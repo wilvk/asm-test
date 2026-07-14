@@ -213,10 +213,12 @@ static int g_scope_whole; /* set by the `scope=whole` client option */
  * `prod` returns early, the `AT_PROD_SKIP` guards remaining in the value pass below are only ever
  * reached with g_prod = 0 (they stay for readability; the record-free branch is the real gate). */
 static int g_prod;
-static int g_gcmove; /* `gcmove` option: publish the gc_move handshake for the live GC-move path */
+static int
+    g_gcmove; /* `gcmove` option: publish the gc_move handshake for the live GC-move path */
 #define AT_PROD_SKIP (g_prod) /* taint build: honor `prod` */
 #else
-#define AT_PROD_SKIP (0)      /* value build: always capture (oracle) — keeps it 14/14 */
+#define AT_PROD_SKIP                                                           \
+    (0) /* value build: always capture (oracle) — keeps it 14/14 */
 #endif
 
 static void *g_lock;
@@ -375,14 +377,40 @@ static int rt_vec_base(reg_id_t reg, int *nbytes) {
     return -1;
 }
 
+/* Installed-leaf registry for DETACH teardown (attach/detach cycling, Increment 5). event_exit
+ * frees the 1 GiB shadow DIRECTORY, but the 1 MiB leaves installed into it are SEPARATE
+ * allocations; freeing only the directory orphans every touched leaf (~1 MiB per touched page),
+ * so K attach/detach rounds on one pid would leak ~K*(touched pages) MiB (measured: ~2 leaves =
+ * ~2 MiB per round). Record each installed leaf + which allocator made it, so event_exit frees
+ * each with its MATCHING deallocator (dr_raw_mem_free vs the bare-mmap GC path's raw_munmap —
+ * cross-provenance frees are a bug). Lock-free append (atomic index) so BOTH the dcontext-holding
+ * hot path and the dcontext-less GC-fence raw path record safely; leaf creation is rare (<= once
+ * per 1 MiB page). Overflow past the cap leaks the excess leaf until process exit (a documented
+ * bound, never a crash) — the cap covers AT_MAX_TRACKED_LEAVES MiB of touched shadow. */
+#define AT_LEAF_KIND_DR       0 /* dr_raw_mem_alloc -> dr_raw_mem_free */
+#define AT_LEAF_KIND_RAW      1 /* raw_mmap_anon    -> raw_munmap      */
+#define AT_MAX_TRACKED_LEAVES 8192
+static at_tag_t *g_leaf_ptr[AT_MAX_TRACKED_LEAVES];
+static uint8_t g_leaf_kind[AT_MAX_TRACKED_LEAVES];
+static volatile int g_leaf_n;
+static void track_leaf(at_tag_t *leaf, uint8_t kind) {
+    int idx = __atomic_fetch_add(&g_leaf_n, 1, __ATOMIC_ACQ_REL);
+    if (idx >= 0 && idx < AT_MAX_TRACKED_LEAVES) {
+        g_leaf_ptr[idx] = leaf;
+        g_leaf_kind[idx] = kind;
+    }
+}
+
 /* Install `leaf` at directory slot i via CAS; on loss free our spare and return the
  * winner. The lone mandatory-atomic shadow mutation (compiler builtin -> lock cmpxchg,
  * no libc). Called only off the hot path (on_seed / thread-init pre-touch). */
 static at_tag_t *leaf_install(size_t i, at_tag_t *leaf) {
     at_tag_t *expect = NULL;
     if (__atomic_compare_exchange_n(&g_dir[i], &expect, leaf, false,
-                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
-        return leaf; /* we won */
+                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        track_leaf(leaf, AT_LEAF_KIND_DR); /* record for detach teardown */
+        return leaf;                       /* we won */
+    }
     dr_raw_mem_free(leaf, AT_LEAF_ALLOC);
     return expect; /* lost: the value now in the slot */
 }
@@ -485,7 +513,8 @@ static void at_gc_remap(uint64_t old_base, uint64_t new_base, uint64_t len) {
     if (len == 0 || old_base == new_base)
         return;
     dr_mutex_lock(g_lock);
-    __atomic_thread_fence(__ATOMIC_SEQ_CST); /* order vs in-flight inline tag stores */
+    __atomic_thread_fence(
+        __ATOMIC_SEQ_CST); /* order vs in-flight inline tag stores */
 
     at_tag_t *snap = (at_tag_t *)dr_global_alloc((size_t)len);
     if (snap == NULL) {
@@ -640,8 +669,12 @@ static at_shm_channel_t *open_ml_shm(const char *shmname) {
 static at_tag_t *leaf_install_raw(size_t i, at_tag_t *leaf) {
     at_tag_t *expect = NULL;
     if (__atomic_compare_exchange_n(&g_dir[i], &expect, leaf, false,
-                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+        track_leaf(
+            leaf,
+            AT_LEAF_KIND_RAW); /* bare-mmap provenance -> raw_munmap at exit */
         return leaf;
+    }
     raw_munmap(leaf, AT_LEAF_ALLOC);
     return expect;
 }
@@ -674,10 +707,12 @@ static at_tag_t *tag_ptr_create_raw(uint64_t ea) {
  * range wider than the static snapshot is skipped rather than truncated. The runtime is fully
  * suspended at the fence, so the spinlock is essentially uncontended and the shadow is quiescent. */
 static volatile int g_remap_spin;
-static void at_gc_remap_live(uint64_t old_base, uint64_t new_base, uint64_t len) {
+static void at_gc_remap_live(uint64_t old_base, uint64_t new_base,
+                             uint64_t len) {
     if (len == 0 || old_base == new_base)
         return;
-    static at_tag_t snap[1 << 20]; /* 1 MiB — covers typical object move ranges */
+    static at_tag_t
+        snap[1 << 20]; /* 1 MiB — covers typical object move ranges */
     if (len > sizeof snap)
         return; /* conservative: skip an over-large range rather than truncate */
     while (__atomic_exchange_n(&g_remap_spin, 1, __ATOMIC_ACQUIRE))
@@ -705,9 +740,12 @@ static void at_gc_remap_live(uint64_t old_base, uint64_t new_base, uint64_t len)
 /* --- LIVE GC-move path: profiler handshake (Increment 7) --------------------------- */
 /* The in-process ICorProfilerCallback4 profiler calls this per moved range at the GC fence.
  * A tiny stderr line proves the live path drove a real remap under DR (the test greps it). */
-static volatile uint64_t g_gcmove_count; /* # of moved ranges remapped (a grep-able liveness) */
-static void asmtest_dr_taint_gc_move(uint64_t old_base, uint64_t new_base, uint64_t len) {
-    at_gc_remap_live(old_base, new_base, len); /* DR-API-free (app-code thread at the fence) */
+static volatile uint64_t
+    g_gcmove_count; /* # of moved ranges remapped (a grep-able liveness) */
+static void asmtest_dr_taint_gc_move(uint64_t old_base, uint64_t new_base,
+                                     uint64_t len) {
+    at_gc_remap_live(old_base, new_base,
+                     len); /* DR-API-free (app-code thread at the fence) */
     __atomic_fetch_add(&g_gcmove_count, 1, __ATOMIC_RELAXED);
 }
 
@@ -727,7 +765,8 @@ static void gcmove_publish(void) {
     ch.pad = 0;
     ch.moves = 0;
     ch.gc_move = (uint64_t)(uintptr_t)&asmtest_dr_taint_gc_move;
-    ch.magic = AT_GCMOVE_MAGIC; /* last: a reader that sees magic sees a valid gc_move */
+    ch.magic =
+        AT_GCMOVE_MAGIC; /* last: a reader that sees magic sees a valid gc_move */
     dr_write_file(f, &ch, sizeof ch);
     dr_close_file(f);
 }
@@ -744,7 +783,8 @@ static void gcmove_publish(void) {
 static int g_gcr_checks, g_gcr_fails;
 static void gcr_check(int cond, const char *msg) {
     g_gcr_checks++;
-    dr_fprintf(STDERR, "%s %d - %s\n", cond ? "ok" : "not ok", g_gcr_checks, msg);
+    dr_fprintf(STDERR, "%s %d - %s\n", cond ? "ok" : "not ok", g_gcr_checks,
+               msg);
     if (!cond)
         g_gcr_fails++;
 }
@@ -765,7 +805,8 @@ static void run_gcremap_selftest(void) {
     {
         uint64_t old = 0x40000000ull, nw = 0x50000000ull, len = 16;
         on_seed(old, len, AT_TAG_TAINTED);
-        gcr_check(gcr_rd(nw) == AT_TAG_CLEAN, "T1 pre: new range clean before remap");
+        gcr_check(gcr_rd(nw) == AT_TAG_CLEAN,
+                  "T1 pre: new range clean before remap");
         at_gc_remap(old, nw, len);
         int new_ok = 1, old_ok = 1;
         for (uint64_t k = 0; k < len; k++) {
@@ -792,7 +833,8 @@ static void run_gcremap_selftest(void) {
             if (gcr_rd(nw + k) != (at_tag_t)(0x80u + k) ||
                 gcr_rd(old + k) != AT_TAG_CLEAN)
                 fid = 0;
-        gcr_check(fid, "T2: per-byte colours move 1:1 (new match, old cleared)");
+        gcr_check(fid,
+                  "T2: per-byte colours move 1:1 (new match, old cleared)");
     }
 
     /* T3: NEGATIVE — an unseeded OLD range must not conjure taint at NEW. */
@@ -803,13 +845,16 @@ static void run_gcremap_selftest(void) {
         for (uint64_t k = 0; k < len; k++)
             if (gcr_rd(nw + k) != AT_TAG_CLEAN)
                 clean = 0;
-        gcr_check(clean, "T3 negative: unseeded move leaves NEW clean (no phantom taint)");
+        gcr_check(
+            clean,
+            "T3 negative: unseeded move leaves NEW clean (no phantom taint)");
     }
 
     /* T4: OVERLAPPING move (compaction slides an object down/up over itself). Snapshot +
      * clear-then-paint must keep the overlap byte's tag, clear only the non-overlap tail. */
     {
-        uint64_t old = 0x60000000ull, len = 32, nw = old + 16; /* 16-byte overlap */
+        uint64_t old = 0x60000000ull, len = 32,
+                 nw = old + 16; /* 16-byte overlap */
         on_seed(old, len, AT_TAG_TAINTED);
         at_gc_remap(old, nw, len);
         int new_all = 1;
@@ -818,10 +863,13 @@ static void run_gcremap_selftest(void) {
                 new_all = 0;
         gcr_check(new_all, "T4 overlap: whole NEW range tainted after slide");
         int head_clear = 1;
-        for (uint64_t k = 0; k < 16; k++) /* [old, new) is the freed non-overlap head */
+        for (uint64_t k = 0; k < 16;
+             k++) /* [old, new) is the freed non-overlap head */
             if (gcr_rd(old + k) != AT_TAG_CLEAN)
                 head_clear = 0;
-        gcr_check(head_clear, "T4 overlap: freed non-overlap head cleared (no stale alias)");
+        gcr_check(
+            head_clear,
+            "T4 overlap: freed non-overlap head cleared (no stale alias)");
     }
 
     /* --- LIVE path (at_gc_remap_live) — the Slice-2 proof. T1-T4 above exercise at_gc_remap
@@ -1538,11 +1586,11 @@ static void emit_taint_phase(void *dc, instrlist_t *bb, instr_t *instr,
             drreg_restore_app_values(dc, bb, instr, op, &swap);
             instrlist_meta_preinsert(
                 bb, instr,
-                INSTR_CREATE_lea(dc, opnd_create_reg(s_a),
-                                 opnd_create_base_disp(
-                                     opnd_get_base(op), opnd_get_index(op),
-                                     opnd_get_scale(op), opnd_get_disp(op),
-                                     OPSZ_lea)));
+                INSTR_CREATE_lea(
+                    dc, opnd_create_reg(s_a),
+                    opnd_create_base_disp(opnd_get_base(op), opnd_get_index(op),
+                                          opnd_get_scale(op), opnd_get_disp(op),
+                                          OPSZ_lea)));
             emit_shadow_or(dc, bb, instr, s_a, s_b, t_rf, s_t, ssz);
             if (swap != DR_REG_NULL)
                 drreg_unreserve_register(dc, bb, instr, swap);
@@ -1954,9 +2002,9 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
             if (g_gpr_order[g] == s_ptr)
                 continue;
             drreg_get_app_value(dc, bb, instr, g_gpr_order[g], s_a);
-            drx_buf_insert_buf_store(dc, g_buf, bb, instr, s_ptr, DR_REG_NULL,
-                                     opnd_create_reg(s_a), OPSZ_8,
-                                     (short)(offsetof(raw_step_t, gpr) + g * 8));
+            drx_buf_insert_buf_store(
+                dc, g_buf, bb, instr, s_ptr, DR_REG_NULL, opnd_create_reg(s_a),
+                OPSZ_8, (short)(offsetof(raw_step_t, gpr) + g * 8));
         }
     }
 
@@ -1996,7 +2044,8 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
                 src = opnd_create_base_disp(s_a, DR_REG_NULL, 0, 0,
                                             memsz[j] == 2 ? OPSZ_2 : OPSZ_1);
                 instrlist_meta_preinsert(
-                    bb, instr, INSTR_CREATE_movzx(dc, opnd_create_reg(s_b), src));
+                    bb, instr,
+                    INSTR_CREATE_movzx(dc, opnd_create_reg(s_b), src));
             }
             drx_buf_insert_buf_store(
                 dc, g_buf, bb, instr, s_ptr, DR_REG_NULL, opnd_create_reg(s_b),
@@ -2067,9 +2116,9 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
          * restores s_ptr before the app instruction). */
         if (!AT_PROD_SKIP) {
             drreg_get_app_value(dc, bb, instr, s_ptr, s_a);
-            drx_buf_insert_buf_store(dc, g_buf, bb, instr, s_b, DR_REG_NULL,
-                                     opnd_create_reg(s_a), OPSZ_8,
-                                     (short)(offsetof(raw_step_t, gpr) + g * 8));
+            drx_buf_insert_buf_store(
+                dc, g_buf, bb, instr, s_b, DR_REG_NULL, opnd_create_reg(s_a),
+                OPSZ_8, (short)(offsetof(raw_step_t, gpr) + g * 8));
         }
         break;
     }
@@ -2225,6 +2274,21 @@ static void event_exit(void) {
     /* Skip g_lock/g_dir teardown while the poller may still touch them (see above); leak at
      * exit. Without methodscan there is no poller, so tear them down normally. */
     if (!g_methodscan_active) {
+        /* Free the installed leaves (Increment 5 leak fix: freeing only the directory below would
+         * orphan every touched 1 MiB leaf — a per-detach leak that accumulates under attach/detach
+         * cycling) with each leaf's matching deallocator. The app is stopped at exit/detach, so no
+         * concurrent leaf install races this read. */
+        int nleaf = __atomic_load_n(&g_leaf_n, __ATOMIC_ACQUIRE);
+        if (nleaf > AT_MAX_TRACKED_LEAVES)
+            nleaf = AT_MAX_TRACKED_LEAVES;
+        for (int k = 0; k < nleaf; k++) {
+            if (g_leaf_ptr[k] == NULL)
+                continue;
+            if (g_leaf_kind[k] == AT_LEAF_KIND_RAW)
+                raw_munmap(g_leaf_ptr[k], AT_LEAF_ALLOC);
+            else
+                dr_raw_mem_free(g_leaf_ptr[k], AT_LEAF_ALLOC);
+        }
         dr_mutex_destroy(g_lock);
         if (g_dir != NULL)
             dr_raw_mem_free(g_dir, AT_DIR_LEN * sizeof(at_tag_t *));

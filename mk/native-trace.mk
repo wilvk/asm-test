@@ -695,7 +695,7 @@ endif
 # at detach), and it exits cleanly (uncorrupted). Proof the tier can seize a process, capture, and
 # release it, leaving it running native. The attach-window capture is checked too (>=1 tainted hit).
 # Needs SYS_PTRACE (attach + detach both ptrace); the external-attach docker image adds the cap.
-# The K-round cycling + the shadow/TLS leak assertion are the remaining Increment-5 slices.
+# The K-round cycling + the shadow/TLS leak assertion land in dr-taint-cycle-test below.
 DR_DRCONFIG ?= $(DYNAMORIO_HOME)/bin64/drconfig
 DETACH_SHM ?= /asmtest_taint_detach_ci
 .PHONY: dr-taint-detach-test
@@ -731,6 +731,90 @@ else
 	 if [ "$$beats_exit" -gt "$$beats_detach" ] && [ "$$end" -ge 1 ]; then \
 	   echo "ok - victim RETURNED TO NATIVE after mid-run detach ($$beats_detach -> $$beats_exit heartbeats past detach) and exited clean [DETACH -> NATIVE]"; \
 	 else echo "not ok - victim did not continue native after detach or exit clean (beats $$beats_detach->$$beats_exit end=$$end)"; exit 1; fi
+endif
+
+# --- DR ATTACH tier, Increment 5 (completion): K-round attach/detach CYCLING + leak assertion ---
+# The detach first slice proved ONE take-over-and-let-go; this proves the tier can do it REPEATEDLY
+# on the SAME pid — the re-attach reliability the taint tier flagged as UNRELIABLE for the
+# in-process path (asmtest_drtrace.h:87: "DynamoRIO's in-process re-attach is unreliable"). Attach
+# is where it must either work or be documented as bounded. A single long-lived native victim
+# (taint_markerless_victim attach <secs>) is seized K times: each round `drrun -attach <pid>` takes
+# it over marker-less (region/seed/shm by module+offset), captures a window into a per-round
+# client-owned shm, then `drconfig -detach <pid>` releases it — and the lane asserts, PER ROUND,
+# (a) the attached window captured a tainted kind=1 sink hit (attach worked), (b) the victim's
+# heartbeats ADVANCE after the detach (it returned to native between rounds), and (c) the surviving
+# NATIVE victim does not ACCUMULATE memory across rounds — the explicit shadow/TLS/drx LEAK
+# assertion. event_exit (fires on each detach) frees the reg-tag TLS + drx buffers + the 1 GiB
+# shadow DIRECTORY *and* every installed 1 MiB shadow LEAF (the Increment-5 leaf-free fix; without
+# it each detach orphaned the touched leaves, ~2 MiB/round). So the check has two teeth: round 1
+# must not jump by a shadow-directory scale (~1 GiB, the coarse backstop), and rounds >= 2 must not
+# grow by a shadow-LEAF scale (~1 MiB) over the prior round (a one-time fixed DR-attach VA footprint
+# is paid in round 1, so rounds 2+ are flat iff leaves are freed). After K rounds the victim exits
+# clean natively (uncorrupted, rc=0). Needs SYS_PTRACE (attach + detach both ptrace); the
+# external-attach docker image adds the cap.
+CYCLE_SHM    ?= /asmtest_taint_cycle_ci
+CYCLE_ROUNDS ?= 3
+# Round-1 backstop: native VmSize vs the pre-attach baseline must stay under this (kB). A leaked
+# 1 GiB shadow directory = +1048576 kB, so 512 MiB catches it while tolerating the fixed one-time
+# DR-attach VA footprint (~2-3 MiB) that external detach does not fully return.
+CYCLE_LEAK_SLACK_KB ?= 524288
+# Per-round (round >= 2) growth cap (kB): with leaves freed each detach the native victim is flat
+# between rounds (measured ~68 kB/round residue); a single orphaned 1 MiB leaf = ~1028 kB, so a
+# 512 kB cap cleanly separates freed (pass) from leaked (fail) with wide margin either side.
+CYCLE_GROWTH_SLACK_KB ?= 512
+.PHONY: dr-taint-cycle-test
+dr-taint-cycle-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-cycle-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/taint_markerless_victim $(BUILD)/taint_validator
+	@echo "== dr-taint-cycle-test (Increment 5: K attach->capture->detach rounds on ONE pid; native + leak-free between) =="
+	@vbin=$(abspath $(BUILD)/taint_markerless_victim); \
+	 fixoff=$$(nm $$vbin | awk '/ [BbDd] g_fixture$$/ {print "0x"$$1}' | head -1); \
+	 seedoff=$$(nm $$vbin | awk '/ [BbDd] g_seedbuf$$/ {print "0x"$$1}' | head -1); \
+	 if [ -z "$$fixoff" ] || [ -z "$$seedoff" ]; then echo "not ok - could not resolve g_fixture/g_seedbuf via nm"; exit 1; fi; \
+	 K=$(CYCLE_ROUNDS); dur=$$((K * 10 + 10)); \
+	 vlog=$(BUILD)/cycle_victim.log; rm -f $$vlog; \
+	 for r in $$(seq 1 $$K); do rm -f /dev/shm$(CYCLE_SHM)_$$r 2>/dev/null || true; done; \
+	 $$vbin attach $$dur 2>$$vlog & vpid=$$!; \
+	 sleep 2; \
+	 base_vsz=$$(awk '/^VmSize:/{print $$2}' /proc/$$vpid/status 2>/dev/null || echo 0); [ -z "$$base_vsz" ] && base_vsz=0; \
+	 echo "# victim pid=$$vpid  native VmSize baseline=$${base_vsz} kB  rounds=$$K  victim_secs=$$dur  round1_slack=$(CYCLE_LEAK_SLACK_KB) kB  per_round_slack=$(CYCLE_GROWTH_SLACK_KB) kB"; \
+	 fail=0; prev_vsz=$$base_vsz; \
+	 for r in $$(seq 1 $$K); do \
+	   shm=$(CYCLE_SHM)_$$r; \
+	   timeout 60 $(DR_DRRUN) -attach $$vpid -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	     region=taint_markerless_victim+$$fixoff,0x16 \
+	     seed=taint_markerless_victim+$$seedoff,0x8,0x1 shm=$$shm >$(BUILD)/cycle_drrun_$$r.log 2>&1 & apid=$$!; \
+	   sleep 3; \
+	   beats_d=$$(grep -c "MARKERLESS_VICTIM heartbeat" $$vlog 2>/dev/null || true); [ -z "$$beats_d" ] && beats_d=0; \
+	   $(DR_DRCONFIG) -detach $$vpid >$(BUILD)/cycle_cfg_$$r.log 2>&1; drc=$$?; \
+	   sleep 1; \
+	   kill $$apid 2>/dev/null || true; wait $$apid 2>/dev/null || true; \
+	   sleep 2; \
+	   alive=$$(kill -0 $$vpid 2>/dev/null && echo 1 || echo 0); \
+	   beats_n=$$(grep -c "MARKERLESS_VICTIM heartbeat" $$vlog 2>/dev/null || true); [ -z "$$beats_n" ] && beats_n=0; \
+	   vsz=$$(awk '/^VmSize:/{print $$2}' /proc/$$vpid/status 2>/dev/null || echo 0); [ -z "$$vsz" ] && vsz=0; \
+	   grew=$$((vsz - base_vsz)); growth=$$((vsz - prev_vsz)); \
+	   cap=$$($(BUILD)/taint_validator $$shm attach >$(BUILD)/cycle_val_$$r.log 2>&1 && echo ok || echo BAD); \
+	   echo "# round $$r: detach_rc=$$drc  capture=$$cap  alive_after_detach=$$alive  beats(detach->native)=$$beats_d->$$beats_n  native_VmSize=$${vsz} kB (+$${grew} vs base, +$${growth} vs prior round)"; \
+	   if [ "$$cap" != ok ]; then echo "not ok - round $$r: externally-attached window captured NO tainted sink hit (attach/capture failed)"; fail=1; fi; \
+	   if [ "$$alive" -ne 1 ]; then echo "not ok - round $$r: victim NOT alive after detach (detach corrupted/killed it) — return-to-native failed"; fail=1; fi; \
+	   if [ "$$beats_n" -le "$$beats_d" ]; then echo "not ok - round $$r: victim did NOT advance natively after detach ($$beats_d -> $$beats_n) — return-to-native failed"; fail=1; fi; \
+	   if [ "$$grew" -ge $(CYCLE_LEAK_SLACK_KB) ]; then echo "not ok - round $$r: native VmSize +$${grew} kB vs base (>= $(CYCLE_LEAK_SLACK_KB)) — shadow DIRECTORY leaked across detach"; fail=1; fi; \
+	   if [ "$$r" -ge 2 ] && [ "$$growth" -ge $(CYCLE_GROWTH_SLACK_KB) ]; then echo "not ok - round $$r: native VmSize grew +$${growth} kB over the prior round (>= $(CYCLE_GROWTH_SLACK_KB)) — a shadow LEAF was orphaned (not freed) across detach"; fail=1; fi; \
+	   prev_vsz=$$vsz; \
+	 done; \
+	 wait $$vpid 2>/dev/null; vrc=$$?; \
+	 end=$$(grep -c "MARKERLESS_VICTIM done" $$vlog 2>/dev/null || true); [ -z "$$end" ] && end=0; \
+	 final_vsz=$$(awk '/^VmSize:/{print $$2}' /proc/$$vpid/status 2>/dev/null || echo "(exited)"); \
+	 echo "# after $$K rounds: victim_done=$$end victim_rc=$$vrc  final native VmSize=$${final_vsz}"; \
+	 if [ "$$end" -lt 1 ] || [ "$$vrc" -ne 0 ]; then echo "not ok - victim did not exit clean natively after $$K attach/detach cycles (done=$$end rc=$$vrc)"; fail=1; fi; \
+	 if [ "$$fail" -ne 0 ]; then echo "not ok - dr-taint-cycle-test: attach/detach cycling FAILED (see rounds above)"; exit 1; fi; \
+	 echo "ok - $$K attach/capture/detach rounds on one pid: each captured, returned to native, and freed the shadow+leaves (VmSize flat round-over-round); victim exited clean [CYCLE OK]"
 endif
 
 # --- Taint tier Increment 5: concurrent-writer shadow stress ---------------

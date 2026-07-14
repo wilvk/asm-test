@@ -282,20 +282,43 @@ config path; the attach lane, capturing a variable multi-run window, gates SINK-
 
 ---
 
-## Increment 5 - Detach correctness + attach/detach cycling *(**first slice LANDED 2026-07-14** — mid-run detach returns the victim to native; K-cycling + leak assertion remain)*
+## Increment 5 - Detach correctness + attach/detach cycling *(**COMPLETE 2026-07-14** — mid-run detach returns the victim to native; K-round re-attach cycling + leak assertion landed)*
 
-> **UPDATE 2026-07-14 — DETACH correctness (return-to-native) LANDED.** The take-over-and-LET-GO half
+> **UPDATE 2026-07-14 (2/2) — K-ROUND CYCLING + LEAK ASSERTION LANDED → Increment 5 COMPLETE.**
+> `make dr-taint-cycle-test` (4th lane in the external-attach image) seizes ONE long-lived native
+> victim (`taint_markerless_victim attach <secs>`) K=3 times: each round `drrun -attach <pid>` takes
+> it over marker-less, captures a window into a per-round client-owned shm, then `drconfig -detach
+> <pid>` releases it — and the lane asserts PER ROUND (a) the attached window captured a tainted
+> `kind=1` sink hit (attach worked), (b) the victim is alive + its heartbeats ADVANCE after the
+> detach (returned to native between rounds), and (c) the surviving native victim does not accumulate
+> memory. **RESULT: external DR re-attach is RELIABLE on this DR — 3/3 rounds took over, captured,
+> and detached-to-native on the same pid, victim exited clean (`rc=0`)** — so the "in-process
+> re-attach is unreliable" caveat ([asmtest_drtrace.h:87](../../../include/asmtest_drtrace.h#L87))
+> does NOT extend to the EXTERNAL attach path. **Leak assertion — and a real leak it caught + FIXED:**
+> `event_exit` (fires on each detach) freed the 1 GiB shadow DIRECTORY + reg-tag TLS + drx buffers but
+> NOT the installed 1 MiB shadow LEAVES, so cycling orphaned ~2 leaves (~2 MiB) per round (measured
+> native VmSize growth +2124 kB/round). Fixed by an installed-leaf registry (a lock-free atomic-index
+> table recording each leaf + its allocator provenance so `event_exit` frees each with its matching
+> deallocator — `dr_raw_mem_free` for hot-path leaves, `raw_munmap` for the bare-mmap GC-path leaves;
+> [dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c)). Post-fix round-over-round
+> growth dropped to **+68 kB/round** (a fixed one-time ~2.4 MiB DR-attach VA footprint that external
+> detach does not fully return is paid once in round 1). The lane gates it two ways: round 1 must not
+> jump a shadow-DIRECTORY scale (~1 GiB), rounds ≥2 must not grow a shadow-LEAF scale (~1 MiB) over the
+> prior round. All additive under `-DASMTEST_TAINT` (flag-off value client still 14/14 byte-identical;
+> `docker-drtrace` 200 ok incl. taint-set oracle + gcremap 13/13). Also: heartbeat cadence densified
+> (every 16 beats ≈ 0.3 s) so the return-to-native signal is robust across the ~2 s post-detach window
+> the attach/detach/cycle lanes sample; the victim gained an optional duration arg for the longer
+> K-round window (default 12 s unchanged). External-attach docker image now 4 lanes: probe + attach +
+> detach + cycle.
+
+> **UPDATE 2026-07-14 (1/2) — DETACH correctness (return-to-native) LANDED.** The take-over-and-LET-GO half
 > of the contract. Unlike `dr-taint-attach-test` (which stays attached until the victim exits),
 > `make dr-taint-detach-test` attaches to the running victim (background `drrun -attach`), captures a
 > ~4 s window, then DETACHES MID-RUN via `drconfig -detach <pid>` and asserts the victim RETURNS TO
 > NATIVE: its heartbeats keep advancing AFTER the detach (measured 5 → 10 past detach) and it exits
 > cleanly (`victim_rc=0`, uncorrupted) — DR restored its register/flag state and removed the
 > instrumentation. The attach-window capture is checked too (≥1 tainted `kind=1` hit). The detach
-> mechanism is `drconfig -detach <pid>` (in the pinned DR; needs CAP_SYS_PTRACE like the attach). In
-> the external-attach docker image (now 3 lanes: probe + attach + detach). **Remaining Increment-5
-> slices:** K-round attach/detach CYCLING on one PID (each window capturing, native + uncorrupted
-> between) — the re-attach reliability the taint plan flagged; and an explicit shadow/TLS leak
-> assertion (each detach frees `g_dir` + the reg-tag TLS + the drx buffers).
+> mechanism is `drconfig -detach <pid>` (in the pinned DR; needs CAP_SYS_PTRACE like the attach).
 
 Launch's "one lifecycle per process" contract is *replaced* by attach's take-over-and-let-go.
 
@@ -309,9 +332,11 @@ Launch's "one lifecycle per process" contract is *replaced* by attach's take-ove
   ([asmtest_drtrace.h:86](../../../include/asmtest_drtrace.h#L86)); attach is where it must
   either work or be documented as bounded.
 
-**Exit criteria:** a cycling lane shows K attach/detach rounds over one victim with correct
-per-window capture and a native, uncorrupted target between and after; a leak check (the
-shadow + TLS are actually freed each detach). **Effort: M.**
+**Exit criteria: MET 2026-07-14.** `make dr-taint-cycle-test` shows K=3 attach/detach rounds over one
+victim with correct per-window capture and a native, uncorrupted target between and after (victim
+exits `rc=0`); the leak check confirms the shadow (directory + leaves) + TLS + drx buffers are freed
+each detach (round-over-round native VmSize flat at ~+68 kB after the leaf-free fix). **Effort: M
+(delivered).** External re-attach proved RELIABLE (not merely bounded) on the pinned DR.
 
 ---
 

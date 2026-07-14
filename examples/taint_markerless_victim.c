@@ -12,12 +12,16 @@
  *     out-of-process oracle diff matches), made executable at runtime via mprotect. Its symbol
  *     offset is what `region=<module>+0x<off>` resolves against.
  *   - g_seedbuf is the seeded 8-byte source the fixture loads; `seed=<module>+0x<off>,8,<color>`.
- * The `attach` arg makes it loop for ~12 s (a long-running target the external-attach lane can
- * seize mid-run, Increment 4); the default runs the fixture a handful of times and exits (enough
- * for the LAUNCH client, configured at init, to instrument it). It prints its pid + result.
+ * The `attach` arg makes it loop for ~12 s by default (a long-running target the external-attach
+ * lane can seize mid-run, Increment 4); an optional 2nd arg overrides the duration in seconds, so
+ * the K-round attach/detach CYCLING lane (Increment 5 completion) can hold ONE pid alive long
+ * enough for K seize->capture->detach->native rounds. The no-arg default runs the fixture a
+ * handful of times and exits (enough for the LAUNCH client, configured at init, to instrument it).
+ * It prints its pid + result.
  */
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h> /* strtod — optional attach-duration arg */
 #include <string.h>
 #include <sys/mman.h>
 #include <time.h>
@@ -52,8 +56,16 @@ static double elapsed_s(const struct timespec *t0) {
 
 int main(int argc, char **argv) {
     int attach = (argc > 1 && strcmp(argv[1], "attach") == 0);
-    fprintf(stderr, "MARKERLESS_VICTIM start pid=%d attach=%d\n", (int)getpid(),
-            attach);
+    /* Optional attach-window duration in seconds (default 12): the K-round cycling lane needs a
+     * longer-lived victim than the single external-attach lane. Bounded so it always terminates. */
+    double attach_secs = 12.0;
+    if (attach && argc > 2) {
+        double d = strtod(argv[2], NULL);
+        if (d > 0.0 && d <= 300.0)
+            attach_secs = d;
+    }
+    fprintf(stderr, "MARKERLESS_VICTIM start pid=%d attach=%d secs=%.0f\n",
+            (int)getpid(), attach, attach ? attach_secs : 0.0);
     fflush(stderr);
 
     /* Make ONLY the fixture bytes executable (the region the client is told about). */
@@ -65,13 +77,17 @@ int main(int argc, char **argv) {
 
     long r = 0;
     if (attach) {
-        /* Long-running: loop the fixture for ~12 s so the external-attach lane can seize it
-         * mid-run (Increment 4). Bounded by wall-clock so it always terminates. */
+        /* Long-running: loop the fixture for attach_secs so the external-attach / cycling lanes
+         * can seize it mid-run (Increments 4-5). Bounded by wall-clock so it always terminates. */
         struct timespec t0, ts = {0, 20 * 1000 * 1000}; /* 20 ms */
         clock_gettime(CLOCK_MONOTONIC, &t0);
-        for (int beat = 0; elapsed_s(&t0) < 12.0 && beat < 100000; beat++) {
+        for (int beat = 0; elapsed_s(&t0) < attach_secs && beat < 1000000;
+             beat++) {
             r = fixture((long)(uintptr_t)&g_seedbuf, 5);
-            if ((beat & 63) == 0) {
+            /* Heartbeat every 16 beats (~0.3 s): the attach/detach/cycle lanes assert the victim
+             * advances NATIVELY after a detach by counting heartbeats across a ~2 s window, so a
+             * dense-enough cadence makes that return-to-native signal robust. */
+            if ((beat & 15) == 0) {
                 fprintf(stderr, "MARKERLESS_VICTIM heartbeat beat=%d r=%ld\n",
                         beat, r);
                 fflush(stderr);
