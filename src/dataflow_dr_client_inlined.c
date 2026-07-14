@@ -126,8 +126,10 @@
 #include "dataflow_dr.h"
 #ifdef ASMTEST_TAINT
 #include "asmtest_taint_gcmove.h" /* live GC-move handshake (Increment 7) */
+#include "asmtest_taint_shm.h" /* at_shm_channel_t — client-owned shm for marker-less config */
+#include <fcntl.h> /* O_CREAT / O_RDWR for the client-opened shm (Increment 3 attach) */
 #include <sys/mman.h> /* PROT_*/MAP_* macros for the raw-syscall leaf allocator */
-#include <sys/syscall.h> /* SYS_mmap / SYS_munmap — bare syscalls on the GC-fence path */
+#include <sys/syscall.h> /* SYS_mmap / SYS_munmap / SYS_open ... — bare syscalls */
 #endif
 
 #include <string.h>
@@ -547,6 +549,92 @@ static void raw_munmap(void *addr, size_t len) {
                      : "rcx", "r11", "memory");
     (void)ret;
 }
+
+/* --- Marker-less config (Increment 3, ATTACH tier) ---------------------------------------- */
+/* An attached/foreign target fires no seed/sink/region marker clean calls, so the DR client
+ * learns them from client OPTIONS + runtime module+offset resolution: `region=<mod>+0x<off>,<len>`,
+ * `seed=<mod>+0x<off>,<len>,<color>`, `shm=/<name>`. Parsed at init; the region + seed are applied
+ * against the named module's runtime base when it loads (event_module_load). The client OWNS the
+ * results shm (opened via bare syscalls below), so the target does zero taint plumbing. */
+static char
+    g_ml_module[80]; /* module basename substring for region/seed resolution */
+static uint64_t g_ml_region_off, g_ml_region_len;
+static int g_ml_region_set;
+static uint64_t g_ml_seed_off, g_ml_seed_len, g_ml_seed_color;
+static int g_ml_seed_set;
+static at_shm_channel_t
+    *g_ml_shm; /* client-owned marker-less report + value-trace channel */
+static int
+    g_ml_applied; /* region/seed applied once (a module can load twice) */
+
+/* Bare file syscalls (no libc, DR-API-free), the raw_mmap_anon family for a shm FILE mapping. */
+static long raw_open(const char *path, long flags, long mode) {
+    long ret;
+    __asm__ volatile("syscall"
+                     : "=a"(ret)
+                     : "0"((long)SYS_open), "D"(path), "S"(flags), "d"(mode)
+                     : "rcx", "r11", "memory");
+    return ret;
+}
+static void raw_close(long fd) {
+    long ret;
+    __asm__ volatile("syscall"
+                     : "=a"(ret)
+                     : "0"((long)SYS_close), "D"(fd)
+                     : "rcx", "r11", "memory");
+    (void)ret;
+}
+static long raw_ftruncate(long fd, long len) {
+    long ret;
+    __asm__ volatile("syscall"
+                     : "=a"(ret)
+                     : "0"((long)SYS_ftruncate), "D"(fd), "S"(len)
+                     : "rcx", "r11", "memory");
+    return ret;
+}
+static void *raw_mmap_shared(size_t len, long fd) {
+    register long r10 __asm__("r10") = MAP_SHARED;
+    register long r8 __asm__("r8") = fd;
+    register long r9 __asm__("r9") = 0;
+    long ret;
+    __asm__ volatile("syscall"
+                     : "=a"(ret)
+                     : "0"((long)SYS_mmap), "D"((long)0), "S"((long)len),
+                       "d"((long)(PROT_READ | PROT_WRITE)), "r"(r10), "r"(r8),
+                       "r"(r9)
+                     : "rcx", "r11", "memory");
+    if (ret < 0 && ret >= -4095)
+        return NULL;
+    return (void *)ret;
+}
+
+/* Open (create + size) the marker-less results shm and lay out its report + value-trace views —
+ * the same setup taint_workload does app-side, but done in the CLIENT (the attach target does
+ * none). The separate validator maps the same /dev/shm/<name> and reads by offset. */
+static at_shm_channel_t *open_ml_shm(const char *shmname) {
+    char path[128];
+    dr_snprintf(path, sizeof path, "/dev/shm%s", shmname);
+    path[sizeof path - 1] = '\0';
+    long fd = raw_open(path, O_CREAT | O_RDWR, 0600);
+    if (fd < 0)
+        return NULL;
+    at_shm_channel_t *shm = NULL;
+    if (raw_ftruncate(fd, (long)sizeof(at_shm_channel_t)) == 0)
+        shm = (at_shm_channel_t *)raw_mmap_shared(sizeof(at_shm_channel_t), fd);
+    raw_close(fd);
+    if (shm == NULL)
+        return NULL;
+    memset(shm, 0, sizeof *shm);
+    shm->report.hits =
+        shm->hits; /* producer-space; the validator reads hits[] by offset */
+    shm->report.hits_cap = AT_SHM_HITS_CAP;
+    shm->drval.steps = shm->steps;
+    shm->drval.steps_cap = AT_SHM_STEPS_CAP;
+    shm->drval.step_taint = shm->step_taint;
+    shm->drval.step_taint_cap = AT_SHM_STEPS_CAP;
+    return shm;
+}
+
 /* CAS-install a raw-mmap leaf; on loss, munmap our spare and return the winner. The DR-API-free
  * twin of leaf_install (raw_munmap instead of dr_raw_mem_free). */
 static at_tag_t *leaf_install_raw(size_t i, at_tag_t *leaf) {
@@ -2018,11 +2106,62 @@ static void try_resolve(module_handle_t h) {
 #endif
 }
 
+#ifdef ASMTEST_TAINT
+/* Parse "<module>+<hexoff>" at s: copy the module basename into g_ml_module, set *off, and return
+ * the pointer just past the offset (at the ',' before <len>), or NULL if malformed. */
+static const char *ml_parse_mod_off(const char *s, uint64_t *off) {
+    const char *plus = s;
+    while (*plus != '\0' && *plus != '+')
+        plus++;
+    if (*plus != '+')
+        return NULL;
+    size_t nlen = (size_t)(plus - s);
+    if (nlen >= sizeof g_ml_module)
+        nlen = sizeof g_ml_module - 1;
+    memcpy(g_ml_module, s, nlen);
+    g_ml_module[nlen] = '\0';
+    const char *p = plus + 1;
+    if (!parse_hex(&p, off))
+        return NULL;
+    return p;
+}
+
+/* Marker-less (Increment 3): apply the option-configured region + seed against a matching module's
+ * runtime base, ONCE. Resolves `region=<mod>+off` / `seed=<mod>+off` by adding the offsets to the
+ * module base, and points the value/report channel at the client-owned shm — so an attached target
+ * that fires no markers is fully configured from outside. */
+static void apply_ml_config(const module_data_t *info) {
+    if (g_ml_applied || info == NULL || (!g_ml_region_set && !g_ml_seed_set))
+        return;
+    const char *name = dr_module_preferred_name(info);
+    if (name == NULL || !str_contains(name, g_ml_module))
+        return;
+    g_ml_applied = 1;
+    if (g_ml_shm != NULL) {
+        if (g_drval == NULL)
+            g_drval =
+                &g_ml_shm
+                     ->drval; /* value/taint trace lands in shm (marker-less) */
+        g_report =
+            &g_ml_shm
+                 ->report; /* sink hits land in shm (marker-less)          */
+    }
+    if (g_ml_region_set)
+        register_range(info->start + g_ml_region_off, (size_t)g_ml_region_len);
+    if (g_ml_seed_set)
+        on_seed((uint64_t)(uintptr_t)info->start + g_ml_seed_off, g_ml_seed_len,
+                g_ml_seed_color);
+}
+#endif
+
 static void resolve_all_modules(void) {
     dr_module_iterator_t *it = dr_module_iterator_start();
     while (dr_module_iterator_hasnext(it)) {
         module_data_t *m = dr_module_iterator_next(it);
         try_resolve(m->handle);
+#ifdef ASMTEST_TAINT
+        apply_ml_config(m);
+#endif
         dr_free_module_data(m);
     }
     dr_module_iterator_stop(it);
@@ -2033,6 +2172,9 @@ static void event_module_load(void *drcontext, const module_data_t *info,
     (void)drcontext;
     (void)loaded;
     try_resolve(info->handle);
+#ifdef ASMTEST_TAINT
+    apply_ml_config(info);
+#endif
 }
 
 static dr_signal_action_t event_signal(void *drcontext, dr_siginfo_t *info) {
@@ -2067,7 +2209,15 @@ static void event_exit(void) {
                    (unsigned long long)g_gcmove_count);
 #endif
     if (g_buf != NULL)
-        drx_buf_free(g_buf);
+        drx_buf_free(
+            g_buf); /* flushes the remaining value/taint trace into shm (marker-less) */
+#ifdef ASMTEST_TAINT
+    /* Marker-less (Increment 3): the client OWNS the shm, so it publishes `done` here — AFTER the
+     * drx_buf flush lands the value trace — the way the workload does app-side in the launch path.
+     * The out-of-process validator (run after drrun/detach) spins on this before draining. */
+    if (g_ml_shm != NULL)
+        __atomic_store_n(&g_ml_shm->done, 1u, __ATOMIC_RELEASE);
+#endif
     drx_exit();
     drreg_exit();
     drmgr_exit();
@@ -2115,6 +2265,36 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
             g_prod = 1;
         else if (strcmp(argv[i], "gcmove") == 0)
             g_gcmove = 1;
+        /* Marker-less config (Increment 3): region/seed by module+offset, client-owned shm. */
+        else if (strncmp(argv[i], "region=", 7) == 0) {
+            uint64_t off = 0, len = 0;
+            const char *p = ml_parse_mod_off(argv[i] + 7, &off);
+            if (p != NULL && *p == ',') {
+                p++;
+                if (parse_hex(&p, &len) && len > 0) {
+                    g_ml_region_off = off;
+                    g_ml_region_len = len;
+                    g_ml_region_set = 1;
+                }
+            }
+        } else if (strncmp(argv[i], "seed=", 5) == 0) {
+            uint64_t off = 0, len = 0, color = AT_TAG_TAINTED;
+            const char *p = ml_parse_mod_off(argv[i] + 5, &off);
+            if (p != NULL && *p == ',') {
+                p++;
+                if (parse_hex(&p, &len) && len > 0) {
+                    if (*p == ',') {
+                        p++;
+                        parse_hex(&p, &color);
+                    }
+                    g_ml_seed_off = off;
+                    g_ml_seed_len = len;
+                    g_ml_seed_color = color;
+                    g_ml_seed_set = 1;
+                }
+            }
+        } else if (strncmp(argv[i], "shm=", 4) == 0)
+            g_ml_shm = open_ml_shm(argv[i] + 4);
 #endif
     }
 #ifdef ASMTEST_TAINT_GCREMAP

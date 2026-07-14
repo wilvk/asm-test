@@ -151,6 +151,7 @@ else
 	@$(MAKE) --no-print-directory dr-taint-native-test
 	@$(MAKE) --no-print-directory dr-taint-launch-test
 	@$(MAKE) --no-print-directory dr-taint-prod-test
+	@$(MAKE) --no-print-directory dr-taint-markerless-test
 	@$(MAKE) --no-print-directory dr-taint-attach-coop-test
 	@$(MAKE) --no-print-directory dr-taint-stress-test
 	@$(MAKE) --no-print-directory dr-taint-multirange-test
@@ -585,6 +586,54 @@ else
 	 else \
 	   echo "ATTACH PROBE NO-GO — external attach did not fully hold (see SUMMARY). Gates attach-tier Increments 3-5; record the mode in dr-attach-probe-findings.md."; \
 	 fi
+endif
+
+# --- DR ATTACH tier, Increment 3: MARKER-LESS seed/sink/region config ---------
+# An attached foreign target fires NO taint markers, so the client learns what to instrument, what
+# to seed, and where to report ENTIRELY from client OPTIONS + runtime module+offset resolution.
+# examples/taint_markerless_victim carries the taint_sink_chain fixture + the seed buffer as STATIC
+# globals (nm-resolvable offsets, PIE so offset == module offset), calls no markers; the lane passes
+# `region=<victim>+0x<fixture_off>,<len> seed=<victim>+0x<seedbuf_off>,8,<color> shm=/<name>` and the
+# client resolves them against the victim module's runtime base (event_module_load), OWNS the shm
+# (opened via bare syscalls), captures, and a separate taint_validator (markerless mode) oracle-diffs
+# the taint SET + sink hit out of process — the launch tier's oracle discipline with config from
+# OUTSIDE. Seeded: a tainted kind=1 sink hit + taint set == emulator forward slice; noseed control:
+# ZERO hits. Validates the config path under LAUNCH (Increment 4 reuses it over `drrun -attach`).
+# Self-skips without DynamoRIO.
+$(BUILD)/taint_markerless_victim: examples/taint_markerless_victim.c $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) examples/taint_markerless_victim.c -o $@
+
+MARKERLESS_SHM ?= /asmtest_taint_markerless_ci
+.PHONY: dr-taint-markerless-test
+dr-taint-markerless-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-markerless-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/taint_markerless_victim $(BUILD)/taint_validator
+	@echo "== dr-taint-markerless-test (Increment 3: marker-less region/seed/shm config via client options) =="
+	@vbin=$(abspath $(BUILD)/taint_markerless_victim); \
+	 fixoff=$$(nm $$vbin | awk '/ [BbDd] g_fixture$$/ {print "0x"$$1}' | head -1); \
+	 seedoff=$$(nm $$vbin | awk '/ [BbDd] g_seedbuf$$/ {print "0x"$$1}' | head -1); \
+	 echo "# victim=taint_markerless_victim  fixture_off=$$fixoff  seedbuf_off=$$seedoff (PIE, module-relative)"; \
+	 if [ -z "$$fixoff" ] || [ -z "$$seedoff" ]; then echo "not ok - could not resolve g_fixture/g_seedbuf offsets via nm"; exit 1; fi; \
+	 rm -f /dev/shm$(MARKERLESS_SHM) 2>/dev/null || true; \
+	 echo "-- seeded (client configured ENTIRELY by options: region + seed + shm; the victim calls NO markers) --"; \
+	 $(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	   region=taint_markerless_victim+$$fixoff,0x16 \
+	   seed=taint_markerless_victim+$$seedoff,0x8,0x1 shm=$(MARKERLESS_SHM) -- \
+	   $$vbin 2>&1 | grep -E 'MARKERLESS_VICTIM|ASMTEST_TAINT_INSCOUNT' || true; \
+	 $(BUILD)/taint_validator $(MARKERLESS_SHM) markerless
+	@rm -f /dev/shm$(MARKERLESS_SHM) 2>/dev/null || true
+	@echo "-- negative control (NO seed= option => zero hits) --"
+	@vbin=$(abspath $(BUILD)/taint_markerless_victim); \
+	 fixoff=$$(nm $$vbin | awk '/ [BbDd] g_fixture$$/ {print "0x"$$1}' | head -1); \
+	 $(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	   region=taint_markerless_victim+$$fixoff,0x16 shm=$(MARKERLESS_SHM) -- \
+	   $$vbin 2>&1 | grep -E 'MARKERLESS_VICTIM' || true; \
+	 $(BUILD)/taint_validator $(MARKERLESS_SHM) markerless noseed
 endif
 
 # --- Taint tier Increment 5: concurrent-writer shadow stress ---------------

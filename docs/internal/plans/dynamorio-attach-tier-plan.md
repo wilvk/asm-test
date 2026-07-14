@@ -212,7 +212,25 @@ native case on the pinned DR 11.91.20630.
 
 ---
 
-## Increment 3 - Marker-less seed/sink/region config (client options + nudge) *(planned)*
+## Increment 3 - Marker-less seed/sink/region config (client options + nudge) *(**config half LANDED 2026-07-14**; the interactive nudge arm/disarm is the remaining slice)*
+
+> **UPDATE 2026-07-14 — marker-less CONFIG landed (validated under launch, first try).** The DR taint
+> client now learns region/seed/report ENTIRELY from client options + runtime module+offset
+> resolution — no marker clean calls: `region=<mod>+0x<off>,<len>`, `seed=<mod>+0x<off>,<len>,<color>`,
+> `shm=/<name>`. The offsets resolve against the named module's runtime base in `event_module_load` /
+> `resolve_all_modules` (`apply_ml_config`); the client OWNS the results shm, opened with bare
+> open/ftruncate/mmap-MAP_SHARED syscalls (`open_ml_shm`, DR-API-free like the GC-move leaf allocator)
+> and published `done` at exit. A new `examples/taint_markerless_victim.c` carries the
+> `taint_sink_chain` fixture + seed as STATIC globals (PIE, so `nm` offset == module offset) and fires
+> NO markers. `make dr-taint-markerless-test` (in `drtrace-test`): `drrun -c <client> region=<victim>+off
+> seed=<victim>+off shm=/name -- victim` produces the IDENTICAL oracle-diffed result as the
+> marker-based launch lane — **seeded 8/8 incl. the full out-of-process TAINT-SET oracle diff (taint set
+> == emulator forward slice); noseed negative 3/3 (zero hits)**; value client still 14/14 byte-identical.
+> `taint_validator` gained a `markerless` mode (skips the app-set `result` check; skips the seeded emu
+> oracle for the noseed control). **Remaining for full Increment 3:** the interactive NUDGE
+> (`dr_nudge_pid` → `drmgr_register_nudge_event`) to arm/disarm a bounded capture window mid-run — a
+> separable refinement; the config half is what Increment 4 (external attach end-to-end) needs, and it
+> is done + reused over `drrun -attach` there.
 
 An attached foreign target calls no markers, so the client learns *what* to instrument
 from outside.

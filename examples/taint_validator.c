@@ -110,12 +110,15 @@ int main(int argc, char **argv) {
      * `noseed` — the negative control, expect ZERO sink hits. Neither flag → the full Increment-5
      * launch validation (backward-compatible). */
     const char *name = AT_SHM_NAME;
-    int prod = 0, noseed = 0;
+    int prod = 0, noseed = 0, markerless = 0;
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "prod") == 0)
             prod = 1;
         else if (strcmp(argv[i], "noseed") == 0)
             noseed = 1;
+        else if (strcmp(argv[i], "markerless") == 0)
+            markerless =
+                1; /* client-owned shm, no app-set result — skip the result check */
         else
             name = argv[i];
     }
@@ -145,8 +148,9 @@ int main(int argc, char **argv) {
 
     CHECK(__atomic_load_n(&shm->done, __ATOMIC_ACQUIRE) == 1,
           "launch: workload finished under drrun (shm done flag set)");
-    CHECK(shm->result == 12,
-          "launch: fixture returned 12 through the launched client");
+    if (!markerless)
+        CHECK(shm->result == 12,
+              "launch: fixture returned 12 through the launched client");
     if (noseed)
         CHECK(shm->report.hits_total == 0 && shm->report.hits_len == 0 &&
                   !shm->report.truncated,
@@ -192,6 +196,10 @@ int main(int argc, char **argv) {
     if (prod) {
         printf("# prod: no taint-SET oracle (record-free client writes no "
                "witness) — the sink is the gate\n");
+    } else if (noseed) {
+        printf(
+            "# noseed: taint set is empty by construction; the emulator "
+            "oracle is seeded, so no diff (the zero-hits check is the gate)\n");
     } else if (!have_oracle) {
         printf("# SKIP out-of-process taint-set oracle: built without "
                "libunicorn\n");
