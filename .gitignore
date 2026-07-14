@@ -28,6 +28,10 @@ bindings/rust/Cargo.lock
 bindings/zig/.zig-cache/
 bindings/zig/zig-out/
 
+# Managed example workload build artifacts (taint tier dotnet lanes)
+examples/**/obj/
+examples/**/bin/
+
 # Node / .NET binding artifacts (Tracks N, D)
 bindings/node/node_modules/
 bindings/node/package-lock.json

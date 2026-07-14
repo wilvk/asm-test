@@ -88,7 +88,8 @@ $(BUILD)/drtrace_app.o: src/drtrace_app.c include/asmtest_drtrace.h \
 .PHONY: drtrace-client
 drtrace-client: $(BUILD)/libasmtest_drclient.so
 $(BUILD)/libasmtest_drclient.so: src/drtrace_client.c src/dataflow_dr_client.c \
-                                 src/dataflow_dr.h drclient/CMakeLists.txt | $(BUILD)
+                                 src/dataflow_dr_client_inlined.c src/dataflow_dr.h \
+                                 include/asmtest_taint.h drclient/CMakeLists.txt | $(BUILD)
 ifndef DR_AVAILABLE
 	@echo "drtrace-client: DynamoRIO not found (set DYNAMORIO_HOME); skipping"
 else
@@ -646,6 +647,52 @@ else
 	  else echo "not ok 2 - expected managed output missing (coexistence failure)"; fi; \
 	  echo "1..2"; \
 	  [ $$rc -eq 0 ] && printf '%s' "$$out" | grep -q "HELLO_TAINT_DOTNET"
+endif
+
+# --- Taint tier Increment 6: dotnet method-range auto-registration ----------
+# DOTNET_PerfMapEnabled=1 drrun -c <taint client>.so methodscan=Hot -- dotnet taint_methods.dll
+# The .NET runtime streams /tmp/perf-<pid>.map as it JITs; the client's perfmap poller thread
+# auto-registers every JIT'd method whose symbol contains "Hot" (HotAlpha + HotBeta) as an
+# instrumented range with NO C region marker — so range-count > 1 arises purely from .NET
+# method-load, and the client instruments REAL JIT'd managed code (the Increment-6 dotnet exit
+# criterion; unblocks Increment 5's managed seed->sink). Asserts: the workload completes
+# (HELLO_TAINT_METHODS, no crash/hang), the client reports regions >= 2, and it instrumented a
+# non-zero instruction count. Self-skips without DynamoRIO OR without the .NET SDK. The client
+# is UNCHANGED from the native launch (single build; the poller is armed by the client option).
+.PHONY: dr-taint-methods-test
+dr-taint-methods-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-methods-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@command -v $(DOTNET) >/dev/null 2>&1 || { \
+	  echo "== dr-taint-methods-test =="; echo "# SKIP: dotnet SDK not found"; \
+	  echo "1..0 # skipped"; exit 0; }
+	@$(MAKE) drtrace-client
+	@echo "== dr-taint-methods-test (drrun methodscan=Hot -- dotnet: perfmap method-load auto-registration) =="
+	@rm -rf $(BUILD)/taint_methods_out
+	@$(DOTNET) build -c Release examples/taint_methods/taint_methods.csproj \
+	    -o $(BUILD)/taint_methods_out >$(BUILD)/taint_methods_build.log 2>&1 \
+	  || { echo "# dotnet build failed:"; tail -20 $(BUILD)/taint_methods_build.log; exit 1; }
+	@out=$$(DOTNET_PerfMapEnabled=1 DOTNET_TieredCompilation=0 \
+	          $(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) methodscan=Hot -- \
+	          $(DOTNET) $(abspath $(BUILD)/taint_methods_out/taint_methods.dll) 2>&1); \
+	  rc=$$?; printf '%s\n' "$$out"; \
+	  reg=$$(printf '%s' "$$out" | grep -oE 'regions=[0-9]+' | grep -oE '[0-9]+' | sort -rn | head -1); \
+	  ins=$$(printf '%s' "$$out" | grep -oE 'inscount=[0-9]+' | grep -oE '[0-9]+' | sort -rn | head -1); \
+	  [ -z "$$reg" ] && reg=0; [ -z "$$ins" ] && ins=0; \
+	  if [ $$rc -eq 0 ] && printf '%s' "$$out" | grep -q "HELLO_TAINT_METHODS"; then \
+	    echo "ok 1 - managed workload ran to completion under drrun + taint client (no crash/hang)"; \
+	  else echo "not ok 1 - dotnet workload crashed/hung or output missing (rc=$$rc)"; fi; \
+	  if [ "$$reg" -ge 2 ]; then \
+	    echo "ok 2 - auto-registered range-count > 1 from .NET method-load (regions=$$reg)"; \
+	  else echo "not ok 2 - expected regions >= 2 auto-registered from perfmap (got $$reg)"; fi; \
+	  if [ "$$ins" -gt 0 ]; then \
+	    echo "ok 3 - client instrumented real JIT'd managed code (inscount=$$ins)"; \
+	  else echo "not ok 3 - expected inscount > 0 over the registered method ranges (got $$ins)"; fi; \
+	  echo "1..3"; \
+	  [ $$rc -eq 0 ] && printf '%s' "$$out" | grep -q "HELLO_TAINT_METHODS" && [ "$$reg" -ge 2 ] && [ "$$ins" -gt 0 ]
 endif
 
 # --- Inlined-vs-clean-call microbenchmark (taint-tier Increment 3) ----------

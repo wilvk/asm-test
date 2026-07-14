@@ -278,6 +278,31 @@ static app_pc pc_seed_marker;
 static app_pc pc_sink_marker;
 static at_taint_report_t *g_report;
 
+/* Managed method-load auto-registration (Increment 6 dotnet slice). A launched managed
+ * workload calls NO region marker, so the client learns which JIT'd method ranges to
+ * instrument from the .NET perfmap (`DOTNET_PerfMapEnabled=1` writes /tmp/perf-<pid>.map,
+ * one `<hex start> <hex size> <symbol>` line per method as it is JIT'd — the same channel
+ * src/ptrace_backend.c parses). The `methodscan=<substr>` client option arms this: a client
+ * poller thread re-reads the perfmap and registers every method whose symbol contains the
+ * substring, so range-count > 1 arises with no per-range C marker. */
+static char g_methodscan[96];
+static int g_methodscan_active;
+/* The APP's process id, captured at client init on the app thread. The poller must NOT call
+ * dr_get_process_id() itself: a DR client thread has its OWN pid on Linux (dr_tools.h), so
+ * from the poller dr_get_process_id() returns the client-thread pid, not the app's — and the
+ * .NET perfmap is /tmp/perf-<app-pid>.map. */
+static int g_app_pid;
+static volatile int g_poller_stop;
+static volatile int g_poller_done;
+
+/* Throwaway capture sink for the marker-less managed path: instrumentation needs a drval to
+ * write into (so it runs + counts via g_inscount), but the managed workload registers none
+ * and we are NOT oracle-diffing managed code here (that is Increments 5(3)/9). A small
+ * client-internal buffer suffices; it overflows honestly and is never read. */
+static at_vstep_t g_self_steps[256];
+static at_tag_t g_self_taint[256];
+static at_drval_t g_self_drval;
+
 /* Map a DR reg id to its reg-tag-file index (canonical 64-bit GP container -> 0..15),
  * or -1 if not a tracked GP register. */
 static int rt_index(reg_id_t reg) {
@@ -828,23 +853,150 @@ static void buf_flush(void *drcontext, void *buf_base, size_t size) {
 /* Marker clean call (once; not the hot path) — learn region + buffer   */
 /* ------------------------------------------------------------------ */
 
+/* Append [base, base+len) to the instrumented range set (deduped by base), lower the offset
+ * origin, and (re)instrument the range. Shared by the region marker (on_marker) and the
+ * managed method-load poller (scan_perfmap); safe to call repeatedly with the same base. */
+static void register_range(app_pc base, size_t len) {
+    int fresh = 0;
+    dr_mutex_lock(g_lock);
+    int n = g_nregions;
+    int dup = 0;
+    for (int i = 0; i < n; i++)
+        if (g_regions[i].base == base) {
+            dup = 1;
+            break;
+        }
+    if (!dup && n < AT_MAX_REGIONS) {
+        if (g_origin == NULL || base < g_origin)
+            g_origin = base; /* offset origin = lowest registered base */
+        g_regions[n].base = base;
+        g_regions[n].len = len;
+        __atomic_store_n(&g_nregions, n + 1, __ATOMIC_RELEASE); /* publish */
+        fresh = 1;
+    }
+    dr_mutex_unlock(g_lock);
+    /* (Re)instrument a freshly-registered (or freshly-mmap'd, never-executed) range so it
+     * picks up the value/taint instrumentation on its next execution. */
+    if (fresh)
+        dr_delay_flush_region(base, len, 0, NULL);
+}
+
 static void on_marker(app_pc base, size_t len, at_drval_t *drval) {
     dr_mutex_lock(g_lock);
     if (g_drval == NULL)
         g_drval = drval; /* first marker latches the shared capture buffer */
-    if (g_origin == NULL || base < g_origin)
-        g_origin = base; /* offset origin = lowest registered base */
-    int n = g_nregions;
-    if (n < AT_MAX_REGIONS) {
-        g_regions[n].base = base;
-        g_regions[n].len = len;
-        __atomic_store_n(&g_nregions, n + 1, __ATOMIC_RELEASE); /* publish */
-    }
     dr_mutex_unlock(g_lock);
-    /* (Re)instrument the range: a freshly-registered (or freshly-mmap'd, never-executed)
-     * range picks up the value/taint instrumentation on its next execution. */
-    dr_delay_flush_region(base, len, 0, NULL);
+    register_range(base, len);
 }
+
+#ifdef ASMTEST_TAINT
+/* ------------------------------------------------------------------ */
+/* Managed method-load auto-registration (Increment 6 dotnet slice)     */
+/* ------------------------------------------------------------------ */
+
+/* Case-sensitive substring test — no libc under DR's private loader. */
+static int str_contains(const char *hay, const char *needle) {
+    if (needle[0] == '\0')
+        return 1;
+    for (const char *h = hay; *h != '\0'; h++) {
+        const char *a = h;
+        const char *b = needle;
+        while (*a != '\0' && *b != '\0' && *a == *b) {
+            a++;
+            b++;
+        }
+        if (*b == '\0')
+            return 1;
+    }
+    return 0;
+}
+
+/* Parse one lower/upper hex integer at *sp, advancing past it; returns 0 if no hex digit. */
+static int parse_hex(const char **sp, uint64_t *out) {
+    const char *s = *sp;
+    uint64_t v = 0;
+    int any = 0;
+    /* Skip an optional 0x/0X prefix — the .NET perfmap writes the start address as
+     * `0x<hex>` (the size field is bare hex), so without this every line mis-parses. */
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X'))
+        s += 2;
+    for (;; s++) {
+        char c = *s;
+        int d;
+        if (c >= '0' && c <= '9')
+            d = c - '0';
+        else if (c >= 'a' && c <= 'f')
+            d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F')
+            d = c - 'A' + 10;
+        else
+            break;
+        v = v * 16 + (uint64_t)d;
+        any = 1;
+    }
+    *out = v;
+    *sp = s;
+    return any;
+}
+
+/* Read /tmp/perf-<pid>.map and register every method whose symbol contains g_methodscan
+ * (deduped in register_range). Off the hot path (poller thread only). A method too late to
+ * fit the read buffer is simply picked up on a later poll once earlier ones are gone or by
+ * a larger read; for the tiny scan-target set this reads the whole map in one pass. */
+static void scan_perfmap(void) {
+    if (!g_methodscan_active)
+        return;
+    char path[64];
+    dr_snprintf(path, sizeof path, "/tmp/perf-%d.map", g_app_pid);
+    path[sizeof path - 1] = '\0';
+    file_t f = dr_open_file(path, DR_FILE_READ);
+    if (f == INVALID_FILE)
+        return;
+    static char buf
+        [1 << 18]; /* 256 KiB; poller is single-threaded so a static is fine */
+    ssize_t got = dr_read_file(f, buf, sizeof buf - 1);
+    dr_close_file(f);
+    if (got <= 0)
+        return;
+    buf[got] = '\0';
+    for (char *p = buf; *p != '\0';) {
+        char *nl = p;
+        while (*nl != '\0' && *nl != '\n')
+            nl++;
+        char saved = *nl;
+        *nl = '\0';
+        const char *s = p;
+        uint64_t start = 0, size = 0;
+        while (*s == ' ' || *s == '\t')
+            s++;
+        if (parse_hex(&s, &start)) {
+            while (*s == ' ' || *s == '\t')
+                s++;
+            if (parse_hex(&s, &size) && size > 0) {
+                while (*s == ' ' || *s == '\t')
+                    s++;
+                if (str_contains(s, g_methodscan))
+                    register_range((app_pc)(uintptr_t)start, (size_t)size);
+            }
+        }
+        if (saved == '\0')
+            break;
+        p = nl + 1;
+    }
+}
+
+/* Client poller thread: re-scan the perfmap until the workload exits (or a ~10 s cap), so
+ * methods JIT'd mid-run are registered + flushed into instrumentation as they appear. Does
+ * not run app code — pure DR API (open/read/flush/sleep). */
+static void poller_thread(void *arg) {
+    (void)arg;
+    for (int i = 0; i < 1000 && !g_poller_stop; i++) {
+        scan_perfmap();
+        dr_sleep(10);
+    }
+    g_poller_done = 1;
+}
+#endif /* ASMTEST_TAINT */
 
 /* ------------------------------------------------------------------ */
 /* Inlined per-instruction capture                                      */
@@ -1406,6 +1558,18 @@ static dr_signal_action_t event_signal(void *drcontext, dr_siginfo_t *info) {
 }
 
 static void event_exit(void) {
+#ifdef ASMTEST_TAINT
+    /* Signal the method-load poller to stop, but do NOT wait for it here. At process exit DR
+     * suspends client threads (they run only while DR is executing the app), so spinning on
+     * dr_sleep() for the poller's ack would deadlock DR's exit synchronization — empirically
+     * the drrun-over-dotnet exit hangs iff BOTH a live poller client thread AND this wait are
+     * present; removing either avoids it. DR terminates the client thread as part of the exit
+     * sequence; we merely flip the stop flag. Because the poller may therefore still be live
+     * (and holding g_lock inside register_range) while this runs, we deliberately DO NOT
+     * destroy g_lock or free g_dir under methodscan — the OS reclaims them at process exit,
+     * and leaking them avoids a teardown-vs-poller race. */
+    g_poller_stop = 1;
+#endif
     /* Scoping cost metric (Increment 6): report how many app instructions the client
      * instrumented and how many ranges it scoped to, so a scope=whole vs scope=ranges pair
      * of runs can prove the inscount delta (the cost bound). A single grep-able line. */
@@ -1418,10 +1582,16 @@ static void event_exit(void) {
     drx_exit();
     drreg_exit();
     drmgr_exit();
-    dr_mutex_destroy(g_lock);
 #ifdef ASMTEST_TAINT
-    if (g_dir != NULL)
-        dr_raw_mem_free(g_dir, AT_DIR_LEN * sizeof(at_tag_t *));
+    /* Skip g_lock/g_dir teardown while the poller may still touch them (see above); leak at
+     * exit. Without methodscan there is no poller, so tear them down normally. */
+    if (!g_methodscan_active) {
+        dr_mutex_destroy(g_lock);
+        if (g_dir != NULL)
+            dr_raw_mem_free(g_dir, AT_DIR_LEN * sizeof(at_tag_t *));
+    }
+#else
+    dr_mutex_destroy(g_lock);
 #endif
 }
 
@@ -1437,12 +1607,23 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
                                  false};
 #endif
     (void)id;
-    /* Client options (drrun -c <client> [opts] -- <app>): `scope=whole` instruments the
-     * whole window spanning the registered ranges instead of only the ranges (Increment 6
-     * inscount toggle). Scanned across all argv (argv[0] is the client path). */
+    /* Client options (drrun -c <client> [opts] -- <app>), scanned across all argv (argv[0]
+     * is the client path): `scope=whole` instruments the whole window spanning the
+     * registered ranges instead of only the ranges (Increment 6 inscount toggle);
+     * `methodscan=<substr>` auto-registers .NET method ranges from the perfmap whose symbol
+     * contains <substr> (Increment 6 managed method-load slice). */
     for (int i = 0; i < argc; i++) {
-        if (argv[i] != NULL && strcmp(argv[i], "scope=whole") == 0)
+        if (argv[i] == NULL)
+            continue;
+        if (strcmp(argv[i], "scope=whole") == 0)
             g_scope_whole = 1;
+#ifdef ASMTEST_TAINT
+        else if (strncmp(argv[i], "methodscan=", 11) == 0) {
+            dr_snprintf(g_methodscan, sizeof g_methodscan, "%s", argv[i] + 11);
+            g_methodscan[sizeof g_methodscan - 1] = '\0';
+            g_methodscan_active = (g_methodscan[0] != '\0');
+        }
+#endif
     }
 #ifdef ASMTEST_TAINT_GCREMAP
     /* Client option (drrun -c <client> gcremap_selftest -- <app>): run the Increment 7
@@ -1506,5 +1687,25 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
      * app's threads exist (so the lock+fence quiesce in at_gc_remap is exact). */
     if (gcremap_selftest)
         run_gcremap_selftest();
+#endif
+#ifdef ASMTEST_TAINT
+    /* Managed method-load auto-registration (Increment 6 dotnet slice): a launched managed
+     * workload registers no C region marker, so point capture at a throwaway internal buffer
+     * (we are not oracle-diffing managed code here) and spawn the perfmap poller that
+     * discovers + registers JIT'd method ranges by symbol substring. */
+    if (g_methodscan_active) {
+        /* Capture the app pid HERE (dr_client_main runs on the app's thread), not in the
+         * poller (a client thread has its own pid) — see g_app_pid. */
+        g_app_pid = (int)dr_get_process_id();
+        g_self_drval.steps = g_self_steps;
+        g_self_drval.steps_cap = sizeof g_self_steps / sizeof g_self_steps[0];
+        g_self_drval.step_taint = g_self_taint;
+        g_self_drval.step_taint_cap =
+            sizeof g_self_taint / sizeof g_self_taint[0];
+        g_drval = &g_self_drval;
+        if (!dr_create_client_thread(poller_thread, NULL))
+            dr_fprintf(STDERR,
+                       "drtaint-inlined: method-load poller create failed\n");
+    }
 #endif
 }

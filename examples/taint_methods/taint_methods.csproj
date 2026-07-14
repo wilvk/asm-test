@@ -1,0 +1,18 @@
+<!-- Managed workload for the DynamoRIO taint tier's method-range auto-registration slice
+     (dynamorio-taint-tier-plan.md, Increment 6). Driven by mk/native-trace.mk
+     dr-taint-methods-test as the target of a drrun client launch with
+     DOTNET_PerfMapEnabled=1 and the client option methodscan=Hot, so the client's perfmap
+     poller auto-registers the JIT'd HotAlpha/HotBeta method ranges (range-count > 1) with no
+     C region marker. Tiered compilation is turned OFF so each method JITs once to a stable
+     address (a single, deterministic perfmap entry per method); the re-JIT / code-cache
+     stress is the separate Increment-5 coexistence lane (taint_hello). -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>taint_methods</AssemblyName>
+    <TieredCompilation>false</TieredCompilation>
+  </PropertyGroup>
+</Project>

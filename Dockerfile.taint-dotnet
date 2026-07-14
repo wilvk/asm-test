@@ -37,7 +37,11 @@ ENV DYNAMORIO_HOME=/opt/dynamorio
 WORKDIR /src
 COPY . .
 
-# Run the coexistence smoke. Self-skips cleanly if DynamoRIO / the .NET SDK were absent,
-# but here both are installed, so it executes.
+# Run (1) the coexistence smoke (make dr-taint-dotnet-test) and (2) the Increment-6 method-
+# range auto-registration lane (make dr-taint-methods-test): DOTNET_PerfMapEnabled=1 +
+# methodscan=Hot so the client's perfmap poller auto-registers the JIT'd HotAlpha/HotBeta
+# ranges (range-count > 1) with no C marker and instruments real managed code. Self-skip
+# cleanly if DynamoRIO / the .NET SDK were absent, but here both are installed, so they run.
 CMD set -eux; \
-    make dr-taint-dotnet-test DYNAMORIO_HOME=$DYNAMORIO_HOME
+    make dr-taint-dotnet-test DYNAMORIO_HOME=$DYNAMORIO_HOME; \
+    make dr-taint-methods-test DYNAMORIO_HOME=$DYNAMORIO_HOME
