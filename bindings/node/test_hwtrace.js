@@ -502,6 +502,57 @@ async function main() {
     }
   }
 
+  // --- AsyncStitchedTrace ZERO-CONFIG ambient hops (§D1 scoped/zero-config async): a decoupled
+  //     helper that NEVER receives the `op` handle enrolls hops against the AMBIENT operation via
+  //     the static AsyncStitchedTrace.scoped(), proving the OPERATION itself (not just its
+  //     ScopeId) propagates across await/continuation hops through AsyncLocalStorage. Complements
+  //     the explicit-`op.step` producer above (the scoped/zero-config surface, dotnet's
+  //     AsyncLocal<ScopeId> analog reaching decoupled code). ---
+  {
+    HwTrace.init(SINGLESTEP);
+    const code = NativeCode.fromBytes(ROUTINE); // add2 leaf: taken path is [0,3,6,0xC,0x11] (5 insns)
+    // ambientWork closes over NO `op` — it discovers the operation from the async context alone.
+    const ambientWork = (c, a, b) => AsyncStitchedTrace.scoped(c, a, b);
+    const op = new AsyncStitchedTrace();
+    try {
+      ok(AsyncStitchedTrace.currentOperation() === null,
+        'scoped: no ambient operation before run()');
+      // Outside any run(): scoped() runs the leaf UNINSTRUMENTED, result intact, no hop enrolled.
+      const outside = AsyncStitchedTrace.scoped(code, 20, 22);
+      ok(outside === 42, 'scoped: outside run() the call still runs (uninstrumented), returns 42');
+      ok(op.hopCount === 0, 'scoped: outside run() enrolls no hop on any operation');
+
+      let ambBefore = false, ambAfter = false;
+      const results = await op.run(async () => {
+        ambBefore = AsyncStitchedTrace.currentOperation() === op;
+        const r0 = ambientWork(code, 20, 22);           // hop 0 via the zero-config ambient path
+        await new Promise((res) => setImmediate(res));  // async hop -> resumes on a later tick
+        ambAfter = AsyncStitchedTrace.currentOperation() === op;
+        const r1 = ambientWork(code, 1, 2);             // hop 1 (post-continuation)
+        return [r0, r1];
+      });
+
+      ok(ambBefore, 'scoped: the ambient OPERATION (not just its id) is on the run() context');
+      ok(ambAfter, 'scoped: the ambient operation propagates across the await (AsyncLocalStorage)');
+      ok(AsyncStitchedTrace.currentOperation() === null,
+        'scoped: ambient operation does not leak past run()');
+      ok(results[0] === 42 && results[1] === 3,
+        'scoped: zero-config ambient hops return their real results (execution intact)');
+      ok(op.hopCount === 2, 'scoped: both ambient hops enrolled onto the operation');
+
+      op.complete();
+      ok(op.skipReason === '', 'scoped: all ambient hops captured on the single-step tier');
+      ok(op.hops.length === 2 && op.hops.every((h, i) => h.seq === i),
+        'scoped: ambient hops stitch densely by seq');
+      ok(op.hops[0].insnOff === 0 && op.hops[1].insnOff === 5,
+        'scoped: ambient hop bounds concatenate each 5-insn body (offsets 0/5)');
+    } finally {
+      op.free();
+      code.free();
+      HwTrace.shutdown();
+    }
+  }
+
   // --- symbolizeBuckets + regionName: whole-window noise attribution. HOST-INDEPENDENT-ish
   //     (Linux /proc + a synthetic /tmp perf-map; no single-step/Capstone/PT/privilege). Mirrors
   //     the C oracle test_symbolize_bucket. ---

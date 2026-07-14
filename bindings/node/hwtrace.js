@@ -1112,13 +1112,48 @@ class HwTrace {
  *    op.complete();
  *    // op.path — merged per-hop disassembly; op.hops — each hop's { seq, tid, insnOff }
  *
+ *  ZERO-CONFIG ambient capture: the `AsyncLocalStorage` store carries the operation ITSELF
+ *  (not just its ScopeId), so deeply-nested code that never received the `op` handle can still
+ *  enroll a hop against the AMBIENT operation via the static `AsyncStitchedTrace.scoped(code,
+ *  ...args)` — the scoped/zero-config async surface, propagated across `await` hops exactly like
+ *  `step`. `currentOperation()` exposes the ambient operation (or null) for the same reason.
+ *
+ *    await op.run(async () => {
+ *      doWork(code);                              // a helper with NO `op` param...
+ *      await something();
+ *      doWork(code);                              // ...its hops still stitch into `op`
+ *    });
+ *    // where: function doWork(c) { AsyncStitchedTrace.scoped(c, 20, 22); }
+ *
  *  Captured hop handles are retained until `free()` (which also `complete()`s if needed).
  *  A `worker_threads` hop escapes the ExecutionContext — the disclosed Node gap (the tag
  *  still records the worker `threadId`, but the ScopeId does not auto-propagate there). */
 class AsyncStitchedTrace {
-  /** The scope id flowing through `AsyncLocalStorage` for the active operation, 0 when none
-   *  is on this execution context (read it inside `run(...)` / an awaited continuation of it). */
-  static currentScopeId() { return AsyncStitchedTrace._als.getStore() || 0; }
+  /** The active operation flowing through `AsyncLocalStorage` on this execution context, or null
+   *  when none is (read it inside `run(...)` / an awaited continuation of it). The store carries
+   *  the operation ITSELF, so `scoped(...)` can enroll a hop with no `op` handle threaded. */
+  static currentOperation() { return AsyncStitchedTrace._als.getStore() || null; }
+
+  /** The scope id (>= 1) of the operation flowing through `AsyncLocalStorage`, or 0 when none is
+   *  on this execution context (read it inside `run(...)` / an awaited continuation of it). */
+  static currentScopeId() {
+    const op = AsyncStitchedTrace._als.getStore();
+    return op ? op._scopeId : 0;
+  }
+
+  /** Capture ONE hop against the AMBIENT operation on this execution context — the scoped,
+   *  zero-config async surface complementing `op.step`. Code that never received the
+   *  `AsyncStitchedTrace` can still enroll a hop: the operation flows in through
+   *  `AsyncLocalStorage` (across `await` / continuation hops, like `run`'s ScopeId), so this
+   *  finds it and tags/renders the hop just as `op.step(code, ...args)` would. With NO ambient
+   *  operation (or a completed/freed one) the call still RUNS UNINSTRUMENTED — the result is
+   *  never lost and no hop is recorded. Returns the call's result (JS number, BigInt out of safe
+   *  range). Keep `code` a native leaf (same in-process single-step footing as `step`). */
+  static scoped(code, ...args) {
+    const op = AsyncStitchedTrace._als.getStore();
+    if (op && !op._completed && !op._freed) return op.step(code, ...args);
+    return code.call(...args.slice(0, 2)); // no ambient op: run uninstrumented, never lose it
+  }
 
   constructor() {
     this._scopeId = ++AsyncStitchedTrace._nextScopeId;
@@ -1137,11 +1172,12 @@ class AsyncStitchedTrace {
   /** Hops attempted so far (including any that ran uninstrumented). */
   get hopCount() { return this._hops.length; }
 
-  /** Run `fn` with this operation's ScopeId established in the `AsyncLocalStorage` store, so
-   *  it flows into every `await` continuation `fn` spawns (where `AsyncStitchedTrace.currentScopeId()`
-   *  reads it back — the same context propagation dotnet gets from `AsyncLocal<ScopeId>`).
-   *  Returns whatever `fn` returns (await it when `fn` is async). */
-  run(fn) { return AsyncStitchedTrace._als.run(this._scopeId, fn); }
+  /** Run `fn` with this operation established in the `AsyncLocalStorage` store, so it flows into
+   *  every `await` continuation `fn` spawns — where `AsyncStitchedTrace.currentScopeId()` reads
+   *  back its scope id and `AsyncStitchedTrace.currentOperation()` / `scoped(...)` reach the
+   *  operation itself for zero-config ambient hop capture (the same context propagation dotnet
+   *  gets from `AsyncLocal<ScopeId>`). Returns whatever `fn` returns (await it when `fn` is async). */
+  run(fn) { return AsyncStitchedTrace._als.run(this, fn); }
 
   /** Capture one hop of the operation: registry-free lazy-arm ONLY `code`'s body
    *  (`call_scoped_ex`), tag the slice with this operation's scope id, the current worker
