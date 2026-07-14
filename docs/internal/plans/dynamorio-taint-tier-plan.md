@@ -760,7 +760,7 @@ DR + .NET-SDK image, the `drrun` launcher, the shm transport, the out-of-process
 managed shim, and the first real JIT-coexistence test. The build-mode fallback is small if it
 triggers; the risk concentration is the un-demonstrated JIT/code-cache coexistence.
 
-## Increment 6 - Whole-process breadth + method-range scoping *(native multi-range mechanism + boundary policy + inscount scoping LANDED 2026-07-13; dotnet method-load auto-registration remains)*
+## Increment 6 - Whole-process breadth + method-range scoping *(COMPLETE — native multi-range mechanism + boundary policy + inscount scoping LANDED 2026-07-13; dotnet method-load auto-registration LANDED 2026-07-14, commit 47a4721)*
 
 > **Native multi-range mechanism LANDED 2026-07-13 — the range-set core + boundary policy +
 > inscount cost bound.** The single `g_region` is generalized to a published SET of registered
@@ -818,7 +818,7 @@ reuses the Phase-4 PC→method addr-channel, so the plumbing is known; the subtl
 conservative un-instrumented-gap boundary policy and proving the scoping cost bound with an
 inscount delta.
 
-## Increment 7 - GC-move umbra shadow remap *(planned — hard-blocked on Phase 4)*
+## Increment 7 - GC-move umbra shadow remap *(partial slice LANDED 2026-07-13 (disabled-flag remap + synthetic test, 092142d); full path now UNBLOCKED 2026-07-14 — the Phase-4 extraction blocker is solved by the ICorProfilerCallback4::MovedReferences2 profiler, coexistence-probe GO 55763e7; remap wiring + live-GC survival test remain)*
 
 > **UPDATE 2026-07-14 — triple-extraction mechanism researched; recommendation changed.**
 > The Phase-4 `{old,new,len}` extraction has now been researched (deep-research
@@ -952,6 +952,33 @@ weight to earlier increments but not equal scope — sequenced late for exactly 
 > the drx_buf record + witness, inline `lea` for the EA — the ~60% chunk), **(2) a direct-mapped shadow**
 > (the residual propagation) — then GC-survival (Increment 7 — now unblocked, profiler path), the
 > shared-fixture emulator cross-check, and the hard band + non-detection CI gate.
+
+> **Implementation spec — lever (1) record-free production propagation (the ~60% chunk, next up).**
+> A precise scope so this delicate `event_insert` change is a clean pickup, not a rushed re-architecture.
+> - **What to remove under `prod`:** the entire drx_buf record path — the per-instruction buffer-pointer
+>   load (`drx_buf_insert_load_buf_ptr`) + advance (`drx_buf_insert_update_buf_ptr`), the `off`/`mem_n`/
+>   `mem_ea` stores, and the `step_taint` witness store. Production needs neither the value trace nor the
+>   taint SET; only the shadow state + the sink.
+> - **What propagation must then do itself:** compute each memory-source EA INLINE via `lea` over the
+>   drreg-app-restored base/index (exactly the pattern `emit_shadow_store` and the Increment-8 >8-byte
+>   SIMD source path already use) instead of reading `mem_ea` from the record. Reg-tag unions, the shadow
+>   read/write, and the guarded sink are unchanged.
+> - **Register plan:** no `s_ptr` (no buffer). Reserve scratch for EA (`s_a`), shadow work (`s_b`), the
+>   union accumulator (`s_t`), and the reg-tag base (`t_rf`), plus aflags around the phase — ~4 GPR +
+>   aflags (vs the current 6). On any drreg failure, degrade to skipping taint for that step (a
+>   conservative miss), never corrupt the shadow.
+> - **Structure:** in `prod`, branch to a self-contained propagation path that does NOT run the value
+>   pass at all; keep the current value+propagation path for non-prod (so the flag-off value client and
+>   the oracle-diffed taint lanes are byte-unchanged). This is a second, smaller emit path, not an edit
+>   of the shared one.
+> - **Validation (note: no witness ⇒ no taint-SET oracle):** correctness rests on the SINK — the native
+>   `sink`/`sink-negative` lanes and the managed seed→sink must still fire/stay-zero under `prod`
+>   (a seed reaching a sink is the end-to-end proof taint propagated). Add a `prod` variant of those
+>   asserts. Then re-measure via the overhead bench — expect `prod` ~187× → ~75× bare.
+> - **Risk:** this is the tier's most delicate code (inline drreg/EA management around the app
+>   instruction); do it fresh, sink-validate before committing, and revert rather than ship a
+>   sink-that-passes-but-mis-propagates. The direct-mapped shadow (lever 2) is a separate, later change
+>   to the shadow accessor only.
 
 The Phase-5 exit gate the whole plan works backward from: everything above composed into a real
 managed data-flow assertion with a measured cost, replacing the offset-only dotnet smoke
