@@ -34,6 +34,7 @@
 'use strict';
 const koffi = require('koffi');
 const path = require('path');
+const fs = require('fs');                              // perf-map read for V8 jitdump resolution
 const { AsyncLocalStorage } = require('async_hooks'); // §D0.4 async-hop ScopeId propagation
 const { threadId } = require('worker_threads');        // per-hop provenance tag
 
@@ -1477,6 +1478,50 @@ class Ptrace {
       codeIndex: Number(entry.readBigUInt64LE(24)),
       code: wantBytes ? Buffer.from(codeBuf.subarray(0, n)) : Buffer.alloc(0),
     };
+  }
+
+  /** Resolve a LIVE V8 (Node.js) JIT method to its recorded { name, codeAddr, codeSize,
+   *  codeIndex, timestamp, code, perfMapAddr, perfMapSize } from a real `jit-<pid>.dump` a
+   *  running V8 emitted under `node --perf-prof` — the Node counterpart to .NET's
+   *  MethodLoad-driven managed-method resolution, closing the "live V8 JIT-method resolution"
+   *  gap the async-hop producer disclosed. V8 names a method IDENTICALLY in `/tmp/perf-<pid>.map`
+   *  (`node --perf-basic-prof`) and the binary jitdump, but the shipped `asmtest_jitdump_find`
+   *  matches the recorded name EXACTLY, so this reads the perf-map to recover the exact name +
+   *  its tier sigil, then resolves each candidate (best tier first) through `jitdumpFind`.
+   *  Preference: OPTIMIZED `LazyCompile:*` (turbofan) over baseline `*:^` over interpreted `*:~`.
+   *  `dumpPath` is the `jit-<pid>.dump`, `mapPath` the `perf-<pid>.map`, `methodSubstr` the JS
+   *  function name (e.g. 'asmtjitHot'). Returns null when the map/dump are absent or no compiled
+   *  tier of the method is recorded yet; the code Buffer carries up to `wantBytes` of the
+   *  recorded body. `perfMapAddr`/`perfMapSize` are the last same-name perf-map entry, for the
+   *  cross-check that the two independent V8 emission paths agree. Linux/V8 only. */
+  static v8ResolveJitMethod(dumpPath, mapPath, methodSubstr, wantBytes = 8192) {
+    let lines;
+    try { lines = fs.readFileSync(mapPath, 'utf8').split('\n'); } catch (_e) { return null; }
+    const entries = []; // { name, addr, size } perf-map rows whose symbol contains methodSubstr
+    for (const line of lines) {
+      const sp1 = line.indexOf(' ');
+      if (sp1 <= 0) continue;
+      const sp2 = line.indexOf(' ', sp1 + 1);
+      if (sp2 < 0) continue;
+      const name = line.slice(sp2 + 1);
+      if (!name.includes(methodSubstr)) continue;
+      entries.push({ name, addr: BigInt('0x' + line.slice(0, sp1)),
+        size: BigInt(parseInt(line.slice(sp1 + 1, sp2), 16)) });
+    }
+    if (entries.length === 0) return null;
+    const tierOf = (n) => (n.includes(':*') ? 0 : n.includes(':^') ? 1 : 2);
+    const names = [...new Set(entries.map((e) => e.name))].sort((a, b) => tierOf(a) - tierOf(b));
+    for (const name of names) {
+      const m = Ptrace.jitdumpFind(dumpPath, name, 0, wantBytes);
+      if (!m) continue;
+      // asmtest_jitdump_find returns the LAST recorded body for this name; align the perf-map
+      // cross-check to the LAST perf-map entry with the same name.
+      let pm = null;
+      for (const e of entries) if (e.name === name) pm = e;
+      return { name, codeAddr: m.codeAddr, codeSize: m.codeSize, codeIndex: m.codeIndex,
+        timestamp: m.timestamp, code: m.code, perfMapAddr: pm.addr, perfMapSize: pm.size };
+    }
+    return null;
   }
 }
 

@@ -16,6 +16,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { spawnSync } = require('child_process');
 const koffi = require('koffi');
 const {
   HwTrace, NativeCode, AddrChannel, AsyncStitchedTrace, Ptrace, Descent, CodeImage, SINGLESTEP, AMD_LBR,
@@ -931,6 +932,57 @@ async function main() {
         ret.free();
       }
     }
+  }
+
+  // --- Live V8 jitdump method resolution (§D1 P2 / dotnet-parity Node row "V8-jitdump
+  //     resolution"): drive a REAL child Node.js (V8) with --perf-prof so it emits a native
+  //     jit-<pid>.dump, then resolve a genuinely-JIT'd JS method's recorded (addr,size,bytes)
+  //     from it via the shipped asmtest_jitdump_find (Ptrace.v8ResolveJitMethod). File-only (no
+  //     ptrace / no privilege), so it runs in the plain docker-hwtrace-node lane — unlike the
+  //     out-of-band attach+step of a live method (docker-hwtrace-jit, SYS_PTRACE). Self-skips off
+  //     Linux or where this node build emits no jitdump. Mirrors the C oracle trace_jitdump (V8). ---
+  if (process.platform !== 'linux') {
+    console.log('# SKIP live V8 jitdump: --perf-prof jitdump is Linux-only');
+  } else {
+    // A distinctively-named hot function V8 will tier up (turbofan) so a compiled body — with
+    // recorded bytes — lands in the jitdump. Guard `acc` from dead-code elimination.
+    const warm = 'function asmtjitHot(a,b){let s=0;for(let i=0;i<a;i++)s+=(i^b)+(i*3);return s;}\n'
+      + 'let acc=0; for(let k=0;k<300000;k++) acc+=asmtjitHot(50,k&7);\n'
+      + 'if(acc===0) process.exit(2);\n';
+    const scriptPath = path.join(os.tmpdir(), `asmtest-v8warm-${process.pid}.js`);
+    fs.writeFileSync(scriptPath, warm);
+    // Spawn the SAME node build; cwd=/tmp so the cwd-relative jit-<pid>.dump lands beside the
+    // hardcoded /tmp/perf-<pid>.map. --perf-prof writes the binary jitdump; --perf-basic-prof the
+    // text perf-map that carries the exact jitdump method name + tier sigil.
+    const child = spawnSync(process.execPath, ['--perf-prof', '--perf-basic-prof', scriptPath],
+      { cwd: '/tmp', timeout: 60000, encoding: 'utf8' });
+    const cpid = child && child.pid;
+    const dumpPath = `/tmp/jit-${cpid}.dump`;
+    const mapPath = `/tmp/perf-${cpid}.map`;
+    let dumpOk = false;
+    try { dumpOk = Boolean(cpid) && fs.statSync(dumpPath).size > 40 && fs.existsSync(mapPath); }
+    catch (_e) { dumpOk = false; }
+    if (!dumpOk) {
+      console.log('# SKIP live V8 jitdump: node emitted no jitdump '
+        + `(status=${child && child.status}, --perf-prof unsupported?)`);
+    } else {
+      const m = Ptrace.v8ResolveJitMethod(dumpPath, mapPath, 'asmtjitHot', 8192);
+      ok(m !== null, "v8ResolveJitMethod: resolved a live-JIT'd asmtjitHot from the real V8 jitdump");
+      if (m !== null) {
+        ok(m.name.includes('asmtjitHot'), `v8 jitdump: resolved the named method (${m.name})`);
+        // Cross-check: the jitdump code_addr/size AGREE with the runtime's own perf-map entry —
+        // two independent V8 emission paths for the same method (the C oracle's check #2).
+        ok(m.codeAddr === m.perfMapAddr && m.codeSize === m.perfMapSize,
+          'v8 jitdump: code_addr/size agree with the perf-map (two independent V8 paths)');
+        // A real recorded body: the jitdump carried its bytes, exactly code_size of them.
+        const want = m.codeSize <= 8192n ? m.codeSize : 8192n;
+        ok(m.codeSize > 0n && BigInt(m.code.length) === want,
+          "v8 jitdump: recovered the method's full recorded code bytes");
+      }
+    }
+    try { fs.unlinkSync(scriptPath); } catch (_e) { /* ignore */ }
+    try { fs.unlinkSync(dumpPath); } catch (_e) { /* ignore */ }
+    try { fs.unlinkSync(mapPath); } catch (_e) { /* ignore */ }
   }
 
   // --- Time-aware code-image recorder (CodeImage, asmtest_codeimage.h): a userspace
