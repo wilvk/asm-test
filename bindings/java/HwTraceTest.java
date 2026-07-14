@@ -156,6 +156,7 @@ public final class HwTraceTest {
             singlestepLiveTrace();
             singlestepLoopNoDepthCeiling();
             callScopedTracesANativeCall();
+            stitchedTraceProducerAcrossHops();
             windowTracesAWholeScope();
             attributeWindowSplitsNamedLeaves();
         } catch (Throwable t) {
@@ -235,6 +236,59 @@ public final class HwTraceTest {
             }
             ok(allOk, "callScoped registry-free: 40 calls each return i+1 (first bad i=" + bad + ")");
         } finally {
+            code.free();
+        }
+    }
+
+    // §D0.4 LIVE async-hop producer (HwTrace.AsmStitchedTrace): follow ONE logical operation across
+    // a REAL executor thread hop and stitch each hop's call_scoped capture into one seq-ordered
+    // trace — the JVM analog of dotnet's AsmStitchedTrace. Proves (1) the thread-local scope id
+    // crosses the submit onto the pool thread via propagate(), (2) the hop really ran on a
+    // DIFFERENT OS thread, and (3) the two hops stitch back by seq, every slice carrying the one
+    // operation's scope id + its capturing tid. Single-step is available here (past the SKIP guard).
+    private static void stitchedTraceProducerAcrossHops() throws Exception {
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
+        try (HwTrace.AsmStitchedTrace op = new HwTrace.AsmStitchedTrace()) {
+            long opId = op.scopeId();
+            ok(opId != 0, "stitchedTrace: the operation has a nonzero scope id");
+            ok(HwTrace.AsmStitchedTrace.currentScopeId() == opId,
+                "stitchedTrace: the scope id flows through this thread's thread-local");
+            int mainTid = (int) Thread.currentThread().threadId();
+
+            long r0 = op.step(code, 20, 22); // hop 0 on THIS thread -> 42
+            ok(r0 == 42, "stitchedTrace: hop 0 runs synchronously on the calling thread (result 42)");
+
+            // hop 1 on a REAL pool thread; propagate() carries the scope id across the submit.
+            long[] hopScope = new long[1];
+            int[] hopTid = new int[1];
+            long r1 = pool.submit(op.propagate(() -> {
+                hopScope[0] = HwTrace.AsmStitchedTrace.currentScopeId();
+                hopTid[0] = (int) Thread.currentThread().threadId();
+                return op.step(code, 1, 2); // -> 3
+            })).get();
+            ok(r1 == 3, "stitchedTrace: hop 1 runs on a pool thread (result 3)");
+            ok(hopScope[0] == opId,
+                "stitchedTrace: propagate() carries the scope id to the pool thread (the AsyncLocal analog)");
+            ok(hopTid[0] != mainTid, "stitchedTrace: hop 1 really ran on a DIFFERENT OS thread");
+
+            op.complete();
+            ok(op.hopCount() == 2, "stitchedTrace: two hops attempted");
+            HwTrace.StitchBound[] b = op.hops();
+            ok(b.length == 2, "stitchedTrace: both hops captured and stitched (got " + b.length + ")");
+            ok(b[0].seq() == 0 && b[0].insnOff() == 0, "stitchedTrace: slice 0 is hop 0 at merged offset 0");
+            ok(b[1].seq() == 1 && b[1].insnOff() > 0,
+                "stitchedTrace: slice 1 is hop 1, stitched AFTER hop 0 in the merged stream (off "
+                    + b[1].insnOff() + ")");
+            ok(b[0].scopeId() == opId && b[1].scopeId() == opId,
+                "stitchedTrace: every slice carries the one operation's scope id");
+            ok(b[0].tid() == mainTid && b[1].tid() == hopTid[0],
+                "stitchedTrace: each slice retains its own capturing thread id");
+            ok(!op.truncated(), "stitchedTrace: the merged trace is complete (not truncated)");
+            ok(op.path().contains("hop 0") && op.path().contains("hop 1"),
+                "stitchedTrace: the merged path has a per-hop header for each stitched hop");
+        } finally {
+            pool.shutdown();
             code.free();
         }
     }

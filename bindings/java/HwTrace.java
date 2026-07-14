@@ -1770,6 +1770,225 @@ public final class HwTrace {
         }
     }
 
+    /**
+     * §D0.4 — the JVM LIVE async-hop producer: follow ONE logical operation across executor /
+     * {@link java.util.concurrent.CompletableFuture} thread hops and stitch each hop's
+     * registry-free {@code call_scoped} capture into a single seq-ordered trace — the JVM analog
+     * of dotnet's {@code AsmStitchedTrace}. A {@link ThreadLocal} scope id identifies the
+     * operation, but a plain JVM thread-local does NOT flow across an executor submit by itself
+     * (unlike dotnet's {@code AsyncLocal}, and {@link java.lang.ScopedValue} only PROPAGATES a
+     * value — it is not a value-changed hop signal, as the managed roadmap notes), so this
+     * producer carries the id two ways: {@link #propagate} wraps a {@link Runnable}/{@link
+     * java.util.concurrent.Callable} so the id crosses the submit onto the pool thread (the
+     * AsyncLocal analog), and {@link #step} RE-ASSERTS the id on whatever thread runs the hop.
+     * Each hop reuses the managed-safe lazy-arm path ({@code call_scoped_ex} — no runtime
+     * machinery is single-stepped, no {@code MAX_REGIONS} slot is consumed), so a long operation
+     * with many hops is safe; {@link #complete} merges the captured hops by seq via the shipped
+     * {@link #stitchHandles} core. A JVMTI executor bytecode agent would be the zero-touch
+     * alternative and {@code libperf-jvmti.so} the live JIT-method resolver (both external build
+     * deps, forward-look); this pure-Java thread-local path is the CI-runnable producer over a
+     * native leaf per hop.
+     * <pre>{@code
+     * try (var op = new HwTrace.AsmStitchedTrace()) {
+     *     long r0 = op.step(work, 20, 22);                 // hop 0, this thread
+     *     long r1 = pool.submit(op.propagate(              // hop 1, a pool thread
+     *         () -> op.step(work, 1, 2))).get();
+     *     op.complete();                                    // op.hops() — each slice's (seq, tid, off)
+     * }
+     * }</pre>
+     */
+    public static final class AsmStitchedTrace implements AutoCloseable {
+        // Pure-Java thread-local scope id (the AsyncLocal/ScopedValue analog). withInitial keeps
+        // currentScopeId() a plain long (0 = no active operation) rather than a boxed null.
+        private static final ThreadLocal<Long> CURRENT = ThreadLocal.withInitial(() -> 0L);
+        private static final java.util.concurrent.atomic.AtomicLong NEXT_SCOPE_ID =
+            new java.util.concurrent.atomic.AtomicLong();
+
+        private static final class Hop {
+            final NativeTrace trace; // an asmtest_trace_t* holder; null when the hop ran uninstrumented
+            final String text;
+            final int seq;
+            final int tid;
+            final boolean captured;
+            Hop(NativeTrace trace, String text, int seq, int tid, boolean captured) {
+                this.trace = trace; this.text = text; this.seq = seq;
+                this.tid = tid; this.captured = captured;
+            }
+        }
+
+        private final long scopeId;
+        private final java.util.List<Hop> hopList = new java.util.ArrayList<>();
+        private final Object lock = new Object();
+        private int nextSeq;
+        private boolean completed;
+        private boolean closed;
+        private String skipReason = "";
+        private String path = "";
+        private boolean truncated;
+        private StitchBound[] bounds = new StitchBound[0];
+
+        public AsmStitchedTrace() {
+            scopeId = NEXT_SCOPE_ID.incrementAndGet();
+            CURRENT.set(scopeId); // flow to hops on THIS context; propagate() carries it across hops
+        }
+
+        /** The scope id flowing through {@link ThreadLocal} for the active operation on this
+         *  thread (0 = none) — the ambient AsyncLocal-analog read. */
+        public static long currentScopeId() { return CURRENT.get(); }
+
+        /** This operation's scope id (every stitched slice is tagged with it). */
+        public long scopeId() { return scopeId; }
+        /** Honest self-skip reason for any hop that could not be captured in-process ("" when all captured). */
+        public String skipReason() { return skipReason; }
+        /** Merged per-hop disassembly in seq order (a {@code ; hop N (tid…, +off):} header per hop,
+         *  then its listing when Capstone is present); populated by {@link #complete}. */
+        public String path() { return path; }
+        /** True when any stitched hop's trace overflowed its capacity. */
+        public boolean truncated() { return truncated; }
+        /** Per-hop stitch bounds in seq order after {@link #complete} (one {@link StitchBound} per captured hop). */
+        public StitchBound[] hops() { return bounds; }
+        /** Hops attempted, including any that ran uninstrumented. */
+        public int hopCount() { synchronized (lock) { return hopList.size(); } }
+
+        /** Propagate this operation's scope id across an executor / {@code CompletableFuture} hop:
+         *  wrap {@code body} so the id is RE-ASSERTED on the pool thread that runs it (a plain JVM
+         *  thread-local does not flow across a submit) and restored after — the AsyncLocal analog. */
+        public Runnable propagate(Runnable body) {
+            long id = scopeId;
+            return () -> {
+                long prev = CURRENT.get();
+                CURRENT.set(id);
+                try { body.run(); } finally { CURRENT.set(prev); }
+            };
+        }
+
+        /** {@link #propagate(Runnable)} for a value-returning {@link java.util.concurrent.Callable} hop. */
+        public <T> java.util.concurrent.Callable<T> propagate(java.util.concurrent.Callable<T> body) {
+            long id = scopeId;
+            return () -> {
+                long prev = CURRENT.get();
+                CURRENT.set(id);
+                try { return body.call(); } finally { CURRENT.set(prev); }
+            };
+        }
+
+        /** Capture ONE hop: re-assert this operation's scope id on the current thread, then lazily
+         *  arm and single-step {@code code}'s body ({@code call_scoped_ex}), tagging the slice with
+         *  the scope id, this thread, and the next seq. Returns the call's result; where no
+         *  single-step backend is available (or the arm fails) the hop runs uninstrumented — its
+         *  result is still returned and the hop is recorded (dense seq), and {@link #skipReason} is set. */
+        public long step(NativeCode code, long... args) {
+            if (closed) throw new RuntimeException("step after close");
+            if (completed) throw new RuntimeException("step after complete");
+            int seq; synchronized (lock) { seq = nextSeq++; }
+            int tid = (int) Thread.currentThread().threadId();
+            CURRENT.set(scopeId); // re-assert on whatever (possibly pool) thread runs this hop
+
+            if (CALL_SCOPED_EX != null) {
+                NativeTrace tr = create(64, 256); // create(blocks, instructions) — insns headroom
+                boolean keep = false;
+                try (Arena a = Arena.ofConfined()) {
+                    int n = args.length;
+                    MemorySegment argSeg = a.allocate(MemoryLayout.sequenceLayout(Math.max(n, 1), JAVA_LONG));
+                    for (int i = 0; i < n; i++) argSeg.setAtIndex(JAVA_LONG, i, args[i]);
+                    MemorySegment result = a.allocate(JAVA_LONG);
+                    MemorySegment scopeOut = a.allocate(MemoryLayout.sequenceLayout(2, JAVA_INT));
+                    MemorySegment base = MemorySegment.ofAddress(code.base());
+                    int rc = (int) CALL_SCOPED_EX.invoke(base, code.length(), tr.handle(), base,
+                        argSeg, n, result, scopeOut);
+                    if (rc == ASMTEST_HW_OK) {
+                        // Render THIS hop's body NOW, on the capturing thread, while its (thread-local,
+                        // short-lived) scope handle is live — the packed {idx | gen<<32} form.
+                        int idx = scopeOut.getAtIndex(JAVA_INT, 0);
+                        int gen = scopeOut.getAtIndex(JAVA_INT, 1);
+                        String text = renderScope((idx & 0xffffffffL) | ((long) gen << 32));
+                        synchronized (lock) { hopList.add(new Hop(tr, text, seq, tid, true)); }
+                        keep = true;
+                        return result.get(JAVA_LONG, 0);
+                    }
+                    skipReason = "hop " + seq + " did not arm (rc=" + rc + "); ran uninstrumented";
+                } catch (RuntimeException re) { throw re; }
+                catch (Throwable t) { throw rethrow(t); }
+                finally { if (!keep) tr.free(); }
+            } else if (skipReason.isEmpty()) {
+                skipReason = "hop " + seq + " single-step unavailable; ran uninstrumented";
+            }
+            // Uninstrumented fallback: the hop still runs (never a crash) and stays in seq order.
+            synchronized (lock) { hopList.add(new Hop(null, null, seq, tid, false)); }
+            return runLeaf(code, args);
+        }
+
+        /** Close the operation and stitch every captured hop into one seq-ordered trace via
+         *  {@link #stitchHandles}, populating {@link #hops()}, {@link #path()}, and {@link #truncated()}.
+         *  Idempotent; clears this thread's thread-local scope. */
+        public void complete() {
+            if (completed) return;
+            completed = true;
+            CURRENT.set(0L);
+            java.util.List<Hop> cap = new java.util.ArrayList<>();
+            synchronized (lock) {
+                for (Hop h : hopList) if (h.captured && h.trace != null) cap.add(h);
+            }
+            if (cap.isEmpty() || STITCH_HANDLES == null) { path = ""; return; }
+            int m = cap.size();
+            NativeTrace[] traces = new NativeTrace[m];
+            long[] scopeIds = new long[m];
+            int[] seqs = new int[m];
+            int[] tids = new int[m];
+            long[] versions = new long[m];
+            for (int i = 0; i < m; i++) {
+                traces[i] = cap.get(i).trace; scopeIds[i] = scopeId;
+                seqs[i] = cap.get(i).seq; tids[i] = cap.get(i).tid; versions[i] = 0;
+            }
+            StitchResult st = stitchHandles(traces, scopeIds, seqs, tids, versions);
+            this.bounds = st.bounds();
+            this.truncated = st.truncated();
+            // Each hop was rendered at CAPTURE time (its scope handle was thread-local + short-lived);
+            // concatenate the stored per-hop text in seq order for a readable path.
+            StringBuilder sb = new StringBuilder();
+            for (StitchBound b : bounds) {
+                sb.append("; hop ").append(b.seq()).append(" (tid ").append(b.tid())
+                  .append(", +").append(b.insnOff()).append("):\n");
+                for (Hop h : cap) if (h.seq == b.seq() && h.text != null) { sb.append(h.text); break; }
+            }
+            path = sb.toString();
+        }
+
+        @Override public void close() {
+            if (closed) return;
+            closed = true;
+            if (!completed) complete();
+            synchronized (lock) {
+                for (Hop h : hopList) if (h.trace != null) h.trace.free();
+            }
+        }
+
+        // Render a captured hop's body from its packed scope handle (Capstone-gated; "" without it).
+        private static String renderScope(long packed) {
+            if (RENDER_SCOPE == null) return "";
+            try (Arena a = Arena.ofConfined()) {
+                int need = (int) RENDER_SCOPE.invoke(packed, MemorySegment.NULL, 0L);
+                if (need <= 0) return "";
+                MemorySegment buf = a.allocate(need + 1L);
+                RENDER_SCOPE.invoke(packed, buf, (long) (need + 1));
+                return buf.getString(0);
+            } catch (Throwable t) { return ""; }
+        }
+
+        // Run a native leaf uninstrumented (the self-skip fallback) through the SysV integer ABI.
+        private static long runLeaf(NativeCode code, long[] args) {
+            try {
+                MemoryLayout[] al = new MemoryLayout[args.length];
+                java.util.Arrays.fill(al, JAVA_LONG);
+                MethodHandle fn = LINKER.downcallHandle(MemorySegment.ofAddress(code.base()),
+                    FunctionDescriptor.of(JAVA_LONG, al));
+                Object[] boxed = new Object[args.length];
+                for (int i = 0; i < args.length; i++) boxed[i] = args[i];
+                return (Long) fn.invokeWithArguments(boxed);
+            } catch (Throwable t) { throw rethrow(t); }
+        }
+    }
+
     // ---- Out-of-process / foreign-process tracing toolkit (asmtest_ptrace.h) ----
     //
     // Single-step a forked or externally-attached target OUT OF BAND, and resolve the
