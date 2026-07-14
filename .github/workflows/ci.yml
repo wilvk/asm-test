@@ -471,8 +471,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Install Capstone (disassembly) + libipt/OpenCSD (hwtrace tier) + ncurses (TUI)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libcapstone-dev libipt-dev libopencsd-dev libncurses-dev pkg-config
+      # Capstone comes from the pinned 5.0.1 source build (the version the docs
+      # and the docker CLI image ship), NOT apt's Capstone 4 — the older library
+      # silently degrades some disassembly, so the smoke must run against what
+      # users actually get. libipt/OpenCSD/ncurses stay apt.
+      - name: Install libipt/OpenCSD (hwtrace tier) + ncurses (TUI) + pkg-config
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libipt-dev libopencsd-dev libncurses-dev pkg-config
+
+      # K1: cache the exact file set the pinned source build installs, keyed on
+      # the pinned inputs. Cold cache / unavailable backend: builds from source.
+      - name: Cache the pinned Capstone source build (K1)
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/asmtest-thirdparty/capstone
+          key: tp-capstone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-capstone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
+
+      - name: Build + install the pinned Capstone 5.0.1 from source (disassembler)
+        run: sh scripts/thirdparty-cache.sh cached-build capstone   # pinned source build; no distro package used; restores from the cache when warm
 
       - name: Build asmspy + victims, run the headless smoke
         run: make WERROR=1 cli-smoke

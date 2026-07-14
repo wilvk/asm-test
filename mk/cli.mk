@@ -137,6 +137,8 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump
 	@echo "== cli-smoke =="
+	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
+	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"
 	BUILD=$(BUILD) sh cli/cli_smoke.sh
 
 # Build the CLI image (bindings base + libipt-dev + libncurses-dev) and run the

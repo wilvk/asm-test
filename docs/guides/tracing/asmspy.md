@@ -444,6 +444,13 @@ Otherwise the attach fails and asmspy shows the reason (the process list marks
 non-attachable targets with `!`). In a default container, add
 `--cap-add=SYS_PTRACE` (or have the target opt in, as the example victims do).
 
+> **Kernel floor.** asmspy attaches with `PTRACE_SEIZE` (+ `PTRACE_INTERRUPT`),
+> which needs **Linux 3.4+** (2012); the syscall stream's entry/exit split adds
+> `PTRACE_GET_SYSCALL_INFO` (Linux 5.3+) and falls back to a toggle below that.
+> On a kernel too old for `SEIZE` the attach fails at the `ptrace` call itself —
+> which can *look like* a permission denial — so check `uname -r` before chasing
+> Yama or `CAP_SYS_PTRACE`.
+
 `--sample` is the exception: it uses `perf_event_open`, not `ptrace`, so Yama's
 `ptrace_scope` does not apply — it can sample any **same-uid** process at the
 default `perf_event_paranoid=2`, no capability needed (in a container the
