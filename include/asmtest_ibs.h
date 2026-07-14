@@ -166,6 +166,51 @@ int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
 /* Free the edge array a survey owns and zero the struct (idempotent; NULL-safe). */
 void asmtest_ibs_survey_free(asmtest_ibs_survey_t *s);
 
+/* One normalized basic-block leader lifted from the edge stream: a block-start
+ * offset plus how many sampled edges entered it. STATISTICAL — it marks a block that
+ * WAS seen entered, never proves one was not (see asmtest_ibs_normalize_blocks). */
+typedef struct {
+    uint64_t
+        start; /* block-start (a branch TARGET). Region-relative offset when
+                       * normalized against a region, else the absolute address.   */
+    uint64_t
+        entries; /* sampled edges that landed here (statistical hit count)     */
+} asmtest_ibs_block_t;
+
+/* A normalized basic-block set: distinct block starts sorted ASCENDING by `start`. */
+typedef struct {
+    asmtest_ibs_block_t
+        *blocks; /* malloc'd; free via asmtest_ibs_blocks_free */
+    size_t n;    /* number of distinct block starts           */
+} asmtest_ibs_blocks_t;
+
+/* PURE, host-independent: normalize a survey's from->to edge stream into the set of
+ * DISTINCT basic-block starts it observed, the SAME branch-edge convention the exact
+ * AMD-LBR / native tiers use — every branch TARGET begins a block (the leader the
+ * exact tiers record with trace_append_block(to - base_ip)). Duplicate targets (a
+ * block reached by several sampled edges) merge, summing their `entries`.
+ *
+ * If `len != 0` the result is filtered to the region [base, base+len) and reported as
+ * region-relative OFFSETS (offset 0 = base, the routine entry), so the block offsets
+ * LINE UP with the exact tiers' blocks[] for the same routine; if `len == 0` every
+ * target is kept and reported as an absolute address (`base` is then ignored).
+ *
+ * STATISTICAL only: it marks blocks SEEN entered, never proves a block was NOT
+ * executed, and (being Capstone-free) it recovers only branch-target leaders, not the
+ * fall-through leaders after a not-taken branch — a strict subset of the exact block
+ * set, never a superset. Out of the exact insns[]/blocks[] parity contract. No
+ * hardware and no perf headers, so it compiles and is unit-tested on ANY host.
+ * Returns ASMTEST_IBS_OK (even with zero blocks), ASMTEST_IBS_EINVAL on a NULL
+ * argument, or ASMTEST_IBS_EUNAVAIL if the block array cannot be allocated. *out is
+ * always zero-initialised first (free it with asmtest_ibs_blocks_free). */
+int asmtest_ibs_normalize_blocks(const asmtest_ibs_survey_t *survey,
+                                 uint64_t base, uint64_t len,
+                                 asmtest_ibs_blocks_t *out);
+
+/* Free the block array a normalization owns and zero the struct (idempotent;
+ * NULL-safe). Pure/host-independent. */
+void asmtest_ibs_blocks_free(asmtest_ibs_blocks_t *b);
+
 #ifdef __cplusplus
 }
 #endif

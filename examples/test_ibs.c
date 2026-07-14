@@ -96,6 +96,67 @@ static void test_decode(void) {
           "decode: NULL out -> EINVAL");
 }
 
+/* Host-independent: Phase-6 edge -> basic-block normalization. Every branch TARGET
+ * is a block leader (the exact AMD-LBR / native tiers' trace_append_block(to -
+ * base_ip) rule); a region lifts the in-region targets to region-relative offsets
+ * that line up with the exact blocks[], and duplicate targets merge (entry counts
+ * summed). No hardware — runs on every CI host, like test_decode. */
+static void test_normalize(void) {
+    /* Four sampled edges: two land at the same in-region target (0x1000), one at a
+     * second in-region target (0x1080), one at a target OUTSIDE the region (0x3000). */
+    asmtest_ibs_edge_t edges[4] = {
+        {0x1050, 0x1000, 100, 1, 0, 0}, /* back-edge into the routine entry  */
+        {0x1040, 0x1080, 30, 1, 0, 0},  /* forward edge to a second block    */
+        {0x1090, 0x1000, 20, 1, 0, 0},  /* another edge into the same entry  */
+        {0x1200, 0x3000, 5, 1, 0, 0},   /* edge leaving the routine's region */
+    };
+    asmtest_ibs_survey_t survey;
+    memset(&survey, 0, sizeof survey);
+    survey.edges = edges;
+    survey.n = 4;
+
+    asmtest_ibs_blocks_t b;
+
+    /* Region [0x1000, 0x1200): in-region targets normalize to offsets 0 and 0x80
+     * (the out-of-region 0x3000 target is dropped), and the two edges into the entry
+     * merge into one block whose entry count is their sum. */
+    CHECK(asmtest_ibs_normalize_blocks(&survey, 0x1000, 0x200, &b) ==
+              ASMTEST_IBS_OK,
+          "normalize: region survey -> OK");
+    CHECK(b.n == 2, "normalize: two distinct in-region block leaders");
+    CHECK(b.n == 2 && b.blocks[0].start == 0 && b.blocks[0].entries == 120,
+          "normalize: entry-offset block merges both edges (offset 0, 120)");
+    CHECK(b.n == 2 && b.blocks[1].start == 0x80 && b.blocks[1].entries == 30,
+          "normalize: second block lifts to region-relative offset 0x80");
+    asmtest_ibs_blocks_free(&b);
+    CHECK(b.blocks == NULL && b.n == 0,
+          "normalize: blocks_free zeroes the set");
+
+    /* No region (len 0): every target is kept as an ABSOLUTE address, sorted. */
+    CHECK(asmtest_ibs_normalize_blocks(&survey, 0, 0, &b) == ASMTEST_IBS_OK,
+          "normalize: no-region survey -> OK");
+    CHECK(b.n == 3, "normalize: all three distinct targets kept absolute");
+    CHECK(b.n == 3 && b.blocks[0].start == 0x1000 &&
+              b.blocks[0].entries == 120 && b.blocks[1].start == 0x1080 &&
+              b.blocks[2].start == 0x3000,
+          "normalize: absolute block starts sorted ascending");
+    asmtest_ibs_blocks_free(&b);
+
+    /* An empty survey normalizes to a valid, empty block set (not an error). */
+    asmtest_ibs_survey_t empty;
+    memset(&empty, 0, sizeof empty);
+    CHECK(asmtest_ibs_normalize_blocks(&empty, 0, 0, &b) == ASMTEST_IBS_OK &&
+              b.n == 0 && b.blocks == NULL,
+          "normalize: empty survey -> OK with no blocks");
+
+    /* NULL arguments are rejected. */
+    CHECK(asmtest_ibs_normalize_blocks(NULL, 0, 0, &b) == ASMTEST_IBS_EINVAL,
+          "normalize: NULL survey -> EINVAL");
+    CHECK(asmtest_ibs_normalize_blocks(&survey, 0, 0, NULL) ==
+              ASMTEST_IBS_EINVAL,
+          "normalize: NULL out -> EINVAL");
+}
+
 /* ---- IBS-Fetch front-end lane (Phase 7): pure synthetic-record checks --------- */
 /* IbsFetchCtl (reg[0]) fields, mirroring the backend's fetch decoder. */
 #define F_VAL      (1ull << 49) /* IbsFetchVal: sample valid   */
@@ -321,6 +382,23 @@ static void test_live(void) {
     CHECK(in_range, "survey_pid: an edge lies within the profiled spin_loop()");
     CHECK(back_edge,
           "survey_pid: the spin loop's taken back-edge was captured");
+
+    /* Phase 6: normalize the real sampled edge stream into basic-block leaders over
+     * spin_loop()'s region — the same branch-target convention the exact tiers use.
+     * With an in-region edge present the survey must yield >=1 leader, and every
+     * recovered leader must be a REGION-RELATIVE offset (< WIN), so IBS block offsets
+     * line up with how the exact blocks[] index this routine. */
+    asmtest_ibs_blocks_t blks;
+    int nrc = asmtest_ibs_normalize_blocks(&survey, (uint64_t)fn, WIN, &blks);
+    CHECK(nrc == ASMTEST_IBS_OK && (!in_range || blks.n > 0),
+          "normalize: lifted the spin_loop edges to basic-block leaders");
+    int leaders_in_region = 1;
+    for (size_t i = 0; i < blks.n; i++)
+        if (blks.blocks[i].start >= WIN)
+            leaders_in_region = 0;
+    CHECK(leaders_in_region,
+          "normalize: every block leader is a region-relative offset (< WIN)");
+    asmtest_ibs_blocks_free(&blks);
 
     if (survey.n > 0) {
         printf("# top edge: %#lx -> %#lx  count=%llu  (%zu edges, %llu/%llu "
@@ -640,6 +718,7 @@ static void test_live_system_wide(void) {
 
 int main(void) {
     test_decode();
+    test_normalize();
     test_decode_fetch();
     test_opts_abi();
     test_available();

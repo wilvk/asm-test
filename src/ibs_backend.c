@@ -130,6 +130,75 @@ void asmtest_ibs_survey_free(asmtest_ibs_survey_t *s) {
     memset(s, 0, sizeof *s);
 }
 
+/* ---- Phase 6: edge -> basic-block normalization (pure, host-independent) ------- */
+/* Ascending by block-start offset so the output is a deterministic, deduplicated
+ * block set (the merge pass below relies on equal starts being adjacent). */
+static int ibs_blk_cmp_asc(const void *a, const void *b) {
+    const asmtest_ibs_block_t *x = (const asmtest_ibs_block_t *)a;
+    const asmtest_ibs_block_t *y = (const asmtest_ibs_block_t *)b;
+    if (x->start != y->start)
+        return x->start < y->start ? -1 : 1;
+    return 0;
+}
+
+int asmtest_ibs_normalize_blocks(const asmtest_ibs_survey_t *survey,
+                                 uint64_t base, uint64_t len,
+                                 asmtest_ibs_blocks_t *out) {
+    if (out == NULL)
+        return ASMTEST_IBS_EINVAL;
+    memset(out, 0, sizeof *out);
+    if (survey == NULL)
+        return ASMTEST_IBS_EINVAL;
+    if (survey->n == 0 || survey->edges == NULL)
+        return ASMTEST_IBS_OK; /* nothing sampled: a valid, empty block set */
+
+    /* Every branch TARGET is a basic-block leader — the same normalization the exact
+     * AMD-LBR / native tiers apply with trace_append_block(to - base_ip). A region
+     * [base, base+len) filters to in-region targets and reports region-relative
+     * OFFSETS (offset 0 = base entry), so these line up with the exact blocks[];
+     * len == 0 keeps every target as an absolute address. */
+    asmtest_ibs_block_t *arr =
+        (asmtest_ibs_block_t *)calloc(survey->n, sizeof *arr);
+    if (arr == NULL)
+        return ASMTEST_IBS_EUNAVAIL; /* OOM: the one allocation-failure signal here */
+    size_t m = 0;
+    for (size_t i = 0; i < survey->n; i++) {
+        uint64_t to = survey->edges[i].to;
+        if (len != 0 && (to < base || to - base >= len))
+            continue; /* target outside this routine's region: drop it */
+        arr[m].start = (len != 0) ? (to - base) : to;
+        arr[m].entries = survey->edges[i].count;
+        m++;
+    }
+    if (m == 0) { /* no in-region targets */
+        free(arr);
+        return ASMTEST_IBS_OK;
+    }
+
+    qsort(arr, m, sizeof *arr, ibs_blk_cmp_asc);
+
+    /* Merge duplicate starts (a block reached by several distinct sampled edges),
+     * summing their entry counts — the DISTINCT block set with hotness preserved. */
+    size_t w = 0;
+    for (size_t r = 0; r < m; r++) {
+        if (w > 0 && arr[w - 1].start == arr[r].start)
+            arr[w - 1].entries += arr[r].entries;
+        else
+            arr[w++] = arr[r];
+    }
+
+    out->blocks = arr;
+    out->n = w;
+    return ASMTEST_IBS_OK;
+}
+
+void asmtest_ibs_blocks_free(asmtest_ibs_blocks_t *b) {
+    if (b == NULL)
+        return;
+    free(b->blocks);
+    memset(b, 0, sizeof *b);
+}
+
 /* ---- Pure IBS-Fetch decoder + free: all platforms (no perf, no hardware) ------ */
 
 int asmtest_ibs_decode_fetch(const void *raw, size_t raw_len,
