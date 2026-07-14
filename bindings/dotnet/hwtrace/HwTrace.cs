@@ -1743,11 +1743,20 @@ namespace Asmtest
         readonly string _name;
         readonly IntPtr _handle;
         readonly bool _emit;
-        readonly bool _wholeWindow; // §Z0/§Z1: the region-free empty-ctor form
-        readonly bool _oopWindow;   // §D3: out-of-process whole-window (AsmTrace.Window)
-        readonly bool _amdWindow;   // §D3: AMD-LBR statistical inline whole-window (new AsmTrace(HwBackend.AmdLbr))
-        AmdSampler _amdSampler;     // the armed AMD sampler (finalizable; null until armed)
-        readonly bool _oopInlineWindow; // §D3: out-of-process inline whole-window (new AsmTrace(outOfProcess: true))
+        // R1: the single Dispose discriminator that replaces the four parallel `_*Window`
+        // bools — it names which teardown Dispose runs. Region (the default) covers the
+        // region form (`new AsmTrace(code)`) and the named-method scopes (name-keyed slice
+        // render); each window kind gets its own Dispose branch.
+        enum Kind
+        {
+            Region,          // region form + Method scopes (name-keyed slice render)
+            WholeWindow,     // §Z0/§Z1: single-step region-free empty-ctor whole-window
+            OopWindow,       // §D3: out-of-process whole-window (AsmTrace.Window factory)
+            AmdWindow,       // §D3: AMD-LBR statistical inline whole-window (new AsmTrace(HwBackend.AmdLbr))
+            OopInlineWindow, // §D3: out-of-process inline whole-window (new AsmTrace(outOfProcess: true))
+        }
+        readonly Kind _kind;    // defaults to Kind.Region (the region / named-method form)
+        AmdSampler _amdSampler; // the armed AMD sampler (finalizable; null until armed)
         OopWindowCtx _oopWinCtx;    // the armed async OOP stepper context (finalizable; null until armed)
         IntPtr _oopWinChan;         // the shared address channel for JIT regions
         ulong[] _amdIps;            // the endpoint buffer drained in Dispose
@@ -1910,7 +1919,7 @@ namespace Asmtest
         {
             _name = ScopeName(member, line);
             _emit = emit;
-            _wholeWindow = true;
+            _kind = Kind.WholeWindow;
             _renderPath = renderPath;
             _rundownSettleMs = rundownSettleMs;
             _armTid = Environment.CurrentManagedThreadId;
@@ -2278,7 +2287,7 @@ namespace Asmtest
         {
             _name = ScopeName(member, line);
             _emit = false;
-            _amdWindow = true;
+            _kind = Kind.AmdWindow;
             _rundownSettleMs = rundownSettleMs;
             _armTid = Environment.CurrentManagedThreadId;
             if (!HwNative.LibAvailable)
@@ -2336,7 +2345,7 @@ namespace Asmtest
         {
             _name = ScopeName(member, line);
             _emit = false;
-            _oopInlineWindow = true;
+            _kind = Kind.OopInlineWindow;
             _rundownSettleMs = rundownSettleMs;
             _armTid = Environment.CurrentManagedThreadId;
             if (outOfProcess == false)
@@ -2484,8 +2493,7 @@ namespace Asmtest
         {
             _name = name;
             _emit = false;
-            _wholeWindow = true;
-            _oopWindow = true;
+            _kind = Kind.OopWindow;
             _rundownSettleMs = rundownSettleMs;
             _armTid = Environment.CurrentManagedThreadId;
             if (!HwNative.LibAvailable)
@@ -2955,159 +2963,167 @@ namespace Asmtest
         {
             // §D3: an out-of-process window (AsmTrace.Window) is already closed by its factory
             // (nothing armed in-process); a stray using() on it is a no-op.
-            if (_oopWindow || _disposed) return;
+            if (_kind == Kind.OopWindow || _disposed) return;
             _disposed = true;
             // With no native lib the ctor self-skipped and allocated no native resources; skip
             // the (P/Invoking) teardown so Dispose also honors "never throws".
             if (!HwNative.LibAvailable) { Path = ""; return; }
-            // §D3: the INLINE AMD-LBR statistical window (new AsmTrace(HwBackend.AmdLbr)). The
-            // block just ran inline, sampled out of band — DRAIN the sampler, attribute the
-            // endpoints (reused seam; Count = weight), release. Handle a self-skipped (unarmed)
-            // scope too: no sampler, just tear down the map + rundown.
-            if (_amdWindow)
+            // R1: dispatch the close by scope kind. OopWindow already returned above (its
+            // factory closed it); the AMD / OOP-inline windows tear down and return, while
+            // WholeWindow and Region (the region form + named-method scopes) fall through
+            // to the shared trace-free / thread-hop / emit tail below.
+            switch (_kind)
             {
-                if (_amdSampler != null)
+                case Kind.AmdWindow:
                 {
-                    _amdSampler.End(_amdIps, out UIntPtr nips, out int trunc);
-                    _amdSampler = null;
-                    ulong n = (ulong)nips;
-                    var addrs = new ulong[n];
-                    if (n > 0) Array.Copy(_amdIps, addrs, (long)n);
-                    Addresses = addrs;
-                    Truncated = trunc != 0;
-                    if (_map != null) _map.Stop();
-                    IntPtr aimg = _map != null ? _map.ImageHandle : IntPtr.Zero;
-                    ulong awhen = _map != null ? _map.ImageNow : 0;
-                    AttributeAddresses(aimg, awhen); // disposes _map
-                    Thread.EndThreadAffinity();       // paired with the ctor's pin (armed path)
-                }
-                else if (_map != null) { _map.Stop(); _map.Dispose(); }
-                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
-                return;
-            }
-            if (_oopInlineWindow)
-            {
-                if (_oopWinCtx != null)
-                {
-                    var tr = HwTrace.Create(blocks: 4096, instructions: 65536);
-                    int rc = _oopWinCtx.End(tr.Handle);
-                    _oopWinCtx = null;
-                    Thread.EndThreadAffinity();
-                    if (rc == HwNative.ASMTEST_HW_OK)
+                    // §D3: the INLINE AMD-LBR statistical window (new AsmTrace(HwBackend.AmdLbr)).
+                    // The block just ran inline, sampled out of band — DRAIN the sampler, attribute
+                    // the endpoints (reused seam; Count = weight), release. Handle a self-skipped
+                    // (unarmed) scope too: no sampler, just tear down the map + rundown.
+                    if (_amdSampler != null)
                     {
-                        if (_map != null)
+                        _amdSampler.End(_amdIps, out UIntPtr nips, out int trunc);
+                        _amdSampler = null;
+                        ulong n = (ulong)nips;
+                        var addrs = new ulong[n];
+                        if (n > 0) Array.Copy(_amdIps, addrs, (long)n);
+                        Addresses = addrs;
+                        Truncated = trunc != 0;
+                        if (_map != null) _map.Stop();
+                        IntPtr aimg = _map != null ? _map.ImageHandle : IntPtr.Zero;
+                        ulong awhen = _map != null ? _map.ImageNow : 0;
+                        AttributeAddresses(aimg, awhen); // disposes _map
+                        Thread.EndThreadAffinity();       // paired with the ctor's pin (armed path)
+                    }
+                    else if (_map != null) { _map.Stop(); _map.Dispose(); }
+                    if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+                    return;
+                }
+                case Kind.OopInlineWindow:
+                {
+                    if (_oopWinCtx != null)
+                    {
+                        var tr = HwTrace.Create(blocks: 4096, instructions: 65536);
+                        int rc = _oopWinCtx.End(tr.Handle);
+                        _oopWinCtx = null;
+                        Thread.EndThreadAffinity();
+                        if (rc == HwNative.ASMTEST_HW_OK)
                         {
-                            _map.Stop();
-                            MethodsObserved = _map.Count;
+                            if (_map != null)
+                            {
+                                _map.Stop();
+                                MethodsObserved = _map.Count;
+                            }
+                            ulong n = HwNative.asmtest_emu_trace_insns_len(tr.Handle);
+                            var addrs = new ulong[n];
+                            for (ulong i = 0; i < n; i++)
+                                addrs[i] = HwNative.asmtest_emu_trace_insn_at(tr.Handle, (UIntPtr)i);
+                            Addresses = addrs;
+                            Truncated = HwNative.asmtest_emu_trace_truncated(tr.Handle) != 0;
+                            IntPtr img = _map != null ? _map.ImageHandle : IntPtr.Zero;
+                            ulong when = _map != null ? _map.ImageNow : 0;
+                            AttributeAddresses(img, when);
                         }
-                        ulong n = HwNative.asmtest_emu_trace_insns_len(tr.Handle);
+                        tr.Free();
+                    }
+                    else if (_map != null) { _map.Stop(); _map.Dispose(); }
+                    if (_oopWinChan != IntPtr.Zero)
+                    {
+                        HwNative.asmtest_addr_channel_free_shared(_oopWinChan);
+                        _oopWinChan = IntPtr.Zero;
+                    }
+                    if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+                    return;
+                }
+                case Kind.WholeWindow:
+                {
+                    // Always render (size-then-allocate) to populate Path — emit gates only the
+                    // sink write, not producing Path. The whole-window (§Z1) path is handle-keyed
+                    // and renders the recorded ABSOLUTE addresses from live self memory; the
+                    // region path is name-keyed and renders base-relative offsets.
+                    HwNative.asmtest_hwtrace_end_window(_scope, _handle);
+                    // §D0.1: freeze the JIT map to exactly the methods seen while the scope
+                    // was open (before the readback/classification below JITs anything more).
+                    // §Z3: also pin the code-image version AT CLOSE — the labelled
+                    // disassembly below decodes against it, so a method that re-tiers/moves
+                    // AFTER the window still renders the bytes that actually ran.
+                    IntPtr img = IntPtr.Zero;
+                    ulong when = 0;
+                    if (_map != null)
+                    {
+                        _map.Stop();
+                        MethodsObserved = _map.Count;
+                        img = _map.ImageHandle;
+                        when = _map.ImageNow;
+                    }
+                    // Capture the raw ABSOLUTE addresses (before the trace is freed below).
+                    // A whole-window trace can be a million runtime instructions, so we do
+                    // NOT auto-render its disassembly (Path) — the caller ATTRIBUTES the
+                    // Addresses instead (classify by known native regions to tell leaves
+                    // apart; §Z1). Path stays empty for the whole-window form.
+                    if (_handle != IntPtr.Zero)
+                    {
+                        ulong n = HwNative.asmtest_emu_trace_insns_len(_handle);
                         var addrs = new ulong[n];
                         for (ulong i = 0; i < n; i++)
-                            addrs[i] = HwNative.asmtest_emu_trace_insn_at(tr.Handle, (UIntPtr)i);
+                            addrs[i] = HwNative.asmtest_emu_trace_insn_at(_handle, (UIntPtr)i);
                         Addresses = addrs;
-                        Truncated = HwNative.asmtest_emu_trace_truncated(tr.Handle) != 0;
-                        IntPtr img = _map != null ? _map.ImageHandle : IntPtr.Zero;
-                        ulong when = _map != null ? _map.ImageNow : 0;
-                        AttributeAddresses(img, when);
                     }
-                    tr.Free();
-                }
-                else if (_map != null) { _map.Stop(); _map.Dispose(); }
-                if (_oopWinChan != IntPtr.Zero)
-                {
-                    HwNative.asmtest_addr_channel_free_shared(_oopWinChan);
-                    _oopWinChan = IntPtr.Zero;
-                }
-                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
-                return;
-            }
-            // Always render (size-then-allocate) to populate Path — emit gates only the
-            // sink write, not producing Path. The whole-window (§Z1) path is handle-keyed
-            // and renders the recorded ABSOLUTE addresses from live self memory; the
-            // region path is name-keyed and renders base-relative offsets.
-            int need;
-            need = 0;
-            if (_wholeWindow)
-            {
-                HwNative.asmtest_hwtrace_end_window(_scope, _handle);
-                // §D0.1: freeze the JIT map to exactly the methods seen while the scope
-                // was open (before the readback/classification below JITs anything more).
-                // §Z3: also pin the code-image version AT CLOSE — the labelled
-                // disassembly below decodes against it, so a method that re-tiers/moves
-                // AFTER the window still renders the bytes that actually ran.
-                IntPtr img = IntPtr.Zero;
-                ulong when = 0;
-                if (_map != null)
-                {
-                    _map.Stop();
-                    MethodsObserved = _map.Count;
-                    img = _map.ImageHandle;
-                    when = _map.ImageNow;
-                }
-                // Capture the raw ABSOLUTE addresses (before the trace is freed below).
-                // A whole-window trace can be a million runtime instructions, so we do
-                // NOT auto-render its disassembly (Path) — the caller ATTRIBUTES the
-                // Addresses instead (classify by known native regions to tell leaves
-                // apart; §Z1). Path stays empty for the whole-window form.
-                if (_handle != IntPtr.Zero)
-                {
-                    ulong n = HwNative.asmtest_emu_trace_insns_len(_handle);
-                    var addrs = new ulong[n];
-                    for (ulong i = 0; i < n; i++)
-                        addrs[i] = HwNative.asmtest_emu_trace_insn_at(_handle, (UIntPtr)i);
-                    Addresses = addrs;
-                }
-                // §D0.1/§D0.2: attribute the captured addresses to managed methods (shared
-                // with the §D3 out-of-process window path). DATA only; the caller presents it.
-                AttributeAddresses(img, when);
-                // §D0.2: turn perf-map generation back off so it is not left on
-                // process-wide (unbounded jitdump growth / per-JIT overhead). Keyed on
-                // the REQUEST, not RundownEnabled — EnablePerfMap can succeed runtime-side
-                // while its response read times out (reported false), and Disable is a
-                // harmless no-op when it never took effect.
-                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
-                // §Z5 (opt-in): render the whole window into Path via the native
-                // render_window — live-memory disassembly with the truncation banner.
-                // The frame stays resolvable after end_window (same order the C
-                // harness uses), and the code it decodes is still mapped; must run
-                // BEFORE the trace_free below, which the frame's trace points into.
-                Path = "";
-                if (_renderPath && _handle != IntPtr.Zero)
-                {
-                    int wneed = HwNative.asmtest_hwtrace_render_window(_scope, null, UIntPtr.Zero);
-                    if (wneed > 0)
+                    // §D0.1/§D0.2: attribute the captured addresses to managed methods (shared
+                    // with the §D3 out-of-process window path). DATA only; the caller presents it.
+                    AttributeAddresses(img, when);
+                    // §D0.2: turn perf-map generation back off so it is not left on
+                    // process-wide (unbounded jitdump growth / per-JIT overhead). Keyed on
+                    // the REQUEST, not RundownEnabled — EnablePerfMap can succeed runtime-side
+                    // while its response read times out (reported false), and Disable is a
+                    // harmless no-op when it never took effect.
+                    if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+                    // §Z5 (opt-in): render the whole window into Path via the native
+                    // render_window — live-memory disassembly with the truncation banner.
+                    // The frame stays resolvable after end_window (same order the C
+                    // harness uses), and the code it decodes is still mapped; must run
+                    // BEFORE the trace_free below, which the frame's trace points into.
+                    Path = "";
+                    if (_renderPath && _handle != IntPtr.Zero)
                     {
-                        byte[] wbuf = new byte[wneed + 1];
-                        HwNative.asmtest_hwtrace_render_window(_scope, wbuf, (UIntPtr)(wneed + 1));
-                        Path = System.Text.Encoding.ASCII.GetString(wbuf, 0, wneed);
+                        int wneed = HwNative.asmtest_hwtrace_render_window(_scope, null, UIntPtr.Zero);
+                        if (wneed > 0)
+                        {
+                            byte[] wbuf = new byte[wneed + 1];
+                            HwNative.asmtest_hwtrace_render_window(_scope, wbuf, (UIntPtr)(wneed + 1));
+                            Path = System.Text.Encoding.ASCII.GetString(wbuf, 0, wneed);
+                        }
                     }
+                    break;
                 }
-            }
-            else
-            {
-                // §D3: an out-of-process Method scope never began in-process — the
-                // helper filled the trace out of band, so there is nothing to end.
-                if (_began) HwNative.asmtest_hwtrace_end(_name);
-                // §1: render THIS scope's slice by handle where begin_scope produced
-                // one (concurrent same-site scopes each render their own); fall back
-                // to the name-keyed render (oop scopes, non-single-step fallback).
-                bool byHandle = _began && _scope.Idx != 0xffffffffu;
-                need = byHandle
-                    ? HwNative.asmtest_hwtrace_render_scope(_scope, null, UIntPtr.Zero)
-                    : HwNative.asmtest_hwtrace_render(_name, null, UIntPtr.Zero);
-                if (need <= 0 && byHandle)
+                default: // Kind.Region — the region form (new AsmTrace(code)) + named-method scopes
                 {
-                    byHandle = false;
-                    need = HwNative.asmtest_hwtrace_render(_name, null, UIntPtr.Zero);
+                    int need = 0;
+                    // §D3: an out-of-process Method scope never began in-process — the
+                    // helper filled the trace out of band, so there is nothing to end.
+                    if (_began) HwNative.asmtest_hwtrace_end(_name);
+                    // §1: render THIS scope's slice by handle where begin_scope produced
+                    // one (concurrent same-site scopes each render their own); fall back
+                    // to the name-keyed render (oop scopes, non-single-step fallback).
+                    bool byHandle = _began && _scope.Idx != 0xffffffffu;
+                    need = byHandle
+                        ? HwNative.asmtest_hwtrace_render_scope(_scope, null, UIntPtr.Zero)
+                        : HwNative.asmtest_hwtrace_render(_name, null, UIntPtr.Zero);
+                    if (need <= 0 && byHandle)
+                    {
+                        byHandle = false;
+                        need = HwNative.asmtest_hwtrace_render(_name, null, UIntPtr.Zero);
+                    }
+                    if (need > 0)
+                    {
+                        byte[] buf = new byte[need + 1];
+                        if (byHandle) HwNative.asmtest_hwtrace_render_scope(_scope, buf, (UIntPtr)(need + 1));
+                        else HwNative.asmtest_hwtrace_render(_name, buf, (UIntPtr)(need + 1));
+                        Path = System.Text.Encoding.ASCII.GetString(buf, 0, need);
+                    }
+                    else Path = "";
+                    break;
                 }
-                if (need > 0)
-                {
-                    byte[] buf = new byte[need + 1];
-                    if (byHandle) HwNative.asmtest_hwtrace_render_scope(_scope, buf, (UIntPtr)(need + 1));
-                    else HwNative.asmtest_hwtrace_render(_name, buf, (UIntPtr)(need + 1));
-                    Path = System.Text.Encoding.ASCII.GetString(buf, 0, need);
-                }
-                else Path = "";
             }
             if (_handle != IntPtr.Zero)
             {
