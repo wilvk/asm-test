@@ -63,7 +63,9 @@ closes each phase the same way.
 > 8 XMM/YMM SIMD taint *(**COMPLETE 2026-07-14** — XMM/SSE + YMM/AVX register + memory taint, a
 > shared Capstone AVX-store-access oracle fix, and the SIMD-vs-scalar overhead delta; ZMM/VSIB/
 > lane-precise deferred)*; 9
-> managed seed→sink validation + measured overhead + CI. Update this file as increments land, the
+> managed seed→sink validation + measured overhead + CI *(overhead + **record-free production
+> propagation (lever 1) LANDED 2026-07-14 — production ~11× bare, IN the ~10-50× band**; the
+> band-threshold hard CI gate is the remaining piece)*. Update this file as increments land, the
 > way [dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md) tracks its
 > own; keep the parent [data-flow-tracing-plan.md](data-flow-tracing-plan.md) Phase-5 stub's
 > status tag in sync with this child.
@@ -995,7 +997,28 @@ def-use oracle silently dropped AVX store→load edges) that gates the oracle-di
 store. Carried its own overhead re-measurement (SIMD ~1.8× the scalar band per the per-byte-lane
 traffic) rather than inheriting the scalar band, exactly as the increment anticipated.
 
-## Increment 9 - Managed seed→sink end-to-end validation + overhead + CI *(overhead-measurement first slice LANDED 2026-07-14; managed seed→sink already met by Increment 5; GC-survival + hard band gate remain)*
+## Increment 9 - Managed seed→sink end-to-end validation + overhead + CI *(overhead-measurement first slice LANDED 2026-07-14; **lever 1 (record-free production propagation) LANDED 2026-07-14 — production overhead now ~11× bare, IN the ~10-50× band**; managed seed→sink already met by Increment 5; the band-threshold hard CI gate remains)*
+
+> **UPDATE 2026-07-14 — lever 1 (record-free production propagation) LANDED; production is IN the band.**
+> The `prod` client option now takes a SEPARATE, RECORD-FREE emit path (`event_insert` branches to
+> `emit_taint_phase_prod` and returns): NO drx_buf record at all — no buffer-pointer load/advance, no
+> GP register-file snapshot, no memory value/size/valid stores, no `off`/`mem_n`/`mem_ea` stores, and
+> no `step_taint` witness. Each memory-source EA is computed INLINE via `lea` for the shadow read
+> instead of round-tripping through a record; the reg-tag unions, shadow read/write, and guarded sink
+> are unchanged. It reserves ~4 GPR + aflags (no buffer pointer) vs the value path's 6. The non-prod
+> value+propagation path is BYTE-UNCHANGED (a second, smaller emit path), so the flag-off value client
+> stays **14/14** and every oracle-diffed taint lane is unaffected. Because production keeps no witness,
+> correctness is SINK-based: new `make dr-taint-prod-test` (in `drtrace-test`) runs the launched sink
+> fixture under `drrun -c <client> prod` and the validator's `prod` mode asserts the seeded run reports
+> exactly one tainted `kind=1` branch hit (**6/6**) and the `noseed` negative reports ZERO (**3/3**) — a
+> seed reaching a sink is the end-to-end proof taint propagated. **MEASURED (`dr-taint-overhead-test`,
+> 1M iters): full-taint ≈ 452× bare → PROD ≈ 11× bare — IN the plan's ~10-50× band.** This CORRECTS the
+> earlier decomposition (which put the record skeleton at ~60% and predicted ~75×): the drx_buf record
+> was the *bulk* of production cost, and removing it ALONE reaches the band — the direct-mapped shadow
+> (lever 2) is a further optimization, **not needed to enter the band**. `docker-drtrace` 0 failures
+> (189 ok). What remains for full Increment 9: the band-threshold HARD CI gate (build-fail on non-
+> detection or overhead-regression) + the shared-fixture emu cross-check; GC-survival already landed
+> (Increment 7).
 
 > **Overhead-measurement first slice LANDED 2026-07-14 — the FIRST in-repo overhead number, with a
 > 4-way DECOMPOSITION.** `make dr-taint-overhead-test` ([taint_overhead.c](../../../examples/taint_overhead.c),
@@ -1038,14 +1061,12 @@ traffic) rather than inheriting the scalar band, exactly as the increment antici
 > (the residual propagation) — then GC-survival (Increment 7 — now unblocked, profiler path), the
 > shared-fixture emulator cross-check, and the hard band + non-detection CI gate.
 
-> **Implementation spec — record-free production propagation (DEFERRED FOLLOWUP optimization).**
-> Priority note (2026-07-14): this is a **followup**, not the active next step. The tier already beats the
-> shipped ptrace-single-step L0 tier (~10³–10⁵×) by 1–3 orders of magnitude at today's ~187× production
-> overhead, so band-compliance strengthens an already-winning number rather than unlocking a capability —
-> and reaching the band additionally needs the uncertain direct-mapped-shadow lever. The active priority
-> is capability breadth (Increment 7 GC survival, now unblocked). Spec retained below for a clean pickup
-> when in-band overhead becomes a hard requirement. A precise scope so this delicate `event_insert` change
-> is a clean pickup, not a rushed re-architecture.
+> **Implementation spec — record-free production propagation (LANDED 2026-07-14 as `emit_taint_phase_prod`).**
+> The spec below is the one that was implemented; it landed exactly as scoped and OUTPERFORMED its own
+> estimate — removing the drx_buf record alone took production to ~11× bare (IN the band), not the ~75×
+> the decomposition predicted, because the record skeleton was the bulk of production cost, not ~60%. The
+> direct-mapped shadow (lever 2) is therefore a further optimization, not a band prerequisite. Retained
+> as the record of the change (a precise scope for this delicate `event_insert` path).
 > - **What to remove under `prod`:** the entire drx_buf record path — the per-instruction buffer-pointer
 >   load (`drx_buf_insert_load_buf_ptr`) + advance (`drx_buf_insert_update_buf_ptr`), the `off`/`mem_n`/
 >   `mem_ea` stores, and the `step_taint` witness store. Production needs neither the value trace nor the

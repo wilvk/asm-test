@@ -64,6 +64,9 @@ typedef long (*fn2_t)(long, long);
 
 int main(int argc, char **argv) {
     const char *name = (argc > 1) ? argv[1] : AT_SHM_NAME;
+    /* "noseed" (2nd arg) is the negative control: paint no shadow, so the branch's ZF is clean
+     * and no sink hit fires — used by the record-free `prod` lane to prove no phantom taint. */
+    int seed = !(argc > 2 && strcmp(argv[2], "noseed") == 0);
 
     int fd = shm_open(name, O_CREAT | O_RDWR, 0600);
     if (fd < 0) {
@@ -112,7 +115,8 @@ int main(int argc, char **argv) {
      * branch executes, so it is in the shared report by the time the fixture returns. */
     asmtest_dr_valcapture_marker(code, sizeof taint_sink_chain, &shm->drval);
     asmtest_dr_taint_sink_marker(&shm->report);
-    asmtest_dr_taint_seed_marker(&seedbuf, sizeof seedbuf, AT_TAG_TAINTED);
+    if (seed)
+        asmtest_dr_taint_seed_marker(&seedbuf, sizeof seedbuf, AT_TAG_TAINTED);
     long r = ((fn2_t)code)((long)(uintptr_t)&seedbuf, 5);
 
     shm->result = r;

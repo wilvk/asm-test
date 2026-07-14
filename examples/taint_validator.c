@@ -104,7 +104,21 @@ static int off_in(const uint64_t *offs, int n, uint64_t off) {
 
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
-    const char *name = (argc > 1) ? argv[1] : AT_SHM_NAME;
+    /* Flags (any order, alongside the shm name): `prod` — the record-free production client wrote
+     * NO value trace and NO step_taint witness, so skip the value-trace + emulator-oracle +
+     * taint-SET checks and validate SINK-only (a seed reaching a sink is the end-to-end proof);
+     * `noseed` — the negative control, expect ZERO sink hits. Neither flag → the full Increment-5
+     * launch validation (backward-compatible). */
+    const char *name = AT_SHM_NAME;
+    int prod = 0, noseed = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "prod") == 0)
+            prod = 1;
+        else if (strcmp(argv[i], "noseed") == 0)
+            noseed = 1;
+        else
+            name = argv[i];
+    }
 
     int fd = shm_open(name, O_RDWR, 0600);
     if (fd < 0) {
@@ -133,14 +147,21 @@ int main(int argc, char **argv) {
           "launch: workload finished under drrun (shm done flag set)");
     CHECK(shm->result == 12,
           "launch: fixture returned 12 through the launched client");
-    CHECK(shm->report.hits_len == 1 && shm->report.hits_total == 1 &&
-              !shm->report.truncated,
-          "launch: exactly one sink hit crossed the shm channel");
-    /* The value / taint trace is drained by the client's drx_buf flush at process exit;
-     * it is complete now (we run AFTER drrun returned). */
-    CHECK(
-        shm->drval.steps_len == 7,
-        "launch: value trace drained via drx_buf process-exit flush (7 steps)");
+    if (noseed)
+        CHECK(shm->report.hits_total == 0 && shm->report.hits_len == 0 &&
+                  !shm->report.truncated,
+              "prod-negative: unseeded => ZERO sink hits (no phantom taint)");
+    else
+        CHECK(shm->report.hits_len == 1 && shm->report.hits_total == 1 &&
+                  !shm->report.truncated,
+              "launch: exactly one sink hit crossed the shm channel");
+    /* The value / taint trace is drained by the client's drx_buf flush at process exit; it is
+     * complete now (we run AFTER drrun returned). PRODUCTION (`prod`) writes no value trace, so
+     * skip this — the sink checks below are the record-free path's gate. */
+    if (!prod)
+        CHECK(shm->drval.steps_len == 7,
+              "launch: value trace drained via drx_buf process-exit flush (7 "
+              "steps)");
 
     uint64_t fwd[AT_SHM_STEPS_CAP];
     int nfwd = 0;
@@ -152,7 +173,11 @@ int main(int argc, char **argv) {
               "launch: sink hit offset is the jz branch (0x10)");
         CHECK(h->tag != AT_TAG_CLEAN, "launch: sink hit tag is tainted");
         CHECK(h->kind == 1, "launch: sink hit kind = 1 (branch condition)");
-        if (!have_oracle)
+        /* prod: no value trace => no emu forward slice to place the sink off in — sink-only. */
+        if (prod)
+            printf("# prod: sink off/tag/kind are the record-free path's proof "
+                   "(no value-trace oracle)\n");
+        else if (!have_oracle)
             printf("# SKIP out-of-process sink oracle: built without "
                    "libunicorn\n");
         else
@@ -162,8 +187,12 @@ int main(int argc, char **argv) {
     }
 
     /* THE OUT-OF-PROCESS TAINT-SET ORACLE: the launched client's tainted step offsets
-     * (drained over shm) must equal the emulator forward slice from the seed. */
-    if (!have_oracle) {
+     * (drained over shm) must equal the emulator forward slice from the seed. PRODUCTION
+     * (`prod`) writes no step_taint witness, so there is no taint SET to diff — skip. */
+    if (prod) {
+        printf("# prod: no taint-SET oracle (record-free client writes no "
+               "witness) — the sink is the gate\n");
+    } else if (!have_oracle) {
         printf("# SKIP out-of-process taint-set oracle: built without "
                "libunicorn\n");
     } else {

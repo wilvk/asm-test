@@ -200,13 +200,16 @@ static app_pc g_origin;
 static volatile uint64_t g_inscount;
 static int g_scope_whole; /* set by the `scope=whole` client option */
 #ifdef ASMTEST_TAINT
-/* PRODUCTION taint mode (`prod` client option): skip the L0 VALUE-capture RECORDING — the GP
- * register-file snapshot (~16 stores/insn) and the memory operand VALUE/size/valid stores — which
- * exist only for the emulator-oracle cross-check, not for taint. The memory-source EA is still
- * captured (the inline propagation reads it from the record) and the tag propagation + shadow +
- * sink are unchanged, so taint semantics are identical (the taint SET is the step_taint witness +
- * offset, not the GP values). This is the Increment-9 production posture: the value trace is the
- * ~300x cost the overhead bench isolated; dropping it is what a real deployment does. */
+/* PRODUCTION taint mode (`prod` client option): the Increment-9 production posture. A `prod`
+ * instruction takes a SEPARATE, RECORD-FREE emit path (event_insert branches to
+ * emit_taint_phase_prod and returns): NO drx_buf record at all — no buffer pointer load/advance,
+ * no GP register-file snapshot, no memory VALUE/size/valid stores, no `off`/`mem_n`/`mem_ea`
+ * stores, and no `step_taint` witness. Each memory-source EA is computed INLINE via `lea` for the
+ * shadow read instead of round-tripping through a record. Production needs neither the value trace
+ * (an emulator-oracle-only cost the overhead bench isolated at ~300x) nor the taint SET — only the
+ * shadow state + the sink; taint semantics are identical (a seed still reaches a sink). Because
+ * `prod` returns early, the `AT_PROD_SKIP` guards remaining in the value pass below are only ever
+ * reached with g_prod = 0 (they stay for readability; the record-free branch is the real gate). */
 static int g_prod;
 static int g_gcmove; /* `gcmove` option: publish the gc_move handshake for the live GC-move path */
 #define AT_PROD_SKIP (g_prod) /* taint build: honor `prod` */
@@ -1516,6 +1519,140 @@ static void emit_taint_phase(void *dc, instrlist_t *bb, instr_t *instr,
             drreg_unreserve_register(dc, bb, instr, swap);
     }
 }
+
+/* PRODUCTION (record-free) propagation — Increment 9 lever 1. The SAME inline dst_tag =
+ * union(src_tags) as emit_taint_phase, but with NO drx_buf record and NO step_taint witness:
+ * every memory-source EA is computed INLINE via `lea` (exactly the store-dst pattern) instead of
+ * read back from the record, so production keeps only the shadow state + the guarded sink — no
+ * value trace, no taint SET. A SEPARATE, smaller emit path so the non-prod emit_taint_phase stays
+ * byte-unchanged (the flag-off value client + the oracle-diffed taint lanes are unaffected).
+ * Registers: s_a (EA), s_b (shadow work), s_t (union accumulator), t_rf (reg-tag base) + aflags —
+ * NO buffer pointer (~4 GPR vs the value path's 6). Correctness rests on the SINK (a seed reaching
+ * a sink is the end-to-end proof taint propagated); there is no witness to oracle-diff, so the
+ * `prod` sink lanes are the gate. Address-register aliasing with a held scratch is a conservative
+ * miss (skip), never corruption. */
+static void emit_taint_phase_prod(void *dc, instrlist_t *bb, instr_t *instr,
+                                  reg_id_t s_a, reg_id_t s_b, reg_id_t s_t,
+                                  reg_id_t t_rf) {
+    /* s_t = 0 (32-bit xor zeroes the whole container). */
+    instrlist_meta_preinsert(
+        bb, instr,
+        INSTR_CREATE_xor(dc, opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_4)),
+                         opnd_create_reg(reg_resize_to_opsz(s_t, OPSZ_4))));
+
+    /* ---- union SOURCE tags into s_t (registers + eflags) ------------------- */
+    drmgr_insert_read_tls_field(dc, g_tls_regfile, bb, instr, t_rf);
+    for (int s = 0; s < instr_num_srcs(instr); s++) {
+        opnd_t op = instr_get_src(instr, s);
+        if (opnd_is_reg(op)) {
+            reg_id_t r = opnd_get_reg(op);
+            int idx = rt_index(r);
+            if (idx >= 0)
+                emit_regtag_or(dc, bb, instr, t_rf, idx, s_t);
+            else {
+                int nb;
+                int xb = rt_vec_base(r, &nb);
+                if (xb >= 0)
+                    emit_vec_regtag_or(dc, bb, instr, t_rf, xb, nb, s_t);
+            }
+        } else if (opnd_is_memory_reference(op)) {
+            int bi = rt_index(opnd_get_base(op)),
+                ii = rt_index(opnd_get_index(op));
+            if (bi >= 0)
+                emit_regtag_or(dc, bb, instr, t_rf, bi, s_t);
+            if (ii >= 0)
+                emit_regtag_or(dc, bb, instr, t_rf, ii, s_t);
+        }
+    }
+    for (int d = 0; d < instr_num_dsts(instr); d++) {
+        opnd_t op = instr_get_dst(instr, d);
+        if (opnd_is_memory_reference(op)) {
+            int bi = rt_index(opnd_get_base(op)),
+                ii = rt_index(opnd_get_index(op));
+            if (bi >= 0)
+                emit_regtag_or(dc, bb, instr, t_rf, bi, s_t);
+            if (ii >= 0)
+                emit_regtag_or(dc, bb, instr, t_rf, ii, s_t);
+        }
+    }
+    if (instr_get_eflags(instr, DR_QUERY_DEFAULT) & EFLAGS_READ_ARITH)
+        emit_regtag_or(dc, bb, instr, t_rf, AT_RT_EFLAGS, s_t);
+
+    /* Memory sources: compute each EA INLINE via lea (no record round-trip) and OR its per-byte
+     * shadow into s_t. Any width taint_mem_size admits (1/2/4/8/16/32). */
+    if (instr_reads_memory(instr)) {
+        for (int s = 0; s < instr_num_srcs(instr); s++) {
+            opnd_t op = instr_get_src(instr, s);
+            if (!opnd_is_memory_reference(op))
+                continue;
+            uint16_t ssz = taint_mem_size(op);
+            if (ssz == 0)
+                continue;
+            reg_id_t bse = opnd_get_base(op), idxr = opnd_get_index(op);
+            if (bse == s_a || bse == s_b || bse == s_t || bse == t_rf ||
+                idxr == s_a || idxr == s_b || idxr == s_t || idxr == t_rf)
+                continue;
+            reg_id_t swap = DR_REG_NULL;
+            drreg_restore_app_values(dc, bb, instr, op, &swap);
+            instrlist_meta_preinsert(
+                bb, instr,
+                INSTR_CREATE_lea(
+                    dc, opnd_create_reg(s_a),
+                    opnd_create_base_disp(opnd_get_base(op), opnd_get_index(op),
+                                          opnd_get_scale(op), opnd_get_disp(op),
+                                          OPSZ_lea)));
+            emit_shadow_or(dc, bb, instr, s_a, s_b, t_rf, s_t, ssz);
+            if (swap != DR_REG_NULL)
+                drreg_unreserve_register(dc, bb, instr, swap);
+        }
+    }
+
+    /* NO step witness store — production has no taint SET (the sink is the proof). */
+
+    /* ---- broadcast s_t to every DST (registers + eflags) ------------------- */
+    drmgr_insert_read_tls_field(dc, g_tls_regfile, bb, instr, t_rf);
+    for (int d = 0; d < instr_num_dsts(instr); d++) {
+        opnd_t op = instr_get_dst(instr, d);
+        if (opnd_is_reg(op)) {
+            reg_id_t r = opnd_get_reg(op);
+            int idx = rt_index(r);
+            if (idx >= 0)
+                emit_regtag_store(dc, bb, instr, t_rf, idx, s_t);
+            else {
+                int nb;
+                int xb = rt_vec_base(r, &nb);
+                if (xb >= 0)
+                    emit_vec_regtag_store(dc, bb, instr, t_rf, xb, nb, s_t);
+            }
+        }
+    }
+    if (instr_get_eflags(instr, DR_QUERY_DEFAULT) & EFLAGS_WRITE_ARITH)
+        emit_regtag_store(dc, bb, instr, t_rf, AT_RT_EFLAGS, s_t);
+
+    /* Store dsts: broadcast s_t into the destination-address shadow (inline lea EA). */
+    for (int d = 0; d < instr_num_dsts(instr); d++) {
+        opnd_t op = instr_get_dst(instr, d);
+        uint16_t dsz = opnd_is_memory_reference(op) ? taint_mem_size(op) : 0;
+        if (dsz == 0)
+            continue;
+        reg_id_t bse = opnd_get_base(op), idxr = opnd_get_index(op);
+        if (bse == s_a || bse == s_b || bse == s_t || bse == t_rf ||
+            idxr == s_a || idxr == s_b || idxr == s_t || idxr == t_rf)
+            continue;
+        reg_id_t swap = DR_REG_NULL;
+        drreg_restore_app_values(dc, bb, instr, op, &swap);
+        instrlist_meta_preinsert(
+            bb, instr,
+            INSTR_CREATE_lea(
+                dc, opnd_create_reg(s_a),
+                opnd_create_base_disp(opnd_get_base(op), opnd_get_index(op),
+                                      opnd_get_scale(op), opnd_get_disp(op),
+                                      OPSZ_lea)));
+        emit_shadow_store(dc, bb, instr, s_a, s_b, t_rf, s_t, dsz);
+        if (swap != DR_REG_NULL)
+            drreg_unreserve_register(dc, bb, instr, swap);
+    }
+}
 #endif /* ASMTEST_TAINT */
 
 /* Is `ipc` in the client's instrumentation scope? On yes, set *off to its offset in the
@@ -1612,6 +1749,40 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
      * in the shared origin space; ea = 0 (a register/flag sink). */
     if (instr_is_cbr(instr))
         emit_guarded_sink(dc, bb, instr, off);
+
+    /* PRODUCTION (record-free) propagation — Increment 9 lever 1. When `prod` is armed, skip the
+     * ENTIRE value pass + drx_buf record + step_taint witness: reserve only the taint scratch (no
+     * buffer pointer), propagate with inline-lea memory EAs (emit_taint_phase_prod), and return.
+     * The whole non-prod value+propagation path below is byte-unchanged (so the flag-off value
+     * client and the oracle-diffed taint lanes are unaffected). On any drreg failure, skip taint
+     * for this step — a conservative miss, never corruption. */
+    if (g_prod) {
+        reg_id_t p_a = DR_REG_NULL, p_b = DR_REG_NULL, p_t = DR_REG_NULL,
+                 p_rf = DR_REG_NULL;
+        if (drreg_reserve_register(dc, bb, instr, NULL, &p_a) ==
+            DRREG_SUCCESS) {
+            if (drreg_reserve_register(dc, bb, instr, NULL, &p_b) ==
+                DRREG_SUCCESS) {
+                if (drreg_reserve_register(dc, bb, instr, NULL, &p_t) ==
+                    DRREG_SUCCESS) {
+                    if (drreg_reserve_register(dc, bb, instr, NULL, &p_rf) ==
+                        DRREG_SUCCESS) {
+                        if (drreg_reserve_aflags(dc, bb, instr) ==
+                            DRREG_SUCCESS) {
+                            emit_taint_phase_prod(dc, bb, instr, p_a, p_b, p_t,
+                                                  p_rf);
+                            drreg_unreserve_aflags(dc, bb, instr);
+                        }
+                        drreg_unreserve_register(dc, bb, instr, p_rf);
+                    }
+                    drreg_unreserve_register(dc, bb, instr, p_t);
+                }
+                drreg_unreserve_register(dc, bb, instr, p_b);
+            }
+            drreg_unreserve_register(dc, bb, instr, p_a);
+        }
+        return DR_EMIT_DEFAULT;
+    }
 #endif
 
     /* Reserve three scratch GPRs FIRST (buffer pointer + two work registers); the
