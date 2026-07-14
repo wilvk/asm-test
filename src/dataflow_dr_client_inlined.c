@@ -959,25 +959,24 @@ static void on_sink_register(at_taint_report_t *report) {
     dr_mutex_unlock(g_lock);
 }
 
-/* Sink append (rare; per watched-branch, NOT per-instruction — the propagation stays
- * inline). Inserted UNCONDITIONALLY at each in-region conditional branch (a transparent
- * clean call, so the app's flags the branch reads are preserved); the taint GUARD is
- * the data check below (append only when the watched operand is tainted). For a branch
- * (kind = 1) the watched operand is eflags, read from THIS thread's reg-tag file — set
- * by the flag-defining instruction's inline propagation, which already executed. off is
- * the branch's region offset; seed_off/depth are left 0 and filled app-side by the
- * validator's def-use BFS. (A guarded INLINE skip — no call when the flag is clean — is
- * the immediate refinement; unconditional-per-branch is correct and simpler here.) */
-static void on_sink(uint64_t off, uint64_t ea, uint64_t kind) {
+/* Sink append (rare; per watched SITE, NOT per-instruction — the propagation stays inline).
+ * A transparent clean call (so the app's regs/flags the site reads are preserved), guarded
+ * INLINE by emit_guarded_sink so it fires only when the watched operand is tainted. `rt_idx`
+ * names the watched reg-tag-file slot, read from THIS thread's reg-tag file (set by the prior
+ * instruction's inline propagation, which already executed): eflags for a conditional branch
+ * (kind 1), the first SysV arg register rdi for a call-arg (kind 2), the string-copy count
+ * register rcx for a mem-len (kind 0). off is the site's region offset; ea = 0 (a register/
+ * flag sink); seed_off/depth are left 0 and filled app-side by the validator's def-use BFS. */
+static void on_sink(uint64_t off, uint64_t ea, uint64_t kind, uint64_t rt_idx) {
     if (g_report == NULL)
         return;
     void *dc = dr_get_current_drcontext();
     if (dc == NULL)
         return;
     at_tag_t *rf = (at_tag_t *)drmgr_get_tls_field(dc, g_tls_regfile);
-    if (rf == NULL)
+    if (rf == NULL || rt_idx >= (uint64_t)AT_RT_COUNT)
         return;
-    at_tag_t tag = rf[AT_RT_EFLAGS]; /* watched operand for a branch sink */
+    at_tag_t tag = rf[rt_idx]; /* watched operand (eflags / arg / count reg) */
     if (tag == AT_TAG_CLEAN)
         return; /* clean flow does not reach the sink */
 
@@ -1003,23 +1002,25 @@ static void on_sink(uint64_t off, uint64_t ea, uint64_t kind) {
     __atomic_store_n(&g_report->hits_len, idx + 1, __ATOMIC_RELAXED);
 }
 
-/* Guarded branch-condition sink (kind = 1): INLINE-read this thread's eflags tag and only
- * call on_sink (a clean call that appends a hit) when it is NONZERO. For the common CLEAN
- * branch — a loop counter, an untainted comparison — this is a TLS load + test + a not-taken
- * jump, with NO clean call, instead of the unconditional clean-call-per-branch the first sink
- * slice emitted (the Increment-4 "guarded inline sink skip" follow-on). NOTE the Increment-9
- * overhead decomposition: on the value+taint client the whole-tier cost is dominated by the L0
- * VALUE-capture recording (~295x bare), not the sink — taint propagation itself adds only
- * ~1.44x — so this skip is a correctness-preserving efficiency refinement, not the lever that
- * reaches the ~10-50x band (a production propagation-only build dropping the value trace is).
- * The branch READS the app aflags set by the prior flag-defining instruction, so we reserve
- * aflags (drreg spills the app value and restores it after the tag test) — the test clobbers
- * only the drreg-owned scratch flags, not the app's. On any drreg failure we degrade to
- * skipping the sink for this branch (a conservative miss, never a wrong hit or a corrupted
- * branch). on_sink re-reads + re-checks the tag, so the inline test is a cheap filter, not the
+/* Guarded taint sink: INLINE-read the watched reg-tag slot `rt_idx` from this thread's
+ * reg-tag file and only call on_sink (a clean call that appends a hit) when it is NONZERO.
+ * For the common CLEAN site — a loop counter, an untainted comparison, an untainted arg —
+ * this is a TLS load + test + a not-taken jump, with NO clean call (the Increment-4 "guarded
+ * inline sink skip" follow-on). ONE mechanism serves all three sink kinds, differing only in
+ * site + watched slot: a conditional branch watches eflags (kind 1), a call watches the first
+ * SysV arg register rdi (kind 2 call-arg), a rep-movs string copy watches the count register
+ * rcx (kind 0 mem-len). NOTE the Increment-9 overhead decomposition: on the value+taint client
+ * the whole-tier cost is dominated by the L0 VALUE-capture recording (~295x bare), not the
+ * sink — taint propagation itself adds only ~1.44x — so this skip is a correctness-preserving
+ * efficiency refinement, not the lever that reaches the ~10-50x band (a production
+ * propagation-only build dropping the value trace is). The site may READ the app aflags, so we
+ * reserve aflags (drreg spills the app value and restores it after the tag test) — the test
+ * clobbers only the drreg-owned scratch flags, not the app's. On any drreg failure we degrade
+ * to skipping the sink for this site (a conservative miss, never a wrong hit or a corrupted
+ * site). on_sink re-reads + re-checks the tag, so the inline test is a cheap filter, not the
  * authority. */
 static void emit_guarded_sink(void *dc, instrlist_t *bb, instr_t *where,
-                              uint64_t off) {
+                              uint64_t off, int rt_idx, uint64_t kind) {
     reg_id_t s;
     if (drreg_reserve_register(dc, bb, where, NULL, &s) != DRREG_SUCCESS)
         return;
@@ -1030,24 +1031,25 @@ static void emit_guarded_sink(void *dc, instrlist_t *bb, instr_t *where,
     instr_t *skip = INSTR_CREATE_label(dc);
     /* s = reg-tag-file base (this thread's TLS slot) */
     drmgr_insert_read_tls_field(dc, g_tls_regfile, bb, where, s);
-    /* s = byte[s + AT_RT_EFLAGS] (the eflags tag), zero-extended */
+    /* s = byte[s + rt_idx] (the watched operand's tag), zero-extended */
     instrlist_meta_preinsert(
         bb, where,
         INSTR_CREATE_movzx(
             dc, opnd_create_reg(s),
-            opnd_create_base_disp(s, DR_REG_NULL, 0, AT_RT_EFLAGS, OPSZ_1)));
-    /* if (tag == 0) goto skip — no clean call for a clean branch */
+            opnd_create_base_disp(s, DR_REG_NULL, 0, rt_idx, OPSZ_1)));
+    /* if (tag == 0) goto skip — no clean call for a clean site */
     instrlist_meta_preinsert(
         bb, where,
         INSTR_CREATE_test(dc, opnd_create_reg(s), opnd_create_reg(s)));
     instrlist_meta_preinsert(
         bb, where, INSTR_CREATE_jcc(dc, OP_jz, opnd_create_instr(skip)));
-    /* tainted flow reaches the sink: append one hit (ea = 0, kind = 1). The clean call is
-     * transparent, so the app regs/flags the branch reads are preserved. */
-    dr_insert_clean_call(dc, bb, where, (void *)on_sink, false, 3,
+    /* tainted flow reaches the sink: append one hit (ea = 0, watched slot rt_idx). The clean
+     * call is transparent, so the app regs/flags the site reads are preserved. */
+    dr_insert_clean_call(dc, bb, where, (void *)on_sink, false, 4,
                          OPND_CREATE_INTPTR((ptr_uint_t)off),
                          OPND_CREATE_INTPTR((ptr_uint_t)0),
-                         OPND_CREATE_INTPTR((ptr_uint_t)1));
+                         OPND_CREATE_INTPTR((ptr_uint_t)kind),
+                         OPND_CREATE_INTPTR((ptr_uint_t)rt_idx));
     instrlist_meta_preinsert(bb, where, skip);
     drreg_unreserve_aflags(dc, bb, where);
     drreg_unreserve_register(dc, bb, where, s);
@@ -1876,15 +1878,27 @@ static dr_emit_flags_t event_insert(void *dc, void *tag, instrlist_t *bb,
     __atomic_fetch_add(&g_inscount, 1, __ATOMIC_RELAXED);
 
 #ifdef ASMTEST_TAINT
-    /* Branch-condition SINK (kind = 1): at each in-region conditional branch, GUARDED-append
-     * a hit iff the eflags tag it reads is tainted. Placed FIRST (before the value/propagation
-     * instrumentation of this branch), so at runtime it observes the reg-tag file as left by
-     * the PRIOR (flag-defining) instruction's inline propagation. emit_guarded_sink inline-
-     * tests the tag and only makes the clean call when tainted — a clean branch pays a TLS
-     * load + test, not a clean call (the Increment-9 overhead fix). off is the branch's offset
-     * in the shared origin space; ea = 0 (a register/flag sink). */
+    /* Taint SINKS (guarded inline): at each in-region sink SITE, append a hit iff the watched
+     * reg-tag is tainted. Placed FIRST (before this instruction's own value/propagation
+     * instrumentation), so at runtime the guard observes the reg-tag file as left by the PRIOR
+     * instruction's inline propagation. emit_guarded_sink inline-tests the tag and only makes
+     * the clean call when tainted — a clean site pays a TLS load + test, not a clean call (the
+     * Increment-9 overhead fix). Three sink kinds share the one mechanism, differing only in
+     * site + watched slot: a conditional branch watches eflags (kind 1), a call watches the
+     * first SysV arg register rdi (kind 2 call-arg), a rep-movs string copy watches the count
+     * register rcx (kind 0 mem-len). off is the site's offset in the shared origin space; ea =
+     * 0 (a register/flag sink). The categories are mutually exclusive, so at most one fires. */
     if (instr_is_cbr(instr))
-        emit_guarded_sink(dc, bb, instr, off);
+        emit_guarded_sink(dc, bb, instr, off, AT_RT_EFLAGS, 1);
+    else if (instr_is_call(instr)) {
+        int ai = rt_index(DR_REG_RDI);
+        if (ai >= 0)
+            emit_guarded_sink(dc, bb, instr, off, ai, 2);
+    } else if (instr_get_opcode(instr) == OP_rep_movs) {
+        int ci = rt_index(DR_REG_RCX);
+        if (ci >= 0)
+            emit_guarded_sink(dc, bb, instr, off, ci, 0);
+    }
 
     /* PRODUCTION (record-free) propagation — Increment 9 lever 1. When `prod` is armed, skip the
      * ENTIRE value pass + drx_buf record + step_taint witness: reserve only the taint scratch (no

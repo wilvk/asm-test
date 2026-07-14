@@ -315,6 +315,22 @@ else
 	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
 	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
 	    $(BUILD)/dr_taint highbyte
+	@echo "== dr-taint-native-test (call-arg sink kind=2: tainted first arg reaches a call) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint callarg
+	@echo "== dr-taint-native-test (call-arg sink negative control: unseeded => zero hits) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint callarg-negative
+	@echo "== dr-taint-native-test (mem-len sink kind=0: tainted rep-movs count reaches the copy) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint memlen
+	@echo "== dr-taint-native-test (mem-len sink negative control: unseeded => zero hits) =="
+	ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/dr_taint memlen-negative
 endif
 
 # --- Taint tier (Increment 8): XMM/YMM (SSE/AVX) SIMD taint ------------------

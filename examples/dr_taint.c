@@ -5,18 +5,24 @@
  * taint client (src/dataflow_dr_client_inlined.c built -DASMTEST_TAINT), SEEDS a known
  * buffer, and (a) asserts the client's per-step taint witness (dv->step_taint) equals
  * the emulator-oracle FORWARD SLICE from the seed step — inline propagation reproduces
- * def-use forward reachability — and (b) asserts a tainted value reaching a conditional-
- * branch SINK produces one at_taint_hit_t with the right off/tag/kind, its off in the
- * forward slice, and the app-side def-use BFS resolving seed_off + depth. Each has a
- * negative control (unseeded => empty taint set / zero hits).
+ * def-use forward reachability — and (b) asserts a tainted value reaching a SINK produces
+ * one at_taint_hit_t with the right off/tag/kind. Three sink kinds are exercised: a
+ * conditional-branch condition (kind 1), a call ARGUMENT register (kind 2), and a
+ * memory-copy LENGTH — the rep-movs count register (kind 0). For the branch and mem-len
+ * sinks the hit's off is in the forward slice and the app-side def-use BFS resolves
+ * seed_off + depth; the call-arg sink is calling-convention-based (a direct call does not
+ * machine-read its args), so its oracle tie is the arg's DEFINING move being in the slice.
+ * Each sink has a negative control (unseeded => empty taint set / zero hits).
  *
  * This mirrors dr_valtrace.c's structure + oracle discipline; the ADDITIVE value
  * capture still runs (asserted: result + step count), so this also proves the taint
  * client fills at_drval_t identically. Named dr_taint.c (not test_*.c) so the root
  * Makefile's SUITES wildcard does not sweep this standalone DynamoRIO harness into the
  * forking runner; it is wired + run explicitly by mk/native-trace.mk's
- * dr-taint-native-test lane (six modes: seeded / negative / sink / sink-negative /
- * heapstore / highbyte).
+ * dr-taint-native-test lane. Modes selected by argv[1]: seeded / negative / sink /
+ * sink-negative / heapstore / highbyte / callarg / callarg-negative / memlen /
+ * memlen-negative — the sink family (sink/callarg/memlen + each negative) covers all
+ * three at_taint_hit_t kinds (1 branch, 2 call-arg, 0 mem-len).
  *
  * DynamoRIO permits ONE in-process lifecycle per process, so each invocation drives ONE
  * scenario, selected by argv[1] (default = seeded). Self-skips cleanly (exit 0) when
@@ -30,6 +36,10 @@
  *   taint_sink_chain: ... / add rcx,rsi / jz +3 / ...         (branch-condition sink)
  *   taint_heapstore:  mov rax,[rdi] / mov [rsi],rax / mov rcx,[rsi] / ... (create-on-
  *                     touch through a fresh, never-pre-touched heap store)
+ *   taint_callarg:    mov rax,[rdi] / mov rdi,rax / call +1 / ret / ret  (call-arg sink:
+ *                     the tainted value reaches call ARG0 rdi)
+ *   taint_memlen:     mov rcx,[rdi] / rep movsb / mov rax,rcx / ret      (mem-len sink:
+ *                     the tainted value is the rep-movs LENGTH in rcx)
  * The store/reload exercise the integer-memory shadow, the moves/lea/add the reg + flag
  * tags; forward(step0) excludes ret.
  */
@@ -119,6 +129,38 @@ static const uint8_t taint_heapstore[] = {
     0x48, 0x89, 0xc8, /* 0x09 mov rax, rcx                              */
     0xc3,             /* 0x0c ret                                       */
 };
+
+/* Call-arg sink fixture (rdi=buf seeded): moves the seeded value into rdi (SysV arg0), then
+ * CALLs — a tainted value reaches a call ARGUMENT register (kind = 2). A direct call does not
+ * machine-read its argument registers, so this sink is calling-convention-based (rdi watched at
+ * the call site), decoupled from the value trace's machine-level def-use — hence, unlike the
+ * branch/mem-len sinks, the CALL step itself is not in forward(seed); the arg's DEFINING move
+ * is (asserted below). The nested call/ret is balanced (the leaf runs as a normal C function).
+ *   taint_callarg: mov rax,[rdi] / mov rdi,rax / call +1 / ret / ret
+ * one hit at off 0x06, kind 2; forward(step0) includes the mov rdi,rax at 0x03. */
+static const uint8_t taint_callarg[] = {
+    0x48, 0x8b, 0x07,             /* 0x00 mov rax, [rdi]  (SEED origin)      */
+    0x48, 0x89, 0xc7,             /* 0x03 mov rdi, rax    (arg0 tainted)     */
+    0xe8, 0x01, 0x00, 0x00, 0x00, /* 0x06 call 0x0c       (SINK: arg tainted)*/
+    0xc3,                         /* 0x0b ret             (to harness)       */
+    0xc3,                         /* 0x0c ret             (callee -> 0x0b)   */
+};
+#define CALLARG_OFF 0x06 /* the call instruction's region offset */
+
+/* Mem-len sink fixture (rdi=buf seeded holding a SMALL byte count; rsi=buf2 a readable src):
+ * loads the seeded value as a length into rcx (the string-copy count register), then rep movsb
+ * — a tainted value reaches a memory-copy LENGTH (kind = 0). rcx IS a machine source of rep
+ * movs, so def-use connects seed->rep-movs and the sink step is in forward(seed).
+ *   taint_memlen: mov rcx,[rdi] / rep movsb / mov rax,rcx / ret
+ * one hit at off 0x03, kind 0; forward(step0) = {0,1,2} (ret excluded), depth 1. */
+static const uint8_t taint_memlen[] = {
+    0x48, 0x8b, 0x0f, /* 0x00 mov rcx, [rdi] (SEED origin: tainted count)  */
+    0xf3, 0xa4,       /* 0x03 rep movsb      (SINK: mem-copy length rcx)   */
+    0x48, 0x89, 0xc8, /* 0x05 mov rax, rcx   (rax = 0 -> deterministic)    */
+    0xc3,             /* 0x08 ret                                          */
+};
+#define MEMLEN_OFF   0x03 /* the rep movsb instruction's region offset      */
+#define MEMLEN_DEPTH 1    /* def-use edges seed(step0) -> rep movsb(step1)  */
 
 static int slices_equal(const asmtest_slice_t *a, const asmtest_slice_t *b) {
     if (a == NULL || b == NULL || a->n != b->n)
@@ -428,6 +470,217 @@ static void test_sink_negative(void) {
     asmtest_valtrace_free(v);
 }
 
+/* Call-arg sink scenario (kind = 2): a tainted value reaches a call ARGUMENT register => one
+ * at_taint_hit_t with the right off/tag/kind. The arg's DEFINING move is in forward(seed)
+ * [ORACLE tie-in]; the call step itself is not (a direct call does not machine-read its args,
+ * so the call-arg sink is calling-convention-based, decoupled from machine-level def-use). */
+static void test_callarg(void) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    at_tag_t step_taint[64];
+    at_taint_hit_t hits[8];
+    at_taint_report_t report;
+    memset(&report, 0, sizeof report);
+    report.hits = hits;
+    report.hits_cap = 8;
+    if (v == NULL) {
+        CHECK(0, "callarg: valtrace_new");
+        return;
+    }
+    uint64_t *buf = (uint64_t *)malloc(sizeof(uint64_t));
+    if (buf == NULL) {
+        CHECK(0, "callarg: buffer alloc");
+        asmtest_valtrace_free(v);
+        return;
+    }
+    *buf = 7;
+    long args[2] = {(long)(uintptr_t)buf, 0};
+    long result = 0;
+    int rc = asmtest_dataflow_dr_taint_run(
+        taint_callarg, sizeof taint_callarg, args, 2, 0,
+        (uint64_t)(uintptr_t)buf, sizeof(uint64_t), AT_TAG_TAINTED, &result, v,
+        step_taint, sizeof step_taint / sizeof step_taint[0], &report);
+
+    CHECK(rc == DF_DR_OK,
+          "callarg: routine captured in-band under the taint client");
+    CHECK(result == 7, "callarg: routine returned 7 (rax = *buf, unchanged)");
+    CHECK(report.hits_total == 1 && report.hits_len == 1 && !report.truncated,
+          "callarg: exactly one taint hit recorded");
+    if (report.hits_len == 1) {
+        at_taint_hit_t *h = &report.hits[0];
+        CHECK(h->off == CALLARG_OFF, "callarg: hit offset is the call (0x06)");
+        CHECK(h->tag != AT_TAG_CLEAN, "callarg: hit tag is tainted");
+        CHECK(h->kind == 2, "callarg: hit kind = 2 (call argument)");
+        CHECK(h->ea == 0, "callarg: hit ea = 0 (register sink)");
+    }
+
+    /* ORACLE tie-in: the argument's DEFINING move (mov rdi,rax at 0x03) is in forward(seed) —
+     * the tainted value that reached the arg is genuinely seed-derived. */
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    at_val_rec_t seed = {0};
+    seed.step = 0;
+    asmtest_slice_t *fwd = g ? asmtest_slice_forward(g, seed) : NULL;
+    int argdef = step_at_off(v, 0x03);
+    CHECK(fwd && argdef >= 0 && asmtest_slice_contains(fwd, (uint32_t)argdef),
+          "callarg: arg-defining move is in forward slice(seed) [ORACLE]");
+
+    asmtest_slice_free(fwd);
+    asmtest_defuse_free(g);
+    free(buf);
+    asmtest_valtrace_free(v);
+}
+
+/* Call-arg negative control: the SAME fixture unseeded => the arg register stays clean => zero
+ * hits (the sink is seed-gated, not structural). */
+static void test_callarg_negative(void) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    at_tag_t step_taint[64];
+    at_taint_hit_t hits[8];
+    at_taint_report_t report;
+    memset(&report, 0, sizeof report);
+    report.hits = hits;
+    report.hits_cap = 8;
+    if (v == NULL) {
+        CHECK(0, "callarg-negative: valtrace_new");
+        return;
+    }
+    uint64_t *buf = (uint64_t *)malloc(sizeof(uint64_t));
+    if (buf == NULL) {
+        CHECK(0, "callarg-negative: buffer alloc");
+        asmtest_valtrace_free(v);
+        return;
+    }
+    *buf = 7;
+    long args[2] = {(long)(uintptr_t)buf, 0};
+    long result = 0;
+    int rc = asmtest_dataflow_dr_taint_run(
+        taint_callarg, sizeof taint_callarg, args, 2, 0, /*seed_base*/ 0,
+        /*seed_len*/ 0, AT_TAG_TAINTED, &result, v, step_taint,
+        sizeof step_taint / sizeof step_taint[0], &report);
+
+    CHECK(rc == DF_DR_OK, "callarg-negative: routine captured (unseeded)");
+    CHECK(report.hits_total == 0 && report.hits_len == 0 && !report.truncated,
+          "callarg-negative: zero hits (unseeded => clean arg never reaches "
+          "sink)");
+
+    free(buf);
+    asmtest_valtrace_free(v);
+}
+
+/* Mem-len sink scenario (kind = 0): a tainted value reaches a memory-copy LENGTH (the rep
+ * movsb count register rcx) => one at_taint_hit_t with the right off/tag/kind. rcx is a machine
+ * source of rep movs, so the sink step is in forward(seed) and the app-side def-use BFS
+ * resolves seed_off + depth. */
+static void test_memlen(void) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    at_tag_t step_taint[64];
+    at_taint_hit_t hits[8];
+    at_taint_report_t report;
+    memset(&report, 0, sizeof report);
+    report.hits = hits;
+    report.hits_cap = 8;
+    if (v == NULL) {
+        CHECK(0, "memlen: valtrace_new");
+        return;
+    }
+    uint64_t *buf = (uint64_t *)malloc(sizeof(uint64_t));
+    uint64_t *buf2 = (uint64_t *)malloc(sizeof(uint64_t));
+    if (buf == NULL || buf2 == NULL) {
+        CHECK(0, "memlen: buffer alloc");
+        free(buf);
+        free(buf2);
+        asmtest_valtrace_free(v);
+        return;
+    }
+    *buf = 4; /* a SMALL, tainted byte count for the rep movsb */
+    *buf2 = 0;
+    long args[2] = {(long)(uintptr_t)buf, (long)(uintptr_t)buf2};
+    long result = 0;
+    int rc = asmtest_dataflow_dr_taint_run(
+        taint_memlen, sizeof taint_memlen, args, 2, 0, (uint64_t)(uintptr_t)buf,
+        sizeof(uint64_t), AT_TAG_TAINTED, &result, v, step_taint,
+        sizeof step_taint / sizeof step_taint[0], &report);
+
+    CHECK(rc == DF_DR_OK,
+          "memlen: routine captured in-band under the taint client");
+    CHECK(report.hits_total == 1 && report.hits_len == 1 && !report.truncated,
+          "memlen: exactly one taint hit recorded");
+    if (report.hits_len == 1) {
+        at_taint_hit_t *h = &report.hits[0];
+        CHECK(h->off == MEMLEN_OFF,
+              "memlen: hit offset is the rep movsb (0x03)");
+        CHECK(h->tag != AT_TAG_CLEAN, "memlen: hit tag is tainted");
+        CHECK(h->kind == 0, "memlen: hit kind = 0 (mem-copy length)");
+        CHECK(h->ea == 0, "memlen: hit ea = 0 (register sink)");
+    }
+
+    /* ORACLE: rcx (the count) is a machine source of rep movsb, so the sink step is in
+     * forward(seed); the app-side def-use BFS resolves seed_off + depth. */
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    at_val_rec_t seed = {0};
+    seed.step = 0;
+    asmtest_slice_t *fwd = g ? asmtest_slice_forward(g, seed) : NULL;
+    int sink_step = step_at_off(v, MEMLEN_OFF);
+    CHECK(fwd && sink_step >= 0 &&
+              asmtest_slice_contains(fwd, (uint32_t)sink_step),
+          "memlen: rep movsb is in forward slice(seed) [ORACLE]");
+
+    fill_seed_and_depth(&report, g, v, 0);
+    if (report.hits_len == 1) {
+        CHECK(report.hits[0].seed_off == 0x00,
+              "memlen: app-side seed_off resolves to the seed load (0x00)");
+        CHECK(report.hits[0].depth == MEMLEN_DEPTH,
+              "memlen: app-side depth = 1 def-use edge seed->sink");
+    }
+
+    asmtest_slice_free(fwd);
+    asmtest_defuse_free(g);
+    free(buf);
+    free(buf2);
+    asmtest_valtrace_free(v);
+}
+
+/* Mem-len negative control: the SAME fixture unseeded => the count register stays clean => zero
+ * hits (the sink is seed-gated, not structural). */
+static void test_memlen_negative(void) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    at_tag_t step_taint[64];
+    at_taint_hit_t hits[8];
+    at_taint_report_t report;
+    memset(&report, 0, sizeof report);
+    report.hits = hits;
+    report.hits_cap = 8;
+    if (v == NULL) {
+        CHECK(0, "memlen-negative: valtrace_new");
+        return;
+    }
+    uint64_t *buf = (uint64_t *)malloc(sizeof(uint64_t));
+    uint64_t *buf2 = (uint64_t *)malloc(sizeof(uint64_t));
+    if (buf == NULL || buf2 == NULL) {
+        CHECK(0, "memlen-negative: buffer alloc");
+        free(buf);
+        free(buf2);
+        asmtest_valtrace_free(v);
+        return;
+    }
+    *buf = 4;
+    *buf2 = 0;
+    long args[2] = {(long)(uintptr_t)buf, (long)(uintptr_t)buf2};
+    long result = 0;
+    int rc = asmtest_dataflow_dr_taint_run(
+        taint_memlen, sizeof taint_memlen, args, 2, 0, /*seed_base*/ 0,
+        /*seed_len*/ 0, AT_TAG_TAINTED, &result, v, step_taint,
+        sizeof step_taint / sizeof step_taint[0], &report);
+
+    CHECK(rc == DF_DR_OK, "memlen-negative: routine captured (unseeded)");
+    CHECK(report.hits_total == 0 && report.hits_len == 0 && !report.truncated,
+          "memlen-negative: zero hits (unseeded => clean count never reaches "
+          "sink)");
+
+    free(buf);
+    free(buf2);
+    asmtest_valtrace_free(v);
+}
+
 /* Create-on-touch scenario: taint flows THROUGH a store to a fresh, never-touched heap
  * buffer and back. Passes only if the inline store-tag slowpath creates the leaf on
  * first touch (no pre-touch); the taint set must equal forward(seed) = {0,1,2,3}. */
@@ -553,6 +806,14 @@ int main(int argc, char **argv) {
         test_heapstore();
     else if (strcmp(mode, "highbyte") == 0)
         test_highbyte();
+    else if (strcmp(mode, "callarg") == 0)
+        test_callarg();
+    else if (strcmp(mode, "callarg-negative") == 0)
+        test_callarg_negative();
+    else if (strcmp(mode, "memlen") == 0)
+        test_memlen();
+    else if (strcmp(mode, "memlen-negative") == 0)
+        test_memlen_negative();
     else
         test_seeded();
     printf("1..%d\n", checks);
