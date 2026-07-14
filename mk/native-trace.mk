@@ -537,6 +537,56 @@ else
 	$(BUILD)/taint_validator $(ATTACH_SHM)
 endif
 
+# --- DR ATTACH tier, Increment 2: external-attach empirical probe (go/no-go) ---
+# The extension-load-probe move, for ATTACH. Unlike Increment 1's COOPERATIVE self-attach
+# (dr_app_*, no experimental API), this probes DR's EXPERIMENTAL EXTERNAL attach: it starts a
+# PLAIN native victim (examples/attach_probe_victim — a bounded heartbeat loop), lets it run
+# natively, then injects DR + a minimal counting client (drclient/attach_probe.c) into the RUNNING
+# process via `drrun -attach <pid>`. It records the yes/no that gates Increments 3-5: did DR take
+# the running process over (the client's bb event fired over live code -> non-zero instrumented
+# instructions EXECUTED = ATTACH_PROBE_TAKEOVER_OK), did the victim KEEP RUNNING (heartbeats
+# continued past the attach), and did it exit native. Prints `ATTACH PROBE OK` (GO) iff all hold,
+# else `ATTACH PROBE NO-GO`. Needs SYS_PTRACE for the ptrace-seize (the docker lane adds the cap).
+# THROWAWAY diagnostic (not a product artifact, not wired into the main CI gate — a no-go is a
+# valid research finding, recorded in docs/internal/analysis/dr-attach-probe-findings.md).
+$(BUILD)/attach_probe_victim: examples/attach_probe_victim.c $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) examples/attach_probe_victim.c -o $@
+
+.PHONY: dr-taint-attach-probe
+dr-taint-attach-probe:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-attach-probe =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@mkdir -p $(BUILD)/attach_probe
+	cd $(BUILD)/attach_probe && cmake -DDynamoRIO_DIR=$(abspath $(DYNAMORIO_DIR)) \
+	    -DASMTEST_BUILD_DIR=$(abspath $(BUILD)) -DASMTEST_BUILD_ATTACH_PROBE=ON \
+	    $(abspath drclient) >/dev/null
+	cmake --build $(BUILD)/attach_probe >/dev/null
+	@$(MAKE) $(BUILD)/attach_probe_victim
+	@echo "== dr-taint-attach-probe (DR EXTERNAL attach to a running native process — Increment 2 go/no-go) =="
+	@vlog=$(BUILD)/attach_victim.log; alog=$(BUILD)/attach_drrun.log; rm -f $$vlog $$alog; \
+	 $(BUILD)/attach_probe_victim 2>$$vlog & vpid=$$!; \
+	 sleep 2; \
+	 pre=$$(grep -c VICTIM_HEARTBEAT $$vlog 2>/dev/null || true); [ -z "$$pre" ] && pre=0; \
+	 echo "# victim pid=$$vpid ($$pre heartbeats native, pre-attach); attaching via 'drrun -attach' ..."; \
+	 timeout 90 $(DR_DRRUN) -attach $$vpid -c $(abspath $(BUILD)/libasmtest_attach_probe.so) >$$alog 2>&1; arc=$$?; \
+	 wait $$vpid 2>/dev/null; vrc=$$?; \
+	 echo "# --- drrun -attach output (rc=$$arc) ---"; head -20 $$alog | sed 's/^/#   /'; \
+	 echo "# --- victim log tail ---"; tail -6 $$vlog | sed 's/^/#   /'; \
+	 post=$$(grep -c VICTIM_HEARTBEAT $$vlog 2>/dev/null || true); [ -z "$$post" ] && post=0; \
+	 reached=$$(cat $$vlog $$alog 2>/dev/null | grep -c 'dr_client_main reached' || true); [ -z "$$reached" ] && reached=0; \
+	 takeover=$$(cat $$vlog $$alog 2>/dev/null | grep -c ATTACH_PROBE_TAKEOVER_OK || true); [ -z "$$takeover" ] && takeover=0; \
+	 ended=$$(grep -c VICTIM_END $$vlog 2>/dev/null || true); [ -z "$$ended" ] && ended=0; \
+	 echo "# SUMMARY: client_reached=$$reached takeover_ok=$$takeover pre_beats=$$pre post_beats=$$post victim_end=$$ended attach_rc=$$arc victim_rc=$$vrc"; \
+	 if [ "$$reached" -ge 1 ] && [ "$$takeover" -ge 1 ] && [ "$$post" -gt "$$pre" ] && [ "$$ended" -ge 1 ]; then \
+	   echo "ATTACH PROBE OK — GO: DR external attach took over the running victim (non-zero instrumentation executed), the victim SURVIVED (heartbeats continued past attach) and exited native."; \
+	 else \
+	   echo "ATTACH PROBE NO-GO — external attach did not fully hold (see SUMMARY). Gates attach-tier Increments 3-5; record the mode in dr-attach-probe-findings.md."; \
+	 fi
+endif
+
 # --- Taint tier Increment 5: concurrent-writer shadow stress ---------------
 # `drrun -c <taint client>.so -- ./taint_stress` launches an N-thread native workload
 # whose threads, released together by a barrier, ALL seed a disjoint buffer + run the

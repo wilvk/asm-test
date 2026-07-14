@@ -129,3 +129,22 @@ if(ASMTEST_BUILD_DREXT_PROBE)
   set_target_properties(asmtest_drext_probe PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${ASMTEST_BUILD_DIR}")
 endif()
+
+# --- Throwaway external-attach probe (DR ATTACH tier, Increment 2) -----------
+# Opt-in only (-DASMTEST_BUILD_ATTACH_PROBE=ON): a MINIMAL client injected into a
+# SEPARATE, already-running native process via DR's EXPERIMENTAL external attach
+# (`drrun -attach <pid>` / dr_inject_process_attach) — the go/no-go that gates the
+# attach-tier Increments 3-5. It counts instrumented instructions EXECUTED and
+# prints ATTACH_PROBE_TAKEOVER_OK iff non-zero (proof the takeover reached the
+# victim's live execution). drmgr only — the takeover question is orthogonal to the
+# extension stack. NOT a product artifact; built only by the dr-taint-attach-probe
+# lane. See drclient/attach_probe.c and dynamorio-attach-tier-plan.md Increment 2.
+option(ASMTEST_BUILD_ATTACH_PROBE "Build the throwaway external-attach probe client" OFF)
+if(ASMTEST_BUILD_ATTACH_PROBE)
+  add_library(asmtest_attach_probe SHARED
+    ${CMAKE_CURRENT_SOURCE_DIR}/attach_probe.c)
+  configure_DynamoRIO_client(asmtest_attach_probe)
+  use_DynamoRIO_extension(asmtest_attach_probe drmgr)
+  set_target_properties(asmtest_attach_probe PROPERTIES
+    LIBRARY_OUTPUT_DIRECTORY "${ASMTEST_BUILD_DIR}")
+endif()

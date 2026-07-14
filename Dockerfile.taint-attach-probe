@@ -1,0 +1,44 @@
+# Dockerfile.taint-attach-probe — throwaway lane for the DynamoRIO ATTACH tier's
+# EXTERNAL-attach go/no-go probe (dynamorio-attach-tier-plan.md, Increment 2).
+#
+# Increment 1 landed COOPERATIVE self-attach (dr_app_*, no experimental API, no
+# SYS_PTRACE). This lane probes DR's EXPERIMENTAL EXTERNAL attach: it starts a plain
+# native victim, lets it run, then injects DR + a minimal counting client into the
+# RUNNING process via `drrun -attach <pid>`, and records whether takeover +
+# victim-survival hold. Because the ptrace-seize needs CAP_SYS_PTRACE, the docker
+# RUN adds `--cap-add=SYS_PTRACE` (mirroring the hwtrace cap lanes). Carries NO
+# Capstone/Unicorn — the probe only counts instrumented instructions.
+#
+# Linux x86-64 only. DynamoRIO is a software DBI engine (Intel and AMD alike).
+#
+# Build + run:  make docker-taint-attach-probe
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# C toolchain + CMake (the probe client is CMake-built via drclient/CMakeLists.txt)
+# and curl to fetch the DynamoRIO release. No Capstone/Unicorn.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config curl ca-certificates xz-utils \
+ && rm -rf /var/lib/apt/lists/*
+
+# Pin the SAME DynamoRIO release the other taint lanes use. Override DR_VERSION/DR_URL to bump.
+ARG DR_VERSION=11.91.20630
+ARG DR_URL=https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz
+RUN curl -fsSL "$DR_URL" -o /tmp/dr.tar.gz \
+ && mkdir -p /opt/dynamorio \
+ && tar -xzf /tmp/dr.tar.gz -C /opt/dynamorio --strip-components=1 \
+ && rm /tmp/dr.tar.gz
+ENV DYNAMORIO_HOME=/opt/dynamorio
+
+WORKDIR /src
+COPY . .
+
+# Run the external-attach probe: start the victim, inject DR into it via `drrun -attach`,
+# and print the GO / NO-GO verdict. Needs `--cap-add=SYS_PTRACE` at run time (the docker
+# target adds it). The kernel's ptrace_scope is reported for the findings record.
+CMD set -eux; \
+    cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null || echo "no yama ptrace_scope"; \
+    make dr-taint-attach-probe DYNAMORIO_HOME=$DYNAMORIO_HOME

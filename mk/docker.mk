@@ -256,6 +256,19 @@ docker-taint-attach:
 	  -t asmtest-taint-attach .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-taint-attach
 
+# DR ATTACH tier Increment 2: EXTERNAL-attach empirical probe (the experimental blocker). A
+# light DR-only image that starts a plain native victim and injects DR + a minimal counting
+# client into the RUNNING process via `drrun -attach <pid>`, printing the GO/NO-GO verdict. The
+# ptrace-seize needs CAP_SYS_PTRACE, so — UNLIKE the coop lane — the `docker run` adds
+# `--cap-add=SYS_PTRACE` (mirroring the hwtrace cap lanes). A no-go is a valid research finding
+# (recorded in dr-attach-probe-findings.md), so this is a manual diagnostic, not in the main gate.
+.PHONY: docker-taint-attach-probe
+docker-taint-attach-probe:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.taint-attach-probe \
+	  --build-arg BASE=$(DOCKER_BASE) --build-arg DR_VERSION=$(DR_VERSION) \
+	  -t asmtest-taint-attach-probe .
+	$(DOCKER) run --rm --cap-add=SYS_PTRACE $(_docker_plat) asmtest-taint-attach-probe
+
 # TAINT tier dotnet coexistence lane (taint tier, Increment 5). Installs DynamoRIO + the
 # .NET SDK (no Capstone/Unicorn) and runs `make dr-taint-dotnet-test`:
 # `drrun -c <taint client> -- dotnet taint_hello.dll` — the first in-tree test of DR's

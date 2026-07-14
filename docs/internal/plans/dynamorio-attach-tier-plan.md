@@ -166,7 +166,26 @@ lifecycle + the "native-then-armed-then-native" harness).
 
 ---
 
-## Increment 2 - External-attach empirical probe (native) *(the experimental blocker)*
+## Increment 2 - External-attach empirical probe (native) *(**LANDED 2026-07-14 — GO**; the experimental blocker is RETIRED for native)*
+
+> **UPDATE 2026-07-14 — probe LANDED; verdict GO.** DR external attach to an already-running
+> native process WORKS on the pinned DR 11.91.20630: `drrun -attach <pid> -c <client>` takes the
+> running victim over, the client's `drmgr` bb event instruments its live code (**1.6 billion
+> instructions executed** in the probe), the victim KEEPS RUNNING (heartbeats continued past the
+> attach) and exits native, all with `--cap-add=SYS_PTRACE`. Artifacts:
+> [attach_probe_victim.c](../../../examples/attach_probe_victim.c),
+> [attach_probe.c](../../../drclient/attach_probe.c) (opt-in `-DASMTEST_BUILD_ATTACH_PROBE`),
+> `make dr-taint-attach-probe` / `make docker-taint-attach-probe`. **Load-bearing gotchas** (full
+> record: [dr-attach-probe-findings.md](../analysis/dr-attach-probe-findings.md)): (1) `-attach <pid>`
+> must PRECEDE `-c <client>` — drrun parses everything after `-c` as client options, so the
+> mis-ordered `-c <client> -attach <pid>` fails with a misleading `ERROR: no app specified` (reads as
+> "unsupported"; it is not — `drrun -h` lists `-attach`); (2) `--cap-add=SYS_PTRACE` is required AND
+> SUFFICIENT — it bypasses the container's `yama/ptrace_scope=1` (no seccomp-unconfined needed), which
+> matters because the injector and victim are siblings, not parent/child; (3) `dr_inject.h`'s
+> `dr_inject_process_attach` + `libdrinjectlib.a` ship too, so a custom injector is available if a
+> later increment needs finer control, but the `drrun -attach` front-end works and is simplest.
+> **Increments 3-5 (native attach data-flow/taint end-to-end) are UNBLOCKED**; managed attach
+> (Increment 6) stays research-gated (this probe is native-only).
 
 The extension-load-probe move, for attach: a throwaway probe — NOT a product artifact —
 that attaches to a **separate, already-running native process** and reports what DR's
@@ -183,12 +202,13 @@ experimental external attach actually does on the pinned DR 11.91.
   version / ptrace-seize behaviour / any `-late` vs `-early` interaction), exactly as the
   extension-load probe did — this is the yes/no that gates Increments 3-5.
 
-**Exit criteria:** `make docker-taint-attach-probe` runs the injector over the running
-victim in a container (with `--cap-add=SYS_PTRACE` if the seize needs it, mirroring the
-hwtrace cap lanes) and prints `ATTACH PROBE OK` iff takeover + non-zero instrumentation +
-victim-survival + detach all hold; self-skips without DynamoRIO. **Effort: M-L** (new
-injector harness against an experimental API; the risk is entirely in DR's attach maturity,
-which is exactly what the probe measures).
+**Exit criteria: MET 2026-07-14 (GO).** `make docker-taint-attach-probe` runs `drrun -attach`
+over the running victim in a container with `--cap-add=SYS_PTRACE` and prints `ATTACH PROBE OK` —
+takeover + non-zero instrumentation (1.6 B insns) + victim-survival + native exit all held
+(`client_reached=1 takeover_ok=1 pre_beats=20 post_beats=100 victim_end=1 attach_rc=0`); self-skips
+without DynamoRIO. **Effort: M-L (delivered)** — a new injector harness against the experimental
+API; the risk was entirely in DR's attach maturity, and the probe measured it as WORKING for the
+native case on the pinned DR 11.91.20630.
 
 ---
 
