@@ -155,6 +155,7 @@ namespace Asmtest
         [DllImport(DRAPP)] public static extern int asmtest_dr_stop();
         [DllImport(DRAPP)] public static extern void asmtest_dr_shutdown();
         [DllImport(DRAPP)] public static extern int asmtest_dr_marker_error();
+        [DllImport(DRAPP)] public static extern int asmtest_dr_under_dynamorio();
 
         // ---- region registration + markers (const char* name) ----
         [DllImport(DRAPP, CharSet = CharSet.Ansi)]
@@ -280,6 +281,9 @@ namespace Asmtest
 
         /// <summary>Count of unbalanced marker operations since init (0 means all balanced).</summary>
         public static int MarkerError() => DrNative.asmtest_dr_marker_error();
+
+        /// <summary>True if the calling thread is currently executing under DynamoRIO's control.</summary>
+        public static bool UnderDynamoRio() => DrNative.asmtest_dr_under_dynamorio() != 0;
 
         /// <summary>The exported fixture (a*2+b) the symbol-mode test traces by name.</summary>
         public static long SymbolDemo(long a, long b) => DrNative.asmtest_symbol_demo(a, b);

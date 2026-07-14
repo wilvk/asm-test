@@ -22,15 +22,14 @@
 # every binding wraps the lower-level asmtest_exec_alloc instead, so none bind it.
 ALL asmtest_asm_exec_native
 
-# Managed-host-gate diagnostic (dr_app_running_under_dynamorio). Only the Python
-# binding surfaces it today; the other nine have no caller for it yet. Drop the
-# matching line here when a binding starts wrapping it.
+# Managed-host-gate diagnostic (dr_app_running_under_dynamorio). Python and .NET
+# surface it today; the other eight have no caller for it yet. Drop the matching
+# line here when a binding starts wrapping it.
 cpp asmtest_dr_under_dynamorio
 rust asmtest_dr_under_dynamorio
 zig asmtest_dr_under_dynamorio
 node asmtest_dr_under_dynamorio
 java asmtest_dr_under_dynamorio
-dotnet asmtest_dr_under_dynamorio
 ruby asmtest_dr_under_dynamorio
 lua asmtest_dr_under_dynamorio
 go asmtest_dr_under_dynamorio
