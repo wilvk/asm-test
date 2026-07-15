@@ -26,6 +26,7 @@
 
 #include "asmtest_ptrace.h"
 #include "asmtest_trace.h"
+#include "asmtest_valtrace.h" /* --dataflow: L0 value trace + L1 def-use graph */
 
 /* ------------------------------------------------------------------ */
 /* Process list (asmspy_proc.c)                                        */
@@ -226,6 +227,54 @@ typedef void (*asmspy_region_sink)(void *ctx, unsigned sample_no, long result,
  * ASMSPY_REGION_NEVER_RAN (unlike the whole-process syscall/stream engines). */
 int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
                          atomic_bool *stop, asmspy_region_sink sink, void *ctx);
+
+/* ------------------------------------------------------------------ */
+/* Data-flow value capture (asmspy_engine.c) — the scoped L0 value      */
+/* trace + L1 def-use of a live region, wrapping the ptrace single-step  */
+/* producer (src/dataflow_ptrace.c). Like the region sampler above it     */
+/* scopes to [base,base+len), but instead of WHICH instructions ran it    */
+/* records HOW DATA MOVED: each executed step's operand VALUES (L0) and    */
+/* the last-writer def-use graph (L1) built over them. Single-shot and     */
+/* expensive (~10^3-10^5x per stepped instruction), so it is scoped by     */
+/* design — one invocation, not a live stream.                            */
+/* ------------------------------------------------------------------ */
+
+/* Returned by asmspy_engine_dataflow when the value PRODUCER is unavailable on
+ * this build/host (off Linux x86-64, or built without Capstone) — a clean skip,
+ * distinct from the negative hard-failure codes and from the other engines'
+ * REGION_NEVER_RAN (1) / SAMPLE_UNAVAIL (2) positives. */
+#define ASMSPY_DATAFLOW_UNAVAIL 3
+
+/* One captured invocation's data flow, handed to the front-end to render: the L0
+ * value trace `vt` (per-step operand read/write values) and the L1 last-writer
+ * def-use graph `g` built over it (may be NULL if the build failed), plus the
+ * region bytes (read from the target) and its `base` so the sink can disassemble
+ * each step. `result` is the region's return value (rax at the region exit). */
+typedef void (*asmspy_dataflow_sink)(void *ctx, long result,
+                                     const asmtest_valtrace_t *vt,
+                                     const asmtest_defuse_t *g,
+                                     const uint8_t *code, size_t len,
+                                     uint64_t base);
+
+/* Attach to `pid`, run the scoped ptrace L0 value producer over [base, base+len)
+ * for ONE invocation, build the def-use graph, hand both to `sink`, and DETACH so
+ * the target SURVIVES. NATIVE code only — the JIT/managed producer (worker-thread
+ * targeting, W^X entry breakpoint, versioned bytes, method attribution) is a later
+ * increment, so the caller picks native from the fingerprint and reports a managed
+ * runtime unavailable. `only_tid` (non-0) seizes exactly that thread — so a routine
+ * that runs on a worker thread can be reached — while 0 targets the thread-group
+ * leader. `max` (>0) bounds the in-region steps captured (the producer's max_insns);
+ * <=0 captures until the region returns (bounded by the producer's step backstop).
+ * `stop` may be NULL (checked once before the capture; the producer's own run-to /
+ * step loop is not interruptible mid-capture — the tier is single-shot and fast).
+ * Returns 0 on a clean capture (sink invoked once), ASMSPY_DATAFLOW_UNAVAIL if the
+ * producer is unavailable, or a negative ASMTEST_PTRACE_* on an attach/permission
+ * failure. Like asmspy_engine_region it attaches only the requested thread, so a
+ * region that never executes on it will block the producer at its entry breakpoint
+ * — bound live use accordingly (the CLI timeout-guards its smoke). */
+int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
+                           long max, atomic_bool *stop,
+                           asmspy_dataflow_sink sink, void *ctx);
 
 /* One executed instruction, formatted "<function+off [module]>  <disasm>". */
 typedef void (*asmspy_stream_sink)(void *ctx, const char *line);

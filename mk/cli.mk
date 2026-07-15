@@ -39,9 +39,18 @@ $(BUILD)/asmspy_engine.o: $(BUILD)/asmspy_syscall_names.inc
 
 ASMSPY_OBJS := $(BUILD)/asmspy.o $(BUILD)/asmspy_proc.o $(BUILD)/asmspy_engine.o
 
+# --dataflow (Increment 6) links the scoped-ptrace L0 VALUE producer
+# (dataflow_ptrace.o) plus its pure L0 sink / L1 def-use / L2 slicer (dataflow.o)
+# and Capstone operand enumerator (dataflow_operands.o) — the same object set the
+# producer's own test links. The producer ships no public header (asmspy_engine.c
+# re-declares its entry point); off Linux x86-64 / without Capstone these compile
+# to ENOSYS stubs and the subcommand self-skips. Rules live in mk/dataflow.mk.
+ASMSPY_DATAFLOW_OBJS := $(BUILD)/dataflow_ptrace.o $(BUILD)/dataflow.o \
+                        $(BUILD)/dataflow_operands.o
+
 # -lstdc++ supplies __cxa_demangle (Itanium C++ ABI demangler) for the ELF symbol
 # resolver (cli/asmspy_proc.c); asmspy is otherwise pure C.
-$(BUILD)/asmspy: $(HWTRACE_OBJS) $(ASMSPY_OBJS)
+$(BUILD)/asmspy: $(HWTRACE_OBJS) $(ASMSPY_OBJS) $(ASMSPY_DATAFLOW_OBJS)
 	$(CC) $(CFLAGS) -pthread $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) \
 	  $(LINK_LIBBPF) -ldl $(NCURSES_LIBS) -lstdc++ -o $@
 

@@ -68,6 +68,10 @@ void asmspy_strerror(int rc, char *buf, size_t buflen) {
         m = "region never observed executing (multi-threaded target? --trace "
             "follows only the main thread)";
         break;
+    case ASMSPY_DATAFLOW_UNAVAIL:
+        m = "data-flow value producer unavailable (off Linux x86-64 / built "
+            "without Capstone)";
+        break;
     case ASMTEST_PTRACE_EINVAL:
         m = "invalid argument";
         break;
@@ -883,6 +887,110 @@ int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
     if (sample == 0 && !(stop && atomic_load(stop)))
         return ASMSPY_REGION_NEVER_RAN;
     return 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Scoped data-flow value capture (Increment 6)                        */
+/*                                                                     */
+/* Wraps the landed scoped-ptrace L0 value producer                    */
+/* (src/dataflow_ptrace.c: asmtest_dataflow_ptrace_attach_pid) — SEIZE  */
+/* a live pid, run_to the region entry, single-step [base,base+len)     */
+/* capturing each step's operand VALUES, DETACH so the target survives  */
+/* — then builds the pure L1 last-writer def-use graph over the L0      */
+/* trace and hands both to the sink. The producer ships NO public       */
+/* header (a value-trace producer is a tier, not the shared             */
+/* asmtest_valtrace.h sink API), so — exactly as its test suite          */
+/* examples/test_dataflow_ptrace.c does — its entry point + return      */
+/* codes are re-declared here. NATIVE targets only; the JIT/managed     */
+/* producer (worker-thread targeting, versioned bytes) is a later       */
+/* increment (the caller gates managed runtimes off via the             */
+/* fingerprint).                                                        */
+/* ------------------------------------------------------------------ */
+
+/* The scoped ptrace producers' return codes — declared here, NOT in a public
+ * header, kept in step with src/dataflow_ptrace.c and its test suite. */
+#define DF_PTRACE_OK     0    /* clean, complete scoped trace                 */
+#define DF_PTRACE_FAULT  1    /* region faulted; a partial trace is filled    */
+#define DF_PTRACE_EINVAL (-1) /* bad arguments                                */
+#define DF_PTRACE_ENOSYS (-3) /* off Linux x86-64 / no Capstone: self-skip    */
+#define DF_PTRACE_ETRACE (-4) /* SEIZE/ptrace/wait failure (seccomp/yama)     */
+
+int asmtest_dataflow_ptrace_attach_pid(pid_t pid, uint64_t base,
+                                       size_t code_len, uint64_t max_insns,
+                                       long *result, asmtest_valtrace_t *vt);
+
+int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
+                           long max, atomic_bool *stop,
+                           asmspy_dataflow_sink sink, void *ctx) {
+    if (len == 0 || len > (64u << 20))
+        return ASMTEST_PTRACE_EINVAL;
+    if (stop && atomic_load(stop))
+        return 0;
+
+    /* Region bytes for the sink's disassembler (best-effort, static native code,
+     * read out of band before we attach). The producer reads its OWN copy from the
+     * target for the operand enumerator; this snapshot is purely render-side. */
+    uint8_t *code = malloc(len);
+    if (code && rd(pid, base, code, len) != 0) {
+        free(code);
+        code = NULL;
+    }
+
+    /* Caller-owned L0 buffers. Bound the step buffer by `max` when given, else a
+     * generous default; recs/wide scale with steps x operands-per-step. Overflow is
+     * honest (vt->truncated), so a bigger region simply truncates rather than lying.
+     * Cap the allocation so a huge --max can't ask for gigabytes up front. */
+    size_t steps_cap = (max > 0) ? (size_t)max : 16384;
+    if (steps_cap < 64)
+        steps_cap = 64;
+    if (steps_cap > 65536)
+        steps_cap =
+            65536; /* bound the one-shot allocation (~33 MB worst case) */
+    asmtest_valtrace_t *vt =
+        asmtest_valtrace_new(steps_cap, steps_cap * 8, steps_cap * 16);
+    if (!vt) {
+        free(code);
+        return ASMTEST_PTRACE_EUNAVAIL; /* OOM: nothing captured */
+    }
+
+    long result = 0;
+    /* --tid seizes exactly that task (ptrace is per-thread, so a tid is a valid
+     * SEIZE target); 0 targets the thread-group leader. */
+    pid_t target = only_tid ? only_tid : pid;
+    uint64_t max_insns = (max > 0) ? (uint64_t)max : 0;
+    int prc = asmtest_dataflow_ptrace_attach_pid(target, base, len, max_insns,
+                                                 &result, vt);
+
+    int rc;
+    switch (prc) {
+    case DF_PTRACE_OK:
+    case DF_PTRACE_FAULT: {
+        /* Captured fully, or a partial prefix on a fault (vt->truncated tells the
+         * story). Build the last-writer def-use graph and surface both. */
+        asmtest_defuse_t *g = asmtest_defuse_build(vt);
+        if (sink)
+            sink(ctx, result, vt, g, code, len, base);
+        asmtest_defuse_free(g);
+        rc = 0;
+        break;
+    }
+    case DF_PTRACE_ENOSYS:
+        rc =
+            ASMSPY_DATAFLOW_UNAVAIL; /* off-platform / no Capstone: clean skip */
+        break;
+    case DF_PTRACE_EINVAL:
+        rc = ASMTEST_PTRACE_EINVAL;
+        break;
+    case DF_PTRACE_ETRACE:
+    default:
+        rc =
+            ASMTEST_PTRACE_ETRACE; /* SEIZE/permission failure (yama/seccomp) */
+        break;
+    }
+
+    asmtest_valtrace_free(vt);
+    free(code);
+    return rc;
 }
 
 /* ------------------------------------------------------------------ */

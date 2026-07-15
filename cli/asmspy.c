@@ -10,6 +10,8 @@
  *   asmspy --syms   <pid> [filter]    list resolved function symbols
  *   asmspy --log    <pid> [n]         stream n syscalls with data (a mini strace)
  *   asmspy --trace  <pid> <sym> [n]   n live samples: disassembly + functions called
+ *   asmspy --dataflow <pid> <sym|0xADDR[:LEN]> [--json] [--tid=<t>] [--max=<n>]
+ *                                     scoped L0 value trace + L1 def-use of one invocation
  *   asmspy --stream <pid> [n] [--tid=<t>]   stream n instructions live (function + asm)
  *   asmspy --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] [--tid=<t>]  whole-process call graph
  *   asmspy --tree   <pid> [n] [--json|--dot] [--tid=<t>]  whole-process live call tree (indented by depth)
@@ -1357,6 +1359,253 @@ static int cmd_trace(pid_t pid, const char *sym, long n) {
     }
     asmspy_symtab_free(&t);
     return rc != 0;
+}
+
+/* ================================================================== */
+/* Data-flow capture view (headless; the TUI mode 9 shares the engine) */
+/* ================================================================== */
+
+/* True for a JIT/managed runtime whose hot code the NATIVE single-step value
+ * producer cannot yet trace (JIT W^X code, worker-thread execution) — the JIT
+ * value producer that handles them is a later increment (live-attach-dataflow
+ * plan, Increments 3-5). Interpreter runtimes (CPython, Ruby, PHP, BEAM) and
+ * AOT-native ones (Go, "native") run ordinary native code and are traced
+ * normally; only the JITs are gated off here. */
+static int runtime_is_managed(const char *rt) {
+    return strcmp(rt, "JVM") == 0 || strcmp(rt, ".NET") == 0 ||
+           strcmp(rt, "Mono") == 0 || strcmp(rt, "Node/V8") == 0;
+}
+
+/* One captured-invocation context for the data-flow sink. `func` is borrowed
+ * (the symtab / argv string, alive for the synchronous engine call). */
+typedef struct {
+    pid_t pid;
+    const char *func;
+    int json;
+} dataflow_ctx;
+
+/* Append " tok" (or "tok" first) to the NUL-terminated `ann`, bounded. */
+static void df_append(char *ann, size_t cap, const char *tok) {
+    size_t l = strlen(ann);
+    if (l + 1 < cap)
+        snprintf(ann + l, cap - l, "%s%s", l ? " " : "", tok);
+}
+
+/* --dataflow JSON schema (documented alongside the --graph / --sample / --tree
+ * JSON; stdout only, one object, so it pipes to jq). One captured invocation:
+ *
+ *   {"pid":P, "func":"NAME", "base":"0xADDR", "result":R,
+ *    "steps":S, "records":K, "truncated":BOOL,
+ *    "trace":[ {"step":N, "off":"0xOFF", "disasm":"...",
+ *               "ops":[ {"rw":"r"|"w",         // read vs write set
+ *                        "loc":"reg"|"mem",     // register or memory operand
+ *                        "size":BYTES,
+ *                        "reg":ID,              // Capstone reg id (loc=reg), or
+ *                                               //   segment reg id (loc=mem; 0=none)
+ *                        "addr":"0xEA",         // loc=mem only: effective address
+ *                        "value":"0xV",         // present when captured & <=8 bytes
+ *                        "wide":BOOL} ... ]} ... ],  // wide=true: XMM/YMM, value omitted
+ *    "defuse":[ {"from":A, "to":B} ... ]}       // L1 last-writer edges (step -> step)
+ *
+ * The `ops` stream is the flattened per-step operand record set (L0); `defuse` is
+ * the L1 last-writer graph built over it. A managed/JIT runtime is reported
+ * unavailable up front (native producer only), so JSON is emitted only for a real
+ * native capture. The human view mirrors it: per-step disassembly annotated with
+ * memory addresses/values + register write values, then the def-use edge list. */
+static void dataflow_render_sink(void *ctx, long result,
+                                 const asmtest_valtrace_t *vt,
+                                 const asmtest_defuse_t *g, const uint8_t *code,
+                                 size_t len, uint64_t base) {
+    const dataflow_ctx *dc = ctx;
+    size_t nsteps = vt->steps_len, nrecs = vt->recs_len;
+
+    if (dc->json) {
+        char ef[256];
+        json_escape(dc->func, ef, sizeof ef);
+        printf("{\"pid\":%d,\"func\":\"%s\",\"base\":\"0x%llx\",\"result\":%ld,"
+               "\"steps\":%zu,\"records\":%zu,\"truncated\":%s,\"trace\":[",
+               (int)dc->pid, ef, (unsigned long long)base, result, nsteps,
+               nrecs, vt->truncated ? "true" : "false");
+        size_t cur = 0;
+        for (size_t s = 0; s < nsteps; s++) {
+            uint64_t off = vt->insn_off[s];
+            char dis[160] = "", ed[4 * 160];
+            if (code && asmtest_disas_available())
+                asmtest_disas(ASMTEST_ARCH_X86_64, code, len, base, off, dis,
+                              sizeof dis);
+            json_escape(dis, ed, sizeof ed);
+            printf("%s\n  {\"step\":%zu,\"off\":\"0x%llx\",\"disasm\":\"%s\","
+                   "\"ops\":[",
+                   s ? "," : "", s, (unsigned long long)off, ed);
+            while (cur < nrecs && vt->recs[cur].step < s)
+                cur++; /* defensive: records are appended grouped in step order */
+            int first = 1;
+            while (cur < nrecs && vt->recs[cur].step == s) {
+                const at_val_rec_t *r = &vt->recs[cur++];
+                printf("%s{\"rw\":\"%s\",\"loc\":\"%s\",\"size\":%u,\"reg\":%u",
+                       first ? "" : ",", r->is_write ? "w" : "r",
+                       r->kind == AT_LOC_REG ? "reg" : "mem", r->size, r->reg);
+                if (r->kind != AT_LOC_REG)
+                    printf(",\"addr\":\"0x%llx\"", (unsigned long long)r->addr);
+                if (r->value_valid && !r->wide)
+                    printf(",\"value\":\"0x%llx\"",
+                           (unsigned long long)r->value);
+                printf(",\"wide\":%s}", r->wide ? "true" : "false");
+                first = 0;
+            }
+            printf("]}");
+        }
+        printf("%s],\"defuse\":[", nsteps ? "\n" : "");
+        for (size_t i = 0; g && i < g->n; i++)
+            printf("%s\n  {\"from\":%u,\"to\":%u}", i ? "," : "",
+                   g->edges[i].from_step, g->edges[i].to_step);
+        printf("%s]}\n", (g && g->n) ? "\n" : "");
+        fflush(stdout);
+        return;
+    }
+
+    printf("data flow — %s @ 0x%llx of pid %d   ret=%ld   %zu steps, %zu "
+           "records%s\n",
+           dc->func, (unsigned long long)base, (int)dc->pid, result, nsteps,
+           nrecs, vt->truncated ? "  (truncated)" : "");
+    printf("  value trace:\n");
+    if (nsteps == 0)
+        printf("    (no steps captured — the region did not execute, or its "
+               "bytes were unreadable)\n");
+    size_t cur = 0;
+    for (size_t s = 0; s < nsteps; s++) {
+        uint64_t off = vt->insn_off[s];
+        char dis[160] = "";
+        if (code && asmtest_disas_available())
+            asmtest_disas(ASMTEST_ARCH_X86_64, code, len, base, off, dis,
+                          sizeof dis);
+        /* Annotate with the captured VALUES the disassembly can't show: memory
+         * addresses/values (load "->", store "<-") and register WRITE results
+         * ("->0x.."); register reads are the disasm's own source operands. */
+        char ann[256] = "";
+        while (cur < nrecs && vt->recs[cur].step < s)
+            cur++;
+        int shown = 0;
+        while (cur < nrecs && vt->recs[cur].step == s) {
+            const at_val_rec_t *r = &vt->recs[cur++];
+            char tok[64];
+            if (r->kind == AT_LOC_REG) {
+                if (!r->is_write)
+                    continue; /* a source operand — already named in the disasm */
+                if (r->wide)
+                    snprintf(tok, sizeof tok, "->[wide]");
+                else if (r->value_valid)
+                    snprintf(tok, sizeof tok, "->0x%llx",
+                             (unsigned long long)r->value);
+                else
+                    continue;
+            } else {
+                const char *arrow = r->is_write ? "<-" : "->";
+                if (r->wide)
+                    snprintf(tok, sizeof tok, "[0x%llx]%s[wide]",
+                             (unsigned long long)r->addr, arrow);
+                else if (r->value_valid)
+                    snprintf(tok, sizeof tok, "[0x%llx]%s0x%llx",
+                             (unsigned long long)r->addr, arrow,
+                             (unsigned long long)r->value);
+                else
+                    snprintf(tok, sizeof tok, "[0x%llx]%s?",
+                             (unsigned long long)r->addr, arrow);
+            }
+            if (shown < 6)
+                df_append(ann, sizeof ann, tok);
+            shown++;
+        }
+        if (shown > 6)
+            df_append(ann, sizeof ann, "...");
+        if (ann[0])
+            printf("    #%-4zu +0x%-4llx  %-36s  %s\n", s,
+                   (unsigned long long)off, dis[0] ? dis : "(?)", ann);
+        else
+            printf("    #%-4zu +0x%-4llx  %s\n", s, (unsigned long long)off,
+                   dis[0] ? dis : "(?)");
+    }
+
+    printf("  def-use edges (last-writer):\n");
+    if (!g || g->n == 0) {
+        printf("    (none)\n");
+    } else {
+        char line[256] = "";
+        size_t per = 0;
+        for (size_t i = 0; i < g->n; i++) {
+            char tok[32];
+            snprintf(tok, sizeof tok, "#%u->#%u", g->edges[i].from_step,
+                     g->edges[i].to_step);
+            df_append(line, sizeof line, tok);
+            if (++per == 8) {
+                printf("    %s\n", line);
+                line[0] = '\0';
+                per = 0;
+            }
+        }
+        if (line[0])
+            printf("    %s\n", line);
+        printf("    (%zu edges)\n", g->n);
+    }
+    fflush(stdout);
+}
+
+static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
+                        int json) {
+    /* NATIVE path only: a JIT/managed runtime needs the (not-yet-landed) JIT value
+     * producer, so gate it off from the fingerprint and self-skip cleanly. */
+    asmspy_fingerprint_t fp;
+    asmspy_fingerprint(pid, &fp);
+    if (runtime_is_managed(fp.runtime)) {
+        fprintf(stderr,
+                "# SKIP --dataflow: pid %d is a %s runtime; the native value "
+                "producer cannot single-step JIT/managed code yet\n",
+                (int)pid, fp.runtime);
+        return 0; /* clean self-skip, like --sample off an IBS host */
+    }
+
+    asmspy_symtab_t t;
+    if (asmspy_symtab_load(pid, &t) < 0) {
+        fprintf(stderr, "cannot read symbols for pid %d\n", (int)pid);
+        return 1;
+    }
+    uint64_t base = 0;
+    size_t len = 0;
+    if (resolve_region(&t, region, &base, &len) != 0) {
+        fprintf(
+            stderr,
+            "cannot resolve '%s' to a region in pid %d\n"
+            "  want a sized function name, 0xADDR inside one, or an explicit "
+            "0xADDR:LEN\n",
+            region, (int)pid);
+        asmspy_symtab_free(&t);
+        return 1;
+    }
+    const asmspy_sym_t *s = asmspy_symtab_at(&t, base);
+    dataflow_ctx dc = {pid, s ? s->name : region, json};
+    /* status to STDERR so --json stdout stays a single clean object */
+    fprintf(stderr,
+            "data-flow capture of %s @ 0x%llx (%zu bytes) in pid %d%s\n",
+            s ? s->name : region, (unsigned long long)base, len, (int)pid,
+            tid ? " [--tid]" : "");
+    int rc = asmspy_engine_dataflow(pid, tid, base, len, max, NULL,
+                                    dataflow_render_sink, &dc);
+    asmspy_symtab_free(&t);
+    if (rc == ASMSPY_DATAFLOW_UNAVAIL) {
+        /* Off Linux x86-64 / built without Capstone — a clean skip (exit 0), the
+         * same discipline as --sample off an IBS host. */
+        char e[128];
+        asmspy_strerror(rc, e, sizeof e);
+        fprintf(stderr, "# SKIP --dataflow: %s\n", e);
+        return 0;
+    }
+    if (rc != 0) {
+        char e[128];
+        asmspy_strerror(rc, e, sizeof e);
+        fprintf(stderr, "data-flow capture failed: %s\n", e);
+        return 1;
+    }
+    return 0;
 }
 
 /* ================================================================== */
@@ -3433,6 +3682,9 @@ static int usage(const char *argv0) {
         "  %s --log    <pid> [n]      stream n syscalls with data\n"
         "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n]  live samples of a "
         "function/region\n"
+        "  %s --dataflow <pid> <sym|0xADDR[:LEN]> [--json] [--tid=<t>] "
+        "[--max=<n>]  scoped L0 value trace + L1 def-use of one invocation "
+        "(native targets)\n"
         "  %s --stream <pid> [n] [--tid=<t>]  stream n instructions live "
         "(function + asm)\n"
         "  %s --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] "
@@ -3454,7 +3706,8 @@ static int usage(const char *argv0) {
         "its next stop — so a target that uses software breakpoints (a JIT or\n"
         "debugger) may never reach a fixed n in batch mode; interrupt with "
         "Ctrl-C.\n",
-        argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0);
+        argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0,
+        argv0);
     return 2;
 }
 
@@ -3498,6 +3751,28 @@ int main(int argc, char **argv) {
         if (argc >= 5 && parse_count(argv[4], &n) != 0)
             return bad_arg("count", argv[4]);
         return cmd_trace(pid, argv[3], n);
+    }
+    if (strcmp(argv[1], "--dataflow") == 0 && argc >= 4) {
+        if (parse_pid(argv[2], &pid) != 0)
+            return bad_arg("pid", argv[2]);
+        pid_t tid = 0;
+        long max = 0; /* 0 = capture until the region returns */
+        int json = 0;
+        for (int i = 4; i < argc;
+             i++) { /* [--json] [--tid=N] [--max=N] in any order */
+            if (strcmp(argv[i], "--json") == 0)
+                json = 1;
+            else if (strncmp(argv[i], "--tid=", 6) == 0) {
+                if (parse_pid(argv[i] + 6, &tid) != 0)
+                    return bad_arg("tid", argv[i] + 6);
+            } else if (strncmp(argv[i], "--max=", 6) == 0) {
+                if (parse_count(argv[i] + 6, &max) != 0 || max <= 0)
+                    return bad_arg("max (positive)", argv[i] + 6);
+            } else {
+                return bad_arg("dataflow option", argv[i]);
+            }
+        }
+        return cmd_dataflow(pid, argv[3], tid, max, json);
     }
     if (strcmp(argv[1], "--stream") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)

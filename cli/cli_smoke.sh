@@ -101,6 +101,79 @@ printf '%s\n' "$out" | head -8
 printf '%s\n' "$out" | grep -qE 'mov|jmp|cmp|add|push|call|lea|test|sub|nop' \
     || fail "stream: no disassembly"
 
+# scoped DATA-FLOW capture: attach to attach_victim, single-step the hot leaf
+# 'hotfn' for ONE invocation, and surface the L0 value trace + L1 def-use. The
+# producer (src/dataflow_ptrace.c) needs Capstone + ptrace; both are present in
+# the CI image, so we assert real output. Where the producer is unavailable the
+# subcommand prints "# SKIP --dataflow" and exits 0 (self-skip discipline), which
+# the smoke accepts. timeout-guarded: a producer that never reaches the region
+# entry (the function isn't executing) would otherwise block at its breakpoint.
+echo "--- asmspy --dataflow $AVPID hotfn (scoped L0 value trace + L1 def-use) ---"
+set +e
+dfout=$(timeout 40 "$ASM" --dataflow "$AVPID" hotfn 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--dataflow hung (producer never reached the region entry)"
+printf '%s\n' "$dfout" | head -14
+if printf '%s\n' "$dfout" | grep -q '^# SKIP --dataflow'; then
+    echo "(data-flow producer unavailable here — subcommand self-skipped, OK)"
+else
+    [ "$rc" -eq 0 ] || fail "--dataflow exited $rc"
+    printf '%s\n' "$dfout" | grep -q 'data flow' || fail "--dataflow: no header"
+    printf '%s\n' "$dfout" | grep -q 'ret=57' \
+        || fail "--dataflow: expected ret=57 from hotfn(6,7)"
+    printf '%s\n' "$dfout" | grep -q 'value trace:' \
+        || fail "--dataflow: no value-trace section"
+    # a per-step disassembled line (offset + a real mnemonic — proves L0 capture)
+    printf '%s\n' "$dfout" | grep -qE '#0 .*\+0x' || fail "--dataflow: no step #0"
+    printf '%s\n' "$dfout" \
+        | grep -qE '(mov|add|cmp|lea|test|sub|xor|imul|neg|jmp|jn?e|jl|jg|ret)' \
+        || fail "--dataflow: no disassembled value-trace steps"
+    printf '%s\n' "$dfout" | grep -q 'def-use edges' \
+        || fail "--dataflow: no def-use section"
+    # hotfn's loop threads registers step-to-step, so there ARE last-writer edges
+    printf '%s\n' "$dfout" | grep -qE '#[0-9]+->#[0-9]+' \
+        || fail "--dataflow: no def-use edges (register data-flow in hotfn expected)"
+
+    # JSON export: machine-readable L0 trace + L1 edges (stdout only, pipes to jq)
+    echo "--- asmspy --dataflow $AVPID hotfn --json ---"
+    set +e
+    djout=$(timeout 40 "$ASM" --dataflow "$AVPID" hotfn --json 2>/dev/null); rc=$?
+    set -e
+    [ "$rc" -eq 124 ] && fail "--dataflow --json hung"
+    printf '%s\n' "$djout" | head -4
+    printf '%s' "$djout" | grep -q '^{"pid":' \
+        || fail "--dataflow --json: no top-level {\"pid\":...} object"
+    printf '%s' "$djout" | grep -q '"func":"hotfn"' \
+        || fail "--dataflow --json: func not exported"
+    printf '%s' "$djout" | grep -q '"result":57' \
+        || fail "--dataflow --json: result 57 missing"
+    printf '%s' "$djout" | grep -q '"trace":\[' \
+        || fail "--dataflow --json: no trace array"
+    printf '%s' "$djout" | grep -q '"defuse":\[' \
+        || fail "--dataflow --json: no defuse array"
+    # at least one captured operand value in the flattened op stream
+    printf '%s' "$djout" | grep -qE '"ops":\[.*"value":"0x' \
+        || fail "--dataflow --json: no captured operand value"
+    # the human view must NOT leak into JSON mode
+    printf '%s' "$djout" | grep -q 'value trace:' \
+        && fail "--dataflow --json: human text leaked into JSON"
+    if command -v python3 >/dev/null 2>&1; then
+        printf '%s' "$djout" | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+assert d["func"] == "hotfn" and d["result"] == 57
+assert d["trace"] and all(k in d["trace"][0] for k in ("step","off","disasm","ops"))
+assert isinstance(d["defuse"], list)' \
+            || fail "--dataflow --json: not well-formed JSON / missing keys"
+        echo "  json validated (python3 json.load: trace + defuse)"
+    else
+        echo "  json structural checks passed (python3 absent; strict parse skipped)"
+    fi
+fi
+# bad --tid / --max / pid are rejected up front (rc=2), before any attach
+expect_badarg "$ASM" --dataflow "$AVPID" hotfn --tid=nope
+expect_badarg "$ASM" --dataflow "$AVPID" hotfn --max=0
+expect_badarg "$ASM" --dataflow nginx hotfn
+
 # call-graph: attach to spy_victim (work() calls helper()) and check the callee
 # is resolved by name in the "functions called" view.
 "$BUILD/spy_victim" 2>/dev/null &
