@@ -31,6 +31,7 @@ $(BUILD)/asmspy_syscall_names.inc: cli/gen-syscall-names.sh | $(BUILD)
 # cli/ sources compile like examples/, but with -pthread (a dedicated tracer
 # thread owns the ptrace loop while the ncurses UI thread stays responsive).
 $(BUILD)/%.o: cli/%.c cli/asmspy.h cli/asmspy_graphsort.h \
+              cli/asmspy_dataview.h \
               include/asmtest_ptrace.h \
               include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -I$(BUILD) -pthread -c $< -o $@
@@ -125,6 +126,15 @@ $(BUILD)/sample_victim: $(BUILD)/sample_victim.o
 $(BUILD)/test_logview: cli/test_logview.c cli/asmspy_logview.h | $(BUILD)
 	$(CC) $(CFLAGS) -Icli -o $@ cli/test_logview.c
 
+# test_view — headless unit test for the data-flow view's pure render/analysis
+# logic (cli/asmspy_dataview.h: value annotation, def-use in/out split, L2 slice
+# highlight/dim), the Increment-7 TUI-mode-9 payoff the ncurses window can't be
+# driven to exercise in CI. Links the PURE L0/L1/L2 sink object (dataflow.o —
+# no Capstone, no ptrace) for asmtest_valtrace_* / _defuse_* / _slice_*.
+$(BUILD)/test_view: cli/test_view.c cli/asmspy_dataview.h $(BUILD)/dataflow.o \
+                    include/asmtest_valtrace.h | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -o $@ cli/test_view.c $(BUILD)/dataflow.o
+
 # test_graphsort — headless unit test for the call-graph sort comparator
 # (cli/asmspy_graphsort.h, shared by --graph --sort=... and TUI mode 4).
 $(BUILD)/test_graphsort: cli/test_graphsort.c cli/asmspy_graphsort.h \
@@ -144,7 +154,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/cpp_victim \
            $(BUILD)/jit_victim $(BUILD)/jitdump_victim $(BUILD)/int3_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/test_logview \
-           $(BUILD)/test_graphsort $(BUILD)/test_jitdump
+           $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
 	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"

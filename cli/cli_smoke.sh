@@ -19,6 +19,8 @@ echo "--- test_graphsort (call-graph sort comparator) ---"
 "$BUILD/test_graphsort" || fail "test_graphsort"
 echo "--- test_jitdump (binary jitdump reader + JIT resolve chain) ---"
 "$BUILD/test_jitdump" || fail "test_jitdump"
+echo "--- test_view (data-flow view: annotation + def-use split + L2 slice) ---"
+"$BUILD/test_view" || fail "test_view"
 
 echo "--- asmspy --list (head) ---"
 # capture first: a bare `... | head` pipeline masks asmspy's exit status (sh has

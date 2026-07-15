@@ -36,6 +36,7 @@
 #include <unistd.h>
 
 #include "asmspy.h"
+#include "asmspy_dataview.h" /* --dataflow value annotation + slice/def-use logic */
 #include "asmspy_graphsort.h" /* gsort_t + gnode_cmp (unit-tested separately) */
 #include "asmspy_logview.h"
 #include "asmtest_ibs.h" /* --sample: out-of-band statistical hot-edge capture */
@@ -1384,13 +1385,6 @@ typedef struct {
     int json;
 } dataflow_ctx;
 
-/* Append " tok" (or "tok" first) to the NUL-terminated `ann`, bounded. */
-static void df_append(char *ann, size_t cap, const char *tok) {
-    size_t l = strlen(ann);
-    if (l + 1 < cap)
-        snprintf(ann + l, cap - l, "%s%s", l ? " " : "", tok);
-}
-
 /* --dataflow JSON schema (documented alongside the --graph / --sample / --tree
  * JSON; stdout only, one object, so it pipes to jq). One captured invocation:
  *
@@ -1481,43 +1475,10 @@ static void dataflow_render_sink(void *ctx, long result,
                           sizeof dis);
         /* Annotate with the captured VALUES the disassembly can't show: memory
          * addresses/values (load "->", store "<-") and register WRITE results
-         * ("->0x.."); register reads are the disasm's own source operands. */
+         * ("->0x.."); register reads are the disasm's own source operands. The
+         * same shared helper the TUI mode-9 data-flow window renders with. */
         char ann[256] = "";
-        while (cur < nrecs && vt->recs[cur].step < s)
-            cur++;
-        int shown = 0;
-        while (cur < nrecs && vt->recs[cur].step == s) {
-            const at_val_rec_t *r = &vt->recs[cur++];
-            char tok[64];
-            if (r->kind == AT_LOC_REG) {
-                if (!r->is_write)
-                    continue; /* a source operand — already named in the disasm */
-                if (r->wide)
-                    snprintf(tok, sizeof tok, "->[wide]");
-                else if (r->value_valid)
-                    snprintf(tok, sizeof tok, "->0x%llx",
-                             (unsigned long long)r->value);
-                else
-                    continue;
-            } else {
-                const char *arrow = r->is_write ? "<-" : "->";
-                if (r->wide)
-                    snprintf(tok, sizeof tok, "[0x%llx]%s[wide]",
-                             (unsigned long long)r->addr, arrow);
-                else if (r->value_valid)
-                    snprintf(tok, sizeof tok, "[0x%llx]%s0x%llx",
-                             (unsigned long long)r->addr, arrow,
-                             (unsigned long long)r->value);
-                else
-                    snprintf(tok, sizeof tok, "[0x%llx]%s?",
-                             (unsigned long long)r->addr, arrow);
-            }
-            if (shown < 6)
-                df_append(ann, sizeof ann, tok);
-            shown++;
-        }
-        if (shown > 6)
-            df_append(ann, sizeof ann, "...");
+        asmspy_df_annotate(vt, s, &cur, 6, ann, sizeof ann);
         if (ann[0])
             printf("    #%-4zu +0x%-4llx  %-36s  %s\n", s,
                    (unsigned long long)off, dis[0] ? dis : "(?)", ann);
@@ -1536,7 +1497,7 @@ static void dataflow_render_sink(void *ctx, long result,
             char tok[32];
             snprintf(tok, sizeof tok, "#%u->#%u", g->edges[i].from_step,
                      g->edges[i].to_step);
-            df_append(line, sizeof line, tok);
+            asmspy_df_tok_append(line, sizeof line, tok);
             if (++per == 8) {
                 printf("    %s\n", line);
                 line[0] = '\0';
@@ -2871,6 +2832,513 @@ static int run_sample_view(pid_t pid, const char *title,
     return back;
 }
 
+/* ================================================================== */
+/* Data-flow view (internal mode 8 — the menu's "9) Data flow")        */
+/*                                                                     */
+/* One-shot: the dedicated tracer thread runs asmspy_engine_dataflow    */
+/* over the picked region for a SINGLE invocation (L0 values + L1 def-   */
+/* use), the sink copies the trace under the view lock, and every        */
+/* interaction below — row selection, backward/forward L2 slicing, the   */
+/* def-use pane — is pure UI work over that frozen COPY and never         */
+/* touches ptrace (the ptrace-per-thread rule; the tracer thread owns    */
+/* the whole capture start-to-finish).                                   */
+/* ================================================================== */
+
+/* Deep-copy a captured value trace into caller-owned storage (the sink's `vt`
+ * is the engine's, valid only for the sink call). The def-use graph is rebuilt
+ * from the copy — pure + deterministic — so the copy is self-consistent and we
+ * never alias the engine's transient buffers. NULL on OOM. */
+static asmtest_valtrace_t *df_vt_copy(const asmtest_valtrace_t *s) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(
+        s->steps_len ? s->steps_len : 1, s->recs_len ? s->recs_len : 1,
+        s->wide_len ? s->wide_len : 1);
+    if (!v)
+        return NULL;
+    if (s->steps_len && v->insn_off)
+        memcpy(v->insn_off, s->insn_off, s->steps_len * sizeof *v->insn_off);
+    v->steps_len = s->steps_len;
+    v->steps_total = s->steps_total;
+    if (s->recs_len && v->recs)
+        memcpy(v->recs, s->recs, s->recs_len * sizeof *v->recs);
+    v->recs_len = s->recs_len;
+    v->recs_total = s->recs_total;
+    if (s->wide_len && v->wide)
+        memcpy(v->wide, s->wide, s->wide_len);
+    v->wide_len = s->wide_len;
+    v->truncated = s->truncated;
+    v->mem_space = s->mem_space;
+    return v;
+}
+
+typedef struct {
+    pthread_mutex_t mu;
+    atomic_bool stop;
+    atomic_bool finished;
+    int rc;       /* engine return code (set before finished)          */
+    int captured; /* the sink fired (a trace was copied)                */
+    /* the frozen snapshot, owned (copied under mu in the sink) */
+    asmtest_valtrace_t *vt;
+    asmtest_defuse_t *g;
+    uint8_t *code;
+    size_t len;
+    uint64_t base;
+    long result;
+    /* capture inputs */
+    pid_t pid;
+    pid_t tid;
+    uint64_t rbase;
+    size_t rlen;
+    long max;
+} dfview_t;
+
+/* No-op SIGALRM handler for the data-flow tracer thread: the UI's
+ * pthread_kill(SIGALRM) then interrupts a blocked waitpid inside the producer
+ * (EINTR, no SA_RESTART) — its run-to re-CONTs a now-running tracee, gets ESRCH,
+ * and returns cleanly (the target is DETACHed and survives) — instead of the
+ * default action killing asmspy. Mirrors the engine's own arm_quit_wake, which
+ * the single-shot data-flow engine (unlike the streaming ones) does not arm. */
+static void df_on_alarm(int s) { (void)s; }
+static void df_arm_alarm(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = df_on_alarm; /* sa_flags = 0 -> EINTR, no SA_RESTART */
+    sigaction(SIGALRM, &sa, NULL);
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGALRM);
+    pthread_sigmask(SIG_UNBLOCK, &set, NULL);
+}
+
+static void dfview_sink(void *ctx, long result, const asmtest_valtrace_t *vt,
+                        const asmtest_defuse_t *g, const uint8_t *code,
+                        size_t len, uint64_t base) {
+    dfview_t *V = ctx;
+    (void)g; /* rebuilt from our copy so def-use references the owned trace */
+    pthread_mutex_lock(&V->mu);
+    V->vt = df_vt_copy(vt);
+    if (V->vt)
+        V->g = asmtest_defuse_build(V->vt);
+    if (code && len) {
+        V->code = malloc(len);
+        if (V->code) {
+            memcpy(V->code, code, len);
+            V->len = len;
+        }
+    }
+    V->base = base;
+    V->result = result;
+    V->captured = (V->vt != NULL);
+    pthread_mutex_unlock(&V->mu);
+}
+
+static void *dfview_tracer(void *arg) {
+    dfview_t *V = arg;
+    df_arm_alarm(); /* make the engine's blocked waitpid quit-interruptible */
+    int rc = asmspy_engine_dataflow(V->pid, V->tid, V->rbase, V->rlen, V->max,
+                                    &V->stop, dfview_sink, V);
+    pthread_mutex_lock(&V->mu);
+    V->rc = rc;
+    pthread_mutex_unlock(&V->mu);
+    atomic_store(&V->finished, true);
+    return NULL;
+}
+
+/* Disassemble the single step at region offset `off` from the copied bytes. */
+static void df_disas_step(const dfview_t *V, uint64_t off, char *dis,
+                          size_t cap) {
+    dis[0] = '\0';
+    if (V->code && asmtest_disas_available())
+        asmtest_disas(ASMTEST_ARCH_X86_64, V->code, V->len, V->base, off, dis,
+                      cap);
+}
+
+/* Build the top pane once: one row per executed step, "#S +0xOFF  <disasm>
+ * <value annotation>", using the SAME shared annotate helper as the headless
+ * --dataflow renderer (asmspy_dataview.h). */
+static void df_build_rows(const dfview_t *V, svec *rows) {
+    svec_clear(rows);
+    size_t nsteps = V->vt ? V->vt->steps_len : 0;
+    size_t cur = 0;
+    for (size_t s = 0; s < nsteps; s++) {
+        uint64_t off = V->vt->insn_off[s];
+        char dis[160] = "";
+        df_disas_step(V, off, dis, sizeof dis);
+        char ann[192] = "";
+        asmspy_df_annotate(V->vt, s, &cur, 6, ann, sizeof ann);
+        char line[400];
+        if (ann[0])
+            snprintf(line, sizeof line, "#%-4zu +0x%-4llx  %-32s  %s", s,
+                     (unsigned long long)off, dis[0] ? dis : "(?)", ann);
+        else
+            snprintf(line, sizeof line, "#%-4zu +0x%-4llx  %s", s,
+                     (unsigned long long)off, dis[0] ? dis : "(?)");
+        svec_push(rows, line);
+    }
+}
+
+/* Build the bottom pane for the selected step: who last WROTE each value it
+ * READS (incoming def-use edges), and who READS each value it WRITES (outgoing
+ * edges). The in/out partition is the unit-tested asmspy_df_defuse_counts logic;
+ * each endpoint step is disassembled so the dependence is legible. */
+static void df_build_defuse(const dfview_t *V, uint32_t sel, svec *out) {
+    svec_clear(out);
+    const asmtest_defuse_t *g = V->g;
+    size_t nsteps = V->vt ? V->vt->steps_len : 0;
+    size_t nin = 0, nout = 0;
+    asmspy_df_defuse_counts(g, sel, &nin, &nout);
+    char hdr[160];
+    snprintf(hdr, sizeof hdr,
+             "step #%u  —  reads %zu value(s), feeds %zu later read(s)", sel,
+             nin, nout);
+    svec_push(out, hdr);
+    svec_push(out,
+              nin ? "READS  (value <- its last writer):"
+                  : "READS: (none captured with a prior in-region writer)");
+    for (size_t i = 0; g && i < g->n; i++) {
+        if (g->edges[i].to_step != sel)
+            continue;
+        char loc[48];
+        asmspy_df_loc_str(&g->edges[i].loc, loc, sizeof loc);
+        uint32_t from = g->edges[i].from_step;
+        char dis[160] = "";
+        if (from < nsteps)
+            df_disas_step(V, V->vt->insn_off[from], dis, sizeof dis);
+        char l[300];
+        snprintf(l, sizeof l, "  %-14s <- #%-4u  %s", loc, from, dis);
+        svec_push(out, l);
+    }
+    svec_push(out, nout ? "WRITES (read again later, at):"
+                        : "WRITES: (nothing written here is read again here)");
+    for (size_t i = 0; g && i < g->n; i++) {
+        if (g->edges[i].from_step != sel)
+            continue;
+        char loc[48];
+        asmspy_df_loc_str(&g->edges[i].loc, loc, sizeof loc);
+        uint32_t to = g->edges[i].to_step;
+        char dis[160] = "";
+        if (to < nsteps)
+            df_disas_step(V, V->vt->insn_off[to], dis, sizeof dis);
+        char l[300];
+        snprintf(l, sizeof l, "  %-14s -> #%-4u  %s", loc, to, dis);
+        svec_push(out, l);
+    }
+}
+
+/* Interactive data-flow window (internal mode 8). Returns 0 to go back to the
+ * per-process options (ESC), or 1 to the process list ('q'). */
+static int run_dataflow_view(pid_t pid, uint64_t base, size_t len,
+                             const char *title, const char *func) {
+    dfview_t V;
+    memset(&V, 0, sizeof V);
+    pthread_mutex_init(&V.mu, NULL);
+    atomic_store(&V.stop, false);
+    atomic_store(&V.finished, false);
+    V.pid = pid;
+    V.tid = 0; /* leader thread (the native producer's default scope) */
+    V.rbase = base;
+    V.rlen = len;
+    V.max = 0; /* capture until the region returns (producer step backstop) */
+
+    /* keep SIGALRM off the UI thread so the tracer alone owns the quit-wake */
+    sigset_t block;
+    sigemptyset(&block);
+    sigaddset(&block, SIGALRM);
+    pthread_sigmask(SIG_BLOCK, &block, NULL);
+
+    pthread_t th;
+    if (pthread_create(&th, NULL, dfview_tracer, &V) != 0) {
+        pthread_sigmask(SIG_UNBLOCK, &block, NULL);
+        pthread_mutex_destroy(&V.mu);
+        return 1;
+    }
+
+    int back = 1;      /* 1 = process list ('q'), 0 = options (ESC)         */
+    int built = 0;     /* the frozen rows have been rendered once           */
+    int sel = 0;       /* selected step (a row in the top pane)             */
+    int top = 0;       /* first visible row in the top pane                 */
+    int last_sel = -1; /* rebuild the def-use pane only when sel moves      */
+    svec rows = {0};   /* one line per step (top pane)                      */
+    svec du = {0};     /* the selected step's def-use (bottom pane)         */
+    asmtest_slice_t *slice = NULL; /* active L2 slice (NULL = whole trace) */
+    int slice_back = 0;            /* 1 = backward, 0 = forward (for label) */
+    uint32_t slice_seed = 0;
+
+    for (;;) {
+        int scr_rows, cols;
+        getmaxyx(stdscr, scr_rows, cols);
+        erase();
+        attron(A_BOLD);
+        mvprintw(0, 0, "%.*s", cols, title);
+        attroff(A_BOLD);
+
+        pthread_mutex_lock(&V.mu);
+        int fin = atomic_load(&V.finished);
+        int cap = V.captured;
+        int erc = V.rc;
+        int nsteps = (cap && V.vt) ? (int)V.vt->steps_len : 0;
+        int nrecs = (cap && V.vt) ? (int)V.vt->recs_len : 0;
+        int trunc = (cap && V.vt) ? V.vt->truncated : 0;
+        long ret = V.result;
+        uint64_t rbase = V.base ? V.base : base;
+        /* Snapshot the copy once (frozen after capture), then work lock-free. */
+        if (cap && !built) {
+            df_build_rows(&V, &rows);
+            built = 1;
+        }
+        pthread_mutex_unlock(&V.mu);
+
+        if (!fin) {
+            mvprintw(1, 0, "capturing one invocation of %.40s @ 0x%llx …", func,
+                     (unsigned long long)base);
+            mvprintw(3, 0,
+                     "single-stepping the region out of band (the target runs "
+                     "free until it enters it).");
+            mvprintw(4, 0, "If it never runs here, cancel below.");
+            mvprintw(scr_rows - 1, 0,
+                     "ESC: cancel to options   q: cancel to processes");
+            clrtoeol();
+            refresh();
+            timeout(120);
+            int ch = getch();
+            if (ch == 'q') {
+                back = 1;
+                break;
+            }
+            if (ch == 27) {
+                back = 0;
+                break;
+            }
+            continue;
+        }
+
+        /* Finished but nothing captured: a clean, explicit hint (never a blank
+         * pane) — availability skip, attach failure, or the region-never-ran. */
+        if (!cap) {
+            char e[128];
+            asmspy_strerror(erc, e, sizeof e);
+            attron(A_BOLD);
+            if (erc == ASMSPY_DATAFLOW_UNAVAIL)
+                mvprintw(2, 0,
+                         "Data-flow capture unavailable on this "
+                         "build/host.");
+            else
+                mvprintw(2, 0, "No data flow captured.");
+            attroff(A_BOLD);
+            if (erc == ASMSPY_DATAFLOW_UNAVAIL)
+                mvprintw(4, 0,
+                         "The scoped value producer needs Linux x86-64 + "
+                         "Capstone (off-platform builds self-skip).");
+            else if (erc == 0)
+                mvprintw(4, 0, "The capture completed but produced no trace.");
+            else
+                mvprintw(4, 0, "attach/capture failed: %s", e);
+            mvprintw(6, 0,
+                     "(A managed/JIT runtime is gated off — the native single-"
+                     "step producer can't step JIT code yet, Increment 5.)");
+            mvprintw(scr_rows - 1, 0, "ESC: options   q: processes");
+            clrtoeol();
+            refresh();
+            timeout(150);
+            int ch = getch();
+            if (ch == 'q') {
+                back = 1;
+                break;
+            }
+            if (ch == 27 || ch == 'b') {
+                back = 0;
+                break;
+            }
+            continue;
+        }
+
+        /* Captured. Header: counts + truncation + return value. */
+        mvprintw(1, 0, "%d steps · %d records%s · ret=%ld · %.30s @ 0x%llx",
+                 nsteps, nrecs, trunc ? " · TRUNCATED" : "", ret, func,
+                 (unsigned long long)rbase);
+        attron(A_DIM);
+        mvprintw(
+            2, 0,
+            "NATIVE only · leader thread (a worker-thread routine captures "
+            "0 steps — Inc 4/5) · memory def-use is GC-uncanonicalized");
+        attroff(A_DIM);
+
+        int header_rows = 4;
+        int hint_row = scr_rows - 1;
+        int avail = hint_row - header_rows;
+        if (avail < 3)
+            avail = 3;
+        int top_h = avail * 3 / 5;
+        if (top_h < 1)
+            top_h = 1;
+        int bot_hdr_y = header_rows + top_h;
+        int bot_y = bot_hdr_y + 1;
+        int bot_h = hint_row - bot_y;
+        if (bot_h < 1)
+            bot_h = 1;
+
+        /* Top-pane label + live slice status. */
+        attron(A_BOLD);
+        if (slice)
+            mvprintw(3, 0, "TRACE   [slice: %s from #%u — %zu of %d steps]",
+                     slice_back ? "backward" : "forward", slice_seed, slice->n,
+                     nsteps);
+        else
+            mvprintw(3, 0, "TRACE   (b: backward slice   f: forward slice)");
+        attroff(A_BOLD);
+
+        if (nsteps == 0) {
+            mvprintw(header_rows, 0,
+                     "(no steps captured — the region did not execute on this "
+                     "thread,");
+            mvprintw(header_rows + 1, 0,
+                     " or its bytes were unreadable; a worker-thread routine "
+                     "needs Inc 4/5)");
+        }
+
+        /* keep the selection in range and on-screen */
+        if (sel > nsteps - 1)
+            sel = nsteps - 1;
+        if (sel < 0)
+            sel = 0;
+        if (sel < top)
+            top = sel;
+        if (sel >= top + top_h)
+            top = sel - top_h + 1;
+        if (top > nsteps - top_h)
+            top = nsteps - top_h;
+        if (top < 0)
+            top = 0;
+
+        for (int r = 0; r < top_h && top + r < (int)rows.n; r++) {
+            int step = top + r;
+            asmspy_df_rowstyle_t rs = asmspy_df_rowstyle(slice, (uint32_t)step);
+            int is_sel = (step == sel);
+            attr_t a = A_NORMAL;
+            if (is_sel)
+                a = A_REVERSE;
+            else if (rs == ASMSPY_DF_ROW_INSLICE)
+                a = A_BOLD;
+            else if (rs == ASMSPY_DF_ROW_DIMMED)
+                a = A_DIM;
+            if (a != A_NORMAL)
+                attron(a);
+            mvprintw(header_rows + r, 0, "%-*.*s", cols, cols, rows.v[step]);
+            if (a != A_NORMAL)
+                attroff(a);
+        }
+
+        /* Bottom pane: def-use for the selected step (rebuilt on move). */
+        if (nsteps > 0 && sel != last_sel) {
+            df_build_defuse(&V, (uint32_t)sel, &du);
+            last_sel = sel;
+        }
+        attron(A_BOLD);
+        mvprintw(bot_hdr_y, 0, "DEF-USE");
+        attroff(A_BOLD);
+        for (int r = 0; r < bot_h && r < (int)du.n; r++)
+            mvprintw(bot_y + r, 0, "%-*.*s", cols, cols, du.v[r]);
+        if ((int)du.n > bot_h && bot_h > 0)
+            mvprintw(bot_y + bot_h - 1, 0, "  … (%d more def-use lines)",
+                     (int)du.n - bot_h + 1);
+
+        mvprintw(hint_row, 0,
+                 "up/down PgUp/PgDn: step   b/f: back/fwd slice   c: clear   "
+                 "ESC: options   q: processes");
+        clrtoeol();
+        refresh();
+
+        timeout(120);
+        int ch = getch();
+        int page = top_h > 1 ? top_h - 1 : 1;
+        if (ch == 'q') {
+            back = 1;
+            break;
+        }
+        if (ch == 27) { /* ESC → options (b is the backward-slice key here) */
+            back = 0;
+            break;
+        }
+        switch (ch) {
+        case KEY_UP:
+            sel -= 1;
+            break;
+        case KEY_DOWN:
+            sel += 1;
+            break;
+        case KEY_PPAGE:
+            sel -= page;
+            break;
+        case KEY_NPAGE:
+            sel += page;
+            break;
+        case KEY_HOME:
+            sel = 0;
+            break;
+        case KEY_END:
+            sel = nsteps - 1;
+            break;
+        case 'b': /* backward slice from the selected step */
+            if (nsteps > 0) {
+                asmtest_slice_free(slice);
+                at_val_rec_t seed = {0};
+                seed.step = (uint32_t)sel;
+                slice = asmtest_slice_backward(V.g, seed);
+                slice_back = 1;
+                slice_seed = (uint32_t)sel;
+            }
+            break;
+        case 'f': /* forward slice from the selected step */
+            if (nsteps > 0) {
+                asmtest_slice_free(slice);
+                at_val_rec_t seed = {0};
+                seed.step = (uint32_t)sel;
+                slice = asmtest_slice_forward(V.g, seed);
+                slice_back = 0;
+                slice_seed = (uint32_t)sel;
+            }
+            break;
+        case 'c': /* clear the slice — back to the whole trace */
+            asmtest_slice_free(slice);
+            slice = NULL;
+            break;
+        default:
+            break;
+        }
+        if (sel < 0)
+            sel = 0;
+    }
+
+    /* Wake the (possibly capture-blocked) tracer and join. A SIGALRM interrupts
+     * the producer's run-to waitpid; it then fails its re-CONT (ESRCH) and
+     * returns, DETACHing the target so it survives. Re-arm every 50 ms until the
+     * join lands, exactly as run_live_view tears its tracer down. */
+    atomic_store(&V.stop, true);
+    for (;;) {
+        pthread_kill(th, SIGALRM);
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += 50L * 1000 * 1000;
+        if (ts.tv_nsec >= 1000000000L) {
+            ts.tv_sec++;
+            ts.tv_nsec -= 1000000000L;
+        }
+        if (pthread_timedjoin_np(th, NULL, &ts) == 0)
+            break;
+    }
+    pthread_sigmask(SIG_UNBLOCK, &block, NULL);
+
+    asmtest_slice_free(slice);
+    svec_free(&rows);
+    svec_free(&du);
+    if (V.g)
+        asmtest_defuse_free(V.g);
+    if (V.vt)
+        asmtest_valtrace_free(V.vt);
+    free(V.code);
+    pthread_mutex_destroy(&V.mu);
+    return back;
+}
+
 /* mode-select screen; returns 0 syscalls, 1 region, 2 stream, 3 graph, -1 back */
 static int screen_mode(const asmspy_proc_t *p) {
     for (;;) {
@@ -2908,7 +3376,10 @@ static int screen_mode(const asmspy_proc_t *p) {
         mvprintw(10, 2,
                  "8)  Process details    — runtime (JVM/.NET/py/Go/…), "
                  "threads, modules, ELF traits (safe, no attach)");
-        mvprintw(rows - 1, 0, "1/2/3/4/5/6/7/8: choose   b/ESC: back");
+        mvprintw(11, 2,
+                 "9)  Data flow          — scoped L0 values + L1 def-use of a "
+                 "function, with L2 slice navigation");
+        mvprintw(rows - 1, 0, "1/2/3/4/5/6/7/8/9: choose   b/ESC: back");
         refresh();
         int ch = getch();
         if (ch == '1')
@@ -2927,6 +3398,8 @@ static int screen_mode(const asmspy_proc_t *p) {
             return 6;
         if (ch == '8')
             return 7;
+        if (ch == '9')
+            return 8;
         if (ch == 'b' || ch == 27 || ch == 'q')
             return -1;
     }
@@ -3599,6 +4072,56 @@ int asmspy_tui(void) {
                          "asmspy — details of pid %d (%.*s)", picked.pid, 60,
                          picked.cmd);
                 nav = run_details_view(picked.pid, title);
+            } else if (mode == 8) {
+                /* data flow: pick a function, then one-shot scoped L0 value +
+                 * L1 def-use capture with L2 slice navigation. Managed/JIT
+                 * runtimes are gated off here (the native single-step producer
+                 * can't step JIT code yet — same self-skip the headless
+                 * --dataflow does), with a clear message rather than a capture
+                 * that would attribute nothing. */
+                asmspy_fingerprint_t fp;
+                asmspy_fingerprint(picked.pid, &fp);
+                if (runtime_is_managed(fp.runtime)) {
+                    erase();
+                    mvprintw(
+                        0, 0,
+                        "data flow: pid %d is a %s runtime — the native "
+                        "value producer can't single-step JIT/managed code "
+                        "yet (Increment 5).",
+                        picked.pid, fp.runtime);
+                    mvprintw(2, 0, "press a key");
+                    refresh();
+                    getch();
+                    nav = 0; /* back to options */
+                } else {
+                    asmspy_symtab_t t;
+                    if (asmspy_symtab_load(picked.pid, &t) < 0 || t.n == 0) {
+                        erase();
+                        mvprintw(0, 0,
+                                 "no function symbols for pid %d (stripped? "
+                                 "permission?) — press a key",
+                                 picked.pid);
+                        refresh();
+                        getch();
+                        asmspy_symtab_free(&t);
+                        continue; /* back to options */
+                    }
+                    uint64_t base = 0;
+                    size_t len = 0;
+                    if (screen_syms(picked.pid, &base, &len, &t) == 0) {
+                        const asmspy_sym_t *s = asmspy_symtab_at(&t, base);
+                        const char *fn = s ? s->name : "region";
+                        char title[176];
+                        snprintf(title, sizeof title,
+                                 "asmspy — data flow of %s @ 0x%llx (pid %d)",
+                                 fn, (unsigned long long)base, picked.pid);
+                        nav =
+                            run_dataflow_view(picked.pid, base, len, title, fn);
+                    } else {
+                        nav = 0; /* symbol-picker ESC -> back to options */
+                    }
+                    asmspy_symtab_free(&t);
+                }
             } else {
                 asmspy_symtab_t t;
                 if (asmspy_symtab_load(picked.pid, &t) < 0 || t.n == 0) {
