@@ -354,6 +354,14 @@ def _declare(lib):
     lib.asmtest_hwtrace_call_scoped_fp.restype = ci
     lib.asmtest_hwtrace_render_scope.argtypes = [_HwScope, cc, sz]
     lib.asmtest_hwtrace_render_scope.restype = ci
+    # §Z1 region-free whole-window trio — the empty-scope window() construct
+    # (begin_window arms with NO registered region; insns then hold ABSOLUTE addresses).
+    lib.asmtest_hwtrace_begin_window.argtypes = [v, C.POINTER(_HwScope)]
+    lib.asmtest_hwtrace_begin_window.restype = ci
+    lib.asmtest_hwtrace_end_window.argtypes = [_HwScope, v]
+    lib.asmtest_hwtrace_end_window.restype = ci
+    lib.asmtest_hwtrace_render_window.argtypes = [_HwScope, cc, sz]
+    lib.asmtest_hwtrace_render_window.restype = ci
     lib.asmtest_hwtrace_arm_tid.restype = ci
     # §3.1(c) whole-window noise attribution: address->name reverse resolver + IP bucketer.
     lib.asmtest_hwtrace_region_name.argtypes = [
@@ -517,6 +525,24 @@ class CallScopedResult:
     def __repr__(self):
         return (f"CallScopedResult(result={self.result}, "
                 f"truncated={self.truncated}, rc={self.rc})")
+
+
+class WindowResult:
+    """The outcome of :meth:`HwTrace.window`: the executed body's disassembly
+    (:attr:`path`, empty when no decoder is present), the :attr:`truncated` honesty bit,
+    and :attr:`armed` (``False`` when the region-free window SELF-SKIPPED on a
+    non-single-step backend — ``fn`` still ran). Mirrors dotnet's empty-ctor
+    ``new AsmTrace()`` whole-window scope / node's ``HwTrace.window``."""
+    __slots__ = ("path", "truncated", "armed")
+
+    def __init__(self, path, truncated, armed):
+        self.path = path
+        self.truncated = truncated
+        self.armed = armed
+
+    def __repr__(self):
+        return (f"WindowResult(armed={self.armed}, "
+                f"truncated={self.truncated}, path_len={len(self.path)})")
 
 
 class TraceCallAutoResult:
@@ -930,6 +956,44 @@ class HwTrace:
                 path = buf.value.decode(errors="replace")
             trunc = bool(lib.asmtest_emu_trace_truncated(handle))
             return CallScopedResult(float(result.value), path, trunc, rc)
+        finally:
+            lib.asmtest_trace_free(handle)
+
+    @classmethod
+    def window(cls, fn, instructions=1 << 20, blocks=0) -> "WindowResult":
+        """§Z1 region-free whole-window scope — the callback form of dotnet's empty-ctor
+        ``using (new AsmTrace())``. Arms a REGION-FREE single-step capture on THIS thread
+        (no :class:`NativeCode`, no ``[base, len)``), runs ``fn()``, disarms, and renders the
+        executed body from live self-memory. HONEST-BUT-NOISY: records EVERYTHING between
+        begin and end, so a traced native leaf's ABSOLUTE addresses appear as a SUBSET of the
+        listing. Keep ``fn`` a TIGHT native leaf — EFLAGS.TF single-step is armed across it
+        (never step arbitrary managed code, which fights the runtime's SIGTRAP/JIT). Returns a
+        :class:`WindowResult` (``.path``, ``.truncated``, ``.armed``); SELF-SKIPS (``.armed``
+        ``False``, ``fn`` still runs) on a non-single-step backend. Requires the tier up
+        (:meth:`HwTrace.init`); arms lazily on first use."""
+        lib = _get()
+        cls._lazy_arm()
+        handle = lib.asmtest_trace_new(instructions, blocks)
+        if not handle:
+            raise RuntimeError("asmtest_trace_new returned NULL")
+        try:
+            scope = _HwScope()
+            rc = int(lib.asmtest_hwtrace_begin_window(handle, C.byref(scope)))
+            if rc != ASMTEST_HW_OK:  # EUNAVAIL/ESTATE/EFULL/EINVAL -> clean self-skip
+                fn()
+                return WindowResult("", False, False)
+            try:
+                fn()  # keep TIGHT: EFLAGS.TF single-step is armed across this
+            finally:
+                lib.asmtest_hwtrace_end_window(scope, handle)  # scope BY VALUE, then trace
+            need = int(lib.asmtest_hwtrace_render_window(scope, None, 0))
+            path = ""
+            if need > 0:
+                buf = C.create_string_buffer(need + 1)
+                lib.asmtest_hwtrace_render_window(scope, buf, need + 1)
+                path = buf.value.decode(errors="replace")
+            trunc = bool(lib.asmtest_emu_trace_truncated(handle))
+            return WindowResult(path, trunc, True)
         finally:
             lib.asmtest_trace_free(handle)
 

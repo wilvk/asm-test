@@ -715,6 +715,30 @@ int main() {
         code.free();
     }
 
+    // ---- window: §Z1 region-free whole-window scope (empty-ctor form) ----
+    {
+        // The earlier auto/flag-day cases shut the tier down; bring single-step
+        // back up so the region-free window has a backend to arm on.
+        HwTrace::init(SINGLESTEP);
+        NativeCode code = NativeCode::from_bytes(ROUTINE);
+        long result = -1;
+        auto w = HwTrace::window([&] { result = code.call(20, 22); });
+        // fn ALWAYS runs — armed or self-skipped, code.call(20, 22) == 42.
+        ok(result == 42, "window: fn ran and code.call(20, 22) == 42");
+        // On the single-step host the region-free window arms; a non-single-step
+        // backend would self-skip (armed == false), still an honest outcome.
+        ok(w.armed, "window: region-free whole-window scope armed on single-step");
+        ok(!w.truncated, "window: 1M-insn cap not overflowed by the tiny leaf");
+        if (w.armed && !w.path.empty())
+            ok(w.path.find("ret") != std::string::npos,
+               "window: rendered listing includes the traced leaf's ret");
+        else
+            std::printf("# note: window path empty (no decoder) — skipping "
+                        "listing check\n");
+        code.free();
+        HwTrace::shutdown();
+    }
+
     std::printf("1..%d\n", g_test);
     return g_failed == 0 ? 0 : 1;
 }

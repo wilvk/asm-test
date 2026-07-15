@@ -100,6 +100,23 @@ def test_call_scoped_fp_traces_a_double_call(hwtrace):
     code.free()
 
 
+def test_window_region_free_whole_window(hwtrace):
+    # window: §Z1 region-free whole-window scope — the callback form of dotnet's empty-ctor
+    # `using (new AsmTrace())`. Arm a REGION-FREE single-step capture on THIS thread (no
+    # NativeCode, no [base,len)), run fn, disarm, render. HONEST-BUT-NOISY: it records
+    # EVERYTHING between begin and end, so the leaf's ABSOLUTE addresses are a SUBSET of the
+    # listing. Self-skips (armed False) on a non-single-step backend; fn still runs.
+    code = NativeCode.from_bytes(ROUTINE)
+    box = {}
+    w = HwTrace.window(lambda: box.__setitem__("r", code.call(20, 22)))
+    assert box["r"] == 42  # fn ALWAYS runs, armed or self-skipped
+    assert w.armed  # the `hwtrace` fixture inited single-step, so the window arms here
+    assert not w.truncated  # the generous 1M-insn cap is not overflowed by the tiny leaf
+    if w.path:  # non-empty when Capstone is present
+        assert "ret" in w.path.lower()
+    code.free()
+
+
 def test_trace_call_auto_owns_the_call_and_completes():
     # trace_call_auto OWNS the invocation: run under the fastest exact tier and
     # auto-escalate to a ceiling-free tier if the trace truncates. It self-manages the

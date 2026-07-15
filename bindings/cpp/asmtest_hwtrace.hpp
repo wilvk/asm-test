@@ -227,6 +227,11 @@ struct HwApi {
     int (*call_scoped_ex)(void *, size_t, void *, void *, const long *, int, long *,
                           asmtest_hwtrace_scope_t *) = nullptr;
     int (*render_scope)(asmtest_hwtrace_scope_t, char *, size_t) = nullptr;
+    /* §Z1 region-free whole-window trio (the empty-scope `window()` construct).
+     * Non-gated: an older lib without them still loads and window() self-skips. */
+    int (*begin_window)(void *, asmtest_hwtrace_scope_t *) = nullptr;
+    int (*end_window)(asmtest_hwtrace_scope_t, void *) = nullptr;
+    int (*render_window)(asmtest_hwtrace_scope_t, char *, size_t) = nullptr;
     void (*shutdown)(void) = nullptr;
     int (*exec_alloc)(const void *, size_t, void **, size_t *) = nullptr;
     void (*exec_free)(void *, size_t) = nullptr;
@@ -383,6 +388,10 @@ inline HwApi &api() {
         dlsym_into(h, "asmtest_hwtrace_arm_tid", t.arm_tid);
         dlsym_into(h, "asmtest_hwtrace_call_scoped_ex", t.call_scoped_ex);
         dlsym_into(h, "asmtest_hwtrace_render_scope", t.render_scope);
+        /* §Z1 region-free whole-window trio — non-gated, window() self-skips absent. */
+        dlsym_into(h, "asmtest_hwtrace_begin_window", t.begin_window);
+        dlsym_into(h, "asmtest_hwtrace_end_window", t.end_window);
+        dlsym_into(h, "asmtest_hwtrace_render_window", t.render_window);
         ok &= dlsym_into(h, "asmtest_hwtrace_shutdown", t.shutdown);
         ok &= dlsym_into(h, "asmtest_hwtrace_exec_alloc", t.exec_alloc);
         ok &= dlsym_into(h, "asmtest_hwtrace_exec_free", t.exec_free);
@@ -712,6 +721,17 @@ struct CallScopedResult {
     bool ok() const { return rc == ASMTEST_HW_OK; }
 };
 
+/// The outcome of `HwTrace::window`: the executed body's disassembly (`path`,
+/// empty when no decoder is present), the `truncated` honesty bit, and `armed`
+/// (false when the window SELF-SKIPPED — a non-single-step backend or an older
+/// lib lacking the whole-window trio; the body still ran). Mirrors dotnet's
+/// empty-ctor `new AsmTrace()` whole-window scope / node's `HwTrace.window`.
+struct WindowResult {
+    std::string path;
+    bool truncated = false;
+    bool armed = false;
+};
+
 /// Forward declaration: HwTrace::traceCallAuto hands back a filled, queryable
 /// HwTrace by value, so TraceCallAutoResult (which owns one) is defined just after
 /// the HwTrace class, and the method bodies out-of-line after that.
@@ -950,6 +970,59 @@ class HwTrace {
         }
         bool trunc = a.trace_truncated(handle) != 0;
         return {result, path, trunc, rc};
+    }
+
+    /// §Z1 region-free whole-window scope (the callback form of dotnet's empty-ctor
+    /// `using (new AsmTrace())`). Arms a REGION-FREE single-step capture on THIS
+    /// thread (no NativeCode, no [base,len)), runs `fn`, disarms, and renders the
+    /// executed body from live self-memory. HONEST-BUT-NOISY: it records EVERYTHING
+    /// between begin and end, so the traced leaf's ABSOLUTE addresses appear as a
+    /// SUBSET of the listing. Keep the block TIGHT and native — EFLAGS.TF single-step
+    /// is armed across `fn` (never step arbitrary managed code). Returns
+    /// {path, truncated, armed}; SELF-SKIPS (`armed` false, `fn` still runs) on a
+    /// non-single-step backend or an older lib without the whole-window trio.
+    template <typename F>
+    static WindowResult window(F &&fn, std::size_t insns_cap = (std::size_t{1} << 20)) {
+        detail::HwApi &a = detail::require();
+        if (!a.begin_window || !a.end_window || !a.render_window) { // older lib -> self-skip
+            fn();
+            return {"", false, false};
+        }
+        void *handle = a.trace_new(insns_cap, 0); // whole-window is insns-only (blocks=0)
+        if (!handle)
+            throw std::runtime_error("asmtest_trace_new returned NULL");
+        struct FreeTrace {
+            detail::HwApi &a;
+            void *h;
+            ~FreeTrace() {
+                if (h)
+                    a.trace_free(h);
+            }
+        } freer{a, handle};
+        asmtest_hwtrace_scope_t scope{};
+        int rc = a.begin_window(handle, &scope);
+        if (rc != ASMTEST_HW_OK) { // EUNAVAIL/ESTATE/EFULL/EINVAL -> clean self-skip
+            fn();
+            return {"", false, false};
+        }
+        {
+            // Balance begin/end even if fn throws (scope BY VALUE, then the trace).
+            struct EndWindow {
+                detail::HwApi &a;
+                asmtest_hwtrace_scope_t s;
+                void *h;
+                ~EndWindow() { a.end_window(s, h); }
+            } ender{a, scope, handle};
+            fn(); // keep TIGHT: EFLAGS.TF single-step is armed across this
+        }
+        std::string path;
+        int need = a.render_window(scope, nullptr, 0);
+        if (need > 0) {
+            path.resize(static_cast<std::size_t>(need));
+            a.render_window(scope, &path[0], static_cast<std::size_t>(need) + 1);
+        }
+        bool trunc = a.trace_truncated(handle) != 0;
+        return {path, trunc, true};
     }
 
     /// Auto-escalating CALL-OWNING cross-tier trace (`asmtest_trace_call_auto`): run
