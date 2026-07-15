@@ -80,9 +80,6 @@ zig asmtest_hwtrace_symbolize_bucket
 ruby asmtest_hwtrace_symbolize_bucket
 lua asmtest_hwtrace_symbolize_bucket
 go asmtest_hwtrace_symbolize_bucket
-ALL asmtest_hwtrace_begin_window      # §Z1 region-free whole-window trio: the .NET managed tier's AsmTrace substrate
-ALL asmtest_hwtrace_end_window        #   (dotnet wraps it); the other bindings ship the name-keyed try_begin path and
-ALL asmtest_hwtrace_render_window     #   gain the trio when they grow a scope construct — same posture as §1 above
 ALL asmtest_hwtrace_attribute_window  # §3.1(c) whole-window noise attribution: node + java (HwTrace.attributeWindow) wrap it against a live whole-window scope (named-region + perf-map fallback); the other eight gain it with a whole-window scope
 ALL asmtest_hwtrace_call_scoped       # Option B lazy-arm NAMED-call scope (managed-singlestep-lazy-arm-plan): dotnet wraps it (AsmTrace.Method's Invoke); the other nine ship the registry-FREE call_scoped_ex form instead (no fixed-table slot), so none bind the registry-keyed call_scoped
 # FP (double…)->double sibling of call_scoped: python (HwTrace.call_scoped_fp) + dotnet

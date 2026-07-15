@@ -679,6 +679,27 @@ pub fn main() !void {
         try check(reg_free, "callScoped: 40 registry-free calls each return i+1");
     }
 
+    // ---- window: §Z1 region-free whole-window scope (the empty-ctor form) ---- //
+    // Mirrors test_hwtrace.py::test_window_region_free_whole_window + the C++ reference.
+    // Arms a REGION-FREE single-step capture, runs a TIGHT native leaf, disarms, renders.
+    // HONEST-BUT-NOISY: it records EVERYTHING between arm and disarm (the leaf's absolute
+    // addresses are a SUBSET), so assert the body ran + armed + the leaf's ret appears.
+    {
+        var code = try hwtrace.NativeCode.fromBytes(&ROUTINE);
+        defer code.free();
+
+        g_result = 0;
+        const w = hwtrace.HwTrace.window(.{ &code, @as(c_long, 20), @as(c_long, 22) }, callBody);
+        try check(g_result == 42, "window: body ran and add2(20,22) == 42");
+        // The single-step tier is up (inited above), so the region-free window arms here;
+        // a non-single-step backend would self-skip (armed false), still an honest outcome.
+        try check(w.armed, "window: region-free whole-window scope armed on single-step");
+        try check(!w.truncated, "window: 1M-insn cap not overflowed by the tiny native leaf");
+        if (w.path().len > 0) // decoder present: the noisy listing still holds the leaf's ret
+            try check(std.mem.indexOf(u8, w.path(), "ret") != null,
+                "window: rendered listing includes the traced leaf's ret");
+    }
+
     // ---- Out-of-process / foreign-process toolkit (hwtrace.Ptrace) ---- //
     // Self-skip cleanly when the ptrace backend is unavailable, like Python's
     // `_skip_if_no_ptrace`; otherwise run the four foreign-process tests.

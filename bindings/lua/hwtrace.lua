@@ -65,6 +65,11 @@ int  asmtest_hwtrace_call_scoped_ex(void* base, size_t len, void* trace, void* f
                                     const long* args, int nargs, long* result_out,
                                     asmtest_hwtrace_scope_t* out);
 int  asmtest_hwtrace_render_scope(asmtest_hwtrace_scope_t handle, char* buf, size_t buflen);
+/* §Z1 region-free whole-window trio (the empty-scope window() construct). begin_window
+   arms with NO registered region; end_window/render_window take the scope handle BY VALUE. */
+int  asmtest_hwtrace_begin_window(void* trace, asmtest_hwtrace_scope_t* out);
+int  asmtest_hwtrace_end_window(asmtest_hwtrace_scope_t handle, void* trace);
+int  asmtest_hwtrace_render_window(asmtest_hwtrace_scope_t handle, char* buf, size_t buflen);
 int  asmtest_hwtrace_arm_tid(void);
 /* asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit. */
 int  asmtest_ptrace_available(void);
@@ -570,6 +575,42 @@ function HwTrace.call_scoped(code, ...)
   local trunc = L.asmtest_emu_trace_truncated(handle) ~= 0
   L.asmtest_trace_free(handle)
   return { result = tonumber(result[0]), path = path, truncated = trunc, rc = rc }
+end
+
+-- §Z1 region-free whole-window scope — the callback form of dotnet's empty-ctor
+-- `using (new AsmTrace())`. Arms a REGION-FREE single-step capture on THIS thread (no
+-- code, no [base,len)), runs fn(), disarms, and renders the executed body from live
+-- self-memory. HONEST-BUT-NOISY: it records EVERYTHING between begin and end, so a traced
+-- leaf's ABSOLUTE addresses appear as a SUBSET of the listing. Keep fn a TIGHT native leaf
+-- — EFLAGS.TF single-step is armed across it (never step arbitrary managed code, which
+-- fights the runtime's SIGTRAP/JIT). A STATIC method (owns its own raw trace handle).
+-- Returns a table {path, truncated, armed}; armed is false (fn still runs) on a
+-- non-single-step backend. The tier must already be up (HwTrace.init(SINGLESTEP)).
+function HwTrace.window(fn)
+  local handle = L.asmtest_trace_new(1048576, 0) -- whole-window is insns-only (blocks=0)
+  if handle == nil then error("asmtest_trace_new failed") end
+  local scope = ffi.new("asmtest_hwtrace_scope_t[1]")
+  local rc = tonumber(L.asmtest_hwtrace_begin_window(handle, scope))
+  if rc ~= ASMTEST_HW_OK then -- EUNAVAIL/ESTATE/EFULL/EINVAL -> clean self-skip; fn still runs
+    L.asmtest_trace_free(handle)
+    local ran_ok, err = pcall(fn)
+    if not ran_ok then error(err) end
+    return { path = "", truncated = false, armed = false }
+  end
+  -- Balance begin/end even if fn errors (pcall), then re-raise after disarming.
+  local ran_ok, err = pcall(fn)
+  L.asmtest_hwtrace_end_window(scope[0], handle) -- scope BY VALUE, then trace
+  local need = tonumber(L.asmtest_hwtrace_render_window(scope[0], nil, 0))
+  local path = ""
+  if need > 0 then
+    local buf = ffi.new("char[?]", need + 1)
+    L.asmtest_hwtrace_render_window(scope[0], buf, need + 1)
+    path = ffi.string(buf, need)
+  end
+  local trunc = L.asmtest_emu_trace_truncated(handle) ~= 0
+  L.asmtest_trace_free(handle)
+  if not ran_ok then error(err) end
+  return { path = path, truncated = trunc, armed = true }
 end
 
 -- Auto-escalating CALL-OWNING cross-tier trace (asmtest_trace_call_auto): run

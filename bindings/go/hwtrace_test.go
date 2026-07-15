@@ -204,6 +204,47 @@ func TestHwtraceCallScoped(t *testing.T) {
 	}
 }
 
+// TestHwtraceWindow exercises the §Z1 region-free whole-window scope (the empty-ctor
+// form). Window arms a REGION-FREE single-step capture on THIS thread (no HwNativeCode,
+// no [base,len)), runs the closure, disarms, and renders. It is HONEST-BUT-NOISY — it
+// steps the Go cgo glue too — so the traced leaf's addresses are a SUBSET of the listing
+// and the generous 1M-insn ring may or may not overflow; both truncated outcomes are
+// honest. Self-skips (Armed false) on a non-single-step backend; the closure still runs.
+// Mirrors test_hwtrace.py::test_window_region_free_whole_window + node's window case.
+func TestHwtraceWindow(t *testing.T) {
+	if !HwTraceAvailable(SingleStep) {
+		t.Skipf("single-step backend unavailable: %s", HwTraceSkipReason(SingleStep))
+	}
+	if err := HwTraceInit(SingleStep); err != nil {
+		t.Skipf("hwtrace init failed: %v", err)
+	}
+	defer HwTraceShutdown()
+
+	code, err := HwNativeCodeFromBytes(hwtraceRoutine)
+	if err != nil {
+		t.Fatalf("HwNativeCodeFromBytes: %v", err)
+	}
+	defer code.Free()
+
+	var r int64
+	res := Window(func() { r = code.Call(20, 22) }) // 42 <= 100 -> jle taken, dec skipped
+	// The closure ALWAYS runs — armed or self-skipped, code.Call(20,22) == 42.
+	if r != 42 {
+		t.Fatalf("Window closure Call(20,22): got %d, want 42", r)
+	}
+	t.Logf("window: armed=%v truncated=%v pathLen=%d", res.Armed, res.Truncated, len(res.Path))
+	// The single-step tier is up, so the region-free window arms here; a non-single-step
+	// backend would self-skip (Armed false), still an honest outcome.
+	if !res.Armed {
+		t.Fatalf("window did not arm on an available single-step backend")
+	}
+	// When a decoder is present the (noisy) listing still contains the traced leaf's ret;
+	// do not require non-empty text (no Capstone => an empty path is honest).
+	if res.Path != "" && !strings.Contains(res.Path, "ret") {
+		t.Fatalf("window listing present but missing a ret (pathLen=%d)", len(res.Path))
+	}
+}
+
 // TestHwtraceScopeFanoutUntraced documents the Go-specific gap: work fanned out via
 // `go func()` inside a scope runs on ANOTHER OS thread and is silently untraced —
 // LockOSThread confines the trace to the arming thread, so the trace holds only the

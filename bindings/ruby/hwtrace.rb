@@ -245,6 +245,13 @@ module Asmtest
         call_scoped_ex: func(LIB, "asmtest_hwtrace_call_scoped_ex",
                              [VOIDP, SZ, VOIDP, VOIDP, VOIDP, INT, VOIDP, VOIDP], INT),
         render_scope:   func(LIB, "asmtest_hwtrace_render_scope", [LL, VOIDP, SZ], INT),
+        # §Z1 region-free whole-window trio (the empty-scope .window construct). begin_window
+        # arms with NO registered region (scope out via a plain void* buffer); end_window /
+        # render_window take the scope handle BY VALUE, declared LL and packed idx|(gen<<32)
+        # exactly like render_scope above.
+        begin_window:   func(LIB, "asmtest_hwtrace_begin_window", [VOIDP, VOIDP], INT),
+        end_window:     func(LIB, "asmtest_hwtrace_end_window", [LL, VOIDP], INT),
+        render_window:  func(LIB, "asmtest_hwtrace_render_window", [LL, VOIDP, SZ], INT),
         # asmtest_hwtrace_arm_tid() — OS tid that armed the active scope, -1 if none.
         arm_tid:        func(LIB, "asmtest_hwtrace_arm_tid", [], INT),
         # ---- host-native executable code ----
@@ -947,6 +954,13 @@ module Asmtest
       # +trace+/+used+ are nil and +rc+ is negative. Mirrors hwtrace.py's TraceCallAutoResult.
       TraceCallAutoResult = Struct.new(:result, :trace, :used, :truncated, :rc)
 
+      # The outcome of .window: the executed body's disassembly (+path+, "" without a
+      # decoder), the +truncated+ honesty bit, and +armed+ (false when the region-free
+      # window SELF-SKIPPED — a non-single-step backend or an older lib lacking the
+      # whole-window trio; the block still ran). Mirrors dotnet's empty-ctor
+      # new AsmTrace() whole-window scope / hwtrace.py's WindowResult.
+      WindowResult = Struct.new(:path, :truncated, :armed)
+
       # Trace ONE native call the managed-safe way: arm the single-step window, call
       # +code+(*args) through the SysV integer ABI, and disarm — all in native code
       # (asmtest_hwtrace_call_scoped_ex) — so nothing the binding runs between arm and disarm
@@ -982,6 +996,44 @@ module Asmtest
         ensure
           Fiddle.free(argbuf.to_i)
           Fiddle.free(res.to_i)
+          Fiddle.free(scope.to_i)
+          Asmtest::HwTrace::FN[:trace_free].call(handle)
+        end
+      end
+
+      # §Z1 region-free whole-window scope — the block form of dotnet's empty-ctor
+      # `using (new AsmTrace())`. Arms a REGION-FREE single-step capture on THIS thread (no
+      # code, no [base,len)), runs the block, disarms, and renders the executed body from
+      # live self-memory. HONEST-BUT-NOISY: it records EVERYTHING between begin and end (it
+      # steps the Ruby VM too), so a traced leaf's ABSOLUTE addresses appear as a SUBSET of
+      # +path+. Keep the block a TIGHT native leaf — EFLAGS.TF single-step is armed across it
+      # (never step arbitrary managed code, which fights the runtime's SIGTRAP/JIT). Arms the
+      # tier lazily on first use. Returns a WindowResult; self-skips (+armed+ false; the block
+      # still runs) on a non-single-step backend. The block runs even if it raises (the
+      # ensure disarms the window).
+      def self.window
+        __lazy_arm
+        handle = Asmtest::HwTrace::FN[:trace_new].call(1 << 20, 0) # whole-window is insns-only (blocks=0)
+        raise "asmtest_trace_new failed" if handle.null?
+        scope = Fiddle::Pointer.new(Fiddle.malloc(8), 8) # asmtest_hwtrace_scope_t {u32 idx; u32 gen}
+        scope[0, 8] = "\x00".b * 8
+        begin
+          rc = Asmtest::HwTrace::FN[:begin_window].call(handle, scope)
+          unless rc == OK # EUNAVAIL/ESTATE/EFULL/EINVAL -> clean self-skip; the block still runs
+            yield if block_given?
+            return WindowResult.new("", false, false)
+          end
+          # idx@0|gen@4 little-endian is exactly the uint64 end/render_window want BY VALUE.
+          handle_u64 = scope[0, 8].unpack1("Q")
+          begin
+            yield if block_given? # keep TIGHT: EFLAGS.TF single-step is armed across this
+          ensure
+            Asmtest::HwTrace::FN[:end_window].call(handle_u64, handle) # scope BY VALUE, then trace
+          end
+          path = __render_window(handle_u64)
+          trunc = Asmtest::HwTrace::FN[:truncated].call(handle) != 0
+          WindowResult.new(path, trunc, true)
+        ensure
           Fiddle.free(scope.to_i)
           Asmtest::HwTrace::FN[:trace_free].call(handle)
         end
@@ -1043,6 +1095,20 @@ module Asmtest
         buf = Fiddle::Pointer.new(Fiddle.malloc(need + 1), need + 1)
         buf[0, need + 1] = "\x00".b * (need + 1)
         Asmtest::HwTrace::FN[:render_scope].call(handle_u64, buf, need + 1)
+        s = buf.to_s(need)
+        Fiddle.free(buf.to_i)
+        s
+      end
+
+      # Render a just-closed whole-window scope handle's body to assembly text (size-then-
+      # allocate). +handle_u64+ is the packed idx|(gen<<32) passed BY VALUE (see the FFI decl
+      # note); "" if the decoder is unavailable or the handle is stale.
+      def self.__render_window(handle_u64)
+        need = Asmtest::HwTrace::FN[:render_window].call(handle_u64, Fiddle::NULL, 0)
+        return "" if need <= 0
+        buf = Fiddle::Pointer.new(Fiddle.malloc(need + 1), need + 1)
+        buf[0, need + 1] = "\x00".b * (need + 1)
+        Asmtest::HwTrace::FN[:render_window].call(handle_u64, buf, need + 1)
         s = buf.to_s(need)
         Fiddle.free(buf.to_i)
         s

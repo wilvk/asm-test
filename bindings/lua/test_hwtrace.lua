@@ -321,6 +321,28 @@ do
   code:free()
 end
 
+-- window — §Z1 region-free whole-window scope (the empty-ctor form). Arms a REGION-FREE
+-- single-step capture, runs fn, disarms, renders. HONEST-BUT-NOISY: it steps the LuaJIT
+-- interpreter too, so the leaf's absolute addresses are a SUBSET and the 1M-insn ring may
+-- overflow (both truncated outcomes are honest). Mirrors
+-- test_hwtrace.py::test_window_region_free_whole_window.
+do
+  local code = NativeCode.from_bytes(ROUTINE)
+  local wresult
+  local w = HwTrace.window(function() wresult = code:call(20, 22) end)
+  eq(wresult, 42, "window: fn ran and call(20,22) == 42")
+  ok(w.armed, "window: region-free whole-window scope armed on single-step")
+  -- A decoder-present listing still holds the leaf's ret when the window did not
+  -- overflow; tolerate truncation (the interpreter noise may fill the ring).
+  if not w.truncated and #w.path > 0 then
+    ok(w.path:find("ret", 1, true) ~= nil, "window: rendered listing includes the leaf's ret")
+  else
+    print(string.format("# note: window truncated=%s pathLen=%d (interpreter noise)",
+                        tostring(w.truncated), #w.path))
+  end
+  code:free()
+end
+
 HwTrace.shutdown()
 
 -- test_auto_resolve_traces_live — on any x86-64 Linux host the cascade is non-empty

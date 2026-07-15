@@ -224,6 +224,23 @@ begin
   registry_free = (0...40).all? { |i| HwTrace.call_scoped(cs_code, i, 1).result == i + 1 }
   ok(registry_free, "call_scoped 40x is registry-free (no MAX_REGIONS exhaustion)")
   cs_code.free
+
+  # ---- window: §Z1 region-free whole-window scope (the empty-ctor form) ----
+  # Arms a REGION-FREE single-step capture, runs the block, disarms, renders. HONEST-BUT-
+  # NOISY: it steps the Ruby VM too, so the leaf's absolute addresses are a SUBSET and the
+  # 1M-insn ring may overflow (both truncated outcomes are honest). Mirrors
+  # test_hwtrace.py::test_window_region_free_whole_window.
+  w_code = NativeCode.from_bytes(ROUTINE)
+  w_result = nil
+  w = HwTrace.window { w_result = w_code.call(20, 22) } # 42 <= 100 -> jle taken, dec skipped
+  ok(w_result == 42, "window: block ran and call(20,22) == 42 (got #{w_result.inspect})")
+  ok(w.armed, "window: region-free whole-window scope armed on single-step")
+  if !w.truncated && !w.path.empty? # decoder present + ring not overflowed
+    ok(w.path.downcase.include?("ret"), "window: rendered listing includes the leaf's ret")
+  else
+    puts "# note: window truncated=#{w.truncated} path_len=#{w.path.length} (VM noise)"
+  end
+  w_code.free
 ensure
   HwTrace.shutdown
 end

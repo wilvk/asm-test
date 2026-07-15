@@ -270,6 +270,13 @@ const FnCallScopedEx = *const fn (?*anyopaque, usize, ?*anyopaque, ?*anyopaque, 
 // 3-int `Choice` struct.
 const FnTraceCallAuto = *const fn (?*const anyopaque, usize, [*c]const c_long, c_int, c_uint, ?*c_long, ?*anyopaque, *Choice) callconv(.C) c_int;
 const FnRenderScope = *const fn (c.asmtest_hwtrace_scope_t, ?[*]u8, usize) callconv(.C) c_int;
+// §Z1 region-free whole-window trio (the empty-scope window() construct). begin_window
+// arms with NO registered region; end_window/render_window take the scope handle BY
+// VALUE (render_scope-style). Optional — an older lib without them still loads and
+// window() self-skips.
+const FnBeginWindow = *const fn (?*anyopaque, *c.asmtest_hwtrace_scope_t) callconv(.C) c_int;
+const FnEndWindow = *const fn (c.asmtest_hwtrace_scope_t, ?*anyopaque) callconv(.C) c_int;
+const FnRenderWindow = *const fn (c.asmtest_hwtrace_scope_t, ?[*]u8, usize) callconv(.C) c_int;
 const FnShutdown = *const fn () callconv(.C) void;
 const FnArmTid = *const fn () callconv(.C) c_int;
 const FnExecAlloc = *const fn (?*const anyopaque, usize, *?*anyopaque, *usize) callconv(.C) c_int;
@@ -373,6 +380,9 @@ const Api = struct {
     call_scoped_ex: ?FnCallScopedEx,
     trace_call_auto: ?FnTraceCallAuto,
     render_scope: ?FnRenderScope,
+    begin_window: ?FnBeginWindow,
+    end_window: ?FnEndWindow,
+    render_window: ?FnRenderWindow,
     shutdown: FnShutdown,
     arm_tid: FnArmTid,
     exec_alloc: FnExecAlloc,
@@ -515,6 +525,10 @@ fn lookupAll(lib: *std.DynLib) ?Api {
         .call_scoped_ex = lib.lookup(FnCallScopedEx, "asmtest_hwtrace_call_scoped_ex"),
         .trace_call_auto = lib.lookup(FnTraceCallAuto, "asmtest_trace_call_auto"),
         .render_scope = lib.lookup(FnRenderScope, "asmtest_hwtrace_render_scope"),
+        // §Z1 region-free whole-window trio — optional (window() self-skips when absent).
+        .begin_window = lib.lookup(FnBeginWindow, "asmtest_hwtrace_begin_window"),
+        .end_window = lib.lookup(FnEndWindow, "asmtest_hwtrace_end_window"),
+        .render_window = lib.lookup(FnRenderWindow, "asmtest_hwtrace_render_window"),
         .shutdown = lib.lookup(FnShutdown, "asmtest_hwtrace_shutdown") orelse return null,
         .arm_tid = lib.lookup(FnArmTid, "asmtest_hwtrace_arm_tid") orelse return null,
         .exec_alloc = lib.lookup(FnExecAlloc, "asmtest_hwtrace_exec_alloc") orelse return null,
@@ -895,6 +909,23 @@ pub const ScopedCall = struct {
     }
 };
 
+/// The outcome of `HwTrace.window`: the executed body's disassembly (`path()`, empty
+/// when no decoder is present), the `truncated` honesty bit, and `armed` (false when
+/// the region-free window SELF-SKIPPED — a non-single-step backend or an older lib
+/// lacking the whole-window trio; the body still ran). Mirrors dotnet's empty-ctor
+/// `new AsmTrace()` whole-window scope / the C++/Python `WindowResult`.
+pub const WindowResult = struct {
+    path_buf: [4096]u8 = undefined,
+    path_len: usize = 0,
+    truncated: bool = false,
+    armed: bool = false,
+
+    /// The rendered assembly listing (empty when the decoder is absent).
+    pub fn path(self: *const WindowResult) []const u8 {
+        return self.path_buf[0..self.path_len];
+    }
+};
+
 /// The outcome of `HwTrace.traceCallAuto`: the traced call's return value
 /// (`result`, null on a self-skip), the filled `trace` (a queryable `HwTrace` — the
 /// CALLER frees it via `trace.free()`; null on a self-skip), the `Choice` that
@@ -1032,6 +1063,57 @@ pub const HwTrace = struct {
             }
         }
         out.truncated = api.truncated(h) != 0;
+        return out;
+    }
+
+    /// §Z1 region-free whole-window scope — the callback form of dotnet's empty-ctor
+    /// `using (new AsmTrace())`, mirroring this binding's `region(args, body)` idiom.
+    /// Arms a REGION-FREE single-step capture on THIS thread (no `NativeCode`, no
+    /// `[base,len)`), runs `body(args…)`, disarms, and renders the executed body from
+    /// live self-memory. HONEST-BUT-NOISY: it records EVERYTHING between begin and end,
+    /// so a traced leaf's ABSOLUTE addresses appear as a SUBSET of `path()`. Keep `body`
+    /// a TIGHT native leaf — EFLAGS.TF single-step is armed across it (never step
+    /// arbitrary managed code). Returns a `WindowResult`; SELF-SKIPS (`armed` false,
+    /// `body` still runs) on a non-single-step backend or an older lib without the
+    /// whole-window trio. Requires the tier up (`init`). Owns and frees its own trace
+    /// handle; takes no `self`.
+    pub fn window(args: anytype, comptime body: anytype) WindowResult {
+        var out = WindowResult{};
+        const api = load();
+        var handle: ?*anyopaque = null;
+        var scope_h: c.asmtest_hwtrace_scope_t = undefined;
+        // Arm a REGION-FREE whole-window capture (insns-only: insns_cap FIRST, blocks 0).
+        // Non-gated: an older lib without the trio (or a non-single-step backend) leaves
+        // `armed` false and `body` simply runs untraced.
+        if (api) |a| {
+            if (a.begin_window != null and a.end_window != null) {
+                if (a.trace_new(1 << 20, 0)) |h| {
+                    handle = h;
+                    if (a.begin_window.?(h, &scope_h) == OK) out.armed = true;
+                }
+            }
+        }
+        // Run the body EXACTLY once — armed or self-skipped. EFLAGS.TF single-step is
+        // armed across this iff `out.armed`; keep it a TIGHT native leaf.
+        @call(.auto, body, args);
+        if (out.armed) {
+            const a = api.?;
+            _ = a.end_window.?(scope_h, handle); // scope BY VALUE, then trace*
+            if (a.render_window) |r| {
+                const need = r(scope_h, null, 0);
+                if (need > 0) {
+                    const want: usize = @intCast(need);
+                    const cap = out.path_buf.len;
+                    const buflen = if (want + 1 <= cap) want + 1 else cap;
+                    _ = r(scope_h, @ptrCast(&out.path_buf), buflen);
+                    out.path_len = if (want < cap) want else cap - 1;
+                }
+            }
+            out.truncated = a.truncated(handle) != 0;
+        }
+        if (handle) |h| {
+            if (api) |a| a.trace_free(h);
+        }
         return out;
     }
 

@@ -117,6 +117,12 @@ typedef unsigned long long (*hw_trace_insn_at_fn)(void *, size_t);
 typedef int (*hw_call_scoped_ex_fn)(void *, size_t, void *, void *, const long *,
                                     int, long *, asmtest_hwtrace_scope_t *);
 typedef int (*hw_render_scope_fn)(asmtest_hwtrace_scope_t, char *, size_t);
+// §Z1 region-free whole-window trio (the empty-scope window() construct). begin_window
+// arms with NO registered region; insns then hold ABSOLUTE addresses. end_window /
+// render_window take the 8-byte scope handle BY VALUE (render_scope-style).
+typedef int (*hw_begin_window_fn)(void *, asmtest_hwtrace_scope_t *);
+typedef int (*hw_end_window_fn)(asmtest_hwtrace_scope_t, void *);
+typedef int (*hw_render_window_fn)(asmtest_hwtrace_scope_t, char *, size_t);
 
 // The jitdump entry struct, redefined here (mirrors asmtest_jitdump_entry_t from
 // include/asmtest_ptrace.h): exactly four uint64 fields, no padding, so it
@@ -226,6 +232,9 @@ static hw_trace_block_at_fn   p_hw_trace_block_at;
 static hw_trace_insn_at_fn    p_hw_trace_insn_at;
 static hw_call_scoped_ex_fn   p_hw_call_scoped_ex;
 static hw_render_scope_fn     p_hw_render_scope;
+static hw_begin_window_fn     p_hw_begin_window;
+static hw_end_window_fn       p_hw_end_window;
+static hw_render_window_fn    p_hw_render_window;
 // asmtest_ptrace.h — out-of-process / foreign-process tracing toolkit.
 static pt_available_fn        p_pt_available;
 static pt_skip_reason_fn      p_pt_skip_reason;
@@ -333,6 +342,11 @@ static void asmtest_hw_resolve(void) {
     p_hw_trace_insn_at     = (hw_trace_insn_at_fn)dlsym(h, "asmtest_emu_trace_insn_at");
     p_hw_call_scoped_ex    = (hw_call_scoped_ex_fn)dlsym(h, "asmtest_hwtrace_call_scoped_ex");
     p_hw_render_scope      = (hw_render_scope_fn)dlsym(h, "asmtest_hwtrace_render_scope");
+    // §Z1 region-free whole-window trio — non-gated (NOT in g_hw_loaded below), so an
+    // older lib without them still loads and Window() self-skips.
+    p_hw_begin_window      = (hw_begin_window_fn)dlsym(h, "asmtest_hwtrace_begin_window");
+    p_hw_end_window        = (hw_end_window_fn)dlsym(h, "asmtest_hwtrace_end_window");
+    p_hw_render_window     = (hw_render_window_fn)dlsym(h, "asmtest_hwtrace_render_window");
     // asmtest_ptrace.h — resolved from the same already-loaded handle.
     p_pt_available         = (pt_available_fn)dlsym(h, "asmtest_ptrace_available");
     p_pt_skip_reason       = (pt_skip_reason_fn)dlsym(h, "asmtest_ptrace_skip_reason");
@@ -527,6 +541,15 @@ static int asmtest_hw_go_call_scoped_ex(void *base, size_t len, void *trace, voi
 }
 static int asmtest_hw_go_render_scope(asmtest_hwtrace_scope_t handle, char *buf, size_t buflen) {
     return p_hw_render_scope ? p_hw_render_scope(handle, buf, buflen) : -3;
+}
+static int asmtest_hw_go_begin_window(void *trace, asmtest_hwtrace_scope_t *out) {
+    return p_hw_begin_window ? p_hw_begin_window(trace, out) : -3; // ASMTEST_HW_EUNAVAIL
+}
+static int asmtest_hw_go_end_window(asmtest_hwtrace_scope_t handle, void *trace) {
+    return p_hw_end_window ? p_hw_end_window(handle, trace) : -3;
+}
+static int asmtest_hw_go_render_window(asmtest_hwtrace_scope_t handle, char *buf, size_t buflen) {
+    return p_hw_render_window ? p_hw_render_window(handle, buf, buflen) : -3;
 }
 
 // Trampoline that invokes the generated host-native code through a function
@@ -1149,6 +1172,63 @@ func CallScoped(code *HwNativeCode, args ...int64) CallScopedResult {
 	}
 	truncated := C.asmtest_hw_go_truncated(h) != 0
 	return CallScopedResult{Result: int64(result), OK: true, Path: path, Truncated: truncated, RC: rc}
+}
+
+// WindowResult carries a Window outcome: the executed body's disassembly (Path, ""
+// when the decoder is absent), the Truncated honesty bit, and Armed (false when the
+// region-free window SELF-SKIPPED — a non-single-step backend or an older lib lacking
+// the whole-window trio; the closure still ran). Mirrors dotnet's empty-ctor
+// new AsmTrace() whole-window scope / the C++/Python WindowResult.
+type WindowResult struct {
+	Path      string
+	Truncated bool
+	Armed     bool
+}
+
+// Window runs body under a §Z1 region-free whole-window single-step capture — the
+// callback form of dotnet's empty-ctor `using (new AsmTrace())`. It arms a REGION-FREE
+// capture on THIS thread (no HwNativeCode, no [base,len)), runs body(), disarms, and
+// renders the executed body from live self-memory. HONEST-BUT-NOISY: it records
+// EVERYTHING between begin and end, so a traced leaf's ABSOLUTE addresses are a SUBSET
+// of the listing. Keep body a TIGHT native leaf — EFLAGS.TF single-step is armed across
+// it (never step arbitrary managed code, which fights the runtime's SIGTRAP/JIT).
+// Returns a WindowResult; SELF-SKIPS (Armed false, body still runs) on a non-single-step
+// backend or an older lib without the whole-window trio. Requires an initialized
+// single-step tier (HwTraceInit). Mirrors python HwTrace.window.
+//
+// LockOSThread pins the goroutine across begin/body/end: the whole-window frame is
+// captured into the arming OS thread's TLS and single-step is per-thread, so a
+// goroutine->M migration mid-window would disarm on the wrong thread and drop the
+// capture (the same pin CallScoped needs, and the documented Go single-step rule).
+func Window(body func()) WindowResult {
+	h := C.asmtest_hw_go_trace_new(1<<20, 0) // whole-window is insns-only (blocks=0)
+	if h == nil {
+		body()
+		return WindowResult{}
+	}
+	defer C.asmtest_hw_go_trace_free(h)
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	var scope C.asmtest_hwtrace_scope_t
+	rc := int(C.asmtest_hw_go_begin_window(h, &scope))
+	if rc != hwOK { // EUNAVAIL/ESTATE/EFULL/EINVAL -> clean self-skip; body still runs
+		body()
+		return WindowResult{}
+	}
+	// Balance begin/end even if body panics (scope BY VALUE, then trace*).
+	func() {
+		defer C.asmtest_hw_go_end_window(scope, h)
+		body() // keep TIGHT: EFLAGS.TF single-step is armed across this
+	}()
+	// Render the executed body from the just-closed (thread-local) scope handle, by value.
+	path := ""
+	if need := int(C.asmtest_hw_go_render_window(scope, (*C.char)(nil), 0)); need > 0 {
+		buf := make([]byte, need+1)
+		C.asmtest_hw_go_render_window(scope, (*C.char)(unsafe.Pointer(&buf[0])), C.size_t(len(buf)))
+		path = string(buf[:need])
+	}
+	truncated := C.asmtest_hw_go_truncated(h) != 0
+	return WindowResult{Path: path, Truncated: truncated, Armed: true}
 }
 
 // TraceCallAutoResult carries a TraceCallAuto outcome: the traced call's return

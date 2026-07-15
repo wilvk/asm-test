@@ -353,6 +353,15 @@ type CallScopedExFn = unsafe extern "C" fn(
 ) -> c_int;
 type RenderScopeFn = unsafe extern "C" fn(HwScope, *mut c_char, usize) -> c_int;
 
+// §Z1 region-free whole-window trio (the empty-scope `window()` construct).
+// begin_window arms with NO registered region (trace*, scope out); end_window
+// disarms (scope BY VALUE, then trace*); render_window shares render_scope's
+// (scope, buf, len) shape. Non-gated: an older lib without them still loads and
+// window() self-skips.
+type BeginWindowFn = unsafe extern "C" fn(*mut c_void, *mut HwScope) -> c_int;
+type EndWindowFn = unsafe extern "C" fn(HwScope, *mut c_void) -> c_int;
+type RenderWindowFn = unsafe extern "C" fn(HwScope, *mut c_char, usize) -> c_int;
+
 // --- Out-of-process / foreign-process tracing (asmtest_ptrace.h) ---------- //
 //
 // The same `libasmtest_hwtrace` already loaded above also ships the out-of-band
@@ -512,6 +521,9 @@ struct HwFns {
     render: Option<RenderFn>,
     call_scoped_ex: Option<CallScopedExFn>,
     render_scope: Option<RenderScopeFn>,
+    begin_window: Option<BeginWindowFn>,
+    end_window: Option<EndWindowFn>,
+    render_window: Option<RenderWindowFn>,
     exec_alloc: Option<ExecAllocFn>,
     exec_free: Option<ExecFreeFn>,
     trace_new: Option<TraceNewFn>,
@@ -642,6 +654,7 @@ fn hw_fns() -> &'static HwFns {
                 register_region: None, begin: None, end: None,
                 try_begin: None, render: None,
                 call_scoped_ex: None, render_scope: None,
+                begin_window: None, end_window: None, render_window: None,
                 exec_alloc: None, exec_free: None,
                 trace_new: None, trace_free: None, trace_covered: None,
                 blocks_len: None, insns_total: None, insns_len: None,
@@ -714,6 +727,10 @@ fn hw_fns() -> &'static HwFns {
             render: load!("asmtest_hwtrace_render", RenderFn),
             call_scoped_ex: load!("asmtest_hwtrace_call_scoped_ex", CallScopedExFn),
             render_scope: load!("asmtest_hwtrace_render_scope", RenderScopeFn),
+            // §Z1 region-free whole-window trio — non-gated, window() self-skips absent.
+            begin_window: load!("asmtest_hwtrace_begin_window", BeginWindowFn),
+            end_window: load!("asmtest_hwtrace_end_window", EndWindowFn),
+            render_window: load!("asmtest_hwtrace_render_window", RenderWindowFn),
             exec_alloc: load!("asmtest_hwtrace_exec_alloc", ExecAllocFn),
             exec_free: load!("asmtest_hwtrace_exec_free", ExecFreeFn),
             trace_new: load!("asmtest_trace_new", TraceNewFn),
@@ -922,6 +939,22 @@ pub struct CallScopedResult {
     pub truncated: bool,
     /// The `ASMTEST_HW_*` status (`0` == OK).
     pub rc: i32,
+}
+
+/// The outcome of [`HwTrace::window`]: the executed body's disassembly (`path`,
+/// empty when no decoder is present), the `truncated` honesty bit, and `armed`
+/// (`false` when the region-free window SELF-SKIPPED — a non-single-step backend or
+/// an older lib lacking the whole-window trio; the closure still ran). Mirrors
+/// dotnet's empty-ctor `new AsmTrace()` whole-window scope / the C++/Python
+/// `WindowResult`.
+#[derive(Debug, Clone)]
+pub struct WindowResult {
+    /// The executed body disassembly (empty when the decoder is absent).
+    pub path: String,
+    /// True if the whole-window capture overflowed its cap (honestly noisy).
+    pub truncated: bool,
+    /// True when the region-free window armed (a single-step backend was up).
+    pub armed: bool,
 }
 
 /// The outcome of [`HwTrace::trace_call_auto`]: the auto-escalating call-owning
@@ -1330,6 +1363,66 @@ impl HwTrace {
         let truncated = f.truncated.map(|t| unsafe { t(handle) } != 0).unwrap_or(false);
         unsafe { free(handle) };
         CallScopedResult { result: Some(result as i64), path, truncated, rc: rc as i32 }
+    }
+
+    /// §Z1 region-free whole-window scope (the closure form of dotnet's empty-ctor
+    /// `using (new AsmTrace())`). Arms a REGION-FREE single-step capture on THIS thread
+    /// (no [`NativeCode`], no `[base,len)`), runs `body`, disarms, and renders the executed
+    /// body from live self-memory. HONEST-BUT-NOISY: it records EVERYTHING between begin
+    /// and end, so a traced leaf's ABSOLUTE addresses appear as a SUBSET of the listing.
+    /// Keep `body` a TIGHT native leaf — EFLAGS.TF single-step is armed across it (never
+    /// step arbitrary managed code). Returns a [`WindowResult`]; SELF-SKIPS (`armed`
+    /// `false`, `body` still runs) on a non-single-step backend or an older lib without the
+    /// whole-window trio. Requires the tier up ([`init`](HwTrace::init)).
+    pub fn window<F: FnOnce()>(body: F) -> WindowResult {
+        let f = hw_fns();
+        let (Some(begin), Some(end), Some(render), Some(new), Some(free)) = (
+            f.begin_window, f.end_window, f.render_window, f.trace_new, f.trace_free,
+        ) else {
+            body(); // older lib -> self-skip; body still runs
+            return WindowResult { path: String::new(), truncated: false, armed: false };
+        };
+        let handle = unsafe { new(1 << 20, 0) }; // whole-window is insns-only (blocks=0)
+        if handle.is_null() {
+            body();
+            return WindowResult { path: String::new(), truncated: false, armed: false };
+        }
+        // Free the trace on EVERY exit path — including a panic in `body` below (the
+        // RAII equivalent of the C++ FreeTrace / Python try-finally).
+        struct FreeGuard(TraceFreeFn, *mut c_void);
+        impl Drop for FreeGuard {
+            fn drop(&mut self) {
+                unsafe { (self.0)(self.1) };
+            }
+        }
+        let _freer = FreeGuard(free, handle);
+        let mut scope = HwScope { idx: 0, generation: 0 };
+        let rc = unsafe { begin(handle, &mut scope) };
+        if rc != ASMTEST_HW_OK {
+            // EUNAVAIL/ESTATE/EFULL/EINVAL -> clean self-skip (FreeGuard still frees).
+            body();
+            return WindowResult { path: String::new(), truncated: false, armed: false };
+        }
+        // Balance begin/end even if `body` panics (scope BY VALUE, then the trace).
+        struct EndGuard(EndWindowFn, HwScope, *mut c_void);
+        impl Drop for EndGuard {
+            fn drop(&mut self) {
+                unsafe { (self.0)(self.1, self.2) };
+            }
+        }
+        {
+            let _ender = EndGuard(end, scope, handle);
+            body(); // keep TIGHT: EFLAGS.TF single-step is armed across this
+        }
+        let mut path = String::new();
+        let need = unsafe { render(scope, std::ptr::null_mut(), 0) };
+        if need > 0 {
+            let mut buf = vec![0u8; need as usize + 1];
+            unsafe { render(scope, buf.as_mut_ptr() as *mut c_char, buf.len()) };
+            path = String::from_utf8_lossy(&buf[..need as usize]).into_owned();
+        }
+        let truncated = f.truncated.map(|t| unsafe { t(handle) } != 0).unwrap_or(false);
+        WindowResult { path, truncated, armed: true }
     }
 
     /// Auto-escalating CALL-OWNING cross-tier trace (`asmtest_trace_call_auto`): run

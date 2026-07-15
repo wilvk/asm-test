@@ -13,7 +13,7 @@
 
 use asmtest::hwtrace::{
     Backend, CallScopedResult, CodeImage, Descent, DescentLevel, Fidelity, HwTrace, NativeCode,
-    Policy, Ptrace, Tier, TraceCallAutoResult, TracePolicy, ASMTEST_HW_EUNAVAIL,
+    Policy, Ptrace, Tier, TraceCallAutoResult, TracePolicy, WindowResult, ASMTEST_HW_EUNAVAIL,
 };
 
 // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret   (two basic blocks)
@@ -170,6 +170,42 @@ fn call_scoped_traces_a_native_call() {
 
     HwTrace::shutdown();
     eprintln!("# PASS: call_scoped (registry-free traced native call)");
+}
+
+// window — §Z1 region-free whole-window scope (the empty-ctor form). Arm a REGION-FREE
+// single-step capture on THIS thread (no NativeCode, no [base,len)), run the closure,
+// disarm, render. Self-skips (armed false) on a non-single-step backend; the closure
+// still runs. Mirrors test_hwtrace.py::test_window_region_free_whole_window + the C++
+// reference test_hwtrace.cpp window case.
+#[test]
+fn window_region_free_whole_window() {
+    if !HwTrace::available(Backend::Singlestep) {
+        eprintln!(
+            "# SKIP: single-step unavailable: {}",
+            HwTrace::skip_reason(Backend::Singlestep)
+        );
+        return;
+    }
+    HwTrace::init(Backend::Singlestep).expect("hwtrace init (single-step)");
+
+    let code = NativeCode::from_bytes(&ROUTINE);
+    let mut result = -1i64;
+    let w: WindowResult = HwTrace::window(|| result = code.call(20, 22));
+    // The closure ALWAYS runs — armed or self-skipped, code.call(20, 22) == 42.
+    assert_eq!(result, 42, "window: closure ran and code.call(20, 22) == 42");
+    // The single-step tier is up, so the region-free window arms here; a
+    // non-single-step backend would self-skip (armed == false), still honest.
+    assert!(w.armed, "window: region-free whole-window scope armed on single-step");
+    assert!(!w.truncated, "window: 1M-insn cap not overflowed by the tiny leaf");
+    if !w.path.is_empty() {
+        // decoder present: the noisy listing still contains the traced leaf's ret.
+        assert!(w.path.contains("ret"), "window: rendered listing includes the leaf's ret");
+    } else {
+        eprintln!("# note: window path empty (no decoder) — skipping listing check");
+    }
+
+    HwTrace::shutdown();
+    eprintln!("# PASS: window (region-free whole-window scope)");
 }
 
 // trace_call_auto — auto-escalating CALL-OWNING cross-tier trace. It OWNS the
