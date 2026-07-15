@@ -56,12 +56,17 @@
  * Arch availability is the compile-time guard below; runtime ptrace permission (seccomp)
  * surfaces as a DF_PTRACE_ETRACE the caller self-skips on.
  *
- * Scope + supported target (Phase 3, first landing): a deterministic, single-threaded
- * LEAF routine of up to six integer arguments, executed from an inherited executable
- * mapping; the recorded region is [code, code+len) and value capture is bounded to it.
- * Call-outs to helpers OUTSIDE the region are not yet stepped over here (the offset-only
- * backend's step-over seam is not exported); a routine that leaves the region is treated
- * as having returned. Whole-run capture is a non-goal by design (see the plan).
+ * Scope + supported target: a deterministic, single-threaded routine of up to six
+ * integer arguments, executed from an inherited executable mapping; the recorded region
+ * is [code, code+len) and value capture is bounded to it. Call-outs to helpers OUTSIDE
+ * the region are STEPPED OVER at native speed (Increment 2): when the just-executed
+ * in-region instruction was a `call` whose return address lands back in the region, the
+ * producer runs the callee to that return address via an int3 breakpoint + PTRACE_CONT
+ * (recording NOTHING over the helper) and then resumes in-region single-stepping — so a
+ * non-leaf routine is traced across its helper calls. The step-over is NOT re-entrancy
+ * aware (it resumes at the FIRST arrival at the return address); a W^X callee page that
+ * refuses the int3, or a callee that never returns, truncates honestly rather than
+ * hanging. Whole-run capture is a non-goal by design (see the plan).
  *
  * Requires Capstone (the operand enumerator) and Linux x86-64; off-platform / without
  * Capstone the entry points return DF_PTRACE_ENOSYS and callers self-skip.
@@ -480,6 +485,62 @@ static int dfp_dirty_exit(dfp_ctx *c, int code, int fatal_sig,
     return code;
 }
 
+/* dfp_run_to (defined below) runs the tracee at NATIVE SPEED to an address via an int3
+ * breakpoint + PTRACE_CONT, rewinding rip to that address. The call-out step-over reuses
+ * it to run OVER a helper to its return; forward-declared here so dfp_step_loop can call
+ * it before its definition. */
+static int dfp_run_to(pid_t pid, uint64_t base);
+
+/* Decide whether the region exit just observed is a CALL-OUT to a helper OUTSIDE the
+ * region rather than the region's own return. `last_off` is the last in-region
+ * instruction — the one whose single-step carried PC out of [base_ip, base_ip+code_len);
+ * `regs` is the post-step register file, i.e. the callee's ENTRY state on a real call-out.
+ * Mirrors ptrace_backend.c's classify_region_exit: the last instruction must be a `call`
+ * (direct OR indirect) whose return address (its fall-through) lands back inside the
+ * region, AND the return address the call pushed on the stack must confirm it. On a
+ * call-out, *resume_off gets the in-region resume offset (the call's fall-through).
+ *
+ * The call is decoded with Capstone directly (a self-contained cs_open/cs_close, detail
+ * on for the CS_GRP_CALL query) rather than via the shared operand enumerator, keeping the
+ * step-over local to this producer; region exits are rare (once per call-out / once at the
+ * return), so this is off the per-step hot path. On x86-64 CS_GRP_CALL tags both `call
+ * rel32` and `call r/m64`, so this is exact for the file's compile-time arch. */
+static int dfp_is_callout(dfp_ctx *c, uint64_t base_ip, size_t code_len,
+                          uint64_t last_off,
+                          const struct user_regs_struct *regs,
+                          uint64_t *resume_off) {
+    if (last_off >= c->code_len)
+        return 0;
+    csh h;
+    if (cs_open(CS_ARCH_X86, CS_MODE_64, &h) != CS_ERR_OK)
+        return 0;
+    cs_option(h, CS_OPT_DETAIL, CS_OPT_ON); /* groups[] needs detail mode */
+    cs_insn *insn = NULL;
+    size_t n = cs_disasm(h, c->code + last_off, c->code_len - (size_t)last_off,
+                         base_ip + last_off, 1, &insn);
+    int is_call = 0;
+    size_t call_len = 0;
+    if (n > 0) {
+        is_call = cs_insn_group(h, &insn[0], CS_GRP_CALL);
+        call_len = insn[0].size;
+        cs_free(insn, n);
+    }
+    cs_close(&h);
+    if (!is_call || call_len == 0)
+        return 0;
+    uint64_t ret_off = last_off + call_len;
+    if (ret_off >= code_len)
+        return 0; /* the call's fall-through is outside the region: a tail exit */
+    /* Confirm the exit is really this call's call-out: a real call leaves its
+     * fall-through (return) address on top of the stack at the callee's entry. */
+    uint64_t pushed = 0;
+    if (!child_read(c->pid, regs->rsp, &pushed, sizeof pushed) ||
+        pushed != base_ip + ret_off)
+        return 0;
+    *resume_off = ret_off;
+    return 1;
+}
+
 /* Drive PTRACE_SINGLESTEP over [base_ip, base_ip+code_len) of an already trace-stopped
  * tracee (c->pid), capturing each in-region step's values. On a CLEAN region exit the
  * tracee is left ptrace-stopped just past the region, `result` (if non-NULL) receives
@@ -561,11 +622,48 @@ static int dfp_step_loop(dfp_ctx *c, uint64_t base_ip, size_t code_len,
                 return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
             }
         } else if (entered) {
-            /* Left the region (a leaf routine's ret): finalize the last in-region step
-             * from this post-state, record the return value, and hand the still-stopped
-             * tracee back to the caller for its resume/detach policy. */
+            /* Left the region. This stop's registers are the previous in-region step's
+             * DESTINATION state, so finalize it: for a CALL-OUT this is the immediate
+             * post-call, callee-entry state (RSP decremented, return address pushed — so
+             * the call's own writes are captured correctly); for a RETURN it is the
+             * post-return state. */
+            uint64_t last_off = c->cur_off;
             if (c->have_cur)
                 finalize_step(c, &regs);
+
+            /* CALL-OUT step-over: if the last in-region instruction was a `call` whose
+             * return address (its fall-through) lands back inside the region, this is a
+             * call to a helper OUTSIDE the region, not the routine's own return. Run the
+             * callee at NATIVE SPEED to that return address (int3 breakpoint + PTRACE_CONT
+             * via dfp_run_to, recording NOTHING over the helper) and then resume in-region
+             * single-stepping — the out-of-process analog of ptrace_backend.c's
+             * classify_region_exit (EXIT_CALLOUT_RESUMED). RE-ENTRANCY CAVEAT: the
+             * step-over resumes at the FIRST arrival at the return address and is NOT
+             * re-entrancy aware — a helper that re-enters the region (a callback /
+             * tiering-OSR stub) and passes the return address before the outer call
+             * returns resumes in the NESTED invocation. */
+            uint64_t resume_off = 0;
+            if (dfp_is_callout(c, base_ip, code_len, last_off, &regs,
+                               &resume_off)) {
+                /* Bound the step-over with the existing whole-run backstop so a runaway
+                 * sequence of call-outs self-truncates rather than looping unbounded. */
+                if (++total > DFP_STEP_BACKSTOP ||
+                    dfp_run_to(pid, base_ip + resume_off) != 0) {
+                    /* Over budget, or the callee never reached its return address (it
+                     * exited, faulted, or its return byte could not be trapped — e.g. a
+                     * W^X helper page): truncate HONESTLY rather than hang. */
+                    c->vt->truncated = true;
+                    return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
+                }
+                /* Stopped AT the return address (in region); examine THAT stop as the
+                 * resume instruction's pre-state without single-stepping past it. */
+                skip_step = 1;
+                continue;
+            }
+
+            /* A genuine return (or a tail-jump out of the region): record the return
+             * value and hand the still-stopped tracee back to the caller for its
+             * resume/detach policy. */
             if (result != NULL)
                 *result = (long)regs.rax;
             *left_stopped = 1;

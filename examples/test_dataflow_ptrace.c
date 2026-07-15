@@ -108,6 +108,34 @@ static const uint8_t rip_load[] = {
     0xbe, 0xba, 0xfe, 0xca, 0xef, 0xbe, 0xad, 0xde, /* 0x08 .quad 0xdead... */
 };
 
+/* Increment 2 — a NON-leaf region that calls a helper MID-region. rdi (arg0) is the
+ * helper's address, rsi/rdx (arg1/arg2) are the data. The helper lives in a SEPARATE
+ * inherited mapping, so `call rdi` leaves the recorded region [base,base+9): the producer
+ * must STEP OVER it and resume, yielding a value trace whose rax chain (step0 write ->
+ * step2 read) threads ACROSS the call. Returns rsi + rdx = 12. */
+static const uint8_t call_region[] = {
+    0x48, 0x89, 0xf0, /* 0x00 mov rax, rsi   (rax = arg1)      */
+    0xff, 0xd7,       /* 0x03 call rdi       (call the helper) */
+    0x48, 0x01, 0xd0, /* 0x05 add rax, rdx   (rax += arg2)     */
+    0xc3,             /* 0x08 ret                              */
+};
+
+/* The stepped-over helper: sets a caller-saved scratch reg and returns, preserving the
+ * region's rax/rsi/rdx. Its two instructions must NOT appear in the value trace. */
+static const uint8_t callout_helper[] = {
+    0x48, 0xc7, 0xc1, 0x64, 0x00, 0x00, 0x00, /* mov rcx, 100 */
+    0xc3,                                     /* ret          */
+};
+
+/* A helper that NEVER returns to its caller — a direct _exit(0) syscall. The step-over's
+ * run-to-return breakpoint is thus never hit, so the producer must catch the target's
+ * exit and truncate HONESTLY (vt->truncated) rather than hang waiting for a return. */
+static const uint8_t callout_helper_noreturn[] = {
+    0xb8, 0x3c, 0x00, 0x00, 0x00, /* mov eax, 60  (__NR_exit) */
+    0x31, 0xff,                   /* xor edi, edi (status 0)  */
+    0x0f, 0x05,                   /* syscall                  */
+};
+
 static int has_edge(const asmtest_defuse_t *g, uint32_t from, uint32_t to) {
     for (size_t i = 0; i < g->n; i++)
         if (g->edges[i].from_step == from && g->edges[i].to_step == to)
@@ -544,8 +572,112 @@ static void test_attach_pid(void) {
     munmap(ex, len);
     munmap(ctl, sizeof *ctl);
 }
+
+/* ---- Increment 2: call-out step-over (a region that calls a helper mid-region) ---- */
+
+/* mmap `code` into a fresh R+X page (RW then R+X, so it works on a W^X kernel). The
+ * fork()ed tracee in asmtest_dataflow_ptrace_run inherits it, so the region can `call`
+ * into it as a helper OUTSIDE the recorded region. Returns the mapping or NULL. */
+static void *map_rx(const uint8_t *code, size_t len) {
+    void *p = mmap(NULL, len, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED)
+        return NULL;
+    memcpy(p, code, len);
+    if (mprotect(p, len, PROT_READ | PROT_EXEC) != 0) {
+        munmap(p, len);
+        return NULL;
+    }
+    return p;
+}
+
+static void test_callout(void) {
+    /* Increment 2 exit criteria (a) + (b): a region that CALLS OUT to a helper
+     * mid-region. The helper is a separate inherited mapping, so `call rdi` leaves the
+     * recorded region; the producer must run the helper at native speed to its return,
+     * record NOTHING over it, and resume — a COMPLETE value trace across the call whose
+     * rax def-use threads step0 -> step2 (over the call), with NO helper instruction
+     * recorded. */
+    void *helper = map_rx(callout_helper, sizeof callout_helper);
+    if (helper == NULL) {
+        printf("# SKIP callout: helper mmap failed\n");
+        return;
+    }
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    long args[3] = {(long)(uintptr_t)helper, 5, 7};
+    long result = 0;
+    int rc = asmtest_dataflow_ptrace_run(call_region, sizeof call_region, args,
+                                         3, 0, 0, &result, v);
+    CHECK(rc == DF_PTRACE_OK,
+          "callout: stepped OVER the helper and completed the region");
+    CHECK(result == 12,
+          "callout: region returned 12 across the call (rsi + rdx)");
+    CHECK(!v->truncated, "callout: value trace is COMPLETE (not truncated)");
+    CHECK(v->steps_len == 4,
+          "callout: four IN-REGION steps captured (helper not stepped)");
+    if (v->steps_len == 4) {
+        static const uint64_t want[4] = {0x00, 0x03, 0x05, 0x08};
+        int ok = 1;
+        for (int i = 0; i < 4; i++)
+            if (v->insn_off[i] != want[i])
+                ok = 0;
+        CHECK(ok,
+              "callout: per-step offsets are the region's {0,3,5,8}, not the "
+              "helper's");
+    }
+    /* (b) No recorded step is a helper-internal instruction (every offset is inside
+     * the recorded region [0, sizeof call_region)). */
+    int any_helper = 0;
+    for (size_t i = 0; i < v->steps_len; i++)
+        if (v->insn_off[i] >= sizeof call_region)
+            any_helper = 1;
+    CHECK(!any_helper, "callout: no helper-internal instruction recorded");
+
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    CHECK(g != NULL && has_edge(g, 0, 2),
+          "callout: rax def-use edge step0 -> step2 threads ACROSS the call");
+    at_val_rec_t seed = {0}; /* step 0 */
+    asmtest_slice_t *fwd = asmtest_slice_forward(g, seed);
+    CHECK(fwd && asmtest_slice_contains(fwd, 0) &&
+              asmtest_slice_contains(fwd, 2),
+          "callout: forward slice(step0) reaches the post-call add (step2)");
+    asmtest_slice_free(fwd);
+    asmtest_defuse_free(g);
+    asmtest_valtrace_free(v);
+    munmap(helper, sizeof callout_helper);
+}
+
+static void test_callout_noreturn(void) {
+    /* Increment 2 exit criterion (c): a callee that NEVER returns must truncate
+     * HONESTLY, not hang. The helper is a direct _exit syscall, so the step-over's
+     * run-to-return breakpoint is never hit; the producer catches the target's exit and
+     * flags truncated, having recorded the region up to (and including) the call. */
+    void *helper =
+        map_rx(callout_helper_noreturn, sizeof callout_helper_noreturn);
+    if (helper == NULL) {
+        printf("# SKIP callout-noreturn: helper mmap failed\n");
+        return;
+    }
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    long args[3] = {(long)(uintptr_t)helper, 5, 7};
+    long result = -1;
+    int rc = asmtest_dataflow_ptrace_run(call_region, sizeof call_region, args,
+                                         3, 0, 0, &result, v);
+    CHECK(rc != DF_PTRACE_OK,
+          "callout-noreturn: non-returning helper did NOT complete the region");
+    CHECK(
+        v->truncated,
+        "callout-noreturn: truncated HONESTLY (no hang on the missing return)");
+    CHECK(v->steps_len >= 2 && v->insn_off[0] == 0x00 && v->insn_off[1] == 0x03,
+          "callout-noreturn: captured the region up to the call before "
+          "truncating");
+    asmtest_valtrace_free(v);
+    munmap(helper, sizeof callout_helper_noreturn);
+}
 #else
 static void test_attach_pid(void) {}
+static void test_callout(void) {}
+static void test_callout_noreturn(void) {}
 #endif
 
 int main(void) {
@@ -576,6 +708,8 @@ int main(void) {
     test_ymm();
     test_attach();
     test_attach_pid();
+    test_callout();
+    test_callout_noreturn();
 
     printf("1..%d\n", checks);
     if (failures)
