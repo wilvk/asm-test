@@ -80,6 +80,7 @@
 
 #include <sys/types.h> /* pid_t — used by the attach_pid signature on every platform */
 
+#include "asmtest_codeimage.h" /* asmtest_codeimage_t / _bytes_at (Increment 3 versioned decode) */
 #include "asmtest_valtrace.h"
 
 /* Return codes from the scoped ptrace producers (kept in step with the test's copy). */
@@ -323,6 +324,15 @@ typedef struct {
     int foreign;
     int pre_positioned;
     int detach_sig;
+    /* Optional versioned decode (Increment 3): when `img` != NULL, each step's operand
+     * read/write set is enumerated against the code-image bytes live at (base+off) as of
+     * sequence `when` (asmtest_codeimage_bytes_at) instead of the c->code snapshot — so a
+     * region the JIT patched / freed / had its address reused mid-capture still decodes the
+     * instruction that was live at that step, not the final bytes. `img` == NULL / `when` ==
+     * 0 (the fork `_run`, forked-victim `attach`, and native `attach_pid` paths all default
+     * it there) keeps the c->code snapshot path byte-for-byte. */
+    asmtest_codeimage_t *img;
+    uint64_t when;
 } dfp_ctx;
 
 /* Fill a record's value from a register (GP inline, XMM/YMM spilled to wide[]) at the
@@ -439,10 +449,33 @@ static void open_step(dfp_ctx *c, const struct user_regs_struct *regs,
 
     at_val_rec_t rd[64], wr[64];
     size_t nr = 64, nw = 64;
+
+    /* Decode byte source. Default: the live snapshot c->code (offset `off`). Versioned
+     * (Increment 3): when a code-image is provided, decode the TIME-CORRECT bytes the
+     * recorder had live at this PC (c->base + off) as of c->when — the "swap the byte
+     * source, keep the step loop" decoupling asmtest_ptrace_trace_attached_versioned uses,
+     * so a region patched/relocated mid-capture still enumerates the RIGHT instruction. If
+     * the query fails (PC not tracked at `when`) fall back to the live snapshot. */
+    const uint8_t *dec = c->code;
+    size_t dec_len = c->code_len;
+    size_t dec_off = off;
+    if (c->img != NULL) {
+        const uint8_t *vb = NULL;
+        size_t avail = 0;
+        if (asmtest_codeimage_bytes_at(c->img,
+                                       (const void *)(uintptr_t)(c->base + off),
+                                       c->when, &vb, &avail) == ASMTEST_CI_OK &&
+            vb != NULL && avail > 0) {
+            dec = vb;
+            dec_len = avail;
+            dec_off = 0;
+        }
+    }
+
     /* The enumerator returns the instruction byte length — needed for the RIP-relative
      * EA fixup (the EA is relative to the next instruction). */
-    size_t insn_len = asmtest_operands(ASMTEST_ARCH_X86_64, c->code,
-                                       c->code_len, off, rd, &nr, wr, &nw);
+    size_t insn_len = asmtest_operands(ASMTEST_ARCH_X86_64, dec, dec_len,
+                                       dec_off, rd, &nr, wr, &nw);
 
     for (size_t i = 0; i < nr; i++) {
         at_val_rec_t r = rd[i];
@@ -937,9 +970,19 @@ kill_out:
     return DF_PTRACE_ETRACE;
 }
 
-int asmtest_dataflow_ptrace_attach_pid(pid_t pid, uint64_t base,
-                                       size_t code_len, uint64_t max_insns,
-                                       long *result, asmtest_valtrace_t *vt) {
+/* Increment 3: attach_pid with an OPTIONAL versioned decode. Identical to the native
+ * attach_pid below, except each step's operands are enumerated against `img`'s time-correct
+ * bytes at sequence `when` instead of the live process_vm_readv snapshot — so a JIT that
+ * patched / freed / reused the code at `base` still decodes the instruction live at that
+ * step (the addr-channel `(base,len,version)` records feed the code-image; each step is
+ * attributed to its method+version by the pure asmtest_method_attribute post-pass over the
+ * captured trace). `img` == NULL degrades to the exact native attach_pid behaviour. */
+int asmtest_dataflow_ptrace_attach_pid_versioned(pid_t pid, uint64_t base,
+                                                 size_t code_len,
+                                                 uint64_t max_insns,
+                                                 asmtest_codeimage_t *img,
+                                                 uint64_t when, long *result,
+                                                 asmtest_valtrace_t *vt) {
     if (vt == NULL || pid <= 0 || base == 0 || code_len == 0)
         return DF_PTRACE_EINVAL;
     vt->mem_space = AT_LOC_MEM_ABS;
@@ -984,6 +1027,8 @@ int asmtest_dataflow_ptrace_attach_pid(pid_t pid, uint64_t base,
     c.base = base;
     c.foreign = 1;        /* NEVER kill the target on any exit */
     c.pre_positioned = 1; /* already trap-stopped AT base (dfp_run_to) */
+    c.img = img; /* optional versioned decode source (NULL = live snapshot) */
+    c.when = when;
 
     rc = dfp_step_loop(&c, base, code_len, max_insns, result, &left_stopped);
     free(c.cur.v);
@@ -1002,6 +1047,16 @@ detach:
     /* Setup failed after SEIZE: detach cleanly, leaving the target running + alive. */
     ptrace(PTRACE_DETACH, pid, NULL, NULL);
     return DF_PTRACE_ETRACE;
+}
+
+/* The native live-attach path (Increment 1) is the versioned path with NO code-image: the
+ * live process_vm_readv snapshot is the decode source. Kept byte-compatible so its callers
+ * (its test suite; the asmspy --dataflow engine) are unaffected by Increment 3. */
+int asmtest_dataflow_ptrace_attach_pid(pid_t pid, uint64_t base,
+                                       size_t code_len, uint64_t max_insns,
+                                       long *result, asmtest_valtrace_t *vt) {
+    return asmtest_dataflow_ptrace_attach_pid_versioned(
+        pid, base, code_len, max_insns, NULL, 0, result, vt);
 }
 
 #else /* not (Linux x86-64 + Capstone) */
@@ -1046,6 +1101,23 @@ int asmtest_dataflow_ptrace_attach_pid(pid_t pid, uint64_t base,
     (void)base;
     (void)code_len;
     (void)max_insns;
+    (void)result;
+    (void)vt;
+    return DF_PTRACE_ENOSYS;
+}
+
+int asmtest_dataflow_ptrace_attach_pid_versioned(pid_t pid, uint64_t base,
+                                                 size_t code_len,
+                                                 uint64_t max_insns,
+                                                 asmtest_codeimage_t *img,
+                                                 uint64_t when, long *result,
+                                                 asmtest_valtrace_t *vt) {
+    (void)pid;
+    (void)base;
+    (void)code_len;
+    (void)max_insns;
+    (void)img;
+    (void)when;
     (void)result;
     (void)vt;
     return DF_PTRACE_ENOSYS;

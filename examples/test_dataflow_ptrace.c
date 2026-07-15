@@ -19,6 +19,7 @@
  *                  lea rdx,[rcx+rsi] / mov rax,rdx / ret     — a load-after-store +
  *                  register move chain; forward(0)=backward(4)={0,1,2,3,4}.
  */
+#include "asmtest_codeimage.h" /* Increment 3: the versioned code-image the decode reads from */
 #include "asmtest_valtrace.h"
 
 #include <stdint.h>
@@ -74,6 +75,23 @@ static const uint8_t df_chain[] = {
     0x48, 0x8d, 0x14, 0x31,       /* 0x0d lea rdx, [rcx+rsi]  */
     0x48, 0x89, 0xd0,             /* 0x11 mov rax, rdx        */
     0xc3,                         /* 0x14 ret                 */
+};
+
+/* Increment 3 — df_chain with ONE byte patched (offset 2: 0xf8 -> 0xf0), so step 0 decodes
+ * `mov rax, rsi` (reads RSI) instead of `mov rax, rdi` (reads RDI). SAME instruction length,
+ * so single-stepping stays offset-synchronized, but a DIFFERENT read-set. The code-image
+ * records df_chain as version 0 (the bytes live when the trace runs) and this as version 1;
+ * decoding at v0 must still enumerate the RDI read even though live memory holds the RSI
+ * read — the "time-correct bytes survive a mid-capture patch/relocate" contract. */
+static const uint8_t df_chain_v2[] = {
+    0x48, 0x89, 0xf0, /* 0x00 mov rax, rsi   (patched; was mov rax,rdi) */
+    0x48, 0x89, 0x44, 0x24,
+    0xf8, /* 0x03 mov [rsp-8], rax                          */
+    0x48, 0x8b, 0x4c, 0x24,
+    0xf8,                   /* 0x08 mov rcx, [rsp-8]                          */
+    0x48, 0x8d, 0x14, 0x31, /* 0x0d lea rdx, [rcx+rsi]                        */
+    0x48, 0x89, 0xd0,       /* 0x11 mov rax, rdx                              */
+    0xc3,                   /* 0x14 ret                                       */
 };
 
 /* mov rax, gs:[0x10] / ret — a gs:-segmented load. */
@@ -451,6 +469,16 @@ int asmtest_dataflow_ptrace_attach_pid(pid_t pid, uint64_t base,
                                        size_t code_len, uint64_t max_insns,
                                        long *result, asmtest_valtrace_t *vt);
 
+/* Increment 3: attach_pid with an optional versioned code-image (+ `when` sequence) as the
+ * operand-decode byte source. img == NULL is the native attach_pid behaviour. Re-declared
+ * here like the other producer entries (the producer ships no public header). */
+int asmtest_dataflow_ptrace_attach_pid_versioned(pid_t pid, uint64_t base,
+                                                 size_t code_len,
+                                                 uint64_t max_insns,
+                                                 asmtest_codeimage_t *img,
+                                                 uint64_t when, long *result,
+                                                 asmtest_valtrace_t *vt);
+
 typedef long (*fn2_t)(long, long);
 typedef struct {
     volatile long counter;
@@ -674,10 +702,211 @@ static void test_callout_noreturn(void) {
     asmtest_valtrace_free(v);
     munmap(helper, sizeof callout_helper_noreturn);
 }
+
+/* ---- Increment 3: time-correct bytes + method attribution (JIT patch survival) ---- */
+
+/* The FIRST register READ record captured at `step` — its reg id (into *reg_out) and inline
+ * value (into *val_out). df_chain's step 0 has exactly one GP-register read (the mov source),
+ * so this pins down WHICH source register the operand enumerator decoded for that step. */
+static int reg_read_first(const asmtest_valtrace_t *v, uint32_t step,
+                          uint32_t *reg_out, uint64_t *val_out) {
+    for (size_t i = 0; i < v->recs_len; i++) {
+        const at_val_rec_t *r = &v->recs[i];
+        if (r->step == step && r->kind == AT_LOC_REG && !r->is_write &&
+            r->value_valid && !r->wide) {
+            if (reg_out != NULL)
+                *reg_out = r->reg;
+            if (val_out != NULL)
+                *val_out = r->value;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void test_versioned(void) {
+    /* Increment 3 exit criteria: (a) a region PATCHED mid-capture still decodes the operands
+     * of the bytes that were LIVE at each step (the code-image version), not the final bytes;
+     * (b) each step attributes to the correct method + version across an induced re-JIT.
+     *
+     * A code-image records df_chain as version 0 (the bytes live when the trace runs); the
+     * region is then patched IN PLACE (a stand-in for an in-place tiered re-JIT / address
+     * reuse) and recorded as version 1. The victim EXECUTES the patched code, but decoding at
+     * version 0 must still enumerate the ORIGINAL instruction's operands — proving the
+     * producer decodes the time-correct bytes, not a stale/late live snapshot. */
+    if (!asmtest_codeimage_available()) {
+        printf("# SKIP versioned: soft-dirty code-image unavailable here\n");
+        return;
+    }
+    size_t len = sizeof df_chain;
+
+    /* ONE RWX MAP_SHARED region: the victim executes it AND the parent patches it in place,
+     * so the patch is visible to the victim and — the code-image tracks THIS process — the
+     * parent's own write is what the soft-dirty refresh detects (a foreign process's write
+     * would not set this process's PTE soft-dirty bit). */
+    void *ex = mmap(NULL, len, PROT_READ | PROT_WRITE | PROT_EXEC,
+                    MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (ex == MAP_FAILED) {
+        printf("# SKIP versioned: RWX MAP_SHARED mmap failed\n");
+        return;
+    }
+    memcpy(ex, df_chain, len);
+    uint64_t base = (uint64_t)(uintptr_t)ex;
+
+    sp_ctl *ctl = mmap(NULL, sizeof *ctl, PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (ctl == MAP_FAILED) {
+        munmap(ex, len);
+        printf("# SKIP versioned: shm mmap failed\n");
+        return;
+    }
+    ctl->counter = 0;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        munmap(ex, len);
+        munmap(ctl, sizeof *ctl);
+        printf("# SKIP versioned: fork failed\n");
+        return;
+    }
+    if (pid == 0) {
+        /* Independent victim: loop calling the shared region (which the parent patches). */
+        struct timespec ts = {0, 2 * 1000 * 1000};
+        for (;;) {
+            volatile long r = ((fn2_t)base)(7, 5);
+            (void)r;
+            ctl->counter++;
+            nanosleep(&ts, NULL);
+        }
+        _exit(0);
+    }
+
+    /* Record the code-image on THIS process (base is the same shared page in both). v0 = the
+     * original df_chain — the "live-at-that-step" bytes. */
+    asmtest_codeimage_t *img = asmtest_codeimage_new(0);
+    int trk = img != NULL ? asmtest_codeimage_track(img, ex, len) : -1;
+    uint64_t when_v0 = asmtest_codeimage_now(img);
+
+    /* Patch the region in place (mov rax,rdi -> mov rax,rsi); record v1 = the patched bytes. */
+    memcpy(ex, df_chain_v2, len);
+    int nvz = img != NULL ? asmtest_codeimage_refresh(img) : -1;
+    uint64_t when_v1 = asmtest_codeimage_now(img);
+
+    if (img == NULL || trk != ASMTEST_CI_OK || nvz < 1) {
+        printf("# SKIP versioned: code-image track/refresh unavailable\n");
+        asmtest_codeimage_free(img);
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        munmap(ex, len);
+        munmap(ctl, sizeof *ctl);
+        return;
+    }
+    CHECK(when_v1 > when_v0,
+          "versioned: code-image recorded v0 (original) then v1 (patched)");
+
+    /* --- (a) capture decoding at v0 (original) while live memory holds the patch --- */
+    asmtest_valtrace_t *va = asmtest_valtrace_new(64, 512, 512);
+    long ra = 0;
+    int rca = asmtest_dataflow_ptrace_attach_pid_versioned(
+        pid, base, len, 0, img, when_v0, &ra, va);
+    if (rca == DF_PTRACE_ETRACE) {
+        printf(
+            "# SKIP versioned: PTRACE_SEIZE unavailable here (yama/seccomp)\n");
+        asmtest_valtrace_free(va);
+        asmtest_codeimage_free(img);
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        munmap(ex, len);
+        munmap(ctl, sizeof *ctl);
+        return;
+    }
+    CHECK(rca == DF_PTRACE_OK,
+          "versioned: stepped the region decoding the tracked v0 bytes");
+    CHECK(ra == 10, "versioned: the LIVE code that ran was the PATCHED variant "
+                    "(returned 10, not 12)");
+    int offs_ok = (va->steps_len == 6);
+    if (offs_ok) {
+        static const uint64_t want[6] = {0x00, 0x03, 0x08, 0x0d, 0x11, 0x14};
+        for (int i = 0; i < 6; i++)
+            if (va->insn_off[i] != want[i])
+                offs_ok = 0;
+    }
+    CHECK(offs_ok, "versioned: six in-region steps, offsets in sync with the "
+                   "tracked bytes");
+
+    uint32_t reg_a = 0;
+    uint64_t val_a = 0;
+    int got_a = reg_read_first(va, 0, &reg_a, &val_a);
+    CHECK(
+        got_a && val_a == 7,
+        "versioned: step0 decoded v0 `mov rax,rdi` (read rdi=7) — SURVIVED the "
+        "patch; a live re-read would read rsi=5");
+
+    asmtest_defuse_t *ga = asmtest_defuse_build(va);
+    CHECK(ga != NULL && has_edge(ga, 1, 2) && has_edge(ga, 0, 1) &&
+              has_edge(ga, 2, 3) && has_edge(ga, 3, 4),
+          "versioned: the v0 decode yields the original routine's coherent "
+          "def-use");
+
+    /* --- decode must FOLLOW the version: capture at v1 (patched) reads rsi=5 --- */
+    asmtest_valtrace_t *vb = asmtest_valtrace_new(64, 512, 512);
+    long rb = 0;
+    int rcb = asmtest_dataflow_ptrace_attach_pid_versioned(
+        pid, base, len, 0, img, when_v1, &rb, vb);
+    uint32_t reg_b = 0;
+    uint64_t val_b = 0;
+    int got_b = (rcb == DF_PTRACE_OK) && reg_read_first(vb, 0, &reg_b, &val_b);
+    CHECK(got_b && val_b == 5,
+          "versioned: at v1 step0 decodes `mov rax,rsi` (read rsi=5) — decode "
+          "follows the version");
+    CHECK(got_a && got_b && reg_a != reg_b,
+          "versioned: v0 and v1 decode DIFFERENT source registers for step0");
+
+    /* --- (b) method + version attribution across the induced re-JIT --- */
+    /* insn_off[] carries region OFFSETS, so the method-map is offset-keyed: method "M" owns
+     * the whole region [0,len). At v0 the JIT map said M was version 0; at v1, version 1. */
+    asmtest_method_t map_v0[] = {{0, len, "M", 0}};
+    asmtest_method_t map_v1[] = {{0, len, "M", 1}};
+    asmtest_method_attr_t attr_a[8], attr_b[8];
+    int na = asmtest_method_attribute(map_v0, 1, va, attr_a, 8);
+    int nb = asmtest_method_attribute(map_v1, 1, vb, attr_b, 8);
+    int a_ok = (na == 6), b_ok = (nb == 6);
+    for (int i = 0; i < na; i++)
+        if (attr_a[i].record < 0 || attr_a[i].version != 0 ||
+            attr_a[i].method != attr_a[0].method)
+            a_ok = 0;
+    for (int i = 0; i < nb; i++)
+        if (attr_b[i].record < 0 || attr_b[i].version != 1)
+            b_ok = 0;
+    CHECK(a_ok, "versioned: every step attributes to method M version 0 at "
+                "code-image v0");
+    CHECK(b_ok, "versioned: every step attributes to version 1 across the "
+                "induced re-JIT");
+    CHECK(
+        na == 6 && nb == 6 && attr_a[0].method >= 0 &&
+            attr_a[0].method == attr_b[0].method,
+        "versioned: method M keeps a STABLE identity across the version bump");
+
+    /* In-place tiered re-JIT at a reused address: both records live, GREATEST version wins. */
+    asmtest_method_t map_both[] = {{0, len, "M", 0}, {0, len, "M", 1}};
+    CHECK(asmtest_method_resolve_pc(map_both, 2, 0x00) == 1,
+          "versioned: in-place re-JIT resolves a reused address to the newest "
+          "version");
+
+    asmtest_defuse_free(ga);
+    asmtest_valtrace_free(va);
+    asmtest_valtrace_free(vb);
+    asmtest_codeimage_free(img);
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+    munmap(ex, len);
+    munmap(ctl, sizeof *ctl);
+}
 #else
 static void test_attach_pid(void) {}
 static void test_callout(void) {}
 static void test_callout_noreturn(void) {}
+static void test_versioned(void) {}
 #endif
 
 int main(void) {
@@ -710,6 +939,7 @@ int main(void) {
     test_attach_pid();
     test_callout();
     test_callout_noreturn();
+    test_versioned();
 
     printf("1..%d\n", checks);
     if (failures)

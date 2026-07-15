@@ -60,6 +60,7 @@ $(BUILD)/dataflow_emu.o: src/dataflow_emu.c include/asmtest_valtrace.h \
 # off Linux x86-64 / without Capstone it compiles to an ENOSYS stub.
 $(BUILD)/dataflow_ptrace.o: src/dataflow_ptrace.c \
                             include/asmtest_valtrace.h include/asmtest_trace.h \
+                            include/asmtest_codeimage.h \
                             $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
 
@@ -252,19 +253,24 @@ endif
 # emulator oracle only where Unicorn is present (-DDF_HAVE_EMU pulls in dataflow_emu.o +
 # libunicorn), and otherwise still runs its live-capture assertions, skipping just the
 # oracle comparison. At runtime it self-skips where ptrace is blocked (seccomp).
+# Increment 3 adds codeimage.o (the versioned-decode byte source the producer now calls) and
+# dataflow_method.o (the PC -> method+version attribution post-pass the suite drives). asmspy
+# already links codeimage.o via HWTRACE_OBJS, so this is only the standalone test's link.
 ifeq ($(DF_HAVE_UNICORN),1)
 $(BUILD)/test_dataflow_ptrace.o: CFLAGS += $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) \
                                            $(UNICORN_CFLAGS) -DDF_HAVE_EMU
 $(BUILD)/test_dataflow_ptrace: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                               $(BUILD)/dataflow_method.o $(BUILD)/codeimage.o \
                                $(BUILD)/dataflow_ptrace.o $(BUILD)/dataflow_emu.o \
                                $(BUILD)/test_dataflow_ptrace.o
-	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) -o $@
+	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -o $@
 else
 $(BUILD)/test_dataflow_ptrace.o: CFLAGS += $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF)
 $(BUILD)/test_dataflow_ptrace: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                               $(BUILD)/dataflow_method.o $(BUILD)/codeimage.o \
                                $(BUILD)/dataflow_ptrace.o \
                                $(BUILD)/test_dataflow_ptrace.o
-	$(CC) $(CFLAGS) $^ $(CAPSTONE_LIBS) -o $@
+	$(CC) $(CFLAGS) $^ $(CAPSTONE_LIBS) $(LINK_LIBBPF) -o $@
 endif
 
 .PHONY: dataflow-test dataflow-grep-gate
