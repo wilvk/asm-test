@@ -8,7 +8,7 @@ uncanonicalized. This plan lands the improvements that were held out of the crit
 each one either **reduces perturbation**, **raises fidelity on managed targets**, or
 **broadens the target set** — ordered so the highest-value, lowest-risk work comes first.
 
-> Status: **ALL items *(planned)*, gated on the base plan.** F1 is the marquee item (the
+> Status: **F1 + F3 spikes done (increment 0 — both GO, 2026-07-15); full landings + F2/F4–F7 planned.** F1 is the marquee item (the
 > perturbation win that makes stepping a live JIT genuinely practical) and carries a spike
 > increment because its value-reconstruction claim is the one genuinely **unproven** bet in
 > the whole design. F3 is the cheapest high-value item (a near-zero-perturbation targeted
@@ -34,7 +34,19 @@ x86-64 first, AArch64 where the primitive exists).
 
 ---
 
-## F1 — Block-step + emulator-replay value optimization *(planned — marquee; spike first)*
+## F1 — Block-step + emulator-replay value optimization *(**spike GO 2026-07-15** — increment 0 proven; full landing planned)*
+
+> **SPIKE (increment 0) — GO, 2026-07-15.** On the oracle fixtures the block-step + Unicorn-replay value
+> trace is **byte-identical** (literal `memcmp` of the record arrays, not just slice-equal) to true
+> single-step: `loop_poly` 303 steps / 854 records, `mem_chain` 6/16. Stop-count drops **6.06×** / **6.00×**
+> (tracking mean block length, as predicted). The purity static-scan classifies 7/7 fixtures (pure loop/mem
+> vs syscall/rdtsc/cpuid/rdrand/int0x80); a coherence-canary injected replay-input divergence is detected
+> at the next real boundary → `truncated`. Probe `examples/blockstep_value_spike.c`, findings
+> `docs/internal/analysis/2026-07-15-blockstep-value-spike.md`. Next: wire the replay into a
+> `dataflow_blockstep.c` value tier (full `GETREGS` per boundary, purity-gated, rsp-relative oracle diff,
+> canary-truncated). Gotchas: map a one-page landing pad for the exit `ret`; validate rsp-relative (two
+> forks differ by an absolute-address delta); undefined-flag (xor AF) divergence is a documented
+> theoretical risk, not observed here.
 
 Direct single-step traps on **every** instruction; that density is exactly what widens the
 cross-thread deadlock window on a live runtime. Decouple values from stops.
@@ -97,7 +109,18 @@ value) is documented as the remaining limit and detected via the real endpoints.
 
 ---
 
-## F3 — Hardware data-watchpoint targeted mode *(planned — cheapest high-value item)*
+## F3 — Hardware data-watchpoint targeted mode *(**spike GO 2026-07-15** — proven; full landing planned)*
+
+> **SPIKE — GO, 2026-07-15.** Data watchpoints work exactly as bet: a WRITE watchpoint (`DR7=0x90001`:
+> R/W0=01, LEN0=8B) on a chosen global captured all 16 stores with the correct value (`process_vm_readv`)
+> and faulting PC (`GETREGS`), matching an independent ground-truth 4/4; R/W=11 also traps reads (16 vs 8
+> hits). Perturbation is within noise (~2M loop iterations between hits with zero traps) — projected
+> ~2,000,000× fewer stops / ≥4,000× less wall-time than single-stepping the same workload. Caps: 4 slots,
+> 1/2/4/8-byte aligned, self-skips under qemu (zero slots). Probe `examples/watchpoint_spike.c`, findings
+> `docs/internal/analysis/2026-07-15-hw-watchpoint-spike.md`. Recommended landing: `asmspy --watch <pid>
+> <addr|func+off> [--rw] [--len]` reusing this DR7/DR6 plumbing, **per-thread arming across
+> `/proc/<pid>/task/*`** (mandatory for a live multi-threaded target), a one-insn decode for read/write
+> labelling, and the AArch64 `NT_ARM_HW_WATCH`/`DBGWCR` analog.
 
 The repo wires only **execution** breakpoints today (`set_hw_bp` hard-codes `DR7 = 0x1`,
 i.e. `R/W0 = 00`, [ptrace_backend.c:485-493](../../../src/ptrace_backend.c#L485)). The x86

@@ -161,10 +161,11 @@ Referenced elsewhere as **netNew #N**. Not one row is a new capture primitive.
 > Host-tested green on this AMD host: `test_wholewindow_singlestep` (`make docker-hwtrace`
 > → 201/0) and the .NET `AsmTrace()` case (`make docker-hwtrace-dotnet` → 33/0). The §Z5
 > self-skip scaffold landed with it (`SkipReason` is set + `Armed` false where no faithful
-> backend exists). **Partially landed (2026-07-15):** the **cpp** and **python** empty-window shims
-> ship (host-verified; `check-bindings-parity` green with the 5 unshimmed bindings still exempt).
-> **Forward-look:** the remaining shims — **rust, go, zig, lua, ruby** (mechanical mirrors of
-> the .NET reference) — and the STRONG whole-window capture behind the seam ([§Z1](#z1--region-free-whole-window-capture-mode-planned-forward-look)).
+> backend exists). **LANDED (2026-07-15):** the empty-window shim now ships in **all 10 bindings** —
+> cpp, python, then rust, go, zig, lua, ruby added to the original .NET/node/java — each host/docker-
+> verified, and the three `ALL asmtest_hwtrace_{begin,end,render}_window` allow-list exemptions were
+> removed (`check-bindings-parity` green, the trio is `Y` for all 10). **Forward-look:** only the STRONG
+> whole-window capture behind the seam ([§Z1](#z1--region-free-whole-window-capture-mode-planned-forward-look)).
 
 **Goal.** Deliver the single net-new *surface* that makes `using (new AsmTrace())`
 compile and run — a legitimately **region-free arm** — without yet committing to a

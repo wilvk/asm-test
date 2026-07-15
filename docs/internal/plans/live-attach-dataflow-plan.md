@@ -15,7 +15,7 @@ optimization, hardware data-watchpoints, the PT-derived value path, and live GC-
 canonicalization are deliberately **out of scope here** and carried in the companion
 [live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md).
 
-> Status: **Increments 1, 2, and 6 (native path) LANDED; 3–5 and 7 planned.** Increment 1 (native live-attach) is the
+> Status: **Increments 1, 2, 3, 6, and 7 (native path) LANDED; 4–5 planned.** Increment 1 (native live-attach) is the
 > recommended first milestone — it is low-risk reuse of the landed capture core and needs no
 > JIT machinery. The single-step value tier already exists and is cross-validated against
 > the emulator L0 oracle; this plan changes *what it attaches to* and *how it survives a
@@ -227,7 +227,18 @@ def-use threaded through them); a callee that never returns truncates honestly
 
 ---
 
-## Increment 3 — Time-correct bytes + method attribution (JIT patch/move survival) *(planned)*
+## Increment 3 — Time-correct bytes + method attribution (JIT patch/move survival) *(**LANDED 2026-07-15**)*
+
+> **UPDATE 2026-07-15 — LANDED (both halves).** `dfp_ctx` gained an optional `{img, when}`; `open_step`
+> decodes operands against `asmtest_codeimage_bytes_at(base+off, when)` when `img != NULL`, else the live
+> `c->code` snapshot — the same "swap the byte source, keep the step loop" seam
+> `asmtest_ptrace_trace_attached_versioned` uses. A new `asmtest_dataflow_ptrace_attach_pid_versioned`
+> carries the code-image; the plain `attach_pid` is now a thin `img=NULL` forwarder (callers, incl. the
+> asmspy `--dataflow` engine, unaffected). Method+version attribution runs via the landed
+> `asmtest_method_attribute` post-pass. Twelve new checks (56–67) in `test_dataflow_ptrace.c` prove a
+> mid-capture in-place patch still decodes the *live-at-that-step* operands (v0 reads `rdi`, v1 reads
+> `rsi`; a live re-read would be wrong) and every step attributes to the correct method version across an
+> induced re-JIT with a stable method identity — **67/67 on real ptrace**, prior 55 unchanged.
 
 A JIT patches, frees, or reuses the code at `base` mid-capture, so a single `process_vm_readv`
 of the bytes feeds the operand enumerator the **wrong** instruction — garbage read/write
@@ -327,7 +338,19 @@ self-skips where unavailable; verified via `make docker-cli`.
 
 ---
 
-## Increment 7 — asmspy TUI "Data flow" window (mode 9) *(planned)*
+## Increment 7 — asmspy TUI "Data flow" window (mode 9) *(**LANDED 2026-07-15 — native path**)*
+
+> **UPDATE 2026-07-15 — LANDED (native path).** `screen_mode` gains "9) Data flow"; `run_dataflow_view` on
+> the dedicated tracer thread runs the landed `asmspy_engine_dataflow` for one invocation, deep-copies the
+> L0 trace under the view lock, and rebuilds L1 def-use so all navigation is pure UI over the frozen copy
+> (never touches ptrace). Top pane = per-step disassembly annotated with captured values; `b`/`f` =
+> backward/forward L2 slice from the selected step (highlight in-slice, dim the rest), `c` clears; bottom
+> pane = the step's def-use; header = steps/records/truncated + ret. Managed/JIT gate + `NEVER_RAN`/
+> unavailable render explicit hints, not blank panes. The annotation/slice/def-use logic was factored into
+> a shared `cli/asmspy_dataview.h` and unit-tested in `cli/test_view.c` (~60 assertions), wired into
+> `cli_smoke.sh`; **`make docker-cli` → cli-smoke PASS**. NOTE: interactive ncurses rendering is compile-
+> and logic-verified, not pixel-e2e. Per-`--tid` selection in the picker (worker routines run off the
+> leader) is an Inc 4/5 follow-on, surfaced in-view.
 
 Add the interactive view. Reuse the existing structure: `screen_mode`
 ([asmspy.c:2626](../../../cli/asmspy.c#L2626)) gains a "9) Data flow" option; `screen_syms`
