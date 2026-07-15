@@ -209,6 +209,17 @@ public final class HwTrace {
     public record JitMethod(long codeAddr, long codeSize, long timestamp,
                             long codeIndex, byte[] code) {}
 
+    /** A LIVE HotSpot (OpenJDK) JIT method resolved from a real {@code jit-<pid>.dump} the
+     *  perf-JVMTI agent emitted (see {@link #javaResolveJitMethod}): the resolved {@code name}
+     *  (the JVM descriptor form the agent records), its load {@code codeAddr}/{@code codeSize},
+     *  the JIT's {@code timestamp}/{@code codeIndex}, up to {@code wantBytes} of the recorded
+     *  native {@code code}, and {@code perfMapAddr}/{@code perfMapSize} — the same method's row
+     *  in HotSpot's own {@code jcmd Compiler.perfmap} output ({@code 0} when no map was supplied),
+     *  for the cross-check that the two independent HotSpot emission paths agree. The JVM analog
+     *  of the Node {@code v8ResolveJitMethod} return / .NET's MethodLoad-driven method map. */
+    public record JavaJitMethod(String name, long codeAddr, long codeSize, long codeIndex,
+                                long timestamp, byte[] code, long perfMapAddr, long perfMapSize) {}
+
     /** The outcome of {@link #callScoped}: the call's {@code result} (the SysV integer
      *  return), the executed body's rendered disassembly ({@code path}), the thread-scope
      *  {@code truncated} honesty bit, and the raw {@code rc}. On a clean self-skip (no
@@ -2335,6 +2346,96 @@ public final class HwTrace {
                 new JitMethod(codeAddr, codeSize, timestamp, codeIndex, code));
         } catch (RuntimeException re) { throw re; }
         catch (Throwable t) { throw rethrow(t); }
+    }
+
+    /** Discover the perf-JVMTI jitdump a live HotSpot JVM (launched with
+     *  {@code -agentpath:libperf-jvmti.so}) wrote for {@code pid}. Unlike V8/CoreCLR — which
+     *  write {@code /tmp/jit-<pid>.dump} — the perf JVMTI agent writes
+     *  {@code $JITDUMPDIR|$HOME|cwd + /.debug/jit/<random-session>/jit-<pid>.dump}, so the
+     *  randomized session directory must be globbed (the {@code pid} in the filename keeps it
+     *  unambiguous). Searches {@code $JITDUMPDIR} (the root the agent honours) then {@code /tmp},
+     *  and returns the resolved dump path, or empty until the agent has created the file. Mirrors
+     *  {@code find_java_jitdump} in the C oracle ({@code examples/jit_trace.c}). */
+    public static java.util.Optional<String> findJavaJitdump(int pid) {
+        java.util.List<String> roots = new java.util.ArrayList<>();
+        String jd = System.getenv("JITDUMPDIR");
+        if (jd != null && !jd.isEmpty()) roots.add(jd);
+        roots.add("/tmp");
+        for (String root : roots) {
+            java.nio.file.Path base = java.nio.file.Path.of(root, ".debug", "jit");
+            if (!java.nio.file.Files.isDirectory(base)) continue;
+            try (java.nio.file.DirectoryStream<java.nio.file.Path> sessions =
+                     java.nio.file.Files.newDirectoryStream(base)) {
+                for (java.nio.file.Path session : sessions) {
+                    java.nio.file.Path dump = session.resolve("jit-" + pid + ".dump");
+                    if (java.nio.file.Files.isRegularFile(dump)) return java.util.Optional.of(dump.toString());
+                }
+            } catch (java.io.IOException ignored) { /* unreadable root — try the next */ }
+        }
+        return java.util.Optional.empty();
+    }
+
+    /** Resolve a LIVE HotSpot (OpenJDK) JIT method to its recorded {@link JavaJitMethod} from a
+     *  real {@code jit-<pid>.dump} a running JVM emitted via the perf-JVMTI agent
+     *  ({@code -agentpath:libperf-jvmti.so}) — the JVM counterpart to the Node
+     *  {@code v8ResolveJitMethod} and .NET's MethodLoad-driven managed-method resolution, closing
+     *  the "live JVM JIT-method resolution" gap the async-hop producer disclosed (§D2). The
+     *  perf-JVMTI agent records each C2 method's bytes under its JVM DESCRIPTOR name (e.g.
+     *  {@code LHot;asmtjit(II)I}) — NOT HotSpot's {@code jcmd Compiler.perfmap} form — and the
+     *  shipped {@code asmtest_jitdump_find} matches the recorded name EXACTLY, so {@code methodName}
+     *  is that descriptor (the one divergence from V8, where the perf-map and jitdump name a method
+     *  identically). {@code dumpPath} is the {@code jit-<pid>.dump} (see {@link #findJavaJitdump});
+     *  {@code mapPath} the optional {@code /tmp/perf-<pid>.map} jcmd wrote — when supplied, the row
+     *  at the resolved address is returned as {@code perfMapAddr}/{@code perfMapSize}, the
+     *  cross-check that the agent's jitdump and jcmd's perf-map (two independent HotSpot outputs)
+     *  agree. Because the two outputs name a method DIFFERENTLY, the ADDRESS (not the name) is the
+     *  common key. Empty when the dump/method is absent or no compiled body is recorded yet; the
+     *  {@code code} carries up to {@code wantBytes} of the recorded body. Linux/HotSpot only. */
+    public static java.util.Optional<JavaJitMethod> javaResolveJitMethod(String dumpPath,
+            String mapPath, String methodName, int wantBytes) {
+        if (dumpPath == null) return java.util.Optional.empty();
+        java.util.Optional<JitMethod> mo = jitdumpFind(dumpPath, methodName, 0, wantBytes);
+        if (mo.isEmpty()) return java.util.Optional.empty();
+        JitMethod m = mo.orElseThrow();
+        long pmAddr = 0, pmSize = 0;
+        if (mapPath != null) {
+            long[] pm = perfMapRowAt(mapPath, m.codeAddr());
+            if (pm != null) { pmAddr = pm[0]; pmSize = pm[1]; }
+        }
+        return java.util.Optional.of(new JavaJitMethod(methodName, m.codeAddr(), m.codeSize(),
+            m.codeIndex(), m.timestamp(), m.code(), pmAddr, pmSize));
+    }
+
+    // Read HotSpot's jcmd Compiler.perfmap output ("<hexaddr> <hexsize> <name>" rows) and return
+    // the {addr, size} of the row whose load address == `addr`. The agent's jitdump names methods
+    // in descriptor form while jcmd's perf-map uses a different form, so ADDRESS — not name — is
+    // the common key for the cross-check (unlike v8ResolveJitMethod). null when absent/unreadable.
+    private static long[] perfMapRowAt(String mapPath, long addr) {
+        try {
+            for (String line : java.nio.file.Files.readAllLines(java.nio.file.Path.of(mapPath))) {
+                int sp1 = line.indexOf(' ');
+                if (sp1 <= 0) continue;
+                int sp2 = line.indexOf(' ', sp1 + 1);
+                if (sp2 < 0) continue;
+                long a, s;
+                try {
+                    a = parseHexField(line.substring(0, sp1));
+                    s = parseHexField(line.substring(sp1 + 1, sp2));
+                } catch (NumberFormatException e) { continue; }
+                if (a == addr) return new long[] { a, s };
+            }
+        } catch (java.io.IOException | RuntimeException e) { /* no map -> no cross-check */ }
+        return null;
+    }
+
+    // Parse a perf-map hex field that MAY carry a "0x"/"0X" prefix — HotSpot's jcmd
+    // Compiler.perfmap 0x-prefixes both the address and size columns (V8's perf-map does not),
+    // so a bare Long.parseUnsignedLong(_, 16) would throw on the prefix. NumberFormatException
+    // on a genuinely malformed field.
+    private static long parseHexField(String s) {
+        if (s.length() > 2 && s.charAt(0) == '0' && (s.charAt(1) == 'x' || s.charAt(1) == 'X'))
+            s = s.substring(2);
+        return Long.parseUnsignedLong(s, 16);
     }
 
     // ---- Call descent (asmtest_descent_t) ----

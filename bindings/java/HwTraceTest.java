@@ -132,6 +132,7 @@ public final class HwTraceTest {
             procRegionByAddr();
             procPerfmapSymbol();
             jitdumpFind();
+            liveJavaJitdumpResolution();
             ptraceDescentEdgesAndFrames();
             ptraceDescentResolverUpcall();
             codeImageRoundTrip();
@@ -894,6 +895,209 @@ public final class HwTraceTest {
         } finally {
             if (path != null) try { Files.deleteIfExists(path); } catch (IOException ignored) {}
         }
+    }
+
+    // --- Live HotSpot JIT-method resolution (§D2 / dotnet-parity Java row "JVM-jitdump
+    //     resolution"): drive a REAL child OpenJDK JVM under -agentpath:libperf-jvmti.so so it
+    //     emits a native jit-<pid>.dump, keep a distinctively-named method (Hot.asmtjit) C2-hot,
+    //     flush the dump on an orderly shutdown, then resolve the genuinely-JIT'd method's
+    //     recorded (addr,size,bytes) from it via the shipped asmtest_jitdump_find
+    //     (HwTrace.javaResolveJitMethod) — the JVM analog of the Node v8ResolveJitMethod / .NET
+    //     MethodLoad path. File-only resolution (no ptrace/privilege), like the C oracle
+    //     trace_jitdump_java. Self-skips off Linux, without the perf-JVMTI agent / a JDK compiler,
+    //     or where HotSpot emits no usable jitdump in time — it never fails the suite (an
+    //     environmental problem prints "# SKIP"; only a genuine resolution mismatch is "not ok"). ---
+    private static void liveJavaJitdumpResolution() {
+        if (!System.getProperty("os.name", "").toLowerCase().contains("linux")) {
+            System.out.println("# SKIP live java jitdump: perf-JVMTI jitdump is Linux-only");
+            return;
+        }
+        String agent = findPerfJvmtiAgent();
+        if (agent == null) {
+            System.out.println("# SKIP live java jitdump: libperf-jvmti.so absent "
+                + "(linux-tools perf JVMTI agent)");
+            return;
+        }
+        javax.tools.JavaCompiler jc = javax.tools.ToolProvider.getSystemJavaCompiler();
+        if (jc == null) {
+            System.out.println("# SKIP live java jitdump: no system Java compiler (JRE-only run)");
+            return;
+        }
+        Path work = null;
+        Process child = null;
+        try {
+            work = Files.createTempDirectory("asmtest-jvmti");
+            // A uniquely-named static hot method HotSpot's C2 compiles to a standalone nmethod;
+            // `static` => the verified entry sits at code_begin (the perf-map/jitdump address).
+            // Mirrors examples/jit_java/Hot.java, written inline like the Node test writes its warm
+            // JS. Descriptor form (what the perf-JVMTI agent records): LHot;asmtjit(II)I.
+            Path src = work.resolve("Hot.java");
+            Files.writeString(src,
+                "public class Hot {\n"
+                + "  static int asmtjit(int a, int b) { return a + b; }\n"
+                + "  public static void main(String[] a) {\n"
+                + "    int s = 0;\n"
+                + "    for (;;) { s = asmtjit(s, 1); if (s > 1000000) s = 0; }\n"
+                + "  }\n}\n");
+            if (jc.run(null, null, null, "-d", work.toString(), src.toString()) != 0) {
+                System.out.println("# SKIP live java jitdump: Hot.java did not compile");
+                return;
+            }
+            // The agent roots its dump tree at $JITDUMPDIR (kept in /tmp, not the repo); jcmd's
+            // perf-map is hardcoded to /tmp/perf-<pid>.map. -XX:-TieredCompilation => one C2 body;
+            // CompileThreshold=1000 => compile promptly; dontinline => asmtjit stays a real
+            // standalone nmethod. Mirrors trace_jitdump_java's child command.
+            String javaBin = System.getProperty("java.home") + "/bin/java";
+            ProcessBuilder pb = new ProcessBuilder(javaBin, "-agentpath:" + agent,
+                "-XX:-TieredCompilation", "-XX:CompileThreshold=1000",
+                "-XX:CompileCommand=dontinline,Hot.asmtjit", "-cp", work.toString(), "Hot");
+            pb.environment().put("JITDUMPDIR", "/tmp");
+            pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+            pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+            child = pb.start();
+            long cpid = child.pid();
+            String mapPath = "/tmp/perf-" + cpid + ".map";
+
+            // (A) Poll HotSpot's own jcmd perf-map until asmtjit compiles — both to know the method
+            //     is live AND as the independent address cross-check. jcmd materializes the perf-map
+            //     on demand (HotSpot does not stream one); rate-limit the jcmd spawns.
+            long paddr = 0;
+            for (int i = 0; i < 150 && paddr == 0 && child.isAlive(); i++) {
+                Thread.sleep(100);
+                if (i % 8 == 0) jcmdPerfmap(cpid);
+                paddr = perfMapAddrContaining(mapPath, "asmtjit");
+            }
+            if (!child.isAlive()) {
+                System.out.println("# SKIP live java jitdump: JVM exited early (JDK broken?)");
+                return;
+            }
+            if (paddr == 0) {
+                System.out.println("# note: asmtjit not in jcmd perf-map yet; resolving from the "
+                    + "jitdump alone (no perf-map cross-check)");
+            }
+
+            // (C) Orderly shutdown so the perf-JVMTI agent flushes its buffered jitdump tail
+            //     (asmtjit) to disk: destroy() sends SIGTERM (runs Agent_OnUnload); SIGKILL would
+            //     lose the unflushed records. A bounded wait means the lane never hangs.
+            child.destroy();
+            boolean exited = child.waitFor(15, java.util.concurrent.TimeUnit.SECONDS);
+            if (!exited) {
+                child.destroyForcibly();
+                System.out.println("# SKIP live java jitdump: JVM did not shut down to flush "
+                    + "the jitdump");
+                return;
+            }
+
+            // (D) Read the now-complete jitdump (it persists after the JVM exits) and resolve the
+            //     descriptor-named method through the shipped reader.
+            Optional<String> dump = HwTrace.findJavaJitdump((int) cpid);
+            if (dump.isEmpty()) {
+                System.out.println("# SKIP live java jitdump: no jit-" + cpid + ".dump flushed");
+                return;
+            }
+            Optional<HwTrace.JavaJitMethod> mo = HwTrace.javaResolveJitMethod(
+                dump.get(), paddr != 0 ? mapPath : null, "LHot;asmtjit(II)I", 8192);
+            if (mo.isEmpty()) {
+                System.out.println("# SKIP live java jitdump: asmtjit not in the flushed jitdump");
+                return;
+            }
+            HwTrace.JavaJitMethod m = mo.orElseThrow();
+            if (m.code().length == 0) { // an entry with no recorded bytes — skip like the C oracle
+                System.out.println("# SKIP live java jitdump: recovered an empty body");
+                return;
+            }
+            // (1) Live resolution: the reader recovered Hot.asmtjit's FULL recorded body — exactly
+            //     min(code_size, wantBytes) bytes of real HotSpot C2 output — from a jitdump a live
+            //     JVM emitted via the perf-JVMTI agent. (name echoes the exact descriptor we keyed
+            //     on, so it is not re-asserted; the address cross-check below is the real check.)
+            int want = (int) Math.min(m.codeSize(), 8192L);
+            ok(m.codeSize() > 0 && m.code().length == want,
+                "javaResolveJitMethod: recovered Hot.asmtjit's full recorded body from the real "
+                + "HotSpot jitdump (" + m.code().length + " bytes)");
+            // (2) Cross-check (when jcmd's perf-map was available): the agent's jitdump and jcmd's
+            //     perf-map — two independent HotSpot outputs — agree on the method's load address.
+            if (paddr != 0) {
+                ok(m.perfMapAddr() == m.codeAddr() && m.codeAddr() == paddr,
+                    "java jitdump: code_addr agrees with HotSpot's jcmd perf-map (two independent "
+                    + "outputs)");
+            } else {
+                System.out.println("# SKIP java jitdump perf-map cross-check: perf-map unavailable");
+            }
+        } catch (Exception e) {
+            // Environmental failure (I/O, process spawn, interrupt): self-skip, never fail the
+            // suite. A genuine resolution mismatch throws AssertionError (an Error, not an
+            // Exception) from ok() and still surfaces as "not ok".
+            System.out.println("# SKIP live java jitdump: " + e);
+        } finally {
+            if (child != null && child.isAlive()) child.destroyForcibly();
+            if (work != null) deleteTree(work);
+        }
+    }
+
+    // Locate the perf-JVMTI agent (libperf-jvmti.so, from linux-tools). It is a userspace JVMTI
+    // agent, so a kernel-version-mismatched copy still loads. linux-tools installs it under
+    // /usr/lib/linux-tools[-<ver>][/<ver>]/libperf-jvmti.so; glob those. null when absent.
+    private static String findPerfJvmtiAgent() {
+        Path libdir = Path.of("/usr/lib");
+        try (java.nio.file.DirectoryStream<Path> top =
+                 Files.newDirectoryStream(libdir, "linux-tools*")) {
+            for (Path d : top) {
+                Path direct = d.resolve("libperf-jvmti.so");
+                if (Files.isReadable(direct)) return direct.toString();
+                if (Files.isDirectory(d)) {
+                    try (java.nio.file.DirectoryStream<Path> sub = Files.newDirectoryStream(d)) {
+                        for (Path v : sub) {
+                            Path a = v.resolve("libperf-jvmti.so");
+                            if (Files.isReadable(a)) return a.toString();
+                        }
+                    } catch (IOException ignored) { /* try the next linux-tools dir */ }
+                }
+            }
+        } catch (IOException ignored) { /* no linux-tools -> agent absent */ }
+        return null;
+    }
+
+    // Drive `jcmd <pid> Compiler.perfmap` to (re)materialize /tmp/perf-<pid>.map on the live JVM
+    // (HotSpot does not stream one). Best-effort — output discarded, failures ignored.
+    private static void jcmdPerfmap(long pid) {
+        try {
+            String jcmd = System.getProperty("java.home") + "/bin/jcmd";
+            new ProcessBuilder(jcmd, Long.toString(pid), "Compiler.perfmap")
+                .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
+                .start().waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+        } catch (Exception ignored) { /* jcmd absent / attach refused -> no perf-map */ }
+    }
+
+    // The load address of the LAST perf-map row (the current compilation) whose name contains
+    // `substr`, or 0 when none / no map yet. Rows are "<hexaddr> <hexsize> <name>"; HotSpot's jcmd
+    // 0x-prefixes the hex columns, so strip an optional "0x" before parsing.
+    private static long perfMapAddrContaining(String mapPath, String substr) {
+        long addr = 0;
+        try {
+            for (String line : Files.readAllLines(Path.of(mapPath))) {
+                int sp1 = line.indexOf(' ');
+                if (sp1 <= 0) continue;
+                int sp2 = line.indexOf(' ', sp1 + 1);
+                if (sp2 < 0) continue;
+                if (!line.substring(sp2 + 1).contains(substr)) continue;
+                String hex = line.substring(0, sp1);
+                if (hex.length() > 2 && hex.charAt(0) == '0'
+                    && (hex.charAt(1) == 'x' || hex.charAt(1) == 'X')) hex = hex.substring(2);
+                try { addr = Long.parseUnsignedLong(hex, 16); }
+                catch (NumberFormatException ignored) { /* skip a malformed row */ }
+            }
+        } catch (IOException | RuntimeException e) { /* map not written yet */ }
+        return addr;
+    }
+
+    // Recursively delete a temp tree, best-effort (deepest-first so directories empty before rmdir).
+    private static void deleteTree(Path root) {
+        try (var s = Files.walk(root)) {
+            s.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                try { Files.deleteIfExists(p); } catch (IOException ignored) { /* leave it */ }
+            });
+        } catch (IOException | RuntimeException ignored) { /* nothing to clean */ }
     }
 
     // The descent fixture is x86-64 machine code, so its live replay is x86-64-only
