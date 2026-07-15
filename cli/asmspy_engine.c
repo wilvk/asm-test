@@ -72,6 +72,11 @@ void asmspy_strerror(int rc, char *buf, size_t buflen) {
         m = "data-flow value producer unavailable (off Linux x86-64 / built "
             "without Capstone)";
         break;
+    case ASMSPY_WATCH_UNAVAIL:
+        m = "hardware data watchpoint unavailable (off x86-64, or "
+            "debug-register "
+            "arming refused: permission / seccomp / qemu)";
+        break;
     case ASMTEST_PTRACE_EINVAL:
         m = "invalid argument";
         break;
@@ -420,7 +425,8 @@ typedef struct {
         call_site; /* graph engine: call-site addr of that pending call     */
     int depth;     /* tree engine: live call depth (push on call, pop on ret) */
     unsigned long long
-        inv; /* procs engine: per-task invocation count (syscalls/calls) */
+        inv;   /* procs engine: per-task invocation count (syscalls/calls) */
+    int armed; /* watch engine: its debug-register watchpoint is installed  */
 } thr_t;
 
 typedef struct {
@@ -457,6 +463,7 @@ static thr_t *thr_get(thr_tab_t *t, pid_t tid) {
     e->call_site = 0;
     e->depth = 0;
     e->inv = 0;
+    e->armed = 0;
     return e;
 }
 
@@ -1915,3 +1922,332 @@ int asmspy_engine_sample(pid_t pid, unsigned ms, atomic_bool *stop,
         return ASMSPY_SAMPLE_UNAVAIL;
     return 0;
 }
+
+/* ------------------------------------------------------------------ */
+/* Hardware DATA-watchpoint engine                                     */
+/*                                                                     */
+/* Arms an x86 debug register (DR0, slot 0) in WRITE / READ-WRITE mode  */
+/* on a chosen address in EVERY thread of the target, PTRACE_CONTs it,  */
+/* and at each #DB reports who touched the field + the value. NO single- */
+/* step, NO code patch — the target runs at native speed between hits.  */
+/* The DR7/DR6 encoding is the one examples/watchpoint_spike.c proved    */
+/* (F3 spike, GO); ptrace_backend.c is NOT touched — this reimplements   */
+/* the DATA-mode DR7 fields (the backend ships only DR7=0x1 EXECUTE bps).*/
+/* ------------------------------------------------------------------ */
+
+#if defined(__x86_64__)
+
+/* DR0..DR3 + DR6/DR7 are reached through struct user's u_debugreg[] via
+ * PTRACE_POKEUSER/PEEKUSER — the SAME door src/ptrace_backend.c opens for
+ * EXECUTION breakpoints (where it writes DR7 = 0x1). A data watchpoint differs
+ * only in DR7's per-slot R/W + LEN fields. asmspy uses slot 0 (it watches one
+ * field). */
+#define WATCH_DR_OFFSET(n)                                                     \
+    (offsetof(struct user, u_debugreg) + (size_t)(n) * sizeof(long))
+
+/* DR7 slot-0 word: L0 enable | R/W0 | LEN0. R/W0 = 01 (write, self-labelling) or
+ * 11 (read+write); LEN0 encodes 1/2/4/8 bytes as 00/01/11/10 — NOT monotonic:
+ * 8 bytes is 10b, 4 bytes is 11b (validated by the spike). */
+static unsigned long watch_dr7_word(int rw_rdwr, int len) {
+    unsigned long rw = rw_rdwr ? 0x3UL : 0x1UL;
+    unsigned long lenf;
+    switch (len) {
+    case 1:
+        lenf = 0x0UL;
+        break;
+    case 2:
+        lenf = 0x1UL;
+        break;
+    case 4:
+        lenf = 0x3UL;
+        break;
+    default:
+        lenf = 0x2UL; /* 8 bytes */
+        break;
+    }
+    return 1UL | (rw << 16) | (lenf << 18); /* L0 | R/W0 | LEN0 */
+}
+
+/* Arm the slot-0 data watchpoint (DR0 = addr, DR7 = word) on one stopped thread.
+ * Returns 0, or -1 if PTRACE_POKEUSER is refused (permission / seccomp / no real
+ * debug registers). */
+static int watch_arm(pid_t tid, uint64_t addr, unsigned long dr7) {
+    errno = 0;
+    if (ptrace(PTRACE_POKEUSER, tid, (void *)WATCH_DR_OFFSET(0),
+               (void *)(uintptr_t)addr) != 0)
+        return -1;
+    errno = 0;
+    if (ptrace(PTRACE_POKEUSER, tid, (void *)WATCH_DR_OFFSET(7), (void *)dr7) !=
+        0)
+        return -1;
+    return 0;
+}
+
+/* Disarm every debug slot on one stopped thread (DR7 = 0 disables all four) and
+ * clear DR0 + the DR6 status — so after detach the thread never takes a stray #DB
+ * (which, with no tracer to absorb it, would be a fatal SIGTRAP). */
+static void watch_disarm(pid_t tid) {
+    ptrace(PTRACE_POKEUSER, tid, (void *)WATCH_DR_OFFSET(7), (void *)0UL);
+    ptrace(PTRACE_POKEUSER, tid, (void *)WATCH_DR_OFFSET(0), (void *)0UL);
+    ptrace(PTRACE_POKEUSER, tid, (void *)WATCH_DR_OFFSET(6), (void *)0UL);
+}
+
+/* DR6's low nibble (B0..B3) says which slot tripped; nonzero => a data watchpoint
+ * we armed fired (as opposed to an app int3 / other SIGTRAP). */
+static unsigned long watch_dr6(pid_t tid) {
+    errno = 0;
+    long v = ptrace(PTRACE_PEEKUSER, tid, (void *)WATCH_DR_OFFSET(6), NULL);
+    return (v == -1 && errno != 0) ? 0UL : (unsigned long)v;
+}
+
+/* The #DB is delivered AFTER the accessing instruction retires, so RIP is the
+ * NEXT instruction and the access instruction is the one ENDING at RIP. Read a
+ * 15-byte window (max x86 insn length) before RIP, disassemble forward, and find
+ * the instruction whose end == RIP; classify its memory operand as write (in the
+ * write-set) or read (in the read-set). Returns 1 write, 0 read, -1 unknown, and
+ * sets *access_pc to the access instruction's address when found. Uses the same
+ * Capstone operand enumerator asmspy's --dataflow path links (dataflow_operands). */
+static int watch_decode_dir(pid_t pid, uint64_t rip, uint64_t *access_pc) {
+    if (!asmtest_operands_available() || rip < 15)
+        return -1;
+    enum { WIN = 15 };
+    uint8_t buf[WIN];
+    uint64_t start = rip - WIN;
+    struct iovec l = {buf, WIN};
+    struct iovec r = {(void *)(uintptr_t)start, WIN};
+    if (process_vm_readv(pid, &l, 1, &r, 1, 0) != (ssize_t)WIN)
+        return -1;
+    for (size_t off = 0; off < WIN; off++) {
+        at_val_rec_t reads[24], writes[24];
+        size_t nr = 24, nw = 24;
+        size_t ilen = asmtest_operands(ASMTEST_ARCH_X86_64, buf, WIN,
+                                       (uint64_t)off, reads, &nr, writes, &nw);
+        if (ilen == 0 || start + off + ilen != rip)
+            continue; /* not the instruction ending exactly at RIP */
+        int wrote_mem = 0, read_mem = 0;
+        for (size_t i = 0; i < nw; i++)
+            if (writes[i].kind != AT_LOC_REG)
+                wrote_mem = 1;
+        for (size_t i = 0; i < nr; i++)
+            if (reads[i].kind != AT_LOC_REG)
+                read_mem = 1;
+        if (access_pc)
+            *access_pc = start + off;
+        return wrote_mem ? 1 : (read_mem ? 0 : -1);
+    }
+    return -1;
+}
+
+/* Interrupt every thread, DISARM its debug registers, then DETACH — the teardown
+ * that lets the watched target SURVIVE (a thread released with a slot still armed
+ * would take a #DB with no tracer -> a fatal SIGTRAP). The watch engine never
+ * single-steps, so detach_threads' single-step drain is not needed; disarming the
+ * debug registers is this engine's equivalent crash-safety step. */
+static void watch_teardown(thr_tab_t *tab) {
+    for (size_t i = 0; i < tab->n; i++) { /* phase 1: interrupt + disarm */
+        pid_t tid = tab->v[i].tid;
+        ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
+        for (;;) {
+            int st;
+            pid_t r = waitpid(tid, &st, __WALL);
+            if (r < 0) {
+                if (errno == EINTR)
+                    continue;
+                break; /* ECHILD — already gone */
+            }
+            if (WIFEXITED(st) || WIFSIGNALED(st))
+                break;
+            if (WIFSTOPPED(st)) {
+                watch_disarm(tid);
+                break; /* leave it stopped; released below */
+            }
+        }
+    }
+    for (size_t i = 0; i < tab->n; i++) /* phase 2: release */
+        ptrace(PTRACE_DETACH, tab->v[i].tid, NULL, NULL);
+    free(tab->v);
+    tab->v = NULL;
+    tab->n = tab->cap = 0;
+}
+
+int asmspy_engine_watch(pid_t pid, uint64_t addr, int rw, int len, long max,
+                        atomic_bool *stop, const asmspy_symtab_t *syms,
+                        asmspy_watch_sink sink, void *ctx) {
+    if (len != 1 && len != 2 && len != 4 && len != 8)
+        return ASMTEST_PTRACE_EINVAL;
+    if (addr &
+        (uint64_t)(len - 1)) /* x86 requires a length-aligned watch addr */
+        return ASMTEST_PTRACE_EINVAL;
+
+    arm_quit_wake();
+
+    /* SEIZE every thread (debug registers are per-thread, so we arm them all) and
+     * follow threads spawned later via PTRACE_O_TRACECLONE. */
+    thr_tab_t tab = {0};
+    if (seize_threads(pid, PTRACE_O_TRACECLONE, &tab) != 0) {
+        detach_threads(pid, &tab, 0); /* frees the (empty) table */
+        return ASMTEST_PTRACE_ETRACE;
+    }
+
+    unsigned long dr7 = watch_dr7_word(rw, len);
+    asmspy_jitmap_t
+        jit; /* name JIT / managed-runtime frames from the perf-map */
+    asmspy_jitmap_init(&jit, pid);
+    asmspy_jitmap_refresh(&jit);
+
+    int any_armed = 0;   /* at least one thread's DR was successfully armed  */
+    int arm_refused = 0; /* the FIRST arm failed -> host refuses (skip)      */
+    unsigned long hits = 0;
+
+    while ((max < 0 || (long)hits < max) && !(stop && atomic_load(stop))) {
+        int status;
+        pid_t tid = waitpid(-1, &status, __WALL);
+        if (tid < 0) {
+            if (errno == EINTR) {
+                if (stop && atomic_load(stop))
+                    break;
+                continue;
+            }
+            break; /* ECHILD — every tracee is gone */
+        }
+
+        if (WIFEXITED(status) || WIFSIGNALED(status)) {
+            thr_del(&tab, tid);
+            if (tab.n == 0)
+                break;
+            continue;
+        }
+        if (!WIFSTOPPED(status))
+            continue;
+
+        int sig = WSTOPSIG(status);
+        int event = (status >> 16) & 0xff;
+
+        /* A newly-spawned thread: table it (armed on its own first stop, below),
+         * then resume the parent. Debug registers are per-thread and NOT inherited
+         * across clone, so every new thread must be armed explicitly. */
+        if (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
+            event == PTRACE_EVENT_VFORK) {
+            unsigned long child = 0;
+            if (ptrace(PTRACE_GETEVENTMSG, tid, NULL, &child) == 0 && child)
+                thr_get(&tab, (pid_t)child);
+            ptrace(PTRACE_CONT, tid, NULL, NULL);
+            continue;
+        }
+
+        thr_t *ts = thr_get(&tab, tid);
+
+        /* Our data watchpoint fired? DR6's low nibble names the slot. A data #DB
+         * reports SIGTRAP with si_code TRAP_HWBKPT, so we key on DR6 (which is
+         * OURS) — NOT sigtrap_is_app, which treats every hw breakpoint as the
+         * app's. */
+        if (sig == SIGTRAP && ts && ts->armed) {
+            if (watch_dr6(tid) & 0xfUL) {
+                struct user_regs_struct regs;
+                uint64_t rip = 0;
+                if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0)
+                    rip = (uint64_t)regs.rip;
+
+                /* the value: the watched bytes AFTER the access (read via the
+                 * leader `pid` — process_vm_readv on a non-leader tid can be
+                 * refused). */
+                uint64_t value = 0;
+                int value_ok =
+                    (rip != 0) && rd(pid, addr, &value, (size_t)len) == 0;
+
+                /* who: the access instruction (one back from RIP) resolved to
+                 * function+offset. A write-only watch is self-labelling (every
+                 * hit is a store); for --rw decode the faulting instruction. */
+                uint64_t pc = rip, access_pc = 0;
+                int dir = watch_decode_dir(pid, rip, &access_pc);
+                if (access_pc)
+                    pc = access_pc;
+                const asmspy_sym_t *s = asmspy_resolve(syms, &jit, pc);
+
+                hits++;
+                if (sink) {
+                    asmspy_watch_hit_t h;
+                    h.hit_no = hits;
+                    h.tid = tid;
+                    h.pc = pc;
+                    h.addr = addr;
+                    h.is_write = rw ? dir : 1;
+                    h.value_ok = value_ok;
+                    h.value_len = (unsigned)len;
+                    h.value = value;
+                    h.func = s ? s->name : NULL;
+                    h.module = s ? s->module : NULL;
+                    h.off = s ? (pc - s->addr) : 0;
+                    sink(ctx, &h);
+                }
+
+                /* clear DR6 (best-effort) so the next hit is unambiguous, then
+                 * resume — DR7 stays armed. */
+                ptrace(PTRACE_POKEUSER, tid, (void *)WATCH_DR_OFFSET(6),
+                       (void *)0UL);
+                ptrace(PTRACE_CONT, tid, NULL, (void *)0);
+                continue;
+            }
+            /* a SIGTRAP that is NOT our watchpoint (the target's own int3 / hw bp):
+             * deliver it so the target handles its own breakpoint, else swallow. */
+            if (sigtrap_is_app(tid))
+                deliver_app_sigtrap(tid);
+            else
+                ptrace(PTRACE_CONT, tid, NULL, (void *)0);
+            continue;
+        }
+
+        /* First stop for this thread (the SEIZE/INTERRUPT stop, or a clone child's
+         * initial stop): ARM its debug registers, then CONT. */
+        if (ts && !ts->armed) {
+            if (watch_arm(tid, addr, dr7) == 0) {
+                any_armed = 1;
+            } else if (!any_armed) {
+                /* the host refuses debug-register arming (qemu zero slots /
+                 * seccomp / permission) — a clean, whole-op skip. */
+                arm_refused = 1;
+                ptrace(PTRACE_CONT, tid, NULL, (void *)0);
+                break;
+            }
+            ts->armed = 1;
+            ptrace(PTRACE_CONT, tid, NULL, (void *)0);
+            continue;
+        }
+
+        /* A job-control group-stop (^Z / SIGSTOP / tty) under SEIZE: PTRACE_LISTEN
+         * so the target stays suspended (honoring ^Z) instead of being resumed. */
+        if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
+                                           sig == SIGTTIN || sig == SIGTTOU)) {
+            ptrace(PTRACE_LISTEN, tid, NULL, NULL);
+            continue;
+        }
+
+        /* Otherwise a real signal-delivery-stop: forward the signal and resume. */
+        int deliver = (event == 0 && sig != SIGTRAP) ? sig : 0;
+        ptrace(PTRACE_CONT, tid, NULL, (void *)(long)deliver);
+    }
+
+    watch_teardown(&tab);
+    asmspy_jitmap_free(&jit);
+    (void)any_armed;
+    return arm_refused ? ASMSPY_WATCH_UNAVAIL : 0;
+}
+
+#else /* !__x86_64__ — no DR0..DR3/DR7 reachable via PTRACE_POKEUSER */
+
+int asmspy_engine_watch(pid_t pid, uint64_t addr, int rw, int len, long max,
+                        atomic_bool *stop, const asmspy_symtab_t *syms,
+                        asmspy_watch_sink sink, void *ctx) {
+    (void)pid;
+    (void)addr;
+    (void)rw;
+    (void)len;
+    (void)max;
+    (void)stop;
+    (void)syms;
+    (void)sink;
+    (void)ctx;
+    return ASMSPY_WATCH_UNAVAIL; /* x86 debug registers only */
+}
+
+#endif /* __x86_64__ */

@@ -121,6 +121,13 @@ $(BUILD)/int3_victim: $(BUILD)/int3_victim.o
 $(BUILD)/sample_victim: $(BUILD)/sample_victim.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# watch_victim's WORKER thread (not the leader) stores a known magic into a known
+# 8-byte global, so the --watch (hardware data-watchpoint) smoke can prove asmspy
+# arms the watchpoint PER-THREAD (a leader-only arm would trap none of the writes)
+# and captures the written value + faulting PC. Multi-threaded, so -pthread.
+$(BUILD)/watch_victim: $(BUILD)/watch_victim.o
+	$(CC) $(CFLAGS) -pthread $^ -o $@
+
 # test_logview — headless unit test for the TUI scrollback viewport math
 # (cli/asmspy_logview.h); no ncurses, so it runs anywhere the smoke does.
 $(BUILD)/test_logview: cli/test_logview.c cli/asmspy_logview.h | $(BUILD)
@@ -153,7 +160,8 @@ $(BUILD)/test_jitdump: cli/test_jitdump.c $(BUILD)/asmspy_proc.o \
 cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/cpp_victim \
            $(BUILD)/jit_victim $(BUILD)/jitdump_victim $(BUILD)/int3_victim \
-           $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/test_logview \
+           $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/watch_victim \
+           $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \

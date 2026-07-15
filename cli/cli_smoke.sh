@@ -69,7 +69,8 @@ UPID=""
 IPID=""
 YPID=""
 MVPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" 2>/dev/null || true' EXIT INT TERM
+HWPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -372,6 +373,93 @@ fi
 # a non-positive window is a bad argument (rc=2), not silently coerced
 expect_badarg "$ASM" --sample "$MVPID" 0
 kill "$MVPID" 2>/dev/null || true
+
+# HARDWARE DATA WATCHPOINT (--watch): watch_victim's WORKER thread (not the leader)
+# stores a known magic (0xd15ea5eddeadbeef) into a known 8-byte global. asmspy must
+# arm an x86 debug register on EVERY thread — a leader-only arm would trap NONE of
+# the worker's writes — PTRACE_CONT the target, and at each #DB report the faulting
+# thread + PC + the value read back (process_vm_readv). On a host without real debug
+# registers (qemu-user emulates zero slots) or where PTRACE_POKEUSER is refused,
+# asmspy prints "# SKIP --watch" and exits 0 — the same self-skip discipline as
+# --sample / --dataflow. timeout-guarded (a never-tripped watch / detach deadlock
+# would otherwise hang the smoke).
+echo "--- asmspy --watch (hardware data watchpoint: who touches a field + value) ---"
+WLOG="$BUILD/watch_victim.log"
+: > "$WLOG"
+"$BUILD/watch_victim" 2>"$WLOG" &
+HWPID=$!
+sleep 1
+kill -0 "$HWPID" 2>/dev/null || fail "watch_victim did not start"
+WADDR=$(sed -n 's/.*watch_target=\(0x[0-9a-fA-F]*\).*/\1/p' "$WLOG" | head -1)
+WTID=$(sed -n 's/^watch worker_tid=\([0-9][0-9]*\).*/\1/p' "$WLOG" | head -1)
+[ -n "$WADDR" ] || fail "watch_victim did not report its watch_target address"
+[ -n "$WTID" ] || fail "watch_victim did not report its worker tid"
+echo "  watched field @ $WADDR, writer worker tid=$WTID"
+set +e
+wout=$(timeout 30 "$ASM" --watch "$HWPID" "$WADDR" 5 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--watch hung (watchpoint never tripped / detach deadlock)"
+printf '%s\n' "$wout" | head -10
+if printf '%s\n' "$wout" | grep -q '^# SKIP --watch'; then
+    echo "(hardware data watchpoints unavailable here — --watch self-skipped, OK)"
+else
+    # the EXACT written value was captured (post-store read out of the tracee)
+    printf '%s\n' "$wout" | grep -qi 'd15ea5eddeadbeef' \
+        || fail "--watch: written value 0xd15ea5eddeadbeef not captured"
+    # a write-only watch is self-labelling — every hit is a store
+    printf '%s\n' "$wout" | grep -q 'write' \
+        || fail "--watch: hit not labelled a write"
+    # PER-THREAD arming: the hit came from the WORKER thread, not the leader — proof
+    # asmspy armed every task's debug registers, not just the group leader
+    printf '%s\n' "$wout" | grep -qE "\[tid $WTID\]" \
+        || fail "--watch: no hit from writer thread tid=$WTID (per-thread arming regressed?)"
+    # the faulting PC resolves into the writer function ("who touched it")
+    printf '%s\n' "$wout" | grep -q 'writer' \
+        || fail "--watch: faulting PC not resolved to the writer function"
+
+    # JSON export: one object with the hits array (pipe to jq)
+    echo "--- asmspy --watch $HWPID $WADDR 3 --json ---"
+    set +e
+    wjout=$(timeout 30 "$ASM" --watch "$HWPID" "$WADDR" 3 --json 2>/dev/null); rc=$?
+    set -e
+    [ "$rc" -eq 124 ] && fail "--watch --json hung"
+    printf '%s\n' "$wjout" | head -4
+    printf '%s' "$wjout" | grep -q '^{"pid":' \
+        || fail "--watch --json: no top-level {\"pid\":...} object"
+    printf '%s' "$wjout" | grep -q '"mode":"write"' \
+        || fail "--watch --json: no write mode field"
+    printf '%s' "$wjout" | grep -q '"value":"0xd15ea5eddeadbeef"' \
+        || fail "--watch --json: written value not exported"
+    printf '%s' "$wjout" | grep -qE "\"tid\":$WTID" \
+        || fail "--watch --json: no hit from the writer thread"
+    printf '%s' "$wjout" | grep -q 'hit ' \
+        && fail "--watch --json: human text leaked into JSON"
+
+    # read+write watch (--rw) decodes the faulting instruction to label direction;
+    # the worker's store must still resolve to a write
+    echo "--- asmspy --watch $HWPID $WADDR 3 --rw (read+write, insn-decoded label) ---"
+    set +e
+    wrwout=$(timeout 30 "$ASM" --watch "$HWPID" "$WADDR" 3 --rw 2>&1); rc=$?
+    set -e
+    [ "$rc" -eq 124 ] && fail "--watch --rw hung"
+    printf '%s\n' "$wrwout" | head -6
+    if ! printf '%s\n' "$wrwout" | grep -q '^# SKIP --watch'; then
+        printf '%s\n' "$wrwout" | grep -q 'write' \
+            || fail "--watch --rw: the worker store not labelled a write (insn decode regressed)"
+    fi
+fi
+# the watched target must SURVIVE the arm + detach cycles (debug registers disarmed,
+# two-phase detach) — a regression that left a slot armed would kill it by SIGTRAP
+kill -0 "$HWPID" 2>/dev/null \
+    || fail "--watch: target KILLED by the watch/detach cycle (debug regs not disarmed?)"
+# a MISALIGNED watch address is rejected (x86 needs a length-aligned address), and a
+# bad --len is a usage error (rc=2) — neither is silently coerced
+"$ASM" --watch "$HWPID" 0x1 --len=8 >/dev/null 2>&1 \
+    && fail "--watch accepted a misaligned watch address"
+expect_badarg "$ASM" --watch "$HWPID" "$WADDR" --len=3
+echo "  --watch: value + PC captured, per-thread arming confirmed, target survived"
+kill "$HWPID" 2>/dev/null || true
+rm -f "$WLOG"
 
 # syscall log: attach to syscall_victim (does file I/O each loop)
 "$BUILD/syscall_victim" 2>/dev/null &

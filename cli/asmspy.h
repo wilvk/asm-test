@@ -461,6 +461,69 @@ int asmspy_engine_sample(pid_t pid, unsigned ms, atomic_bool *stop,
                          const asmspy_symtab_t *syms, asmspy_jitmap_t *jit,
                          asmspy_sample_sink sink, void *ctx);
 
+/* ------------------------------------------------------------------ */
+/* Hardware DATA-watchpoint engine (asmspy_engine.c) — the TARGETED,   */
+/* near-zero-perturbation data-flow view. It arms an x86 debug register */
+/* (DR0-3) in WRITE / READ-WRITE mode — not the EXECUTE mode the rest   */
+/* of the tracer uses — on a chosen address in EVERY thread of the      */
+/* target, PTRACE_CONTs it (NATIVE speed between hits: no single-step,   */
+/* no code patch), and at each #DB reports who touched the field and     */
+/* with what value. It answers "who wrote this field, and what did they  */
+/* write" that nothing else in asmspy can. x86-64 only (debug registers);*/
+/* self-skips elsewhere and where arming is refused (qemu / permission). */
+/* ------------------------------------------------------------------ */
+
+/* Returned by asmspy_engine_watch when the host refuses debug-register arming
+ * (PTRACE_POKEUSER on DR0/DR7 rejected — permission / seccomp / no real debug
+ * registers) or off x86-64 entirely — a clean skip, distinct from the negative
+ * attach-failure codes and the other engines' positives (1/2/3). */
+#define ASMSPY_WATCH_UNAVAIL 4
+
+/* One data-watchpoint hit handed to the front-end. Thread `tid` accessed the
+ * watched location `addr` at instruction `pc` (resolved to `func`+`off` in
+ * `module`; `func`/`module` are NULL when unresolved). `is_write` is 1 for a
+ * store (the only kind a write-only watch traps), 0 for a load, -1 if the
+ * direction could not be decoded (a read+write watch whose faulting instruction
+ * did not decode). `value` holds the `value_len` (<=8) bytes read back from the
+ * watched location AFTER the access (host-endian) when `value_ok`. `hit_no` is
+ * the 1-based hit index. `func`/`module` are transient — valid only for the sink
+ * call (copy to keep). */
+typedef struct {
+    unsigned long hit_no;
+    pid_t tid;
+    uint64_t pc;        /* the accessing instruction (or the following one)  */
+    uint64_t addr;      /* the watched location                              */
+    int is_write;       /* 1 write, 0 read, -1 unknown                       */
+    int value_ok;       /* the watched bytes were read back                  */
+    unsigned value_len; /* bytes valid in `value` (== the watch length, <=8) */
+    uint64_t value;     /* the watched bytes, read post-access               */
+    const char *func;   /* resolved symbol name, or NULL                     */
+    const char *module; /* backing module basename, or NULL                  */
+    uint64_t off;       /* pc - func base (0 when func == NULL)              */
+} asmspy_watch_hit_t;
+
+typedef void (*asmspy_watch_sink)(void *ctx, const asmspy_watch_hit_t *hit);
+
+/* Arm an x86 hardware DATA watchpoint on [addr, addr+len) in EVERY thread of
+ * `pid` — debug registers are PER-THREAD, so a live multi-threaded target needs
+ * every task armed (this iterates /proc/<pid>/task and arms threads spawned later
+ * via PTRACE_O_TRACECLONE too) — then PTRACE_CONT the whole process. Between hits
+ * the target runs at NATIVE speed. At each #DB the access is reported through
+ * `sink`: the faulting thread + PC (resolved via `syms`, then the JIT perf-map),
+ * the value read back from the watched bytes, and — for a read+write watch — read
+ * vs write decoded from the faulting instruction. `rw` selects the trapped
+ * condition (0 = writes only, self-labelling; 1 = reads AND writes). `len` is
+ * 1/2/4/8 and `addr` must be `len`-aligned (an x86 hardware requirement). Runs
+ * until `max` hits (<0 = until stop / target exit), `stop`, or the target exits,
+ * then DISARMS the debug registers on every thread and detaches so the target
+ * SURVIVES. Returns 0 on clean detach (any number of hits, including 0),
+ * ASMSPY_WATCH_UNAVAIL if arming is refused or off x86-64, ASMTEST_PTRACE_EINVAL
+ * on a bad length/alignment, or a negative ASMTEST_PTRACE_* on an attach failure.
+ * `syms` may be NULL (raw addresses). */
+int asmspy_engine_watch(pid_t pid, uint64_t addr, int rw, int len, long max,
+                        atomic_bool *stop, const asmspy_symtab_t *syms,
+                        asmspy_watch_sink sink, void *ctx);
+
 /* Human-readable one-liner for an engine/attach failure code, into buf. */
 void asmspy_strerror(int rc, char *buf, size_t buflen);
 

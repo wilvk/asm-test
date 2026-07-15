@@ -1363,6 +1363,227 @@ static int cmd_trace(pid_t pid, const char *sym, long n) {
 }
 
 /* ================================================================== */
+/* Hardware DATA-watchpoint view (headless; shares asmspy_engine_watch) */
+/* ================================================================== */
+
+/* Resolve a watch-location argument to an absolute address. Three forms:
+ *     0x<addr>        a raw address
+ *     <name>          a function symbol's entry address (offset 0)
+ *     <name>+<off>    that symbol's address plus <off> (off parsed base-0)
+ * Unlike resolve_region NO length is derived — the watch length comes from
+ * --len. Returns 0 on success, -1 if the name/address cannot be resolved. */
+static int resolve_watch_addr(const asmspy_symtab_t *t, const char *arg,
+                              uint64_t *addr) {
+    if (arg[0] == '0' && (arg[1] == 'x' || arg[1] == 'X')) {
+        char *end = NULL;
+        uint64_t a = strtoull(arg, &end, 16);
+        if (end == arg + 2 ||
+            *end != '\0') /* "0x" alone, or trailing garbage */
+            return -1;
+        *addr = a;
+        return 0;
+    }
+    const char *plus = strchr(arg, '+');
+    uint64_t off = 0;
+    char name[256];
+    if (plus) {
+        size_t nlen = (size_t)(plus - arg);
+        if (nlen == 0 || nlen >= sizeof name)
+            return -1;
+        memcpy(name, arg, nlen);
+        name[nlen] = '\0';
+        char *oend = NULL;
+        off = strtoull(plus + 1, &oend, 0);
+        if (oend == plus + 1 || *oend != '\0')
+            return -1;
+    } else if (snprintf(name, sizeof name, "%s", arg) >= (int)sizeof name) {
+        return -1;
+    }
+    const asmspy_sym_t *s = asmspy_symtab_by_name(t, name);
+    if (!s)
+        return -1;
+    *addr = s->addr + off;
+    return 0;
+}
+
+/* One captured hit, with the resolved name/module COPIED out — the engine's
+ * asmspy_sym_t pointers are transient (the JIT map is freed when the engine
+ * returns), so a --json run (which prints after the engine returns) must not
+ * borrow them. */
+typedef struct {
+    unsigned long hit_no;
+    pid_t tid;
+    uint64_t pc, addr, value, off;
+    int is_write, value_ok, resolved;
+    unsigned value_len;
+    char func[128];
+    char module[64];
+} watch_row;
+
+typedef struct {
+    int json;
+    unsigned long count; /* hits seen (drives the 0-hit skip + JSON commas) */
+    watch_row *rows;     /* --json: buffered hits (text mode prints live)   */
+    size_t n, cap;
+} watch_ctx;
+
+/* "who touched it" location string: "func+0xoff [module]" or a bare "0x..". */
+static void watch_loc(const asmspy_watch_hit_t *h, char *out, size_t cap) {
+    if (h->func)
+        snprintf(out, cap, "%s+0x%llx [%s]", h->func,
+                 (unsigned long long)h->off, h->module ? h->module : "?");
+    else
+        snprintf(out, cap, "0x%llx", (unsigned long long)h->pc);
+}
+
+static const char *watch_dir_word(int is_write) {
+    return is_write == 1 ? "write" : (is_write == 0 ? "read " : "  ?  ");
+}
+
+static void watch_sink(void *ctx, const asmspy_watch_hit_t *h) {
+    watch_ctx *w = ctx;
+    w->count = h->hit_no;
+
+    if (!w->json) { /* text: print live for immediate feedback */
+        char loc[208];
+        watch_loc(h, loc, sizeof loc);
+        if (h->value_ok)
+            printf("hit %3lu  [tid %d]  %s  *0x%llx = 0x%0*llx  @ %s\n",
+                   h->hit_no, (int)h->tid, watch_dir_word(h->is_write),
+                   (unsigned long long)h->addr, (int)(h->value_len * 2),
+                   (unsigned long long)h->value, loc);
+        else
+            printf("hit %3lu  [tid %d]  %s  *0x%llx = (unread)  @ %s\n",
+                   h->hit_no, (int)h->tid, watch_dir_word(h->is_write),
+                   (unsigned long long)h->addr, loc);
+        fflush(stdout);
+        return;
+    }
+
+    /* JSON: buffer a COPY (the name/module pointers are transient). */
+    if (w->n == w->cap) {
+        size_t nc = w->cap ? w->cap * 2 : 32;
+        watch_row *nv = realloc(w->rows, nc * sizeof *nv);
+        if (!nv)
+            return; /* drop on OOM — the count still advanced */
+        w->rows = nv;
+        w->cap = nc;
+    }
+    watch_row *r = &w->rows[w->n++];
+    r->hit_no = h->hit_no;
+    r->tid = h->tid;
+    r->pc = h->pc;
+    r->addr = h->addr;
+    r->value = h->value;
+    r->off = h->off;
+    r->is_write = h->is_write;
+    r->value_ok = h->value_ok;
+    r->value_len = h->value_len;
+    r->resolved = h->func != NULL;
+    snprintf(r->func, sizeof r->func, "%s", h->func ? h->func : "");
+    snprintf(r->module, sizeof r->module, "%s", h->module ? h->module : "");
+}
+
+/* --watch JSON schema (stdout only, one object, so it pipes to jq):
+ *   {"pid":P,"addr":"0xADDR","len":N,"mode":"write"|"readwrite","hits":[
+ *     {"hit":K,"tid":T,"pc":"0xPC","dir":"w"|"r"|"?",
+ *      "func":"NAME","off":"0xOFF","module":"M",   // omitted when unresolved
+ *      "value":"0xV"|null,"bytes":N} ... ]} */
+static void watch_emit_json(pid_t pid, uint64_t addr, int len, int rw,
+                            const watch_ctx *w) {
+    printf("{\"pid\":%d,\"addr\":\"0x%llx\",\"len\":%d,\"mode\":\"%s\","
+           "\"hits\":[",
+           (int)pid, (unsigned long long)addr, len, rw ? "readwrite" : "write");
+    for (size_t i = 0; i < w->n; i++) {
+        const watch_row *r = &w->rows[i];
+        const char *dir =
+            r->is_write == 1 ? "w" : (r->is_write == 0 ? "r" : "?");
+        printf(
+            "%s\n  {\"hit\":%lu,\"tid\":%d,\"pc\":\"0x%llx\",\"dir\":\"%s\",",
+            i ? "," : "", r->hit_no, (int)r->tid, (unsigned long long)r->pc,
+            dir);
+        if (r->resolved) {
+            char fesc[4 * sizeof r->func], mesc[4 * sizeof r->module];
+            json_escape(r->func, fesc, sizeof fesc);
+            json_escape(r->module, mesc, sizeof mesc);
+            printf("\"func\":\"%s\",\"off\":\"0x%llx\",\"module\":\"%s\",",
+                   fesc, (unsigned long long)r->off, mesc);
+        }
+        if (r->value_ok)
+            printf("\"value\":\"0x%0*llx\",\"bytes\":%u}",
+                   (int)(r->value_len * 2), (unsigned long long)r->value,
+                   r->value_len);
+        else
+            printf("\"value\":null,\"bytes\":%u}", r->value_len);
+    }
+    printf("%s]}\n", w->n ? "\n" : "");
+}
+
+static int cmd_watch(pid_t pid, const char *loc, int rw, int len, long n,
+                     int json) {
+    asmspy_symtab_t t;
+    asmspy_symtab_load(pid, &t); /* best-effort; raw addresses still work */
+    uint64_t addr = 0;
+    if (resolve_watch_addr(&t, loc, &addr) != 0) {
+        fprintf(stderr,
+                "cannot resolve '%s' to an address in pid %d\n"
+                "  want 0xADDR, a function name, or name+0xOFF\n",
+                loc, (int)pid);
+        asmspy_symtab_free(&t);
+        return 1;
+    }
+    if (addr & (uint64_t)(len - 1)) {
+        fprintf(stderr,
+                "watch address 0x%llx is not %d-byte aligned "
+                "(x86 requires a length-aligned watch address)\n",
+                (unsigned long long)addr, len);
+        asmspy_symtab_free(&t);
+        return 1;
+    }
+    if (!json)
+        fprintf(
+            stderr,
+            "watching %d byte%s @ 0x%llx in pid %d (%s access) — arms every "
+            "thread's debug registers\n",
+            len, len == 1 ? "" : "s", (unsigned long long)addr, (int)pid,
+            rw ? "read+write" : "write");
+
+    watch_ctx w = {0};
+    w.json = json;
+    int rc =
+        asmspy_engine_watch(pid, addr, rw, len, n, NULL, &t, watch_sink, &w);
+    asmspy_symtab_free(&t);
+
+    if (rc == ASMSPY_WATCH_UNAVAIL) {
+        /* debug-register arming refused (qemu / seccomp / permission) or off
+         * x86-64 — a clean self-skip, exit 0, like --sample / --dataflow. */
+        printf(
+            "# SKIP --watch: hardware data watchpoint unavailable "
+            "(off x86-64, or debug-register arming refused: qemu / seccomp / "
+            "permission)\n");
+        free(w.rows);
+        return 0;
+    }
+    if (rc != 0) {
+        char e[128];
+        asmspy_strerror(rc, e, sizeof e);
+        fprintf(stderr, "watch failed: %s\n", e);
+        free(w.rows);
+        return 1;
+    }
+
+    if (json)
+        watch_emit_json(pid, addr, len, rw, &w);
+    else if (w.count == 0)
+        printf(
+            "# SKIP --watch: armed the watchpoint but observed no access "
+            "(the location was not touched, or this host emulates zero debug "
+            "slots under qemu-user)\n");
+    free(w.rows);
+    return 0;
+}
+
+/* ================================================================== */
 /* Data-flow capture view (headless; the TUI mode 9 shares the engine) */
 /* ================================================================== */
 
@@ -4221,6 +4442,10 @@ static int usage(const char *argv0) {
         "  %s --sample <pid> [ms] [--json]  statistical hot edges via AMD "
         "IBS-Op, OUT OF BAND — safe on a JIT (no single-step); needs an AMD "
         "IBS host\n"
+        "  %s --watch  <pid> <sym|sym+off|0xADDR> [n] [--rw] [--len=1|2|4|8] "
+        "[--json]  hardware DATA watchpoint: who touches a field + the value, "
+        "at "
+        "native speed (x86-64)\n"
         "\n"
         "A negative n runs until the target exits or you interrupt (Ctrl-C).\n"
         "Note: the single-step views deliver a target's OWN int3 breakpoints\n"
@@ -4230,7 +4455,7 @@ static int usage(const char *argv0) {
         "debugger) may never reach a fixed n in batch mode; interrupt with "
         "Ctrl-C.\n",
         argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0,
-        argv0);
+        argv0, argv0);
     return 2;
 }
 
@@ -4395,6 +4620,30 @@ int main(int argc, char **argv) {
                 return bad_arg("milliseconds (positive)", argv[i]);
         }
         return cmd_sample(pid, ms, json);
+    }
+    if (strcmp(argv[1], "--watch") == 0 && argc >= 4) {
+        if (parse_pid(argv[2], &pid) != 0)
+            return bad_arg("pid", argv[2]);
+        const char *loc = argv[3];
+        int rw = 0, len = 8, json = 0;
+        n = 20; /* default hit budget; a negative n runs until stop / exit */
+        for (int i = 4; i < argc;
+             i++) { /* [n], --rw, --len=1|2|4|8, --json in any order */
+            if (strcmp(argv[i], "--rw") == 0) {
+                rw = 1;
+            } else if (strcmp(argv[i], "--json") == 0) {
+                json = 1;
+            } else if (strncmp(argv[i], "--len=", 6) == 0) {
+                long l;
+                if (parse_count(argv[i] + 6, &l) != 0 ||
+                    (l != 1 && l != 2 && l != 4 && l != 8))
+                    return bad_arg("len (want 1, 2, 4, or 8)", argv[i] + 6);
+                len = (int)l;
+            } else if (parse_count(argv[i], &n) != 0) {
+                return bad_arg("watch option", argv[i]);
+            }
+        }
+        return cmd_watch(pid, loc, rw, len, n, json);
     }
     return usage(argv[0]);
 }
