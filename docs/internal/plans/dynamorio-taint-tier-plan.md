@@ -1183,7 +1183,7 @@ hard gate, not new instrumentation.
   value + dead-register slots are documented clean-call-only divergences. `make dr-valtrace-bench`
   ([dr_valtrace_bench.c](../../../examples/dr_valtrace_bench.c)) shows a ~2.6× per-instruction
   capture-cost drop on the isolated capture window.
-- ⬜ Increments 4–9 — planned (this document).
+- ✅ Increments 4–9 — LANDED (this document; see the per-increment sections above).
 
 ## Validation notes
 

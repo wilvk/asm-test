@@ -15,7 +15,7 @@ optimization, hardware data-watchpoints, the PT-derived value path, and live GC-
 canonicalization are deliberately **out of scope here** and carried in the companion
 [live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md).
 
-> Status: **ALL increments *(planned)*.** Increment 1 (native live-attach) is the
+> Status: **Increments 1, 2, and 6 (native path) LANDED; 3–5 and 7 planned.** Increment 1 (native live-attach) is the
 > recommended first milestone — it is low-risk reuse of the landed capture core and needs no
 > JIT machinery. The single-step value tier already exists and is cross-validated against
 > the emulator L0 oracle; this plan changes *what it attaches to* and *how it survives a
@@ -189,7 +189,19 @@ denied host the entry point returns `DF_PTRACE_ETRACE` and the lane self-skips.
 
 ---
 
-## Increment 2 — Call-out step-over (real methods, not just leaves) *(planned)*
+## Increment 2 — Call-out step-over (real methods, not just leaves) *(**LANDED 2026-07-15**)*
+
+> **UPDATE 2026-07-15 — LANDED.** `dfp_step_loop` now distinguishes a call-out from a return when
+> the single-stepped PC leaves the region: a new `dfp_is_callout` predicate (the last in-region
+> instruction decodes as a `call` whose pushed return address lands back in the region) triggers a
+> native-speed run to that return address via the existing int3 `dfp_run_to`, records nothing over the
+> helper, then resumes in-region single-stepping. Kept **self-contained in `dataflow_ptrace.c`** (no
+> `ptrace_backend.c`/header change; the shared-helper refactor of `classify_region_exit` is a deferred
+> cleanup). Because it lives in the shared loop, the `_run`/`_attach`/`_attach_pid` paths all gain it.
+> Eleven new checks in `test_dataflow_ptrace.c` (45–55) assert a complete value trace across the call
+> with a def-use edge threading the call, four in-region steps only (no helper instruction recorded),
+> and an honest `truncated` on a non-returning callee — **55/55 on real ptrace**; existing 44 unchanged.
+> The re-entrancy caveat (resume at first arrival at the return address) is carried in-code.
 
 Today the value producer treats "PC left the region" as "returned"
 ([dataflow_ptrace.c:527-537](../../../src/dataflow_ptrace.c#L527)), so a region that calls a
@@ -286,7 +298,17 @@ documented inherent hazard (indistinguishable from a step-induced trap).
 
 ---
 
-## Increment 6 — asmspy headless `--dataflow` subcommand + JSON *(planned)*
+## Increment 6 — asmspy headless `--dataflow` subcommand + JSON *(**LANDED 2026-07-15 — native path**)*
+
+> **UPDATE 2026-07-15 — LANDED (native path).** `asmspy --dataflow <pid> <sym|0xADDR[:LEN]> [--json]
+> [--tid=N] [--max=N]` resolves the region via the existing symtab/jitmap resolver, runs the landed
+> scoped-ptrace L0 producer (`asmtest_dataflow_ptrace_attach_pid`) on the live pid for one invocation,
+> and emits the L0 value trace + L1 def-use edges (documented JSON on `--json`). A new engine seam
+> `asmspy_engine_dataflow` mirrors `asmspy_engine_region`; managed/JIT runtimes self-skip via the
+> fingerprint (**the JIT engine path awaits Increment 5**) and off-platform/no-Capstone returns
+> `ASMSPY_DATAFLOW_UNAVAIL`. `cli_smoke.sh` covers the human + `--json` (json.load-validated) + bad-arg
+> paths; **`make docker-cli` → `cli-smoke: PASS`**. The optional L2 slice navigation is left for the
+> Increment 7 TUI.
 
 Every asmspy view has a headless twin; add this one first (CI-testable, no ncurses).
 

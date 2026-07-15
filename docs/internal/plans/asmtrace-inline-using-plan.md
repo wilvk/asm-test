@@ -11,9 +11,8 @@ work for EVERY trace form, IN ADDITION to the delegate factories (`AsmTrace.Wind
 [asmtrace-extensions-plan.md](asmtrace-extensions-plan.md).
 
 > Status: **AMD-LBR inline LANDED** and **R4 (out-of-process inline) LANDED** (`578caed`,
-> ahead of R1–R3); R1–R3 remain roadmap. Note: R4 landing out of sequence means Dispose now
-> carries four parallel `_*Window` bools, so the **R1 `_kind` refactor is now the warranted
-> next cleanup**.
+> ahead of R1–R3); **R1 (`_kind` refactor) + R3 (SingleStep via the unified ctor) now LANDED**,
+> only **R2 (Intel PT inline)** remains roadmap.
 
 ## The general requirement + the two backend classes
 
@@ -63,7 +62,7 @@ can meet it is decided by **how its backend is armed**:
 
 ## Roadmap
 
-**R1 — the `_kind` refactor (do before more forms).** Replace the `_wholeWindow`/`_oopWindow`
+**R1 — the `_kind` refactor (LANDED).** Replace the `_wholeWindow`/`_oopWindow`
 (now +`_amdWindow`) bools with one `enum Kind` and a `switch` in Dispose. Zero-behavior; keeps
 Dispose from accreting parallel bools. Not required for the AMD form (which shipped with a
 minimal `_amdWindow` flag) but is the clean spine before PT/OOP cases.
@@ -74,7 +73,7 @@ AUX `intel_pt` + ENABLE) / `pt_end_window` (DISABLE + libipt decode → fill `Ad
 PT is available to validate. PT is the *ideal* inline backend (hardware start/stop, exact,
 near-native).
 
-**R3 — SingleStep via the unified ctor (optional ergonomics).** Make `new
+**R3 — SingleStep via the unified ctor (LANDED).** Make `new
 AsmTrace(HwBackend.SingleStep)` forward to the existing whole-window arming (extract it into a
 shared private method) so the backend-keyed ctor covers single-step too, instead of directing
 to `new AsmTrace()`. Cosmetic.

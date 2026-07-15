@@ -271,7 +271,7 @@ IBS remains **out of** `asmtest_trace_call_auto`'s exact cascade.
 **Acceptance.** The survey returns a populated statistical histogram on Zen 2; the exact
 cascade is untouched; no statistical result can reach the parity assertions.
 
-### Phase 5 — Sampling-quality + call-graph enrichments *(forward-look)*
+### Phase 5 — Sampling-quality + call-graph enrichments *(landed)*
 
 **Goal.** Better coverage per sample.
 
@@ -283,7 +283,7 @@ model (verified available). (c) Period jitter to avoid aliasing against periodic
 (note: unlike the LBR `#2A` period-spacing finding, statistical aliasing with a loop period
 is a real sampling bias here, not a window-reach question).
 
-### Phase 6 — Edge → basic-block normalization (optional) *(forward-look)*
+### Phase 6 — Edge → basic-block normalization (optional) *(landed)*
 
 **Goal.** Lift sampled edges to covered basic-block offsets for parity-adjacent reporting.
 

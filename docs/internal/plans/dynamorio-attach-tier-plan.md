@@ -212,7 +212,7 @@ native case on the pinned DR 11.91.20630.
 
 ---
 
-## Increment 3 - Marker-less seed/sink/region config (client options + nudge) *(**config half LANDED 2026-07-14**; the interactive nudge arm/disarm is the remaining slice)*
+## Increment 3 - Marker-less seed/sink/region config (client options + nudge) *(**LANDED** — config half 2026-07-14; interactive nudge arm/disarm 2026-07-15)*
 
 > **UPDATE 2026-07-14 — marker-less CONFIG landed (validated under launch, first try).** The DR taint
 > client now learns region/seed/report ENTIRELY from client options + runtime module+offset
@@ -227,10 +227,16 @@ native case on the pinned DR 11.91.20630.
 > marker-based launch lane — **seeded 8/8 incl. the full out-of-process TAINT-SET oracle diff (taint set
 > == emulator forward slice); noseed negative 3/3 (zero hits)**; value client still 14/14 byte-identical.
 > `taint_validator` gained a `markerless` mode (skips the app-set `result` check; skips the seeded emu
-> oracle for the noseed control). **Remaining for full Increment 3:** the interactive NUDGE
-> (`dr_nudge_pid` → `drmgr_register_nudge_event`) to arm/disarm a bounded capture window mid-run — a
-> separable refinement; the config half is what Increment 4 (external attach end-to-end) needs, and it
-> is done + reused over `drrun -attach` there.
+> oracle for the noseed control). **Nudge slice LANDED 2026-07-15:** `dr_register_nudge_event` +
+> `handle_nudge` decode the low byte of the nudge arg as an opcode — ARM (resolve the configured region,
+> `register_range`+`on_seed`, flush so fragments rebuild WITH instrumentation), DISARM (clear + flush),
+> SNAPSHOT (publish shm `done`). A new `nudge` client option starts DISARMED so ARM genuinely opens the
+> window; `in_scope()` gained a `g_armed` gate (taint-only; flag-off value client byte-identical). The
+> handler runs in a valid DR nudge context (DR documents `dr_flush_region` as nudge-callable — not the
+> foreign app-code GC thread the live-remap path guards). `make dr-taint-nudge-test` /
+> `docker-taint-attach`: a mid-run ARM→capture→DISARM round-trip **5/5** + never-armed control **2/2**,
+> victim survives; coop 8/8 + validator 9/9 unbroken. The external-attach (`drrun -attach` +
+> `drnudgeunix`) compose is the trivial follow-on — identical client code.
 
 An attached foreign target calls no markers, so the client learns *what* to instrument
 from outside.

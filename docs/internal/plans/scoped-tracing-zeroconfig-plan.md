@@ -161,8 +161,10 @@ Referenced elsewhere as **netNew #N**. Not one row is a new capture primitive.
 > Host-tested green on this AMD host: `test_wholewindow_singlestep` (`make docker-hwtrace`
 > → 201/0) and the .NET `AsmTrace()` case (`make docker-hwtrace-dotnet` → 33/0). The §Z5
 > self-skip scaffold landed with it (`SkipReason` is set + `Armed` false where no faithful
-> backend exists). **Forward-look:** the other nine binding shims (mechanical mirrors of
-> the .NET reference) and the STRONG whole-window capture behind the seam ([§Z1](#z1--region-free-whole-window-capture-mode-planned-forward-look)).
+> backend exists). **Partially landed (2026-07-15):** the **cpp** and **python** empty-window shims
+> ship (host-verified; `check-bindings-parity` green with the 5 unshimmed bindings still exempt).
+> **Forward-look:** the remaining shims — **rust, go, zig, lua, ruby** (mechanical mirrors of
+> the .NET reference) — and the STRONG whole-window capture behind the seam ([§Z1](#z1--region-free-whole-window-capture-mode-planned-forward-look)).
 
 **Goal.** Deliver the single net-new *surface* that makes `using (new AsmTrace())`
 compile and run — a legitimately **region-free arm** — without yet committing to a
@@ -462,16 +464,19 @@ shipped AMD backend.
 
 ---
 
-## §Z2 — Live whole-window decode validation *(synthetic fixture front-loaded; live PT forward-look)*
+## §Z2 — Live whole-window decode validation *(synthetic-fixture decode LANDED; live PT forward-look)*
 
-> **Status: planned — front-loaded, in parallel with §Z0.** The byte adapter this phase rides
+> **Status: synthetic-fixture decode LANDED (`test_wholewindow_decode`); live PT forward-look.** The byte adapter this phase rides
 > ships: `asmtest_pt_read_codeimage` ([src/pt_backend.c:47](../../../src/pt_backend.c#L47)) is
 > libipt-**independent**, host-tested (`test_pt_image_from_codeimage`) by
 > [Core §2](../archive/plans/scoped-tracing-core-plan.md#2--libipt-decode-against-self-code-image-glue-host-testable-half-done-live-pt-forward-look).
-> The whole-window decoder `asmtest_pt_decode_window` exists ([:198](../../../src/pt_backend.c#L198))
-> but has **never been exercised end-to-end** — every current CI/AMD host compiles the `#else`
-> `ENOSYS` stub ([:266](../../../src/pt_backend.c#L266)), and even the real body self-skips for
-> want of an `intel_pt` PMU. **This phase is the trust-gate on §Z1's STRONG tier.** Requires
+> The whole-window decoder `asmtest_pt_decode_window` ([:198](../../../src/pt_backend.c#L198))
+> is now **exercised end-to-end on a synthetic packet stream**: `asmtest_pt_encode_fixture`
+> ([:294](../../../src/pt_backend.c#L294)) hand-assembles a valid Intel-PT byte array that
+> `test_wholewindow_decode` decodes with **no PT hardware** (where libipt is built; AMD/CI
+> hosts without it compile the `#else` `ENOSYS` stub ([:266](../../../src/pt_backend.c#L266))
+> and self-skip, as does the real body for want of an `intel_pt` PMU on the **live** half).
+> **This phase is the trust-gate on §Z1's STRONG tier.** Requires
 > **libipt at build (no PT hardware)** for the synthetic half; **bare-metal Intel PT** for the
 > live half.
 

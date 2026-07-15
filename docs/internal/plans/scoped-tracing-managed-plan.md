@@ -3,10 +3,11 @@
 > **Reconciliation note (2026-07-07):** moved back to `plans/` from `archive/` — this plan
 > is **partially landed**, not done, so it belongs with the active plans. The §D4 shared
 > merge core, version-aware render, the Node (§D1) / Java (§D2) scope constructs, the
-> .NET §D0.1/§D0.2 rundown, §D0.3's named-method form (`AsmTrace.Method`), and §D0.4's
-> `AsyncLocal` async-hop stitching (`AsmStitchedTrace`) ship and are tested; the §D1/§D2
-> per-runtime async-hop hooks and the §D3 live-JIT cross-process address channel remain
-> **forward-look** (need PT hardware / a second process to validate). The status block below is accurate.
+> .NET §D0.1/§D0.2 rundown, §D0.3's named-method form (`AsmTrace.Method`), §D0.4's
+> `AsyncLocal` async-hop stitching (`AsmStitchedTrace`), and the Node (§D1 `AsyncStitchedTrace`)
+> / Java (§D2 propagating executor) per-runtime async-hop producers ship and are tested; the
+> §D3 live-JIT cross-process address channel remains **forward-look** (needs PT hardware / a
+> second process to validate). The status block below is accurate.
 
 The **hard** half of the [scoped in-process tracing
 plan](../archive/plans/scoped-inprocess-tracing-plan.md) — extending the scope model to the three
@@ -30,10 +31,11 @@ thread → logical-operation model change). It is deliberately sequenced **last*
 > labelling (`JitMethodMap`) and the §D0.2 dependency-free jitdump rundown
 > (`DiagnosticsIpc`) ship in the .NET binding as `new AsmTrace(byMethod:, withRundown:)`
 > — commits 69ace98, d4e7deb, 8bf7d52, 4aaf473 — exercised by `hwtrace-dotnet-test` and
-> the `examples/dotnet/*` lanes. **Forward-look (not yet landed):** §D0.3's named-method
-> form and §D0.4 `AsyncLocal` stitching (both slated near-term), the §D1/§D2 per-runtime
-> async-hop hooks, and the §D3 live-JIT cross-process address channel — the parts that
-> need PT hardware / a second process to validate. See
+> the `examples/dotnet/*` lanes. **Also landed since (2026-07):** §D0.3's named-method
+> form (`AsmTrace.Method`), §D0.4 `AsyncLocal` stitching (`AsmStitchedTrace`), and the §D1
+> (Node `AsyncStitchedTrace`) / §D2 (Java propagating executor) per-runtime async-hop
+> producers. **Forward-look (not yet landed):** the §D3 live-JIT cross-process address
+> channel — the part that needs PT hardware / a second process to validate. See
 > [docs/scoped-tracing-implementation.md](../../scoped-tracing-implementation.md).
 >
 > Status legend: **planned**, forward-look. The clean managed path needs the

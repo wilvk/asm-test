@@ -23,7 +23,7 @@
 > rollout. **Phase 2 STARTED** — the §Z1 in-process whole-window trio, out-of-process stealth
 > + crash-proof whole-window capture, version-aware render, and the §D0.4 async-hop merge have
 > LANDED in Node/Java (`c2327bc` ff.; see CHANGELOG.md); the .NET deep live-JIT per-method
-> resolution (E3) remains forward-look. **Phase 3 planned**
+> resolution (E3) has since LANDED. **Phase 3 planned**
 > (grow-a-use, per binding). The clean-path validation is PT-hardware-gated (this host is AMD).
 
 ## Why this is not "wrap 13 symbols × 9 bindings"
@@ -99,7 +99,7 @@ over `_ex`.
 | **python** | ctypes | Cluster 1 (via `_ex`), `arm_tid`, `dr_under_dynamorio` | grow-a-use: window trio, `stealth_trace`, `symbolize_bucket` | ~2–3d (mostly low-value) | Closest. **Leads .NET** on `dr_under_dynamorio`. No live JIT → not a managed target |
 | **ruby** | Fiddle | Cluster 1 (`_ex`+`render_scope`+`call_scoped`) | optional generics; `arm_tid` | ~2–3d | Handle packed `LONG_LONG`; capturing upcall blocked (descent stays exempt) |
 | **node** | koffi | Cluster 1, §D1 `using`-scope, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)** | **§D1 managed**: `AsyncLocalStorage` hop hook, `render_versioned`, V8-jitdump resolution | ~4–6d | **Managed target.** `worker_threads` hops escape (disclosed gap) |
-| **java** | FFM/Panama | Cluster 1, §D2 `AsmTrace` t-w-r, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)** | **§D2 managed**: JVMTI hop hook, `libperf-jvmti` jitdump resolution | ~4–6d | **Managed target.** `libperf-jvmti.so` is an external build dep |
+| **java** | FFM/Panama | Cluster 1, §D2 `AsmTrace` t-w-r, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)**, **`libperf-jvmti` live JIT resolution ✅ (2026-07-15)** | **§D2 managed**: JVMTI value-changed hop hook | ~4–6d | **Managed target.** `libperf-jvmti.so` is an external build dep |
 | **cpp** | dlopen | Cluster 1 ✅, `arm_tid` | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | Struct-by-value trivial (real C decls); capturing upcall blocked |
 | **rust** | libloading | Cluster 1 ✅ | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `#[repr(C)]` by value trivial; capturing upcall blocked |
 | **zig** | std.DynLib | Cluster 1 ✅ | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `extern struct` by value trivial; capturing upcall blocked |
@@ -204,10 +204,13 @@ removed (stale exemptions fail the gate, so they *must* be removed).
 > `[StructLayout]`s. Validated in `docker-hwtrace-node` / `-java` against the C oracles
 > (`test_render_versioned` / `test_symbolize_bucket` / `test_wholewindow_buckets` /
 > `test_stitch_slices`). All six `ALL` allow-list lines stay (7-8 bindings still don't wrap them).
-> **What remains is genuinely forward-look**: the LIVE async-hop *producer* (Node
-> `AsyncLocalStorage` / Java JVMTI hop hooks) and runtime JIT-address resolution (V8 jitdump /
-> `libperf-jvmti`) — runtime-specific, no CI coverage today; the merge/attribution *substrate* they
-> feed is now wrapped and host-tested. The remaining ALL-exempt symbols are hardware-gated (AMD
+> **Since landed**: the LIVE async-hop *producer* on both runtimes (Node `AsyncLocalStorage` /
+> Java executor-decorator hop hooks), Node's V8 jitdump JIT-address resolution, and **(2026-07-15)**
+> Java's `libperf-jvmti` live JIT-method resolution (`findJavaJitdump` + `javaResolveJitMethod`,
+> CI-covered by `docker-hwtrace-java` with an address-keyed jcmd perf-map cross-check). **What
+> remains genuinely forward-look**: the Java **JVMTI value-changed hop hook** (a greenfield native
+> agent, no CI coverage today); the merge/attribution *substrate* they feed is now wrapped and
+> host-tested. The remaining ALL-exempt symbols are hardware-gated (AMD
 > LBR/MSR survey) or superseded (registry `call_scoped`, `begin_scope`).
 
 **Bindings:** node, java only. **~8–12d** (§D1 ~4–6d, §D2 ~4–6d, per the [managed

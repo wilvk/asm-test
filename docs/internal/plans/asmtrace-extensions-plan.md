@@ -108,7 +108,7 @@ the bare-`using` ergonomics become a hard requirement. Keep the delegate form as
 entry point. (The in-process `using (new AsmTrace())` already provides the inline shape for
 the best-effort tier.)
 
-### E5 — AutoFDO-faithful weighting for `WindowHot` *(forward-look)*
+### E5 — AutoFDO-faithful weighting for `WindowHot` — **LANDED**
 
 Today `WindowHot` weights each sampled branch-target endpoint equally. The AutoFDO/BOLT model
 weights the basic block spanning `[to_i, from_{i+1}]` (MCF-style block frequencies, [BOLT](https://arxiv.org/pdf/1807.06735)),
@@ -138,9 +138,9 @@ inline `using (new AsmTrace(HwBackend.AmdLbr))` — see
 
 1. ~~**E1 `WindowHybrid`**~~ — **LANDED** (the exact-on-hot-slice composition; all reuse).
 2. ~~**E2 `AsmMethod.Weight`**~~ — **LANDED** (alongside E1).
-3. **E3 sibling-thread publish** — closes the `Window` deep-BCL gap (the one honest-partial in the family).
+3. ~~**E3 sibling-thread publish**~~ — **LANDED** (closes the `Window` deep-BCL gap, the one honest-partial in the family).
 4. ~~**E7 AMD region example**~~ — **LANDED**.
-5. **E5 / E6** — additive fidelity; when a consumer needs them.
+5. ~~**E5**~~ — **LANDED**. **E6** — additive fidelity; when a consumer needs it.
 6. **E4 inline-`using` OOP** — only if bare-`using` ergonomics become required.
 
 ## Non-goals
