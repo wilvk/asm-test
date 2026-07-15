@@ -28,6 +28,14 @@
 | Live call **tree** (indented by depth; TUI two-pane w/ assembly) | `--tree` | mode 5 | `asmspy_engine_tree` | single-step, all threads | **no** (single-step) |
 | Process/thread **topology** (procs+threads+children, drill-in) | `--procs` | mode 6 | `asmspy_engine_procs` | `PTRACE_SYSCALL` **or** single-step, whole tree | **yes** in `--count=syscalls` |
 | **Statistical hot edges** (IBS-Op `from→to`, named endpoints, misp/ret tags, `--json`) | `--sample` | mode 7 | `asmspy_engine_sample` | **AMD IBS-Op statistical sampling, OUT OF BAND** (no ptrace/step) | **yes** — the only *rich* view safe on any target (incl. a live JIT) |
+| **Data flow** (L0 values + L1 def-use + L2 slice nav) | `--dataflow` | mode 9 | `asmspy_engine_dataflow` | scoped-ptrace L0 value producer (attach + region single-step), UI-side slice navigation | **no** (single-step); leader-only pending Inc 5 worker wiring |
+| **Data watchpoint** (who-wrote-this-field + value) | `--watch` | — | `asmspy_engine_watch` | x86 HW data watchpoint (DR0-3, per-thread arm), native speed between hits | **yes** — near-zero perturbation |
+
+> The **Data flow** and **Data watchpoint** views landed **2026-07-15** via the
+> [live-attach data-flow plan](live-attach-dataflow-plan.md) (Inc 6 headless `--dataflow` +
+> Inc 7 TUI mode 9) and its followup **F3** (`--watch`); `asmspy_engine_watch` per-thread-arms
+> across `/proc/<pid>/task/*`. The Data-flow view is native-target only for now (the JIT/managed
+> engine path is live-attach Increment 5).
 
 Cross-cutting, landed: **PLT stub resolution** (`name@plt`, tagged `[EXT]`); the **crash-safe
 two-phase detach** (stop all threads, then release all — fixes a fatal-SIGTRAP-on-detach when
@@ -68,7 +76,7 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 |---|---|---|
 | ~~**No regression test for the crash-safe two-phase detach** — the exact bug the fix closed has zero guard, and every smoke victim is killed right after tracing, so a regression that silently kills the target looks like success. Trace a multi-threaded victim, then assert it **survives** detach~~ — **landed** as a happy-path survival tripwire (single-step via `--stream`+`--tree`, then assert alive) in `cli_smoke.sh`. Honest scope: the historical fatal SIGTRAP reproduced *reliably only on a real V8/Node JIT* (per 6aaad45's own notes — simple victims survive even the pre-fix detach), so this guards gross regressions, not that JIT crash (which needs a live JIT, an inherent limit) | med | S |
 | ~~Graph sort comparator (`gnode_cmp`) ordering/tiebreaks unasserted — extract into a testable header + `test_graphsort.c`~~ — **landed 2026-07-12**: `cli/asmspy_graphsort.h` + `cli/test_graphsort.c` (ties included), wired into the smoke | med | M |
-| `asmspy_symtab_at` reverse-lookup edge cases; multi-thread `[tid]` tagging for graph/tree; attach-failure + `REGION_NEVER_RAN`; negative-`n` "until exit"; `--tree` depth > 1; post-attach clone-following; job-control group-stop; syscall-decoder breadth; region edge aggregation; a pure TUI view-model (`test_view.c`) | low | S–M each |
+| `asmspy_symtab_at` reverse-lookup edge cases; multi-thread `[tid]` tagging for graph/tree; attach-failure + `REGION_NEVER_RAN`; negative-`n` "until exit"; `--tree` depth > 1; post-attach clone-following; job-control group-stop; syscall-decoder breadth; region edge aggregation; ~~a pure TUI view-model (`test_view.c`)~~ **(landed 2026-07-15: `cli/asmspy_dataview.h` + `cli/test_view.c`, unit-testing the Data-flow annotation/slice/def-use logic, wired into `cli_smoke.sh`)** | low | S–M each |
 
 ### Theme E — TUI / UX & interop
 

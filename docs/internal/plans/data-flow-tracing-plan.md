@@ -191,7 +191,11 @@ to a `using` region.
 - *Optional* Phase 3b: ptrace-snapshot → **emulator replay** for the value work off the live
   thread — valid only for **OS-interaction-free** regions (a syscall/futex/vDSO/signal in the
   region has no kernel under the emulator); anything else escalates to full input-capture
-  record/replay. Nice-to-have, not on the critical path.
+  record/replay. Nice-to-have, not on the critical path. **Realized 2026-07-15** as followup
+  **F1 increment 1** ([live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md)) —
+  the block-step + Unicorn-replay value tier `src/dataflow_blockstep.c`: purity-gated, byte-identical
+  to single-step, ~6× fewer stops; impure regions fall back to single-step (F2 record-inject is the
+  input-capture escalation).
 
 **Exit criteria:** attaches to a live victim, captures a scoped region's value trace whose
 slices match the emulator oracle on a deterministic region; XMM/YMM and a `gs:`-relative
