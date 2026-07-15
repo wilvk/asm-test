@@ -95,9 +95,11 @@
 
 #include <asm/prctl.h> /* ARCH_SET_GS */
 #include <capstone/capstone.h>
+#include <dirent.h> /* /proc/<pid>/task enumeration (Increment 4 worker targeting) */
 #include <elf.h> /* NT_X86_XSTATE */
 #include <errno.h>
 #include <signal.h>
+#include <stdio.h> /* snprintf for the /proc/<pid>/task path (Increment 4) */
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
@@ -111,6 +113,13 @@
 /* Hard backstop on TOTAL steps (prologue/libc to the region entry, plus the region):
  * bounds wall time if the tracee never enters or never leaves [code, code+len). */
 #define DFP_STEP_BACKSTOP (1u << 20)
+
+/* waitpid on a SEIZE'd foreign target's THREADS (clone children) needs __WALL to report
+ * their ptrace-stops — Increment 4 enumerates every thread and steps whichever WORKER
+ * enters the region, not just the leader. */
+#ifndef __WALL
+#define __WALL 0x40000000
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Register-file value reads                                           */
@@ -1059,6 +1068,415 @@ int asmtest_dataflow_ptrace_attach_pid(pid_t pid, uint64_t base,
         pid, base, code_len, max_insns, NULL, 0, result, vt);
 }
 
+/* ================================================================== */
+/* Increment 4 — worker-thread targeting (managed methods run off the  */
+/* leader).                                                            */
+/*                                                                     */
+/* The attach paths above single-step the LEADER: dfp_run_to plants an  */
+/* int3 and PTRACE_CONTs `pid` (the thread-group leader) alone, so a    */
+/* routine that only ever runs on a WORKER thread is never entered —    */
+/* the leader hits the region-entry breakpoint never, and the capture   */
+/* hangs / comes back empty. Managed runtimes run almost everything on  */
+/* worker threads, so this path must not depend on the leader.          */
+/*                                                                     */
+/* It SEIZEs EVERY thread of the target (enumerating /proc/<pid>/task), */
+/* plants ONE int3 at the region entry — a software breakpoint is a     */
+/* memory patch, so it is shared across all threads of the (single)     */
+/* address space — releases them all, and single-steps WHICHEVER thread */
+/* first traps at the entry. That thread is targeted by the tid         */
+/* `waitpid` reports (its OWN kernel tid), NEVER the leader `pid`:       */
+/* stepping the leader while a worker is the one at the breakpoint is    */
+/* the getpid-vs-gettid mistargeting that was a real fatal-SIGTRAP bug   */
+/* on HotSpot (src/hwtrace.c targets SYS_gettid, not getpid, for exactly */
+/* this reason). The other threads are DETACHed so they run FREE at full */
+/* speed while the one entering thread is stepped. An optional           */
+/* `only_tid` (0 = any) pins exactly one thread: a non-target thread     */
+/* that reaches the entry first is single-stepped OVER the shared        */
+/* breakpoint and released, so the bp stays armed for the pinned tid.    */
+/*                                                                     */
+/* Caveat carried in-code: PTRACE_O_TRACECLONE is deliberately NOT set. */
+/* The siblings are detached to run free, so we must not inherit their   */
+/* future clone-stops (which would strand a never-waited thread). The    */
+/* re-scan in dfp_seize_all catches every thread that exists when we     */
+/* attach — the worker-targeting scope here; a thread SPAWNED after the  */
+/* scan that enters the region during the brief entry-catch window is    */
+/* untracked (Increment 5's JIT entry pairs this with a re-arm loop).    */
+/* ================================================================== */
+
+typedef struct {
+    pid_t *v;
+    size_t n, cap;
+} dfp_thrset;
+
+static int dfp_thrset_has(const dfp_thrset *s, pid_t tid) {
+    for (size_t i = 0; i < s->n; i++)
+        if (s->v[i] == tid)
+            return 1;
+    return 0;
+}
+
+/* Append `tid` (idempotent). Returns 1 on success, 0 on allocation failure. */
+static int dfp_thrset_add(dfp_thrset *s, pid_t tid) {
+    if (dfp_thrset_has(s, tid))
+        return 1;
+    if (s->n == s->cap) {
+        size_t nc = s->cap ? s->cap * 2 : 16;
+        pid_t *nv = (pid_t *)realloc(s->v, nc * sizeof *nv);
+        if (nv == NULL)
+            return 0;
+        s->v = nv;
+        s->cap = nc;
+    }
+    s->v[s->n++] = tid;
+    return 1;
+}
+
+/* Plant a shared int3 at `base` via `tid` (any stopped thread — one address space); the
+ * original word is returned in *orig for the later restore. 0 on success, -1 on failure. */
+static int dfp_plant_bp(pid_t tid, uint64_t base, long *orig) {
+    errno = 0;
+    long o = ptrace(PTRACE_PEEKTEXT, tid, (void *)(uintptr_t)base, NULL);
+    if (o == -1 && errno != 0)
+        return -1;
+    long trap = (o & ~0xffL) | 0xccL;
+    if (ptrace(PTRACE_POKETEXT, tid, (void *)(uintptr_t)base,
+               (void *)(uintptr_t)trap) != 0)
+        return -1;
+    *orig = o;
+    return 0;
+}
+
+/* Restore the original byte at `base` (remove the shared int3) via a stopped `tid`. */
+static void dfp_remove_bp(pid_t tid, uint64_t base, long orig) {
+    ptrace(PTRACE_POKETEXT, tid, (void *)(uintptr_t)base,
+           (void *)(uintptr_t)orig);
+}
+
+/* Remove the shared int3 via ANY thread we can stop (POKETEXT needs a stopped tracee) —
+ * used on failure teardown when the thread that would naturally restore it is gone. */
+static void dfp_remove_bp_any(dfp_thrset *set, uint64_t base, long orig) {
+    for (size_t i = 0; i < set->n; i++) {
+        pid_t tid = set->v[i];
+        ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
+        int st = 0;
+        pid_t w;
+        do {
+            w = waitpid(tid, &st, __WALL);
+        } while (w < 0 && errno == EINTR);
+        if (w == tid && WIFSTOPPED(st)) {
+            dfp_remove_bp(tid, base, orig);
+            return;
+        }
+    }
+}
+
+/* A non-target thread `tid` is trap-stopped at base+1 (it reached the shared entry int3
+ * before the pinned thread). Step it PAST the entry WITHOUT losing the breakpoint for the
+ * pinned thread: rewind rip to base, restore the original byte, single-step one real
+ * instruction, then re-plant the int3 (the caller then CONTs `tid` so it runs on free).
+ * Returns 0 on success, -1 if the thread vanished / a ptrace call failed. */
+static int dfp_step_over_bp(pid_t tid, uint64_t base, long orig) {
+    struct user_regs_struct regs;
+    if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) != 0)
+        return -1;
+    if (regs.rip == base + 1) {
+        regs.rip = base;
+        if (ptrace(PTRACE_SETREGS, tid, NULL, &regs) != 0)
+            return -1;
+    }
+    dfp_remove_bp(tid, base, orig);
+    if (ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL) != 0)
+        return -1;
+    int st = 0;
+    pid_t w;
+    do {
+        w = waitpid(tid, &st, __WALL);
+    } while (w < 0 && errno == EINTR);
+    if (w != tid || WIFEXITED(st) || WIFSIGNALED(st))
+        return -1; /* it left mid-step: nothing to re-arm, no thread to resume */
+    long trap = (orig & ~0xffL) | 0xccL;
+    ptrace(PTRACE_POKETEXT, tid, (void *)(uintptr_t)base,
+           (void *)(uintptr_t)trap); /* re-arm for the pinned thread */
+    return 0;
+}
+
+/* SEIZE every thread of `pid` (enumerate /proc/<pid>/task, re-scanning until a full pass
+ * adds nothing — closing the race where a not-yet-seized thread spawns another) and
+ * INTERRUPT each into a stop. NO PTRACE_O_EXITKILL (a foreign target must outlive us) and
+ * NO O_TRACECLONE (the siblings are detached to run free, so their future clone-stops must
+ * not become ours). Records every seized tid in `set`. Returns 0 if the leader was seized
+ * (the shared int3 can then be planted via the common address space), -1 otherwise. */
+static int dfp_seize_all(pid_t pid, dfp_thrset *set) {
+    if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0)
+        return -1;
+    ptrace(PTRACE_INTERRUPT, pid, NULL, NULL);
+    if (!dfp_thrset_add(set, pid)) {
+        ptrace(PTRACE_DETACH, pid, NULL, NULL);
+        return -1;
+    }
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/task", (int)pid);
+    for (int pass = 0; pass < 16; pass++) {
+        DIR *d = opendir(path);
+        if (d == NULL)
+            break;
+        int added = 0;
+        struct dirent *de;
+        while ((de = readdir(d)) != NULL) {
+            if (de->d_name[0] < '0' || de->d_name[0] > '9')
+                continue;
+            pid_t tid = (pid_t)strtol(de->d_name, NULL, 10);
+            if (tid <= 0 || dfp_thrset_has(set, tid))
+                continue;
+            if (ptrace(PTRACE_SEIZE, tid, NULL, NULL) == 0) {
+                ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
+                if (dfp_thrset_add(set, tid))
+                    added = 1;
+                else
+                    ptrace(PTRACE_DETACH, tid, NULL, NULL);
+            }
+        }
+        closedir(d);
+        if (!added)
+            break; /* stable: a full pass found no new thread */
+    }
+    return 0;
+}
+
+/* With every thread of the target already SEIZE+INTERRUPT'd (recorded in `set`), plant the
+ * shared entry int3, release ALL threads, and run until the FIRST thread to execute `base`
+ * traps there — honoring `only_tid` (0 = any). A non-target thread that reaches base first
+ * is stepped OVER the breakpoint and released (the bp stays armed for the pinned thread).
+ * On success *entering gets that tid, left trap-stopped AT base (byte restored, rip rewound
+ * — the pre_positioned precondition dfp_step_loop expects) with the OTHER threads running
+ * free; returns 0. On failure the shared bp is removed and -1 returned (caller tears down). */
+static int dfp_run_to_multi(dfp_thrset *set, uint64_t base, pid_t only_tid,
+                            pid_t *entering) {
+    /* 1. Drain each thread's SEIZE/INTERRUPT stop so all are ptrace-stopped (the
+     *    precondition for planting the shared int3 and for the release CONT). Drop any
+     *    thread that vanished mid-seize. */
+    for (size_t i = 0; i < set->n;) {
+        pid_t tid = set->v[i];
+        int st = 0;
+        pid_t w;
+        do {
+            w = waitpid(tid, &st, __WALL);
+        } while (w < 0 && errno == EINTR);
+        if (w != tid || WIFEXITED(st) || WIFSIGNALED(st)) {
+            set->v[i] = set->v[--set->n]; /* vanished: drop, order irrelevant */
+            continue;
+        }
+        i++;
+    }
+    if (set->n == 0)
+        return -1; /* whole target gone */
+
+    /* 2. Plant the shared int3 (via the first live thread — one address space). */
+    long orig = 0;
+    if (dfp_plant_bp(set->v[0], base, &orig) != 0)
+        return -1;
+
+    /* 3. Release every thread into the region race. */
+    for (size_t i = 0; i < set->n; i++)
+        ptrace(PTRACE_CONT, set->v[i], NULL, NULL);
+
+    /* 4. Catch the first thread to reach base (respecting only_tid). */
+    uint64_t budget = 0;
+    for (;;) {
+        int st = 0;
+        pid_t w = waitpid(-1, &st, __WALL);
+        if (w < 0) {
+            if (errno == EINTR)
+                continue;
+            return -1; /* ECHILD: target gone, the bp died with it */
+        }
+        if (WIFEXITED(st) || WIFSIGNALED(st)) {
+            for (size_t i = 0; i < set->n; i++)
+                if (set->v[i] == w) {
+                    set->v[i] = set->v[--set->n];
+                    break;
+                }
+            if (set->n == 0)
+                return -1; /* target gone */
+            continue;
+        }
+        if (!WIFSTOPPED(st))
+            continue;
+        int sig = WSTOPSIG(st);
+        if (sig == SIGTRAP) {
+            struct user_regs_struct regs;
+            if (ptrace(PTRACE_GETREGS, w, NULL, &regs) != 0) {
+                ptrace(PTRACE_CONT, w, NULL, NULL);
+                continue;
+            }
+            if (regs.rip == base + 1) {
+                if (only_tid == 0 || w == only_tid) {
+                    /* The pinned/first thread: restore the byte, rewind rip to base, and
+                     * leave it trap-stopped THERE for dfp_step_loop (pre_positioned). */
+                    dfp_remove_bp(w, base, orig);
+                    regs.rip = base;
+                    if (ptrace(PTRACE_SETREGS, w, NULL, &regs) != 0)
+                        return -1;
+                    *entering = w;
+                    return 0;
+                }
+                /* A non-target reached base first: step it OVER the bp and release it,
+                 * keeping the bp armed for only_tid. */
+                if (++budget > DFP_STEP_BACKSTOP ||
+                    dfp_step_over_bp(w, base, orig) != 0) {
+                    dfp_remove_bp_any(set, base, orig);
+                    return -1;
+                }
+                ptrace(PTRACE_CONT, w, NULL, NULL);
+                continue;
+            }
+            /* A SIGTRAP not at our bp (a stray group/event stop): just resume. */
+            ptrace(PTRACE_CONT, w, NULL, NULL);
+            continue;
+        }
+        /* A group-stop (SIGSTOP family under SEIZE) resumes with 0; any other signal is
+         * forwarded so the target handles its own. */
+        int fwd = (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
+                   sig == SIGTTOU)
+                      ? 0
+                      : sig;
+        ptrace(PTRACE_CONT, w, NULL, (void *)(uintptr_t)fwd);
+    }
+}
+
+/* Detach every thread in `set` except `keep` (the one about to be single-stepped) so the
+ * siblings resume and run FREE (untraced, full speed). Each is INTERRUPT'd, waited to a
+ * stop, then DETACHed; a sibling caught at base+1 (a concurrent int3 hit not yet drained)
+ * is rewound to base first so it re-executes the now-restored instruction correctly. */
+static void dfp_detach_others(dfp_thrset *set, pid_t keep, uint64_t base) {
+    for (size_t i = 0; i < set->n; i++) {
+        pid_t tid = set->v[i];
+        if (tid == keep)
+            continue;
+        ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
+        int st = 0;
+        pid_t w;
+        for (;;) {
+            w = waitpid(tid, &st, __WALL);
+            if (w < 0) {
+                if (errno == EINTR)
+                    continue;
+                break; /* gone */
+            }
+            if (WIFEXITED(st) || WIFSIGNALED(st)) {
+                w = -1;
+                break;
+            }
+            if (WIFSTOPPED(st))
+                break;
+        }
+        if (w != tid)
+            continue; /* exited: nothing to detach */
+        struct user_regs_struct regs;
+        if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0 &&
+            regs.rip == base + 1) {
+            regs.rip = base;
+            ptrace(PTRACE_SETREGS, tid, NULL, &regs);
+        }
+        ptrace(PTRACE_DETACH, tid, NULL, NULL);
+    }
+}
+
+/* The multi-thread worker-targeting core. `img`/`when` carry the optional Increment-3
+ * versioned decode (NULL/0 = the live process_vm_readv snapshot) so the Increment-5 JIT
+ * entry can compose worker-targeting with time-correct bytes; the public attach_pid_tid
+ * below passes NULL. */
+static int dfp_attach_worker(pid_t pid, pid_t only_tid, uint64_t base,
+                             size_t code_len, uint64_t max_insns,
+                             asmtest_codeimage_t *img, uint64_t when,
+                             long *result, asmtest_valtrace_t *vt) {
+    if (vt == NULL || pid <= 0 || only_tid < 0 || base == 0 || code_len == 0)
+        return DF_PTRACE_EINVAL;
+    vt->mem_space = AT_LOC_MEM_ABS;
+
+    dfp_thrset set;
+    memset(&set, 0, sizeof set);
+
+    /* SEIZE every thread of the (live, foreign) target. */
+    if (dfp_seize_all(pid, &set) != 0) {
+        free(set.v);
+        return DF_PTRACE_ETRACE;
+    }
+    /* A requested tid must actually be a thread we seized — else it could hit the shared
+     * int3 UNTRACED and take a real (target-fatal) SIGTRAP. */
+    if (only_tid != 0 && !dfp_thrset_has(&set, only_tid)) {
+        dfp_detach_others(&set, 0, base); /* nothing planted yet */
+        free(set.v);
+        return DF_PTRACE_ETRACE;
+    }
+
+    /* Plant the shared entry breakpoint, release all threads, catch whichever enters. */
+    pid_t entering = 0;
+    if (dfp_run_to_multi(&set, base, only_tid, &entering) != 0) {
+        dfp_detach_others(&set, 0, base);
+        free(set.v);
+        return DF_PTRACE_ETRACE;
+    }
+
+    /* The entering thread is trap-stopped at base. Detach the SIBLINGS so they run free. */
+    dfp_detach_others(&set, entering, base);
+
+    /* Read the region bytes FROM the target (shared AS; read via the entering tid). */
+    uint8_t *code = (uint8_t *)malloc(code_len);
+    if (code == NULL) {
+        ptrace(PTRACE_DETACH, entering, NULL, NULL);
+        free(set.v);
+        return DF_PTRACE_ETRACE;
+    }
+    if (!child_read(entering, base, code, code_len)) {
+        free(code);
+        ptrace(PTRACE_DETACH, entering, NULL, NULL);
+        free(set.v);
+        return DF_PTRACE_ETRACE;
+    }
+
+    dfp_ctx c;
+    memset(&c, 0, sizeof c);
+    c.pid =
+        entering; /* single-step the ENTERING thread by its own tid, never the leader */
+    c.vt = vt;
+    c.code = code;
+    c.code_len = code_len;
+    c.base = base;
+    c.foreign = 1;        /* NEVER kill the target on any exit */
+    c.pre_positioned = 1; /* already trap-stopped AT base (dfp_run_to_multi) */
+    c.img = img;          /* optional versioned decode (NULL = live snapshot) */
+    c.when = when;
+
+    int left_stopped = 0;
+    int rc =
+        dfp_step_loop(&c, base, code_len, max_insns, result, &left_stopped);
+    free(c.cur.v);
+    free(code);
+
+    /* Crash-safe detach: the entering thread is trap-stopped past the region; DETACH (with
+     * any fault signal forwarded) resumes it free so the target SURVIVES. */
+    if (left_stopped)
+        ptrace(PTRACE_DETACH, entering, NULL, (void *)(uintptr_t)c.detach_sig);
+    free(set.v);
+    return rc;
+}
+
+/* Increment 4 — worker-thread targeting. SEIZE EVERY thread of the (live, foreign) target,
+ * plant one shared region-entry int3, and single-step WHICHEVER thread first enters the
+ * region — identified by its OWN tid (the waitpid-reported stopping thread), never the
+ * leader — while the siblings are DETACHed to run free at full speed. `only_tid` (0 = any)
+ * pins exactly one thread. This is the entry managed methods need: they run on worker
+ * threads, so the leader-only attach_pid above returns nothing for them. Native-decode
+ * (live snapshot); versioned + worker-targeting is composed by the Increment-5 JIT entry. */
+int asmtest_dataflow_ptrace_attach_pid_tid(pid_t pid, pid_t only_tid,
+                                           uint64_t base, size_t code_len,
+                                           uint64_t max_insns, long *result,
+                                           asmtest_valtrace_t *vt) {
+    return dfp_attach_worker(pid, only_tid, base, code_len, max_insns, NULL, 0,
+                             result, vt);
+}
+
 #else /* not (Linux x86-64 + Capstone) */
 
 int asmtest_dataflow_ptrace_run(const uint8_t *code, size_t code_len,
@@ -1118,6 +1536,20 @@ int asmtest_dataflow_ptrace_attach_pid_versioned(pid_t pid, uint64_t base,
     (void)max_insns;
     (void)img;
     (void)when;
+    (void)result;
+    (void)vt;
+    return DF_PTRACE_ENOSYS;
+}
+
+int asmtest_dataflow_ptrace_attach_pid_tid(pid_t pid, pid_t only_tid,
+                                           uint64_t base, size_t code_len,
+                                           uint64_t max_insns, long *result,
+                                           asmtest_valtrace_t *vt) {
+    (void)pid;
+    (void)only_tid;
+    (void)base;
+    (void)code_len;
+    (void)max_insns;
     (void)result;
     (void)vt;
     return DF_PTRACE_ENOSYS;

@@ -459,8 +459,10 @@ static void test_attach(void) {
 
 /* ---- Increment 1: attach to a FOREIGN, already-running process by pid ---- */
 #if defined(__linux__) && defined(__x86_64__)
+#include <pthread.h> /* Increment 4: the multi-thread worker fixture */
 #include <signal.h>
 #include <sys/mman.h>
+#include <sys/syscall.h> /* Increment 4: SYS_gettid (the worker publishes its own tid) */
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -468,6 +470,13 @@ static void test_attach(void) {
 int asmtest_dataflow_ptrace_attach_pid(pid_t pid, uint64_t base,
                                        size_t code_len, uint64_t max_insns,
                                        long *result, asmtest_valtrace_t *vt);
+
+/* Increment 4: worker-thread targeting. SEIZE all threads, single-step whichever enters
+ * the region (by its own tid, never the leader); only_tid (0 = any) pins one thread. */
+int asmtest_dataflow_ptrace_attach_pid_tid(pid_t pid, pid_t only_tid,
+                                           uint64_t base, size_t code_len,
+                                           uint64_t max_insns, long *result,
+                                           asmtest_valtrace_t *vt);
 
 /* Increment 3: attach_pid with an optional versioned code-image (+ `when` sequence) as the
  * operand-decode byte source. img == NULL is the native attach_pid behaviour. Re-declared
@@ -902,11 +911,291 @@ static void test_versioned(void) {
     munmap(ex, len);
     munmap(ctl, sizeof *ctl);
 }
+
+/* ---- Increment 4: worker-thread targeting (the target runs OFF the leader) ---- */
+
+/* Shared (MAP_SHARED) control block: the victim's threads publish their kernel tids and
+ * bump per-thread counters so the parent (tracer) can (a) target a worker by tid, (b) prove
+ * capture came from the intended thread (distinct args -> distinct values), and (c) prove
+ * the siblings + captured thread all keep running after the detach. `base` is the region
+ * address, the same in the parent and its fork()ed victim (inherited mapping). */
+typedef struct {
+    volatile long
+        leader_counter; /* the leader bumps this; it NEVER runs the region */
+    volatile int worker_a_tid;
+    volatile long worker_a_counter;
+    volatile int worker_b_tid;
+    volatile long worker_b_counter;
+    volatile uint64_t base;
+    volatile long a0_a, a1_a, a0_b, a1_b;
+} wk_ctl;
+
+/* worker A / B bodies: publish gettid, then loop calling the region at ctl->base with the
+ * worker's OWN args, bumping the worker's counter each iteration (a small sleep keeps the
+ * shared-breakpoint race gentle so the pinned thread is caught quickly). Two workers with
+ * distinct args let the only_tid test prove WHICH thread was captured. */
+static void *wk_worker_a(void *arg) {
+    wk_ctl *ctl = (wk_ctl *)arg;
+    ctl->worker_a_tid = (int)syscall(SYS_gettid);
+    struct timespec ts = {0, 3 * 1000 * 1000};
+    for (;;) {
+        volatile long r = ((fn2_t)(uintptr_t)ctl->base)(ctl->a0_a, ctl->a1_a);
+        (void)r;
+        ctl->worker_a_counter++;
+        nanosleep(&ts, NULL);
+    }
+    return NULL;
+}
+static void *wk_worker_b(void *arg) {
+    wk_ctl *ctl = (wk_ctl *)arg;
+    ctl->worker_b_tid = (int)syscall(SYS_gettid);
+    struct timespec ts = {0, 3 * 1000 * 1000};
+    for (;;) {
+        volatile long r = ((fn2_t)(uintptr_t)ctl->base)(ctl->a0_b, ctl->a1_b);
+        (void)r;
+        ctl->worker_b_counter++;
+        nanosleep(&ts, NULL);
+    }
+    return NULL;
+}
+
+static void test_attach_worker(void) {
+    /* Exit criterion (worker capture): a victim whose target routine runs ONLY on a WORKER
+     * thread; the leader NEVER calls the region. The leader-only attach_pid would never
+     * enter / hang; attach_pid_tid SEIZEs all threads and steps whichever enters — the
+     * worker — while the leader keeps running free. */
+    void *ex = map_rx(df_chain, sizeof df_chain);
+    if (ex == NULL) {
+        printf("# SKIP attach_worker: region mmap failed\n");
+        return;
+    }
+    size_t len = sizeof df_chain;
+    uint64_t base = (uint64_t)(uintptr_t)ex;
+
+    wk_ctl *ctl = mmap(NULL, sizeof *ctl, PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (ctl == MAP_FAILED) {
+        munmap(ex, len);
+        printf("# SKIP attach_worker: shm mmap failed\n");
+        return;
+    }
+    memset((void *)ctl, 0, sizeof *ctl);
+    ctl->base = base;
+    ctl->a0_a = 7;
+    ctl->a1_a = 5;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        munmap(ex, len);
+        munmap((void *)ctl, sizeof *ctl);
+        printf("# SKIP attach_worker: fork failed\n");
+        return;
+    }
+    if (pid == 0) {
+        /* Victim: the leader spawns a worker that loops the region, then the leader
+         * busy-loops WITHOUT ever touching the region (the target is off-leader). */
+        pthread_t th;
+        if (pthread_create(&th, NULL, wk_worker_a, (void *)ctl) != 0)
+            _exit(1);
+        struct timespec ts = {0, 3 * 1000 * 1000};
+        for (;;) {
+            ctl->leader_counter++;
+            nanosleep(&ts, NULL);
+        }
+        _exit(0);
+    }
+
+    /* Wait until the worker published its tid AND ran the region once (bounded, so a stuck
+     * victim self-skips rather than hangs the suite). */
+    int ready = 0;
+    for (int i = 0; i < 500; i++) {
+        if (ctl->worker_a_tid != 0 && ctl->worker_a_counter > 0) {
+            ready = 1;
+            break;
+        }
+        struct timespec ts = {0, 3 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+    }
+    if (!ready) {
+        printf("# SKIP attach_worker: victim worker did not start\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        munmap(ex, len);
+        munmap((void *)ctl, sizeof *ctl);
+        return;
+    }
+
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    long result = 0;
+    int rc = asmtest_dataflow_ptrace_attach_pid_tid(pid, 0, base, len, 0,
+                                                    &result, v);
+    if (rc == DF_PTRACE_ETRACE) {
+        printf("# SKIP attach_worker: PTRACE_SEIZE unavailable here "
+               "(yama/seccomp)\n");
+        asmtest_valtrace_free(v);
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        munmap(ex, len);
+        munmap((void *)ctl, sizeof *ctl);
+        return;
+    }
+    CHECK(
+        rc == DF_PTRACE_OK,
+        "attach_worker: SEIZE-all + stepped the WORKER's region (off-leader)");
+    CHECK(result == 12, "attach_worker: worker region returned 12 (rdi + rsi)");
+    CHECK(v->steps_len == 6,
+          "attach_worker: six in-region steps captured on the worker thread");
+
+    /* Both the leader (a sibling, never traced-stepped) and the worker (single-stepped then
+     * detached) must keep running — proving siblings run free AND the target survived. */
+    long lc0 = ctl->leader_counter;
+    long wc0 = ctl->worker_a_counter;
+    struct timespec ts = {0, 60 * 1000 * 1000};
+    nanosleep(&ts, NULL);
+    CHECK(
+        ctl->leader_counter > lc0,
+        "attach_worker: the LEADER kept running at full speed (sibling free)");
+    CHECK(ctl->worker_a_counter > wc0,
+          "attach_worker: the worker SURVIVED the detach (kept looping)");
+
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    CHECK(
+        g != NULL && has_edge(g, 1, 2),
+        "attach_worker: load-after-store edge step1 -> step2 (worker capture)");
+    CHECK(g != NULL && has_edge(g, 0, 1) && has_edge(g, 2, 3) &&
+              has_edge(g, 3, 4),
+          "attach_worker: register move chain edges 0->1, 2->3, 3->4 (worker)");
+    at_val_rec_t sink = {0};
+    sink.step = 4;
+    asmtest_slice_t *bwd = g ? asmtest_slice_backward(g, sink) : NULL;
+    CHECK(
+        bwd && bwd->n == 5 && asmtest_slice_contains(bwd, 0) &&
+            asmtest_slice_contains(bwd, 4),
+        "attach_worker: backward slice(step4) = {0,1,2,3,4} (worker capture)");
+    asmtest_slice_free(bwd);
+    asmtest_defuse_free(g);
+    asmtest_valtrace_free(v);
+
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+    munmap(ex, len);
+    munmap((void *)ctl, sizeof *ctl);
+}
+
+static void test_attach_worker_tid(void) {
+    /* Exit criterion (only_tid restricts to exactly one thread): TWO workers both loop the
+     * SAME region with DISTINCT args (A: 7,5 -> 12, stores rdi=7; B: 100,200 -> 300, stores
+     * rdi=100). Pinning only_tid = A must capture A's values even though B also races the
+     * shared entry breakpoint — a non-target hit is stepped OVER the bp, which stays armed
+     * for A. The captured return + step-1 store prove WHICH thread was stepped. */
+    void *ex = map_rx(df_chain, sizeof df_chain);
+    if (ex == NULL) {
+        printf("# SKIP attach_worker_tid: region mmap failed\n");
+        return;
+    }
+    size_t len = sizeof df_chain;
+    uint64_t base = (uint64_t)(uintptr_t)ex;
+
+    wk_ctl *ctl = mmap(NULL, sizeof *ctl, PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (ctl == MAP_FAILED) {
+        munmap(ex, len);
+        printf("# SKIP attach_worker_tid: shm mmap failed\n");
+        return;
+    }
+    memset((void *)ctl, 0, sizeof *ctl);
+    ctl->base = base;
+    ctl->a0_a = 7;
+    ctl->a1_a = 5; /* A -> 12 */
+    ctl->a0_b = 100;
+    ctl->a1_b = 200; /* B -> 300 */
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        munmap(ex, len);
+        munmap((void *)ctl, sizeof *ctl);
+        printf("# SKIP attach_worker_tid: fork failed\n");
+        return;
+    }
+    if (pid == 0) {
+        pthread_t ta, tb;
+        if (pthread_create(&ta, NULL, wk_worker_a, (void *)ctl) != 0)
+            _exit(1);
+        if (pthread_create(&tb, NULL, wk_worker_b, (void *)ctl) != 0)
+            _exit(1);
+        struct timespec ts = {0, 5 * 1000 * 1000};
+        for (;;) {
+            ctl->leader_counter++;
+            nanosleep(&ts, NULL);
+        }
+        _exit(0);
+    }
+
+    int ready = 0;
+    for (int i = 0; i < 500; i++) {
+        if (ctl->worker_a_tid != 0 && ctl->worker_b_tid != 0 &&
+            ctl->worker_a_counter > 0 && ctl->worker_b_counter > 0) {
+            ready = 1;
+            break;
+        }
+        struct timespec ts = {0, 3 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+    }
+    if (!ready) {
+        printf("# SKIP attach_worker_tid: victim workers did not start\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        munmap(ex, len);
+        munmap((void *)ctl, sizeof *ctl);
+        return;
+    }
+
+    pid_t a_tid = (pid_t)ctl->worker_a_tid;
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    long result = 0;
+    int rc = asmtest_dataflow_ptrace_attach_pid_tid(pid, a_tid, base, len, 0,
+                                                    &result, v);
+    if (rc == DF_PTRACE_ETRACE) {
+        printf("# SKIP attach_worker_tid: PTRACE_SEIZE unavailable here "
+               "(yama/seccomp)\n");
+        asmtest_valtrace_free(v);
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        munmap(ex, len);
+        munmap((void *)ctl, sizeof *ctl);
+        return;
+    }
+    CHECK(rc == DF_PTRACE_OK,
+          "attach_worker_tid: only_tid pinned worker A under contention");
+    CHECK(
+        result == 12,
+        "attach_worker_tid: captured A's return 12 (not B's 300) — tid pinned");
+    uint64_t sv = 0;
+    CHECK(mem_write_value(v, 1, &sv) && sv == 7,
+          "attach_worker_tid: step1 store is A's rdi=7 (not B's 100)");
+    CHECK(v->steps_len == 6,
+          "attach_worker_tid: six in-region steps on the pinned worker");
+
+    long wa0 = ctl->worker_a_counter;
+    long wb0 = ctl->worker_b_counter;
+    struct timespec ts = {0, 60 * 1000 * 1000};
+    nanosleep(&ts, NULL);
+    CHECK(ctl->worker_a_counter > wa0 && ctl->worker_b_counter > wb0,
+          "attach_worker_tid: BOTH workers kept running after detach (free)");
+
+    asmtest_valtrace_free(v);
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+    munmap(ex, len);
+    munmap((void *)ctl, sizeof *ctl);
+}
 #else
 static void test_attach_pid(void) {}
 static void test_callout(void) {}
 static void test_callout_noreturn(void) {}
 static void test_versioned(void) {}
+static void test_attach_worker(void) {}
+static void test_attach_worker_tid(void) {}
 #endif
 
 int main(void) {
@@ -940,6 +1229,8 @@ int main(void) {
     test_callout();
     test_callout_noreturn();
     test_versioned();
+    test_attach_worker();
+    test_attach_worker_tid();
 
     printf("1..%d\n", checks);
     if (failures)

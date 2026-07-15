@@ -273,6 +273,12 @@ $(BUILD)/test_dataflow_ptrace: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o 
 	$(CC) $(CFLAGS) $^ $(CAPSTONE_LIBS) $(LINK_LIBBPF) -o $@
 endif
 
+# Increment 4 (worker-thread targeting): the multi-thread fixture in test_dataflow_ptrace.c
+# spawns pthread workers, so the suite links libpthread. -pthread is additive + position-
+# independent (a no-op where glibc folds pthread into libc, glibc >= 2.34); appended so it
+# applies to whichever test_dataflow_ptrace link rule (unicorn / non-unicorn) above fires.
+$(BUILD)/test_dataflow_ptrace: CFLAGS += -pthread
+
 .PHONY: dataflow-test dataflow-grep-gate
 dataflow-test: $(BUILD)/test_dataflow $(BUILD)/test_dataflow_method \
                $(BUILD)/test_dataflow_gcmove $(BUILD)/test_dataflow_helpers \
@@ -301,3 +307,44 @@ dataflow-grep-gate:
 	   exit 1; \
 	 fi; \
 	 echo "dataflow: operand enumerator holds a persistent csh (1 cs_open) — OK"
+
+# --- F1 increment 1: block-step + emulator-replay value tier ---------------
+# src/dataflow_blockstep.c — a lower-perturbation scoped L0 producer: drive the region
+# with PTRACE_SINGLEBLOCK (one stop per taken branch) + a full GETREGS at each boundary,
+# and REPLAY each pure straight-line block through Unicorn to reconstruct the interior
+# values, purity-gated (impure -> single-step fallback) with a coherence canary. Needs
+# Linux x86-64 + Capstone (operand enumerator + purity scan) + Unicorn (replay); off any
+# of those it compiles to an ENOSYS stub, so the object + explicit link rule are defined
+# UNCONDITIONALLY (the explicit rule beats the root Makefile's generic test_% pattern,
+# which would otherwise link the framework runtime against this standalone-main suite),
+# with the Unicorn cflags/-D and libs toggled by DF_HAVE_UNICORN (set above). Ships no
+# header — a value-trace PRODUCER is a tier; its suite re-declares the entry points.
+DFB_UNICORN_FLAGS :=
+DFB_LINK_LIBS     := $(CAPSTONE_LIBS)
+ifeq ($(DF_HAVE_UNICORN),1)
+DFB_UNICORN_FLAGS := $(UNICORN_CFLAGS) -DASMTEST_HAVE_UNICORN
+DFB_LINK_LIBS     := $(UNICORN_LIBS) $(CAPSTONE_LIBS)
+endif
+
+$(BUILD)/dataflow_blockstep.o: src/dataflow_blockstep.c \
+                               include/asmtest_valtrace.h include/asmtest_trace.h \
+                               $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) $(DFB_UNICORN_FLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
+
+$(BUILD)/test_dataflow_blockstep: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                                  $(BUILD)/dataflow_blockstep.o \
+                                  $(BUILD)/test_dataflow_blockstep.o
+	$(CC) $(CFLAGS) $^ $(DFB_LINK_LIBS) -o $@
+
+# Dedicated lane: build + run where libunicorn is present, else a clean SKIP (matching the
+# "optional tiers need libunicorn" convention). At runtime the suite ALSO self-skips where
+# ptrace is blocked (seccomp/yama) or PTRACE_SINGLEBLOCK is non-functional.
+.PHONY: dataflow-blockstep-test
+ifeq ($(DF_HAVE_UNICORN),1)
+dataflow-blockstep-test: $(BUILD)/test_dataflow_blockstep
+	@echo "== dataflow-blockstep-test =="
+	$(BUILD)/test_dataflow_blockstep
+else
+dataflow-blockstep-test:
+	@echo "# SKIP dataflow-blockstep-test: no libunicorn (make deps DEPS_ARGS=--emu)"
+endif
