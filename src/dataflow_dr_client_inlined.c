@@ -596,6 +596,28 @@ static at_shm_channel_t
 static int
     g_ml_applied; /* region/seed applied once (a module can load twice) */
 
+/* Interactive NUDGE arm/disarm (Increment 3, interactive slice). An external controller
+ * (drnudgeunix -pid <pid> -client <id> <arg>, or an in-process dr_nudge_client) toggles a
+ * bounded capture window on a running/attached client WITHOUT the target cooperating. The
+ * nudge handler runs in a valid DR context (a nudge event — like a clean call or a syscall
+ * event; DR's flush + heap/lock APIs are safe here, unlike the foreign app-code GC thread the
+ * live-remap path guards against), so it mirrors the marker-less config path's install/remove
+ * exactly: register_range + on_seed to ARM, and a g_armed gate + region flush to DISARM. The
+ * low byte of the nudge argument is the opcode; higher bits are reserved. */
+#define AT_NUDGE_ARM                                                           \
+    1u /* open the window: install region + paint seed, start capturing */
+#define AT_NUDGE_DISARM                                                        \
+    2u /* close the window: stop capturing (flush the region fragments) */
+#define AT_NUDGE_SNAPSHOT                                                      \
+    3u /* publish `done` so an out-of-process validator can drain mid-run */
+#define AT_NUDGE_OP_MASK 0xffu
+static client_id_t g_client_id; /* saved for nudge (un)registration */
+static int
+    g_nudge_mode; /* `nudge` option: start DISARMED, defer region+seed to an ARM nudge */
+static volatile int g_armed =
+    1; /* capture gate; default ARMED so the marker / launch / methodscan paths are
+                    unchanged — only the nudge path (or `nudge` option at init) toggles it */
+
 /* Bare file syscalls (no libc, DR-API-free), the raw_mmap_anon family for a shm FILE mapping. */
 static long raw_open(const char *path, long flags, long mode) {
     long ret;
@@ -1800,6 +1822,14 @@ static void emit_taint_phase_prod(void *dc, instrlist_t *bb, instr_t *instr,
  * scoped default avoids (the inscount-delta exit criterion). Runs at bb-build time, not the
  * runtime hot path, so a linear scan over <=AT_MAX_REGIONS ranges is fine. */
 static int in_scope(app_pc ipc, uint64_t *off) {
+#ifdef ASMTEST_TAINT
+    /* Nudge DISARM (or a `nudge`-mode client before its first ARM) closes the capture window:
+     * gate instrumentation off without disturbing the registered range set, so a later ARM
+     * re-opens the SAME window via a flush. Default ARMED, so the marker / launch / methodscan
+     * paths are unaffected (they never touch g_armed). */
+    if (!__atomic_load_n(&g_armed, __ATOMIC_ACQUIRE))
+        return 0;
+#endif
     int n = __atomic_load_n(&g_nregions, __ATOMIC_ACQUIRE);
     if (n <= 0)
         return 0;
@@ -2209,11 +2239,108 @@ static void apply_ml_config(const module_data_t *info) {
             &g_ml_shm
                  ->report; /* sink hits land in shm (marker-less)          */
     }
+    /* Nudge mode (Increment 3, interactive): DEFER the region install + seed paint to the ARM
+     * nudge so an external controller opens a bounded capture window mid-run; only the shm
+     * channel is latched now (harmless — nothing captures until an ARM flips g_armed). */
+    if (g_nudge_mode)
+        return;
     if (g_ml_region_set)
         register_range(info->start + g_ml_region_off, (size_t)g_ml_region_len);
     if (g_ml_seed_set)
         on_seed((uint64_t)(uintptr_t)info->start + g_ml_seed_off, g_ml_seed_len,
                 g_ml_seed_color);
+}
+
+/* Resolve the runtime base of the module whose preferred name contains g_ml_module (the same
+ * name apply_ml_config matches), so an ARM nudge can install region/seed by module+offset even
+ * though the module loaded before the nudge arrived. Returns NULL if not (yet) loaded. */
+static app_pc nudge_module_base(void) {
+    if (g_ml_module[0] == '\0')
+        return NULL;
+    app_pc base = NULL;
+    dr_module_iterator_t *it = dr_module_iterator_start();
+    while (dr_module_iterator_hasnext(it)) {
+        module_data_t *m = dr_module_iterator_next(it);
+        const char *name = dr_module_preferred_name(m);
+        if (name != NULL && str_contains(name, g_ml_module))
+            base = m->start;
+        dr_free_module_data(m);
+        if (base != NULL)
+            break;
+    }
+    dr_module_iterator_stop(it);
+    return base;
+}
+
+/* ARM: open the capture window from the nudge context. Installs the configured region + paints
+ * the seed (mirroring apply_ml_config), latches the client-owned shm, flips the armed gate, and
+ * flushes every registered region so its fragments rebuild WITH instrumentation on next entry.
+ * register_range already flushes a FRESH range; the explicit flush additionally re-instruments a
+ * re-arm after a prior DISARM. No lock is held across a flush (register_range unlocks before its
+ * own flush; on_seed holds none), as dr_delay_flush_region requires. */
+static void nudge_arm(void) {
+    if (g_ml_shm != NULL) {
+        if (g_drval == NULL)
+            g_drval = &g_ml_shm->drval;
+        g_report = &g_ml_shm->report;
+    }
+    app_pc base = nudge_module_base();
+    if (base != NULL) {
+        if (g_ml_region_set)
+            register_range(base + g_ml_region_off, (size_t)g_ml_region_len);
+        if (g_ml_seed_set)
+            on_seed((uint64_t)(uintptr_t)base + g_ml_seed_off, g_ml_seed_len,
+                    g_ml_seed_color);
+    }
+    __atomic_store_n(&g_armed, 1, __ATOMIC_RELEASE);
+    int n = __atomic_load_n(&g_nregions, __ATOMIC_ACQUIRE);
+    for (int i = 0; i < n && i < AT_MAX_REGIONS; i++)
+        dr_delay_flush_region(g_regions[i].base, g_regions[i].len, 0, NULL);
+    dr_fprintf(STDERR, "ASMTEST_NUDGE op=arm armed=1 regions=%d base=%p\n", n,
+               (void *)base);
+}
+
+/* DISARM: close the capture window. Flip the gate off and flush the registered regions so their
+ * fragments rebuild WITHOUT instrumentation (in_scope now returns 0). The range set is left
+ * intact so a later ARM re-opens the SAME window. Same nudge-context flush safety as nudge_arm. */
+static void nudge_disarm(void) {
+    __atomic_store_n(&g_armed, 0, __ATOMIC_RELEASE);
+    int n = __atomic_load_n(&g_nregions, __ATOMIC_ACQUIRE);
+    for (int i = 0; i < n && i < AT_MAX_REGIONS; i++)
+        dr_delay_flush_region(g_regions[i].base, g_regions[i].len, 0, NULL);
+    dr_fprintf(STDERR, "ASMTEST_NUDGE op=disarm armed=0 regions=%d\n", n);
+}
+
+/* SNAPSHOT: publish `done` so an out-of-process validator can drain the captured window WITHOUT
+ * waiting for process exit / detach (the synchronous sink report is already live in shm). */
+static void nudge_snapshot(void) {
+    if (g_ml_shm != NULL)
+        __atomic_store_n(&g_ml_shm->done, 1u, __ATOMIC_RELEASE);
+    dr_fprintf(STDERR, "ASMTEST_NUDGE op=snapshot published_done=%d\n",
+               g_ml_shm != NULL);
+}
+
+/* Nudge event handler (drnudgeunix / dr_nudge_client). The low byte of `argument` selects
+ * arm/disarm/snapshot; higher bits are reserved. Runs on a DR-managed nudge context with a valid
+ * drcontext, so the DR APIs the arm/disarm paths use (module iterator, the dr_mutex inside
+ * register_range, dr_delay_flush_region, the shadow alloc inside on_seed) are all in-context. */
+static void handle_nudge(void *drcontext, uint64_t argument) {
+    (void)drcontext;
+    switch ((unsigned)(argument & AT_NUDGE_OP_MASK)) {
+    case AT_NUDGE_ARM:
+        nudge_arm();
+        break;
+    case AT_NUDGE_DISARM:
+        nudge_disarm();
+        break;
+    case AT_NUDGE_SNAPSHOT:
+        nudge_snapshot();
+        break;
+    default:
+        dr_fprintf(STDERR, "ASMTEST_NUDGE op=unknown arg=0x%llx\n",
+                   (unsigned long long)argument);
+        break;
+    }
 }
 #endif
 
@@ -2258,6 +2385,8 @@ static void event_exit(void) {
      * destroy g_lock or free g_dir under methodscan — the OS reclaims them at process exit,
      * and leaking them avoids a teardown-vs-poller race. */
     g_poller_stop = 1;
+    dr_unregister_nudge_event(handle_nudge,
+                              g_client_id); /* symmetric with registration */
 #endif
     /* Scoping cost metric (Increment 6): report how many app instructions the client
      * instrumented and how many ranges it scoped to, so a scope=whole vs scope=ranges pair
@@ -2343,6 +2472,13 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
             g_prod = 1;
         else if (strcmp(argv[i], "gcmove") == 0)
             g_gcmove = 1;
+        /* Interactive nudge (Increment 3): start DISARMED and defer the region install + seed
+         * paint to an ARM nudge (drnudgeunix / dr_nudge_client), so an external controller opens
+         * a bounded capture window mid-run on a running/attached client. */
+        else if (strcmp(argv[i], "nudge") == 0) {
+            g_nudge_mode = 1;
+            g_armed = 0;
+        }
         /* Marker-less config (Increment 3): region/seed by module+offset, client-owned shm. */
         else if (strncmp(argv[i], "region=", 7) == 0) {
             uint64_t off = 0, len = 0;
@@ -2431,6 +2567,17 @@ DR_EXPORT void dr_client_main(client_id_t id, int argc, const char *argv[]) {
     drmgr_register_bb_instrumentation_event(NULL, event_insert, NULL);
     drmgr_register_signal_event(event_signal);
     drmgr_register_exit_event(event_exit);
+#ifdef ASMTEST_TAINT
+    /* Interactive nudge arm/disarm (Increment 3): an external controller can open/close a
+     * bounded capture window on this (possibly attached) client via drnudgeunix / dr_nudge_client
+     * without the target cooperating. Registered unconditionally (inert until nudged); the
+     * `nudge` option additionally starts the client DISARMED so the FIRST arm opens the window.
+     * The ready line publishes the client id the nudge tool must target. */
+    g_client_id = id;
+    dr_register_nudge_event(handle_nudge, id);
+    dr_fprintf(STDERR, "ASMTEST_NUDGE_READY client_id=%08x nudge_mode=%d\n",
+               (unsigned)id, g_nudge_mode);
+#endif
 
 #ifdef ASMTEST_TAINT_GCREMAP
     /* Increment 7 (partial): run the synthetic GC-move remap unit test now, before the

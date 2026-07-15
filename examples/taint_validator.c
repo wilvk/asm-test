@@ -126,6 +126,11 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "attach") == 0)
             attach =
                 1; /* external attach mid-run: variable post-seed runs -> SINK-based */
+        else if (strcmp(argv[i], "nudge") == 0)
+            /* interactive ARM/DISARM window: marker-less, client-owned, variable SINK-based
+             * capture — the SAME validation shape as external attach (>=1 tainted hit, or
+             * `nudge noseed` => 0 hits for the never-armed control). */
+            attach = 1;
         else
             name = argv[i];
     }

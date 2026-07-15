@@ -153,6 +153,7 @@ else
 	@$(MAKE) --no-print-directory dr-taint-prod-test
 	@$(MAKE) --no-print-directory dr-taint-markerless-test
 	@$(MAKE) --no-print-directory dr-taint-attach-coop-test
+	@$(MAKE) --no-print-directory dr-taint-nudge-test
 	@$(MAKE) --no-print-directory dr-taint-stress-test
 	@$(MAKE) --no-print-directory dr-taint-multirange-test
 	@$(MAKE) --no-print-directory dr-taint-gcremap-test
@@ -743,6 +744,77 @@ else
 	   region=taint_markerless_victim+$$fixoff,0x16 shm=$(MARKERLESS_SHM) -- \
 	   $$vbin 2>&1 | grep -E 'MARKERLESS_VICTIM' || true; \
 	 $(BUILD)/taint_validator $(MARKERLESS_SHM) markerless noseed
+endif
+
+# --- DR ATTACH tier, Increment 3 (interactive slice): NUDGE arm/disarm capture window ---
+# The marker-less CONFIG half (region/seed/shm by option) is proven by dr-taint-markerless-test;
+# this proves the INTERACTIVE half — an external controller opening/closing a bounded capture
+# window MID-RUN via DR's nudge mechanism, WITHOUT the target cooperating. The client is launched
+# with the `nudge` option so it starts DISARMED (region configured, but NO capture until armed);
+# the long-running victim (taint_markerless_victim `attach`) loops the seeded fixture. An external
+# `drnudgeunix -pid <pid> -client <id> 1` ARM opens the window (installs the region + paints the
+# seed) so subsequent loop iterations trip the branch-condition sink into the client-owned shm;
+# `... 2` DISARM closes it (fragments re-flushed, capture off). taint_validator (`nudge` mode:
+# marker-less, SINK-based) asserts >=1 tainted kind=1 hit from the armed window and the victim
+# exited native. NEGATIVE control: NEVER arm => ZERO hits (the window is genuinely nudge-gated).
+# The nudge handler is producer-entry-agnostic, so this LAUNCH round-trip exercises the IDENTICAL
+# client code an external `drrun -attach` client runs (the attach compose is a trivial follow-on).
+# Nudge delivery is a signal, so no SYS_PTRACE is needed for the launch case. Self-skips w/o DR.
+DR_DRNUDGE ?= $(DYNAMORIO_HOME)/bin64/drnudgeunix
+NUDGE_SHM ?= /asmtest_taint_nudge_ci
+.PHONY: dr-taint-nudge-test
+dr-taint-nudge-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-nudge-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+	@$(MAKE) $(BUILD)/taint_markerless_victim $(BUILD)/taint_validator
+	@echo "== dr-taint-nudge-test (Increment 3: interactive nudge ARM/DISARM of a bounded capture window mid-run) =="
+	@vbin=$(abspath $(BUILD)/taint_markerless_victim); \
+	 fixoff=$$(nm $$vbin | awk '/ [BbDd] g_fixture$$/ {print "0x"$$1}' | head -1); \
+	 seedoff=$$(nm $$vbin | awk '/ [BbDd] g_seedbuf$$/ {print "0x"$$1}' | head -1); \
+	 echo "# victim=taint_markerless_victim fixture_off=$$fixoff seedbuf_off=$$seedoff (PIE, module-relative)"; \
+	 if [ -z "$$fixoff" ] || [ -z "$$seedoff" ]; then echo "not ok - could not resolve g_fixture/g_seedbuf offsets via nm"; exit 1; fi; \
+	 rm -f /dev/shm$(NUDGE_SHM) 2>/dev/null || true; \
+	 echo "-- seeded: launch DISARMED (nudge option), ARM mid-run, capture ~3s, DISARM --"; \
+	 dlog=$(BUILD)/nudge_drrun.log; rm -f $$dlog; \
+	 timeout 90 $(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	   nudge region=taint_markerless_victim+$$fixoff,0x16 \
+	   seed=taint_markerless_victim+$$seedoff,0x8,0x1 shm=$(NUDGE_SHM) -- \
+	   $$vbin attach 8 >$$dlog 2>&1 & drpid=$$!; \
+	 cid=""; vpid=""; \
+	 for i in $$(seq 1 100); do \
+	   cid=$$(grep -o 'ASMTEST_NUDGE_READY client_id=[0-9a-f]*' $$dlog 2>/dev/null | head -1 | sed 's/.*client_id=//'); \
+	   vpid=$$(grep -o 'MARKERLESS_VICTIM start pid=[0-9]*' $$dlog 2>/dev/null | head -1 | sed 's/.*pid=//'); \
+	   [ -n "$$cid" ] && [ -n "$$vpid" ] && break; \
+	   sleep 0.1; \
+	 done; \
+	 echo "# client_id=$$cid victim_pid=$$vpid (launched disarmed; arming ...)"; \
+	 if [ -z "$$cid" ] || [ -z "$$vpid" ]; then echo "not ok - client did not report ASMTEST_NUDGE_READY / victim pid"; kill $$drpid 2>/dev/null || true; exit 1; fi; \
+	 sleep 1; \
+	 $(DR_DRNUDGE) -pid $$vpid -client $$cid 1 || true; \
+	 sleep 3; \
+	 $(DR_DRNUDGE) -pid $$vpid -client $$cid 2 || true; \
+	 wait $$drpid 2>/dev/null; drc=$$?; \
+	 arm=$$(grep -c 'ASMTEST_NUDGE op=arm' $$dlog 2>/dev/null || true); [ -z "$$arm" ] && arm=0; \
+	 dis=$$(grep -c 'ASMTEST_NUDGE op=disarm' $$dlog 2>/dev/null || true); [ -z "$$dis" ] && dis=0; \
+	 end=$$(grep -c 'MARKERLESS_VICTIM done' $$dlog 2>/dev/null || true); [ -z "$$end" ] && end=0; \
+	 echo "# nudge_arm=$$arm nudge_disarm=$$dis victim_done=$$end drrun_rc=$$drc"; \
+	 if [ "$$arm" -lt 1 ] || [ "$$dis" -lt 1 ]; then echo "not ok - ARM/DISARM nudge handler did not run (see $$dlog)"; sed 's/^/#   /' $$dlog | tail -20; exit 1; fi; \
+	 if [ "$$end" -lt 1 ]; then echo "not ok - victim did not exit native after the nudge window (survival failed)"; exit 1; fi; \
+	 $(BUILD)/taint_validator $(NUDGE_SHM) nudge
+	@rm -f /dev/shm$(NUDGE_SHM) 2>/dev/null || true
+	@echo "-- negative control: NEVER arm => zero hits (the window is nudge-gated) --"
+	@vbin=$(abspath $(BUILD)/taint_markerless_victim); \
+	 fixoff=$$(nm $$vbin | awk '/ [BbDd] g_fixture$$/ {print "0x"$$1}' | head -1); \
+	 seedoff=$$(nm $$vbin | awk '/ [BbDd] g_seedbuf$$/ {print "0x"$$1}' | head -1); \
+	 timeout 90 $(DR_DRRUN) -c $(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	   nudge region=taint_markerless_victim+$$fixoff,0x16 \
+	   seed=taint_markerless_victim+$$seedoff,0x8,0x1 shm=$(NUDGE_SHM) -- \
+	   $$vbin attach 2 >/dev/null 2>&1 || true; \
+	 $(BUILD)/taint_validator $(NUDGE_SHM) nudge noseed
 endif
 
 # --- DR ATTACH tier, Increment 4: EXTERNAL attach data-flow/taint end-to-end ---

@@ -47,7 +47,11 @@ RUN sh scripts/build-capstone.sh && ldconfig
 
 # Run the cooperative attach + detach lifecycle lane: native -> dr_app_* self-attach ->
 # armed in-band capture -> dr_app_stop_and_cleanup detach -> native, POSIX-shm transport,
-# out-of-process oracle diff. Self-skips cleanly if DynamoRIO were absent, but here it is
-# installed, so it executes.
+# out-of-process oracle diff. Then the Increment-3 INTERACTIVE nudge lane: a client launched
+# DISARMED, ARMED mid-run by an external `drnudgeunix` (open a bounded capture window), then
+# DISARMED — the same marker-less client an external `drrun -attach` drives, exercised over the
+# non-experimental launch path (nudge delivery is a signal, so no SYS_PTRACE is needed here).
+# Both self-skip cleanly if DynamoRIO were absent, but here it is installed, so they execute.
 CMD set -eux; \
-    make dr-taint-attach-coop-test DYNAMORIO_HOME=$DYNAMORIO_HOME
+    make dr-taint-attach-coop-test DYNAMORIO_HOME=$DYNAMORIO_HOME; \
+    make dr-taint-nudge-test DYNAMORIO_HOME=$DYNAMORIO_HOME
