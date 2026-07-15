@@ -8,7 +8,7 @@ uncanonicalized. This plan lands the improvements that were held out of the crit
 each one either **reduces perturbation**, **raises fidelity on managed targets**, or
 **broadens the target set** — ordered so the highest-value, lowest-risk work comes first.
 
-> Status: **F1 + F3 spikes done (increment 0 — both GO, 2026-07-15); full landings + F2/F4–F7 planned.** F1 is the marquee item (the
+> Status: **F3 LANDED (asmspy --watch); F1 increment 1 LANDED (pure-method block-step tier); F2/F4–F7 + F1 vector-breadth planned.** F1 is the marquee item (the
 > perturbation win that makes stepping a live JIT genuinely practical) and carries a spike
 > increment because its value-reconstruction claim is the one genuinely **unproven** bet in
 > the whole design. F3 is the cheapest high-value item (a near-zero-perturbation targeted
@@ -34,7 +34,17 @@ x86-64 first, AArch64 where the primitive exists).
 
 ---
 
-## F1 — Block-step + emulator-replay value optimization *(**spike GO 2026-07-15** — increment 0 proven; full landing planned)*
+## F1 — Block-step + emulator-replay value optimization *(**increment 1 LANDED 2026-07-15** — pure-method value tier; F2/vector breadth planned)*
+
+> **UPDATE 2026-07-15 — INCREMENT 1 LANDED.** The spike is promoted to a real tier `src/dataflow_blockstep.c`:
+> `PTRACE_SINGLEBLOCK` per taken branch → full `GETREGS` boundary snapshot → Unicorn replay of each
+> straight-line block (guest mapped at real addresses, memory faulted via `process_vm_readv`, a landing pad
+> for the region-exit `ret`); a **purity static-scan** routes pure methods to replay and impure ones to the
+> single-step fallback; a **coherence canary** truncates on any replay-input divergence; oracle validation is
+> rsp-relative. New `examples/test_dataflow_blockstep.c` — **22/22** on host (real ptrace + Unicorn 2.0.1):
+> block-step+replay is **byte-identical** (literal `memcmp`) to single-step on `loop_poly` (303→50 stops,
+> 6.06×) and `mem_chain` (6→1, 6.00×), impure `cpuid` falls back, the canary truncates. Carryover: YMM/ZMM
+> boundary seeding, F2 (impure via record-inject). Increment-0 spike evidence retained below.
 
 > **SPIKE (increment 0) — GO, 2026-07-15.** On the oracle fixtures the block-step + Unicorn-replay value
 > trace is **byte-identical** (literal `memcmp` of the record arrays, not just slice-equal) to true
@@ -109,7 +119,16 @@ value) is documented as the remaining limit and detected via the real endpoints.
 
 ---
 
-## F3 — Hardware data-watchpoint targeted mode *(**spike GO 2026-07-15** — proven; full landing planned)*
+## F3 — Hardware data-watchpoint targeted mode *(**LANDED 2026-07-15** — asmspy --watch; AArch64 analog planned)*
+
+> **UPDATE 2026-07-15 — LANDED as `asmspy --watch`.** `asmspy --watch <pid> <addr|func+off> [--rw] [--len=N]
+> [--json]` arms an x86 data watchpoint (DR0-3; DR7 R/W=01 write / 11 r/w, LEN 1/2/4/8) via `PTRACE_POKEUSER`,
+> `PTRACE_CONT`s the target, and at each `#DB` reports read/write + the value (`process_vm_readv`) + the
+> faulting PC resolved to function+offset. **Per-thread arming across `/proc/<pid>/task/*` + `PTRACE_O_TRACECLONE`**
+> (the spike's mandated fix) — verified capturing writes on a WORKER thread (tid ≠ leader). New
+> `asmspy_engine_watch` lives in `cli/`; `src/ptrace_backend.c` untouched. Two-phase detach so the target
+> survives; self-skips on POKEUSER-refused / qemu / non-x86-64. `make docker-cli` cli-smoke PASS. Carryover:
+> the AArch64 `NT_ARM_HW_WATCH`/`DBGWCR` analog. Increment-0 spike evidence retained below.
 
 > **SPIKE — GO, 2026-07-15.** Data watchpoints work exactly as bet: a WRITE watchpoint (`DR7=0x90001`:
 > R/W0=01, LEN0=8B) on a chosen global captured all 16 stores with the correct value (`process_vm_readv`)

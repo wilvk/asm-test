@@ -15,7 +15,7 @@ optimization, hardware data-watchpoints, the PT-derived value path, and live GC-
 canonicalization are deliberately **out of scope here** and carried in the companion
 [live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md).
 
-> Status: **Increments 1, 2, 3, 6, and 7 (native path) LANDED; 4–5 planned.** Increment 1 (native live-attach) is the
+> Status: **Increments 1, 2, 3, 4, 6, and 7 (native path) LANDED; only Increment 5 (attach_jit) planned.** Increment 1 (native live-attach) is the
 > recommended first milestone — it is low-risk reuse of the landed capture core and needs no
 > JIT machinery. The single-step value tier already exists and is cross-validated against
 > the emulator L0 oracle; this plan changes *what it attaches to* and *how it survives a
@@ -264,7 +264,21 @@ across an induced tiered re-JIT.
 
 ---
 
-## Increment 4 — Worker-thread targeting (managed methods run off the leader) *(planned)*
+## Increment 4 — Worker-thread targeting (managed methods run off the leader) *(**LANDED 2026-07-15**)*
+
+> **UPDATE 2026-07-15 — LANDED.** New additive producer entry `asmtest_dataflow_ptrace_attach_pid_tid(pid,
+> only_tid, base, len, max, result, vt)` (existing entries byte-unchanged). `dfp_seize_all` SEIZEs the
+> leader then re-scans `/proc/<pid>/task/*` (up to 16 passes, closing the thread-spawns-a-thread race);
+> `dfp_run_to_multi` plants one shared int3 at `base`, `PTRACE_CONT`s all threads, and `waitpid(-1, __WALL)`
+> catches the **first thread that enters**, targeting it by **the kernel tid waitpid reports, never the
+> leader** (the getpid-vs-gettid fatal-SIGTRAP fix); `only_tid` steps non-target hits over the shared bp and
+> pins one thread; siblings are detached to run free (no `O_TRACECLONE`, so they outlive us). The internal
+> core `dfp_attach_worker` already threads `img`/`when`, so **Increment 5 (`attach_jit`) composes on top**.
+> Thirteen new checks (68–80) in `test_dataflow_ptrace.c`: worker captured off an idle leader, siblings +
+> target survive detach, `only_tid` picks A-not-B under two-worker contention — **80/80 on real ptrace**, 30
+> stress runs + ASan/UBSan clean. Edge notes in-code: the shared-int3 step-over has a tiny skip window (why
+> the plan cites per-thread HW breakpoints); a thread spawned mid entry-catch is untracked (the scan covers
+> attach-time threads).
 
 `asmspy_engine_region` attaches only the leader and returns `ASMSPY_REGION_NEVER_RAN` when
 the function runs on a worker thread — "run_to only steps the leader here"
