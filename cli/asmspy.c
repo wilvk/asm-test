@@ -15,7 +15,7 @@
  *   asmspy --stream <pid> [n] [--tid=<t>] [--follow]   stream n instructions live (function + asm)
  *   asmspy --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] [--tid=<t>]  whole-process call graph
  *   asmspy --tree   <pid> [n] [--depth=<d>] [--focus=<sym>] [--module=<m>] [--json|--dot] [--tid=<t>] [--follow]  whole-process live call tree (indented by depth)
- *   asmspy --procs  <pid> [n] [--count=syscalls|calls]  process/thread topology tree
+ *   asmspy --procs  <pid> [n] [--count=syscalls|calls] [--json|--dot]  process/thread topology tree
  *
  * A negative n streams until the target exits or you interrupt.
  */
@@ -1237,7 +1237,93 @@ static void topo_capture_sink(void *ctx, const asmspy_task_t *tasks, size_t n) {
     topo_snap_copy(ctx, tasks, n); /* headless: keep only the latest snapshot */
 }
 
-static int cmd_procs(pid_t pid, long n, asmspy_count_t mode) {
+/* --procs JSON: the flat TASK list, which is exactly what the engine observed —
+ * tid/tgid/ppid/leader/comm/exe/inv per task. The forest the human view draws is
+ * derivable from tgid+ppid, so exporting a rendered tree instead would throw
+ * information away AND force a consumer to re-parse box-drawing glyphs. Same
+ * top-level shape as the --graph / --tree exporters ({"pid":…, one array}), plus
+ * "count" — because inv means something different per mode and a bare number
+ * that silently switches meaning is exactly the sort of thing an exporter
+ * should not do. */
+static void procs_export_json(const asmspy_task_t *t, size_t n, pid_t pid,
+                              asmspy_count_t mode) {
+    printf("{\"pid\":%d,\"count\":\"%s\",\"tasks\":[", (int)pid,
+           mode == ASMSPY_COUNT_CALLS ? "calls" : "syscalls");
+    for (size_t i = 0; i < n; i++) {
+        char ec[4 * sizeof t[i].comm], ee[4 * sizeof t[i].exe];
+        json_escape(t[i].comm, ec, sizeof ec);
+        json_escape(t[i].exe, ee, sizeof ee);
+        printf("%s\n  {\"tid\":%d,\"tgid\":%d,\"ppid\":%d,\"leader\":%s,"
+               "\"comm\":\"%s\",\"exe\":\"%s\",\"inv\":%llu}",
+               i ? "," : "", (int)t[i].tid, (int)t[i].tgid, (int)t[i].ppid,
+               t[i].is_leader ? "true" : "false", ec, ee, t[i].inv);
+    }
+    printf("%s]}\n", n ? "\n" : "");
+}
+
+/* --procs DOT: the process forest as a Graphviz digraph, mirroring the --graph /
+ * --tree exporters' conventions. PROCESSES are boxes (parent -> child, solid);
+ * THREADS are ellipses hanging off their process (dashed), so the two kinds of
+ * "child" the human view stacks in one glyph column stay distinguishable here.
+ * Threads are drawn only where a process has more than its lone leader — the
+ * same rule the human view uses, so the two renderings agree. */
+/* `pid` is deliberately absent: unlike the JSON object, a digraph has no
+ * top-level scope to hang it on, and every process already appears as its own
+ * "p<tgid>" node — the traced pid among them. */
+static void procs_export_dot(const asmspy_task_t *t, size_t n) {
+    printf("digraph asmspy {\n  rankdir=LR;\n  node [shape=box, style=filled,"
+           " fontname=monospace, fontsize=10];\n");
+    /* processes: one node per distinct tgid, labelled from its leader */
+    for (size_t i = 0; i < n; i++) {
+        if (!t[i].is_leader)
+            continue;
+        unsigned long long inv = 0;
+        size_t nt = 0;
+        for (size_t j = 0; j < n; j++)
+            if (t[j].tgid == t[i].tgid) {
+                inv += t[j].inv;
+                nt++;
+            }
+        char lbl[4 * sizeof t[i].exe];
+        dot_escape(t[i].exe[0] ? t[i].exe : t[i].comm, lbl, sizeof lbl);
+        printf("  \"p%d\" [label=\"%d [%s]\\ninv=%llu\\n%zu thread%s\","
+               " fillcolor=\"#e8f0ff\"];\n",
+               (int)t[i].tgid, (int)t[i].tgid, lbl, inv, nt,
+               nt == 1 ? "" : "s");
+    }
+    /* threads: only where the process has more than its lone leader */
+    for (size_t i = 0; i < n; i++) {
+        size_t nt = 0;
+        for (size_t j = 0; j < n; j++)
+            if (t[j].tgid == t[i].tgid)
+                nt++;
+        if (nt < 2)
+            continue;
+        char lbl[4 * sizeof t[i].comm];
+        dot_escape(t[i].comm, lbl, sizeof lbl);
+        printf("  \"t%d\" [label=\"tid %d\\n%s\\ninv=%llu\", shape=ellipse,"
+               " fillcolor=\"#fff3c4\"];\n",
+               (int)t[i].tid, (int)t[i].tid, lbl, t[i].inv);
+        printf("  \"p%d\" -> \"t%d\" [style=dashed];\n", (int)t[i].tgid,
+               (int)t[i].tid);
+    }
+    /* child processes: an edge only when the parent is itself in the capture
+     * (the root's own ppid is outside the traced tree) */
+    for (size_t i = 0; i < n; i++) {
+        if (!t[i].is_leader)
+            continue;
+        for (size_t j = 0; j < n; j++)
+            if (t[j].is_leader && t[j].tgid == t[i].ppid) {
+                printf("  \"p%d\" -> \"p%d\";\n", (int)t[i].ppid,
+                       (int)t[i].tgid);
+                break;
+            }
+    }
+    printf("}\n");
+}
+
+static int cmd_procs(pid_t pid, long n, asmspy_count_t mode, int json,
+                     int dot) {
     topo_snap snap = {0};
     int rc = asmspy_engine_procs(pid, n, NULL, mode, topo_capture_sink, &snap);
     if (rc != 0) {
@@ -1246,6 +1332,14 @@ static int cmd_procs(pid_t pid, long n, asmspy_count_t mode) {
         fprintf(stderr, "attach failed: %s\n", e);
         free(snap.v);
         return 1;
+    }
+    if (dot || json) { /* like --graph/--tree: --dot wins when both are given */
+        if (dot)
+            procs_export_dot(snap.v, snap.n);
+        else
+            procs_export_json(snap.v, snap.n, pid, mode);
+        free(snap.v);
+        return 0;
     }
     topo_rows rows = {0};
     topo_build_rows(snap.v, snap.n, &rows);
@@ -4430,8 +4524,8 @@ static int usage(const char *argv0) {
         "                                   (--follow also traces child "
         "PROCESSES the target forks, like strace -f — each followed process "
         "gets its OWN symbols/fds; not combinable with --tid)\n"
-        "  %s --procs  <pid> [n] [--count=syscalls|calls]  process/thread tree "
-        "(procs+threads+children) with counts\n"
+        "  %s --procs  <pid> [n] [--count=syscalls|calls] [--json|--dot]  "
+        "process/thread tree (procs+threads+children) with counts\n"
         "  %s --sample <pid> [ms] [--json]  statistical hot edges via AMD "
         "IBS-Op, OUT OF BAND — safe on a JIT (no single-step); needs an AMD "
         "IBS host\n"
@@ -4599,7 +4693,9 @@ int main(int argc, char **argv) {
             return bad_arg("pid", argv[2]);
         n = 200; /* invocations to count before reporting; negative = until exit */
         asmspy_count_t mode = ASMSPY_COUNT_SYSCALLS;
-        for (int i = 3; i < argc; i++) { /* [n] and --count= in any order */
+        int json = 0, dot = 0;
+        for (int i = 3; i < argc;
+             i++) { /* [n], --count=, --json/--dot, any order */
             if (strncmp(argv[i], "--count=", 8) == 0) {
                 const char *v = argv[i] + 8;
                 if (strcmp(v, "syscalls") == 0)
@@ -4608,11 +4704,15 @@ int main(int argc, char **argv) {
                     mode = ASMSPY_COUNT_CALLS;
                 else
                     return bad_arg("count (want 'syscalls' or 'calls')", v);
+            } else if (strcmp(argv[i], "--json") == 0) {
+                json = 1;
+            } else if (strcmp(argv[i], "--dot") == 0) {
+                dot = 1;
             } else if (parse_count(argv[i], &n) != 0) {
                 return bad_arg("count", argv[i]);
             }
         }
-        return cmd_procs(pid, n, mode);
+        return cmd_procs(pid, n, mode, json, dot);
     }
     if (strcmp(argv[1], "--graph") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)

@@ -1221,6 +1221,70 @@ out2=$(timeout 40 "$ASM" --procs "$TVPID" 60 --count=calls 2>&1) \
     || fail "--procs --count=calls"
 printf '%s\n' "$out2" | grep -qE '^node [0-9]+.*inv=[0-9]' \
     || fail "--procs --count=calls: no counted node"
+# --procs JSON export (asmspy-plan Theme E): the flat TASK list, which is what
+# the engine actually observed — the forest the human view draws is derivable
+# from tgid+ppid, so exporting a rendered tree would throw information away and
+# force a consumer to re-parse box glyphs.
+echo "--- asmspy --procs $TVPID 120 --json (machine-readable export) ---"
+set +e
+pjout=$(timeout 60 "$ASM" --procs "$TVPID" 120 --json 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--procs --json hung"
+[ "$rc" -eq 0 ] || fail "--procs --json exited rc=$rc"
+printf '%s\n' "$pjout" | head -3
+printf '%s' "$pjout" | grep -q '^{"pid":' || fail "--procs --json: no top-level {\"pid\":...} object"
+printf '%s' "$pjout" | grep -q '"tasks":\[' || fail "--procs --json: no tasks array"
+# "count" must be exported: inv means something DIFFERENT per mode, and a bare
+# number that silently switches meaning is what an exporter must not emit
+printf '%s' "$pjout" | grep -q '"count":"syscalls"' \
+    || fail "--procs --json: the count mode is not exported (inv would be ambiguous)"
+printf '%s' "$pjout" | grep -qE '"tid":[0-9]+,"tgid":[0-9]+,"ppid":[0-9]+,"leader":(true|false),"comm":"' \
+    || fail "--procs --json: per-task fields missing"
+# the human tree must NOT leak into JSON mode (box glyphs / the header line)
+printf '%s' "$pjout" | grep -q 'process/thread topology' && fail "--procs --json: human header leaked into JSON"
+printf '%s' "$pjout" | grep -q 'node ' && fail "--procs --json: human tree rows leaked into JSON"
+if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$pjout" | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+assert d["tasks"], "no tasks"
+assert all(k in d["tasks"][0] for k in ("tid","tgid","ppid","leader","comm","exe","inv"))
+# the victim is multi-threaded: exactly one leader, several tasks, all one tgid
+leaders = [t for t in d["tasks"] if t["leader"]]
+assert len(leaders) == 1, "expected exactly 1 leader, got %d" % len(leaders)
+assert len(d["tasks"]) >= 2, "expected the threads to be exported too"
+assert leaders[0]["tid"] == leaders[0]["tgid"], "leader tid != tgid"
+assert all(t["tgid"] == leaders[0]["tgid"] for t in d["tasks"]), "tasks span >1 process"
+assert sum(t["inv"] for t in d["tasks"]) > 0, "every task exported inv=0"
+print("  json validated (python3: %d tasks, 1 leader, tid==tgid, inv>0)" % len(d["tasks"]))' \
+        || fail "--procs --json: not well-formed / task invariants violated"
+else
+    echo "  json structural checks passed (python3 absent; strict parse skipped)"
+fi
+
+# --procs DOT export: the process forest as a Graphviz digraph. Processes are
+# boxes, threads are dashed-edged ellipses — the two kinds of "child" the human
+# view stacks in one glyph column stay distinguishable here.
+echo "--- asmspy --procs $TVPID 120 --dot (Graphviz export) ---"
+set +e
+pdout=$(timeout 60 "$ASM" --procs "$TVPID" 120 --dot 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--procs --dot hung"
+printf '%s\n' "$pdout" | head -4
+printf '%s' "$pdout" | grep -q '^digraph asmspy {' || fail "--procs --dot: not a digraph"
+printf '%s' "$pdout" | grep -qE "\"p$TVPID\" \[label=\"$TVPID \[threads_victim\]" \
+    || fail "--procs --dot: the traced process node is missing/mislabelled"
+printf '%s' "$pdout" | grep -qE '"t[0-9]+" \[label="tid [0-9]+' \
+    || fail "--procs --dot: no thread nodes (the victim is multi-threaded)"
+printf '%s' "$pdout" | grep -qE "\"p$TVPID\" -> \"t[0-9]+\" \[style=dashed\]" \
+    || fail "--procs --dot: no process->thread edges"
+printf '%s' "$pdout" | grep -q '^}' || fail "--procs --dot: unterminated digraph"
+if command -v dot >/dev/null 2>&1; then
+    printf '%s' "$pdout" | dot -Tsvg >/dev/null 2>&1 || fail "--procs --dot: graphviz rejected the output"
+    echo "  dot validated (graphviz dot -Tsvg)"
+else
+    echo "  dot structural checks passed (graphviz absent)"
+fi
+
 # a bad --count value is rejected up front (rc=2)
 expect_badarg "$ASM" --procs "$TVPID" --count=bogus
 kill "$TVPID" 2>/dev/null || true
