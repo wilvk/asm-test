@@ -41,9 +41,12 @@
 /* The libipt pt_image callback (read_recorder, below) adapts this to    */
 /* pt_image's signature when libipt is present; this plain form is       */
 /* exercised directly by test_pt_image_from_codeimage — no PT hardware,  */
-/* no libipt packet stream (unlike AMD/CS, Intel PT has no synthetic     */
-/* packet fixture in the tree, so end-to-end libipt decode is forward-   */
-/* look on real hardware). */
+/* no libipt packet stream. (End-to-end libipt decode is NOT forward-    */
+/* look: asmtest_pt_encode_fixture below synthesizes a valid PT packet   */
+/* stream with libipt's own encoder, and test_wholewindow_decode drives  */
+/* both decode entries through it on any host. What stays hardware-      */
+/* gated is PT CAPTURE — and with it the facade dispatch, which cannot   */
+/* run at all until asmtest_hwtrace_available(INTEL_PT) is true.) */
 int asmtest_pt_read_codeimage(const asmtest_codeimage_t *img, uint64_t when,
                               uint64_t ip, uint8_t *buffer, size_t size) {
     if (img == NULL || buffer == NULL || size == 0)
@@ -279,20 +282,28 @@ int asmtest_pt_decode_window(const uint8_t *aux, size_t aux_len,
 /* ------------------------------------------------------------------ */
 /* Synthetic fixture generator — a valid Intel PT packet stream WITHOUT any PT  */
 /* hardware, built with libipt's own packet ENCODER (userspace). Emits exactly  */
-/* the stream a CPU would produce for the canonical two-block ROUTINE           */
+/* the stream a CPU would produce for the canonical ROUTINE                     */
 /*   mov rax,rdi ; add rax,rsi ; cmp rax,100 ; jle +3 ; dec rax ; ret           */
-/* on its TAKEN-jle path (as for args like 20,22): a PSB header (psb, mode.exec  */
-/* 64-bit, psbend), trace-enable at `base_ip` (tip.pge), one taken conditional   */
-/* (a 1-bit TNT for the jle, so the dec at +0xe is skipped), then trace-disable  */
-/* at the ret (tip.pgd). Decoded against the ROUTINE bytes this yields insn      */
-/* offsets {0x0,0x3,0x6,0xc,0x11} and blocks {0x0,0x11} — the SAME ground-truth  */
-/* walk the AMD / CoreSight / DynamoRIO backends reconstruct. Lets                */
-/* asmtest_pt_decode[_window] run end-to-end in CI (test_wholewindow_decode)     */
-/* with no intel_pt PMU. Writes the raw AUX bytes into buf[0,cap); *out_len gets  */
+/* on EITHER side of its `jle`: a PSB header (psb, mode.exec 64-bit, psbend),   */
+/* trace-enable at `base_ip` (tip.pge), one 1-bit TNT for the jle, then trace-  */
+/* disable at the ret (tip.pgd).                                                */
+/*                                                                              */
+/* `taken` selects the TNT payload and is the fixture's DISCRIMINATING knob:    */
+/*   taken != 0 (args like 20,22 -> 42 <= 100): jle TAKEN, the dec at +0xe is   */
+/*              SKIPPED -> insns {0x0,0x3,0x6,0xc,0x11},    blocks {0x0,0x11}   */
+/*   taken == 0 (args like 200,1 -> 201 > 100): jle NOT taken, the dec at +0xe  */
+/*              RUNS    -> insns {0x0,0x3,0x6,0xc,0xe,0x11}, blocks {0x0,0xe}   */
+/* The taken walk is the SAME ground truth the AMD / CoreSight / DynamoRIO      */
+/* backends reconstruct for these bytes. Emitting BOTH is what makes the decode */
+/* test non-vacuous: a one-sided fixture cannot distinguish a decoder that      */
+/* actually FOLLOWS the TNT from one whose expected answer is merely baked in — */
+/* the two walks differ exactly at the 0xe `dec`. Lets                          */
+/* asmtest_pt_decode[_window] run end-to-end in CI (test_wholewindow_decode)    */
+/* with no intel_pt PMU. Writes the raw AUX bytes into buf[0,cap); *out_len gets */
 /* the byte count. Returns ASMTEST_HW_OK, ASMTEST_HW_EINVAL on a bad argument, or */
 /* ASMTEST_HW_EDECODE on an encoder error. */
 int asmtest_pt_encode_fixture(uint8_t *buf, size_t cap, uint64_t base_ip,
-                              size_t *out_len) {
+                              int taken, size_t *out_len) {
     if (buf == NULL || cap == 0 || out_len == NULL)
         return ASMTEST_HW_EINVAL;
     memset(buf, 0, cap);
@@ -325,10 +336,10 @@ int asmtest_pt_encode_fixture(uint8_t *buf, size_t cap, uint64_t base_ip,
     pkt.payload.ip.ipc = pt_ipc_full;
     pkt.payload.ip.ip = base_ip;
     rc |= pt_enc_next(enc, &pkt) < 0;
-    memset(&pkt, 0, sizeof pkt); /* TNT — one conditional (jle), TAKEN */
+    memset(&pkt, 0, sizeof pkt); /* TNT — one conditional (jle), taken or not */
     pkt.type = ppt_tnt_8;
     pkt.payload.tnt.bit_size = 1;
-    pkt.payload.tnt.payload = 1;
+    pkt.payload.tnt.payload = (taken != 0) ? 1 : 0;
     rc |= pt_enc_next(enc, &pkt) < 0;
     memset(&pkt, 0, sizeof pkt); /* TIP.PGD — disable tracing at the ret */
     pkt.type = ppt_tip_pgd;
@@ -373,10 +384,11 @@ int asmtest_pt_decode_window(const uint8_t *aux, size_t aux_len,
 }
 
 int asmtest_pt_encode_fixture(uint8_t *buf, size_t cap, uint64_t base_ip,
-                              size_t *out_len) {
+                              int taken, size_t *out_len) {
     (void)buf;
     (void)cap;
     (void)base_ip;
+    (void)taken;
     (void)out_len;
     return ASMTEST_HW_ENOSYS;
 }
