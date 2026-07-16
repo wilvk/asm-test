@@ -49,13 +49,13 @@ x86-64 first, AArch64 where the primitive exists).
 
 > **UPDATE 2026-07-17 — INCREMENT 2 LANDED: vector breadth (the YMM/ZMM carryover) is CLOSED,
 > and the honest boundary is narrower than the carryover assumed.** `make docker-dataflow-attach`
-> / `make dataflow-blockstep-test` — **47/47**, deterministic (60/60 repeat runs in-container,
-> 40/40 host). The carryover read "YMM/ZMM boundary seeding"; what is actually achievable was
-> **measured, not assumed**, and it splits three ways:
+> / `make dataflow-blockstep-test` — **65/65** (47 at first landing; +18 after the adversarial
+> review round recorded below), deterministic. The carryover read "YMM/ZMM boundary seeding";
+> what is actually achievable was **measured, not assumed**, and it splits three ways:
 >
 > | width | seeded into the replay? | replayed? | captured into the trace? |
 > |---|---|---|---|
-> | **XMM 128** | **YES** (all 16, each verified by read-back) | **YES** — legacy SSE | yes |
+> | **XMM 128** | **YES** (all 16 + **MXCSR**, each verified by read-back) | **YES** — legacy SSE | yes |
 > | **YMM 256** | no — unreachable by construction | **NO** — upstream-blocked | **YES**, real, from silicon |
 > | **ZMM 512** (incl. zmm16-31) | no — unreachable by construction | **NO** — upstream-blocked | **YES**, real, from silicon |
 >
@@ -125,11 +125,45 @@ x86-64 first, AArch64 where the primitive exists).
 > boundary — the tier ships no header and its suite re-declares them.
 >
 > **Carryover:** F2 (impure via record-inject) — now **unblocked**; the replay it rides on is
-> unchanged and the fallback it must displace is the same single-step path. Two bounded,
-> honestly-scoped follow-ons: allowlisting VEX-GP (BMI) back onto the replay after verifying all
-> 13 (`andn` is already measured faithful), and revisiting the pin the day QEMU's AVX TCG reaches
-> a Unicorn release — at which point YMM/ZMM seeding becomes *observable* and this increment's
-> deliberate XMM-only choice should be revisited.
+> unchanged and the fallback it must displace is the same single-step path. One bounded
+> follow-on: revisit the pin the day QEMU's AVX TCG reaches a Unicorn release — at which point
+> YMM/ZMM seeding becomes *observable* and this increment's deliberate XMM-only choice should be
+> revisited. (A BMI allowlist was considered and **measured to be worth nothing**; see the
+> review round below.)
+
+> **UPDATE 2026-07-17 — ADVERSARIAL REVIEW round: 7 defects found, all reproduced by EXECUTION
+> and all fixed. `make docker-dataflow-attach` → 65/65.** The review's unifying finding is the
+> one worth carrying forward: **`region_scan` is a single point of failure feeding BOTH the
+> replayability gate AND — via `touches_vec` — the vector seed and the vector canary, and it
+> failed OPEN in three different ways.** They were never independent defences: when the scan was
+> wrong, the gate let the instruction through *and* removed the check that would have caught the
+> lie. Every gate now fails **closed**.
+>
+> | # | defect | now |
+> |---|---|---|
+> | **HIGH 1** | a decoder DESYNC left both verdicts optimistic — a constant-pool island (routine in the JIT method-maps this tier targets) makes a `movabs` swallow a following VEX prefix; measured `replayable=1 touches_vec=0, remaining=5/17`, so a VEX-128 reached Unicorn ungated AND unwitnessed | `remaining != 0` ⇒ `replayable=0 ("decode")`, `touches_vec=1` |
+> | **HIGH 2** | **MXCSR was never seeded**, so the replay used Unicorn's default rounding. Measured on the legacy-SSE path — the one the whole perturbation win rests on: `divsd` under RC=toward-zero gave oracle `0x3fc9999999999999` vs replay `0x3fc999999999999a` at `rc=OK, truncated=0, pure=1`. Non-default rounding is not exotic (`-ffast-math`'s crtfastmath.o; JIT/managed runtimes) | MXCSR seeded + read-back-verified, and its **control** bits added to the canary. Legitimate only because Unicorn was verified to **honour** it (matches silicon under RN and RZ); had it merely stored the value, the honest move was to gate FP regions |
+> | **HIGH 3** | the impurity early-`break` truncated the sweep, so vector instructions AFTER a `cpuid` were unseen ⇒ `touches_vec=0` ⇒ **no `xstate_read` on the single-step fallback** ⇒ every vector record `value_valid=0` at `rc=OK`. That is the headline "values in the trace" deliverable failing on the exact path ALL AVX code is routed to | only the *purity* answer is settled early; the sweep runs on |
+> | **MED 4** | the PUBLIC `is_replayable()` answered **1, reason=NULL** for `cpuid; vpaddq xmm0,xmm1,xmm2; ret` — telling a caller "Unicorn can faithfully replay this" about the instruction this tier calls a silent liar. `run()` masked it; the API was still wrong | purity and replayability are now independent verdicts with independent reasons |
+> | **MED 5** | **the central design claim was unfalsifiable by its own suite.** Swapping the encoding gate for the Capstone AVX-group gate the commit explicitly rejects **passed all 47 checks** — every scanned region happened to contain a metadata-visible instruction, and the one that proves the gap (`vpbroadcastq zmm0,xmm0`) sat in the entry *glue*, which `region_scan` never scans | two regions gated ONLY by the encoding rule: `vex_bmi` (`andn`, no hardware gate, pins the rule on every x86-64 box) and `evex_invis` (every region instruction metadata-invisible). The metadata swap now **fails 4 checks** |
+> | **LOW 6** | the `cs_open`-failure path's comment said "assume the worst" while the code left `replayable=1` — failing closed only by downstream accident | says what it means |
+> | **LOW 7** | Hi16_ZMM (zmm16-31) reassembly was uncovered — deleting it passed all 47 | covered by a region computing through `zmm16` |
+>
+> **MEASURED COST OF FAILING CLOSED** (this repo's own sources, 224 functions, four builds, via
+> the shipped `is_replayable`): `-O2`/`-O3` decline **0%** — baseline x86-64 emits no VEX at all;
+> `-O3 -mavx2` / `-march=native` decline **17.3%**, and **all** of those contain genuine vector
+> VEX/EVEX that no released Unicorn can run anyway. The **decode** (fail-closed) verdict fired on
+> **0 of 224** — compilers put constants in `.rodata`, so the island case is JIT-specific, which
+> is precisely this tier's target. The deliberate **BMI over-gate cost 0 functions**, so the
+> allowlist follow-on is retired rather than deferred.
+>
+> **Five further candidates were REFUTED** under the same discipline and correctly NOT acted on
+> (XOP `0x8F` handling; `vec_coherent` on a failed XSTATE read; MMX live-in; the per-boundary
+> re-seed; check 36 comparing single-step against itself). One review note is worth recording as
+> a method lesson: the MXCSR negative control initially used `no_vec_seed`, which zeroes the XMM
+> file too — so the region computed `0.0/0.0 = NaN` and the control "passed" by re-proving the
+> XMM bug rather than the rounding one. It now uses a dedicated `no_mxcsr_seed` hook that leaves
+> `vec_seeded=16` and only `mxcsr_seeded=0`, so the divergence can have exactly one cause.
 
 > **UPDATE 2026-07-17 — F1 increment 1 CANNOT be CI-gated on GitHub runners, and now we know why.**
 > It was an orphan until 2026-07-17 (`dataflow-blockstep-test` was defined at
