@@ -24,6 +24,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include "asmspy_treefilter.h" /* --tree: depth cap / symbol focus / module   */
 #include "asmtest_ptrace.h"
 #include "asmtest_trace.h"
 #include "asmtest_valtrace.h" /* --dataflow: L0 value trace + L1 def-use graph */
@@ -113,6 +114,18 @@ typedef struct {
     size_t n;
 } asmspy_symtab_t;
 
+/* The ELF class of `pid`'s main executable, read from /proc/<pid>/exe: 32 for an
+ * i386 tracee, 64 for x86-64, 0 if it cannot be determined (unreadable /proc,
+ * not an ELF).
+ *
+ * Every ptrace engine here is x86-64-hardcoded, and on a 32-bit tracee that is
+ * not a build error but a SILENTLY WRONG ANSWER: the kernel reports an i386
+ * task's syscall number in orig_rax against a COMPLETELY DIFFERENT syscall
+ * table (i386 4 = write, x86-64 4 = stat), so a --log of a 32-bit process names
+ * every single syscall wrong while looking perfectly plausible. So the engines
+ * refuse rather than guess — see ASMSPY_ETRACEE_I386. */
+int asmspy_elf_class(pid_t pid);
+
 /* Load every STT_FUNC symbol from the target's mapped ELF files, sorted by
  * runtime address. Returns 0 on success (even if n==0), -1 on hard failure. */
 int asmspy_symtab_load(pid_t pid, asmspy_symtab_t *out);
@@ -199,7 +212,7 @@ typedef void (*asmspy_syscall_sink)(void *ctx, const char *line,
  * data via `sink`, detach. When more than one thread is followed each `line` is
  * prefixed "[tid] " so the interleaved streams stay distinguishable. Returns 0
  * on clean detach, negative (an ASMTEST_PTRACE_* spirit code) on attach failure. */
-int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
+int asmspy_engine_syscalls(pid_t pid, int follow, long max, atomic_bool *stop,
                            asmspy_syscall_sink sink, void *ctx);
 
 /* One captured invocation of the traced region, handed to the front-end to
@@ -305,9 +318,9 @@ typedef void (*asmspy_stream_sink)(void *ctx, const char *line);
  * full speed (isolation + no per-step slowdown on them); 0 = whole process (all
  * threads). Returns 0 on clean detach, negative on an attach/availability
  * failure. `syms` may be NULL (raw addrs). */
-int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
-                         const asmspy_symtab_t *syms, asmspy_stream_sink sink,
-                         void *ctx);
+int asmspy_engine_stream(pid_t pid, pid_t only_tid, int follow, long max,
+                         atomic_bool *stop, const asmspy_symtab_t *syms,
+                         asmspy_stream_sink sink, void *ctx);
 
 /* One node of the whole-process call graph: a function seen as a caller and/or
  * a callee. `invocations` = how many times it was CALLED; `out_calls` = how many
@@ -352,9 +365,9 @@ typedef void (*asmspy_graph_sink)(void *ctx, const asmspy_gnode_t *nodes,
  * while traced. `only_tid` (non-0) restricts the trace to that one thread (see
  * asmspy_engine_stream). Returns 0 on clean detach, negative on an attach/
  * availability failure. */
-int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
-                        const asmspy_symtab_t *syms, asmspy_graph_sink sink,
-                        void *ctx);
+int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
+                        atomic_bool *stop, const asmspy_symtab_t *syms,
+                        asmspy_graph_sink sink, void *ctx);
 
 /* One call-tree entry, structured — so a front-end can do more than print the
  * pre-rendered line (the TUI disassembles `addr`; the headless --json/--dot
@@ -362,7 +375,10 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
  * `name`/`module` are transient (valid only for the sink call — copy to keep). */
 typedef struct {
     pid_t tid;        /* thread that made the call                          */
-    int depth;        /* that thread's live call depth at entry (0 = top)   */
+    int depth;        /* EFFECTIVE call depth at entry (0 = top). Equals the
+                       * thread's live call depth, except under a --focus
+                       * filter, which re-bases it so the focused function
+                       * sits at depth 0 (see asmspy_treefilter.h).         */
     uint64_t addr;    /* callee entry address                               */
     const char *name; /* resolved symbol name, or "0x…" if unresolved       */
     const char *module; /* backing module basename, "jit", or "?" if unknown  */
@@ -376,17 +392,33 @@ typedef void (*asmspy_tree_sink)(void *ctx, const char *line,
 
 /* Attach to `pid` and ALL its threads, single-step them, and stream a live,
  * indented call TREE through `sink` (one entry per function entry, indented by
- * the calling thread's live call depth, with the callee address). Depth
- * is a per-thread shadow counter — push on CALL, pop on RET (clamped at 0), so a
- * tail-call/longjmp/signal can drift the indentation but never desync fatally.
+ * the calling thread's live call depth, with the callee address). Depth is the
+ * height of a real per-thread RETURN-ADDRESS STACK, keyed on rsp: a frame is
+ * live exactly while the thread's stack pointer is at or below the rsp its CALL
+ * left behind. So anything that moves rsp back out — a RET, a longjmp over ten
+ * frames, a C++ unwind — pops those frames whether or not a `ret` ever retired,
+ * and a signal handler (which runs BELOW the interrupted rsp) correctly leaves
+ * the frames under it intact. This replaced a push-on-CALL/pop-on-RET counter,
+ * whose drift after a longjmp was permanent and cumulative rather than
+ * cosmetic.
  * `max` bounds the call lines emitted (<0 = until stop / exit). Whole-process
  * single-stepping is slow, so the target crawls while traced. Each line is
  * prefixed "[tid] " once more than one thread is followed. `only_tid` (non-0)
- * restricts the trace to that one thread (see asmspy_engine_stream). Returns 0 on
- * clean detach, negative on an attach/availability failure. `syms` may be NULL. */
-int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
-                       const asmspy_symtab_t *syms, asmspy_tree_sink sink,
-                       void *ctx);
+ * restricts the trace to that one thread (see asmspy_engine_stream).
+ *
+ * `filter` (NULL = unfiltered) caps the depth / focuses on a symbol's subtree /
+ * restricts to a module — the difference between a readable tree and a firehose
+ * on a busy process (asmspy_treefilter.h). It bounds only what is EMITTED: every
+ * call and return is still tracked, so the depths of the surviving lines stay
+ * true, and `max` therefore counts SURVIVING lines (a capped run reaches its
+ * budget in filtered lines, not raw calls).
+ *
+ * Returns 0 on clean detach, negative on an attach/availability failure. `syms`
+ * may be NULL. */
+int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
+                       atomic_bool *stop, const asmspy_symtab_t *syms,
+                       const asmspy_tree_filter_t *filter,
+                       asmspy_tree_sink sink, void *ctx);
 
 /* What the process/thread topology counts per task. */
 typedef enum {
@@ -493,6 +525,13 @@ int asmspy_engine_sample(pid_t pid, unsigned ms, atomic_bool *stop,
  * registers) or off x86-64 entirely — a clean skip, distinct from the negative
  * attach-failure codes and the other engines' positives (1/2/3). */
 #define ASMSPY_WATCH_UNAVAIL 4
+
+/* The tracee is a 32-bit (i386) process: REFUSED at attach, not attempted.
+ * asmspy's engines read rip/eflags-TF/orig_rax through the x86-64 ABI and decode
+ * against the x86-64 syscall table; pointed at an i386 task they produce
+ * confident nonsense rather than an error. Checked before any attach
+ * (asmspy_elf_class). */
+#define ASMSPY_ETRACEE_I386 5
 
 /* One data-watchpoint hit handed to the front-end. Thread `tid` accessed the
  * watched location `addr` at instruction `pc` (resolved to `func`+`off` in

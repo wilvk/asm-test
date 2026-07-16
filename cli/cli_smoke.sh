@@ -21,6 +21,10 @@ echo "--- test_jitdump (binary jitdump reader + JIT resolve chain) ---"
 "$BUILD/test_jitdump" || fail "test_jitdump"
 echo "--- test_view (data-flow view: annotation + def-use split + L2 slice) ---"
 "$BUILD/test_view" || fail "test_view"
+echo "--- test_treefilter (call-tree depth cap / symbol focus / module filter) ---"
+"$BUILD/test_treefilter" || fail "test_treefilter"
+echo "--- test_symtab (symbol reverse lookup: gaps, zero-size, boundaries) ---"
+"$BUILD/test_symtab" || fail "test_symtab"
 
 echo "--- asmspy --list (head) ---"
 # capture first: a bare `... | head` pipeline masks asmspy's exit status (sh has
@@ -71,7 +75,13 @@ YPID=""
 MVPID=""
 HWPID=""
 DLPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
+EXPID=""
+FKPID=""
+CLPID=""
+IVPID=""
+SKPID=""
+LJPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -405,6 +415,23 @@ assert all(k in d["functions"][0] for k in ("addr","name","module","kind","invoc
 assert all(k in d["edges"][0] for k in ("caller","callee","count"))' \
         || fail "--json: not well-formed JSON / missing node or edge keys"
     echo "  json validated (python3 json.load: nodes + edges)"
+    # NODE/EDGE UNIQUENESS — the guard on the hash index that replaced the O(n)
+    # scans (asmspy-plan Theme E). Both lookups are "find it, else append", so a
+    # broken index does not error: it MISSES, appends a second node for an
+    # address it already has, and renders a plausible graph with the call counts
+    # silently split across the duplicates. Uniqueness is the property the index
+    # must preserve, so it is what gets asserted — not the speed, which is what
+    # the index is FOR but which no assertion here could pin down honestly.
+    printf '%s' "$jout" | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+addrs = [f["addr"] for f in d["functions"]]
+dup = {a for a in addrs if addrs.count(a) > 1}
+assert not dup, "duplicate node addresses (index missed a hit): %s" % sorted(dup)[:4]
+keys = [(e["caller"], e["callee"]) for e in d["edges"]]
+edup = {k for k in keys if keys.count(k) > 1}
+assert not edup, "duplicate caller->callee edges (index missed a hit): %s" % sorted(edup)[:4]
+print("  nodes/edges unique (%d nodes, %d edges) — hash index dedups correctly" % (len(addrs), len(keys)))' \
+        || fail "--json: duplicate nodes/edges — the graph node/edge index is missing hits it should find"
 else
     echo "  json structural checks passed (python3 absent; strict parse skipped)"
 fi
@@ -491,7 +518,554 @@ if command -v dot >/dev/null 2>&1; then
 else
     echo "  dot structural checks passed (graphviz absent)"
 fi
+
+# ---------------------------------------------------------------------------
+# CALL-TREE OUTPUT FILTERS: --depth / --focus / --module (asmspy-plan Theme E)
+# ---------------------------------------------------------------------------
+# The unfiltered tree above is this test's NEGATIVE CONTROL, and it is the whole
+# point: it PROVES the lines each filter must remove are present when the filter
+# is off. spy_victim's shape supplies a control for every case --
+#
+#   -> work [spy_victim]            real depth 0
+#     -> helper [spy_victim]        real depth 1   (x5 per iteration)
+#   -> usleep@plt [spy_victim]      real depth 0   <- same depth as work
+#     -> __nanosleep [libc.so.6]    real depth 1
+#       -> clock_nanosleep [libc.so.6]  real depth 2
+#
+# -- so "--focus=work dropped usleep@plt" cannot pass by dropping deep lines (it
+# is at the SAME depth as the surviving work), and "--focus=helper printed helper
+# at column 0" cannot pass without a real re-base (unfiltered, helper only ever
+# appears indented two columns).
+tf_capture() { # tf_capture <n> <flag...> -> sets $out; fails on hang/error
+    set +e
+    out=$(timeout 60 "$ASM" --tree "$WVPID" "$@" 2>&1); rc=$?
+    set -e
+    [ "$rc" -eq 124 ] && fail "--tree $* hung (whole-process single-step)"
+    [ "$rc" -eq 0 ] || fail "--tree $* exited rc=$rc"
+    [ -n "$out" ] || fail "--tree $* produced no output at all"
+}
+
+echo "--- asmspy --tree --depth=1 (depth cap) ---"
+tf_capture 8 --depth=1
+printf '%s\n' "$out" | head -3
+printf '%s\n' "$out" | grep -qE '^-> work ' || fail "--depth=1: work (depth 0) missing"
+# the cap must remove the depth-1 callee the unfiltered run proved was there
+printf '%s\n' "$out" | grep -q 'helper' && fail "--depth=1: helper (depth 1) leaked past the cap"
+# and it must not just be dropping everything but the first line
+printf '%s\n' "$out" | grep -qE '^-> usleep@plt ' || fail "--depth=1: usleep@plt (depth 0) wrongly dropped"
+# n must count SURVIVING lines, not raw calls: unfiltered, 8 calls yield only ~2
+# depth-0 lines, so a budget spent on filtered-away calls lands far short of 8.
+[ "$(printf '%s\n' "$out" | grep -c '^-> ')" -ge 8 ] \
+    || fail "--depth=1: fewer than 8 lines — n is counting raw calls, not surviving lines"
+echo "  depth cap: only depth-0 calls, and n counts surviving lines"
+
+echo "--- asmspy --tree --focus=helper (symbol focus + depth re-base) ---"
+tf_capture 6 --focus=helper
+printf '%s\n' "$out" | head -3
+# helper runs at real depth 1 (unfiltered: indented two columns). Under focus it
+# roots the tree, so it must render at column 0 — a filter that suppressed lines
+# without re-basing would print "  -> helper" and fail here.
+printf '%s\n' "$out" | grep -qE '^-> helper \[spy_victim\]' \
+    || fail "--focus=helper: helper not re-based to depth 0"
+printf '%s\n' "$out" | grep -q '  -> ' && fail "--focus=helper: leaked an indented non-root line"
+# work is helper's CALLER: focusing on a callee must not show it
+printf '%s\n' "$out" | grep -q -- '-> work ' && fail "--focus=helper: caller 'work' leaked"
+echo "  focus: subtree rooted + re-based to depth 0, caller excluded"
+
+echo "--- asmspy --tree --focus=work (subtree scope) ---"
+tf_capture 8 --focus=work
+printf '%s\n' "$out" | head -3
+printf '%s\n' "$out" | grep -qE '^-> work \[spy_victim\]' || fail "--focus=work: root missing"
+printf '%s\n' "$out" | grep -qE '^  -> helper \[spy_victim\]' \
+    || fail "--focus=work: work's callee helper missing (focus must keep the SUBTREE)"
+# THE scope assertion: usleep@plt runs at the SAME real depth as work but OUTSIDE
+# it, so a "focus" implemented as a plain name filter (or as a depth cut) keeps it.
+printf '%s\n' "$out" | grep -q 'usleep' \
+    && fail "--focus=work: usleep@plt leaked — focus is not scoping to the subtree"
+echo "  focus: keeps the subtree, drops a same-depth sibling outside it"
+
+echo "--- asmspy --tree --module=libc (module filter) ---"
+tf_capture 4 --module=libc
+printf '%s\n' "$out" | head -3
+printf '%s\n' "$out" | grep -q '\[libc' || fail "--module=libc: no libc frames captured"
+# the victim's own functions dominate the unfiltered tree and must all be gone
+printf '%s\n' "$out" | grep -q '\[spy_victim\]' \
+    && fail "--module=libc: the target's own [spy_victim] frames leaked"
+echo "  module filter: libc callees only, target's own frames dropped"
+
+echo "--- asmspy --tree --focus=usleep --depth=2 (composition) ---"
+# Depth must measure from the RE-BASED root: usleep@plt roots at eff 0,
+# __nanosleep is eff 1 (kept), clock_nanosleep is eff 2 (cut). Its REAL depth is
+# 2, so a cap applied to the real depth would keep it and fail here.
+tf_capture 4 --focus=usleep --depth=2
+printf '%s\n' "$out" | head -3
+printf '%s\n' "$out" | grep -qE '^-> usleep@plt ' || fail "--focus=usleep: root missing"
+printf '%s\n' "$out" | grep -qE '^  -> __nanosleep \[libc' \
+    || fail "--focus=usleep --depth=2: __nanosleep (eff depth 1) missing"
+printf '%s\n' "$out" | grep -q 'clock_nanosleep' \
+    && fail "--focus=usleep --depth=2: clock_nanosleep (eff depth 2) leaked past the cap"
+echo "  composition: --depth measures from the --focus root, not the real depth"
+
+# the re-base must survive the JSON export too: helper is exported at depth 1
+# unfiltered (asserted above) and MUST be depth 0 under --focus=helper — same
+# symbol, same run shape, the depth difference is the filter's alone.
+echo "--- asmspy --tree --focus=helper --json (re-based depth survives export) ---"
+set +e
+tfj=$(timeout 60 "$ASM" --tree "$WVPID" 4 --focus=helper --json 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--tree --focus --json hung"
+printf '%s' "$tfj" | grep -qE '"depth":0,"addr":"0x[0-9a-f]+","name":"helper"' \
+    || fail "--tree --focus=helper --json: helper not exported at re-based depth 0"
+printf '%s' "$tfj" | grep -q '"name":"work"' \
+    && fail "--tree --focus=helper --json: out-of-focus caller leaked into the export"
+echo "  json: focused subtree exported with re-based depths"
+
+# bad filter arguments are rejected up front (rc=2), not silently coerced.
+# --depth=0 is a usage error, NOT "unlimited": it can only ever print nothing.
+expect_badarg "$ASM" --tree "$WVPID" --depth=0
+expect_badarg "$ASM" --tree "$WVPID" --depth=-1
+expect_badarg "$ASM" --tree "$WVPID" --depth=abc
+expect_badarg "$ASM" --tree "$WVPID" --focus=
+expect_badarg "$ASM" --tree "$WVPID" --module=
+echo "  bad --depth/--focus/--module rejected up front"
 kill "$WVPID" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# --tree DEPTH IS A REAL RETURN-ADDRESS STACK, not a counter (Theme C)
+# ---------------------------------------------------------------------------
+# longjmp_victim: main setjmps, calls three deep (level_one -> level_two ->
+# jump_out), and longjmp()s straight back — then calls after_jump() from main at
+# depth 0.
+#
+# longjmp restores rsp and rip directly: those three frames are discarded without
+# a single `ret` retiring. A tracer that counts +1 per CALL and -1 per RET
+# therefore never comes back down, and the drift is CUMULATIVE — MEASURED
+# against exactly that algorithm, after_jump rendered at depth 5, then 10, and
+# level_one marched 0 -> 10 -> 20 columns across three iterations of a process
+# behaving completely normally.
+#
+# The rsp-keyed stack pops every frame the stack pointer moved above, so
+# after_jump lands at depth 0. Both halves are asserted, and they are each
+# other's control:
+#   * jump_out at depth 2  => real nesting IS still tracked (so "depth 0" is not
+#                             just a tracer that never counts anything)
+#   * after_jump at depth 0 => the discarded frames were actually unwound
+echo "--- asmspy --tree across a longjmp (real return-address stack) ---"
+"$BUILD/longjmp_victim" 2>/dev/null &
+LJPID=$!
+sleep 1
+set +e
+ljout=$(timeout 60 "$ASM" --tree "$LJPID" 24 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--tree on longjmp_victim hung"
+kill -9 "$LJPID" 2>/dev/null || true
+wait "$LJPID" 2>/dev/null || true
+LJPID=""
+printf '%s\n' "$ljout" | head -6
+# control: the call chain really did nest before the longjmp
+printf '%s\n' "$ljout" | grep -qE '^-> level_one \[' \
+    || fail "longjmp: level_one not at depth 0"
+printf '%s\n' "$ljout" | grep -qE '^  -> level_two \[' \
+    || fail "longjmp: level_two not nested one level under level_one"
+printf '%s\n' "$ljout" | grep -qE '^    -> jump_out \[' \
+    || fail "longjmp: jump_out not nested two levels — real nesting is not being tracked, so the depth-0 check below would be vacuous"
+# the payload: after_jump is called from main at depth 0, and those three frames
+# were discarded with NO ret. A push/pop counter renders it 5+ levels deep.
+printf '%s\n' "$ljout" | grep -qE '^-> after_jump \[' \
+    || fail "longjmp: after_jump is not at depth 0 — the frames longjmp discarded were never unwound (a push-on-call/pop-on-ret counter cannot do this)"
+printf '%s\n' "$ljout" | grep -qE '^ +-> after_jump \[' \
+    && fail "longjmp: after_jump ALSO appears indented — the depth drifted after a longjmp"
+echo "  nesting tracked (jump_out at depth 2) AND after_jump back at depth 0"
+
+# ---------------------------------------------------------------------------
+# EXEC-STOP RE-RESOLUTION (asmspy-plan Theme B): PTRACE_O_TRACEEXEC
+# ---------------------------------------------------------------------------
+# exec_victim runs preexec_fn, then execv()s exec_stage2, which runs postexec_fn.
+# The two functions live in DIFFERENT binaries at different load biases, so ONE
+# traced run that names BOTH can only have re-read the symbol table at the
+# exec-stop: the table asmspy loaded at attach is exec_victim's and knows nothing
+# of postexec_fn.
+#
+# The two halves are each other's control, which is what makes this airtight:
+#   * preexec_fn present  => asmspy really was attached BEFORE the exec, so
+#                            "postexec_fn appeared" is not just a late attach to
+#                            the post-exec image.
+#   * postexec_fn present => the reload happened, and it cannot be faked by the
+#                            stale table.
+# --graph also proves the exebase re-read: postexec_fn must be tagged INTERNAL.
+# A stale exebase ("exec_victim") would label exec_stage2's own functions
+# external — a wrong answer that still renders as a plausible graph.
+echo "--- asmspy --graph across an execve (exec-stop re-resolution) ---"
+"$BUILD/exec_victim" "$BUILD/exec_stage2" 2>/dev/null &
+EXPID=$!
+sleep 1
+set +e
+exout=$(timeout 90 "$ASM" --graph "$EXPID" 4000 --json 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--graph across execve hung"
+[ "$rc" -eq 0 ] || fail "--graph across execve exited rc=$rc"
+# control: the PRE-exec image was traced and resolved from the attach-time table
+printf '%s' "$exout" | grep -q '"name":"preexec_fn","module":"exec_victim"' \
+    || fail "exec: preexec_fn [exec_victim] absent — asmspy did not trace the pre-exec image (the post-exec proof below would be vacuous)"
+echo "  pre-exec:  preexec_fn [exec_victim] resolved from the attach-time table"
+# the payload: a symbol that exists ONLY in the exec'd binary
+printf '%s' "$exout" | grep -q '"name":"postexec_fn","module":"exec_stage2"' \
+    || fail "exec: postexec_fn [exec_stage2] absent — the symtab was NOT re-read at the exec-stop (new image named from the old binary's table)"
+# and the exe basename was re-read too: stage2's own function is INTERNAL
+printf '%s' "$exout" \
+    | grep -qE '"name":"postexec_fn","module":"exec_stage2","kind":"internal"' \
+    || fail "exec: postexec_fn not tagged internal — the exebase went stale, so the new binary's own code is labelled external"
+echo "  post-exec: postexec_fn [exec_stage2] resolved + tagged internal (symtab AND exebase re-read)"
+# both in ONE capture => the trace really did span the exec
+printf '%s' "$exout" | grep -q '"pid":'"$EXPID" \
+    || fail "exec: graph is not for the traced pid"
+echo "  one capture spans both images (pid $EXPID unchanged across the exec)"
+
+kill "$EXPID" 2>/dev/null || true
+wait "$EXPID" 2>/dev/null || true
+EXPID=""
+
+# The instruction stream re-resolves too (same option, same reload path). This
+# needs a FRESH victim: the run above already let the first one exec, and
+# attaching to an ALREADY-exec'd process would load stage2's symbols at attach
+# and resolve postexec_fn with no reload at all — a vacuously green test. The
+# preexec_fn assertion below is what holds that honest.
+echo "--- asmspy --stream across an execve (fresh pre-exec victim) ---"
+"$BUILD/exec_victim" "$BUILD/exec_stage2" 2>/dev/null &
+EXPID=$!
+sleep 1
+set +e
+sxout=$(timeout 120 "$ASM" --stream "$EXPID" 200000 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--stream across execve hung"
+# control first: we were attached BEFORE the exec
+printf '%s' "$sxout" | grep -q 'preexec_fn.*\[exec_victim\]' \
+    || fail "--stream: preexec_fn absent — attached after the exec, so the postexec_fn check below would be vacuous"
+printf '%s' "$sxout" | grep -q 'postexec_fn.*\[exec_stage2\]' \
+    || fail "--stream: postexec_fn [exec_stage2] never named — no exec re-resolution in the stream engine"
+echo "  stream: pre-exec AND post-exec text each named from their own image"
+kill "$EXPID" 2>/dev/null || true
+wait "$EXPID" 2>/dev/null || true
+EXPID=""
+
+# ---------------------------------------------------------------------------
+# CHILD-PROCESS FOLLOWING: --follow (asmspy-plan Theme B, `strace -f` parity)
+# ---------------------------------------------------------------------------
+# fork_victim forks; parent and child run DISTINCT functions (parent_fn /
+# child_fn) and each open a DIFFERENT file at the SAME fd number (3, opened
+# after the fork).
+#
+# --follow is OPT-IN, which hands every case below a real negative control: the
+# identical run without the flag must never show the child. That is the control
+# the whole section rests on — "the child appeared" means nothing unless the same
+# command without --follow proves it does not appear by default.
+#
+# fork_victim waits 2s before forking and we attach after 1, because
+# PTRACE_O_TRACEFORK reports forks that happen WHILE traced and cannot adopt a
+# child that already existed (the same semantics as `strace -f -p`). Attaching
+# late would silently test nothing — hence the parent_fn/child_fn counts below,
+# not just a "child appeared" grep.
+fk_spawn() { # fk_spawn [stage2] -> $FKPID, attached-before-the-fork
+    "$BUILD/fork_victim" ${1:+"$1"} 2>/dev/null &
+    FKPID=$!
+    sleep 1
+}
+fk_kill() {
+    kill "$FKPID" 2>/dev/null || true # the child dies with it (PR_SET_PDEATHSIG)
+    wait "$FKPID" 2>/dev/null || true
+    FKPID=""
+}
+
+echo "--- asmspy --log --follow (child processes, strace -f parity) ---"
+# CONTROL: no --follow -> the child must be invisible
+fk_spawn
+set +e
+nfout=$(timeout 60 "$ASM" --log "$FKPID" 300 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--log (control) hung"
+fk_kill
+[ "$(printf '%s\n' "$nfout" | grep -c asmspy_fork_parent)" -gt 0 ] \
+    || fail "--log control: the PARENT's own writes are missing — the run is broken, so the --follow comparison below would be meaningless"
+printf '%s\n' "$nfout" | grep -q asmspy_fork_child \
+    && fail "--log without --follow: the child's writes appeared — following is supposed to be OPT-IN (and this destroys the control for the check below)"
+echo "  control: without --follow the forked child is invisible (parent-only)"
+
+# --follow: BOTH processes
+fk_spawn
+set +e
+fout=$(timeout 60 "$ASM" --log "$FKPID" 300 --follow 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--log --follow hung"
+fk_kill
+printf '%s\n' "$fout" | grep -q asmspy_fork_parent \
+    || fail "--log --follow: parent's writes missing"
+printf '%s\n' "$fout" | grep -q asmspy_fork_child \
+    || fail "--log --follow: the forked child's writes never appeared (TRACEFORK not set / child not followed)"
+[ "$(printf '%s\n' "$fout" | grep -oE '^\[[0-9]+\]' | sort -u | wc -l)" -ge 2 ] \
+    || fail "--log --follow: expected syscalls tagged with >=2 distinct pids"
+# THE fd-table assertion. Parent and child BOTH write to fd 3, pointing at
+# different files. A followed child has its OWN fd table, so resolving its
+# write(3) through the PARENT's /proc/<pid>/fd yields the parent's path — the
+# right syscall with a confidently wrong argument, rendering as a perfectly
+# plausible line. Each fd=3 must name its own process's file.
+printf '%s\n' "$fout" | grep -q 'write(fd=3</tmp/asmspy_fork_child.txt>' \
+    || fail "--log --follow: the child's fd 3 does not resolve to the CHILD's file — fd->path is being decoded through the parent's fd table"
+printf '%s\n' "$fout" | grep -q 'write(fd=3</tmp/asmspy_fork_parent.txt>' \
+    || fail "--log --follow: the parent's fd 3 no longer resolves to the parent's file"
+echo "  --follow: both processes logged; each one's fd 3 resolves to its OWN file"
+
+echo "--- asmspy --stream --follow (single-step both processes) ---"
+# CONTROL first, again: the child's code must not appear by default
+fk_spawn
+set +e
+nsout=$(timeout 90 "$ASM" --stream "$FKPID" 4000 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--stream (control) hung"
+fk_kill
+[ "$(printf '%s\n' "$nsout" | grep -c parent_fn)" -gt 0 ] \
+    || fail "--stream control: parent_fn missing — run is broken"
+printf '%s\n' "$nsout" | grep -q child_fn \
+    && fail "--stream without --follow: child_fn appeared — following must be opt-in"
+echo "  control: without --follow only the parent's code is stepped"
+
+fk_spawn
+set +e
+fsout=$(timeout 90 "$ASM" --stream "$FKPID" 4000 --follow 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--stream --follow hung"
+fk_kill
+printf '%s\n' "$fsout" | grep -q parent_fn || fail "--stream --follow: parent_fn missing"
+printf '%s\n' "$fsout" | grep -q child_fn \
+    || fail "--stream --follow: child_fn never appeared — the forked child is not being stepped"
+echo "  --follow: both the parent's and the forked child's code are stepped"
+
+echo "--- asmspy --graph --follow with a child that EXECs (per-process symbols) ---"
+# The child forks AND THEN execs exec_stage2, so the two followed processes are
+# in different images at unrelated load biases: parent_fn is PIE-relocated in
+# fork_victim, postexec_fn is at a static address in exec_stage2. Naming BOTH in
+# one graph is only possible with a per-PROCESS symbol table — a single table
+# (whichever image it came from) cannot resolve the other.
+fk_spawn "$BUILD/exec_stage2"
+set +e
+fgout=$(timeout 90 "$ASM" --graph "$FKPID" 6000 --follow --json 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--graph --follow hung"
+fk_kill
+printf '%s' "$fgout" | grep -q '"name":"parent_fn","module":"fork_victim"' \
+    || fail "--graph --follow: parent_fn [fork_victim] missing"
+printf '%s' "$fgout" | grep -q '"name":"postexec_fn","module":"exec_stage2"' \
+    || fail "--graph --follow: postexec_fn [exec_stage2] missing — a followed child that EXECs is not getting its own symbol table"
+echo "  --follow + exec: two processes, two images, two symbol tables, one graph"
+
+# --tid pins ONE task; --follow adds whole processes. Asking for both is a
+# contradiction, so it is a usage error rather than a silent precedence rule.
+expect_badarg "$ASM" --stream 1 --tid=1 --follow
+expect_badarg "$ASM" --graph 1 --tid=1 --follow
+expect_badarg "$ASM" --tree 1 --tid=1 --follow
+echo "  --tid with --follow rejected (contradictory scopes)"
+rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# POST-ATTACH CLONE FOLLOWING (Theme D) + thr_get OOM RELEASE (Theme C)
+# ---------------------------------------------------------------------------
+# clone_victim stays single-threaded until after we attach, then keeps spawning
+# short-lived threads. spawned_fn runs ONLY on those post-attach clones, so it
+# cannot be reached by seize_threads' one-shot /proc scan — only by
+# PTRACE_O_TRACECLONE plus the clone-event handler.
+#
+# The two checks below are EACH OTHER'S CONTROL, and that is the point:
+#
+#   * no injection -> spawned_fn MUST appear (clones are followed and stepped)
+#   * ASMSPY_TEST_THR_OOM=1 (only the leader may be tabled) -> spawned_fn must
+#     NOT appear: a task we cannot table is RELEASED, not traced-but-untracked.
+#
+# Without the first, the second passes for the wrong reason — anything that
+# breaks clone following at all (TRACECLONE unset, say) also yields spawned_fn=0
+# and would look like a clean OOM release. MEASURED: that exact mutation does
+# make the OOM check pass on its own.
+#
+# HONEST SCOPE. The bug this guards is that an untabled task escapes the
+# two-phase detach and is left step-armed, which kills the target LATER by
+# SIGTRAP. That consequence is NOT what is asserted here, because it does not
+# reproduce on a simple victim — MEASURED: this victim survives with AND without
+# the fix, the same limitation already recorded for the two-phase-detach
+# tripwire (the crash reproduced reliably only on a real V8/Node JIT). So this
+# asserts the POLICY that prevents it — untabled implies released — which is
+# mutation-detectable, rather than a crash that would pass either way.
+#
+# ASMSPY_TEST_THR_OOM is a test-only fault-injection knob: a mid-trace
+# allocation failure cannot be provoked from outside and is silent when it
+# happens, so without a lever the fix could only be argued, not demonstrated.
+echo "--- asmspy post-attach clone following (Theme D) ---"
+"$BUILD/clone_victim" 2>/dev/null &
+CLPID=$!
+sleep 1
+set +e
+clout=$(timeout 90 "$ASM" --stream "$CLPID" 20000 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--stream on clone_victim hung"
+kill -9 "$CLPID" 2>/dev/null || true
+wait "$CLPID" 2>/dev/null || true
+CLPID=""
+printf '%s\n' "$clout" | grep -q main_fn \
+    || fail "clone-follow: main_fn (the leader's own code) missing — the run is broken, so the spawned_fn check would be meaningless"
+printf '%s\n' "$clout" | grep -q spawned_fn \
+    || fail "clone-follow: spawned_fn never appeared — a thread created AFTER the attach is not being followed (TRACECLONE / clone-event handling)"
+[ "$(printf '%s\n' "$clout" | grep -oE '^\[[0-9]+\]' | sort -u | wc -l)" -ge 2 ] \
+    || fail "clone-follow: expected >=2 distinct tids once post-attach clones are followed"
+echo "  post-attach clones followed (leader + spawned threads, spawned_fn stepped)"
+
+echo "--- asmspy thr_get OOM: an untabled task is RELEASED, not left traced (Theme C) ---"
+"$BUILD/clone_victim" 2>/dev/null &
+CLPID=$!
+sleep 1
+set +e
+oomout=$(ASMSPY_TEST_THR_OOM=1 timeout 90 "$ASM" --stream "$CLPID" 20000 2>/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--stream under injected thr_get OOM hung"
+[ "$rc" -eq 0 ] || fail "--stream under injected thr_get OOM exited rc=$rc"
+# the leader IS tabled (cap=1), so it must still be traced — proving the run
+# happened at all and that the injection did not simply break everything
+printf '%s\n' "$oomout" | grep -q main_fn \
+    || fail "thr_get OOM: the leader's own code is missing — the injection broke the whole trace, not just the untabled tasks"
+# every post-attach clone is UNTABLED under cap=1, and each must therefore be
+# detached on sight rather than resumed. Stepping one proves it was resumed
+# while absent from the table detach_threads walks — the escape this fixes.
+printf '%s\n' "$oomout" | grep -q spawned_fn \
+    && fail "thr_get OOM: spawned_fn was stepped even though the task could not be tabled — an untracked task is being resumed, so it escapes the two-phase detach"
+[ "$(printf '%s\n' "$oomout" | grep -oE '^\[[0-9]+\]' | sort -u | wc -l)" -le 1 ] \
+    || fail "thr_get OOM: more than one tid was traced under a 1-task table cap"
+echo "  untabled tasks released on sight; the tabled leader keeps tracing"
+kill -9 "$CLPID" 2>/dev/null || true
+wait "$CLPID" 2>/dev/null || true
+CLPID=""
+
+# ---------------------------------------------------------------------------
+# fd -> ENDPOINT enrichment for sockets (asmspy-plan Theme E)
+# ---------------------------------------------------------------------------
+# readlink("/proc/<pid>/fd/N") on a socket yields "socket:[12345]" — an inode,
+# the one thing a person watching a trace does not care about. asmspy resolves it
+# through /proc/<pid>/net (the TARGET's pid, so a container's socket is looked up
+# in ITS netns, not ours).
+#
+# The victim binds to port 0 and PRINTS the port the kernel picked, so the
+# expected strings are DERIVED from the run rather than hardcoded — the
+# assertions below cannot pass against a stale/wrong socket, and cannot be
+# satisfied by echoing the inode back.
+echo "--- asmspy --log fd->endpoint (socket:[inode] -> real endpoint) ---"
+"$BUILD/sock_victim" 2>"$BUILD/sock_victim.log" &
+SKPID=$!
+sleep 1
+kill -0 "$SKPID" 2>/dev/null || { cat "$BUILD/sock_victim.log"; fail "sock_victim died at startup"; }
+SKPORT=$(sed -n 's/.*tcp_port=\([0-9]*\).*/\1/p' "$BUILD/sock_victim.log")
+[ -n "$SKPORT" ] || { cat "$BUILD/sock_victim.log"; fail "sock_victim did not report its TCP port"; }
+set +e
+skout=$(timeout 60 "$ASM" --log "$SKPID" 80 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--log on sock_victim hung"
+[ "$rc" -eq 0 ] || fail "--log on sock_victim exited rc=$rc"
+printf '%s\n' "$skout" | grep -E '^write' | sort -u | head -4
+
+# THE negative control: the raw inode form must be GONE for these sockets. This
+# is the whole item — "socket:[12345]" is what it used to print.
+printf '%s\n' "$skout" | grep -q 'fd=[0-9]*<socket:\[' \
+    && fail "fd->endpoint: a socket still renders as socket:[inode] — not enriched"
+
+# a connected TCP pair: both ends are in this process, so each must show its own
+# local->remote direction, and the kernel-chosen port must appear on both sides
+printf '%s\n' "$skout" | grep -qE "fd=[0-9]+<TCP 127\.0\.0\.1:[0-9]+->127\.0\.0\.1:$SKPORT>" \
+    || fail "fd->endpoint: the TCP client end does not render as ...->127.0.0.1:$SKPORT (the port the victim reported)"
+printf '%s\n' "$skout" | grep -qE "fd=[0-9]+<TCP 127\.0\.0\.1:$SKPORT->127\.0\.0\.1:[0-9]+>" \
+    || fail "fd->endpoint: the TCP server end does not render as 127.0.0.1:$SKPORT->..."
+# a LISTENing socket names its state, not a bogus 0.0.0.0:0 peer
+printf '%s\n' "$skout" | grep -qE "fd=[0-9]+<TCP LISTEN 127\.0\.0\.1:$SKPORT>" \
+    || fail "fd->endpoint: the listening socket does not render as 'TCP LISTEN 127.0.0.1:$SKPORT'"
+# an AF_UNIX socket bound to a path shows the path
+printf '%s\n' "$skout" | grep -q 'fd=[0-9]*<unix:/tmp/asmspy_sock_victim.sock>' \
+    || fail "fd->endpoint: the AF_UNIX socket does not render its bound path"
+echo "  sockets resolved: TCP both directions + LISTEN + unix path (port $SKPORT, derived from the run)"
+
+# The enrichment must be ADDITIVE — a regular file's fd must still resolve to
+# its path. That is already asserted downstream, on syscall_victim ("write()'s
+# fd is resolved to the file it points at"), which runs after this section and
+# would fail if fd_endpoint() had swallowed the ordinary case. Not repeated here:
+# syscall_victim is not spawned yet at this point in the script.
+kill "$SKPID" 2>/dev/null || true
+wait "$SKPID" 2>/dev/null || true
+SKPID=""
+rm -f /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# 32-bit (i386) TRACEE REFUSAL (asmspy-plan Theme F3)
+# ---------------------------------------------------------------------------
+# asmspy's engines read rip/eflags-TF/orig_rax through the x86-64 ABI and decode
+# against the x86-64 syscall table. Pointed at an i386 task they do not fail —
+# they report CONFIDENT NONSENSE, because the two syscall tables overlap and
+# disagree (i386 4 = write, x86-64 4 = stat). So the engines read
+# /proc/<pid>/exe's EI_CLASS before attaching and refuse.
+#
+# Dockerfile.cli installs gcc-multilib precisely so this runs for real here — a
+# 32-bit process is not hardware, so it is a dependency to add, not a gate. The
+# `make docker-cli` lane therefore HARD-FAILS below if the victim is missing,
+# rather than quietly skipping. $ASMSPY_HAVE_M32 comes from mk/cli.mk's
+# parse-time probe and is only ever non-"yes" on a toolchain without multilib
+# (e.g. the bare CI runner, whose apt line needs gcc-multilib added).
+if [ "${ASMSPY_HAVE_M32:-}" = "yes" ]; then
+    echo "--- asmspy refuses a 32-bit (i386) tracee ---"
+    [ -x "$BUILD/i386_victim" ] \
+        || fail "i386_victim missing though the -m32 probe said yes — the F3 lane must not silently skip"
+    # prove the fixture really is 32-bit; a 64-bit "i386_victim" would make every
+    # assertion below pass for the wrong reason
+    if command -v python3 >/dev/null 2>&1; then
+        cls=$(python3 -c 'import sys; f=open(sys.argv[1],"rb").read(5); print(f[4])' "$BUILD/i386_victim")
+        [ "$cls" = "1" ] || fail "i386_victim is not ELFCLASS32 (e_ident[EI_CLASS]=$cls) — the refusal test would be vacuous"
+        echo "  fixture verified ELFCLASS32 (e_ident[EI_CLASS]=1)"
+    fi
+    "$BUILD/i386_victim" 2>/dev/null &
+    IVPID=$!
+    sleep 1
+    kill -0 "$IVPID" 2>/dev/null || fail "i386_victim did not start (no 32-bit runtime?)"
+
+    # CONTROL: the identical command against a 64-bit victim must SUCCEED, so a
+    # refusal cannot be passed off by anything that breaks --log generally.
+    set +e
+    ok64=$(timeout 30 "$ASM" --log "$AVPID" 5 2>&1); rc64=$?
+    set -e
+    [ "$rc64" -eq 0 ] || fail "control: --log on the 64-bit victim failed (rc=$rc64) — the i386 refusal below would prove nothing"
+    echo "  control: --log on a 64-bit tracee succeeds"
+
+    # every ptrace engine must refuse, BEFORE attaching
+    for v in "--log $IVPID 5" "--stream $IVPID 5" "--graph $IVPID 5" \
+             "--tree $IVPID 5" "--procs $IVPID 5"; do
+        set +e
+        # shellcheck disable=SC2086
+        out=$(timeout 30 "$ASM" $v 2>&1); rc=$?
+        set -e
+        [ "$rc" -eq 124 ] && fail "asmspy $v hung on a 32-bit tracee"
+        [ "$rc" -eq 0 ] && fail "asmspy $v ACCEPTED a 32-bit tracee (rc=0) — it is decoding an i386 task against the x86-64 syscall table and reporting confident nonsense"
+        printf '%s\n' "$out" | grep -qi '32-bit' \
+            || { printf '%s\n' "$out" | head -3; fail "asmspy $v refused a 32-bit tracee but the message never says so (a clear message is the whole fix)"; }
+    done
+    echo "  --log/--stream/--graph/--tree/--procs all refuse with a clear 32-bit message"
+
+    # the refusal must be a REFUSAL, not a failed attach: nothing was traced, so
+    # the victim is untouched and still running
+    kill -0 "$IVPID" 2>/dev/null \
+        || fail "the 32-bit victim died — asmspy attached before refusing"
+    echo "  32-bit victim untouched (refused before attach, not after)"
+    kill "$IVPID" 2>/dev/null || true
+    wait "$IVPID" 2>/dev/null || true
+    IVPID=""
+else
+    # NOT a self-skip of the feature: `make docker-cli` always has gcc-multilib
+    # and always runs the block above. This branch is only reachable on a
+    # toolchain that cannot build ANY 32-bit binary.
+    echo "--- asmspy 32-bit refusal: no -m32 toolchain here ---"
+    echo "  NOT RUN on this toolchain (gcc-multilib absent). The feature is"
+    echo "  covered by 'make docker-cli', whose image installs it; to cover this"
+    echo "  lane too, add gcc-multilib to its apt line."
+fi
 
 # statistical hot-edge sampler: attach AMD IBS-Op to a CPU-busy victim OUT OF
 # BAND (no ptrace, no single-step) and check the hot function is named. IBS-Op is
@@ -697,6 +1271,70 @@ out2=$(timeout 40 "$ASM" --procs "$TVPID" 60 --count=calls 2>&1) \
     || fail "--procs --count=calls"
 printf '%s\n' "$out2" | grep -qE '^node [0-9]+.*inv=[0-9]' \
     || fail "--procs --count=calls: no counted node"
+# --procs JSON export (asmspy-plan Theme E): the flat TASK list, which is what
+# the engine actually observed — the forest the human view draws is derivable
+# from tgid+ppid, so exporting a rendered tree would throw information away and
+# force a consumer to re-parse box glyphs.
+echo "--- asmspy --procs $TVPID 120 --json (machine-readable export) ---"
+set +e
+pjout=$(timeout 60 "$ASM" --procs "$TVPID" 120 --json 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--procs --json hung"
+[ "$rc" -eq 0 ] || fail "--procs --json exited rc=$rc"
+printf '%s\n' "$pjout" | head -3
+printf '%s' "$pjout" | grep -q '^{"pid":' || fail "--procs --json: no top-level {\"pid\":...} object"
+printf '%s' "$pjout" | grep -q '"tasks":\[' || fail "--procs --json: no tasks array"
+# "count" must be exported: inv means something DIFFERENT per mode, and a bare
+# number that silently switches meaning is what an exporter must not emit
+printf '%s' "$pjout" | grep -q '"count":"syscalls"' \
+    || fail "--procs --json: the count mode is not exported (inv would be ambiguous)"
+printf '%s' "$pjout" | grep -qE '"tid":[0-9]+,"tgid":[0-9]+,"ppid":[0-9]+,"leader":(true|false),"comm":"' \
+    || fail "--procs --json: per-task fields missing"
+# the human tree must NOT leak into JSON mode (box glyphs / the header line)
+printf '%s' "$pjout" | grep -q 'process/thread topology' && fail "--procs --json: human header leaked into JSON"
+printf '%s' "$pjout" | grep -q 'node ' && fail "--procs --json: human tree rows leaked into JSON"
+if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$pjout" | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+assert d["tasks"], "no tasks"
+assert all(k in d["tasks"][0] for k in ("tid","tgid","ppid","leader","comm","exe","inv"))
+# the victim is multi-threaded: exactly one leader, several tasks, all one tgid
+leaders = [t for t in d["tasks"] if t["leader"]]
+assert len(leaders) == 1, "expected exactly 1 leader, got %d" % len(leaders)
+assert len(d["tasks"]) >= 2, "expected the threads to be exported too"
+assert leaders[0]["tid"] == leaders[0]["tgid"], "leader tid != tgid"
+assert all(t["tgid"] == leaders[0]["tgid"] for t in d["tasks"]), "tasks span >1 process"
+assert sum(t["inv"] for t in d["tasks"]) > 0, "every task exported inv=0"
+print("  json validated (python3: %d tasks, 1 leader, tid==tgid, inv>0)" % len(d["tasks"]))' \
+        || fail "--procs --json: not well-formed / task invariants violated"
+else
+    echo "  json structural checks passed (python3 absent; strict parse skipped)"
+fi
+
+# --procs DOT export: the process forest as a Graphviz digraph. Processes are
+# boxes, threads are dashed-edged ellipses — the two kinds of "child" the human
+# view stacks in one glyph column stay distinguishable here.
+echo "--- asmspy --procs $TVPID 120 --dot (Graphviz export) ---"
+set +e
+pdout=$(timeout 60 "$ASM" --procs "$TVPID" 120 --dot 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--procs --dot hung"
+printf '%s\n' "$pdout" | head -4
+printf '%s' "$pdout" | grep -q '^digraph asmspy {' || fail "--procs --dot: not a digraph"
+printf '%s' "$pdout" | grep -qE "\"p$TVPID\" \[label=\"$TVPID \[threads_victim\]" \
+    || fail "--procs --dot: the traced process node is missing/mislabelled"
+printf '%s' "$pdout" | grep -qE '"t[0-9]+" \[label="tid [0-9]+' \
+    || fail "--procs --dot: no thread nodes (the victim is multi-threaded)"
+printf '%s' "$pdout" | grep -qE "\"p$TVPID\" -> \"t[0-9]+\" \[style=dashed\]" \
+    || fail "--procs --dot: no process->thread edges"
+printf '%s' "$pdout" | grep -q '^}' || fail "--procs --dot: unterminated digraph"
+if command -v dot >/dev/null 2>&1; then
+    printf '%s' "$pdout" | dot -Tsvg >/dev/null 2>&1 || fail "--procs --dot: graphviz rejected the output"
+    echo "  dot validated (graphviz dot -Tsvg)"
+else
+    echo "  dot structural checks passed (graphviz absent)"
+fi
+
 # a bad --count value is rejected up front (rc=2)
 expect_badarg "$ASM" --procs "$TVPID" --count=bogus
 kill "$TVPID" 2>/dev/null || true
@@ -805,6 +1443,35 @@ printf '%s\n' "$fout" | grep -qE '^\[[0-9]+\]' \
 # a bad --tid value is rejected up front (rc=2)
 expect_badarg "$ASM" --stream "$YPID" --tid=nope
 echo "  per-thread filter: alpha only (beta_work absent)"
+
+# MULTI-THREAD [tid] TAGGING for --tree (asmspy-plan Theme D). The tree prefixes
+# every line with "[tid] " once it follows more than one thread — without it, two
+# threads' call trees interleave into one indented column that reads like a
+# single nonsensical call chain. tid_victim runs alpha_work and beta_work on
+# DISTINCT threads, so both must appear, each tagged, under >=2 distinct tids.
+echo "--- asmspy --tree $YPID (multi-thread [tid] tagging) ---"
+set +e
+tt=$(timeout 60 "$ASM" --tree "$YPID" 40 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--tree on tid_victim hung"
+printf '%s
+' "$tt" | head -3
+printf '%s
+' "$tt" | grep -qE '^\[[0-9]+\] '     || fail "--tree: no [tid] prefix on a multi-threaded target — two threads' trees would interleave indistinguishably"
+[ "$(printf '%s
+' "$tt" | grep -oE '^\[[0-9]+\]' | sort -u | wc -l)" -ge 2 ]     || fail "--tree: expected entries from >=2 distinct tids on a multi-threaded target"
+# and the tags are real: the two threads' DISTINCT functions each appear
+printf '%s
+' "$tt" | grep -q 'alpha_work' || fail "--tree: alpha_work missing"
+printf '%s
+' "$tt" | grep -q 'beta_work' || fail "--tree: beta_work missing"
+# control: with --tid the tree follows ONE thread, so the prefix is gone again
+set +e
+tt1=$(timeout 60 "$ASM" --tree "$YPID" 20 --tid="$ATID" 2>/dev/null)
+set -e
+printf '%s
+' "$tt1" | grep -qE '^\[[0-9]+\] '     && fail "--tree --tid: a single-thread trace must NOT carry the [tid] prefix"
+echo "  --tree: [tid]-tagged across >=2 threads; single-thread trace unprefixed"
 kill "$YPID" 2>/dev/null || true
 rm -f "$TLOG"
 

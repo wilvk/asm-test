@@ -31,7 +31,7 @@ $(BUILD)/asmspy_syscall_names.inc: cli/gen-syscall-names.sh | $(BUILD)
 # cli/ sources compile like examples/, but with -pthread (a dedicated tracer
 # thread owns the ptrace loop while the ncurses UI thread stays responsive).
 $(BUILD)/%.o: cli/%.c cli/asmspy.h cli/asmspy_graphsort.h \
-              cli/asmspy_dataview.h \
+              cli/asmspy_dataview.h cli/asmspy_treefilter.h \
               include/asmtest_ptrace.h \
               include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -I$(BUILD) -pthread -c $< -o $@
@@ -128,6 +128,81 @@ $(BUILD)/sample_victim: $(BUILD)/sample_victim.o
 $(BUILD)/watch_victim: $(BUILD)/watch_victim.o
 	$(CC) $(CFLAGS) -pthread $^ -o $@
 
+# longjmp_victim: main setjmps, calls 3 deep, and longjmps straight back, then
+# calls after_jump() from main at depth 0. longjmp discards those 3 frames with
+# NO `ret` retiring, so a push-on-call/pop-on-ret depth COUNTER never comes back
+# down and renders after_jump 3 levels too deep — forever. Backs the --tree
+# return-address-stack smoke (Theme C).
+$(BUILD)/longjmp_victim: $(BUILD)/longjmp_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+# sock_victim opens a LISTENing TCP socket, a connected TCP pair (both ends in
+# one process, so the expected endpoints are derivable from the port it prints)
+# and an AF_UNIX socket bound to a path — for the fd->endpoint smoke, which
+# proves asmspy renders the endpoint behind "socket:[inode]" rather than the
+# inode. Compiles via the cli/ .o pattern rule.
+$(BUILD)/sock_victim: $(BUILD)/sock_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+# i386_victim is a REAL 32-bit tracee (-m32) for the EI_CLASS refusal smoke
+# (asmspy-plan Theme F3). Dockerfile.cli installs gcc-multilib for exactly this,
+# so `make docker-cli` — the lane this feature is verified in — always builds and
+# runs it. A 32-bit process is not hardware or a credential, so per CLAUDE.md it
+# is a dependency to add, not a gate to skip.
+#
+# The parse-time probe below exists ONLY for toolchains outside that lane (CI
+# runs `make cli-smoke` on a bare GitHub runner, whose apt line lives in
+# .github/workflows/ci.yml and would need `gcc-multilib` added to it). A recipe
+# line that self-skips would not work here anyway: `command -v ... || exit 0` in
+# a recipe exits only that line's shell and make runs the next one regardless —
+# hence a parse-time conditional feeding a sentinel the smoke reads.
+CLI_M32_PROBE := $(shell t=$$(mktemp -d 2>/dev/null) &&   printf 'int main(void){return 0;}' > $$t/m32.c &&   $(CC) -m32 $$t/m32.c -o $$t/m32 >/dev/null 2>&1 && echo yes; rm -rf $$t)
+ifeq ($(CLI_M32_PROBE),yes)
+CLI_I386_VICTIM := $(BUILD)/i386_victim
+else
+CLI_I386_VICTIM :=
+endif
+
+$(BUILD)/i386_victim: cli/i386_victim.c | $(BUILD)
+	$(CC) $(CFLAGS) -m32 $< -o $@
+
+# clone_victim spawns threads DURING the trace (every other threaded victim
+# starts its workers before the attach, so they arrive via seize_threads' /proc
+# scan instead). spawned_fn runs only on those post-attach clones. Backs the
+# post-attach clone-following smoke (Theme D) and the thr_get OOM survival smoke
+# (Theme C, via ASMSPY_TEST_THR_OOM). Multi-threaded, so -pthread.
+$(BUILD)/clone_victim: $(BUILD)/clone_victim.o
+	$(CC) $(CFLAGS) -pthread $^ -o $@
+
+# exec_victim / exec_stage2 — the exec-stop re-resolution pair (Theme B).
+# exec_victim runs preexec_fn, then execv()s exec_stage2, which runs postexec_fn.
+# The two functions live in DIFFERENT binaries, so naming postexec_fn proves
+# asmspy re-read the symtab at the exec-stop (the attach-time table is
+# exec_victim's and describes a different image at a different load bias).
+$(BUILD)/exec_victim: $(BUILD)/exec_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+# exec_stage2 is linked -static ON PURPOSE. After an execve the dynamic loader
+# runs first, and relocating a PIE against a shared libc costs well over 20k
+# instructions before main() is ever reached — so a single-step smoke would burn
+# its whole budget inside ld.so and never see postexec_fn, whether or not the
+# re-resolution works. Static linking removes ld.so from the post-exec path
+# (_start -> __libc_start_main -> main), which puts postexec_fn within a few
+# thousand steps. This is a TEST-RUNTIME concession, not a narrowing of the
+# feature: the reload is keyed off the exec-stop and /proc/<pid>/maps, neither of
+# which cares how the new image is linked. Built from the source directly — the
+# cli/ .o pattern rule's object is shared with the dynamic link line.
+$(BUILD)/exec_stage2: cli/exec_stage2.c | $(BUILD)
+	$(CC) $(CFLAGS) -static $< -o $@
+
+# fork_victim forks; parent and child run DISTINCT functions and each open a
+# DIFFERENT file at the SAME fd number (3, opened after the fork). Backs the
+# --follow (strace -f parity) smoke: following the child, and resolving its fds
+# through ITS OWN fd table rather than the parent's. Optional argv[1] = a binary
+# the child execs, which also puts it in an image of its own.
+$(BUILD)/fork_victim: $(BUILD)/fork_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 # debuglink_victim carries a function (debuglink_only_fn) that lands in .symtab
 # but NOT .dynsym, so the smoke can strip a copy, prove asmspy resolves nothing,
 # then attach the debug info back as a separate .gnu_debuglink / build-id file and
@@ -155,6 +230,25 @@ $(BUILD)/test_graphsort: cli/test_graphsort.c cli/asmspy_graphsort.h \
                          cli/asmspy.h | $(BUILD)
 	$(CC) $(CFLAGS) -Icli -o $@ cli/test_graphsort.c
 
+# test_treefilter — headless unit test for the call-tree output filter
+# (cli/asmspy_treefilter.h: --tree --depth/--focus/--module). Replays scripted
+# call/ret streams through the filter, so the focus open/close and depth re-base
+# sequences are asserted directly instead of only via whatever shapes a live
+# single-stepped victim happens to run.
+$(BUILD)/test_treefilter: cli/test_treefilter.c cli/asmspy_treefilter.h \
+                          | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -o $@ cli/test_treefilter.c
+
+# test_symtab — unit test for the symbol REVERSE lookup (asmspy_symtab_at), the
+# one function every view that names an address goes through. Pins the edges
+# where a resolver lies quietly instead of failing: one byte past a function,
+# the gap between two functions, a zero-SIZE symbol, an address below the first.
+# Links the resolver TU directly, like test_jitdump.
+$(BUILD)/test_symtab: cli/test_symtab.c $(BUILD)/asmspy_proc.o cli/asmspy.h \
+                      | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -pthread cli/test_symtab.c $(BUILD)/asmspy_proc.o \
+	  -lstdc++ -o $@
+
 # test_jitdump — unit test for the binary jitdump reader + the two-tier JIT
 # resolve chain. Links the resolver TU (asmspy_proc.o) directly; -lstdc++
 # supplies its __cxa_demangle just like the asmspy link line.
@@ -169,11 +263,14 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/jit_victim $(BUILD)/jitdump_victim $(BUILD)/int3_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/watch_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_logview \
-           $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view
+           $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
+           $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
+           $(BUILD)/fork_victim $(BUILD)/clone_victim \
+           $(BUILD)/sock_victim $(BUILD)/longjmp_victim $(CLI_I386_VICTIM)
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
 	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"
-	BUILD=$(BUILD) sh cli/cli_smoke.sh
+	BUILD=$(BUILD) ASMSPY_HAVE_M32='$(CLI_M32_PROBE)' sh cli/cli_smoke.sh
 
 # Build the CLI image (bindings base + libipt-dev + libncurses-dev) and run the
 # headless smoke. Interactive use: `docker run --rm -it asmtest-cli bash` then

@@ -74,6 +74,13 @@ void asmspy_strerror(int rc, char *buf, size_t buflen) {
         m = "data-flow value producer unavailable (off Linux x86-64 / built "
             "without Capstone)";
         break;
+    case ASMSPY_ETRACEE_I386:
+        /* Must fit the callers' char[128] or it truncates mid-sentence
+         * (measured). The detail lives in asmspy.h; this is the operator's
+         * one-liner: what is wrong, and what to do instead. */
+        m = "32-bit (i386) tracee — unsupported (asmspy is x86-64-only and "
+            "would MISDECODE it). Trace a 64-bit process";
+        break;
     case ASMSPY_WATCH_UNAVAIL:
         m = "hardware data watchpoint unavailable (off x86-64, or "
             "debug-register "
@@ -290,6 +297,165 @@ static size_t ap_dirfd(char *b, size_t cap, size_t o, long long raw) {
  * pipe to "socket:[inode]" / "pipe:[inode]" (what strace shows too). Best-effort:
  * an fd already gone by the time we format (close() at its exit-stop) or one we
  * cannot readlink just prints "fd=N" with no suffix. */
+/* ------------------------------------------------------------------ */
+/* Socket fd -> ENDPOINT (asmspy-plan Theme E)                         */
+/*                                                                      */
+/* readlink("/proc/<pid>/fd/N") on a socket yields "socket:[12345]" —   */
+/* an inode, which is exactly the thing a person watching a trace does  */
+/* not care about. The endpoint behind it lives under /proc/<pid>/net.  */
+/* (read through the TARGET's pid, so its network namespace is the one  */
+/* consulted — a container's socket must not be looked up in ours).     */
+/* ------------------------------------------------------------------ */
+
+/* Render one hex address from /proc/net/{tcp,udp}{,6} plus its port. IPv4 is 8
+ * hex chars holding 4 LITTLE-ENDIAN bytes; IPv6 is 32, as 4 little-endian
+ * 32-bit words. Ports are already host order in these files. */
+static void net_addr(const char *hex, unsigned port, char *out, size_t cap) {
+    size_t n = strlen(hex);
+    if (n == 8) {
+        unsigned long v = strtoul(hex, NULL, 16);
+        snprintf(out, cap, "%lu.%lu.%lu.%lu:%u", v & 0xff, (v >> 8) & 0xff,
+                 (v >> 16) & 0xff, (v >> 24) & 0xff, port);
+        return;
+    }
+    if (n == 32) { /* keep it simple + unambiguous: 8 colon-separated groups */
+        unsigned char b16[16];
+        for (int w = 0; w < 4; w++) {
+            char t[9];
+            memcpy(t, hex + w * 8, 8);
+            t[8] = '\0';
+            unsigned long v = strtoul(t, NULL, 16);
+            b16[w * 4 + 0] = (unsigned char)(v & 0xff);
+            b16[w * 4 + 1] = (unsigned char)((v >> 8) & 0xff);
+            b16[w * 4 + 2] = (unsigned char)((v >> 16) & 0xff);
+            b16[w * 4 + 3] = (unsigned char)((v >> 24) & 0xff);
+        }
+        size_t o = 0;
+        o += (size_t)snprintf(out + o, cap - o, "[");
+        for (int i = 0; i < 8 && o < cap; i++)
+            o += (size_t)snprintf(out + o, cap - o, "%s%x", i ? ":" : "",
+                                  (b16[i * 2] << 8) | b16[i * 2 + 1]);
+        snprintf(out + o, cap > o ? cap - o : 0, "]:%u", port);
+        return;
+    }
+    snprintf(out, cap, "?:%u", port);
+}
+
+/* TCP states from /proc/net/tcp (st column). Only the ones worth naming in a
+ * one-line trace; anything else keeps its number. */
+static const char *tcp_state(unsigned st) {
+    switch (st) {
+    case 0x01:
+        return "ESTABLISHED";
+    case 0x0A:
+        return "LISTEN";
+    case 0x06:
+        return "TIME_WAIT";
+    case 0x08:
+        return "CLOSE_WAIT";
+    default:
+        return NULL;
+    }
+}
+
+/* Search one /proc/<pid>/net/{tcp,udp}{,6} table for `ino`. Returns 1 and fills
+ * `out` ("TCP 127.0.0.1:5555->127.0.0.1:41234", "TCP LISTEN 0.0.0.0:5555"). */
+static int net_lookup(pid_t pid, const char *file, const char *label,
+                      int is_tcp, unsigned long ino, char *out, size_t cap) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/net/%s", (int)pid, file);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return 0;
+    char line[512];
+    int found = 0;
+    if (!fgets(line, sizeof line, f)) { /* header */
+        fclose(f);
+        return 0;
+    }
+    while (fgets(line, sizeof line, f)) {
+        char la[40], ra[40];
+        unsigned lp, rp, st;
+        unsigned long inode = 0;
+        if (sscanf(line,
+                   " %*u: %39[0-9A-Fa-f]:%X %39[0-9A-Fa-f]:%X %X %*X:%*X "
+                   "%*X:%*X %*X %*u %*u %lu",
+                   la, &lp, ra, &rp, &st, &inode) != 6)
+            continue;
+        if (inode != ino)
+            continue;
+        char ls[64], rs[64];
+        net_addr(la, lp, ls, sizeof ls);
+        net_addr(ra, rp, rs, sizeof rs);
+        const char *sn = is_tcp ? tcp_state(st) : NULL;
+        if (sn && strcmp(sn, "LISTEN") == 0)
+            snprintf(out, cap, "%s LISTEN %s", label, ls);
+        else
+            snprintf(out, cap, "%s %s->%s", label, ls, rs);
+        found = 1;
+        break;
+    }
+    fclose(f);
+    return found;
+}
+
+/* Search /proc/<pid>/net/unix for `ino`. Its path column is optional (an
+ * unbound/socketpair end has none) — those still get named "unix" rather than
+ * an inode, because "which kind of thing is this fd" is itself the answer. */
+static int unix_lookup(pid_t pid, unsigned long ino, char *out, size_t cap) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/net/unix", (int)pid);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return 0;
+    char line[512];
+    int found = 0;
+    if (!fgets(line, sizeof line, f)) { /* header */
+        fclose(f);
+        return 0;
+    }
+    while (fgets(line, sizeof line, f)) {
+        unsigned long inode = 0;
+        char p[256];
+        p[0] = '\0';
+        /* Num RefCount Protocol Flags Type St Inode Path */
+        int n =
+            sscanf(line, "%*x: %*X %*X %*X %*X %*X %lu %255[^\n]", &inode, p);
+        if (n < 1 || inode != ino)
+            continue;
+        if (p[0])
+            snprintf(out, cap, "unix:%s", p);
+        else
+            snprintf(out, cap, "unix (unbound)");
+        found = 1;
+        break;
+    }
+    fclose(f);
+    return found;
+}
+
+/* Turn a readlink target into a human endpoint, or return 0 to keep it as is.
+ * Handles "socket:[<ino>]"; a "pipe:[<ino>]" is left alone deliberately — its
+ * peer is not in /proc/<pid>/net at all, and naming it would mean scanning every
+ * process's fds for the same inode, which is not something an attach path
+ * should do per syscall. */
+static int fd_endpoint(pid_t pid, const char *tgt, char *out, size_t cap) {
+    unsigned long ino = 0;
+    if (sscanf(tgt, "socket:[%lu]", &ino) != 1 || !ino)
+        return 0;
+    if (net_lookup(pid, "tcp", "TCP", 1, ino, out, cap))
+        return 1;
+    if (net_lookup(pid, "tcp6", "TCP6", 1, ino, out, cap))
+        return 1;
+    if (net_lookup(pid, "udp", "UDP", 0, ino, out, cap))
+        return 1;
+    if (net_lookup(pid, "udp6", "UDP6", 0, ino, out, cap))
+        return 1;
+    if (unix_lookup(pid, ino, out, cap))
+        return 1;
+    return 0; /* netlink/packet/… — keep the raw socket:[ino] */
+}
+
 static size_t ap_fd(char *b, size_t cap, size_t o, pid_t pid, long long fd) {
     o = apf(b, cap, o, "fd=%lld", fd);
     if (fd < 0)
@@ -300,7 +466,13 @@ static size_t ap_fd(char *b, size_t cap, size_t o, pid_t pid, long long fd) {
     ssize_t k = readlink(link, tgt, sizeof tgt - 1);
     if (k > 0) {
         tgt[k] = '\0';
-        o = apf(b, cap, o, "<%s>", tgt);
+        char ep[160];
+        /* a socket resolves to its endpoint; everything else (a real path, a
+         * pipe, an anon inode) is already as informative as it gets */
+        if (fd_endpoint(pid, tgt, ep, sizeof ep))
+            o = apf(b, cap, o, "<%s>", ep);
+        else
+            o = apf(b, cap, o, "<%s>", tgt);
     }
     return o;
 }
@@ -417,16 +589,41 @@ static int syscall_stop_is_entry(pid_t tid) {
     return -1;
 }
 
+/* One live call frame on a thread's shadow RETURN-ADDRESS STACK (tree engine).
+ *
+ * `sp` is the rsp the CALL leaves behind — i.e. the callee's entry rsp, pointing
+ * at the pushed return address. It, not `ret`, is what makes the stack correct:
+ * a frame is live exactly while the thread's rsp is <= sp, so ONE comparison
+ * unwinds normal returns, longjmp, and C++ unwinding alike (see frm_unwind).
+ * `ret` is kept for diagnosis and for a future nesting-aware aggregation. */
+typedef struct {
+    uint64_t ret; /* return address the call pushed (call site + insn length) */
+    uint64_t sp;  /* rsp immediately after the call pushed it                 */
+} frame_t;
+
 /* Per-thread syscall entry/exit bookkeeping (the stream loop uses only .tid). */
 typedef struct {
     pid_t tid;
+    pid_t tgid;   /* thread-group (process) this task belongs to. 0 = not yet
+                   * known. Only meaningful once --follow is on: a cloned THREAD
+                   * shares its parent's mm/fd table, but a FORKED CHILD shares
+                   * neither, so every read keyed off the original leader `pid`
+                   * is wrong for it. */
     int at_entry; /* fallback toggle: next stop is an ENTRY */
     long ent_nr;  /* syscall nr captured at entry, -1 if none */
     struct user_regs_struct entry; /* register snapshot at that entry */
     int pending_call; /* graph engine: an INDIRECT call awaits its callee entry */
     uint64_t
         call_site; /* graph engine: call-site addr of that pending call     */
-    int depth;     /* tree engine: live call depth (push on call, pop on ret) */
+    /* tree engine: the thread's live call stack. Depth is stk_n — NOT a counter
+     * incremented on call and decremented on ret; see frm_unwind for why that
+     * distinction is the whole point. */
+    frame_t *stk;
+    size_t stk_n, stk_cap;
+    int focus_depth; /* tree engine: real depth at which this thread entered the
+                      * --focus subtree, ASMSPY_TF_NO_FOCUS when outside one.
+                      * Per-thread because thread A being inside the focused
+                      * function says nothing about thread B.                 */
     unsigned long long
         inv;     /* procs engine: per-task invocation count (syscalls/calls) */
     int armed;   /* watch engine: its debug-register watchpoint is installed  */
@@ -448,11 +645,34 @@ static int thr_find(const thr_tab_t *t, pid_t tid) {
     return -1;
 }
 
+/* TEST-ONLY fault injection for the thr_get OOM path (asmspy-plan Theme C).
+ *
+ * The bug this guards — an untabled task resumed anyway, escaping the two-phase
+ * detach and dying later of a SIGTRAP that looks like the target's own — is
+ * reachable only through a mid-trace allocation failure, which cannot be
+ * provoked from outside and does not announce itself when it happens. Without a
+ * lever, the fix could only ever be argued, not demonstrated.
+ *
+ * ASMSPY_TEST_THR_OOM=<n> allows `n` tasks to be tabled and fails every NEW one
+ * after that (sticky, so the untabled task stays untabled on every later stop —
+ * which is what a real OOM would do). Unset = disabled, the normal path.
+ * Returns 1 if this insertion must fail. */
+static int thr_table_full_for_test(const thr_tab_t *t) {
+    static int cap = -2; /* -2 = unread, -1 = disabled */
+    if (cap == -2) {
+        const char *e = getenv("ASMSPY_TEST_THR_OOM");
+        cap = (e && *e) ? atoi(e) : -1;
+    }
+    return cap >= 0 && t->n >= (size_t)cap;
+}
+
 /* Find `tid`, adding a fresh entry if absent. NULL only on allocation failure. */
 static thr_t *thr_get(thr_tab_t *t, pid_t tid) {
     int i = thr_find(t, tid);
     if (i >= 0)
         return &t->v[i];
+    if (thr_table_full_for_test(t))
+        return NULL; /* injected OOM (ASMSPY_TEST_THR_OOM) */
     if (t->n == t->cap) {
         size_t nc = t->cap ? t->cap * 2 : 16;
         thr_t *nv = realloc(t->v, nc * sizeof *nv);
@@ -463,12 +683,15 @@ static thr_t *thr_get(thr_tab_t *t, pid_t tid) {
     }
     thr_t *e = &t->v[t->n++];
     e->tid = tid;
+    e->tgid = 0; /* resolved lazily (thr_tgid) or set by the clone/fork event */
     e->at_entry = 1;
     e->ent_nr = -1;
     memset(&e->entry, 0, sizeof e->entry);
     e->pending_call = 0;
     e->call_site = 0;
-    e->depth = 0;
+    e->stk = NULL;
+    e->stk_n = e->stk_cap = 0;
+    e->focus_depth = ASMSPY_TF_NO_FOCUS;
     e->inv = 0;
     e->armed = 0;
     e->stopped = 0;
@@ -477,8 +700,57 @@ static thr_t *thr_get(thr_tab_t *t, pid_t tid) {
 
 static void thr_del(thr_tab_t *t, pid_t tid) {
     int i = thr_find(t, tid);
-    if (i >= 0)
+    if (i >= 0) {
+        free(t->v[i].stk);      /* the tree engine's call stack, if any */
         t->v[i] = t->v[--t->n]; /* order is irrelevant */
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Per-thread return-address stack (the --tree engine's depth)         */
+/*                                                                      */
+/* --tree used to carry an int incremented on CALL and decremented on   */
+/* RET, clamped at 0. That is only right while control flow is a        */
+/* matched call/return sequence, and it drifts PERMANENTLY the moment   */
+/* it is not: longjmp() and a C++ unwind restore rsp to an outer frame  */
+/* WITHOUT executing the returns in between, so the counter never       */
+/* comes back down and every later line is indented too deep, forever.  */
+/*                                                                      */
+/* A real stack keyed on rsp fixes all of it with ONE rule: a frame is  */
+/* live exactly while the thread's rsp is at or below the rsp that call */
+/* left behind. Anything that moves rsp above it — a RET, a longjmp     */
+/* over ten frames, an unwind — pops it, whether or not a `ret` ever    */
+/* retired. And a signal handler runs BELOW the interrupted rsp, so the */
+/* frames underneath it correctly survive.                              */
+/* ------------------------------------------------------------------ */
+
+/* Bound the stack: a runaway/unbounded recursion must cost the TRACER a fixed
+ * amount of memory. Past this, depth stops growing (the view clamps its
+ * indentation long before this anyway) but the frames already recorded stay
+ * correct, so unwinding still tracks. */
+#define ASMSPY_STK_MAX 4096
+
+static void frm_push(thr_t *t, uint64_t ret, uint64_t sp) {
+    if (t->stk_n >= ASMSPY_STK_MAX)
+        return;
+    if (t->stk_n == t->stk_cap) {
+        size_t nc = t->stk_cap ? t->stk_cap * 2 : 32;
+        frame_t *nv = realloc(t->stk, nc * sizeof *nv);
+        if (!nv)
+            return; /* OOM: skip this frame; the rsp rule still unwinds the rest */
+        t->stk = nv;
+        t->stk_cap = nc;
+    }
+    t->stk[t->stk_n].ret = ret;
+    t->stk[t->stk_n].sp = sp;
+    t->stk_n++;
+}
+
+/* Pop every frame the thread's stack pointer has moved ABOVE. See the block
+ * comment: this single comparison is what a push/pop counter cannot express. */
+static void frm_unwind(thr_t *t, uint64_t rsp) {
+    while (t->stk_n > 0 && rsp > t->stk[t->stk_n - 1].sp)
+        t->stk_n--;
 }
 
 /* SEIZE every thread of `pid` with `opts` and INTERRUPT each so it stops and can
@@ -544,10 +816,172 @@ static int seize_one(pid_t tid, long opts, thr_tab_t *tab) {
 }
 
 /* Attach for a single-step engine: one thread when `only_tid` is set, else the
- * whole process (all threads, following clones). Returns 0 or -1. */
-static int seize_for_engine(pid_t pid, pid_t only_tid, thr_tab_t *tab) {
-    return only_tid ? seize_one(only_tid, 0, tab)
-                    : seize_threads(pid, PTRACE_O_TRACECLONE, tab);
+ * whole process (all threads, following clones). Returns 0 or -1.
+ *
+ * PTRACE_O_TRACEEXEC is set on BOTH paths — a --tid-pinned thread that execs
+ * replaces the image just as thoroughly as the leader doing it (and by then it
+ * IS the leader; execve from any thread makes the caller the thread-group
+ * leader). Without the option the exec-stop arrives as a bare SIGTRAP that the
+ * step loop cannot tell from its own, so the engine would resume stepping brand
+ * new code while still naming it from the OLD image's symbol table. */
+static int seize_for_engine(pid_t pid, pid_t only_tid, int follow,
+                            thr_tab_t *tab) {
+    long opts = PTRACE_O_TRACEEXEC;
+    if (only_tid) /* --tid: exactly this task; follow neither clones nor forks */
+        return seize_one(only_tid, opts, tab);
+    opts |= PTRACE_O_TRACECLONE;
+    if (follow) /* --follow: child PROCESSES too (strace -f) */
+        opts |= PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK;
+    return seize_threads(pid, opts, tab);
+}
+
+/* Defined further down with the views that own them; needed here by the
+ * per-process resolution helpers below. */
+static void exe_basename(pid_t pid, char *out, size_t cap);
+static void read_task_meta(pid_t tid, pid_t *tgid, pid_t *ppid, char *comm,
+                           size_t cz);
+
+/* The thread-group `tid` belongs to. Recorded when we see the clone/fork event
+ * that created it (free, exact); looked up from /proc once and cached otherwise
+ * (a task seized at attach, or one we met before its event). Falls back to
+ * `dflt` — the original leader — which is right for every non-follow trace,
+ * where by construction there is only one thread group. */
+static pid_t thr_tgid(thr_tab_t *t, pid_t tid, pid_t dflt) {
+    int i = thr_find(t, tid);
+    if (i < 0)
+        return dflt;
+    if (t->v[i].tgid == 0) {
+        pid_t g = 0, pp = 0;
+        char comm[24];
+        read_task_meta(tid, &g, &pp, comm, sizeof comm);
+        t->v[i].tgid = g > 0 ? g : dflt;
+    }
+    return t->v[i].tgid;
+}
+
+/* ------------------------------------------------------------------ */
+/* Per-PROCESS symbol resolution: execve + followed children           */
+/*                                                                      */
+/* Two separate things invalidate "one symtab for the whole trace":     */
+/*                                                                      */
+/*  1. execve() replaces an image wholesale — same pid, entirely new     */
+/*     text, new load bias, new symbols. Every later resolution against  */
+/*     the old table returns a CONFIDENTLY WRONG name. For a tracer that */
+/*     is worse than no name: an address that resolves to "main" because */
+/*     the old binary happened to have main there reads as fact. (Same   */
+/*     reasoning that makes Theme A's separate-debug keys verified       */
+/*     rather than trusted.) PTRACE_O_TRACEEXEC stops the tracee at      */
+/*     exactly the right moment: the new image is mapped, but not one of */
+/*     its instructions has retired yet.                                 */
+/*                                                                      */
+/*  2. --follow (PTRACE_O_TRACEFORK) brings in child PROCESSES. A cloned */
+/*     THREAD shares its parent's address space and fd table, so one     */
+/*     table and one `pid` to read through serve the whole thread group. */
+/*     A FORKED CHILD shares NEITHER: new address space, new fd table,   */
+/*     its own /proc/<pid>/maps. So everything the engines key off the   */
+/*     leader `pid` — process_vm_readv, symbol resolution, fd->path, the */
+/*     exe basename — is wrong for a followed child unless it is re-keyed */
+/*     by that child's own thread-group id. Following forks is therefore  */
+/*     not "one more ptrace option": it is a per-tgid re-keying.          */
+/*                                                                      */
+/* Both reduce to the same thing — resolve against the table for THIS    */
+/* task's process, reloading it when that process's image changes.       */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    pid_t tgid;
+    const asmspy_symtab_t *syms; /* what to resolve against for this process  */
+    asmspy_symtab_t own;         /* our loaded table, when we own one         */
+    int have_own;                /* `own` is loaded -> free it                */
+    asmspy_jitmap_t jit;         /* this process's perf-map / jitdump         */
+    char exebase[64];            /* its exe basename (the [int]/[EXT] split)  */
+} psym_t;
+
+typedef struct {
+    psym_t *v;
+    size_t n, cap;
+    pid_t root;                   /* the pid the caller attached to        */
+    const asmspy_symtab_t *rsyms; /* the caller's table, for `root` only   */
+} psym_tab_t;
+
+static void psym_init(psym_tab_t *pt, pid_t root,
+                      const asmspy_symtab_t *rsyms) {
+    pt->v = NULL;
+    pt->n = pt->cap = 0;
+    pt->root = root;
+    pt->rsyms = rsyms;
+}
+
+/* Load (or re-load) one process's symbol table, JIT map and exe basename.
+ * Best-effort throughout: a failure leaves an empty table, so the view falls
+ * back to RAW ADDRESSES. That is the honest outcome — an unresolved "0x…" says
+ * "I don't know", a stale name says something false. */
+static void psym_load(psym_t *p, pid_t tgid, int reload) {
+    asmspy_symtab_t fresh;
+    asmspy_symtab_load(tgid, &fresh);
+    if (p->have_own)
+        asmspy_symtab_free(&p->own);
+    p->own = fresh;
+    p->have_own = 1;
+    p->syms = &p->own;
+    if (reload) {
+        /* The perf-map / jitdump described the OLD image too. Re-init rather
+         * than refresh: a refresh merges, and a stale JIT method surviving an
+         * exec is the same confidently-wrong name in a different table. */
+        asmspy_jitmap_free(&p->jit);
+    }
+    asmspy_jitmap_init(&p->jit, tgid);
+    asmspy_jitmap_refresh(&p->jit);
+    exe_basename(tgid, p->exebase, sizeof p->exebase);
+}
+
+/* The resolution context for `tgid`, created on first sight. The process the
+ * caller attached to starts with the caller's pre-loaded table (no reload —
+ * that table was read for exactly this image); any other process is one we
+ * followed into, so we load its own. NULL only on allocation failure. */
+static psym_t *psym_get(psym_tab_t *pt, pid_t tgid) {
+    for (size_t i = 0; i < pt->n; i++)
+        if (pt->v[i].tgid == tgid)
+            return &pt->v[i];
+    if (pt->n == pt->cap) {
+        size_t nc = pt->cap ? pt->cap * 2 : 8;
+        psym_t *nv = realloc(pt->v, nc * sizeof *nv);
+        if (!nv)
+            return NULL;
+        pt->v = nv;
+        pt->cap = nc;
+    }
+    psym_t *p = &pt->v[pt->n++];
+    memset(p, 0, sizeof *p);
+    p->tgid = tgid;
+    if (tgid == pt->root) {
+        p->syms = pt->rsyms; /* the caller's table — borrowed, never freed */
+        p->have_own = 0;
+        asmspy_jitmap_init(&p->jit, tgid);
+        asmspy_jitmap_refresh(&p->jit); /* methods already compiled at attach */
+        exe_basename(tgid, p->exebase, sizeof p->exebase);
+    } else {
+        psym_load(p, tgid, 0); /* a followed child: its own image entirely */
+    }
+    return p;
+}
+
+/* Re-resolve `tgid` after an execve replaced its image. */
+static void psym_exec(psym_tab_t *pt, pid_t tgid) {
+    psym_t *p = psym_get(pt, tgid);
+    if (p)
+        psym_load(p, tgid, 1);
+}
+
+static void psym_free(psym_tab_t *pt) {
+    for (size_t i = 0; i < pt->n; i++) {
+        if (pt->v[i].have_own)
+            asmspy_symtab_free(&pt->v[i].own);
+        asmspy_jitmap_free(&pt->v[i].jit);
+    }
+    free(pt->v);
+    pt->v = NULL;
+    pt->n = pt->cap = 0;
 }
 
 /* x86 EFLAGS Trap Flag: set by PTRACE_SINGLESTEP to fire a #DB after one insn. */
@@ -659,7 +1093,12 @@ static void detach_threads(pid_t pid, thr_tab_t *tab, int single_stepped) {
     if (single_stepped)
         for (size_t i = 0; i < tab->n;
              i++) { /* phase 2: drain any QUEUED step #DB */
-            drain_pending_step(pid, tab->v[i].tid);
+            /* Read the guard instruction through the task's OWN process: under
+             * --follow the table spans several address spaces, and checking a
+             * followed child's rip against the ORIGINAL leader's memory would
+             * decide "don't step" (or worse, "do step") from unrelated bytes. */
+            pid_t g = tab->v[i].tgid ? tab->v[i].tgid : pid;
+            drain_pending_step(g, tab->v[i].tid);
             clear_trap_flag(
                 tab->v[i].tid); /* the drain step re-armed TF; drop it */
         }
@@ -667,9 +1106,33 @@ static void detach_threads(pid_t pid, thr_tab_t *tab, int single_stepped) {
     for (size_t i = 0; i < tab->n; i++)
         ptrace(PTRACE_DETACH, tab->v[i].tid, NULL, NULL);
 
+    for (size_t i = 0; i < tab->n; i++)
+        free(tab->v[i].stk); /* the tree engine's per-thread call stack */
     free(tab->v);
     tab->v = NULL;
     tab->n = tab->cap = 0;
+}
+
+/* Give up on a tracee we could not TABLE (thr_get returned NULL — allocation
+ * failure). It must NOT simply be resumed. detach_threads walks the TABLE, so an
+ * untabled task is never detached; and in a single-step engine it was resumed
+ * trap-flag-armed, so when we eventually go away it takes a #DB with no tracer
+ * left to absorb it and DIES — seconds later, seemingly unrelated to the tool.
+ * That is the fatal-SIGTRAP class the crash-safe two-phase detach exists to
+ * prevent, and an untracked clone child is exactly how one escapes it.
+ *
+ * So disarm and detach it here instead. We lose sight of that task, which is the
+ * honest outcome of running out of memory — the alternative is killing the very
+ * process we are supposed to be watching out of band. This is the policy the
+ * seize path already applies on OOM (seize_threads/seize_one detach rather than
+ * strand a thread seized); the resume paths simply never did.
+ *
+ * `stepped` mirrors detach_threads: only a single-step engine can have armed TF,
+ * and a PTRACE_SYSCALL engine must not have step state written into it. */
+static void release_untracked(pid_t tid, int stepped) {
+    if (stepped)
+        clear_trap_flag(tid); /* drop a step armed before we lost the table */
+    ptrace(PTRACE_DETACH, tid, NULL, NULL);
 }
 
 /* A SIGTRAP the tracee delivered to ITSELF — it executed its own int3 (a JIT or
@@ -706,12 +1169,20 @@ static void deliver_app_sigtrap(pid_t tid) {
     ptrace(PTRACE_CONT, tid, NULL, (void *)(long)SIGTRAP);
 }
 
-int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
+int asmspy_engine_syscalls(pid_t pid, int follow, long max, atomic_bool *stop,
                            asmspy_syscall_sink sink, void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     arm_quit_wake();
 
     thr_tab_t tab = {0};
     long opts = PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACECLONE;
+    if (follow) /* --follow: child PROCESSES too (strace -f) */
+        opts |= PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK;
     if (seize_threads(pid, opts, &tab) != 0) {
         detach_threads(pid, &tab, 0); /* frees the (empty) table */
         return ASMTEST_PTRACE_ETRACE;
@@ -751,7 +1222,12 @@ int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
             event == PTRACE_EVENT_VFORK) {
             unsigned long child = 0;
             if (ptrace(PTRACE_GETEVENTMSG, tid, NULL, &child) == 0 && child) {
-                thr_get(&tab, (pid_t)child); /* also fine if we saw it first */
+                thr_t *ct =
+                    thr_get(&tab, (pid_t)child); /* fine if we saw it first */
+                if (ct) /* CLONE joins this group; FORK/VFORK starts its own */
+                    ct->tgid = (event == PTRACE_EVENT_CLONE)
+                                   ? thr_tgid(&tab, tid, pid)
+                                   : (pid_t)child;
                 multi = 1;
             }
             ptrace(PTRACE_SYSCALL, tid, NULL, NULL); /* resume the parent */
@@ -772,10 +1248,16 @@ int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
                 } else if (ts->ent_nr >=
                            0) { /* skip an exit we saw no entry for */
                     char line[1024], sdata[512], out[1088];
-                    /* decode via the leader `pid` (shared mm + fd table); the
-                     * per-thread label is added below, not inside the decoder */
-                    format_syscall(line, sizeof line, sdata, sizeof sdata, pid,
-                                   ts->ent_nr, &ts->entry, (long)regs.rax);
+                    /* Decode via this task's OWN thread-group leader (shared mm
+                     * + fd table). Threads of one process all share the target's,
+                     * but a FOLLOWED CHILD has its own address space AND its own
+                     * fd table — decoding it through the original leader would
+                     * read the parent's strings and resolve the parent's fds,
+                     * silently reporting the wrong path for the right syscall.
+                     * The per-thread label is added below, not in the decoder. */
+                    format_syscall(line, sizeof line, sdata, sizeof sdata,
+                                   thr_tgid(&tab, tid, pid), ts->ent_nr,
+                                   &ts->entry, (long)regs.rax);
                     const char *emit = line;
                     if (multi) {
                         snprintf(out, sizeof out, "[%d] %s", (int)tid, line);
@@ -801,7 +1283,10 @@ int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
          * SIGCONT. */
         if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
                                            sig == SIGTTIN || sig == SIGTTOU)) {
-            thr_get(&tab, tid);
+            if (!thr_get(&tab, tid)) { /* OOM: don't strand it traced */
+                release_untracked(tid, 0);
+                continue;
+            }
             ptrace(PTRACE_LISTEN, tid, NULL, NULL);
             continue;
         }
@@ -814,7 +1299,10 @@ int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
         int deliver = 0;
         if (event == 0 && sig != SIGTRAP && sig != (SIGTRAP | 0x80))
             deliver = sig;
-        thr_get(&tab, tid);
+        if (!thr_get(&tab, tid)) { /* OOM: detach, never resume untracked */
+            release_untracked(tid, 0);
+            continue;
+        }
         ptrace(PTRACE_SYSCALL, tid, NULL, (void *)(long)deliver);
     }
 
@@ -1218,6 +1706,12 @@ static void rgn_detach_all(thr_tab_t *tab, uint64_t base) {
 int asmspy_engine_region(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
                          long max, atomic_bool *stop, asmspy_region_sink sink,
                          void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     if (!asmtest_ptrace_available())
         return ASMTEST_PTRACE_EUNAVAIL;
     if (len == 0 || len > (64u << 20))
@@ -1365,6 +1859,12 @@ int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
 int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
                            long max, atomic_bool *stop,
                            asmspy_dataflow_sink sink, void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     if (len == 0 || len > (64u << 20))
         return ASMTEST_PTRACE_EINVAL;
     if (stop && atomic_load(stop))
@@ -1442,9 +1942,15 @@ int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
 /* Whole-process live instruction stream                               */
 /* ------------------------------------------------------------------ */
 
-int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
-                         const asmspy_symtab_t *syms, asmspy_stream_sink sink,
-                         void *ctx) {
+int asmspy_engine_stream(pid_t pid, pid_t only_tid, int follow, long max,
+                         atomic_bool *stop, const asmspy_symtab_t *syms,
+                         asmspy_stream_sink sink, void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     if (!asmtest_ptrace_available())
         return ASMTEST_PTRACE_EUNAVAIL;
 
@@ -1454,17 +1960,16 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
      * only_tid is set — just that one thread while the rest run at full speed.
      * No TRACESYSGOOD — every stop here is a step. */
     thr_tab_t tab = {0};
-    if (seize_for_engine(pid, only_tid, &tab) != 0) {
+    if (seize_for_engine(pid, only_tid, follow, &tab) != 0) {
         detach_threads(pid, &tab, 1);
         return ASMTEST_PTRACE_ETRACE;
     }
 
     int multi = tab.n > 1;
-    asmspy_jitmap_t
-        jit; /* name JIT / managed-runtime frames from the perf-map */
-    asmspy_jitmap_init(&jit, pid);
-    asmspy_jitmap_refresh(
-        &jit); /* pick up methods already compiled at attach */
+    /* Per-process resolution: re-read on execve, and give a followed child its
+     * own table (it shares neither the address space nor the symbols). */
+    psym_tab_t pt;
+    psym_init(&pt, pid, syms);
     long done = 0;
 
     while ((max < 0 || done < max) && !(stop && atomic_load(stop))) {
@@ -1495,9 +2000,29 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
             event == PTRACE_EVENT_VFORK) {
             unsigned long child = 0;
             if (ptrace(PTRACE_GETEVENTMSG, tid, NULL, &child) == 0 && child) {
-                thr_get(&tab, (pid_t)child);
+                thr_t *ct = thr_get(&tab, (pid_t)child);
+                if (ct)
+                    /* A CLONE joins this task's thread group; a FORK/VFORK is a
+                     * new process whose tgid is the child pid itself. Taken
+                     * from the event: free and exact. */
+                    ct->tgid = (event == PTRACE_EVENT_CLONE)
+                                   ? thr_tgid(&tab, tid, pid)
+                                   : (pid_t)child;
                 multi = 1;
             }
+            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            continue;
+        }
+
+        /* execve() replaced the image: RE-RESOLVE before stepping a single
+         * instruction of the new text, or every line below names new code from
+         * the old binary's symbol table. Post-exec the caller IS the leader, so
+         * its tid names the thread group whose image just changed. */
+        if (event == PTRACE_EVENT_EXEC) {
+            thr_t *ts = thr_get(&tab, tid);
+            if (ts)
+                ts->tgid = tid;
+            psym_exec(&pt, tid);
             ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
             continue;
         }
@@ -1512,23 +2037,29 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
             struct user_regs_struct regs;
             if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
                 uint64_t rip = regs.rip;
+                /* This task's OWN process: with --follow the tracee set spans
+                 * several address spaces, and reading/naming through the
+                 * original leader would silently describe the wrong one. */
+                pid_t tgid = thr_tgid(&tab, tid, pid);
+                psym_t *ps = psym_get(&pt, tgid);
 
                 /* disassemble the instruction about to retire */
                 uint8_t code[16];
                 char dis[160] = "";
                 struct iovec liov = {code, sizeof code};
                 struct iovec riov = {(void *)(uintptr_t)rip, sizeof code};
-                /* read via the thread-group leader `pid`: all threads share the
+                /* read via the thread-group LEADER: all threads share the
                  * address space, and process_vm_readv on a non-leader tid can be
                  * refused, which would blank the disassembly */
-                ssize_t got = process_vm_readv(pid, &liov, 1, &riov, 1, 0);
+                ssize_t got = process_vm_readv(tgid, &liov, 1, &riov, 1, 0);
                 if (got >= 1 && asmtest_disas_available())
                     asmtest_disas(ASMTEST_ARCH_X86_64, code, (size_t)got, rip,
                                   0, dis, sizeof dis);
 
                 /* resolve the function this address lands in (ELF, else JIT) */
                 char loc[96];
-                const asmspy_sym_t *s = asmspy_resolve(syms, &jit, rip);
+                const asmspy_sym_t *s =
+                    ps ? asmspy_resolve(ps->syms, &ps->jit, rip) : NULL;
                 if (s)
                     snprintf(loc, sizeof loc, "%s+0x%llx [%s]", s->name,
                              (unsigned long long)(rip - s->addr), s->module);
@@ -1557,7 +2088,10 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
          * stays suspended (honoring ^Z) instead of being single-stepped onward. */
         if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
                                            sig == SIGTTIN || sig == SIGTTOU)) {
-            thr_get(&tab, tid);
+            if (!thr_get(&tab, tid)) { /* OOM: don't strand it traced */
+                release_untracked(tid, 1);
+                continue;
+            }
             ptrace(PTRACE_LISTEN, tid, NULL, NULL);
             continue;
         }
@@ -1569,12 +2103,15 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
         int deliver = 0;
         if (event == 0 && sig != SIGTRAP)
             deliver = sig;
-        thr_get(&tab, tid);
+        if (!thr_get(&tab, tid)) { /* OOM: detach, never resume untracked */
+            release_untracked(tid, 1);
+            continue;
+        }
         ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)deliver);
     }
 
     detach_threads(pid, &tab, 1);
-    asmspy_jitmap_free(&jit);
+    psym_free(&pt);
     return 0;
 }
 
@@ -1588,12 +2125,109 @@ typedef struct {
     unsigned long long count;
 } gedge_t;
 
+/* ------------------------------------------------------------------ */
+/* Open-addressed index over the node and edge tables                  */
+/*                                                                      */
+/* The graph is built one CALL at a time, and both lookups used to be   */
+/* linear scans: O(nodes) and O(edges) PER RECORDED CALL. Whole-process */
+/* single-stepping still dominates the wall clock — which is why this   */
+/* was filed as secondary — but the scans made the engine degrade with  */
+/* the SIZE OF WHAT IT HAD ALREADY LEARNED, which is the wrong shape:   */
+/* the longer a trace usefully runs, the more of each call it spends    */
+/* re-walking its own results.                                          */
+/*                                                                      */
+/* Slots hold `table index + 1`, so 0 means empty and no separate       */
+/* tombstone/occupancy array is needed (nothing is ever deleted from    */
+/* either table). Capacity is a power of two; linear probing; grown at  */
+/* 70% load. On OOM the index is simply left behind and the callers     */
+/* fall back to the linear scan — slower, never wrong.                  */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    uint32_t *slot;
+    size_t cap; /* power of two; 0 = unallocated (callers scan linearly) */
+} ghash_t;
+
+/* splitmix64 finalizer: cheap, and mixes the low bits that matter here —
+ * node keys are function addresses, whose low bits are alignment zeros. */
+static uint64_t gh_mix(uint64_t x) {
+    x += 0x9E3779B97F4A7C15ULL;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+    return x ^ (x >> 31);
+}
+
+/* Insert `idx` under hash `h64`. The caller must already have established that
+ * the key is absent (it just probed for it). No-op if the index is unallocated. */
+static void gh_put(ghash_t *h, uint64_t h64, size_t idx) {
+    if (!h->cap)
+        return;
+    size_t m = h->cap - 1, i = (size_t)(h64 & m);
+    while (h->slot[i])
+        i = (i + 1) & m;
+    h->slot[i] = (uint32_t)(idx + 1);
+}
+
 typedef struct {
     asmspy_gnode_t *node;
     size_t nn, ncap;
+    ghash_t nidx; /* node addr -> node index */
     gedge_t *edge;
     size_t ne, ecap;
+    ghash_t eidx; /* (caller,callee) -> edge index */
 } graph_t;
+
+/* Hash of a node's key (its resolved address). */
+static uint64_t gh_node_hash(const graph_t *g, size_t i) {
+    return gh_mix(g->node[i].addr);
+}
+
+/* Hash of an edge's key. The two endpoints are mixed SEPARATELY before being
+ * combined: a plain xor of two small indices collides trivially (a->b vs b->a,
+ * and every pair summing alike), which would degrade the probe chain to the very
+ * linear scan this replaces. */
+static uint64_t gh_edge_hash_kv(size_t caller, size_t callee) {
+    return gh_mix((uint64_t)caller * 0x9E3779B97F4A7C15ULL) ^
+           gh_mix((uint64_t)callee + 0x165667B19E3779F9ULL);
+}
+static uint64_t gh_edge_hash(const graph_t *g, size_t i) {
+    return gh_edge_hash_kv(g->edge[i].caller, g->edge[i].callee);
+}
+
+/* Grow the index to hold `n+1` entries below a 70% load factor, re-inserting
+ * every live entry. Returns 0 on success (or when no growth is needed), -1 on
+ * OOM — after which the index is left EMPTY and the caller scans linearly, so a
+ * failure here costs speed, never correctness. */
+static int gh_grow(ghash_t *h, size_t n, const graph_t *g,
+                   uint64_t (*hashof)(const graph_t *, size_t)) {
+    if (h->cap && (n + 1) * 10 < h->cap * 7)
+        return 0;
+    size_t nc = h->cap ? h->cap * 2 : 128;
+    while ((n + 1) * 10 >= nc * 7)
+        nc *= 2;
+    uint32_t *ns = calloc(nc, sizeof *ns);
+    if (!ns) {
+        /* DROP the index rather than keep a stale one. The caller skips its
+         * gh_put when we fail, so the entry it is adding would exist in the
+         * table but not in the index — and the next lookup for that key would
+         * MISS and create a duplicate node/edge. Falling back to the linear
+         * scan (cap == 0) is slow; a silently duplicated node is wrong. */
+        free(h->slot);
+        h->slot = NULL;
+        h->cap = 0;
+        return -1;
+    }
+    free(h->slot);
+    h->slot = ns;
+    h->cap = nc;
+    size_t m = nc - 1;
+    for (size_t k = 0; k < n; k++) {
+        size_t i = (size_t)(hashof(g, k) & m);
+        while (h->slot[i])
+            i = (i + 1) & m;
+        h->slot[i] = (uint32_t)(k + 1);
+    }
+    return 0;
+}
 
 /* Basename of the target's own executable (for the internal/external split);
  * `out` gets "" on any failure (then every node is treated as internal). */
@@ -1619,9 +2253,23 @@ static long gnode_get(graph_t *g, const asmspy_symtab_t *syms,
                       uint64_t addr) {
     const asmspy_sym_t *s = asmspy_resolve(syms, jit, addr);
     uint64_t key = s ? s->addr : addr;
-    for (size_t i = 0; i < g->nn; i++)
-        if (g->node[i].addr == key)
-            return (long)i;
+
+    /* indexed lookup; the linear scan is the fallback when the index could not
+     * be allocated (correct, just O(n)) */
+    uint64_t h64 = gh_mix(key);
+    if (g->nidx.cap) {
+        size_t m = g->nidx.cap - 1, i = (size_t)(h64 & m);
+        while (g->nidx.slot[i]) {
+            size_t k = g->nidx.slot[i] - 1;
+            if (g->node[k].addr == key) /* compare the KEY, not the hash */
+                return (long)k;
+            i = (i + 1) & m;
+        }
+    } else {
+        for (size_t i = 0; i < g->nn; i++)
+            if (g->node[i].addr == key)
+                return (long)i;
+    }
     if (g->nn == g->ncap) {
         size_t nc = g->ncap ? g->ncap * 2 : 64;
         asmspy_gnode_t *nv = realloc(g->node, nc * sizeof *nv);
@@ -1651,6 +2299,10 @@ static long gnode_get(graph_t *g, const asmspy_symtab_t *syms,
         snprintf(e->module, sizeof e->module, "?"); /* row shows [?] */
         e->external = 0;
     }
+    /* index the new node. gh_grow first (it rehashes what is already there and
+     * may reallocate), then place this one. */
+    if (gh_grow(&g->nidx, g->nn, g, gh_node_hash) == 0)
+        gh_put(&g->nidx, h64, g->nn);
     return (long)g->nn++;
 }
 
@@ -1662,14 +2314,34 @@ static int grecord(graph_t *g, const asmspy_symtab_t *syms,
     long ki = gnode_get(g, syms, jit, exebase, callee_addr);
     if (ci < 0 || ki < 0)
         return 0;
-    for (size_t i = 0; i < g->ne; i++) {
-        if (g->edge[i].caller == (size_t)ci &&
-            g->edge[i].callee == (size_t)ki) {
-            g->edge[i].count++;
-            g->node[ci].out_calls++;
-            g->node[ki].invocations++;
-            return 1;
+
+    /* indexed edge lookup; linear scan as the unallocated-index fallback */
+    uint64_t eh = gh_edge_hash_kv((size_t)ci, (size_t)ki);
+    long hit = -1;
+    if (g->eidx.cap) {
+        size_t m = g->eidx.cap - 1, i = (size_t)(eh & m);
+        while (g->eidx.slot[i]) {
+            size_t k = g->eidx.slot[i] - 1;
+            if (g->edge[k].caller == (size_t)ci &&
+                g->edge[k].callee == (size_t)ki) { /* the KEY, not the hash */
+                hit = (long)k;
+                break;
+            }
+            i = (i + 1) & m;
         }
+    } else {
+        for (size_t i = 0; i < g->ne; i++)
+            if (g->edge[i].caller == (size_t)ci &&
+                g->edge[i].callee == (size_t)ki) {
+                hit = (long)i;
+                break;
+            }
+    }
+    if (hit >= 0) {
+        g->edge[hit].count++;
+        g->node[ci].out_calls++;
+        g->node[ki].invocations++;
+        return 1;
     }
     if (g->ne == g->ecap) {
         size_t nc = g->ecap ? g->ecap * 2 : 128;
@@ -1682,6 +2354,8 @@ static int grecord(graph_t *g, const asmspy_symtab_t *syms,
     g->edge[g->ne].caller = (size_t)ci;
     g->edge[g->ne].callee = (size_t)ki;
     g->edge[g->ne].count = 1;
+    if (gh_grow(&g->eidx, g->ne, g, gh_edge_hash) == 0)
+        gh_put(&g->eidx, eh, g->ne);
     g->ne++;
     g->node[ci].out_calls++;
     g->node[ci].fanout++; /* a callee not seen from this caller before */
@@ -1715,32 +2389,34 @@ static void graph_emit(asmspy_graph_sink sink, void *ctx, const graph_t *g,
     sink(ctx, g->node, g->nn, *ae, g->ne);
 }
 
-int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
-                        const asmspy_symtab_t *syms, asmspy_graph_sink sink,
-                        void *ctx) {
+int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
+                        atomic_bool *stop, const asmspy_symtab_t *syms,
+                        asmspy_graph_sink sink, void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     if (!asmtest_ptrace_available())
         return ASMTEST_PTRACE_EUNAVAIL;
 
     arm_quit_wake();
 
     thr_tab_t tab = {0};
-    if (seize_for_engine(pid, only_tid, &tab) != 0) {
+    if (seize_for_engine(pid, only_tid, follow, &tab) != 0) {
         detach_threads(pid, &tab, 1);
         return ASMTEST_PTRACE_ETRACE;
     }
-
-    char exebase[64];
-    exe_basename(pid, exebase, sizeof exebase);
 
     graph_t g = {0};
     asmspy_gedge_t *aedges =
         NULL; /* scratch: address-keyed edges for the sink */
     size_t aecap = 0;
-    asmspy_jitmap_t
-        jit; /* name JIT / managed-runtime frames from the perf-map */
-    asmspy_jitmap_init(&jit, pid);
-    asmspy_jitmap_refresh(
-        &jit);           /* pick up methods already compiled at attach */
+    /* Per-process resolution: symtab, JIT map and exe basename are all
+     * per-image, so an execve or a followed child needs its own. */
+    psym_tab_t pt;
+    psym_init(&pt, pid, syms);
     long recorded = 0;   /* calls counted so far */
     long published = -1; /* recorded value at the last sink() call */
 
@@ -1771,8 +2447,26 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
         if (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
             event == PTRACE_EVENT_VFORK) {
             unsigned long child = 0;
-            if (ptrace(PTRACE_GETEVENTMSG, tid, NULL, &child) == 0 && child)
-                thr_get(&tab, (pid_t)child);
+            if (ptrace(PTRACE_GETEVENTMSG, tid, NULL, &child) == 0 && child) {
+                thr_t *ct = thr_get(&tab, (pid_t)child);
+                if (ct) /* CLONE joins this thread group; FORK starts its own */
+                    ct->tgid = (event == PTRACE_EVENT_CLONE)
+                                   ? thr_tgid(&tab, tid, pid)
+                                   : (pid_t)child;
+            }
+            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            continue;
+        }
+
+        /* execve() replaced the image: re-resolve BOTH the symbol table and the
+         * exe basename before a single instruction of the new text retires. The
+         * basename drives the [int]/[EXT] split, so a stale one silently
+         * re-labels the new binary's own functions as external. */
+        if (event == PTRACE_EVENT_EXEC) {
+            thr_t *ts = thr_get(&tab, tid);
+            if (ts)
+                ts->tgid = tid; /* post-exec the caller IS the leader */
+            psym_exec(&pt, tid);
             ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
             continue;
         }
@@ -1788,17 +2482,24 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
             if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
                 uint64_t rip = regs.rip;
                 thr_t *ts = thr_get(&tab, tid);
+                /* this task's own process (see the stream engine's note) */
+                pid_t tgid = thr_tgid(&tab, tid, pid);
+                psym_t *ps = psym_get(&pt, tgid);
+                if (!ps) { /* OOM: keep stepping rather than mis-name */
+                    ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+                    continue;
+                }
 
                 /* read the bytes of the instruction about to retire */
                 uint8_t code[16];
                 struct iovec liov = {code, sizeof code};
                 struct iovec riov = {(void *)(uintptr_t)rip, sizeof code};
-                ssize_t got = process_vm_readv(pid, &liov, 1, &riov, 1, 0);
+                ssize_t got = process_vm_readv(tgid, &liov, 1, &riov, 1, 0);
 
                 /* consume a pending INDIRECT call: this rip is its callee entry */
                 if (ts && ts->pending_call) {
-                    recorded +=
-                        grecord(&g, syms, &jit, exebase, ts->call_site, rip);
+                    recorded += grecord(&g, ps->syms, &ps->jit, ps->exebase,
+                                        ts->call_site, rip);
                     ts->pending_call = 0;
                 }
 
@@ -1809,7 +2510,8 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
                     if (asmtest_disas_call_target(ASMTEST_ARCH_X86_64, code,
                                                   (size_t)got, rip, 0, &tgt)) {
                         /* DIRECT call: target known now — record immediately */
-                        recorded += grecord(&g, syms, &jit, exebase, rip, tgt);
+                        recorded += grecord(&g, ps->syms, &ps->jit, ps->exebase,
+                                            rip, tgt);
                     } else if (ts) {
                         /* INDIRECT call: resolve the callee at the next step */
                         ts->pending_call = 1;
@@ -1829,7 +2531,10 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
 
         if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
                                            sig == SIGTTIN || sig == SIGTTOU)) {
-            thr_get(&tab, tid);
+            if (!thr_get(&tab, tid)) { /* OOM: don't strand it traced */
+                release_untracked(tid, 1);
+                continue;
+            }
             ptrace(PTRACE_LISTEN, tid, NULL, NULL);
             continue;
         }
@@ -1837,7 +2542,10 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
         int deliver = 0;
         if (event == 0 && sig != SIGTRAP)
             deliver = sig;
-        thr_get(&tab, tid);
+        if (!thr_get(&tab, tid)) { /* OOM: detach, never resume untracked */
+            release_untracked(tid, 1);
+            continue;
+        }
         ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)deliver);
     }
 
@@ -1846,8 +2554,10 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
         graph_emit(sink, ctx, &g, &aedges, &aecap);
     free(g.node);
     free(g.edge);
+    free(g.nidx.slot);
+    free(g.eidx.slot);
     free(aedges);
-    asmspy_jitmap_free(&jit);
+    psym_free(&pt);
     return 0;
 }
 
@@ -1855,23 +2565,47 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
 /* Whole-process live call TREE                                        */
 /* ------------------------------------------------------------------ */
 
-/* Emit one "entered a function" line, indented by the caller's live depth,
- * plus the structured entry (tid/depth/addr/name/module) so a front-end can
- * disassemble the callee or export the tree without re-parsing the text. */
-static void tree_emit(asmspy_tree_sink sink, void *ctx, int multi, pid_t tid,
-                      const asmspy_symtab_t *syms, asmspy_jitmap_t *jit,
-                      uint64_t callee, int depth) {
+/* Emit one "entered a function" line, indented by the caller's live depth, plus
+ * the structured entry (tid/depth/addr/name/module) so a front-end can
+ * disassemble the callee or export the tree without re-parsing the text.
+ *
+ * `filt`/`focus_depth` apply the view's output filter (depth cap / symbol focus
+ * / module — asmspy_treefilter.h). Returns 1 if a line was emitted, 0 if the
+ * filter suppressed it: the CALLER still pushes the depth either way, because
+ * the shadow counter tracks the target's real control flow, not the filtered
+ * view of it. Resolution happens here (before the filter) because focus and
+ * module both match on the RESOLVED name/module, not the raw address. */
+static int tree_emit(asmspy_tree_sink sink, void *ctx, int multi, pid_t tid,
+                     const asmspy_symtab_t *syms, asmspy_jitmap_t *jit,
+                     uint64_t callee, int depth,
+                     const asmspy_tree_filter_t *filt, int *focus_depth) {
     if (!sink)
-        return;
+        return 0;
     const asmspy_sym_t *s = asmspy_resolve(syms, jit, callee);
-    char name[200], raw[24];
+    char raw[24];
+    const char *nm, *mod;
     if (s) {
-        snprintf(name, sizeof name, "%s [%s]", s->name, s->module);
+        nm = s->name;
+        mod = s->module;
     } else {
         snprintf(raw, sizeof raw, "0x%llx", (unsigned long long)callee);
-        snprintf(name, sizeof name, "%s", raw);
+        nm = raw;
+        mod = "?";
     }
-    int ind = depth * 2;
+
+    /* Match on what the view SHOWS: an unresolved frame is "0x…"/"?", so
+     * --focus=0x7f… can still pin a raw JIT address and --module='?' can single
+     * out the unresolved frames, while --module=libc correctly skips them. */
+    int eff = depth;
+    if (!asmspy_tree_filter_call(filt, nm, mod, depth, focus_depth, &eff))
+        return 0;
+
+    char name[200];
+    if (s)
+        snprintf(name, sizeof name, "%s [%s]", nm, mod);
+    else
+        snprintf(name, sizeof name, "%s", raw);
+    int ind = eff * 2;
     if (ind > 60) /* clamp runaway / drifted indentation to a sane width */
         ind = 60;
     char line[320];
@@ -1879,31 +2613,36 @@ static void tree_emit(asmspy_tree_sink sink, void *ctx, int multi, pid_t tid,
         snprintf(line, sizeof line, "[%d] %*s-> %s", (int)tid, ind, "", name);
     else
         snprintf(line, sizeof line, "%*s-> %s", ind, "", name);
-    asmspy_tree_call_t call = {tid, depth, callee, s ? s->name : raw,
-                               s ? s->module : "?"};
+    asmspy_tree_call_t call = {tid, eff, callee, nm, mod};
     sink(ctx, line, &call);
+    return 1;
 }
 
-int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
-                       const asmspy_symtab_t *syms, asmspy_tree_sink sink,
-                       void *ctx) {
+int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
+                       atomic_bool *stop, const asmspy_symtab_t *syms,
+                       const asmspy_tree_filter_t *filter,
+                       asmspy_tree_sink sink, void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     if (!asmtest_ptrace_available())
         return ASMTEST_PTRACE_EUNAVAIL;
 
     arm_quit_wake();
 
     thr_tab_t tab = {0};
-    if (seize_for_engine(pid, only_tid, &tab) != 0) {
+    if (seize_for_engine(pid, only_tid, follow, &tab) != 0) {
         detach_threads(pid, &tab, 1);
         return ASMTEST_PTRACE_ETRACE;
     }
 
     int multi = tab.n > 1;
-    asmspy_jitmap_t
-        jit; /* name JIT / managed-runtime frames from the perf-map */
-    asmspy_jitmap_init(&jit, pid);
-    asmspy_jitmap_refresh(
-        &jit);        /* pick up methods already compiled at attach */
+    /* Per-process resolution (execve + followed children) */
+    psym_tab_t pt;
+    psym_init(&pt, pid, syms);
     long emitted = 0; /* call lines produced so far */
 
     while ((max < 0 || emitted < max) && !(stop && atomic_load(stop))) {
@@ -1934,9 +2673,48 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
             event == PTRACE_EVENT_VFORK) {
             unsigned long child = 0;
             if (ptrace(PTRACE_GETEVENTMSG, tid, NULL, &child) == 0 && child) {
-                thr_get(&tab, (pid_t)child);
+                thr_t *ct = thr_get(&tab, (pid_t)child);
+                if (ct) { /* CLONE joins this group; FORK starts its own */
+                    ct->tgid = (event == PTRACE_EVENT_CLONE)
+                                   ? thr_tgid(&tab, tid, pid)
+                                   : (pid_t)child;
+                    /* A forked child resumes INSIDE fork() on a COPY of the
+                     * parent's stack — same addresses, same frames — so it
+                     * inherits the parent's live call stack outright. Starting
+                     * it empty would make its first returns unwind nothing and
+                     * render its whole tree flat at the top level. */
+                    if (event != PTRACE_EVENT_CLONE) {
+                        int pi = thr_find(&tab, tid);
+                        if (pi >= 0 && tab.v[pi].stk_n) {
+                            frame_t *cp = malloc(tab.v[pi].stk_n * sizeof *cp);
+                            if (cp) {
+                                memcpy(cp, tab.v[pi].stk,
+                                       tab.v[pi].stk_n * sizeof *cp);
+                                free(ct->stk);
+                                ct->stk = cp;
+                                ct->stk_n = ct->stk_cap = tab.v[pi].stk_n;
+                            }
+                        }
+                    }
+                }
                 multi = 1;
             }
+            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            continue;
+        }
+
+        /* execve() replaced the image: re-resolve before naming any of the new
+         * text from the old binary's table. The per-thread call depths are also
+         * meaningless across an exec (the old stack is gone), so reset them. */
+        if (event == PTRACE_EVENT_EXEC) {
+            thr_t *ts = thr_get(&tab, tid);
+            if (ts) {
+                ts->tgid = tid; /* post-exec the caller IS the leader */
+                ts->stk_n = 0;  /* the old stack died with the old image */
+                ts->pending_call = 0;
+                ts->focus_depth = ASMSPY_TF_NO_FOCUS;
+            }
+            psym_exec(&pt, tid);
             ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
             continue;
         }
@@ -1952,39 +2730,69 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
             if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
                 uint64_t rip = regs.rip;
                 thr_t *ts = thr_get(&tab, tid);
+                /* this task's own process (see the stream engine's note) */
+                pid_t tgid = thr_tgid(&tab, tid, pid);
+                psym_t *ps = psym_get(&pt, tgid);
+                if (!ps) { /* OOM: keep stepping rather than mis-name */
+                    ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+                    continue;
+                }
 
                 uint8_t code[16];
                 struct iovec liov = {code, sizeof code};
                 struct iovec riov = {(void *)(uintptr_t)rip, sizeof code};
-                ssize_t got = process_vm_readv(pid, &liov, 1, &riov, 1, 0);
+                ssize_t got = process_vm_readv(tgid, &liov, 1, &riov, 1, 0);
 
-                /* a pending INDIRECT call resolves at its callee entry (= rip) */
-                if (ts && ts->pending_call) {
-                    tree_emit(sink, ctx, multi, tid, syms, &jit, rip,
-                              ts->depth);
-                    ts->depth++;
-                    ts->pending_call = 0;
-                    emitted++;
+                /* FIRST, before anything is attributed to a depth: unwind
+                 * every frame this thread's rsp has moved above. This is where
+                 * a RET pops — and, crucially, where a longjmp/unwind that
+                 * executed NO ret at all pops every frame it jumped over. */
+                if (ts) {
+                    size_t was = ts->stk_n;
+                    frm_unwind(ts, regs.rsp);
+                    if (ts->stk_n < was) /* left the --focus subtree? */
+                        asmspy_tree_filter_ret(filter, (int)ts->stk_n,
+                                               &ts->focus_depth);
                 }
 
-                int isc = 0, isr = 0;
+                /* a pending INDIRECT call resolves at its callee entry (= rip).
+                 * Its frame was pushed at the call site, so the CALLER's depth
+                 * is stk_n-1. `emitted` counts SURVIVING lines, but the frame
+                 * push is unconditional: the stack tracks the target's real
+                 * control flow, never the filtered view of it. */
+                if (ts && ts->pending_call) {
+                    int d = ts->stk_n ? (int)ts->stk_n - 1 : 0;
+                    emitted +=
+                        tree_emit(sink, ctx, multi, tid, ps->syms, &ps->jit,
+                                  rip, d, filter, &ts->focus_depth);
+                    ts->pending_call = 0;
+                }
+
+                int isc = 0;
+                /* probe returns the instruction's LENGTH — which is what lets
+                 * the return address be computed here, at the call site, rather
+                 * than inferred from wherever the next step happens to land */
+                size_t ilen = 0;
                 if (got >= 1 && asmtest_disas_available())
-                    asmtest_disas_probe(ASMTEST_ARCH_X86_64, code, (size_t)got,
-                                        0, &isc, &isr);
+                    ilen = asmtest_disas_probe(ASMTEST_ARCH_X86_64, code,
+                                               (size_t)got, 0, &isc, NULL);
                 if (isc && ts) {
+                    /* Push the frame the call is ABOUT to create: it will push
+                     * rip+ilen and leave rsp at regs.rsp-8. Both are known now,
+                     * from the call site — no dependence on the next stop. */
+                    int d = (int)ts->stk_n; /* the CALLER's depth */
+                    if (ilen)
+                        frm_push(ts, rip + ilen, regs.rsp - 8);
                     uint64_t tgt = 0;
                     if (asmtest_disas_call_target(ASMTEST_ARCH_X86_64, code,
                                                   (size_t)got, rip, 0, &tgt)) {
-                        tree_emit(sink, ctx, multi, tid, syms, &jit, tgt,
-                                  ts->depth);
-                        ts->depth++;
-                        emitted++;
+                        emitted +=
+                            tree_emit(sink, ctx, multi, tid, ps->syms, &ps->jit,
+                                      tgt, d, filter, &ts->focus_depth);
                     } else {
                         ts->pending_call = 1; /* indirect: resolve next step */
                         ts->call_site = rip;
                     }
-                } else if (isr && ts && ts->depth > 0) {
-                    ts->depth--; /* returned: pop a level (clamped at 0) */
                 }
             }
             ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
@@ -1993,7 +2801,10 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
 
         if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
                                            sig == SIGTTIN || sig == SIGTTOU)) {
-            thr_get(&tab, tid);
+            if (!thr_get(&tab, tid)) { /* OOM: don't strand it traced */
+                release_untracked(tid, 1);
+                continue;
+            }
             ptrace(PTRACE_LISTEN, tid, NULL, NULL);
             continue;
         }
@@ -2001,12 +2812,15 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
         int deliver = 0;
         if (event == 0 && sig != SIGTRAP)
             deliver = sig;
-        thr_get(&tab, tid);
+        if (!thr_get(&tab, tid)) { /* OOM: detach, never resume untracked */
+            release_untracked(tid, 1);
+            continue;
+        }
         ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)deliver);
     }
 
     detach_threads(pid, &tab, 1);
-    asmspy_jitmap_free(&jit);
+    psym_free(&pt);
     return 0;
 }
 
@@ -2133,6 +2947,12 @@ static int seize_process_tree(pid_t pid, long opts, thr_tab_t *tab) {
 
 int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
                         asmspy_count_t mode, asmspy_topo_sink sink, void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     if (mode == ASMSPY_COUNT_CALLS && !asmtest_ptrace_available())
         return ASMTEST_PTRACE_EUNAVAIL;
 
@@ -2244,7 +3064,10 @@ int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
 
         if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
                                            sig == SIGTTIN || sig == SIGTTOU)) {
-            thr_get(&tab, tid);
+            if (!thr_get(&tab, tid)) { /* OOM: don't strand it traced */
+                release_untracked(tid, (mode == ASMSPY_COUNT_CALLS));
+                continue;
+            }
             ptrace(PTRACE_LISTEN, tid, NULL, NULL);
             continue;
         }
@@ -2252,7 +3075,10 @@ int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
         int deliver = 0;
         if (event == 0 && sig != SIGTRAP && sig != (SIGTRAP | 0x80))
             deliver = sig;
-        thr_get(&tab, tid);
+        if (!thr_get(&tab, tid)) { /* OOM: detach, never resume untracked */
+            release_untracked(tid, (mode == ASMSPY_COUNT_CALLS));
+            continue;
+        }
         TOPO_RESUME(tid, deliver);
     }
 
@@ -2511,6 +3337,12 @@ static void watch_teardown(thr_tab_t *tab) {
 int asmspy_engine_watch(pid_t pid, uint64_t addr, int rw, int len, long max,
                         atomic_bool *stop, const asmspy_symtab_t *syms,
                         asmspy_watch_sink sink, void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     if (len != 1 && len != 2 && len != 4 && len != 8)
         return ASMTEST_PTRACE_EINVAL;
     if (addr &
