@@ -149,6 +149,32 @@ int asmtest_ptrace_trace_attached_window_stop(pid_t pid,
                                               volatile int *stop,
                                               asmtest_trace_t *trace);
 
+/* BTF block-step variant of asmtest_ptrace_trace_attached_windowed — the §D3 plan's W-1
+ * driver upgrade. Drives PTRACE_SINGLEBLOCK (one #DB per TAKEN branch) instead of one
+ * #DB per instruction and reconstructs the IDENTICAL absolute-address stream by
+ * disassembling each block's straight-line run out of the TARGET's memory. Same
+ * contract, arguments, and results as the per-instruction windowed entry (run_to
+ * `win_base` first; the window ends when control returns to the frame's caller;
+ * mid-window channel publishes are drained at every stop; `chan` may be NULL). This is a
+ * COST upgrade, not a fidelity one: the stream, the block partition, *result and
+ * trace->truncated all match the per-instruction path — it just costs ~4-10x fewer
+ * tracer round-trips (measured 4.6x on the native windowed fixture), which is what makes
+ * a large managed window affordable out-of-process. Probe with
+ * asmtest_ptrace_blockstep_available(); returns ASMTEST_PTRACE_ENOSYS where
+ * PTRACE_SINGLEBLOCK / Capstone are unavailable (a DEBUGCTL.BTF-masking hypervisor —
+ * callers self-skip or use the per-instruction entry, which is exact everywhere).
+ *
+ * Block-step reconstruction can only see control transfers the BTF hardware records, so
+ * a KERNEL-injected transfer (signal delivery / sigreturn) is invisible to it. A managed
+ * runtime raises and handles SIGSEGV as normal operation, so rather than truncate, this
+ * driver reconstructs the block that was interrupted (up to and including the stop PC)
+ * and then hands the REST of the window to the per-instruction loop, which is exact
+ * across signals. The capture therefore stays byte-identical to the per-instruction
+ * entry; only the block-step cost saving stops at the window's first signal. */
+int asmtest_ptrace_trace_attached_windowed_blockstep(
+    pid_t pid, const void *win_base, size_t win_len,
+    asmtest_addr_channel_t *chan, long *result, asmtest_trace_t *trace);
+
 /* §D3 whole-window capture that OWNS its tracee — the fork-internal analog of
  * asmtest_ptrace_trace_call. Forks a child that calls `code(args…)` (up to 6 integer
  * args), run_to's the window frame entry, then single-steps recording the ABSOLUTE
