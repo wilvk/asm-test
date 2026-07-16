@@ -114,6 +114,18 @@ typedef struct {
     size_t n;
 } asmspy_symtab_t;
 
+/* The ELF class of `pid`'s main executable, read from /proc/<pid>/exe: 32 for an
+ * i386 tracee, 64 for x86-64, 0 if it cannot be determined (unreadable /proc,
+ * not an ELF).
+ *
+ * Every ptrace engine here is x86-64-hardcoded, and on a 32-bit tracee that is
+ * not a build error but a SILENTLY WRONG ANSWER: the kernel reports an i386
+ * task's syscall number in orig_rax against a COMPLETELY DIFFERENT syscall
+ * table (i386 4 = write, x86-64 4 = stat), so a --log of a 32-bit process names
+ * every single syscall wrong while looking perfectly plausible. So the engines
+ * refuse rather than guess — see ASMSPY_ETRACEE_I386. */
+int asmspy_elf_class(pid_t pid);
+
 /* Load every STT_FUNC symbol from the target's mapped ELF files, sorted by
  * runtime address. Returns 0 on success (even if n==0), -1 on hard failure. */
 int asmspy_symtab_load(pid_t pid, asmspy_symtab_t *out);
@@ -507,6 +519,13 @@ int asmspy_engine_sample(pid_t pid, unsigned ms, atomic_bool *stop,
  * registers) or off x86-64 entirely — a clean skip, distinct from the negative
  * attach-failure codes and the other engines' positives (1/2/3). */
 #define ASMSPY_WATCH_UNAVAIL 4
+
+/* The tracee is a 32-bit (i386) process: REFUSED at attach, not attempted.
+ * asmspy's engines read rip/eflags-TF/orig_rax through the x86-64 ABI and decode
+ * against the x86-64 syscall table; pointed at an i386 task they produce
+ * confident nonsense rather than an error. Checked before any attach
+ * (asmspy_elf_class). */
+#define ASMSPY_ETRACEE_I386 5
 
 /* One data-watchpoint hit handed to the front-end. Thread `tid` accessed the
  * watched location `addr` at instruction `pc` (resolved to `func`+`off` in

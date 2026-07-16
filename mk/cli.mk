@@ -128,6 +128,28 @@ $(BUILD)/sample_victim: $(BUILD)/sample_victim.o
 $(BUILD)/watch_victim: $(BUILD)/watch_victim.o
 	$(CC) $(CFLAGS) -pthread $^ -o $@
 
+# i386_victim is a REAL 32-bit tracee (-m32) for the EI_CLASS refusal smoke
+# (asmspy-plan Theme F3). Dockerfile.cli installs gcc-multilib for exactly this,
+# so `make docker-cli` — the lane this feature is verified in — always builds and
+# runs it. A 32-bit process is not hardware or a credential, so per CLAUDE.md it
+# is a dependency to add, not a gate to skip.
+#
+# The parse-time probe below exists ONLY for toolchains outside that lane (CI
+# runs `make cli-smoke` on a bare GitHub runner, whose apt line lives in
+# .github/workflows/ci.yml and would need `gcc-multilib` added to it). A recipe
+# line that self-skips would not work here anyway: `command -v ... || exit 0` in
+# a recipe exits only that line's shell and make runs the next one regardless —
+# hence a parse-time conditional feeding a sentinel the smoke reads.
+CLI_M32_PROBE := $(shell t=$$(mktemp -d 2>/dev/null) &&   printf 'int main(void){return 0;}' > $$t/m32.c &&   $(CC) -m32 $$t/m32.c -o $$t/m32 >/dev/null 2>&1 && echo yes; rm -rf $$t)
+ifeq ($(CLI_M32_PROBE),yes)
+CLI_I386_VICTIM := $(BUILD)/i386_victim
+else
+CLI_I386_VICTIM :=
+endif
+
+$(BUILD)/i386_victim: cli/i386_victim.c | $(BUILD)
+	$(CC) $(CFLAGS) -m32 $< -o $@
+
 # clone_victim spawns threads DURING the trace (every other threaded victim
 # starts its workers before the attach, so they arrive via seize_threads' /proc
 # scan instead). spawned_fn runs only on those post-attach clones. Backs the
@@ -217,11 +239,12 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
            $(BUILD)/test_treefilter $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
-           $(BUILD)/fork_victim $(BUILD)/clone_victim
+           $(BUILD)/fork_victim $(BUILD)/clone_victim \
+           $(CLI_I386_VICTIM)
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
 	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"
-	BUILD=$(BUILD) sh cli/cli_smoke.sh
+	BUILD=$(BUILD) ASMSPY_HAVE_M32='$(CLI_M32_PROBE)' sh cli/cli_smoke.sh
 
 # Build the CLI image (bindings base + libipt-dev + libncurses-dev) and run the
 # headless smoke. Interactive use: `docker run --rm -it asmtest-cli bash` then

@@ -76,7 +76,8 @@ DLPID=""
 EXPID=""
 FKPID=""
 CLPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
+IVPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -871,6 +872,77 @@ echo "  untabled tasks released on sight; the tabled leader keeps tracing"
 kill -9 "$CLPID" 2>/dev/null || true
 wait "$CLPID" 2>/dev/null || true
 CLPID=""
+
+# ---------------------------------------------------------------------------
+# 32-bit (i386) TRACEE REFUSAL (asmspy-plan Theme F3)
+# ---------------------------------------------------------------------------
+# asmspy's engines read rip/eflags-TF/orig_rax through the x86-64 ABI and decode
+# against the x86-64 syscall table. Pointed at an i386 task they do not fail —
+# they report CONFIDENT NONSENSE, because the two syscall tables overlap and
+# disagree (i386 4 = write, x86-64 4 = stat). So the engines read
+# /proc/<pid>/exe's EI_CLASS before attaching and refuse.
+#
+# Dockerfile.cli installs gcc-multilib precisely so this runs for real here — a
+# 32-bit process is not hardware, so it is a dependency to add, not a gate. The
+# `make docker-cli` lane therefore HARD-FAILS below if the victim is missing,
+# rather than quietly skipping. $ASMSPY_HAVE_M32 comes from mk/cli.mk's
+# parse-time probe and is only ever non-"yes" on a toolchain without multilib
+# (e.g. the bare CI runner, whose apt line needs gcc-multilib added).
+if [ "${ASMSPY_HAVE_M32:-}" = "yes" ]; then
+    echo "--- asmspy refuses a 32-bit (i386) tracee ---"
+    [ -x "$BUILD/i386_victim" ] \
+        || fail "i386_victim missing though the -m32 probe said yes — the F3 lane must not silently skip"
+    # prove the fixture really is 32-bit; a 64-bit "i386_victim" would make every
+    # assertion below pass for the wrong reason
+    if command -v python3 >/dev/null 2>&1; then
+        cls=$(python3 -c 'import sys; f=open(sys.argv[1],"rb").read(5); print(f[4])' "$BUILD/i386_victim")
+        [ "$cls" = "1" ] || fail "i386_victim is not ELFCLASS32 (e_ident[EI_CLASS]=$cls) — the refusal test would be vacuous"
+        echo "  fixture verified ELFCLASS32 (e_ident[EI_CLASS]=1)"
+    fi
+    "$BUILD/i386_victim" 2>/dev/null &
+    IVPID=$!
+    sleep 1
+    kill -0 "$IVPID" 2>/dev/null || fail "i386_victim did not start (no 32-bit runtime?)"
+
+    # CONTROL: the identical command against a 64-bit victim must SUCCEED, so a
+    # refusal cannot be passed off by anything that breaks --log generally.
+    set +e
+    ok64=$(timeout 30 "$ASM" --log "$AVPID" 5 2>&1); rc64=$?
+    set -e
+    [ "$rc64" -eq 0 ] || fail "control: --log on the 64-bit victim failed (rc=$rc64) — the i386 refusal below would prove nothing"
+    echo "  control: --log on a 64-bit tracee succeeds"
+
+    # every ptrace engine must refuse, BEFORE attaching
+    for v in "--log $IVPID 5" "--stream $IVPID 5" "--graph $IVPID 5" \
+             "--tree $IVPID 5" "--procs $IVPID 5"; do
+        set +e
+        # shellcheck disable=SC2086
+        out=$(timeout 30 "$ASM" $v 2>&1); rc=$?
+        set -e
+        [ "$rc" -eq 124 ] && fail "asmspy $v hung on a 32-bit tracee"
+        [ "$rc" -eq 0 ] && fail "asmspy $v ACCEPTED a 32-bit tracee (rc=0) — it is decoding an i386 task against the x86-64 syscall table and reporting confident nonsense"
+        printf '%s\n' "$out" | grep -qi '32-bit' \
+            || { printf '%s\n' "$out" | head -3; fail "asmspy $v refused a 32-bit tracee but the message never says so (a clear message is the whole fix)"; }
+    done
+    echo "  --log/--stream/--graph/--tree/--procs all refuse with a clear 32-bit message"
+
+    # the refusal must be a REFUSAL, not a failed attach: nothing was traced, so
+    # the victim is untouched and still running
+    kill -0 "$IVPID" 2>/dev/null \
+        || fail "the 32-bit victim died — asmspy attached before refusing"
+    echo "  32-bit victim untouched (refused before attach, not after)"
+    kill "$IVPID" 2>/dev/null || true
+    wait "$IVPID" 2>/dev/null || true
+    IVPID=""
+else
+    # NOT a self-skip of the feature: `make docker-cli` always has gcc-multilib
+    # and always runs the block above. This branch is only reachable on a
+    # toolchain that cannot build ANY 32-bit binary.
+    echo "--- asmspy 32-bit refusal: no -m32 toolchain here ---"
+    echo "  NOT RUN on this toolchain (gcc-multilib absent). The feature is"
+    echo "  covered by 'make docker-cli', whose image installs it; to cover this"
+    echo "  lane too, add gcc-multilib to its apt line."
+fi
 
 # statistical hot-edge sampler: attach AMD IBS-Op to a CPU-busy victim OUT OF
 # BAND (no ptrace, no single-step) and check the hot function is named. IBS-Op is

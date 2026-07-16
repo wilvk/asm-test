@@ -74,6 +74,13 @@ void asmspy_strerror(int rc, char *buf, size_t buflen) {
         m = "data-flow value producer unavailable (off Linux x86-64 / built "
             "without Capstone)";
         break;
+    case ASMSPY_ETRACEE_I386:
+        /* Must fit the callers' char[128] or it truncates mid-sentence
+         * (measured). The detail lives in asmspy.h; this is the operator's
+         * one-liner: what is wrong, and what to do instead. */
+        m = "32-bit (i386) tracee — unsupported (asmspy is x86-64-only and "
+            "would MISDECODE it). Trace a 64-bit process";
+        break;
     case ASMSPY_WATCH_UNAVAIL:
         m = "hardware data watchpoint unavailable (off x86-64, or "
             "debug-register "
@@ -931,6 +938,12 @@ static void deliver_app_sigtrap(pid_t tid) {
 
 int asmspy_engine_syscalls(pid_t pid, int follow, long max, atomic_bool *stop,
                            asmspy_syscall_sink sink, void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     arm_quit_wake();
 
     thr_tab_t tab = {0};
@@ -1460,6 +1473,12 @@ static void rgn_detach_all(thr_tab_t *tab, uint64_t base) {
 int asmspy_engine_region(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
                          long max, atomic_bool *stop, asmspy_region_sink sink,
                          void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     if (!asmtest_ptrace_available())
         return ASMTEST_PTRACE_EUNAVAIL;
     if (len == 0 || len > (64u << 20))
@@ -1607,6 +1626,12 @@ int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
 int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
                            long max, atomic_bool *stop,
                            asmspy_dataflow_sink sink, void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     if (len == 0 || len > (64u << 20))
         return ASMTEST_PTRACE_EINVAL;
     if (stop && atomic_load(stop))
@@ -1687,6 +1712,12 @@ int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
 int asmspy_engine_stream(pid_t pid, pid_t only_tid, int follow, long max,
                          atomic_bool *stop, const asmspy_symtab_t *syms,
                          asmspy_stream_sink sink, void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     if (!asmtest_ptrace_available())
         return ASMTEST_PTRACE_EUNAVAIL;
 
@@ -1991,6 +2022,12 @@ static void graph_emit(asmspy_graph_sink sink, void *ctx, const graph_t *g,
 int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
                         atomic_bool *stop, const asmspy_symtab_t *syms,
                         asmspy_graph_sink sink, void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     if (!asmtest_ptrace_available())
         return ASMTEST_PTRACE_EUNAVAIL;
 
@@ -2213,6 +2250,12 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
                        atomic_bool *stop, const asmspy_symtab_t *syms,
                        const asmspy_tree_filter_t *filter,
                        asmspy_tree_sink sink, void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     if (!asmtest_ptrace_available())
         return ASMTEST_PTRACE_EUNAVAIL;
 
@@ -2508,6 +2551,12 @@ static int seize_process_tree(pid_t pid, long opts, thr_tab_t *tab) {
 
 int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
                         asmspy_count_t mode, asmspy_topo_sink sink, void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     if (mode == ASMSPY_COUNT_CALLS && !asmtest_ptrace_available())
         return ASMTEST_PTRACE_EUNAVAIL;
 
@@ -2892,6 +2941,12 @@ static void watch_teardown(thr_tab_t *tab) {
 int asmspy_engine_watch(pid_t pid, uint64_t addr, int rw, int len, long max,
                         atomic_bool *stop, const asmspy_symtab_t *syms,
                         asmspy_watch_sink sink, void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
+     * decode below assumes the x86-64 ABI, so on an i386 task this engine does
+     * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
     if (len != 1 && len != 2 && len != 4 && len != 8)
         return ASMTEST_PTRACE_EINVAL;
     if (addr &

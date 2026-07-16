@@ -517,6 +517,28 @@ static uint8_t *map_file(const char *path, size_t *len) {
     return m;
 }
 
+/* The ELF class of pid's main executable (32 / 64 / 0-unknown). Reads only the
+ * 16-byte e_ident, which is IDENTICAL in ELF32 and ELF64 — so unlike everything
+ * else in this file it must NOT go through elf_ok(), whose whole job is to
+ * reject the non-ELF64 files this function exists to identify. */
+int asmspy_elf_class(pid_t pid) {
+    char exe[64];
+    snprintf(exe, sizeof exe, "/proc/%d/exe", (int)pid);
+    size_t flen = 0;
+    uint8_t *base = map_file(exe, &flen);
+    if (!base)
+        return 0;
+    int cls = 0;
+    if (flen >= EI_NIDENT && memcmp(base, ELFMAG, SELFMAG) == 0) {
+        if (base[EI_CLASS] == ELFCLASS32)
+            cls = 32;
+        else if (base[EI_CLASS] == ELFCLASS64)
+            cls = 64;
+    }
+    munmap(base, flen);
+    return cls;
+}
+
 /* Validate a mapped file as an ELF64 with a usable section table. Every later
  * walk indexes sections through ASMSPY_SHDR below, so this is the single place
  * that proves the table itself is inside the mapping. */
@@ -789,8 +811,8 @@ static int find_debug_file(const uint8_t *base, size_t flen,
  * or SHT_DYNSYM) into the table, biased to runtime addresses. Returns 1 if a
  * section of that type was present, 0 if not, -1 on allocation failure. */
 static int scan_elf_syms(const uint8_t *base, size_t flen, int want,
-                         uint64_t bias, const char *modname,
-                         asmspy_symtab_t *t, size_t *cap) {
+                         uint64_t bias, const char *modname, asmspy_symtab_t *t,
+                         size_t *cap) {
     if (!elf_ok(base, flen))
         return 0;
     const Elf64_Ehdr *eh = (const Elf64_Ehdr *)base;
@@ -888,8 +910,8 @@ static void load_module_syms(pid_t pid, const module_t *mod, asmspy_symtab_t *t,
                 /* The debug file is the same ELF with the contents carved out —
                  * it keeps the original section addresses and st_values — so the
                  * bias computed from the RUNNING module applies unchanged. */
-                got =
-                    scan_elf_syms(dbase, dlen, SHT_SYMTAB, bias, modname, t, cap);
+                got = scan_elf_syms(dbase, dlen, SHT_SYMTAB, bias, modname, t,
+                                    cap);
                 munmap(dbase, dlen);
             }
         }
