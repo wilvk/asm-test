@@ -1099,6 +1099,32 @@ them).
   When more than one candidate terminator in the straight-line run targets next-stop, treat
   the block as ambiguous and set `truncated` (the block-step analogue of the documented
   POPF/IRET single-step edge) rather than guessing.
+
+  > **This rule was specified here and then NOT implemented — for as long as the block-step
+  > tier has shipped. Fixed 2026-07-17 (`ee696e0`).** Both reconstructors did exactly the
+  > greedy thing this bullet warns against, so the dual-guard shape (`je T; …; je T` — the
+  > `||` short-circuit that JIT'd managed code emits constantly) ended the block at a
+  > *not-taken* branch and silently dropped instructions that really executed, returning
+  > `rc=OK` with `truncated=false`. Reproduced through the shipped
+  > `asmtest_ptrace_trace_call_blockstep`: per-instruction `0 3 6 8 11 14 18 21 24` vs
+  > block-step `0 3 6 21 24`.
+  >
+  > It survived because the differential oracles could not see it: every block-step fixture
+  > had **one** conditional per block, so no two branches ever shared a target — a
+  > non-exhaustive fixture, not a fake oracle. It was found by adversarial review of the W-1
+  > windowed driver (which had faithfully mirrored the shipped bug), not by the suite.
+  >
+  > Now implemented in **both** `blockstep_reconstruct` (region form) and `window_block_walk`
+  > (windowed): count candidates, hard-stop at the first always-taken instruction, and on >1 —
+  > or on any decode failure / ceiling hit, since uniqueness then cannot be *proven* — record
+  > the definite prefix and set `truncated`. A `ret`/indirect hard-stops the scan but is not
+  > itself a candidate, else every taken conditional followed by the function's `ret` would go
+  > ambiguous. Cost is decoding, not stops: the measured 6.4x stop reduction is unchanged.
+  > `trace_auto` gains from this for free — it escalates on `!truncated`, so ambiguous code
+  > now falls through to the exact per-instruction tier instead of returning a short stream as
+  > complete. Covered by dual-guard fixtures in both oracles plus an ordered-subsequence
+  > assert (block-step may never invent an address); mutation-verified — restoring the greedy
+  > rule fails `ok 336` and `ok 369`.
 - Reuse the two existing arch seams unchanged — `read_pc_ret`
   ([ptrace_backend.c:322](../../../src/ptrace_backend.c)) to read the target RIP at each
   `#DB`, and `PTRACE_TRACE_ARCH` ([ptrace_backend.c:302](../../../src/ptrace_backend.c)) for
