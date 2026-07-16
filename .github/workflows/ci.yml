@@ -625,10 +625,19 @@ jobs:
       - name: Assert the C suite really ran (nothing self-skipped) and every assertion passed
         run: |
           log=/tmp/dataflow-attach.log
-          if grep -q '^# SKIP' "$log"; then
+          # ONE skip is expected here and is an environmental fact, not a lapse: GitHub's
+          # runners are VMs whose hypervisor MASKS BTF/DEBUGCTL, so PTRACE_SINGLEBLOCK is
+          # non-functional and the live block-step/replay tier (F1 increment 1) self-skips.
+          # It runs for real on bare metal (verified 22/22 on a Zen 5 host), so F1 inc 1 is
+          # HOST-gated, not CI-gated — recorded in live-attach-dataflow-followup-plan.md F1.
+          # Every OTHER skip is still a hard failure: allow this one BY NAME, never blanket.
+          if grep '^# SKIP' "$log" | grep -qv 'live block-step/replay'; then
             echo "::error::the data-flow C suite SELF-SKIPPED — the gate tested less than it claims:"
-            grep '^# SKIP' "$log"
+            grep '^# SKIP' "$log" | grep -v 'live block-step/replay'
             exit 1
+          fi
+          if grep -q '^# SKIP live block-step/replay' "$log"; then
+            echo "::notice::block-step/replay self-skipped (PTRACE_SINGLEBLOCK masked on this VM) — expected on GitHub runners; F1 inc 1 is gated on bare metal only."
           fi
           if grep -q '^not ok' "$log"; then
             echo "::error::the data-flow C suite reported FAILING assertions:"
@@ -643,15 +652,18 @@ jobs:
             exit 1
           fi
           # A floor, not an exact count: new assertions should not break the gate, but a
-          # truncated or half-run suite must not pass. 257 across 8 suites at the time of
-          # writing (test_dataflow 23, method 29, gcmove 26, helpers 36, operands 20, emu 10,
-          # ptrace 91, blockstep 22).
+          # truncated or half-run suite must not pass. On bare metal the 8 suites total 257
+          # (test_dataflow 23, method 29, gcmove 26, helpers 36, operands 20, emu 10,
+          # ptrace 91, blockstep 22). On a GitHub VM block-step's 22 self-skip (BTF masked,
+          # see above), leaving 235 — so the floor is 230. Note test_dataflow_ptrace's 91 DO
+          # run here: it drives PTRACE_SINGLESTEP, which the hypervisor does not mask; only
+          # SINGLEBLOCK is affected. If that 91 ever vanishes, this floor catches it.
           n=$(grep -c '^ok ' "$log" || true)
-          if [ "$n" -lt 250 ]; then
-            echo "::error::the data-flow C suite ran only $n assertions, expected >= 250 — a suite is missing or the run was truncated."
+          if [ "$n" -lt 230 ]; then
+            echo "::error::the data-flow C suite ran only $n assertions, expected >= 230 — a suite is missing or the run was truncated."
             exit 1
           fi
-          echo "data-flow C suite: $n assertions across 8 suites, no skips, block-step included."
+          echo "data-flow C suite: $n assertions, no unexpected skips, block-step chain intact."
 
   # The remaining seven data-flow language bindings, each run in the pinned toolchain
   # image it was validated in (a `docker run` on the host runner — checkout stays on the

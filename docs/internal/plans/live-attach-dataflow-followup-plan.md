@@ -44,7 +44,30 @@ x86-64 first, AArch64 where the primitive exists).
 
 ---
 
-## F1 — Block-step + emulator-replay value optimization *(**increment 1 LANDED 2026-07-15** — pure-method value tier; F2/vector breadth planned)*
+## F1 — Block-step + emulator-replay value optimization *(**increment 1 LANDED 2026-07-15** — pure-method value tier; **HOST-gated, not CI-gatable**; F2/vector breadth planned)*
+
+> **UPDATE 2026-07-17 — F1 increment 1 CANNOT be CI-gated on GitHub runners, and now we know why.**
+> It was an orphan until 2026-07-17 (`dataflow-blockstep-test` was defined at
+> [mk/dataflow.mk](../../../mk/dataflow.mk) but omitted from the `dataflow-test` aggregate, and
+> `grep blockstep .github/` returned zero). It is now chained into the aggregate, and the aggregate
+> runs in CI via `docker-dataflow-attach` — but the block-step tier **self-skips there**:
+>
+> ```
+> # SKIP live block-step/replay: ptrace unavailable (seccomp/yama) or
+>        PTRACE_SINGLEBLOCK non-functional (BTF masked)
+> ```
+>
+> GitHub's runners are **VMs whose hypervisor masks BTF/DEBUGCTL**, so `PTRACE_SINGLEBLOCK` is
+> non-functional. This is not a container/seccomp issue — the lane already runs
+> `seccomp=unconfined` and it still skips. Note `test_dataflow_ptrace`'s 91 assertions **do** run
+> there: they drive `PTRACE_SINGLEBLOCK`'s sibling `PTRACE_SINGLESTEP`, which is not masked. Only
+> block-step is affected.
+>
+> **So F1 increment 1's 22/22 is gated on BARE METAL ONLY** (verified on a Zen 5 host). The CI gate
+> allows this one skip **by name** and fails on every other — a blanket allowance would re-open the
+> vacuous-green hole the gate exists to close. Anyone wanting real CI coverage for F1 needs a
+> bare-metal runner; that is the same constraint the AMD/PT lanes carry, arrived at from a different
+> direction.
 
 > **UPDATE 2026-07-15 — INCREMENT 1 LANDED.** The spike is promoted to a real tier `src/dataflow_blockstep.c`:
 > `PTRACE_SINGLEBLOCK` per taken branch → full `GETREGS` boundary snapshot → Unicorn replay of each
