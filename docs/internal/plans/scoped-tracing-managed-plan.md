@@ -378,7 +378,26 @@ file asserts the two things only the syntax can prove: nothing renders *inside* 
 a listing exists *at block exit*, and that an exception unwinding the block still disposes.
 The **async-hop case** (opt-in, asserting slices stitch by `ScopeId`; PT/ptrace host,
 self-skips otherwise) was outside this increment — `AsyncStitchedTrace` assertions already
-run in `test_hwtrace.js`, so this line needs its own audit rather than a status flip here.
+run in `test_hwtrace.js`, so this line needed its own audit rather than a status flip.
+
+> **Audit done 2026-07-17 — COVERED for the same-thread case, and non-vacuously.** Ran
+> `make hwtrace-node-test` on a bare-metal Zen 5 host: **16 `AsyncStitchedTrace` assertions
+> execute and pass (`ok 66`–`ok 81`), 0 `not ok`, and no single-step `# SKIP`.** The coverage is
+> real, not the shape that has made hwtrace lanes blind in this tree before (an assertion an
+> empty render silently skips, plus a `truncated` check that passes vacuously):
+> `ok 73` asserts `skipReason === ''`, so a silent de-arm FAILS the lane rather than passing
+> quietly; `ok 76` pins the concatenated hop bodies to offsets 0/5/10; and `ok 78` asserts the
+> merged path carries all three per-hop sections **unconditionally** — not behind an
+> `if (op.path)` that an empty render (the exact failure signature) would skip. `ok 71` checks
+> each hop returns its real result, so execution is proven intact rather than merely uncrashed.
+>
+> **Scope of the claim, stated honestly:** this covers hops across `await` continuations
+> (macrotask + microtask) on ONE thread — the case `AsyncLocalStorage` can carry — and `ok 77`
+> asserts exactly that single-tid shape rather than papering over it. Genuine **cross-thread**
+> hops (Worker / libuv-pool) remain the disclosed §D1 gap below; they escape `AsyncLocalStorage`
+> and, per §Z4, exercising one needs bare-metal Intel PT per-thread events (the §D3 single-thread
+> stepper cannot produce one). So this line is CLOSED for what it can prove here, and the
+> cross-thread remainder stays tracked as the structural gap it is — not as missing test work.
 
 ---
 
