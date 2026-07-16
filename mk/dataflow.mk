@@ -245,12 +245,16 @@ dataflow-bindings-test: dataflow-python-test dataflow-cpp-test dataflow-node-tes
 # tag its neighbours depend on.
 #
 # --cap-add=SYS_PTRACE: F7's whole subject is attaching to a live pid. Measured, not
-# assumed — the lanes pass under a PLAIN `docker run` too, because the victim is the
-# test's own child (same uid, a descendant, and it calls PR_SET_PTRACER_ANY), and
-# docker's default seccomp profile has allowed ptrace since 19.03. The cap is added
-# anyway so the lane does not silently depend on all three of those staying true:
-# the failure it prevents is ETRACE, which these suites treat as a hard FAILURE
-# rather than a skip, so a lane that lost ptrace would go red, not quietly green.
+# assumed — the lanes also pass under a PLAIN `docker run` with no caps and no
+# seccomp override (verified in the exact shape ci.yml's dataflow-bindings matrix
+# uses: `docker run --rm -v $PWD:/w -w /w ubuntu:24.04 ... make dataflow-ruby-test`
+# -> 36/36). They can, because the victim is the test's own child (same uid, a
+# descendant) AND calls PR_SET_PTRACER_ANY, and docker's default seccomp profile has
+# allowed ptrace since 19.03. So the CI lanes, which cannot pass extra flags, keep
+# working. The cap is added HERE anyway so this lane does not silently depend on all
+# of that staying true: the failure it prevents is ETRACE, which these suites treat
+# as a hard FAILURE rather than a skip, so a lane that lost ptrace goes red — never
+# quietly green.
 DATAFLOW_DOCKER_LANGS := python cpp node ruby lua zig rust go java dotnet
 
 .PHONY: docker-dataflow-bindings $(addprefix docker-dataflow-,$(DATAFLOW_DOCKER_LANGS))

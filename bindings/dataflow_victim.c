@@ -112,8 +112,8 @@ int main(int argc, char **argv) {
         perror("ftruncate");
         return 1;
     }
-    uint64_t *counter = mmap(NULL, sizeof(uint64_t), PROT_READ | PROT_WRITE,
-                             MAP_SHARED, fd, 0);
+    uint64_t *counter =
+        mmap(NULL, sizeof(uint64_t), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (counter == MAP_FAILED) {
         perror("mmap counter");
         return 1;
@@ -122,8 +122,8 @@ int main(int argc, char **argv) {
 
     /* Publish the base the caller attaches at, our pid, and FLUSH — the caller
      * blocks on this line, so a buffered newline would deadlock the lane. */
-    printf("base=0x%llx len=%zu pid=%d\n", (unsigned long long)(uintptr_t)ex, len,
-           (int)getpid());
+    printf("base=0x%llx len=%zu pid=%d\n", (unsigned long long)(uintptr_t)ex,
+           len, (int)getpid());
     fflush(stdout);
 
     /* Independent hot loop: call the region, bump the counter, forever. The sleep
