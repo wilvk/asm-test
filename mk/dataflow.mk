@@ -205,9 +205,8 @@ dataflow-rust-test: $(DATAFLOW_LIVE_DEPS)
 # Phase 6 — the Go data-flow binding (bindings/go/cmd/dataflowsmoke, cgo dlopen).
 # Needs Go + a C toolchain (cgo); validated in golang:1 locally.
 .PHONY: dataflow-go-test
-dataflow-go-test: shared-dataflow
-	cd bindings/go && \
-	  ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
+dataflow-go-test: $(DATAFLOW_LIVE_DEPS)
+	cd bindings/go && $(dataflow_live_env) \
 	  GOFLAGS=-mod=mod $(GO) run ./cmd/dataflowsmoke
 
 # Phase 6 — the Java data-flow binding (bindings/java/TestDataflow.java, Project Panama
