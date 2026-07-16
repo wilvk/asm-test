@@ -73,7 +73,8 @@ YPID=""
 MVPID=""
 HWPID=""
 DLPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
+EXPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -604,6 +605,77 @@ expect_badarg "$ASM" --tree "$WVPID" --focus=
 expect_badarg "$ASM" --tree "$WVPID" --module=
 echo "  bad --depth/--focus/--module rejected up front"
 kill "$WVPID" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# EXEC-STOP RE-RESOLUTION (asmspy-plan Theme B): PTRACE_O_TRACEEXEC
+# ---------------------------------------------------------------------------
+# exec_victim runs preexec_fn, then execv()s exec_stage2, which runs postexec_fn.
+# The two functions live in DIFFERENT binaries at different load biases, so ONE
+# traced run that names BOTH can only have re-read the symbol table at the
+# exec-stop: the table asmspy loaded at attach is exec_victim's and knows nothing
+# of postexec_fn.
+#
+# The two halves are each other's control, which is what makes this airtight:
+#   * preexec_fn present  => asmspy really was attached BEFORE the exec, so
+#                            "postexec_fn appeared" is not just a late attach to
+#                            the post-exec image.
+#   * postexec_fn present => the reload happened, and it cannot be faked by the
+#                            stale table.
+# --graph also proves the exebase re-read: postexec_fn must be tagged INTERNAL.
+# A stale exebase ("exec_victim") would label exec_stage2's own functions
+# external — a wrong answer that still renders as a plausible graph.
+echo "--- asmspy --graph across an execve (exec-stop re-resolution) ---"
+"$BUILD/exec_victim" "$BUILD/exec_stage2" 2>/dev/null &
+EXPID=$!
+sleep 1
+set +e
+exout=$(timeout 90 "$ASM" --graph "$EXPID" 4000 --json 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--graph across execve hung"
+[ "$rc" -eq 0 ] || fail "--graph across execve exited rc=$rc"
+# control: the PRE-exec image was traced and resolved from the attach-time table
+printf '%s' "$exout" | grep -q '"name":"preexec_fn","module":"exec_victim"' \
+    || fail "exec: preexec_fn [exec_victim] absent — asmspy did not trace the pre-exec image (the post-exec proof below would be vacuous)"
+echo "  pre-exec:  preexec_fn [exec_victim] resolved from the attach-time table"
+# the payload: a symbol that exists ONLY in the exec'd binary
+printf '%s' "$exout" | grep -q '"name":"postexec_fn","module":"exec_stage2"' \
+    || fail "exec: postexec_fn [exec_stage2] absent — the symtab was NOT re-read at the exec-stop (new image named from the old binary's table)"
+# and the exe basename was re-read too: stage2's own function is INTERNAL
+printf '%s' "$exout" \
+    | grep -qE '"name":"postexec_fn","module":"exec_stage2","kind":"internal"' \
+    || fail "exec: postexec_fn not tagged internal — the exebase went stale, so the new binary's own code is labelled external"
+echo "  post-exec: postexec_fn [exec_stage2] resolved + tagged internal (symtab AND exebase re-read)"
+# both in ONE capture => the trace really did span the exec
+printf '%s' "$exout" | grep -q '"pid":'"$EXPID" \
+    || fail "exec: graph is not for the traced pid"
+echo "  one capture spans both images (pid $EXPID unchanged across the exec)"
+
+kill "$EXPID" 2>/dev/null || true
+wait "$EXPID" 2>/dev/null || true
+EXPID=""
+
+# The instruction stream re-resolves too (same option, same reload path). This
+# needs a FRESH victim: the run above already let the first one exec, and
+# attaching to an ALREADY-exec'd process would load stage2's symbols at attach
+# and resolve postexec_fn with no reload at all — a vacuously green test. The
+# preexec_fn assertion below is what holds that honest.
+echo "--- asmspy --stream across an execve (fresh pre-exec victim) ---"
+"$BUILD/exec_victim" "$BUILD/exec_stage2" 2>/dev/null &
+EXPID=$!
+sleep 1
+set +e
+sxout=$(timeout 120 "$ASM" --stream "$EXPID" 200000 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--stream across execve hung"
+# control first: we were attached BEFORE the exec
+printf '%s' "$sxout" | grep -q 'preexec_fn.*\[exec_victim\]' \
+    || fail "--stream: preexec_fn absent — attached after the exec, so the postexec_fn check below would be vacuous"
+printf '%s' "$sxout" | grep -q 'postexec_fn.*\[exec_stage2\]' \
+    || fail "--stream: postexec_fn [exec_stage2] never named — no exec re-resolution in the stream engine"
+echo "  stream: pre-exec AND post-exec text each named from their own image"
+kill "$EXPID" 2>/dev/null || true
+wait "$EXPID" 2>/dev/null || true
+EXPID=""
 
 # statistical hot-edge sampler: attach AMD IBS-Op to a CPU-busy victim OUT OF
 # BAND (no ptrace, no single-step) and check the hot function is named. IBS-Op is

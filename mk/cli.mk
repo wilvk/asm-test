@@ -128,6 +128,27 @@ $(BUILD)/sample_victim: $(BUILD)/sample_victim.o
 $(BUILD)/watch_victim: $(BUILD)/watch_victim.o
 	$(CC) $(CFLAGS) -pthread $^ -o $@
 
+# exec_victim / exec_stage2 — the exec-stop re-resolution pair (Theme B).
+# exec_victim runs preexec_fn, then execv()s exec_stage2, which runs postexec_fn.
+# The two functions live in DIFFERENT binaries, so naming postexec_fn proves
+# asmspy re-read the symtab at the exec-stop (the attach-time table is
+# exec_victim's and describes a different image at a different load bias).
+$(BUILD)/exec_victim: $(BUILD)/exec_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+# exec_stage2 is linked -static ON PURPOSE. After an execve the dynamic loader
+# runs first, and relocating a PIE against a shared libc costs well over 20k
+# instructions before main() is ever reached — so a single-step smoke would burn
+# its whole budget inside ld.so and never see postexec_fn, whether or not the
+# re-resolution works. Static linking removes ld.so from the post-exec path
+# (_start -> __libc_start_main -> main), which puts postexec_fn within a few
+# thousand steps. This is a TEST-RUNTIME concession, not a narrowing of the
+# feature: the reload is keyed off the exec-stop and /proc/<pid>/maps, neither of
+# which cares how the new image is linked. Built from the source directly — the
+# cli/ .o pattern rule's object is shared with the dynamic link line.
+$(BUILD)/exec_stage2: cli/exec_stage2.c | $(BUILD)
+	$(CC) $(CFLAGS) -static $< -o $@
+
 # debuglink_victim carries a function (debuglink_only_fn) that lands in .symtab
 # but NOT .dynsym, so the smoke can strip a copy, prove asmspy resolves nothing,
 # then attach the debug info back as a separate .gnu_debuglink / build-id file and
@@ -179,7 +200,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/watch_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
-           $(BUILD)/test_treefilter
+           $(BUILD)/test_treefilter $(BUILD)/exec_victim $(BUILD)/exec_stage2
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
 	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"
