@@ -1,19 +1,87 @@
-// asmtest_dataflow.hpp — C++ binding for the data-flow analysis tier (Phase 6).
+// asmtest_dataflow.hpp — C++ binding for the data-flow tier (Phase 6 + F7).
 //
 // Thin, header-only, typed conveniences over the C API in asmtest_valtrace.h (which
-// is extern "C"-guarded). This first increment mirrors the Python binding: the pure
-// GC-move canonicalizer and the tiered-re-JIT method resolver. Link the pure analysis
-// objects (dataflow_gcmove.o + dataflow_method.o) or libasmtest_dataflow.
+// is extern "C"-guarded): the pure GC-move canonicalizer, the tiered-re-JIT method
+// resolver, the L0/L1/L2 ValueTrace pipeline, and — F7 — LIVE-ATTACH capture over a
+// running pid. Link the pure analysis objects (dataflow_gcmove.o + dataflow_method.o),
+// adding dataflow_ptrace.o + dataflow_operands.o + codeimage.o for the live attach,
+// or just libasmtest_dataflow (which carries all of them).
 #pragma once
 
 #include "asmtest_valtrace.h"
 
 #include <cstdint>
 #include <set>
+#include <sys/types.h>
 #include <vector>
+
+// F7 — the scoped ptrace L0 producer's live-attach entry points. Declared HERE, not
+// #included: a value-trace PRODUCER is a tier, not part of the shared sink API, so
+// src/dataflow_ptrace.c ships no header and every caller re-declares what it uses —
+// exactly as that tier's own C suite (examples/test_dataflow_ptrace.c) does. Keep in
+// step with src/dataflow_ptrace.c.
+extern "C" {
+// The versioned-decode byte source, opaque here — attachJit takes it as a pointer
+// and this binding only ever passes null (live-snapshot decode). Same spelling as
+// include/asmtest_codeimage.h's own forward declaration, so including that header
+// alongside this one is harmless.
+typedef struct asmtest_codeimage asmtest_codeimage_t;
+
+// Attach to LIVE `pid`, single-step [base, base+code_len), then DETACH leaving the
+// target running. Steps the thread-group LEADER. `result` takes the region's return
+// value; `vt` is filled with the captured trace. max_insns 0 = the tier's backstop.
+int asmtest_dataflow_ptrace_attach_pid(pid_t pid, std::uint64_t base,
+                                       std::size_t code_len, std::uint64_t max_insns,
+                                       long* result, asmtest_valtrace_t* vt);
+// As above, but SEIZE every thread and step whichever one first ENTERS the region
+// (identified by its own tid, never assumed to be the leader); only_tid 0 = any, a
+// nonzero value pins one thread. The entry managed methods need — they run on workers.
+int asmtest_dataflow_ptrace_attach_pid_tid(pid_t pid, pid_t only_tid,
+                                           std::uint64_t base, std::size_t code_len,
+                                           std::uint64_t max_insns, long* result,
+                                           asmtest_valtrace_t* vt);
+// The JIT-aware entry: worker-targeting + a versioned code-image byte source
+// (`img`/`when`; NULL = decode from a live snapshot) + an explicit `survived` report.
+int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, std::uint64_t base,
+                                       std::size_t code_len, asmtest_codeimage_t* img,
+                                       std::uint64_t when, std::uint64_t max_insns,
+                                       long* result, int* survived,
+                                       asmtest_valtrace_t* vt);
+}
 
 namespace asmtest {
 namespace dataflow {
+
+// The scoped ptrace producer's return codes (src/dataflow_ptrace.c). Re-declared for
+// the same reason the entry points above are.
+enum PtraceRc {
+    kPtraceOk = 0,       // a complete scoped trace
+    kPtraceFault = 1,    // the routine faulted; a partial trace is filled
+    kPtraceEinval = -1,  // bad arguments
+    kPtraceEnosys = -3,  // off Linux x86-64 / no Capstone: the tier is absent
+    kPtraceEtrace = -4,  // ptrace/wait failure (seccomp/yama): the caller self-skips
+};
+
+// The outcome of a live attach: the producer's code, the region's return value, and
+// (attachJit only) whether the detach left the target alive.
+struct AttachResult {
+    int rc;
+    long result;
+    int survived;
+    bool ok() const { return rc == kPtraceOk; }
+};
+
+// True iff this build's live-attach tier is real (Linux x86-64 + Capstone) rather
+// than the off-platform ENOSYS stub. PROBED, not guessed — an argument-rejecting
+// call returns EINVAL from the real producer and ENOSYS from the stub, which is the
+// only way to tell them apart when the symbol links either way. Attaches to nothing.
+inline bool live_attach_available() {
+    asmtest_valtrace_t* v = asmtest_valtrace_new(1, 1, 0);
+    long out = 0;
+    int rc = asmtest_dataflow_ptrace_attach_pid(0, 0, 0, 0, &out, v);
+    asmtest_valtrace_free(v);
+    return rc != kPtraceEnosys;
+}
 
 // A GC move-range (the shape of an EventPipe GCBulkMovedObjectRanges entry):
 // [old_base, old_base+len) was relocated to [new_base, new_base+len) at `step`.
@@ -94,7 +162,52 @@ public:
     std::set<std::uint32_t> forwardSlice(std::uint32_t origin) { return slice(origin, true); }
     std::set<std::uint32_t> backwardSlice(std::uint32_t sink) { return slice(sink, false); }
 
+    // --- F7: live-attach capture (fills THIS trace) --- //
+    // The producer fills the very asmtest_valtrace_t this object owns, so a live
+    // capture flows straight into forwardSlice/backwardSlice above — the point of
+    // every tier sharing one L0 sink. Each resyncs the step count from the native
+    // trace (the producer appends behind our back) and drops a stale def-use graph.
+
+    // Attach to LIVE `pid` and single-step [base, base+codeLen); the target survives.
+    AttachResult attachPid(pid_t pid, std::uint64_t base, std::size_t codeLen,
+                           std::uint64_t maxInsns = 0) {
+        AttachResult r{};
+        r.rc = asmtest_dataflow_ptrace_attach_pid(pid, base, codeLen, maxInsns,
+                                                  &r.result, v_);
+        postAttach();
+        return r;
+    }
+    // As attachPid, but step whichever THREAD enters the region (onlyTid 0 = any).
+    AttachResult attachPidTid(pid_t pid, pid_t onlyTid, std::uint64_t base,
+                              std::size_t codeLen, std::uint64_t maxInsns = 0) {
+        AttachResult r{};
+        r.rc = asmtest_dataflow_ptrace_attach_pid_tid(pid, onlyTid, base, codeLen,
+                                                      maxInsns, &r.result, v_);
+        postAttach();
+        return r;
+    }
+    // The JIT-aware attach: worker-targeting plus a `survived` report. `img`/`when`
+    // are the versioned code-image byte source; null means live-snapshot decode.
+    AttachResult attachJit(pid_t pid, pid_t onlyTid, std::uint64_t base,
+                           std::size_t codeLen, std::uint64_t maxInsns = 0,
+                           asmtest_codeimage_t* img = nullptr, std::uint64_t when = 0) {
+        AttachResult r{};
+        r.rc = asmtest_dataflow_ptrace_attach_jit(pid, onlyTid, base, codeLen, img, when,
+                                                  maxInsns, &r.result, &r.survived, v_);
+        postAttach();
+        return r;
+    }
+
+    // Steps / records stored in the trace (a live producer's, or hand-built ones).
+    std::size_t steps() const { return asmtest_valtrace_steps(v_); }
+    std::size_t recs() const { return asmtest_valtrace_recs(v_); }
+
 private:
+    void postAttach() {
+        nSteps_ = static_cast<std::uint32_t>(asmtest_valtrace_steps(v_));
+        if (g_) { asmtest_defuse_free(g_); g_ = nullptr; }
+    }
+
     static at_val_rec_t rec(const Loc& l, bool isWrite) {
         at_val_rec_t r{};
         r.kind = l.kind;

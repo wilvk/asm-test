@@ -1,9 +1,12 @@
-// asmtest/dataflow (Node, koffi) — binding for the data-flow analysis tier (Phase 6).
+// asmtest/dataflow (Node, koffi) — binding for the data-flow tier (Phase 6 + F7).
 //
-// Wraps libasmtest_dataflow (built with `make shared-dataflow`): this increment mirrors
-// the Python/C++ bindings — the pure GC-move canonicalizer and the tiered-re-JIT method
-// resolver. self-skips (available() === false) when the lib is not built, so a general
-// node binding run never fails on it.
+// Wraps libasmtest_dataflow (built with `make shared-dataflow`), mirroring the
+// Python/C++ bindings: the pure GC-move canonicalizer, the tiered-re-JIT method
+// resolver, the L0/L1/L2 ValueTrace pipeline, and — F7 — LIVE-ATTACH capture over a
+// running pid (ValueTrace.attachPid / attachPidTid / attachJit), which fills that
+// same ValueTrace so a live capture slices exactly like a hand-built one.
+// available() === false when the lib is not built, so a general node binding run
+// never fails on it; liveAttachAvailable() probes for the (Linux x86-64) attach tier.
 'use strict';
 
 const koffi = require('koffi');
@@ -88,12 +91,56 @@ let _fn = null;
     sliceBackward: _lib.func('void* asmtest_slice_backward(void*, at_val_rec_t)'),
     sliceFree: _lib.func('void asmtest_slice_free(void*)'),
     sliceContains: _lib.func('int asmtest_slice_contains(void*, uint32)'),
+    valtraceSteps: _lib.func('size_t asmtest_valtrace_steps(void*)'),
+    valtraceRecs: _lib.func('size_t asmtest_valtrace_recs(void*)'),
+    // F7 — the LIVE-ATTACH producer entry points (src/dataflow_ptrace.c). The
+    // producer ships no header (a value-trace PRODUCER is a tier, not part of the
+    // shared sink API), so this prototype IS the contract — keep it in step with
+    // that file. pid_t is int; `long` is 64-bit on the Linux x86-64 this tier runs
+    // on. _Out_ params come back through a one-element array.
+    attachPid: _lib.func(
+      'int asmtest_dataflow_ptrace_attach_pid(int pid, uint64 base, size_t code_len, ' +
+        'uint64 max_insns, _Out_ long *result, void *vt)'
+    ),
+    attachPidTid: _lib.func(
+      'int asmtest_dataflow_ptrace_attach_pid_tid(int pid, int only_tid, uint64 base, ' +
+        'size_t code_len, uint64 max_insns, _Out_ long *result, void *vt)'
+    ),
+    attachJit: _lib.func(
+      'int asmtest_dataflow_ptrace_attach_jit(int pid, int only_tid, uint64 base, ' +
+        'size_t code_len, void *img, uint64 when, uint64 max_insns, ' +
+        '_Out_ long *result, _Out_ int *survived, void *vt)'
+    ),
   };
 })();
 
 // True when libasmtest_dataflow loaded (i.e. `make shared-dataflow` has run).
 function available() {
   return _fn !== null;
+}
+
+// --- F7: live-attach data-flow capture ------------------------------------
+// The scoped ptrace producer's return codes (src/dataflow_ptrace.c), re-declared
+// for the same reason the prototypes above are.
+const PTRACE_OK = 0; // a complete scoped trace
+const PTRACE_FAULT = 1; // the routine faulted; a partial trace is filled
+const PTRACE_EINVAL = -1; // bad arguments
+const PTRACE_ENOSYS = -3; // off Linux x86-64 / no Capstone: the tier is absent
+const PTRACE_ETRACE = -4; // ptrace/wait failure (seccomp/yama)
+
+// True iff this build's live-attach tier is real (Linux x86-64 + Capstone) rather
+// than the off-platform ENOSYS stub. PROBED, not guessed: an argument-rejecting call
+// returns EINVAL from the real producer and ENOSYS from the stub, which is the only
+// way to tell them apart — the symbol resolves either way. Attaches to nothing.
+function liveAttachAvailable() {
+  if (!_fn) return false;
+  const v = _fn.valtraceNew(1, 1, 0);
+  try {
+    const out = [0];
+    return _fn.attachPid(0, 0n, 0, 0n, out, v) !== PTRACE_ENOSYS;
+  } finally {
+    _fn.valtraceFree(v);
+  }
 }
 
 // Map heap address `phys` observed at value-trace `step` to its canonical
@@ -201,6 +248,68 @@ class ValueTrace {
     return this._slice(sink, false);
   }
 
+  // --- F7: live-attach capture (fills THIS trace) --------------------------
+  // The producer fills the very asmtest_valtrace_t this handle owns, so a live
+  // capture flows into the same forwardSlice/backwardSlice a hand-built trace does
+  // — the point of every tier sharing one L0 sink. Each resyncs the step count from
+  // the native trace (the producer appends behind our back) and drops a stale graph.
+
+  _postAttach() {
+    this._n = Number(_fn.valtraceSteps(this._v));
+    if (this._g) {
+      _fn.defuseFree(this._g);
+      this._g = null;
+    }
+  }
+
+  // Attach to LIVE `pid`, single-step [base, base+codeLen), then DETACH leaving the
+  // target running. Steps the thread-group LEADER (a routine that only ever runs on
+  // a worker thread needs attachPidTid). Returns { rc, result }.
+  attachPid(pid, base, codeLen, maxInsns = 0) {
+    const out = [0];
+    const rc = _fn.attachPid(pid, BigInt(base), codeLen, BigInt(maxInsns), out, this._v);
+    this._postAttach();
+    return { rc, result: Number(out[0]) };
+  }
+
+  // As attachPid, but SEIZE every thread and step whichever one first ENTERS the
+  // region — identified by its own tid, never assumed to be the leader — while the
+  // siblings run free. onlyTid 0 = any thread; nonzero pins exactly one. This is the
+  // entry managed methods need: they run on workers. Returns { rc, result }.
+  attachPidTid(pid, onlyTid, base, codeLen, maxInsns = 0) {
+    const out = [0];
+    const rc = _fn.attachPidTid(
+      pid, onlyTid, BigInt(base), codeLen, BigInt(maxInsns), out, this._v
+    );
+    this._postAttach();
+    return { rc, result: Number(out[0]) };
+  }
+
+  // The JIT-aware live attach: worker-targeting plus an explicit survival report.
+  // Returns { rc, result, survived } — survived === 1 means the detach left the
+  // target alive. This is the entry F4's live GC-move canonicalization lane drives.
+  // The versioned-decode code-image (img/when) is passed NULL: operands decode from
+  // a live snapshot. `when` is accepted so the order matches the C entry point.
+  attachJit(pid, onlyTid, base, codeLen, maxInsns = 0, when = 0) {
+    const out = [0];
+    const survived = [0];
+    const rc = _fn.attachJit(
+      pid, onlyTid, BigInt(base), codeLen, null, BigInt(when), BigInt(maxInsns),
+      out, survived, this._v
+    );
+    this._postAttach();
+    return { rc, result: Number(out[0]), survived: survived[0] };
+  }
+
+  // Steps / records stored in the trace (a live producer's, or hand-built ones).
+  get steps() {
+    return Number(_fn.valtraceSteps(this._v));
+  }
+
+  get recs() {
+    return Number(_fn.valtraceRecs(this._v));
+  }
+
   free() {
     if (this._g) {
       _fn.defuseFree(this._g);
@@ -215,10 +324,16 @@ class ValueTrace {
 
 module.exports = {
   available,
+  liveAttachAvailable,
   gcmoveCanon,
   methodResolvePc,
   ValueTrace,
   LOC_REG,
   LOC_MEM_ABS,
   LOC_MEM_OFF,
+  PTRACE_OK,
+  PTRACE_FAULT,
+  PTRACE_EINVAL,
+  PTRACE_ENOSYS,
+  PTRACE_ETRACE,
 };

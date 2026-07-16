@@ -148,26 +148,30 @@ dataflow-python-test: $(DATAFLOW_LIVE_DEPS)
 	$(dataflow_live_env) python3 bindings/python/tests/test_dataflow.py
 
 # Phase 6 — the C++ data-flow binding (bindings/cpp/asmtest_dataflow.hpp): a
-# header-only typed wrapper. Links the two PURE analysis objects it calls
-# (gcmove canon + method resolver); no Capstone/Unicorn, so it builds anywhere.
+# header-only typed wrapper. Unlike the nine dlopen bindings this one LINKS the
+# objects it calls, so F7's live attach adds dataflow_ptrace.o (the producer) and
+# codeimage.o (the versioned-decode byte source it calls) + $(LINK_LIBBPF) here,
+# rather than riding the shlib. It still needs the victim to attach to.
 .PHONY: dataflow-cpp-test
 dataflow-cpp-test: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
                    $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o \
+                   $(BUILD)/dataflow_ptrace.o $(BUILD)/codeimage.o \
+                   $(BUILD)/dataflow_victim \
                    bindings/cpp/asmtest_dataflow.hpp bindings/cpp/test_dataflow.cpp | $(BUILD)
 	$(CXX) -std=c++17 -Iinclude bindings/cpp/test_dataflow.cpp \
 	  $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
-	  $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o $(CAPSTONE_LIBS) \
+	  $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o \
+	  $(BUILD)/dataflow_ptrace.o $(BUILD)/codeimage.o \
+	  $(CAPSTONE_LIBS) $(LINK_LIBBPF) \
 	  -o $(BUILD)/test_dataflow_cpp
-	$(BUILD)/test_dataflow_cpp
+	$(dataflow_live_env) $(BUILD)/test_dataflow_cpp
 
 # Phase 6 — the Node data-flow binding (bindings/node/dataflow.js, koffi). Self-skips
 # (available()===false) when the analysis lib isn't built, so it never reddens a general
 # node run; this dedicated target builds the lib + points the loader at it.
 .PHONY: dataflow-node-test
-dataflow-node-test: shared-dataflow
-	cd bindings/node && \
-	  ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
-	  $(NODE) test_dataflow.js
+dataflow-node-test: $(DATAFLOW_LIVE_DEPS)
+	cd bindings/node && $(dataflow_live_env) $(NODE) test_dataflow.js
 
 # Phase 6 — the Ruby data-flow binding (bindings/ruby/dataflow.rb, Fiddle). Needs a
 # Ruby interpreter (the docker bindings image); validated in ubuntu:24.04 locally.
@@ -235,6 +239,44 @@ dataflow-bindings-test: dataflow-python-test dataflow-cpp-test dataflow-node-tes
                         dataflow-rust-test dataflow-go-test dataflow-java-test \
                         dataflow-dotnet-test
 	@echo "dataflow-bindings-test: all 10 language bindings passed"
+
+# --- F7: the DOCKER lanes for the ten binding tests ------------------------
+# `make dataflow-<lang>-test` needs that language's toolchain, which the host has
+# for at most a couple of them — so each lane gets a pinned-toolchain image, the
+# same way every other binding lane in this repo does. These reuse
+# bindings/Dockerfile.lang and docker.mk's per-language knobs (DOCKER_APT_<lang> /
+# DOCKER_SETUP_<lang> / DOCKER_RUNENV_<lang>, all defined before this file is
+# included) — one Dockerfile, no toolchain drift from the docker-<lang> images.
+#
+# They tag asmtest-dataflow-<lang>, NOT asmtest-<lang>: the latter is the shared
+# per-language image several other lanes build FROM, and a lane must not repoint a
+# tag its neighbours depend on.
+#
+# --cap-add=SYS_PTRACE: F7's whole subject is attaching to a live pid. Measured, not
+# assumed — the lanes pass under a PLAIN `docker run` too, because the victim is the
+# test's own child (same uid, a descendant, and it calls PR_SET_PTRACER_ANY), and
+# docker's default seccomp profile has allowed ptrace since 19.03. The cap is added
+# anyway so the lane does not silently depend on all three of those staying true:
+# the failure it prevents is ETRACE, which these suites treat as a hard FAILURE
+# rather than a skip, so a lane that lost ptrace would go red, not quietly green.
+DATAFLOW_DOCKER_LANGS := python cpp node ruby lua zig rust go java dotnet
+
+.PHONY: docker-dataflow-bindings $(addprefix docker-dataflow-,$(DATAFLOW_DOCKER_LANGS))
+
+define dataflow_docker_lang_rule
+docker-dataflow-$(1): docker-bindings-base
+	$$(DOCKER) build $$(_docker_plat) -f bindings/Dockerfile.lang \
+	  --build-arg BASE_IMAGE=$$(DOCKER_BINDINGS_BASE) \
+	  --build-arg APT_PKGS='$$(DOCKER_APT_$(1))' \
+	  --build-arg SETUP='$$(DOCKER_SETUP_$(1))' \
+	  --build-arg TARGET=$(1) -t asmtest-dataflow-$(1) .
+	$$(DOCKER) run --rm --cap-add=SYS_PTRACE $$(_docker_plat) $$(DOCKER_RUNENV_$(1)) \
+	  asmtest-dataflow-$(1) make dataflow-$(1)-test
+endef
+$(foreach L,$(DATAFLOW_DOCKER_LANGS),$(eval $(call dataflow_docker_lang_rule,$(L))))
+
+docker-dataflow-bindings: $(addprefix docker-dataflow-,$(DATAFLOW_DOCKER_LANGS))
+	@echo "docker-dataflow-bindings: all 10 language lanes passed in their pinned images"
 
 # --- test-object compile knobs ---------------------------------------------
 # The examples/%.c pattern rule (root Makefile) compiles these with plain CFLAGS;
