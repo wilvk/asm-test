@@ -564,18 +564,45 @@ int asmtest_ss_call_scoped_fp(const void *base, size_t len,
     return ASMTEST_HW_OK;
 }
 
-/* Resolve a frame handle (idx+gen) on the CALLING thread to its region + trace. The
- * frame data survives a pop (only stream is freed), so a render-on-close can read the
- * normalized trace. Returns 1 + fills the out params on a live match, 0 on a
- * stale/unknown handle. */
-int asmtest_ss_frame_lookup(uint32_t idx, uint32_t gen, const void **base,
-                            size_t *len, asmtest_trace_t **trace) {
+/* §Z4: the OS tid this backend stamps frames with, for the CALLING thread. The handle
+ * carries this value (see asmtest_ss_frame_lookup), and a handle's tid is compared
+ * against a frame's arm_tid — so both MUST come from this one clock. Callers that mint
+ * a handle read it here rather than calling gettid themselves: two independent notions
+ * of "my tid" that ever disagreed would fail every lookup, turning every close into a
+ * silent false-truncate. Returns the same value as the SS_ARM_TID() stamp in
+ * ss_push_frame, by construction. */
+int asmtest_ss_self_tid(void) { return SS_ARM_TID(); }
+
+/* Resolve a frame handle (idx+gen+arm_tid) on the CALLING thread to its region +
+ * trace. The frame data survives a pop (only stream is freed), so a render-on-close can
+ * read the normalized trace. Returns 1 + fills the out params on a live match, 0 on a
+ * stale/unknown/FOREIGN handle.
+ *
+ * §Z4: {idx,gen} names a frame only within ONE thread — tls_frames and tls_gen_ctr are
+ * both __thread, so every thread's first frame is {0,1} and handles collide ACROSS
+ * threads. Resolving another thread's handle here would index the CALLER's table and
+ * match the caller's own live frame on gen alone: the wrong frame, reported as a good
+ * one. So the handle carries the tid that armed it and it must equal this frame's
+ * stamp. This lives here, not in the callers, because arm_tid is private to
+ * ss_frame_t: the layer that owns the invariant is the layer that enforces it, once,
+ * for every caller — and "is this handle mine?" is part of resolving it, not a policy
+ * each caller re-derives. What to DO with a miss stays the caller's business. */
+int asmtest_ss_frame_lookup(uint32_t idx, uint32_t gen, int arm_tid,
+                            const void **base, size_t *len,
+                            asmtest_trace_t **trace) {
     /* Unsigned compare: a signed cast would let the 0xffffffff sentinel handle
      * (begin_scope's failure marker) pass the bound and index out of range. */
     if (idx >= (uint32_t)SS_MAX_FRAMES)
         return 0;
     ss_frame_t *f = &tls_frames[idx];
     if (f->gen != gen || f->gen == 0)
+        return 0;
+    /* Foreign handle: armed by another thread, so it names a frame in ANOTHER TLS
+     * table that is invisible (and uncloseable) from here. No syscall — f->arm_tid is
+     * this thread's own stamp already, so this compares the handle's origin against
+     * the caller's identity for free. A thread that exits and has its tid recycled
+     * cannot alias: the new thread's TLS starts zeroed, so gen==0 rejects first. */
+    if (f->arm_tid != arm_tid)
         return 0;
     if (base != NULL)
         *base = f->base;
@@ -641,10 +668,15 @@ int asmtest_ss_call_scoped_fp(const void *base, size_t len,
     return ASMTEST_HW_ENOSYS;
 }
 void asmtest_ss_end(void) {}
-int asmtest_ss_frame_lookup(uint32_t idx, uint32_t gen, const void **base,
-                            size_t *len, asmtest_trace_t **trace) {
+int asmtest_ss_self_tid(void) {
+    return -1; /* no frames to stamp on this arch; matches the idle/sentinel tid */
+}
+int asmtest_ss_frame_lookup(uint32_t idx, uint32_t gen, int arm_tid,
+                            const void **base, size_t *len,
+                            asmtest_trace_t **trace) {
     (void)idx;
     (void)gen;
+    (void)arm_tid;
     (void)base;
     (void)len;
     (void)trace;

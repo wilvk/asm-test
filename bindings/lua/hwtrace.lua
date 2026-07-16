@@ -59,8 +59,13 @@ int      asmtest_emu_trace_truncated(void* trace);
 uint64_t asmtest_emu_trace_block_at(void* trace, size_t i);
 uint64_t asmtest_emu_trace_insn_at(void* trace, size_t i);
 /* §1 registry-free lazy-arm call + handle-keyed render (the call_scoped path).
-   render_scope takes the 8-byte scope handle BY VALUE — native in LuaJIT FFI. */
-typedef struct { uint32_t idx; uint32_t gen; } asmtest_hwtrace_scope_t;
+   render_scope takes the 12-byte scope handle BY VALUE — native in LuaJIT FFI, which
+   applies the SysV classification itself (12 bytes = TWO INTEGER eightbytes = two
+   registers, not one). §Z4: arm_tid is the OS tid that armed the scope (-1 unarmed);
+   it rides in the handle because idx/gen are unique only within ONE thread (every
+   thread's first scope is {0,1}), so a close from another thread would otherwise
+   resolve to that thread's own frame. */
+typedef struct { uint32_t idx; uint32_t gen; int32_t arm_tid; } asmtest_hwtrace_scope_t;
 int  asmtest_hwtrace_call_scoped_ex(void* base, size_t len, void* trace, void* fn,
                                     const long* args, int nargs, long* result_out,
                                     asmtest_hwtrace_scope_t* out);

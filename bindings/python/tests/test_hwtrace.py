@@ -112,6 +112,14 @@ def test_window_region_free_whole_window(hwtrace):
     assert box["r"] == 42  # fn ALWAYS runs, armed or self-skipped
     assert w.armed  # the `hwtrace` fixture inited single-step, so the window arms here
     assert not w.truncated  # the generous 1M-insn cap is not overflowed by the tiny leaf
+    # The window CLOSED: end_window takes the scope handle BY VALUE, and a window is only
+    # normalized into its trace by a close that RESOLVES, so a nonzero count is proof the
+    # by-value marshalling matches the C struct's ABI. Nothing else here can witness that:
+    # `path` is empty whenever Capstone is absent (so it must be guarded, and an empty
+    # render is exactly the failure signature), and `truncated` stays False when a close
+    # does not resolve, which is indistinguishable from a clean capture. Without this, a
+    # scope struct whose layout has drifted from the header passes the whole test.
+    assert w.insns > 0
     if w.path:  # non-empty when Capstone is present
         assert "ret" in w.path.lower()
     code.free()

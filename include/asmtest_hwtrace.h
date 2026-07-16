@@ -318,10 +318,29 @@ int asmtest_hwtrace_render(const char *name, char *buf, size_t buflen);
 /* ------------------------------------------------------------------ */
 
 /* Opaque per-scope capture handle: an index into the calling thread's TLS range
- * stack, tagged with a generation counter so a stale/closed handle is rejected. */
+ * stack, tagged with a generation counter so a stale/closed handle is rejected, plus
+ * the OS thread id that armed the scope (-1 when unarmed / a sentinel).
+ *
+ * §Z4 arm_tid carry — WHY the tid is in the HANDLE and not just in the frame: the
+ * range stack and its generation counter are both __thread, so {idx,gen} is unique
+ * only WITHIN one thread. Every thread's first scope is {idx=0, gen=1}. Resolving a
+ * handle on the wrong thread therefore indexes THAT thread's table and can match its
+ * OWN live frame on gen alone — closing the wrong scope and reporting a false
+ * COMPLETE. The frame's own arm_tid cannot catch this (a lookup reads the caller's
+ * table, where it always equals the caller's tid), so the arming tid has to travel
+ * WITH the handle: it is the only part of it that is meaningful across threads.
+ * A handle whose arm_tid does not match the frame it names does not resolve, and each
+ * caller takes its existing miss path (end_window -> `truncated`, renders -> EINVAL) —
+ * the tier's conservative-miss default, never a silent wrong answer.
+ *
+ * ABI: this is 12 bytes / alignment 4. On SysV x86-64 that is TWO INTEGER eightbytes,
+ * so a by-value handle occupies TWO argument registers (it was one at 8 bytes); an FFI
+ * binding that hand-flattens it to a single 64-bit scalar must pass two instead, or
+ * every following argument shifts down a register. */
 typedef struct {
     uint32_t idx;
     uint32_t gen;
+    int32_t arm_tid;
 } asmtest_hwtrace_scope_t;
 
 /* Handle-producing begin: register-then-begin under `name` (§0.4 idempotent), push a

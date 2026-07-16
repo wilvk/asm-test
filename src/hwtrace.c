@@ -115,8 +115,13 @@ int asmtest_ss_call_scoped_fp(const void *base, size_t len,
                               asmtest_trace_t *trace, void *fn,
                               const double *args, int nargs, double *result_out,
                               uint32_t *out_idx, uint32_t *out_gen);
-int asmtest_ss_frame_lookup(uint32_t idx, uint32_t gen, const void **base,
-                            size_t *len, asmtest_trace_t **trace);
+/* §Z4: the tid the ss backend stamps frames with, for the calling thread. Handles are
+ * minted with THIS, never with hw_current_tid(): the stamp and the handle must come
+ * from one clock or every lookup would miss (see ss_backend.c). */
+int asmtest_ss_self_tid(void);
+int asmtest_ss_frame_lookup(uint32_t idx, uint32_t gen, int arm_tid,
+                            const void **base, size_t *len,
+                            asmtest_trace_t **trace);
 void asmtest_ss_end(void);
 #endif
 
@@ -2124,6 +2129,7 @@ int asmtest_hwtrace_begin_scope(const char *name,
     if (out != NULL) {
         out->idx = 0xffffffffu;
         out->gen = 0;
+        out->arm_tid = -1;
     }
 #if defined(HWTRACE_LIFECYCLE)
     if (!g_inited)
@@ -2143,6 +2149,8 @@ int asmtest_hwtrace_begin_scope(const char *name,
         if (out != NULL) {
             out->idx = idx;
             out->gen = gen;
+            out->arm_tid =
+                asmtest_ss_self_tid(); /* §Z4: carried, not re-derived */
         }
         return ASMTEST_HW_OK;
     }
@@ -2171,6 +2179,7 @@ int asmtest_hwtrace_call_scoped(const char *name, void *fn, const long *args,
     if (out != NULL) {
         out->idx = 0xffffffffu;
         out->gen = 0;
+        out->arm_tid = -1;
     }
 #if defined(HWTRACE_LIFECYCLE)
     if (!g_inited)
@@ -2191,6 +2200,8 @@ int asmtest_hwtrace_call_scoped(const char *name, void *fn, const long *args,
         if (out != NULL) {
             out->idx = idx;
             out->gen = gen;
+            out->arm_tid =
+                asmtest_ss_self_tid(); /* §Z4: carried, not re-derived */
         }
         return ASMTEST_HW_OK;
     }
@@ -2226,6 +2237,7 @@ int asmtest_hwtrace_call_scoped_fp(const char *name, void *fn,
     if (out != NULL) {
         out->idx = 0xffffffffu;
         out->gen = 0;
+        out->arm_tid = -1;
     }
 #if defined(HWTRACE_LIFECYCLE)
     if (!g_inited)
@@ -2246,6 +2258,8 @@ int asmtest_hwtrace_call_scoped_fp(const char *name, void *fn,
         if (out != NULL) {
             out->idx = idx;
             out->gen = gen;
+            out->arm_tid =
+                asmtest_ss_self_tid(); /* §Z4: carried, not re-derived */
         }
         return ASMTEST_HW_OK;
     }
@@ -2285,6 +2299,7 @@ int asmtest_hwtrace_call_scoped_ex(void *base, size_t len,
     if (out != NULL) {
         out->idx = 0xffffffffu;
         out->gen = 0;
+        out->arm_tid = -1;
     }
 #if defined(HWTRACE_LIFECYCLE)
     if (!g_inited)
@@ -2301,6 +2316,8 @@ int asmtest_hwtrace_call_scoped_ex(void *base, size_t len,
         if (out != NULL) {
             out->idx = idx;
             out->gen = gen;
+            out->arm_tid =
+                asmtest_ss_self_tid(); /* §Z4: carried, not re-derived */
         }
         return ASMTEST_HW_OK;
     }
@@ -2331,7 +2348,8 @@ int asmtest_hwtrace_render_scope(asmtest_hwtrace_scope_t handle, char *buf,
     const void *base = NULL;
     size_t len = 0;
     asmtest_trace_t *trace = NULL;
-    if (asmtest_ss_frame_lookup(handle.idx, handle.gen, &base, &len, &trace))
+    if (asmtest_ss_frame_lookup(handle.idx, handle.gen, handle.arm_tid, &base,
+                                &len, &trace))
         return render_trace_into(trace, base, len, buf, buflen);
 #endif
     (void)handle;
@@ -2413,6 +2431,7 @@ int asmtest_hwtrace_begin_window(asmtest_trace_t *trace,
     if (out != NULL) {
         out->idx = 0xffffffffu;
         out->gen = 0;
+        out->arm_tid = -1;
     }
     if (trace == NULL)
         return ASMTEST_HW_EINVAL;
@@ -2432,6 +2451,8 @@ int asmtest_hwtrace_begin_window(asmtest_trace_t *trace,
         if (out != NULL) {
             out->idx = idx;
             out->gen = gen;
+            out->arm_tid =
+                asmtest_ss_self_tid(); /* §Z4: carried, not re-derived */
         }
         return ASMTEST_HW_OK;
     }
@@ -2455,8 +2476,12 @@ int asmtest_hwtrace_end_window(asmtest_hwtrace_scope_t handle,
      * resolves here, this is the arming thread — close normally. If it does NOT
      * (the traced work hopped threads and Dispose ran elsewhere), the frame is
      * invisible and uncloseable here: flag the trace truncated rather than present
-     * a thread-window as a complete logical-operation trace. Errs false-truncated. */
-    if (asmtest_ss_frame_lookup(handle.idx, handle.gen, &base, &len, &ftrace)) {
+     * a thread-window as a complete logical-operation trace. Errs false-truncated.
+     * The handle's carried arm_tid is what makes "resolves here" mean "is MINE": a
+     * closer holding its own scope at the same {idx,gen} would otherwise match its
+     * OWN frame and close the wrong window, reporting a false complete. */
+    if (asmtest_ss_frame_lookup(handle.idx, handle.gen, handle.arm_tid, &base,
+                                &len, &ftrace)) {
         asmtest_ss_end(); /* closes the calling thread's top frame + normalizes */
         g_arm_tid = -1;
         return ASMTEST_HW_OK;
@@ -2478,9 +2503,10 @@ int asmtest_hwtrace_render_window(asmtest_hwtrace_scope_t handle, char *buf,
     const void *base = NULL;
     size_t len = 0;
     asmtest_trace_t *trace = NULL;
-    if (!asmtest_ss_frame_lookup(handle.idx, handle.gen, &base, &len, &trace) ||
+    if (!asmtest_ss_frame_lookup(handle.idx, handle.gen, handle.arm_tid, &base,
+                                 &len, &trace) ||
         trace == NULL)
-        return ASMTEST_HW_EINVAL; /* stale/unknown handle (or non-single-step) */
+        return ASMTEST_HW_EINVAL; /* stale/unknown/foreign handle (or non-SS) */
     if (!asmtest_disas_available())
         return ASMTEST_HW_ENOSYS; /* no Capstone: cannot render text */
     /* WEAK-tier render: insns[] hold ABSOLUTE addresses; disassemble each from LIVE
@@ -2787,9 +2813,10 @@ int asmtest_hwtrace_attribute_window(
     const void *base = NULL;
     size_t len = 0;
     asmtest_trace_t *trace = NULL;
-    if (!asmtest_ss_frame_lookup(handle.idx, handle.gen, &base, &len, &trace) ||
+    if (!asmtest_ss_frame_lookup(handle.idx, handle.gen, handle.arm_tid, &base,
+                                 &len, &trace) ||
         trace == NULL)
-        return ASMTEST_HW_EINVAL; /* stale/unknown handle (or non-single-step) */
+        return ASMTEST_HW_EINVAL; /* stale/unknown/foreign handle (or non-SS) */
     /* A whole-window frame is uniquely base==NULL/len==0 (ss_push_frame). Reject a
      * REGION-scope handle: its insns[] hold base-RELATIVE offsets, not the absolute
      * addresses this classifies — silently bucketing them all as "[unknown]". */

@@ -335,11 +335,17 @@ type TraceAtFn = unsafe extern "C" fn(*mut c_void, usize) -> u64;
 // The 8-byte scope handle is passed to render_scope BY VALUE — native #[repr(C)]
 // struct-by-value (no packing, unlike the Ruby/Java bindings). `gen` is spelled
 // `generation` (a reserved keyword in edition 2024).
+// §Z4: `arm_tid` is the OS tid that armed the scope (-1 unarmed / sentinel). It rides
+// in the HANDLE because idx/generation only name a frame within ONE thread (every
+// thread's first scope is {0, 1}), so a close from another thread would otherwise
+// resolve to that thread's own frame. At 12 bytes this is TWO INTEGER eightbytes on
+// SysV x86-64 — by value it occupies two registers, not one.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct HwScope {
     idx: u32,
     generation: u32,
+    arm_tid: i32,
 }
 type CallScopedExFn = unsafe extern "C" fn(
     *mut c_void,   // base
@@ -1334,7 +1340,7 @@ impl HwTrace {
         let argv: Vec<c_long> = args.iter().map(|&a| a as c_long).collect();
         let argp = if argv.is_empty() { std::ptr::null() } else { argv.as_ptr() };
         let mut result: c_long = 0;
-        let mut scope = HwScope { idx: 0, generation: 0 };
+        let mut scope = HwScope { idx: 0, generation: 0, arm_tid: -1 };
         let rc = unsafe {
             call(
                 code.base() as *mut c_void,
@@ -1396,7 +1402,7 @@ impl HwTrace {
             }
         }
         let _freer = FreeGuard(free, handle);
-        let mut scope = HwScope { idx: 0, generation: 0 };
+        let mut scope = HwScope { idx: 0, generation: 0, arm_tid: -1 };
         let rc = unsafe { begin(handle, &mut scope) };
         if rc != ASMTEST_HW_OK {
             // EUNAVAIL/ESTATE/EFULL/EINVAL -> clean self-skip (FreeGuard still frees).

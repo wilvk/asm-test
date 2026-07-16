@@ -507,8 +507,18 @@ def library_path():
 
 
 class _HwScope(C.Structure):
-    """asmtest_hwtrace_scope_t — an opaque per-scope capture handle (idx + generation)."""
-    _fields_ = [("idx", C.c_uint32), ("gen", C.c_uint32)]
+    """asmtest_hwtrace_scope_t — an opaque per-scope capture handle.
+
+    idx + generation name a frame in the ARMING thread's TLS range stack, and
+    arm_tid (§Z4) is the OS tid that armed it. The tid is part of the handle
+    because idx/gen are only unique within one thread — every thread's first
+    scope is {0, 1} — so without it a close from another thread could resolve to
+    that thread's own frame. -1 when unarmed / a sentinel.
+
+    Layout must match the C struct exactly: ctypes derives it from _fields_, and
+    at 12 bytes this is passed by value in TWO integer registers, not one.
+    """
+    _fields_ = [("idx", C.c_uint32), ("gen", C.c_uint32), ("arm_tid", C.c_int32)]
 
 
 class CallScopedResult:
@@ -530,19 +540,29 @@ class CallScopedResult:
 class WindowResult:
     """The outcome of :meth:`HwTrace.window`: the executed body's disassembly
     (:attr:`path`, empty when no decoder is present), the :attr:`truncated` honesty bit,
-    and :attr:`armed` (``False`` when the region-free window SELF-SKIPPED on a
-    non-single-step backend — ``fn`` still ran). Mirrors dotnet's empty-ctor
-    ``new AsmTrace()`` whole-window scope / node's ``HwTrace.window``."""
-    __slots__ = ("path", "truncated", "armed")
+    :attr:`armed` (``False`` when the region-free window SELF-SKIPPED on a
+    non-single-step backend — ``fn`` still ran), and :attr:`insns`, the number of
+    instructions the closed window recorded. Mirrors dotnet's empty-ctor
+    ``new AsmTrace()`` whole-window scope / node's ``HwTrace.window``.
 
-    def __init__(self, path, truncated, armed):
+    :attr:`insns` is DECODER-FREE, which makes it the one field that can witness a
+    successful close: a window is normalized into its trace by ``end_window``, so a
+    nonzero count proves the by-value scope handle actually resolved. :attr:`path` cannot
+    play that role (it is empty whenever Capstone is absent, so a test must guard on it)
+    and neither can :attr:`truncated` (a close that fails to resolve leaves the trace
+    untouched, which is indistinguishable from a clean, un-truncated capture)."""
+    __slots__ = ("path", "truncated", "armed", "insns")
+
+    def __init__(self, path, truncated, armed, insns=0):
         self.path = path
         self.truncated = truncated
         self.armed = armed
+        self.insns = insns
 
     def __repr__(self):
         return (f"WindowResult(armed={self.armed}, "
-                f"truncated={self.truncated}, path_len={len(self.path)})")
+                f"truncated={self.truncated}, insns={self.insns}, "
+                f"path_len={len(self.path)})")
 
 
 class TraceCallAutoResult:
@@ -981,7 +1001,7 @@ class HwTrace:
             rc = int(lib.asmtest_hwtrace_begin_window(handle, C.byref(scope)))
             if rc != ASMTEST_HW_OK:  # EUNAVAIL/ESTATE/EFULL/EINVAL -> clean self-skip
                 fn()
-                return WindowResult("", False, False)
+                return WindowResult("", False, False, 0)
             try:
                 fn()  # keep TIGHT: EFLAGS.TF single-step is armed across this
             finally:
@@ -993,7 +1013,8 @@ class HwTrace:
                 lib.asmtest_hwtrace_render_window(scope, buf, need + 1)
                 path = buf.value.decode(errors="replace")
             trunc = bool(lib.asmtest_emu_trace_truncated(handle))
-            return WindowResult(path, trunc, True)
+            insns = int(lib.asmtest_emu_trace_insns_len(handle))
+            return WindowResult(path, trunc, True, insns)
         finally:
             lib.asmtest_trace_free(handle)
 

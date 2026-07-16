@@ -179,6 +179,18 @@ public final class HwTrace {
         JAVA_LONG.withName("base"), JAVA_LONG.withName("len"));
     private static final long NAMED_REGION_SIZE = 80;
 
+    // asmtest_hwtrace_scope_t {u32 idx; u32 gen; i32 arm_tid;} — 12 B. §Z4: arm_tid is the
+    // OS tid that armed the scope (-1 unarmed / sentinel); it rides in the HANDLE because
+    // idx/gen name a frame only WITHIN one thread (every thread's first scope is {0,1}), so
+    // a close from another thread would otherwise resolve to that thread's own frame.
+    // Declared as a real by-value struct layout rather than a packed scalar: at 8 bytes the
+    // struct was a single INTEGER eightbyte and a JAVA_LONG was ABI-identical, but at 12 it
+    // is TWO eightbytes (two registers) and that equivalence is gone — a packed long would
+    // shift every following argument down a register. The Linker applies the platform's
+    // classification from this layout, so it stays correct if the struct grows again.
+    private static final MemoryLayout HW_SCOPE_LAYOUT = MemoryLayout.structLayout(
+        JAVA_INT.withName("idx"), JAVA_INT.withName("gen"), JAVA_INT.withName("arm_tid"));
+
     // asmtest_trace_choice_t {int tier; int backend; int fidelity; int mechanism;} —
     // four int-sized enum fields, no padding (pinned by a static_assert in the
     // header), so a choice marshals as four consecutive ints (16 bytes).
@@ -536,19 +548,19 @@ public final class HwTrace {
             callScopedEx = h(lib, "asmtest_hwtrace_call_scoped_ex",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS,
                     ADDRESS, JAVA_INT, ADDRESS, ADDRESS));
-            // The by-value 8-byte asmtest_hwtrace_scope_t {u32 idx, u32 gen} passes in one
-            // integer register on SysV x86-64 — ABI-identical to a JAVA_LONG, so declare it
-            // as a packed long (idx | gen<<32) and avoid a by-value struct descriptor.
+            // The by-value asmtest_hwtrace_scope_t is declared with its real struct layout
+            // (HW_SCOPE_LAYOUT) and passed as a MemorySegment — see that constant for why a
+            // packed long is no longer ABI-equivalent.
             renderScope = h(lib, "asmtest_hwtrace_render_scope",
-                FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG));
+                FunctionDescriptor.of(JAVA_INT, HW_SCOPE_LAYOUT, ADDRESS, JAVA_LONG));
             // §Z0/§Z1 region-free whole-window: begin(trace*, scope* out); end(scope BY
-            // VALUE as packed long, trace*); render(scope BY VALUE, buf, buflen).
+            // VALUE, trace*); render(scope BY VALUE, buf, buflen).
             beginWindow = h(lib, "asmtest_hwtrace_begin_window",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));
             endWindow = h(lib, "asmtest_hwtrace_end_window",
-                FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS));
+                FunctionDescriptor.of(JAVA_INT, HW_SCOPE_LAYOUT, ADDRESS));
             renderWindow = h(lib, "asmtest_hwtrace_render_window",
-                FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG));
+                FunctionDescriptor.of(JAVA_INT, HW_SCOPE_LAYOUT, ADDRESS, JAVA_LONG));
             // §D3 concealed out-of-process ptrace-stealth stepper: stealth_trace(base, len,
             // trace*, result_out*, run_region fnptr, arg). The helper child steps the region
             // out of band while run_region runs it — no TF on the calling thread.
@@ -574,9 +586,9 @@ public final class HwTrace {
                 FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS));
             symbolizeBucket = h(lib, "asmtest_hwtrace_symbolize_bucket",
                 FunctionDescriptor.of(JAVA_LONG, JAVA_INT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_LONG));
-            // attribute_window: scope BY VALUE as a packed long (idx | gen<<32), like render_window.
+            // attribute_window: scope BY VALUE (real struct layout), like render_window.
             attributeWindow = h(lib, "asmtest_hwtrace_attribute_window",
-                FunctionDescriptor.of(JAVA_INT, JAVA_LONG, ADDRESS, JAVA_LONG, ADDRESS, JAVA_LONG, ADDRESS));
+                FunctionDescriptor.of(JAVA_INT, HW_SCOPE_LAYOUT, ADDRESS, JAVA_LONG, ADDRESS, JAVA_LONG, ADDRESS));
             stitchHandles = h(lib, "asmtest_hwtrace_stitch_handles",
                 FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS, ADDRESS, ADDRESS, ADDRESS, JAVA_LONG, ADDRESS, ADDRESS, ADDRESS));
             execAlloc = h(lib, "asmtest_hwtrace_exec_alloc",
@@ -1050,23 +1062,19 @@ public final class HwTrace {
                     MemoryLayout.sequenceLayout(Math.max(n, 1), JAVA_LONG));
                 for (int i = 0; i < n; i++) argSeg.setAtIndex(JAVA_LONG, i, args[i]);
                 MemorySegment result = a.allocate(JAVA_LONG);
-                MemorySegment scopeOut = a.allocate(MemoryLayout.sequenceLayout(2, JAVA_INT));
+                MemorySegment scopeOut = a.allocate(HW_SCOPE_LAYOUT);
                 // For a native leaf fn == base (offset 0 = entry).
                 MemorySegment base = MemorySegment.ofAddress(code.base());
                 int rc = (int) CALL_SCOPED_EX.invoke(base, code.length(), handle, base,
                     argSeg, n, result, scopeOut);
                 if (rc != ASMTEST_HW_OK) return new CallScopedResult(0L, "", false, rc);
-                // Render the body from the just-captured (thread-local) scope handle. The
-                // by-value 8-byte scope struct is passed as a packed long (idx | gen<<32),
-                // ABI-identical to the struct in one integer register on SysV x86-64.
-                int idx = scopeOut.getAtIndex(JAVA_INT, 0);
-                int gen = scopeOut.getAtIndex(JAVA_INT, 1);
-                long packed = (idx & 0xffffffffL) | ((long) gen << 32);
+                // Render the body from the just-captured (thread-local) scope handle, passed
+                // BY VALUE as the struct the Linker classifies from HW_SCOPE_LAYOUT.
                 String path = "";
-                int need = (int) RENDER_SCOPE.invoke(packed, MemorySegment.NULL, 0L);
+                int need = (int) RENDER_SCOPE.invoke(scopeOut, MemorySegment.NULL, 0L);
                 if (need > 0) {
                     MemorySegment buf = a.allocate(need + 1L);
-                    RENDER_SCOPE.invoke(packed, buf, (long) (need + 1));
+                    RENDER_SCOPE.invoke(scopeOut, buf, (long) (need + 1));
                     path = buf.getString(0);
                 }
                 boolean trunc = ((int) TRACE_TRUNCATED.invoke(handle)) != 0;
@@ -1159,25 +1167,22 @@ public final class HwTrace {
             if (MemorySegment.NULL.equals(handle))
                 throw new RuntimeException("asmtest_trace_new returned NULL");
             try {
-                MemorySegment scopeOut = a.allocate(MemoryLayout.sequenceLayout(2, JAVA_INT));
+                MemorySegment scopeOut = a.allocate(HW_SCOPE_LAYOUT); // scope BY VALUE below
                 int rc = (int) BEGIN_WINDOW.invoke(handle, scopeOut);
                 if (rc != ASMTEST_HW_OK) { // EUNAVAIL/ESTATE/EFULL/EINVAL -> clean self-skip
                     body.run();
                     return new WindowResult("", false, new long[0], rc);
                 }
-                int idx = scopeOut.getAtIndex(JAVA_INT, 0);
-                int gen = scopeOut.getAtIndex(JAVA_INT, 1);
-                long packed = (idx & 0xffffffffL) | ((long) gen << 32); // scope BY VALUE
                 try {
                     body.run(); // TIGHT window: EFLAGS.TF single-step is armed across this
                 } finally {
-                    END_WINDOW.invoke(packed, handle); // disarm even on a body throw
+                    END_WINDOW.invoke(scopeOut, handle); // disarm even on a body throw
                 }
                 String path = "";
-                int need = (int) RENDER_WINDOW.invoke(packed, MemorySegment.NULL, 0L);
+                int need = (int) RENDER_WINDOW.invoke(scopeOut, MemorySegment.NULL, 0L);
                 if (need > 0) {
                     MemorySegment buf = a.allocate(need + 1L);
-                    RENDER_WINDOW.invoke(packed, buf, (long) (need + 1));
+                    RENDER_WINDOW.invoke(scopeOut, buf, (long) (need + 1));
                     path = buf.getString(0);
                 }
                 boolean trunc = ((int) TRACE_TRUNCATED.invoke(handle)) != 0;
@@ -1465,13 +1470,10 @@ public final class HwTrace {
             MemorySegment handle = (MemorySegment) TRACE_NEW.invoke((long) insnsCap, 0L);
             if (MemorySegment.NULL.equals(handle)) throw new RuntimeException("asmtest_trace_new returned NULL");
             try {
-                MemorySegment scopeOut = a.allocate(MemoryLayout.sequenceLayout(2, JAVA_INT));
+                MemorySegment scopeOut = a.allocate(HW_SCOPE_LAYOUT); // scope BY VALUE below
                 int rc = (int) BEGIN_WINDOW.invoke(handle, scopeOut);
                 if (rc != ASMTEST_HW_OK) { body.run(); return new AttributeResult(new Bucket[0], false, false); }
-                int idx = scopeOut.getAtIndex(JAVA_INT, 0);
-                int gen = scopeOut.getAtIndex(JAVA_INT, 1);
-                long packed = (idx & 0xffffffffL) | ((long) gen << 32); // scope BY VALUE
-                try { body.run(); } finally { END_WINDOW.invoke(packed, handle); }
+                try { body.run(); } finally { END_WINDOW.invoke(scopeOut, handle); }
                 int nreg = regions.length;
                 MemorySegment regSeg = a.allocate(NAMED_REGION_SIZE * Math.max(nreg, 1)); // zero-filled => NUL-padded names
                 for (int i = 0; i < nreg; i++) {
@@ -1484,7 +1486,7 @@ public final class HwTrace {
                 MemorySegment buckets = a.allocate(cap * BUCKET_SIZE);
                 MemorySegment nb = a.allocate(JAVA_LONG);
                 boolean trunc = ((int) TRACE_TRUNCATED.invoke(handle)) != 0;
-                int arc = (int) ATTRIBUTE_WINDOW.invoke(packed, regSeg, (long) nreg, buckets, (long) cap, nb);
+                int arc = (int) ATTRIBUTE_WINDOW.invoke(scopeOut, regSeg, (long) nreg, buckets, (long) cap, nb);
                 if (arc != ASMTEST_HW_OK) return new AttributeResult(new Bucket[0], true, trunc);
                 int n = Math.min((int) nb.get(JAVA_LONG, 0), cap);
                 return new AttributeResult(readBuckets(buckets, n), true, trunc);
@@ -1952,16 +1954,14 @@ public final class HwTrace {
                     MemorySegment argSeg = a.allocate(MemoryLayout.sequenceLayout(Math.max(n, 1), JAVA_LONG));
                     for (int i = 0; i < n; i++) argSeg.setAtIndex(JAVA_LONG, i, args[i]);
                     MemorySegment result = a.allocate(JAVA_LONG);
-                    MemorySegment scopeOut = a.allocate(MemoryLayout.sequenceLayout(2, JAVA_INT));
+                    MemorySegment scopeOut = a.allocate(HW_SCOPE_LAYOUT);
                     MemorySegment base = MemorySegment.ofAddress(code.base());
                     int rc = (int) CALL_SCOPED_EX.invoke(base, code.length(), tr.handle(), base,
                         argSeg, n, result, scopeOut);
                     if (rc == ASMTEST_HW_OK) {
-                        // Render THIS hop's body NOW, on the capturing thread, while its (thread-local,
-                        // short-lived) scope handle is live — the packed {idx | gen<<32} form.
-                        int idx = scopeOut.getAtIndex(JAVA_INT, 0);
-                        int gen = scopeOut.getAtIndex(JAVA_INT, 1);
-                        String text = renderScope((idx & 0xffffffffL) | ((long) gen << 32));
+                        // Render THIS hop's body NOW, on the capturing thread, while its
+                        // (thread-local, short-lived) scope handle is live.
+                        String text = renderScope(scopeOut);
                         synchronized (lock) { hopList.add(new Hop(tr, text, seq, tid, true)); }
                         keep = true;
                         return result.get(JAVA_LONG, 0);
@@ -2023,14 +2023,15 @@ public final class HwTrace {
             }
         }
 
-        // Render a captured hop's body from its packed scope handle (Capstone-gated; "" without it).
-        private static String renderScope(long packed) {
+        // Render a captured hop's body from its scope handle, passed BY VALUE
+        // (Capstone-gated; "" without it).
+        private static String renderScope(MemorySegment scope) {
             if (RENDER_SCOPE == null) return "";
             try (Arena a = Arena.ofConfined()) {
-                int need = (int) RENDER_SCOPE.invoke(packed, MemorySegment.NULL, 0L);
+                int need = (int) RENDER_SCOPE.invoke(scope, MemorySegment.NULL, 0L);
                 if (need <= 0) return "";
                 MemorySegment buf = a.allocate(need + 1L);
-                RENDER_SCOPE.invoke(packed, buf, (long) (need + 1));
+                RENDER_SCOPE.invoke(scope, buf, (long) (need + 1));
                 return buf.getString(0);
             } catch (Throwable t) { return ""; }
         }

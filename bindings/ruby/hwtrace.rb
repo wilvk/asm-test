@@ -238,20 +238,26 @@ module Asmtest
         try_begin:    func(LIB, "asmtest_hwtrace_try_begin", [VOIDP], INT),
         render:       func(LIB, "asmtest_hwtrace_render", [VOIDP, VOIDP, SZ], INT),
         # registry-free lazy-arm call + handle-keyed render (the call_scoped path). The
-        # 8-byte asmtest_hwtrace_scope_t out-param comes back through a plain void* buffer;
-        # render_scope takes that handle BY VALUE — on x86-64 the two-u32 struct rides in one
-        # integer register identical to a uint64, so it is declared LONG_LONG and the handle
-        # is packed idx|(gen<<32) (little-endian), the ABI-correct bridge Fiddle can pass.
+        # 12-byte asmtest_hwtrace_scope_t out-param comes back through a plain void* buffer;
+        # render_scope takes that handle BY VALUE. Fiddle cannot declare a by-value struct,
+        # so the handle is passed as the RAW EIGHTBYTES the SysV ABI would put in registers:
+        # {u32 idx; u32 gen; i32 arm_tid} is 12 bytes = TWO INTEGER-class eightbytes, so it
+        # occupies TWO integer argument registers, exactly like two consecutive LONG_LONG
+        # args — the first packed idx|(gen<<32) (little-endian), the second carrying arm_tid
+        # in its low 32 bits (the eightbyte's upper half is struct padding the callee never
+        # reads). This is the ABI-correct bridge Fiddle can express; it was ONE register
+        # while the struct was 8 bytes, and adding the §Z4 arm_tid made it two — declaring
+        # only one would shift buf/len down a register and corrupt every call.
         call_scoped_ex: func(LIB, "asmtest_hwtrace_call_scoped_ex",
                              [VOIDP, SZ, VOIDP, VOIDP, VOIDP, INT, VOIDP, VOIDP], INT),
-        render_scope:   func(LIB, "asmtest_hwtrace_render_scope", [LL, VOIDP, SZ], INT),
+        render_scope:   func(LIB, "asmtest_hwtrace_render_scope", [LL, LL, VOIDP, SZ], INT),
         # §Z1 region-free whole-window trio (the empty-scope .window construct). begin_window
         # arms with NO registered region (scope out via a plain void* buffer); end_window /
-        # render_window take the scope handle BY VALUE, declared LL and packed idx|(gen<<32)
-        # exactly like render_scope above.
+        # render_window take the scope handle BY VALUE as the same two eightbytes as
+        # render_scope above.
         begin_window:   func(LIB, "asmtest_hwtrace_begin_window", [VOIDP, VOIDP], INT),
-        end_window:     func(LIB, "asmtest_hwtrace_end_window", [LL, VOIDP], INT),
-        render_window:  func(LIB, "asmtest_hwtrace_render_window", [LL, VOIDP, SZ], INT),
+        end_window:     func(LIB, "asmtest_hwtrace_end_window", [LL, LL, VOIDP], INT),
+        render_window:  func(LIB, "asmtest_hwtrace_render_window", [LL, LL, VOIDP, SZ], INT),
         # asmtest_hwtrace_arm_tid() — OS tid that armed the active scope, -1 if none.
         arm_tid:        func(LIB, "asmtest_hwtrace_arm_tid", [], INT),
         # ---- host-native executable code ----
@@ -981,15 +987,17 @@ module Asmtest
         argbuf[0, 8 * n] = args.pack("q*") if n > 0
         res = Fiddle::Pointer.new(Fiddle.malloc(8), 8) # long result_out
         res[0, 8] = "\x00".b * 8
-        scope = Fiddle::Pointer.new(Fiddle.malloc(8), 8) # asmtest_hwtrace_scope_t {u32 idx; u32 gen}
-        scope[0, 8] = "\x00".b * 8
+        # asmtest_hwtrace_scope_t {u32 idx; u32 gen; i32 arm_tid} — 12 bytes.
+        scope = Fiddle::Pointer.new(Fiddle.malloc(12), 12)
+        scope[0, 12] = "\x00".b * 12
         begin
           rc = Asmtest::HwTrace::FN[:call_scoped_ex].call(
             code.base, code.length, handle, code.base,
             n > 0 ? argbuf : Fiddle::NULL, n, res, scope)
           return CallScopedResult.new(nil, "", false) if rc != OK
-          # idx@0|gen@4 little-endian is exactly the uint64 render_scope wants BY VALUE.
-          path = __render_scope(scope[0, 8].unpack1("Q"))
+          # The two eightbytes render_scope wants BY VALUE: idx@0|gen@4 little-endian,
+          # then arm_tid@8.
+          path = __render_scope(scope[0, 8].unpack1("Q"), scope[8, 4].unpack1("l"))
           result = res[0, 8].unpack1("q")
           trunc = Asmtest::HwTrace::FN[:truncated].call(handle) != 0
           CallScopedResult.new(result, path, trunc)
@@ -1015,22 +1023,26 @@ module Asmtest
         __lazy_arm
         handle = Asmtest::HwTrace::FN[:trace_new].call(1 << 20, 0) # whole-window is insns-only (blocks=0)
         raise "asmtest_trace_new failed" if handle.null?
-        scope = Fiddle::Pointer.new(Fiddle.malloc(8), 8) # asmtest_hwtrace_scope_t {u32 idx; u32 gen}
-        scope[0, 8] = "\x00".b * 8
+        # asmtest_hwtrace_scope_t {u32 idx; u32 gen; i32 arm_tid} — 12 bytes.
+        scope = Fiddle::Pointer.new(Fiddle.malloc(12), 12)
+        scope[0, 12] = "\x00".b * 12
         begin
           rc = Asmtest::HwTrace::FN[:begin_window].call(handle, scope)
           unless rc == OK # EUNAVAIL/ESTATE/EFULL/EINVAL -> clean self-skip; the block still runs
             yield if block_given?
             return WindowResult.new("", false, false)
           end
-          # idx@0|gen@4 little-endian is exactly the uint64 end/render_window want BY VALUE.
+          # The two eightbytes end/render_window want BY VALUE: idx@0|gen@4 little-endian,
+          # then arm_tid@8.
           handle_u64 = scope[0, 8].unpack1("Q")
+          handle_tid = scope[8, 4].unpack1("l")
           begin
             yield if block_given? # keep TIGHT: EFLAGS.TF single-step is armed across this
           ensure
-            Asmtest::HwTrace::FN[:end_window].call(handle_u64, handle) # scope BY VALUE, then trace
+            # scope BY VALUE (two eightbytes), then trace
+            Asmtest::HwTrace::FN[:end_window].call(handle_u64, handle_tid, handle)
           end
-          path = __render_window(handle_u64)
+          path = __render_window(handle_u64, handle_tid)
           trunc = Asmtest::HwTrace::FN[:truncated].call(handle) != 0
           WindowResult.new(path, trunc, true)
         ensure
@@ -1087,28 +1099,30 @@ module Asmtest
       end
 
       # Render a just-captured scope handle's body to assembly text (size-then-allocate).
-      # +handle_u64+ is the packed idx|(gen<<32) passed BY VALUE (see the FFI decl note);
-      # "" if the decoder is unavailable or the handle is stale.
-      def self.__render_scope(handle_u64)
-        need = Asmtest::HwTrace::FN[:render_scope].call(handle_u64, Fiddle::NULL, 0)
+      # +handle_u64+ is the packed idx|(gen<<32) and +handle_tid+ the arm_tid — the scope's
+      # two by-value eightbytes (see the FFI decl note); "" if the decoder is unavailable
+      # or the handle is stale/foreign.
+      def self.__render_scope(handle_u64, handle_tid)
+        need = Asmtest::HwTrace::FN[:render_scope].call(handle_u64, handle_tid, Fiddle::NULL, 0)
         return "" if need <= 0
         buf = Fiddle::Pointer.new(Fiddle.malloc(need + 1), need + 1)
         buf[0, need + 1] = "\x00".b * (need + 1)
-        Asmtest::HwTrace::FN[:render_scope].call(handle_u64, buf, need + 1)
+        Asmtest::HwTrace::FN[:render_scope].call(handle_u64, handle_tid, buf, need + 1)
         s = buf.to_s(need)
         Fiddle.free(buf.to_i)
         s
       end
 
       # Render a just-closed whole-window scope handle's body to assembly text (size-then-
-      # allocate). +handle_u64+ is the packed idx|(gen<<32) passed BY VALUE (see the FFI decl
-      # note); "" if the decoder is unavailable or the handle is stale.
-      def self.__render_window(handle_u64)
-        need = Asmtest::HwTrace::FN[:render_window].call(handle_u64, Fiddle::NULL, 0)
+      # allocate). +handle_u64+ is the packed idx|(gen<<32) and +handle_tid+ the arm_tid —
+      # the scope's two by-value eightbytes (see the FFI decl note); "" if the decoder is
+      # unavailable or the handle is stale/foreign.
+      def self.__render_window(handle_u64, handle_tid)
+        need = Asmtest::HwTrace::FN[:render_window].call(handle_u64, handle_tid, Fiddle::NULL, 0)
         return "" if need <= 0
         buf = Fiddle::Pointer.new(Fiddle.malloc(need + 1), need + 1)
         buf[0, need + 1] = "\x00".b * (need + 1)
-        Asmtest::HwTrace::FN[:render_window].call(handle_u64, buf, need + 1)
+        Asmtest::HwTrace::FN[:render_window].call(handle_u64, handle_tid, buf, need + 1)
         s = buf.to_s(need)
         Fiddle.free(buf.to_i)
         s

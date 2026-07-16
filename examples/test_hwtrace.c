@@ -6208,7 +6208,7 @@ static void test_wholewindow_singlestep(void) {
         return;
     }
     /* begin_window rejects a NULL trace deterministically (no backend needed). */
-    asmtest_hwtrace_scope_t bad = {0, 0};
+    asmtest_hwtrace_scope_t bad = {0, 0, -1};
     CHECK(asmtest_hwtrace_begin_window(NULL, &bad) == ASMTEST_HW_EINVAL,
           "whole-window: begin_window(NULL trace) is EINVAL");
 
@@ -6222,7 +6222,7 @@ static void test_wholewindow_singlestep(void) {
     CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "whole-window init");
 
     asmtest_trace_t *tr = asmtest_trace_new(4096, 0);
-    asmtest_hwtrace_scope_t scope = {0xffffffffu, 0};
+    asmtest_hwtrace_scope_t scope = {0xffffffffu, 0, -1};
     add2_fn fn = (add2_fn)p;
     /* Bracket ONLY the call — no CHECK/printf inside the window (single-step steps
      * every instruction, so keep the window tight; check the return codes after). */
@@ -6286,7 +6286,7 @@ static void test_wholewindow_singlestep(void) {
      * thread (the cross-thread-hop case, simulated with a never-armed handle) flags
      * the trace truncated rather than presenting a thread window as complete. */
     asmtest_trace_t *tr2 = asmtest_trace_new(16, 0);
-    asmtest_hwtrace_scope_t phantom = {5, 999};
+    asmtest_hwtrace_scope_t phantom = {5, 999, -1};
     asmtest_hwtrace_end_window(phantom, tr2);
     CHECK(asmtest_emu_trace_truncated(tr2) != 0,
           "whole-window: a cross-thread (unresolvable-handle) close flags "
@@ -6325,7 +6325,7 @@ static void test_wholewindow_buckets(void) {
           "whole-window buckets init");
 
     asmtest_trace_t *tr = asmtest_trace_new(4096, 0);
-    asmtest_hwtrace_scope_t scope = {0xffffffffu, 0};
+    asmtest_hwtrace_scope_t scope = {0xffffffffu, 0, -1};
     add2_fn fa = (add2_fn)a, fb = (add2_fn)b;
     /* Bracket ONLY the two calls — both leaves run inside one empty scope. */
     int rc_begin = asmtest_hwtrace_begin_window(tr, &scope);
@@ -6392,6 +6392,549 @@ static void test_wholewindow_buckets(void) {
 #endif
 }
 
+#if defined(__linux__) && defined(__x86_64__)
+/* Is `addr` among a whole-window trace's recorded ABSOLUTE addresses? */
+static int ww_has_addr(const asmtest_trace_t *t, uint64_t addr) {
+    for (size_t i = 0; i < t->insns_len; i++)
+        if (t->insns[i] == addr)
+            return 1;
+    return 0;
+}
+#endif
+
+/* §Z1.1 WEAK-tier DESCEND_ALL + the capture ring's OWN truncation. A region-free
+ * window has no [base,len) to step OVER, so "capture whatever ran here" IS descent
+ * level L3: TF traps every retired instruction and, with no in-range filter, the
+ * handler records a CALLEE's absolute RIPs too. The load-bearing assert is one
+ * caller traced BOTH ways — the shipped region-scoped frame filters ss_on_sigtrap's
+ * store to [base,len) and drops the callee entirely (3 in-region insns), while the
+ * region-free window keeps it (the callee's 3 IPs are all present). That difference
+ * IS the lifted record policy; the walk is never asserted to be transparent. The
+ * ring is then rendered through render_versioned against a self (pid==0) code-image
+ * — §Z1's byte source for an absolute-RIP stream. (test_wholewindow_singlestep
+ * renders LIVE memory via render_window; test_zeroctor_managed_compose drives
+ * render_versioned from a SYNTHETIC trace — only here does a REAL region-free
+ * capture meet the versioned render.) Last, the ring's own self-truncation: a
+ * runaway overruns the frame's bounded RIP buffer and the post-pass flags
+ * `truncated` — a DIFFERENT path from the trace-cap prefix test_wholewindow_banner
+ * asserts, and isolated from it here by a trace cap large enough that
+ * insns_total == insns_len, so the flag can only have come from the ring.
+ *
+ * NOT asserted, and not assertable at this tier: the plan's second truncation path,
+ * the §L3 instruction budget + ITIMER_REAL/SIGALRM watchdog. Those are the
+ * OUT-OF-PROCESS descent handle's guards (asmtest_descent_set_insn_budget /
+ * _set_watchdog_ms), gated by test_descent_fork; the in-process TF window has
+ * neither. Any x86-64 Linux; no PMU/perf/privilege. */
+static void test_wholewindow_ss_descend(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP whole-window descend: single-step unavailable\n");
+        return;
+    }
+    /* The CALLEE, on its OWN mapping: mov rax,rdi; add rax,rsi; ret — executed IPs
+     * {0x0,0x3,0x6}. A separate page, so its RIPs can never fall inside the
+     * caller's [base,len) and the two runs below discriminate cleanly. */
+    static const unsigned char WW_CALLEE[] = {
+        0x48, 0x89, 0xf8, /* mov rax,rdi */
+        0x48, 0x01, 0xf0, /* add rax,rsi */
+        0xc3};            /* ret         */
+    void *kp = ss_map_exec(WW_CALLEE, sizeof WW_CALLEE);
+    if (kp == NULL) {
+        printf("# SKIP whole-window descend: mmap failed\n");
+        return;
+    }
+    /* The CALLER: movabs r11,<callee>; call r11; ret — executed IPs {0x0,0xa,0xd}
+     * (the call's own trap lands on the callee's entry, not on 0xd). */
+    unsigned char WW_CALLER[] = {
+        0x49, 0xbb, 0,    0, 0, 0, 0, 0, 0, 0, /* 0x0  movabs r11,<callee> */
+        0x41, 0xff, 0xd3,                      /* 0xa  call r11            */
+        0xc3};                                 /* 0xd  ret                 */
+    uint64_t kb = (uint64_t)(uintptr_t)kp;
+    memcpy(&WW_CALLER[2], &kb, sizeof kb);
+    void *cp = ss_map_exec(WW_CALLER, sizeof WW_CALLER);
+    if (cp == NULL) {
+        printf("# SKIP whole-window descend: mmap failed\n");
+        munmap(kp, sizeof WW_CALLEE);
+        return;
+    }
+    asmtest_hwtrace_options_t opts;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
+    CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK,
+          "whole-window descend init");
+
+    uint64_t cb = (uint64_t)(uintptr_t)cp;
+    add2_fn fn = (add2_fn)cp;
+
+    /* Run 1 — the REGION-FREE window: no register_region, no [base,len). Bracket
+     * ONLY the call (every instruction between arm and disarm is stepped). */
+    asmtest_trace_t *tr = asmtest_trace_new(4096, 0);
+    asmtest_hwtrace_scope_t scope = {0xffffffffu, 0, -1};
+    int rc_begin = asmtest_hwtrace_begin_window(tr, &scope);
+    if (rc_begin != ASMTEST_HW_OK) {
+        printf("# SKIP whole-window descend: begin_window unavailable here "
+               "(rc=%d)\n",
+               rc_begin);
+        asmtest_hwtrace_shutdown();
+        asmtest_trace_free(tr);
+        munmap(cp, sizeof WW_CALLER);
+        munmap(kp, sizeof WW_CALLEE);
+        return;
+    }
+    long rw = fn(20, 22);
+    int rc_end = asmtest_hwtrace_end_window(scope, tr);
+    CHECK(rc_begin == ASMTEST_HW_OK && rc_end == ASMTEST_HW_OK && rw == 42,
+          "whole-window descend: the region-free window opens, calls out, and "
+          "closes");
+
+    int caller_ok = ww_has_addr(tr, cb + 0x0) && ww_has_addr(tr, cb + 0xa) &&
+                    ww_has_addr(tr, cb + 0xd);
+    int callee_ok = ww_has_addr(tr, kb + 0x0) && ww_has_addr(tr, kb + 0x3) &&
+                    ww_has_addr(tr, kb + 0x6);
+    CHECK(caller_ok,
+          "whole-window descend: the caller's absolute IPs are captured");
+    CHECK(callee_ok, "whole-window descend: DESCEND_ALL descended — the "
+                     "CALLEE's out-of-(former-)range IPs are captured too");
+
+    /* Run 2 — the SAME caller, REGION-scoped. ss_on_sigtrap stores rip-base only
+     * in-range, so the callee is dropped: exactly the caller's 3 in-region insns
+     * and nothing outside [0,len). This is what makes run 1's callee_ok a lifted
+     * POLICY rather than an accident of the fixture. */
+    asmtest_trace_t *trr = asmtest_trace_new(64, 64);
+    asmtest_hwtrace_register_region("wwdescend", cp, sizeof WW_CALLER, trr);
+    asmtest_hwtrace_begin("wwdescend");
+    long rr = fn(20, 22);
+    asmtest_hwtrace_end("wwdescend");
+    int in_range = 1;
+    for (size_t i = 0; i < trr->insns_len; i++)
+        if (trr->insns[i] >= sizeof WW_CALLER)
+            in_range = 0;
+    CHECK(rr == 42 && trr->insns_total == 3 && in_range,
+          "whole-window descend: the REGION-scoped run of the SAME caller "
+          "filters the callee out (3 in-region insns)");
+
+    /* The §Z1 render swap: an absolute-RIP ring has no single contiguous
+     * [base,len), so render_scope cannot render it — only render_versioned against
+     * a code-image can. Snapshot both leaves into a self (pid==0) image and render
+     * the REAL captured window through it: the two leaves decode to text, the
+     * untracked harness noise honestly reads "(no bytes @version)". */
+    if (!asmtest_codeimage_available() || !asmtest_disas_available()) {
+        printf("# SKIP whole-window descend versioned render: %s\n",
+               asmtest_disas_available() ? "codeimage unavailable"
+                                         : "built without Capstone");
+    } else {
+        asmtest_codeimage_t *img = asmtest_codeimage_new(0);
+        int t1 =
+            (img != NULL) &&
+            asmtest_codeimage_track(img, cp, sizeof WW_CALLER) == ASMTEST_CI_OK;
+        int t2 =
+            (img != NULL) &&
+            asmtest_codeimage_track(img, kp, sizeof WW_CALLEE) == ASMTEST_CI_OK;
+        uint64_t when = (img != NULL) ? asmtest_codeimage_now(img) : 0;
+        int need = (img != NULL) ? asmtest_hwtrace_render_versioned(img, when,
+                                                                    tr, NULL, 0)
+                                 : ASMTEST_HW_EINVAL;
+        char *buf = (char *)malloc(need > 0 ? (size_t)need + 1 : 1);
+        buf[0] = '\0';
+        int wrote = (need > 0) ? asmtest_hwtrace_render_versioned(
+                                     img, when, tr, buf, (size_t)need + 1)
+                               : need;
+        CHECK(t1 && t2 && need > 0 && wrote == need,
+              "whole-window descend: render_versioned sizes and fills the REAL "
+              "captured ring (snprintf semantics)");
+        /* Ground truth per leaf, from the source blobs at their live addresses. */
+        char g_call[128], g_add[128];
+        asmtest_disas(ASMTEST_ARCH_X86_64, WW_CALLER, sizeof WW_CALLER, cb, 0xa,
+                      g_call, sizeof g_call);
+        asmtest_disas(ASMTEST_ARCH_X86_64, WW_CALLEE, sizeof WW_CALLEE, kb, 0x3,
+                      g_add, sizeof g_add);
+        CHECK(g_call[0] != '\0' && strstr(buf, g_call) != NULL,
+              "whole-window descend: the versioned render decodes the caller's "
+              "call site");
+        CHECK(
+            g_add[0] != '\0' && strstr(buf, g_add) != NULL,
+            "whole-window descend: the versioned render decodes the DESCENDED "
+            "callee's body");
+        free(buf);
+        asmtest_codeimage_free(img);
+    }
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tr);
+    asmtest_trace_free(trr);
+    munmap(cp, sizeof WW_CALLER);
+    munmap(kp, sizeof WW_CALLEE);
+
+    /* The capture ring's OWN self-truncation. AMD_LOOP(1,trips) runs 3 insns per
+     * trip, so a big trip count overruns the frame's bounded absolute-RIP buffer;
+     * the handler sets the frame's overflow flag and the post-pass turns it into
+     * trace.truncated. The trace cap is deliberately far LARGER than the ring, so
+     * insns_total == insns_len proves trace_append_insn's cap was never reached and
+     * the flag can ONLY be the ring's — the two paths, told apart. */
+    void *lp = ss_map_exec(AMD_LOOP, sizeof AMD_LOOP);
+    if (lp == NULL) {
+        printf("# SKIP whole-window descend ring overflow: mmap failed\n");
+        return;
+    }
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
+    asmtest_hwtrace_init(&opts);
+    asmtest_trace_t *tro = asmtest_trace_new(1u << 22, 0); /* >> the ring cap */
+    asmtest_hwtrace_scope_t oscope = {0xffffffffu, 0, -1};
+    long (*loop)(long, long) = (long (*)(long, long))lp;
+    int ob = asmtest_hwtrace_begin_window(tro, &oscope);
+    if (ob == ASMTEST_HW_OK) {
+        loop(1, 600000); /* 1.8M+ insns — far past the bounded ring */
+        asmtest_hwtrace_end_window(oscope, tro);
+        CHECK(asmtest_emu_trace_truncated(tro) &&
+                  tro->insns_total == tro->insns_len && tro->insns_len > 0,
+              "whole-window descend: a runaway window self-truncates on the "
+              "BOUNDED RING (not the trace cap)");
+    } else {
+        printf("# SKIP whole-window descend ring overflow: begin_window "
+               "unavailable (rc=%d)\n",
+               ob);
+    }
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tro);
+    munmap(lp, sizeof AMD_LOOP);
+#else
+    printf("# SKIP whole-window descend: x86-64 Linux only\n");
+#endif
+}
+
+#if defined(__linux__) && defined(__x86_64__)
+static volatile int g_ahf_go;       /* main -> hopped thread: main has armed */
+static volatile int g_ahf_rc = 999; /* the hopped end_window's return code */
+static volatile int g_ahf_tid;      /* the hopped closer's OS tid */
+static asmtest_hwtrace_scope_t g_ahf_scope; /* the handle armed on MAIN */
+static asmtest_trace_t *g_ahf_tr;           /* the hopped closer's OWN trace */
+
+/* The async hop: close MAIN's REGION-FREE window handle from THIS thread, exactly as
+ * a continuation resuming on a thread-pool thread would run `using`'s Dispose. The
+ * handle is REAL and live — it just belongs to another thread's TLS frame stack. */
+static void *asynchop_close_on_thread(void *arg) {
+    (void)arg;
+    while (!g_ahf_go) {
+    } /* wait until main has armed (main owns the frame + TF) */
+    g_ahf_tid = (int)syscall(SYS_gettid);
+    g_ahf_rc = asmtest_hwtrace_end_window(g_ahf_scope, g_ahf_tr);
+    return NULL;
+}
+#endif
+
+/* §Z4 — the async-hop honesty DEFAULT for the region-free (empty-ctor) window: the
+ * scope is a THREAD window, so a `using (new AsmTrace())` whose work hops threads is
+ * Disposed somewhere else, and end_window must flag `truncated` rather than present
+ * a thread window as a complete logical-operation trace. The region-keyed §0.2
+ * backstop CANNOT fire here — it keys on find_region(name), which returns NULL for a
+ * window that registered no region — so end_window re-implements the check on the
+ * handle: asmtest_ss_frame_lookup reads the CALLING thread's initial-exec TLS frame
+ * stack, so the arming thread's frame is invisible from the closer and the miss is
+ * the hop signal. Errs false-truncated over false-complete.
+ *
+ * Distinct from the two shipped neighbours, deliberately: test_arm_tid_mismatch
+ * covers the REGION-keyed begin_scope/end path (via asmtest_hwtrace_arm_tid), and
+ * test_wholewindow_singlestep's phantom {5,999} handle only SIMULATES the hop with a
+ * never-armed handle — which a process-global frame table would still miss, so it
+ * cannot see a cross-thread visibility regression. Here the handle is genuinely
+ * armed on main and genuinely closed from a second thread, and main's own frame must
+ * SURVIVE the foreign close (asserted below). Main arms and disarms itself: the
+ * arming thread owns TF, so it is never left stepping behind a foreign close. */
+static void test_asynchop_flag(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP async-hop flag: single-step unavailable\n");
+        return;
+    }
+    void *p = ss_map_exec(ROUTINE, sizeof ROUTINE);
+    if (p == NULL) {
+        printf("# SKIP async-hop flag: mmap failed\n");
+        return;
+    }
+    asmtest_hwtrace_options_t opts;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
+    CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "async-hop flag init");
+
+    asmtest_trace_t *tr = asmtest_trace_new(4096, 0); /* main's window */
+    /* The hopped close gets its OWN trace, so `truncated` on it can only have come
+     * from the frame-lookup miss — never from main's window overflowing. */
+    asmtest_trace_t *trh = asmtest_trace_new(16, 0);
+    g_ahf_tr = trh;
+    g_ahf_go = 0;
+    g_ahf_rc = 999;
+    g_ahf_tid = 0;
+    g_ahf_scope.idx = 0xffffffffu;
+    g_ahf_scope.gen = 0;
+
+    /* Spawn BEFORE arming: pthread_create under TF would step the whole runtime.
+     * Spawn OUTSIDE CHECK(): the macro evaluates its condition TWICE, so a
+     * pthread_create inside it starts a second, unjoined thread that races the
+     * close and outlives the test. */
+    pthread_t th;
+    int rc_spawn = pthread_create(&th, NULL, asynchop_close_on_thread, NULL);
+    CHECK(rc_spawn == 0, "async-hop flag: spawn the hopped closing thread");
+
+    add2_fn fn = (add2_fn)p;
+    int rc_begin = asmtest_hwtrace_begin_window(tr, &g_ahf_scope);
+    long r = 0;
+    if (rc_begin == ASMTEST_HW_OK)
+        r = fn(20, 22); /* the window's real work, on the arming thread */
+    g_ahf_go = 1;       /* release the hop (also unblocks the skip path) */
+    pthread_join(th, NULL);
+    /* Main closes its OWN frame: resolves, so it disarms TF and normalizes. */
+    int rc_end = asmtest_hwtrace_end_window(g_ahf_scope, tr);
+
+    if (rc_begin != ASMTEST_HW_OK) {
+        printf("# SKIP async-hop flag: begin_window unavailable here (rc=%d)\n",
+               rc_begin);
+        asmtest_hwtrace_shutdown();
+        asmtest_trace_free(tr);
+        asmtest_trace_free(trh);
+        munmap(p, sizeof ROUTINE);
+        return;
+    }
+    CHECK(rc_begin == ASMTEST_HW_OK && r == 42,
+          "async-hop flag: begin_window arms the region-free window on main");
+    CHECK(g_ahf_tid != 0 && g_ahf_tid != (int)syscall(SYS_gettid),
+          "async-hop flag: the close really ran on a SECOND OS thread");
+    CHECK(g_ahf_rc == ASMTEST_HW_OK,
+          "async-hop flag: the hopped close returns OK (honest degradation, "
+          "not an error)");
+    /* THE §Z4 default: a region-free window closed off its arming thread is
+     * flagged, never silently dropped and never presented as complete. */
+    CHECK(asmtest_emu_trace_truncated(trh),
+          "async-hop flag: closing a REGION-FREE window from another thread "
+          "flags truncated");
+    /* And the foreign close must not have stolen or closed main's frame: main's
+     * own close still resolves (OK) and its window still holds the real capture. */
+    CHECK(
+        rc_end == ASMTEST_HW_OK && ww_has_addr(tr, (uint64_t)(uintptr_t)p) &&
+            ww_has_addr(tr, (uint64_t)(uintptr_t)p + 0x11),
+        "async-hop flag: the arming thread's frame SURVIVES the foreign close "
+        "(TLS-local) and still captured the routine");
+    CHECK(asmtest_hwtrace_arm_tid() == -1,
+          "async-hop flag: arm_tid reads idle (-1) after the window closes");
+
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tr);
+    asmtest_trace_free(trh);
+    munmap(p, sizeof ROUTINE);
+#else
+    printf("# SKIP async-hop flag: needs x86-64 Linux threads\n");
+#endif
+}
+
+#if defined(__linux__) && defined(__x86_64__)
+/* §Z4 handle-COLLISION fixture. tls_gen_ctr is __thread, so EVERY thread's FIRST
+ * window is handle {idx=0, gen=1}: two FRESH threads therefore hold handle values
+ * that are LITERALLY EQUAL yet name two different frames in two different TLS
+ * tables. Main can play neither role — its gen counter is far past 1 by the time
+ * this runs — which is exactly why two spawned threads are needed to see it. */
+static volatile int
+    g_hc_a_armed; /* A -> B: A's handle is published and LIVE   */
+static volatile int
+    g_hc_a_fail; /* A -> B: A could not arm; do not hang       */
+static volatile int
+    g_hc_b_done; /* B -> A: B is finished; A may leave its     */
+static asmtest_hwtrace_scope_t
+    g_hc_ha; /* the handle armed on thread A         */
+static asmtest_hwtrace_scope_t
+    g_hc_hb; /* the handle armed on thread B         */
+static int g_hc_a_tid, g_hc_b_tid;
+static int g_hc_rc_foreign =
+    999; /* B's end_window(A's handle) return code    */
+static asmtest_trace_t
+    *g_hc_tra; /* A's window                                */
+static asmtest_trace_t
+    *g_hc_trb; /* B's OWN window                            */
+static asmtest_trace_t
+    *g_hc_trh;        /* the foreign close's own trace             */
+static void *g_hc_pa; /* A's routine                               */
+static void *g_hc_pb1,
+    *g_hc_pb2; /* B's routines, pre- and post-foreign-close */
+static long g_hc_ra, g_hc_rb1, g_hc_rb2;
+
+/* Thread A — the ARMING thread whose window B will try to close. */
+static void *hc_thread_a(void *arg) {
+    (void)arg;
+    g_hc_a_tid = (int)syscall(SYS_gettid);
+    /* A's FIRST window on a FRESH thread => {idx=0, gen=1}. */
+    if (asmtest_hwtrace_begin_window(g_hc_tra, &g_hc_ha) != ASMTEST_HW_OK) {
+        g_hc_a_fail = 1;
+        return NULL;
+    }
+    g_hc_ra = ((add2_fn)g_hc_pa)(20, 22); /* A's real in-window work */
+    g_hc_a_armed = 1;
+    /* Stay INSIDE the window across B's foreign close — the async-hop shape: A is
+     * still in its `using` block when the continuation Disposes elsewhere. This spin
+     * is single-stepped, but B is already parked and its armed section is a few
+     * hundred instructions, so it is bounded far below SS_WINDOW_CAP (1<<20). Its
+     * RIPs are window noise: nothing below asserts A's window is un-truncated. */
+    while (!g_hc_b_done) {
+    }
+    asmtest_hwtrace_end_window(g_hc_ha, g_hc_tra);
+    return NULL;
+}
+
+/* Thread B — holds its OWN window at the SAME {idx,gen} and closes A's handle. */
+static void *hc_thread_b(void *arg) {
+    (void)arg;
+    g_hc_b_tid = (int)syscall(SYS_gettid);
+    while (!g_hc_a_armed && !g_hc_a_fail) { /* wait until A's handle is live */
+    }
+    if (g_hc_a_fail) {
+        g_hc_b_done = 1;
+        return NULL;
+    }
+    /* B's FIRST window on a FRESH thread => ALSO {idx=0, gen=1}: identical to A's. */
+    if (asmtest_hwtrace_begin_window(g_hc_trb, &g_hc_hb) != ASMTEST_HW_OK) {
+        g_hc_b_done = 1;
+        return NULL;
+    }
+    g_hc_rb1 =
+        ((add2_fn)g_hc_pb1)(20, 22); /* captured BEFORE the foreign close */
+    /* THE FOREIGN CLOSE: close A's window from B while B holds its own window at the
+     * very same {idx,gen}. The handle is real, live, and belongs to A. */
+    g_hc_rc_foreign = asmtest_hwtrace_end_window(g_hc_ha, g_hc_trh);
+    g_hc_rb2 =
+        ((add2_fn)g_hc_pb2)(20, 22); /* captured only if B's window LIVES */
+    asmtest_hwtrace_end_window(g_hc_hb, g_hc_trb); /* B closes its OWN window */
+    g_hc_b_done = 1;
+    return NULL;
+}
+#endif
+
+/* §Z4 — the COLLIDING-HANDLE false-complete. The neighbour test_asynchop_flag covers
+ * the case where the closing thread holds NO window: its TLS frame table is empty, so
+ * the lookup misses and end_window honestly truncates. This covers the case it cannot:
+ * the closer holds its OWN window at the SAME {idx,gen}, because a handle carrying only
+ * {idx,gen} is NOT unique across threads — tls_gen_ctr is __thread, so every thread's
+ * first window is {0,1}. asmtest_ss_frame_lookup then indexes the CLOSER's TLS table
+ * and matches on gen alone, resolving a foreign handle to the closer's OWN frame. The
+ * result is the one thing this tier must never do: the WRONG window is closed and the
+ * close reports a false-COMPLETE (truncated=0, OK). The tier's house style is a
+ * conservative miss — false-truncated, never false-complete.
+ *
+ * The fix is the §Z4 "arm_tid carry": the arming OS tid rides in the HANDLE, so a
+ * foreign close is detected explicitly and flags truncated. (Comparing arm_tid inside
+ * frame_lookup alone cannot work: it reads the CALLER's own TLS table, where the
+ * frame's arm_tid is always the caller's own tid — the tid must travel in the handle.)
+ * Any x86-64 Linux; no PMU/perf/privilege. */
+static void test_crossthread_handle_collision(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP handle collision: single-step unavailable\n");
+        return;
+    }
+    /* Three SEPARATE mappings: A's routine, and B's pre- and post-close routines.
+     * Distinct pages, so each thread's capture is attributable to exactly one of
+     * them and "B's window kept recording after the foreign close" is decidable. */
+    g_hc_pa = ss_map_exec(ROUTINE, sizeof ROUTINE);
+    g_hc_pb1 = ss_map_exec(ROUTINE, sizeof ROUTINE);
+    g_hc_pb2 = ss_map_exec(ROUTINE, sizeof ROUTINE);
+    if (g_hc_pa == NULL || g_hc_pb1 == NULL || g_hc_pb2 == NULL) {
+        printf("# SKIP handle collision: mmap failed\n");
+        return;
+    }
+    asmtest_hwtrace_options_t opts;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
+    CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK,
+          "handle collision init");
+
+    g_hc_tra =
+        asmtest_trace_new(4096, 0); /* A's window (holds the TF spin too) */
+    g_hc_trb =
+        asmtest_trace_new(8192, 0); /* B's own window                     */
+    /* The foreign close gets its OWN trace, never a window's, so `truncated` on it
+     * can only have come from the frame-lookup miss — never from an overflow. */
+    g_hc_trh = asmtest_trace_new(16, 0);
+    g_hc_a_armed = 0;
+    g_hc_a_fail = 0;
+    g_hc_b_done = 0;
+    g_hc_a_tid = 0;
+    g_hc_b_tid = 0;
+    g_hc_rc_foreign = 999;
+    g_hc_ra = g_hc_rb1 = g_hc_rb2 = 0;
+    g_hc_ha.idx = g_hc_hb.idx = 0xffffffffu;
+    g_hc_ha.gen = g_hc_hb.gen = 0;
+
+    /* Spawn BOTH before either arms: pthread_create under TF would step the runtime
+     * (and blocks SIGTRAP around clone(), which is fatal inside a window).
+     * NB: spawn OUTSIDE CHECK() — the macro evaluates its condition TWICE (once to
+     * pick the format, once to count the failure), so a pthread_create inside it
+     * silently starts a SECOND, unjoined thread. */
+    pthread_t ta, tb;
+    int rc_spawn_b = pthread_create(&tb, NULL, hc_thread_b, NULL);
+    CHECK(rc_spawn_b == 0,
+          "handle collision: spawn the colliding closer thread B");
+    int rc_spawn_a = pthread_create(&ta, NULL, hc_thread_a, NULL);
+    CHECK(rc_spawn_a == 0, "handle collision: spawn the arming thread A");
+    pthread_join(tb, NULL);
+    pthread_join(ta, NULL);
+
+    if (g_hc_a_fail || g_hc_rc_foreign == 999) {
+        printf("# SKIP handle collision: begin_window unavailable on a spawned "
+               "thread here\n");
+        asmtest_hwtrace_shutdown();
+        asmtest_trace_free(g_hc_tra);
+        asmtest_trace_free(g_hc_trb);
+        asmtest_trace_free(g_hc_trh);
+        munmap(g_hc_pa, sizeof ROUTINE);
+        munmap(g_hc_pb1, sizeof ROUTINE);
+        munmap(g_hc_pb2, sizeof ROUTINE);
+        return;
+    }
+
+    /* The PREMISE this test rests on: the two handles really are indistinguishable by
+     * {idx,gen}. If this ever stops holding, the test below stops testing what it
+     * claims, so assert it rather than assume it. (The fix does NOT change this —
+     * idx and gen still collide; only the carried arm_tid tells them apart.) */
+    CHECK(g_hc_ha.idx == g_hc_hb.idx && g_hc_ha.gen == g_hc_hb.gen,
+          "handle collision: two fresh threads' first windows really do share "
+          "one "
+          "{idx,gen} handle value");
+    CHECK(g_hc_a_tid != 0 && g_hc_b_tid != 0 && g_hc_a_tid != g_hc_b_tid,
+          "handle collision: A and B are genuinely two different OS threads");
+    CHECK(g_hc_ra == 42 && g_hc_rb1 == 42 && g_hc_rb2 == 42,
+          "handle collision: every routine really ran");
+    CHECK(g_hc_rc_foreign == ASMTEST_HW_OK,
+          "handle collision: the foreign close returns OK (honest degradation, "
+          "not an error)");
+
+    /* THE BUG (1/2): a close of ANOTHER thread's window must be a conservative MISS.
+     * Against the {idx,gen}-only handle this resolves to B's OWN frame and reports a
+     * false-COMPLETE: truncated=0. */
+    CHECK(asmtest_emu_trace_truncated(g_hc_trh),
+          "handle collision: closing ANOTHER thread's window from a thread "
+          "holding "
+          "its own colliding {idx,gen} flags truncated (never false-complete)");
+
+    /* THE BUG (2/2): and it must not close the WRONG window. B's own frame has to
+     * survive the foreign close, so work B runs AFTER it is still captured. Against
+     * the {idx,gen}-only handle the foreign close pops B's frame and disarms B's TF,
+     * so pb2 never lands in B's window. */
+    CHECK(ww_has_addr(g_hc_trb, (uint64_t)(uintptr_t)g_hc_pb1),
+          "handle collision: B's own window captured its pre-close work");
+    CHECK(
+        ww_has_addr(g_hc_trb, (uint64_t)(uintptr_t)g_hc_pb2),
+        "handle collision: B's OWN window SURVIVES the foreign close and still "
+        "captures B's post-close work (the WRONG window must not be closed)");
+
+    /* And A's window — the one actually named by the handle — still holds A's own
+     * capture (it is closed by A itself, on the thread that armed it). */
+    CHECK(ww_has_addr(g_hc_tra, (uint64_t)(uintptr_t)g_hc_pa),
+          "handle collision: A's window still holds A's own capture");
+
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(g_hc_tra);
+    asmtest_trace_free(g_hc_trb);
+    asmtest_trace_free(g_hc_trh);
+    munmap(g_hc_pa, sizeof ROUTINE);
+    munmap(g_hc_pb1, sizeof ROUTINE);
+    munmap(g_hc_pb2, sizeof ROUTINE);
+#else
+    printf("# SKIP handle collision: needs x86-64 Linux threads\n");
+#endif
+}
+
 /* §Z0 gate extras — empty-ctor scope hygiene. (a) NESTED scopes: a region-free
  * whole window composes with a region scope registered+begun INSIDE it (a shim
  * nesting `using (new AsmTrace())` around the region form); both close in LIFO
@@ -6430,7 +6973,7 @@ static void test_zeroctor_scope_hygiene(void) {
     asmtest_trace_t *tr_win = asmtest_trace_new(65536, 0);
     asmtest_trace_t *tr_in = asmtest_trace_new(64, 64);
     asmtest_hwtrace_register_region("hyg_inner", p, sizeof ROUTINE, tr_in);
-    asmtest_hwtrace_scope_t win = {0xffffffffu, 0};
+    asmtest_hwtrace_scope_t win = {0xffffffffu, 0, -1};
     int rc_win = asmtest_hwtrace_begin_window(tr_win, &win);
     if (rc_win != ASMTEST_HW_OK) {
         /* Whole-window is Linux/x86-64-only today; self-skip cleanly elsewhere. */
@@ -6491,7 +7034,7 @@ static void test_zeroctor_scope_hygiene(void) {
     int bad = 0;
     for (int i = 0; i < 300; i++) {
         asmtest_trace_t *t = asmtest_trace_new(16, 0);
-        asmtest_hwtrace_scope_t sc = {0xffffffffu, 0};
+        asmtest_hwtrace_scope_t sc = {0xffffffffu, 0, -1};
         int rb = (t != NULL) ? asmtest_hwtrace_begin_window(t, &sc)
                              : ASMTEST_HW_EINVAL;
         int re = (rb == ASMTEST_HW_OK) ? asmtest_hwtrace_end_window(sc, t)
@@ -6506,7 +7049,7 @@ static void test_zeroctor_scope_hygiene(void) {
 
     /* Capture #301: the surface still works after the churn. */
     asmtest_trace_t *tr_f = asmtest_trace_new(65536, 0);
-    asmtest_hwtrace_scope_t fsc = {0xffffffffu, 0};
+    asmtest_hwtrace_scope_t fsc = {0xffffffffu, 0, -1};
     int rb_f = asmtest_hwtrace_begin_window(tr_f, &fsc);
     long r_f = (rb_f == ASMTEST_HW_OK) ? fn(20, 22) : -1;
     int re_f = (rb_f == ASMTEST_HW_OK) ? asmtest_hwtrace_end_window(fsc, tr_f)
@@ -6566,7 +7109,7 @@ static void test_wholewindow_banner(void) {
 
     asmtest_trace_t *tr =
         asmtest_trace_new(8, 0); /* tiny cap: force overflow */
-    asmtest_hwtrace_scope_t scope = {0xffffffffu, 0};
+    asmtest_hwtrace_scope_t scope = {0xffffffffu, 0, -1};
     long (*fn)(long, long) = (long (*)(long, long))p;
     int rc_begin = asmtest_hwtrace_begin_window(tr, &scope);
     if (rc_begin != ASMTEST_HW_OK) {
@@ -6870,6 +7413,21 @@ int main(void) {
      * tier + the §Z4 cross-thread honesty flag (any x86-64 Linux, no hardware). */
     test_wholewindow_singlestep();
     test_wholewindow_buckets();
+
+    /* §Z1.1: the WEAK tier's lifted record policy — DESCEND_ALL (the callee's IPs
+     * are captured where the region-scoped run filters them out), the versioned
+     * render of a REAL ring against a self code-image, and the bounded ring's own
+     * self-truncation told apart from the trace cap. */
+    test_wholewindow_ss_descend();
+
+    /* §Z4: the async-hop honesty DEFAULT — a REGION-FREE window closed from a
+     * second thread flags truncated (the region-keyed backstop cannot fire), and
+     * the arming thread's TLS frame survives the foreign close. */
+    test_asynchop_flag();
+
+    /* §Z4: the COLLIDING-handle false-complete — a closer holding its OWN window at
+     * the same {idx,gen} must not resolve another thread's handle to its own frame. */
+    test_crossthread_handle_collision();
 
     /* §Z0 gate extras: nested region-free + region scopes (SIGTRAP installed
      * once, restored once to the pre-init handler) and 300-cycle

@@ -222,8 +222,9 @@ struct HwApi {
     int (*render)(const char *, char *, size_t) = nullptr;
     int (*arm_tid)() = nullptr;
     /* §1 registry-free lazy-arm call + handle-keyed render (the call_scoped path).
-     * render_scope takes the 8-byte asmtest_hwtrace_scope_t handle BY VALUE (native
-     * POD from the #included header — no packing, unlike the Fiddle/JNI bindings). */
+     * render_scope takes the 12-byte asmtest_hwtrace_scope_t handle BY VALUE (native
+     * POD from the #included header — no packing, unlike the Fiddle/JNI bindings, so
+     * the §Z4 arm_tid field needs no work here beyond a recompile). */
     int (*call_scoped_ex)(void *, size_t, void *, void *, const long *, int, long *,
                           asmtest_hwtrace_scope_t *) = nullptr;
     int (*render_scope)(asmtest_hwtrace_scope_t, char *, size_t) = nullptr;

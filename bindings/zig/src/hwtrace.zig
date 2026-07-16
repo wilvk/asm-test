@@ -260,8 +260,9 @@ const FnMarker = *const fn ([*:0]const u8) callconv(.C) void;
 const FnTryBegin = *const fn ([*:0]const u8) callconv(.C) c_int;
 const FnRender = *const fn ([*:0]const u8, ?[*]u8, usize) callconv(.C) c_int;
 // §1 registry-free lazy-arm call + handle-keyed render (the call_scoped path).
-// render_scope takes the 8-byte asmtest_hwtrace_scope_t handle BY VALUE — native
-// struct-by-value across callconv(.C) (no packing, unlike the Ruby/Java bindings).
+// render_scope takes the 12-byte asmtest_hwtrace_scope_t handle BY VALUE — native
+// struct-by-value across callconv(.C) (no packing, unlike the Ruby/Java bindings), so
+// the §Z4 arm_tid field is picked up by @cImport with no work here beyond a rebuild.
 const FnCallScopedEx = *const fn (?*anyopaque, usize, ?*anyopaque, ?*anyopaque, [*c]const c_long, c_int, ?*c_long, *c.asmtest_hwtrace_scope_t) callconv(.C) c_int;
 // Auto-escalating CALL-OWNING cross-tier trace (asmtest_trace_call_auto): owns the
 // invocation, runs it under the fastest exact tier, and re-runs on a ceiling-free

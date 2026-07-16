@@ -116,13 +116,19 @@ namespace Asmtest
         public const int STAGE_PROBE = 4;   // perf open probe failed (EPERM vs EUNAVAIL)
 
         // asmtest_hwtrace_scope_t: a region-free (§Z0/§Z1) scope handle — an index into
-        // the calling thread's range stack tagged with a generation counter. Marshals
-        // as two consecutive C uint32.
+        // the calling thread's range stack tagged with a generation counter, plus the OS
+        // tid that armed it (§Z4; -1 when unarmed / a sentinel). The tid is part of the
+        // handle because Idx/Gen name a frame only WITHIN one thread — every thread's
+        // first scope is {0, 1} — so a close from another thread would otherwise resolve
+        // to that thread's own frame and close the wrong scope. Marshals as two
+        // consecutive C uint32 plus an int32; at 12 bytes it is TWO INTEGER eightbytes
+        // on SysV x86-64, so a by-value handle occupies two registers, not one.
         [StructLayout(LayoutKind.Sequential)]
         public struct HwScope
         {
             public uint Idx;
             public uint Gen;
+            public int ArmTid;
         }
 
         // asmtest_trace_choice_t: four int-sized enum fields, no padding (pinned by a
@@ -1959,7 +1965,7 @@ namespace Asmtest
             // so it is enabled only briefly, never left on process-wide.
             _rundownRequested = withRundown;
             if (withRundown) RundownEnabled = DiagnosticsIpc.EnablePerfMap();
-            _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0 };
+            _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0, ArmTid = -1 };
             // Whole-window captures the runtime too (JIT/GC/marshalling), so size the
             // retained trace to the single-step window ring (SS_WINDOW_CAP = 1<<20) — a
             // tiny native leaf can otherwise fall past a small cap behind the managed
@@ -2040,7 +2046,7 @@ namespace Asmtest
             // via the §1 HANDLE-KEYED begin: each thread entering this same auto-named
             // site gets its own range-stack frame, so concurrent same-site scopes no
             // longer alias; Dispose renders this scope's own slice by handle.
-            _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0 };
+            _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0, ArmTid = -1 };
             int brc = HwNative.asmtest_hwtrace_begin_scope(_name, ref _scope);
             Armed = _began = brc == HwNative.ASMTEST_HW_OK;
             // §Z5: the region form has no auto-init retry (only the whole-window ctor
@@ -2801,7 +2807,7 @@ namespace Asmtest
                 SkipReason = $"could not register the method-body region (rc={reg})";
                 return;
             }
-            _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0 };
+            _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0, ArmTid = -1 };
         }
 
         // B (lazy-arm) shim table — the concrete (long…)->long reverse-P/Invoke delegates.
@@ -4496,7 +4502,7 @@ namespace Asmtest
                     // disable ALL hwtrace capture). Render THIS hop's body NOW, on this
                     // (possibly pool) thread, while its scope handle is live — the handle is
                     // thread-local and only valid until the next scope on this thread.
-                    var scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0 };
+                    var scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0, ArmTid = -1 };
                     int rc = HwNative.asmtest_hwtrace_call_scoped_ex(
                         new IntPtr(unchecked((long)start)), (UIntPtr)size, handle,
                         Marshal.GetFunctionPointerForDelegate(shim), iargs, iargs.Length, out long r, ref scope);

@@ -72,11 +72,20 @@ typedef struct {
     int mechanism;
 } asmtest_trace_choice_t;
 
-// asmtest_hwtrace_scope_t (include/asmtest_hwtrace.h): an 8-byte per-scope capture
-// handle. render_scope takes it BY VALUE (cgo marshals it directly — no packing).
+// asmtest_hwtrace_scope_t (include/asmtest_hwtrace.h): a 12-byte per-scope capture
+// handle — a TLS range-stack index + generation, plus the OS tid that armed it (§Z4,
+// -1 unarmed/sentinel). The tid rides in the handle because idx/gen name a frame only
+// WITHIN one thread (every thread's first scope is {0, 1}), so a close from another
+// thread would otherwise resolve to that thread's own frame. render_scope takes it BY
+// VALUE (cgo marshals it directly — no packing); at 12 bytes it is TWO INTEGER
+// eightbytes on SysV x86-64, so it occupies two registers, not one.
+// NOTE: this preamble REDECLARES the struct rather than #include-ing the header, and
+// the symbols are dlsym'd — so nothing cross-checks this against the real layout at
+// compile time. It must be updated by hand whenever the C struct changes.
 typedef struct {
     uint32_t idx;
     uint32_t gen;
+    int32_t arm_tid;
 } asmtest_hwtrace_scope_t;
 
 // Entry-point typedefs (one per exported symbol in libasmtest_hwtrace).

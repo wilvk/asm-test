@@ -74,10 +74,14 @@ the [§Z0–§Z5 phases](#sequencing-dependency-correct-order) below own the spl
 > [docs/scoped-tracing-implementation.md](../../scoped-tracing-implementation.md).
 >
 > Status legend: **planned** unless noted. Per-phase status: **§Z0 landed** · **§Z1** WEAK
-> landed, CEILING landed as a sampled survey, STRONG forward-look · **§Z2** synthetic half
+> landed + host-tested (`test_wholewindow_ss_descend`, 2026-07-16; its drafted §L3
+> budget/watchdog assert struck as not-of-this-tier, and `test_wholewindow_ss_managed_routes`
+> struck as gating a seam the 2026-07-06 decision retired), CEILING landed as a sampled
+> survey, STRONG forward-look · **§Z2** synthetic half
 > landed, live PT forward-look · **§Z3** host-testable half landed, live half forward-look ·
-> **§Z4** default landed (untested for the region-free window), escalation forward-look ·
-> **§Z5 landed**.
+> **§Z4** default landed **and host-tested** (`test_asynchop_flag` +
+> `test_crossthread_handle_collision`, 2026-07-16), escalation
+> forward-look · **§Z5 landed**.
 
 ---
 
@@ -130,7 +134,7 @@ code.
 
 | Slice | Ref | Consumed deliverable | State |
 |---|---|---|---|
-| Core | §0 | Error-returning `try_begin` ([:1708](../../../src/hwtrace.c#L1708)); arm-tid record + `asmtest_hwtrace_arm_tid` + cross-thread `truncated` ([:1829](../../../src/hwtrace.c#L1829), [:1885-1888](../../../src/hwtrace.c#L1885)); size-then-alloc render-on-close; idempotent-by-name `register_region` ([:603](../../../src/hwtrace.c#L603)) | shipped (arm-tid backstop is **region-keyed**; see §Z4) |
+| Core | §0 | Error-returning `try_begin` ([:1708](../../../src/hwtrace.c#L1708)); arm-tid record + `asmtest_hwtrace_arm_tid` + cross-thread `truncated` ([:1829](../../../src/hwtrace.c#L1829), [:1885-1888](../../../src/hwtrace.c#L1885)); size-then-alloc render-on-close; idempotent-by-name `register_region` ([:603](../../../src/hwtrace.c#L603)) | shipped (this §0 backstop is **region-keyed**; the region-FREE window path is handle-keyed via the §Z4 arm-tid carry) |
 | Core | §1 | Per-thread hwtrace state + handle-keyed `begin_scope`/`render_scope`/`render_versioned` — [:2122](../../../src/hwtrace.c#L2122), [:2328](../../../src/hwtrace.c#L2328), [:2343](../../../src/hwtrace.c#L2343) | shipped |
 | Core | §2 | Recorder-backed libipt whole-window decode glue (`read_recorder`→`asmtest_pt_decode_window`, **no** in-region filter — [:96](../../../src/pt_backend.c#L96), [:198](../../../src/pt_backend.c#L198)) + capture-side `PERF_EVENT_IOC_SET_FILTER` + the anon-JIT constraint | **planned** — `#ifdef`-gated, unvalidated end-to-end (§Z2 validates it); PT-hardware-gated |
 | Core | §3.1 | `asmtest_hwtrace_symbolize_bucket` ([:2735](../../../src/hwtrace.c#L2735)) + address→name `asmtest_hwtrace_region_name` ([:2642](../../../src/hwtrace.c#L2642)) | shipped (host-tested by `test_symbolize_bucket`); the eBPF PROT_EXEC emission-slicer it composes is **planned/gated** (CAP_BPF + BTF) |
@@ -407,6 +411,20 @@ handle:
   **is** descent level **L3** — riding [call-descent-plan.md](../archive/plans/call-descent-plan.md)'s §L3
   denylist + instruction-budget + `ITIMER_REAL`/`SIGALRM` watchdog, expected to self-truncate.
   Tests assert the guards fire, never that L3 is transparent.
+  > **Correction (2026-07-16), found while writing `test_wholewindow_ss_descend`: as shipped,
+  > the in-process tier takes L3's SEMANTICS but NONE of its guards.** `ss_on_sigtrap`'s
+  > whole-window branch ([src/ss_backend.c](../../../src/ss_backend.c)) records every RIP
+  > unconditionally — there is no denylist, no instruction budget, and no `ITIMER_REAL`
+  > watchdog on this path. Those three are the **out-of-process** descent handle's guards
+  > (`asmtest_descent_deny_region` / `_set_insn_budget` / `_set_watchdog_ms`), reached through
+  > `asmtest_ptrace_trace_call_ex` and gated by `test_descent_fork`; the region-free TF window
+  > does not consume `asmtest_descent_t` at all. So "descend everything" here self-truncates
+  > **only** on the bounded RIP ring (`SS_WINDOW_CAP`, 1<<20 → `truncated`), which is what
+  > `test_wholewindow_ss_descend` asserts. Porting the denylist/budget/watchdog onto the
+  > in-process window is **unbuilt forward-look**, not shipped behaviour — the sentence above
+  > describes the design intent. Consequence for the empty ctor: a region-free window over a
+  > leaf that calls into a **blocking** libc entry has nothing to step over it and nothing to
+  > time it out; the tier is honest about the result (`truncated`) but not bounded in *time*.
 - **Native-leaf / ptrace-only routing + gate.** Single-step is **forbidden against live
   managed code** (it swaps the process-wide `SIGTRAP` disposition CoreCLR's PAL owns), so the
   WEAK tier runs in-process **only on a native leaf** (any x86-64 Linux, unprivileged,
@@ -487,15 +505,52 @@ Linux ≥ 6.10, `CAP_PERFMON`+`CAP_BPF`); **Phase 2 block-step** cheapens the
 
 **§Z1 tests** (in [examples/test_hwtrace.c](../../../examples/test_hwtrace.c)):
 
-- `test_wholewindow_ss_descend` (host-testable, `docker-hwtrace`) — arm the region-free
-  single-step tier over a native leaf that calls out; assert the **bounded absolute-RIP
-  ring** captured out-of-(former-)range IPs, that it renders through `render_versioned`
-  against the self codeimage, that `DESCEND_ALL` descended, and that **both** truncation
-  paths fire on a runaway (buffer-overflow flag; §L3 budget/watchdog) — never that the walk
-  is transparent.
-- `test_wholewindow_ss_managed_routes` — assert a region-free **managed** arm refuses
-  in-process single-step and routes to §D3 (CI-runnable, `SYS_PTRACE`; alarm/ITIMER-guarded
-  like `test_ptrace_scoped_stealth`).
+- `test_wholewindow_ss_descend` (host-testable, `docker-hwtrace`) — **LANDED 2026-07-16, in
+  the reduced form below** (`docker-hwtrace` → 433/0). Arms the region-free single-step tier
+  over a native leaf that **calls out** to a callee on its own mapping and asserts: the
+  bounded absolute-RIP ring captured the callee's **out-of-(former-)range IPs** (the
+  `DESCEND_ALL` claim); that the **same caller traced REGION-scoped filters that callee out**
+  (exactly 3 in-region insns) — the two runs are the discriminator, so the lifted record
+  policy is asserted as a *difference*, never as a transparent walk; that the **REAL captured
+  ring renders through `render_versioned`** against a self (`pid==0`) codeimage (the §Z1 byte
+  source — `test_wholewindow_singlestep` renders LIVE memory via `render_window`, and
+  `test_zeroctor_managed_compose` drives `render_versioned` from a *synthetic* trace, so only
+  here does a real region-free capture meet the versioned render); and that a runaway
+  window **self-truncates on the bounded ring**.
+  > **Scope correction (2026-07-16): only ONE of the drafted "both truncation paths" exists
+  > at this tier, and the drafted overlap with the shipped tests was real.** (1) The
+  > buffer-overflow path is now covered *and isolated*: the test sizes the trace cap far
+  > above the ring (`SS_WINDOW_CAP`, 1<<20) so `insns_total == insns_len` proves
+  > `trace_append_insn`'s cap was never reached and the flag can only be the frame ring's —
+  > measured `len == total == 1048576`. This is a **third, distinct** truncation path from
+  > the *trace-cap prefix* `test_wholewindow_banner` asserts; the two were conflated here.
+  > (2) The **§L3 instruction-budget + `ITIMER_REAL`/SIGALRM watchdog** half is **not
+  > assertable at this tier and was never built into it**: those are the *out-of-process*
+  > descent handle's guards (`asmtest_descent_set_insn_budget` / `_set_watchdog_ms`, gated by
+  > `test_descent_fork`'s L3 cases). The in-process TF window rides
+  > [call-descent-plan.md](../archive/plans/call-descent-plan.md)'s L3 *semantics* (descend
+  > everything) but **none of its guards** — its only self-truncation is the bounded ring.
+  > This section's "riding §L3's denylist + budget + watchdog" (see §Z1.1) is therefore
+  > **forward-look for the in-process tier**, not shipped. (3) Partially superseded, as
+  > suspected: the absolute-RIP capture itself is already gated by
+  > `test_wholewindow_singlestep`, so this test asserts only the **net-new** ground —
+  > descent, the region/region-free difference, and the versioned render of a real ring.
+- `test_wholewindow_ss_managed_routes` — **NOT BUILT, and should be struck rather than
+  scheduled (2026-07-16): it gates a seam that shipped the OTHER way.** The test asserts a
+  region-free **managed** arm *refuses* in-process single-step and routes to §D3 — but the
+  **Decision (2026-07-06)** above retired exactly that refusal ("no longer a shipping
+  precondition"), and `asmtest_hwtrace_begin_window`
+  ([src/hwtrace.c](../../../src/hwtrace.c)) has **no managed detection of any kind**: it
+  `EUNAVAIL`s every non-single-step backend and otherwise arms `asmtest_ss_begin_window`
+  unconditionally. There is no refusal to assert and no routing to observe — writing the test
+  today would mean asserting behaviour the tree deliberately does not have. Independently, it
+  is also **unrunnable in this harness**: `test_hwtrace` is a plain C binary with no managed
+  runtime to arm over (the "managed" half would have to be faked, at which point the test
+  asserts nothing about managed code). **Revive it only if** the safe-managed-arm roadmap in
+  §Z1.1 is actually built (PT/LBR where the silicon exists, else the §D3 stepper); it is a
+  gate *for that seam*, not an open item against today's tree. The managed WEAK arm's real
+  shipped coverage is the .NET lane (`docker-hwtrace-dotnet`), which exercises the
+  in-process-single-step-of-managed-windows the 2026-07-06 decision accepts.
 - The STRONG PT arm's decode is exercised by §Z2's `test_wholewindow_decode`; the **live**
   whole-window PT/LBR smokes self-skip off their silicon
   (`asmtest_hwtrace_available()`/`asmtest_pt_decoder_present()` + why-string), wrapped in
@@ -684,7 +739,8 @@ when ptrace is denied. Linux-only.
 
 ## §Z4 — Async-hop honesty default, opt-in stitching *(default landed; stitching forward-look)*
 
-> **Status: default + merge core landed; escalation forward-look.** The mismatch-flag
+> **Status: default + merge core landed AND host-tested (`test_asynchop_flag`, 2026-07-16);
+> escalation forward-look.** The mismatch-flag
 > **pattern** ships for the region-scoped path (Core §0.2): `asmtest_hwtrace_arm_tid`
 > ([src/hwtrace.c:1829](../../../src/hwtrace.c#L1829)) + the cross-thread `truncated` flag in
 > `asmtest_hwtrace_end` ([:1885-1888](../../../src/hwtrace.c#L1885)). But that backstop is
@@ -722,7 +778,7 @@ live chain has no CI protection.
 | Hopped continuation | flagged `truncated` | captured as a further slice |
 | New work | region-free arm-tid carry (Z0/Z4) — the region-keyed §0.2 backstop can't fire | first live `slice_t` producer |
 | Cost | cheap | per-hop decode-at-disable |
-| CI protection | host-testable — but **not yet tested** for the region-free window (see §Z4 tests) | none — needs live runtime + Intel PT |
+| CI protection | **host-tested** — `test_asynchop_flag` (a real second thread closes a live region-free handle), `docker-hwtrace` | none — needs live runtime + Intel PT |
 | Synchronous case | plain trace | byte-identical (degenerate single slice) |
 
 ### The opt-in escalation: wiring the first live slice producer into `stitch`
@@ -757,15 +813,83 @@ cross-thread merge is **Intel-PT-gated** and validated by a synthetic host test,
 ### §Z4 tests + gate
 
 **SPLIT.** The pure merge core is **host-tested on every host** by `test_stitch_slices`
-(synthetic `slice_t` values → ordered stream + `bounds`). **Gap (found 2026-07-16): the
-honest default is IMPLEMENTED but UNTESTED.** The mechanism ships — `asmtest_hwtrace_end_window`
+(synthetic `slice_t` values → ordered stream + `bounds`). ~~**Gap (found 2026-07-16): the
+honest default is IMPLEMENTED but UNTESTED.**~~ **CLOSED (2026-07-16): `test_asynchop_flag`
+is written and green** ([examples/test_hwtrace.c](../../../examples/test_hwtrace.c),
+`docker-hwtrace` → 433/0 then, 444/0 today). The mechanism ships —
+`asmtest_hwtrace_end_window`
 ([src/hwtrace.c](../../../src/hwtrace.c)) flags `trace->truncated` when
 `asmtest_ss_frame_lookup` misses, i.e. when the closing thread is not the arming thread —
-but **no test closes a region-FREE window from another thread**. The drafted
-`test_asynchop_flag` was never written, and `test_arm_tid_mismatch` covers the
-**region-keyed** `begin_scope` path (via `asmtest_hwtrace_arm_tid`), not the window path.
-So this row's "host-testable" claim is a design intent, not shipped coverage — writing
-`test_asynchop_flag` against `begin_window`/`end_window` is the open item. The per-binding
+and it is now gated by a **real** hop: `begin_window` arms a region-free window on main, a
+second thread closes **main's live handle** (as a continuation resuming on a thread-pool
+thread would run `Dispose`), and the test asserts the hopped close returns `OK` with
+`truncated` set on **its own** trace (so the flag can only be the frame-lookup miss, never
+main's window overflowing), that the close really ran on a different OS tid, and — the part
+that makes it more than a restatement — that **main's frame SURVIVES the foreign close**
+(main's own `end_window` still resolves and its window still holds the capture), i.e. the
+frame is genuinely TLS-local.
+> **Why it is not redundant with the two neighbours.** `test_arm_tid_mismatch` covers the
+> **region-keyed** `begin_scope` path (via `asmtest_hwtrace_arm_tid`), not the window path —
+> as this section already noted. Less obviously, `test_wholewindow_singlestep` *does* already
+> assert "a cross-thread close flags truncated", but only by **simulating** the hop with a
+> never-armed phantom handle `{5,999}` — which a **process-global** frame table would still
+> miss, so that assert is **blind** to a cross-thread visibility regression. Verified by
+> mutation: making the frame table visible across threads (a global mirror consulted when the
+> TLS lookup misses, `tls_depth` left per-thread) fails `test_asynchop_flag`'s assert **and
+> nothing else** — the phantom assert stays green. The drafted test was worth writing.
+
+> **~~OPEN BUG~~ FIXED (2026-07-16) — the §Z4 false-complete hole is closed by the
+> specified arm-tid carry, and the RED test that proves it is in the tree.** The region-free
+> close check *was* implemented as *TLS-invisibility* (an `asmtest_ss_frame_lookup` miss),
+> **not** as the "compare the closing OS tid against the **handle-carried** `arm_tid`" this
+> section and §Z0 netNew #1 point 3 both call for. The frame carried the field —
+> `ss_frame_t.arm_tid`, set in `ss_push_frame` ([src/ss_backend.c](../../../src/ss_backend.c))
+> — but **nothing ever read it**; it was write-only. That mattered because a `(idx,gen)`
+> handle is only unique **per thread**: `tls_gen_ctr` is `__thread`, so *every* thread's first
+> region-free window is handle `{0,1}`. A second thread holding its OWN window at `{0,1}` and
+> closing another thread's `{0,1}` made the lookup **spuriously HIT the closer's own frame**:
+> `asmtest_ss_end()` closed the **wrong thread's** window and `end_window` returned `OK` with
+> `truncated == 0` — a false-**complete**, the wrong way round, and reachable whenever a
+> continuation hops onto a thread that itself holds an empty-ctor scope at the same nesting
+> depth (two concurrent `using (new AsmTrace())`, one hopping).
+>
+> **Now gated by `test_crossthread_handle_collision`** ([examples/test_hwtrace.c](../../../examples/test_hwtrace.c),
+> `docker-hwtrace` → **444/0**), which is the test `test_asynchop_flag` deliberately could not
+> be: two FRESH threads (main cannot play either role — its `gen` counter is long past 1), each
+> arming its first window, so both handles are literally `{0,1}`; the test **asserts that
+> premise**, then has B close A's handle while holding its own. It was written RED and failed
+> exactly twice against the old core — the false-complete (`truncated == 0`) *and* the wrong
+> window closed (work B ran after the foreign close was never captured, because B's own frame
+> had been popped and its TF disarmed).
+>
+> **Fix as landed — the arm_tid CARRY (an ABI change, chosen over making `gen`
+> process-globally unique).** `asmtest_hwtrace_scope_t` grows a third field, `int32_t arm_tid`
+> ([include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h)), stamped from
+> `asmtest_ss_self_tid()` at every handle-minting site and compared inside
+> `asmtest_ss_frame_lookup`, which now takes the tid as a third scalar. **Correction to the
+> fix this section previously specified:** having `end_window` compare `hw_current_tid()`
+> against *the frame's* `arm_tid` does **not** work and would have been a no-op — a lookup
+> reads the **caller's own** TLS table, so a frame that resolves there always has
+> `arm_tid == hw_current_tid()` and the mismatch can never fire. The tid is only meaningful
+> across threads if it travels **in the handle**; that is the whole reason this is an ABI
+> change rather than a one-line compare. The compare lives in `frame_lookup` (not in the four
+> `hwtrace.c` callers) because `arm_tid` is private to `ss_frame_t`: the layer that owns the
+> invariant enforces it once, for `end_window` + `render_scope` + `render_window` +
+> `attribute_window` alike, and each caller keeps its existing miss path (`end_window` →
+> `truncated`; the renders → `EINVAL`) — so the tier's conservative-miss default is restored
+> with no new policy at any caller. `asmtest_ss_self_tid()` exists so the stamp and the handle
+> come from ONE clock: `ss_backend.c` and `hwtrace.c` each had their own `gettid` notion
+> (`SS_ARM_TID()` vs `hw_current_tid()`), and had they ever diverged every lookup would miss,
+> turning every close into a silent false-**truncate**.
+>
+> **All 10 bindings track the ABI** (12 bytes / align 4). The ABI subtlety that bites: at 8
+> bytes the struct was a single INTEGER eightbyte — **one** argument register — so `ruby`
+> (Fiddle) and `java` (FFM) legitimately hand-flattened it to one packed `uint64`. At 12 bytes
+> it is **two** eightbytes, so a by-value handle takes **two** registers and every following
+> argument shifts down one slot. Ruby now passes the two eightbytes as two `LONG_LONG` args;
+> Java swapped the packed long for a real `structLayout` and lets the Linker classify it.
+
+The per-binding
 opt-in async case (a real
 `await`/continuation hop → slices stitch by `ScopeId`) and the whole **live hook→tag→merge
 chain have no CI coverage** — they need a live managed runtime + bare-metal Intel PT
