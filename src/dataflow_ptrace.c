@@ -527,6 +527,27 @@ static int dfp_dirty_exit(dfp_ctx *c, int code, int fatal_sig,
     return code;
 }
 
+/* Increment 5 — the signal split. A SIGTRAP stop this file's OWN PTRACE_SINGLESTEP produced
+ * ordinarily reports si_code TRAP_TRACE (an x86 #DB single-step) or TRAP_BRKPT (a step
+ * completing across a syscall — MEASURED in cli/asmspy_engine.c, not an app breakpoint). If
+ * the single-stepped instruction was instead a byte the TARGET planted itself — a JIT/
+ * debugger int3 self-check (V8's IMMEDIATE_CRASH, a CLR breakpoint) or its own hardware
+ * breakpoint — the kernel reports si_code SI_KERNEL (the force_sig path a real #BP exception
+ * takes) or TRAP_HWBKPT instead. This function is called ONLY from the PTRACE_SINGLESTEP
+ * branch of dfp_step_loop below, where this file never plants an int3 of its own (the
+ * region-entry / call-out breakpoints are planted-and-restored entirely inside dfp_run_to /
+ * dfp_run_to_multi before the tracee is ever handed to the single-step loop), so a positive
+ * here is unambiguously the TARGET's own trap, never ours. A GETSIGINFO failure or any other
+ * si_code defaults to 0 (treat as our step) — the same discard-not-deliver behaviour every
+ * SIGTRAP got before this increment, so a false negative is a regression to the prior
+ * behaviour, not a new hazard. Mirrors cli/asmspy_engine.c's sigtrap_is_app. */
+static int dfp_sigtrap_is_app(pid_t tid) {
+    siginfo_t si;
+    if (ptrace(PTRACE_GETSIGINFO, tid, NULL, &si) != 0)
+        return 0;
+    return si.si_code == SI_KERNEL || si.si_code == TRAP_HWBKPT;
+}
+
 /* dfp_run_to (defined below) runs the tracee at NATIVE SPEED to an address via an int3
  * breakpoint + PTRACE_CONT, rewinding rip to that address. The call-out step-over reuses
  * it to run OVER a helper to its return; forward-declared here so dfp_step_loop can call
@@ -636,6 +657,33 @@ static int dfp_step_loop(dfp_ctx *c, uint64_t base_ip, size_t code_len,
                 pending_sig =
                     sig; /* unrelated signal: forward and keep stepping */
                 continue;
+            }
+            /* The signal split (Increment 5): the instruction we just single-stepped was
+             * the TARGET's own trap, not an ordinary step completion. Precise per-
+             * instruction capture cannot safely continue across it — re-arming the trap
+             * flag immediately after delivering a signal fires a #DB on the handler's
+             * first instruction, where SIGTRAP is masked by default, which the kernel
+             * escalates to SIG_DFL and KILLS the target (the asmspy engines' MEASURED
+             * finding, cli/asmspy_engine.c). So the scoped capture ends here, honestly
+             * truncated, and the trap is DELIVERED via the crash-safe detach path
+             * (fatal_sig = SIGTRAP) so the runtime's own signal machinery — a debugger
+             * protocol handshake, an abort/crash handler, a safepoint redirect — runs
+             * exactly as it would untraced, the out-of-process analog of the DynamoRIO
+             * tier's DR_SIGNAL_DELIVER. Finalize whatever step was already open (its
+             * post-state is these regs) before handing off. */
+            if (dfp_sigtrap_is_app(pid)) {
+                struct user_regs_struct aregs;
+                if (c->have_cur) {
+                    if (ptrace(PTRACE_GETREGS, pid, NULL, &aregs) == 0)
+                        finalize_step(c, &aregs);
+                    else
+                        c->cur.n =
+                            0; /* can't read post-state: drop, don't guess */
+                    c->have_cur = 0;
+                }
+                c->vt->truncated = true;
+                return dfp_dirty_exit(c, DF_PTRACE_FAULT, SIGTRAP,
+                                      left_stopped);
             }
             if (++total > DFP_STEP_BACKSTOP) {
                 c->vt->truncated = true;
@@ -1385,11 +1433,16 @@ static void dfp_detach_others(dfp_thrset *set, pid_t keep, uint64_t base) {
 /* The multi-thread worker-targeting core. `img`/`when` carry the optional Increment-3
  * versioned decode (NULL/0 = the live process_vm_readv snapshot) so the Increment-5 JIT
  * entry can compose worker-targeting with time-correct bytes; the public attach_pid_tid
- * below passes NULL. */
+ * below passes NULL. `survived` (optional, NULL = don't care) reports whether the crash-
+ * safe detach actually engaged on a live, stopped tracee — see the note at its write site
+ * below for exactly what it does and does not prove. */
 static int dfp_attach_worker(pid_t pid, pid_t only_tid, uint64_t base,
                              size_t code_len, uint64_t max_insns,
                              asmtest_codeimage_t *img, uint64_t when,
-                             long *result, asmtest_valtrace_t *vt) {
+                             long *result, int *survived,
+                             asmtest_valtrace_t *vt) {
+    if (survived != NULL)
+        *survived = 0;
     if (vt == NULL || pid <= 0 || only_tid < 0 || base == 0 || code_len == 0)
         return DF_PTRACE_EINVAL;
     vt->mem_space = AT_LOC_MEM_ABS;
@@ -1455,9 +1508,19 @@ static int dfp_attach_worker(pid_t pid, pid_t only_tid, uint64_t base,
     free(code);
 
     /* Crash-safe detach: the entering thread is trap-stopped past the region; DETACH (with
-     * any fault signal forwarded) resumes it free so the target SURVIVES. */
+     * any fault signal forwarded, incl. a delivered app SIGTRAP from the signal split above)
+     * resumes it free so the target SURVIVES. `*survived` reflects whether the kernel
+     * actually CONFIRMED the detach (rc==0) rather than merely that we believed the tracee
+     * was still stopped — a real proof for THIS family, unlike the self-forked
+     * asmtest_dataflow_ptrace_attach sibling, which has a shared control page the victim
+     * itself writes to after running past the region; a foreign attach has no such page, so
+     * a successful detach-while-stopped is the strongest signal available. */
+    int detached_ok = 0;
     if (left_stopped)
-        ptrace(PTRACE_DETACH, entering, NULL, (void *)(uintptr_t)c.detach_sig);
+        detached_ok = ptrace(PTRACE_DETACH, entering, NULL,
+                             (void *)(uintptr_t)c.detach_sig) == 0;
+    if (survived != NULL)
+        *survived = detached_ok;
     free(set.v);
     return rc;
 }
@@ -1474,7 +1537,29 @@ int asmtest_dataflow_ptrace_attach_pid_tid(pid_t pid, pid_t only_tid,
                                            uint64_t max_insns, long *result,
                                            asmtest_valtrace_t *vt) {
     return dfp_attach_worker(pid, only_tid, base, code_len, max_insns, NULL, 0,
-                             result, vt);
+                             result, NULL, vt);
+}
+
+/* Increment 5 — the JIT-aware entry point: worker-thread targeting (Inc 4) + hardware/int3
+ * entry breakpoint (automatic via dfp_run_to_multi) + versioned decode & method-version
+ * attribution feed (Inc 3, `img`/`when` — attribution itself stays the caller-side
+ * asmtest_method_attribute post-pass, exactly as Inc 3 established) + call-out step-over
+ * (Inc 2, always on in dfp_step_loop) + the signal split (this increment, always on in
+ * dfp_step_loop) + the crash-safe two-phase detach with an explicit `*survived` proof. This
+ * is everything a live managed runtime needs that a native attach does not: real methods run
+ * on worker threads, get re-JIT'd/moved mid-capture, call runtime helpers, and may trap into
+ * their own signal machinery mid-region. `img`/`when` may be NULL/0 to degrade to the native
+ * live-snapshot decode `attach_pid_tid` uses. Composes entirely on `dfp_attach_worker`; the
+ * only code this function adds is the ENOSYS/EINVAL contract and the `*survived` default. */
+int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
+                                       size_t code_len,
+                                       asmtest_codeimage_t *img, uint64_t when,
+                                       uint64_t max_insns, long *result,
+                                       int *survived, asmtest_valtrace_t *vt) {
+    if (survived != NULL)
+        *survived = 0;
+    return dfp_attach_worker(pid, only_tid, base, code_len, max_insns, img,
+                             when, result, survived, vt);
 }
 
 #else /* not (Linux x86-64 + Capstone) */
@@ -1552,6 +1637,25 @@ int asmtest_dataflow_ptrace_attach_pid_tid(pid_t pid, pid_t only_tid,
     (void)max_insns;
     (void)result;
     (void)vt;
+    return DF_PTRACE_ENOSYS;
+}
+
+int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
+                                       size_t code_len,
+                                       asmtest_codeimage_t *img, uint64_t when,
+                                       uint64_t max_insns, long *result,
+                                       int *survived, asmtest_valtrace_t *vt) {
+    (void)pid;
+    (void)only_tid;
+    (void)base;
+    (void)code_len;
+    (void)img;
+    (void)when;
+    (void)max_insns;
+    (void)result;
+    (void)vt;
+    if (survived != NULL)
+        *survived = 0;
     return DF_PTRACE_ENOSYS;
 }
 

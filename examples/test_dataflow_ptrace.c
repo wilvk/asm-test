@@ -488,6 +488,16 @@ int asmtest_dataflow_ptrace_attach_pid_versioned(pid_t pid, uint64_t base,
                                                  uint64_t when, long *result,
                                                  asmtest_valtrace_t *vt);
 
+/* Increment 5: the JIT-aware entry point — attach_pid_tid's worker-targeting composed with
+ * an optional versioned decode (img/when, NULL/0 = native live snapshot), the signal split,
+ * and an explicit `*survived` proof of the crash-safe detach. Re-declared here like every
+ * other producer entry (the producer ships no public header). */
+int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
+                                       size_t code_len,
+                                       asmtest_codeimage_t *img, uint64_t when,
+                                       uint64_t max_insns, long *result,
+                                       int *survived, asmtest_valtrace_t *vt);
+
 typedef long (*fn2_t)(long, long);
 typedef struct {
     volatile long counter;
@@ -1189,6 +1199,249 @@ static void test_attach_worker_tid(void) {
     munmap(ex, len);
     munmap((void *)ctl, sizeof *ctl);
 }
+
+/* ---- Increment 5: the signal split ---- */
+
+/* mov rax,rdi / int3 / mov rax,rsi / ret — a routine that executes its OWN int3 mid-region.
+ * The victim installs a SIGTRAP handler before looping this, so a correct signal split must:
+ * detect the trap is the TARGET's own (si_code SI_KERNEL, not our single-step #DB), stop
+ * precise capture there (truncated), and DELIVER it via the crash-safe detach so the
+ * installed handler actually RUNS (proven by a shared counter it bumps) — the runtime's own
+ * signal machinery passing through exactly as it would untraced. */
+static const uint8_t int3_region[] = {
+    0x48, 0x89, 0xf8, /* 0x00 mov rax, rdi */
+    0xcc,             /* 0x03 int3          */
+    0x48, 0x89, 0xf0, /* 0x04 mov rax, rsi */
+    0xc3,             /* 0x07 ret          */
+};
+
+typedef struct {
+    volatile long loop_counter; /* victim: bumped once per loop iteration */
+    volatile long trap_handled; /* victim's SIGTRAP handler: bumped each run */
+} it_ctl;
+
+/* A signal handler takes no user data, so the victim (post-fork, its own address space)
+ * points this at its MAP_SHARED control block before installing the handler. */
+static it_ctl *g_it_ctl;
+
+static void it_sigtrap_handler(int sig) {
+    (void)sig;
+    if (g_it_ctl != NULL)
+        g_it_ctl->trap_handled++;
+}
+
+static void test_signal_split(void) {
+    void *ex = map_rx(int3_region, sizeof int3_region);
+    if (ex == NULL) {
+        printf("# SKIP signal_split: region mmap failed\n");
+        return;
+    }
+    size_t len = sizeof int3_region;
+    uint64_t base = (uint64_t)(uintptr_t)ex;
+
+    it_ctl *ctl = mmap(NULL, sizeof *ctl, PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (ctl == MAP_FAILED) {
+        munmap(ex, len);
+        printf("# SKIP signal_split: shm mmap failed\n");
+        return;
+    }
+    memset((void *)ctl, 0, sizeof *ctl);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        munmap(ex, len);
+        munmap((void *)ctl, sizeof *ctl);
+        printf("# SKIP signal_split: fork failed\n");
+        return;
+    }
+    if (pid == 0) {
+        /* Independent victim: installs its OWN SIGTRAP handler (as a JIT/managed runtime
+         * would for a self-check / debugger breakpoint), then loops the region forever. */
+        g_it_ctl = ctl;
+        struct sigaction sa;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_handler = it_sigtrap_handler;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGTRAP, &sa, NULL);
+        struct timespec ts = {0, 2 * 1000 * 1000};
+        for (;;) {
+            volatile long r = ((fn2_t)base)(7, 5);
+            (void)r;
+            ctl->loop_counter++;
+            nanosleep(&ts, NULL);
+        }
+        _exit(0);
+    }
+
+    int ready = 0;
+    for (int i = 0; i < 500; i++) {
+        if (ctl->loop_counter > 0) {
+            ready = 1;
+            break;
+        }
+        struct timespec ts = {0, 3 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+    }
+    if (!ready) {
+        printf("# SKIP signal_split: victim did not start\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        munmap(ex, len);
+        munmap((void *)ctl, sizeof *ctl);
+        return;
+    }
+
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    long result = 0;
+    int rc = asmtest_dataflow_ptrace_attach_pid(pid, base, len, 0, &result, v);
+    if (rc == DF_PTRACE_ETRACE) {
+        printf("# SKIP signal_split: PTRACE_SEIZE unavailable here "
+               "(yama/seccomp)\n");
+        asmtest_valtrace_free(v);
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        munmap(ex, len);
+        munmap((void *)ctl, sizeof *ctl);
+        return;
+    }
+    CHECK(rc == DF_PTRACE_FAULT,
+          "signal_split: the target's own int3 ends the scoped capture "
+          "(DF_PTRACE_FAULT)");
+    CHECK(v->truncated,
+          "signal_split: truncated — capture cannot continue across the "
+          "target's own trap");
+    CHECK(v->steps_len >= 1 && v->steps_len <= 2,
+          "signal_split: only the pre-trap step(s) were captured, nothing "
+          "past the int3");
+
+    long lc0 = ctl->loop_counter;
+    long th0 = ctl->trap_handled;
+    struct timespec ts = {0, 80 * 1000 * 1000};
+    nanosleep(&ts, NULL);
+    CHECK(ctl->trap_handled > th0,
+          "signal_split: the int3 was DELIVERED — the victim's own SIGTRAP "
+          "handler ran");
+    CHECK(ctl->loop_counter > lc0,
+          "signal_split: the victim SURVIVED — kept looping after the "
+          "delivered trap");
+
+    asmtest_valtrace_free(v);
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+    munmap(ex, len);
+    munmap((void *)ctl, sizeof *ctl);
+}
+
+/* ---- Increment 5: the JIT-aware entry point (worker-targeting + survived) ---- */
+
+static void test_attach_jit_worker(void) {
+    /* Reuses the Increment-4 worker fixture (the target routine runs ONLY on a worker
+     * thread, exactly what a managed method needs) to prove attach_jit correctly composes
+     * worker-targeting AND reports an explicit *survived proof — the two things this
+     * increment adds on top of the already-landed dfp_attach_worker core. */
+    void *ex = map_rx(df_chain, sizeof df_chain);
+    if (ex == NULL) {
+        printf("# SKIP attach_jit_worker: region mmap failed\n");
+        return;
+    }
+    size_t len = sizeof df_chain;
+    uint64_t base = (uint64_t)(uintptr_t)ex;
+
+    wk_ctl *ctl = mmap(NULL, sizeof *ctl, PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (ctl == MAP_FAILED) {
+        munmap(ex, len);
+        printf("# SKIP attach_jit_worker: shm mmap failed\n");
+        return;
+    }
+    memset((void *)ctl, 0, sizeof *ctl);
+    ctl->base = base;
+    ctl->a0_a = 7;
+    ctl->a1_a = 5;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        munmap(ex, len);
+        munmap((void *)ctl, sizeof *ctl);
+        printf("# SKIP attach_jit_worker: fork failed\n");
+        return;
+    }
+    if (pid == 0) {
+        pthread_t th;
+        if (pthread_create(&th, NULL, wk_worker_a, (void *)ctl) != 0)
+            _exit(1);
+        struct timespec ts = {0, 3 * 1000 * 1000};
+        for (;;) {
+            ctl->leader_counter++;
+            nanosleep(&ts, NULL);
+        }
+        _exit(0);
+    }
+
+    int ready = 0;
+    for (int i = 0; i < 500; i++) {
+        if (ctl->worker_a_tid != 0 && ctl->worker_a_counter > 0) {
+            ready = 1;
+            break;
+        }
+        struct timespec ts = {0, 3 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+    }
+    if (!ready) {
+        printf("# SKIP attach_jit_worker: victim worker did not start\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        munmap(ex, len);
+        munmap((void *)ctl, sizeof *ctl);
+        return;
+    }
+
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    long result = 0;
+    int survived = -1;
+    int rc = asmtest_dataflow_ptrace_attach_jit(pid, 0, base, len, NULL, 0, 0,
+                                                &result, &survived, v);
+    if (rc == DF_PTRACE_ETRACE) {
+        printf("# SKIP attach_jit_worker: PTRACE_SEIZE unavailable here "
+               "(yama/seccomp)\n");
+        asmtest_valtrace_free(v);
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        munmap(ex, len);
+        munmap((void *)ctl, sizeof *ctl);
+        return;
+    }
+    CHECK(rc == DF_PTRACE_OK,
+          "attach_jit_worker: SEIZE-all + stepped the WORKER's region via "
+          "attach_jit");
+    CHECK(result == 12, "attach_jit_worker: worker region returned 12 (rdi + "
+                        "rsi)");
+    CHECK(v->steps_len == 6,
+          "attach_jit_worker: six in-region steps captured on the worker "
+          "thread");
+    CHECK(survived == 1,
+          "attach_jit_worker: *survived reports the crash-safe detach "
+          "engaged");
+
+    long wc0 = ctl->worker_a_counter;
+    struct timespec ts = {0, 60 * 1000 * 1000};
+    nanosleep(&ts, NULL);
+    CHECK(ctl->worker_a_counter > wc0,
+          "attach_jit_worker: the worker kept running after detach (matches "
+          "*survived)");
+
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    CHECK(g != NULL && has_edge(g, 1, 2),
+          "attach_jit_worker: load-after-store edge step1 -> step2");
+
+    asmtest_defuse_free(g);
+    asmtest_valtrace_free(v);
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+    munmap(ex, len);
+    munmap((void *)ctl, sizeof *ctl);
+}
 #else
 static void test_attach_pid(void) {}
 static void test_callout(void) {}
@@ -1196,6 +1449,8 @@ static void test_callout_noreturn(void) {}
 static void test_versioned(void) {}
 static void test_attach_worker(void) {}
 static void test_attach_worker_tid(void) {}
+static void test_signal_split(void) {}
+static void test_attach_jit_worker(void) {}
 #endif
 
 int main(void) {
@@ -1231,6 +1486,8 @@ int main(void) {
     test_versioned();
     test_attach_worker();
     test_attach_worker_tid();
+    test_signal_split();
+    test_attach_jit_worker();
 
     printf("1..%d\n", checks);
     if (failures)

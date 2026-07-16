@@ -1587,17 +1587,6 @@ static int cmd_watch(pid_t pid, const char *loc, int rw, int len, long n,
 /* Data-flow capture view (headless; the TUI mode 9 shares the engine) */
 /* ================================================================== */
 
-/* True for a JIT/managed runtime whose hot code the NATIVE single-step value
- * producer cannot yet trace (JIT W^X code, worker-thread execution) — the JIT
- * value producer that handles them is a later increment (live-attach-dataflow
- * plan, Increments 3-5). Interpreter runtimes (CPython, Ruby, PHP, BEAM) and
- * AOT-native ones (Go, "native") run ordinary native code and are traced
- * normally; only the JITs are gated off here. */
-static int runtime_is_managed(const char *rt) {
-    return strcmp(rt, "JVM") == 0 || strcmp(rt, ".NET") == 0 ||
-           strcmp(rt, "Mono") == 0 || strcmp(rt, "Node/V8") == 0;
-}
-
 /* One captured-invocation context for the data-flow sink. `func` is borrowed
  * (the symtab / argv string, alive for the synchronous engine call). */
 typedef struct {
@@ -1734,18 +1723,6 @@ static void dataflow_render_sink(void *ctx, long result,
 
 static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                         int json) {
-    /* NATIVE path only: a JIT/managed runtime needs the (not-yet-landed) JIT value
-     * producer, so gate it off from the fingerprint and self-skip cleanly. */
-    asmspy_fingerprint_t fp;
-    asmspy_fingerprint(pid, &fp);
-    if (runtime_is_managed(fp.runtime)) {
-        fprintf(stderr,
-                "# SKIP --dataflow: pid %d is a %s runtime; the native value "
-                "producer cannot single-step JIT/managed code yet\n",
-                (int)pid, fp.runtime);
-        return 0; /* clean self-skip, like --sample off an IBS host */
-    }
-
     asmspy_symtab_t t;
     if (asmspy_symtab_load(pid, &t) < 0) {
         fprintf(stderr, "cannot read symbols for pid %d\n", (int)pid);
@@ -4295,26 +4272,13 @@ int asmspy_tui(void) {
                 nav = run_details_view(picked.pid, title);
             } else if (mode == 8) {
                 /* data flow: pick a function, then one-shot scoped L0 value +
-                 * L1 def-use capture with L2 slice navigation. Managed/JIT
-                 * runtimes are gated off here (the native single-step producer
-                 * can't step JIT code yet — same self-skip the headless
-                 * --dataflow does), with a clear message rather than a capture
-                 * that would attribute nothing. */
-                asmspy_fingerprint_t fp;
-                asmspy_fingerprint(picked.pid, &fp);
-                if (runtime_is_managed(fp.runtime)) {
-                    erase();
-                    mvprintw(
-                        0, 0,
-                        "data flow: pid %d is a %s runtime — the native "
-                        "value producer can't single-step JIT/managed code "
-                        "yet (Increment 5).",
-                        picked.pid, fp.runtime);
-                    mvprintw(2, 0, "press a key");
-                    refresh();
-                    getch();
-                    nav = 0; /* back to options */
-                } else {
+                 * L1 def-use capture with L2 slice navigation. The producer
+                 * SEIZEs every thread and races whichever enters the region,
+                 * so a managed method running on a worker thread is reached
+                 * the same as a native leaf; a genuinely W^X-protected JIT
+                 * page that refuses the entry breakpoint self-skips cleanly
+                 * (surfaced as a capture-failed message), not a runtime gate. */
+                {
                     asmspy_symtab_t t;
                     if (asmspy_symtab_load(picked.pid, &t) < 0 || t.n == 0) {
                         erase();

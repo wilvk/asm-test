@@ -28,14 +28,26 @@
 | Live call **tree** (indented by depth; TUI two-pane w/ assembly) | `--tree` | mode 5 | `asmspy_engine_tree` | single-step, all threads | **no** (single-step) |
 | Process/thread **topology** (procs+threads+children, drill-in) | `--procs` | mode 6 | `asmspy_engine_procs` | `PTRACE_SYSCALL` **or** single-step, whole tree | **yes** in `--count=syscalls` |
 | **Statistical hot edges** (IBS-Op `from→to`, named endpoints, misp/ret tags, `--json`) | `--sample` | mode 7 | `asmspy_engine_sample` | **AMD IBS-Op statistical sampling, OUT OF BAND** (no ptrace/step) | **yes** — the only *rich* view safe on any target (incl. a live JIT) |
-| **Data flow** (L0 values + L1 def-use + L2 slice nav) | `--dataflow` | mode 9 | `asmspy_engine_dataflow` | scoped-ptrace L0 value producer (attach + region single-step), UI-side slice navigation | **no** (single-step); leader-only pending Inc 5 worker wiring |
+| **Data flow** (L0 values + L1 def-use + L2 slice nav) | `--dataflow` | mode 9 | `asmspy_engine_dataflow` | JIT-aware scoped-ptrace L0 value producer (`attach_jit`: SEIZE-all-threads-and-race + signal split), UI-side slice navigation | **no** (single-step); worker-thread + managed targets now reached |
 | **Data watchpoint** (who-wrote-this-field + value) | `--watch` | — | `asmspy_engine_watch` | x86 HW data watchpoint (DR0-3, per-thread arm), native speed between hits | **yes** — near-zero perturbation |
 
 > The **Data flow** and **Data watchpoint** views landed **2026-07-15** via the
 > [live-attach data-flow plan](live-attach-dataflow-plan.md) (Inc 6 headless `--dataflow` +
 > Inc 7 TUI mode 9) and its followup **F3** (`--watch`); `asmspy_engine_watch` per-thread-arms
-> across `/proc/<pid>/task/*`. The Data-flow view is native-target only for now (the JIT/managed
-> engine path is live-attach Increment 5).
+> across `/proc/<pid>/task/*`. **Live-attach Increment 5 (`attach_jit` + the signal split)
+> LANDED 2026-07-15**: the Data-flow view now SEIZEs every thread and races whichever one
+> first enters the region — reaching a routine that runs on a worker thread (as managed
+> methods almost always do), same as any native leaf — and detects/delivers the target's own
+> trap (a JIT self-check, a debugger breakpoint) rather than swallowing or single-stepping
+> through it, so the `runtime_is_managed` hard gate is removed from both the headless and TUI
+> call sites. Two disclosed gaps remain: a genuinely W^X-enforced JIT page's entry breakpoint
+> has no hardware-breakpoint fallback yet (self-skips cleanly, `DF_PTRACE_ETRACE`), and a
+> method re-JIT'd/moved *mid-capture* decodes the live snapshot (the versioned-decode `img`
+> plumbing isn't wired into asmspy's call site yet) — both were pre-existing, explicitly
+> flagged deferrals, not new bugs. Validated by 11 new checks in
+> `examples/test_dataflow_ptrace.c` (signal-detection/delivery + worker-targeting, ASan/UBSan-
+> clean) and `make docker-cli`; not yet validated against a real dotnet/JVM process (no such
+> asmspy-specific harness exists in-repo).
 
 Cross-cutting, landed: **PLT stub resolution** (`name@plt`, tagged `[EXT]`); the **crash-safe
 two-phase detach** (stop all threads, then release all — fixes a fatal-SIGTRAP-on-detach when

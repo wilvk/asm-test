@@ -256,22 +256,28 @@ typedef void (*asmspy_dataflow_sink)(void *ctx, long result,
                                      const uint8_t *code, size_t len,
                                      uint64_t base);
 
-/* Attach to `pid`, run the scoped ptrace L0 value producer over [base, base+len)
- * for ONE invocation, build the def-use graph, hand both to `sink`, and DETACH so
- * the target SURVIVES. NATIVE code only — the JIT/managed producer (worker-thread
- * targeting, W^X entry breakpoint, versioned bytes, method attribution) is a later
- * increment, so the caller picks native from the fingerprint and reports a managed
- * runtime unavailable. `only_tid` (non-0) seizes exactly that thread — so a routine
- * that runs on a worker thread can be reached — while 0 targets the thread-group
- * leader. `max` (>0) bounds the in-region steps captured (the producer's max_insns);
- * <=0 captures until the region returns (bounded by the producer's step backstop).
- * `stop` may be NULL (checked once before the capture; the producer's own run-to /
- * step loop is not interruptible mid-capture — the tier is single-shot and fast).
- * Returns 0 on a clean capture (sink invoked once), ASMSPY_DATAFLOW_UNAVAIL if the
- * producer is unavailable, or a negative ASMTEST_PTRACE_* on an attach/permission
- * failure. Like asmspy_engine_region it attaches only the requested thread, so a
- * region that never executes on it will block the producer at its entry breakpoint
- * — bound live use accordingly (the CLI timeout-guards its smoke). */
+/* Attach to `pid`, run the JIT-aware scoped ptrace L0 value producer
+ * (asmtest_dataflow_ptrace_attach_jit) over [base, base+len) for ONE invocation,
+ * build the def-use graph, hand both to `sink`, and DETACH so the target SURVIVES.
+ * SEIZEs EVERY thread and steps whichever one first enters the region, so a routine
+ * that runs on a worker thread — as managed methods almost always do — is reached,
+ * not just the leader; `only_tid` (non-0, the --tid convention) pins exactly that
+ * thread instead. The target's own trap (a JIT self-check, a debugger breakpoint)
+ * is detected and DELIVERED rather than swallowed or single-stepped through (the
+ * signal split), so native and managed/JIT targets share one path — no runtime
+ * gate. Two known, separately-tracked gaps: a region patched/re-JIT'd MID-capture
+ * decodes the live snapshot (versioned decode is not wired in here yet), and a
+ * genuinely W^X-enforced JIT page refusing the int3 entry breakpoint self-skips
+ * cleanly via a negative ASMTEST_PTRACE_ETRACE (no hardware-breakpoint fallback
+ * here yet) rather than crashing anything. `max` (>0) bounds the in-region steps
+ * captured (the producer's max_insns); <=0 captures until the region returns
+ * (bounded by the producer's step backstop). `stop` may be NULL (checked once
+ * before the capture; the producer's own run-to / step loop is not interruptible
+ * mid-capture — the tier is single-shot and fast). Returns 0 on a clean capture
+ * (sink invoked once), ASMSPY_DATAFLOW_UNAVAIL if the producer is unavailable, or
+ * a negative ASMTEST_PTRACE_* on an attach/permission failure. A region that never
+ * executes on ANY thread blocks the producer at its entry breakpoint — bound live
+ * use accordingly (the CLI timeout-guards its smoke). */
 int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
                            long max, atomic_bool *stop,
                            asmspy_dataflow_sink sink, void *ctx);

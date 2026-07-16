@@ -29,6 +29,7 @@
 #include <unistd.h>
 
 #include "asmspy.h"
+#include "asmtest_codeimage.h" /* asmtest_codeimage_t — the attach_jit versioned-decode param (unused today, NULL) */
 #include "asmtest_ibs.h" /* the out-of-band statistical sampler (asmspy_engine_sample) */
 
 #define DUMP_CAP 200 /* bytes of a buffer/path decoded per syscall */
@@ -90,7 +91,8 @@ void asmspy_strerror(int rc, char *buf, size_t buflen) {
         m = "region/symbol not found";
         break;
     case ASMTEST_PTRACE_ETRACE:
-        m = "ptrace/attach failure (permission? ptrace_scope?)";
+        m = "ptrace/attach failure (permission? ptrace_scope? on a managed "
+            "target, possibly a W^X JIT page refusing the entry breakpoint)";
         break;
     default:
         m = "attach failed";
@@ -897,21 +899,29 @@ int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
 }
 
 /* ------------------------------------------------------------------ */
-/* Scoped data-flow value capture (Increment 6)                        */
+/* Scoped data-flow value capture (Increments 6 + 5)                   */
 /*                                                                     */
-/* Wraps the landed scoped-ptrace L0 value producer                    */
-/* (src/dataflow_ptrace.c: asmtest_dataflow_ptrace_attach_pid) — SEIZE  */
-/* a live pid, run_to the region entry, single-step [base,base+len)     */
-/* capturing each step's operand VALUES, DETACH so the target survives  */
-/* — then builds the pure L1 last-writer def-use graph over the L0      */
-/* trace and hands both to the sink. The producer ships NO public       */
-/* header (a value-trace producer is a tier, not the shared             */
-/* asmtest_valtrace.h sink API), so — exactly as its test suite          */
+/* Wraps the landed JIT-aware scoped-ptrace L0 value producer          */
+/* (src/dataflow_ptrace.c: asmtest_dataflow_ptrace_attach_jit) — SEIZE  */
+/* EVERY thread of a live pid, race whichever one first enters          */
+/* [base,base+len) (so a routine running on a worker thread, as         */
+/* managed methods almost always do, is reached — not just the          */
+/* leader), single-step it capturing each step's operand VALUES with    */
+/* the signal split (the target's OWN trap is detected and DELIVERED,   */
+/* never swallowed or single-stepped through), DETACH so the target     */
+/* survives — then builds the pure L1 last-writer def-use graph over    */
+/* the L0 trace and hands both to the sink. The producer ships NO       */
+/* public header (a value-trace producer is a tier, not the shared      */
+/* asmtest_valtrace.h sink API), so — exactly as its test suite         */
 /* examples/test_dataflow_ptrace.c does — its entry point + return      */
-/* codes are re-declared here. NATIVE targets only; the JIT/managed     */
-/* producer (worker-thread targeting, versioned bytes) is a later       */
-/* increment (the caller gates managed runtimes off via the             */
-/* fingerprint).                                                        */
+/* codes are re-declared here. `img`/`when` (versioned decode / method   */
+/* attribution) are not wired in yet — a target patched/re-JIT'd MID-   */
+/* capture decodes the live snapshot, same as the native tier; a         */
+/* genuinely W^X-enforced JIT page refusing the POKETEXT entry           */
+/* breakpoint (no hardware-breakpoint fallback here yet, unlike the      */
+/* offset-only tracer) self-skips cleanly via DF_PTRACE_ETRACE rather    */
+/* than crashing anything — both are known, separately-tracked gaps,     */
+/* not silent partial captures.                                         */
 /* ------------------------------------------------------------------ */
 
 /* The scoped ptrace producers' return codes — declared here, NOT in a public
@@ -922,9 +932,11 @@ int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
 #define DF_PTRACE_ENOSYS (-3) /* off Linux x86-64 / no Capstone: self-skip    */
 #define DF_PTRACE_ETRACE (-4) /* SEIZE/ptrace/wait failure (seccomp/yama)     */
 
-int asmtest_dataflow_ptrace_attach_pid(pid_t pid, uint64_t base,
-                                       size_t code_len, uint64_t max_insns,
-                                       long *result, asmtest_valtrace_t *vt);
+int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid,
+                                       uint64_t base, size_t code_len,
+                                       asmtest_codeimage_t *img, uint64_t when,
+                                       uint64_t max_insns, long *result,
+                                       int *survived, asmtest_valtrace_t *vt);
 
 int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
                            long max, atomic_bool *stop,
@@ -961,12 +973,14 @@ int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
     }
 
     long result = 0;
-    /* --tid seizes exactly that task (ptrace is per-thread, so a tid is a valid
-     * SEIZE target); 0 targets the thread-group leader. */
-    pid_t target = only_tid ? only_tid : pid;
+    int survived = 0; /* not yet surfaced to the caller; see asmspy.h note */
+    /* SEIZE every thread of `pid` and step whichever one first enters the region —
+     * so a routine that runs on a worker thread (as managed methods almost always
+     * do) is reached, not just the leader. `only_tid` (non-0, the --tid convention)
+     * pins exactly that thread instead of racing all of them. */
     uint64_t max_insns = (max > 0) ? (uint64_t)max : 0;
-    int prc = asmtest_dataflow_ptrace_attach_pid(target, base, len, max_insns,
-                                                 &result, vt);
+    int prc = asmtest_dataflow_ptrace_attach_jit(
+        pid, only_tid, base, len, NULL, 0, max_insns, &result, &survived, vt);
 
     int rc;
     switch (prc) {

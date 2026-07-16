@@ -15,8 +15,8 @@ optimization, hardware data-watchpoints, the PT-derived value path, and live GC-
 canonicalization are deliberately **out of scope here** and carried in the companion
 [live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md).
 
-> Status: **Increments 1, 2, 3, 4, 6, and 7 (native path) LANDED; only Increment 5 (attach_jit) planned.** Increment 1 (native live-attach) is the
-> recommended first milestone — it is low-risk reuse of the landed capture core and needs no
+> Status: **All seven increments LANDED (2026-07-15).** Increment 1 (native live-attach) was
+> the recommended first milestone — it is low-risk reuse of the landed capture core and needs no
 > JIT machinery. The single-step value tier already exists and is cross-validated against
 > the emulator L0 oracle; this plan changes *what it attaches to* and *how it survives a
 > foreign target*, not the per-step capture math. House rule in force throughout: a foreign
@@ -24,6 +24,49 @@ canonicalization are deliberately **out of scope here** and carried in the compa
 > **self-skips cleanly** (returns an availability code, emits nothing) where ptrace
 > permission, Capstone, or the platform is missing — never an unproven or partial-without-
 > saying-so trace.
+>
+> **Increment 5 (`attach_jit` + the signal split) LANDED 2026-07-15.** The signal split lives
+> in the shared `dfp_step_loop` (`dfp_sigtrap_is_app`, [dataflow_ptrace.c](../../../src/dataflow_ptrace.c)):
+> a SIGTRAP stop is checked via `PTRACE_GETSIGINFO` before being assumed to be our own
+> single-step trap — `si_code == SI_KERNEL`/`TRAP_HWBKPT` means the TARGET executed its own
+> int3/hardware breakpoint (a JIT self-check, a debugger breakpoint, a safepoint), which
+> re-arming the trap flag across cannot safely continue through (the asmspy engines' MEASURED
+> fatal-SIGTRAP-in-masked-handler finding). The scoped capture ends there — `vt->truncated`,
+> honestly — and the trap is DELIVERED via the existing crash-safe detach path
+> (`fatal_sig = SIGTRAP`) so the target's own signal machinery runs exactly as it would
+> untraced, benefiting every entry point (`attach`, `attach_pid[_versioned]`, `attach_pid_tid`,
+> `attach_jit`) since it lives in the shared loop, not per-entry-point. The new
+> `asmtest_dataflow_ptrace_attach_jit(pid, only_tid, base, len, img, when, max_insns, result,
+> survived, vt)` composes worker-thread targeting (Inc 4) + versioned-decode plumbing (Inc 3,
+> `img`/`when` — method-version *attribution* stays the caller-side `asmtest_method_attribute`
+> post-pass, as Inc 3 established) + call-out step-over (Inc 2) + the signal split + an explicit
+> `*survived` proof (true only when the kernel confirms the crash-safe `PTRACE_DETACH` actually
+> succeeded on a live, stopped tracee — a real proof for this foreign-attach family, unlike the
+> self-forked `asmtest_dataflow_ptrace_attach` sibling's shared-control-page self-report).
+> Eleven new checks in `examples/test_dataflow_ptrace.c` (81–91, ASan/UBSan-clean, stable over
+> repeat runs): `test_signal_split` seeds an embedded `int3` in a victim with its OWN installed
+> `SIGTRAP` handler and asserts the trap is detected, capture truncates at exactly that point,
+> the handler actually RUNS (delivery proven, not assumed), and the victim SURVIVES and keeps
+> looping afterward; `test_attach_jit_worker` proves `attach_jit` correctly reaches a routine
+> running only on a worker thread and reports `*survived == 1`. asmspy's Data-flow engine
+> (`asmspy_engine_dataflow`, [cli/asmspy_engine.c](../../../cli/asmspy_engine.c)) now calls
+> `attach_jit` unconditionally, and the `runtime_is_managed` gate that refused ANY managed
+> target at both call sites (`asmspy.c`'s headless `--dataflow` and the TUI mode-9 window) is
+> **removed** — every target now goes through the same SEIZE-all-threads-and-race path, native
+> or managed, with no runtime-name special case (the dead `runtime_is_managed` helper was
+> deleted). Two **known, deliberately out-of-scope-here** gaps, carried forward honestly rather
+> than silently: (1) `attach_jit` is called with `img=NULL`/`when=0` from asmspy — a target
+> patched/re-JIT'd *mid-capture* decodes the live snapshot, same as the native tier, not the
+> time-correct versioned bytes (wiring a live code-image + addr-channel feed into asmspy is
+> further work); (2) the region-entry breakpoint (`dfp_run_to`/`dfp_run_to_multi` in
+> [dataflow_ptrace.c](../../../src/dataflow_ptrace.c)) still plants via `PTRACE_POKETEXT`
+> **only** — unlike the offset-only control-flow tracer's `asmtest_ptrace_run_to`, it has **no**
+> DR0 hardware-breakpoint fallback for a genuinely W^X-enforced JIT page, so such a target
+> self-skips cleanly via `DF_PTRACE_ETRACE` (never a crash, never a silent partial capture) but
+> cannot yet be captured — the in-code comments at `dfp_run_to`/`dfp_plant_bp` already flagged
+> this as "a later increment" before this change and it remains exactly that. Verified via
+> `make dataflow-test` (91/91, incl. under `SAN=1` ASan+UBSan) and `make docker-cli`
+> (`cli-smoke: PASS`, incl. the existing native `--dataflow` + `--json` regression).
 
 ---
 
@@ -301,7 +344,56 @@ is captured (no longer `NEVER_RAN`); the process's other threads keep running at
 
 ---
 
-## Increment 5 — JIT-aware entry point (compose 2–4) + signal pass-through *(planned)*
+## Increment 5 — JIT-aware entry point (compose 2–4) + signal pass-through *(LANDED 2026-07-15)*
+
+> **Outcome.** `asmtest_dataflow_ptrace_attach_jit` ties the pieces together into one
+> managed-safe path, composing entirely on the existing `dfp_attach_worker` (Inc 4's core):
+> worker-thread targeting (Inc 4), versioned-decode plumbing (Inc 3, `img`/`when` — attribution
+> itself stays the caller-side `asmtest_method_attribute` post-pass), call-out step-over (Inc 2,
+> already always-on in the shared step loop), the new signal split, and the crash-safe
+> two-phase detach with an explicit, kernel-confirmed `*survived`. The **signal split**
+> (`dfp_sigtrap_is_app`) lives in the SHARED `dfp_step_loop`, so every entry point gets it for
+> free, not just `attach_jit`. **Deviations from the sketch below, each a deliberate, disclosed
+> scope decision, not an oversight:** (1) the `asmtest_addr_channel_t *chan` parameter in the
+> original sketch was dropped — it had no internal operational use (attach_jit doesn't
+> maintain a "known JIT regions" set; a caller wanting attribution already has
+> `asmtest_method_attribute`), so accepting-and-ignoring it would have been unused complexity;
+> (2) a `long *result` param was ADDED (the sketch omitted it) for signature consistency with
+> every sibling entry point (`_run`/`_attach`/`_attach_pid[_versioned]`/`_attach_pid_tid`), none
+> of which drop the routine's return value. **Two known gaps, carried forward openly:** no
+> hardware-breakpoint (DR0) fallback yet for the region-entry `int3` on a genuinely
+> W^X-enforced JIT page (`dfp_run_to`/`dfp_run_to_multi` are POKETEXT-only — pre-existing,
+> flagged in-code before this change, still "a later increment"); `img`/`when` (Inc 3 versioned
+> decode) is not yet wired into asmspy's own call site (asmspy calls `attach_jit` with
+> `img=NULL`), so an asmspy-driven capture of a method that gets re-JIT'd or moved *mid-capture*
+> decodes the live snapshot, same as the native tier — a live code-image + addr-channel feed
+> into asmspy is further, separable work.
+>
+> **Validation.** 11 new checks in `examples/test_dataflow_ptrace.c` (81–91; 91/91 total,
+> ASan+UBSan-clean, stable over 8 repeat runs): `test_signal_split` proves the mechanism
+> end-to-end — a victim with a hand-installed SIGTRAP handler executes its OWN embedded `int3`
+> mid-region; the capture detects it (`si_code == SI_KERNEL`), truncates honestly at exactly
+> that point, DELIVERS the trap (the victim's handler is proven to have actually run via a
+> shared counter, not merely "the process didn't crash by coincidence"), and the victim
+> SURVIVES and keeps running afterward. `test_attach_jit_worker` proves the composed entry
+> point reaches a routine that runs only on a worker thread and that `*survived == 1` reflects
+> a real, kernel-confirmed detach. `cli/asmspy_engine.c`'s `asmspy_engine_dataflow` now calls
+> `attach_jit` unconditionally (SEIZE-all-threads-and-race, replacing the old leader-only
+> `attach_pid`), and the `runtime_is_managed` gate that hard-refused every managed target at
+> BOTH asmspy call sites (`--dataflow` headless, TUI mode-9 window) is removed — verified via
+> `make docker-cli` (`cli-smoke: PASS`, including the pre-existing native `--dataflow`/`--json`
+> regression). **What this does NOT cover, honestly:** no real dotnet/JVM process was attached
+> to end-to-end — the exit criteria's original "reuse the existing dotnet / JVM smoke fixtures
+> under `bindings/`" wasn't executed, because no asmspy-specific harness against a real managed
+> runtime exists in-repo (the JIT smoke fixture `jit_victim` cli-smoke already uses is a
+> synthetic anonymous-mmap + hand-written perf-map stand-in, not a real JIT). The mechanism
+> tests above exercise the EXACT new logic (signal detection/delivery, worker racing, survived
+> proof) deterministically and in isolation; a live-JVM/.NET run through `asmspy --dataflow`
+> remains a natural, named follow-on. V8's `IMMEDIATE_CRASH` self-check remains a documented
+> inherent hazard (indistinguishable from a step-induced trap) — the signal split makes it
+> *survivable* (delivered, not swallowed), not detectable-as-benign.
+>
+> The as-planned bullets below are the original sketch, retained for provenance.
 
 `asmtest_dataflow_ptrace_attach_jit` ties the pieces together into one managed-safe path:
 worker-thread targeting (Inc 4) + hardware entry breakpoint (automatic via `run_to`) +
@@ -403,8 +495,13 @@ picked function of a live process; the leader/worker and JIT caveats surface in-
   as-observed at each step (single-step reads the real memory), so this tier is *correct*
   here — the divergence risk is specific to the deferred emulator-replay path (F1/F2).
 - **Entry breakpoint on a moving target.** If the method is re-JIT'd to a new address between
-  `run_to` arming and arrival, the breakpoint is stale; the addr-channel feed + a re-arm on a
-  `NEVER_RAN`/timeout loop is the mitigation (Inc 4/5).
+  `run_to` arming and arrival, the breakpoint is stale; a re-arm on a `NEVER_RAN`/timeout loop
+  fed by the addr-channel is the natural mitigation, but Increment 5 did **not** build it —
+  `attach_jit` was shipped with the addr-channel (`chan`) parameter deliberately DROPPED from
+  the original sketch (no internal use was identified; see the Increment 5 note above), so this
+  risk is still open, not mitigated. Also unmitigated: the region-entry `int3` itself has no
+  hardware-breakpoint fallback on a W^X-enforced JIT page (also noted above) — such a target
+  self-skips (`DF_PTRACE_ETRACE`) rather than capturing.
 - **PT/permission gating.** The native path needs only ptrace permission; the JIT path's
   method-map is best-effort (jitdump/perf-map may be absent). Everything self-skips.
 
@@ -418,3 +515,11 @@ no code-image, addr-channel, or worker-thread machinery, and immediately gives a
 working data-flow capture on native processes. It also forces the one refactor everything
 else depends on — making `dfp_step_loop` foreign-safe (stop killing the target) — so landing
 it de-risks Increments 2–7 before any JIT complexity is added.
+
+**All seven increments are now landed (2026-07-15)** — the plan's committed scope is complete
+and it is ready to archive per the repo's convention (moving `docs/internal/plans/*.md` to
+`docs/internal/archive/plans/` once every phase/increment lands), left in place here pending
+that housekeeping pass, consistent with how [dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md)
+records the same status. The two gaps disclosed in the Increment 5 note (the addr-channel
+re-arm-on-stale-breakpoint mitigation, and the W^X hardware-breakpoint entry fallback) and a
+real dotnet/JVM validation run are the honest remaining follow-ons, not committed scope.
