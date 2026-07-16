@@ -77,7 +77,8 @@ EXPID=""
 FKPID=""
 CLPID=""
 IVPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
+SKPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -411,6 +412,23 @@ assert all(k in d["functions"][0] for k in ("addr","name","module","kind","invoc
 assert all(k in d["edges"][0] for k in ("caller","callee","count"))' \
         || fail "--json: not well-formed JSON / missing node or edge keys"
     echo "  json validated (python3 json.load: nodes + edges)"
+    # NODE/EDGE UNIQUENESS — the guard on the hash index that replaced the O(n)
+    # scans (asmspy-plan Theme E). Both lookups are "find it, else append", so a
+    # broken index does not error: it MISSES, appends a second node for an
+    # address it already has, and renders a plausible graph with the call counts
+    # silently split across the duplicates. Uniqueness is the property the index
+    # must preserve, so it is what gets asserted — not the speed, which is what
+    # the index is FOR but which no assertion here could pin down honestly.
+    printf '%s' "$jout" | python3 -c 'import json,sys
+d = json.load(sys.stdin)
+addrs = [f["addr"] for f in d["functions"]]
+dup = {a for a in addrs if addrs.count(a) > 1}
+assert not dup, "duplicate node addresses (index missed a hit): %s" % sorted(dup)[:4]
+keys = [(e["caller"], e["callee"]) for e in d["edges"]]
+edup = {k for k in keys if keys.count(k) > 1}
+assert not edup, "duplicate caller->callee edges (index missed a hit): %s" % sorted(edup)[:4]
+print("  nodes/edges unique (%d nodes, %d edges) — hash index dedups correctly" % (len(addrs), len(keys)))' \
+        || fail "--json: duplicate nodes/edges — the graph node/edge index is missing hits it should find"
 else
     echo "  json structural checks passed (python3 absent; strict parse skipped)"
 fi
@@ -872,6 +890,61 @@ echo "  untabled tasks released on sight; the tabled leader keeps tracing"
 kill -9 "$CLPID" 2>/dev/null || true
 wait "$CLPID" 2>/dev/null || true
 CLPID=""
+
+# ---------------------------------------------------------------------------
+# fd -> ENDPOINT enrichment for sockets (asmspy-plan Theme E)
+# ---------------------------------------------------------------------------
+# readlink("/proc/<pid>/fd/N") on a socket yields "socket:[12345]" — an inode,
+# the one thing a person watching a trace does not care about. asmspy resolves it
+# through /proc/<pid>/net (the TARGET's pid, so a container's socket is looked up
+# in ITS netns, not ours).
+#
+# The victim binds to port 0 and PRINTS the port the kernel picked, so the
+# expected strings are DERIVED from the run rather than hardcoded — the
+# assertions below cannot pass against a stale/wrong socket, and cannot be
+# satisfied by echoing the inode back.
+echo "--- asmspy --log fd->endpoint (socket:[inode] -> real endpoint) ---"
+"$BUILD/sock_victim" 2>"$BUILD/sock_victim.log" &
+SKPID=$!
+sleep 1
+kill -0 "$SKPID" 2>/dev/null || { cat "$BUILD/sock_victim.log"; fail "sock_victim died at startup"; }
+SKPORT=$(sed -n 's/.*tcp_port=\([0-9]*\).*/\1/p' "$BUILD/sock_victim.log")
+[ -n "$SKPORT" ] || { cat "$BUILD/sock_victim.log"; fail "sock_victim did not report its TCP port"; }
+set +e
+skout=$(timeout 60 "$ASM" --log "$SKPID" 80 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--log on sock_victim hung"
+[ "$rc" -eq 0 ] || fail "--log on sock_victim exited rc=$rc"
+printf '%s\n' "$skout" | grep -E '^write' | sort -u | head -4
+
+# THE negative control: the raw inode form must be GONE for these sockets. This
+# is the whole item — "socket:[12345]" is what it used to print.
+printf '%s\n' "$skout" | grep -q 'fd=[0-9]*<socket:\[' \
+    && fail "fd->endpoint: a socket still renders as socket:[inode] — not enriched"
+
+# a connected TCP pair: both ends are in this process, so each must show its own
+# local->remote direction, and the kernel-chosen port must appear on both sides
+printf '%s\n' "$skout" | grep -qE "fd=[0-9]+<TCP 127\.0\.0\.1:[0-9]+->127\.0\.0\.1:$SKPORT>" \
+    || fail "fd->endpoint: the TCP client end does not render as ...->127.0.0.1:$SKPORT (the port the victim reported)"
+printf '%s\n' "$skout" | grep -qE "fd=[0-9]+<TCP 127\.0\.0\.1:$SKPORT->127\.0\.0\.1:[0-9]+>" \
+    || fail "fd->endpoint: the TCP server end does not render as 127.0.0.1:$SKPORT->..."
+# a LISTENing socket names its state, not a bogus 0.0.0.0:0 peer
+printf '%s\n' "$skout" | grep -qE "fd=[0-9]+<TCP LISTEN 127\.0\.0\.1:$SKPORT>" \
+    || fail "fd->endpoint: the listening socket does not render as 'TCP LISTEN 127.0.0.1:$SKPORT'"
+# an AF_UNIX socket bound to a path shows the path
+printf '%s\n' "$skout" | grep -q 'fd=[0-9]*<unix:/tmp/asmspy_sock_victim.sock>' \
+    || fail "fd->endpoint: the AF_UNIX socket does not render its bound path"
+echo "  sockets resolved: TCP both directions + LISTEN + unix path (port $SKPORT, derived from the run)"
+
+# The enrichment must be ADDITIVE — a regular file's fd must still resolve to
+# its path. That is already asserted downstream, on syscall_victim ("write()'s
+# fd is resolved to the file it points at"), which runs after this section and
+# would fail if fd_endpoint() had swallowed the ordinary case. Not repeated here:
+# syscall_victim is not spawned yet at this point in the script.
+kill "$SKPID" 2>/dev/null || true
+wait "$SKPID" 2>/dev/null || true
+SKPID=""
+rm -f /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # 32-bit (i386) TRACEE REFUSAL (asmspy-plan Theme F3)

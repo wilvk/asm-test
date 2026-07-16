@@ -297,6 +297,165 @@ static size_t ap_dirfd(char *b, size_t cap, size_t o, long long raw) {
  * pipe to "socket:[inode]" / "pipe:[inode]" (what strace shows too). Best-effort:
  * an fd already gone by the time we format (close() at its exit-stop) or one we
  * cannot readlink just prints "fd=N" with no suffix. */
+/* ------------------------------------------------------------------ */
+/* Socket fd -> ENDPOINT (asmspy-plan Theme E)                         */
+/*                                                                      */
+/* readlink("/proc/<pid>/fd/N") on a socket yields "socket:[12345]" —   */
+/* an inode, which is exactly the thing a person watching a trace does  */
+/* not care about. The endpoint behind it is in /proc/<pid>/net/*       */
+/* (read through the TARGET's pid, so its network namespace is the one  */
+/* consulted — a container's socket must not be looked up in ours).     */
+/* ------------------------------------------------------------------ */
+
+/* Render one hex address from /proc/net/{tcp,udp}{,6} plus its port. IPv4 is 8
+ * hex chars holding 4 LITTLE-ENDIAN bytes; IPv6 is 32, as 4 little-endian
+ * 32-bit words. Ports are already host order in these files. */
+static void net_addr(const char *hex, unsigned port, char *out, size_t cap) {
+    size_t n = strlen(hex);
+    if (n == 8) {
+        unsigned long v = strtoul(hex, NULL, 16);
+        snprintf(out, cap, "%lu.%lu.%lu.%lu:%u", v & 0xff, (v >> 8) & 0xff,
+                 (v >> 16) & 0xff, (v >> 24) & 0xff, port);
+        return;
+    }
+    if (n == 32) { /* keep it simple + unambiguous: 8 colon-separated groups */
+        unsigned char b16[16];
+        for (int w = 0; w < 4; w++) {
+            char t[9];
+            memcpy(t, hex + w * 8, 8);
+            t[8] = '\0';
+            unsigned long v = strtoul(t, NULL, 16);
+            b16[w * 4 + 0] = (unsigned char)(v & 0xff);
+            b16[w * 4 + 1] = (unsigned char)((v >> 8) & 0xff);
+            b16[w * 4 + 2] = (unsigned char)((v >> 16) & 0xff);
+            b16[w * 4 + 3] = (unsigned char)((v >> 24) & 0xff);
+        }
+        size_t o = 0;
+        o += (size_t)snprintf(out + o, cap - o, "[");
+        for (int i = 0; i < 8 && o < cap; i++)
+            o += (size_t)snprintf(out + o, cap - o, "%s%x", i ? ":" : "",
+                                  (b16[i * 2] << 8) | b16[i * 2 + 1]);
+        snprintf(out + o, cap > o ? cap - o : 0, "]:%u", port);
+        return;
+    }
+    snprintf(out, cap, "?:%u", port);
+}
+
+/* TCP states from /proc/net/tcp (st column). Only the ones worth naming in a
+ * one-line trace; anything else keeps its number. */
+static const char *tcp_state(unsigned st) {
+    switch (st) {
+    case 0x01:
+        return "ESTABLISHED";
+    case 0x0A:
+        return "LISTEN";
+    case 0x06:
+        return "TIME_WAIT";
+    case 0x08:
+        return "CLOSE_WAIT";
+    default:
+        return NULL;
+    }
+}
+
+/* Search one /proc/<pid>/net/{tcp,udp}{,6} table for `ino`. Returns 1 and fills
+ * `out` ("TCP 127.0.0.1:5555->127.0.0.1:41234", "TCP LISTEN 0.0.0.0:5555"). */
+static int net_lookup(pid_t pid, const char *file, const char *label,
+                      int is_tcp, unsigned long ino, char *out, size_t cap) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/net/%s", (int)pid, file);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return 0;
+    char line[512];
+    int found = 0;
+    if (!fgets(line, sizeof line, f)) { /* header */
+        fclose(f);
+        return 0;
+    }
+    while (fgets(line, sizeof line, f)) {
+        char la[40], ra[40];
+        unsigned lp, rp, st;
+        unsigned long inode = 0;
+        if (sscanf(line,
+                   " %*u: %39[0-9A-Fa-f]:%X %39[0-9A-Fa-f]:%X %X %*X:%*X "
+                   "%*X:%*X %*X %*u %*u %lu",
+                   la, &lp, ra, &rp, &st, &inode) != 6)
+            continue;
+        if (inode != ino)
+            continue;
+        char ls[64], rs[64];
+        net_addr(la, lp, ls, sizeof ls);
+        net_addr(ra, rp, rs, sizeof rs);
+        const char *sn = is_tcp ? tcp_state(st) : NULL;
+        if (sn && strcmp(sn, "LISTEN") == 0)
+            snprintf(out, cap, "%s LISTEN %s", label, ls);
+        else
+            snprintf(out, cap, "%s %s->%s", label, ls, rs);
+        found = 1;
+        break;
+    }
+    fclose(f);
+    return found;
+}
+
+/* Search /proc/<pid>/net/unix for `ino`. Its path column is optional (an
+ * unbound/socketpair end has none) — those still get named "unix" rather than
+ * an inode, because "which kind of thing is this fd" is itself the answer. */
+static int unix_lookup(pid_t pid, unsigned long ino, char *out, size_t cap) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/net/unix", (int)pid);
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return 0;
+    char line[512];
+    int found = 0;
+    if (!fgets(line, sizeof line, f)) { /* header */
+        fclose(f);
+        return 0;
+    }
+    while (fgets(line, sizeof line, f)) {
+        unsigned long inode = 0;
+        char p[256];
+        p[0] = '\0';
+        /* Num RefCount Protocol Flags Type St Inode Path */
+        int n =
+            sscanf(line, "%*x: %*X %*X %*X %*X %*X %lu %255[^\n]", &inode, p);
+        if (n < 1 || inode != ino)
+            continue;
+        if (p[0])
+            snprintf(out, cap, "unix:%s", p);
+        else
+            snprintf(out, cap, "unix (unbound)");
+        found = 1;
+        break;
+    }
+    fclose(f);
+    return found;
+}
+
+/* Turn a readlink target into a human endpoint, or return 0 to keep it as is.
+ * Handles "socket:[<ino>]"; a "pipe:[<ino>]" is left alone deliberately — its
+ * peer is not in /proc/<pid>/net at all, and naming it would mean scanning every
+ * process's fds for the same inode, which is not something an attach path
+ * should do per syscall. */
+static int fd_endpoint(pid_t pid, const char *tgt, char *out, size_t cap) {
+    unsigned long ino = 0;
+    if (sscanf(tgt, "socket:[%lu]", &ino) != 1 || !ino)
+        return 0;
+    if (net_lookup(pid, "tcp", "TCP", 1, ino, out, cap))
+        return 1;
+    if (net_lookup(pid, "tcp6", "TCP6", 1, ino, out, cap))
+        return 1;
+    if (net_lookup(pid, "udp", "UDP", 0, ino, out, cap))
+        return 1;
+    if (net_lookup(pid, "udp6", "UDP6", 0, ino, out, cap))
+        return 1;
+    if (unix_lookup(pid, ino, out, cap))
+        return 1;
+    return 0; /* netlink/packet/… — keep the raw socket:[ino] */
+}
+
 static size_t ap_fd(char *b, size_t cap, size_t o, pid_t pid, long long fd) {
     o = apf(b, cap, o, "fd=%lld", fd);
     if (fd < 0)
@@ -307,7 +466,13 @@ static size_t ap_fd(char *b, size_t cap, size_t o, pid_t pid, long long fd) {
     ssize_t k = readlink(link, tgt, sizeof tgt - 1);
     if (k > 0) {
         tgt[k] = '\0';
-        o = apf(b, cap, o, "<%s>", tgt);
+        char ep[160];
+        /* a socket resolves to its endpoint; everything else (a real path, a
+         * pipe, an anon inode) is already as informative as it gets */
+        if (fd_endpoint(pid, tgt, ep, sizeof ep))
+            o = apf(b, cap, o, "<%s>", ep);
+        else
+            o = apf(b, cap, o, "<%s>", tgt);
     }
     return o;
 }
@@ -1892,12 +2057,109 @@ typedef struct {
     unsigned long long count;
 } gedge_t;
 
+/* ------------------------------------------------------------------ */
+/* Open-addressed index over the node and edge tables                  */
+/*                                                                      */
+/* The graph is built one CALL at a time, and both lookups used to be   */
+/* linear scans: O(nodes) and O(edges) PER RECORDED CALL. Whole-process */
+/* single-stepping still dominates the wall clock — which is why this   */
+/* was filed as secondary — but the scans made the engine degrade with  */
+/* the SIZE OF WHAT IT HAD ALREADY LEARNED, which is the wrong shape:   */
+/* the longer a trace usefully runs, the more of each call it spends    */
+/* re-walking its own results.                                          */
+/*                                                                      */
+/* Slots hold `table index + 1`, so 0 means empty and no separate       */
+/* tombstone/occupancy array is needed (nothing is ever deleted from    */
+/* either table). Capacity is a power of two; linear probing; grown at  */
+/* 70% load. On OOM the index is simply left behind and the callers     */
+/* fall back to the linear scan — slower, never wrong.                  */
+/* ------------------------------------------------------------------ */
+typedef struct {
+    uint32_t *slot;
+    size_t cap; /* power of two; 0 = unallocated (callers scan linearly) */
+} ghash_t;
+
+/* splitmix64 finalizer: cheap, and mixes the low bits that matter here —
+ * node keys are function addresses, whose low bits are alignment zeros. */
+static uint64_t gh_mix(uint64_t x) {
+    x += 0x9E3779B97F4A7C15ULL;
+    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
+    return x ^ (x >> 31);
+}
+
+/* Insert `idx` under hash `h64`. The caller must already have established that
+ * the key is absent (it just probed for it). No-op if the index is unallocated. */
+static void gh_put(ghash_t *h, uint64_t h64, size_t idx) {
+    if (!h->cap)
+        return;
+    size_t m = h->cap - 1, i = (size_t)(h64 & m);
+    while (h->slot[i])
+        i = (i + 1) & m;
+    h->slot[i] = (uint32_t)(idx + 1);
+}
+
 typedef struct {
     asmspy_gnode_t *node;
     size_t nn, ncap;
+    ghash_t nidx; /* node addr -> node index */
     gedge_t *edge;
     size_t ne, ecap;
+    ghash_t eidx; /* (caller,callee) -> edge index */
 } graph_t;
+
+/* Hash of a node's key (its resolved address). */
+static uint64_t gh_node_hash(const graph_t *g, size_t i) {
+    return gh_mix(g->node[i].addr);
+}
+
+/* Hash of an edge's key. The two endpoints are mixed SEPARATELY before being
+ * combined: a plain xor of two small indices collides trivially (a->b vs b->a,
+ * and every pair summing alike), which would degrade the probe chain to the very
+ * linear scan this replaces. */
+static uint64_t gh_edge_hash_kv(size_t caller, size_t callee) {
+    return gh_mix((uint64_t)caller * 0x9E3779B97F4A7C15ULL) ^
+           gh_mix((uint64_t)callee + 0x165667B19E3779F9ULL);
+}
+static uint64_t gh_edge_hash(const graph_t *g, size_t i) {
+    return gh_edge_hash_kv(g->edge[i].caller, g->edge[i].callee);
+}
+
+/* Grow the index to hold `n+1` entries below a 70% load factor, re-inserting
+ * every live entry. Returns 0 on success (or when no growth is needed), -1 on
+ * OOM — after which the index is left EMPTY and the caller scans linearly, so a
+ * failure here costs speed, never correctness. */
+static int gh_grow(ghash_t *h, size_t n, const graph_t *g,
+                   uint64_t (*hashof)(const graph_t *, size_t)) {
+    if (h->cap && (n + 1) * 10 < h->cap * 7)
+        return 0;
+    size_t nc = h->cap ? h->cap * 2 : 128;
+    while ((n + 1) * 10 >= nc * 7)
+        nc *= 2;
+    uint32_t *ns = calloc(nc, sizeof *ns);
+    if (!ns) {
+        /* DROP the index rather than keep a stale one. The caller skips its
+         * gh_put when we fail, so the entry it is adding would exist in the
+         * table but not in the index — and the next lookup for that key would
+         * MISS and create a duplicate node/edge. Falling back to the linear
+         * scan (cap == 0) is slow; a silently duplicated node is wrong. */
+        free(h->slot);
+        h->slot = NULL;
+        h->cap = 0;
+        return -1;
+    }
+    free(h->slot);
+    h->slot = ns;
+    h->cap = nc;
+    size_t m = nc - 1;
+    for (size_t k = 0; k < n; k++) {
+        size_t i = (size_t)(hashof(g, k) & m);
+        while (h->slot[i])
+            i = (i + 1) & m;
+        h->slot[i] = (uint32_t)(k + 1);
+    }
+    return 0;
+}
 
 /* Basename of the target's own executable (for the internal/external split);
  * `out` gets "" on any failure (then every node is treated as internal). */
@@ -1923,9 +2185,23 @@ static long gnode_get(graph_t *g, const asmspy_symtab_t *syms,
                       uint64_t addr) {
     const asmspy_sym_t *s = asmspy_resolve(syms, jit, addr);
     uint64_t key = s ? s->addr : addr;
-    for (size_t i = 0; i < g->nn; i++)
-        if (g->node[i].addr == key)
-            return (long)i;
+
+    /* indexed lookup; the linear scan is the fallback when the index could not
+     * be allocated (correct, just O(n)) */
+    uint64_t h64 = gh_mix(key);
+    if (g->nidx.cap) {
+        size_t m = g->nidx.cap - 1, i = (size_t)(h64 & m);
+        while (g->nidx.slot[i]) {
+            size_t k = g->nidx.slot[i] - 1;
+            if (g->node[k].addr == key) /* compare the KEY, not the hash */
+                return (long)k;
+            i = (i + 1) & m;
+        }
+    } else {
+        for (size_t i = 0; i < g->nn; i++)
+            if (g->node[i].addr == key)
+                return (long)i;
+    }
     if (g->nn == g->ncap) {
         size_t nc = g->ncap ? g->ncap * 2 : 64;
         asmspy_gnode_t *nv = realloc(g->node, nc * sizeof *nv);
@@ -1955,6 +2231,10 @@ static long gnode_get(graph_t *g, const asmspy_symtab_t *syms,
         snprintf(e->module, sizeof e->module, "?"); /* row shows [?] */
         e->external = 0;
     }
+    /* index the new node. gh_grow first (it rehashes what is already there and
+     * may reallocate), then place this one. */
+    if (gh_grow(&g->nidx, g->nn, g, gh_node_hash) == 0)
+        gh_put(&g->nidx, h64, g->nn);
     return (long)g->nn++;
 }
 
@@ -1966,14 +2246,34 @@ static int grecord(graph_t *g, const asmspy_symtab_t *syms,
     long ki = gnode_get(g, syms, jit, exebase, callee_addr);
     if (ci < 0 || ki < 0)
         return 0;
-    for (size_t i = 0; i < g->ne; i++) {
-        if (g->edge[i].caller == (size_t)ci &&
-            g->edge[i].callee == (size_t)ki) {
-            g->edge[i].count++;
-            g->node[ci].out_calls++;
-            g->node[ki].invocations++;
-            return 1;
+
+    /* indexed edge lookup; linear scan as the unallocated-index fallback */
+    uint64_t eh = gh_edge_hash_kv((size_t)ci, (size_t)ki);
+    long hit = -1;
+    if (g->eidx.cap) {
+        size_t m = g->eidx.cap - 1, i = (size_t)(eh & m);
+        while (g->eidx.slot[i]) {
+            size_t k = g->eidx.slot[i] - 1;
+            if (g->edge[k].caller == (size_t)ci &&
+                g->edge[k].callee == (size_t)ki) { /* the KEY, not the hash */
+                hit = (long)k;
+                break;
+            }
+            i = (i + 1) & m;
         }
+    } else {
+        for (size_t i = 0; i < g->ne; i++)
+            if (g->edge[i].caller == (size_t)ci &&
+                g->edge[i].callee == (size_t)ki) {
+                hit = (long)i;
+                break;
+            }
+    }
+    if (hit >= 0) {
+        g->edge[hit].count++;
+        g->node[ci].out_calls++;
+        g->node[ki].invocations++;
+        return 1;
     }
     if (g->ne == g->ecap) {
         size_t nc = g->ecap ? g->ecap * 2 : 128;
@@ -1986,6 +2286,8 @@ static int grecord(graph_t *g, const asmspy_symtab_t *syms,
     g->edge[g->ne].caller = (size_t)ci;
     g->edge[g->ne].callee = (size_t)ki;
     g->edge[g->ne].count = 1;
+    if (gh_grow(&g->eidx, g->ne, g, gh_edge_hash) == 0)
+        gh_put(&g->eidx, eh, g->ne);
     g->ne++;
     g->node[ci].out_calls++;
     g->node[ci].fanout++; /* a callee not seen from this caller before */
@@ -2184,6 +2486,8 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
         graph_emit(sink, ctx, &g, &aedges, &aecap);
     free(g.node);
     free(g.edge);
+    free(g.nidx.slot);
+    free(g.eidx.slot);
     free(aedges);
     psym_free(&pt);
     return 0;

@@ -4414,8 +4414,10 @@ static int usage(const char *argv0) {
         "(native targets)\n"
         "  %s --stream <pid> [n] [--tid=<t>] [--follow]  stream n "
         "instructions live (function + asm)\n"
-        "  %s --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] "
-        "[--tid=<t>] [--follow]  whole-process call graph over n calls\n"
+        "  %s --graph  <pid> [n] [--sort=invocations|fanout|functions-called] "
+        "[--json|--dot] [--tid=<t>] [--follow]  whole-process call graph over "
+        "n "
+        "calls ('functions-called' is a synonym for 'fanout')\n"
         "  %s --tree   <pid> [n] [--depth=<d>] [--focus=<sym>] "
         "[--module=<m>] [--json|--dot] [--tid=<t>] [--follow]  whole-process "
         "live call tree, indented by depth (n call lines)\n"
@@ -4629,7 +4631,13 @@ int main(int argc, char **argv) {
                          strcmp(v, "functions-called") == 0)
                     sort = GSORT_FANOUT;
                 else
-                    return bad_arg("sort (want 'invocations' or 'fanout')", v);
+                    /* name every accepted spelling: 'functions-called' IS
+                     * accepted just above, so omitting it here told a user who
+                     * typed a near-miss that their working synonym does not
+                     * exist. */
+                    return bad_arg("sort (want 'invocations', 'fanout', or "
+                                   "'functions-called')",
+                                   v);
             } else if (strcmp(argv[i], "--json") == 0) {
                 json = 1;
             } else if (strcmp(argv[i], "--dot") == 0) {
