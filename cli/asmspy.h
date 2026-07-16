@@ -392,9 +392,15 @@ typedef void (*asmspy_tree_sink)(void *ctx, const char *line,
 
 /* Attach to `pid` and ALL its threads, single-step them, and stream a live,
  * indented call TREE through `sink` (one entry per function entry, indented by
- * the calling thread's live call depth, with the callee address). Depth
- * is a per-thread shadow counter — push on CALL, pop on RET (clamped at 0), so a
- * tail-call/longjmp/signal can drift the indentation but never desync fatally.
+ * the calling thread's live call depth, with the callee address). Depth is the
+ * height of a real per-thread RETURN-ADDRESS STACK, keyed on rsp: a frame is
+ * live exactly while the thread's stack pointer is at or below the rsp its CALL
+ * left behind. So anything that moves rsp back out — a RET, a longjmp over ten
+ * frames, a C++ unwind — pops those frames whether or not a `ret` ever retired,
+ * and a signal handler (which runs BELOW the interrupted rsp) correctly leaves
+ * the frames under it intact. This replaced a push-on-CALL/pop-on-RET counter,
+ * whose drift after a longjmp was permanent and cumulative rather than
+ * cosmetic.
  * `max` bounds the call lines emitted (<0 = until stop / exit). Whole-process
  * single-stepping is slow, so the target crawls while traced. Each line is
  * prefixed "[tid] " once more than one thread is followed. `only_tid` (non-0)

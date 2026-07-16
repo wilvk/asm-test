@@ -128,6 +128,14 @@ $(BUILD)/sample_victim: $(BUILD)/sample_victim.o
 $(BUILD)/watch_victim: $(BUILD)/watch_victim.o
 	$(CC) $(CFLAGS) -pthread $^ -o $@
 
+# longjmp_victim: main setjmps, calls 3 deep, and longjmps straight back, then
+# calls after_jump() from main at depth 0. longjmp discards those 3 frames with
+# NO `ret` retiring, so a push-on-call/pop-on-ret depth COUNTER never comes back
+# down and renders after_jump 3 levels too deep — forever. Backs the --tree
+# return-address-stack smoke (Theme C).
+$(BUILD)/longjmp_victim: $(BUILD)/longjmp_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 # sock_victim opens a LISTENing TCP socket, a connected TCP pair (both ends in
 # one process, so the expected endpoints are derivable from the port it prints)
 # and an AF_UNIX socket bound to a path — for the fd->endpoint smoke, which
@@ -248,7 +256,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
            $(BUILD)/test_treefilter $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
            $(BUILD)/fork_victim $(BUILD)/clone_victim \
-           $(BUILD)/sock_victim $(CLI_I386_VICTIM)
+           $(BUILD)/sock_victim $(BUILD)/longjmp_victim $(CLI_I386_VICTIM)
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
 	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"

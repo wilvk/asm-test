@@ -302,7 +302,7 @@ static size_t ap_dirfd(char *b, size_t cap, size_t o, long long raw) {
 /*                                                                      */
 /* readlink("/proc/<pid>/fd/N") on a socket yields "socket:[12345]" —   */
 /* an inode, which is exactly the thing a person watching a trace does  */
-/* not care about. The endpoint behind it is in /proc/<pid>/net/*       */
+/* not care about. The endpoint behind it lives under /proc/<pid>/net.  */
 /* (read through the TARGET's pid, so its network namespace is the one  */
 /* consulted — a container's socket must not be looked up in ours).     */
 /* ------------------------------------------------------------------ */
@@ -589,6 +589,18 @@ static int syscall_stop_is_entry(pid_t tid) {
     return -1;
 }
 
+/* One live call frame on a thread's shadow RETURN-ADDRESS STACK (tree engine).
+ *
+ * `sp` is the rsp the CALL leaves behind — i.e. the callee's entry rsp, pointing
+ * at the pushed return address. It, not `ret`, is what makes the stack correct:
+ * a frame is live exactly while the thread's rsp is <= sp, so ONE comparison
+ * unwinds normal returns, longjmp, and C++ unwinding alike (see frm_unwind).
+ * `ret` is kept for diagnosis and for a future nesting-aware aggregation. */
+typedef struct {
+    uint64_t ret; /* return address the call pushed (call site + insn length) */
+    uint64_t sp;  /* rsp immediately after the call pushed it                 */
+} frame_t;
+
 /* Per-thread syscall entry/exit bookkeeping (the stream loop uses only .tid). */
 typedef struct {
     pid_t tid;
@@ -603,7 +615,11 @@ typedef struct {
     int pending_call; /* graph engine: an INDIRECT call awaits its callee entry */
     uint64_t
         call_site; /* graph engine: call-site addr of that pending call     */
-    int depth;     /* tree engine: live call depth (push on call, pop on ret) */
+    /* tree engine: the thread's live call stack. Depth is stk_n — NOT a counter
+     * incremented on call and decremented on ret; see frm_unwind for why that
+     * distinction is the whole point. */
+    frame_t *stk;
+    size_t stk_n, stk_cap;
     int focus_depth; /* tree engine: real depth at which this thread entered the
                       * --focus subtree, ASMSPY_TF_NO_FOCUS when outside one.
                       * Per-thread because thread A being inside the focused
@@ -673,7 +689,8 @@ static thr_t *thr_get(thr_tab_t *t, pid_t tid) {
     memset(&e->entry, 0, sizeof e->entry);
     e->pending_call = 0;
     e->call_site = 0;
-    e->depth = 0;
+    e->stk = NULL;
+    e->stk_n = e->stk_cap = 0;
     e->focus_depth = ASMSPY_TF_NO_FOCUS;
     e->inv = 0;
     e->armed = 0;
@@ -683,8 +700,57 @@ static thr_t *thr_get(thr_tab_t *t, pid_t tid) {
 
 static void thr_del(thr_tab_t *t, pid_t tid) {
     int i = thr_find(t, tid);
-    if (i >= 0)
+    if (i >= 0) {
+        free(t->v[i].stk);      /* the tree engine's call stack, if any */
         t->v[i] = t->v[--t->n]; /* order is irrelevant */
+    }
+}
+
+/* ------------------------------------------------------------------ */
+/* Per-thread return-address stack (the --tree engine's depth)         */
+/*                                                                      */
+/* --tree used to carry an int incremented on CALL and decremented on   */
+/* RET, clamped at 0. That is only right while control flow is a        */
+/* matched call/return sequence, and it drifts PERMANENTLY the moment   */
+/* it is not: longjmp() and a C++ unwind restore rsp to an outer frame  */
+/* WITHOUT executing the returns in between, so the counter never       */
+/* comes back down and every later line is indented too deep, forever.  */
+/*                                                                      */
+/* A real stack keyed on rsp fixes all of it with ONE rule: a frame is  */
+/* live exactly while the thread's rsp is at or below the rsp that call */
+/* left behind. Anything that moves rsp above it — a RET, a longjmp     */
+/* over ten frames, an unwind — pops it, whether or not a `ret` ever    */
+/* retired. And a signal handler runs BELOW the interrupted rsp, so the */
+/* frames underneath it correctly survive.                              */
+/* ------------------------------------------------------------------ */
+
+/* Bound the stack: a runaway/unbounded recursion must cost the TRACER a fixed
+ * amount of memory. Past this, depth stops growing (the view clamps its
+ * indentation long before this anyway) but the frames already recorded stay
+ * correct, so unwinding still tracks. */
+#define ASMSPY_STK_MAX 4096
+
+static void frm_push(thr_t *t, uint64_t ret, uint64_t sp) {
+    if (t->stk_n >= ASMSPY_STK_MAX)
+        return;
+    if (t->stk_n == t->stk_cap) {
+        size_t nc = t->stk_cap ? t->stk_cap * 2 : 32;
+        frame_t *nv = realloc(t->stk, nc * sizeof *nv);
+        if (!nv)
+            return; /* OOM: skip this frame; the rsp rule still unwinds the rest */
+        t->stk = nv;
+        t->stk_cap = nc;
+    }
+    t->stk[t->stk_n].ret = ret;
+    t->stk[t->stk_n].sp = sp;
+    t->stk_n++;
+}
+
+/* Pop every frame the thread's stack pointer has moved ABOVE. See the block
+ * comment: this single comparison is what a push/pop counter cannot express. */
+static void frm_unwind(thr_t *t, uint64_t rsp) {
+    while (t->stk_n > 0 && rsp > t->stk[t->stk_n - 1].sp)
+        t->stk_n--;
 }
 
 /* SEIZE every thread of `pid` with `opts` and INTERRUPT each so it stops and can
@@ -1040,6 +1106,8 @@ static void detach_threads(pid_t pid, thr_tab_t *tab, int single_stepped) {
     for (size_t i = 0; i < tab->n; i++)
         ptrace(PTRACE_DETACH, tab->v[i].tid, NULL, NULL);
 
+    for (size_t i = 0; i < tab->n; i++)
+        free(tab->v[i].stk); /* the tree engine's per-thread call stack */
     free(tab->v);
     tab->v = NULL;
     tab->n = tab->cap = 0;
@@ -2610,15 +2678,23 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
                     ct->tgid = (event == PTRACE_EVENT_CLONE)
                                    ? thr_tgid(&tab, tid, pid)
                                    : (pid_t)child;
-                    /* A forked child resumes INSIDE fork() in a copy of the
-                     * parent's stack, so it inherits the parent's live call
-                     * depth — start it there rather than at 0, or its first
-                     * returns would underflow to a clamped 0 and its whole tree
-                     * would render flat at the top level. */
+                    /* A forked child resumes INSIDE fork() on a COPY of the
+                     * parent's stack — same addresses, same frames — so it
+                     * inherits the parent's live call stack outright. Starting
+                     * it empty would make its first returns unwind nothing and
+                     * render its whole tree flat at the top level. */
                     if (event != PTRACE_EVENT_CLONE) {
                         int pi = thr_find(&tab, tid);
-                        if (pi >= 0)
-                            ct->depth = tab.v[pi].depth;
+                        if (pi >= 0 && tab.v[pi].stk_n) {
+                            frame_t *cp = malloc(tab.v[pi].stk_n * sizeof *cp);
+                            if (cp) {
+                                memcpy(cp, tab.v[pi].stk,
+                                       tab.v[pi].stk_n * sizeof *cp);
+                                free(ct->stk);
+                                ct->stk = cp;
+                                ct->stk_n = ct->stk_cap = tab.v[pi].stk_n;
+                            }
+                        }
                     }
                 }
                 multi = 1;
@@ -2634,7 +2710,7 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
             thr_t *ts = thr_get(&tab, tid);
             if (ts) {
                 ts->tgid = tid; /* post-exec the caller IS the leader */
-                ts->depth = 0;
+                ts->stk_n = 0;  /* the old stack died with the old image */
                 ts->pending_call = 0;
                 ts->focus_depth = ASMSPY_TF_NO_FOCUS;
             }
@@ -2667,40 +2743,56 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
                 struct iovec riov = {(void *)(uintptr_t)rip, sizeof code};
                 ssize_t got = process_vm_readv(tgid, &liov, 1, &riov, 1, 0);
 
+                /* FIRST, before anything is attributed to a depth: unwind
+                 * every frame this thread's rsp has moved above. This is where
+                 * a RET pops — and, crucially, where a longjmp/unwind that
+                 * executed NO ret at all pops every frame it jumped over. */
+                if (ts) {
+                    size_t was = ts->stk_n;
+                    frm_unwind(ts, regs.rsp);
+                    if (ts->stk_n < was) /* left the --focus subtree? */
+                        asmspy_tree_filter_ret(filter, (int)ts->stk_n,
+                                               &ts->focus_depth);
+                }
+
                 /* a pending INDIRECT call resolves at its callee entry (= rip).
-                 * `emitted` counts SURVIVING lines, but the depth push is
-                 * unconditional: the shadow counter tracks the target's real
+                 * Its frame was pushed at the call site, so the CALLER's depth
+                 * is stk_n-1. `emitted` counts SURVIVING lines, but the frame
+                 * push is unconditional: the stack tracks the target's real
                  * control flow, never the filtered view of it. */
                 if (ts && ts->pending_call) {
+                    int d = ts->stk_n ? (int)ts->stk_n - 1 : 0;
                     emitted +=
                         tree_emit(sink, ctx, multi, tid, ps->syms, &ps->jit,
-                                  rip, ts->depth, filter, &ts->focus_depth);
-                    ts->depth++;
+                                  rip, d, filter, &ts->focus_depth);
                     ts->pending_call = 0;
                 }
 
-                int isc = 0, isr = 0;
+                int isc = 0;
+                /* probe returns the instruction's LENGTH — which is what lets
+                 * the return address be computed here, at the call site, rather
+                 * than inferred from wherever the next step happens to land */
+                size_t ilen = 0;
                 if (got >= 1 && asmtest_disas_available())
-                    asmtest_disas_probe(ASMTEST_ARCH_X86_64, code, (size_t)got,
-                                        0, &isc, &isr);
+                    ilen = asmtest_disas_probe(ASMTEST_ARCH_X86_64, code,
+                                               (size_t)got, 0, &isc, NULL);
                 if (isc && ts) {
+                    /* Push the frame the call is ABOUT to create: it will push
+                     * rip+ilen and leave rsp at regs.rsp-8. Both are known now,
+                     * from the call site — no dependence on the next stop. */
+                    int d = (int)ts->stk_n; /* the CALLER's depth */
+                    if (ilen)
+                        frm_push(ts, rip + ilen, regs.rsp - 8);
                     uint64_t tgt = 0;
                     if (asmtest_disas_call_target(ASMTEST_ARCH_X86_64, code,
                                                   (size_t)got, rip, 0, &tgt)) {
                         emitted +=
                             tree_emit(sink, ctx, multi, tid, ps->syms, &ps->jit,
-                                      tgt, ts->depth, filter, &ts->focus_depth);
-                        ts->depth++;
+                                      tgt, d, filter, &ts->focus_depth);
                     } else {
                         ts->pending_call = 1; /* indirect: resolve next step */
                         ts->call_site = rip;
                     }
-                } else if (isr && ts) {
-                    if (ts->depth > 0)
-                        ts->depth--; /* returned: pop a level (clamped at 0) */
-                    /* left the --focus subtree? (unconditional, so a drifted
-                     * counter resting at 0 still releases a depth-0 focus) */
-                    asmspy_tree_filter_ret(filter, ts->depth, &ts->focus_depth);
                 }
             }
             ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);

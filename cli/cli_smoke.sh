@@ -78,7 +78,8 @@ FKPID=""
 CLPID=""
 IVPID=""
 SKPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
+LJPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -626,6 +627,53 @@ expect_badarg "$ASM" --tree "$WVPID" --focus=
 expect_badarg "$ASM" --tree "$WVPID" --module=
 echo "  bad --depth/--focus/--module rejected up front"
 kill "$WVPID" 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# --tree DEPTH IS A REAL RETURN-ADDRESS STACK, not a counter (Theme C)
+# ---------------------------------------------------------------------------
+# longjmp_victim: main setjmps, calls three deep (level_one -> level_two ->
+# jump_out), and longjmp()s straight back — then calls after_jump() from main at
+# depth 0.
+#
+# longjmp restores rsp and rip directly: those three frames are discarded without
+# a single `ret` retiring. A tracer that counts +1 per CALL and -1 per RET
+# therefore never comes back down, and the drift is CUMULATIVE — MEASURED
+# against exactly that algorithm, after_jump rendered at depth 5, then 10, and
+# level_one marched 0 -> 10 -> 20 columns across three iterations of a process
+# behaving completely normally.
+#
+# The rsp-keyed stack pops every frame the stack pointer moved above, so
+# after_jump lands at depth 0. Both halves are asserted, and they are each
+# other's control:
+#   * jump_out at depth 2  => real nesting IS still tracked (so "depth 0" is not
+#                             just a tracer that never counts anything)
+#   * after_jump at depth 0 => the discarded frames were actually unwound
+echo "--- asmspy --tree across a longjmp (real return-address stack) ---"
+"$BUILD/longjmp_victim" 2>/dev/null &
+LJPID=$!
+sleep 1
+set +e
+ljout=$(timeout 60 "$ASM" --tree "$LJPID" 24 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--tree on longjmp_victim hung"
+kill -9 "$LJPID" 2>/dev/null || true
+wait "$LJPID" 2>/dev/null || true
+LJPID=""
+printf '%s\n' "$ljout" | head -6
+# control: the call chain really did nest before the longjmp
+printf '%s\n' "$ljout" | grep -qE '^-> level_one \[' \
+    || fail "longjmp: level_one not at depth 0"
+printf '%s\n' "$ljout" | grep -qE '^  -> level_two \[' \
+    || fail "longjmp: level_two not nested one level under level_one"
+printf '%s\n' "$ljout" | grep -qE '^    -> jump_out \[' \
+    || fail "longjmp: jump_out not nested two levels — real nesting is not being tracked, so the depth-0 check below would be vacuous"
+# the payload: after_jump is called from main at depth 0, and those three frames
+# were discarded with NO ret. A push/pop counter renders it 5+ levels deep.
+printf '%s\n' "$ljout" | grep -qE '^-> after_jump \[' \
+    || fail "longjmp: after_jump is not at depth 0 — the frames longjmp discarded were never unwound (a push-on-call/pop-on-ret counter cannot do this)"
+printf '%s\n' "$ljout" | grep -qE '^ +-> after_jump \[' \
+    && fail "longjmp: after_jump ALSO appears indented — the depth drifted after a longjmp"
+echo "  nesting tracked (jump_out at depth 2) AND after_jump back at depth 0"
 
 # ---------------------------------------------------------------------------
 # EXEC-STOP RE-RESOLUTION (asmspy-plan Theme B): PTRACE_O_TRACEEXEC
