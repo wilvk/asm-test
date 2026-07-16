@@ -29,23 +29,26 @@ through the DynamoRIO and .NET-interpretability phases rather than stopping at t
 > **F1 block-step + emulator replay** and **F3 hardware data-watchpoint** modes
 > ([live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md)).
 >
-> **Phase 4 (.NET interpretability): Increments 1–3 LANDED 2026-07-12/13** — the pure
-> host-independent PC→method+version resolver (`src/dataflow_method.c`), runtime-helper
-> summary edges, and the GC-move *detection* feed (`GcMoveMap` from `GCBulkMovedObjectRanges`).
-> The concrete `{old,new,len}` triple extraction remains the one open item, but **its stated
-> blocker is obsolete as of 2026-07-14** and this legend's previous wording ("needs an
-> out-of-proc EventPipe/nettrace consumer") is wrong: that was an *assumption*, and it was
-> disproved. A native in-process `ICorProfilerCallback4::MovedReferences2` profiler delivers
-> the exact triples at a fully-suspended-EE GC fence, was proven to coexist with DynamoRIO
-> (`make docker-gcprofiler-probe`), and is **already shipping** on the DR side — taint
-> Increment 7 wires it through a POSIX-shm handshake into `at_gc_remap_live`
+> **Phase 4 (.NET interpretability): Increments 1–3 LANDED 2026-07-12/13; the `{old,new,len}`
+> wiring LANDED 2026-07-16 as followup F4** — the pure host-independent PC→method+version
+> resolver (`src/dataflow_method.c`), runtime-helper summary edges, and the GC-move *detection*
+> feed (`GcMoveMap` from `GCBulkMovedObjectRanges`). The triple extraction's stated blocker
+> ("needs an out-of-proc EventPipe/nettrace consumer") was an *assumption*, and it was disproved
+> 2026-07-14: a native in-process `ICorProfilerCallback4::MovedReferences2` profiler delivers the
+> exact triples at a fully-suspended-EE GC fence, was proven to coexist with DynamoRIO
+> (`make docker-gcprofiler-probe`), and already ships on the DR side — taint Increment 7 wires it
+> through a POSIX-shm handshake into `at_gc_remap_live`
 > ([dataflow_dr_client_inlined.c:737](../../../src/dataflow_dr_client_inlined.c#L737)),
 > remapping 60,021 real ranges on a live compacting GC. See
 > [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
-> What is left is therefore **wiring a proven feed to a landed transform**, not building a
-> nettrace parser: the ptrace-tier canonicalizer `asmtest_gcmove_canonicalize`
-> ([dataflow_gcmove.c:74](../../../src/dataflow_gcmove.c#L74)) still has no caller outside
-> its unit test. That work is followup **F4**.
+> **That feed is now pointed at the landed transform on a live attach.** The ptrace-tier
+> canonicalizer `asmtest_gcmove_canonicalize`
+> ([dataflow_gcmove.c:74](../../../src/dataflow_gcmove.c#L74)) — for which this legend previously
+> recorded "no caller outside its unit test" — is driven by
+> [gccanon_tracer.c:1285](../../../examples/gccanon_attach/gccanon_tracer.c#L1285) over an
+> attach-mode profiler feed, with same-window multi-GC chaining. `make docker-gccanon-attach`,
+> 37 assertions, negative control included. See
+> [live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md) F4.
 >
 > **Phase 5 (DynamoRIO taint tier): ALL NINE INCREMENTS LANDED** *(1–3 2026-07-13; 4–9 through
 > 2026-07-15)* — in-band tag propagation, the launch-under-DR container, GC-move shadow remap,
@@ -56,9 +59,14 @@ through the DynamoRIO and .NET-interpretability phases rather than stopping at t
 >
 > **Phase 6 (bindings/docs/CI) LANDED 2026-07-13.**
 >
-> **Remaining implementable work across this plan: Phase 4's `{old,new,len}` wiring (followup
-> F4) alone.** Phases 3 and 5 are the two target tiers and both are delivered. Update this file
-> as phases land, the way
+> **Remaining implementable work across this plan: none** *(reconciled 2026-07-17)*. Phase 4's
+> `{old,new,len}` wiring — the last open item this legend carried — landed 2026-07-16 as followup
+> F4; Phases 3 and 5 are the two target tiers and both are delivered. Work that continues *near*
+> this plan lives in the followup tier
+> ([live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md)): F2, F5–F7 and
+> F1's vector breadth, plus F4's optional extension to full object identity
+> (`GCBulkType`/`Node`/`Edge`), which the address-identity model defers by design
+> (`asmtest_valtrace.h`). Update this file as phases land, the way
 > [dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md) tracks its own.
 
 ---
