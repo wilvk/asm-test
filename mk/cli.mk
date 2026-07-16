@@ -239,6 +239,16 @@ $(BUILD)/test_treefilter: cli/test_treefilter.c cli/asmspy_treefilter.h \
                           | $(BUILD)
 	$(CC) $(CFLAGS) -Icli -o $@ cli/test_treefilter.c
 
+# test_symtab — unit test for the symbol REVERSE lookup (asmspy_symtab_at), the
+# one function every view that names an address goes through. Pins the edges
+# where a resolver lies quietly instead of failing: one byte past a function,
+# the gap between two functions, a zero-SIZE symbol, an address below the first.
+# Links the resolver TU directly, like test_jitdump.
+$(BUILD)/test_symtab: cli/test_symtab.c $(BUILD)/asmspy_proc.o cli/asmspy.h \
+                      | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -pthread cli/test_symtab.c $(BUILD)/asmspy_proc.o \
+	  -lstdc++ -o $@
+
 # test_jitdump — unit test for the binary jitdump reader + the two-tier JIT
 # resolve chain. Links the resolver TU (asmspy_proc.o) directly; -lstdc++
 # supplies its __cxa_demangle just like the asmspy link line.
@@ -254,7 +264,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/watch_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
-           $(BUILD)/test_treefilter $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
+           $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
            $(BUILD)/fork_victim $(BUILD)/clone_victim \
            $(BUILD)/sock_victim $(BUILD)/longjmp_victim $(CLI_I386_VICTIM)
 	@echo "== cli-smoke =="

@@ -23,6 +23,8 @@ echo "--- test_view (data-flow view: annotation + def-use split + L2 slice) ---"
 "$BUILD/test_view" || fail "test_view"
 echo "--- test_treefilter (call-tree depth cap / symbol focus / module filter) ---"
 "$BUILD/test_treefilter" || fail "test_treefilter"
+echo "--- test_symtab (symbol reverse lookup: gaps, zero-size, boundaries) ---"
+"$BUILD/test_symtab" || fail "test_symtab"
 
 echo "--- asmspy --list (head) ---"
 # capture first: a bare `... | head` pipeline masks asmspy's exit status (sh has
@@ -1441,6 +1443,35 @@ printf '%s\n' "$fout" | grep -qE '^\[[0-9]+\]' \
 # a bad --tid value is rejected up front (rc=2)
 expect_badarg "$ASM" --stream "$YPID" --tid=nope
 echo "  per-thread filter: alpha only (beta_work absent)"
+
+# MULTI-THREAD [tid] TAGGING for --tree (asmspy-plan Theme D). The tree prefixes
+# every line with "[tid] " once it follows more than one thread — without it, two
+# threads' call trees interleave into one indented column that reads like a
+# single nonsensical call chain. tid_victim runs alpha_work and beta_work on
+# DISTINCT threads, so both must appear, each tagged, under >=2 distinct tids.
+echo "--- asmspy --tree $YPID (multi-thread [tid] tagging) ---"
+set +e
+tt=$(timeout 60 "$ASM" --tree "$YPID" 40 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--tree on tid_victim hung"
+printf '%s
+' "$tt" | head -3
+printf '%s
+' "$tt" | grep -qE '^\[[0-9]+\] '     || fail "--tree: no [tid] prefix on a multi-threaded target — two threads' trees would interleave indistinguishably"
+[ "$(printf '%s
+' "$tt" | grep -oE '^\[[0-9]+\]' | sort -u | wc -l)" -ge 2 ]     || fail "--tree: expected entries from >=2 distinct tids on a multi-threaded target"
+# and the tags are real: the two threads' DISTINCT functions each appear
+printf '%s
+' "$tt" | grep -q 'alpha_work' || fail "--tree: alpha_work missing"
+printf '%s
+' "$tt" | grep -q 'beta_work' || fail "--tree: beta_work missing"
+# control: with --tid the tree follows ONE thread, so the prefix is gone again
+set +e
+tt1=$(timeout 60 "$ASM" --tree "$YPID" 20 --tid="$ATID" 2>/dev/null)
+set -e
+printf '%s
+' "$tt1" | grep -qE '^\[[0-9]+\] '     && fail "--tree --tid: a single-thread trace must NOT carry the [tid] prefix"
+echo "  --tree: [tid]-tagged across >=2 threads; single-thread trace unprefixed"
 kill "$YPID" 2>/dev/null || true
 rm -f "$TLOG"
 
