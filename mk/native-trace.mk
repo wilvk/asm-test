@@ -2068,6 +2068,18 @@ $(BUILD)/test_branchsnap: $(HWTRACE_OBJS) $(BUILD)/test_branchsnap.o
 branchsnap-test: $(BUILD)/test_branchsnap
 	$(BUILD)/test_branchsnap
 
+# E6 — the branchsnap TILED at checkpoints and merged into the WindowHot sampled-endpoint
+# surface (asmtest_hwtrace_tile_window_amd). Same objects and the same self-skip contract
+# as branchsnap-test above: without the BPF toolchain / CAP_BPF+CAP_PERFMON / AMD LbrExtV2
+# it exits 0. The docker-hwtrace-codeimage lane carries all three, so it runs LIVE there
+# on a Zen 4/5 host — the fixture's negative control and tiled-vs-untiled differential
+# only mean anything on a live capture.
+$(BUILD)/test_branchtile: $(HWTRACE_OBJS) $(BUILD)/test_branchtile.o
+	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -lpthread -o $@
+.PHONY: branchtile-test
+branchtile-test: $(BUILD)/test_branchtile
+	$(BUILD)/test_branchtile
+
 # Statistical AMD IBS-Op edge lane. test_ibs's PURE decoder checks (synthetic raw
 # records) run and pass on ANY host; its live out-of-band capture self-skips (exit 0)
 # off AMD IBS-Op. Links only ibs_backend.o (a self-contained producer, no Capstone /
@@ -2685,8 +2697,18 @@ hwtrace-dotnet-example: shared-hwtrace
 	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/amd-period-sweep/amd-period-sweep.csproj
 	@echo "== hwtrace-dotnet-example (amd-snapshot) =="
 	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/amd-snapshot/amd-snapshot.csproj
+	@echo "== hwtrace-dotnet-example (amd-tile) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/amd-tile/amd-tile.csproj
 	@echo "== hwtrace-dotnet-example (codeimage) =="
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/codeimage/codeimage.csproj
+
+# E6 — the MANAGED-checkpoint tiling demo on its own, for the one lane that can actually run
+# it live (docker-hwtrace-dotnet-amd: .NET SDK + BPF toolchain + CAP_BPF + Zen 4/5). It is
+# also in hwtrace-dotnet-example above, where it self-skips like its AMD siblings.
+.PHONY: hwtrace-dotnet-amd-example
+hwtrace-dotnet-amd-example: shared-hwtrace
+	@echo "== hwtrace-dotnet-amd-example (amd-tile: E6 managed-checkpoint tiling) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/amd-tile/amd-tile.csproj
 
 hwtrace-ruby-test: shared-hwtrace
 	@echo "== hwtrace-ruby-test =="

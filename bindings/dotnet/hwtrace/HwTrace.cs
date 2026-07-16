@@ -24,6 +24,7 @@ using System.Diagnostics.Tracing;
 using System.Globalization;
 using System.IO;
 using System.Net.Sockets;
+using System.Reflection; // §E6: MethodBase -> entry PC for AsmTrace.Checkpoints
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -513,6 +514,21 @@ namespace Asmtest
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_sample_window_amd_weighted(
             IntPtr runFn, IntPtr arg, int period, ulong[] ips, UIntPtr cap,
             out UIntPtr nips, out int truncated);
+        // §E6: the SAME survey plus the deterministic branchsnap TILED at up to 4 absolute
+        // `checkpoints` (managed method entries). One run of runFn feeds both producers into
+        // one ips[] endpoint stream: the survey's branch-stack event turns the LBR on, and
+        // each checkpoint's HW breakpoint freezes + snapshots it via BPF. ips[0..ntiled) is
+        // the island-sourced prefix (tiles drain first, so sampled endpoints cannot crowd
+        // them out); [ntiled..nips) is sampled. islands = checkpoint hits merged; 0 means
+        // tiling did not arm or the checkpoint never ran, and this degrades EXACTLY to the
+        // plain survey. Same self-skip contract; needs CAP_BPF on top of the survey's needs.
+        // tileTruncated and truncated are DISTINCT and must not be conflated: tileTruncated
+        // means the ISLAND merge lost endpoints; truncated is the survey-wide prefix flag and
+        // ALSO fires on SAMPLER-ring loss. Only the former is causally tied to island content.
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_tile_window_amd(
+            IntPtr runFn, IntPtr arg, int period, ulong[] checkpoints, int ncheckpoints,
+            ulong[] ips, UIntPtr cap, out UIntPtr nips, out UIntPtr ntiled,
+            out int islands, out int tileTruncated, out int truncated);
         // Begin/end split of the AMD-LBR survey: arm in a ctor, drain in Dispose, so the block
         // runs INLINE between them (`using (new AsmTrace(HwBackend.AmdLbr)) { block }`). _end's
         // ips may be null (a drain-less release of a leaked scope's fd+mapping).
@@ -1824,6 +1840,54 @@ namespace Asmtest
         /// (dropped/throttled samples), a coverage signal — not a hard error. False (an exact
         /// scope) leaves all of these with their exact-trace meaning.</summary>
         public bool IsStatistical { get; private set; }
+        /// <summary>
+        /// §E6: how many CHECKPOINT ISLANDS were merged into <see cref="Addresses"/> — one per
+        /// time execution reached a <c>tileCheckpoints</c> address while the window was open.
+        /// 0 for every non-tiled scope, and also when tiling could not arm (no <c>CAP_BPF</c> /
+        /// BPF-toolchain build / AMD LbrExtV2 / free debug register) or no checkpoint ever ran
+        /// — in which case the scope is EXACTLY the plain survey, not a failure. Nonzero is the
+        /// only proof an island actually landed, so a caller that cares should check it rather
+        /// than assume tiling happened because it asked for it.
+        /// </summary>
+        public int TiledIslands { get; private set; }
+        /// <summary>
+        /// §E6: how many leading entries of <see cref="Addresses"/> came from checkpoint
+        /// islands rather than the sampler — exactly <c>Addresses.Take(TiledAddresses)</c>.
+        /// Islands are merged FIRST so the sampler can never crowd them out of the bounded
+        /// buffer. On a complete merge this is <see cref="TiledIslands"/> * the AMD branch-stack
+        /// depth (16 on every shipping part): one checkpoint hit freezes the whole stack.
+        ///
+        /// WHAT THESE GUARANTEE, exactly: at each checkpoint HIT, the ~16 most recently retired
+        /// branch targets, EXACTLY. WHAT THEY DO NOT: anything about the code BETWEEN hits. The
+        /// merged surface is therefore SAMPLED / PARTIAL COVERAGE — exact islands in an
+        /// unobserved sea — and NOT an exact whole-window trace, which remains a hardware dead
+        /// end on AMD and is a documented non-goal. That is honest for this surface precisely
+        /// because <see cref="WindowHot"/> is a HOT-ADDRESS histogram and makes no completeness
+        /// claim; tiled endpoints must never be read as one. <see cref="IsStatistical"/> stays
+        /// TRUE for a tiled scope for exactly this reason: adding exact islands to a sampled
+        /// survey yields a better-covered SURVEY, not an exact trace.
+        /// </summary>
+        public int TiledAddresses { get; private set; }
+        /// <summary>
+        /// §E6: true if the ISLAND MERGE lost endpoints — a saturated BPF ringbuf dropped a
+        /// checkpoint hit, or <see cref="Addresses"/> filled with islands left to merge.
+        ///
+        /// This is NOT <see cref="Truncated"/>, and the difference is load-bearing.
+        /// <see cref="Truncated"/> is the SURVEY-wide prefix flag and also fires when the
+        /// SAMPLER's ring goes near-full — which says nothing whatever about whether an island
+        /// kept its endpoints. An island-content assertion written in this repo's
+        /// "covered OR truncated" shape must therefore disjoin with THIS flag, never with
+        /// <see cref="Truncated"/>: that rule is sound only when the truncation term is
+        /// CAUSALLY TIED to the property asserted, and a fixture whose branch count grew until
+        /// the sampler lost records would otherwise satisfy such an assert forever, with the
+        /// island silently never checked again.
+        ///
+        /// Like <see cref="Truncated"/>, it does NOT mean "the coverage is partial" — tiled
+        /// coverage is ALWAYS partial by construction (a ~16-branch tail per hit). A flag that
+        /// is always true makes every assertion disjoined with it vacuous, so it means only:
+        /// endpoints were LOST.
+        /// </summary>
+        public bool TiledTruncated { get; private set; }
         /// <summary>§E1: for a <see cref="WindowHybrid"/> scope, the pass-1 <see cref="WindowHot"/>
         /// AMD-LBR statistical survey used to pick the hot method set that this (pass-2, exact)
         /// scope captured — inspect its <see cref="Methods"/> for the sampled hot histogram and
@@ -2455,17 +2519,252 @@ namespace Asmtest
         /// and branchy code is not over-weighted vs. hot straight-line code. Additive fidelity
         /// behind the same survey surface; degrades to the plain endpoint model on the Zen-2
         /// IBS-Op fallback. Default keeps the E2 one-endpoint-per-branch weighting.</param>
+        /// <param name="tileCheckpoints">§E6: up to 4 absolute code addresses (managed method
+        /// entries — see <see cref="Checkpoints"/>) to TILE the deterministic branch snapshot
+        /// at. Each hit freezes the ~16-deep LBR and merges that exact ISLAND into
+        /// <see cref="Addresses"/>, so a routine too small or too rare for the sampler to catch
+        /// still gets covered — the gap a one-shot method falls into at any realistic
+        /// <paramref name="period"/>. An ADDITIVE producer into the same surface, not a mode:
+        /// the sampler keeps running, one pass of <paramref name="body"/> feeds both, and
+        /// <see cref="IsStatistical"/> stays true because the result is a better-covered
+        /// SURVEY, never an exact trace. The coverage it adds is exact AT the checkpoints and
+        /// blind between them. Needs <c>CAP_BPF</c> on top of the survey's requirements; where
+        /// tiling cannot arm (or a checkpoint never runs) the scope degrades EXACTLY to the
+        /// plain survey and reports <see cref="TiledIslands"/> == 0 rather than failing. More
+        /// than 4 checkpoints throws — the limit is the 4 x86 debug registers, hardware, not
+        /// policy. Null/empty = no tiling (byte-identical to the pre-E6 survey).</param>
         public static AsmTrace WindowHot(Action body, int period = 16, bool withRundown = true,
                                          int rundownSettleMs = 300, bool blockWeighted = false,
+                                         ulong[] tileCheckpoints = null,
                                          [CallerMemberName] string member = null,
                                          [CallerLineNumber] int line = 0)
         {
+            if (tileCheckpoints != null && tileCheckpoints.Length > MaxTileCheckpoints)
+                throw new ArgumentException(
+                    $"at most {MaxTileCheckpoints} tile checkpoints (one x86 debug register each), got "
+                    + tileCheckpoints.Length, nameof(tileCheckpoints));
+            // Refuse rather than silently drop one of them: E5 weights the span between
+            // adjacent sampled branches, but islands are disjoint 16-branch windows, so the
+            // gap across an island boundary is not a straight-line run and weighting it would
+            // invent frequency the hardware never reported.
+            if (blockWeighted && tileCheckpoints != null && tileCheckpoints.Length > 0)
+                throw new ArgumentException(
+                    "blockWeighted (E5 block-frequency weighting) and tileCheckpoints (E6 island "
+                    + "tiling) are not combinable: E5 weights the straight-line span between "
+                    + "adjacent sampled branches, which is undefined across a checkpoint island's "
+                    + "boundary. Pick one producer model.", nameof(blockWeighted));
             var ww = new AsmTrace(ScopeName(member, line), byMethod: true, withRundown, rundownSettleMs);
-            ww.RunWindowHotAmd(body ?? (() => { }), period, blockWeighted);
+            ww.RunWindowHotAmd(body ?? (() => { }), period, blockWeighted, tileCheckpoints);
             return ww;
         }
 
-        void RunWindowHotAmd(Action body, int period, bool blockWeighted = false)
+        /// <summary>
+        /// §E6: the number of checkpoints <see cref="WindowHot"/> can tile at once — one x86
+        /// debug register each (mirrors the native <c>ASMTEST_AMD_MAX_EXITS</c>). A hardware
+        /// ceiling, not a policy one.
+        /// </summary>
+        public const int MaxTileCheckpoints = 4;
+
+        /// <summary>
+        /// §E6: one line per method the last <see cref="Checkpoints(MethodBase[], int)"/> call
+        /// could NOT resolve to an unambiguous JIT'd body, and why — an AMBIGUOUS match
+        /// (overloads / generic instantiations / a name that is a prefix of another) or no
+        /// match at all. Empty when every method resolved.
+        ///
+        /// Read it. A returned array that is quietly SHORT is indistinguishable from success
+        /// with fewer islands, and the alternative — resolving a bare name to whichever body
+        /// JIT'd last — is worse: the breakpoint arms cleanly on the WRONG method and reports
+        /// a perfect 16-entry island for code you did not ask about.
+        /// </summary>
+        public static string[] LastCheckpointSkips { get; private set; } = System.Array.Empty<string>();
+
+        /// <summary>
+        /// §E6: resolve managed methods to the JIT'd-body entry PCs <see cref="WindowHot"/>'s
+        /// <c>tileCheckpoints</c> wants. Each method is JIT-PREPARED
+        /// (<see cref="RuntimeHelpers.PrepareMethod"/>) so a body EXISTS, and then resolved
+        /// through the RUNDOWN JIT MAP — the same jitdump path <see cref="WindowHybrid"/> uses
+        /// to turn a hot method into its <c>[base,len)</c>.
+        ///
+        /// It does NOT use <c>MethodHandle.GetFunctionPointer()</c>, and that is the whole
+        /// point of this helper. That pointer is the method's STABLE ENTRY — a precode stub —
+        /// not the JIT'd body. A breakpoint planted there never fires, because the runtime
+        /// backpatches call sites to the real body and the stub stops executing. MEASURED, not
+        /// assumed: with a GetFunctionPointer checkpoint the snapshot armed cleanly
+        /// (<c>tile_begin: armed ncp=1</c>) and reported <c>islands=0</c> — a silent, total
+        /// miss that looks exactly like "the method never ran". The jitdump address fires.
+        ///
+        /// Needs the diagnostics rundown (it enables the perf-map/jitdump briefly and waits
+        /// <paramref name="settleMs"/> for it to quiesce). Methods that cannot be prepared or
+        /// resolved (abstract, open generics, or a runtime with diagnostics off) are SKIPPED,
+        /// not thrown — so a caller gets a best-effort set and an honestly shorter array. Check
+        /// <see cref="TiledIslands"/> afterwards to see whether a checkpoint actually landed.
+        ///
+        /// NB (tiered compilation): a method re-JIT'd at a higher tier MOVES to a new body and
+        /// the checkpoint stays on the old one — it simply stops firing, which shows up
+        /// honestly as fewer <see cref="TiledIslands"/>, never as wrong addresses. Pin
+        /// <c>TieredCompilation=false</c> (as the amd-tile example does), or resolve after the
+        /// methods have reached their final tier, when a checkpoint must hold for a long window.
+        /// </summary>
+        public static ulong[] Checkpoints(MethodBase[] methods, int settleMs = 300)
+        {
+            if (methods == null || methods.Length == 0) return System.Array.Empty<ulong>();
+            // Force each body to EXIST before the map is read — an un-JIT'd method has no
+            // jitdump record to resolve, and PrepareMethod is the supported way to demand one.
+            foreach (var m in methods)
+            {
+                if (m == null) continue;
+                try { RuntimeHelpers.PrepareMethod(m.MethodHandle); }
+                catch { /* abstract / open generic: nothing to plant a checkpoint on */ }
+            }
+            bool rundown = false;
+            var map = new JitMethodMap();
+            try
+            {
+                rundown = DiagnosticsIpc.EnablePerfMap();
+                if (!rundown) return System.Array.Empty<ulong>(); // diagnostics off: honest empty
+                string dump = DiagnosticsIpc.JitDumpPath();
+                if (settleMs > 0) DiagnosticsIpc.WaitJitDumpSettled(dump, settleMs);
+                map.LoadJitDump(dump);
+                var addrs = new List<ulong>(methods.Length);
+                var seen = new HashSet<ulong>();
+                var unresolved = new List<string>();
+                foreach (var m in methods)
+                {
+                    if (m == null) continue;
+                    if (TryResolveMethodEntry(map, m, out ulong start, out string why)
+                        && start != 0)
+                    {
+                        if (seen.Add(start)) addrs.Add(start);
+                    }
+                    else unresolved.Add(m.Name + ": " + why);
+                }
+                // A method we could not resolve UNAMBIGUOUSLY is not a checkpoint we may
+                // silently omit — the caller asked for coverage of it, and an array that is
+                // quietly short looks exactly like success with fewer islands. Record the
+                // reasons so a caller (and the demo) can print them.
+                LastCheckpointSkips = unresolved.ToArray();
+                return addrs.ToArray();
+            }
+            catch { return System.Array.Empty<ulong>(); }
+            finally
+            {
+                if (rundown) DiagnosticsIpc.DisablePerfMap();
+                map.Stop();
+                map.Dispose();
+            }
+        }
+
+        /// <summary>§E6 convenience: <see cref="Checkpoints(MethodBase[], int)"/> with the
+        /// default settle budget, in <c>params</c> shape.</summary>
+        public static ulong[] Checkpoints(params MethodBase[] methods) => Checkpoints(methods, 300);
+
+        // §E6: one method -> its JIT'd body entry, against the jitdump's real spelling
+        // (observed: "void [amd-tile] Program::ColdLeaf()[MinOptJitted]").
+        //
+        // This deliberately does NOT reuse TryResolveHotMethod's loosening ladder, and the
+        // difference matters. That ladder ends in a BARE-NAME substring match and takes the
+        // NEWEST hit — correct there (a wrong guess mislabels one sampled address) and unsafe
+        // here for two reasons a hardware breakpoint makes severe:
+        //
+        //   (a) PREFIX COLLISION. "Program::ColdLeaf" is a substring of
+        //       "...Program::ColdLeafExtra()...", and if ColdLeafExtra JIT'd later it WINS.
+        //   (b) OVERLOADS / generic instantiations. "Program::Over" matches both Over(int32)
+        //       and Over(System.String) — whichever JIT'd last wins.
+        //
+        // Either way the breakpoint arms cleanly, fires on the WRONG body, and merges a real
+        // 16-entry island: TiledIslands==1, TiledAddresses==16 — INDISTINGUISHABLE from
+        // success, with the caller's requested coverage silently absent. That is the same
+        // class as the precode-stub bug (an address that is real but not the requested
+        // method's), and the same trap the DR taint tier records: "methodscan substring must
+        // be UNIQUE to the sink method".
+        //
+        // So: anchor on '(' (which alone kills (a) — "ColdLeafExtra(" does not contain
+        // "ColdLeaf("), prefer the full signature (which kills (b)), and REFUSE rather than
+        // guess when more than one distinct method still matches.
+        static bool TryResolveMethodEntry(JitMethodMap map, MethodBase m, out ulong start,
+                                          out string why)
+        {
+            start = 0; why = null;
+            string type = m.DeclaringType != null ? m.DeclaringType.Name : null;
+            if (string.IsNullOrEmpty(type)) { why = "method has no declaring type"; return false; }
+
+            // "Type::Method(p1,p2)" — the jitdump's own signature spelling.
+            var ps = m.GetParameters();
+            var spelled = new string[ps.Length];
+            for (int i = 0; i < ps.Length; i++) spelled[i] = SpellType(ps[i].ParameterType);
+            string sigKey = type + "::" + m.Name + "(" + string.Join(",", spelled) + ")";
+            // "Type::Method(" — the paren-anchored fallback for when our spelling misses the
+            // runtime's (an exotic type). Still collision-proof; not overload-proof, so the
+            // uniqueness check below is what keeps it honest.
+            string anchored = type + "::" + m.Name + "(";
+
+            List<string> names = map.MatchingNames(sigKey);
+            string key = sigKey;
+            if (names.Count == 0) { names = map.MatchingNames(anchored); key = anchored; }
+            if (names.Count == 0) { why = "no JIT'd body matches \"" + anchored + "\""; return false; }
+
+            // Distinct METHODS matching, ignoring the trailing "[tier]": the SAME method
+            // re-JIT'd at a higher tier is not an ambiguity — it is one method with two
+            // bodies, and the newest is the one that runs. Two DIFFERENT methods is an
+            // ambiguity, and there is no honest way to pick.
+            var distinct = new HashSet<string>();
+            foreach (string n in names) distinct.Add(StripTier(n));
+            if (distinct.Count > 1)
+            {
+                why = "AMBIGUOUS: " + distinct.Count + " different JIT'd methods match \"" + key
+                    + "\" (overloads, generic instantiations, or a name that is a prefix of "
+                    + "another). Refusing to guess — a checkpoint on the wrong body arms "
+                    + "cleanly and reports a perfect island for code you did not ask about.";
+                return false;
+            }
+            ulong size;
+            if (!map.TryResolveEntry(key, out start, out size)) { why = "resolve failed"; return false; }
+            return true;
+        }
+
+        // §E6: the CoreCLR jitdump's type spelling (observed: "int64 [amd-tile]
+        // Program::HotWork(int64)[MinOptJitted]"). Primitives use the runtime's short names;
+        // everything else falls back to the full name. A miss is SAFE, not silent: the
+        // signature key simply finds nothing and resolution falls back to the paren-anchored
+        // key, which still refuses an ambiguous match.
+        static string SpellType(Type t)
+        {
+            if (t == typeof(void)) return "void";
+            if (t == typeof(bool)) return "bool";
+            if (t == typeof(char)) return "char";
+            if (t == typeof(sbyte)) return "int8";
+            if (t == typeof(byte)) return "uint8";
+            if (t == typeof(short)) return "int16";
+            if (t == typeof(ushort)) return "uint16";
+            if (t == typeof(int)) return "int32";
+            if (t == typeof(uint)) return "uint32";
+            if (t == typeof(long)) return "int64";
+            if (t == typeof(ulong)) return "uint64";
+            if (t == typeof(float)) return "float32";
+            if (t == typeof(double)) return "float64";
+            if (t == typeof(IntPtr)) return "native int";
+            if (t == typeof(UIntPtr)) return "native uint";
+            // OBSERVED, not assumed: the runtime writes "void [amd-tile] Program::Over(string)",
+            // not "System.String" — it uses the ILDASM short names for these two as well.
+            if (t == typeof(string)) return "string";
+            if (t == typeof(object)) return "object";
+            return t.FullName ?? t.Name;
+        }
+
+        // §E6: drop the jitdump name's trailing "[tier]" ("...ColdLeaf()[MinOptJitted]" ->
+        // "...ColdLeaf()"), so one method's tier bodies collapse to one identity while two
+        // different methods stay two.
+        static string StripTier(string jitName)
+        {
+            if (string.IsNullOrEmpty(jitName)) return jitName;
+            int close = jitName.LastIndexOf(']');
+            if (close != jitName.Length - 1) return jitName;
+            int open = jitName.LastIndexOf('[');
+            return open > 0 ? jitName.Substring(0, open) : jitName;
+        }
+
+        void RunWindowHotAmd(Action body, int period, bool blockWeighted = false,
+                             ulong[] tileCheckpoints = null)
         {
             _disposed = true;       // this factory already closed the scope
             IsStatistical = true;   // the result is a sampled survey, always
@@ -2486,15 +2785,30 @@ namespace Asmtest
             int rc;
             UIntPtr nips;
             int trunc;
+            UIntPtr ntiled = UIntPtr.Zero;
+            int islands = 0;
+            int tileTrunc = 0;
+            bool tiling = tileCheckpoints != null && tileCheckpoints.Length > 0;
             Thread.BeginThreadAffinity(); // the sampled event is on this OS thread
             try
             {
-                // §E5: the block-frequency drain when requested, else the E2 endpoint drain.
-                rc = blockWeighted
-                    ? HwNative.asmtest_hwtrace_sample_window_amd_weighted(
-                        fn, IntPtr.Zero, period, ips, (UIntPtr)ips.Length, out nips, out trunc)
-                    : HwNative.asmtest_hwtrace_sample_window_amd(
-                        fn, IntPtr.Zero, period, ips, (UIntPtr)ips.Length, out nips, out trunc);
+                // §E6 tiling composes with the plain endpoint drain (the tiled producer emits
+                // one endpoint per retired branch, matching that model exactly); it is NOT
+                // offered with §E5 block weighting, whose weights come from measuring spans
+                // BETWEEN adjacent sampled branches. Islands are disjoint 16-branch windows,
+                // so the "block" between an island's last entry and the next sample's first is
+                // not a real straight-line run — weighting it would invent frequency the
+                // hardware never reported. Refusing that combination is the honest choice.
+                rc = tiling
+                    ? HwNative.asmtest_hwtrace_tile_window_amd(
+                        fn, IntPtr.Zero, period, tileCheckpoints, tileCheckpoints.Length,
+                        ips, (UIntPtr)ips.Length, out nips, out ntiled, out islands,
+                        out tileTrunc, out trunc)
+                    : blockWeighted
+                        ? HwNative.asmtest_hwtrace_sample_window_amd_weighted(
+                            fn, IntPtr.Zero, period, ips, (UIntPtr)ips.Length, out nips, out trunc)
+                        : HwNative.asmtest_hwtrace_sample_window_amd(
+                            fn, IntPtr.Zero, period, ips, (UIntPtr)ips.Length, out nips, out trunc);
             }
             finally { Thread.EndThreadAffinity(); GC.KeepAlive(cb); }
 
@@ -2511,6 +2825,12 @@ namespace Asmtest
             var addrs = new ulong[n];
             Array.Copy(ips, addrs, (long)n);
             Addresses = addrs;                 // sampled branch-target PCs (not ordered)
+            // §E6: the island-sourced prefix. Recorded even when 0 (tiling asked for but not
+            // armed / checkpoint never reached) — that IS the honest answer, and the caller
+            // reads TiledIslands to tell "tiling added nothing" from "tiling never ran".
+            TiledIslands = islands;
+            TiledAddresses = (int)(ulong)ntiled;
+            TiledTruncated = tileTrunc != 0;
             Truncated = trunc != 0;            // a prefix (dropped/throttled samples)
             // Pin the code-image version AFTER Stop() (mirrors the in-process Dispose order),
             // so a method JIT'd mid-window disassembles against the version that actually ran.
@@ -3532,6 +3852,27 @@ namespace Asmtest
                     }
             }
             return false;
+        }
+
+        /// <summary>
+        /// §E6: every recorded method name CONTAINING <paramref name="nameSubstring"/>, newest
+        /// first. <see cref="TryResolveEntry"/> answers "give me the newest match", which is
+        /// right for labelling a sampled address (a wrong guess costs a mis-attributed sample)
+        /// and WRONG for planting a hardware breakpoint (a wrong guess arms on the wrong method
+        /// and reports a perfect, indistinguishable success). A caller that must not guess uses
+        /// this to SEE the ambiguity and refuse it.
+        /// </summary>
+        internal List<string> MatchingNames(string nameSubstring)
+        {
+            var hits = new List<string>();
+            if (string.IsNullOrEmpty(nameSubstring)) return hits;
+            lock (_lock)
+            {
+                for (int i = _methods.Count - 1; i >= 0; i--)
+                    if (_methods[i].Name.Contains(nameSubstring))
+                        hits.Add(_methods[i].Name);
+            }
+            return hits;
         }
 
         protected override void OnEventSourceCreated(EventSource src)

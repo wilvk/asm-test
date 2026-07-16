@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- §E6: the deterministic branch snapshot TILED at MANAGED checkpoints and merged into the
+       WindowHot sampled-endpoint surface. Where `amd-snapshot` captures ONE native region
+       exactly at its exit (a separate region API), this plants checkpoints on MANAGED method
+       entries inside a whole-window survey and merges each frozen 16-branch island into
+       AsmTrace.Addresses — an additive producer into WindowHot, not a new API.
+
+       The result is SAMPLED/PARTIAL coverage: exact AT the checkpoints, blind between them.
+       Exact whole-window on AMD stays a hardware dead end and a documented non-goal.
+
+       A dependency-free console app that compiles the binding source (HwTrace.cs) directly and
+       P/Invokes libasmtest_hwtrace — no NuGet, so `dotnet run` works offline. Self-skips
+       (exit 0) without CAP_BPF + CAP_PERFMON + AMD LbrExtV2 + a BPF-toolchain build.
+
+       EnableDefaultCompileItems=false so it compiles exactly Program.cs + the one binding
+       source (never globbing sibling examples or the binding's own Main). -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>amd-tile</AssemblyName>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Deterministic>true</Deterministic>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <!-- The checkpoint is planted on the method's PREPARED entry. Tiered compilation would
+         re-JIT a hot method to a NEW address mid-window, leaving the breakpoint on the
+         abandoned body — it would simply stop firing (honestly visible as fewer islands, never
+         as wrong addresses). Pinning tiering off keeps this demo's checkpoint valid for the
+         whole window; see AsmTrace.Checkpoints for the general guidance. -->
+    <TieredCompilation>false</TieredCompilation>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="../../../bindings/dotnet/hwtrace/HwTrace.cs" />
+  </ItemGroup>
+
+</Project>

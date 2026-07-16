@@ -1312,14 +1312,29 @@ size_t asmtest_amd_block_weight_sample(const struct perf_branch_entry *e,
 }
 
 /* Shared core of the whole-window survey; block_weight != 0 selects the E5 AutoFDO
- * block-frequency drain above, 0 the plain one-endpoint-per-branch drain. */
+ * block-frequency drain above, 0 the plain one-endpoint-per-branch drain.
+ *
+ * E6: `cps`/`ncp` optionally add the SECOND producer into the same ips[] endpoint stream
+ * — the deterministic branchsnap TILED at up to ASMTEST_AMD_MAX_EXITS absolute
+ * checkpoints (branchsnap.c). The two producers compose because the survey's own
+ * branch-stack event is what turns the LBR on: tiling adds one HW breakpoint per
+ * checkpoint and reads the frozen stack there via BPF, so ONE run of run_fn feeds both.
+ * Passing cps == NULL / ncp == 0 is byte-identical to the pre-E6 survey. */
 static int sample_window_amd_impl(void (*run_fn)(void *), void *arg, int period,
-                                  uint64_t *ips, size_t cap, size_t *nips,
+                                  const uint64_t *cps, int ncp, uint64_t *ips,
+                                  size_t cap, size_t *nips, size_t *ntiled,
+                                  int *islands, int *tile_truncated,
                                   int *truncated, int block_weight) {
     if (run_fn == NULL || ips == NULL || cap == 0)
         return ASMTEST_HW_EINVAL;
     if (nips != NULL)
         *nips = 0;
+    if (ntiled != NULL)
+        *ntiled = 0;
+    if (islands != NULL)
+        *islands = 0;
+    if (tile_truncated != NULL)
+        *tile_truncated = 0;
     if (truncated != NULL)
         *truncated = 0;
     if (period < 2)
@@ -1346,6 +1361,9 @@ static int sample_window_amd_impl(void (*run_fn)(void *), void *arg, int period,
         if (fd >= 0)
             close((
                 int)fd); /* forced IBS: drop the just-opened branch-stack event */
+        /* E6: no branch stack here, so there is no LBR for a checkpoint snapshot to
+         * freeze — tiling is silently OFF on the IBS path (islands stays 0, which is
+         * the caller's signal that no island merged), never an error. */
         return sample_window_ibs(run_fn, arg, ips, cap, nips, truncated);
     }
     long pg = sysconf(_SC_PAGESIZE);
@@ -1365,6 +1383,14 @@ static int sample_window_amd_impl(void (*run_fn)(void *), void *arg, int period,
         return ASMTEST_HW_EUNAVAIL;
     }
 
+    /* E6: ARM the checkpoint tiles now — AFTER the branch-stack event is enabled (so the
+     * LBR is live and a frozen window has something in it) and BEFORE run_fn. A failure
+     * to arm is not fatal: the survey runs untiled and islands stays 0, so the caller
+     * sees that no island merged instead of being told a quiet half-truth. */
+    int tiled_on = 0;
+    if (cps != NULL && ncp > 0)
+        tiled_on = asmtest_amd_tile_begin(cps, ncp) == ASMTEST_HW_OK;
+
     run_fn(
         arg); /* the window body (a managed delegate thunk) runs at native speed */
 
@@ -1378,6 +1404,38 @@ static int sample_window_amd_impl(void (*run_fn)(void *), void *arg, int period,
     size_t span = (size_t)(head - tail);
     size_t n = 0;
     int lost = 0;
+    /* E6: drain the TILES FIRST, into ips[0..n). The islands are the SCARCE, deterministic
+     * signal — a handful of ~16-entry windows — while the sampler can emit tens of
+     * thousands of endpoints and fill cap on its own. Draining tiles first guarantees a
+     * checkpoint's exact island can never be crowded out of the buffer by sampled
+     * endpoints; the sampler then fills whatever remains. *ntiled records the split, so a
+     * caller can tell which prefix of ips[] is island-sourced. */
+    if (tiled_on) {
+        size_t tn = 0;
+        int isl = 0, ttrunc = 0;
+        if (asmtest_amd_tile_end(ips, cap, &tn, &isl, &ttrunc) ==
+            ASMTEST_HW_OK) {
+            n = tn;
+            if (ntiled != NULL)
+                *ntiled = tn;
+            if (islands != NULL)
+                *islands = isl;
+            /* Report the tile's truncation SEPARATELY as well as folding it into the
+             * survey-wide flag. The two are NOT interchangeable, and conflating them is
+             * an anti-vacuity hazard, not a nicety: *truncated also fires when the
+             * SAMPLER's ring goes near-full, which has no causal relation to whether an
+             * island kept its endpoints. A caller asserting "the island contains X OR the
+             * capture truncated" against the survey-wide flag can therefore be satisfied
+             * by an unrelated producer's loss — the assert silently stops testing the
+             * island. *tile_truncated means ONLY: this merge lost island endpoints
+             * (ringbuf drop / ips[] full). That is the term an island-content assert may
+             * honestly be disjoined with. */
+            if (tile_truncated != NULL)
+                *tile_truncated = ttrunc;
+            if (ttrunc)
+                lost = 1; /* an island was DROPPED: the merge is a prefix */
+        }
+    }
     /* Near-full ring = loss. The ring is non-overwrite and data_tail advances only at the
      * end, so a ring that FILLED during run_fn drops the NEWEST samples (the window's tail)
      * and emits NO PERF_RECORD_LOST (the kernel never gets the next reservation). Treat less
@@ -1463,8 +1521,54 @@ static int sample_window_amd_impl(void (*run_fn)(void *), void *arg, int period,
 int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
                                       int period, uint64_t *ips, size_t cap,
                                       size_t *nips, int *truncated) {
-    return sample_window_amd_impl(run_fn, arg, period, ips, cap, nips,
-                                  truncated, 0);
+    return sample_window_amd_impl(run_fn, arg, period, NULL, 0, ips, cap, nips,
+                                  NULL, NULL, NULL, truncated, 0);
+}
+
+/* E6 variant: the SAME survey, plus the deterministic branchsnap TILED at up to
+ * ASMTEST_AMD_MAX_EXITS absolute `checkpoints` (managed method entries). One run of
+ * run_fn feeds both producers into one ips[] endpoint stream — the survey's branch-stack
+ * event turns the LBR on; each checkpoint's HW breakpoint freezes and snapshots it.
+ *
+ * WHAT THE MERGED COVERAGE IS: at every checkpoint HIT, the ~16 most recently retired
+ * branch targets, EXACTLY. Between hits, whatever the sampler happened to catch at
+ * `period`. WHAT IT IS NOT: an exact whole-window trace — that is a hardware dead end on
+ * AMD and is DECLINED. The union of exact islands and sampled endpoints is SAMPLED /
+ * PARTIAL COVERAGE, honest for a HOT-ADDRESS histogram (WindowHot) and never admissible
+ * to the exact insns[]/blocks[] parity cascade.
+ *
+ * ips[0..*ntiled) is the island-sourced prefix (tiles drain first, so they cannot be
+ * crowded out); [*ntiled..*nips) is sampled. *islands = checkpoint hits merged — 0 means
+ * NO island landed (checkpoint never executed, or tiling could not arm: no BPF toolchain,
+ * no CAP_BPF/CAP_PERFMON, no LbrExtV2, a debugger holding a debug register), in which
+ * case this degrades EXACTLY to the plain survey rather than failing.
+ *
+ * TWO truncation outputs, and the distinction is load-bearing — do not conflate them:
+ *   *truncated      the SURVEY-wide prefix flag, unchanged from the plain survey: a
+ *                   dropped/throttled sample, the sampler's ring near-full, a dropped
+ *                   island, or ips[] full.
+ *   *tile_truncated ONLY: this merge lost ISLAND endpoints (ringbuf drop / ips[] full).
+ *
+ * A caller asserting island CONTENT in the repo's "covered OR truncated" shape must
+ * disjoin with *tile_truncated, NEVER with *truncated. The rule exists because AMD LBR
+ * truncates on tiny fixtures — but it is only sound when the truncation term is CAUSALLY
+ * TIED to the property asserted. *truncated is owned by the SAMPLER: a fixture whose
+ * branch count grows until the sampler's ring runs near-full would make it permanently
+ * true and silently satisfy an island-content assert forever, with the island never
+ * checked again. Neither flag is set merely because tiling is islands-not-a-stream —
+ * that is this producer's defined granularity, and a truncation flag that is always true
+ * makes every assert disjoined with it vacuous.
+ *
+ * Same self-skip contract as the plain survey; tiling is silently off on the Zen-2 IBS
+ * fallback (no branch stack to freeze). */
+int asmtest_hwtrace_tile_window_amd(void (*run_fn)(void *), void *arg,
+                                    int period, const uint64_t *checkpoints,
+                                    int ncheckpoints, uint64_t *ips, size_t cap,
+                                    size_t *nips, size_t *ntiled, int *islands,
+                                    int *tile_truncated, int *truncated) {
+    return sample_window_amd_impl(run_fn, arg, period, checkpoints,
+                                  ncheckpoints, ips, cap, nips, ntiled, islands,
+                                  tile_truncated, truncated, 0);
 }
 
 /* E5 variant: the AutoFDO/BOLT block-frequency reweighting behind the same survey
@@ -1475,8 +1579,8 @@ int asmtest_hwtrace_sample_window_amd_weighted(void (*run_fn)(void *),
                                                void *arg, int period,
                                                uint64_t *ips, size_t cap,
                                                size_t *nips, int *truncated) {
-    return sample_window_amd_impl(run_fn, arg, period, ips, cap, nips,
-                                  truncated, 1);
+    return sample_window_amd_impl(run_fn, arg, period, NULL, 0, ips, cap, nips,
+                                  NULL, NULL, NULL, truncated, 1);
 }
 
 /* BEGIN/END split of the survey above — lets a caller ARM the sampler, run a block INLINE,
@@ -1674,6 +1778,27 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
     (void)ips;
     (void)cap;
     (void)nips;
+    (void)truncated;
+    return ASMTEST_HW_ENOSYS;
+}
+/* E6 tiled survey: the AMD branch stack is x86-64 Linux only, so off that platform this
+ * is ENOSYS exactly like its untiled sibling. */
+int asmtest_hwtrace_tile_window_amd(void (*run_fn)(void *), void *arg,
+                                    int period, const uint64_t *checkpoints,
+                                    int ncheckpoints, uint64_t *ips, size_t cap,
+                                    size_t *nips, size_t *ntiled, int *islands,
+                                    int *tile_truncated, int *truncated) {
+    (void)run_fn;
+    (void)arg;
+    (void)period;
+    (void)checkpoints;
+    (void)ncheckpoints;
+    (void)ips;
+    (void)cap;
+    (void)nips;
+    (void)ntiled;
+    (void)islands;
+    (void)tile_truncated;
     (void)truncated;
     return ASMTEST_HW_ENOSYS;
 }

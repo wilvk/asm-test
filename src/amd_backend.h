@@ -73,6 +73,31 @@ int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off,
                                int branch_filter);
 int asmtest_amd_snapshot_end(asmtest_trace_t *trace);
 
+/* E6 — TILING the same boundary-snapshot machinery at CHECKPOINTS (branchsnap.c), the
+ * second producer into the WindowHot sampled-endpoint surface. Where the region entries
+ * above capture one [base,len) at its exits and decode the RICHEST window into an exact
+ * in-region instruction stream, these plant a breakpoint at each of up to
+ * ASMTEST_AMD_MAX_EXITS ABSOLUTE checkpoint addresses (managed method entries — no
+ * region, no decode) and MERGE EVERY frozen window's retired branch targets into the
+ * survey's ips[] endpoint stream.
+ *
+ * The result is SAMPLED / PARTIAL COVERAGE — exact ~16-branch islands at the checkpoints,
+ * nothing between them — NOT an exact whole-window trace (a hardware dead end on AMD,
+ * DECLINED). Honest for WindowHot precisely because that surface is a hot-address
+ * histogram with no completeness claim; these must NEVER feed the exact insns[]/blocks[]
+ * parity cascade.
+ *
+ * tile_begin does NOT open its own LBR event: the CALLER must already have a branch-stack
+ * event enabled on the calling thread (sample_window_amd_impl does), so tiling adds
+ * breakpoints without adding a second LBR user that could multiplex the survey. ALL-OR-
+ * NOTHING arming; a nonzero return means the caller runs untiled and reports islands == 0.
+ * *truncated from tile_end means endpoints were LOST (ringbuf drop / ips[] full) — NOT
+ * the inherent 16-deep island bound, which is the producer's defined granularity (making
+ * it always-true would render a caller's `covered || truncated` check vacuous). */
+int asmtest_amd_tile_begin(const uint64_t *cp_addrs, int ncp);
+int asmtest_amd_tile_end(uint64_t *ips, size_t cap, size_t *nips, int *islands,
+                         int *truncated);
+
 #if defined(__linux__) && defined(__x86_64__)
 #include <linux/perf_event.h> /* struct perf_branch_entry + PERF_SAMPLE_BRANCH_* */
 
