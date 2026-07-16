@@ -18,7 +18,14 @@ Intel runner for the day-to-day signal.
 >
 > - **Track D (x86 Docker-OSX) needs no Apple hardware** and `/dev/kvm` is present on
 >   the current dev host — its only real gate is fetching a prebuilt `darwin-x86_64`
->   payload. **Try this one first.**
+>   payload. ~~**Try this one first.**~~ **Superseded 2026-07-17 — read Track D's
+>   re-assessment before picking this up.** The `darwin-x86_64` payload did not exist to
+>   fetch (the `macos-13` runner was retired 2025-12-08, so every Intel-mac leg silently
+>   queued forever). Fixed in `0b2dd51` by moving to `macos-15-intel`: the payload now
+>   builds, **and the same fix gives a real Intel-macOS clean room on genuine Apple
+>   hardware in CI** (7/7 Intel legs green on run 29514910178), which is most of what
+>   Track D was standing in for. It remains a useful local backstop; it is no longer the
+>   first thing to try, and it still needs a host `sudo` for `sshpass`.
 > - **Track C (arm64 tart) is genuinely Apple-Silicon-gated** and cannot run here.
 
 ---
@@ -225,6 +232,48 @@ Apple-Silicon box; optionally a self-hosted CI lane.
 >    produce. Fetch a release `native-all` artifact (or build it on an Intel mac)
 >    and run with `ASMTEST_CLEANROOM_PREBUILT=1`. This is the only real gating
 >    step, and it is a download, not hardware.
+>
+> ---
+>
+> ### Re-assessed 2026-07-17 — prerequisite 2 is FIXED; the lane's *rationale* is now weaker
+>
+> **Prerequisite 2 was not "a download": no `darwin-x86_64` payload existed to download.**
+> The only surviving `native-all` artifact (dry-run 28234827347, 2026-06-26) ships exactly
+> `linux-x86_64`, `darwin-arm64`, `linux-aarch64` — no Intel-mac slot. Root cause: **the
+> `macos-13` runner image was retired 2025-12-08**, so every Intel-mac leg silently *queued
+> forever* rather than failing. `d4449a5` (2026-07-04) had tried to close this same hole by
+> adding `macos-13` legs plus an `EXPECT_PLATFORMS` completeness gate — but macos-13 was
+> already four months dead by then, and release.yml was never dispatched again, so neither the
+> legs nor the gate ever executed.
+>
+> **Fixed in `0b2dd51`** by migrating every Intel-mac leg to `macos-15-intel` (GitHub's
+> documented successor; the last x86_64 image, available until 2027-08). **Verified on
+> dry-run 29514910178:** `native (macos-15-intel)` succeeded, `native (collect + verify)`
+> passed the `EXPECT_PLATFORMS` gate **on its first-ever execution**, and the `native-all`
+> artifact now carries all four platforms — `darwin-x86_64/libasmtest.dylib` confirmed as
+> `Mach-O 64-bit x86_64`. **So the payload now exists and Track D's stated blocker is gone.**
+>
+> **But the same fix substantially delivers what Track D was built to substitute for.** This
+> lane's whole premise is running the x86 clean room "without waiting on the scarce nightly
+> macos-13 runner". With `macos-15-intel` live, the release matrix now runs the *real* Track-E
+> clean-room scrub (`scripts/clean-env.sh`) after a fresh install **on genuine Intel Apple
+> hardware** — and on run 29514910178 all seven Intel legs passed: `native`, `python`, `lua`,
+> `java`, `node`, `ruby`, `dotnet`. That is strictly better evidence than a virtualised
+> Hackintosh: real Apple userland, no OpenCore, no EULA question.
+>
+> **Remaining gates for actually running Track D (unchanged by the above):**
+> - **`sshpass` is absent and installing it needs a host `sudo` password** — a user action, not
+>   an agent one. (It could instead be containerised — CLAUDE.md's "add it where the work runs,
+>   not the host" — which would also remove the host dependency.)
+> - A tens-of-GB Docker-OSX image pull against a disk at 89% (≈202 GB free).
+> - The lane is EULA-gray on non-Apple hosts, as this document already records.
+>
+> **Recommendation: Track D is now a genuine backstop rather than a gap-filler** — worth
+> keeping for on-demand local use with no CI dependency, but no longer the "try it first"
+> priority, because the coverage it was standing in for is now green on real hardware. The
+> honest remaining unique value is proving a clean-room x86 `dlopen` on a *vanilla* Intel-macOS
+> userland that Apple's CI image does not represent. Weigh that against ~30 GB, a brittle
+> shakedown, and the EULA note before spending the time.
 >
 > [`scripts/docker-osx-bindings.sh`](../../../scripts/docker-osx-bindings.sh) +
 > `make docker-osx-bindings` ([mk/docker.mk](../../../mk/docker.mk)) implement the
