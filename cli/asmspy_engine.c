@@ -457,11 +457,34 @@ static int thr_find(const thr_tab_t *t, pid_t tid) {
     return -1;
 }
 
+/* TEST-ONLY fault injection for the thr_get OOM path (asmspy-plan Theme C).
+ *
+ * The bug this guards — an untabled task resumed anyway, escaping the two-phase
+ * detach and dying later of a SIGTRAP that looks like the target's own — is
+ * reachable only through a mid-trace allocation failure, which cannot be
+ * provoked from outside and does not announce itself when it happens. Without a
+ * lever, the fix could only ever be argued, not demonstrated.
+ *
+ * ASMSPY_TEST_THR_OOM=<n> allows `n` tasks to be tabled and fails every NEW one
+ * after that (sticky, so the untabled task stays untabled on every later stop —
+ * which is what a real OOM would do). Unset = disabled, the normal path.
+ * Returns 1 if this insertion must fail. */
+static int thr_table_full_for_test(const thr_tab_t *t) {
+    static int cap = -2; /* -2 = unread, -1 = disabled */
+    if (cap == -2) {
+        const char *e = getenv("ASMSPY_TEST_THR_OOM");
+        cap = (e && *e) ? atoi(e) : -1;
+    }
+    return cap >= 0 && t->n >= (size_t)cap;
+}
+
 /* Find `tid`, adding a fresh entry if absent. NULL only on allocation failure. */
 static thr_t *thr_get(thr_tab_t *t, pid_t tid) {
     int i = thr_find(t, tid);
     if (i >= 0)
         return &t->v[i];
+    if (thr_table_full_for_test(t))
+        return NULL; /* injected OOM (ASMSPY_TEST_THR_OOM) */
     if (t->n == t->cap) {
         size_t nc = t->cap ? t->cap * 2 : 16;
         thr_t *nv = realloc(t->v, nc * sizeof *nv);
@@ -850,6 +873,28 @@ static void detach_threads(pid_t pid, thr_tab_t *tab, int single_stepped) {
     tab->n = tab->cap = 0;
 }
 
+/* Give up on a tracee we could not TABLE (thr_get returned NULL — allocation
+ * failure). It must NOT simply be resumed. detach_threads walks the TABLE, so an
+ * untabled task is never detached; and in a single-step engine it was resumed
+ * trap-flag-armed, so when we eventually go away it takes a #DB with no tracer
+ * left to absorb it and DIES — seconds later, seemingly unrelated to the tool.
+ * That is the fatal-SIGTRAP class the crash-safe two-phase detach exists to
+ * prevent, and an untracked clone child is exactly how one escapes it.
+ *
+ * So disarm and detach it here instead. We lose sight of that task, which is the
+ * honest outcome of running out of memory — the alternative is killing the very
+ * process we are supposed to be watching out of band. This is the policy the
+ * seize path already applies on OOM (seize_threads/seize_one detach rather than
+ * strand a thread seized); the resume paths simply never did.
+ *
+ * `stepped` mirrors detach_threads: only a single-step engine can have armed TF,
+ * and a PTRACE_SYSCALL engine must not have step state written into it. */
+static void release_untracked(pid_t tid, int stepped) {
+    if (stepped)
+        clear_trap_flag(tid); /* drop a step armed before we lost the table */
+    ptrace(PTRACE_DETACH, tid, NULL, NULL);
+}
+
 /* A SIGTRAP the tracee delivered to ITSELF — it executed its own int3 (a JIT or
  * debugger software breakpoint) or hit its own hardware breakpoint — as opposed
  * to the single-step trap WE induced. Distinguished by the stop's si_code
@@ -992,7 +1037,10 @@ int asmspy_engine_syscalls(pid_t pid, int follow, long max, atomic_bool *stop,
          * SIGCONT. */
         if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
                                            sig == SIGTTIN || sig == SIGTTOU)) {
-            thr_get(&tab, tid);
+            if (!thr_get(&tab, tid)) { /* OOM: don't strand it traced */
+                release_untracked(tid, 0);
+                continue;
+            }
             ptrace(PTRACE_LISTEN, tid, NULL, NULL);
             continue;
         }
@@ -1005,7 +1053,10 @@ int asmspy_engine_syscalls(pid_t pid, int follow, long max, atomic_bool *stop,
         int deliver = 0;
         if (event == 0 && sig != SIGTRAP && sig != (SIGTRAP | 0x80))
             deliver = sig;
-        thr_get(&tab, tid);
+        if (!thr_get(&tab, tid)) { /* OOM: detach, never resume untracked */
+            release_untracked(tid, 0);
+            continue;
+        }
         ptrace(PTRACE_SYSCALL, tid, NULL, (void *)(long)deliver);
     }
 
@@ -1773,7 +1824,10 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, int follow, long max,
          * stays suspended (honoring ^Z) instead of being single-stepped onward. */
         if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
                                            sig == SIGTTIN || sig == SIGTTOU)) {
-            thr_get(&tab, tid);
+            if (!thr_get(&tab, tid)) { /* OOM: don't strand it traced */
+                release_untracked(tid, 1);
+                continue;
+            }
             ptrace(PTRACE_LISTEN, tid, NULL, NULL);
             continue;
         }
@@ -1785,7 +1839,10 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, int follow, long max,
         int deliver = 0;
         if (event == 0 && sig != SIGTRAP)
             deliver = sig;
-        thr_get(&tab, tid);
+        if (!thr_get(&tab, tid)) { /* OOM: detach, never resume untracked */
+            release_untracked(tid, 1);
+            continue;
+        }
         ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)deliver);
     }
 
@@ -2067,7 +2124,10 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
 
         if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
                                            sig == SIGTTIN || sig == SIGTTOU)) {
-            thr_get(&tab, tid);
+            if (!thr_get(&tab, tid)) { /* OOM: don't strand it traced */
+                release_untracked(tid, 1);
+                continue;
+            }
             ptrace(PTRACE_LISTEN, tid, NULL, NULL);
             continue;
         }
@@ -2075,7 +2135,10 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
         int deliver = 0;
         if (event == 0 && sig != SIGTRAP)
             deliver = sig;
-        thr_get(&tab, tid);
+        if (!thr_get(&tab, tid)) { /* OOM: detach, never resume untracked */
+            release_untracked(tid, 1);
+            continue;
+        }
         ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)deliver);
     }
 
@@ -2299,7 +2362,10 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
 
         if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
                                            sig == SIGTTIN || sig == SIGTTOU)) {
-            thr_get(&tab, tid);
+            if (!thr_get(&tab, tid)) { /* OOM: don't strand it traced */
+                release_untracked(tid, 1);
+                continue;
+            }
             ptrace(PTRACE_LISTEN, tid, NULL, NULL);
             continue;
         }
@@ -2307,7 +2373,10 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
         int deliver = 0;
         if (event == 0 && sig != SIGTRAP)
             deliver = sig;
-        thr_get(&tab, tid);
+        if (!thr_get(&tab, tid)) { /* OOM: detach, never resume untracked */
+            release_untracked(tid, 1);
+            continue;
+        }
         ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)deliver);
     }
 
@@ -2550,7 +2619,10 @@ int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
 
         if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
                                            sig == SIGTTIN || sig == SIGTTOU)) {
-            thr_get(&tab, tid);
+            if (!thr_get(&tab, tid)) { /* OOM: don't strand it traced */
+                release_untracked(tid, (mode == ASMSPY_COUNT_CALLS));
+                continue;
+            }
             ptrace(PTRACE_LISTEN, tid, NULL, NULL);
             continue;
         }
@@ -2558,7 +2630,10 @@ int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
         int deliver = 0;
         if (event == 0 && sig != SIGTRAP && sig != (SIGTRAP | 0x80))
             deliver = sig;
-        thr_get(&tab, tid);
+        if (!thr_get(&tab, tid)) { /* OOM: detach, never resume untracked */
+            release_untracked(tid, (mode == ASMSPY_COUNT_CALLS));
+            continue;
+        }
         TOPO_RESUME(tid, deliver);
     }
 

@@ -128,6 +128,14 @@ $(BUILD)/sample_victim: $(BUILD)/sample_victim.o
 $(BUILD)/watch_victim: $(BUILD)/watch_victim.o
 	$(CC) $(CFLAGS) -pthread $^ -o $@
 
+# clone_victim spawns threads DURING the trace (every other threaded victim
+# starts its workers before the attach, so they arrive via seize_threads' /proc
+# scan instead). spawned_fn runs only on those post-attach clones. Backs the
+# post-attach clone-following smoke (Theme D) and the thr_get OOM survival smoke
+# (Theme C, via ASMSPY_TEST_THR_OOM). Multi-threaded, so -pthread.
+$(BUILD)/clone_victim: $(BUILD)/clone_victim.o
+	$(CC) $(CFLAGS) -pthread $^ -o $@
+
 # exec_victim / exec_stage2 — the exec-stop re-resolution pair (Theme B).
 # exec_victim runs preexec_fn, then execv()s exec_stage2, which runs postexec_fn.
 # The two functions live in DIFFERENT binaries, so naming postexec_fn proves
@@ -209,7 +217,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
            $(BUILD)/test_treefilter $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
-           $(BUILD)/fork_victim
+           $(BUILD)/fork_victim $(BUILD)/clone_victim
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
 	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"

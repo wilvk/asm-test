@@ -75,7 +75,8 @@ HWPID=""
 DLPID=""
 EXPID=""
 FKPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
+CLPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -794,6 +795,82 @@ expect_badarg "$ASM" --graph 1 --tid=1 --follow
 expect_badarg "$ASM" --tree 1 --tid=1 --follow
 echo "  --tid with --follow rejected (contradictory scopes)"
 rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt 2>/dev/null || true
+
+# ---------------------------------------------------------------------------
+# POST-ATTACH CLONE FOLLOWING (Theme D) + thr_get OOM RELEASE (Theme C)
+# ---------------------------------------------------------------------------
+# clone_victim stays single-threaded until after we attach, then keeps spawning
+# short-lived threads. spawned_fn runs ONLY on those post-attach clones, so it
+# cannot be reached by seize_threads' one-shot /proc scan — only by
+# PTRACE_O_TRACECLONE plus the clone-event handler.
+#
+# The two checks below are EACH OTHER'S CONTROL, and that is the point:
+#
+#   * no injection -> spawned_fn MUST appear (clones are followed and stepped)
+#   * ASMSPY_TEST_THR_OOM=1 (only the leader may be tabled) -> spawned_fn must
+#     NOT appear: a task we cannot table is RELEASED, not traced-but-untracked.
+#
+# Without the first, the second passes for the wrong reason — anything that
+# breaks clone following at all (TRACECLONE unset, say) also yields spawned_fn=0
+# and would look like a clean OOM release. MEASURED: that exact mutation does
+# make the OOM check pass on its own.
+#
+# HONEST SCOPE. The bug this guards is that an untabled task escapes the
+# two-phase detach and is left step-armed, which kills the target LATER by
+# SIGTRAP. That consequence is NOT what is asserted here, because it does not
+# reproduce on a simple victim — MEASURED: this victim survives with AND without
+# the fix, the same limitation already recorded for the two-phase-detach
+# tripwire (the crash reproduced reliably only on a real V8/Node JIT). So this
+# asserts the POLICY that prevents it — untabled implies released — which is
+# mutation-detectable, rather than a crash that would pass either way.
+#
+# ASMSPY_TEST_THR_OOM is a test-only fault-injection knob: a mid-trace
+# allocation failure cannot be provoked from outside and is silent when it
+# happens, so without a lever the fix could only be argued, not demonstrated.
+echo "--- asmspy post-attach clone following (Theme D) ---"
+"$BUILD/clone_victim" 2>/dev/null &
+CLPID=$!
+sleep 1
+set +e
+clout=$(timeout 90 "$ASM" --stream "$CLPID" 20000 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--stream on clone_victim hung"
+kill -9 "$CLPID" 2>/dev/null || true
+wait "$CLPID" 2>/dev/null || true
+CLPID=""
+printf '%s\n' "$clout" | grep -q main_fn \
+    || fail "clone-follow: main_fn (the leader's own code) missing — the run is broken, so the spawned_fn check would be meaningless"
+printf '%s\n' "$clout" | grep -q spawned_fn \
+    || fail "clone-follow: spawned_fn never appeared — a thread created AFTER the attach is not being followed (TRACECLONE / clone-event handling)"
+[ "$(printf '%s\n' "$clout" | grep -oE '^\[[0-9]+\]' | sort -u | wc -l)" -ge 2 ] \
+    || fail "clone-follow: expected >=2 distinct tids once post-attach clones are followed"
+echo "  post-attach clones followed (leader + spawned threads, spawned_fn stepped)"
+
+echo "--- asmspy thr_get OOM: an untabled task is RELEASED, not left traced (Theme C) ---"
+"$BUILD/clone_victim" 2>/dev/null &
+CLPID=$!
+sleep 1
+set +e
+oomout=$(ASMSPY_TEST_THR_OOM=1 timeout 90 "$ASM" --stream "$CLPID" 20000 2>/dev/null)
+rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--stream under injected thr_get OOM hung"
+[ "$rc" -eq 0 ] || fail "--stream under injected thr_get OOM exited rc=$rc"
+# the leader IS tabled (cap=1), so it must still be traced — proving the run
+# happened at all and that the injection did not simply break everything
+printf '%s\n' "$oomout" | grep -q main_fn \
+    || fail "thr_get OOM: the leader's own code is missing — the injection broke the whole trace, not just the untabled tasks"
+# every post-attach clone is UNTABLED under cap=1, and each must therefore be
+# detached on sight rather than resumed. Stepping one proves it was resumed
+# while absent from the table detach_threads walks — the escape this fixes.
+printf '%s\n' "$oomout" | grep -q spawned_fn \
+    && fail "thr_get OOM: spawned_fn was stepped even though the task could not be tabled — an untracked task is being resumed, so it escapes the two-phase detach"
+[ "$(printf '%s\n' "$oomout" | grep -oE '^\[[0-9]+\]' | sort -u | wc -l)" -le 1 ] \
+    || fail "thr_get OOM: more than one tid was traced under a 1-task table cap"
+echo "  untabled tasks released on sight; the tabled leader keeps tracing"
+kill -9 "$CLPID" 2>/dev/null || true
+wait "$CLPID" 2>/dev/null || true
+CLPID=""
 
 # statistical hot-edge sampler: attach AMD IBS-Op to a CPU-busy victim OUT OF
 # BAND (no ptrace, no single-step) and check the hot function is named. IBS-Op is
