@@ -588,29 +588,49 @@ static int asmtest_go_pt_trace_call(const void *code, size_t len, const long *ar
                                     int nargs, long *result, void *trace) {
     return p_pt_trace_call ? p_pt_trace_call(code, len, args, nargs, result, trace) : -1;
 }
-static int asmtest_go_pt_trace_attached(int pid, const void *base, size_t len,
+// The `addr`/`base` parameters below are ADDRESSES IN A FOREIGN PROCESS (or in a
+// JIT mapping this process never dereferences), not Go pointers: nothing Go's GC
+// owns or tracks lives at them. They are therefore typed uintptr_t all the way
+// across the cgo boundary, and the integer -> pointer cast happens HERE, in C,
+// where it is legitimate. Typing them `const void *` instead would force the Go
+// side to manufacture an unsafe.Pointer out of a uintptr, which is invalid under
+// the unsafe.Pointer rules (and what `go vet` correctly flags): the value is not
+// a tracked Go pointer, so the GC may neither find nor update it. The underlying
+// p_* function pointers keep their `const void *` ABI — only the shim's
+// parameter type changes.
+static int asmtest_go_pt_trace_attached(int pid, uintptr_t base, size_t len,
                                         long *result, void *trace) {
-    return p_pt_trace_attached ? p_pt_trace_attached(pid, base, len, result, trace) : -1;
+    return p_pt_trace_attached
+               ? p_pt_trace_attached(pid, (const void *)base, len, result, trace)
+               : -1;
 }
-static int asmtest_go_pt_trace_attached_blockstep(int pid, const void *base,
+static int asmtest_go_pt_trace_attached_blockstep(int pid, uintptr_t base,
                                                   size_t len, long *result,
                                                   void *trace) {
     return p_pt_trace_attached_blockstep
-               ? p_pt_trace_attached_blockstep(pid, base, len, result, trace)
+               ? p_pt_trace_attached_blockstep(pid, (const void *)base, len, result, trace)
                : -1;
 }
-static int asmtest_go_pt_trace_attached_versioned(int pid, const void *base, size_t len,
+static int asmtest_go_pt_trace_attached_versioned(int pid, uintptr_t base, size_t len,
                                                   void *img, uint64_t when,
                                                   long *result, void *trace) {
     return p_pt_trace_attached_versioned
-        ? p_pt_trace_attached_versioned(pid, base, len, img, when, result, trace) : -1;
+        ? p_pt_trace_attached_versioned(pid, (const void *)base, len, img, when, result, trace)
+        : -1;
 }
-static int asmtest_go_pt_run_to(int pid, const void *addr) {
-    return p_pt_run_to ? p_pt_run_to(pid, addr) : -1;
+static int asmtest_go_pt_run_to(int pid, uintptr_t addr) {
+    return p_pt_run_to ? p_pt_run_to(pid, (const void *)addr) : -1;
 }
-static int asmtest_go_proc_region_by_addr(int pid, const void *addr,
-                                          void **base_out, size_t *len_out) {
-    return p_proc_region_by_addr ? p_proc_region_by_addr(pid, addr, base_out, len_out) : -1;
+// base_out is an address in pid's address space too, so it comes back as a
+// uintptr_t rather than landing in a GC-scanned Go unsafe.Pointer variable.
+static int asmtest_go_proc_region_by_addr(int pid, uintptr_t addr,
+                                          uintptr_t *base_out, size_t *len_out) {
+    void *b = NULL;
+    int rc;
+    if (!p_proc_region_by_addr) return -1;
+    rc = p_proc_region_by_addr(pid, (const void *)addr, &b, len_out);
+    *base_out = (uintptr_t)b;
+    return rc;
 }
 static int asmtest_go_proc_perfmap_symbol(int pid, const char *name,
                                           void **base_out, size_t *len_out) {
@@ -631,14 +651,17 @@ static void asmtest_go_ci_skip_reason(char *buf, size_t buflen) {
 }
 static void *asmtest_go_ci_new(int pid) { return p_ci_new ? p_ci_new(pid) : NULL; }
 static void asmtest_go_ci_free(void *img) { if (p_ci_free) p_ci_free(img); }
-static int asmtest_go_ci_track(void *img, const void *base, size_t len) {
-    return p_ci_track ? p_ci_track(img, base, len) : -1;
+// base/addr: an address in the TARGET process the image records (pid 0 => this
+// process, where it is still only ever a code mapping Go does not own). uintptr_t
+// across the boundary; cast to a pointer here. See the note above the ptrace bridges.
+static int asmtest_go_ci_track(void *img, uintptr_t base, size_t len) {
+    return p_ci_track ? p_ci_track(img, (const void *)base, len) : -1;
 }
 static int asmtest_go_ci_refresh(void *img) { return p_ci_refresh ? p_ci_refresh(img) : -1; }
 static uint64_t asmtest_go_ci_now(const void *img) { return p_ci_now ? p_ci_now(img) : 0; }
-static int asmtest_go_ci_bytes_at(const void *img, const void *addr, uint64_t when,
+static int asmtest_go_ci_bytes_at(const void *img, uintptr_t addr, uint64_t when,
                                   const uint8_t **out, size_t *out_len) {
-    return p_ci_bytes_at ? p_ci_bytes_at(img, addr, when, out, out_len) : -1;
+    return p_ci_bytes_at ? p_ci_bytes_at(img, (const void *)addr, when, out, out_len) : -1;
 }
 static int asmtest_go_ci_bpf_available(void) { return p_ci_bpf_available ? p_ci_bpf_available() : 0; }
 static void asmtest_go_ci_bpf_skip_reason(char *buf, size_t buflen) {
@@ -663,8 +686,10 @@ static void asmtest_go_desc_set_max_depth(void *d, uint32_t v) { if (p_desc_set_
 static void asmtest_go_desc_set_insn_budget(void *d, uint64_t v) { if (p_desc_set_insn_budget) p_desc_set_insn_budget(d, v); }
 static void asmtest_go_desc_set_watchdog_ms(void *d, uint32_t v) { if (p_desc_set_watchdog_ms) p_desc_set_watchdog_ms(d, v); }
 static void asmtest_go_desc_use_default_denylist(void *d) { if (p_desc_use_default_denylist) p_desc_use_default_denylist(d); }
-static int asmtest_go_desc_allow_region(void *d, const void *b, size_t n) { return p_desc_allow_region ? p_desc_allow_region(d, b, n) : -1; }
-static int asmtest_go_desc_deny_region(void *d, const void *b, size_t n) { return p_desc_deny_region ? p_desc_deny_region(d, b, n) : -1; }
+// b: an address in the traced (foreign) process — uintptr_t across the boundary,
+// cast to a pointer here. See the note above the ptrace bridges.
+static int asmtest_go_desc_allow_region(void *d, uintptr_t b, size_t n) { return p_desc_allow_region ? p_desc_allow_region(d, (const void *)b, n) : -1; }
+static int asmtest_go_desc_deny_region(void *d, uintptr_t b, size_t n) { return p_desc_deny_region ? p_desc_deny_region(d, (const void *)b, n) : -1; }
 static void asmtest_go_desc_set_resolver(void *d, void *user) { if (p_desc_set_resolver) p_desc_set_resolver(d, goDescentResolverTramp, user); }
 static void asmtest_go_desc_set_denylist(void *d, void *user) { if (p_desc_set_denylist) p_desc_set_denylist(d, goDescentDenylistTramp, user); }
 static size_t asmtest_go_desc_edges_len(void *d) { return p_desc_edges_len ? p_desc_edges_len(d) : 0; }
@@ -686,14 +711,15 @@ static int asmtest_go_pt_trace_call_ex(const void *code, size_t len, const long 
                                        long *result, void *trace, void *descent) {
     return p_pt_trace_call_ex ? p_pt_trace_call_ex(code, len, args, nargs, result, trace, descent) : -1;
 }
-static int asmtest_go_pt_trace_attached_ex(int pid, const void *base, size_t len, long *result,
+static int asmtest_go_pt_trace_attached_ex(int pid, uintptr_t base, size_t len, long *result,
                                            void *trace, void *descent) {
-    return p_pt_trace_attached_ex ? p_pt_trace_attached_ex(pid, base, len, result, trace, descent) : -1;
+    return p_pt_trace_attached_ex
+        ? p_pt_trace_attached_ex(pid, (const void *)base, len, result, trace, descent) : -1;
 }
-static int asmtest_go_pt_trace_attached_versioned_ex(int pid, const void *base, size_t len, void *img,
+static int asmtest_go_pt_trace_attached_versioned_ex(int pid, uintptr_t base, size_t len, void *img,
                                                      uint64_t when, long *result, void *trace, void *descent) {
     return p_pt_trace_attached_versioned_ex
-        ? p_pt_trace_attached_versioned_ex(pid, base, len, img, when, result, trace, descent) : -1;
+        ? p_pt_trace_attached_versioned_ex(pid, (const void *)base, len, img, when, result, trace, descent) : -1;
 }
 */
 import "C"
@@ -966,6 +992,14 @@ func HwNativeCodeFromBytes(b []byte) (*HwNativeCode, error) {
 
 // Base is the runtime address of the executable mapping (offset 0 = entry).
 func (c *HwNativeCode) Base() uintptr { return uintptr(c.base) }
+
+// Ptr is the executable mapping as an unsafe.Pointer — what the PtraceTraceCall*
+// entry points take. Unlike unsafe.Pointer(c.Base()), it does NOT round-trip the
+// address through uintptr, so the pointer keeps its provenance (this mapping is
+// real allocated memory in THIS process, from asmtest_hwtrace_exec_alloc, which
+// the tracer executes). The round-trip is invalid under the unsafe.Pointer rules
+// and is what `go vet` flags; use this instead.
+func (c *HwNativeCode) Ptr() unsafe.Pointer { return c.base }
 
 // Len is the number of code bytes.
 func (c *HwNativeCode) Len() int { return int(c.len) }
@@ -1455,7 +1489,7 @@ func PtraceTraceCallBlockstep(codeBase unsafe.Pointer, codeLen int, args []int64
 // region exit.
 func PtraceTraceAttached(pid int, base uintptr, length int, trace *HwTrace) (int64, error) {
 	var result C.long
-	rc := C.asmtest_go_pt_trace_attached(C.int(pid), unsafe.Pointer(base),
+	rc := C.asmtest_go_pt_trace_attached(C.int(pid), C.uintptr_t(base),
 		C.size_t(length), &result, trace.h)
 	if rc != ptraceOK {
 		return 0, fmt.Errorf("asmtest_ptrace_trace_attached failed: %d", int(rc))
@@ -1469,7 +1503,7 @@ func PtraceTraceAttached(pid int, base uintptr, length int, trace *HwTrace) (int
 // a fraction of the stops. Probe first with PtraceBlockstepAvailable.
 func PtraceTraceAttachedBlockstep(pid int, base uintptr, length int, trace *HwTrace) (int64, error) {
 	var result C.long
-	rc := C.asmtest_go_pt_trace_attached_blockstep(C.int(pid), unsafe.Pointer(base),
+	rc := C.asmtest_go_pt_trace_attached_blockstep(C.int(pid), C.uintptr_t(base),
 		C.size_t(length), &result, trace.h)
 	if rc != ptraceOK {
 		return 0, fmt.Errorf("asmtest_ptrace_trace_attached_blockstep failed: %d", int(rc))
@@ -1491,7 +1525,7 @@ func PtraceTraceAttachedVersioned(pid int, base uintptr, length int, img *CodeIm
 		imgPtr = img.h
 	}
 	var result C.long
-	rc := C.asmtest_go_pt_trace_attached_versioned(C.int(pid), unsafe.Pointer(base),
+	rc := C.asmtest_go_pt_trace_attached_versioned(C.int(pid), C.uintptr_t(base),
 		C.size_t(length), imgPtr, C.uint64_t(when), &result, trace.h)
 	if rc != ptraceOK {
 		return 0, fmt.Errorf("asmtest_ptrace_trace_attached_versioned failed: %d", int(rc))
@@ -1506,16 +1540,16 @@ func PtraceTraceAttachedVersioned(pid int, base uintptr, length int, img *CodeIm
 // status code (PTRACE_OK, or PTRACE_ENOENT if the target exited first). The caller
 // owns PTRACE_ATTACH/DETACH.
 func PtraceRunTo(pid int, addr uintptr) int {
-	return int(C.asmtest_go_pt_run_to(C.int(pid), unsafe.Pointer(addr)))
+	return int(C.asmtest_go_pt_run_to(C.int(pid), C.uintptr_t(addr)))
 }
 
 // ProcRegionByAddr finds the executable mapping in /proc/<pid>/maps that contains
 // addr and returns its extent (base, len). ok is false when no executable mapping
 // contains addr (or on a read failure).
 func ProcRegionByAddr(pid int, addr uintptr) (base, length uintptr, ok bool) {
-	var b unsafe.Pointer
+	var b C.uintptr_t
 	var l C.size_t
-	rc := C.asmtest_go_proc_region_by_addr(C.int(pid), unsafe.Pointer(addr), &b, &l)
+	rc := C.asmtest_go_proc_region_by_addr(C.int(pid), C.uintptr_t(addr), &b, &l)
 	if rc != ptraceOK {
 		return 0, 0, false
 	}
@@ -1689,7 +1723,7 @@ func NewCodeImage(pid int) *CodeImage {
 // arm write-protect-async on its pages so the next Refresh sees changes. May be called
 // for several disjoint regions.
 func (c *CodeImage) Track(base uintptr, length int) error {
-	rc := C.asmtest_go_ci_track(c.h, unsafe.Pointer(base), C.size_t(length))
+	rc := C.asmtest_go_ci_track(c.h, C.uintptr_t(base), C.size_t(length))
 	if rc != ciOK {
 		return fmt.Errorf("asmtest_codeimage_track failed: %d", int(rc))
 	}
@@ -1719,7 +1753,7 @@ func (c *CodeImage) Now() uint64 { return uint64(C.asmtest_go_ci_now(c.h)) }
 func (c *CodeImage) BytesAt(addr uintptr, when uint64) []byte {
 	var out *C.uint8_t
 	var outLen C.size_t
-	rc := C.asmtest_go_ci_bytes_at(c.h, unsafe.Pointer(addr), C.uint64_t(when), &out, &outLen)
+	rc := C.asmtest_go_ci_bytes_at(c.h, C.uintptr_t(addr), C.uint64_t(when), &out, &outLen)
 	if rc != ciOK || out == nil {
 		return nil
 	}
@@ -1878,13 +1912,13 @@ func (d *Descent) UseDefaultDenylist() {
 // AllowRegion adds [base, base+length) to the level-2 allow-set (descend into calls
 // landing inside). Returns 0 on success, negative on OOM.
 func (d *Descent) AllowRegion(base uintptr, length int) int {
-	return int(C.asmtest_go_desc_allow_region(d.h, unsafe.Pointer(base), C.size_t(length)))
+	return int(C.asmtest_go_desc_allow_region(d.h, C.uintptr_t(base), C.size_t(length)))
 }
 
 // DenyRegion adds [base, base+length) to the level-3 deny-set (never descend into it).
 // Returns 0 on success, negative on OOM.
 func (d *Descent) DenyRegion(base uintptr, length int) int {
-	return int(C.asmtest_go_desc_deny_region(d.h, unsafe.Pointer(base), C.size_t(length)))
+	return int(C.asmtest_go_desc_deny_region(d.h, C.uintptr_t(base), C.size_t(length)))
 }
 
 // SetResolver installs a level-2/3 resolver upcall. The closure is kept alive in a
@@ -2019,7 +2053,7 @@ func PtraceTraceAttachedEx(pid int, base uintptr, length int, trace *HwTrace,
 		dh = descent.h
 	}
 	var result C.long
-	rc := C.asmtest_go_pt_trace_attached_ex(C.int(pid), unsafe.Pointer(base),
+	rc := C.asmtest_go_pt_trace_attached_ex(C.int(pid), C.uintptr_t(base),
 		C.size_t(length), &result, th, dh)
 	if rc != ptraceOK {
 		return 0, fmt.Errorf("asmtest_ptrace_trace_attached_ex failed: %d", int(rc))
@@ -2043,7 +2077,7 @@ func PtraceTraceAttachedVersionedEx(pid int, base uintptr, length int, img *Code
 		dh = descent.h
 	}
 	var result C.long
-	rc := C.asmtest_go_pt_trace_attached_versioned_ex(C.int(pid), unsafe.Pointer(base),
+	rc := C.asmtest_go_pt_trace_attached_versioned_ex(C.int(pid), C.uintptr_t(base),
 		C.size_t(length), imgPtr, C.uint64_t(when), &result, th, dh)
 	if rc != ptraceOK {
 		return 0, fmt.Errorf("asmtest_ptrace_trace_attached_versioned_ex failed: %d", int(rc))

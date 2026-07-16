@@ -282,9 +282,18 @@ package-libs: shared shared-emu
 # DYNAMORIO_HOME is unset). Both self-skip on macOS / where unbuildable, so package-libs
 # stays green everywhere; a re-run of collect-licenses folds any tier deps' notices in.
 # The multi-platform packers pick the staged libs up for free (they glob lib*.so*).
+#
+# The sub-make is chained with && DELIBERATELY. It used to be `;`, which discarded the
+# sub-make's exit status entirely — the case arm returned collect-licenses.sh's status
+# instead — so ANY failure staging a tier (a broken drapp, a failed hwtrace build) left
+# package-libs GREEN and shipped an incomplete payload. That is why the release
+# `native` legs could not catch a drtrace tier that never loaded. Self-skipping does NOT
+# depend on `;`: package-libs-drtrace already self-skips by exiting 0 from INSIDE the
+# rule (non-linux-x86_64, or DynamoRIO unobtainable), so && preserves every intended
+# skip while letting a genuine failure fail the build.
 package-libs-tiers:
 	@case "$(PKG_PLAT)" in \
-	  linux-*) $(MAKE) --no-print-directory package-libs-hwtrace package-libs-drtrace; \
+	  linux-*) $(MAKE) --no-print-directory package-libs-hwtrace package-libs-drtrace && \
 	           ASMTEST_DR_VERSION=$(DR_VERSION) sh scripts/collect-licenses.sh \
 	             $(PKG_DIST)/native/$(PKG_PLAT)/THIRD-PARTY-LICENSES ;; \
 	  *) echo "package-libs: native-trace tiers are Linux-only — none staged for $(PKG_PLAT)" ;; \
@@ -298,6 +307,25 @@ package-libs-hwtrace: shared-hwtrace $(BUILD)/asmtest-stealth-helper
 # drtrace: linux-x86_64 only, needs DynamoRIO. Uses $DYNAMORIO_HOME if set, else fetches
 # the pinned release into the local cache. Self-skips (never fails package-libs) off
 # linux-x86_64 or when DynamoRIO can't be obtained (e.g. offline dev box).
+#
+# DRAPP_KEYSTONE=0 is REQUIRED here, not an optimization: assemble.o carries the
+# emulator's in-line-assembler bridges (emu_*_call_asm), whose emu_*_call targets are
+# NOT linked into the standalone libasmtest_drapp (see mk/native-trace.mk). A
+# Keystone-enabled drapp .so therefore has unresolved emu_* symbols and will NOT
+# dlopen — `undefined symbol: emu_arm64_call` — which is precisely what a consumer of
+# this payload hits, since every dlopen binding loads drapp at run time. This rule
+# used to inherit the DRAPP_KEYSTONE=1 default, so on any host where pkg-config found
+# Keystone (i.e. every release runner: the wheel job builds it) it staged a drapp that
+# could not be loaded. The per-lane test targets already pass DRAPP_KEYSTONE=0 for the
+# same reason; the packaged payload must too. Nothing is lost: the drtrace surface the
+# bindings expose is the raw-bytes path (asmtest_exec_alloc), never asm_exec_native.
+#
+# The `ldd -r` gate below is what makes that non-vacuous. package-native.sh asserts the
+# staged lib EXPORTS asmtest_dr_available, and package-libs-verify checks the file
+# exists with an $ORIGIN rpath — an unloadable drapp satisfies BOTH, which is exactly
+# how a payload whose drtrace tier could never load stayed green through the `native`
+# legs. An export assertion is not a loadability assertion: assert here that the staged
+# lib has no unresolved symbols, so this can never be staged broken again.
 package-libs-drtrace:
 	@case "$(PKG_PLAT)" in linux-x86_64) ;; *) \
 	   echo "package-libs: drtrace is linux-x86_64 only — skipped on $(PKG_PLAT)"; exit 0 ;; esac; \
@@ -306,12 +334,23 @@ package-libs-drtrace:
 	   drhome=$$(DR_VERSION=$(DR_VERSION) sh scripts/fetch-dynamorio.sh) || { \
 	     echo "package-libs: could not obtain DynamoRIO — drtrace NOT staged"; exit 0; }; \
 	 fi; \
-	 $(MAKE) --no-print-directory shared-drtrace drtrace-client DYNAMORIO_HOME="$$drhome" && \
+	 $(MAKE) --no-print-directory shared-drtrace drtrace-client DYNAMORIO_HOME="$$drhome" \
+	   DRAPP_KEYSTONE=0 && \
 	 slot=$(PKG_DIST)/native/$(PKG_PLAT) && \
 	 cp -f $(call shlib_real,libasmtest_drapp) $$slot/$(pkg_drapp_name) && \
 	 cp -f $(BUILD)/libasmtest_drclient.so $$slot/ && \
 	 cp -fL "$$drhome/lib64/release/libdynamorio.so" $$slot/ && \
-	 ASMTEST_DR_VERSION=$(DR_VERSION) sh scripts/package-native.sh --tier drtrace $$slot $(pkg_drapp_name)
+	 ASMTEST_DR_VERSION=$(DR_VERSION) sh scripts/package-native.sh --tier drtrace $$slot $(pkg_drapp_name) && \
+	 { command -v ldd >/dev/null 2>&1 || { \
+	     echo "package-libs: FATAL — no ldd, cannot verify $(pkg_drapp_name) is loadable."; \
+	     echo "  Refusing to stage an unverified drtrace tier (a silent pass here is how"; \
+	     echo "  an unloadable drapp shipped in the first place)."; exit 1; }; \
+	   undef=$$(ldd -r "$$slot/$(pkg_drapp_name)" 2>&1 | grep 'undefined symbol' || true); \
+	   [ -z "$$undef" ] || { \
+	     echo "package-libs: FATAL — staged $(pkg_drapp_name) has UNRESOLVED symbols, so it"; \
+	     echo "  will not dlopen and every binding's drtrace tier is dead on arrival:"; \
+	     echo "$$undef" | sed 's/^/    /'; exit 1; }; \
+	   echo "package-libs: ok — $(pkg_drapp_name) resolves all symbols (dlopen-able)"; }
 
 # dlopen bindings: bundle the prebuilt libasmtest_emu (the superset) + its vendored
 # native deps + THIRD-PARTY-LICENSES in the package's payload. Python's wheel is

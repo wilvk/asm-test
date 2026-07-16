@@ -47,7 +47,7 @@ value-to-effort; all are independent and can land in any order.
 
 # Part 1 — Reach (finish the deferred work)
 
-## Track A — Publish the bindings — **code-complete; blocked on registry credentials**
+## Track A — Publish the bindings — **pipeline was BROKEN, not merely uncredentialed; four defects fixed 2026-07-17, go-live still needs credentials**
 
 **Goal.** Turn the ten packaging-*scaffolded* bindings into ones a user installs from
 their language's registry, with the native libraries bundled — the multi-language
@@ -57,8 +57,68 @@ analog of the existing `pkg-config` adoption story.
 done; nobody can `pip install asmtest`. [docs/packaging.md](../../reference/packaging.md) already
 scopes the remainder: credentials and cross-OS native-payload build matrices.
 
-**Status.** The whole release pipeline exists and is dry-run-proven end to end in
-[`.github/workflows/release.yml`](../../../.github/workflows/release.yml):
+**Status — corrected 2026-07-17.** This entry previously read "code-complete; blocked
+on registry credentials" and claimed the pipeline was "dry-run-proven end to end".
+**That was false.** `release.yml` had not been dispatched since **2026-06-26**, so
+everything merged after that date entered it **untested** — including the commit that
+added the native-trace bundling assert (`53fc151`, 2026-07-01), which had therefore
+**never once executed**. A re-dispatch on 2026-07-17 found the pipeline broken in four
+independent ways: two workflow-config faults and two real defects in shipped code.
+
+The credentials gate is real, but it was **never the only gate** — and describing it as
+such is what let a dead pipeline read as "done" for three weeks. The lesson is
+structural, not incidental: **a release workflow that only runs on dispatch decays
+silently.** Nothing merged between 2026-06-26 and 2026-07-17 was release-tested.
+
+| # | Defect | Kind | Why it hid |
+|---|--------|------|-----------|
+| 1 | `libipt-dev` installed unguarded on arm64 (no such package on Ubuntu ports) | workflow config | the arm64 leg is release-only |
+| 2 | `macos-13` runners retired 2025-12-08 — every Intel-mac leg queued until timeout | workflow config | no runner ⇒ the leg never reports; migrated to `macos-15-intel` (the last x86_64 image, available until 2027-08) |
+| 3 | `go vet` failed at 16 sites ("possible misuse of unsafe.Pointer") | real code defect | **`go vet` runs ONLY in release.yml, never in ci.yml**, and `go-version: "stable"` tracks an ever-stricter Go. The rule tightened under a lane nobody ran. |
+| 4 | The Linux wheel's **drtrace tier could never load** (`undefined symbol: emu_arm64_call`) | real packaging defect | see below — three compounding causes, and every existing check passed anyway |
+
+Defect 4 is the instructive one. The tier *was* bundled; it just could not be
+`dlopen`'d, and **nothing in the pipeline could tell the difference**:
+
+- `package-libs-drtrace` inherited `DRAPP_KEYSTONE=1`, which `mk/native-trace.mk`
+  already documents as unloadable (a Keystone-enabled drapp has unresolved `emu_*`
+  symbols). Every per-lane *test* target passes `DRAPP_KEYSTONE=0`; the *packaged*
+  payload did not.
+- `package-native.sh` asserted only that drapp **exports** `asmtest_dr_available`, and
+  `package-libs-verify` only that the file exists with an `$ORIGIN` rpath. A broken
+  drapp satisfies both: **an export assertion is not a loadability assertion.**
+- `package-libs-tiers` chained its sub-make with `;`, discarding the exit status — so
+  even a fatal tier failure left `package-libs` **green**. This is why the `native`
+  legs happily staged a dead payload and passed.
+
+The tier is therefore fixed at the source (`DRAPP_KEYSTONE=0`) and, more importantly,
+made **unable to regress silently**: an `ldd -r` gate now fails the staging step, and
+`&&` lets that failure propagate. Self-skipping is unaffected (`package-libs-drtrace`
+already self-skips by exiting 0 from inside the rule).
+
+The clean-room assert added by `53fc151` was itself wrong on arm64 in two ways, both
+masked because the first killed the leg before the second could run: it called
+`drtrace.library_path()` **above its own platform guard**, and it asserted
+`hwtrace.HwTrace.available(SINGLESTEP)` unconditionally even though single-step is
+x86-64-only (`HWTRACE_HAVE_SINGLESTEP` is gated on `__x86_64__`; on aarch64 the lib
+loads and self-skips with "single-step backend is x86-64 Linux/macOS only"). It now
+asserts each tier where it ships and asserts its **documented absence** — matched on
+the specific skip reason — where it does not, so neither dropping a tier nor silently
+starting to ship one can pass.
+
+**drtrace on arm64 — decided, not deferred.** DynamoRIO *does* publish
+`DynamoRIO-AArch64-Linux-11.91.20630.tar.gz` for the pinned version, so the engine
+exists and the tier is not fundamentally impossible here. It is nonetheless **not
+shipped on arm64**, which is the repo's consistent, deliberate scoping
+(`scripts/fetch-dynamorio.sh` fetches the x86-64 tarball and says "Linux x86-64 only";
+`package-libs-drtrace`, `package-libs-verify`, and `mk/native-trace.mk`'s
+`lib64/release` layout all encode linux-x86_64). Enabling it would be a **feature
+expansion** — new arch for a whole tier, needing its own digest pin and arm64
+validation — not part of repairing the release. Recorded here as a real, evidenced
+option rather than an unknown.
+
+**What the pipeline now proves** (all four `native` legs and `native (collect +
+verify)` pass; the below is corrected from the prior overclaim):
 
 - Each `make <lang>-package` exposes the **library module** (not the test runner)
   and bundles the native payload; the dlopen bindings **self-locate** it (no
@@ -68,10 +128,13 @@ scopes the remainder: credentials and cross-OS native-payload build matrices.
   publishes**; the dlopen bindings install-test on Linux **and** macOS. Python is
   per-platform (manylinux / macOS wheels, libunicorn vendored via auditwheel /
   delocate); the link bindings (Go/C++/Zig/Rust) are validated as consumable.
-- **What remains is only the credentialed go-live** (not code): register the
-  package names, add the per-ecosystem token secrets, and tag a release — the
-  gated publish steps light up automatically. The gate is the **credentials
-  themselves**: `PYPI_TOKEN`, `NPM_TOKEN`, `CARGO_REGISTRY_TOKEN`,
+- **What remains for go-live is the credentials** — but "only credentials" is the
+  claim that hid four defects for three weeks, so it is worth stating precisely: the
+  publish steps are credential-gated, *and* the pipeline must be **re-dispatched and
+  green on the run that carries the release**, not on a three-week-old run. Register
+  the package names, add the per-ecosystem token secrets, and tag a release — the
+  gated publish steps light up automatically. The credentials are:
+  `PYPI_TOKEN`, `NPM_TOKEN`, `CARGO_REGISTRY_TOKEN`,
   `RUBYGEMS_API_KEY`, `NUGET_API_KEY` (lua + java have no registry leg here, and
   fall through). Each publish step is `if:`-gated to a **tag build on the Linux
   leg**, then guarded in-step by `[ -n "$TOKEN" ] || skip`, so forks and
@@ -388,11 +451,13 @@ instruction text, no host crash.
 1. **Track C** (disassembly) — **done.** Cheap, transformed every diagnostic, and
    Tracks E/F can build on it. Now also bound across all ten languages via the
    single `libasmtest_emu_full` (Keystone + Capstone) — `disas`/`disas_available`.
-2. **Track A** (publish) — **code-complete; blocked on registry credentials.** The
-   release pipeline packages, installs, and smoke-tests every binding end to end
-   (Linux + macOS), with only the credentialed go-live (register names + add token
-   secrets + tag) left — the single biggest adoption lever, no dependency on the
-   others.
+2. **Track A** (publish) — **was NOT code-complete; four defects fixed 2026-07-17,
+   go-live still needs credentials.** The pipeline had not been dispatched since
+   2026-06-26 and was broken in four ways (two workflow-config, two real: `go vet`,
+   and a Linux wheel whose drtrace tier could never load). It packages, installs and
+   smoke-tests every binding (Linux + macOS) again now. Still the single biggest
+   adoption lever with no dependency on the others — but its status must be read off a
+   **fresh** dispatch, since a dispatch-only workflow decays silently.
 3. **Track D** (wide vectors) — **AVX2 + AVX-512 done** (256- **and** 512-bit
    capture on SysV **and** Win64, plus binding parity across all ten), validated
    on a real AVX-512 host. Only **SVE** is staged, hardware-gated on an

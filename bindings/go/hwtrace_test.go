@@ -15,7 +15,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"unsafe"
 )
 
 // mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two basic blocks)
@@ -570,7 +569,7 @@ func TestPtraceTraceCall(t *testing.T) {
 	tr := NewHwTrace(64, 64) // blocks=64, instructions=64
 	defer tr.Free()
 
-	result, err := PtraceTraceCall(unsafe.Pointer(code.Base()), code.Len(), []int64{20, 22}, tr)
+	result, err := PtraceTraceCall(code.Ptr(), code.Len(), []int64{20, 22}, tr)
 	if err != nil {
 		t.Fatalf("PtraceTraceCall: %v", err)
 	}
@@ -609,7 +608,7 @@ func TestPtraceTraceCallBlockstep(t *testing.T) {
 	tr := NewHwTrace(64, 64) // blocks=64, instructions=64
 	defer tr.Free()
 
-	result, err := PtraceTraceCallBlockstep(unsafe.Pointer(code.Base()), code.Len(), []int64{20, 22}, tr)
+	result, err := PtraceTraceCallBlockstep(code.Ptr(), code.Len(), []int64{20, 22}, tr)
 	if err != nil {
 		t.Fatalf("PtraceTraceCallBlockstep: %v", err)
 	}
@@ -801,7 +800,7 @@ func TestHwtraceDescent(t *testing.T) {
 		t.Fatal("NewDescent(DescentRecordEdges): got nil")
 	}
 	defer d1.Free()
-	r, err := PtraceTraceCallEx(unsafe.Pointer(code.Base()), code.Len(), []int64{20, 22}, nil, d1, 0xc)
+	r, err := PtraceTraceCallEx(code.Ptr(), code.Len(), []int64{20, 22}, nil, d1, 0xc)
 	if err != nil {
 		t.Fatalf("PtraceTraceCallEx L1: %v", err)
 	}
@@ -835,7 +834,7 @@ func TestHwtraceDescent(t *testing.T) {
 	if rc := d2.AllowRegion(code.Base()+0xc, 4); rc != 0 {
 		t.Fatalf("AllowRegion: got %d, want 0", rc)
 	}
-	r2, err := PtraceTraceCallEx(unsafe.Pointer(code.Base()), code.Len(), []int64{20, 22}, nil, d2, 0xc)
+	r2, err := PtraceTraceCallEx(code.Ptr(), code.Len(), []int64{20, 22}, nil, d2, 0xc)
 	if err != nil {
 		t.Fatalf("PtraceTraceCallEx L2: %v", err)
 	}
@@ -890,7 +889,7 @@ func TestHwtraceDescentResolver(t *testing.T) {
 		return false, 0, 0
 	})
 
-	r, err := PtraceTraceCallEx(unsafe.Pointer(code.Base()), code.Len(), []int64{20, 22}, nil, d, 0xc)
+	r, err := PtraceTraceCallEx(code.Ptr(), code.Len(), []int64{20, 22}, nil, d, 0xc)
 	if err != nil {
 		t.Fatalf("PtraceTraceCallEx: %v", err)
 	}
