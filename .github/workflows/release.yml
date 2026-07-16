@@ -223,19 +223,61 @@ jobs:
           . scripts/clean-env.sh
           python -m asmtest --where
           python - <<'PY'
-          import os, sysconfig
+          import platform, sysconfig
           from asmtest import hwtrace, drtrace
           site = sysconfig.get_paths()["purelib"]
-          hp, dp = hwtrace.library_path(), drtrace.library_path()
-          for who, p in (("hwtrace", hp), ("drtrace", dp)):
+
+          def in_wheel(who, p):
               assert p and p.startswith(site), f"{who} resolved OUTSIDE the wheel: {p}"
               assert "/build/" not in p, f"{who} leaked to a dev build/ tree: {p}"
-          assert hwtrace.HwTrace.available(hwtrace.SINGLESTEP), "hwtrace SINGLESTEP not available from the wheel"
-          # drtrace is linux-x86_64 only; assert it self-locates its bundled libdynamorio there.
-          import platform
+
+          # The hwtrace LIB ships in every Linux wheel (any arch) and must resolve from it.
+          hp = hwtrace.library_path()
+          in_wheel("hwtrace", hp)
+
+          # Its SINGLESTEP BACKEND, though, is x86-64 Linux/macOS only (src/hwtrace.c:
+          # HWTRACE_HAVE_SINGLESTEP is gated on __x86_64__), so available() is False on
+          # aarch64 — the lib loads and self-skips with a documented reason. Assert the
+          # backend where it exists, and assert the DOCUMENTED SELF-SKIP where it does
+          # not, matching on that reason so an unexpected failure (a missing Capstone,
+          # say) still trips this gate rather than passing as "expected absence".
           if platform.machine() in ("x86_64", "AMD64"):
+              assert hwtrace.HwTrace.available(hwtrace.SINGLESTEP), "hwtrace SINGLESTEP not available from the wheel"
+          else:
+              assert not hwtrace.HwTrace.available(hwtrace.SINGLESTEP), (
+                  f"hwtrace SINGLESTEP reports available on {platform.machine()}, but the "
+                  "backend is documented x86-64-only. If it now works here, update this gate.")
+              reason = hwtrace.HwTrace.skip_reason(hwtrace.SINGLESTEP)
+              assert "x86-64" in reason, (
+                  f"hwtrace SINGLESTEP unavailable on {platform.machine()} for an "
+                  f"UNEXPECTED reason (want the documented x86-64-only self-skip): {reason}")
+
+          # drtrace (DynamoRIO) ships ONLY in the linux-x86_64 wheel: package-libs-drtrace
+          # stages that slot alone and scripts/fetch-dynamorio.sh fetches the x86-64
+          # tarball. Assert it resolves where it ships, and assert its DOCUMENTED ABSENCE
+          # where it does not — never skip, so that either dropping the tier on x86_64 or
+          # starting to ship it elsewhere fails this gate instead of passing silently.
+          # (This used to call drtrace.library_path() unconditionally, ABOVE its own
+          # platform guard, so the arm64 leg died on the OSError the guard existed to
+          # avoid.)
+          if platform.machine() in ("x86_64", "AMD64"):
+              dp = drtrace.library_path()
+              in_wheel("drtrace", dp)
               assert drtrace.NativeTrace.available(), "drtrace not available from the wheel (bundled libdynamorio not found)"
-          print("python clean-room ok: native-trace tiers resolve from the wheel")
+              print(f"python clean-room ok: hwtrace {hp}")
+              print(f"python clean-room ok: drtrace {dp}")
+          else:
+              try:
+                  dp = drtrace.library_path()
+              except OSError:
+                  pass  # documented: no drtrace tier off linux-x86_64
+              else:
+                  raise AssertionError(
+                      f"drtrace resolved on {platform.machine()} ({dp}), but the payload is "
+                      "documented linux-x86_64-only for this tier (mk/bindings.mk "
+                      "package-libs-drtrace). If it now ships here, update this gate.")
+              print(f"python clean-room ok: hwtrace {hp}")
+              print(f"python clean-room ok: drtrace absent, as documented on {platform.machine()}")
           PY
       - uses: actions/upload-artifact@v7
         with:
