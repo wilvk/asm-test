@@ -6,16 +6,37 @@ work), not a single registered leaf. It is the one investment that turns the
 already-shipping out-of-process stepper from a **region** primitive into a
 **whole-window** capture the in-process single-step tier is *forbidden* to attempt.
 
-> **Status (consolidated 2026-07-16): all four phases landed for native fixtures *and*
-> live CoreCLR; one variant remains.** W-0, W-2, and W-3 are complete; **W-1 is partial**
-> — its begin/end delimiting ships, but the `PTRACE_SINGLEBLOCK` driver is wired only for
-> the **region** form (`asmtest_ptrace_trace_attached_blockstep`,
-> [asmtest_ptrace.h:125](../../../include/asmtest_ptrace.h#L125)); the **windowed** entry
-> ([:142](../../../include/asmtest_ptrace.h#L142)) takes no blockstep flag and no
-> `*_windowed_blockstep` symbol exists. That is a **cost** upgrade (~4–10× fewer stops on a
-> large managed window), not a correctness gap — the per-instruction windowed path is exact
-> today. *(This block consolidates the three dated status updates that previously stacked
-> here; their provenance is preserved below.)*
+> **Status (2026-07-17): COMPLETE — all four phases landed for native fixtures *and* live
+> CoreCLR.** W-0, W-1, W-2 and W-3 are done; this plan has no remaining forward-looks.
+> W-1's last variant — the `PTRACE_SINGLEBLOCK` driver for the **windowed** entry — landed
+> 2026-07-17 as `asmtest_ptrace_trace_attached_windowed_blockstep`
+> ([asmtest_ptrace.h:174](../../../include/asmtest_ptrace.h#L174)), a distinct symbol
+> mirroring the region form's `*_blockstep` spelling rather than a flag on the shipped
+> windowed entry (the §"Opt-in surface" rule below: *a distinct entry point, not a mode
+> bit*; it also leaves the windowed ABI and the bindings untouched). It is a **cost**
+> upgrade, not a fidelity one, and is verified as such by a DIFFERENTIAL ORACLE against the
+> exact per-instruction path — `test_ptrace_windowed_blockstep` (22 checks in
+> `make hwtrace-test`) runs the same window both ways and requires byte-identical absolute
+> streams and block partitions over **6,410 instructions**, with the leaves' straight-line
+> runs reconstructed rather than stepped. Measured on this Zen 5 host, counting the
+> tracee's ptrace-stops from the kernel (`voluntary_ctxt_switches`, not from the code under
+> test): **6,476 → 1,005 stops, 6.4× fewer** — inside the ~4–10× the plan predicted.
+> *(This block consolidates the three dated status updates that previously stacked here;
+> their provenance is preserved below.)*
+>
+> - **2026-07-17 — W-1's windowed block-step driver.** One caveat is recorded rather than
+>   papered over: BTF only records control transfers the CPU takes, so a KERNEL-injected
+>   transfer (signal delivery / sigreturn) is invisible to block-step reconstruction. Since
+>   a managed runtime raises and handles SIGSEGV as normal operation (the W-2 hardening
+>   below), the driver reconstructs the block a signal cut — through the interrupted
+>   instruction, which is exactly what the per-instruction path records — and then hands
+>   the REST of the window to the shipped per-instruction loop, which is exact across
+>   signals. So the capture stays byte-identical either way and only the *cost saving*
+>   stops at a window's first signal. That path is covered by its own leg (a window that
+>   faults mid-block and is resumed by a handler; the oracle holds across it), not left to
+>   inference. Per-excursion fallback (resuming block-step after the handler returns)
+>   would recover the saving on signal-heavy windows; it is not needed for the phase's
+>   exit criterion and is not built.
 >
 > - **2026-07-08 — W-0/W-3 substrate + the fork path.** The native substrate this plan
 >   called "net-new" **already shipped** and is live-tested:
@@ -184,9 +205,15 @@ default that changes a whole-window scope's cost/permission profile:
 2. **W-1 — BTF block-step driver + delimiting.** Add the `PTRACE_SINGLEBLOCK` path and
    the begin/end breakpoint delimiting; assert identical stream vs W-0 at ~1 stop per
    taken branch; self-skip where a hypervisor masks `DEBUGCTL.BTF`
-   (`blockstep_available`). *(PARTIAL — the delimiting ships and `PTRACE_SINGLEBLOCK`
-   drives the **region** form; the **windowed** blockstep variant is the one remaining
-   forward-look in this plan. See the status block above.)*
+   (`blockstep_available`). *(LANDED — the delimiting and the **region** driver
+   (`asmtest_ptrace_trace_attached_blockstep`) shipped earlier; the **windowed** driver
+   (`asmtest_ptrace_trace_attached_windowed_blockstep`) landed 2026-07-17. The exit
+   criterion is MET as stated: identical stream vs the per-instruction path — asserted
+   over 6,410 instructions by a differential oracle, at 1,005 stops instead of 6,476
+   (6.4×). Self-skips via `asmtest_ptrace_blockstep_available`, which is why this cannot
+   be CI-gated: GitHub-hosted runners mask `DEBUGCTL.BTF` and self-skip, so the lane is
+   validated on bare metal — the same posture commit `280b617` recorded for the F1
+   block-step lane. See the status block above.)*
 3. **W-2 — .NET whole-window `outOfProcess: true`.** Wire the ctor flag through the
    stealth self-attach helper; capture a whole inline block (the localscope body) on
    the managed thread; fold absolute addresses through the existing `JitMethodMap` +

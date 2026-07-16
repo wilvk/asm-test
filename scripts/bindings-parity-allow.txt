@@ -97,6 +97,7 @@ lua asmtest_hwtrace_call_scoped_fp
 go asmtest_hwtrace_call_scoped_fp
 ALL asmtest_hwtrace_stitch_handles    # §D0.4 async-hop merge bridge for asmtest_hwtrace_stitch: dotnet (AsmStitchedTrace, the async-hop producer), node + java (HwTrace.stitchHandles) wrap it; the other seven consume the shipped stitch core when they grow a stitched-scope form, host-tested (test_stitch_handles)
 ALL asmtest_ptrace_trace_attached_windowed  # §D3 whole-window multi-region capture: driven by the bundled asmtest-stealth-helper binary + C examples, not per-binding FFI
+ALL asmtest_ptrace_trace_attached_windowed_blockstep  # §D3 W-1 BTF block-step DRIVER for the above: same capture at ~6x fewer stops, selected C-side (a cost knob on an entry no binding wraps), not per-binding FFI
 ALL asmtest_amd_snapshot_trace        # AMD deterministic boundary LBR snapshot: C-level callback capture, reached through the region begin/end markers (snapshot opt-in), not direct FFI
 ALL asmtest_amd_msr_trace             # AMD MSR-direct LBR snapshot (src/msr_lbr.c): C-level callback capture reading /dev/cpu/N/msr, self-hosted CAP_SYS_ADMIN lane only — same posture as asmtest_amd_snapshot_trace
 ALL asmtest_amd_msr_available         #   substrate probe for the above (amd_lbr_v2 + /dev/cpu/N/msr); C-level gate, not per-binding FFI

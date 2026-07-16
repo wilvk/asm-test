@@ -1934,21 +1934,22 @@ static size_t foreign_insn_len(pid_t pid, uint64_t at) {
     return asmtest_disas(PTRACE_TRACE_ARCH, buf, (size_t)got, 0, 0, NULL, 0);
 }
 
-/* Shared inner loop for trace_attached_windowed and trace_attached_window_stop */
-static int trace_attached_window_loop(pid_t pid, uint64_t win_base,
-                                      size_t win_len, uint64_t win_ret,
-                                      asmtest_addr_channel_t *chan,
-                                      asmtest_addr_rec_t *regs,
-                                      uint32_t *nreg_io, volatile int *stop,
-                                      long *result, uint64_t *stream,
-                                      uint32_t *stream_len, int *overflow_out) {
+/* Shared inner loop for trace_attached_windowed and trace_attached_window_stop —
+ * and the per-instruction remainder the block-step windowed driver hands off to when a
+ * signal cuts a block (pass that signal as `pending_sig0`, so the first resume delivers
+ * it; the two windowed entries pass 0, having no signal in hand). */
+static int trace_attached_window_loop(
+    pid_t pid, uint64_t win_base, size_t win_len, uint64_t win_ret,
+    asmtest_addr_channel_t *chan, asmtest_addr_rec_t *regs, uint32_t *nreg_io,
+    volatile int *stop, long *result, uint64_t *stream, uint32_t *stream_len,
+    int *overflow_out, int pending_sig0) {
     uint32_t n = *stream_len;
     int overflow = 0;
     int rc = ASMTEST_PTRACE_OK;
     int status = 0;
     long retval_final = 0;
     uint64_t steps = 0;
-    int pending_sig = 0;
+    int pending_sig = pending_sig0;
     int reached_end =
         0; /* set only at a CLEAN terminator (*stop / pc==win_ret) */
     uint32_t nreg = *nreg_io;
@@ -2079,9 +2080,9 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
         stream[n++] = pc0;
 
     int overflow = 0;
-    int rc =
-        trace_attached_window_loop(pid, win_base, win_len, win_ret, chan, regs,
-                                   &nreg, NULL, result, stream, &n, &overflow);
+    int rc = trace_attached_window_loop(pid, win_base, win_len, win_ret, chan,
+                                        regs, &nreg, NULL, result, stream, &n,
+                                        &overflow, 0);
 
     if (rc == ASMTEST_PTRACE_OK) {
         materialize_stream_to_trace(pid, stream, n, overflow, trace);
@@ -2089,6 +2090,259 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
     free(stream);
     return rc;
 }
+
+/* ------------------------------------------------------------------ */
+/* §D3 W-1 — the BTF block-step DRIVER for the whole-window capture.    */
+/* PTRACE_SINGLEBLOCK stops once per TAKEN branch instead of once per   */
+/* instruction; the instructions BETWEEN two stops are recovered by     */
+/* disassembling the straight-line run out of the target. x86-64 only   */
+/* (SINGLEBLOCK is x86/ppc/s390; AArch64 has no equivalent).            */
+/* ------------------------------------------------------------------ */
+#if defined(__x86_64__)
+
+/* Ceiling on the straight-line walk of ONE reconstructed block. A basic block with more
+ * than this many instructions and no taken branch is not real code — it means the walk
+ * desynced, so it is failed (truncated) rather than walked forever. */
+#ifndef PTRACE_BLOCK_WALK_CAP
+#define PTRACE_BLOCK_WALK_CAP (1u << 16)
+#endif
+
+/* A refillable window of TARGET bytes, so walking a block costs one foreign read per
+ * ~256 bytes instead of one per instruction. Unlike the REGION block-stepper (which
+ * snapshots its whole [base, len) up front) a window has no bounded byte extent: it
+ * spans the frame plus every channel-published JIT region, at absolute addresses. */
+typedef struct {
+    pid_t pid;
+    uint64_t base; /* address buf[0] holds  */
+    size_t len;    /* valid bytes in buf    */
+    uint8_t buf[256];
+} foreign_bytes_t;
+
+/* Bytes of the target at absolute `at`, with *avail readable bytes following (NULL if
+ * unreadable). Refills when `at` is uncovered or sits too near the end of the cache for
+ * a maximal x86 instruction; a short read (a mapping ending) yields a short *avail,
+ * which the decoder rejects as undecodable rather than reading past the mapping. */
+static const uint8_t *foreign_bytes_at(foreign_bytes_t *fb, uint64_t at,
+                                       size_t *avail) {
+    if (at < fb->base || at >= fb->base + fb->len ||
+        (fb->base + fb->len) - at < 16) {
+        ssize_t got = ptrace_read_mem(fb->pid, fb->buf, (void *)(uintptr_t)at,
+                                      sizeof fb->buf);
+        if (got <= 0) {
+            *avail = 0;
+            return NULL;
+        }
+        fb->base = at;
+        fb->len = (size_t)got;
+    }
+    *avail = (size_t)((fb->base + fb->len) - at);
+    return fb->buf + (at - fb->base);
+}
+
+/* Reconstruct the straight-line run of ONE block of a windowed capture, appending the
+ * absolute address of every instruction in it that falls in the window frame or a
+ * published region (the same in_region_set filter the per-instruction loop applies at
+ * each stop) — so the reconstructed stream is identical to the stepped one.
+ *
+ * Two ways a run ends, both observed with the tracee stopped at `to_pc`:
+ *   at_mode == 0  a TAKEN branch whose target is `to_pc` (a block-step #DB is
+ *                 trap-class: the stop PC is the TARGET). Walk to that terminator
+ *                 exactly as the region reconstructor does: a `ret`/indirect branch is
+ *                 always taken; a direct branch is the terminator iff its target ==
+ *                 to_pc, else it was a NOT-taken conditional and the run walks through.
+ *   at_mode == 1  the run reached `to_pc` and was cut there by a signal-delivery stop.
+ *                 No taken branch can precede to_pc (BTF would have stopped first), so
+ *                 walk by length to to_pc INCLUSIVE — matching the per-instruction path,
+ *                 which records to_pc at the TF stop preceding the signal stop.
+ *                 Overshooting to_pc means the walk desynced: fail.
+ * Returns 1 on a clean end, 0 on overflow / undecodable / unreadable / desync / no
+ * terminator (the caller flags the capture truncated). */
+static int window_block_walk(foreign_bytes_t *fb, int at_mode, uint64_t from_pc,
+                             uint64_t to_pc, uint64_t win_base,
+                             uint64_t win_len, const asmtest_addr_rec_t *regs,
+                             uint32_t nreg, uint64_t *stream, uint32_t *pn) {
+    uint64_t walk = from_pc;
+    if (at_mode && to_pc < from_pc)
+        return 0; /* a straight-line run cannot end BEFORE it started */
+    for (uint32_t guard = 0; guard < PTRACE_BLOCK_WALK_CAP; guard++) {
+        if (at_mode && walk > to_pc)
+            return 0; /* walked past the stop PC: desynced */
+        size_t avail = 0;
+        const uint8_t *p = foreign_bytes_at(fb, walk, &avail);
+        if (p == NULL)
+            return 0;
+        int is_call = 0, is_ret = 0;
+        size_t l = asmtest_disas_probe(PTRACE_TRACE_ARCH, p, avail, 0, &is_call,
+                                       &is_ret);
+        if (l == 0)
+            return 0; /* undecodable */
+        (void)is_call;
+        if (in_region_set(walk, win_base, win_len, regs, nreg)) {
+            if (*pn >= PTRACE_STREAM_CAP)
+                return 0; /* stream full */
+            stream[(*pn)++] = walk;
+        }
+        if (at_mode) {
+            if (walk == to_pc)
+                return 1; /* recorded through the interrupted instruction */
+            walk += l;
+            continue;
+        }
+        if (!asmtest_disas_is_branch(PTRACE_TRACE_ARCH, p, avail, 0)) {
+            walk += l;
+            continue; /* straight-line instruction: the block continues */
+        }
+        if (is_ret)
+            return 1; /* return: indirect, always taken -> terminator */
+        uint64_t target = 0;
+        if (!asmtest_disas_branch_target(PTRACE_TRACE_ARCH, p, avail, walk, 0,
+                                         &target))
+            return 1; /* indirect jmp/call: always taken -> terminator */
+        if (target == to_pc)
+            return 1; /* direct branch TAKEN to the observed stop -> terminator */
+        walk += l;    /* direct conditional NOT taken: fall through */
+    }
+    return 0; /* no terminator within the walk ceiling */
+}
+
+int asmtest_ptrace_trace_attached_windowed_blockstep(
+    pid_t pid, const void *win_base_p, size_t win_len,
+    asmtest_addr_channel_t *chan, long *result, asmtest_trace_t *trace) {
+    if (win_base_p == NULL || win_len == 0 || trace == NULL)
+        return ASMTEST_PTRACE_EINVAL;
+    if (!asmtest_ptrace_blockstep_available())
+        return ASMTEST_PTRACE_ENOSYS;
+    const uint64_t win_base = (uint64_t)(uintptr_t)win_base_p;
+
+    /* Identical window delimiting to the per-instruction entry: at the frame entry
+     * [rsp] holds the return into the caller — the region-agnostic window end. */
+    uint64_t pc0 = 0, sp0 = 0, win_ret = 0;
+    if (read_pc_ret(pid, &pc0, NULL, &sp0, NULL) != 0)
+        return ASMTEST_PTRACE_ETRACE;
+    if (ptrace_read_mem(pid, &win_ret, (void *)(uintptr_t)sp0,
+                        sizeof win_ret) != (ssize_t)sizeof win_ret)
+        return ASMTEST_PTRACE_ETRACE;
+
+    uint64_t *stream =
+        (uint64_t *)malloc((size_t)PTRACE_STREAM_CAP * sizeof(uint64_t));
+    if (stream == NULL)
+        return ASMTEST_PTRACE_ETRACE;
+    uint32_t n = 0;
+
+    asmtest_addr_rec_t regs[ASMTEST_ADDR_CHAN_CAP];
+    uint32_t nreg = 0;
+    if (chan != NULL)
+        nreg = asmtest_addr_channel_drain(chan, regs, ASMTEST_ADDR_CHAN_CAP);
+
+    foreign_bytes_t fb;
+    fb.pid = pid;
+    fb.base = 0;
+    fb.len = 0;
+
+    /* The current stop opens the first block; reconstructing it records pc0 itself —
+     * which is exactly the address the per-instruction entry seeds its stream with. */
+    uint64_t prev_pc = pc0;
+    int overflow = 0, reached_end = 0, rc = ASMTEST_PTRACE_OK, status = 0;
+    long retval_final = 0;
+    uint64_t steps = 0;
+    int handoff_sig = -1;
+
+    for (;;) {
+        if (ptrace(PTRACE_SINGLEBLOCK, pid, NULL, NULL) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (waitpid(pid, &status, 0) < 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (WIFEXITED(status) || WIFSIGNALED(status))
+            break;
+        if (!WIFSTOPPED(status))
+            continue;
+        /* Bounds WALL TIME exactly as the per-instruction loop does: the budget is per
+         * ptrace round-trip, and a block-step round-trip costs what a single-step one
+         * costs — it just covers more instructions. */
+        if (++steps > PTRACE_WINDOW_STEP_CAP) {
+            overflow = 1;
+            break;
+        }
+        uint64_t pc = 0, rax = 0;
+        if (read_pc_ret(pid, &pc, &rax, NULL, NULL) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (chan != NULL && nreg < ASMTEST_ADDR_CHAN_CAP)
+            nreg += asmtest_addr_channel_drain(chan, regs + nreg,
+                                               ASMTEST_ADDR_CHAN_CAP - nreg);
+
+        /* A non-SIGTRAP stop is a signal delivery: the block was cut at `pc` by a
+         * transfer BTF cannot see. Reconstruct what ran, then finish the window on the
+         * per-instruction loop, which is exact across delivery and sigreturn. */
+        int sig = WSTOPSIG(status);
+        int at_mode = (sig != SIGTRAP);
+
+        /* A block that STARTS outside every region contributes nothing: control enters
+         * a region only through a taken branch, and that stops AT the region entry. So
+         * the runtime/glue between regions costs no walk at all, and an undecodable
+         * byte out there cannot truncate the capture (the per-instruction path never
+         * decodes glue either). */
+        if (in_region_set(prev_pc, win_base, win_len, regs, nreg) &&
+            !window_block_walk(&fb, at_mode, prev_pc, pc, win_base, win_len,
+                               regs, nreg, stream, &n)) {
+            overflow = 1;
+            break;
+        }
+        if (at_mode) {
+            handoff_sig = sig;
+            break;
+        }
+        /* The frame's `ret` is a taken branch, so the window end is always a block-step
+         * stop — checked AFTER the reconstruction above, which records that `ret`. */
+        if (pc == win_ret) {
+            retval_final = (long)rax;
+            reached_end = 1;
+            break;
+        }
+        prev_pc = pc; /* the block's target opens the next block */
+    }
+
+    if (handoff_sig >= 0) {
+        int ov2 = 0;
+        int rc2 = trace_attached_window_loop(
+            pid, win_base, win_len, win_ret, chan, regs, &nreg, NULL,
+            &retval_final, stream, &n, &ov2, handoff_sig);
+        if (rc2 != ASMTEST_PTRACE_OK)
+            rc = rc2;
+        else if (ov2)
+            overflow = 1;
+    } else if (rc == ASMTEST_PTRACE_OK && !overflow && !reached_end) {
+        /* pc == win_ret is the only clean end; a tracee that exited or died first cut
+         * the window short — never render a partial stream as a complete capture. */
+        overflow = 1;
+    }
+    if (result != NULL)
+        *result = retval_final;
+
+    if (rc == ASMTEST_PTRACE_OK)
+        materialize_stream_to_trace(pid, stream, n, overflow, trace);
+    free(stream);
+    return rc;
+}
+
+#else  /* !__x86_64__ : no PTRACE_SINGLEBLOCK equivalent on AArch64 */
+int asmtest_ptrace_trace_attached_windowed_blockstep(
+    pid_t pid, const void *win_base_p, size_t win_len,
+    asmtest_addr_channel_t *chan, long *result, asmtest_trace_t *trace) {
+    (void)pid;
+    (void)win_base_p;
+    (void)win_len;
+    (void)chan;
+    (void)result;
+    (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+#endif /* __x86_64__ */
 
 int asmtest_ptrace_trace_attached_window_stop(pid_t pid,
                                               asmtest_addr_channel_t *chan,
@@ -2117,7 +2371,7 @@ int asmtest_ptrace_trace_attached_window_stop(pid_t pid,
 
     int overflow = 0;
     int rc = trace_attached_window_loop(pid, 0, 0, 0, chan, regs, &nreg, stop,
-                                        NULL, stream, &n, &overflow);
+                                        NULL, stream, &n, &overflow, 0);
 
     if (rc == ASMTEST_PTRACE_OK) {
         materialize_stream_to_trace(pid, stream, n, overflow, trace);
@@ -2763,6 +3017,18 @@ int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base_p,
                                            asmtest_addr_channel_t *chan,
                                            long *result,
                                            asmtest_trace_t *trace) {
+    (void)pid;
+    (void)win_base_p;
+    (void)win_len;
+    (void)chan;
+    (void)result;
+    (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+
+int asmtest_ptrace_trace_attached_windowed_blockstep(
+    pid_t pid, const void *win_base_p, size_t win_len,
+    asmtest_addr_channel_t *chan, long *result, asmtest_trace_t *trace) {
     (void)pid;
     (void)win_base_p;
     (void)win_len;
