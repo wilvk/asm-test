@@ -57,6 +57,7 @@ hardware tier (`amdhot`/`amdlbr`/`amd-period-sweep`, needs Zen 3+ + `CAP_PERFMON
 | [tier-ladder/](tier-ladder/) | `HwTrace.ResolveTiers` / `AutoTier` | this host's **honest degradation ladder** with a reason per rung, from the public cascade API — and how `CeilingFree`/`NativeOnly` policies drop rungs. Pure enumeration, no tracing |
 | [amd-period-sweep/](amd-period-sweep/) | `AsmTrace.WindowHot(period:)` | the AMD-LBR statistical survey **swept across sample periods** — finer (more PMIs/throttle) vs coarser (cheaper) on the same hot block. Needs Zen 3+/LBR + `CAP_PERFMON` |
 | [amd-snapshot/](amd-snapshot/) | `AmdSnapshot.Trace` | the **deterministic boundary LBR snapshot** — EXACT capture of a tiny single-shot routine that the sampled survey truncates, via a HW breakpoint at the region exit + `bpf_get_branch_snapshot`. Needs `CAP_BPF` + `CAP_PERFMON` + a BPF-toolchain build → self-skips otherwise |
+| [amd-tile/](amd-tile/) | `AsmTrace.WindowHot(tileCheckpoints:)` | §E6 — the same snapshot **TILED at MANAGED checkpoints** and merged into `WindowHot.Addresses`: a breakpoint on a JIT'd method entry, and each hit's frozen ~16-branch island joins the sampled endpoint stream. Catches a method that runs ONCE where the sampler is blind. **SAMPLED/PARTIAL coverage** — exact AT the checkpoints, blind between them; NOT a whole-window trace. Same gate as `amd-snapshot` |
 
 See the [dotnet examples roadmap](../../docs/internal/archive/plans/dotnet-examples-roadmap.md) for the full design
 pass behind these and what the single-step tier honestly cannot do.
@@ -115,6 +116,7 @@ dotnet run --project examples/dotnet/crashproof-survey/crashproof-survey.csproj
 dotnet run --project examples/dotnet/tier-ladder/tier-ladder.csproj
 dotnet run --project examples/dotnet/amd-period-sweep/amd-period-sweep.csproj    # AMD LBR: needs Zen 3+ + CAP_PERFMON
 dotnet run --project examples/dotnet/amd-snapshot/amd-snapshot.csproj            # AMD snapshot: needs CAP_BPF + CAP_PERFMON
+dotnet run --project examples/dotnet/amd-tile/amd-tile.csproj                    # E6 managed-checkpoint tiling: needs CAP_BPF + CAP_PERFMON
 ```
 
 To iterate — an **interactive shell** in the `asmtest-dotnet` container with the working
@@ -683,7 +685,11 @@ floor. `descend-all` auto-descends unknown callees and trips its guardrail hones
 
 **AMD** — `amd-period-sweep` sweeps the survey period (smaller = more samples/throttle, larger =
 coarser); `amd-snapshot` is the deterministic boundary snapshot that captures a tiny routine the
-sampler truncates (self-skips `built without the BPF toolchain` where `CAP_BPF`/libbpf is absent).
+sampler truncates (self-skips `built without the BPF toolchain` where `CAP_BPF`/libbpf is absent). `amd-tile` (§E6) TILES that same snapshot at **managed** checkpoints and merges each frozen
+island into `WindowHot.Addresses`, so a one-shot method the sampler never sees is still covered —
+exact AT the checkpoints and blind between them, so the result stays a better-covered SURVEY
+(`IsStatistical` remains true), never an exact trace. `make docker-hwtrace-dotnet-amd` is the one
+lane carrying both the .NET SDK and the BPF toolchain, and it runs this LIVE on a Zen 4/5 host.
 
 ## API used
 

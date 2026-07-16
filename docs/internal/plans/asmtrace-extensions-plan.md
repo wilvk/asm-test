@@ -21,7 +21,7 @@ family stays coherent rather than accreting one-off flags.
 | `using (new AsmTrace(code))` | region (single-step / **AMD LBR** if inited) | exact | No (in-proc) | low | native leaf only |
 | `AsmTrace.Method(delegate)` | region lazy-arm / §D3 oop | exact | oop: **yes** | low / high | one method |
 | `AsmTrace.Window(() => {…})` | out-of-process ptrace | exact (block's own code + mid-window JIT, published live by §E3) | **Yes** | ~100–1000×/stop | whole block |
-| `AsmTrace.WindowHot(() => {…})` | **AMD LBR statistical** | sampled hot-method histogram | **Yes** | near-native (a few PMIs) | whole block |
+| `AsmTrace.WindowHot(() => {…})` | **AMD LBR statistical** | sampled hot-method histogram (+ §E6: exact ~16-branch islands at up to 4 optional `tileCheckpoints` — still a SURVEY, not a trace) | **Yes** | near-native (a few PMIs) | whole block |
 | `using (new AsmTrace(HwBackend.AmdLbr)) {…}` | **AMD LBR statistical** (inline) | sampled hot-method histogram (richest managed attribution — deep BCL named) | **Yes** | near-native | whole block |
 | `AsmTrace.WindowHybrid(() => {…})` | **survey (AMD LBR) → exact (ptrace) on the hot slice** | exact per-instruction on the hot methods; cold elided (`Survey` = pass-1 histogram) | **Yes** | survey near-native + exact only on the hot slice | whole block |
 
@@ -32,6 +32,10 @@ and — because the block runs at native speed — give the RICHEST managed attr
 named). The extensions below close the remaining gaps. See
 [asmtrace-inline-using-plan.md](asmtrace-inline-using-plan.md) for the inline-`using`
 conformance of each form.
+
+> **This plan is CLOSED (2026-07-17).** E1–E7 have all landed; E6's branchsnap-at-managed-
+> checkpoints tiling was the last open fragment. What remains below is the record of what was
+> built and — for E4 and the non-goals — what was deliberately declined.
 
 ## Extensions
 
@@ -121,7 +125,7 @@ weights the basic block spanning `[to_i, from_{i+1}]` (MCF-style block frequenci
 so branchy code is not over-weighted vs. straight-line hot code. Additive fidelity upgrade
 behind the same `WindowHot` surface. Effort: ~3d.
 
-### E6 — snapshot-tiling / IBS producers into the `WindowHot` surface — **IBS producer LANDED; branchsnap-at-checkpoints remains**
+### E6 — snapshot-tiling / IBS producers into the `WindowHot` surface — **LANDED (both producers)**
 
 Feed additional AMD facilities into the same sampled-endpoint surface: the deterministic
 `bpf_get_branch_snapshot` boundary snapshot ([branchsnap.c](../../../src/branchsnap.c)) at a
@@ -140,16 +144,67 @@ STATISTICAL (it never feeds the exact `insns[]`/`blocks[]` parity cascade), and
 `ASMTEST_FORCE_IBS_SURVEY` forces the IBS path even where the branch stack works, for
 cross-validation on Zen 3+/CI.
 
-**Remains (the branchsnap tiling)** — narrower than the sketch implies. The boundary-snapshot
-substrate ships and is already .NET-visible, but as a **separate region API**:
-`AmdSnapshot.Trace(code, exitOff, body, tr)`
-([HwTrace.cs:1203](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1203),
-[examples/dotnet/amd-snapshot](../../../examples/dotnet/amd-snapshot/)) plants a hardware
-execution breakpoint at a region's exit and snapshots the frozen 16-entry branch stack there,
-exactly reconstructing the entry block a sampled survey drops. So the mechanism is proven and
-exposed; what is NOT built is **tiling it at managed checkpoints** and merging the islands into
-`WindowHot.Addresses`. Gated on Zen 4/5 + `CAP_BPF` + `CAP_PERFMON` + a BPF-toolchain build +
-Linux >= 6.10 (it self-skips otherwise).
+**Landed (the branchsnap tiling).** The boundary-snapshot substrate already shipped as a
+**separate region API** — `AmdSnapshot.Trace(code, exitOff, body, tr)`
+([HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs),
+[examples/dotnet/amd-snapshot](../../../examples/dotnet/amd-snapshot/)): one `[base,len)`,
+breakpoints at its exits, the RICHEST window decoded to an exact in-region stream. Tiling is the
+OTHER consumer of that same BPF machinery and inverts all three axes: absolute **checkpoints**
+(no region, no decode), **every** island (coverage is their union), and **endpoint PCs** merged
+into the survey's `ips[]` — a producer into `WindowHot.Addresses`, not a new API, exactly as
+this entry specified.
+
+- Native: `asmtest_amd_tile_begin` / `_end` ([branchsnap.c](../../../src/branchsnap.c), its own
+  state slot; the single-active invariant is enforced across both slots) plant one HW execution
+  breakpoint per checkpoint and merge every frozen window's retired branch targets.
+  `asmtest_hwtrace_tile_window_amd` ([hwtrace.c](../../../src/hwtrace.c)) is the survey core
+  threaded with checkpoints. Kept OFF the public tier header, mirroring how E5's `_weighted`
+  producer is wired, so the bindings-parity surface is unchanged.
+- Composition: `tile_begin` deliberately does **not** open its own LBR event — the survey's
+  branch-stack event already powers the hardware, so tiling adds breakpoints and *not* a second
+  LBR user that could multiplex the survey it exists to enrich. **One** pass of the body feeds
+  both producers. Tiles drain FIRST, so a checkpoint's exact island can never be crowded out of
+  the bounded buffer by tens of thousands of sampled endpoints; `ntiled` records the split.
+- .NET: `AsmTrace.WindowHot(…, tileCheckpoints:)` + `TiledIslands` / `TiledAddresses`, and
+  `AsmTrace.Checkpoints(methods)` to resolve managed methods to entry PCs. Demo:
+  [examples/dotnet/amd-tile](../../../examples/dotnet/amd-tile/).
+- **Honest boundary.** Tiled coverage is **SAMPLED / PARTIAL** — at each checkpoint HIT the ~16
+  most recently retired branch targets, EXACTLY; between hits, nothing but what the sampler
+  caught. It is **not** an exact whole-window trace; that stays a hardware dead end on AMD and a
+  documented non-goal. Legitimate for `WindowHot` precisely because that surface is a
+  hot-address histogram with no completeness claim — `IsStatistical` stays TRUE for a tiled
+  scope (a better-covered SURVEY, never an exact trace), and tiled endpoints never feed the
+  exact `insns[]`/`blocks[]` parity cascade. `truncated` keeps its survey meaning (endpoints
+  were LOST) and is NOT set for the inherent 16-deep island bound — that is the producer's
+  defined granularity, and making it always-true would render a caller's `covered || truncated`
+  check vacuous.
+- **Boundary assumption.** Tiling inherits the Zen 4/5 property Phase 9 validated for the region
+  path: a `#DB` execution breakpoint does not evict the recent branch history before the BPF
+  helper reads it. Phase 9 validated it for a `ret` boundary; the tail-`jmp` boundary assumption
+  is untouched here. A managed method-entry checkpoint is neither — it is a CALL target, nearer
+  the validated shape (the call retires, then the breakpoint fires on the entry instruction) but
+  not literally it, so the test asserts the entry edge is present rather than assuming it.
+- `blockWeighted` (E5) and `tileCheckpoints` (E6) are refused in combination, loudly: E5 weights
+  the straight-line span between adjacent sampled branches, which is undefined across an
+  island's boundary.
+- **Measured live on Zen 5** (Ryzen 9 9950X, kernel 6.17), not self-skipped —
+  `make docker-hwtrace-codeimage` (native, [examples/test_branchtile.c](../../../examples/test_branchtile.c)):
+  islands=1, ntiled=16, nips=8528, truncated=0; negative control (a never-executed checkpoint)
+  islands=0/ntiled=0; differential 5/5 tiled vs **0/5** untiled @ period=50000.
+  `make docker-hwtrace-dotnet-amd` (managed): a JIT'd `ColdLeaf` entry, 16 island endpoints from
+  1 island, covered TILED=True / UNTILED=False.
+- **A managed checkpoint is not a C function entry**, and that distinction was not free:
+  `MethodHandle.GetFunctionPointer()` returns a **precode stub**, so the snapshot armed cleanly
+  (`tile_begin: armed ncp=1`) and reported `islands=0` — a silent total miss indistinguishable
+  from "the method never ran". `AsmTrace.Checkpoints` therefore resolves through the **rundown
+  jitdump** (the same path E1's `WindowHybrid` uses), which is the address that actually
+  executes. This is why the managed claim needed its own live lane rather than inheriting the
+  native test's result.
+
+Gated on Zen 4/5 + `CAP_BPF` + `CAP_PERFMON` + a BPF-toolchain build + Linux >= 6.10 (it
+self-skips otherwise). `ASMTEST_TILE_REQUIRE=1` turns those self-skips into FAILURES for the one
+lane built to satisfy the gate (`docker-hwtrace-dotnet-amd` sets it) — the `CLEANROOM_ONLY=<lang>`
+pattern, so the lane cannot go green by skipping the thing it exists to prove.
 
 ### E7 — AMD-LBR **region** `using` example — **LANDED**
 
@@ -168,9 +223,8 @@ inline `using (new AsmTrace(HwBackend.AmdLbr))` — see
 2. ~~**E2 `AsmMethod.Weight`**~~ — **LANDED** (alongside E1).
 3. ~~**E3 sibling-thread publish**~~ — **LANDED** (closes the `Window` deep-BCL gap, the one honest-partial in the family).
 4. ~~**E7 AMD region example**~~ — **LANDED**.
-5. ~~**E5**~~ — **LANDED**. **E6** — the IBS producer is **LANDED** (the Zen-2 survey
-   fallback); the branchsnap-at-managed-checkpoints tiling is additive fidelity, when a
-   consumer needs it.
+5. ~~**E5**~~ — **LANDED**. ~~**E6**~~ — **LANDED**, both producers: the IBS survey fallback
+   (Zen 2) and the branchsnap tiled at managed checkpoints into `WindowHot.Addresses`.
 6. ~~**E4 inline-`using` OOP**~~ — **LANDED** (`578caed`, shipped as the inline-using plan's
    R4). Built, but *strictly worse* than the factory: `AsmTrace.Window` stays the recommended
    OOP entry point.
@@ -182,3 +236,11 @@ inline `using (new AsmTrace(HwBackend.AmdLbr))` — see
 - A dedicated permissioned CI lane for the AMD dotnet examples — they self-skip in the plain
   lane and are validated on a self-hosted Zen runner (mirroring `docker-hwtrace-amd`); a
   `docker-hwtrace-dotnet-amd` lane is optional operational plumbing, not a capability.
+  **Superseded for E6 (2026-07-17), and only for E6.** The reasoning above holds for the SAMPLED
+  AMD examples: their native siblings validate the capability, so a skipped dotnet demo costs
+  nothing. It does not survive a feature whose entire claim is about MANAGED checkpoints —
+  `docker-hwtrace-dotnet-amd` now exists (`Dockerfile.hwtrace-dotnet-amd`: the .NET SDK + the
+  eBPF toolchain in one image, which no other lane had) because a JIT'd method entry is NOT a C
+  function entry, and the difference was load-bearing: the obvious `GetFunctionPointer()`
+  address armed cleanly and never fired. That is a capability question, not plumbing — per
+  CLAUDE.md, a lane that cannot test a feature gets extended.

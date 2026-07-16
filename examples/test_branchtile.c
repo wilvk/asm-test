@@ -38,6 +38,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #if defined(__linux__) && defined(__x86_64__)
@@ -100,6 +101,29 @@ static void body(void *arg) {
 #define SURVEY_PERIOD 50000
 #define IPS_CAP       65536
 
+/* ASMTEST_TILE_REQUIRE=1 turns every self-skip below into a FAILURE. The self-skips are
+ * correct on a host without the substrate — but on the lane built precisely to supply it
+ * (docker-hwtrace-dotnet-amd: Zen 4/5 + CAP_BPF + CAP_PERFMON + a BPF-toolchain build) a
+ * skip is not a pass, it is the feature silently gone. Same idea as CLEANROOM_ONLY=<lang>,
+ * which fails a clean-room run whose binding self-skipped rather than let it pass vacuously.
+ * Unset (every other lane) the skips stay skips. */
+static int tile_required(void) {
+    const char *e = getenv("ASMTEST_TILE_REQUIRE");
+    return e != NULL && e[0] != '\0' && e[0] != '0';
+}
+
+/* Report a self-skip, and return the process exit code it should produce. */
+static int skip_or_fail(const char *why) {
+    if (tile_required()) {
+        printf("not ok - branchtile: %s — but ASMTEST_TILE_REQUIRE=1 says this "
+               "lane MUST be able to tile, so a skip here is a failure\n",
+               why);
+        return 1;
+    }
+    printf("# SKIP branchtile: %s\n", why);
+    return 0;
+}
+
 static int contains(const uint64_t *ips, size_t n, uint64_t target) {
     for (size_t i = 0; i < n; i++)
         if (ips[i] == target)
@@ -141,11 +165,9 @@ static void capture(const uint64_t *cps, int ncp, struct cap_result *out) {
 int main(void) {
     printf("== branchtile-test (E6: branchsnap tiled at checkpoints -> "
            "WindowHot) ==\n");
-    if (!asmtest_amd_snapshot_available()) {
-        printf("# SKIP branchtile: substrate absent (needs AMD LbrExtV2 + "
-               "perfmon_v2 + kernel >= 6.10)\n");
-        return 0;
-    }
+    if (!asmtest_amd_snapshot_available())
+        return skip_or_fail("substrate absent (needs AMD LbrExtV2 + perfmon_v2 "
+                            "+ kernel >= 6.10)");
 
     const uint64_t cold_cp = (uint64_t)(uintptr_t)&cold_leaf;
     const uint64_t bogus_cp = (uint64_t)(uintptr_t)&never_called;
@@ -154,26 +176,28 @@ int main(void) {
     /* --- probe: is the tiled capture actually LIVE here? ----------------------- */
     struct cap_result probe;
     capture(&cold_cp, 1, &probe);
-    if (probe.rc == ASMTEST_HW_ENOSYS) {
-        printf("# SKIP branchtile: built without the BPF toolchain\n");
-        return 0;
-    }
+    if (probe.rc == ASMTEST_HW_ENOSYS)
+        return skip_or_fail("built without the BPF toolchain");
     if (probe.rc != ASMTEST_HW_OK) {
-        printf(
-            "# SKIP branchtile: survey unavailable (rc=%d; needs CAP_PERFMON "
-            "/ AMD branch stack)\n",
-            probe.rc);
-        return 0;
+        char msg[160];
+        snprintf(msg, sizeof msg,
+                 "survey unavailable (rc=%d; needs CAP_PERFMON / AMD branch "
+                 "stack)",
+                 probe.rc);
+        return skip_or_fail(msg);
     }
-    if (probe.islands == 0) {
-        /* The survey ran but no island merged: no CAP_BPF, or tiling could not arm.
-         * Distinguishable from a real failure, and honest to skip — but say so loudly,
-         * because on a Zen 4/5 + CAP_BPF lane this SHOULD be nonzero. */
-        printf(
-            "# SKIP branchtile: tiling did not arm (islands=0; needs CAP_BPF "
-            "+ CAP_PERFMON + a free debug register)\n");
-        return 0;
-    }
+    if (probe.islands == 0)
+        /* The survey ran but no island merged. Two causes hide here: tiling could not
+         * ARM (no CAP_BPF / no free debug register), or it armed and the checkpoint was
+         * never REACHED. ASMTEST_AMD_DEBUG=1 prints "tile_begin: armed ..." and
+         * separates them — the .NET sibling hit exactly the second case (a precode-stub
+         * entry PC), which armed cleanly and never fired. */
+        return skip_or_fail(
+            "no island merged (islands=0): tiling could not arm (needs CAP_BPF "
+            "+ "
+            "CAP_PERFMON + a free debug register), or it armed and the "
+            "checkpoint "
+            "was never reached — ASMTEST_AMD_DEBUG=1 tells which");
 
     /* --- 1. a REAL checkpoint yields islands + island-sourced endpoints -------- */
     printf(

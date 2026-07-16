@@ -432,7 +432,7 @@ docker-drtrace-bindings: $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
 #   make docker-hwtrace-jit-dotnet-jitdump recover a real CoreCLR jitdump method's bytes
 HWTRACE_DOCKER_LANGS := cpp rust go node java dotnet ruby lua zig
 
-.PHONY: docker-hwtrace docker-hwtrace-attach-demo docker-hwtrace-syscall-log docker-hwtrace-amd docker-hwtrace-msr docker-hwtrace-ibs docker-hwtrace-privileged docker-hwtrace-codeimage docker-hwtrace-bindings \
+.PHONY: docker-hwtrace docker-hwtrace-attach-demo docker-hwtrace-syscall-log docker-hwtrace-amd docker-hwtrace-msr docker-hwtrace-ibs docker-hwtrace-privileged docker-hwtrace-codeimage docker-hwtrace-dotnet-amd docker-hwtrace-bindings \
         docker-hwtrace-jit docker-hwtrace-jit-dotnet docker-hwtrace-jit-java \
         docker-hwtrace-jit-java-jitdump docker-hwtrace-jit-jitdump \
         docker-hwtrace-jit-dotnet-jitdump \
@@ -600,6 +600,34 @@ docker-hwtrace-codeimage: docker-bindings-base
 	  --security-opt seccomp=unconfined --ulimit memlock=-1:-1 \
 	  -v /sys/kernel/tracing:/sys/kernel/tracing:ro \
 	  asmtest-hwtrace-codeimage
+
+# E6 — the MANAGED-checkpoint tiling lane: the ONE image carrying both the .NET SDK and the
+# eBPF toolchain, so a JIT'd managed method entry can actually be breakpointed and its frozen
+# LBR island merged into WindowHot.Addresses. The native branchtile test proves the producer on
+# C entries; only this lane can prove the MANAGED-checkpoint claim E6 is actually about, which
+# is why it exists despite the plan's "optional operational plumbing" note (written for the
+# sampled AMD examples, which their native siblings cover).
+#
+# Same privilege shape as docker-hwtrace-codeimage: CAP_BPF (load the program) + CAP_PERFMON
+# (breakpoint + branch-stack perf events) + seccomp=unconfined (Docker's default profile blocks
+# bpf(2)/perf_event_open(2)) + memlock unlimited (BPF maps). NOT --privileged. CAP_PERFMON also
+# bypasses kernel.perf_event_paranoid, including the Debian/Ubuntu "=4, no unprivileged perf"
+# default, so on an AMD Zen 4/5 host this runs LIVE. On any other host the demo self-skips
+# (exit 0) — a self-hosted-Zen lane, like its docker-hwtrace-amd sibling.
+#
+# ASMTEST_TILE_REQUIRE=1 makes a self-skip FATAL here (the CLEANROOM_ONLY=<lang> pattern:
+# fail rather than let a lane pass vacuously). This lane exists for exactly one purpose —
+# to prove tiling at a MANAGED checkpoint — so if it cannot, that is the news, not a pass.
+# Set it only here; every other lane keeps the ordinary self-skip. On a non-Zen / non-CAP_BPF
+# host, run the image without this variable to get the graceful skip.
+docker-hwtrace-dotnet-amd: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace-dotnet-amd \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace-dotnet-amd .
+	$(DOCKER) run --rm $(_docker_plat) \
+	  --cap-add=BPF --cap-add=PERFMON \
+	  --security-opt seccomp=unconfined --ulimit memlock=-1:-1 \
+	  -e ASMTEST_TILE_REQUIRE=1 \
+	  asmtest-hwtrace-dotnet-amd
 
 # Reuse each already-built per-language image (asmtest-<lang>: full source +
 # toolchain + Capstone) and just run its hwtrace test target — no extra image

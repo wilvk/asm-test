@@ -2697,8 +2697,18 @@ hwtrace-dotnet-example: shared-hwtrace
 	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/amd-period-sweep/amd-period-sweep.csproj
 	@echo "== hwtrace-dotnet-example (amd-snapshot) =="
 	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/amd-snapshot/amd-snapshot.csproj
+	@echo "== hwtrace-dotnet-example (amd-tile) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/amd-tile/amd-tile.csproj
 	@echo "== hwtrace-dotnet-example (codeimage) =="
 	$(hwtrace_env) $(DOTNET) run --project examples/dotnet/codeimage/codeimage.csproj
+
+# E6 — the MANAGED-checkpoint tiling demo on its own, for the one lane that can actually run
+# it live (docker-hwtrace-dotnet-amd: .NET SDK + BPF toolchain + CAP_BPF + Zen 4/5). It is
+# also in hwtrace-dotnet-example above, where it self-skips like its AMD siblings.
+.PHONY: hwtrace-dotnet-amd-example
+hwtrace-dotnet-amd-example: shared-hwtrace
+	@echo "== hwtrace-dotnet-amd-example (amd-tile: E6 managed-checkpoint tiling) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project examples/dotnet/amd-tile/amd-tile.csproj
 
 hwtrace-ruby-test: shared-hwtrace
 	@echo "== hwtrace-ruby-test =="

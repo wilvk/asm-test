@@ -1,0 +1,56 @@
+# Dockerfile.hwtrace-dotnet-amd — the §E6 MANAGED-checkpoint tiling lane.
+#
+# WHY THIS IMAGE EXISTS. E6's remaining half is "tile the branch snapshot at MANAGED
+# checkpoints". Validating that needs the .NET SDK and the eBPF toolchain in the SAME image,
+# and no existing lane has both: asmtest-dotnet has the SDK but no libbpf (so branchsnap.c
+# compiles its self-skipping stub), and asmtest-hwtrace-codeimage has the BPF toolchain but no
+# runtime to JIT a managed method. The native test (make branchtile-test) proves the producer
+# on C function entries, but a JIT'd managed method entry is NOT a C function entry — whether
+# RuntimeHelpers.PrepareMethod + GetFunctionPointer yields an address a hardware breakpoint
+# actually fires on is exactly the claim E6 makes, and only this combination can test it. Per
+# CLAUDE.md: a lane that lacks what a feature needs in order to be TESTED gets extended, and a
+# test that can only ever self-skip is not a test.
+#
+# This supersedes the asmtrace-extensions-plan non-goal "a docker-hwtrace-dotnet-amd lane is
+# optional operational plumbing, not a capability" for E6 specifically. That call was made for
+# the SAMPLED AMD examples, which are validated by their native siblings and self-skip
+# harmlessly. It does not survive a feature whose whole claim is about managed checkpoints.
+#
+# Distinct image tag (asmtest-hwtrace-dotnet-amd), deliberately NOT built FROM asmtest-dotnet:
+# it composes on the shared bindings-base, so it never races another lane for an image tag.
+#
+# Needs, at run time: AMD Zen 4/5 (LbrExtV2 + perfmon_v2), CAP_BPF + CAP_PERFMON,
+# seccomp=unconfined (Docker's default profile blocks bpf(2)/perf_event_open(2)), and
+# Linux >= 6.10. The demo self-skips (exit 0) on anything else — see `make
+# docker-hwtrace-dotnet-amd`.
+ARG BASE_IMAGE=asmtest-bindings-base
+FROM ${BASE_IMAGE}
+ENV DEBIAN_FRONTEND=noninteractive
+
+# The .NET SDK (pinned major: dotnet-sdk-8.0, matching DOCKER_APT_dotnet and every example's
+# <TargetFramework>net8.0</TargetFramework>) + the eBPF build toolchain. The bpftool wrapper
+# dance mirrors Dockerfile.hwtrace-codeimage verbatim: on Ubuntu Noble bpftool is a virtual
+# package provided only by kernel-versioned linux-tools, and /usr/sbin/bpftool execs the
+# binary matching `uname -r` (the HOST kernel inside a container, which won't match) — so
+# install linux-tools-generic and symlink its real versioned binary into PATH, bypassing the
+# wrapper. A 6.8 bpftool reads the host's BTF and generates skeletons fine (format is stable).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      dotnet-sdk-8.0 \
+      clang llvm libbpf-dev linux-tools-common linux-tools-generic \
+ && ln -sf "$(find /usr/lib/linux-tools* -name bpftool 2>/dev/null | head -1)" \
+      /usr/local/bin/bpftool \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
+ENV DOTNET_NOLOGO=1
+# `dotnet run` writes obj/bin next to the project; keep the NuGet cache in the image.
+ENV NUGET_PACKAGES=/root/.nuget/packages
+
+COPY . .
+
+# Build the shared hwtrace lib (WITH libbpf present, so branchsnap.c compiles its real body
+# and the E6 tiling producer is live), then run the managed-checkpoint demo. The native
+# branchtile test runs first: if the C-entry producer is broken there is no point asking
+# whether a managed entry works, and its failure is far easier to read.
+CMD ["sh", "-c", "make branchtile-test && make hwtrace-dotnet-amd-example"]
