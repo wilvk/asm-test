@@ -74,7 +74,7 @@ line anchors below were re-grounded against the header on **2026-07-16** (the or
 | **0 · Diagnostic** | `arm_tid` ([:294](../../../include/asmtest_hwtrace.h#L294)) | OS tid that armed the active capture — a managed-thread-level single-region assert | All (trivial) — **now wrapped in all ten**; the side item below is retired |
 
 **Two symbols are deliberately *not* binding targets.** `asmtest_hwtrace_stitch`
-([:371](../../../include/asmtest_hwtrace.h#L371)) passes `asmtest_hwtrace_slice_t` **by
+([:476](../../../include/asmtest_hwtrace.h#L476)) passes `asmtest_hwtrace_slice_t` **by
 value with embedded heap pointers a binding cannot marshal** — the header ships
 `stitch_handles` (opaque trace handles + blittable scalar arrays) as the binding-facing
 form. `asmtest_hwtrace_begin_scope` / `call_scoped` (registry form) are **superseded by
@@ -104,13 +104,18 @@ over `_ex`.
 > **Table re-grounded 2026-07-16** against `scripts/check-bindings-parity.sh --report`
 > (116 × 10, green). Four rows were stale: python's and node's `Next` cells were largely
 > already done, and the `arm_tid` / `dr_under_dynamorio` side items had both closed.
+> **Node corrected 2026-07-16 (second pass):** the row had claimed §D1 complete with
+> "nothing named". Only §D1's **callback** form (`region`/`scope`) ships; the
+> `using`/`Symbol.dispose` construct and its test case are **unbuilt** (Node 24+ gate) —
+> re-grounded against `bindings/node/hwtrace.js`, which contains no `Symbol.dispose`,
+> `nodejs.dispose`, or `kDispose` outside one doc comment.
 
 | Binding | FFI | Has today | Next (ordered) | Effort | Notes |
 |---|---|---|---|---|---|
 | **python** | ctypes | Cluster 1 (via `_ex`), `arm_tid`, `dr_under_dynamorio`, **window trio ✅ `35b80df`**, **`symbolize_bucket` + `region_name` ✅ `402e080`**, **`call_scoped_fp` ✅ `304957e`**, descent upcalls | grow-a-use: `stealth_trace` (the only named item left); then optionally `render_versioned` / `stitch_handles` / `attribute_window` | ~1d | Closest of the ten. **Leads .NET** on `region_name` (see the reverse gaps below). No live JIT → not a managed target |
 | **ruby** | Fiddle | Cluster 1 (`_ex`+`render_scope`+`call_scoped`), `arm_tid` ✅, **window trio ✅ `a1608c8`** | optional generics only | ~2–3d | Handle packed `LONG_LONG`; capturing upcall blocked (descent stays exempt) |
-| **node** | koffi | Cluster 1, §D1 `using`-scope, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)**, **`AsyncLocalStorage` hop hook ✅ `b3db344`/`60d74a7`**, **`render_versioned` ✅ `8a42e42`**, **V8-jitdump resolution ✅ `3cfd7bb`/`80f49bc`**, `stitch`/`stitch_handles`, `region_name`, `symbolize_bucket`, `attribute_window`, `stealth_window`, `windowCall` | **— nothing named.** §D1 is complete; grow-a-use only | done | **Managed target — AT PARITY.** `worker_threads` hops escape, but that is structural (each Worker has its own ALS), not a to-do |
-| **java** | FFM/Panama | Cluster 1, §D2 `AsmTrace` t-w-r, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)**, **`libperf-jvmti` live JIT resolution ✅ (2026-07-15, `df66e2b`)**, **async-hop producer ✅ `7ecaaec`/`719f021` (propagating executor decorator)**, `stitch_handles`, `region_name`, `symbolize_bucket`, `attribute_window`, `stealth_window` | **§D2 managed**: the **zero-touch JVMTI** value-changed hop hook — *optional*; the executor decorator already produces hops, at the cost of wrapping the executor | ~4–6d | **Managed target.** The one binding with a named managed item left. `libperf-jvmti.so` is an external build dep — and is the JIT *resolver*, not the hop hook |
+| **node** | koffi | Cluster 1, §D1 scope construct **callback form only** (`region`/`scope`), **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)**, **`AsyncLocalStorage` hop hook ✅ `b3db344`/`60d74a7`**, **`render_versioned` ✅ `8a42e42`**, **V8-jitdump resolution ✅ `3cfd7bb`/`80f49bc`**, `stitch`/`stitch_handles`, `region_name`, `symbolize_bucket`, `attribute_window`, `stealth_window`, `windowCall` | **§D1 `using`/`Symbol.dispose` sugar** — *optional*; the shipped `region`/`scope` callback form is §D1's own version-independent fallback and captures the same, at the cost of a callback instead of a block-scoped declaration. Gated on **Node 24+**, plus its unbuilt `using`-scope test case | ~1d | **Managed target.** Capture is at parity; only the *ergonomic* sugar is outstanding. `worker_threads` hops escape, but that is structural (each Worker has its own ALS), not a to-do |
+| **java** | FFM/Panama | Cluster 1, §D2 `AsmTrace` t-w-r, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)**, **`libperf-jvmti` live JIT resolution ✅ (2026-07-15, `df66e2b`)**, **async-hop producer ✅ `7ecaaec`/`719f021` (propagating executor decorator)**, `stitch_handles`, `region_name`, `symbolize_bucket`, `attribute_window`, `stealth_window` | **§D2 managed**: the **zero-touch JVMTI** value-changed hop hook — *optional*; the executor decorator already produces hops, at the cost of wrapping the executor | ~4–6d | **Managed target.** One of two bindings with a named managed item left (node's §D1 sugar is the other; both are *optional* ergonomics over a shipped fallback). `libperf-jvmti.so` is an external build dep — and is the JIT *resolver*, not the hop hook |
 | **cpp** | dlopen | Cluster 1 ✅, `arm_tid` ✅, **window trio ✅ `35b80df`** | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | Struct-by-value trivial (real C decls); capturing upcall blocked |
 | **rust** | libloading | Cluster 1 ✅, `arm_tid` ✅, **window trio ✅ `a1608c8`** | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `#[repr(C)]` by value trivial; capturing upcall blocked |
 | **zig** | std.DynLib | Cluster 1 ✅, `arm_tid` ✅, **window trio ✅ `a1608c8`** | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `extern struct` by value trivial; capturing upcall blocked |
@@ -275,8 +280,11 @@ attribution (`begin_window` + `symbolize_bucket`), or a multi-region native merg
   the other eight. `begin_scope` / `call_scoped` stay dotnet-only, as designed.
 - **Reverse gaps — where a binding leads the reference.** ~~python wraps
   `asmtest_dr_under_dynamorio` and .NET does not~~ — **CLOSED** (`65234d7` added the
-  P/Invoke; `bindings/dotnet/drtrace/DrTrace.cs:158`, surfaced as
-  `DrNative.UnderDynamoRio()`), so both python and dotnet are `Y`. **But two new reverse
+  P/Invoke on the internal `DrNative`
+  ([DrTrace.cs:158](../../../bindings/dotnet/drtrace/DrTrace.cs#L158)), surfaced publicly as
+  `DrTrace.UnderDynamoRio()`
+  ([:286](../../../bindings/dotnet/drtrace/DrTrace.cs#L286))), so both python and dotnet are
+  `Y`. **But two new reverse
   gaps have opened since**, both from Phase 2 landing in node/java ahead of the reference:
   - **`asmtest_hwtrace_region_name`** — `Y` in **python, node, java**; `-` in **dotnet**.
     .NET does carry `SymbolizeBuckets` ([HwTrace.cs:1045](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1045))

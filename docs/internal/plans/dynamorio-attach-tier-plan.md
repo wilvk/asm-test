@@ -480,17 +480,21 @@ last + optional; the capture tiers above stand without a UI.
 - **`SYS_PTRACE` in CI.** The Linux seize likely needs the capability; the hwtrace docker
   lanes already grant caps in CI, so the pattern exists — but a plain-runner lane may have
   to self-skip.
-  **→ OPEN, being addressed (2026-07-15) — this is the tier's one live gap.** `--cap-add=SYS_PTRACE`
+  **→ RESOLVED (2026-07-16): the capability lanes are CI-gated.** `--cap-add=SYS_PTRACE`
   proved **required AND sufficient** for the seize (it bypasses the container's
   `yama/ptrace_scope=1`, which matters because the injector and victim are siblings rather than
-  parent/child; no seccomp-unconfined needed). But the four docker lanes this tier ships —
-  `docker-taint-attach`, `docker-taint-attach-probe`, `docker-taint-managed-attach-probe`, and
-  `docker-suspendprof-probe` ([docker.mk:267,280,293,329](../../../mk/docker.mk#L267)) — are **not
-  yet wired into [.github/workflows/ci.yml](../../../.github/workflows/ci.yml)**, whose DR jobs are
-  `drtrace`, `drext-probe`, `taint`, and `taint-gcmove`. So Increments 1-5 are **make-gated but not
-  CI-gated**, against this tier's stated "docker-CI-checkable" goal. CI wiring for the capability-
-  granting lanes is **in progress**; the managed-attach + suspendprof probes are THROWAWAY
-  diagnostics and are correctly excluded by design.
+  parent/child; no seccomp-unconfined needed), and a hosted runner grants it — so no self-skip was
+  needed. The **`taint-attach`** job ([ci.yml:458](../../../.github/workflows/ci.yml#L458)) now joins
+  `drtrace`, `drext-probe`, `taint`, and `taint-gcmove` in the DR job set. It runs the two
+  capability-bearing lanes ([docker.mk:267,280](../../../mk/docker.mk#L267)):
+  `docker-taint-attach` (cooperative `dr_app_*` attach/detach — Increment 1 — plus Increment 3's
+  marker-less interactive nudge arm/disarm; plain run, no caps), and `docker-taint-attach-probe`,
+  whose CMD runs **all four** SYS_PTRACE lanes in one image — `dr-taint-attach-probe` (Increment 2's
+  GO probe), `dr-taint-attach-test` (Increment 4's marker-less external capture),
+  `dr-taint-detach-test`, and `dr-taint-cycle-test` (Increment 5's K=3 cycling + the shadow-leaf leak
+  assertion). So **Increments 1-5 are CI-gated**, meeting this tier's "docker-CI-checkable" goal. The
+  managed-attach + suspendprof probes ([docker.mk:293,329](../../../mk/docker.mk#L293)) stay out by
+  design: they are THROWAWAY diagnostics recording a reproducible NO-GO, not capability to protect.
 - **Managed attach may simply not be viable** on this DR; that is an accepted outcome
   (Increment 6's kill criterion), not a failure — the managed default stays launch/ptrace.
   **→ RESOLVED (Increment 6, 2026-07-14): the risk MATERIALIZED — NO-GO, and exhaustively closed.**
@@ -520,7 +524,8 @@ closed **NO-GO** — the kill criterion fired and both escape routes were exhaus
 
 **What is left:** only **Increment 7** (the optional asmspy `--attach-dataflow` UI surface, not
 started — no `--attach-dataflow`/`attach_dataflow` exists in `src/`, `include/`, `examples/`, or the
-makefiles today), plus the **CI wiring** of the four SYS_PTRACE docker lanes noted in the risk
-register above, which is in progress. Neither is capture work: the tier's headline capability —
-take over a native process we did not start, taint a scoped region in band, drain it out of process,
-and let the process go, repeatably — is landed and make-gated.
+makefiles today). That is the tier's sole genuine remainder, and it is not capture work: the tier's
+headline capability — take over a native process we did not start, taint a scoped region in band,
+drain it out of process, and let the process go, repeatably — is landed, and now **CI-gated** by the
+`taint-attach` job as well as make-gated. The one-time CI-wiring gap the risk register carried is
+closed (2026-07-16).

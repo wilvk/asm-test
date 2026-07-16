@@ -1727,8 +1727,9 @@ next to the other CPUID probes) rather than `hwtrace.c`.*
   runs branchsnap-test.)*
 - **Bindings:** the three `asmtest_ptrace_*` block-step symbols wrapped (whole-word) in each
   of the 10 bindings' `hwtrace.*` wrappers so
-  [scripts/check-bindings-parity.sh](../../../scripts/check-bindings-parity.sh) stays green (98
-  tier symbols × 10 bindings); `asmtest_amd_snapshot_trace` and the whole-window trio carry
+  [scripts/check-bindings-parity.sh](../../../scripts/check-bindings-parity.sh) stays green (116
+  tier symbols × 10 bindings as of 2026-07-16; 98 when this item was written);
+  `asmtest_amd_snapshot_trace` and the whole-window trio carry
   allow-list exemptions (C-level / managed-tier reach). No new `asmtest_trace_choice_t` field
   (the `3 * sizeof(int)` static-assert at
   [asmtest_trace_auto.h:83-84](../../../include/asmtest_trace_auto.h) holds).

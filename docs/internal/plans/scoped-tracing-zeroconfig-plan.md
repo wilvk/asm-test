@@ -53,7 +53,7 @@ the [§Z0–§Z5 phases](#sequencing-dependency-correct-order) below own the spl
 > run**. (3) ~~Managed byte-resolution is partial~~ **LARGELY DONE (updated 2026-07-16):**
 > the self recorder works ([src/codeimage.c:314](../../../src/codeimage.c#L314)),
 > `asmtest_hwtrace_render_versioned` exists
-> ([src/hwtrace.c:1172](../../../src/hwtrace.c#L1172)), and the method **discovery** this
+> ([src/hwtrace.c:2343](../../../src/hwtrace.c#L2343)), and the method **discovery** this
 > point called missing now ships — Managed §D0.1's `MethodLoadVerbose` listener
 > (`JitMethodMap`) resolves `(address, size, version)` and feeds `asmtest_codeimage_track`,
 > so the `byMethod` path decodes against the window-live version rather than the
@@ -61,7 +61,7 @@ the [§Z0–§Z5 phases](#sequencing-dependency-correct-order) below own the spl
 > **What still needs a live .NET 8+ runtime** is only the *live* §Z3 composition over an
 > unwarmed method whose JIT and GC run inside the window. (4) **Scope is a thread window —
 > and that is the shipped DEFAULT, by decision:** `asmtest_hwtrace_end` flags `truncated` on
-> a cross-thread close ([src/hwtrace.c:898-907](../../../src/hwtrace.c#L898)), and the
+> a cross-thread close ([src/hwtrace.c:1885-1888](../../../src/hwtrace.c#L1885)), and the
 > region-free `end_window` does the same on an `asmtest_ss_frame_lookup` miss.
 > ~~the merge core `asmtest_hwtrace_stitch` has **no upstream producer**~~ — **it now has
 > two**: .NET's `AsmStitchedTrace` (`AsyncLocal` hop) and Node's `AsyncStitchedTrace`
@@ -130,14 +130,14 @@ code.
 
 | Slice | Ref | Consumed deliverable | State |
 |---|---|---|---|
-| Core | §0 | Error-returning `try_begin` ([:739](../../../src/hwtrace.c#L739)); arm-tid record + `asmtest_hwtrace_arm_tid` + cross-thread `truncated` ([:844](../../../src/hwtrace.c#L844), [:898-907](../../../src/hwtrace.c#L898)); size-then-alloc render-on-close; idempotent-by-name `register_region` ([:432](../../../src/hwtrace.c#L432)) | shipped (arm-tid backstop is **region-keyed**; see §Z4) |
-| Core | §1 | Per-thread hwtrace state + handle-keyed `begin_scope`/`render_scope`/`render_versioned` — [:1121](../../../src/hwtrace.c#L1121), [:1157](../../../src/hwtrace.c#L1157), [:1172](../../../src/hwtrace.c#L1172) | shipped |
+| Core | §0 | Error-returning `try_begin` ([:1708](../../../src/hwtrace.c#L1708)); arm-tid record + `asmtest_hwtrace_arm_tid` + cross-thread `truncated` ([:1829](../../../src/hwtrace.c#L1829), [:1885-1888](../../../src/hwtrace.c#L1885)); size-then-alloc render-on-close; idempotent-by-name `register_region` ([:603](../../../src/hwtrace.c#L603)) | shipped (arm-tid backstop is **region-keyed**; see §Z4) |
+| Core | §1 | Per-thread hwtrace state + handle-keyed `begin_scope`/`render_scope`/`render_versioned` — [:2122](../../../src/hwtrace.c#L2122), [:2328](../../../src/hwtrace.c#L2328), [:2343](../../../src/hwtrace.c#L2343) | shipped |
 | Core | §2 | Recorder-backed libipt whole-window decode glue (`read_recorder`→`asmtest_pt_decode_window`, **no** in-region filter — [:96](../../../src/pt_backend.c#L96), [:198](../../../src/pt_backend.c#L198)) + capture-side `PERF_EVENT_IOC_SET_FILTER` + the anon-JIT constraint | **planned** — `#ifdef`-gated, unvalidated end-to-end (§Z2 validates it); PT-hardware-gated |
-| Core | §3.1 | `asmtest_hwtrace_symbolize_bucket` ([:1384](../../../src/hwtrace.c#L1384)) + address→name `asmtest_hwtrace_region_name` ([:1292](../../../src/hwtrace.c#L1292)) | shipped (host-tested by `test_symbolize_bucket`); the eBPF PROT_EXEC emission-slicer it composes is **planned/gated** (CAP_BPF + BTF) |
+| Core | §3.1 | `asmtest_hwtrace_symbolize_bucket` ([:2735](../../../src/hwtrace.c#L2735)) + address→name `asmtest_hwtrace_region_name` ([:2642](../../../src/hwtrace.c#L2642)) | shipped (host-tested by `test_symbolize_bucket`); the eBPF PROT_EXEC emission-slicer it composes is **planned/gated** (CAP_BPF + BTF) |
 | Core | §3.2 | Snapshot drain (PT `aux_tail` / AMD `data_tail` — keep the tail, flag `truncated`) | reconstruction shipped; live drains **planned** |
 | Bindings | — | `.NET AsmTrace : IDisposable` reference shim + `[ModuleInitializer]` lazy arm + `[CallerMemberName]`/`[CallerLineNumber]` auto-name; shim-shape invariants (no slot / no SIGTRAP at import, self-skip-clean, closing-tid assert) | shipped (region form) |
 | Managed | §D0.1/§D0.2 | `MethodLoadVerbose_V2` in-proc listener → name→(addr,size,version) map feeding `asmtest_codeimage_track`; pre-arm `EnablePerfMap(JitDump)` rundown + self-recorder fallback | **shipped** (`JitMethodMap` + `DiagnosticsIpc`); only the *live* §Z3 compose over an unwarmed method still needs a runtime |
-| Managed | §D0.4/§D4 | `AsyncLocal<ScopeId>` async-hop hook; `asmtest_hwtrace_stitch` merge core + slice/bound ABI ([:1233](../../../src/hwtrace.c#L1233), [asmtest_hwtrace.h:246](../../../include/asmtest_hwtrace.h#L246)) | **both shipped** — merge core host-tested, and it now has two live producers (.NET `AsmStitchedTrace`, Node `AsyncStitchedTrace`); the seam is CI-covered by `test_stitch_hops_scripted` |
+| Managed | §D0.4/§D4 | `AsyncLocal<ScopeId>` async-hop hook; `asmtest_hwtrace_stitch` merge core + slice/bound ABI ([:2537](../../../src/hwtrace.c#L2537), [asmtest_hwtrace.h:246](../../../include/asmtest_hwtrace.h#L246)) | **both shipped** — merge core host-tested, and it now has two live producers (.NET `AsmStitchedTrace`, Node `AsyncStitchedTrace`); the seam is CI-covered by `test_stitch_hops_scripted` |
 | Managed | §D3 | Concealed out-of-process ptrace-stealth stepper (bundled `asmtest-stealth-helper`, reverse-attach) | **shipped**, including the live-JIT address channel (`asmtest_addr_channel.h`) and its .NET composition (E3, `4416071`) |
 | AMD | Part III P2/P3 | **P2** BTF block-step mode for the W2/§D3 ptrace stepper (`asmtest_ptrace_*_blockstep` — one `#DB` per **taken branch**, ~4–10× fewer stops than per-insn, rootless, every Zen incl. Zen 2); **P3** eBPF `bpf_get_branch_snapshot` boundary capture (deterministic ≤16-entry LBR window at scope entry/exit; Zen 4/5, Linux ≥ 6.10) | **planned** — [amd-tracing-plan.md](../plans/amd-tracing-plan.md) Part III; consumed as upgrades when they land, **not** Z0–Z5 prerequisites |
 | Substrate | — | Backend auto-selection + `available()`/`skip_reason()` self-probe + the self `pid==0` code-image recorder — [codeimage.c:310](../../../src/codeimage.c#L310), [:373](../../../src/codeimage.c#L373) | shipped |
@@ -148,9 +148,9 @@ Referenced elsewhere as **netNew #N**. Not one row is a new capture primitive.
 
 | # | Net-new deliverable | Phase(s) | Why it is new *(no shipped path does it)* |
 |---|---|---|---|
-| 1 | Region-free whole-window **capture MODE** + C arm entry point (`asmtest_hwtrace_begin_window`, or a `WHOLE_WINDOW` mode flag permitting a NULL/zero-len range): opens the per-thread state with no registered region, bypasses `find_region`, never calls `register_region`, selects Core §2's decode + the lifted record policy | Z0 (surface) · Z1 (policy) · Z2 (PT decode select) | Every shipped begin keys on `find_region` [:486](../../../src/hwtrace.c#L486) and no-ops on a miss; `asmtest_ss_begin_ex` EINVALs on `base==NULL\|\|len==0` [ss_backend.c:162](../../../src/ss_backend.c#L162). A legitimately region-less arm does not exist. |
+| 1 | Region-free whole-window **capture MODE** + C arm entry point (`asmtest_hwtrace_begin_window`, or a `WHOLE_WINDOW` mode flag permitting a NULL/zero-len range): opens the per-thread state with no registered region, bypasses `find_region`, never calls `register_region`, selects Core §2's decode + the lifted record policy | Z0 (surface) · Z1 (policy) · Z2 (PT decode select) | Every shipped begin keys on `find_region` [:657](../../../src/hwtrace.c#L657) and no-ops on a miss; `asmtest_ss_begin_ex` EINVALs on `base==NULL\|\|len==0` [ss_backend.c:162](../../../src/ss_backend.c#L162). A legitimately region-less arm does not exist. |
 | 2 | Parameterless `AsmTrace()` ctor + the nine mirror binding shims calling the region-free arm (no `NativeCode`, lazy arm, auto-name, render-on-close, closing-tid assert) | Z0 | The shipped ctor **requires** a `NativeCode` [HwTrace.cs:997](../../../bindings/dotnet/hwtrace/HwTrace.cs#L997), obtainable only via `NativeCode.FromBytes` [:421](../../../bindings/dotnet/hwtrace/HwTrace.cs#L421). No empty-ctor form over an arbitrary managed method exists in any binding. |
-| 3 | The arm-time **composition seam**: §D0.1 listener ⊕ Core §2 recorder image callback ⊕ `/proc/self/maps` DSO enumeration into one lazy arm (feeding `asmtest_codeimage_track`), plus the *managed*-tier `Dispose` swap onto `render_versioned` | Z3 | Each piece exists in isolation; the seam composing them for the region-free managed case is unbuilt, and `AsmTrace.Dispose` [:1016](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1016) still calls the version-blind render [:1106](../../../src/hwtrace.c#L1106). |
+| 3 | The arm-time **composition seam**: §D0.1 listener ⊕ Core §2 recorder image callback ⊕ `/proc/self/maps` DSO enumeration into one lazy arm (feeding `asmtest_codeimage_track`), plus the *managed*-tier `Dispose` swap onto `render_versioned` | Z3 | Each piece exists in isolation; the seam composing them for the region-free managed case is unbuilt, and `AsmTrace.Dispose` [:1016](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1016) still calls the version-blind render [:2107](../../../src/hwtrace.c#L2107). |
 | 4 | Single-step region-free **L3 DESCEND_ALL** degradation (descend every call; denylist + instruction-budget + `ITIMER_REAL`/`SIGALRM` watchdog; native-leaf/ptrace-only; managed routes to §D3) | Z1 | Shipped single-step only steps **known native leaves with a region** — `ss_on_sigtrap` records in-range offsets and silently drops the rest [ss_backend.c:143-148](../../../src/ss_backend.c#L143). A range-less "trace whatever ran" contract has no upstream. |
 | 5 | The empty-ctor **honest-degradation UX** (skip_reason + §3.1 buckets + §3.2 banner through the scope's Path/sink; never emit partial-as-complete) **and** the zero-config async **DEFAULT** = honest thread-scope-with-mismatch-flag (stitching stays explicit opt-in) | Z4 (async default) · Z5 (presentation) | A ctor cannot detect whether its result was assigned, a whole-window trace is noisy/partial by nature, and the region-free arm carries no region record — so the "assume no knowledge, present honestly" contract is net-new integration. |
 | 6 | The composed, actionable **privilege-detection developer message** assembled from the raw self-probe | Z5 | `available()`/`skip_reason()` return a reason **code** (consumed); the human-readable, provision-me message the empty-ctor promise rests on was unbuilt. **LANDED** as `HwTrace.DegradationNote()` ([HwTrace.cs:899](../../../bindings/dotnet/hwtrace/HwTrace.cs#L899)) — in the .NET binding, not the C core, by decision (§Z5). |
@@ -187,9 +187,9 @@ backend ladder are [§Z1](#z1--region-free-whole-window-capture-mode-planned-for
 **Today — a `[base,len)` is mandatory at every layer.** `asmtest_ss_begin_ex`
 `EINVAL`s on a null range ([:162](../../../src/ss_backend.c#L162)); `ss_on_sigtrap` stores
 `rip-base_ip` **only** in-range ([:143-148](../../../src/ss_backend.c#L143)); every
-begin/end/render keys through `find_region` ([hwtrace.c:486](../../../src/hwtrace.c#L486)) so
-`try_begin` ([:739](../../../src/hwtrace.c#L739)) forces a shim to `register_region`
-([:432](../../../src/hwtrace.c#L432)) first; and the .NET ctor
+begin/end/render keys through `find_region` ([hwtrace.c:657](../../../src/hwtrace.c#L657)) so
+`try_begin` ([:1708](../../../src/hwtrace.c#L1708)) forces a shim to `register_region`
+([:603](../../../src/hwtrace.c#L603)) first; and the .NET ctor
 ([HwTrace.cs:997](../../../bindings/dotnet/hwtrace/HwTrace.cs#L997)) can only obtain a range
 via `NativeCode.FromBytes` ([:421](../../../bindings/dotnet/hwtrace/HwTrace.cs#L421)), which
 mmaps **pre-supplied** bytes. There is no path from "an arbitrary managed method ran here"
@@ -200,10 +200,10 @@ to a `[base,len)`.
 Add a **whole-window** arm that legitimately permits a `NULL` / zero-len range — either
 **`asmtest_hwtrace_begin_window(const char *name)`** *(new — no line yet)*, a sibling of
 `asmtest_hwtrace_try_begin`, or an **`ASMTEST_HWTRACE_WHOLE_WINDOW`** mode flag on
-`asmtest_hwtrace_begin_scope` ([:1121](../../../src/hwtrace.c#L1121)). Contract:
+`asmtest_hwtrace_begin_scope` ([:2122](../../../src/hwtrace.c#L2122)). Contract:
 
-1. **Bypasses `find_region`** ([:486](../../../src/hwtrace.c#L486)) and **never calls
-   `register_region`** ([:432](../../../src/hwtrace.c#L432)) — there is no `[base,len)` to
+1. **Bypasses `find_region`** ([:657](../../../src/hwtrace.c#L657)) and **never calls
+   `register_region`** ([:603](../../../src/hwtrace.c#L603)) — there is no `[base,len)` to
    register. It still takes the auto-**name**, so the name→handle binding survives.
 2. **Opens the per-thread state with no registered region** — pushes the Core §1
    per-thread block / (under a stepper) a range-less TLS frame, returning a `(idx,gen)`
@@ -214,7 +214,7 @@ Add a **whole-window** arm that legitimately permits a `NULL` / zero-len range �
 3. **Binds `arm_tid` + the trace pointer onto the per-thread handle/block.** The shipped
    cross-thread backstop in `asmtest_hwtrace_end` is **region-keyed** —
    `find_region(name); if (r != NULL && r->arm_tid != …) r->trace->truncated = true`
-   ([:898-907](../../../src/hwtrace.c#L898)) — so on a region-free arm `find_region` returns
+   ([:1885-1888](../../../src/hwtrace.c#L1885)) — so on a region-free arm `find_region` returns
    NULL and it **cannot fire**. The region-free arm must therefore carry `arm_tid` and the
    trace pointer on its own handle so [§Z4](#z4--async-hop-honesty-default-opt-in-stitching-default-landed-stitching-forward-look)
    can re-implement the closing-vs-arming-tid check for this path (new integration, not
@@ -278,7 +278,7 @@ public AsmTrace(bool emit = true,
 `Dispose` ([:1016](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1016)) keeps its
 size-then-alloc render-on-close and `truncated` read. All ten shims drive the
 error-returning region-free arm, **not** the legacy silent-no-op `asmtest_hwtrace_begin`
-([:839](../../../src/hwtrace.c#L839)).
+([:1824](../../../src/hwtrace.c#L1824)).
 
 **The empty scope, per binding** — the region-free form drops only the argument on the shipped
 construct: .NET `using (new AsmTrace())`, C++ RAII `asmtest::ScopedTrace t;`, Rust
@@ -393,11 +393,11 @@ handle:
   region-scoped case (regression assert).
 - **Render — versioned, against a self codeimage (new to Z1).** A region-free frame registers
   no region, so the name-keyed `asmtest_hwtrace_render`
-  ([:1106](../../../src/hwtrace.c#L1106)) `find_region`-misses → `EINVAL`, and the handle-keyed
-  `asmtest_hwtrace_render_scope` ([:1157](../../../src/hwtrace.c#L1157)) disassembles a single
+  ([:2107](../../../src/hwtrace.c#L2107)) `find_region`-misses → `EINVAL`, and the handle-keyed
+  `asmtest_hwtrace_render_scope` ([:2328](../../../src/hwtrace.c#L2328)) disassembles a single
   contiguous `[base,base+len)` window — useless for a `base=NULL`/`len=0` frame. An
   absolute-RIP ring can **only** be rendered by `asmtest_hwtrace_render_versioned`
-  ([:1172](../../../src/hwtrace.c#L1172)) against a codeimage. So Z1 WEAK captures a self
+  ([:2343](../../../src/hwtrace.c#L2343)) against a codeimage. So Z1 WEAK captures a self
   `pid==0` codeimage snapshot (`asmtest_codeimage_new(0)`,
   [codeimage.c:314](../../../src/codeimage.c#L314)) over the native leaf's live-mapped bytes and
   renders the ring through it. **This render swap + self-codeimage byte source are Z1
@@ -411,7 +411,7 @@ handle:
   managed code** (it swaps the process-wide `SIGTRAP` disposition CoreCLR's PAL owns), so the
   WEAK tier runs in-process **only on a native leaf** (any x86-64 Linux, unprivileged,
   `docker-hwtrace`); region-free **managed** degradation routes to the
-  [**§D3** concealed ptrace-stealth helper running L3](scoped-tracing-managed-plan.md#d3--the-concealed-out-of-process-ptrace-stepper-scope-stepper--standalone-binary-bundling--package-embedding-done-live-jit-address-channel-forward-look)
+  [**§D3** concealed ptrace-stealth helper running L3](scoped-tracing-managed-plan.md#d3--the-concealed-out-of-process-ptrace-stepper-scope-landed--stepper-standalone-binary-bundling-package-embedding-and-the-live-jit-address-channel)
   (`SYS_PTRACE` / Yama `PR_SET_PTRACER`; default Docker seccomp on host kernel ≥ 4.8, else
   `CAP_SYS_PTRACE`), which also backstops the cross-thread drop `asmtest_ss_end`
   ([:279](../../../src/ss_backend.c#L279)) still exhibits. The stepper steps per-instruction
@@ -600,11 +600,11 @@ PT runner exists — the gate [hardware-trace-plan.md](../plans/hardware-trace-p
 >
 > netNew #3 is a pure composition seam (no new capture primitive). Every
 > *piece* exists in isolation: the
-> [Managed §D0.1](scoped-tracing-managed-plan.md#d0--net-managed-code-capability-closing-the-leaks-on-net-8-forward-look-needs-a-live-net-runtime--intel-pt-for-the-clean-path)
+> [Managed §D0.1](scoped-tracing-managed-plan.md#d0--net-managed-code-capability-closing-the-leaks-on-net-8-landed--d01d02d03d04-all-ship)
 > `NativeRuntimeEventSource` listener, the self `pid==0` recorder + `asmtest_codeimage_track`
 > ([codeimage.c:314](../../../src/codeimage.c#L314) / [:373](../../../src/codeimage.c#L373)), Core
 > §2's `read_recorder` callback ([pt_backend.c:96](../../../src/pt_backend.c#L96)), and
-> `asmtest_hwtrace_render_versioned` ([hwtrace.c:1172](../../../src/hwtrace.c#L1172), WEAK-tier
+> `asmtest_hwtrace_render_versioned` ([hwtrace.c:2343](../../../src/hwtrace.c#L2343), WEAK-tier
 > wiring already introduced by §Z1). **Net-new is the arm-time wiring** composing them into
 > **one** lazy arm for the *managed* case, so an *unwarmed* `HotPath(data)` — whose JIT and GC
 > also run in the window — decodes against the **full executed image set** with zero developer
@@ -645,8 +645,8 @@ version-independent fallback byte source.
 **The `Dispose` render swap for the managed tier.** §Z1 already re-points *native-leaf*
 render onto `render_versioned` against a self codeimage. §Z3 extends the swap to the .NET
 managed path: `AsmTrace.Dispose` ([HwTrace.cs:1016](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1016))
-moves off the version-blind `asmtest_hwtrace_render` ([:1106](../../../src/hwtrace.c#L1106))
-onto `render_versioned` ([:1172](../../../src/hwtrace.c#L1172)), fed by the §D0.1-populated,
+moves off the version-blind `asmtest_hwtrace_render` ([:2107](../../../src/hwtrace.c#L2107))
+onto `render_versioned` ([:2343](../../../src/hwtrace.c#L2343)), fed by the §D0.1-populated,
 soft-dirty-versioned code-image — so tiered/moved/freed JIT bytes render against the
 version live in the window, not stale live bytes. This swap is correct **only once its
 producer exists** (this seam); before then it would render `(no bytes @version)`.
@@ -686,13 +686,13 @@ when ptrace is denied. Linux-only.
 
 > **Status: default + merge core landed; escalation forward-look.** The mismatch-flag
 > **pattern** ships for the region-scoped path (Core §0.2): `asmtest_hwtrace_arm_tid`
-> ([src/hwtrace.c:844](../../../src/hwtrace.c#L844)) + the cross-thread `truncated` flag in
-> `asmtest_hwtrace_end` ([:898-907](../../../src/hwtrace.c#L898)). But that backstop is
+> ([src/hwtrace.c:1829](../../../src/hwtrace.c#L1829)) + the cross-thread `truncated` flag in
+> `asmtest_hwtrace_end` ([:1885-1888](../../../src/hwtrace.c#L1885)). But that backstop is
 > **region-keyed** (`find_region(name)` → NULL on a region-free arm), so the empty ctor
 > must carry `arm_tid` + the trace pointer on its own per-thread handle (Z0 netNew #1
 > point 3) and re-implement the closing-vs-arming check there — **new integration, not
 > zero new code**. The opt-in merge **core** also ships and is host-tested
-> (`test_stitch_slices`, [:1233](../../../src/hwtrace.c#L1233)). **Forward-look:** the first
+> (`test_stitch_slices`, [:2537](../../../src/hwtrace.c#L2537)). **Forward-look:** the first
 > live **producer** of slices — §D0.4's `AsyncLocal` hook driving decode-at-disable
 > per-thread PT events into `stitch` — which needs a live managed runtime + bare-metal
 > Intel PT per-thread events (the §D3 single-thread ptrace stepper **cannot** exercise a
@@ -729,7 +729,7 @@ live chain has no CI protection.
 
 An **explicit opt-in, a redesign not a knob** — the scope becomes a **stitched trace of one
 logical operation**, building the missing **upstream** for a merge core that has always
-lacked one. `asmtest_hwtrace_stitch` ([:1233](../../../src/hwtrace.c#L1233)) is a pure,
+lacked one. `asmtest_hwtrace_stitch` ([:2537](../../../src/hwtrace.c#L2537)) is a pure,
 seq-ordered concatenation of pre-decoded slices, but nothing emits `asmtest_hwtrace_slice_t`
 ([:246](../../../include/asmtest_hwtrace.h#L246)) today. The producer: §D0.4's
 `AsyncLocal<ScopeId>` hook fires on a resuming thread's execution-context restore; on leaving
@@ -800,8 +800,8 @@ AMD/ARM/VMs/Docker/macOS.
 >
 > The raw self-probe ships and is the sole
 > input this phase consumes: `asmtest_hwtrace_available`
-> ([src/hwtrace.c:247](../../../src/hwtrace.c#L247)) and `asmtest_hwtrace_skip_reason`
-> ([:264](../../../src/hwtrace.c#L264), reason strings [:280-303](../../../src/hwtrace.c#L280))
+> ([src/hwtrace.c:315](../../../src/hwtrace.c#L315)) and `asmtest_hwtrace_skip_reason`
+> ([:415](../../../src/hwtrace.c#L415), reason strings [:350-409](../../../src/hwtrace.c#L350))
 > return per-backend codes; `asmtest_pt_decoder_present`
 > ([pt_backend.c:65](../../../src/pt_backend.c#L65) real / [:254](../../../src/pt_backend.c#L254)
 > stub) and `asmtest_amd_decoder_present`
@@ -814,7 +814,7 @@ AMD/ARM/VMs/Docker/macOS.
 > surface, the **composed** developer message, and the never-emit-partial contract over the
 > §3.1 bucket labels + §3.2 banner. On this AMD
 > host the empty ctor is a **clean no-op absent privilege** — no `intel_pt` PMU
-> ([:298-299](../../../src/hwtrace.c#L298)), single-step forbidden against live managed code —
+> ([:397](../../../src/hwtrace.c#L397)), single-step forbidden against live managed code —
 > so unprivileged it records nothing and reports the §Z5.2 message; with `CAP_PERFMON` the
 > CEILING LBR complement arms (bounded, `truncated`), and with ptrace permitted the §D3
 > stepper renders the complete window (§Z1's *AMD fork*). Host-testable on **every** host;
@@ -843,12 +843,12 @@ note surfaced through the scope's `Path`/sink and `SkipReason`:
 
 | Host / condition | Raw `skip_reason` (shipped) | Composed empty-ctor message (net-new) |
 |---|---|---|
-| Intel bare metal, unprivileged | `perf_event capture not permitted` ([:302](../../../src/hwtrace.c#L302)) | whole-window PT needs `perf_event_paranoid<0` **or** `CAP_PERFMON`; falling back to ptrace stepper (timing-intrusive) — §Z5.4 |
-| AMD / cloud / VM (this host) | `no intel_pt PMU…` ([:298-299](../../../src/hwtrace.c#L298)) | PT unavailable here; **Zen 3+ offers LBR** (bounded ~16-branch window, flags `truncated`); **complete** capture = the §D3 ptrace stepper (`CEILING_FREE`); else self-skip |
-| AMD Zen 3+, unprivileged | `perf branch-stack not permitted…` ([:290-292](../../../src/hwtrace.c#L290)) | LBR present but not permitted; lower `perf_event_paranoid` or grant `CAP_PERFMON` |
+| Intel bare metal, unprivileged | `perf_event capture not permitted` ([:407](../../../src/hwtrace.c#L407)) | whole-window PT needs `perf_event_paranoid<0` **or** `CAP_PERFMON`; falling back to ptrace stepper (timing-intrusive) — §Z5.4 |
+| AMD / cloud / VM (this host) | `no intel_pt PMU…` ([:397](../../../src/hwtrace.c#L397)) | PT unavailable here; **Zen 3+ offers LBR** (bounded ~16-branch window, flags `truncated`); **complete** capture = the §D3 ptrace stepper (`CEILING_FREE`); else self-skip |
+| AMD Zen 3+, unprivileged | `perf branch-stack not permitted…` ([:383-385](../../../src/hwtrace.c#L383)) | LBR present but not permitted; lower `perf_event_paranoid` or grant `CAP_PERFMON` |
 | No PT/LBR, ptrace-capable | ptrace skip code ([asmtest_ptrace.h:82](../../../include/asmtest_ptrace.h#L82)) | degraded to the concealed §D3 ptrace stepper — a second process, ~1000× on the stepped thread (amd Part III P2 block-step cuts stops ~4–10× when it lands); L3 self-truncating |
 | No PT/LBR, ptrace denied | ptrace skip code | records nothing; grant `CAP_SYS_PTRACE` or `PR_SET_PTRACER`, or run on Intel bare metal |
-| Not Linux | `single-step backend is Linux x86-64 only…` ([:280-281](../../../src/hwtrace.c#L280)), codeimage `ENOSYS` ([codeimage.c:492](../../../src/codeimage.c#L492)) | the whole using-model is **Linux-only**; records nothing and says why |
+| Not Linux | `single-step backend is Linux x86-64 only…` ([:364-366](../../../src/hwtrace.c#L364)), codeimage `ENOSYS` ([codeimage.c:492](../../../src/codeimage.c#L492)) | the whole using-model is **Linux-only**; records nothing and says why |
 | Async-hop detected | `trace.truncated` via arm-tid mismatch (handle-carried; §Z4) | captured the arming thread only; continuation hopped — stitching is opt-in (§Z4) |
 
 Where multiple tiers self-skip, the message names the *ladder* ("PT unavailable (AMD); LBR
@@ -860,8 +860,8 @@ detection.**
 The render on close must label and banner, never present a prefix as the whole:
 
 - **Bucket labels (Core §3.1).** Render through the shipped `asmtest_hwtrace_symbolize_bucket`
-  ([:1384](../../../src/hwtrace.c#L1384)) + address→name `asmtest_hwtrace_region_name`
-  ([:1292](../../../src/hwtrace.c#L1292)) — both host-tested by `test_symbolize_bucket` — so "31k
+  ([:2735](../../../src/hwtrace.c#L2735)) + address→name `asmtest_hwtrace_region_name`
+  ([:2642](../../../src/hwtrace.c#L2642)) — both host-tested by `test_symbolize_bucket` — so "31k
   in RyuJIT, 2k in GC, 7k in `HotPath`" is labelled. **Temporal** attribution (which tier ran
   *when*) uses §3.1's **eBPF PROT_EXEC emission-slicer** — gated on **CAP_BPF + kernel BTF**
   (`asmtest_codeimage_bpf_available` [codeimage.c:618](../../../src/codeimage.c#L618); reason
@@ -871,7 +871,7 @@ The render on close must label and banner, never present a prefix as the whole:
 - **Truncation banner (Core §3.2).** An overflowed window keeps its tail and banners
   `truncated`, never cap-as-complete — the same posture `trace.truncated`
   ([asmtest_trace.h:59](../../../include/asmtest_trace.h#L59)) already gives the shared render
-  ([:1106](../../../src/hwtrace.c#L1106)).
+  ([:2107](../../../src/hwtrace.c#L2107)).
 - **Async-hop (default).** A cross-thread close rides the §Z4 handle-carried backstop —
   flagged, never dropped, never auto-stitched.
 
@@ -995,7 +995,7 @@ re-stated as they *bind the empty ctor* — a scope with **no `[base,len)` at al
   own handle (Z0) and flags `trace.truncated` there, rather than the no-frame result
   `asmtest_ss_end` ([:279](../../../src/ss_backend.c#L279)) gives on the wrong thread. **Default
   = honest-thread-scope-with-flag, not auto-stitching**; stitching through
-  `asmtest_hwtrace_stitch` ([:1233](../../../src/hwtrace.c#L1233)) is an **explicit opt-in
+  `asmtest_hwtrace_stitch` ([:2537](../../../src/hwtrace.c#L2537)) is an **explicit opt-in
   escalation**.
 
 - **Whole-window is honest-but-noisy; region-scoped is clean (§Z1 mode, §Z5 presentation).**
@@ -1019,7 +1019,7 @@ re-stated as they *bind the empty ctor* — a scope with **no `[base,len)` at al
   stream rendered *as of the version live in the window* — §Z1 wires `render_versioned` for
   the native leaf, §Z3 extends it to managed (re-pointing `AsmTrace.Dispose`
   [:1016](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1016) off the version-blind render
-  [:1106](../../../src/hwtrace.c#L1106)) — **not** per-step register/memory values (the emulator
+  [:2107](../../../src/hwtrace.c#L2107)) — **not** per-step register/memory values (the emulator
   tier's job).
 
 - **Linux-only, across every binding (§Z5 owns the off-Linux promise).** The whole facility —
@@ -1088,10 +1088,10 @@ shipped `test_pt_image_from_codeimage`, `test_stitch_slices`, `test_amd_reconstr
 
 | Test | Phase | Synthetic input → assertion | Lane(s) |
 |---|---|---|---|
-| `test_zeroctor_scope` → **shipped as `test_zeroctor_scope_hygiene`** | Z0 | Region-free arm opens a per-thread block with **no** registered region (bypasses `find_region` [:486](../../../src/hwtrace.c#L486), never calls `register_region` [:432](../../../src/hwtrace.c#L432)); lazy arm **claims no slot / installs no SIGTRAP**; auto-name resolves; render-on-close returns text; the handle-carried closing-vs-arming tid check fires; the handler path takes **no malloc/lock**; nested region-free + region-scoped scopes install/restore SIGTRAP **exactly once**; repeated construct/dispose neither exhausts the frame stack nor leaks the stream buffer. **As built (`e5c7734`) it covers the last three only** — nested LIFO close with exact inner offsets, SIGTRAP installed once + restored to the pre-init handler, and 300-cycle churn with capture #301 still exact. The lazy-arm/auto-name/no-malloc and tid-check assertions are **not** exercised | `docker-hwtrace`, `docker-hwtrace-bindings` |
+| `test_zeroctor_scope` → **shipped as `test_zeroctor_scope_hygiene`** | Z0 | Region-free arm opens a per-thread block with **no** registered region (bypasses `find_region` [:657](../../../src/hwtrace.c#L657), never calls `register_region` [:603](../../../src/hwtrace.c#L603)); lazy arm **claims no slot / installs no SIGTRAP**; auto-name resolves; render-on-close returns text; the handle-carried closing-vs-arming tid check fires; the handler path takes **no malloc/lock**; nested region-free + region-scoped scopes install/restore SIGTRAP **exactly once**; repeated construct/dispose neither exhausts the frame stack nor leaks the stream buffer. **As built (`e5c7734`) it covers the last three only** — nested LIFO close with exact inner offsets, SIGTRAP installed once + restored to the pre-init handler, and 300-cycle churn with capture #301 still exact. The lazy-arm/auto-name/no-malloc and tid-check assertions are **not** exercised | `docker-hwtrace`, `docker-hwtrace-bindings` |
 | `test_wholewindow_ss_descend` — **NOT BUILT** | Z1 | The lifted **pre-allocated bounded absolute-RIP ring** replacing `ss_on_sigtrap`'s in-region filter ([:143-148](../../../src/ss_backend.c#L143)), rendered via `render_versioned` against a self codeimage, driving the **WEAK single-step L3 DESCEND_ALL** native leaf — asserts capture **and self-truncation** via **both** paths (buffer overflow flag; §L3 budget/watchdog), never that L3 is transparent. **What ships instead:** `test_wholewindow_singlestep` (EINVAL on a NULL trace, absolute-RIP capture, result preserved, render contains `ret`, and the **buffer-overflow** truncation flag) + `test_wholewindow_buckets`. The **§L3 budget/watchdog** truncation path is covered by the `test_descent_*` cases against the ptrace backend, not here | `hwtrace-test`, `docker-hwtrace` |
 | `test_wholewindow_decode` | Z2 | A checked-in / encoder-produced **TIP/TNT/PSB stream** feeding `asmtest_pt_decode_window`'s real libipt body ([:198](../../../src/pt_backend.c#L198), guard `ASMTEST_HAVE_LIBIPT` [:62](../../../src/pt_backend.c#L62)) through `read_recorder` ([:96](../../../src/pt_backend.c#L96)) with **no in-region filter** — the only non-hardware route to this body, contrasting `read_region` ([:74](../../../src/pt_backend.c#L74), which dies at the first out-of-range IP [:179-188](../../../src/pt_backend.c#L179)). **Self-skips where libipt is absent** | `hwtrace-test` (front-loaded, ‖ Z0, x86_64) |
-| `test_zeroctor_managed_compose` — **SHIPPED** (`e5c7734`) | Z3 | A **synthetic `MethodLoadVerbose` stream** (no runtime): the listener→(addr,size,version) map feeds `asmtest_codeimage_track` on the self path (`pid==0`, [:314](../../../src/codeimage.c#L314) / track [:373](../../../src/codeimage.c#L373), soft-dirty-gated); `Dispose` re-points from the version-blind render ([:1106](../../../src/hwtrace.c#L1106)) to `render_versioned` ([:1172](../../../src/hwtrace.c#L1172)). **As built:** a W^X buffer is re-JIT'd in place (`add` → `sub`) and `refresh()`ed; `when0` renders the first body and `when1` the second while live memory holds only the second — decode-at-version proven | `hwtrace-test` |
+| `test_zeroctor_managed_compose` — **SHIPPED** (`e5c7734`) | Z3 | A **synthetic `MethodLoadVerbose` stream** (no runtime): the listener→(addr,size,version) map feeds `asmtest_codeimage_track` on the self path (`pid==0`, [:314](../../../src/codeimage.c#L314) / track [:373](../../../src/codeimage.c#L373), soft-dirty-gated); `Dispose` re-points from the version-blind render ([:2107](../../../src/hwtrace.c#L2107)) to `render_versioned` ([:2343](../../../src/hwtrace.c#L2343)). **As built:** a W^X buffer is re-JIT'd in place (`add` → `sub`) and `refresh()`ed; `when0` renders the first body and `when1` the second while live memory holds only the second — decode-at-version proven | `hwtrace-test` |
 | `test_asynchop_flag` — **NOT BUILT** | Z4 | The honest **default**: a cross-thread/awaited close rides the **handle-carried** arm-tid so the trace is flagged `truncated` (not the region-keyed §0.2 backstop, which can't fire region-free) rather than silently dropping the arming thread's TLS — hop **flagged, never dropped, never auto-stitched**. The **mechanism ships** (`end_window` flags `truncated` on an `asmtest_ss_frame_lookup` miss) but nothing tests it: `test_arm_tid_mismatch` covers the **region-keyed** `begin_scope` path instead. Open item | `hwtrace-test` |
 | `test_stitch_slices` *(shipped)* | Z4 | Existing pure seq-ordered merge over synthetic `slice_t` ([asmtest_hwtrace.h:246](../../../include/asmtest_hwtrace.h#L246)); the opt-in producer is wired **into** it | `hwtrace-test` |
 | `test_wholewindow_banner` — **SHIPPED** (`e5c7734`) · `test_degradation_message` — **not built, by decision** | Z5 | Pure self-probe on **any** host: composes every tier's `skip_reason()` + §3.1 bucket labels (`symbolize_bucket` / `region_name`) + §3.2 banner into the scope's `Path`; asserts the **actionable privilege message** and that the empty ctor is **never a hard failure**. **As built:** `test_wholewindow_banner` proves an overflowed window (insns cap 8) renders a prefix ENDING with the truncation banner, asserting even without Capstone. `test_degradation_message` has no composed **C** builder to drive — the §Z5.2 ladder ships as `HwTrace.DegradationNote()` in the .NET binding instead | `hwtrace-test` (every host) |
@@ -1187,7 +1187,7 @@ primitives are Core §2 / Managed §D0/§D4. All are **Linux-only**.
   sufficient, for *trusted*.
 
 - **The async-hop default is new integration, not a freebie.** The region-keyed §0.2 backstop
-  ([:898-907](../../../src/hwtrace.c#L898)) **cannot fire** on the region-free arm (`find_region` →
+  ([:1885-1888](../../../src/hwtrace.c#L1885)) **cannot fire** on the region-free arm (`find_region` →
   NULL), so the empty ctor must carry `arm_tid` on its own handle and re-implement the check
   (Z0/Z4 wiring). Full stitching needs Z2's validated per-thread PT (the §D3 stepper cannot
   exercise a hop) and has **no CI coverage** — so it stays opt-in.
@@ -1209,7 +1209,7 @@ primitives are Core §2 / Managed §D0/§D4. All are **Linux-only**.
 - **Open point — the managed render swap lands with §Z3, not before.** §Z1 wires
   `render_versioned` for the native-leaf tier against its self codeimage; re-pointing the
   *managed* `AsmTrace.Dispose` ([:1016](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1016)) off the
-  version-blind render ([:1106](../../../src/hwtrace.c#L1106)) is correct **only once §Z3's producer
+  version-blind render ([:2107](../../../src/hwtrace.c#L2107)) is correct **only once §Z3's producer
   exists**, else it renders `(no bytes @version)`.
 
 ---

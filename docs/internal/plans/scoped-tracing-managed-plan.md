@@ -251,20 +251,32 @@ PT-host lanes self-skip; the ptrace fallback (§D3) runs the exactness check.
 
 ---
 
-## §D1 — Node scope construct + async-hop stitching *(LANDED)*
+## §D1 — Node scope construct + async-hop stitching *(LANDED, except the `using` / `Symbol.dispose` sugar)*
 
-**Construct.** Node's `region(name, fn)` ships at
-[bindings/node/hwtrace.js:439](../../../bindings/node/hwtrace.js#L439) (on `class HwTrace`,
-[:328](../../../bindings/node/hwtrace.js#L328)). Add a `using`-compatible scope via
+**Construct — the callback form LANDED; the `using` sugar is NOT built.** What ships is the
+**callback** pair on `class HwTrace`
+([bindings/node/hwtrace.js:524](../../../bindings/node/hwtrace.js#L524)): `region(name, fn)`
+([:1013](../../../bindings/node/hwtrace.js#L1013)), the plain begin/`fn`/`end`-in-a-`finally`
+bracket, and `scope(code, fn, opts)` ([:1031](../../../bindings/node/hwtrace.js#L1031)), the
+register-then-`try_begin` / `end` block scope with the shared-core render-on-close, the tid
+assert, and a call-site-derived `basename:line` name. That is this section's own
+**version-independent fallback** — and it is *all* that ships.
+
+**OPEN — the `using` / `Symbol.dispose` construct (unbuilt; gated on Node 24+).** The design
+below is still the spec; nothing in the binding implements it (no `Symbol.dispose`,
+`Symbol.for('nodejs.dispose')`, or `kDispose` — only a doc comment at
+[:1024](../../../bindings/node/hwtrace.js#L1024) recording that the sugar needs Node 24+ and
+that the callback form is the fallback standing in for it). Add a `using`-compatible scope via
 `Symbol.dispose` — `using t = new AsmTrace()` — over the same
 register-then-`try_begin` / `end` pair, with the shared-core render-on-close and tid
-assert. The `using` **declaration** ships unflagged in **Node 24+** (Node 24 GA bundles V8 13.6
+assert. The **reason it is not built: the version gate.** The `using` **declaration** ships unflagged in **Node 24+** (Node 24 GA bundles V8 13.6
 and enables Explicit Resource Management itself; upstream it was default-on in the V8
 engine at v13.8 / Chrome 138 — Chrome had turned it on earlier at Chromium 134 on V8 13.4,
 which is why Node 24 on V8 13.6 still had to flip it manually); on
 Node 22 it needs `--harmony-explicit-resource-management`, so gate the sugar on Node 24
 and keep the existing `region(name, fn)` callback form as the version-independent
-fallback (it needs no `using`). **The `Symbol.dispose` well-known symbol is itself only
+fallback (it needs no `using`) — **which is exactly the posture that shipped: the fallback,
+and only the fallback.** **The `Symbol.dispose` well-known symbol is itself only
 native from Node 18.18 / 20.4** (not the whole 18.0 floor), so key the manual-dispose
 method off a guarded `const kDispose = Symbol.dispose ?? Symbol.for('nodejs.dispose');`
 (Node uses `Symbol.for('nodejs.dispose')` internally) rather than assuming
@@ -293,10 +305,11 @@ not stitched. Live JS needs PT/LBR or the ptrace stepper (single-step is unsafe 
 the V8 runtime). Explicit opt-in; default stays the honest thread-scope with a mismatch
 flag.
 
-**§D1 tests.** Extend the `hwtrace-node-test` lane
-([mk/native-trace.mk:559-612](../../../mk/native-trace.mk#L559)) with a `using`-scope
-case over a native leaf (works today), and an opt-in async-hop case asserting slices
-stitch by `ScopeId` (PT/ptrace host; self-skips otherwise).
+**§D1 tests.** **OPEN — neither case is built.** Extend the `hwtrace-node-test` lane
+([mk/native-trace.mk:2417](../../../mk/native-trace.mk#L2417)) with a `using`-scope
+case over a native leaf (blocked with the construct above on the Node 24+ gate; the lane
+would need a version guard, unlike the callback form, which works today), and an opt-in
+async-hop case asserting slices stitch by `ScopeId` (PT/ptrace host; self-skips otherwise).
 
 ---
 

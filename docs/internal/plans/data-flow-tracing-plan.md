@@ -39,7 +39,7 @@ through the DynamoRIO and .NET-interpretability phases rather than stopping at t
 > the exact triples at a fully-suspended-EE GC fence, was proven to coexist with DynamoRIO
 > (`make docker-gcprofiler-probe`), and is **already shipping** on the DR side — taint
 > Increment 7 wires it through a POSIX-shm handshake into `at_gc_remap_live`
-> ([dataflow_dr_client_inlined.c:732](../../../src/dataflow_dr_client_inlined.c#L732)),
+> ([dataflow_dr_client_inlined.c:737](../../../src/dataflow_dr_client_inlined.c#L737)),
 > remapping 60,021 real ranges on a live compacting GC. See
 > [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
 > What is left is therefore **wiring a proven feed to a landed transform**, not building a
@@ -238,7 +238,7 @@ cost is documented per-region, not per-run.
 > which receives the exact per-range triples at a **fully-suspended-EE GC fence** — a stronger
 > coherence position than any event-stream consumer, since no mutator can race the remap.
 > It is not hypothetical: taint Increment 7 ships it, and it drives `at_gc_remap_live`
-> ([dataflow_dr_client_inlined.c:732](../../../src/dataflow_dr_client_inlined.c#L732)) under
+> ([dataflow_dr_client_inlined.c:737](../../../src/dataflow_dr_client_inlined.c#L737)) under
 > DynamoRIO across 60,021 real move ranges. Findings:
 > [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
 >

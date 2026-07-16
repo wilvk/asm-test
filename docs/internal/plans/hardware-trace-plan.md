@@ -107,17 +107,36 @@ the same-address-different-bytes case resolving to the version live at each `whe
 "feed the recorder's timeline to libipt" is **no longer the open item** — that entry
 point exists and is decoder-side complete.
 
+**And the decode is validated end-to-end on hosts with no PT silicon.**
+`asmtest_pt_encode_fixture` ([src/pt_backend.c:294](../../../src/pt_backend.c)) synthesizes
+a valid Intel PT AUX stream for the ROUTINE taken-`jle` walk using libipt's *own packet
+encoder* — userspace, no `intel_pt` PMU. `test_wholewindow_decode`
+([examples/test_hwtrace.c:3154](../../../examples/test_hwtrace.c)) drives that stream
+through the **real libipt bodies** — both `asmtest_pt_decode` (region-scoped) and
+`asmtest_pt_decode_window` (whole-window, called at
+[test_hwtrace.c:3217](../../../examples/test_hwtrace.c)) — and asserts the full result:
+instruction offsets `{0,3,6,0xc,0x11}`, block partition `{0,0x11}`, not truncated. That is
+the same ground-truth walk the AMD / CoreSight / DynamoRIO backends reconstruct for these
+bytes, so a decoder regression fails CI.
+
 What Phase 2 still needs is therefore **narrower than earlier revisions of this plan
-claimed** — two things, both ultimately gated on **bare-metal Intel PT silicon, which
-neither dev box provides** (a Ryzen 9 9950X / Zen 5 and a Ryzen 9 4900HS / Zen 2):
+claimed** — two things, rooted in **bare-metal Intel PT silicon, which neither dev box
+provides** (a Ryzen 9 9950X / Zen 5 and a Ryzen 9 4900HS / Zen 2). Only the first is
+strictly hardware-gated; the second is gated on the first:
 
 - **PT-attach-to-live-PID capture** (`perf record -p <pid>` / `perf_event_open` against a
   running process, versus Phase 1's `pid=0` self-trace). Nothing in
   [src/hwtrace.c](../../../src/hwtrace.c) opens a PT event on a foreign pid today.
-- **Wiring** that capture to the decode: `asmtest_pt_decode_window` currently has **no
-  caller** — the hwtrace facade never dispatches to it. The wiring itself is pure
-  software, but it cannot be validated without PT hardware, so per the house "no untested
-  hardware code" rule it stays forward-look alongside the capture it serves.
+- **Wiring** that capture to the decode: `asmtest_pt_decode_window` has **no production
+  caller** — the hwtrace facade never dispatches to it (its only caller is
+  `test_wholewindow_decode`). Note the distinction, which earlier revisions of this plan
+  blurred: the **decode** is *not* hardware-gated — the synthetic fixture validates it
+  end-to-end here today. What genuinely needs silicon is **PT capture**: producing a real
+  AUX stream from a real `intel_pt` PMU against a live PID. So the honest reason the
+  wiring stays forward-look is that **the capture it would dispatch from does not exist**,
+  not that the wiring is unvalidatable — a fixture-fed facade test could cover most of it.
+  The residual hardware-gated risk is narrow: whether real-silicon AUX (PSB cadence,
+  overflow/`ovf`, timing packets, perf AUX wraparound) matches what the encoder emits.
 
 ---
 
@@ -319,14 +338,19 @@ position.
   register, so soft-dirty is the cross-process primitive). Runtime-enabled **jitdump**
   (a) — .NET `DiagnosticsClient.EnablePerfMap(JitDump)` / JVM jitdump agent + `perf inject
   --jit` — remains the PT-hardware half below.
-- _Done (decoder-side; unwired)._ Feeding the recorder's bytes into libipt's
+- _Done (decoder-side, validated; unwired)._ Feeding the recorder's bytes into libipt's
   `pt_image_set_callback` keyed to trace position — `asmtest_pt_decode_window`
   ([src/pt_backend.c:221](../../../src/pt_backend.c)), image callback at
   [pt_backend.c:239](../../../src/pt_backend.c), adapter `asmtest_pt_read_codeimage` at
-  [pt_backend.c:47](../../../src/pt_backend.c), host-tested at
-  [examples/test_hwtrace.c:3111-3130](../../../examples/test_hwtrace.c). Written and
-  decoder-side complete, but it has **no caller**: the PT capture that would drive it does
-  not exist yet (see Status).
+  [pt_backend.c:47](../../../src/pt_backend.c), adapter host-tested at
+  [examples/test_hwtrace.c:3111-3130](../../../examples/test_hwtrace.c). Not merely
+  written: `test_wholewindow_decode`
+  ([test_hwtrace.c:3154](../../../examples/test_hwtrace.c)) calls it at
+  [:3217](../../../examples/test_hwtrace.c) against a synthetic AUX stream from
+  `asmtest_pt_encode_fixture` ([pt_backend.c:294](../../../src/pt_backend.c)) and asserts
+  offsets `{0,3,6,0xc,0x11}` / blocks `{0,0x11}` / not-truncated through the real libipt
+  body — **no PT hardware required**. What it lacks is a **production caller**: the PT
+  capture that would drive it does not exist yet (see Status).
 - libipt (or libxdc) decode; reuse the Capstone layer to render recovered bytes —
   no new decoder API in the bindings.
 - The hypervisor/EPT frontier as the research-grade, maximum-stealth option:
@@ -342,12 +366,15 @@ trace that matches a ground-truth disassembly of the same bytes.
 **Status.** The **byte-source half is implemented and live-validated** — the
 `asmtest_codeimage` time-aware recorder + its eBPF emission detector, paired with the W2
 ptrace stepper (the AMD-host route that needs no PT). The **recorder-backed libipt decode
-is written as well** — `asmtest_pt_decode_window`
-([src/pt_backend.c:221](../../../src/pt_backend.c)), with a host-tested image adapter and
-no caller. What remains forward-look is strictly the **PT capture and its wiring**:
-attach-to-live-PID PT capture, dispatched into that decode entry. Both are gated on
-**bare-metal Intel PT hardware, which neither dev box provides** (Zen 5 9950X / Zen 2
-4900HS), so they cannot be built or validated here. Distinct from the
+is written *and* end-to-end validated** — `asmtest_pt_decode_window`
+([src/pt_backend.c:221](../../../src/pt_backend.c)) reconstructs the ground-truth walk from
+a synthetic AUX stream (`asmtest_pt_encode_fixture`) in `test_wholewindow_decode`, on
+hosts with no PT silicon; it simply has no production caller. What remains forward-look is
+strictly the **PT capture and its wiring**: attach-to-live-PID PT capture, dispatched into
+that decode entry. The **capture** is genuinely gated on **bare-metal Intel PT hardware,
+which neither dev box provides** (Zen 5 9950X / Zen 2 4900HS). The wiring is gated on the
+capture existing, not on hardware per se — the fixture shows the decode side is testable
+here. Distinct from the
 Phase 0-8 work of the native-trace plan, which traces code asm-test generates itself;
 depends on this plan's Phase 1 (PT substrate) and **native-trace Phase 5**
 (instruction-mode semantics). See the analysis doc for the ranked approaches, per-runtime

@@ -261,8 +261,10 @@ docker-taint-native:
 # under drrun), runs a fixture natively, self-attaches DR + the UNCHANGED taint client mid-run,
 # captures a scoped window into POSIX-shm, detaches, runs native again, and a separate
 # validator oracle-diffs the captured window out of process. No experimental API, no
-# SYS_PTRACE — a plain `docker run` (the external foreign-PID injector is the experimental
-# Increment 2 probe, deferred). See docs/internal/plans/dynamorio-attach-tier-plan.md.
+# SYS_PTRACE — a plain `docker run` (the external foreign-PID injector landed separately as
+# docker-taint-attach-probe below, which does need the cap). Also carries Increment 3's
+# marker-less interactive nudge arm/disarm. CI-gated by the `taint-attach` job in
+# .github/workflows/ci.yml. See docs/internal/plans/dynamorio-attach-tier-plan.md.
 .PHONY: docker-taint-attach
 docker-taint-attach:
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.taint-attach \
@@ -270,12 +272,15 @@ docker-taint-attach:
 	  -t asmtest-taint-attach .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-taint-attach
 
-# DR ATTACH tier Increment 2: EXTERNAL-attach empirical probe (the experimental blocker). A
-# light DR-only image that starts a plain native victim and injects DR + a minimal counting
-# client into the RUNNING process via `drrun -attach <pid>`, printing the GO/NO-GO verdict. The
+# DR ATTACH tier EXTERNAL-attach lane (Increments 2, 4 and 5). A light DR-only image that starts a
+# plain native victim and injects DR into the RUNNING process via `drrun -attach <pid>`. Its CMD
+# runs all four lanes: Increment 2's GO/NO-GO probe (a minimal counting client — the verdict was GO,
+# recorded in dr-attach-probe-findings.md), Increment 4's marker-less external taint capture, and
+# Increment 5's detach + K=3 attach/capture/detach cycling with the shadow-leaf leak assertion. The
 # ptrace-seize needs CAP_SYS_PTRACE, so — UNLIKE the coop lane — the `docker run` adds
-# `--cap-add=SYS_PTRACE` (mirroring the hwtrace cap lanes). A no-go is a valid research finding
-# (recorded in dr-attach-probe-findings.md), so this is a manual diagnostic, not in the main gate.
+# `--cap-add=SYS_PTRACE` (mirroring the hwtrace cap lanes). Began as Increment 2's research probe,
+# but landed capability was added to the SAME image, so it is now CI-gated by the `taint-attach`
+# job in .github/workflows/ci.yml (a hosted runner grants the cap), not a manual diagnostic.
 .PHONY: docker-taint-attach-probe
 docker-taint-attach-probe:
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.taint-attach-probe \
