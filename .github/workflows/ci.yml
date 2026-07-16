@@ -29,7 +29,7 @@ jobs:
       fail-fast: false
       matrix:
         # Cover {x86-64, AArch64} x {Linux/ELF, macOS/Mach-O}. The x86-64 macOS
-        # corner (macos-13) is scarce/slow, so it runs nightly in the
+        # corner (macos-15-intel) is scarce/slow, so it runs nightly in the
         # `test-macos-x86` job below rather than gating every push.
         #   ubuntu-latest     x86-64  Linux  (gcc, ELF @function)
         #   ubuntu-24.04-arm  aarch64 Linux  (gcc, ELF %function)
@@ -71,7 +71,7 @@ jobs:
   # them into one cross-system matrix. Every leg also gates the DETERMINISTIC
   # golden emu counts (host/OS-independent, so the committed golden must match a
   # fresh run everywhere — the manifest/conformance golden pattern).
-  # Follow-ups (per the plan): the windows-latest + macos-13(x86) legs (the
+  # Follow-ups (per the plan): the windows-latest + macos-15-intel(x86) legs (the
   # shell runner is portable but those lanes need the emu deps installed), and the
   # nightly auto-commit of per-box records into benchmarks/ (needs contents:write).
   benchmarks:
@@ -131,15 +131,19 @@ jobs:
           path: comparison.md
           if-no-files-found: error
 
-  # x86-64 macOS / Mach-O tier (clang). The Intel `macos-13` runners are
-  # scarce and slow, so this corner of the {arch} x {OS} matrix runs nightly
-  # (and on manual `workflow_dispatch`) instead of gating every push — the
-  # per-push `test` job already covers arm64 macOS/Mach-O plus both Linux/ELF
-  # arches. Mirrors the `test` job's steps exactly.
+  # x86-64 macOS / Mach-O tier (clang). The Intel runners are scarce and slow, so
+  # this corner of the {arch} x {OS} matrix runs nightly (and on manual
+  # `workflow_dispatch`) instead of gating every push — the per-push `test` job
+  # already covers arm64 macOS/Mach-O plus both Linux/ELF arches. Mirrors the
+  # `test` job's steps exactly.
+  # `macos-15-intel`, NOT `macos-13`: the macOS 13 image was retired 2025-12-08, so
+  # a macos-13 leg never gets a runner — it silently queues, which for a nightly
+  # job reads exactly like "the nightly is green". macos-15-intel is GitHub's
+  # documented successor and the last x86_64 image (available until 2027-08).
   test-macos-x86:
-    name: test (macos-13, nightly)
+    name: test (macos-15-intel, nightly)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: macos-13
+    runs-on: macos-15-intel
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -1143,9 +1147,9 @@ jobs:
   # The Intel macOS (darwin-x86_64) payload, nightly + on manual dispatch, exactly
   # as the `test-macos-x86` job gates that scarce/slow corner off the per-push path.
   package-libs-macos-x86:
-    name: payloads (macos-13, nightly)
+    name: payloads (macos-15-intel, nightly)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
-    runs-on: macos-13
+    runs-on: macos-15-intel
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -1177,7 +1181,7 @@ jobs:
       - name: Upload native payload
         uses: actions/upload-artifact@v7
         with:
-          name: native-payload-macos-13
+          name: native-payload-macos-15-intel
           path: build/dist/native/
           if-no-files-found: error
 

@@ -25,10 +25,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-latest is arm64; macos-13 is the Intel (x86_64) runner. Both are
-        # required so the published packages/wheels carry a darwin-x86_64 payload
+        # macos-latest is arm64; macos-15-intel is the Intel (x86_64) runner. Both
+        # are required so the published packages/wheels carry a darwin-x86_64 payload
         # (repo-review B2) — README advertises "x86-64 and AArch64, Linux and macOS".
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-13]
+        # NOT macos-13: that image was retired 2025-12-08, so the leg never gets a
+        # runner — it queues until it times out and the whole release stalls.
+        # macos-15-intel is GitHub's documented successor and the LAST x86_64 image
+        # (available until 2027-08); after that, darwin-x86_64 needs another source.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel]
     steps:
       - uses: actions/checkout@v7
       - name: Install build deps (unicorn, pkg-config) + patchelf + tier deps
@@ -154,10 +158,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-latest is arm64; macos-13 is the Intel (x86_64) runner. Both are
-        # required so the published packages/wheels carry a darwin-x86_64 payload
+        # macos-latest is arm64; macos-15-intel is the Intel (x86_64) runner. Both
+        # are required so the published packages/wheels carry a darwin-x86_64 payload
         # (repo-review B2) — README advertises "x86-64 and AArch64, Linux and macOS".
-        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-13]
+        # NOT macos-13: that image was retired 2025-12-08, so the leg never gets a
+        # runner — it queues until it times out and the whole release stalls.
+        # macos-15-intel is GitHub's documented successor and the LAST x86_64 image
+        # (available until 2027-08); after that, darwin-x86_64 needs another source.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
@@ -257,9 +265,10 @@ jobs:
       fail-fast: false
       matrix:
         lang: [node, ruby, lua, java, dotnet]
-        # macos-13 (Intel) alongside macos-latest (arm64) so the Intel-mac install
-        # is smoke-tested too; the packages already bundle every native-all slot.
-        os: [ubuntu-latest, macos-latest, macos-13]
+        # macos-15-intel (Intel) alongside macos-latest (arm64) so the Intel-mac
+        # install is smoke-tested too; the packages already bundle every native-all
+        # slot. (macos-13 was retired 2025-12-08 — see the native job.)
+        os: [ubuntu-latest, macos-latest, macos-15-intel]
         # Each smoke installs/builds with the FULL env first (package managers and
         # builds need it), then sources scripts/clean-env.sh — the shared clean-room
         # scrub (Track E, docs/internal/plans/macos-clean-test-plan.md): every ASMTEST_*/
