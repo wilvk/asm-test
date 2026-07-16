@@ -189,19 +189,18 @@ dataflow-lua-test: $(DATAFLOW_LIVE_DEPS)
 # zig 0.13.x (the docker bindings image). `-lc` selects the libc dlopen backend (zig's
 # own ELF loader wants a hash table the plain shared lib omits — ElfHashTableNotFound).
 .PHONY: dataflow-zig-test
-dataflow-zig-test: shared-dataflow
-	ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
-	  $(ZIG) run -lc bindings/zig/src/test_dataflow.zig
+dataflow-zig-test: $(DATAFLOW_LIVE_DEPS)
+	$(dataflow_live_env) $(ZIG) run -lc bindings/zig/src/test_dataflow.zig
 
 # Phase 6 — the Rust data-flow binding (bindings/rust/test_dataflow.rs, direct FFI).
 # Standalone rustc smoke (no cargo project) linked against the analysis lib; needs
 # rustc (the docker bindings image).
 RUSTC ?= rustc
 .PHONY: dataflow-rust-test
-dataflow-rust-test: shared-dataflow
+dataflow-rust-test: $(DATAFLOW_LIVE_DEPS)
 	$(RUSTC) bindings/rust/test_dataflow.rs -L $(BUILD) -l asmtest_dataflow \
 	  -o $(BUILD)/rust_dataflow_test
-	LD_LIBRARY_PATH=$(abspath $(BUILD)) $(BUILD)/rust_dataflow_test
+	LD_LIBRARY_PATH=$(abspath $(BUILD)) $(dataflow_live_env) $(BUILD)/rust_dataflow_test
 
 # Phase 6 — the Go data-flow binding (bindings/go/cmd/dataflowsmoke, cgo dlopen).
 # Needs Go + a C toolchain (cgo); validated in golang:1 locally.
