@@ -341,7 +341,11 @@ package-libs-drtrace:
 	 cp -f $(BUILD)/libasmtest_drclient.so $$slot/ && \
 	 cp -fL "$$drhome/lib64/release/libdynamorio.so" $$slot/ && \
 	 ASMTEST_DR_VERSION=$(DR_VERSION) sh scripts/package-native.sh --tier drtrace $$slot $(pkg_drapp_name) && \
-	 { undef=$$(ldd -r "$$slot/$(pkg_drapp_name)" 2>&1 | grep 'undefined symbol' || true); \
+	 { command -v ldd >/dev/null 2>&1 || { \
+	     echo "package-libs: FATAL — no ldd, cannot verify $(pkg_drapp_name) is loadable."; \
+	     echo "  Refusing to stage an unverified drtrace tier (a silent pass here is how"; \
+	     echo "  an unloadable drapp shipped in the first place)."; exit 1; }; \
+	   undef=$$(ldd -r "$$slot/$(pkg_drapp_name)" 2>&1 | grep 'undefined symbol' || true); \
 	   [ -z "$$undef" ] || { \
 	     echo "package-libs: FATAL — staged $(pkg_drapp_name) has UNRESOLVED symbols, so it"; \
 	     echo "  will not dlopen and every binding's drtrace tier is dead on arrival:"; \
