@@ -34,7 +34,10 @@
 #endif
 
 static volatile sig_atomic_t g_handled;
-static void on_sigtrap(int s) { (void)s; g_handled = 1; }
+static void on_sigtrap(int s) {
+    (void)s;
+    g_handled = 1;
+}
 
 int main(void) {
     prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
@@ -42,7 +45,8 @@ int main(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_handler = on_sigtrap;
-    sigemptyset(&sa.sa_mask); /* SIGTRAP still masked inside the handler by default */
+    sigemptyset(
+        &sa.sa_mask); /* SIGTRAP still masked inside the handler by default */
     sigaction(SIGTRAP, &sa, NULL);
 
     fprintf(stderr, "int3_victim pid=%d\n", (int)getpid());

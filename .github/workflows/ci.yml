@@ -565,8 +565,12 @@ jobs:
       # and the docker CLI image ship), NOT apt's Capstone 4 — the older library
       # silently degrades some disassembly, so the smoke must run against what
       # users actually get. libipt/OpenCSD/ncurses stay apt.
-      - name: Install libipt/OpenCSD (hwtrace tier) + ncurses (TUI) + pkg-config
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libipt-dev libopencsd-dev libncurses-dev pkg-config
+      # gcc-multilib builds the -m32 i386 victim. Without it, mk/cli.mk's parse-time
+      # probe silently drops the i386-refusal block from cli-smoke — so the check
+      # that asmspy REFUSES a 32-bit tracee would never run on this (bare, non-docker)
+      # runner. Docker CLI image installs it too (Dockerfile.cli).
+      - name: Install libipt/OpenCSD (hwtrace tier) + ncurses (TUI) + pkg-config + gcc-multilib (i386 victim)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libipt-dev libopencsd-dev libncurses-dev pkg-config gcc-multilib
 
       # K1: cache the exact file set the pinned source build installs, keyed on
       # the pinned inputs. Cold cache / unavailable backend: builds from source.
@@ -928,6 +932,40 @@ jobs:
         run: sh scripts/check-thirdparty-versions.sh
       - name: Check every binding wraps every native-trace tier symbol
         run: make check-bindings-parity
+
+  # `go vet` on every push — NOT only on a release dispatch.
+  #
+  # This job exists because of a real miss: 16 "possible misuse of unsafe.Pointer"
+  # sites accumulated in bindings/go and nobody saw them, because vet ran ONLY in
+  # release.yml and release.yml had not been dispatched since 2026-06-26. The cgo
+  # shims typed foreign-process/JIT addresses as `const void *`, forcing the Go side
+  # to fabricate an unsafe.Pointer from a uintptr; vet was right to object.
+  #
+  # `go-version: stable` deliberately MATCHES release.yml. The docker binding lane
+  # uses apt's golang-go (Go 1.22.2, mk/docker.mk), which is old enough that it does
+  # not flag this class at all — so that lane structurally cannot substitute for this
+  # one, and pinning an older version here would recreate the blind spot.
+  #
+  # Note vet is necessary but NOT sufficient: truncating one of those casts to 32
+  # bits still vets clean AND still builds, and is caught only by the Go binding's
+  # own base-equality test. Keep both.
+  go-vet:
+    name: go (vet + build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
+        with: { go-version: "stable" }
+      # libasmtest_emu is the superset the cgo module links against; Keystone has no
+      # apt package, so both pinned engines are built from source (as release.yml does).
+      - run: make deps DEPS_ARGS=--asm
+      - run: ./scripts/build-keystone.sh && ./scripts/build-capstone.sh && make shared-emu
+      - name: go vet + build
+        run: |
+          cd bindings/go
+          CGO_LDFLAGS="-L$GITHUB_WORKSPACE/build" go vet ./...
+          CGO_LDFLAGS="-L$GITHUB_WORKSPACE/build" go build ./...
 
   # Native Win64 tier (see docs/internal/archive/plans/win64-native-tier-plan.md). The Microsoft
   # x64 capture trampoline is exercised two ways on x86-64 with no Windows host:

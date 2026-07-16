@@ -713,6 +713,7 @@ FMT_SOURCES  := $(filter-out include/asm.h, \
                  $(wildcard src/*.c src/*.h include/*.h tests/*.c \
                  tests/win64/*.c tests/win64/*.h bindings/conformance/*.c \
                  examples/*.c scripts/gen-manifest.c \
+                 cli/*.c cli/*.h \
                  tools/*.c tools/*.h))
 fmt:
 	$(CLANG_FORMAT) -i $(FMT_SOURCES)
