@@ -468,6 +468,56 @@ jobs:
       - name: External attach (Inc 2) + marker-less taint capture (Inc 4) + K-round detach cycling (Inc 5)
         run: make docker-taint-attach-probe
 
+  # F4 — live GC-move canonicalization on the ptrace ATTACH tier (Increments 1 and 2). This is
+  # the WIRING that joins the proven profiler GC-move feed to the landed pure transform
+  # (asmtest_gcmove_canonicalize) on a live attach, and it is the one place that tier can be
+  # WRONG rather than merely slow: without it a managed value's memory def-use edge silently
+  # VANISHES across a compaction. It landed with `make docker-gccanon-attach` as its only proof
+  # and no CI job — the same "landed capability inherited a research probe's CI posture" the
+  # taint-attach job above exists to fix. Same runner and needs as taint-gcmove next door (a
+  # hosted runner grants the SYS_PTRACE the sibling-process seize needs), so the gate is
+  # affordable. The lane is ~3 minutes of live dotnet + ptrace locally; the timeout is generous.
+  #
+  # THE GATE MUST NOT BE VACUOUS. The lane SELF-SKIPS with `1..0 # skipped` AND EXIT 0 when the
+  # dotnet SDK / git / capstone are absent, when the CoreCLR profiler-header fetch fails, or when
+  # the Microsoft.Diagnostics.NETCore.Client restore fails (the $(BUILD)/.gccanon_skip sentinel in
+  # mk/native-trace.mk). A plain `run: make docker-gccanon-attach` would therefore go GREEN having
+  # tested NOTHING. So the run is captured and echoed (failures stay debuggable), the skip
+  # sentinel is a HARD failure, any `not ok` is a failure, and the exact assertion count is
+  # asserted: the pure `--selftest` plan `1..5`, then one phase per GCCANON_PHASES value —
+  # `1..10` / `1..11` / `1..11` for 1, 2 and 3 compacting GCs per call-out window = 37 `ok`.
+  # See docs/internal/plans/live-attach-dataflow-followup-plan.md.
+  gccanon-attach:
+    name: dataflow (F4 live GC-move canon, attach tier)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: F4 — live GC-move canon on a ptrace attach (selftest + 1, 2 and 3 GCs per window)
+        run: |
+          set -o pipefail
+          make docker-gccanon-attach 2>&1 | tee /tmp/gccanon.log
+
+      - name: Assert the lane really ran (no self-skip) and every assertion passed
+        run: |
+          log=/tmp/gccanon.log
+          if grep -q '1\.\.0 # skipped' "$log"; then
+            echo "::error::gccanon-attach SELF-SKIPPED (1..0 # skipped) — the F4 gate tested NOTHING. Either a tool is missing (dotnet SDK / git / capstone) or the CoreCLR-header fetch / NETCore.Client restore failed. Fix the lane; do not let this pass silently."
+            exit 1
+          fi
+          if grep -q '^not ok' "$log"; then
+            echo "::error::gccanon-attach reported FAILING assertions:"
+            grep '^not ok' "$log"
+            exit 1
+          fi
+          n=$(grep -c '^ok ' "$log" || true)
+          if [ "$n" -ne 37 ]; then
+            echo "::error::gccanon-attach ran $n assertions, expected 37 (selftest 1..5 + phases 1..10 / 1..11 / 1..11 for 1, 2 and 3 GCs per call-out window). A phase did not run, or the lane changed shape — if the change is intended, update this count."
+            exit 1
+          fi
+          echo "gccanon-attach: 37/37 assertions — pure selftest + live 1, 2 and 3 GCs per call-out window."
+
   # Optional hardware-assisted trace tier. The live capture backends (Intel PT,
   # ARM CoreSight, AMD LBR) need bare-metal hardware that GitHub-hosted runners do
   # not expose, so they self-skip — but the AMD branch-record RECONSTRUCTION is
@@ -533,10 +583,22 @@ jobs:
   # Python (ctypes) + C++ (header-only) need only Capstone + the stock ubuntu
   # python3/g++; the Node (koffi) binding is exercised in the docker bindings
   # lane, matching this repo's node-in-docker pattern.
+  #
+  # This job ran ONLY the two binding smokes for a long time, which left the C suite the
+  # bindings sit on top of — test_dataflow, test_dataflow_method, test_dataflow_gcmove,
+  # test_dataflow_helpers, test_operands, test_dataflow_emu and test_dataflow_ptrace — with no
+  # CI gate at all, plus F1 increment 1's block-step suite, which was not even wired into the
+  # `dataflow-test` aggregate. The C suite is added below through the docker-dataflow-attach
+  # lane rather than the host toolchain, because the lane's image is what makes the run
+  # NON-vacuous: it installs libunicorn (so test_dataflow_emu and the block-step oracle compare
+  # for real instead of taking their no-unicorn SKIP) and runs with seccomp=unconfined (so the
+  # PTRACE_SEIZE attach path in test_dataflow_ptrace actually EXECUTES instead of self-skipping
+  # DF_PTRACE_ETRACE). The host runner has neither, so a host `make dataflow-test` would skip
+  # exactly the parts most worth gating. Verified locally: 8 suites, 257 assertions, 0 skips.
   dataflow:
     name: dataflow (analysis lib + bindings)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
 
@@ -547,6 +609,49 @@ jobs:
         run: |
           make WERROR=1 dataflow-python-test
           make WERROR=1 dataflow-cpp-test
+
+      # The C suite under the analysis lib, in the one image where none of it self-skips:
+      # unicorn present (emulator oracle) + seccomp=unconfined (live PTRACE_SEIZE attach).
+      # Includes F1 increment 1's block-step suite, now chained into the dataflow-test
+      # aggregate (mk/dataflow.mk).
+      - name: Build + run the C data-flow suite (incl. F1 inc 1 block-step) in the attach lane
+        run: |
+          set -o pipefail
+          make docker-dataflow-attach 2>&1 | tee /tmp/dataflow-attach.log
+
+      # Same anti-vacuity posture as the gccanon-attach gate: every suite here degrades to a
+      # clean SKIP rather than a failure when its dependency is missing, so "green" alone
+      # proves nothing. Assert the skips did NOT happen.
+      - name: Assert the C suite really ran (nothing self-skipped) and every assertion passed
+        run: |
+          log=/tmp/dataflow-attach.log
+          if grep -q '^# SKIP' "$log"; then
+            echo "::error::the data-flow C suite SELF-SKIPPED — the gate tested less than it claims:"
+            grep '^# SKIP' "$log"
+            exit 1
+          fi
+          if grep -q '^not ok' "$log"; then
+            echo "::error::the data-flow C suite reported FAILING assertions:"
+            grep '^not ok' "$log"
+            exit 1
+          fi
+          # F1 increment 1 specifically: its lane self-skips without unicorn, and it was an
+          # orphan (defined but never called) before being chained into dataflow-test. If this
+          # banner is gone, the chain broke and the increment is unguarded again.
+          if ! grep -q '^== dataflow-blockstep-test ==' "$log"; then
+            echo "::error::dataflow-blockstep-test did not run — F1 increment 1 (block-step vs. the single-step oracle) is UNGATED. Check that dataflow-test still chains it (mk/dataflow.mk)."
+            exit 1
+          fi
+          # A floor, not an exact count: new assertions should not break the gate, but a
+          # truncated or half-run suite must not pass. 257 across 8 suites at the time of
+          # writing (test_dataflow 23, method 29, gcmove 26, helpers 36, operands 20, emu 10,
+          # ptrace 91, blockstep 22).
+          n=$(grep -c '^ok ' "$log" || true)
+          if [ "$n" -lt 250 ]; then
+            echo "::error::the data-flow C suite ran only $n assertions, expected >= 250 — a suite is missing or the run was truncated."
+            exit 1
+          fi
+          echo "data-flow C suite: $n assertions across 8 suites, no skips, block-step included."
 
   # The remaining seven data-flow language bindings, each run in the pinned toolchain
   # image it was validated in (a `docker run` on the host runner — checkout stays on the

@@ -297,6 +297,12 @@ else
 	@echo "# SKIP test_dataflow_emu: no libunicorn (make deps DEPS_ARGS=--emu)"
 endif
 	$(BUILD)/test_dataflow_ptrace
+# F1 increment 1 (PTRACE_SINGLEBLOCK block-stepping, byte-identical to the single-step oracle)
+# shipped its own lane but was left OUT of this aggregate, so it had no gate. Chained as a
+# sub-make (like dataflow-grep-gate above) rather than repeated as another ifeq block: the
+# dataflow-blockstep-test target ALREADY carries the DF_HAVE_UNICORN gate and its own clean
+# SKIP, so calling it keeps that gate in ONE place instead of a copy here that can drift.
+	$(MAKE) --no-print-directory dataflow-blockstep-test
 
 # Phase 0 exit-criterion grep gate: the operand enumerator must hold ONE persistent
 # csh, never a per-op cs_open in the hot path — so exactly one cs_open call site.
