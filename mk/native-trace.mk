@@ -2812,3 +2812,195 @@ install-shared-drtrace: shared-drtrace
 	cp include/asmtest_drtrace.h include/asmtest_trace.h $(incdir)/
 	@echo "installed shared libasmtest_drapp $(ASMTEST_VERSION) to $(libdir)"
 
+
+# --- F4 GC-FENCE FREEZE probe: does a single-stepped managed thread retire ZERO ---------------
+# instructions across a GC fence? (live-attach-dataflow-followup-plan.md F4; findings in
+# docs/internal/analysis/f4-gc-fence-freeze-probe-findings.md.)
+#
+# F4 stamps each MovedReferences2 {old,new,len} triple with an asmtest_gcmove_t.step — an index into
+# the value trace's insn_off[], i.e. how many in-region instructions the tracer has recorded so far.
+# The design's load-bearing claim is that the GC fence suspends the EE so completely that a
+# ptrace-single-stepped managed thread retires NOTHING across it, so the step counter is frozen and
+# the boundary can be read AT DRAIN TIME. This lane MEASURES that instead of assuming it: an
+# attach-mode profiler samples the tracer's live step counter at both ends of TWO windows —
+# GarbageCollectionStarted..Finished (the GC as a profiler sees it, which is what drain-time
+# stamping would be stamping against) and RuntimeSuspendFinished..RuntimeResumeStarted (where the EE
+# is literally, fully parked). S1-S0 is the answer; zero => drain-time stamping is exact, non-zero
+# => F4 must stamp with the profiler-sampled S0 (robust either way, so a non-zero result REFINES the
+# design rather than killing it). /proc/<tid>/{stat,wchan,syscall} sampling plus PTRACE_GETREGS RIP
+# sampling say WHY (parked in a futex vs. running, and in whose code).
+#
+# NO DynamoRIO — this is the out-of-band ptrace tier. Needs the .NET SDK + a C/C++ toolchain + git
+# (the pinned CoreCLR profiler headers, shared with the gcprofiler/attachprof probes) and
+# CAP_SYS_PTRACE at run time (it ptrace-attaches to a SIBLING process — see
+# `docker-gcfence-probe`). The body of `make docker-gcfence-probe`.
+GCFENCE_CLSID          ?= {D7E5F4A3-4444-5555-6666-777788889999}
+# A burst must be long enough to CONTAIN a whole GC: while a managed thread is single-stepped the
+# runtime needs ~1.3M stepped instructions (seconds of wall clock, microseconds of native work) just
+# to park it, so a short burst ends mid-suspension and every window then closes against a DEAD
+# counter — which reads as a false zero. Hence 20s bursts, and traced_close=1 as a hard filter.
+GCFENCE_VICTIM_SECONDS ?= 70
+GCFENCE_STEP_SECONDS   ?= 20
+GCFENCE_BURSTS         ?= 2
+# The traced worker's shape is the PHASE selector, and it is not a detail: the two shapes give
+# genuinely different answers, so the lane runs BOTH and neither is allowed to stand for the other.
+#   ALLOC=1  an ALLOCATING managed hot loop. The runtime cannot park it at all while it is stepped
+#            (it livelocks on SIGRTMIN activation injection), so no fence ever CLOSES and the whole
+#            process's GC stalls until the tracer detaches. Nothing to sample => the S1-S0 question
+#            is moot here, and the stall is the finding.
+#   ALLOC=0  a PURE-COMPUTE managed hot loop. It parks in ~1.5k stepped instructions, fences do
+#            complete while stepping, and S1-S0 is measurable — this is the phase that ANSWERS the
+#            question the probe was built for.
+GCFENCE_WORKER_ALLOC   ?= 1
+GCFENCE_PHASE          ?= ?
+GCFENCE_SHM_FILE       := /dev/shm/asmtest_gcfence_probe
+# PARSE-time tool gate, like `attachprof-probe` and NOT like the DR lanes: `command -v X || { echo
+# SKIP; exit 0; }` written as a recipe LINE only exits that one line's shell, so make cheerfully
+# runs the next line; that idiom is only sound behind an `ifndef DR_AVAILABLE` short-circuit, and
+# this lane has no DR gate. Hence GCFENCE_MISSING.
+GCFENCE_MISSING :=
+ifeq ($(shell command -v $(DOTNET) >/dev/null 2>&1 && echo y),)
+GCFENCE_MISSING += dotnet-SDK
+endif
+ifeq ($(shell command -v git >/dev/null 2>&1 && echo y),)
+GCFENCE_MISSING += git(for-the-CoreCLR-profiler-headers)
+endif
+# The lane proper: both phases, each a self-contained TAP block (the sibling probe images run
+# several lanes per CMD the same way).
+.PHONY: gcfence-probe
+gcfence-probe:
+ifneq ($(GCFENCE_MISSING),)
+	@echo "== gcfence-probe =="
+	@echo "# SKIP: not found: $(GCFENCE_MISSING)"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) --no-print-directory gcfence-probe-phase GCFENCE_WORKER_ALLOC=1 \
+	   GCFENCE_PHASE="A: ALLOCATING managed hot loop"
+	@echo ""
+	@$(MAKE) --no-print-directory gcfence-probe-phase GCFENCE_WORKER_ALLOC=0 \
+	   GCFENCE_PHASE="B: PURE-COMPUTE managed hot loop"
+endif
+
+.PHONY: gcfence-probe-phase
+gcfence-probe-phase:
+ifneq ($(GCFENCE_MISSING),)
+	@echo "== gcfence-probe-phase =="
+	@echo "# SKIP: not found: $(GCFENCE_MISSING)"
+	@echo "1..0 # skipped"
+else
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/.gcfence_skip
+	@if [ ! -f $(GCPROBE_RT)/src/coreclr/pal/prebuilt/inc/corprof.h ]; then \
+	   echo "# fetching CoreCLR profiler headers (dotnet/runtime $(GCPROBE_RT_TAG))..."; \
+	   rm -rf $(GCPROBE_RT); \
+	   git clone --depth 1 --filter=blob:none --sparse -b $(GCPROBE_RT_TAG) https://github.com/dotnet/runtime $(GCPROBE_RT) >/dev/null 2>&1 \
+	     && git -C $(GCPROBE_RT) sparse-checkout set src/coreclr/pal/inc src/coreclr/pal/prebuilt/inc src/coreclr/inc >/dev/null 2>&1 \
+	     || { echo "== gcfence-probe =="; echo "# SKIP: could not fetch CoreCLR headers (no network?)"; echo "1..0 # skipped"; touch $(BUILD)/.gcfence_skip; }; \
+	 fi
+	@[ -f $(BUILD)/.gcfence_skip ] && exit 0; \
+	 R=$(abspath $(GCPROBE_RT))/src/coreclr; \
+	 $(CXX) -std=c++17 -shared -fPIC -o $(BUILD)/libgcfenceprof.so examples/gcfence_probe/gcfenceprof.cpp \
+	   -DPAL_STDCPP_COMPAT -DHOST_UNIX -DHOST_64BIT -DHOST_AMD64 -DTARGET_UNIX -DTARGET_64BIT -DTARGET_AMD64 \
+	   -DBIT64 -DUNIX -DPLATFORM_UNIX -DFEATURE_PAL \
+	   -I$$R/pal/inc/rt -I$$R/pal/inc -I$$R/pal/prebuilt/inc -I$$R/inc -Iinclude -Iexamples/gcfence_probe \
+	   -lrt || { echo "# gc-fence profiler build failed"; exit 1; }
+	@[ -f $(BUILD)/.gcfence_skip ] && exit 0; \
+	 $(CC) -O2 -g -Wall -Wextra -o $(BUILD)/gcfence_stepper examples/gcfence_probe/gcfence_stepper.c \
+	   -Iexamples/gcfence_probe -lpthread -lrt || { echo "# gc-fence stepper build failed"; exit 1; }
+	@[ -f $(BUILD)/.gcfence_skip ] && exit 0; \
+	 rm -rf $(BUILD)/gcfence_victim_out $(BUILD)/gcfence_attacher_out; \
+	 $(DOTNET) build -c Release examples/gcfence_probe/victim/victim.csproj -o $(BUILD)/gcfence_victim_out \
+	    >$(BUILD)/gcfence_victim_build.log 2>&1 || { echo "# victim dotnet build failed:"; tail -15 $(BUILD)/gcfence_victim_build.log; exit 1; }
+	@[ -f $(BUILD)/.gcfence_skip ] && exit 0; \
+	 $(DOTNET) build -c Release examples/gcfence_probe/attacher/attacher.csproj -o $(BUILD)/gcfence_attacher_out \
+	    >$(BUILD)/gcfence_attacher_build.log 2>&1 || { echo "== gcfence-probe =="; echo "# SKIP: could not build the attacher (Microsoft.Diagnostics.NETCore.Client restore failed — no network?):"; tail -8 $(BUILD)/gcfence_attacher_build.log | sed 's/^/#   /'; echo "1..0 # skipped"; touch $(BUILD)/.gcfence_skip; }
+	@[ -f $(BUILD)/.gcfence_skip ] && exit 0; \
+	 echo "== gcfence-probe phase $(GCFENCE_PHASE) (F4: does a single-stepped managed thread retire ZERO instructions across a GC fence?) =="; \
+	 vlog=$(BUILD)/gcfence_victim.log; alog=$(BUILD)/gcfence_attacher.log; slog=$(BUILD)/gcfence_stepper.log; \
+	 rm -f $$vlog $$alog $$slog $(GCFENCE_SHM_FILE); \
+	 env -u CORECLR_ENABLE_PROFILING -u CORECLR_PROFILER -u CORECLR_PROFILER_PATH \
+	     GCFENCE_VICTIM_SECONDS=$(GCFENCE_VICTIM_SECONDS) GCFENCE_WORKER_ALLOC=$(GCFENCE_WORKER_ALLOC) \
+	     $(DOTNET) $(abspath $(BUILD)/gcfence_victim_out/gcfence_victim.dll) >$$vlog 2>&1 & lpid=$$!; \
+	 vpid=""; wtid=""; \
+	 for t in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+	   vpid=$$(sed -n 's/.*GCFENCE_VICTIM_START pid=\([0-9]*\).*/\1/p' $$vlog 2>/dev/null | head -1); \
+	   wtid=$$(sed -n 's/.*GCFENCE_VICTIM_WORKER tid=\([0-9]*\).*/\1/p' $$vlog 2>/dev/null | head -1); \
+	   [ -n "$$vpid" ] && [ -n "$$wtid" ] && break; sleep 1; \
+	 done; \
+	 if [ -z "$$vpid" ] || [ -z "$$wtid" ]; then echo "not ok 1 - plain dotnet victim never reported pid/worker tid (pid='$$vpid' tid='$$wtid')"; \
+	   kill $$lpid 2>/dev/null; echo "1..1"; echo "GC-FENCE FREEZE PROBE INCONCLUSIVE — victim failed to start"; exit 1; fi; \
+	 sleep 2; \
+	 echo "# plain victim pid=$$vpid managed worker tid=$$wtid (no CORECLR_* env)"; \
+	 echo "# ORDER: profiler FIRST (attach travels the diagnostics IPC socket, which needs a RUNNING runtime), ptrace stepper SECOND"; \
+	 $(DOTNET) $(abspath $(BUILD)/gcfence_attacher_out/gcfence_attacher.dll) \
+	     $$vpid '$(GCFENCE_CLSID)' $(abspath $(BUILD)/libgcfenceprof.so) 30 >$$alog 2>&1; arc=$$?; \
+	 sed 's/^/#   /' $$alog; \
+	 complete=0; \
+	 for t in 1 2 3 4 5 6 7 8 9 10; do \
+	   complete=$$(grep -c 'ProfilerAttachComplete' $$vlog 2>/dev/null || true); [ -z "$$complete" ] && complete=0; \
+	   [ "$$complete" -ge 1 ] && break; sleep 1; \
+	 done; \
+	 pre_gc=$$(grep -c '^GCFENCEPROF: GCWINDOW' $$vlog 2>/dev/null || true); [ -z "$$pre_gc" ] && pre_gc=0; \
+	 echo "# profiler attach_complete=$$complete, $$pre_gc GC windows already observed WITHOUT a tracer; now $(GCFENCE_BURSTS) ptrace burst(s) of $(GCFENCE_STEP_SECONDS)s on tid=$$wtid ..."; \
+	 $(BUILD)/gcfence_stepper $$vpid $$wtid $(GCFENCE_STEP_SECONDS) $(GCFENCE_BURSTS) >$$slog 2>&1; src=$$?; \
+	 sed 's/^/#   /' $$slog; \
+	 wait $$lpid 2>/dev/null; vrc=$$?; \
+	 accepted=$$(grep -c 'AttachProfiler ACCEPTED' $$alog 2>/dev/null || true); [ -z "$$accepted" ] && accepted=0; \
+	 ifa=$$(grep -c 'InitializeForAttach ENTERED' $$vlog 2>/dev/null || true); [ -z "$$ifa" ] && ifa=0; \
+	 maskok=$$(grep -c 'InitializeForAttach — SetEventMask.*(S_OK)' $$vlog 2>/dev/null || true); [ -z "$$maskok" ] && maskok=0; \
+	 steps=$$(sed -n 's/^GCFENCE_STEPS total=\([0-9]*\).*/\1/p' $$slog | head -1); [ -z "$$steps" ] && steps=0; \
+	 sfail=$$(grep -c '^GCFENCE_STEPPER_FAIL' $$slog 2>/dev/null || true); [ -z "$$sfail" ] && sfail=0; \
+	 ended=$$(grep -c GCFENCE_VICTIM_END $$vlog 2>/dev/null || true); [ -z "$$ended" ] && ended=0; \
+	 crash=$$(grep -icE 'stack smashing|SIGSEGV|SIGILL|SIGABRT|Segmentation fault|Fatal error|double free|core dumped' $$vlog 2>/dev/null || true); [ -z "$$crash" ] && crash=0; \
+	 signame=none; if [ "$$vrc" -gt 128 ]; then n=$$((vrc-128)); \
+	   case $$n in 11) signame=SIGSEGV;; 6) signame=SIGABRT;; 5) signame=SIGTRAP;; 4) signame=SIGILL;; 9) signame=SIGKILL;; *) signame=SIG$$n;; esac; fi; \
+	 stats=$$(awk '/^GCFENCE_REC/ { delete f; for (i = 2; i <= NF; i++) { split($$i, kv, "="); f[kv[1]] = kv[2] } \
+	                d = f["delta"] + 0; \
+	                if (f["traced"] == "1" && f["traced_close"] == "0") { st++; u = f["us"] + 0; if (u > stmx) stmx = u } \
+	                if (f["traced"] != "1" || f["traced_close"] != "1") next; \
+	                if (f["kind"] == "GCWINDOW") { g++; gs += d; if (d != 0) gnz++; if (d > gmx) gmx = d; if (f["reloc"] + 0 > 0) gr++ } \
+	                else if (f["kind"] == "SUSPEND") { s++; ss += d; if (d != 0) snz++; if (d > smx) smx = d } } \
+	              END { printf "%d %d %d %d %d %d %d %d %d %d %d", g+0, gnz+0, gmx+0, gs+0, gr+0, s+0, snz+0, smx+0, ss+0, st+0, stmx+0 }' $$slog); \
+	 set -- $$stats; gcn=$$1; gcnz=$$2; gcmx=$$3; gcsum=$$4; gcreloc=$$5; sn=$$6; snz=$$7; smx=$$8; ssum=$$9; stall=$${10}; stallmax=$${11}; \
+	 any_reloc=$$(awk '/^GCFENCEPROF: GCWINDOW/ { for (i = 2; i <= NF; i++) { split($$i, kv, "="); if (kv[1] == "reloc" && kv[2] + 0 > 0) n++ } } END { print n+0 }' $$vlog); \
+	 where=$$(grep -m1 '^GCFENCE_WHERE' $$slog | sed 's/^GCFENCE_WHERE //'); \
+	 sigline=$$(grep -m1 'signals forwarded to the traced thread:' $$slog | sed 's/^# *//'); \
+	 echo "# --- THE MEASUREMENT (only windows that both OPENED and CLOSED while the tracer was stepping count: any other reads a dead counter at one end) ---"; \
+	 grep '^GCFENCE_REC' $$slog | grep 'traced=1 traced_close=1' | sed 's/^/#   /'; \
+	 echo "# GC windows (GarbageCollectionStarted..Finished) that opened AND closed while stepping: $$gcn ($$gcreloc with relocating ranges); S1-S0 != 0 on $$gcnz of them; max=$$gcmx sum=$$gcsum"; \
+	 echo "# EE-suspended windows (RuntimeSuspendFinished..RuntimeResumeStarted) that opened AND closed while stepping: $$sn; S1-S0 != 0 on $$snz of them; max=$$smx sum=$$ssum"; \
+	 echo "# windows that OPENED while stepping but could NOT close until the tracer let go: $$stall (longest $$stallmax us) — the STALL"; \
+	 echo "# where the stepped instructions went: $$where"; \
+	 echo "# $$sigline  (sig34 = SIGRTMIN, CoreCLR's activation-injection signal — the runtime trying to park the thread)"; \
+	 echo "# SUMMARY: attacher_rc=$$arc accepted=$$accepted init_for_attach=$$ifa mask_s_ok=$$maskok attach_complete=$$complete steps=$$steps stepper_rc=$$src stepper_fail=$$sfail measured_gc_windows=$$gcn gc_nonzero=$$gcnz gc_max_delta=$$gcmx measured_ee_windows=$$sn ee_nonzero=$$snz ee_max_delta=$$smx stalled_windows=$$stall stall_max_us=$$stallmax reloc_gc_windows=$$any_reloc victim_end=$$ended crash=$$crash victim_rc=$$vrc ($$signame)"; \
+	 fail=0; \
+	 if [ "$$accepted" -ge 1 ] && [ "$$ifa" -ge 1 ] && [ "$$maskok" -ge 1 ] && [ "$$complete" -ge 1 ]; then \
+	   echo "ok 1 - profiler attached to the RUNNING victim over the diagnostics port; SetEventMask(COR_PRF_MONITOR_GC|COR_PRF_MONITOR_SUSPENDS) S_OK (both windows observable)"; \
+	   else echo "not ok 1 - profiler attach failed (rc=$$arc accepted=$$accepted ifa=$$ifa mask=$$maskok complete=$$complete) — cannot measure"; fail=1; fi; \
+	 if [ "$$sfail" -eq 0 ] && [ "$$steps" -gt 0 ]; then \
+	   echo "ok 2 - ptrace stepper attached to the managed worker thread AFTER the profiler and drove $$steps single-steps (the diagnostics thread serviced the attach with a stepper pending)"; \
+	   else echo "not ok 2 - stepper could not single-step the managed worker (steps=$$steps rc=$$src) — see the log above"; fail=1; fi; \
+	 if [ "$$any_reloc" -ge 1 ] && [ $$(($$gcn + $$sn + $$stall)) -ge 1 ]; then \
+	   echo "ok 3 - not vacuous: the feed is live ($$any_reloc GC windows delivered ranges that ACTUALLY relocated, old != new) and $$(($$gcn + $$sn + $$stall)) fence window(s) opened while the worker was being single-stepped"; \
+	   else echo "not ok 3 - the stepped thread and the GC fence never interacted (reloc_windows=$$any_reloc measured=$$(($$gcn + $$sn)) stalled=$$stall) — nothing was measured"; fail=1; fi; \
+	 if [ $$(($$gcn + $$sn)) -ge 1 ] || [ "$$stall" -ge 1 ]; then \
+	   echo "ok 4 - the fence/step-counter interaction is MEASURED: $$gcn GC + $$sn EE-suspended window(s) sampled at BOTH ends by the profiler, and $$stall window(s) that opened while stepping and could not close until detach (longest $$stallmax us)"; \
+	   else echo "not ok 4 - no window opened with a live step counter — the probe measured nothing"; fail=1; fi; \
+	 if [ "$$ended" -ge 1 ] && [ "$$vrc" -eq 0 ] && [ "$$crash" -eq 0 ]; then \
+	   echo "ok 5 - victim SURVIVED profiler attach + ptrace single-stepping of a managed thread + detach (rc=0, reached GCFENCE_VICTIM_END, no fatal signal)"; \
+	   else echo "not ok 5 - victim crashed/hung (end=$$ended rc=$$vrc/$$signame crash=$$crash) — a real finding: record it, do not paper over it"; fail=1; fi; \
+	 echo "1..5"; \
+	 if [ "$$fail" -ne 0 ]; then \
+	   echo "GC-FENCE FREEZE PROBE INCONCLUSIVE — a precondition above failed; the S1-S0 numbers (if any) are not trustworthy."; \
+	 elif [ $$(($$gcn + $$sn)) -eq 0 ] && [ "$$stall" -ge 1 ]; then \
+	   echo "GC-FENCE FREEZE VERDICT: MOOT — NO GC FENCE EVER COMPLETES WHILE A MANAGED THREAD IS SINGLE-STEPPED. $$stall suspension/GC window(s) opened while stepping and did NOT close until the tracer detached (longest $$stallmax us ~= the whole burst); the runtime hammered the stepped thread with SIGRTMIN activation injections and never reached RuntimeSuspendFinished. So the step counter cannot advance across a fence for the trivial reason that no fence spans your stepping — stamping is safe, but the tier stalls EVERY GC (and so every allocating thread) for as long as it steps. See the findings doc; this dominates the S1-S0 question."; \
+	 elif [ "$$gcnz" -eq 0 ] && [ "$$snz" -eq 0 ]; then \
+	   echo "GC-FENCE FREEZE VERDICT: HOLDS — S1-S0 == 0 on all $$gcn traced GC windows and all $$sn traced EE-suspended windows. The step counter does NOT advance across the fence, so F4's drain-time stamping of asmtest_gcmove_t.step is EXACT."; \
+	 elif [ "$$snz" -eq 0 ] && [ "$$sn" -ge 1 ]; then \
+	   echo "GC-FENCE FREEZE VERDICT: SPLIT — the EE-SUSPENDED window is frozen (S1-S0 == 0 on all $$sn of them), but the wider GC window is NOT ($$gcnz of $$gcn advanced, max=$$gcmx). GarbageCollectionStarted..Finished is NOT the suspended window, so DRAIN-TIME stamping is UNSOUND while a profiler-sampled S0 is exact. F4 must stamp asmtest_gcmove_t.step with the S0 captured at GarbageCollectionStarted."; \
+	 else \
+	   echo "GC-FENCE FREEZE VERDICT: FALSE — the step counter advanced across the fence ($$gcnz of $$gcn GC windows, max=$$gcmx; $$snz of $$sn EE-suspended windows, max=$$smx). Drain-time stamping is UNSOUND; F4 must stamp asmtest_gcmove_t.step with the profiler-sampled S0 (captured at GarbageCollectionStarted), which is correct either way."; \
+	 fi; \
+	 rm -f $(GCFENCE_SHM_FILE); \
+	 [ "$$fail" -eq 0 ]
+endif

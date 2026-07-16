@@ -338,6 +338,22 @@ docker-attachprof-probe:
 	  --build-arg BASE=$(DOCKER_BASE) -t asmtest-attachprof-probe .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-attachprof-probe
 
+# F4 GC-FENCE FREEZE MEASUREMENT probe (live-attach-dataflow-followup-plan.md F4). The attach probe
+# above proved the FEED; this one measures the assumption F4's STAMPING rests on: that the GC fence
+# suspends the EE so completely that a ptrace-single-stepped managed thread retires ZERO
+# instructions across it, so asmtest_gcmove_t.step (an index into insn_off[]) can be read at DRAIN
+# time. An attach-mode profiler samples the tracer's live step counter at GarbageCollectionStarted
+# (S0) and GarbageCollectionFinished (S1); S1-S0 is the verdict, and fence-time /proc state says
+# whether the thread is blocked or spinning. No DynamoRIO (out-of-band ptrace tier), but — UNLIKE
+# docker-attachprof-probe — it DOES need `--cap-add=SYS_PTRACE`, because the stepper ptrace-attaches
+# to a SIBLING process (mirroring docker-taint-attach-probe). Runs `make gcfence-probe`. See
+# docs/internal/analysis/f4-gc-fence-freeze-probe-findings.md.
+.PHONY: docker-gcfence-probe
+docker-gcfence-probe:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.gcfence-probe \
+	  --build-arg BASE=$(DOCKER_BASE) -t asmtest-gcfence-probe .
+	$(DOCKER) run --rm --cap-add=SYS_PTRACE $(_docker_plat) asmtest-gcfence-probe
+
 # MANAGED-ATTACH SAFEPOINT plan Increment-1 suspend-primitive probe. Same image shape as the
 # gcprofiler probe (DynamoRIO + .NET SDK + git for the CoreCLR profiler headers), no SYS_PTRACE
 # (launch, not attach): drives ICorProfilerInfo10::SuspendRuntime/ResumeRuntime cycles natively and

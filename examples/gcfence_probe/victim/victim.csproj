@@ -1,0 +1,16 @@
+<!-- Managed victim for the F4 GC-fence FREEZE probe (live-attach-dataflow-followup-plan.md F4;
+     findings in docs/internal/analysis/f4-gc-fence-freeze-probe-findings.md). A plain dotnet
+     process — NO CORECLR_* env vars — with a managed hot loop on an identifiable worker thread
+     (it publishes its gettid) plus a main thread forcing compacting gen2 GCs. The harness attaches
+     a profiler over the diagnostics port, then ptrace-single-steps the worker.
+     See mk/native-trace.mk `gcfence-probe`. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>gcfence_victim</AssemblyName>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+</Project>

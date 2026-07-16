@@ -1,0 +1,41 @@
+# Dockerfile.gcfence-probe — the F4 GC-FENCE FREEZE measurement probe
+# (docs/internal/plans/live-attach-dataflow-followup-plan.md F4; findings in
+# docs/internal/analysis/f4-gc-fence-freeze-probe-findings.md).
+#
+# F4 stamps every MovedReferences2 {old,new,len} triple with an asmtest_gcmove_t.step — an index
+# into the value trace's insn_off[], i.e. how many in-region instructions the tracer has recorded so
+# far. The design's load-bearing claim is that a GC fence suspends the EE so completely that a
+# ptrace-single-stepped managed thread retires ZERO instructions across it, so the step counter is
+# frozen and can be read AT DRAIN TIME. This lane MEASURES that: an attach-mode CLR profiler samples
+# the tracer's live step counter at GarbageCollectionStarted (S0) and GarbageCollectionFinished
+# (S1); S1-S0 is the answer, and /proc/<tid>/{stat,wchan,syscall} sampling during the fence says
+# whether the thread is BLOCKED or SPINNING, i.e. why.
+#
+# Deliberately NO DynamoRIO: this is the out-of-band ptrace tier. The image is the .NET SDK + a
+# C/C++ toolchain + git (the pinned CoreCLR profiler headers cor.h/corprof.h + the PAL from
+# dotnet/runtime). Linux x86-64 only. UNLIKE Dockerfile.attachprof-probe this lane DOES need
+# --cap-add=SYS_PTRACE, because it ptrace-attaches to a SIBLING process (the profiler attach itself
+# still travels the diagnostics IPC socket, not ptrace) — see `docker-gcfence-probe` in mk/docker.mk.
+# Build + run:  make docker-gcfence-probe
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential pkg-config curl ca-certificates git \
+      dotnet-sdk-8.0 \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+# Builds the measuring attach-mode profiler, the minimal standalone ptrace stepper, a PLAIN
+# managed-hot-loop + compacting-GC victim (started with NO CORECLR_* env vars), and the
+# Microsoft.Diagnostics.NETCore.Client attacher; starts the victim, attaches the profiler MID-RUN,
+# THEN single-steps the managed worker thread, and reports S1-S0 per GC fence.
+# Self-skips cleanly if any prerequisite is absent, but here all are installed, so it executes.
+CMD set -eux; \
+    make gcfence-probe
