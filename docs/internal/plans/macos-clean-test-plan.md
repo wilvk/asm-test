@@ -6,7 +6,20 @@ native lib is the *only* thing that can satisfy the load — never a leaked dev
 Darwin arches** (arm64 + x86-64), without depending on the scarce/slow hosted
 Intel runner for the day-to-day signal.
 
-> Status legend: **done** / **planned**. Update as tracks land.
+> Status legend: **done** / **written per spec, UNVALIDATED** (code exists, lane has
+> never run — first run is a shakedown) / **planned**. Update as tracks land.
+
+> **Status (2026-07-16): 3 of 5 tracks done — A, B, E.** The hosted-CI story is
+> complete and gating: Track A (scrubbed-env smoke + resolved-path assert) over all
+> six dlopen bindings, Track B (static Mach-O checks on the Linux collector), Track E
+> (CI wiring + docs). The two remaining tracks are *additive clean-room backstops*,
+> both written-but-never-run, and they are blocked on **different** things — the
+> distinction that matters most when picking one up:
+>
+> - **Track D (x86 Docker-OSX) needs no Apple hardware** and `/dev/kvm` is present on
+>   the current dev host — its only real gate is fetching a prebuilt `darwin-x86_64`
+>   payload. **Try this one first.**
+> - **Track C (arm64 tart) is genuinely Apple-Silicon-gated** and cannot run here.
 
 ---
 
@@ -166,15 +179,20 @@ install-name) at **build time**, on the existing Linux collector — no macOS ne
   per-OS payload on `ubuntu-latest`; it carries `llvm` tools, so these assertions run
   there for free and gate the merged tree before it's published.
 
-## Track C — tart ephemeral arm64 clean-room — **written per spec (2026-07-07), UNVALIDATED**
+## Track C — tart ephemeral arm64 clean-room — **written per spec (2026-07-07), UNVALIDATED — needs Apple Silicon**
 
-> **Status: written, never executed.** [`scripts/osx-vm.sh`](../../../scripts/osx-vm.sh)
-> + `make osx-vm-test` implement the spec below (clone → headless boot → copy the
-> tree with host-staged packages in → run the Track-A test over SSH with
-> `ASMTEST_CLEANROOM_PREBUILT=1` — the vanilla guest is toolchain-free, so
-> packaging stays on the host — → delete). **No Apple-Silicon host with tart was
-> available where this was authored, so the lane has never run**; treat the first
-> run as a shakedown and flip this status to *done* when it goes green.
+> **Status: written, never executed. Blocked on Apple hardware** (the only track
+> that genuinely is — contrast Track D, which is runnable on a Linux box today).
+> tart is built on Apple's `Virtualization.framework` and is **Apple-Silicon-only**;
+> there is no substitute host, so this lane cannot run here at all.
+>
+> [`scripts/osx-vm.sh`](../../../scripts/osx-vm.sh) + `make osx-vm-test` implement
+> the spec below (clone → headless boot → copy the tree with host-staged packages
+> in → run the Track-A test over SSH with `ASMTEST_CLEANROOM_PREBUILT=1` — the
+> vanilla guest is toolchain-free, so packaging stays on the host — → delete).
+> **No Apple-Silicon host with tart was available where this was authored, so the
+> lane has never run**; treat the first run as a shakedown and flip this status to
+> *done* when it goes green.
 
 The highest-fidelity arm64 clean room: a **vanilla macOS image with no Xcode/Homebrew**,
 reverted between runs — something a hosted runner structurally cannot be. Local on any
@@ -191,18 +209,32 @@ Apple-Silicon box; optionally a self-hosted CI lane.
 - **EULA note in the doc** — macOS's license permits up to **2 macOS VMs on Apple
   hardware**, so tart-on-Mac is above board (unlike Track D on non-Apple hosts).
 
-## Track D — Docker-OSX x86 clean-room — **written per spec (2026-07-07), UNVALIDATED**
+## Track D — Docker-OSX x86 clean-room — **written per spec (2026-07-07), UNVALIDATED — NOT Mac-gated**
 
-> **Status: written, never executed.**
+> **Status: written, never executed. This lane needs NO Apple hardware** — it runs
+> a macOS guest on Linux under KVM. Unlike Track C, nothing about it is
+> Apple-Silicon-gated; it is the *cheaper* of the two unvalidated lanes to bring
+> up, and it is the one to try first.
+>
+> **Two prerequisites, both satisfiable here (verified 2026-07-16):**
+> 1. **Bare-metal Linux + `/dev/kvm`** — **present on the current dev host**, so
+>    the `HAVE_KVM` guard passes and the lane is launchable today. (Confirmed by
+>    the device node's existence; nested/virtualised KVM may still underperform or
+>    fail at boot — part of what the shakedown finds out.)
+> 2. **A prebuilt `darwin-x86_64` payload** — the one thing a Linux host *cannot*
+>    produce. Fetch a release `native-all` artifact (or build it on an Intel mac)
+>    and run with `ASMTEST_CLEANROOM_PREBUILT=1`. This is the only real gating
+>    step, and it is a download, not hardware.
+>
 > [`scripts/docker-osx-bindings.sh`](../../../scripts/docker-osx-bindings.sh) +
 > `make docker-osx-bindings` ([mk/docker.mk](../../../mk/docker.mk)) implement the
 > spec below, including the `HAVE_KVM` guard (the target hard-errors with a clear
 > message when `/dev/kvm` is absent) and the `make help` + docs tradeoff notes.
 > Like Track C it copies host-staged packages in and runs the Track-A test with
-> `ASMTEST_CLEANROOM_PREBUILT=1` (a Linux host cannot build the darwin-x86_64
-> payload — fetch a release `native-all` artifact or build it on an Intel mac).
-> **No bare-metal KVM host was available where this was authored, so the lane has
-> never run**; treat the first run as a shakedown and flip this status when green.
+> `ASMTEST_CLEANROOM_PREBUILT=1`. **No bare-metal KVM host was available where this
+> was authored, so the lane has never run**; treat the first run as a shakedown
+> (Docker-OSX is a brittle virtualised-Hackintosh path — see the tradeoffs below)
+> and flip this status when green.
 
 On-demand **x86 macOS** clean room that doesn't wait on the scarce nightly `macos-13`
 runner. **Self-hosted bare-metal Linux only** (needs `/dev/kvm`; GitHub hosted runners
@@ -234,11 +266,15 @@ convention.
 > docs-site Guides list) with cross-links from
 > [portability.md](../../reference/portability.md), [packaging.md](../../reference/packaging.md),
 > and [ci.md](../../reference/ci.md), plus a `make help` "Clean-room (macOS)" section.
-> **Exceptions:** (1) the optional self-hosted CI lanes for Tracks C/D are *not*
+> **Exception:** the optional self-hosted CI lanes for Tracks C/D are *not*
 > wired — those tracks are written but unvalidated and this repo registers no
 > self-hosted runners, so a `workflow_dispatch` job would only queue forever; add
-> them once a runner exists and the lanes have run green. (2) the CHANGELOG entry
-> is deferred to the next release cut.
+> them once a runner exists and the lanes have run green.
+>
+> *(Update 2026-07-16: this block previously listed a second exception — "the
+> CHANGELOG entry is deferred to the next release cut". That is **done**: the
+> `macOS clean-room plan — Track E finished, Tracks C/D written` entry is in
+> `CHANGELOG.md` under `[Unreleased]`.)*
 
 - **Free lanes on hosted CI:** Track A (scrubbed smoke + path assert) into
   [`release.yml`](../../../.github/workflows/release.yml) and the

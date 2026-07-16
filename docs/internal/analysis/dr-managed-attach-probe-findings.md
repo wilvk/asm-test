@@ -120,7 +120,7 @@ Three findings that sharpen the diagnosis and rule out the easy fixes:
 is fundamental (seizing arbitrary managed thread state), not a narrow segment bug or a bad build.
 The only credible path left was **Option 2: park all managed threads at GC-safe points *before* the
 seize** — planned + then EXECUTED as a spike
-([dynamorio-managed-attach-safepoint-plan.md](../plans/dynamorio-managed-attach-safepoint-plan.md)).
+([dynamorio-managed-attach-safepoint-plan.md](../archive/plans/dynamorio-managed-attach-safepoint-plan.md)).
 
 ## Option-2 safepoint spike — EXECUTED, also NO-GO (2026-07-14)
 

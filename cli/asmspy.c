@@ -9,7 +9,7 @@
  *   asmspy --list [active|scan]       list attachable processes
  *   asmspy --syms   <pid> [filter]    list resolved function symbols
  *   asmspy --log    <pid> [n]         stream n syscalls with data (a mini strace)
- *   asmspy --trace  <pid> <sym> [n]   n live samples: disassembly + functions called
+ *   asmspy --trace  <pid> <sym> [n] [--tid=<t>]  n live samples: disassembly + functions called
  *   asmspy --dataflow <pid> <sym|0xADDR[:LEN]> [--json] [--tid=<t>] [--max=<n>]
  *                                     scoped L0 value trace + L1 def-use of one invocation
  *   asmspy --stream <pid> [n] [--tid=<t>]   stream n instructions live (function + asm)
@@ -1324,7 +1324,7 @@ static int resolve_region(const asmspy_symtab_t *t, const char *arg,
     return 0;
 }
 
-static int cmd_trace(pid_t pid, const char *sym, long n) {
+static int cmd_trace(pid_t pid, const char *sym, pid_t only_tid, long n) {
     asmspy_symtab_t t;
     if (asmspy_symtab_load(pid, &t) < 0) {
         fprintf(stderr, "cannot read symbols for pid %d\n", (int)pid);
@@ -1343,16 +1343,26 @@ static int cmd_trace(pid_t pid, const char *sym, long n) {
     }
     fprintf(stderr, "tracing %s @ 0x%llx (%zu bytes) in pid %d\n", sym,
             (unsigned long long)base, len, (int)pid);
-    int rc =
-        asmspy_engine_region(pid, base, len, n, NULL, region_print_sink, &t);
+    int rc = asmspy_engine_region(pid, only_tid, base, len, n, NULL,
+                                  region_print_sink, &t);
     if (rc == ASMSPY_REGION_NEVER_RAN) {
-        fprintf(stderr,
-                "%s never executed while traced in pid %d\n"
-                "  --trace follows only the main thread; if the target is "
-                "multi-threaded the\n"
-                "  function may run on a worker thread (--stream follows all "
-                "threads)\n",
-                sym, (int)pid);
+        /* The engine races EVERY thread to the entry, so this is no longer the
+         * "it ran on a worker thread" case — it genuinely did not execute. */
+        if (only_tid)
+            fprintf(stderr,
+                    "%s never executed on thread %d while traced in pid %d\n"
+                    "  --tid=%d pins the sample to one thread; drop it to "
+                    "follow whichever\n"
+                    "  thread reaches %s first\n",
+                    sym, (int)only_tid, (int)pid, (int)only_tid, sym);
+        else
+            fprintf(stderr,
+                    "%s never executed while traced in pid %d\n"
+                    "  all threads were followed, so the region simply did not "
+                    "run in the\n"
+                    "  sample window — try a longer run, or a function the "
+                    "target actually calls\n",
+                    sym, (int)pid);
     } else if (rc != 0) {
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
@@ -2054,7 +2064,9 @@ static void *tracer_thread(void *arg) {
         rc = asmspy_engine_procs(L->pid, -1, &L->stop, L->count_mode,
                                  live_topo_sink, L);
     else
-        rc = asmspy_engine_region(L->pid, L->base, L->len, -1, &L->stop,
+        /* only_tid = 0: the view has no thread picker, so sample whichever
+         * thread reaches the region first (worker threads included). */
+        rc = asmspy_engine_region(L->pid, 0, L->base, L->len, -1, &L->stop,
                                   live_region_sink, L);
     pthread_mutex_lock(&L->mu);
     L->rc = rc;
@@ -4388,8 +4400,8 @@ static int usage(const char *argv0) {
         "scan=string-rich memory)\n"
         "  %s --syms   <pid> [filter] list resolved function symbols\n"
         "  %s --log    <pid> [n]      stream n syscalls with data\n"
-        "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n]  live samples of a "
-        "function/region\n"
+        "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n] [--tid=<t>]  live samples "
+        "of a function/region (any thread)\n"
         "  %s --dataflow <pid> <sym|0xADDR[:LEN]> [--json] [--tid=<t>] "
         "[--max=<n>]  scoped L0 value trace + L1 def-use of one invocation "
         "(native targets)\n"
@@ -4460,9 +4472,16 @@ int main(int argc, char **argv) {
         if (parse_pid(argv[2], &pid) != 0)
             return bad_arg("pid", argv[2]);
         n = 3;
-        if (argc >= 5 && parse_count(argv[4], &n) != 0)
-            return bad_arg("count", argv[4]);
-        return cmd_trace(pid, argv[3], n);
+        pid_t tid = 0;
+        for (int i = 4; i < argc; i++) { /* [n] and --tid= in any order */
+            if (strncmp(argv[i], "--tid=", 6) == 0) {
+                if (parse_pid(argv[i] + 6, &tid) != 0)
+                    return bad_arg("tid", argv[i] + 6);
+            } else if (parse_count(argv[i], &n) != 0) {
+                return bad_arg("count", argv[i]);
+            }
+        }
+        return cmd_trace(pid, argv[3], tid, n);
     }
     if (strcmp(argv[1], "--dataflow") == 0 && argc >= 4) {
         if (parse_pid(argv[2], &pid) != 0)

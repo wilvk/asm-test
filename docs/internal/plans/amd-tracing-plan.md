@@ -32,10 +32,28 @@ the same branch-edge normalization step. It is a **sibling** of the
 > Part I (the LBR snapshot backend, Phases 0–5) shipped; Part III Improvement
 > Phases 0–5 and 8–9 landed and are validated on the Zen 5 dev box, and Phase 7
 > (IBS-Op) is **superseded + landed** via
-> [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md). The single open item is
+> [zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-tracing-plan.md). The single open item is
 > **Improvement Phase 6 (BRS period-adjust)** — hardware-blocked on a Zen 3 host
 > neither dev box provides, per the house rule above — which is why this plan
 > stays in `plans/` rather than `archive/plans/` until that silicon is available.
+
+> **Amended 2026-07-16 — the deterministic snapshot is MULTI-exit now; several sections
+> below still say "single-exit".** Landed in `e9ca70e`: `hwtrace_begin_amd` plants **one HW
+> execution breakpoint per region exit, up to `ASMTEST_AMD_MAX_EXITS == 4`**
+> ([src/amd_backend.h:57](../../../src/amd_backend.h)) via `asmtest_amd_all_exits` +
+> `asmtest_amd_snapshot_begin_multi` ([src/amd_backend.h:69](../../../src/amd_backend.h)),
+> so **whichever** ret/tail-call a multi-exit routine leaves through hits a boundary. The
+> default-on gate is now `amd_nexit >= 1 && … amd_nexit <= ASMTEST_AMD_MAX_EXITS`
+> ([src/hwtrace.c:777-783](../../../src/hwtrace.c) — **not** `hwtrace.c:655`, the line this
+> plan cites throughout; the file has moved under it). A region with **>4** exits, or any
+> arm failure, still falls through to the sampled path unchanged. **This partly obsoletes
+> Improvement Phase 8's stated rationale** — the MSR rung is justified below as covering
+> "the multi-exit tiny routine the snapshot cannot", which now holds only for **>4**-exit
+> regions; the rung itself remains correct and shipped for that residual plus every
+> arm-failure fallback (see the amendment at Phase 8). The *hardware* status is unchanged:
+> **Improvement Phase 6 (BRS period-adjust) remains the one open item, hardware-blocked on
+> Zen 3 (Family 19h) BRS silicon** — the dev boxes are a Ryzen 9 9950X (Family 1Ah, Zen 5)
+> and a Ryzen 9 4900HS (Family 17h, Zen 2), so neither can validate it.
 
 ---
 
@@ -484,9 +502,9 @@ CPU do the block-stepping.
 | **P1** | **Consume LbrExtV2 `spec`/`valid` bits** before replay/stitch | [amd_backend.c](../../../src/amd_backend.c) filters only `abort` and *notes* it ignores spec flags — drop `PERF_BR_SPEC_WRONG_PATH` phantom edges | Zen 4/5, Linux ≥6.1 | **LANDED** (2026-07, Phase 4) | Small |
 | **P1** | **Harden Tier-B throttle/ring config** (larger data ring; raise `kernel.perf_event_max_sample_rate`, set `kernel.perf_cpu_time_max_percent=0` on the runner) | Extends stitch reach before the kernel drops the newest samples — zero fidelity change | Zen 3/4/5 | **LANDED** (ring 64KB→256KB, Phase 5) | Small |
 | **P1** | **Add a decodable-distance invariant to the stitcher** | The smallest-overlap heuristic can splice non-contiguous edges after a dropped/throttled sample; require the spliced adjacency be real straight-line code, else honest gap | Zen 3/4/5 | **LANDED** (2026-07, Phase 5 — honestly scoped: catches dropped-sample splices, not byte-decodable phase aliases) | Small–Med |
-| **P2** | **IBS-Op complementary coverage lane** (esp. Zen 2) | Only HW branch source on Zen 2 (statistical precise-IP source→target); coverage-confirmer to shrink block-step/DR residual | statistical, not ordered | **SUPERSEDED + LANDED** by [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md) (Phases 0–4, 2026-07-12). That plan corrects the mechanics: the branch target arrives in the perf `PERF_SAMPLE_RAW` record (`reg[7] IbsBrTarget`), so the lane is **user-only + unprivileged** at `paranoid=2` via the kernel `swfilt` bit — **no `CAP_PERFMON` and no `MSR_AMD64_IBSBRTARGET`** read. Shipped: `asmtest_ibs_*` + `asmspy --sample` / TUI mode 7 | Medium |
+| **P2** | **IBS-Op complementary coverage lane** (esp. Zen 2) | Only HW branch source on Zen 2 (statistical precise-IP source→target); coverage-confirmer to shrink block-step/DR residual | statistical, not ordered | **SUPERSEDED + LANDED** by [zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-tracing-plan.md) (Phases 0–4, 2026-07-12). That plan corrects the mechanics: the branch target arrives in the perf `PERF_SAMPLE_RAW` record (`reg[7] IbsBrTarget`), so the lane is **user-only + unprivileged** at `paranoid=2` via the kernel `swfilt` bit — **no `CAP_PERFMON` and no `MSR_AMD64_IBSBRTARGET`** read. Shipped: `asmtest_ibs_*` + `asmspy --sample` / TUI mode 7 | Medium |
 | **P2** | **Runtime depth from CPUID `0x80000022` EBX** instead of `#define AMD_LBR_DEPTH 16` | Future-proofing hygiene (a no-op today — every shipping part reports 16) | Zen 4/5 | **LANDED** (2026-07, Phase 0 — EBX[9:4] `lbr_v2_stack_sz`) | Tiny |
-| **P0** | **Cascade composition** (escalate to the MSR read before block-step) | Sampled-window truncation drops straight to the ~1000× block-step tier though an MSR-direct LBR read would complete a too-fast tiny routine first — the boundary snapshot is already default-on in `hwtrace_begin_amd` for single-exit regions (Matrix 2 #3), but the MSR path is in neither the marker path nor the auto cascade | **Zen 4/5 + `msr` access** (MSR); the rung self-skips elsewhere | real (composition gap, MSR-only) — see [Newly surfaced](#newly-surfaced-2026-07-09-review) | Medium |
+| **P0** | **Cascade composition** (escalate to the MSR read before block-step) | Sampled-window truncation drops straight to the ~1000× block-step tier though an MSR-direct LBR read would complete a too-fast tiny routine first — the boundary snapshot is already default-on in `hwtrace_begin_amd` for single-exit regions (Matrix 2 #3; **widened to 1..4 exits 2026-07-12**), but the MSR path is in neither the marker path nor the auto cascade | **Zen 4/5 + `msr` access** (MSR); the rung self-skips elsewhere | **LANDED** (2026-07-10, Phase 8) — see [Newly surfaced](#newly-surfaced-2026-07-09-review) | Medium |
 
 ### The three to build first
 
@@ -595,10 +613,36 @@ genuine semantic gap versus the fork-sandboxed steppers below it. It must theref
 ([trace_auto.c:74](../../../src/trace_auto.c)) since the MSR read shares AMD_LBR's 16-deep
 ceiling.
 
+> **Amendment (2026-07-16) — the multi-exit premise above expired; the rung did not.** This
+> analysis is preserved as written on 2026-07-09. Two of its load-bearing claims have since
+> been overtaken by `e9ca70e`, which widened the default-on snapshot from one breakpoint at
+> the last exit to **one per exit, up to `ASMTEST_AMD_MAX_EXITS == 4`**
+> ([src/hwtrace.c:777-783](../../../src/hwtrace.c); the `hwtrace.c:655` line cited above is
+> stale):
+> - *"it also completes a multi-exit tiny routine, which the boundary snapshot cannot"* —
+>   now true only for a region with **more than 4** exits. At 1..4 exits the snapshot plants
+>   a breakpoint at **every** exit, so whichever one the run leaves through is caught.
+> - *"The snapshot's genuine improvement is WIDENING that default to the tail-call exit (the
+>   Phase-9 item below)"* — that widening landed (Phase 9) and was then generalised again by
+>   the multi-exit arm, which subsumes it: `asmtest_amd_all_exits` counts both `ret`-class
+>   and region-leaving direct tail-`jmp` exits.
+>
+> **The rung remains correct, shipped, and worth keeping** — its residual is real, just
+> smaller than this paragraph implies: regions with **>4** exits (which stay on the sampled
+> path by default), plus every snapshot **arm failure** (no BPF toolchain, missing
+> `CAP_BPF`/`CAP_PERFMON`, a debugger holding a needed debug register, no decodable exit),
+> plus non-Zen-4/5 substrates where the snapshot is unavailable outright. The rest of the
+> reasoning above — the in-process re-run caveat, the `asmtest_amd_msr_available()` gate, the
+> `CEILING_FREE` exclusion — is unaffected and describes the shipped code. See the Phase 8
+> amendment for the as-shipped framing.
+
 **The correctness & hygiene cluster.** One real bug and four divergence risks, all in the AMD
 TUs:
 
-- **MSR speculative-entry leak — real trace bug [confirmed].** In `asmtest_amd_msr_trace` the
+- **MSR speculative-entry leak — real trace bug [confirmed]. FIXED (Phase 9, 2026-07-10);
+  the `msr_lbr.c:175` line ref below is pre-fix — the decode was extracted to the pure
+  `asmtest_amd_msr_decode_entry`, where the test now reads `if (!((to >> 63) & 1))` at
+  [msr_lbr.c:99](../../../src/msr_lbr.c).** In `asmtest_amd_msr_trace` the
   validity test `int valid = ((t >> 63) & 1) || ((t >> 62) & 1)`
   ([msr_lbr.c:175](../../../src/msr_lbr.c)) admits a spec-only wrong-path entry (TO[63]=0,
   TO[62]=1) whose `.spec` field stays zero from the earlier `memset`, so `amd_replay`'s
@@ -627,7 +671,8 @@ TUs:
   AMD sampled and survey paths already convert that to an honest `truncated`, so on the AMD
   tiers this is robustness, not a correctness fix.
 
-**Tail-call snapshot widening.** The default-on boundary snapshot is gated to single-exit
+**Tail-call snapshot widening. LANDED (Phase 9, 2026-07-10) and since GENERALISED — see the
+note below.** The default-on boundary snapshot is gated to single-exit
 regions (`amd_nret == 1`, [hwtrace.c:655](../../../src/hwtrace.c)), and its exit deriver
 recognizes only `ret`-class instructions — so a genuinely single-exit routine that leaves via
 a tail-call `jmp` never gets the deterministic default. Extending the exit predicate to a
@@ -635,6 +680,15 @@ region-LEAVING direct uncond `jmp` widens the default with no new risk (a missed
 already truncates rather than corrupts). This — not a cascade re-run rung — is the snapshot's
 genuine composition improvement (the MSR rung above covers the multi-exit tiny case in the
 meantime).
+
+> **Superseded 2026-07-16.** The tail-`jmp` predicate landed as specced in Phase 9
+> (`amd_last_ret_off` → `asmtest_amd_last_exit_off`), and `e9ca70e` then generalised the
+> whole gate: the deriver became `asmtest_amd_all_exits`, which collects **every** exit
+> (`ret`-class *and* region-leaving direct tail-`jmp`) and the arm plants a breakpoint at
+> each, up to `ASMTEST_AMD_MAX_EXITS == 4`
+> ([src/hwtrace.c:777-783](../../../src/hwtrace.c)). So the `nret == 1` gate described here
+> no longer exists, and the parenthetical "the MSR rung covers the multi-exit tiny case in
+> the meantime" now applies only to regions with **>4** exits and to snapshot arm failures.
 
 **Correction to the review's §1.2 [real, qualified].** The review flagged the perf-ring
 pointer casts — `uint64_t nr = *(uint64_t *)body` and the sibling header/entry casts in the
@@ -727,28 +781,50 @@ AMD hardware ceiling** — but remove its sharpest edges.
   single frozen snapshot window spans ~2× the iterations. Deterministic (no sampling
   variance), `reduced >= full` always (fallback ties). This is the AMD Zen 4/5 window-stretch
   lever that #2A cannot provide for loops (see above).
-- **#3 deterministic-snapshot default (single-exit) — LANDED.**
+- **#3 deterministic-snapshot default — LANDED (single-exit 2026-07-08; widened to
+  MULTI-exit 2026-07-12, `e9ca70e`).**
   The Phase-3 boundary snapshot (Part II #2) was previously opt-in only (`opts.snapshot`).
-  `hwtrace_begin_amd` ([src/hwtrace.c](../../../src/hwtrace.c)) now also selects it **by
-  default** on the substrate that supports it (`asmtest_amd_snapshot_available()`), but
-  **only for a SINGLE-exit region** (`amd_last_ret_off` now also counts rets; the gate is
-  `nret == 1`). The snapshot plants ONE breakpoint at the last ret, so a *multi*-exit
-  routine returning via an earlier ret would miss it and honestly truncate with no
-  fall-through (snapshot mode is committed) — where the sampled richest-window path could
-  still reconstruct it; gating to a lone ret keeps the boundary guaranteed-hit. An explicit
-  `opts.snapshot` is still honored for any region, and any arm failure (no BPF toolchain /
-  caps / decodable ret) falls through to the sampled path. This closes the richest-window
-  guessing for the common small single-exit routine without regressing multi-exit ones (an
-  adversarial-review finding). Validated: `branchsnap markers` (`docker-hwtrace-codeimage`)
-  routes the single-exit `add2` through the snapshot begin/end on the Zen 5 dev box.
-- **Pre-existing hygiene note (not this work):** the 7 field-by-field bindings (Python,
+  `hwtrace_begin_amd` ([src/hwtrace.c:777-783](../../../src/hwtrace.c)) now also selects it
+  **by default** on the substrate that supports it (`asmtest_amd_snapshot_available()`).
+  *As first shipped* the default was gated to a **SINGLE-exit** region (`nret == 1`),
+  because the snapshot planted ONE breakpoint at the last ret: a *multi*-exit routine
+  returning via an earlier ret would miss it and honestly truncate with no fall-through
+  (snapshot mode is committed), so gating to a lone ret kept the boundary guaranteed-hit.
+  **That restriction is gone.** The arm now plants **one HW execution breakpoint per exit,
+  up to `ASMTEST_AMD_MAX_EXITS == 4`** — the x86 debug-register budget — via
+  `asmtest_amd_all_exits` + `asmtest_amd_snapshot_begin_multi`
+  ([src/amd_backend.h:57,69](../../../src/amd_backend.h)), so whichever exit the run leaves
+  through hits a boundary; the gate is `amd_nexit >= 1 && … amd_nexit <=
+  ASMTEST_AMD_MAX_EXITS`. A BPF-side drop counter drives an honest truncated-on-drop
+  contract. A region with **more than 4** exits stays on the sampled path by default (not
+  enough debug registers to cover every boundary); an explicit `opts.snapshot` is still
+  honored for any region and keeps the legacy last-exit best-effort there. The arm is
+  **all-exits-or-nothing**: any failure (no BPF toolchain / caps, a debugger holding a
+  needed debug register, no decodable exit) falls through to the sampled path unchanged.
+  Validated: `branchsnap markers` (`docker-hwtrace-codeimage`) routes `add2` through the
+  snapshot begin/end on the Zen 5 dev box.
+- **Pre-existing hygiene note (not this work) — RESOLVED 2026-07-12 (`e9ca70e`), see the
+  amendment under this item.** ~~the 7 field-by-field bindings (Python,
   Rust, Go, Node, Ruby, Java, Lua) still mirror `asmtest_hwtrace_options_t` only through
   `object_hint`, so `asmtest_hwtrace_init`'s by-value copy over-reads the `lbr_period` +
   `branch_filter` tail (Zig/C++/.NET track the full struct). This 8-byte over-read predates
   this work (it shipped with `lbr_period`); `branch_filter`'s addition does not grow it and
   its garbage-value consequence is benign (the reduced filter is fidelity-neutral and
   retries on rejection). Closing it fully means appending both int fields to those 7
-  layouts — a focused, individually-lane-validated follow-up.
+  layouts — a focused, individually-lane-validated follow-up.~~
+
+  **Closed by the options ABI flag day** (`e9ca70e`), which fixed the class of bug rather
+  than the two fields: `asmtest_hwtrace_options_t` now **leads with `size_t struct_size`**
+  ([include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h), first member) and
+  `asmtest_hwtrace_init` copies `min(struct_size, sizeof)` then zero-fills the tail, so a
+  short caller can no longer be over-read. A caller that does not self-describe
+  (`struct_size == 0`, or too small to reach `backend`) is rejected with **EINVAL** rather
+  than silently losing a trailing field. All seven field-by-field bindings now mirror the
+  full struct — `lbr_period`, `branch_filter` **and** `struct_size` are present in
+  `bindings/python/asmtest/hwtrace.py`, `bindings/rust/src/hwtrace.rs`,
+  `bindings/go/hwtrace.go`, `bindings/node/hwtrace.js`, `bindings/ruby/hwtrace.rb`,
+  `bindings/java/HwTrace.java`, and `bindings/lua/hwtrace.lua` — with parity green and zero
+  allow-list changes.
 
 ## Matrix 3 — Confirmed dead ends (do not invest)
 
@@ -768,7 +844,7 @@ All refuted against a named primary source. Stop spending fallback complexity he
 
 ## Notes on IBS (why it is P2, not P0)
 
-> **Superseded by [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md) (landed 2026-07-12).**
+> **Superseded by [zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-tracing-plan.md) (landed 2026-07-12).**
 > The paragraph below is kept for history but was **wrong on the privilege model**: the branch
 > target is delivered in the perf `PERF_SAMPLE_RAW` record (`reg[7] IbsBrTarget`), so with the
 > kernel `swfilt` bit the lane runs **user-only and unprivileged** at `paranoid=2` — **no
@@ -835,7 +911,7 @@ shipped LBR backend.
 ## Implementation status
 
 **Phases 0–5 and 8–9 landed; Phase 7 superseded + landed via
-[zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md); Phase 6 remains forward-look
+[zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-tracing-plan.md); Phase 6 remains forward-look
 (hardware-blocked).** The
 [2026-07-09-amd-tracing-review](../analysis/2026-07-09-amd-tracing-review.md) surfaced two
 further phases that — *unlike* the hardware-blocked Phases 6–7 — need no new silicon and
@@ -872,7 +948,7 @@ neither dev host has (Zen 3 BRS), so per the house "no untested hardware code" r
 is not implemented — a lane that cannot self-validate on its target silicon must not
 ship unproven. It remains fully specified below for when that hardware is available.
 *(Phase 7, once grouped here as hardware-blocked, has since landed — unprivileged, on
-the Zen 2 host — via [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md).)*
+the Zen 2 host — via [zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-tracing-plan.md).)*
 
 Two **documentation corrections** Part II surfaced shipped alongside Phase 0/2 (see
 Deliverables): the `PTRACE_SINGLEBLOCK`-unwired-on-x86 claim in
@@ -1104,6 +1180,15 @@ with clang+libbpf+bpftool, `--cap-add=BPF --cap-add=PERFMON --cap-add=SYS_PTRACE
 single-shot routine** that the sampling path marks `truncated`, and reconstructs it
 complete. Self-skips cleanly without libbpf / the caps / a Zen 4+ host.
 
+> **Superseded 2026-07-16 — `docker-hwtrace-lbr-snapshot` was never built and does not
+> exist.** The dedicated lane specced here proved unnecessary: the existing
+> `docker-hwtrace-codeimage` image already carries the clang+libbpf+bpftool toolchain and
+> the BPF/PERFMON caps, so it simply runs `branchsnap-test` after `codeimage-test`, and that
+> is where this acceptance is met on the Zen 5 dev box. The Deliverables section records the
+> same decision; the stale "adds `docker-hwtrace-lbr-snapshot`" line under Validation is
+> corrected there. **Do not add the lane** — `make docker-hwtrace-codeimage` is the one to
+> run.
+
 ## Improvement Phase 4 — LbrExtV2 speculation-bit filtering (`src/amd_backend.c`) *(landed 2026-07-06)*
 
 > **Status (2026-07-06): LANDED and validated on the Zen 5 dev box.** `amd_replay`
@@ -1200,7 +1285,18 @@ heuristic mis-stitches now either stitches correctly or reports an honest gap (`
 `make docker-hwtrace-amd`'s 20 000-trip loop reconstructs further before truncating with the
 enlarged ring.
 
-## Improvement Phase 6 — BRS period-adjust single-window Tier-A capture (`src/hwtrace.c`) *(forward-look)*
+## Improvement Phase 6 — BRS period-adjust single-window Tier-A capture (`src/hwtrace.c`) *(forward-look — HARDWARE-BLOCKED on Zen 3 / Family 19h BRS)*
+
+> **The one open item in this plan (re-confirmed 2026-07-16).** It is blocked on silicon,
+> not on effort or design: BRS exists **only on AMD Family 19h "Zen 3"**, and neither dev box
+> is one — they are a **Ryzen 9 9950X (Family 1Ah, Zen 5, `amd_lbr_v2`)** and a **Ryzen 9
+> 4900HS (Family 17h, Zen 2, no branch stack at all)**. Zen 4/5 do not use BRS (they use
+> LbrExtV2, where the Phase-3 software-event snapshot is the better lever anyway), and Zen 2
+> has no branch hardware to period-adjust. Per the house "no untested hardware code" rule it
+> is **not implemented** — verified absent: no `amd_brs` / `branch-brs` / `brs_adjust` /
+> `brs_period` symbol exists anywhere in `src/` or `include/`. It stays fully specified below
+> for whenever a Zen 3 host is available, and is the sole reason this plan remains in
+> `plans/` rather than `archive/plans/`.
 
 **Goal.** On **Zen 3 BRS**, for a routine known to take ≤ ~16 taken branches, replace the
 `sample_period=1` PMI-per-branch flood with a single fixed-period frozen overflow (the
@@ -1222,9 +1318,9 @@ switch must keep them coherent or justify the divergence.
 Zen 5.)* On a Zen 3 BRS host, a ≤16-branch routine reconstructs identically to the
 `sample_period=1` path with a single PMI; the Tier-B stitch path is untouched.
 
-## Improvement Phase 7 — IBS-Op complementary coverage lane (`src/hwtrace.c` + new backend) *(SUPERSEDED + LANDED via [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md))*
+## Improvement Phase 7 — IBS-Op complementary coverage lane (`src/hwtrace.c` + new backend) *(SUPERSEDED + LANDED via [zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-tracing-plan.md))*
 
-> **Superseded by [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md) (Phases 0–4 landed
+> **Superseded by [zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-tracing-plan.md) (Phases 0–4 landed
 > 2026-07-12).** Two mechanics below were **refuted empirically on the Zen 2 host** and are
 > corrected in the superseding plan: the branch target arrives in the perf
 > `PERF_SAMPLE_RAW` record (`reg[7] IbsBrTarget`, delivered whenever `IBS_CAPS_BRNTRGT` is
@@ -1255,6 +1351,16 @@ mark a subset of region basic blocks as covered ~~and reduce the number of block
 block-step fallback must walk~~ (the block-step pre-cover integration remains that plan's
 forward-look Phase 6); self-skips without `IBS_CAPS_BRNTRGT`.
 
+> **Cross-reference corrected 2026-07-16.** The parenthetical above is wrong on two counts.
+> [zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-tracing-plan.md) has **no forward-look phase** — all
+> eight (0–7) are landed — and its **Phase 6 is *edge → basic-block normalization***, which
+> shipped as `asmtest_ibs_normalize_blocks` / `asmtest_ibs_blocks_free`
+> ([include/asmtest_ibs.h](../../../include/asmtest_ibs.h)). Marking region blocks as
+> statistically covered is therefore **done**. What is *not* owned by any phase in either
+> plan is the narrower **block-step pre-cover integration** — feeding that covered-block set
+> into the Phase-2 block-step / DynamoRIO fallback to shrink its residual. It remains
+> unscheduled and unowned; it is pure software (no silicon gate) if it is ever wanted.
+
 ## Improvement Phase 8 — Cascade composition: MSR-direct escalation rung before block-step (`src/trace_auto.c`) *(landed 2026-07-10)*
 
 > **Status (2026-07-10): LANDED and validated on the Zen 5 dev box.** The MSR-direct rung ships
@@ -1272,6 +1378,29 @@ forward-look Phase 6); self-skips without `IBS_CAPS_BRNTRGT`.
 > interrupts) *before* block-step, `CEILING_FREE` excludes it, and the existing `trace_call_auto`
 > cases are unchanged — `test_call_auto` case (c),
 > [examples/test_hwtrace.c](../../../examples/test_hwtrace.c); 361/361 green on the Ryzen 9 9950X.
+
+> **Amended 2026-07-16 — the rung's *rationale* narrowed; the rung itself is unchanged and
+> stays.** This phase was motivated (Part II, and the Work section below) by the MSR read
+> being the only path that could complete a **multi-exit** tiny routine, since the
+> default-on boundary snapshot planted a single breakpoint at the region's last exit.
+> `e9ca70e` removed that limitation: the snapshot now plants **one breakpoint per exit, up
+> to `ASMTEST_AMD_MAX_EXITS == 4`** ([src/hwtrace.c:777-783](../../../src/hwtrace.c)), so
+> the fast tier already catches 1..4-exit routines through the marker path. **The rung is
+> still correct and still earns its place** — its residual is simply smaller and more
+> precisely stated than the text below claims:
+> - regions with **more than 4** exits (deliberately left on the sampled path by default —
+>   there are only four x86 debug registers);
+> - any snapshot **arm failure**: no BPF toolchain, missing `CAP_BPF`/`CAP_PERFMON` at load,
+>   a debugger already holding a needed debug register (the arm is all-exits-or-nothing), or
+>   no decodable exit;
+> - substrates where the snapshot is unavailable outright but `/dev/cpu/N/msr` is not — the
+>   snapshot needs Zen 4/5 perfmon-v2 + Linux ≥ 6.10 + BPF caps, a strictly narrower floor
+>   than the MSR read's root/`CAP_SYS_ADMIN` + `msr` module.
+>
+> In all three the fast tier still returns truncated and the rung still completes the
+> too-fast tiny routine with zero PMU interrupts before block-step's ~1000× cost. Read every
+> "multi-exit" justification below as "**>4**-exit, or snapshot-unavailable". Nothing about
+> the shipped code, its gating, or its acceptance changes.
 
 **Goal.** Insert an **MSR-direct escalation rung** into `asmtest_trace_call_auto` between the
 fast sampled-hwtrace tier and the BTF block-step tier. When the fast tier returns a
@@ -1292,7 +1421,10 @@ block-step's fork-per-attempt, ~1000× stop cost. This is the Part II
   ([trace_auto.c:181](../../../src/trace_auto.c)). It therefore runs **only** when the fast
   tier came back truncated or absent, and its own truncation/failure must **fall through into
   block-step** — never `return` early on its own miss.
-- **Why the boundary snapshot is NOT a rung (deliberate scope).** The fast tier drives the
+- **Why the boundary snapshot is NOT a rung (deliberate scope).** *(As written 2026-07-09;
+  the "single-exit" framing is now "1..4-exit" — see the amendment above. The conclusion —
+  the snapshot is not a rung — is unchanged and if anything stronger, since the default-on
+  gate is wider.)* The fast tier drives the
   marker path, and `hwtrace_begin_amd` already selects the Phase-3 boundary snapshot **by
   default** for a single-exit region on the supporting substrate
   ([hwtrace.c:655](../../../src/hwtrace.c), Matrix 2 #3 — landed) — so on the single-exit case
@@ -1344,11 +1476,14 @@ block-step's fork-per-attempt, ~1000× stop cost. This is the Part II
   ([msr_lbr.c:190-193](../../../src/msr_lbr.c)), which then falls through to block-step.
 
 **Why this is worth a rung.** For the too-fast-to-sample tiny routine — including the
-**multi-exit** one that the default-on snapshot must skip — this rung reconstructs the trace
-complete with zero PMU interrupts instead of falling straight to fork-isolated block-step,
-avoiding its roughly three-orders-of-magnitude stop-count cost on hosts with `msr` access
-(the dev box, self-hosted runners). The scope is honest: it is a narrow, privilege-gated
-rung, not a new tier — but the entry point already ships, so the composition is cheap.
+**multi-exit** one that the default-on snapshot must skip *(read: the **>4**-exit one, or
+any region whose snapshot arm failed / whose substrate lacks it — see the 2026-07-16
+amendment above; at 1..4 exits the fast tier now catches it)* — this rung reconstructs the
+trace complete with zero PMU interrupts instead of falling straight to fork-isolated
+block-step, avoiding its roughly three-orders-of-magnitude stop-count cost on hosts with
+`msr` access (the dev box, self-hosted runners). The scope is honest: it is a narrow,
+privilege-gated rung, not a new tier — but the entry point already ships, so the
+composition is cheap.
 
 **Acceptance.** A multi-exit tiny fixture routine that the sampled fast tier marks
 `truncated` is reconstructed **complete** by `asmtest_trace_call_auto` via the MSR rung
@@ -1360,6 +1495,15 @@ truncated-then-block-step and pure single-step floors — is **unchanged**. Vali
 privileged AMD lane on the Zen 5 dev box (the `docker-hwtrace-amd` shape plus the `msr`
 device), self-skipping in hosted CI.
 
+> **Note (2026-07-16) on re-running this acceptance.** It was met as written on 2026-07-10
+> (`test_call_auto` case (c)), when *any* multi-exit region bypassed the default-on snapshot.
+> Since `e9ca70e` a 2..4-exit region is caught by the snapshot **inside the fast tier**, so
+> it no longer truncates and would no longer reach the rung. A fixture written to re-prove
+> this acceptance today must therefore use a region the fast tier genuinely cannot complete —
+> **more than 4 exits**, or a substrate/arm-failure case where the snapshot does not run —
+> otherwise it asserts the wrong tier. The shipped rung and its existing test are unaffected;
+> this is a note for whoever next touches the fixture.
+
 ## Improvement Phase 9 — Correctness & hygiene cluster (2026-07-09 review) (`src/amd_backend.h`, `src/hwtrace.c`, `src/msr_lbr.c`) *(landed 2026-07-10)*
 
 > **Status (2026-07-10): LANDED and validated on the Zen 5 dev box.** Both `[correctness]` fixes
@@ -1370,7 +1514,11 @@ device), self-skipping in hosted CI.
 > `struct branch_entry` bit layout. (2) **Tail-call snapshot widening:** the default-on gate's exit
 > deriver `amd_last_ret_off` → `asmtest_amd_last_exit_off` ([src/hwtrace.c](../../../src/hwtrace.c))
 > now counts a region-leaving direct uncond `jmp` as an exit, guarding out indirect and in-region
-> jmps. (3) **Shared internal header:** new [src/amd_backend.h](../../../src/amd_backend.h) is the one
+> jmps. *(Generalised further 2026-07-12 by `e9ca70e`: the deriver is now `asmtest_amd_all_exits`,
+> collecting **every** exit — `ret`-class and tail-`jmp` alike — and the arm plants a breakpoint at
+> each, up to `ASMTEST_AMD_MAX_EXITS == 4`, so the `nret == 1` gate this item widened no longer
+> exists. `asmtest_amd_last_exit_off` survives as the >4-exit / explicit-`opts.snapshot`
+> last-exit fallback. The Work item below describes the 2026-07-10 shape.)* (3) **Shared internal header:** new [src/amd_backend.h](../../../src/amd_backend.h) is the one
 > source for the `amd_*` decls, the folded `ASMTEST_AMD_REDUCED_FILTER`, and the re-exported
 > `ASMTEST_HW_*` codes — the four hand-copied inline decl blocks, the duplicated macro, and the local
 > error-code redefs (amd_backend.c, ss_backend.c) are deleted, so a signature/constant drift is now a
@@ -1391,7 +1539,10 @@ header so a future signature or constant drift becomes a **compile error** rathe
 Every item is value-preserving on the shipped build except the two `[correctness]` fixes; the
 refactors are a no-op the test output must confirm.
 
-**Work.**
+**Work.** *(As specced 2026-07-09; all line refs below are pre-fix. As shipped, the raw
+FROM/TO decode was extracted to the pure `asmtest_amd_msr_decode_entry`, so the validity
+test now lives at [msr_lbr.c:99](../../../src/msr_lbr.c) and reads `if (!((to >> 63) & 1))
+continue;` — the `|| spec` term dropped exactly as prescribed here.)*
 - **[correctness] Drop speculative wrong-path entries at the MSR source.** In the MSR-direct capture
   ([msr_lbr.c:175](../../../src/msr_lbr.c)) the validity test is
   `int valid = ((t >> 63) & 1) || ((t >> 62) & 1); /* valid || spec */` — `TO[63]` is retired-valid
@@ -1594,8 +1745,17 @@ next to the other CPUID probes) rather than `hwtrace.c`.*
   non-x86/absent-capability hosts — the first AMD-adjacent lane that runs *live* on ordinary
   CI rather than needing bare-metal AMD.
 - **Bare-metal AMD:** `make docker-hwtrace-amd` (`--security-opt seccomp=unconfined
-  --cap-add=PERFMON`) validates Phases 1, 4, 5 on the Zen 5 dev box; Phase 3 adds
-  `docker-hwtrace-lbr-snapshot` (BPF/PERFMON/PTRACE caps).
+  --cap-add=PERFMON`) validates Phases 1, 4, 5 on the Zen 5 dev box; Phase 3 is validated by
+  **`make docker-hwtrace-codeimage`** (BPF/PERFMON caps), which runs `branchsnap-test` after
+  `codeimage-test`. *(Corrected 2026-07-16: this line previously named a
+  `docker-hwtrace-lbr-snapshot` lane. It was never built and no such target exists — the
+  codeimage image already carries the clang+libbpf+bpftool toolchain, so a second one was
+  unnecessary. See Deliverables and the Phase 3 note.)* The MSR-direct path (Phase 5, Phase 8)
+  additionally needs `make docker-hwtrace-msr` (`--privileged`, for `/dev/cpu/N/msr`).
+  **None of these three AMD-hardware lanes runs in hosted CI** (`.github/workflows/ci.yml`
+  carries `docker-hwtrace-codeimage`, but its branchsnap step self-skips there without an AMD
+  host + caps); they need a self-hosted bare-metal AMD runner, so the AMD hardware path is
+  validated on the dev box, not in CI.
 - **Cross-tier parity:** every reconstructed trace is asserted byte-identical (`insns[]` +
   `blocks[]`) to the existing single-step / DynamoRIO output on shared fixtures, using the
   same branch-edge normalization as `pt_backend.c` — the parity harness Part I already

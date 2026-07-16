@@ -1,6 +1,6 @@
 # asm-test — live-attach data-flow: post-implementation follow-up plan
 
-The next steps **after** [live-attach-dataflow-plan.md](live-attach-dataflow-plan.md) lands
+The next steps **after** [live-attach-dataflow-plan.md](../archive/plans/live-attach-dataflow-plan.md) lands
 its native + JIT-aware live-attach value producer and the asmspy Data flow window. That plan
 deliberately ships the **conservative core**: direct single-step value capture (proven, but
 it perturbs the stepped thread), scoped to a region, with managed memory def-use left GC-
@@ -8,13 +8,21 @@ uncanonicalized. This plan lands the improvements that were held out of the crit
 each one either **reduces perturbation**, **raises fidelity on managed targets**, or
 **broadens the target set** — ordered so the highest-value, lowest-risk work comes first.
 
-> Status: **F3 LANDED (asmspy --watch); F1 increment 1 LANDED (pure-method block-step tier); F2/F4–F7 + F1 vector-breadth planned.** F1 is the marquee item (the
-> perturbation win that makes stepping a live JIT genuinely practical) and carries a spike
-> increment because its value-reconstruction claim is the one genuinely **unproven** bet in
-> the whole design. F3 is the cheapest high-value item (a near-zero-perturbation targeted
-> mode from a one-line DR7 change). F4/F5 are hardware-/runtime-gated and self-skip. House
-> rule unchanged: foreign targets are never killed; every tier self-skips where its substrate
-> is absent.
+> Status *(reconciled 2026-07-16)*: **F3 LANDED (asmspy `--watch`); F1 increment 1 LANDED
+> (pure-method block-step tier); F4 UNBLOCKED and now the top candidate; F2/F5–F7 + F1 vector
+> breadth open.** The two bets this plan was written around have both been settled in its
+> favour. F1 was the marquee item and carried a spike increment because its
+> value-reconstruction claim was the one genuinely **unproven** bet in the whole design — that
+> spike came back **GO** (byte-identical to single-step by literal `memcmp`, ~6× fewer stops),
+> so the design holds and F2/F5, which build on the replay, did not fall away with it. F3 was
+> the cheapest high-value item (a near-zero-perturbation targeted mode from a one-line DR7
+> change) and landed as `asmspy --watch`. **F4 is no longer runtime-gated** — its EventPipe
+> blocker was disproved and the profiler feed it needs is proven and shipping in the taint
+> tier, leaving wiring plus one honest spike (attaching a profiler to a process we did not
+> launch); see F4 below. F5 remains **hardware-gated** on bare-metal Intel PT and self-skips;
+> the dev boxes are AMD, so it is a ceiling to demonstrate elsewhere, not a default path.
+> House rule unchanged: foreign targets are never killed; every tier self-skips where its
+> substrate is absent.
 
 ---
 
@@ -28,7 +36,7 @@ least-perturbing PT-derived value path where the silicon allows; (F6) broaden to
 whole-process; (F7) expose it through the language bindings.
 
 **Non-goals** — production whole-process **taint** over managed code (that remains the
-DynamoRIO tier, [dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md)); this plan
+DynamoRIO tier, [dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md)); this plan
 stays on the out-of-band observe-don't-instrument side. Windows / macOS attach (Linux
 x86-64 first, AArch64 where the primitive exists).
 
@@ -163,22 +171,51 @@ enforced; self-skips under qemu-user (which emulates zero breakpoint slots,
 
 ---
 
-## F4 — Live GC-move canonicalization for managed memory def-use *(planned — runtime-gated)*
+## F4 — Live GC-move canonicalization for managed memory def-use *(**UNBLOCKED 2026-07-14/16** — the feed is proven and shipping on the DR side; this is now wiring, and it is the highest-value remaining item in this plan)*
+
+> **UPDATE 2026-07-16 — F4's stated blocker is obsolete, and the plan's own risk note was
+> wrong.** This item was written as "hard-gated on a runtime feed the .NET in-proc
+> EventListener does not currently surface; it may need an out-of-process EventPipe consumer,
+> which is its own lift." The `EventListener` limitation is real, but the conclusion drawn
+> from it was not. A deep-research investigation plus a coexistence probe (GO, 2026-07-14)
+> found a native in-process mechanism that **bypasses EventPipe entirely**: an
+> `ICorProfilerCallback4::MovedReferences2` profiler, which receives the exact per-range
+> `{old, new, len}` triples at a **fully-suspended-EE GC fence**. That fence is a strictly
+> better coherence position than any event-stream consumer could reach, because no mutator
+> thread can race the remap — which also retires the "a missed move event silently aliases"
+> concern in the parent plan's risk list for this route.
+>
+> It is not speculative. The DR taint tier's Increment 7 **ships it**: the profiler feeds
+> `at_gc_remap_live` ([dataflow_dr_client_inlined.c:732](../../../src/dataflow_dr_client_inlined.c#L732))
+> through a POSIX-shm handshake and remapped 60,021 real ranges on a live compacting GC under
+> DynamoRIO, with `make docker-gcprofiler-probe` proving profiler/DR coexistence. Findings:
+> [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
+>
+> **So F4 is now "point a proven feed at a landed transform."** Both halves exist; only the
+> join is missing. Note the two tiers need genuinely different plumbing from the same
+> profiler, so this is not a copy of the DR path: the DR client is *in-process* with the
+> target and remaps its live shadow at the fence (hence the DR-API-free constraint recorded
+> there), whereas this tier is *out-of-process* and post-pass — it consumes triples stamped
+> with the value-trace step boundary the compaction takes effect at, then canonicalizes a
+> captured trace before `asmtest_defuse_build`. The realistic new risk is not the feed but
+> **attaching a profiler to a process asmspy did not launch**: `CORECLR_ENABLE_PROFILING` is
+> read at startup, so a live-attach target either needs the .NET attach-profiler path or the
+> capture is limited to launched targets — that, not EventPipe, is the honest open question
+> to spike first.
 
 The base plan leaves managed **memory** def-use GC-uncanonicalized: a store before a
 compaction (old address) and its matching load after (new address) look unrelated, so the
 edge is lost, and an object reusing the vacated address forges a false edge. The **pure
 transform is already landed** — `asmtest_gcmove_canonicalize`
 ([asmtest_valtrace.h:353](../../../include/asmtest_valtrace.h#L353)),
-[src/dataflow_gcmove.c](../../../src/dataflow_gcmove.c) — what is missing is the live feed.
+[src/dataflow_gcmove.c](../../../src/dataflow_gcmove.c), whose only callers today are its unit
+test [examples/test_dataflow_gcmove.c](../../../examples/test_dataflow_gcmove.c) — what is
+missing is the live feed.
 
-- Extract concrete `{old_base, new_base, len}` triples from EventPipe
-  `GCBulkMovedObjectRanges`, stamped with the value-trace step boundary the compaction takes
-  effect at, and run `asmtest_gcmove_canonicalize` on the captured trace before
-  `asmtest_defuse_build`. This closes the gap the memory notes flag: the `GcMoveMap` captures
-  the event but "the in-proc EventListener does not surface the Values struct-array," so the
-  triple extraction + remap wiring is the concrete deferred work
-  ([data-flow-tracing-plan.md:193](data-flow-tracing-plan.md#L193)).
+- Extract concrete `{old_base, new_base, len}` triples **from an in-process
+  `MovedReferences2` profiler** (per the update above — *not* from EventPipe, as originally
+  written), stamped with the value-trace step boundary the compaction takes effect at, and run
+  `asmtest_gcmove_canonicalize` on the captured trace before `asmtest_defuse_build`.
 - Full object identity via `GCBulkType`/`Node`/`Edge` is a further step.
 
 **Exit criteria:** a managed value's **memory** def-use survives an induced GC compaction
@@ -214,7 +251,7 @@ JIT's methods across a whole window for control flow
 ([asmtest_ptrace_trace_attached_windowed](../../../include/asmtest_ptrace.h#L142)); extend
 the value producer onto that windowed frame for a **survey** (sampled) def-use over a whole
 window rather than one region. Where the ask is production whole-process **taint**, this hands
-off to [dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md) (whose in-band L0 value
+off to [dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md) (whose in-band L0 value
 producer already landed) rather than pushing single-step past its cost envelope.
 
 **Exit criteria:** a windowed capture produces a def-use survey spanning multiple JIT'd
@@ -248,8 +285,14 @@ least the native path in their pinned toolchain images.
   emulator, and gives a qualitatively new capability (targeted field-watch) at near-zero
   perturbation. Consider landing it **before** F1 if perturbation on a specific object, rather
   than whole-region tracing, is the pressing user need.
-- **F4 is hard-gated on a runtime feed** the .NET in-proc EventListener does not currently
-  surface; it may need an out-of-process EventPipe consumer, which is its own lift.
+- **F4 is no longer gated on a runtime feed** *(corrected 2026-07-16; this bullet previously
+  read "hard-gated … may need an out-of-process EventPipe consumer, which is its own lift")*.
+  The EventPipe premise was right and the conclusion was wrong: an in-process
+  `MovedReferences2` profiler delivers the exact triples at a suspended-EE GC fence, is proven
+  to coexist with DR, and already ships in the taint tier. F4's remaining risk moved to a
+  different place — attaching a profiler to a process we did **not** launch
+  (`CORECLR_ENABLE_PROFILING` is start-up-read), which is what to spike first. See the F4
+  update above.
 - **F5's hardware is absent** on most cloud/GitHub-hosted VMs (Intel PT needs Intel bare
   metal); it is a ceiling to demonstrate on the right box, not a default path.
 - **The deadlock residual persists** across all of these — block-step and replay *shrink* the
@@ -259,6 +302,22 @@ least the native path in their pinned toolchain images.
 ---
 
 ## Recommended first milestone
+
+> **UPDATE 2026-07-16 — both original recommendations are done; the milestone below is
+> superseded.** F3 landed as `asmspy --watch` and F1's spike came back GO and was promoted to
+> the `dataflow_blockstep.c` tier. **The recommended next milestone is now F4**, on three
+> grounds: its blocker turned out to be imaginary (the feed is proven and shipping in the
+> taint tier), it is the last correctness gap in the shipped live-attach tier rather than an
+> optimization — managed memory def-use is silently GC-aliased today, which is the one place
+> this tier can be *wrong* rather than merely slow or truncated — and the transform half is
+> already landed and unit-tested. Sequence it as: spike the attach-a-profiler-to-a-running-pid
+> question first (it is the only real unknown left, and a NO-GO there scopes F4 to launched
+> targets rather than killing it), then wire triples → `asmtest_gcmove_canonicalize` →
+> `asmtest_defuse_build`. After F4, **F7** (bindings) is the cheapest remaining item and is
+> pure software; **F2** extends F1's replay to impure methods; **F6** is scope-gated; **F5**
+> waits on silicon this project does not have.
+>
+> The original recommendation is retained below for provenance.
 
 **F3 (hardware data-watchpoint targeted mode)** if the immediate need is watching specific
 data with minimal perturbation — it is cheap, decoupled, and safe. **F1's spike increment**

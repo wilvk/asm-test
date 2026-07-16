@@ -1,19 +1,19 @@
 # asm-test — live-attach data-flow capture (native + JIT), surfaced in asmspy: implementation plan
 
 A phased plan to extend the scoped ptrace L0 value producer
-([src/dataflow_ptrace.c](../../../src/dataflow_ptrace.c)) from "fork a self-owned victim
+([src/dataflow_ptrace.c](../../../../src/dataflow_ptrace.c)) from "fork a self-owned victim
 and run caller-supplied code bytes" to **attach to an arbitrary live process — native or a
 JIT/managed runtime — and capture a scoped region's data flow out of band**, then surface
-that as a new **Data flow** view in the asmspy CLI ([cli/asmspy.c](../../../cli/asmspy.c)).
+that as a new **Data flow** view in the asmspy CLI ([cli/asmspy.c](../../../../cli/asmspy.c)).
 
-This builds directly on [data-flow-tracing-plan.md](data-flow-tracing-plan.md) — it turns
+This builds directly on [data-flow-tracing-plan.md](../../plans/data-flow-tracing-plan.md) — it turns
 that plan's Phase 3 (scoped ptrace L0, LANDED) into a real attach-to-a-running-PID producer
 and gives it a UI. The design investigation behind the JIT half is
-[analysis/jit-runtime-tracing.md](../analysis/jit-runtime-tracing.md) ("stop instrumenting
+[analysis/jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md) ("stop instrumenting
 and start observing"); this document is the build order. The emulator-replay perturbation
 optimization, hardware data-watchpoints, the PT-derived value path, and live GC-move
 canonicalization are deliberately **out of scope here** and carried in the companion
-[live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md).
+[live-attach-dataflow-followup-plan.md](../../plans/live-attach-dataflow-followup-plan.md).
 
 > Status: **All seven increments LANDED (2026-07-15).** Increment 1 (native live-attach) was
 > the recommended first milestone — it is low-risk reuse of the landed capture core and needs no
@@ -26,7 +26,7 @@ canonicalization are deliberately **out of scope here** and carried in the compa
 > saying-so trace.
 >
 > **Increment 5 (`attach_jit` + the signal split) LANDED 2026-07-15.** The signal split lives
-> in the shared `dfp_step_loop` (`dfp_sigtrap_is_app`, [dataflow_ptrace.c](../../../src/dataflow_ptrace.c)):
+> in the shared `dfp_step_loop` (`dfp_sigtrap_is_app`, [dataflow_ptrace.c](../../../../src/dataflow_ptrace.c)):
 > a SIGTRAP stop is checked via `PTRACE_GETSIGINFO` before being assumed to be our own
 > single-step trap — `si_code == SI_KERNEL`/`TRAP_HWBKPT` means the TARGET executed its own
 > int3/hardware breakpoint (a JIT self-check, a debugger breakpoint, a safepoint), which
@@ -49,7 +49,7 @@ canonicalization are deliberately **out of scope here** and carried in the compa
 > the handler actually RUNS (delivery proven, not assumed), and the victim SURVIVES and keeps
 > looping afterward; `test_attach_jit_worker` proves `attach_jit` correctly reaches a routine
 > running only on a worker thread and reports `*survived == 1`. asmspy's Data-flow engine
-> (`asmspy_engine_dataflow`, [cli/asmspy_engine.c](../../../cli/asmspy_engine.c)) now calls
+> (`asmspy_engine_dataflow`, [cli/asmspy_engine.c](../../../../cli/asmspy_engine.c)) now calls
 > `attach_jit` unconditionally, and the `runtime_is_managed` gate that refused ANY managed
 > target at both call sites (`asmspy.c`'s headless `--dataflow` and the TUI mode-9 window) is
 > **removed** — every target now goes through the same SEIZE-all-threads-and-race path, native
@@ -59,7 +59,7 @@ canonicalization are deliberately **out of scope here** and carried in the compa
 > patched/re-JIT'd *mid-capture* decodes the live snapshot, same as the native tier, not the
 > time-correct versioned bytes (wiring a live code-image + addr-channel feed into asmspy is
 > further work); (2) the region-entry breakpoint (`dfp_run_to`/`dfp_run_to_multi` in
-> [dataflow_ptrace.c](../../../src/dataflow_ptrace.c)) still plants via `PTRACE_POKETEXT`
+> [dataflow_ptrace.c](../../../../src/dataflow_ptrace.c)) still plants via `PTRACE_POKETEXT`
 > **only** — unlike the offset-only control-flow tracer's `asmtest_ptrace_run_to`, it has **no**
 > DR0 hardware-breakpoint fallback for a genuinely W^X-enforced JIT page, so such a target
 > self-skips cleanly via `DF_PTRACE_ETRACE` (never a crash, never a silent partial capture) but
@@ -76,7 +76,7 @@ canonicalization are deliberately **out of scope here** and carried in the compa
 
 - A **native** live-attach value producer: `asmtest_dataflow_ptrace_attach_pid(pid, base,
   len, …)` that SEIZEs a running process, waits for `[base, base+len)` to execute, single-
-  steps the region capturing the same [`asmtest_valtrace_t`](../../../include/asmtest_valtrace.h#L93)
+  steps the region capturing the same [`asmtest_valtrace_t`](../../../../include/asmtest_valtrace.h#L93)
   stream the fork producer fills, and DETACHes so the target **survives**.
 - A **JIT/managed-aware** entry point that layers the mitigations a live runtime needs:
   worker-thread targeting, time-correct bytes across re-JIT/patching, method+version
@@ -97,7 +97,7 @@ canonicalization are deliberately **out of scope here** and carried in the compa
 - **Hardware data-watchpoint** targeted mode — followup F3.
 - **PT + code-image + replay** (the least-perturbing, Intel-PT-gated ceiling) — followup F5.
 - **Live GC-move canonicalization** of managed memory def-use — the pure transform is
-  landed ([asmtest_gcmove_canonicalize](../../../include/asmtest_valtrace.h#L353)); wiring
+  landed ([asmtest_gcmove_canonicalize](../../../../include/asmtest_valtrace.h#L353)); wiring
   the live EventPipe `{old,new,len}` feed is followup F4.
 - **Whole-process / continuous** value capture — the tier is scoped to a `using`-style
   region by design (cost is ~10³–10⁵×/stepped instruction); whole-process taint is the
@@ -114,8 +114,8 @@ dangerous one.
 - **Hazard A — int3 code patching.** `PTRACE_POKETEXT` writing `0xCC` corrupts a JIT's code
   page. Already mitigated: `asmtest_ptrace_run_to` falls back to a **hardware execution
   breakpoint** (x86 DR0 / AArch64 `NT_ARM_HW_BREAK`) the moment `POKETEXT` is refused on a
-  W^X heap ([ptrace_backend.c:678-714](../../../src/ptrace_backend.c#L678), comment at
-  [:480-483](../../../src/ptrace_backend.c#L480)) — "writes no code … per-thread, so it
+  W^X heap ([ptrace_backend.c:678-714](../../../../src/ptrace_backend.c#L678), comment at
+  [:480-483](../../../../src/ptrace_backend.c#L480)) — "writes no code … per-thread, so it
   never traps a sibling thread."
 - **Hazard B — per-instruction single-step (the TF trap flag).** Fatal *in-process* (a
   TF-armed thread that masks `SIGTRAP` — as `pthread_create`, CLR exception dispatch, and
@@ -132,7 +132,7 @@ induced cross-thread deadlock** — the tracer steps one thread ~1000× slower w
 run free — which scoping shrinks but cannot close; followup F1 shrinks it further.
 
 The producer stays the shared capture core. `dfp_step_loop`
-([dataflow_ptrace.c:459](../../../src/dataflow_ptrace.c#L459)) already operates on a
+([dataflow_ptrace.c:459](../../../../src/dataflow_ptrace.c#L459)) already operates on a
 `dfp_ctx {pid, vt, code, code_len, base}` and is documented as driving "an already trace-
 stopped tracee" — nothing in the per-step register/XSTATE/`process_vm_readv` capture knows
 the tracee is a forked child. The `code` (tracer-local bytes Capstone decodes) and `base`
@@ -169,7 +169,7 @@ a tier, not part of the shared `asmtest_valtrace.h` sink API), re-declared by th
 suite exactly as `asmtest_dataflow_ptrace_run/attach` are today.
 
 The asmspy engine seam mirrors the existing `asmspy_engine_region`
-([asmspy.h:227](../../../cli/asmspy.h#L227)):
+([asmspy.h:227](../../../../cli/asmspy.h#L227)):
 
 ```c
 /* Capture the data flow of [base,base+len) in live `pid`; pick native vs JIT internally
@@ -205,15 +205,15 @@ Add `asmtest_dataflow_ptrace_attach_pid` and make the shared step loop foreign-s
 
 - **Foreign-safe error policy (the critical refactor).** Every error path in `dfp_step_loop`
   currently `SIGKILL`s the tracee (fault at
-  [:490-493](../../../src/dataflow_ptrace.c#L490), backstop at
-  [:498-503](../../../src/dataflow_ptrace.c#L498), `max_insns` at
-  [:523-525](../../../src/dataflow_ptrace.c#L523), ptrace failure at
-  [:542-544](../../../src/dataflow_ptrace.c#L542)) — correct for a disposable child, fatal
+  [:490-493](../../../../src/dataflow_ptrace.c#L490), backstop at
+  [:498-503](../../../../src/dataflow_ptrace.c#L498), `max_insns` at
+  [:523-525](../../../../src/dataflow_ptrace.c#L523), ptrace failure at
+  [:542-544](../../../../src/dataflow_ptrace.c#L542)) — correct for a disposable child, fatal
   for a foreign target. Extend the existing `left_stopped` out so **every** exit reports
   whether the tracee is still trap-stopped, and move the kill/detach decision to the caller:
   the fork path (`_run`) keeps kill+reap; the live path always `PTRACE_DETACH`s.
 - **Bytes from the target, not fork inheritance.** Replace `map_exec`
-  ([:562](../../../src/dataflow_ptrace.c#L562)) for this path with a `process_vm_readv` of
+  ([:562](../../../../src/dataflow_ptrace.c#L562)) for this path with a `process_vm_readv` of
   `[base, base+len)` into `c->code`; set `c->base = base` (the target's symbol address).
 - **Reach the region.** SEIZE + INTERRUPT, then `asmtest_ptrace_run_to(pid, base)` (int3,
   auto-falling-back to the DR0 hardware breakpoint) to leave the target trap-stopped at the
@@ -226,7 +226,7 @@ Add `asmtest_dataflow_ptrace_attach_pid` and make the shared step loop foreign-s
 **Exit criteria:** a new docker lane (proposed `make docker-dataflow-attach`) starts a
 native victim, attaches by pid, captures a scoped region's value trace whose L2 slices
 **match the emulator L0 oracle** on a deterministic region (reuse the
-[test_dataflow_ptrace.c](../../../examples/test_dataflow_ptrace.c) cross-validation shape);
+[test_dataflow_ptrace.c](../../../../examples/test_dataflow_ptrace.c) cross-validation shape);
 the victim **survives detach** (a post-region marker proves it); on a seccomp/permission-
 denied host the entry point returns `DF_PTRACE_ETRACE` and the lane self-skips.
 
@@ -247,15 +247,15 @@ denied host the entry point returns `DF_PTRACE_ETRACE` and the lane self-skips.
 > The re-entrancy caveat (resume at first arrival at the return address) is carried in-code.
 
 Today the value producer treats "PC left the region" as "returned"
-([dataflow_ptrace.c:527-537](../../../src/dataflow_ptrace.c#L527)), so a region that calls a
+([dataflow_ptrace.c:527-537](../../../../src/dataflow_ptrace.c#L527)), so a region that calls a
 runtime helper ends at the first `call`. Real managed methods call helpers constantly.
 
 - Adopt the **return-address-breakpoint step-over** the control-flow tracers already use: at
   a call-out, breakpoint the return address, `PTRACE_CONT` over the helper at native speed
   (recording nothing), and resume in-region single-stepping — the exact seam
-  `asmtest_ptrace_trace_attached` documents ([asmtest_ptrace.h:184-191](../../../include/asmtest_ptrace.h#L184))
+  `asmtest_ptrace_trace_attached` documents ([asmtest_ptrace.h:184-191](../../../../include/asmtest_ptrace.h#L184))
   and `classify_region_exit` implements for block-step
-  ([ptrace_backend.c:1858-1873](../../../src/ptrace_backend.c#L1858), the
+  ([ptrace_backend.c:1858-1873](../../../../src/ptrace_backend.c#L1858), the
   `EXIT_CALLOUT_RESUMED` / `EXIT_CALLOUT_LOST` split). The offset backend's step-over is not
   yet exported to the value producer (its header flags exactly this); factor it into a
   shared helper both call.
@@ -290,15 +290,15 @@ sets. Decode against the versioned code-image instead.
 - `asmtest_codeimage_track(img, base, len)` before the run; `asmtest_codeimage_refresh(img)`
   between captured invocations; decode each step's operands against
   `asmtest_codeimage_bytes_at(img, pc, when)`
-  ([asmtest_codeimage.h:110](../../../include/asmtest_codeimage.h#L110)) rather than the live
+  ([asmtest_codeimage.h:110](../../../../include/asmtest_codeimage.h#L110)) rather than the live
   snapshot — the same "swap the byte source, keep the step loop" decoupling
   `asmtest_ptrace_trace_attached_versioned` uses
-  ([ptrace_backend.c:2302-2335](../../../src/ptrace_backend.c#L2302)).
+  ([ptrace_backend.c:2302-2335](../../../../src/ptrace_backend.c#L2302)).
 - Attribute every step to its **method + version** with the landed Phase-4 resolver
-  `asmtest_method_attribute` ([asmtest_valtrace.h:281](../../../include/asmtest_valtrace.h#L281),
-  [src/dataflow_method.c](../../../src/dataflow_method.c)), fed by the jitdump/perf-map
+  `asmtest_method_attribute` ([asmtest_valtrace.h:281](../../../../include/asmtest_valtrace.h#L281),
+  [src/dataflow_method.c](../../../../src/dataflow_method.c)), fed by the jitdump/perf-map
   method-map and the addr-channel `(base,len,version)` records
-  ([asmtest_addr_channel.h](../../../include/asmtest_addr_channel.h)).
+  ([asmtest_addr_channel.h](../../../../include/asmtest_addr_channel.h)).
 
 **Exit criteria:** a fixture that **patches or relocates** the region mid-capture still
 decodes correct operands (assert the read/write sets match a static decode of the *live-at-
@@ -325,17 +325,17 @@ across an induced tiered re-JIT.
 
 `asmspy_engine_region` attaches only the leader and returns `ASMSPY_REGION_NEVER_RAN` when
 the function runs on a worker thread — "run_to only steps the leader here"
-([asmspy_engine.c:880-884](../../../src/asmspy_engine.c#L880)). Managed methods almost always
+([asmspy_engine.c:880-884](../../../../cli/asmspy_engine.c#L880)). Managed methods almost always
 run on worker threads, so the JIT path must not depend on the leader.
 
 - Reuse the existing whole-process **SEIZE-all-threads** helper
-  ([asmspy_engine.c:465-511](../../../src/asmspy_engine.c#L465)); plant the entry breakpoint
+  ([asmspy_engine.c:465-511](../../../../cli/asmspy_engine.c#L465)); plant the entry breakpoint
   process-wide (a hardware breakpoint is per-thread, so arm it on each seized tid, or use the
   int3 which is shared); run **whichever thread first enters** the region to the stop and
   single-step that one thread; leave the siblings running.
 - Target the entering thread by its own **`SYS_gettid`**, never the leader — the getpid-vs-
   gettid mistargeting was a real fatal-SIGTRAP bug on HotSpot
-  ([hwtrace.c:2803-2808](../../../src/hwtrace.c#L2803)).
+  ([hwtrace.c:2803-2808](../../../../src/hwtrace.c#L2803)).
 - Honor an optional `only_tid` filter (the asmspy `--tid=` convention) to pin one thread.
 
 **Exit criteria:** a multi-threaded fixture whose target routine runs on a **worker** thread
@@ -430,16 +430,16 @@ documented inherent hazard (indistinguishable from a step-induced trap).
 Every asmspy view has a headless twin; add this one first (CI-testable, no ncurses).
 
 - `asmspy --dataflow <pid> <func> [--json] [--tid=N] [--max=N]`: resolve `func` via the
-  existing symtab + jitmap ([asmspy.h:117-180](../../../cli/asmspy.h#L117)), pick the native
+  existing symtab + jitmap ([asmspy.h:117-180](../../../../cli/asmspy.h#L117)), pick the native
   vs JIT engine path from the fingerprint runtime field
-  ([asmspy_fingerprint_t.runtime](../../../cli/asmspy.h#L68)), run
+  ([asmspy_fingerprint_t.runtime](../../../../cli/asmspy.h#L68)), run
   `asmspy_engine_dataflow`, and emit the L0 value trace + L1 def-use edges (and, on request,
   a backward/forward slice for a seed step). JSON schema documented alongside the existing
   `--graph`/`--sample` JSON.
 
 **Exit criteria:** the subcommand prints a value trace + def-use for a chosen function of a
 live process; `--json` emits a documented schema; `cli_smoke.sh`
-([cli/cli_smoke.sh](../../../cli/cli_smoke.sh)) covers it against a bundled victim and it
+([cli/cli_smoke.sh](../../../../cli/cli_smoke.sh)) covers it against a bundled victim and it
 self-skips where unavailable; verified via `make docker-cli`.
 
 ---
@@ -459,9 +459,9 @@ self-skips where unavailable; verified via `make docker-cli`.
 > leader) is an Inc 4/5 follow-on, surfaced in-view.
 
 Add the interactive view. Reuse the existing structure: `screen_mode`
-([asmspy.c:2626](../../../cli/asmspy.c#L2626)) gains a "9) Data flow" option; `screen_syms`
-([asmspy.c:2689](../../../cli/asmspy.c#L2689)) picks the function; the view runs the engine
-on the **dedicated tracer thread** (the ptrace-per-thread rule, [asmspy.h:14-17](../../../cli/asmspy.h#L14)).
+([asmspy.c:2626](../../../../cli/asmspy.c#L2626)) gains a "9) Data flow" option; `screen_syms`
+([asmspy.c:2689](../../../../cli/asmspy.c#L2689)) picks the function; the view runs the engine
+on the **dedicated tracer thread** (the ptrace-per-thread rule, [asmspy.h:14-17](../../../../cli/asmspy.h#L14)).
 
 - **Top pane:** region disassembly, one row per executed step, annotated with captured
   values (`mov rax,[rbp-8]` → `rax ← 0x2a`).
@@ -485,7 +485,7 @@ picked function of a live process; the leader/worker and JIT caveats surface in-
 - **Perturbation-induced deadlock is the irreducible residual.** Stepping one thread ~1000×
   slower while runtime siblings run free can stall a sibling on a lock the stepped region
   holds (GC alloc slow-path, JIT-compile helper, loader lock) — a deadlock no watchdog
-  breaks ([jit-runtime-tracing.md:347-357](../analysis/jit-runtime-tracing.md)). Scoping to a
+  breaks ([jit-runtime-tracing.md:347-357](../../analysis/jit-runtime-tracing.md)). Scoping to a
   small region shrinks the window; followup F1 (block-step) shrinks it further; it never
   fully closes. Bound every capture with `max_insns` and surface truncation honestly.
 - **Managed memory def-use is GC-uncanonicalized** until followup F4 wires the live move

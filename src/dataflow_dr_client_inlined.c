@@ -91,12 +91,17 @@
  *  - on_seed: a rare PC-resolved clean call (the on_marker pattern, no drwrap) that
  *    paints tag_ptr(base..+len) = color at seed time (pre-traced-code, no concurrency).
  *  - Sink slice: on_sink_register (PC-resolved, rdi = at_taint_report_t*) records the
- *    report; a branch-condition sink (kind = 1) appends one at_taint_hit_t at each in-
- *    region conditional branch whose flag is tainted, via a transparent clean call that
- *    reads the eflags tag from this thread's reg-tag file (off the per-instruction path;
- *    seed_off/depth are left 0 and filled app-side by the validator's def-use BFS). The
- *    guarded INLINE skip (no call when the flag is clean) and other sink kinds (mem-len /
- *    call-arg watching a passed-in operand tag) are the next refinement.
+ *    report; a sink appends one at_taint_hit_t when the watched reg-tag is tainted, via a
+ *    transparent clean call that reads this thread's reg-tag file (off the per-instruction
+ *    path; seed_off/depth are left 0 and filled app-side by the validator's def-use BFS).
+ *    The call is GUARDED by an inline test of the watched tag (drreg-reserved aflags, so
+ *    the app flags a branch reads are preserved): a clean operand pays a TLS load + test,
+ *    not a call. THREE sink kinds share the one mechanism and one clean-call site,
+ *    differing only in which reg-tag index emit_guarded_sink watches (see event_insert):
+ *    a conditional branch watches eflags (kind 1), a call watches the first SysV arg
+ *    register rdi (kind 2 call-arg), and a rep-movs string copy watches the count
+ *    register rcx (kind 0 mem-len). The categories are mutually exclusive; at most one
+ *    fires per instruction.
  *
  * Store-tag broadcast is real CREATE-ON-TOUCH: the inline fast path stores the tag when
  * the leaf exists, else a first-touch SLOWPATH clean call (on_store_slow) allocates the

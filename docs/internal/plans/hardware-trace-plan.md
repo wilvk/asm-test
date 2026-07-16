@@ -67,10 +67,12 @@ with the specific reason. Capture is validated only on bare-metal Intel PT with
 `perf_event_paranoid` lowered. User-facing docs:
 [native-tracing.md](../../guides/tracing/native-tracing.md#hardware-trace-tier-intel-pt--arm-coresight).
 
-Phase 2 (attach-to-foreign-JIT) remains **planned, forward-look** (it is research-
-grade: PT-attach-to-PID + a time-aware jitdump/eBPF code-image recorder, then the
-hypervisor/EPT frontier — see the analysis doc); it needs PT hardware to build and
-validate and is intentionally not implemented as untested code.
+Phase 2 (attach-to-foreign-JIT) remains **forward-look as a capability**, but its scope
+has narrowed substantially since earlier revisions of this plan: the time-aware
+code-image recorder *and* the recorder-backed libipt decode have both landed (below),
+leaving only **PT-attach-to-live-PID capture and its wiring** — hardware-gated on
+bare-metal Intel PT — plus the research-grade hypervisor/EPT frontier (see the analysis
+doc). It is intentionally not implemented as untested code.
 
 Phase 2's **code-image building blocks have, however, already landed** out of the
 [single-step plan's W2 work](zen2-singlestep-trace-plan.md) (Phase 5) and are reusable
@@ -93,11 +95,29 @@ versioned W2 trace in `make hwtrace-test`, and the eBPF lane `make
 docker-hwtrace-codeimage`) and is already paired with the on-host W2 ptrace stepper
 (`asmtest_ptrace_trace_attached_versioned`) — the AMD-host route that does not need PT.
 
-What Phase 2 still needs on top of all this is the **hardware half**:
-**PT-attach-to-live-PID** capture (`perf record -p <pid>` / `perf_event_open` on a
-running process) and feeding the recorder's (or jitdump's) bytes into the libipt decoder
-at the right point in the trace — which needs PT hardware to build and validate, so it
-stays the forward-look.
+**The recorder-backed libipt decode has since been written too** (2026-07) —
+`asmtest_pt_decode_window(aux, aux_len, img, when, trace)`
+([src/pt_backend.c:221](../../../src/pt_backend.c)) builds a `pt_image` whose bytes come
+from the code-image recorder instead of a registered region, via
+`pt_image_set_callback(image, read_recorder, &ctx)`
+([pt_backend.c:239](../../../src/pt_backend.c)) keyed to the trace position `when`; its
+adapter `asmtest_pt_read_codeimage` ([pt_backend.c:47](../../../src/pt_backend.c)) is
+host-tested directly ([examples/test_hwtrace.c:3111-3130](../../../examples/test_hwtrace.c),
+the same-address-different-bytes case resolving to the version live at each `when`). So
+"feed the recorder's timeline to libipt" is **no longer the open item** — that entry
+point exists and is decoder-side complete.
+
+What Phase 2 still needs is therefore **narrower than earlier revisions of this plan
+claimed** — two things, both ultimately gated on **bare-metal Intel PT silicon, which
+neither dev box provides** (a Ryzen 9 9950X / Zen 5 and a Ryzen 9 4900HS / Zen 2):
+
+- **PT-attach-to-live-PID capture** (`perf record -p <pid>` / `perf_event_open` against a
+  running process, versus Phase 1's `pid=0` self-trace). Nothing in
+  [src/hwtrace.c](../../../src/hwtrace.c) opens a PT event on a foreign pid today.
+- **Wiring** that capture to the decode: `asmtest_pt_decode_window` currently has **no
+  caller** — the hwtrace facade never dispatches to it. The wiring itself is pure
+  software, but it cannot be validated without PT hardware, so per the house "no untested
+  hardware code" rule it stays forward-look alongside the capture it serves.
 
 ---
 
@@ -261,7 +281,7 @@ dev boards/phones (Juno, ZCU102/Kria, Jetson, Pixel) with `CONFIG_CORESIGHT*` an
 
 ---
 
-## Phase 2 - Attach-to-foreign-JIT tracing *(byte-source recorder done; PT-attach decode forward-look)*
+## Phase 2 - Attach-to-foreign-JIT tracing *(byte-source recorder + recorder-backed decode done; PT capture + wiring forward-look, Intel-PT-gated)*
 
 **Goal.** Trace the machine code a *foreign* JIT (JVM, V8, CoreCLR, the CPython
 3.13+ JIT, LLVM ORC) generates inside a **running** process — attached at runtime,
@@ -298,8 +318,15 @@ position.
   approach #2's "eBPF + userfaultfd-WP" sketch (uffd-WP needs the owning process to
   register, so soft-dirty is the cross-process primitive). Runtime-enabled **jitdump**
   (a) — .NET `DiagnosticsClient.EnablePerfMap(JitDump)` / JVM jitdump agent + `perf inject
-  --jit` — and feeding the recorder's bytes into libipt's `pt_image_set_callback` keyed
-  to trace position remain the PT-hardware half below.
+  --jit` — remains the PT-hardware half below.
+- _Done (decoder-side; unwired)._ Feeding the recorder's bytes into libipt's
+  `pt_image_set_callback` keyed to trace position — `asmtest_pt_decode_window`
+  ([src/pt_backend.c:221](../../../src/pt_backend.c)), image callback at
+  [pt_backend.c:239](../../../src/pt_backend.c), adapter `asmtest_pt_read_codeimage` at
+  [pt_backend.c:47](../../../src/pt_backend.c), host-tested at
+  [examples/test_hwtrace.c:3111-3130](../../../examples/test_hwtrace.c). Written and
+  decoder-side complete, but it has **no caller**: the PT capture that would drive it does
+  not exist yet (see Status).
 - libipt (or libxdc) decode; reuse the Capstone layer to render recovered bytes —
   no new decoder API in the bindings.
 - The hypervisor/EPT frontier as the research-grade, maximum-stealth option:
@@ -314,9 +341,13 @@ trace that matches a ground-truth disassembly of the same bytes.
 
 **Status.** The **byte-source half is implemented and live-validated** — the
 `asmtest_codeimage` time-aware recorder + its eBPF emission detector, paired with the W2
-ptrace stepper (the AMD-host route that needs no PT). What remains forward-look is the
-**PT hardware half**: attach-to-live-PID PT capture + libipt decode keyed to the
-recorder's timeline, which needs PT hardware to build and validate. Distinct from the
+ptrace stepper (the AMD-host route that needs no PT). The **recorder-backed libipt decode
+is written as well** — `asmtest_pt_decode_window`
+([src/pt_backend.c:221](../../../src/pt_backend.c)), with a host-tested image adapter and
+no caller. What remains forward-look is strictly the **PT capture and its wiring**:
+attach-to-live-PID PT capture, dispatched into that decode entry. Both are gated on
+**bare-metal Intel PT hardware, which neither dev box provides** (Zen 5 9950X / Zen 2
+4900HS), so they cannot be built or validated here. Distinct from the
 Phase 0-8 work of the native-trace plan, which traces code asm-test generates itself;
 depends on this plan's Phase 1 (PT substrate) and **native-trace Phase 5**
 (instruction-mode semantics). See the analysis doc for the ranked approaches, per-runtime

@@ -652,6 +652,70 @@ echo "  per-thread filter: alpha only (beta_work absent)"
 kill "$YPID" 2>/dev/null || true
 rm -f "$TLOG"
 
+# REGION SAMPLING ON A WORKER THREAD (asmspy-plan Theme B).
+#
+# tid_victim's main() only sleeps: alpha_work/beta_work run ONLY on worker
+# threads. The pre-Theme-B engine attached the thread-group LEADER and ran it to
+# the region, so this returned ASMSPY_REGION_NEVER_RAN — the exact shape of a
+# managed method, which almost never runs on the leader. The engine now SEIZEs
+# every thread and races them to the entry, so the arriving worker is sampled.
+echo "--- asmspy --trace on a WORKER-thread function (Theme B) ---"
+TLOG="$BUILD/tid_victim.log"
+: > "$TLOG"
+"$BUILD/tid_victim" 2>"$TLOG" &
+YPID=$!
+sleep 1
+kill -0 "$YPID" 2>/dev/null || fail "tid_victim did not start"
+ATID=$(sed -n 's/^alpha tid=\([0-9][0-9]*\).*/\1/p' "$TLOG" | head -1)
+BTID=$(sed -n 's/^beta tid=\([0-9][0-9]*\).*/\1/p' "$TLOG" | head -1)
+[ -n "$ATID" ] && [ -n "$BTID" ] || fail "tid_victim did not report both worker tids"
+
+set +e
+wout=$(timeout 40 "$ASM" --trace "$YPID" alpha_work 2 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--trace hung on a worker-thread region"
+printf '%s\n' "$wout" | grep -qE '^sample #1' \
+    || fail "--trace: worker-thread alpha_work never sampled (leader-only regression?)"
+printf '%s\n' "$wout" | grep -q 'never executed' \
+    && fail "--trace: reported NEVER_RAN for a function a worker runs constantly"
+echo "  worker-thread region sampled (no longer NEVER_RAN)"
+
+# --tid pins the sample to one thread. Pinning to the thread that DOES run the
+# region samples it; pinning to the one that never does must report "never
+# executed" — promptly and without perturbing the busy non-target thread. (This
+# path arms a per-thread HARDWARE breakpoint precisely so the non-target thread
+# is never trapped and stepped back over a shared int3, which does not converge.)
+set +e
+pout=$(timeout 40 "$ASM" --trace "$YPID" alpha_work 1 --tid="$ATID" 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--trace --tid=<runner> hung"
+printf '%s\n' "$pout" | grep -qE '^sample #1' \
+    || fail "--trace --tid=$ATID: alpha_work not sampled on the thread that runs it"
+set +e
+nout=$(timeout 40 "$ASM" --trace "$YPID" alpha_work 1 --tid="$BTID" 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--trace --tid=<non-runner> hung (entry wait not bounded?)"
+printf '%s\n' "$nout" | grep -qE '^sample #' \
+    && fail "--trace --tid=$BTID: sampled alpha_work on a thread that never runs it"
+printf '%s\n' "$nout" | grep -q 'never executed' \
+    || fail "--trace --tid=$BTID: no honest never-executed report"
+echo "  --tid pins the sample (runner sampled; non-runner reports never-executed)"
+
+# THE TARGET MUST OUTLIVE US. This is the assertion that matters: an entry trap
+# left behind on detach does NOT fail loudly — the victim runs on and dies of
+# SIGTRAP (exit 133) on its NEXT arrival at the region, seconds later and
+# seemingly unrelated to the tool. Both the shared int3 and the debug registers
+# survive PTRACE_DETACH, and both are refused on a RUNNING thread, so a disarm
+# that skips stopping the thread first still passes an immediate liveness check.
+# Sleep past the region's next call before asserting.
+sleep 2
+kill -0 "$YPID" 2>/dev/null \
+    || fail "tid_victim DIED after --trace detached (entry trap left armed?)"
+echo "  target survived 4 attach/detach cycles + settle (no trap left armed)"
+expect_badarg "$ASM" --trace "$YPID" alpha_work --tid=nope
+kill "$YPID" 2>/dev/null || true
+rm -f "$TLOG"
+
 # TWO-PHASE DETACH: assert a traced target SURVIVES detach.
 #
 # A whole-process single-step run leaves threads SEIZEd and Trap-Flag-armed;

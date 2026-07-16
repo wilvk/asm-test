@@ -5,8 +5,8 @@ every managed thread at a **GC-safe point before the seize**, then taking DR ove
 resuming — the one credible path left after the Increment-6 probe closed the naive approach.
 
 This is the **Option-2** follow-on to
-[dynamorio-attach-tier-plan.md](dynamorio-attach-tier-plan.md) Increment 6, whose probe
-([dr-managed-attach-probe-findings.md](../analysis/dr-managed-attach-probe-findings.md))
+[dynamorio-attach-tier-plan.md](../../plans/dynamorio-attach-tier-plan.md) Increment 6, whose probe
+([dr-managed-attach-probe-findings.md](../../analysis/dr-managed-attach-probe-findings.md))
 returned a definitive **NO-GO**: `drrun -attach <dotnet-pid>` *delivers* the client
 (`dr_client_main` runs) but the takeover immediately crashes the process
 (stack-canary trip → SIGSEGV rc 139), and an **Option-1 sweep** proved it is not fixable by
@@ -26,7 +26,7 @@ release helps).
 > called out below. Increment 3 was not reached. **Managed stays launch-under-DR** (taint tier
 > Increment 5, landed) **/ ptrace-attach** (out-of-band, the
 > [live-attach-dataflow plan](live-attach-dataflow-plan.md)) — the accepted outcome, not a failure.
-> Findings: [dr-managed-attach-probe-findings.md](../analysis/dr-managed-attach-probe-findings.md).
+> Findings: [dr-managed-attach-probe-findings.md](../../analysis/dr-managed-attach-probe-findings.md).
 > Lanes: `make docker-suspendprof-probe` (Inc 1 `dr-suspendprof-test` + Inc 2
 > `dr-suspendprof-attach-test`).
 
@@ -158,8 +158,20 @@ validator + atomic report verbatim; the new surface is only the suspend/attach/r
 
 ## Recommended first milestone
 
+*(As written, before the spike ran. Retained for provenance — the sequence below is exactly what
+happened, and its final branch is the one that fired.)*
+
 **Increment 1** (suspend/resume under DR *launch*) — it is safe (no attach, no experimental seize),
 reuses the proven `gcprofiler_probe` coexistence, and answers the cheapest prerequisite question —
 *can the runtime even be suspended/resumed under a DR that is already coexisting?* — before the
 expensive Increment-2 ordering experiment. If Increment 1 is clean, Increment 2 is the make-or-break
 go/no-go; if Increment 2 stays NO-GO, close Option 2 and keep managed on launch/ptrace.
+
+**Outcome 2026-07-14: Increment 1 was clean (GO), Increment 2 stayed NO-GO — so Option 2 is CLOSED
+and managed stays on launch/ptrace.** The cheap-prerequisite-first ordering did its job: Increment 1
+cost little and isolated the make-or-break question, and Increment 2 answered it decisively enough
+that Increment 3 was never reached and the ICorDebug fallback was not worth pursuing (it stops only
+managed threads, so it would fail for the same reason). **No further work is planned or recommended
+on this plan** — it is a closed research spike, not an open track. The sanctioned managed-
+already-running path is ptrace-attach + emulator replay
+([live-attach-dataflow-plan.md](live-attach-dataflow-plan.md), Increment 1 landed).

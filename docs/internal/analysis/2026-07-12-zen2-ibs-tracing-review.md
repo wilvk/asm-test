@@ -8,7 +8,7 @@ This is an empirical review: every claim below was produced by compiling and run
 `perf_event_open` probe on *this* box and decoding the raw records, not by reading specs.
 The repro programs are in the session scratchpad (`hwprobe2.c`, `ibsraw.c`, `ibscaps.c`,
 `ibsattach.c`); the plan that turns this into work is
-[zen2-ibs-tracing-plan.md](../plans/zen2-ibs-tracing-plan.md).
+[zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-tracing-plan.md).
 
 ## 1. Executive summary
 

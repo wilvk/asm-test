@@ -2,44 +2,44 @@
 
 This is the standalone child plan for **goal (b)** of the data-flow effort — production-grade
 taint over live JIT'd managed (.NET) code under DynamoRIO. It splits out of Phase 5 of the
-parent [data-flow-tracing-plan.md](data-flow-tracing-plan.md), whose Phase-5 section is now a
+parent [data-flow-tracing-plan.md](../../plans/data-flow-tracing-plan.md), whose Phase-5 section is now a
 pointer stub retaining only the landed-Increment-1 status; the detail lives here. The
 source-of-truth analysis note for every overhead figure, launch-vs-attach decision, and
-integration-model claim below is [data-flow-capture.md](../analysis/data-flow-capture.md); the
+integration-model claim below is [data-flow-capture.md](../../analysis/data-flow-capture.md); the
 standalone-DynamoRIO-plan precedent this file's shape follows is
-[dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md).
+[dynamorio-native-trace-plan.md](dynamorio-native-trace-plan.md).
 
 The shipped tier (Increment 1, **LANDED 2026-07-13**) is an in-process, clean-call **L0 VALUE**
 producer: `libasmtest_drval_client.so` records, per instrumented instruction, the GP register
 file (`dr_get_mcontext`) plus each explicit memory SOURCE operand's effective address/value
 (`decode` + `opnd_compute_address` + `dr_safe_read`) into an app-owned `at_drval_t`,
 cross-validated against the emulator oracle
-([dataflow_dr_client.c:1](../../../src/dataflow_dr_client.c#L1)). This plan does **not** extend
+([dataflow_dr_client.c:1](../../../../src/dataflow_dr_client.c#L1)). This plan does **not** extend
 that client — it *re-platforms* it. The spine of the remaining work is a departure from
 DynamoRIO's raw BSD **core API** onto its standard **extension stack**
 (`drmgr`/`drreg`/`umbra`/`drx_buf`) with inlined instrumentation, which the client header itself
-names as "the Phase-5 END goal" ([dataflow_dr_client.c:20](../../../src/dataflow_dr_client.c#L20)).
+names as "the Phase-5 END goal" ([dataflow_dr_client.c:20](../../../../src/dataflow_dr_client.c#L20)).
 Everything else — in-band tag propagation, the launch-under-DR container, GC-move shadow remap,
 whole-process breadth, SIMD taint — hangs off that re-platform. The whole point is the overhead
 band: an inlined+buffered DBI client sits at the **greenfield ~10–50×** versus ptrace
-single-step's **~10³–10⁵×** ([data-flow-capture.md:180](../analysis/data-flow-capture.md#L180)),
+single-step's **~10³–10⁵×** ([data-flow-capture.md:180](../../analysis/data-flow-capture.md#L180)),
 so this is the only substrate on which whole-process managed taint is affordable at all.
 
 The plan is written **exit-criteria-first**: each increment is framed by the committed
 end-state — *a seed at a source is detected at a sink over real JIT'd managed code, taint
 survives a GC, and overhead is measured against a budget* — and works backward to the smallest
 buildable, docker-CI-checkable slice, with the emulator L0 oracle
-([dataflow_emu.c](../../../src/dataflow_emu.c), the reference oracle for the live capture tiers)
+([dataflow_emu.c](../../../../src/dataflow_emu.c), the reference oracle for the live capture tiers)
 as the standing cross-validation reference at every step. Each increment also carries an explicit
 **Effort.** sizing (relative, not absolute) so the eight-increment sequence can be scheduled — the
-re-architecting-tier precedent [dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md)
+re-architecting-tier precedent [dynamorio-native-trace-plan.md](dynamorio-native-trace-plan.md)
 closes each phase the same way.
 
 > Status legend: **Increment 1 — in-band L0 VALUE producer** *(LANDED 2026-07-13)* — the
 > clean-call per-instruction register/memory value snapshot
-> ([dataflow_dr_client.c](../../../src/dataflow_dr_client.c#L1), capture ABI
-> [dataflow_dr.h](../../../src/dataflow_dr.h#L87)), cross-validated against the emulator oracle
-> ([dataflow_emu.c](../../../src/dataflow_emu.c)), driven in-process by the `dr_valtrace` C
+> ([dataflow_dr_client.c](../../../../src/dataflow_dr_client.c#L1), capture ABI
+> [dataflow_dr.h](../../../../src/dataflow_dr.h#L87)), cross-validated against the emulator oracle
+> ([dataflow_emu.c](../../../../src/dataflow_emu.c)), driven in-process by the `dr_valtrace` C
 > harness. **Increment 2 — extension-load probe** *(LANDED 2026-07-13)* — the prebuilt
 > `drmgr`/`drreg`/`drx` (the `drx_buf` API lives in `drx.h`) load cleanly under DR's private
 > loader on glibc 2.39 with the pinned DR 11.91.20630; the documented blocker does **not**
@@ -47,18 +47,25 @@ closes each phase the same way.
 > The license question resolved to a **split**: `drmgr`/`drreg`/`drx` are BSD (DR core), but
 > **`umbra` is LGPL-2.1** (it ships in the Dr. Memory Framework, not DR core — only `drfuzz`/
 > `drltrace` are its BSD carve-outs), contradicting the plan's permissive-umbra assumption.
-> Probe [drclient/probe_extensions.c](../../../drclient/probe_extensions.c); findings
-> [dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md); gate
+> Probe [drclient/probe_extensions.c](../../../../drclient/probe_extensions.c); findings
+> [dr-extension-load-probe-findings.md](../../analysis/dr-extension-load-probe-findings.md); gate
 > `make docker-drext-probe` + CI `drext-probe`. **Increment 3 — inlined L0 value client (CORE)**
-> *(LANDED 2026-07-13)* — [dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c)
+> *(LANDED 2026-07-13)* — [dataflow_dr_client_inlined.c](../../../../src/dataflow_dr_client_inlined.c)
 > re-platforms the clean-call recorder onto `drmgr`/`drreg`/`drx_buf` and passes the emulator-oracle
 > cross-check identically to the clean-call client (`make dr-valtrace-inlined-test`, wired into
 > `drtrace-test`); `rflags`/dead-register slots are documented clean-call-only divergences; the
 > `make dr-valtrace-bench` microbenchmark shows a ~2.6× per-instruction capture-cost drop.
-> **Increments 4–9** *(planned)* — 4 in-band tag propagation
-> (`dst_tag = ∪ src_tags`) + shadow-concurrency policy + seed/sink API; 5 launch-under-DR
-> container (`drrun -c … -- dotnet app.dll`) + out-of-process oracle-diff validator; 6
-> whole-process breadth + method-range scoping; 7 GC-move shadow remap *(**COMPLETE 2026-07-14** —
+> **Increments 4–9** *(**ALL LANDED** 2026-07-13/14)* — 4 in-band tag propagation
+> (`dst_tag = ∪ src_tags`) + shadow-concurrency policy + seed/sink API *(**COMPLETE 2026-07-13** —
+> hand-rolled BSD 2-level shadow, per-thread reg tags, inline union/broadcast, create-on-touch
+> stores, per-byte memory-tag union, the guarded-inline sink skip, and all three sink kinds:
+> branch-condition (1), mem-len (0), call-arg (2))*; 5 launch-under-DR
+> container (`drrun -c … -- dotnet app.dll`) + out-of-process oracle-diff validator
+> *(**COMPLETE 2026-07-14** — native launch + shm + validator, dotnet tiered-JIT coexistence,
+> concurrent-writer stress, managed seed→sink over real JIT'd code)*; 6
+> whole-process breadth + method-range scoping *(**COMPLETE 2026-07-14** — native multi-range
+> set + boundary policy + inscount cost bound, dotnet method-load auto-registration)*;
+> 7 GC-move shadow remap *(**COMPLETE 2026-07-14** —
 > profiler-fed live remap + full seed→move→sink survival via a DR-API-free raw-mmap leaf allocator)*;
 > 8 XMM/YMM SIMD taint *(**COMPLETE 2026-07-14** — XMM/SSE + YMM/AVX register + memory taint, a
 > shared Capstone AVX-store-access oracle fix, and the SIMD-vs-scalar overhead delta; ZMM/VSIB/
@@ -66,8 +73,8 @@ closes each phase the same way.
 > managed seed→sink validation + measured overhead + CI *(**COMPLETE 2026-07-14** — record-free
 > production propagation put production at ~11× bare (IN the ~10-50× band), the HARD BAND GATE + the
 > GC-survival CI job landed; all exit criteria MET — the plan is ready to archive)*. Update this file as increments land, the
-> way [dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md) tracks its
-> own; keep the parent [data-flow-tracing-plan.md](data-flow-tracing-plan.md) Phase-5 stub's
+> way [dynamorio-native-trace-plan.md](dynamorio-native-trace-plan.md) tracks its
+> own; keep the parent [data-flow-tracing-plan.md](../../plans/data-flow-tracing-plan.md) Phase-5 stub's
 > status tag in sync with this child.
 
 ---
@@ -77,26 +84,26 @@ closes each phase the same way.
 **Goals**
 
 - Re-platform the DynamoRIO data-flow tier off the per-instruction clean-call recorder
-  ([dataflow_dr_client.c:173](../../../src/dataflow_dr_client.c#L173)) onto the standard
+  ([dataflow_dr_client.c:173](../../../../src/dataflow_dr_client.c#L173)) onto the standard
   extension stack — `drmgr` phased pass ordering, `drreg` scratch-register/flag reservation,
   `umbra` byte-granular shadow memory, `drx_buf` buffered per-thread trace — i.e. the
   drcachesim/memtrace idiom plus operand values plus inline tag propagation
   (`dst_tag = ∪ src_tags`), targeting the realistic **~10–50×** DBI band
-  ([data-flow-capture.md:194](../analysis/data-flow-capture.md#L194)). This stack is named as
+  ([data-flow-capture.md:194](../../analysis/data-flow-capture.md#L194)). This stack is named as
   the Phase-5 END goal in the client header itself
-  ([dataflow_dr_client.c:20](../../../src/dataflow_dr_client.c#L20)).
+  ([dataflow_dr_client.c:20](../../../../src/dataflow_dr_client.c#L20)).
 - **Defeat the private-loader/glibc blocker first.** The whole re-platform is gated on getting
   the prebuilt release extensions to load under DR's private loader (or side-stepping it) — the
   single documented reason the tier stays on raw core API today
-  ([drclient/CMakeLists.txt:19](../../../drclient/CMakeLists.txt#L19),
-  [dataflow_dr_client.c:16](../../../src/dataflow_dr_client.c#L16)).
+  ([drclient/CMakeLists.txt:19](../../../../drclient/CMakeLists.txt#L19),
+  [dataflow_dr_client.c:16](../../../../src/dataflow_dr_client.c#L16)).
 - Ship in-band L2 taint: a per-byte tag shadow propagated inline as `dst_tag = ∪ src_tags`, with
   a **process-global shadow concurrency policy** for the multithreaded managed runtime and a
   managed-facing **seed/sink** surface (a taint source at e.g. a `read()` buffer, a sink at a
   `memcpy` length or a branch condition).
 - Stand up a **launch-under-DR container** (`drrun -c libasmtest_drval_client.so -- dotnet app.dll`)
   — a genuinely new in-tree integration path; no `drrun` launcher exists today
-  ([data-flow-capture.md:203](../analysis/data-flow-capture.md#L203)) — together with the
+  ([data-flow-capture.md:203](../../analysis/data-flow-capture.md#L203)) — together with the
   **out-of-process oracle-diff validator** that consumes its results channel.
 - Make taint **survive .NET GC compaction** via `umbra`-shadow remap on GC-move events, and
   extend to **whole-process breadth** beyond the single registered region, scoped to registered
@@ -113,22 +120,22 @@ closes each phase the same way.
   three cited reasons: attach freezes the runtime at an arbitrary state (threads in syscalls, on
   runtime locks, mid-GC, deep in JIT'd code), the arbitrary-state half is not mitigable the way
   the signal half is, and a clean managed attach needs research-grade safepoint coordination
-  ([data-flow-capture.md:226](../analysis/data-flow-capture.md#L226)). Attach also means
+  ([data-flow-capture.md:226](../../analysis/data-flow-capture.md#L226)). Attach also means
   abandoning the cooperative `dr_app_*` model for the `dr_inject` injector — a re-architecture,
   not a flag. Launch owns the process from a clean start.
 - Pulling **`drwrap`** back in for function wrapping. The current client already does its own
   marker/arg resolution via `dr_get_proc_address` + a SysV-arg clean call
-  ([dataflow_dr_client.c:64](../../../src/dataflow_dr_client.c#L64),
-  [:156](../../../src/dataflow_dr_client.c#L156)); the re-platform must preserve that, never
+  ([dataflow_dr_client.c:64](../../../../src/dataflow_dr_client.c#L64),
+  [:156](../../../../src/dataflow_dr_client.c#L156)); the re-platform must preserve that, never
   adopt `drwrap_wrap`/`drwrap_get_arg`.
 - **Re-attach cycling.** One DR lifecycle per process stays the contract — the header flags
   in-process re-attach as unreliable
-  ([asmtest_drtrace.h:86](../../../include/asmtest_drtrace.h#L86)); launch-under-DR fits it.
+  ([asmtest_drtrace.h:86](../../../../include/asmtest_drtrace.h#L86)); launch-under-DR fits it.
 - macOS / arm64 / Windows. Linux x86-64 only, matching the pinned DR image
-  (`DR_VERSION=11.91.20630`, [Dockerfile.drtrace:35](../../../Dockerfile.drtrace#L35)).
+  (`DR_VERSION=11.91.20630`, [Dockerfile.drtrace:35](../../../../Dockerfile.drtrace#L35)).
 - Any claim of the ~10–50× band for SIMD-heavy code until Increment 8 measures it — even libdft's
   low numbers *skip* XMM/SSE/MMX (a coverage tradeoff), so the band may not hold once `umbra`
-  covers vector state ([data-flow-capture.md:356](../analysis/data-flow-capture.md#L356)).
+  covers vector state ([data-flow-capture.md:356](../../analysis/data-flow-capture.md#L356)).
 - Replacing the shipped ptrace L0 tier or the emulator oracle — those remain the correctness
   references, not competitors.
 
@@ -138,37 +145,37 @@ closes each phase the same way.
 
 | Piece | Already present | Gap |
 |---|---|---|
-| Instrumentation model | Per-instruction **clean call** `dr_insert_clean_call(…, on_step, …)` inserted before every in-range instr ([dataflow_dr_client.c:173](../../../src/dataflow_dr_client.c#L173)) on raw `dr_register_bb_event` ([:227](../../../src/dataflow_dr_client.c#L227)) | Replace with **inlined** instrumentation under `drmgr` pass ordering + `drreg` scratch regs/flags; the clean call per instr is precisely what makes the shipped increment slow ([data-flow-capture.md:198](../analysis/data-flow-capture.md#L198)) |
-| BB event | Raw `dr_register_bb_event(event_bb)` ([dataflow_dr_client.c:227](../../../src/dataflow_dr_client.c#L227)); `event_bb` at [:149](../../../src/dataflow_dr_client.c#L149) | `drmgr` phased events (app2app / analysis / insertion) so value capture + tag propagation compose as separate, ordered passes |
-| Extension stack | **None** — raw BSD core API only, by policy ([drclient/CMakeLists.txt:19-21](../../../drclient/CMakeLists.txt#L19)) | `drmgr`+`drreg`+`umbra`+`drx_buf`, blocked today by the private-loader/glibc load failure — Increment 2 must defeat it |
-| Value capture | Register file (`dr_get_mcontext`, [:89](../../../src/dataflow_dr_client.c#L89)) + explicit memory **source** EA/value (`decode`+`opnd_compute_address` [:122](../../../src/dataflow_dr_client.c#L122)+`dr_safe_read`) into app-owned `at_drval_t` ([dataflow_dr.h:87](../../../src/dataflow_dr.h#L87)) | `drx_buf` buffered per-thread flush to amortize the store cost (the memtrace pattern) |
+| Instrumentation model | Per-instruction **clean call** `dr_insert_clean_call(…, on_step, …)` inserted before every in-range instr ([dataflow_dr_client.c:173](../../../../src/dataflow_dr_client.c#L173)) on raw `dr_register_bb_event` ([:227](../../../../src/dataflow_dr_client.c#L227)) | Replace with **inlined** instrumentation under `drmgr` pass ordering + `drreg` scratch regs/flags; the clean call per instr is precisely what makes the shipped increment slow ([data-flow-capture.md:198](../../analysis/data-flow-capture.md#L198)) |
+| BB event | Raw `dr_register_bb_event(event_bb)` ([dataflow_dr_client.c:227](../../../../src/dataflow_dr_client.c#L227)); `event_bb` at [:149](../../../../src/dataflow_dr_client.c#L149) | `drmgr` phased events (app2app / analysis / insertion) so value capture + tag propagation compose as separate, ordered passes |
+| Extension stack | **None** — raw BSD core API only, by policy ([drclient/CMakeLists.txt:19-21](../../../../drclient/CMakeLists.txt#L19)) | `drmgr`+`drreg`+`umbra`+`drx_buf`, blocked today by the private-loader/glibc load failure — Increment 2 must defeat it |
+| Value capture | Register file (`dr_get_mcontext`, [:89](../../../../src/dataflow_dr_client.c#L89)) + explicit memory **source** EA/value (`decode`+`opnd_compute_address` [:122](../../../../src/dataflow_dr_client.c#L122)+`dr_safe_read`) into app-owned `at_drval_t` ([dataflow_dr.h:87](../../../../src/dataflow_dr.h#L87)) | `drx_buf` buffered per-thread flush to amortize the store cost (the memtrace pattern) |
 | Taint / shadow | None (values only) | `umbra` byte-granular tag shadow, one `at_tag_t` per app byte; inline `dst_tag = ∪ src_tags`; seed/sink surface. The shadow is **process-global**, written concurrently by every instrumented thread — tolerated-benign-race byte-store policy, set in Increment 4 |
-| Operand coverage | Explicit memory **source** loads; far/segmented `fs:`/`gs:`, VSIB vector-gather EA, and store (post-instruction) values all skipped ([dataflow_dr_client.c:104-107](../../../src/dataflow_dr_client.c#L104)) | Store **tags** (a store's *location* already enters def-use even though its value is skipped, [dataflow_dr.h:60-62](../../../src/dataflow_dr.h#L60)); then SIMD lanes (Increment 8) |
-| Region registration | One region, learned from an app-emitted marker's SysV args `rdi/rsi/rdx` ([on_marker :64](../../../src/dataflow_dr_client.c#L64), re-instrument via `dr_delay_flush_region` [:70](../../../src/dataflow_dr_client.c#L70), resolved by PC [:188](../../../src/dataflow_dr_client.c#L188)) | Whole-process breadth scoped to **registered method ranges**; a launched `dotnet app.dll` never calls the C-harness marker, so a new registration mechanism is needed |
-| Integration model | In-process cooperative `dr_app_*`; header flags in-process re-attach as unreliable ([asmtest_drtrace.h:86](../../../include/asmtest_drtrace.h#L86)); driven by the self-init harness `dr_valtrace` via `ASMTEST_DRVAL_CLIENT` ([native-trace.mk:201](../../../mk/native-trace.mk#L201)) | **Launch-under-DR** container over a live `dotnet` — no `drrun` launcher in-tree; plus an out-of-process validator to consume the results channel |
-| Signal coexistence | **Mitigated** — `event_signal` → `DR_SIGNAL_DELIVER` in both clients ([dataflow_dr_client.c:213-217](../../../src/dataflow_dr_client.c#L213); rationale in the control client [drtrace_client.c:386](../../../src/drtrace_client.c#L386)) so .NET null-check `SIGSEGV` reaches the runtime | Carries over unchanged to launch; the **code-cache/JIT-collision half** is only *asserted* solved by launch, not demonstrated — a hypothesis first tested in Increment 5 |
+| Operand coverage | Explicit memory **source** loads; far/segmented `fs:`/`gs:`, VSIB vector-gather EA, and store (post-instruction) values all skipped ([dataflow_dr_client.c:104-107](../../../../src/dataflow_dr_client.c#L104)) | Store **tags** (a store's *location* already enters def-use even though its value is skipped, [dataflow_dr.h:60-62](../../../../src/dataflow_dr.h#L60)); then SIMD lanes (Increment 8) |
+| Region registration | One region, learned from an app-emitted marker's SysV args `rdi/rsi/rdx` ([on_marker :64](../../../../src/dataflow_dr_client.c#L64), re-instrument via `dr_delay_flush_region` [:70](../../../../src/dataflow_dr_client.c#L70), resolved by PC [:188](../../../../src/dataflow_dr_client.c#L188)) | Whole-process breadth scoped to **registered method ranges**; a launched `dotnet app.dll` never calls the C-harness marker, so a new registration mechanism is needed |
+| Integration model | In-process cooperative `dr_app_*`; header flags in-process re-attach as unreliable ([asmtest_drtrace.h:86](../../../../include/asmtest_drtrace.h#L86)); driven by the self-init harness `dr_valtrace` via `ASMTEST_DRVAL_CLIENT` ([native-trace.mk:201](../../../../mk/native-trace.mk#L201)) | **Launch-under-DR** container over a live `dotnet` — no `drrun` launcher in-tree; plus an out-of-process validator to consume the results channel |
+| Signal coexistence | **Mitigated** — `event_signal` → `DR_SIGNAL_DELIVER` in both clients ([dataflow_dr_client.c:213-217](../../../../src/dataflow_dr_client.c#L213); rationale in the control client [drtrace_client.c:386](../../../../src/drtrace_client.c#L386)) so .NET null-check `SIGSEGV` reaches the runtime | Carries over unchanged to launch; the **code-cache/JIT-collision half** is only *asserted* solved by launch, not demonstrated — a hypothesis first tested in Increment 5 |
 | GC-move survival | Phase-4 `GcMoveMap` captures `GCBulkMovedObjectRanges` (DETECTION landed 2026-07-13) | **DONE (Increment 7, 2026-07-14)** — the in-process `MovedReferences2` profiler feeds exact `{old,new,len}` ranges to `at_gc_remap_live` at the GC fence; a DR-API-free raw-mmap leaf allocator carries the tag across never-touched destination leaves, so a seed survives a compacting GC end-to-end (`dr-taint-gcmove-survival-test`) |
 | Oracle-diff validation | In-process `dr_valtrace` replays `at_drval_t` through the shared spine and diffs the emulator oracle in the same address space | Under launch the client no longer hosts the diff — a **separate app-side validator** must drain the shm channel and run the replay/diff out-of-process (Increment 5) |
 | Overhead evidence | None on this repo's managed workload; all figures external literature | Increment 9 must measure on a representative `dotnet` workload against an explicit budget |
 
 **Contract.** The re-platform keeps the *capture ABI* (`at_drval_t`,
-[dataflow_dr.h:87-96](../../../src/dataflow_dr.h#L87)) and the app-side replay /
+[dataflow_dr.h:87-96](../../../../src/dataflow_dr.h#L87)) and the app-side replay /
 cross-validation path stable, and changes only *how* the client fills it (inlined + buffered
 instead of clean-call append) plus *adds* the taint shadow and seed/sink surface. Increment 3
 must reproduce `at_drval_t` **byte-identically** and be regression-gated against the emulator
-oracle ([dataflow_emu.c](../../../src/dataflow_emu.c)) *before* any taint semantics land; taint
+oracle ([dataflow_emu.c](../../../../src/dataflow_emu.c)) *before* any taint semantics land; taint
 is an **additive** shadow surface, not a change to the value record. Because the in-band capture
 path feeds the same record-building code as the scoped ptrace producer
-([dataflow_ptrace.c](../../../src/dataflow_ptrace.c)) and the emulator oracle, every increment
+([dataflow_ptrace.c](../../../../src/dataflow_ptrace.c)) and the emulator oracle, every increment
 ships with an oracle-diff gate so the inlined/taint path never silently diverges from the
-offline slice ([dataflow.c](../../../src/dataflow.c), the shared L1/L2 spine). Through Increment 4
+offline slice ([dataflow.c](../../../../src/dataflow.c), the shared L1/L2 spine). Through Increment 4
 that diff runs **in-process** (the `dr_valtrace` harness replays and diffs in the same address
 space); from Increment 5 the diff *consumer* moves **out-of-process** — a separate app-side
 validator drains the shared-memory results channel and runs the same replay/diff — but the gate
 itself is unchanged.
 
 **Target stack — each component replaces one hand-rolled thing.** (1) **`drmgr`** replaces the
-raw `dr_register_bb_event` ([:227](../../../src/dataflow_dr_client.c#L227)) with drmgr's *phased*
+raw `dr_register_bb_event` ([:227](../../../../src/dataflow_dr_client.c#L227)) with drmgr's *phased*
 instrumentation event (app2app / analysis / insertion pass ordering) so value capture and tag
 propagation compose as separate, ordered passes instead of one monolithic `event_bb`.
 (2) **`drreg`** reserves scratch GP registers and arithmetic flags so the value/tag work is
@@ -180,13 +187,13 @@ trace that batches emitted operand-value/address/tag records and flushes periodi
 pattern drcachesim/memtrace use to amortize the store cost.
 
 **License posture** *(RESOLVED by Increment 2 — see
-[dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md)).* The
+[dr-extension-load-probe-findings.md](../../analysis/dr-extension-load-probe-findings.md)).* The
 picture is a **split**, not the uniform "avoid only `drwrap`" the plan first assumed:
 - `drmgr`, `drreg`, and `drx` (which is where the `drx_buf` trace-buffer API lives — there is
   **no** separate `drx_buf` extension) are DR-**core** `ext/` extensions covered by DR's primary
   **BSD** license. The re-platform (Increment 3) can adopt them and stay LGPL-clean, **as long as
   the client keeps doing its own PC-resolved marker/arg resolution**
-  ([:64](../../../src/dataflow_dr_client.c#L64), [:156](../../../src/dataflow_dr_client.c#L156))
+  ([:64](../../../../src/dataflow_dr_client.c#L64), [:156](../../../../src/dataflow_dr_client.c#L156))
   rather than `drwrap_wrap`/`drwrap_get_arg`.
 - **`umbra` is LGPL-2.1** — it is **not** a DR-core extension; it ships under `drmemory/drmf/`
   as part of the Dr. Memory Framework (primary license LGPL; only `drfuzz`/`drltrace` are BSD
@@ -197,7 +204,7 @@ picture is a **split**, not the uniform "avoid only `drwrap`" the plan first ass
 Consequence: the byte-granular tag shadow (Increments 4/7) must either **hand-roll a BSD
 direct-mapped shadow** (DR-core `dr_raw_mem_alloc` + a scale-down map) — *recommended*, keeps the
 tier fully BSD — or **accept LGPL-2.1 for `umbra`** (dynamic-link relink obligation; static-link
-inherits the stricter form, [dynamorio-native-trace-plan.md:914](../archive/plans/dynamorio-native-trace-plan.md#L914)).
+inherits the stricter form, [dynamorio-native-trace-plan.md:914](dynamorio-native-trace-plan.md#L914)).
 Increment 4 now carries that decision explicitly instead of assuming permissive `umbra`.
 
 ---
@@ -205,13 +212,13 @@ Increment 4 now carries that decision explicitly instead of assuming permissive 
 ## Public API / capture-ABI sketch
 
 The value capture ABI already exists and is unchanged: `at_drval_t` / `at_vstep_t` / `at_vmem_t`
-in [dataflow_dr.h:63-96](../../../src/dataflow_dr.h#L63), plus the marker symbol
-`AT_DRVAL_MARKER_SYM` ([dataflow_dr.h:33](../../../src/dataflow_dr.h#L33)). Taint adds a **new
+in [dataflow_dr.h:63-96](../../../../src/dataflow_dr.h#L63), plus the marker symbol
+`AT_DRVAL_MARKER_SYM` ([dataflow_dr.h:33](../../../../src/dataflow_dr.h#L33)). Taint adds a **new
 seed/sink surface**. Everything below is **proposed** (new header
 `include/asmtest_taint.h`, **does not exist yet**) and, like `dataflow_dr.h`, must stay
 `<stdint.h>`/`<stddef.h>`-only so the client can include it alongside `dr_api.h` — no
 `<stdbool.h>`, whose `bool` clashes with DynamoRIO's own
-([dataflow_dr.h:20](../../../src/dataflow_dr.h#L20)).
+([dataflow_dr.h:20](../../../../src/dataflow_dr.h#L20)).
 
 ```c
 /* PROPOSED — include/asmtest_taint.h (does not exist yet). Byte-granular tag-shadow +
@@ -269,10 +276,10 @@ typedef struct at_taint_report {             /* PROPOSED */
 ```
 
 Marker/argument resolution stays **`drwrap`-free**: seeds/sinks arm by PC via
-`dr_get_proc_address` ([dataflow_dr_client.c:188](../../../src/dataflow_dr_client.c#L188)) + a
+`dr_get_proc_address` ([dataflow_dr_client.c:188](../../../../src/dataflow_dr_client.c#L188)) + a
 `drmgr` insertion-phase equivalent of today's `on_marker`/`on_step` SysV-arg clean call
-([:64](../../../src/dataflow_dr_client.c#L64),
-[:156](../../../src/dataflow_dr_client.c#L156)) — never `drwrap_wrap`/`drwrap_get_arg`.
+([:64](../../../../src/dataflow_dr_client.c#L64),
+[:156](../../../../src/dataflow_dr_client.c#L156)) — never `drwrap_wrap`/`drwrap_get_arg`.
 
 ---
 
@@ -284,7 +291,7 @@ Marker/argument resolution stays **`drwrap`-free**: seeds/sinks arm by PC via
 build-from-source or static-link is owed. The `__memcpy_chk` symptom did not recur. The license
 question resolved to a **split**: `drmgr`/`drreg`/`drx` are BSD, but **`umbra` is LGPL-2.1** (Dr.
 Memory Framework), which reshapes Increment 4's shadow-memory choice (see License posture above).
-Full record: [dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md).
+Full record: [dr-extension-load-probe-findings.md](../../analysis/dr-extension-load-probe-findings.md).
 The subsections below are the as-planned scope, retained for provenance.
 
 The foundation. Nothing downstream can load `drmgr`/`drreg`/`drx` (`drx_buf`) until the
@@ -297,8 +304,8 @@ its replacement.
   `use_DynamoRIO_extension()`s each of `drmgr`, `drreg`, `umbra`, `drx_buf` (explicitly **not**
   `drwrap`) and calls one API from each, running a trivial `/bin/true`-class inscount workload
   in the in-process DR smoke image `Dockerfile.drtrace`, under the DR release it pins
-  (`DR_VERSION=11.91.20630`, [Dockerfile.drtrace:35](../../../Dockerfile.drtrace#L35) — the same
-  pin the per-language bindings image [Dockerfile.drtrace-lang:26](../../../Dockerfile.drtrace-lang#L26)
+  (`DR_VERSION=11.91.20630`, [Dockerfile.drtrace:35](../../../../Dockerfile.drtrace#L35) — the same
+  pin the per-language bindings image [Dockerfile.drtrace-lang:26](../../../../Dockerfile.drtrace-lang#L26)
   carries).
 - Pick one of four options, in preference order:
   - **(a) build-from-source** — build the four extensions from source against the pinned DR so
@@ -315,7 +322,7 @@ its replacement.
   Run (c)'s cheap loader test first: if the pinned 11.91.20630 prebuilts happen to load, this
   increment collapses to a one-line `use_DynamoRIO_extension()`; otherwise commit to (a).
 - Reproduce or rule out the concrete `__memcpy_chk` resolution symptom on record
-  ([macos-drtrace-plan.md:466](macos-drtrace-plan.md#L466)) and record the observed glibc
+  ([macos-drtrace-plan.md:466](../../plans/macos-drtrace-plan.md#L466)) and record the observed glibc
   boundary the docs never pin.
 - **Confirm `umbra`/`drx_buf` licensing is BSD/permissive** (only `drwrap` is called out as LGPL
   anywhere in-repo) and record it in the tier's license note — the LGPL-clean claim depends on
@@ -326,13 +333,13 @@ probe under the pinned DR image and prints a load-success line for `drmgr`+`drre
 (`drx_buf` is drx's trace-buffer API, not a separate extension) with a non-zero
 instrumented-instruction count (130588 over `/bin/true`) ✅; the chosen option **(c) version-pin**
 and the observed glibc **2.39** are recorded in-tree
-([dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md)) ✅; the
+([dr-extension-load-probe-findings.md](../../analysis/dr-extension-load-probe-findings.md)) ✅; the
 BSD stack links **no `drwrap` and no LGPL object**, and the license finding is recorded — with the
 correction that **`umbra` is LGPL-2.1** (so it is *excluded* from the BSD gate, opt-in behind
 `PROBE_UMBRA`) ✅; CI gained a `drext-probe` job that fails red if any of `drmgr`/`drreg`/`drx`
 fails to load ✅; the untouched clean-call client still builds through the additively-edited
 `drclient/CMakeLists.txt` (`make drtrace-client` reconfirmed; `make dr-valtrace-test`
-[native-trace.mk:191](../../../mk/native-trace.mk#L191) unchanged) ✅.
+[native-trace.mk:191](../../../../mk/native-trace.mk#L191) unchanged) ✅.
 
 **Effort.** **S** — a throwaway probe plus one `make`/CI target; the risk was *discovery* (which
 of a/b/c loads, the glibc boundary, and the true license of each extension), not code volume.
@@ -341,7 +348,7 @@ discovery.
 
 ## Increment 3 - Re-platform the L0 value client onto inlined instrumentation *(LANDED 2026-07-13)*
 
-**Outcome.** The inlined client [dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c)
+**Outcome.** The inlined client [dataflow_dr_client_inlined.c](../../../../src/dataflow_dr_client_inlined.c)
 (`libasmtest_drval_client_inlined.so`) re-platforms the clean-call recorder onto the BSD-clean
 extension stack — `drmgr` phased instrumentation, `drreg` scratch regs + aflags, `drx_buf` trace
 buffer — and fills the SAME `at_drval_t`. Driven by the SAME `dr_valtrace` harness via
@@ -350,8 +357,8 @@ the clean-call client, including both emulator-oracle slice cross-checks** (stab
 now wired into the `drtrace-test` CI gate alongside the clean-call client. The shipped clean-call
 `asmtest_drval_client` is untouched as oracle/fallback.
 
-**Microbenchmark (`make dr-valtrace-bench`, [dr_valtrace_bench.c](../../../examples/dr_valtrace_bench.c)
-+ [scripts/dr_valtrace_bench.sh](../../../scripts/dr_valtrace_bench.sh)):** over a 120002-step
+**Microbenchmark (`make dr-valtrace-bench`, [dr_valtrace_bench.c](../../../../examples/dr_valtrace_bench.c)
++ [scripts/dr_valtrace_bench.sh](../../../../scripts/dr_valtrace_bench.sh)):** over a 120002-step
 looping fixture (a back-edge + a flag-dependent branch + ~30 `drx_buf` flushes — correctness the
 tiny oracle fixture skips; the routine's return value is asserted), the isolated capture window
 (`ASMTEST_DRVAL_BENCH`, excluding the symmetric DR init + replay) is **~184 ns/insn clean-call vs
@@ -389,7 +396,7 @@ now skipped conservatively; (b) the inline value load dereferenced no-load memor
 faults too). Two **shared** (both value producers), latent, design/ABI-level findings are
 **documented** in-code as known limitations, deferred to the increment that owns their real fix:
 the deferred-write model mis-values a `call`'s `rsp`/`rip` across an out-of-region callee (proper
-fix = call-out step-over / whole-process capture; [dataflow_dr.c](../../../src/dataflow_dr.c)
+fix = call-out step-over / whole-process capture; [dataflow_dr.c](../../../../src/dataflow_dr.c)
 `build_valtrace`), and high-byte sub-registers (`AH`/`BH`/`CH`/`DH`) fold to the low byte (needs a
 sub-register byte-offset in the record ABI; `snap_gp`). The subsections below are the as-planned
 scope, retained for provenance.
@@ -397,30 +404,30 @@ scope, retained for provenance.
 Swap the recorder, not the semantics: reproduce the exact `at_drval_t` capture the clean-call
 client produces, but inlined + buffered, and re-validate against the emulator oracle before any
 taint rides on top. Still no taint, no dotnet — the current in-process C harness and
-emulator-oracle cross-check ([native-trace.mk:201](../../../mk/native-trace.mk#L201)) stay the
+emulator-oracle cross-check ([native-trace.mk:201](../../../../mk/native-trace.mk#L201)) stay the
 test bed. Land as a *new* CMake target so the shipped `asmtest_drval_client` stays intact as the
 fallback/oracle during the swap.
 
-- Move `event_bb` ([dataflow_dr_client.c:149](../../../src/dataflow_dr_client.c#L149)) into
+- Move `event_bb` ([dataflow_dr_client.c:149](../../../../src/dataflow_dr_client.c#L149)) into
   `drmgr`'s analysis + insertion phases; emit the GP-snapshot and memory-source EA/value capture
-  ([on_step :77](../../../src/dataflow_dr_client.c#L77)) as **inline** `drreg`-scratch
+  ([on_step :77](../../../../src/dataflow_dr_client.c#L77)) as **inline** `drreg`-scratch
   instrumentation instead of the `on_step` clean call
-  ([:173-177](../../../src/dataflow_dr_client.c#L173)).
+  ([:173-177](../../../../src/dataflow_dr_client.c#L173)).
 - Route captured records through a **`drx_buf`** per-thread buffer with periodic flush, replacing
   the direct append into `at_drval_t`. Preserve the honest-overflow/`truncated` discipline of the
-  ABI ([dataflow_dr.h:95](../../../src/dataflow_dr.h#L95)).
+  ABI ([dataflow_dr.h:95](../../../../src/dataflow_dr.h#L95)).
 - **Re-express marker/arg resolution without `drwrap`:** keep resolving `AT_DRVAL_MARKER_SYM` by
-  PC ([:188](../../../src/dataflow_dr_client.c#L188)) and reading `rdi/rsi/rdx` at the marker PC,
+  PC ([:188](../../../../src/dataflow_dr_client.c#L188)) and reading `rdi/rsi/rdx` at the marker PC,
   now as a `drmgr` insertion-phase equivalent of the current SysV-arg clean call
-  ([:156](../../../src/dataflow_dr_client.c#L156)) — do **not** silently pull `drwrap_get_arg`
+  ([:156](../../../../src/dataflow_dr_client.c#L156)) — do **not** silently pull `drwrap_get_arg`
   back in.
 - Keep the existing operand exclusions honest and unchanged for now (far/segmented `fs:`/`gs:`,
-  VSIB gather EA, store post-values, [:104-107](../../../src/dataflow_dr_client.c#L104)); this
+  VSIB gather EA, store post-values, [:104-107](../../../../src/dataflow_dr_client.c#L104)); this
   increment is a performance/architecture swap only. Keep the `DR_SIGNAL_DELIVER` handler
-  ([:213-217](../../../src/dataflow_dr_client.c#L213)) unchanged.
+  ([:213-217](../../../../src/dataflow_dr_client.c#L213)) unchanged.
 
 **Exit criteria:** the inlined+buffered client passes the existing `dr_valtrace`
-cross-validation against the emulator oracle ([dataflow_emu.c](../../../src/dataflow_emu.c)) —
+cross-validation against the emulator oracle ([dataflow_emu.c](../../../../src/dataflow_emu.c)) —
 same green CI gate, now on the extension stack — via `make dr-valtrace-inlined-test`, wired into
 `drtrace-test` ✅ (**MET 2026-07-13**; 14/14, both oracle slice cross-checks, 5/5 stable). Records
 match the clean-call client for every def-use-consumed field (byte-identical on live reads,
@@ -443,12 +450,12 @@ still no dotnet, so the launch container (Increment 5) is a separable change.
 
 > **Design (locked 2026-07-13 by a 3-way design panel; winner: *hand-rolled BSD 2-level
 > create-on-touch shadow behind a `tag_ptr` seam*).** The ABI is **LANDED**:
-> [include/asmtest_taint.h](../../../include/asmtest_taint.h) (`at_tag_t` = 1-byte union tag,
+> [include/asmtest_taint.h](../../../../include/asmtest_taint.h) (`at_tag_t` = 1-byte union tag,
 > bit0 = tainted + up-to-7 colors; `AT_TAINT_SEED_SYM`/`AT_TAINT_SINK_SYM` PC-resolved markers;
 > `at_taint_seed_t`/`at_taint_hit_t`/`at_taint_report_t`; `<stdint.h>`-only, no `<stdbool.h>`).
 > Build plan:
 > - **Same file, additive `-DASMTEST_TAINT`.** Ship `libasmtest_drtaint_client.so` from the SAME
->   [dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c) under the flag; with
+>   [dataflow_dr_client_inlined.c](../../../../src/dataflow_dr_client_inlined.c) under the flag; with
 >   the flag off the TU compiles byte-for-byte to the Increment-3 value client, so
 >   `dr-valtrace-inlined-test` stays provably untouched (stronger than a second TU that can drift).
 > - **Shadow (BSD, DR-core only — the umbra-swap seam kept tiny).** 1:1 byte scale, 2-level
@@ -503,9 +510,9 @@ still no dotnet, so the launch container (Increment 5) is a separable change.
 > `step_tainted` witness (a phase of the value-capture insertion pass, placed after the mem loop and
 > before the buffer advances, so the witness rides the same `drx_buf` record via `dv->step_taint[]`),
 > and `on_seed`, all additive under `-DASMTEST_TAINT` in the SAME
-> [dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c). Validated by
+> [dataflow_dr_client_inlined.c](../../../../src/dataflow_dr_client_inlined.c). Validated by
 > `make docker-taint-native` / `make dr-taint-native-test`
-> ([examples/dr_taint.c](../../../examples/dr_taint.c)): the seeded run's client taint set is
+> ([examples/dr_taint.c](../../../../examples/dr_taint.c)): the seeded run's client taint set is
 > **EQUAL to `asmtest_slice_forward(seed_step)`** (8/8, incl. the emulator-oracle forward-slice
 > cross-check), the unseeded **negative control reports zero tainted steps** (5/5), the inline gate
 > proves the only clean calls are the two markers, and — the key invariant — the flag-OFF value
@@ -553,8 +560,27 @@ still no dotnet, so the launch container (Increment 5) is a separable change.
 > an 8-byte buffer, then loads all 8: the load's low-byte tag is clean, so this passes only under the
 > per-byte union (a low-byte-only read would taint nothing). flag-off value client still 14/14; all
 > 35/35 in the fresh docker image; landed first-try. The guarded inline sink skip + other sink kinds
-> (mem-len / call-arg) remain as generality follow-ons, not correctness gaps. **Increment 4 is
+> (mem-len / call-arg) remained as generality follow-ons at this point, not correctness gaps — **both
+> have since LANDED** (see the follow-on note below). **Increment 4 is
 > complete; Increment 5 (launch-under-DR container + out-of-process validator) is the next major push.**
+>
+> **Generality follow-ons LANDED (both).** (1) **Guarded inline sink skip** *(landed with the
+> Increment-9 overhead work, commit `a56b7f4`)* — the sink now inline-tests the watched tag with
+> drreg-reserved aflags (so the app flags the branch reads are preserved) and only makes the
+> `on_sink` clean call when tainted; a clean branch pays a TLS load + test, not a call. (2) **All
+> three sink kinds** *(commit `2befa39`)* — `emit_guarded_sink`
+> ([dataflow_dr_client_inlined.c:1049](../../../../src/dataflow_dr_client_inlined.c#L1049)) is
+> generalized to take a watched reg-tag index + kind and `on_sink(off, ea, kind, rt_idx)` reads
+> `rf[rt_idx]` bounds-checked
+> ([:997](../../../../src/dataflow_dr_client_inlined.c#L997)), with the `event_insert` dispatch at
+> [:1926](../../../../src/dataflow_dr_client_inlined.c#L1926) selecting: `cbr` → eflags (**kind 1**,
+> branch condition), `call` → SysV arg0 `rdi` (**kind 2**, call-arg), `OP_rep_movs` → count register
+> `rcx` (**kind 0**, mem-len). Categories are mutually exclusive, at most one fires, and the ONE
+> shared clean-call site keeps the inline gate at exactly 5. New `dr_taint.c` modes
+> `callarg`/`callarg-negative` + `memlen`/`memlen-negative` are wired into `dr-taint-native-test`;
+> mem-len asserts the sink is in `forward(seed)` at depth 1 (`rcx` is a machine source of rep-movs),
+> call-arg asserts the arg's defining move is in `forward(seed)` (a direct call does not machine-read
+> its args, so that sink is calling-convention-based). Flag-off value client still 14/14.
 >
 > **Concurrency (committed, all approaches agreed):** tolerated-benign-race single-byte tag stores
 > (aligned `at_tag_t` writes atomic on x86-64; union monotone within a seed epoch → a lost update
@@ -565,7 +591,7 @@ still no dotnet, so the launch container (Increment 5) is a separable change.
 
 > **License decision (from Increment 2): RESOLVED — hand-rolled BSD shadow, no `umbra`.** Increment
 > 2 found `umbra` is **LGPL-2.1** (Dr. Memory Framework), not permissive
-> ([dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md)), so the
+> ([dr-extension-load-probe-findings.md](../../analysis/dr-extension-load-probe-findings.md)), so the
 > locked design above hand-rolls a BSD 2-level shadow over DR-core `dr_raw_mem_alloc` (option (i)) —
 > the tier stays fully BSD. The `dst_tag = ∪ src_tags` semantics and concurrency policy are
 > provider-independent; only the shadow provider is fixed to BSD. The as-planned subsections below
@@ -576,10 +602,10 @@ still no dotnet, so the launch container (Increment 5) is a separable change.
   provider (BSD direct-map, or `umbra` if (ii)). On
   each instrumented instruction, compute `dst_tag = ∪ src_tags` **inline** in the `drmgr`
   insertion pass over the register + memory operands the enumerator already walks
-  ([dataflow_operands.c](../../../src/dataflow_operands.c), the shared enumerator behind
-  [dataflow_dr.h](../../../src/dataflow_dr.h)); key the memory-dst shadow on the same
+  ([dataflow_operands.c](../../../../src/dataflow_operands.c), the shared enumerator behind
+  [dataflow_dr.h](../../../../src/dataflow_dr.h)); key the memory-dst shadow on the same
   `opnd_compute_address` EA math the value path uses
-  ([dataflow_dr_client.c:122](../../../src/dataflow_dr_client.c#L122)).
+  ([dataflow_dr_client.c:122](../../../../src/dataflow_dr_client.c#L122)).
 - **Shadow concurrency policy — a first-class design decision, not an edge case.** `drx_buf` is
   per-thread, but the `umbra` tag shadow is a *single process-global byte map* every instrumented
   thread writes via inline `dst_tag = ∪ src_tags`, and .NET is heavily multithreaded (app threads
@@ -597,19 +623,19 @@ still no dotnet, so the launch container (Increment 5) is a separable change.
   value reaches a watched sink operand — resolved by PC exactly as the value marker is, **no
   `drwrap`**.
 - Handle **store tags**: the value client skips store *values*, but a store's *location* already
-  enters def-use ([dataflow_dr.h:60-62](../../../src/dataflow_dr.h#L60)), so propagate the
+  enters def-use ([dataflow_dr.h:60-62](../../../../src/dataflow_dr.h#L60)), so propagate the
   source-union tag into the store's destination-address shadow.
 - Scope taint to GP + integer-memory operands this increment; the current Increment-1 EXCLUSIONS
   (`fs:`/`gs:`, VSIB gather EA, store values,
-  [:104-107](../../../src/dataflow_dr_client.c#L104)) remain known tag gaps, and **XMM/YMM is
+  [:104-107](../../../../src/dataflow_dr_client.c#L104)) remain known tag gaps, and **XMM/YMM is
   explicitly deferred to Increment 8** (even libdft's low overhead partly comes from *skipping*
   XMM/SSE/MMX, so SIMD is real work, not free).
 
 **Exit criteria:** a new native docker lane *(proposed `make docker-taint-native`)* seeds a color
 on a known buffer, runs a hand-written fixture that copies/derives through GP regs and integer
 memory, and the sink fires with the correct `seed_off`→`off` and `depth`; the tag graph is
-**diffed against the emulator L2 slicer** (the shared spine [dataflow.c](../../../src/dataflow.c)
-driven by the [dataflow_emu.c](../../../src/dataflow_emu.c) oracle) on the same fixture; a
+**diffed against the emulator L2 slicer** (the shared spine [dataflow.c](../../../../src/dataflow.c)
+driven by the [dataflow_emu.c](../../../../src/dataflow_emu.c) oracle) on the same fixture; a
 **negative control** (unseeded run, or seed not reaching the sink) reports **zero hits**;
 propagation is emitted inline (no clean call in the hot path — verifiable by an inscount sanity
 check); the shadow-concurrency policy is documented in-tree with its rejected alternatives. Green
@@ -626,16 +652,16 @@ concurrency exists.
 > `make dr-taint-managed-test` (folded into `Dockerfile.taint-dotnet`): the last exit criterion —
 > a taint seed flowing through **REAL JIT'd managed code** to a sink, reported **out of process** — by
 > composing Increment 6's method-range auto-registration with this increment's shm channel + validator.
-> A native P/Invoke shim ([taint_managed_shim.c](../../../examples/taint_managed_shim.c),
+> A native P/Invoke shim ([taint_managed_shim.c](../../../../examples/taint_managed_shim.c),
 > `libtaint_managed_shim.so`) exports the seed/sink marker symbols the client resolves by PC (the
 > client's `event_module_load` resolves them when the .so loads), maps the shm channel, and holds a
 > **native** seed buffer (a stable address — painting a GC-movable managed object is Increment 7). The
-> managed workload ([taint_managed/Program.cs](../../../examples/taint_managed/Program.cs)) P/Invokes the
+> managed workload ([taint_managed/Program.cs](../../../../examples/taint_managed/Program.cs)) P/Invokes the
 > shim to seed, then loops calling a `[MethodImpl(NoInlining)]` `HotSeedSink(ptr)` that reads the seeded
 > buffer and uses it as a **loop bound** — a real conditional branch (an `if (x==k)` folds to a
 > branchless `cmov`, so no branch sink fires; a loop's `cmp i,x` is the reliable tainted-eflags branch).
 > `methodscan=Hot` auto-registers HotSeedSink; the seeded load→cmp→branch trips the branch-condition
-> sink and the hit crosses to a SEPARATE [taint_managed_validator](../../../examples/taint_managed_validator.c).
+> sink and the hit crosses to a SEPARATE [taint_managed_validator](../../../../examples/taint_managed_validator.c).
 > **Seeded run: the sink reports a tainted `kind=1` hit over JIT'd managed code (4/4); unseeded negative
 > control: ZERO hits (2/2)** — deterministic over repeated runs, clean exit (no hang, riding the
 > Increment-6 exit-hang fix). Validation is STRUCTURAL, not the emulator oracle diff the native lanes use
@@ -646,7 +672,7 @@ concurrency exists.
 
 > **Concurrent-writer stress LANDED 2026-07-13 — exit criterion (4) MET; the Increment-4 race policy is
 > now VALIDATED, not just stated.** `make dr-taint-stress-test` /
-> [taint_stress.c](../../../examples/taint_stress.c): `drrun -c <taint client>.so -- ./taint_stress`
+> [taint_stress.c](../../../../examples/taint_stress.c): `drrun -c <taint client>.so -- ./taint_stress`
 > launches N=8 threads released together by a barrier, ALL seeding a disjoint buffer + running the
 > branch-sink fixture at once — so the process-global tag shadow takes concurrent leaf-CAS installs
 > (nearby seed buffers share a leaf; each thread's stack spill first-touches its own) and concurrent
@@ -666,7 +692,7 @@ concurrency exists.
 > **dotnet JIT/code-cache coexistence LANDED 2026-07-13 — the plan's risk concentration is RETIRED.**
 > `make dr-taint-dotnet-test` / `make docker-taint-dotnet` runs
 > `drrun -c libasmtest_drtaint_client.so -- dotnet taint_hello.dll`: a managed workload
-> ([examples/taint_hello/](../../../examples/taint_hello/)) whose hot method tiers up (tier-0 → tier-1)
+> ([examples/taint_hello/](../../../../examples/taint_hello/)) whose hot method tiers up (tier-0 → tier-1)
 > mid-run — so DR's code cache must handle .NET's tiered JIT **rewriting live code** — runs to
 > **completion, exit 0, no swallowed SIGSEGV, no SIGTRAP/crash, no hang** (2/2 in a fresh docker image
 > built from `Dockerfile.taint-dotnet` = DR + the .NET SDK). This is the **first in-tree demonstration
@@ -685,8 +711,8 @@ concurrency exists.
 > dr-taint-launch-test` runs `drrun -c libasmtest_drtaint_client.so -- ./taint_workload`, and the
 > launched client (running under DR from a CLEAN START) seeds a buffer, propagates taint inline, and
 > writes the branch-condition sink hit into a **POSIX shared-memory** channel
-> ([include/asmtest_taint_shm.h](../../../include/asmtest_taint_shm.h)); a SEPARATE
-> [taint_validator](../../../examples/taint_validator.c) process drains it and oracle-diffs the hit
+> ([include/asmtest_taint_shm.h](../../../../include/asmtest_taint_shm.h)); a SEPARATE
+> [taint_validator](../../../../examples/taint_validator.c) process drains it and oracle-diffs the hit
 > against the emulator forward slice **out of process** (9/9 green in the fresh `make
 > docker-taint-native` image; chained into `drtrace-test` so the CI `drtrace` job runs it too, oracle
 > auto-skipped there without libunicorn). **The build-mode question is RESOLVED: a SINGLE build** — the
@@ -699,13 +725,13 @@ concurrency exists.
 > call, present when the fixture returns) and the drx_buf-buffered VALUE / taint trace (flushed by the
 > client's exit event at PROCESS EXIT, complete once `drrun` returns). The validator diffs the sink hit
 > AND the full taint SET (`{steps[i].off : step_taint[i]}` == the emulator forward slice) out of
-> process. [taint_workload.c](../../../examples/taint_workload.c) is self-contained (defines the marker
+> process. [taint_workload.c](../../../../examples/taint_workload.c) is self-contained (defines the marker
 > symbols, maps shm, mmaps an RWX fixture) — no in-process `dr_init`/`dr_start`, since DR owns the
 > process. **Next slices:** the `dotnet` launch + first real JIT/code-cache coexistence test (the
 > plan's risk concentration), and a concurrent-writer stress validating the Increment-4 race policy.
 
 The new integration path — there is **no** `drrun`/`dr_inject` launcher in-tree today (a clean
-grep returns zero matches, [data-flow-capture.md:203](../analysis/data-flow-capture.md#L203)).
+grep returns zero matches, [data-flow-capture.md:203](../../analysis/data-flow-capture.md#L203)).
 Launch owns the `dotnet` process from a clean start so DR never takes over a runtime that already
 installed its signal handlers / JIT'd code mid-run — the code-cache/JIT-collision half the
 in-process model cannot solve. De-risk the launcher mechanics on a native workload first, then a
@@ -717,11 +743,11 @@ concurrent writers.
   needs both **plus the `drrun` binary** from the tarball's `bin64` on `PATH`. Recommend one
   merged Dockerfile over a compose for CI determinism.
 - Invocation `drrun -c libasmtest_drval_client.so -- dotnet app.dll`. The `DR_SIGNAL_DELIVER`
-  mitigation carries over unchanged ([dataflow_dr_client.c:213](../../../src/dataflow_dr_client.c#L213));
+  mitigation carries over unchanged ([dataflow_dr_client.c:213](../../../../src/dataflow_dr_client.c#L213));
   the arbitrary-state problem does not arise because DR owns the process from a clean start.
   **Attach stays out of scope** (record why).
 - **New region/method-range registration:** a launched `dotnet app.dll` never calls the C-harness
-  marker ([:64](../../../src/dataflow_dr_client.c#L64)). Recommend `drrun` client-option seed/sink
+  marker ([:64](../../../../src/dataflow_dr_client.c#L64)). Recommend `drrun` client-option seed/sink
   config **plus a small injected managed shim** that reports the seeded buffer's address (the
   managed source of method ranges is method-load events, wired in Increment 6).
 - **Cross-address-space results channel (transport):** back the report buffer with a **POSIX
@@ -729,8 +755,8 @@ concurrent writers.
   `at_taint_report_t*` pointer is not valid across the separately-launched process).
 - **Out-of-process oracle-diff validator (the shm *consumer*):** in-process today, `dr_valtrace`
   replays `at_drval_t`/hit records through the shared enumerator and spine
-  ([dataflow_operands.c](../../../src/dataflow_operands.c) → [dataflow.c](../../../src/dataflow.c))
-  and diffs the emulator oracle ([dataflow_emu.c](../../../src/dataflow_emu.c)) in the same
+  ([dataflow_operands.c](../../../../src/dataflow_operands.c) → [dataflow.c](../../../../src/dataflow.c))
+  and diffs the emulator oracle ([dataflow_emu.c](../../../../src/dataflow_emu.c)) in the same
   address space. Under launch the client can no longer host that diff, so name an explicit
   **separate app-side validator process** — the evolved `dr_valtrace` harness, *not* the launched
   `dotnet` — that attaches to the same shm segment, drains the records, and runs the L1/L2 replay
@@ -739,14 +765,14 @@ concurrent writers.
   depend on; it does not exist in-tree and lands here.
 - **Client build-mode fallback branch:** verify whether the same `libasmtest_drval_client.so`
   works unmodified under `drrun -c` vs the in-process `configure_DynamoRIO_client` build
-  ([drclient/CMakeLists.txt:18](../../../drclient/CMakeLists.txt#L18)). **If a distinct
+  ([drclient/CMakeLists.txt:18](../../../../drclient/CMakeLists.txt#L18)). **If a distinct
   launched-runmode build IS required**, it lands *within this increment* as a second small CMake
   target (a `configure_DynamoRIO_client` launched-runmode variant) — an **additive ~S** build
   change, not a re-architecture; the in-process build stays intact as the oracle/fallback. State
   this branch now so the increment is fully scoped either way.
 - Treat "launch sidesteps the JIT collision" as a **hypothesis under test** — this is the first
   in-tree exercise of DR's code cache coexisting with .NET tiered-JIT recompilation
-  ([data-flow-capture.md:203](../analysis/data-flow-capture.md#L203)).
+  ([data-flow-capture.md:203](../../analysis/data-flow-capture.md#L203)).
 
 **Exit criteria:** a `drrun -c <client>.so -- <native workload>` lane produces a non-empty
 value/taint trace in docker, drained and oracle-diffed by the out-of-process validator; a
@@ -800,12 +826,12 @@ scoping the expensive per-operand shadow work to registered method ranges (the ~
 assumes we are not tag-tracking the entire runtime).
 
 - Generalize the single `g_region` (the unlocked region read on the hot path,
-  [dataflow_dr_client.c:165-167](../../../src/dataflow_dr_client.c#L165)) to a set of registered
+  [dataflow_dr_client.c:165-167](../../../../src/dataflow_dr_client.c#L165)) to a set of registered
   method ranges, re-instrumented via `dr_delay_flush_region`
-  ([:70](../../../src/dataflow_dr_client.c#L70)) as ranges arrive.
+  ([:70](../../../../src/dataflow_dr_client.c#L70)) as ranges arrive.
 - Auto-register ranges under launch from .NET **method-load events** (reuse the Phase-4 PC→method
   identity channel; `MethodLoadVerbose` event id **143**,
-  [data-flow-tracing-plan.md:199](data-flow-tracing-plan.md#L199)) so a launched dotnet workload
+  [data-flow-tracing-plan.md:199](../../plans/data-flow-tracing-plan.md#L199)) so a launched dotnet workload
   populates ranges without the C-harness marker.
 - Keep propagation **correct across un-instrumented gaps**: the shadow is process-wide even
   though *instrumentation* is scoped, so a tag written inside a scoped range must persist when it
@@ -837,7 +863,7 @@ inscount delta.
 >   leaf / conjures no phantom taint (T7) — the shadow-level present-at-new + absent-at-old coherence.
 >   Now **13/13** (was 7/7); `docker-drtrace` **161/161**, value client still **14/14 byte-identical**.
 > - **Live end-to-end (the de-risk):** new `dr-taint-gcmove-survival-test` lane
->   ([taint_gcmove_managed](../../../examples/taint_gcmove_managed/) + the shim's `shim_seed_at`): seed a
+>   ([taint_gcmove_managed](../../../../examples/taint_gcmove_managed/) + the shim's `shim_seed_at`): seed a
 >   GC-movable managed `byte[]` at its briefly-pinned current address, force compacting gen2 GCs that
 >   RELOCATE it (measured `moved=1`, old→new ~44 MB apart), the profiler feeds every moved range to
 >   `at_gc_remap_live` at the fence, and the instrumented `GcMoveSink` (`methodscan=MoveSink`) reads the
@@ -852,8 +878,8 @@ inscount delta.
 > **UPDATE 2026-07-14 — live wiring (Slice 1) LANDED.** The profiler→client GC-move path is wired
 > end-to-end and validated under DR (`make dr-gcmove-live-test` / `docker-gcprofiler-probe`): the DR
 > taint client, under the new `gcmove` option, publishes the address of its `at_gc_remap` entry to a
-> POSIX-shm handshake ([asmtest_taint_gcmove.h](../../../include/asmtest_taint_gcmove.h)); the
-> in-process `MovedReferences2` profiler ([examples/gcprofiler_probe/](../../../examples/gcprofiler_probe/))
+> POSIX-shm handshake ([asmtest_taint_gcmove.h](../../../../include/asmtest_taint_gcmove.h)); the
+> in-process `MovedReferences2` profiler ([examples/gcprofiler_probe/](../../../../examples/gcprofiler_probe/))
 > reads it and feeds every moved `{old,new,len}` range to the client at the GC fence. Measured: **60,021
 > real compacting-GC move ranges remapped under DR across 120 GC events, workload completed, no
 > crash/hang**; flag-off value client still 14/14, gcremap selftest still 7/7, docker-drtrace 155/155.
@@ -867,7 +893,7 @@ inscount delta.
 > conservative MISS. **Slice 2 (full seed→move→sink survival)** needs a **raw-syscall leaf allocator**
 > (a bare `mmap` syscall, DR-API-free) so the tag is carried across a never-touched destination, plus the
 > managed seed→move→sink choreography + the coherence canary. Details:
-> [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
+> [gc-move-range-extraction-findings.md](../../analysis/gc-move-range-extraction-findings.md).
 
 > **UPDATE 2026-07-14 — triple-extraction mechanism researched; recommendation changed.**
 > The Phase-4 `{old,new,len}` extraction has now been researched (deep-research
@@ -885,7 +911,7 @@ inscount delta.
 > target (forces blocking collections) — clean fences, but an observable change to the
 > target's GC behaviour. **Go/no-go gate: PASSED (GO, 2026-07-14).** The one untested risk —
 > profiler-vs-DynamoRIO coexistence on Linux — was probed and **confirmed working**: a minimal
-> `MovedReferences2` profiler ([examples/gcprofiler_probe/](../../../examples/gcprofiler_probe/)),
+> `MovedReferences2` profiler ([examples/gcprofiler_probe/](../../../../examples/gcprofiler_probe/)),
 > run under `drrun -c <taint client> -- dotnet <compacting-GC workload>`, loaded + Initialized
 > and delivered the **exact `{old,new,len}` ranges under DR (same count as native, no crash/hang)** —
 > `make dr-gcprofiler-probe` / `make docker-gcprofiler-probe`. So the profiler path is adoptable;
@@ -893,20 +919,21 @@ inscount delta.
 > constraint (e.g. not wanting `COR_PRF_MONITOR_GC` to disable background GC). The in-proc
 > `EventListener` is a confirmed **dead end** (scalar count only, no `Values` array). Full
 > analysis, candidates, sources, the probe result, and caveats:
-> [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
+> [gc-move-range-extraction-findings.md](../../analysis/gc-move-range-extraction-findings.md).
 > The as-planned text below is **superseded on the extraction mechanism** (EventPipe → in-proc
-> profiler) but otherwise stands; the increment remains hard-blocked until the coexistence
-> probe is green.
+> profiler) but otherwise stands. *(This note's closing line originally read "the increment remains
+> hard-blocked until the coexistence probe is green" — that condition was MET by the probe recorded
+> in this same note, and Increment 7 went on to complete via Slices 1 and 2 above. Not blocked.)*
 
 Make taint survive .NET GC compaction: when the GC moves an object, its shadow tags must move
 with it, or a compacting GC silently drops/aliases taint. **Hard dependency:** this needs Phase
 4's concrete `GCBulkMovedObjectRanges` `{OldRangeBase, NewRangeBase, RangeLength}` triple (via
 EventPipe), which is **still deferred** — the in-proc `EventListener` landed only the DETECTION
 feed (`GcMoveMap`) and does not surface the `Values` struct-array
-([data-flow-tracing-plan.md:193](data-flow-tracing-plan.md#L193)). *(Superseded 2026-07-14: the
+([data-flow-tracing-plan.md:193](../../plans/data-flow-tracing-plan.md#L193)). *(Superseded 2026-07-14: the
 recommended extraction mechanism is now the `ICorProfilerCallback4::MovedReferences2` in-process
 profiler, not out-of-process EventPipe — see the update note above and
-[gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).)*
+[gc-move-range-extraction-findings.md](../../analysis/gc-move-range-extraction-findings.md).)*
 
 - On each GC-move event, remap the `umbra` shadow for every moved range: copy tags from
   `[OldRangeBase, +RangeLength)` to `[NewRangeBase, +RangeLength)` so post-compaction reads see
@@ -951,7 +978,7 @@ surfaced the triple in-process, and Slice 2 carried the tag across the move.
 > operand of a **VEX/EVEX vector STORE** as `access=READ` (the SSE `movdqu [m],xmm` is correct
 > `WRITE`), so the def-use oracle silently dropped every AVX store→load edge — the ymm-copy forward
 > slice came back `{0,1,2}` (missing the reload). Fixed in the shared operand enumerator
-> ([dataflow_operands.c](../../../src/dataflow_operands.c)): a MOV-family instruction's operand[0] (the
+> ([dataflow_operands.c](../../../../src/dataflow_operands.c)): a MOV-family instruction's operand[0] (the
 > Intel-order destination) is written, never read (`x86_move_store_dest`); scoped to the mov/vmov
 > mnemonic + operand-0 so GP/SSE moves are idempotent and loads/RMW/compares are untouched. Host
 > `make dataflow-test` 180/180 (incl. the pre-existing ptrace YMM tests) confirms no regression.
@@ -969,13 +996,13 @@ surfaced the triple in-process, and Slice 2 carried the tag across the move.
 
 Genuine research, not a checkbox — even **libdft punts on XMM/SSE/MMX**, and its cited low
 overhead (1.14–6.03× utils) is partly *that coverage tradeoff*
-([data-flow-capture.md:356](../analysis/data-flow-capture.md#L356)) — so the ~10–50× band may not
+([data-flow-capture.md:356](../../analysis/data-flow-capture.md#L356)) — so the ~10–50× band may not
 hold once `umbra` covers vector state. Scoped as its own increment with its own overhead
 measurement.
 
 - Extend the shadow + `dst_tag = ∪ src_tags` rules to XMM/YMM registers and SSE/AVX
   loads/stores/shuffles; handle the VSIB vector-gather EA math the value client currently skips
-  ([dataflow_dr_client.c:104-107](../../../src/dataflow_dr_client.c#L104)). Decide lane
+  ([dataflow_dr_client.c:104-107](../../../../src/dataflow_dr_client.c#L104)). Decide lane
   granularity (per-byte vs per-lane tags) explicitly — per-byte matches the integer shadow but
   multiplies shadow traffic.
 - **Re-measure** overhead with SIMD taint on vs off; if the band does not hold, scope SIMD taint
@@ -1033,7 +1060,7 @@ traffic) rather than inheriting the scalar band, exactly as the increment antici
 > (Increment 7).
 
 > **Overhead-measurement first slice LANDED 2026-07-14 — the FIRST in-repo overhead number, with a
-> 4-way DECOMPOSITION.** `make dr-taint-overhead-test` ([taint_overhead.c](../../../examples/taint_overhead.c),
+> 4-way DECOMPOSITION.** `make dr-taint-overhead-test` ([taint_overhead.c](../../../../examples/taint_overhead.c),
 > folded into `Dockerfile.taint-native`): a hot loop (seeded load + integer arithmetic, branchless body
 > so the only branch is the loop back-edge) timed with an internal `CLOCK_MONOTONIC` window, run four
 > ways — bare native, DR code-cache baseline (regions=0), the inlined VALUE client (value capture only),
@@ -1066,7 +1093,7 @@ traffic) rather than inheriting the scalar band, exactly as the increment antici
 > band lever (the value trace is). INFORMATIONAL: wall-clock ratios are noise-prone (as the Increment-3
 > microbench notes), so the lane asserts only the monotonic structural fact `T_taint >= T_value > T_dr >=
 > T_bare` and REPORTS the decomposition. The **managed seed→sink** half of this increment's exit criteria
-> is already met by Increment 5 ([taint_managed](../../../examples/taint_managed/)), and the production
+> is already met by Increment 5 ([taint_managed](../../../../examples/taint_managed/)), and the production
 > propagation-only build now landed (above); what remains for full Increment 9 is to bring `prod` into the
 > ~10-50× band via the measured lever sequence — **(1) a record-free production propagation path** (drop
 > the drx_buf record + witness, inline `lea` for the EA — the ~60% chunk), **(2) a direct-mapped shadow**
@@ -1106,7 +1133,7 @@ traffic) rather than inheriting the scalar band, exactly as the increment antici
 
 The Phase-5 exit gate the whole plan works backward from: everything above composed into a real
 managed data-flow assertion with a measured cost, replacing the offset-only dotnet smoke
-([bindings/dotnet/drtrace/](../../../bindings/dotnet/drtrace/)).
+([bindings/dotnet/drtrace/](../../../../bindings/dotnet/drtrace/)).
 
 - A launched dotnet workload with a taint **seed at a source** (a `read()`/`recv()`/stream
   buffer) **detected at a sink** (a `memcpy` length or a branch condition) over **real JIT'd
@@ -1116,10 +1143,10 @@ managed data-flow assertion with a measured cost, replacing the offset-only dotn
   workload today — all cited figures are external literature: the greenfield ~10–50× band, libdft
   1.14–6.03× utils / 1.25–4.83× servers, TaintTrace ~5.5×, bare-DR inscount ~15× on SPEC CPU
   2017, fast-path Taint Rabbit 1.7× / Sdft 1.58× / HardTaint ~9%
-  ([data-flow-capture.md:356-360](../analysis/data-flow-capture.md#L356)). Set the budget at the
+  ([data-flow-capture.md:356-360](../../analysis/data-flow-capture.md#L356)). Set the budget at the
   ~10–50× band, report the measured slowdown vs a bare `dotnet` run, and flag if SIMD taint
   (Increment 8) pushes past it. This is the number that justifies the tier over ptrace
-  single-step's ~10³–10⁵× ([data-flow-capture.md:180](../analysis/data-flow-capture.md#L180)).
+  single-step's ~10³–10⁵× ([data-flow-capture.md:180](../../analysis/data-flow-capture.md#L180)).
 - **CI wiring:** a new `dr-taint` docker lane / ci.yml job replacing the in-process
   `make drtrace-test` smoke with the `drrun` invocation over a live dotnet workload, asserting
   seed→sink + GC-survival, with a **hard gate** that build-fails on non-detection or overhead
@@ -1141,12 +1168,12 @@ managed data-flow assertion with a measured cost, replacing the offset-only dotn
   production per-instruction cost is the meaningful figure and it is band-gated.
 - **verdict cross-checked vs the emulator oracle on a shared fixture** —
   `dr-taint-launch-test`'s out-of-process `taint_validator` runs the emulator
-  ([dataflow_emu.c](../../../src/dataflow_emu.c)) on the shared native `taint_sink_chain` fixture and
+  ([dataflow_emu.c](../../../../src/dataflow_emu.c)) on the shared native `taint_sink_chain` fixture and
   diffs BOTH the sink hit AND the full taint SET vs the emulator forward slice (the record-free
   `prod` path is validated sink-only, since it keeps no witness). In the CI `drtrace` job.
 
 This validates beyond the offset-only `bindings/dotnet/drtrace/` smoke, matching
-[data-flow-tracing-plan.md:215](data-flow-tracing-plan.md#L215). Per the archive rule, on landing this
+[data-flow-tracing-plan.md:215](../../plans/data-flow-tracing-plan.md#L215). Per the archive rule, on landing this
 plan moves to `docs/internal/archive/plans/` and the parent Phase-5 stub is updated to LANDED.
 
 **Effort.** **M** in code — mostly composition of 5–8 plus the CI/threshold wiring — but gated on
@@ -1161,83 +1188,120 @@ hard gate, not new instrumentation.
   `libasmtest_drval_client.so` — a clean-call per-instruction producer capturing the GP register
   file (`dr_get_mcontext`) + explicit memory SOURCE effective addresses/values (`decode` +
   `opnd_compute_address` + `dr_safe_read`), cross-validated against the emulator oracle. Source
-  [dataflow_dr_client.c:1-28](../../../src/dataflow_dr_client.c#L1); capture ABI
-  [dataflow_dr.h:63-96](../../../src/dataflow_dr.h#L63); oracle
-  [dataflow_emu.c](../../../src/dataflow_emu.c); driven in-process via `ASMTEST_DRVAL_CLIENT`
-  ([native-trace.mk:201](../../../mk/native-trace.mk#L201)), gated by
-  `make dr-valtrace-test` (target defined at [native-trace.mk:191](../../../mk/native-trace.mk#L191)).
+  [dataflow_dr_client.c:1-28](../../../../src/dataflow_dr_client.c#L1); capture ABI
+  [dataflow_dr.h:63-96](../../../../src/dataflow_dr.h#L63); oracle
+  [dataflow_emu.c](../../../../src/dataflow_emu.c); driven in-process via `ASMTEST_DRVAL_CLIENT`
+  ([native-trace.mk:201](../../../../mk/native-trace.mk#L201)), gated by
+  `make dr-valtrace-test` (target defined at [native-trace.mk:191](../../../../mk/native-trace.mk#L191)).
 - ✅ **Increment 2 — extension-load probe** *(LANDED 2026-07-13)*: the prebuilt
   `drmgr`/`drreg`/`drx` load under DR's private loader on glibc 2.39 / pinned DR 11.91.20630
   (blocker does not reproduce → **option (c) version-pin**); license resolved to a split
   (`drmgr`/`drreg`/`drx` BSD, **`umbra` LGPL-2.1**). Probe
-  [drclient/probe_extensions.c](../../../drclient/probe_extensions.c); findings
-  [dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md); gates
-  `make drext-probe` / `make docker-drext-probe` ([native-trace.mk](../../../mk/native-trace.mk),
-  [docker.mk](../../../mk/docker.mk)) + CI `drext-probe`.
+  [drclient/probe_extensions.c](../../../../drclient/probe_extensions.c); findings
+  [dr-extension-load-probe-findings.md](../../analysis/dr-extension-load-probe-findings.md); gates
+  `make drext-probe` / `make docker-drext-probe` ([native-trace.mk](../../../../mk/native-trace.mk),
+  [docker.mk](../../../../mk/docker.mk)) + CI `drext-probe`.
 - ✅ **Increment 3 — inlined L0 value client** *(LANDED 2026-07-13)*:
   `libasmtest_drval_client_inlined.so`
-  ([dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c)) re-platforms the
+  ([dataflow_dr_client_inlined.c](../../../../src/dataflow_dr_client_inlined.c)) re-platforms the
   clean-call recorder onto `drmgr`/`drreg`/`drx_buf` and fills the same `at_drval_t`; passes the
   `dr_valtrace` emulator-oracle cross-check identically to the clean-call client (14/14, 5/5
   stable) via `make dr-valtrace-inlined-test`, wired into the `drtrace-test` CI gate. `rflags`
   value + dead-register slots are documented clean-call-only divergences. `make dr-valtrace-bench`
-  ([dr_valtrace_bench.c](../../../examples/dr_valtrace_bench.c)) shows a ~2.6× per-instruction
+  ([dr_valtrace_bench.c](../../../../examples/dr_valtrace_bench.c)) shows a ~2.6× per-instruction
   capture-cost drop on the isolated capture window.
 - ✅ Increments 4–9 — LANDED (this document; see the per-increment sections above).
 
 ## Validation notes
 
+> *These were code-checked when the plan was written, against the **Increment-1 clean-call client**
+> ([dataflow_dr_client.c](../../../../src/dataflow_dr_client.c)) — which is deliberately **untouched**
+> as the oracle/fallback, so each observation about it still holds today. The re-platformed client
+> ([dataflow_dr_client_inlined.c](../../../../src/dataflow_dr_client_inlined.c)) is the one that moved
+> onto `drmgr`/`drreg`/`drx_buf` (Increment 3) and carries the taint surface under `-DASMTEST_TAINT`
+> (Increments 4-9). The integration-model note below is updated where the tier has since moved past
+> it; the rest is retained as written.*
+
 - *Code-checked:* the hot path is a per-instruction clean call
-  ([dataflow_dr_client.c:173-177](../../../src/dataflow_dr_client.c#L173)) on raw
-  `dr_register_bb_event` ([:227](../../../src/dataflow_dr_client.c#L227)); the client uses raw
+  ([dataflow_dr_client.c:173-177](../../../../src/dataflow_dr_client.c#L173)) on raw
+  `dr_register_bb_event` ([:227](../../../../src/dataflow_dr_client.c#L227)); the client uses raw
   core API only, **no** `use_DynamoRIO_extension()`, with the private-loader blocker recorded
-  verbatim in the build file ([drclient/CMakeLists.txt:19-21](../../../drclient/CMakeLists.txt#L19))
-  and the client header ([dataflow_dr_client.c:16-23](../../../src/dataflow_dr_client.c#L16),
+  verbatim in the build file ([drclient/CMakeLists.txt:19-21](../../../../drclient/CMakeLists.txt#L19))
+  and the client header ([dataflow_dr_client.c:16-23](../../../../src/dataflow_dr_client.c#L16),
   which also names the `drreg`+`umbra` stack as the Phase-5 END goal).
 - *Code-checked:* the signal handler returns `DR_SIGNAL_DELIVER`
-  ([:213-217](../../../src/dataflow_dr_client.c#L213)); region registration is marker-driven from
-  SysV args ([on_marker :64-71](../../../src/dataflow_dr_client.c#L64),
-  [event_bb insertion :156](../../../src/dataflow_dr_client.c#L156), PC-resolved
-  [:188](../../../src/dataflow_dr_client.c#L188)); SIMD/far/VSIB/store operands are skipped
-  ([:104-107](../../../src/dataflow_dr_client.c#L104)).
-- *Code-checked:* the emulator oracle is [dataflow_emu.c](../../../src/dataflow_emu.c) ("the
-  reference oracle for the live capture tiers"), **not** [dataflow.c](../../../src/dataflow.c),
-  which is the shared L1/L2 (def-use / slicer) spine; no `drrun`/`dr_inject` launcher exists
-  in-tree — the only DR entry is the in-process `dr_app_*` cooperative lifecycle
-  ([asmtest_drtrace.h:78-93](../../../include/asmtest_drtrace.h#L78)). In-process, `dr_valtrace`
-  hosts the replay/diff in the same address space; the out-of-process validator (Increment 5) is
-  net-new.
+  ([:213-217](../../../../src/dataflow_dr_client.c#L213)); region registration is marker-driven from
+  SysV args ([on_marker :64-71](../../../../src/dataflow_dr_client.c#L64),
+  [event_bb insertion :156](../../../../src/dataflow_dr_client.c#L156), PC-resolved
+  [:188](../../../../src/dataflow_dr_client.c#L188)); SIMD/far/VSIB/store operands are skipped
+  ([:104-107](../../../../src/dataflow_dr_client.c#L104)).
+- *Code-checked:* the emulator oracle is [dataflow_emu.c](../../../../src/dataflow_emu.c) ("the
+  reference oracle for the live capture tiers"), **not** [dataflow.c](../../../../src/dataflow.c),
+  which is the shared L1/L2 (def-use / slicer) spine. *(As written: "no `drrun`/`dr_inject`
+  launcher exists in-tree — the only DR entry is the in-process `dr_app_*` cooperative lifecycle
+  ([asmtest_drtrace.h:78-93](../../../../include/asmtest_drtrace.h#L78))". **Superseded 2026-07-14** —
+  Increment 5 landed the launch-under-DR path (`drrun -c <client> -- <app>`, `make
+  dr-taint-launch-test` / `dr-taint-dotnet-test`), and the ATTACH tier
+  ([dynamorio-attach-tier-plan.md](../../plans/dynamorio-attach-tier-plan.md)) has since added the cooperative
+  `dr_app_*` mid-run attach/detach AND the **external** `drrun -attach <pid>` injector path. All
+  three DR integration models now exist in-tree.)* In-process, `dr_valtrace`
+  hosts the replay/diff in the same address space; the out-of-process validator (Increment 5)
+  landed as [taint_validator.c](../../../../examples/taint_validator.c).
 - *Docs-checked:* the extension stack, overhead band, and launch-vs-attach framing are the
   authoritative analysis note
-  ([data-flow-capture.md:180-241](../analysis/data-flow-capture.md#L180),
-  [:356-363](../analysis/data-flow-capture.md#L356)); the license separability of `drwrap` is
-  [dynamorio-native-trace-plan.md:224-226](../archive/plans/dynamorio-native-trace-plan.md#L224)
-  and the static-link nuance [:914](../archive/plans/dynamorio-native-trace-plan.md#L914); the
-  `__memcpy_chk` loader symptom is [macos-drtrace-plan.md:466](macos-drtrace-plan.md#L466); the
+  ([data-flow-capture.md:180-241](../../analysis/data-flow-capture.md#L180),
+  [:356-363](../../analysis/data-flow-capture.md#L356)); the license separability of `drwrap` is
+  [dynamorio-native-trace-plan.md:224-226](dynamorio-native-trace-plan.md#L224)
+  and the static-link nuance [:914](dynamorio-native-trace-plan.md#L914); the
+  `__memcpy_chk` loader symptom is [macos-drtrace-plan.md:466](../../plans/macos-drtrace-plan.md#L466); the
   `MethodLoadVerbose` event id 143 addr-channel and the GC-move deferral are
-  [data-flow-tracing-plan.md:199](data-flow-tracing-plan.md#L199) and
-  [:193](data-flow-tracing-plan.md#L193).
+  [data-flow-tracing-plan.md:199](../../plans/data-flow-tracing-plan.md#L199) and
+  [:193](../../plans/data-flow-tracing-plan.md#L193).
 
 ## Risks and open points
 
+> **Register status as of 2026-07-14 (all nine increments landed).** This register was written
+> before Increment 2; each entry is **retained as written for provenance** and annotated inline with
+> its outcome. Nine of twelve are **RESOLVED** by the increments that landed. The three that remain
+> live are *standing constraints*, not open work: keep marker/arg resolution `drwrap`-free, keep the
+> shadow's benign-race policy intact, and do not regress `DR_SIGNAL_DELIVER` coexistence.
+
 - **The private-loader blocker is documented, never solved.** Every source records it
   generically ("modern glibc") with no tested version boundary
-  ([drclient/CMakeLists.txt:19-21](../../../drclient/CMakeLists.txt#L19),
-  [macos-drtrace-plan.md:466](macos-drtrace-plan.md#L466)); no build-from-source / static-link /
+  ([drclient/CMakeLists.txt:19-21](../../../../drclient/CMakeLists.txt#L19),
+  [macos-drtrace-plan.md:466](../../plans/macos-drtrace-plan.md#L466)); no build-from-source / static-link /
   version-pin has been attempted. Increment 2 must turn it into an empirical yes/no per option —
   it is the single-point dependency for the entire plan, and if none of (a)/(b)/(c) loads cleanly
   the re-platform stalls.
+  **→ RESOLVED (Increment 2, 2026-07-13): the blocker does not reproduce.** The prebuilt
+  `drmgr`/`drreg`/`drx` load cleanly under the private loader on glibc **2.39** with the pinned DR
+  11.91.20630 (130588 instructions instrumented over `/bin/true`); the `__memcpy_chk` symptom did
+  not recur. **Option (c) version-pin** chosen — no build-from-source/static-link owed. Gate
+  `make docker-drext-probe` + CI `drext-probe`; findings
+  [dr-extension-load-probe-findings.md](../../analysis/dr-extension-load-probe-findings.md).
 - **License angle.** Only `drwrap` is LGPL-2.1 and is separable from the target stack; options
   (a)/(b)/(c) keep the tier LGPL-clean, but **static-link (b) carries the stricter obligation**
-  ([dynamorio-native-trace-plan.md:914](../archive/plans/dynamorio-native-trace-plan.md#L914)) —
+  ([dynamorio-native-trace-plan.md:914](dynamorio-native-trace-plan.md#L914)) —
   it only bites if an LGPL object is in the set, which it is not, so (b) stays clean but must
   contain no LGPL object. `umbra`/`drx_buf` licensing is **not asserted anywhere in-repo**;
   Increment 2 must confirm them BSD/permissive before the license-clean claim stands.
+  **→ RESOLVED (Increment 2, 2026-07-13), and the assumption was WRONG for `umbra`.** The picture is
+  a **split**: `drmgr`/`drreg`/`drx` (which is where the `drx_buf` trace-buffer API lives — there is
+  **no** separate `drx_buf` extension) are DR-**core** `ext/` extensions under DR's primary **BSD**
+  license, but **`umbra` is LGPL-2.1** — it ships under `drmemory/drmf/` as part of the Dr. Memory
+  Framework (only `drfuzz`/`drltrace` are its BSD carve-outs), so `umbra` sits with `drwrap`, not
+  with the BSD stack. Consequence, taken in Increment 4: the tag shadow is a **hand-rolled BSD
+  2-level create-on-touch shadow** over DR-core `dr_raw_mem_alloc` — **no `umbra` is linked**, and
+  the tier is fully BSD. The BSD gate excludes `umbra` (opt-in behind `PROBE_UMBRA`).
 - **Marker/arg resolution must stay `drwrap`-free.** The re-platform must re-express the SysV-arg
-  marker capture ([:64](../../../src/dataflow_dr_client.c#L64),
-  [:156](../../../src/dataflow_dr_client.c#L156)) in the `drmgr` world without reaching for
+  marker capture ([:64](../../../../src/dataflow_dr_client.c#L64),
+  [:156](../../../../src/dataflow_dr_client.c#L156)) in the `drmgr` world without reaching for
   `drwrap_get_arg`, or the tier silently reacquires the LGPL-2.1 obligation (option d) it is
   trying to avoid.
+  **→ STANDING CONSTRAINT — held through Increment 9.** No `drwrap` is linked anywhere in the tier.
+  Markers stay PC-resolved via `dr_get_proc_address`, and the ATTACH tier's marker-*less* config
+  reaches the same end by client options + module+offset resolution + `dr_nudge`, still without
+  `drwrap`. Keep it that way.
 - **Process-global shadow under a multithreaded runtime.** The `umbra` tag shadow is one
   process-wide byte map every instrumented .NET thread writes concurrently (app + GC threads);
   `drx_buf` is per-thread but the shadow is not. The committed policy is **tolerated-benign-race
@@ -1247,27 +1311,68 @@ hard gate, not new instrumentation.
   in Increment 5. A global hot-path lock is rejected (blows the band); per-thread shadows are
   rejected (cannot express cross-thread flows). The GC-move remap (Increment 7) is the one bulk
   shadow mutation that must be fenced against in-flight stores.
+  **→ STANDING CONSTRAINT — policy VALIDATED (Increment 5, 2026-07-13), no longer merely stated.**
+  (Read "`umbra` shadow" as "the hand-rolled BSD shadow" per the Increment-2 license split.)
+  `make dr-taint-stress-test` releases N=8 threads through a barrier, all seeding disjoint buffers
+  and running the sink fixture at once — concurrent leaf-CAS installs, concurrent single-byte tag
+  stores, concurrent report appends. Result, deterministic over repeated runs: **exactly N hits,
+  every one correct, no crash/hang, no false clean→tainted flip, no lost hit.** One change it forced:
+  the sink-report append is now thread-safe (atomic fetch-add reserves a disjoint slot). The
+  ATTACH tier is the first place these threads are ones we did not spawn, and the policy held there
+  too.
 - **Scale vs the ~10–50× band.** The band is the *greenfield* figure, not the shipped tier
-  ([data-flow-capture.md:194-195](../analysis/data-flow-capture.md#L194)); it holds only for a
+  ([data-flow-capture.md:194-195](../../analysis/data-flow-capture.md#L194)); it holds only for a
   properly inlined+buffered client. Increment 3's re-platform is what earns it, and Increment 9
   is the first place it is measured on this repo — with a budget/threshold, not a bare report.
+  **→ RESOLVED (Increment 9, 2026-07-14): the band HOLDS for production, and is now ENFORCED.**
+  Measured `dr-taint-overhead-test`: production (record-free) ≈ **11× bare**, inside the ~10–50×
+  band. The surprise was *where* the cost lived — not taint (propagation adds only ~1.4× over value
+  capture) but the **L0 value-capture recording**, an oracle-validation feature. `BAND_MAX ?= 50`
+  ([native-trace.mk:1292](../../../../mk/native-trace.mk#L1292)) hard-gates it: `ok 3` build-FAILS if
+  prod-taint exceeds 50× bare (~4.5× noise headroom; the prod/bare ratio is runner-speed-independent).
 - **SIMD is under-solved industry-wide.** libdft's cheapness partly comes from *skipping*
-  XMM/SSE/MMX ([data-flow-capture.md:356-360](../analysis/data-flow-capture.md#L356)); Increment 8
+  XMM/SSE/MMX ([data-flow-capture.md:356-360](../../analysis/data-flow-capture.md#L356)); Increment 8
   may blow the band and forces an explicit coverage/cost tradeoff rather than a silent gap.
+  **→ RESOLVED (Increment 8, 2026-07-14): measured, and reported SEPARATELY rather than folded into
+  the scalar band.** SIMD full-taint ≈ **785× bare** vs scalar full-taint ≈ **428×** — ~1.8× costlier,
+  the direct consequence of per-byte lane granularity (a 32-byte YMM operand = 32 union/broadcast ops
+  + a 32-byte shadow access vs 1 for a GP reg). The tradeoff is explicit in the lane output, not a
+  silent gap. ZMM / VSIB / lane-precise flow are deferred with an in-code rationale.
 - **GC-move coherence + external block.** A missed `GCBulkMovedObjectRanges` event silently
   aliases pre/post-move taint; Increment 7 needs a coherence canary, and it is **hard-blocked** on
   Phase 4's still-deferred `{old,new,len}` extraction
-  ([data-flow-tracing-plan.md:193](data-flow-tracing-plan.md#L193)) — mitigated by the disabled-
+  ([data-flow-tracing-plan.md:193](../../plans/data-flow-tracing-plan.md#L193)) — mitigated by the disabled-
   flag + synthetic-triple partial path so the chain does not fully stall.
+  **→ RESOLVED (Increment 7, 2026-07-14): the external block never had to be cleared.** Phase 4's
+  deferred EventPipe feed was **side-stepped**, not waited on: an in-process
+  `ICorProfilerCallback4::MovedReferences2` profiler delivers the exact `{old,new,len}` triple
+  synchronously at a suspended-EE fence, calling `at_gc_remap_live` directly. The coherence canary
+  landed as the synthetic T5-T7 (`dr-taint-gcremap-test` 13/13: present-at-new, per-byte colours move
+  1:1, and an unseeded move conjures no phantom taint), plus the live
+  `dr-taint-gcmove-survival-test` (seed survives a compacting gen2 GC that relocates the object;
+  sink fires at the NEW address 4/4; noseed 0 hits). CI job `taint-gcmove`. Residual conservative
+  miss (never a crash/false positive): a move range wider than the 1 MiB static snapshot is skipped.
 - **DR-over-managed heaviness / JIT collision is asserted, not demonstrated.** "Launch owns the
   process from a clean start, so DR's code cache coexists with .NET tiered-JIT" has no in-tree
-  evidence ([data-flow-capture.md:203-209](../analysis/data-flow-capture.md#L203)); Increment 5 is
+  evidence ([data-flow-capture.md:203-209](../../analysis/data-flow-capture.md#L203)); Increment 5 is
   the first real test and may surface tiered-recompilation/dynamic-codegen problems.
+  **→ RESOLVED (Increment 5, 2026-07-13): coexistence DEMONSTRATED, and it held first try.**
+  `make dr-taint-dotnet-test` runs `drrun -c libasmtest_drtaint_client.so -- dotnet taint_hello.dll`
+  over a workload whose hot method tiers up (tier-0 → tier-1) mid-run — so DR's code cache must
+  handle .NET rewriting live code — to completion, exit 0, no swallowed SIGSEGV, no SIGTRAP, no hang,
+  with the client UNCHANGED. This retired the plan's stated risk concentration. *(Note the converse
+  is NOT true for attach: DR **seizing** an already-running runtime is fatal — see the ATTACH tier's
+  Increment 6 NO-GO. Launch-from-a-clean-start is what makes managed viable.)*
 - **Out-of-process validator wiring is net-new.** In-process, `dr_valtrace` replays and diffs the
   oracle in the same address space; once the client is a separately-launched dotnet process
   writing to shm, a *distinct* app-side validator must own the replay/diff. The plan pins the shm
   *transport* and names the validator as the *consumer* (Increment 5), but neither exists in-tree
   and both are first exercised there.
+  **→ RESOLVED (Increment 5, 2026-07-13):** both landed and are reused verbatim by the ATTACH tier.
+  Transport [include/asmtest_taint_shm.h](../../../../include/asmtest_taint_shm.h) (consumer reads by
+  OFFSET, never producer pointers); consumer [taint_validator.c](../../../../examples/taint_validator.c),
+  which drains the channel and diffs BOTH the sink hit AND the full taint SET against the emulator
+  forward slice out of process (`dr-taint-launch-test` 9/9).
 - **Single-step-crashes-JIT inheritance.** The tier already carries hard-won managed-signal
   lessons (TF-armed threads die under managed runtimes; the dotnet GH-runner SIGTRAP; Go's missing
   `runtime.LockOSThread`). Inlined DBI is not single-step, but any per-thread instrumentation
@@ -1278,9 +1383,22 @@ hard gate, not new instrumentation.
   shared-memory results channel, and an out-of-process validator (Increment 5); a launched-runmode
   CMake variant is scoped as a fallback if the in-process client build does not carry over. None
   of this exists in-tree and each is first exercised there.
+  **→ RESOLVED (Increment 5, 2026-07-13/14): all of it landed, and the fallback never triggered.**
+  The merged image is `Dockerfile.taint-dotnet` (DR + .NET SDK); the shm channel, managed shim
+  ([taint_managed_shim.c](../../../../examples/taint_managed_shim.c)), and out-of-process validator all
+  shipped. **The build-mode question resolved to a SINGLE build** — the same
+  `configure_DynamoRIO_client` `.so` works unmodified under `drrun -c`, so **no launched-runmode
+  CMake variant was needed** and **zero client changes** were required for the launch path.
 - **No in-repo overhead number.** Every cited figure is external literature; the tier's cost
   claim is unproven on this repo's managed workload until Increment 9 measures it against the
   budget.
+  **→ RESOLVED (Increment 9, 2026-07-14): the repo now has its own numbers, and they are gated.**
+  `dr-taint-overhead-test` measures a 4-way decomposition on the native hot-loop proxy
+  ([taint_overhead.c](../../../../examples/taint_overhead.c)): DR-baseline ≈ 1.0× bare (DR's
+  steady-state on a hot loop is near-native), value-capture ≈ 300×, full-taint ≈ 437–452×, **PROD
+  (record-free) ≈ 11× bare**. Measured on the native proxy rather than a full dotnet run by design —
+  a dotnet number would be dominated by the `scope=ranges` ~1× baseline plus JIT/GC noise, so the
+  record-free per-instruction cost is the meaningful figure, and it is band-gated (`BAND_MAX=50`).
 
 ## Recommended first milestone
 
@@ -1289,13 +1407,28 @@ independently-landable slice and the single-point dependency gating everything d
 resolved cleanly: the pinned DR 11.91.20630 prebuilt `drmgr`/`drreg`/`drx` load under the private
 loader on glibc 2.39 (option (c) version-pin), and the license question resolved to a split
 (`drmgr`/`drreg`/`drx` BSD; **`umbra` LGPL-2.1**). Artifacts:
-[drclient/probe_extensions.c](../../../drclient/probe_extensions.c),
+[drclient/probe_extensions.c](../../../../drclient/probe_extensions.c),
 `make docker-drext-probe` / CI `drext-probe`, findings in
-[dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md).
+[dr-extension-load-probe-findings.md](../../analysis/dr-extension-load-probe-findings.md).
 
-**Next: Increment 3 — re-platform the L0 value client onto inlined `drmgr`/`drreg`/`drx_buf`
-instrumentation** (byte-identical `at_drval_t` under the existing emulator-oracle gate, no taint
-yet). It is now unblocked: the BSD extension stack demonstrably loads, so the swap needs no loader
-workaround. It is the **L** central lift and highest-risk single increment — see its section
-above. Before its shadow work (Increment 4) begins, settle the umbra/BSD-shadow license decision
-the probe surfaced.
+*(As written, the next step from here was: "**Next: Increment 3 — re-platform the L0 value client
+onto inlined `drmgr`/`drreg`/`drx_buf` instrumentation** … the **L** central lift and highest-risk
+single increment … Before its shadow work (Increment 4) begins, settle the umbra/BSD-shadow license
+decision the probe surfaced." Retained for provenance.)*
+
+**Status 2026-07-14 — the sequence is finished; there is no "next" increment.** Increment 3 landed
+that day (the re-platform passed the oracle gate 14/14 with a ~2.6× capture-cost drop), the
+umbra/BSD-shadow license decision was settled in favour of the **hand-rolled BSD shadow** (no
+`umbra` linked), and Increments 4–9 followed. **All nine increments are LANDED and every exit
+criterion is MET** — production taint runs at ~11× bare inside the ~10–50× band with a hard CI gate
+(`BAND_MAX=50`), a seed reaches a sink over real JIT'd managed code, and taint survives a compacting
+GC. Per the archive rule this plan is **ready to archive** to `docs/internal/archive/plans/`, with
+the parent [data-flow-tracing-plan.md](../../plans/data-flow-tracing-plan.md) Phase-5 stub updated to LANDED in
+the same change.
+
+**Follow-on work, all optional and none blocking** (each documented at its site above and in-code):
+lever 2's **direct-mapped shadow** (a further optimization on the residual propagation cost — *not*
+required for the band, since lever 1 alone reached ~11×); **ZMM / VSIB / lane-precise SIMD** flow;
+and the known ABI-level limitations (`rflags` value + dead-register slots are clean-call-only; a
+`call`'s `rsp`/`rip` is mis-valued across an out-of-region callee; high-byte sub-registers fold to
+the low byte).

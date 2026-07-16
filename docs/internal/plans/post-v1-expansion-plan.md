@@ -1,7 +1,7 @@
 # asm-test — Post-v1.0 Expansion Plan
 
 A roadmap for what comes *after* the v1.0.0 feature set. The five prior plans —
-[DESIGN.md](../../../DESIGN.md) (phases 0–11), [expansion-plan.md](expansion-plan.md)
+[DESIGN.md](../../../DESIGN.md) (phases 0–11), [expansion-plan.md](../archive/plans/expansion-plan.md)
 (tracks A–E), [multi-language-bindings-plan.md](../archive/plans/multi-language-bindings-plan.md)
 (Track 0 + ten languages), [binding-parity-plan.md](../archive/plans/binding-parity-plan.md), and the
 [Native Win64 tier plan](../archive/plans/win64-native-tier-plan.md) — are all **landed**. They
@@ -17,7 +17,7 @@ verified gaps in the current code). Within each part they are ordered by
 value-to-effort; all are independent and can land in any order.
 
 > Status legend: **planned** unless noted. Update this file as tracks land, the way
-> DESIGN.md and [expansion-plan.md](expansion-plan.md) track their phases.
+> DESIGN.md and [expansion-plan.md](../archive/plans/expansion-plan.md) track their phases.
 
 ---
 
@@ -47,7 +47,7 @@ value-to-effort; all are independent and can land in any order.
 
 # Part 1 — Reach (finish the deferred work)
 
-## Track A — Publish the bindings — **dry-run complete; credentialed go-live remains**
+## Track A — Publish the bindings — **code-complete; blocked on registry credentials**
 
 **Goal.** Turn the ten packaging-*scaffolded* bindings into ones a user installs from
 their language's registry, with the native libraries bundled — the multi-language
@@ -70,10 +70,16 @@ scopes the remainder: credentials and cross-OS native-payload build matrices.
   delocate); the link bindings (Go/C++/Zig/Rust) are validated as consumable.
 - **What remains is only the credentialed go-live** (not code): register the
   package names, add the per-ecosystem token secrets, and tag a release — the
-  gated publish steps (`if: …env.<TOKEN> != ''`, pinned to the Linux leg) light
-  up automatically. Per-ecosystem registry quirks (PyPI Trusted Publishing,
-  Maven Central signing, broader manylinux/python-version coverage) are tuned at
-  that point.
+  gated publish steps light up automatically. The gate is the **credentials
+  themselves**: `PYPI_TOKEN`, `NPM_TOKEN`, `CARGO_REGISTRY_TOKEN`,
+  `RUBYGEMS_API_KEY`, `NUGET_API_KEY` (lua + java have no registry leg here, and
+  fall through). Each publish step is `if:`-gated to a **tag build on the Linux
+  leg**, then guarded in-step by `[ -n "$TOKEN" ] || skip`, so forks and
+  untagged runs no-op — see
+  [release.yml](../../../.github/workflows/release.yml) (per-binding publish;
+  crates.io on its own job). Per-ecosystem registry quirks (PyPI Trusted
+  Publishing, Maven Central signing, broader manylinux/python-version coverage)
+  are tuned at that point.
 
 ### Deliverables
 
@@ -193,7 +199,7 @@ a small surface and an already-familiar optional-dependency pattern.
 
 ---
 
-## Track D — Wide-vector capture (AVX/AVX-512, SVE) — **AVX2 (SysV + Win64) done; AVX-512/SVE staged**
+## Track D — Wide-vector capture (AVX/AVX-512, SVE) — **AVX2 + AVX-512 done (SysV + Win64, all ten bindings); SVE staged (needs an SVE runner)**
 
 **Goal.** Capture vector state wider than 128 bits, so AVX2 / AVX-512 (`ymm`/`zmm`)
 and AArch64 SVE routines are testable to their full register width.
@@ -277,7 +283,7 @@ testing that proves a suite catches a perturbed routine.
 
 **Why.** The emulator already records basic-block coverage — the exact signal a
 coverage-guided fuzzer consumes — but it only ever feeds a report
-([expansion-plan.md](expansion-plan.md) Track C). Meanwhile Keystone can assemble
+([expansion-plan.md](../archive/plans/expansion-plan.md) Track C). Meanwhile Keystone can assemble
 *mutants* of a routine. Wiring coverage back into generation (Phase 7's
 `ASSERT_MATCHES_REF` RNG) and adding instruction-level mutation reuses two systems
 already built and differentiates the framework further.
@@ -349,8 +355,27 @@ violation as data via a new `UC_HOOK_MEM_WRITE` / second `UC_HOOK_BLOCK` hook in
 
 Three host-independent example tests in `examples/test_emu.c`; surfaced the real
 property that the engine **retains register state across calls** on a handle (only
-args + `rsp` reset). Acceptance met: a routine writing past its confined region is
-caught at the offending store with its instruction text, no host crash.
+args + `rsp` reset) — since addressed by snapshot/restore, below. Acceptance met: a
+routine writing past its confined region is caught at the offending store with its
+instruction text, no host crash.
+
+**Done since:** two additions on top of the acceptance above.
+
+- **Read watchpoints** — `emu_watch_reads(e, addr, size, mode, &w)`, the read-side
+  sibling of #1 with the same modes and `emu_watch_t` result: catches a routine
+  that reads a secret/uninitialized area (`NEVER`) or reads past a declared length
+  (`ONLY`) — which a write watch misses. One watchpoint per handle (it replaces an
+  armed write watch); x86-64 guest, like the rest of Track F.
+- **`emu_snapshot` / `emu_restore` / `emu_snapshot_free`** (`17556f0`) — the answer
+  to the retention property above. Mapped memory and the stack *deliberately*
+  persist across `emu_call_*` (that is how a caller preloads data), so a Track E
+  fuzz or mutation sweep otherwise runs each candidate against memory dirtied by
+  earlier ones, making killed/survived classification depend on handle history.
+  Bracketing a sweep with a snapshot/restore pair gives every candidate identical
+  starting state. A restore rewinds the guest (mapping set, region bytes, register
+  context) but deliberately leaves *handle-level* arming — watchpoints, register
+  guards, preloads, the fuzz corpus — untouched: those belong to the harness, not
+  the guest.
 
 **Effort:** ~3–4 days. **Touches:** `src/emu.c`, `include/asmtest_emu.h`,
 `src/disasm.c` (the describe helper, kept Capstone-side), `examples/test_emu.c`,
@@ -363,13 +388,15 @@ caught at the offending store with its instruction text, no host crash.
 1. **Track C** (disassembly) — **done.** Cheap, transformed every diagnostic, and
    Tracks E/F can build on it. Now also bound across all ten languages via the
    single `libasmtest_emu_full` (Keystone + Capstone) — `disas`/`disas_available`.
-2. **Track A** (publish) — **dry-run complete.** The release pipeline packages,
-   installs, and smoke-tests every binding end to end (Linux + macOS), with only
-   the credentialed go-live (register names + add token secrets + tag) left — the
-   single biggest adoption lever, no dependency on the others.
-3. **Track D** (wide vectors) — **AVX2 done** (256-bit capture on SysV **and**
-   Win64, plus binding parity); AVX-512 (`zmm`) and SVE staged, hardware-gated on
-   an AVX-512 / SVE runner to execute (not just assemble) the trampoline.
+2. **Track A** (publish) — **code-complete; blocked on registry credentials.** The
+   release pipeline packages, installs, and smoke-tests every binding end to end
+   (Linux + macOS), with only the credentialed go-live (register names + add token
+   secrets + tag) left — the single biggest adoption lever, no dependency on the
+   others.
+3. **Track D** (wide vectors) — **AVX2 + AVX-512 done** (256- **and** 512-bit
+   capture on SysV **and** Win64, plus binding parity across all ten), validated
+   on a real AVX-512 host. Only **SVE** is staged, hardware-gated on an
+   AArch64+SVE runner to execute (not just assemble) the trampoline.
 4. **Track F** (invariants) — **done.** Small, compounded with Track C (the
    offending store is disassembled).
 5. **Track E** (fuzzing/mutation) — **done.** Built on C and F; coverage now
@@ -383,7 +410,7 @@ caught at the offending store with its instruction text, no host crash.
   WASM, LoongArch). MIPS would close the MIPSUnit prior-art gap in
   [DESIGN.md](../../../DESIGN.md) §1 and a WASM guest would be novel, but both are
   diminishing-returns vs. effort — reconsider only on concrete demand, as
-  [expansion-plan.md](expansion-plan.md) already records.
+  [expansion-plan.md](../archive/plans/expansion-plan.md) already records.
 - A GUI/TUI front-end (TAP + JUnit already integrate with standard tooling).
 - Rewriting the C + asm core in another language (wrapping it is the bindings story).
 - Tier 3 bindings (porting the runner/discovery into another language).

@@ -8,6 +8,33 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **asmspy region view samples WORKER threads (`--trace`, TUI mode 2) + a new `--tid=<t>`
+  filter.** `asmspy_engine_region` used to `PTRACE_ATTACH` the thread-group LEADER and run it
+  to the region, so a function that runs on a worker thread was never observed and the view
+  reported `ASMSPY_REGION_NEVER_RAN` — structurally blind to exactly the code asmspy exists to
+  show, since a **managed method almost never runs on the leader**. It now SEIZEs every thread
+  (`PTRACE_O_TRACECLONE`, so a thread spawned mid-run can win a later round) and races them all
+  to the entry, sampling **whichever arrives first**. `--trace` gains `--tid=<t>` to pin one
+  thread, matching `--stream`/`--graph`/`--tree`/`--dataflow`. The design reuses the data-flow
+  tier's oracle-validated race (`dfp_seize_all`/`dfp_run_to_multi`) rather than inventing a
+  second one, reimplemented over asmspy's own thread table per the standing precedent that an
+  engine stays in `cli/` and leaves `src/ptrace_backend.c` untouched. `--tid` pins via a
+  **per-thread hardware execution breakpoint**, not the shared int3: a shared int3 traps every
+  thread, and stepping hot non-target threads back over it was measured not to converge.
+  `cli_smoke.sh` asserts the worker sample, both `--tid` directions, and target survival past a
+  settle; `make docker-cli` → cli-smoke PASS. Known gaps, unchanged: the any-thread entry
+  breakpoint is `POKETEXT`-only (a W^X JIT page self-skips; no DR0 fallback), and the TUI has
+  no thread picker.
+- **CI gate for the DynamoRIO attach tier (`taint-attach`).** Increments 1 and 3-5 — cooperative
+  attach, the marker-less interactive nudge, external `drrun -attach` into a running native
+  process with taint capture, and K-round attach/capture/detach cycling — had docker lanes but
+  **no CI job**, so five increments of capability had no regression gate while the launch-only
+  taint tier next door had four. The external-attach image needs `--cap-add=SYS_PTRACE` and its
+  comment still described it as the Increment-2 research probe ("a manual diagnostic, not in the
+  main gate") — true when written, but Increments 4-5 were later added to the same image, so
+  landed capability inherited a probe's CI posture. Both lanes now run on every push. The two
+  MANAGED probes stay out by design: they record a reproducible NO-GO, not capability.
+
 - **Data-flow tracing Phase 6 Increment 1 — `libasmtest_dataflow` shared lib + Python
   binding.** `make shared-dataflow` builds the pure analysis pipeline (L0 value sink + L1
   def-use + L2 slice + method identity + GC-move canonicalization + runtime-helper summaries;
@@ -581,6 +608,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Apple-Silicon-tart / bare-metal-KVM hosts this environment lacks.
 
 ### Changed
+
+- **Internal plan docs reconciled against the code; four completed plans archived.** An audit
+  of all 20 active plans against the source, Makefile lanes, CI, and git history found ~30
+  stale status markers whose drift was **entirely one-directional — every one under-reported**,
+  marking shipped and tested work as "planned" or "forward-look"; nothing claimed landed was
+  missing. The mechanism was visible in the artifacts: status was recorded by appending a dated
+  block while section headers and tables kept their original marker. The markers are corrected
+  (provenance preserved), and the four complete/closed plans move to
+  `docs/internal/archive/plans/` per the repo convention: live-attach data-flow (7/7),
+  DynamoRIO taint tier (9/9, band-gated at ~11x bare), Zen2 IBS (8/8), and the managed-attach
+  safepoint spike (closed NO-GO). Two corrections are load-bearing rather than cosmetic:
+  `data-flow-tracing-plan.md`'s Phase-5 stub told readers the taint tier stopped at Increment 3
+  when all nine had landed; and **F4's blocker was retired** — both it and Phase 4 stated that
+  live GC-move canonicalization needed an out-of-process EventPipe consumer ("its own lift"),
+  but that was an assumption and it was disproved: an in-process `MovedReferences2` profiler
+  delivers the exact `{old,new,len}` triples at a suspended-EE GC fence, is proven to coexist
+  with DynamoRIO, and already ships in the taint tier. F4 is now wiring a proven feed to a
+  landed transform, and is the recommended next milestone in that plan.
 
 - **AMD-LBR reconstruction fills the entry-block prologue (fidelity fix).** On a live AMD
   host a too-fast tiny routine's frozen branch stack can carry spurious mid-routine *landing*

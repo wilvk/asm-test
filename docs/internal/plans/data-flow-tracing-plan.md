@@ -15,26 +15,50 @@ live values on an attached, running process** (out-of-band ptrace tier) and **(b
 production-grade taint over live managed runtimes** (DynamoRIO tier) — so the plan carries
 through the DynamoRIO and .NET-interpretability phases rather than stopping at the CI demo.
 
-> Status legend: **Phases 0–3 *(LANDED 2026-07-12)*** — the shared spine + CI proving
+> Status legend (**reconciled 2026-07-16** — every phase re-verified against the code; the
+> previous legend materially under-reported Phases 4 and 5):
+>
+> **Phases 0–3 *(LANDED 2026-07-12)*** — the shared spine + CI proving
 > ground (`include/asmtest_valtrace.h`, `src/dataflow.c` / `src/dataflow_operands.c` /
 > `src/dataflow_emu.c`, `make dataflow-test`, 53 checks; the Unicorn L0 producer validated
 > live) and the scoped ptrace L0 live out-of-band producer, cross-validated against the
 > emulator L0 oracle (RIP-relative EA, gs-base, XMM/YMM wide values, live SEIZE+detach).
+> Phase 3 has since grown its two committed extensions, both complete: the **live-attach**
+> producer + asmspy Data-flow view (all seven increments,
+> [live-attach-dataflow-plan.md](../archive/plans/live-attach-dataflow-plan.md)) and the followup tier's
+> **F1 block-step + emulator replay** and **F3 hardware data-watchpoint** modes
+> ([live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md)).
+>
 > **Phase 4 (.NET interpretability): Increments 1–3 LANDED 2026-07-12/13** — the pure
 > host-independent PC→method+version resolver (`src/dataflow_method.c`), runtime-helper
-> summary edges, and the GC-move *detection* feed (`GcMoveMap` from `GCBulkMovedObjectRanges`);
-> the concrete `{old,new,len}` triple extraction is **deferred** (the in-proc EventListener
-> does not surface the `Values` struct-array — needs an out-of-proc EventPipe/nettrace consumer).
-> **Phase 5 (DynamoRIO taint tier): Increments 1–3 LANDED 2026-07-13** — Increment 1 the in-band
-> L0 value producer; Increment 2 the extension-load probe (prebuilt `drmgr`/`drreg`/`drx` load
-> under DR's private loader — blocker does not reproduce, **option (c) version-pin**; license
-> resolved to a split, `drmgr`/`drreg`/`drx` BSD but **`umbra` LGPL-2.1**); Increment 3 (CORE) the
-> inlined `drmgr`/`drreg`/`drx_buf` re-platform of the value client, oracle-validated identically
-> to the clean-call client; Increments 4–9 (in-band taint + launch container) remain planned in
-> the standalone [dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md). **Phase 6
-> (bindings/docs/CI) LANDED 2026-07-13.** Remaining implementable work: Phase 4's deferred
-> concrete GC-move triples and Phase 5 Increments 3–9. Phases 3 and 5 are the two target tiers.
-> Update this file as phases land, the way
+> summary edges, and the GC-move *detection* feed (`GcMoveMap` from `GCBulkMovedObjectRanges`).
+> The concrete `{old,new,len}` triple extraction remains the one open item, but **its stated
+> blocker is obsolete as of 2026-07-14** and this legend's previous wording ("needs an
+> out-of-proc EventPipe/nettrace consumer") is wrong: that was an *assumption*, and it was
+> disproved. A native in-process `ICorProfilerCallback4::MovedReferences2` profiler delivers
+> the exact triples at a fully-suspended-EE GC fence, was proven to coexist with DynamoRIO
+> (`make docker-gcprofiler-probe`), and is **already shipping** on the DR side — taint
+> Increment 7 wires it through a POSIX-shm handshake into `at_gc_remap_live`
+> ([dataflow_dr_client_inlined.c:732](../../../src/dataflow_dr_client_inlined.c#L732)),
+> remapping 60,021 real ranges on a live compacting GC. See
+> [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
+> What is left is therefore **wiring a proven feed to a landed transform**, not building a
+> nettrace parser: the ptrace-tier canonicalizer `asmtest_gcmove_canonicalize`
+> ([dataflow_gcmove.c:74](../../../src/dataflow_gcmove.c#L74)) still has no caller outside
+> its unit test. That work is followup **F4**.
+>
+> **Phase 5 (DynamoRIO taint tier): ALL NINE INCREMENTS LANDED** *(1–3 2026-07-13; 4–9 through
+> 2026-07-15)* — in-band tag propagation, the launch-under-DR container, GC-move shadow remap,
+> SIMD taint, and the overhead work are **complete**, not planned. Production (record-free)
+> propagation measures **~11× bare**, inside the target ~10–50× band, and is held there by a
+> build-failing CI gate (`BAND_MAX = 50`, [mk/native-trace.mk:1292](../../../mk/native-trace.mk#L1292)).
+> Details in the standalone [dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md).
+>
+> **Phase 6 (bindings/docs/CI) LANDED 2026-07-13.**
+>
+> **Remaining implementable work across this plan: Phase 4's `{old,new,len}` wiring (followup
+> F4) alone.** Phases 3 and 5 are the two target tiers and both are delivered. Update this file
+> as phases land, the way
 > [dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md) tracks its own.
 
 ---
@@ -202,7 +226,33 @@ slices match the emulator oracle on a deterministic region; XMM/YMM and a `gs:`-
 access are covered; the target **survives detach** (reuse the crash-safe two-phase detach);
 cost is documented per-region, not per-run.
 
-## Phase 4 - .NET interpretability layer (managed taint prerequisite) *(Increments 1-3 LANDED; live GC-move DETECTION feed LANDED 2026-07-13 — GcMoveMap captures GCBulkMovedObjectRanges from a compacting GC; concrete {old,new,len} triple extraction + remap wiring deferred, in-proc EventListener does not surface the Values struct-array)*
+## Phase 4 - .NET interpretability layer (managed taint prerequisite) *(Increments 1-3 LANDED; live GC-move DETECTION feed LANDED 2026-07-13; the `{old,new,len}` EXTRACTION blocker was disproved 2026-07-14 — the profiler route is proven and shipping on the DR side, so what remains is wiring it to the ptrace-side canonicalizer, followup F4)*
+
+> **UPDATE 2026-07-14/16 — the deferral reason recorded here was wrong.** This phase deferred
+> the concrete `{old, new, len}` extraction on the grounds that the in-proc `EventListener`
+> does not surface the manifest `Values` struct-array, and therefore that an out-of-process
+> EventPipe/nettrace consumer — "its own lift" — was required. The premise about
+> `EventListener` is true; **the conclusion was not**. A deep-research investigation followed
+> by a coexistence probe (GO, 2026-07-14) established a better in-process native mechanism
+> that bypasses EventPipe entirely: an `ICorProfilerCallback4::MovedReferences2` profiler,
+> which receives the exact per-range triples at a **fully-suspended-EE GC fence** — a stronger
+> coherence position than any event-stream consumer, since no mutator can race the remap.
+> It is not hypothetical: taint Increment 7 ships it, and it drives `at_gc_remap_live`
+> ([dataflow_dr_client_inlined.c:732](../../../src/dataflow_dr_client_inlined.c#L732)) under
+> DynamoRIO across 60,021 real move ranges. Findings:
+> [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
+>
+> The residue is therefore narrow and named. The DR tier's shadow remap is **done**; the
+> *ptrace* tier's pure transform `asmtest_gcmove_canonicalize`
+> ([dataflow_gcmove.c:74](../../../src/dataflow_gcmove.c#L74)) is **landed and unit-tested but
+> has no live caller** — its only callers are `examples/test_dataflow_gcmove.c`. Pointing the
+> proven profiler feed at that transform is followup **F4**
+> ([live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md)), and it is
+> ordinary wiring work, not a research lift. Note the two tiers legitimately need different
+> plumbing even from the same profiler: the DR client is in-process with the target (shm
+> handshake, DR-API-free remap at the fence), whereas the ptrace tier is out-of-process and
+> post-pass, so it consumes the triples stamped with a value-trace step boundary and runs the
+> canonicalization over a captured trace before `asmtest_defuse_build`.
 
 Raw L0 gives `rdx ← load @0x7f…`; managed taint needs method + object identity.
 
@@ -214,7 +264,9 @@ Raw L0 gives `rdx ← load @0x7f…`; managed taint needs method + object identi
   `GCBulkMovedObjectRanges` (`OldRangeBase`/`NewRangeBase`/`RangeLength`) to remap the L1
   memory last-writer / taint shadow across compactions → `(object, field)` identity;
   `GCBulkType`/`Node`/`Edge` for full identity. EventPipe is the cross-platform feed (no
-  Windows needed).
+  Windows needed). — *Superseded as to mechanism: see the 2026-07-14/16 update above. The
+  detection feed built this way landed, but the triples come from an in-process
+  `MovedReferences2` profiler, not from EventPipe. This bullet is retained for provenance.*
 - **Runtime-helper edges:** descend into allocation/write-barrier/generic-dict helpers (they
   are ordinary instrumented blocks) or model them as summary edges.
 - *Optional:* IL→native variable map (debug info / PDB) to report `total depends on prices[i]`
@@ -224,11 +276,31 @@ Raw L0 gives `rdx ← load @0x7f…`; managed taint needs method + object identi
 aliasing pre/post-move addresses; a value is attributed to the correct method+version after a
 tiered re-JIT.
 
-## Phase 5 - DynamoRIO production taint tier (whole-process, in-band) — *goal (b)* *(Increments 1–3 LANDED 2026-07-13; DR-side taint shadowing + whole-process breadth planned)*
+## Phase 5 - DynamoRIO production taint tier (whole-process, in-band) — *goal (b)* *(**ALL NINE INCREMENTS LANDED** — 1–3 2026-07-13, 4–9 through 2026-07-15; goal (b) delivered)*
+
+> **UPDATE 2026-07-16 — this stub is reconciled; it previously stopped at Increment 3.** Every
+> item the paragraph below called "the deferred remainder" has since landed, and the phase's
+> exit criteria are met end-to-end. Increment 4 built the BSD 2-level shadow and the inline
+> `dst_tag = ∪ src_tags` propagation plus the seed/sink ABI; Increment 5 the launch-under-DR
+> container (`drrun -c … -- dotnet app.dll`), the POSIX-shm out-of-process validator, and a
+> managed seed→sink over real JIT'd code; Increment 6 multi-range scoping + .NET method-load
+> auto-registration; Increment 7 the GC-move shadow remap, live-wired from an in-process
+> `MovedReferences2` profiler (this also disproved the Phase-4 blocker this stub used to cite
+> as hard-gating it — see the Phase 4 update above); Increment 8 SIMD taint (XMM/SSE, then
+> YMM/AVX); Increment 9 the overhead work. **Overhead, measured in-repo** (`dr-taint-overhead-test`):
+> DR baseline ≈1× bare, full taint ≈437–452×, production (value-trace-free) ≈216×, and
+> **record-free production propagation ≈11× bare — inside the target ~10–50× band**, held by a
+> build-failing gate (`BAND_MAX = 50`, [mk/native-trace.mk:1292](../../../mk/native-trace.mk#L1292)).
+> The decisive finding was that the cost was never the taint: per-instruction *value capture*
+> (oracle-validation machinery) and the `drx_buf` record skeleton dominated, and propagation
+> itself adds only ~1.4×. Deliberate deferrals, documented in-code: ZMM upper lanes, VSIB
+> gather effective addresses, lane-precise sub-register flow. The direct-mapped shadow
+> ("lever 2") was **not** built and is no longer required — eliminating the production record
+> overshot the band target on its own.
 
 The largest lift — production-grade taint over live JIT'd managed code — is a re-architecture of
-the current tier, not an extension, and now has its own standalone plan:
-**[dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md)**.
+the current tier, not an extension, and has its own standalone plan:
+**[dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md)**.
 
 Increment 1 (the in-band L0 VALUE producer `libasmtest_drval_client.so`, a clean-call
 per-instruction register/memory value snapshot cross-validated against the emulator oracle,
@@ -241,18 +313,26 @@ Memory Framework), so the byte-granular shadow must hand-roll a BSD map or expli
 ([dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md)). Increment
 3 (CORE) then re-platformed the value client onto inlined `drmgr`/`drreg`/`drx_buf` instrumentation
 ([dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c)), oracle-validated
-identically to the clean-call client (`make dr-valtrace-inlined-test`). The deferred remainder — in-band
-tag propagation (`dst_tag = ∪ src_tags`, the ~10–50× band), the launch-under-DR container
-(`drrun -c … -- dotnet app.dll`), the shadow remap on GC moves (hard-gated on the deferred Phase 4
-`{old,new,len}` extraction), whole-process breadth, and SIMD taint — is decomposed into Increments
-4–9 there. The signal half is already mitigated (`DR_SIGNAL_DELIVER`); external attach stays out of
-scope for managed.
+identically to the clean-call client (`make dr-valtrace-inlined-test`). What this paragraph used
+to call "the deferred remainder" — in-band tag propagation (`dst_tag = ∪ src_tags`, the ~10–50×
+band), the launch-under-DR container (`drrun -c … -- dotnet app.dll`), the shadow remap on GC
+moves, whole-process breadth, and SIMD taint — was decomposed into Increments 4–9 there and **has
+since landed in full** (see the 2026-07-16 update above). The one causal claim worth correcting
+rather than just re-dating: the GC-move remap was described here as "hard-gated on the deferred
+Phase 4 `{old,new,len}` extraction," and it was not — Increment 7 sourced the triples from an
+in-process `MovedReferences2` profiler instead, which is also what disproved the Phase-4 deferral.
+The signal half was already mitigated (`DR_SIGNAL_DELIVER`); external attach stays out of scope
+for managed, and that boundary held — the DR attach tier's Increment 6 probed managed attach
+twice (external seize, then a safepoint-parked variant) and closed it **NO-GO** both times, the
+fatal takeover being the runtime's *native* threads
+([dynamorio-managed-attach-safepoint-plan.md](../archive/plans/dynamorio-managed-attach-safepoint-plan.md)).
 
-**Exit criteria:** a launched `dotnet` workload runs under DR with a taint seed at a source
-(e.g. a `read()` buffer) detected at a sink (a `memcpy` length / branch) over real JIT'd managed
-code; taint survives a GC; overhead measured on a representative workload; validates beyond the
-current offset-only dotnet smoke (`bindings/dotnet/drtrace/`). See
-[dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md) for the full increment sequence.
+**Exit criteria — MET 2026-07-15.** A launched `dotnet` workload runs under DR with a taint seed
+at a source detected at a sink over real JIT'd managed code (Increment 5); taint survives a
+compacting GC (Increment 7, live-wired); overhead is measured on a representative workload and
+band-gated in CI at ~11× bare (Increment 9); it validates well beyond the offset-only dotnet
+smoke (`bindings/dotnet/drtrace/`). See
+[dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md) for the full increment sequence.
 
 ## Phase 6 - Bindings, docs, CI *(LANDED 2026-07-13: libasmtest_dataflow shared lib; ALL 10 language bindings (Python/C++/Node/Ruby/Lua/Zig/Rust/Go/Java/.NET) wrap the pure gcmove+method helpers, each `make dataflow-<lang>-test`-validated (host or docker); Python/C++/Node also wrap the full L0/L1/L2 ValueTrace pipeline; data-flow guide page; `dataflow` CI job gates python+cpp, and a `dataflow-bindings` matrix job gates the other seven in their pinned toolchain images. Phase 6 fully landed — only hardware/upstream/credential-gated forward-look items remain across the plan set)*
 

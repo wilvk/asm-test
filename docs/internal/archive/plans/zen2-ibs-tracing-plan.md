@@ -3,15 +3,15 @@
 The buildable plan for asm-test's **AMD IBS** (Instruction-Based Sampling) tracing lane —
 the one hardware branch-tracing facility that actually exists on **Zen 2**, where every
 branch-stack path self-skips. It turns the empirical finding in
-[2026-07-12-zen2-ibs-tracing-review.md](../analysis/2026-07-12-zen2-ibs-tracing-review.md)
+[2026-07-12-zen2-ibs-tracing-review.md](../../analysis/2026-07-12-zen2-ibs-tracing-review.md)
 into work: IBS-Op delivers **statistical from→to control-flow edges, out of band, against a
 live process, unprivileged**, and can observe a JIT/managed runtime without single-stepping
 it (which can crash it).
 
-It is a **sibling** of the [AMD LBR plan](amd-tracing-plan.md) (BRS / LbrExtV2 — absent on
-Zen 2), the [single-step plan](zen2-singlestep-trace-plan.md) (the exact Zen 2 path), the
-[hardware-trace plan](hardware-trace-plan.md) (Intel PT / CoreSight), and the
-[asmspy plan](asmspy-plan.md) (the interactive tracer that gains the flagship view here).
+It is a **sibling** of the [AMD LBR plan](../../plans/amd-tracing-plan.md) (BRS / LbrExtV2 — absent on
+Zen 2), the [single-step plan](../../plans/zen2-singlestep-trace-plan.md) (the exact Zen 2 path), the
+[hardware-trace plan](../../plans/hardware-trace-plan.md) (Intel PT / CoreSight), and the
+[asmspy plan](../../plans/asmspy-plan.md) (the interactive tracer that gains the flagship view here).
 
 > **Status legend: _planned_ unless a phase is marked _(landed)_; forward-look phases are
 > tagged _(forward-look)_.** Update this file as phases land. The house rule holds:
@@ -20,12 +20,31 @@ Zen 2), the [single-step plan](zen2-singlestep-trace-plan.md) (the exact Zen 2 p
 > **IBS is statistical and must never feed the exact `insns[]`/`blocks[]` parity
 > contract** — it is a separate diagnostic producer, not a member of the fidelity cascade.
 
+> **Status (2026-07-16): COMPLETE — 8 of 8 phases landed (0–7).** Every phase below ships
+> and is validated; this plan has **no forward-look and no hardware-blocked item left**.
+> Unlike its sibling plans, nothing here waits on silicon the project lacks: the lane needs
+> only an AMD `ibs_op` PMU, which the **Zen 2 dev host (Ryzen 9 4900HS) has**, and it opens
+> **unprivileged at `perf_event_paranoid=2`** via the kernel `swfilt` bit — it self-skips
+> cleanly off AMD/IBS everywhere else. Flagship surface: `asmspy --sample <pid>` (headless
+> + `--json`) and TUI **mode 7** ("Hot edges (sample)"), the only rich asmspy view that
+> never ptraces or single-steps its target. Docker lane `make docker-hwtrace-ibs` ships.
+>
+> Two **scope notes** where the as-shipped surface differs from the sketches below, both
+> deliberate and carried forward at their phase markers:
+> - **Phase 5** shipped its sampling knobs as a **flags bitmask** on
+>   `asmtest_ibs_opts_t.flags`, *not* the named `cnt_ctl`/`callchain`/`system_wide` fields
+>   the Phases 0+1 note and the Design sketch declared as the target surface.
+> - **Phase 7**'s IBS-**Fetch** lane is **internal-only** — `asmtest_ibs_fetch_*` live in
+>   [src/ibs_backend.h](../../../../src/ibs_backend.h); [include/asmtest_ibs.h](../../../../include/asmtest_ibs.h)
+>   carries no fetch surface, and there is no asmspy view for it. The phase specced a
+>   decoder + per-tid survey and shipped exactly that; a public surface was never promised.
+
 > **Landed 2026-07-12 — Phases 0 + 1** (the pure decoder + out-of-band capture engine,
-> the non-TUI foundation). New surface: [include/asmtest_ibs.h](../../../include/asmtest_ibs.h),
-> [src/ibs_backend.c](../../../src/ibs_backend.c) (wired into `libasmtest_hwtrace` via
-> `HWTRACE_OBJS` in [mk/native-trace.mk](../../../mk/native-trace.mk)),
-> [examples/ibs_probe.c](../../../examples/ibs_probe.c) (capability probe) and
-> [examples/test_ibs.c](../../../examples/test_ibs.c) (synthetic-decoder unit tests +
+> the non-TUI foundation). New surface: [include/asmtest_ibs.h](../../../../include/asmtest_ibs.h),
+> [src/ibs_backend.c](../../../../src/ibs_backend.c) (wired into `libasmtest_hwtrace` via
+> `HWTRACE_OBJS` in [mk/native-trace.mk](../../../../mk/native-trace.mk)),
+> [examples/ibs_probe.c](../../../../examples/ibs_probe.c) (capability probe) and
+> [examples/test_ibs.c](../../../../examples/test_ibs.c) (synthetic-decoder unit tests +
 > live out-of-band capture test), run by `make ibs-test` and folded into `make hwtrace-test`.
 > The raw-record byte layout was **empirically re-confirmed on this Zen 2 host** before
 > coding (PERF_SAMPLE_IP == `reg[1]` cross-check); the live test captures the spin-loop's
@@ -33,6 +52,12 @@ Zen 2), the [single-step plan](zen2-singlestep-trace-plan.md) (the exact Zen 2 p
 > header exposes `asmtest_ibs_available`/`_skip_reason`/`_decode_op`/`_survey_pid`/`_survey_free`;
 > **the `opts` `cnt_ctl`/`callchain`/`system_wide` fields are deferred to Phase 5** (declared
 > here as the target surface, not yet shipped — every shipped symbol has a real, tested body).
+> *(Superseded 2026-07-16: Phase 5 **landed**, but not in this shape — the knobs shipped as a
+> **flags bitmask** (`asmtest_ibs_opts_t.flags`: `ASMTEST_IBS_OPT_COUNT_CYCLES` / `_CALLCHAIN`
+> / `_SYSTEM_WIDE` / `_NO_JITTER`) plus a `period_jitter` field and an additive-ABI
+> `struct_size`. No `cnt_ctl` / `callchain` / `system_wide` member exists in
+> [include/asmtest_ibs.h](../../../../include/asmtest_ibs.h) and none is planned; the bitmask is
+> the final surface.)*
 
 > **Landed 2026-07-12 — Phase 2** (whole-process coverage). New symbol
 > `asmtest_ibs_survey_process(pid, ms, opts, out)` in the same TU: refactors the single-tid
@@ -46,11 +71,13 @@ Zen 2), the [single-step plan](zen2-singlestep-trace-plan.md) (the exact Zen 2 p
 > `survey_process(0, …)`, asserting the merged survey carries edges from ≥2 workers' code
 > windows (something no single-tid survey could produce): reliably recovers 3/3 in practice,
 > `>=2` gate for throttle-robustness. Phase 3 (the `asmspy --sample` view, now unblocked) is
-> the next deliverable and is **out of scope for this pass** (TUI).
+> the next deliverable and is **out of scope for this pass** (TUI). *(Landed later the same
+> day — see the Phase 3 marker below. This line records the state at the Phase-2 pass only
+> and is not open work.)*
 
 ## Relationship to the existing AMD plan (Phase 7)
 
-This plan **refines and supersedes** [amd-tracing-plan.md](amd-tracing-plan.md) **Improvement
+This plan **refines and supersedes** [amd-tracing-plan.md](../../plans/amd-tracing-plan.md) **Improvement
 Phase 7 — IBS-Op complementary coverage lane** *(forward-look)*, which is correct in spirit
 but wrong on two mechanics that change the whole cost/benefit:
 
@@ -137,11 +164,22 @@ void asmtest_ibs_survey_free(asmtest_ibs_survey_t *);
 int  asmtest_ibs_decode_op(const void *raw, size_t raw_len, asmtest_ibs_edge_t *out);
 ```
 
+> **As-shipped delta (2026-07-16) — the sketch above is the original design, kept for the
+> record; two things landed differently.** (1) `asmtest_ibs_opts_t` carries its Phase-5
+> knobs as a **flags bitmask** (`flags`: `ASMTEST_IBS_OPT_COUNT_CYCLES` / `_CALLCHAIN` /
+> `_SYSTEM_WIDE` / `_NO_JITTER`) plus `period_jitter` and an additive-ABI `struct_size` —
+> not the named `cnt_ctl` / `callchain` / `system_wide` fields sketched here. (2) The header
+> also grew the **Phase 6** normalization pair `asmtest_ibs_normalize_blocks` /
+> `asmtest_ibs_blocks_free`, which this sketch predates. The **Phase 7 fetch** lane
+> (`asmtest_ibs_fetch_*`) is deliberately **not** in the public header — it lives in
+> [src/ibs_backend.h](../../../../src/ibs_backend.h). See
+> [include/asmtest_ibs.h](../../../../include/asmtest_ibs.h) for the authoritative surface.
+
 New TU `src/ibs_backend.c`, compiled into `libasmtest_hwtrace` (Linux-only; self-skips
 elsewhere). It needs **no extra library** — raw `perf_event_open` + the existing Capstone
 length-decoder only for the optional Phase 6 block normalization. Wire it into the hwtrace
-object list in [mk/](../../../mk/) alongside `hwtrace.c`/`amd_backend.c`, and into
-[mk/cli.mk](../../../mk/cli.mk) so asmspy can link it.
+object list in [mk/](../../../../mk/) alongside `hwtrace.c`/`amd_backend.c`, and into
+[mk/cli.mk](../../../../mk/cli.mk) so asmspy can link it.
 
 ## Phases
 
@@ -199,18 +237,18 @@ pre-existing worker; the race and the system-wide remedy are documented, not hid
 
 > **Landed 2026-07-12 — the full `--sample` view: headless + TUI mode 7.**
 > `asmspy_engine_sample(pid, ms, stop, syms, jit, sink, ctx)` in
-> [cli/asmspy_engine.c](../../../cli/asmspy_engine.c) drives `asmtest_ibs_survey_process`
+> [cli/asmspy_engine.c](../../../../cli/asmspy_engine.c) drives `asmtest_ibs_survey_process`
 > **out of band** (no ptrace, no single-step) and resolves both endpoints of each hot edge
 > through `asmspy_resolve` (ELF symtab → JIT perf-map), so managed frames are named. Headless
-> `asmspy --sample <pid> [ms] [--json]` ([cli/asmspy.c](../../../cli/asmspy.c) `cmd_sample`)
+> `asmspy --sample <pid> [ms] [--json]` ([cli/asmspy.c](../../../../cli/asmspy.c) `cmd_sample`)
 > prints the edge histogram — `count  from -> to` with `[misp N%]`/`[ret]` tags and honest
 > `branch/total samples`, `throttled` provenance — or a machine-readable JSON export; it
 > **self-skips** (`# SKIP`, exit 0) off IBS. The **TUI mode 7** (menu item "7) Hot edges
 > (sample)") runs the same engine on a tracer thread, showing a live hot-edge table that is
 > pausable + scrollable + Tab-sortable (count / mispredicts) like the call-graph view — the
 > only rich TUI view that never ptraces or single-steps (gated up front off IBS with a clear
-> message). New busy victim [cli/sample_victim.c](../../../cli/sample_victim.c) (a hot
-> `hot_spin()`) + a `--sample` smoke in [cli/cli_smoke.sh](../../../cli/cli_smoke.sh) prove
+> message). New busy victim [cli/sample_victim.c](../../../../cli/sample_victim.c) (a hot
+> `hot_spin()`) + a `--sample` smoke in [cli/cli_smoke.sh](../../../../cli/cli_smoke.sh) prove
 > the hot function is named out of band and that JSON resolves it (self-skips off IBS); the
 > TUI view was driven end-to-end through a pty+pyte harness (menu → filter → mode 7 →
 > Tab/space), asserting `HOT EDGES` + `hot_spin` render and the sort/pause keys work.
@@ -222,15 +260,15 @@ any target **out of band** — the safe view for JITs where stream/graph/tree si
 dangerous. This is the highest-value item and the reason to do the lane.
 
 **Work.** Add `asmspy_engine_sample(pid, ms, stop, syms, jit, sink, ctx)` to
-[cli/asmspy_engine.c](../../../cli/asmspy_engine.c) built on `asmtest_ibs_survey_process`
+[cli/asmspy_engine.c](../../../../cli/asmspy_engine.c) built on `asmtest_ibs_survey_process`
 (no ptrace, no single-step). Resolve edge endpoints through the existing
-`asmspy_resolve` ([cli/asmspy.h](../../../cli/asmspy.h)) so ELF symbols **and** JIT
+`asmspy_resolve` ([cli/asmspy.h](../../../../cli/asmspy.h)) so ELF symbols **and** JIT
 perf-map methods (Node/.NET/Java) are named — the perf-map resolver already exists and this
 view is where it pays off without the single-step crash risk. Add the headless `--sample`
-subcommand to [cli/asmspy.c](../../../cli/asmspy.c) and a TUI **mode 7** (hot functions /
+subcommand to [cli/asmspy.c](../../../../cli/asmspy.c) and a TUI **mode 7** (hot functions /
 edges, sortable by sample count, with taken/mispredict rates). Extend
-[cli/cli_smoke.sh](../../../cli/cli_smoke.sh) with a `--sample` smoke that self-skips off
-IBS. Update the view-family table in [asmspy-plan.md](asmspy-plan.md): a new row —
+[cli/cli_smoke.sh](../../../../cli/cli_smoke.sh) with a `--sample` smoke that self-skips off
+IBS. Update the view-family table in [asmspy-plan.md](../../plans/asmspy-plan.md): a new row —
 mechanism "IBS-Op statistical sampling", **"safe on any target? yes (out-of-band, no
 single-step)"** — the only rich view with that property.
 
@@ -245,24 +283,24 @@ risk crashing.
 > `sample_begin_amd`/`sample_end_amd`) now fall back to a statistical IBS-Op survey when the
 > branch stack is absent (Zen 2, `perf_open` fails) or `ASMTEST_FORCE_IBS_SURVEY` is set
 > (cross-validation on Zen 3+/CI). New **internal** window primitives
-> [src/ibs_backend.h](../../../src/ibs_backend.h) `asmtest_ibs_window_begin`/`_end` arm IBS-Op
+> [src/ibs_backend.h](../../../../src/ibs_backend.h) `asmtest_ibs_window_begin`/`_end` arm IBS-Op
 > on the calling thread, let the caller run its window body inline, then drain — the same
 > begin/run/end shape as the branch-stack pair, reusing the channel/drain/edge-hash machinery.
-> [src/hwtrace.c](../../../src/hwtrace.c) flattens each sampled edge's TARGET into the `ips[]`
+> [src/hwtrace.c](../../../../src/hwtrace.c) flattens each sampled edge's TARGET into the `ips[]`
 > endpoint histogram weighted by count, so the caller's bucket-by-method hotness view is
 > unchanged in shape. Purely STATISTICAL — a separate producer, never in the exact
 > `insns[]/blocks[]` parity cascade; the branch-stack path is byte-identical when the stack is
 > present and the env unset. `examples/test_hwtrace.c` `test_amd_sample_window_ibs` forces the
 > IBS path over the hot-loop fixture (self-skips off IBS) and asserts most endpoints land
 > in-loop (both the monolith and the split) — ~468/468 in-loop live on this Zen 2; full
-> `hwtrace-test` 341/341. This supersedes [amd-tracing-followup-plan.md](../archive/plans/amd-tracing-followup-plan.md)
+> `hwtrace-test` 341/341. This supersedes [amd-tracing-followup-plan.md](amd-tracing-followup-plan.md)
 > Phase 7c, which specced the same integration before the IBS lane existed.
 
 **Goal.** Make the statistical whole-window survey produce a result on Zen 2 instead of
 `EUNAVAIL`, and label statistical output so it is never mistaken for exact.
 
 **Work.** Give `asmtest_hwtrace_sample_window_amd`
-([src/hwtrace.c](../../../src/hwtrace.c):976, which returns `EUNAVAIL` when the branch-stack
+([src/hwtrace.c](../../../../src/hwtrace.c):976, which returns `EUNAVAIL` when the branch-stack
 `perf_open` fails at :1000) an **IBS-Op fallback** via `asmtest_ibs_survey_*`, returning a
 hot-method/edge histogram flagged `fidelity = STATISTICAL`. This closes review **F6** and
 feeds the F22/F26/F37 rung-discriminator work (a statistical producer must self-identify).
@@ -308,9 +346,9 @@ engine shape as Phase 1; lower priority than the edge lane.
   out-of-band-against-a-child fixtures asserting known hot edges appear and the target is
   unperturbed. Guarded to self-skip off IBS so it is safe in the shared CI matrix.
 - **Docker:** add `docker-hwtrace-ibs` (mirroring `docker-hwtrace-amd`/`-msr` in
-  [mk/docker.mk](../../../mk/docker.mk)) running the live IBS fixtures on this host's PMU —
+  [mk/docker.mk](../../../../mk/docker.mk)) running the live IBS fixtures on this host's PMU —
   user-only IBS works in an unprivileged container at `paranoid=2`; the system-wide variant
-  needs `--cap-add=PERFMON`. Per [CLAUDE.md](../../../CLAUDE.md), prefer this lane over host
+  needs `--cap-add=PERFMON`. Per [CLAUDE.md](../../../../CLAUDE.md), prefer this lane over host
   installs.
 
 ## Honest limitations (carry into the code + user docs)

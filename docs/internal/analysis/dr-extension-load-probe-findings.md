@@ -1,7 +1,7 @@
 # Findings: DynamoRIO extension-load probe (taint tier, Increment 2)
 
 *Status: findings / empirical record. Produced by
-[dynamorio-taint-tier-plan.md](../plans/dynamorio-taint-tier-plan.md) **Increment 2**,
+[dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md) **Increment 2**,
 whose whole purpose is to turn the long-documented "the prebuilt DR extensions won't
 load under the private loader on modern glibc" claim into an empirical yes/no and to
 settle the `umbra`/`drx_buf` license question the tier's LGPL-clean claim rests on.

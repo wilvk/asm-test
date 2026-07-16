@@ -72,7 +72,7 @@ single-step has no install/dependency and no ceiling; DynamoRIO has no per-step 
 > [AMD LBR plan](amd-tracing-plan.md) and
 > [trace-parity-matrix](../analysis/trace-parity-matrix.md)), and a **Ryzen 9 4900HS
 > (Family 0x17, Zen 2)** with no branch stack at all, on which the premise holds
-> literally and the [IBS statistical lane](zen2-ibs-tracing-plan.md) was built and
+> literally and the [IBS statistical lane](../archive/plans/zen2-ibs-tracing-plan.md) was built and
 > validated. The single-step backend's value is **unchanged** — it is the portable,
 > no-PMU/perf/privilege, depth-unbounded backend that runs on *any* x86-64 Linux host
 > (including the true Zen 2, VMs, plain containers, and standard CI) and is the
@@ -128,11 +128,31 @@ popfq disarm, because NtContinue does not reproduce the popf trap-suppression th
 POSIX steppers rely on. Its fixtures are the Win64-ABI twins of the Linux suite's
 ROUTINE/LOOP blobs, so the identical expected streams ([0x0,0x3,0x6,0xc,0x11]; 62
 steps across the loop back-edge) prove front-end parity — validated under Wine
-(`make win64-ss-test`, in `win64-check`) and on real Windows in CI. The remaining
-Phase-5 front (the **AArch64** ptrace tracer — whose `MDSCR_EL1.SS` is kernel-only,
-so out-of-process is its *only* single-step form) stays forward-look, as does the richer
-**binary jitdump** code-image reader (the text perf-map is the portable lowest common
-denominator already supported).
+(`make win64-ss-test`, in `win64-check`) and on real Windows in CI.
+
+**The AArch64 ptrace tracer and the binary jitdump reader have both since landed**
+(amended 2026-07-16; an earlier revision of this paragraph filed both as forward-look and
+the Phase-5 detail below has recorded them as *Done* since). The **AArch64** tracer ships
+in [src/ptrace_backend.c](../../../src/ptrace_backend.c) — `MDSCR_EL1.SS` is kernel-only,
+so out-of-process ptrace is its *only* single-step form; it rides the same
+`PTRACE_SINGLESTEP` seam as x86-64, reading the PC + return register via
+`PTRACE_GETREGSET`/`NT_PRSTATUS` (AArch64 has no `PTRACE_GETREGS`) and decoding block
+lengths with `ASMTEST_ARCH_ARM64` Capstone. The **binary jitdump** reader ships as
+`asmtest_jitdump_find` ([asmtest_ptrace.h](../../../include/asmtest_ptrace.h)) and is
+validated against all three real runtimes (V8, HotSpot, CoreCLR) — richer than the text
+perf-map, which remains the portable lowest common denominator. See the Phase 5 detail
+below for both.
+
+**The one genuinely remaining Phase-5 front is the AArch64 live single-step *stream*** —
+the tracer is written and its code fixtures are decode- and execute-validated under qemu,
+but qemu-user does not emulate the ptrace tracer/tracee relationship at all, so the
+capture itself **cannot be validated without real AArch64 silicon** (Apple Silicon /
+Linux-ARM64 / Windows-on-ARM — no dev box here provides it). `asmtest_ptrace_available()`
+is a cached, hang-proof self-probe that returns 0 under emulation, so the stepper
+self-skips there exactly as the PT/CoreSight tiers self-skip off their hardware. The ten
+binding wrappers gate on the same `available()`, so their live AArch64 fixtures are a
+small follow-on alongside that hardware. The **in-process BTF** variant (W3) also stays
+forward-look — but on a *kernel*, not a silicon, blocker: see W3 below.
 
 ---
 
@@ -268,12 +288,28 @@ cross-language wrappers trace and assert coverage on the same host.
 
 ---
 
-## Phase 5 — Cross-OS and cross-arch portability *(forward-look)*
+## Phase 5 — Cross-OS and cross-arch portability *(mostly LANDED; two fronts remain — see below)*
 
 The CPU mechanism (`TF` → `#DB`) is x86-universal, but the OS plumbing is per-OS and
 the in-process variant does not exist on ARM. Each is an additive front-end behind a
 swappable "stepper" seam designed in Phase 1; none is required for the shippable
 Linux/x86-64 backend.
+
+> **Status (2026-07-16).** This phase was originally filed *(forward-look)* in full; most
+> of it has since shipped and the marker is corrected here. **Landed:** the Windows x86-64
+> VEH front-end, the macOS-Intel front-end, and the whole **W2** out-of-process ptrace
+> programme — `trace_call` / `trace_attached` / `_versioned` / `run_to`, call-depth
+> awareness, the hardware-breakpoint `run_to` on **both** x86-64 and AArch64, the binary
+> jitdump reader, the region resolvers, the code-image recorder, the AArch64 tracer, the
+> out-of-process **BTF block-step** trio, the per-binding surface across all ten bindings,
+> and six live real-JIT lanes (V8 / CoreCLR / HotSpot × perf-map and jitdump). **Two
+> fronts remain**, and they are blocked on different things:
+> - **AArch64 live single-step *stream*** — blocked on **real AArch64 hardware** (Apple
+>   Silicon / Linux-ARM64 / Windows-on-ARM). The tracer is written; qemu-user cannot
+>   validate it (it does not emulate the ptrace tracer/tracee relationship), so it
+>   self-skips there.
+> - **In-process BTF (W3)** — blocked on a **kernel helper / uapi patch**, not silicon:
+>   `DEBUGCTL` is a ring-0 MSR. The out-of-process form already shipped.
 
 - **Windows (x86-64)** *(shipped — see the status note above)*. Same `TF`, delivered
   as `EXCEPTION_SINGLE_STEP` to a Vectored Exception Handler (the classic technique);
@@ -389,9 +425,20 @@ Linux/x86-64 backend.
     thread the way a process-wide `int3` can. Software stays the default (no debug-register
     budget, no risk to the existing tests); `ASMTEST_PTRACE_HW_BP` forces the hardware path,
     which `test_ptrace_callout("hardware bp", …)` uses to validate it deterministically on
-    ordinary memory (real DR0/DR7, in a plain container). AArch64's hardware-breakpoint
-    ptrace interface (`NT_ARM_HW_BKPT`) is a separate follow-on; there `run_to` is
-    software-only for now.
+    ordinary memory (real DR0/DR7, in a plain container).
+  - _Done — AArch64 hardware breakpoint._ *(Amended 2026-07-16: this was previously filed
+    here as "a separate follow-on; there `run_to` is software-only for now", and named the
+    interface `NT_ARM_HW_BKPT` — a constant that does not exist. Both are corrected.)*
+    AArch64 reaches hardware execution breakpoints through the **`NT_ARM_HW_BREAK`**
+    regset (`struct user_hwdebug_state`: `dbg_info` + `dbg_regs[]`), not debug-register
+    `POKEUSER` like x86. It ships in [src/ptrace_backend.c](../../../src/ptrace_backend.c)
+    as the same `set_hw_bp`/`clear_hw_bp` seam the x86-64 path uses, so `run_until` is
+    arch-neutral: software `int3`/`brk` by default, hardware fallback on a `POKETEXT`
+    refusal (the W^X JIT-text case), on **both** arches. The A64 control word is a 4-byte
+    aligned EL0 execution breakpoint (`E=1`, `PMC=0b10`, `BAS=0b1111`). `set_hw_bp` fails
+    when the host exposes no breakpoint slots — qemu-user emulates none — so `run_until`
+    returns `ETRACE` there and the caller self-skips rather than hanging; like the AArch64
+    stream itself, the live path is **pending real AArch64 hardware**.
 
   - _Done._ Binary jitdump reader — `asmtest_jitdump_find` parses the `jit-<pid>.dump`
     image format CoreCLR/HotSpot/V8 emit. Richer than the text perf-map: it carries the

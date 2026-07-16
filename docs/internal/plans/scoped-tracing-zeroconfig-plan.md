@@ -1,12 +1,14 @@
 # asm-test — Zero-config whole-window scoped tracing (the empty-ctor `using (new AsmTrace())` form): implementation plan
 
-> **Reconciliation note (2026-07-07):** moved back to `plans/` from `archive/` — this plan
-> is **not fully landed** and should not have been archived under the "done ⇒ archive" rule.
-> The region-free **WEAK** single-step path (§Z0 + §Z1) ships and is host-tested, but the
-> STRONG whole-window PT / AMD-LBR tiers (§Z2), the full managed compose (§Z3), and
-> default-arm escalation (§Z4) remain **forward-look**, gated on a synthetic Intel-PT
-> fixture / bare-metal PT hardware and a live .NET runtime. The per-phase status block
-> below is accurate.
+> **Reconciliation note (2026-07-07, refreshed 2026-07-16):** moved back to `plans/` from
+> `archive/` — this plan is **not fully landed** and should not have been archived under the
+> "done ⇒ archive" rule. It still belongs here, but less is outstanding than this note
+> originally recorded. The region-free **WEAK** single-step path (§Z0 + §Z1) ships and is
+> host-tested; since then §Z2's **synthetic** decode fixture, §Z3's **host-testable** half,
+> §Z5, and the AMD-LBR tier (as a *sampled survey*, §Z1.3) have all landed. **What remains
+> forward-look:** the STRONG whole-window PT tier and §Z2's live half (bare-metal Intel PT),
+> §Z3's live managed compose (a live .NET 8+ runtime), and §Z4's opt-in stitching
+> escalation. The per-phase status block below is the accurate accounting.
 
 The **capstone slice** of the scoped-tracing set. It sequences the remaining work to
 collapse the shipped `AsmTrace` constructor down to its aspirational **empty** form —
@@ -32,8 +34,10 @@ The **only genuinely new** engineering is a region-free arm surface plus the arm
 composition and honest-degradation UX that wire shipped-but-disconnected pieces together —
 the [§Z0–§Z5 phases](#sequencing-dependency-correct-order) below own the split.
 
-> **Status: partially reached — the region-free WEAK path now works end-to-end on any
-> x86-64 Linux; three hardware/runtime gaps remain to the full managed target.**
+> **Status: partially reached — the region-free WEAK path works end-to-end on any x86-64
+> Linux, and four of the six phases are landed (§Z0, §Z2-synthetic, §Z4-default, §Z5; §Z1
+> and §Z3 partial). Two hardware/runtime gaps remain to the full managed target: live
+> Intel-PT silicon and a live .NET runtime.**
 > (1) ~~Region is mandatory~~ **DONE (§Z0 + §Z1 WEAK):** the region-free arm surface ships —
 > `asmtest_hwtrace_begin_window`/`_end_window`/`_render_window`
 > ([src/hwtrace.c](../../../src/hwtrace.c)) over `asmtest_ss_begin_window`
@@ -46,26 +50,34 @@ the [§Z0–§Z5 phases](#sequencing-dependency-correct-order) below own the spl
 > `#ifdef ASMTEST_HAVE_LIBIPT` ([:62](../../../src/pt_backend.c#L62)); every current CI/AMD
 > host compiles the `ENOSYS` stub ([:266](../../../src/pt_backend.c#L266)) — **needs a
 > synthetic PT-packet fixture (built with libipt) to trust, then bare-metal Intel PT to
-> run**. (3) **Managed byte-resolution is partial:** the self recorder works
-> ([src/codeimage.c:314](../../../src/codeimage.c#L314)) and
+> run**. (3) ~~Managed byte-resolution is partial~~ **LARGELY DONE (updated 2026-07-16):**
+> the self recorder works ([src/codeimage.c:314](../../../src/codeimage.c#L314)),
 > `asmtest_hwtrace_render_versioned` exists
-> ([src/hwtrace.c:1172](../../../src/hwtrace.c#L1172)), but nothing discovers a method's
-> `(address,size,version)` (MethodLoadVerbose wiring is Managed §D0.1, to-be-added) and
-> `AsmTrace.Dispose` still calls the version-**blind** `asmtest_hwtrace_render`
-> ([:1106](../../../src/hwtrace.c#L1106),
-> [HwTrace.cs:1016](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1016)) — **needs a live
-> .NET 8+ runtime**. (4) **Scope is a thread window:** `asmtest_hwtrace_end` merely
-> flags `truncated` on a cross-thread close ([src/hwtrace.c:898-907](../../../src/hwtrace.c#L898))
-> and `asmtest_ss_end` no-ops when the closing thread holds no frame
-> ([src/ss_backend.c:279](../../../src/ss_backend.c#L279)); the merge core
-> `asmtest_hwtrace_stitch` ([:1233](../../../src/hwtrace.c#L1233)) has **no upstream
-> producer**. The whole facility is **Linux-only** across every binding; on this AMD host a
-> clean no-op self-skip absent privilege (§Z1's *AMD fork*: with `CAP_PERFMON` a bounded LBR
-> tail, with ptrace the complete §D3-stepper window). Full accounting + the
+> ([src/hwtrace.c:1172](../../../src/hwtrace.c#L1172)), and the method **discovery** this
+> point called missing now ships — Managed §D0.1's `MethodLoadVerbose` listener
+> (`JitMethodMap`) resolves `(address, size, version)` and feeds `asmtest_codeimage_track`,
+> so the `byMethod` path decodes against the window-live version rather than the
+> version-blind render. §Z3's host-testable half is gated by `test_zeroctor_managed_compose`.
+> **What still needs a live .NET 8+ runtime** is only the *live* §Z3 composition over an
+> unwarmed method whose JIT and GC run inside the window. (4) **Scope is a thread window —
+> and that is the shipped DEFAULT, by decision:** `asmtest_hwtrace_end` flags `truncated` on
+> a cross-thread close ([src/hwtrace.c:898-907](../../../src/hwtrace.c#L898)), and the
+> region-free `end_window` does the same on an `asmtest_ss_frame_lookup` miss.
+> ~~the merge core `asmtest_hwtrace_stitch` has **no upstream producer**~~ — **it now has
+> two**: .NET's `AsmStitchedTrace` (`AsyncLocal` hop) and Node's `AsyncStitchedTrace`
+> (`AsyncLocalStorage` hop), both feeding it via `stitch_handles`. Stitching remains an
+> explicit **opt-in escalation** (§Z4), not the zero-config default. The whole facility is
+> **Linux-only** across every binding; on this AMD host a clean no-op self-skip absent
+> privilege (§Z1's *AMD fork*: with `CAP_PERFMON` a sampled LBR hot-method survey — see
+> §Z1.3 — with ptrace the complete §D3-stepper window). Full accounting + the
 > Docker-can/can't matrix:
 > [docs/scoped-tracing-implementation.md](../../scoped-tracing-implementation.md).
 >
-> Status legend: **planned** unless noted.
+> Status legend: **planned** unless noted. Per-phase status: **§Z0 landed** · **§Z1** WEAK
+> landed, CEILING landed as a sampled survey, STRONG forward-look · **§Z2** synthetic half
+> landed, live PT forward-look · **§Z3** host-testable half landed, live half forward-look ·
+> **§Z4** default landed (untested for the region-free window), escalation forward-look ·
+> **§Z5 landed**.
 
 ---
 
@@ -124,9 +136,9 @@ code.
 | Core | §3.1 | `asmtest_hwtrace_symbolize_bucket` ([:1384](../../../src/hwtrace.c#L1384)) + address→name `asmtest_hwtrace_region_name` ([:1292](../../../src/hwtrace.c#L1292)) | shipped (host-tested by `test_symbolize_bucket`); the eBPF PROT_EXEC emission-slicer it composes is **planned/gated** (CAP_BPF + BTF) |
 | Core | §3.2 | Snapshot drain (PT `aux_tail` / AMD `data_tail` — keep the tail, flag `truncated`) | reconstruction shipped; live drains **planned** |
 | Bindings | — | `.NET AsmTrace : IDisposable` reference shim + `[ModuleInitializer]` lazy arm + `[CallerMemberName]`/`[CallerLineNumber]` auto-name; shim-shape invariants (no slot / no SIGTRAP at import, self-skip-clean, closing-tid assert) | shipped (region form) |
-| Managed | §D0.1/§D0.2 | `MethodLoadVerbose_V2` in-proc listener → name→(addr,size,version) map feeding `asmtest_codeimage_track`; pre-arm `EnablePerfMap(JitDump)` rundown + self-recorder fallback | **planned** — needs a live runtime |
-| Managed | §D0.4/§D4 | `AsyncLocal<ScopeId>` async-hop hook; `asmtest_hwtrace_stitch` merge core + slice/bound ABI ([:1233](../../../src/hwtrace.c#L1233), [asmtest_hwtrace.h:246](../../../include/asmtest_hwtrace.h#L246)) | hook **planned**; merge core shipped (host-tested) but **no upstream producer** |
-| Managed | §D3 | Concealed out-of-process ptrace-stealth stepper (bundled `asmtest-stealth-helper`, reverse-attach) | stepper shipped; live-JIT address channel **planned** |
+| Managed | §D0.1/§D0.2 | `MethodLoadVerbose_V2` in-proc listener → name→(addr,size,version) map feeding `asmtest_codeimage_track`; pre-arm `EnablePerfMap(JitDump)` rundown + self-recorder fallback | **shipped** (`JitMethodMap` + `DiagnosticsIpc`); only the *live* §Z3 compose over an unwarmed method still needs a runtime |
+| Managed | §D0.4/§D4 | `AsyncLocal<ScopeId>` async-hop hook; `asmtest_hwtrace_stitch` merge core + slice/bound ABI ([:1233](../../../src/hwtrace.c#L1233), [asmtest_hwtrace.h:246](../../../include/asmtest_hwtrace.h#L246)) | **both shipped** — merge core host-tested, and it now has two live producers (.NET `AsmStitchedTrace`, Node `AsyncStitchedTrace`); the seam is CI-covered by `test_stitch_hops_scripted` |
+| Managed | §D3 | Concealed out-of-process ptrace-stealth stepper (bundled `asmtest-stealth-helper`, reverse-attach) | **shipped**, including the live-JIT address channel (`asmtest_addr_channel.h`) and its .NET composition (E3, `4416071`) |
 | AMD | Part III P2/P3 | **P2** BTF block-step mode for the W2/§D3 ptrace stepper (`asmtest_ptrace_*_blockstep` — one `#DB` per **taken branch**, ~4–10× fewer stops than per-insn, rootless, every Zen incl. Zen 2); **P3** eBPF `bpf_get_branch_snapshot` boundary capture (deterministic ≤16-entry LBR window at scope entry/exit; Zen 4/5, Linux ≥ 6.10) | **planned** — [amd-tracing-plan.md](../plans/amd-tracing-plan.md) Part III; consumed as upgrades when they land, **not** Z0–Z5 prerequisites |
 | Substrate | — | Backend auto-selection + `available()`/`skip_reason()` self-probe + the self `pid==0` code-image recorder — [codeimage.c:310](../../../src/codeimage.c#L310), [:373](../../../src/codeimage.c#L373) | shipped |
 
@@ -141,7 +153,7 @@ Referenced elsewhere as **netNew #N**. Not one row is a new capture primitive.
 | 3 | The arm-time **composition seam**: §D0.1 listener ⊕ Core §2 recorder image callback ⊕ `/proc/self/maps` DSO enumeration into one lazy arm (feeding `asmtest_codeimage_track`), plus the *managed*-tier `Dispose` swap onto `render_versioned` | Z3 | Each piece exists in isolation; the seam composing them for the region-free managed case is unbuilt, and `AsmTrace.Dispose` [:1016](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1016) still calls the version-blind render [:1106](../../../src/hwtrace.c#L1106). |
 | 4 | Single-step region-free **L3 DESCEND_ALL** degradation (descend every call; denylist + instruction-budget + `ITIMER_REAL`/`SIGALRM` watchdog; native-leaf/ptrace-only; managed routes to §D3) | Z1 | Shipped single-step only steps **known native leaves with a region** — `ss_on_sigtrap` records in-range offsets and silently drops the rest [ss_backend.c:143-148](../../../src/ss_backend.c#L143). A range-less "trace whatever ran" contract has no upstream. |
 | 5 | The empty-ctor **honest-degradation UX** (skip_reason + §3.1 buckets + §3.2 banner through the scope's Path/sink; never emit partial-as-complete) **and** the zero-config async **DEFAULT** = honest thread-scope-with-mismatch-flag (stitching stays explicit opt-in) | Z4 (async default) · Z5 (presentation) | A ctor cannot detect whether its result was assigned, a whole-window trace is noisy/partial by nature, and the region-free arm carries no region record — so the "assume no knowledge, present honestly" contract is net-new integration. |
-| 6 | The composed, actionable **privilege-detection developer message** assembled from the raw self-probe | Z5 | `available()`/`skip_reason()` return a reason **code** (consumed); the human-readable, provision-me message the empty-ctor promise rests on is unbuilt. |
+| 6 | The composed, actionable **privilege-detection developer message** assembled from the raw self-probe | Z5 | `available()`/`skip_reason()` return a reason **code** (consumed); the human-readable, provision-me message the empty-ctor promise rests on was unbuilt. **LANDED** as `HwTrace.DegradationNote()` ([HwTrace.cs:899](../../../bindings/dotnet/hwtrace/HwTrace.cs#L899)) — in the .NET binding, not the C core, by decision (§Z5). |
 
 > Read the net-new column as three kinds of work only — **surface** (rows 1, 2, 4),
 > **integration** (row 3), **presentation** (rows 5, 6). No row introduces a new way to
@@ -244,8 +256,16 @@ trace); and **asserts closing tid == arming tid against the handle-carried `arm_
 (netNew #1 point 3) — the region-keyed §0.2 backstop does **not** cover the region-free path,
 so this check is re-implemented on the handle in Z0/Z4, not inherited for free.
 
-**.NET reference delta** — the ctor at
-[HwTrace.cs:997](../../../bindings/dotnet/hwtrace/HwTrace.cs#L997) drops its `NativeCode`
+> **Anchor note (2026-07-16).** The `HwTrace.cs` line anchors in this §Z0 section predate the
+> binding's growth and no longer resolve — re-resolve them **by symbol**, not by line. The
+> ctor described below as needing a `NativeCode` now lives at
+> [:2023](../../../bindings/dotnet/hwtrace/HwTrace.cs#L2023) (not `:997`), `NativeCode.FromBytes`
+> at [:755](../../../bindings/dotnet/hwtrace/HwTrace.cs#L755) (not `:421`). **And the delta
+> below is DONE:** the empty ctor ships at
+> [:1915](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1915) with every parameter defaulted,
+> so `new AsmTrace()` binds — alongside, not replacing, the `NativeCode` form.
+
+**.NET reference delta** — the ctor drops its `NativeCode`
 parameter, the `register_region` pair, and the `NativeCode.FromBytes` dependency,
 becoming:
 
@@ -276,21 +296,26 @@ the [bindings shim shape](../archive/plans/scoped-tracing-bindings-plan.md#the-s
 [multi-language-bindings-plan.md](../archive/plans/multi-language-bindings-plan.md); the substrate
 `available()`/`skip_reason()` self-probe.
 
-**Gate.** The region-free arm ABI, lazy-arm-claims-no-slot, auto-name,
-render-on-close-of-a-range-less-scope, and self-skip-clean contract all run in ordinary
-CI — a new `static void test_zeroctor_scope(void)` in
-[examples/test_hwtrace.c](../../../examples/test_hwtrace.c) (TAP via `CHECK`), on the
-universal single-step backend with no PMU and no privilege, plus each per-binding lane in
-`docker-hwtrace` / `docker-hwtrace-bindings`. The test also asserts the **handler path
-takes no malloc/lock**, that nested region-free + region-scoped scopes install `SIGTRAP`
-**exactly once and restore exactly once**, and that repeated construct/dispose neither
-exhausts the frame stack nor leaks the stream buffer.
+**Gate.** The region-free arm ABI, render-on-close-of-a-range-less-scope, and
+self-skip-clean contract all run in ordinary CI, on the universal single-step backend with
+no PMU and no privilege, plus each per-binding lane in `docker-hwtrace` /
+`docker-hwtrace-bindings`. **As shipped this is `test_zeroctor_scope_hygiene`**
+([examples/test_hwtrace.c](../../../examples/test_hwtrace.c), commit `e5c7734`; TAP via
+`CHECK`) — the plan drafted it as `test_zeroctor_scope`. It asserts that nested region-free
++ region-scoped scopes close **LIFO with exact inner offsets**, that the `SIGTRAP`
+disposition is installed **exactly once and restored** to the pre-init handler after full
+teardown (probed via `sigaction` before/during/after), and that **300 begin/end_window
+cycles** exhaust neither the frame stack nor the generation counter (capture #301 still
+exact). *Not* covered by it: the lazy-arm-claims-no-slot and auto-name assertions this
+section drafted, and the handler-path no-malloc/lock assertion — those remain
+unexercised.
 
 ---
 
 ## §Z1 — Region-free whole-window capture mode *(planned, forward-look)*
 
-> **Status: WEAK single-step tier LANDED; STRONG/CEILING forward-look.** Fills the
+> **Status: WEAK single-step tier LANDED; CEILING landed as a sampled survey (§Z1.3);
+> STRONG forward-look.** Fills the
 > record-policy/backend seam behind
 > [§Z0](#z0--parameterless-ctor--region-free-arm-surface)'s arm. The **WEAK** single-step
 > tier is implemented + host-tested green (`test_wholewindow_singlestep`, `docker-hwtrace`
@@ -324,7 +349,7 @@ Auto-selects one of three honesty tiers.
 |---|---|---|---|---|
 | **WEAK** | single-step L3 `DESCEND_ALL` | a **degradation** (self-truncating by design) | any **x86-64 Linux**, native leaf only; managed → §D3 ptrace | `docker-hwtrace` (unprivileged) — **first end-to-end** |
 | **STRONG** | PT recorder-backed whole-window | **native** (filter-at-decode) | **Intel bare-metal PT** + `paranoid < 0` / `CAP_PERFMON` (128 KiB ring if unprivileged) | self-hosted PT runner (trust-gated on §Z2); self-skips on AMD/ARM/VM/Docker |
-| **CEILING** | AMD LBR | native but **~16-branch-bounded** — a quiet *complement*; a whole window always overruns it (`truncated`) | **Zen 3+** bare metal + `CAP_PERFMON` | `docker-hwtrace-amd` capped lane; Zen 2 → `EOPNOTSUPP` → ptrace |
+| **CEILING** | AMD LBR | native but **~16-branch-bounded** — a quiet *complement*; a whole window always overruns it (`truncated`). **LANDED, but as a SAMPLED survey, not the exact tail this row assumed** — see §Z1.3 | **Zen 3+** bare metal + `CAP_PERFMON` | `docker-hwtrace-amd` capped lane; Zen 2 → `EOPNOTSUPP` → ptrace |
 
 The ladder prefers **STRONG** when `asmtest_pt_decoder_present`
 ([:65](../../../src/pt_backend.c#L65)) is true, an `intel_pt` PMU is present, *and* §Z2's fixture
@@ -423,6 +448,25 @@ synthetic fixture is green** — nothing in §Z1 forward-looks on an unproven de
 unprivileged); self-skips on AMD/ARM/VMs/Docker. Linux-only.
 
 #### §Z1.3 — CEILING: AMD LBR
+
+> **Status (2026-07-16): LANDED — but as a SAMPLED HOT-METHOD SURVEY, not the exact
+> ~16-branch tail this section designed, and it is reached through its OWN entry points
+> rather than through §Z0's `begin_window`.** What ships is
+> `asmtest_hwtrace_sample_window_amd` plus the `sample_begin_amd` / `sample_end_amd`
+> begin/end split ([include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h)), surfaced
+> in .NET as `AsmTrace.WindowHot` and as the inline
+> `using (new AsmTrace(HwBackend.AmdLbr)) { block }` shape — i.e. the region-free
+> whole-window scope this tier was for. **The design changed, and the header states why:**
+> exact whole-window on AMD is *"a hardware dead end (16-deep stack + throttle)"*, so rather
+> than render an honest-but-near-useless 16-branch tail, the shipped tier **samples** the
+> branch stack at `sample_period > 1` while the block runs and returns the absolute branch
+> *target* endpoints, which the caller buckets by method into a **sample-weighted hot-method
+> histogram (AutoFDO/BOLT shape) — explicitly NOT an exact instruction trace.** It uses no
+> `EFLAGS.TF` and no `SIGTRAP`, so unlike the WEAK tier it survives managed code in-process,
+> and `truncated` becomes a **coverage** signal (a dropped/throttled sample), not an
+> overflow. Read the rest of this section as the original design; the *AMD fork* framing
+> above still holds — the **complete** region-free AMD trace is still the §D3 stepper via
+> `CEILING_FREE`.
 
 Auto-selected when LBR is present and PT is not. LBR is a bounded ~16-branch window; a
 whole scope overruns it and the trace is flagged `truncated`.
@@ -539,9 +583,22 @@ PT runner exists — the gate [hardware-trace-plan.md](../plans/hardware-trace-p
 
 ---
 
-## §Z3 — Arbitrary managed-method capture in the empty scope *(forward-look)*
+## §Z3 — Arbitrary managed-method capture in the empty scope *(host-testable half LANDED; live half forward-look)*
 
-> **Status: planned — netNew #3, a pure composition seam (no new capture primitive).** Every
+> **Status (revised 2026-07-16): the host-testable half LANDED; only the LIVE half is
+> forward-look.** `test_zeroctor_managed_compose`
+> ([examples/test_hwtrace.c](../../../examples/test_hwtrace.c), commit `e5c7734`, which names
+> it "§Z3 host-testable half") drives a synthetic `MethodLoad {name, addr, size}` through
+> `codeimage_track` on a W^X buffer, re-JITs the buffer in place (`add` → `sub`),
+> `refresh()`es, and proves **decode-at-version**: `when0` renders the first body and `when1`
+> the second, while live memory holds only the second. The `render_versioned`/codeimage seam
+> it gates also landed for the .NET `byMethod` path (see the routing note at the end of this
+> section, which the old "planned" marker contradicted). **What remains forward-look is the
+> LIVE half only:** composing the seam against a real .NET 8+ runtime over either §Z2's PT
+> path or §D3's stepper — i.e. an unwarmed `HotPath(data)` whose JIT and GC also run in the
+> window. Everything below is the as-planned design.
+>
+> netNew #3 is a pure composition seam (no new capture primitive). Every
 > *piece* exists in isolation: the
 > [Managed §D0.1](scoped-tracing-managed-plan.md#d0--net-managed-code-capability-closing-the-leaks-on-net-8-forward-look-needs-a-live-net-runtime--intel-pt-for-the-clean-path)
 > `NativeRuntimeEventSource` listener, the self `pid==0` recorder + `asmtest_codeimage_track`
@@ -665,7 +722,7 @@ live chain has no CI protection.
 | Hopped continuation | flagged `truncated` | captured as a further slice |
 | New work | region-free arm-tid carry (Z0/Z4) — the region-keyed §0.2 backstop can't fire | first live `slice_t` producer |
 | Cost | cheap | per-hop decode-at-disable |
-| CI protection | host-testable (handle-carried tid assert) | none — needs live runtime + Intel PT |
+| CI protection | host-testable — but **not yet tested** for the region-free window (see §Z4 tests) | none — needs live runtime + Intel PT |
 | Synchronous case | plain trace | byte-identical (degenerate single slice) |
 
 ### The opt-in escalation: wiring the first live slice producer into `stitch`
@@ -699,10 +756,17 @@ cross-thread merge is **Intel-PT-gated** and validated by a synthetic host test,
 
 ### §Z4 tests + gate
 
-**SPLIT.** The honest default + the pure merge core are **host-testable on every host**:
-`test_stitch_slices` (synthetic `slice_t` values → ordered stream + `bounds`) and the
-default-flag assertion in `test_zeroctor_scope` (close from a spawned thread → `Truncated`
-via the handle-carried arm-tid check). The per-binding opt-in async case (a real
+**SPLIT.** The pure merge core is **host-tested on every host** by `test_stitch_slices`
+(synthetic `slice_t` values → ordered stream + `bounds`). **Gap (found 2026-07-16): the
+honest default is IMPLEMENTED but UNTESTED.** The mechanism ships — `asmtest_hwtrace_end_window`
+([src/hwtrace.c](../../../src/hwtrace.c)) flags `trace->truncated` when
+`asmtest_ss_frame_lookup` misses, i.e. when the closing thread is not the arming thread —
+but **no test closes a region-FREE window from another thread**. The drafted
+`test_asynchop_flag` was never written, and `test_arm_tid_mismatch` covers the
+**region-keyed** `begin_scope` path (via `asmtest_hwtrace_arm_tid`), not the window path.
+So this row's "host-testable" claim is a design intent, not shipped coverage — writing
+`test_asynchop_flag` against `begin_window`/`end_window` is the open item. The per-binding
+opt-in async case (a real
 `await`/continuation hop → slices stitch by `ScopeId`) and the whole **live hook→tag→merge
 chain have no CI coverage** — they need a live managed runtime + bare-metal Intel PT
 per-thread events (per-thread mode needs no privilege bump; the per-CPU alternative needs
@@ -711,9 +775,30 @@ AMD/ARM/VMs/Docker/macOS.
 
 ---
 
-## §Z5 — Privilege detection, self-skip, and honest degradation UX *(every host; never hard-fails)*
+## §Z5 — Privilege detection, self-skip, and honest degradation UX *(LANDED; every host; never hard-fails)*
 
-> **Status: planned; scaffolded at §Z0.** The raw self-probe already ships and is the sole
+> **Status (revised 2026-07-16): LANDED — all three net-new pieces ship.** (1)
+> `AsmTrace.SkipReason` is a real scope-object surface
+> ([bindings/dotnet/hwtrace/HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs)). (2)
+> **netNew #6, the composed developer message, ships as `HwTrace.DegradationNote()`**
+> ([HwTrace.cs:899](../../../bindings/dotnet/hwtrace/HwTrace.cs#L899)), consumed by the
+> §Z5.1 ladder at [:2017](../../../bindings/dotnet/hwtrace/HwTrace.cs#L2017) and
+> [:2795](../../../bindings/dotnet/hwtrace/HwTrace.cs#L2795). (3) The §Z5.3
+> never-emit-partial contract is gated by `test_wholewindow_banner`
+> ([examples/test_hwtrace.c](../../../examples/test_hwtrace.c), commit `e5c7734`): a
+> genuinely overflowed window (insns cap 8) must render a well-formed prefix ENDING with the
+> truncation banner, and the assert runs even without Capstone.
+>
+> **The absent C builder is a DECISION, not an omission.** There is deliberately no
+> `asmtest_hwtrace_degradation_note` in the C core and no `test_degradation_message` —
+> commit `e5c7734` records the call explicitly: *"test_degradation_message is intentionally
+> absent (no composed C builder; the .NET binding ships the §Z5.2 ladder as
+> HwTrace.DegradationNote())."* The §Z5.2 table below is therefore the **specification the
+> .NET builder implements**, not an unbuilt design. A binding that wants the composed message
+> reimplements the ladder over the shipped self-probe; the raw probe stays the C-level
+> contract.
+>
+> The raw self-probe ships and is the sole
 > input this phase consumes: `asmtest_hwtrace_available`
 > ([src/hwtrace.c:247](../../../src/hwtrace.c#L247)) and `asmtest_hwtrace_skip_reason`
 > ([:264](../../../src/hwtrace.c#L264), reason strings [:280-303](../../../src/hwtrace.c#L280))
@@ -724,10 +809,10 @@ AMD/ARM/VMs/Docker/macOS.
 > gate PT/AMD; the fallback tiers carry their own reason strings
 > ([asmtest_codeimage.h:76](../../../include/asmtest_codeimage.h#L76),
 > [asmtest_ptrace.h:82](../../../include/asmtest_ptrace.h#L82)). The `.NET` shim already
-> surfaces `Armed`, `Truncated`, and always populates `Path` on close. **Net-new here:**
-> the `AsmTrace.SkipReason` scope-object surface (new field, no line yet), the **composed**
-> developer message (new `asmtest_hwtrace_degradation_note`-style builder, to be added), and
-> the never-emit-partial contract over the §3.1 bucket labels + §3.2 banner. On this AMD
+> surfaces `Armed`, `Truncated`, and always populates `Path` on close. **What was net-new
+> here** (all now landed, per the status above): the `AsmTrace.SkipReason` scope-object
+> surface, the **composed** developer message, and the never-emit-partial contract over the
+> §3.1 bucket labels + §3.2 banner. On this AMD
 > host the empty ctor is a **clean no-op absent privilege** — no `intel_pt` PMU
 > ([:298-299](../../../src/hwtrace.c#L298)), single-step forbidden against live managed code —
 > so unprivileged it records nothing and reports the §Z5.2 message; with `CAP_PERFMON` the
@@ -812,14 +897,16 @@ self-skips to `(void)name` no-ops (codeimage stub `ENOSYS`,
 [codeimage.c:492](../../../src/codeimage.c#L492)) — "records nothing, and says why", **never a
 hard failure.**
 
-**§Z5 tests** (all host-testable, every host, pure self-probe): `test_zeroctor_scope`
-(no backend → `Armed == false`, `SkipReason` non-empty, `Path` is the self-skip note, no
-exception); `test_degradation_message` (drive the composed builder from a synthetic
+**§Z5 tests** (all host-testable, every host, pure self-probe). **As shipped:**
+`test_wholewindow_banner` — a genuinely overflowed window (insns cap 8) renders a
+well-formed prefix that ENDS with the truncation banner, never cap-as-complete; the
+honesty assert runs even without Capstone. **As drafted but deliberately not built:**
+`test_degradation_message` (drive the composed builder from a synthetic
 `(available, skip_reason)` tuple per §Z5.2 row; each string names the missing capability
-**and** the one-time grant); `test_wholewindow_banner` (a synthetic
-`truncated`/arm-tid-mismatch trace renders the §3.1 bucket labels + banner, never a partial
-window without one). **Effort:** `SkipReason` near-free (Z0 scaffold); the message builder and
-banner render ~2 days each over Core §3.1/§3.2. No forward-look, no hardware gate.
+**and** the one-time grant) — there is no composed **C** builder to drive, by the decision
+recorded in the status block above; the ladder ships as `HwTrace.DegradationNote()` and is
+covered on the .NET side. The `Armed == false` / `SkipReason` non-empty / `Path`-is-the-note
+contract rides the per-binding lanes rather than a C case.
 
 ---
 
@@ -1001,13 +1088,13 @@ shipped `test_pt_image_from_codeimage`, `test_stitch_slices`, `test_amd_reconstr
 
 | Test | Phase | Synthetic input → assertion | Lane(s) |
 |---|---|---|---|
-| `test_zeroctor_scope` | Z0 | Region-free arm opens a per-thread block with **no** registered region (bypasses `find_region` [:486](../../../src/hwtrace.c#L486), never calls `register_region` [:432](../../../src/hwtrace.c#L432)); lazy arm **claims no slot / installs no SIGTRAP**; auto-name resolves; render-on-close returns text; the handle-carried closing-vs-arming tid check fires; the handler path takes **no malloc/lock**; nested region-free + region-scoped scopes install/restore SIGTRAP **exactly once**; repeated construct/dispose neither exhausts the frame stack nor leaks the stream buffer | `docker-hwtrace`, `docker-hwtrace-bindings` |
-| `test_wholewindow_ss_descend` | Z1 | The lifted **pre-allocated bounded absolute-RIP ring** replacing `ss_on_sigtrap`'s in-region filter ([:143-148](../../../src/ss_backend.c#L143)), rendered via `render_versioned` against a self codeimage, driving the **WEAK single-step L3 DESCEND_ALL** native leaf — asserts capture **and self-truncation** via **both** paths (buffer overflow flag; §L3 budget/watchdog), never that L3 is transparent | `hwtrace-test`, `docker-hwtrace` |
+| `test_zeroctor_scope` → **shipped as `test_zeroctor_scope_hygiene`** | Z0 | Region-free arm opens a per-thread block with **no** registered region (bypasses `find_region` [:486](../../../src/hwtrace.c#L486), never calls `register_region` [:432](../../../src/hwtrace.c#L432)); lazy arm **claims no slot / installs no SIGTRAP**; auto-name resolves; render-on-close returns text; the handle-carried closing-vs-arming tid check fires; the handler path takes **no malloc/lock**; nested region-free + region-scoped scopes install/restore SIGTRAP **exactly once**; repeated construct/dispose neither exhausts the frame stack nor leaks the stream buffer. **As built (`e5c7734`) it covers the last three only** — nested LIFO close with exact inner offsets, SIGTRAP installed once + restored to the pre-init handler, and 300-cycle churn with capture #301 still exact. The lazy-arm/auto-name/no-malloc and tid-check assertions are **not** exercised | `docker-hwtrace`, `docker-hwtrace-bindings` |
+| `test_wholewindow_ss_descend` — **NOT BUILT** | Z1 | The lifted **pre-allocated bounded absolute-RIP ring** replacing `ss_on_sigtrap`'s in-region filter ([:143-148](../../../src/ss_backend.c#L143)), rendered via `render_versioned` against a self codeimage, driving the **WEAK single-step L3 DESCEND_ALL** native leaf — asserts capture **and self-truncation** via **both** paths (buffer overflow flag; §L3 budget/watchdog), never that L3 is transparent. **What ships instead:** `test_wholewindow_singlestep` (EINVAL on a NULL trace, absolute-RIP capture, result preserved, render contains `ret`, and the **buffer-overflow** truncation flag) + `test_wholewindow_buckets`. The **§L3 budget/watchdog** truncation path is covered by the `test_descent_*` cases against the ptrace backend, not here | `hwtrace-test`, `docker-hwtrace` |
 | `test_wholewindow_decode` | Z2 | A checked-in / encoder-produced **TIP/TNT/PSB stream** feeding `asmtest_pt_decode_window`'s real libipt body ([:198](../../../src/pt_backend.c#L198), guard `ASMTEST_HAVE_LIBIPT` [:62](../../../src/pt_backend.c#L62)) through `read_recorder` ([:96](../../../src/pt_backend.c#L96)) with **no in-region filter** — the only non-hardware route to this body, contrasting `read_region` ([:74](../../../src/pt_backend.c#L74), which dies at the first out-of-range IP [:179-188](../../../src/pt_backend.c#L179)). **Self-skips where libipt is absent** | `hwtrace-test` (front-loaded, ‖ Z0, x86_64) |
-| `test_zeroctor_managed_compose` | Z3 | A **synthetic `MethodLoadVerbose` stream** (no runtime): the listener→(addr,size,version) map feeds `asmtest_codeimage_track` on the self path (`pid==0`, [:314](../../../src/codeimage.c#L314) / track [:373](../../../src/codeimage.c#L373), soft-dirty-gated); `Dispose` re-points from the version-blind render ([:1106](../../../src/hwtrace.c#L1106)) to `render_versioned` ([:1172](../../../src/hwtrace.c#L1172)) | `hwtrace-test` |
-| `test_asynchop_flag` | Z4 | The honest **default**: a cross-thread/awaited close rides the **handle-carried** arm-tid so the trace is flagged `truncated` (not the region-keyed §0.2 backstop, which can't fire region-free) rather than silently dropping the arming thread's TLS — hop **flagged, never dropped, never auto-stitched** | `hwtrace-test` |
+| `test_zeroctor_managed_compose` — **SHIPPED** (`e5c7734`) | Z3 | A **synthetic `MethodLoadVerbose` stream** (no runtime): the listener→(addr,size,version) map feeds `asmtest_codeimage_track` on the self path (`pid==0`, [:314](../../../src/codeimage.c#L314) / track [:373](../../../src/codeimage.c#L373), soft-dirty-gated); `Dispose` re-points from the version-blind render ([:1106](../../../src/hwtrace.c#L1106)) to `render_versioned` ([:1172](../../../src/hwtrace.c#L1172)). **As built:** a W^X buffer is re-JIT'd in place (`add` → `sub`) and `refresh()`ed; `when0` renders the first body and `when1` the second while live memory holds only the second — decode-at-version proven | `hwtrace-test` |
+| `test_asynchop_flag` — **NOT BUILT** | Z4 | The honest **default**: a cross-thread/awaited close rides the **handle-carried** arm-tid so the trace is flagged `truncated` (not the region-keyed §0.2 backstop, which can't fire region-free) rather than silently dropping the arming thread's TLS — hop **flagged, never dropped, never auto-stitched**. The **mechanism ships** (`end_window` flags `truncated` on an `asmtest_ss_frame_lookup` miss) but nothing tests it: `test_arm_tid_mismatch` covers the **region-keyed** `begin_scope` path instead. Open item | `hwtrace-test` |
 | `test_stitch_slices` *(shipped)* | Z4 | Existing pure seq-ordered merge over synthetic `slice_t` ([asmtest_hwtrace.h:246](../../../include/asmtest_hwtrace.h#L246)); the opt-in producer is wired **into** it | `hwtrace-test` |
-| `test_degradation_message` / `test_wholewindow_banner` | Z5 | Pure self-probe on **any** host: composes every tier's `skip_reason()` + §3.1 bucket labels (`symbolize_bucket` / `region_name`) + §3.2 banner into the scope's `Path`; asserts the **actionable privilege message** and that the empty ctor is **never a hard failure** | `hwtrace-test` (every host) |
+| `test_wholewindow_banner` — **SHIPPED** (`e5c7734`) · `test_degradation_message` — **not built, by decision** | Z5 | Pure self-probe on **any** host: composes every tier's `skip_reason()` + §3.1 bucket labels (`symbolize_bucket` / `region_name`) + §3.2 banner into the scope's `Path`; asserts the **actionable privilege message** and that the empty ctor is **never a hard failure**. **As built:** `test_wholewindow_banner` proves an overflowed window (insns cap 8) renders a prefix ENDING with the truncation banner, asserting even without Capstone. `test_degradation_message` has no composed **C** builder to drive — the §Z5.2 ladder ships as `HwTrace.DegradationNote()` in the .NET binding instead | `hwtrace-test` (every host) |
 
 The Z5 self-skip scaffold ships **with Z0**; `test_zeroctor_scope` grows from a scaffold
 assertion at Z0 into the full composed-message assertion at Z5. Per-binding coverage reuses
@@ -1040,15 +1127,21 @@ primitives are Core §2 / Managed §D0/§D4. All are **Linux-only**.
 
 ### Docs to update
 
-- **[../scoped-tracing-implementation.md](../../scoped-tracing-implementation.md)** — the summary
-  opens with the aspirational `using (new AsmTrace())` snippet (lines 24–29) as if delivered,
-  but the shipped ctor still **requires** a `NativeCode`
-  ([HwTrace.cs:997](../../../bindings/dotnet/hwtrace/HwTrace.cs#L997)). Add a **"Zero-config /
-  whole-window scope (forward-look)"** subsection stating plainly the empty-ctor form is *not
-  built* (the region-free arm, the validated whole-window PT decode — `#ifdef`-stubbed to
-  `ENOSYS` [pt_backend.c:266](../../../src/pt_backend.c#L266) on every current host — managed
-  byte-discovery, and async stitching are this plan's Z0–Z5), and correct the top snippet's
-  framing.
+- **[../scoped-tracing-implementation.md](../../scoped-tracing-implementation.md)** —
+  *(instruction rewritten 2026-07-16: it previously asked that page to state the empty-ctor
+  form is "not built", which was true when drafted but is false since §Z0 + §Z1-WEAK
+  landed.)* The empty ctor **is** built and renders a real whole-window trace of a native
+  leaf on any x86-64 Linux. Add a **"Zero-config / whole-window scope"** subsection that
+  keeps the aspirational snippet **and** states the tier ladder honestly: WEAK single-step
+  ships everywhere (noisy, self-truncating, native-leaf in-process); CEILING ships on Zen 3+
+  as a **sampled hot-method survey**, not an exact trace (§Z1.3); STRONG whole-window PT
+  remains forward-look — its decode is validated on §Z2's synthetic fixture but is
+  `#ifdef`-stubbed to `ENOSYS` ([pt_backend.c:266](../../../src/pt_backend.c#L266)) on every
+  current host and has never run against live silicon. The empty ctor is live at
+  [HwTrace.cs:1915](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1915) (every parameter
+  defaulted, so `new AsmTrace()` binds), and the region-form ctor over a `NativeCode` still
+  exists beside it at [:2023](../../../bindings/dotnet/hwtrace/HwTrace.cs#L2023) — the empty
+  form is additive, not a replacement.
 - **[scoped-inprocess-tracing-plan.md](../archive/plans/scoped-inprocess-tracing-plan.md)** umbrella slice table
   (lines 162–166) — add a fourth **"Zero-config / whole-window"** row pointing here; `Owns` =
   *the region-free arm surface + empty-ctor across all ten bindings, the whole-window

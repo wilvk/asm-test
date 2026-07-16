@@ -1,13 +1,11 @@
 # asm-test — Scoped-tracing managed-JIT tier (Node → JVM → .NET): implementation plan
 
-> **Reconciliation note (2026-07-07):** moved back to `plans/` from `archive/` — this plan
-> is **partially landed**, not done, so it belongs with the active plans. The §D4 shared
-> merge core, version-aware render, the Node (§D1) / Java (§D2) scope constructs, the
-> .NET §D0.1/§D0.2 rundown, §D0.3's named-method form (`AsmTrace.Method`), §D0.4's
-> `AsyncLocal` async-hop stitching (`AsmStitchedTrace`), and the Node (§D1 `AsyncStitchedTrace`)
-> / Java (§D2 propagating executor) per-runtime async-hop producers ship and are tested; the
-> §D3 live-JIT cross-process address channel remains **forward-look** (needs PT hardware / a
-> second process to validate). The status block below is accurate.
+> **Reconciliation note (2026-07-07, superseded 2026-07-16):** moved back to `plans/` from
+> `archive/` — at the time this plan was **partially landed**, so it belonged with the
+> active plans. It recorded the §D3 live-JIT cross-process address channel as the standing
+> **forward-look**; that channel has since landed, as has the .NET composition on top of it
+> (E3). See the status block below for the current accounting — the plan is now effectively
+> complete, with the JVM's zero-touch JVMTI hop hook the one optional remainder.
 
 The **hard** half of the [scoped in-process tracing
 plan](../archive/plans/scoped-inprocess-tracing-plan.md) — extending the scope model to the three
@@ -22,25 +20,43 @@ The analysis is blunt that this is "the real project," medium-plus effort, and t
 one place the four qualifications stop being knobs and become a redesign (the
 thread → logical-operation model change). It is deliberately sequenced **last**.
 
-> **Status: partially landed.** The **§D4 shared merge core** (`asmtest_hwtrace_stitch`
-> + the slice/bound ABI) and the **version-aware render** (`asmtest_hwtrace_render_versioned`)
-> are implemented and host-tested (`test_stitch_slices`, `test_render_versioned`). The
-> **Node (§D1)** `scope`/`using`-fallback and **Java (§D2)** try-with-resources
-> `AsmTrace` scope constructs over a native leaf are implemented + tested in their
-> `hwtrace-<lang>-test` lanes. **Landed since (2026-07):** §D0.1 `MethodLoadVerbose`
-> labelling (`JitMethodMap`) and the §D0.2 dependency-free jitdump rundown
-> (`DiagnosticsIpc`) ship in the .NET binding as `new AsmTrace(byMethod:, withRundown:)`
-> — commits 69ace98, d4e7deb, 8bf7d52, 4aaf473 — exercised by `hwtrace-dotnet-test` and
-> the `examples/dotnet/*` lanes. **Also landed since (2026-07):** §D0.3's named-method
-> form (`AsmTrace.Method`), §D0.4 `AsyncLocal` stitching (`AsmStitchedTrace`), and the §D1
-> (Node `AsyncStitchedTrace`) / §D2 (Java propagating executor) per-runtime async-hop
-> producers. **Forward-look (not yet landed):** the §D3 live-JIT cross-process address
-> channel — the part that needs PT hardware / a second process to validate. See
-> [docs/scoped-tracing-implementation.md](../../scoped-tracing-implementation.md).
+> **Status (revised 2026-07-16): effectively landed — 5 of 5 sections ship.** §D0 (.NET),
+> §D1 (Node), §D2 (Java), §D3 (the out-of-process stepper *and* its live-JIT address
+> channel), and §D4 (the merge core + its live producers) are all implemented and tested.
+> **The single genuine remainder is the JVM's zero-touch JVMTI hop hook** — see §D2 below;
+> it is **optional**, since Java's shipped async-hop producer (the propagating executor
+> decorator) already drives the merge, just at the cost of wrapping the executor.
 >
-> Status legend: **planned**, forward-look. The clean managed path needs the
-> shared-core libipt glue (PT hardware to validate); the ptrace fallback runs on
-> ordinary CI-adjacent hosts (Zen 2 / Docker) but exercises a second process.
+> Dated provenance:
+>
+> - **2026-07 (earlier).** The **§D4 shared merge core** (`asmtest_hwtrace_stitch` + the
+>   slice/bound ABI) and the **version-aware render** (`asmtest_hwtrace_render_versioned`)
+>   — host-tested (`test_stitch_slices`, `test_render_versioned`). The **Node (§D1)**
+>   `scope`/`using`-fallback and **Java (§D2)** try-with-resources `AsmTrace` scope
+>   constructs over a native leaf, tested in their `hwtrace-<lang>-test` lanes. §D0.1
+>   `MethodLoadVerbose` labelling (`JitMethodMap`) + the §D0.2 dependency-free jitdump
+>   rundown (`DiagnosticsIpc`), shipping as `new AsmTrace(byMethod:, withRundown:)` —
+>   commits 69ace98, d4e7deb, 8bf7d52, 4aaf473 — exercised by `hwtrace-dotnet-test` and the
+>   `examples/dotnet/*` lanes. Then §D0.3's named-method form (`AsmTrace.Method`), §D0.4
+>   `AsyncLocal` stitching (`AsmStitchedTrace`), and the §D1 (Node `AsyncStitchedTrace`) /
+>   §D2 (Java propagating executor) per-runtime async-hop producers.
+> - **2026-07 — the §D3 live-JIT cross-process address channel LANDED**, retiring what this
+>   block previously called its standing forward-look: the header-only SPSC ring
+>   ([asmtest_addr_channel.h](../../../include/asmtest_addr_channel.h)) +
+>   `asmtest_ptrace_trace_attached_windowed`, covered by `test_ptrace_windowed`.
+> - **2026-07-12 — the .NET composition on top of that channel LANDED** (extensions plan
+>   E3, commit `4416071`): `JitMethodMap.SetPublishChannel` drives a sibling-thread
+>   publisher into the shared channel and `AsmTrace.Window` reports it via
+>   `LiveJitPublished`, validated against a live CoreCLR. See
+>   [managed-wholewindow-oop-plan.md](managed-wholewindow-oop-plan.md).
+> - **2026-07 — §D4's hook→merge seam gained CI coverage**: `test_stitch_hops_scripted`
+>   (commit `5c35a71`) is the fake-hook harness §D4's risk section asked for.
+>
+> **Still forward-look (hardware, not engineering):** the *clean* in-process PT path for
+> per-hop slices — it needs the shared-core libipt glue on bare-metal Intel PT to validate.
+> The ptrace fallback runs on ordinary CI-adjacent hosts (Zen 2 / Docker) but exercises a
+> second process, and so cannot exercise a cross-thread hop. See
+> [docs/scoped-tracing-implementation.md](../../scoped-tracing-implementation.md).
 
 **Hard dependencies:**
 
@@ -107,7 +123,7 @@ per-language analogues).
 
 ---
 
-## §D0 — .NET managed-code capability (closing the leaks on .NET 8+) *(§D0.1/§D0.2 landed; §D0.3/§D0.4 slated near-term)*
+## §D0 — .NET managed-code capability (closing the leaks on .NET 8+) *(LANDED — §D0.1/§D0.2/§D0.3/§D0.4 all ship)*
 
 > **Status, by requirement (updated 2026-07-06).** The `AsmTrace` native-leaf reference
 > shim ships (see the bindings slice). **§D0.1 landed** as `JitMethodMap` — an in-proc
@@ -235,7 +251,7 @@ PT-host lanes self-skip; the ptrace fallback (§D3) runs the exactness check.
 
 ---
 
-## §D1 — Node scope construct + async-hop stitching *(planned)*
+## §D1 — Node scope construct + async-hop stitching *(LANDED)*
 
 **Construct.** Node's `region(name, fn)` ships at
 [bindings/node/hwtrace.js:439](../../../bindings/node/hwtrace.js#L439) (on `class HwTrace`,
@@ -258,8 +274,11 @@ method off a guarded `const kDispose = Symbol.dispose ?? Symbol.for('nodejs.disp
 **Async-hop stitching (piece D) — weaker for Node than for .NET, by construction.**
 Node's per-`ScopeId` hook for the shared
 [§D4 model](#d4--async-hop-stitching-piece-d-the-shared-logical-operation-model) is
-`AsyncLocalStorage` / `async_hooks` — **neither appears in the binding today**
-(verified). But Node's threading model changes what the hook can do: **normal
+`AsyncLocalStorage` / `async_hooks` — **both now ship in the binding** as
+`AsyncStitchedTrace` ([bindings/node/hwtrace.js](../../../bindings/node/hwtrace.js), which
+requires `async_hooks` at :38 and backs the class with an `AsyncLocalStorage` store at
+:1253); *this section originally recorded that neither appeared in the binding.* But Node's
+threading model changes what the hook can do: **normal
 `await`/Promise/timer continuations resume on the same single JS thread**, so there is
 *no OS-thread hop to follow* — the per-thread PT event never moves, and `async_hooks`
 `before`/`after` only reconstruct **logical-async ordering on one thread**, not a
@@ -281,7 +300,7 @@ stitch by `ScopeId` (PT/ptrace host; self-skips otherwise).
 
 ---
 
-## §D2 — JVM scope construct *(planned)*
+## §D2 — JVM scope construct *(LANDED, except the optional zero-touch JVMTI hop hook)*
 
 **Construct.** Java's `region(String, Runnable)` ships at
 [bindings/java/HwTrace.java:779](../../../bindings/java/HwTrace.java#L779) on the
@@ -318,6 +337,21 @@ This is the **least-proven** of the three per-runtime hooks. Scoped to the opt-i
 posture as Node/.NET. Live managed JIT needs PT/LBR or ptrace; DynamoRIO self-skips
 (guarded) and is never used against the runtime.
 
+> **Status (2026-07-16): the executor route SHIPPED; the JVMTI route is the one remaining
+> item in this plan — and it is OPTIONAL.** Java's live async-hop producer ships as
+> `AsmStitchedTrace` (commits `7ecaaec` / `719f021`) — a **propagating executor decorator**
+> that carries the `ScopeId` across a hop and feeds the §D4 merge via `stitchHandles`. It
+> works, at one cost: the caller must let the binding wrap the executor. **JVMTI (or a
+> bytecode agent) is the zero-touch alternative that would remove that cost** — no source
+> or wiring change at the hop site. It is **not built**: there is no JVMTI agent source in
+> the tree, and every `JVMTI` mention in
+> [bindings/java/HwTrace.java](../../../bindings/java/HwTrace.java) is a doc comment
+> pointing at this gap (e.g. :1801, "a JVMTI executor bytecode agent *would be* the
+> zero-touch alternative"). It is a greenfield native agent with no CI coverage today —
+> hence "least-proven" above. Note the distinct `libperf-jvmti.so` **did** land (2026-07-15,
+> `df66e2b`), but that is the live JIT-method *resolver* (§D2's address side), not the
+> value-changed hop hook — do not read one as the other.
+
 **§D2 tests.** Extend the `hwtrace-java-test` lane and the
 [examples/jit_java/](../../../examples/jit_java/) fixture under `docker-hwtrace-jit-java`
 ([mk/docker.mk:222-272](../../../mk/docker.mk#L222)); assert a JIT'd method resolves and
@@ -325,7 +359,7 @@ decodes; PT lanes self-skip, ptrace fallback checks exactness.
 
 ---
 
-## §D3 — The concealed out-of-process ptrace stepper scope *(stepper + standalone-binary bundling + package embedding DONE; live-JIT address channel forward-look)*
+## §D3 — The concealed out-of-process ptrace stepper scope *(LANDED — stepper, standalone-binary bundling, package embedding, and the live-JIT address channel)*
 
 > **Status: reverse-attach stealth stepper + standalone-binary bundling landed +
 > CI-runnable.** `asmtest_hwtrace_stealth_trace`
@@ -367,10 +401,14 @@ decodes; PT lanes self-skip, ptrace fallback checks exactness.
 > following calls into published methods and eliding the runtime noise between them.
 > `test_ptrace_windowed` ([examples/test_hwtrace.c](../../../examples/test_hwtrace.c)) proves
 > the cross-process handoff with a driver blob calling two channel-published leaves — the
-> stepper records both without knowing their addresses at fork time. **Forward-look:** the
-> .NET-binding composition that publishes from the `JitMethodMap` listener into a shared
-> channel and drives the windowed helper end-to-end against a live CoreCLR (needs a live
-> managed runtime to validate the noisy whole-window path).
+> stepper records both without knowing their addresses at fork time. **The .NET-binding
+> composition on top of the channel LANDED 2026-07-12** (extensions plan E3, commit
+> `4416071`), retiring the last forward-look in this section: `JitMethodMap.SetPublishChannel`
+> publishes each JIT'd method from the listener into a shared channel via a **sibling** thread
+> (firing the EventPipe callback on the *stepped* thread re-enters the runtime under step and
+> aborts it), and `AsmTrace.Window` drives the windowed helper end-to-end against a live
+> CoreCLR, reporting the result via `LiveJitPublished`. Details + the pre-E3 rationale:
+> [managed-wholewindow-oop-plan.md](managed-wholewindow-oop-plan.md).
 
 The hardware-free path, hidden behind the same scope constructs, for hosts with no
 PT/LBR (Zen 2 — [src/hwtrace.c:183](../../../src/hwtrace.c#L183) classifies it
@@ -439,15 +477,22 @@ it is CI-runnable in the `hwtrace` job / a Docker lane with `--cap-add=SYS_PTRAC
 
 ## §D4 — Async-hop stitching (piece D): the shared logical-operation model
 
-> **Status: shared merge core landed (host-testable half).** The slice/bound ABI
+> **Status: merge core landed + two of three live producers landed.** The slice/bound ABI
 > (`asmtest_hwtrace_slice_t`, `asmtest_hwtrace_slice_bound_t`) and the pure ordered
 > merge `asmtest_hwtrace_stitch` are implemented in
 > [src/hwtrace.c](../../../src/hwtrace.c) / declared in
 > [include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h); `test_stitch_slices`
 > (checks 6–10) passes with no PT hardware and no real threads — the CI-runnable
-> deliverable that closes the async-hop merge test hole. **Forward-look:** the
-> per-runtime value-changed hooks (.NET `AsyncLocal` / Node `AsyncLocalStorage` / JVM
-> JVMTI) that drive live capture→tag→merge remain a disclosed gap (a PT/ptrace host).
+> deliverable that closes the async-hop merge test hole. **The per-runtime hooks that drive
+> live capture→tag→merge are no longer a blanket gap:** .NET's `AsyncLocal` value-changed
+> hook (`AsmStitchedTrace`) and Node's `AsyncLocalStorage` hook (`AsyncStitchedTrace`,
+> [bindings/node/hwtrace.js](../../../bindings/node/hwtrace.js)) both ship as live
+> producers, feeding the merge through the `asmtest_hwtrace_stitch_handles` bridge. The
+> hook→merge **seam** is now CI-covered by `test_stitch_hops_scripted` (a fake-hook harness
+> scripting hops out of `seq` order). **Remaining:** only the JVM's **zero-touch JVMTI**
+> value-changed hook — Java's shipped producer is the propagating executor decorator, which
+> works but requires wrapping the executor (§D2). **Forward-look (hardware):** the *clean*
+> PT-decoded per-hop slice path still needs bare-metal Intel PT.
 
 *(planned; explicit opt-in — the deepest piece in the set.)* This is the analysis's
 Q1 redesign: the one qualification that is **not a knob but a model change** — the
@@ -561,12 +606,15 @@ forward-look on PT hardware.
 **§D4 risk.** This is the real engineering of the whole plan set — a model change,
 gated behind an explicit opt-in, and it must **never** emit a partial (un-stitched)
 trace as complete; the Core §0.2 arming-thread assert is the backstop that flags any
-unhandled hop as `truncated`. **Coverage honesty:** the hook-side `ScopeId`/`seq`/
-`version` *tagging* is exercised by **neither** CI-protective test — `test_stitch_slices`
-builds correct tags itself, and §D3 is single-thread — so the live capture→tag→merge
-chain ships with no CI coverage. Add a **fake-hook harness** that drives the merge from
-a scripted hop sequence (not pre-tagged slices) to cover the hook→merge seam; the live
-per-runtime hook remains a disclosed forward-look gap.
+unhandled hop as `truncated`. **Coverage honesty (updated 2026-07-16):** the hook-side
+`ScopeId`/`seq`/`version` *tagging* was originally exercised by **neither** CI-protective
+test — `test_stitch_slices` builds correct tags itself, and §D3 is single-thread — so the
+live capture→tag→merge chain shipped with no CI coverage. **The fake-hook harness this
+section called for now exists:** `test_stitch_hops_scripted`
+([examples/test_hwtrace.c](../../../examples/test_hwtrace.c), commit `5c35a71`) drives the
+merge from a scripted hop sequence rather than pre-tagged slices, covering the hook→merge
+seam. What remains uncovered is the *live* per-runtime hook itself — a disclosed
+forward-look gap, since exercising a real cross-thread hop needs bare-metal Intel PT.
 
 **§D4 cost (feasibility, disclose in docs).** Decoding each slice *at disable time*
 (what keeps `stitch` a pure host-testable merge) puts a PT drain + libipt decode **and** a

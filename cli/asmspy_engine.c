@@ -2,7 +2,8 @@
  * asmspy_engine.c — the two out-of-process tracer engines behind asmspy.
  *
  *   asmspy_engine_syscalls() — PTRACE_SYSCALL stream, decoding data (a strace)
- *   asmspy_engine_region()   — run_to + trace_attached_ex sampler (asm + calls)
+ *   asmspy_engine_region()   — race-to-entry + trace_attached_ex sampler
+ *                              (asm + calls), on whichever thread arrives first
  *
  * Both attach, drive, and detach ENTIRELY on the calling thread — ptrace is
  * per-thread, so the TUI hands each engine to a dedicated tracer thread. A quit
@@ -427,8 +428,12 @@ typedef struct {
         call_site; /* graph engine: call-site addr of that pending call     */
     int depth;     /* tree engine: live call depth (push on call, pop on ret) */
     unsigned long long
-        inv;   /* procs engine: per-task invocation count (syscalls/calls) */
-    int armed; /* watch engine: its debug-register watchpoint is installed  */
+        inv;     /* procs engine: per-task invocation count (syscalls/calls) */
+    int armed;   /* watch engine: its debug-register watchpoint is installed  */
+    int stopped; /* region engine: we consumed its stop and left it stopped.
+                  * Must be tracked, not probed: PTRACE_INTERRUPT on a thread
+                  * already in a ptrace-stop yields no new event, so a blind
+                  * interrupt-then-waitpid at detach would block forever. */
 } thr_t;
 
 typedef struct {
@@ -466,6 +471,7 @@ static thr_t *thr_get(thr_tab_t *t, pid_t tid) {
     e->depth = 0;
     e->inv = 0;
     e->armed = 0;
+    e->stopped = 0;
     return e;
 }
 
@@ -817,11 +823,400 @@ int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
 }
 
 /* ------------------------------------------------------------------ */
-/* Region-sample engine                                                */
+/* Region-sample engine                                                 */
+/*                                                                      */
+/* Worker-thread targeting (asmspy-plan Theme B). This engine used to    */
+/* PTRACE_ATTACH the LEADER and run_to() it, so a routine that runs on a */
+/* worker thread — as managed methods almost always do — was never       */
+/* observed and the engine returned ASMSPY_REGION_NEVER_RAN. It now      */
+/* SEIZEs every thread, plants ONE shared int3 at the region entry, and  */
+/* races them all: whichever thread arrives first is the one sampled.    */
+/* This mirrors the landed, oracle-validated race in the data-flow tier  */
+/* (src/dataflow_ptrace.c: dfp_seize_all + dfp_run_to_multi, Increment   */
+/* 4) rather than inventing a second design; it is reimplemented here    */
+/* over asmspy's own thr_tab, matching the precedent that an asmspy      */
+/* engine stays in cli/ and leaves src/ptrace_backend.c untouched (as    */
+/* asmspy_engine_watch does), because those producers' helpers are       */
+/* static to a tier with no public header.                               */
+/*                                                                      */
+/* Two deliberate departures from the data-flow tier's one-shot capture: */
+/*                                                                      */
+/*  - PTRACE_O_TRACECLONE IS set, and the siblings stay SEIZED for the   */
+/*    engine's lifetime. The data-flow tier captures ONE invocation and  */
+/*    detaches, so it must not inherit future clone-stops; this engine   */
+/*    re-races every round for `max` samples, so a thread spawned mid-run */
+/*    should be able to win the race too. Siblings still run FREE while  */
+/*    one thread is stepped: a ptrace stop is per-thread, so CONTinued    */
+/*    siblings are only stopped if they themselves reach the entry.       */
+/*                                                                      */
+/*  - `only_tid` CANNOT narrow the SEIZE. The entry breakpoint is a      */
+/*    shared int3 in the process's text, so an UNSEIZED thread reaching  */
+/*    it would take a SIGTRAP with no tracer and DIE. only_tid is        */
+/*    therefore a race FILTER (a non-target arrival is stepped over the  */
+/*    bp and released, keeping it armed for the pinned tid), never a     */
+/*    seize_one() — which is why this engine does not use               */
+/*    seize_for_engine() the way the pure single-step engines do.        */
 /* ------------------------------------------------------------------ */
 
-int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
-                         atomic_bool *stop, asmspy_region_sink sink,
+/* Plant the shared entry int3 at `base` via any STOPPED thread of the target (one
+ * address space). PTRACE_POKETEXT patches an r-x text page the way a debugger does.
+ * The original word lands in *orig for the later restore. 0 on success, -1 on failure
+ * (notably a W^X-enforced JIT page, which refuses POKETEXT with EIO — this engine has
+ * no DR0 fallback yet, the same gap the data-flow tier carries, so such a target
+ * self-skips cleanly rather than being traced wrong). */
+static int rgn_plant_bp(pid_t tid, uint64_t base, long *orig) {
+    errno = 0;
+    long o = ptrace(PTRACE_PEEKTEXT, tid, (void *)(uintptr_t)base, NULL);
+    if (o == -1 && errno != 0)
+        return -1;
+    long trap = (o & ~0xffL) | 0xccL;
+    if (ptrace(PTRACE_POKETEXT, tid, (void *)(uintptr_t)base,
+               (void *)(uintptr_t)trap) != 0)
+        return -1;
+    *orig = o;
+    return 0;
+}
+
+static void rgn_remove_bp(pid_t tid, uint64_t base, long orig) {
+    ptrace(PTRACE_POKETEXT, tid, (void *)(uintptr_t)base,
+           (void *)(uintptr_t)orig);
+}
+
+/* THE SAFETY NET. A thread trap-stopped just past the shared int3 has rip == base+1,
+ * which is the MIDDLE of the region's first real instruction once the original byte is
+ * restored — resuming it there executes garbage and would crash a process we do not own.
+ * So every path that observes a stopped thread rewinds it here before letting it run,
+ * and because every thread stays seized for the engine's lifetime, no such stop can be
+ * lost: it can only be delivered later, and is rewound whenever it surfaces. Returns 1
+ * if it rewound, 0 otherwise. */
+static int rgn_rewind_from_bp(pid_t tid, uint64_t base) {
+    struct user_regs_struct regs;
+    if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) != 0)
+        return 0;
+    if (regs.rip != base + 1)
+        return 0;
+    regs.rip = base;
+    return ptrace(PTRACE_SETREGS, tid, NULL, &regs) == 0;
+}
+
+/* DR0..DR3 + DR6/DR7 via struct user's u_debugreg[] — the same door the data-watchpoint
+ * engine below opens, and the one src/ptrace_backend.c uses for EXECUTION breakpoints. */
+#define RGN_DR_OFFSET(n)                                                       \
+    (offsetof(struct user, u_debugreg) + (size_t)(n) * sizeof(long))
+
+/* Arm a slot-0 EXECUTION breakpoint at `addr` on ONE stopped thread: DR0 = addr,
+ * DR7 = 0x1 (L0 enable; R/W0 = 00 execute; LEN0 = 00) — the encoding ptrace_backend.c's
+ * set_hw_bp already ships. Debug registers are PER-THREAD, which is the whole point
+ * here: no other thread can trap on it. Returns 0, or -1 where PTRACE_POKEUSER is
+ * refused (qemu-user exposes no slots; seccomp/permission can also refuse). */
+static int rgn_hw_bp_arm(pid_t tid, uint64_t addr) {
+    if (ptrace(PTRACE_POKEUSER, tid, (void *)RGN_DR_OFFSET(0),
+               (void *)(uintptr_t)addr) != 0)
+        return -1;
+    if (ptrace(PTRACE_POKEUSER, tid, (void *)RGN_DR_OFFSET(7), (void *)0x1UL) !=
+        0)
+        return -1;
+    return 0;
+}
+
+/* Disable all four slots (DR7 = 0) and clear the address + status. Idempotent. */
+static void rgn_hw_bp_disarm(pid_t tid) {
+    ptrace(PTRACE_POKEUSER, tid, (void *)RGN_DR_OFFSET(7), (void *)0UL);
+    ptrace(PTRACE_POKEUSER, tid, (void *)RGN_DR_OFFSET(0), (void *)0UL);
+    ptrace(PTRACE_POKEUSER, tid, (void *)RGN_DR_OFFSET(6), (void *)0UL);
+}
+
+/* Resume `tid` (forwarding `sig`, 0 for none) and record that it is no longer stopped.
+ * Every resume in the race goes through here so the stopped-bookkeeping detach relies
+ * on cannot drift out of step with reality. */
+static void rgn_cont(thr_tab_t *tab, pid_t tid, int sig) {
+    if (ptrace(PTRACE_CONT, tid, NULL, (void *)(uintptr_t)sig) == 0) {
+        int i = thr_find(tab, tid);
+        if (i >= 0)
+            tab->v[i].stopped = 0;
+    }
+}
+
+static void rgn_mark_stopped(thr_tab_t *tab, pid_t tid) {
+    int i = thr_find(tab, tid);
+    if (i >= 0)
+        tab->v[i].stopped = 1;
+}
+
+/* Bring `tid` to a ptrace-stop so PTRACE_POKETEXT / PTRACE_POKEUSER will be accepted —
+ * BOTH are refused on a running tracee, silently leaving the trap we planted armed.
+ * Returns 0 if stopped on return, -1 if it vanished (then it is removed from `tab`). */
+static int rgn_ensure_stopped(thr_tab_t *tab, pid_t tid) {
+    int i = thr_find(tab, tid);
+    if (i < 0)
+        return -1;
+    if (tab->v[i].stopped)
+        return 0;
+    ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
+    for (;;) {
+        int st = 0;
+        pid_t r = waitpid(tid, &st, __WALL);
+        if (r < 0) {
+            if (errno == EINTR)
+                continue;
+            thr_del(tab, tid);
+            return -1;
+        }
+        if (WIFEXITED(st) || WIFSIGNALED(st)) {
+            thr_del(tab, tid);
+            return -1;
+        }
+        if (WIFSTOPPED(st)) {
+            rgn_mark_stopped(tab, tid);
+            return 0;
+        }
+    }
+}
+
+/* Remove whichever entry trap this round armed, from ANY exit path — including the
+ * ones where every thread is running free (the idle timeout, a user quit).
+ *
+ * This is the single most safety-critical function in the engine. A trap left behind
+ * on detach does not fail loudly: the target runs on and then, on its NEXT arrival at
+ * the region, takes a SIGTRAP with no tracer attached and DIES (exit 133). The victim
+ * outlives the tool that killed it by whole seconds, so the damage does not look like
+ * ours. Both primitives are refused on a RUNNING thread, so each must be stopped first
+ * — which is exactly the step it is tempting to skip, because skipping it still passes
+ * a survives-immediately-after-detach check. */
+static void rgn_disarm_entry(thr_tab_t *tab, int hw, pid_t only_tid,
+                             uint64_t base, long orig) {
+    if (hw) {
+        if (rgn_ensure_stopped(tab, only_tid) == 0)
+            rgn_hw_bp_disarm(only_tid);
+        return;
+    }
+    /* The int3 is shared, so any thread we can stop can restore the byte — they share
+     * one address space. Walk until one sticks; entries vanish as threads exit, so
+     * only advance when the current one survived. */
+    for (size_t i = 0; i < tab->n;) {
+        pid_t tid = tab->v[i].tid;
+        if (rgn_ensure_stopped(tab, tid) == 0) {
+            rgn_remove_bp(tid, base, orig);
+            return;
+        }
+        /* vanished: thr_del swapped a new tid into slot i — retry the same slot */
+    }
+}
+
+/* If no thread reaches the entry within this much FREE-RUNNING time, call the region
+ * idle rather than block a UI thread (and a headless --trace) forever. The pre-Theme-B
+ * engine bounded this implicitly and crudely — a fast-failing run_to retried 21 times,
+ * ~1s total — so an explicit, more generous bound is a strict improvement. Polled
+ * (WNOHANG + a short nap) rather than signal-driven, to avoid interacting with the
+ * SIGALRM/ITIMER watchdog the descent tracer arms inside trace_attached_ex. */
+#define RGN_ENTRY_WAIT_MS 3000
+#define RGN_POLL_US       200
+
+/* Race the target's threads to the region entry, arming whichever primitive fits:
+ *
+ *   only_tid == 0 — a SHARED int3 at `base` planted through `planter` (any stopped
+ *     tid; one address space). Every thread races and the FIRST to arrive is sampled:
+ *     the Theme-B fix, and it needs no debug-register budget, so it works wherever
+ *     ptrace does.
+ *
+ *   only_tid != 0 — a PER-THREAD hardware execution breakpoint on that tid alone.
+ *     A shared int3 would be wrong here, not merely slower: every other thread would
+ *     trap on it too and have to be single-stepped back over, which on a hot region
+ *     is an unbounded storm that perturbs threads the user did not ask about (and,
+ *     measured, does not converge). The hardware breakpoint is per-thread, so the
+ *     non-target threads never trap at all, and it patches NO code — the target's
+ *     bytes are untouched.
+ *
+ * On success *entering is the arriving thread, left trap-stopped exactly AT base with
+ * the breakpoint disarmed and the other threads running free — the precondition
+ * asmtest_ptrace_trace_attached_ex expects. Returns 0 on success, 1 if the user asked
+ * to stop, 2 if the region stayed idle for RGN_ENTRY_WAIT_MS, -1 on failure/target
+ * gone. Every non-zero return leaves the breakpoint removed. */
+static int rgn_race_to_entry(thr_tab_t *tab, pid_t planter, uint64_t base,
+                             pid_t only_tid, atomic_bool *stop,
+                             pid_t *entering) {
+    const int hw = (only_tid != 0);
+    long orig = 0;
+
+    if (hw) {
+        if (rgn_hw_bp_arm(only_tid, base) != 0)
+            return -1;
+    } else if (rgn_plant_bp(planter, base, &orig) != 0) {
+        return -1;
+    }
+
+    /* Release every thread we are holding into the race. A thread we already let run
+     * (a previous round's sibling) is not stopped, so its CONT would just ESRCH —
+     * skip it and keep the bookkeeping honest. */
+    for (size_t i = 0; i < tab->n; i++) {
+        if (!tab->v[i].stopped)
+            continue;
+        if (ptrace(PTRACE_CONT, tab->v[i].tid, NULL, NULL) == 0)
+            tab->v[i].stopped = 0;
+    }
+
+    unsigned long idle_us = 0;
+    for (;;) {
+        if (stop && atomic_load(stop)) {
+            rgn_disarm_entry(tab, hw, only_tid, base, orig);
+            return 1;
+        }
+        int st = 0;
+        pid_t w = waitpid(-1, &st, __WALL | WNOHANG);
+        if (w == 0) { /* nothing ready: the target is running free */
+            if (idle_us >= (unsigned long)RGN_ENTRY_WAIT_MS * 1000UL) {
+                rgn_disarm_entry(tab, hw, only_tid, base, orig);
+                return 2;
+            }
+            struct timespec nap = {0, RGN_POLL_US * 1000};
+            nanosleep(&nap, NULL);
+            idle_us += RGN_POLL_US;
+            continue;
+        }
+        if (w < 0) {
+            if (errno == EINTR)
+                continue;
+            return -1; /* ECHILD: target gone, the bp died with it */
+        }
+        idle_us = 0; /* something happened: the target is alive and moving */
+
+        if (WIFEXITED(st) || WIFSIGNALED(st)) {
+            thr_del(tab, w);
+            if (tab->n == 0)
+                return -1; /* target gone */
+            if (hw && w == only_tid) {
+                /* The pinned thread died: nothing can arrive. Report idle rather
+                 * than poll out the full window. */
+                return 2;
+            }
+            continue;
+        }
+        if (!WIFSTOPPED(st))
+            continue;
+        rgn_mark_stopped(
+            tab, w); /* we consumed its stop; it is ours until resumed */
+
+        int sig = WSTOPSIG(st);
+        int event = (st >> 16) & 0xff;
+
+        if (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
+            event == PTRACE_EVENT_VFORK) {
+            unsigned long child = 0;
+            if (ptrace(PTRACE_GETEVENTMSG, w, NULL, &child) == 0 && child)
+                /* Table it so it can win a LATER round — a thread spawned mid-run is
+                 * a legitimate region entrant, and it inherits no debug registers, so
+                 * the pinned (hw) case correctly ignores it. Do NOT resume it here:
+                 * its own attach-stop has not necessarily arrived yet. It surfaces in
+                 * this same loop as a group-stop and is released there. */
+                thr_get(tab, (pid_t)child);
+            rgn_cont(tab, w, 0);
+            continue;
+        }
+
+        if (sig == SIGTRAP && event == 0) {
+            struct user_regs_struct regs;
+            if (ptrace(PTRACE_GETREGS, w, NULL, &regs) != 0) {
+                rgn_cont(tab, w, 0);
+                continue;
+            }
+            /* OURS? Test this BEFORE sigtrap_is_app: a hardware breakpoint reports
+             * si_code == TRAP_HWBKPT, which that helper (correctly, for its own
+             * callers) reads as "the target's own". Ours is identified by the PC.
+             * A hardware execution breakpoint is a FAULT — it stops AT base, before
+             * the instruction runs — so, unlike the int3, there is nothing to rewind. */
+            int mine = hw ? (w == only_tid && regs.rip == base)
+                          : (regs.rip == base + 1);
+            if (mine) {
+                if (!thr_get(tab, w)) { /* OOM: don't strand it trap-stopped */
+                    if (!hw)
+                        rgn_rewind_from_bp(w, base);
+                    rgn_cont(tab, w, 0);
+                    continue;
+                }
+                /* `w` is stopped (we just consumed its trap), so it can restore the
+                 * byte / clear its own debug registers directly. */
+                if (hw)
+                    rgn_hw_bp_disarm(w);
+                else
+                    rgn_remove_bp(w, base, orig);
+                if (!hw && !rgn_rewind_from_bp(w, base))
+                    return -1;
+                *entering = w; /* stays marked stopped: the caller steps it */
+                return 0;
+            }
+            /* Not our breakpoint. The target's OWN int3/hardware bp is delivered so
+             * its signal machinery runs as it would untraced; anything else (a stray
+             * ptrace-synthesized trap) is simply resumed. */
+            if (sigtrap_is_app(w)) {
+                deliver_app_sigtrap(w);
+                int i = thr_find(tab, w);
+                if (i >= 0)
+                    tab->v[i].stopped = 0; /* deliver_app_sigtrap resumes it */
+            } else {
+                rgn_cont(tab, w, 0);
+            }
+            continue;
+        }
+
+        /* A group-stop (SIGSTOP family under SEIZE) resumes with 0; any other signal
+         * is forwarded so the target handles its own. */
+        int fwd = (sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN ||
+                   sig == SIGTTOU)
+                      ? 0
+                      : sig;
+        rgn_cont(tab, w, fwd);
+    }
+}
+
+/* Detach every tracked thread, leaving the target alive and running. Mirrors
+ * detach_threads' interrupt-drain-detach shape but adds the two teardown hazards this
+ * engine owns, which is why it does not simply call detach_threads():
+ *
+ *  1. The base+1 REWIND. A sibling that hit the shared int3 concurrently with its
+ *     removal is still queued at base+1; detaching it there resumes it in the MIDDLE of
+ *     the region's first instruction. Every stop we see here is rewound first.
+ *  2. The debug-register DISARM. PTRACE_DETACH does NOT clear DR0/DR7 — a thread left
+ *     armed would trap at `base` with no tracer attached, take a SIGTRAP nothing
+ *     handles, and DIE. It is cheap and idempotent, so every thread is disarmed
+ *     regardless of which primitive this run actually used.
+ *
+ * Both are the same failure in different clothes: leaving a live process holding a trap
+ * we planted. The house rule is that a foreign target is never killed, and detach is
+ * exactly where that rule is won or lost. */
+static void rgn_detach_all(thr_tab_t *tab, uint64_t base) {
+    for (size_t i = 0; i < tab->n; i++) {
+        pid_t tid = tab->v[i].tid;
+        /* Only interrupt a thread we believe is RUNNING. Interrupting one that is
+         * already ptrace-stopped produces no new event, so the wait below would
+         * block forever — the bookkeeping exists precisely to avoid that. */
+        if (!tab->v[i].stopped) {
+            ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
+            for (;;) {
+                int st = 0;
+                pid_t r = waitpid(tid, &st, __WALL);
+                if (r < 0) {
+                    if (errno == EINTR)
+                        continue;
+                    break; /* ECHILD — already gone */
+                }
+                if (WIFEXITED(st) || WIFSIGNALED(st))
+                    goto gone; /* nothing left to clean up or detach */
+                if (WIFSTOPPED(st))
+                    break;
+            }
+        }
+        rgn_rewind_from_bp(tid, base);
+        rgn_hw_bp_disarm(tid);
+        ptrace(PTRACE_DETACH, tid, NULL, NULL);
+    gone:;
+    }
+    free(tab->v);
+    tab->v = NULL;
+    tab->n = tab->cap = 0;
+}
+
+int asmspy_engine_region(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
+                         long max, atomic_bool *stop, asmspy_region_sink sink,
                          void *ctx) {
     if (!asmtest_ptrace_available())
         return ASMTEST_PTRACE_EUNAVAIL;
@@ -830,11 +1225,32 @@ int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
 
     arm_quit_wake();
 
-    if (ptrace(PTRACE_ATTACH, pid, NULL, NULL) != 0)
+    /* SEIZE the WHOLE process, never seize_one(): see the only_tid note above. */
+    thr_tab_t tab = {0};
+    if (seize_threads(pid, PTRACE_O_TRACECLONE, &tab) != 0) {
+        rgn_detach_all(&tab, base);
         return ASMTEST_PTRACE_ETRACE;
-    int status = 0;
-    if (waitpid(pid, &status, 0) < 0) {
-        ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    }
+
+    /* Drain each SEIZE/INTERRUPT stop so every thread is ptrace-stopped — the
+     * precondition for planting the shared int3 and for the release CONT. Drop any
+     * thread that vanished mid-seize. */
+    for (size_t i = 0; i < tab.n;) {
+        pid_t tid = tab.v[i].tid;
+        int st = 0;
+        pid_t w;
+        do {
+            w = waitpid(tid, &st, __WALL);
+        } while (w < 0 && errno == EINTR);
+        if (w != tid || WIFEXITED(st) || WIFSIGNALED(st)) {
+            thr_del(&tab, tid);
+            continue;
+        }
+        tab.v[i].stopped = 1;
+        i++;
+    }
+    if (tab.n == 0) {
+        rgn_detach_all(&tab, base);
         return ASMTEST_PTRACE_ETRACE;
     }
 
@@ -845,27 +1261,32 @@ int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
         code = NULL;
     }
 
+    /* Any stopped thread can POKETEXT the shared bp; after a sample the entrant is
+     * left stopped at the region exit, so it plants the next round. */
+    pid_t planter = tab.v[0].tid;
     unsigned sample = 0;
     int idle = 0; /* consecutive rounds that produced NO sample */
     while ((max < 0 || (long)sample < max) && !(stop && atomic_load(stop))) {
-        int rc = asmtest_ptrace_run_to(pid, (void *)(uintptr_t)base);
-        if (rc != ASMTEST_PTRACE_OK) {
-            if (stop && atomic_load(stop))
-                break;
-            if (rc == ASMTEST_PTRACE_ENOENT) /* target exited */
-                break;
-            if (++idle > 20)
-                break;
-            continue;
-        }
+        pid_t entrant = 0;
+        int rc =
+            rgn_race_to_entry(&tab, planter, base, only_tid, stop, &entrant);
+        /* rc: 0 = entrant caught; 1 = user quit; 2 = region idle for the whole
+         * wait window; -1 = target gone / entry unarmable. Only 0 continues. A 2
+         * ends sampling rather than retrying: the round already waited longer than
+         * the pre-Theme-B engine's entire give-up budget, so retrying would only
+         * delay an honest "it isn't running" (and, with samples already taken, the
+         * region has simply gone quiet). */
+        if (rc != 0)
+            break;
 
         asmtest_trace_t *tr = asmtest_trace_new(8192, 512);
         asmtest_descent_t *dsc =
             asmtest_descent_new(ASMTEST_DESCENT_RECORD_EDGES);
         long result = 0;
-        rc = asmtest_ptrace_trace_attached_ex(pid, (void *)(uintptr_t)base, len,
-                                              &result, tr, dsc);
-        int produced = (rc == ASMTEST_PTRACE_OK && tr &&
+        /* Step the ENTERING thread, not the leader — the whole point of the race. */
+        int trc = asmtest_ptrace_trace_attached_ex(
+            entrant, (void *)(uintptr_t)base, len, &result, tr, dsc);
+        int produced = (trc == ASMTEST_PTRACE_OK && tr &&
                         asmtest_emu_trace_insns_total(tr) >= 1);
         if (produced) {
             sample++;
@@ -876,12 +1297,15 @@ int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
         asmtest_trace_free(tr);
         asmtest_descent_free(dsc);
 
+        /* The entrant is left stopped past the region: it plants the next round. */
+        planter = entrant;
+
         if (!produced) {
-            /* run_to succeeded but the trace failed/was empty; count it toward
-             * the idle bailout so a bad region can't spin the loop forever. */
+            /* The race reached the entry but the trace failed/was empty; count it
+             * toward the idle bailout so a bad region can't spin the loop forever. */
             if (stop && atomic_load(stop))
                 break;
-            if (rc == ASMTEST_PTRACE_ENOENT)
+            if (trc == ASMTEST_PTRACE_ENOENT)
                 break;
             if (++idle > 20)
                 break;
@@ -889,10 +1313,10 @@ int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
     }
 
     free(code);
-    ptrace(PTRACE_DETACH, pid, NULL, NULL);
-    /* Detached cleanly but never saw the region run (and the user didn't quit):
-     * report it distinctly so the caller can hint that a multi-threaded target may
-     * execute the function on a worker thread — run_to only steps the leader here. */
+    rgn_detach_all(&tab, base);
+    /* Detached cleanly but never saw the region run (and the user didn't quit).
+     * Since the race now covers every thread, this no longer means "it ran on a
+     * worker" — it means the region genuinely did not execute in the sample window. */
     if (sample == 0 && !(stop && atomic_load(stop)))
         return ASMSPY_REGION_NEVER_RAN;
     return 0;
@@ -932,8 +1356,8 @@ int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
 #define DF_PTRACE_ENOSYS (-3) /* off Linux x86-64 / no Capstone: self-skip    */
 #define DF_PTRACE_ETRACE (-4) /* SEIZE/ptrace/wait failure (seccomp/yama)     */
 
-int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid,
-                                       uint64_t base, size_t code_len,
+int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
+                                       size_t code_len,
                                        asmtest_codeimage_t *img, uint64_t when,
                                        uint64_t max_insns, long *result,
                                        int *survived, asmtest_valtrace_t *vt);

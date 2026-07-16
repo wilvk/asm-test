@@ -9,9 +9,11 @@
 > (which backend runs where) and consumes the same source of record: the tier headers +
 > [scripts/check-bindings-parity.sh](../../../scripts/check-bindings-parity.sh).
 
-> **Status: partially landed (roadmap).** Phase 1 and part of Phase 2 have landed (see the
-> status legend below and CHANGELOG.md); the rest is forward-look. The formal parity gate is
-> **green** — `bindings-parity: OK — 114 tier symbols x 10 bindings in sync` — but green means only
+> **Status (revised 2026-07-16): Phase 1 LANDED; Phase 2 LANDED (all four increments, one
+> optional item open); Phase 3 is on-demand by design.** The one named item left in the whole
+> roadmap is Java's **zero-touch JVMTI** hop hook — optional, since the executor-decorator
+> producer already ships. The formal parity gate is
+> **green** — `bindings-parity: OK — 116 tier symbols x 10 bindings in sync` — but green means only
 > that every binding either wraps each tier symbol *or carries a documented exemption* in
 > [scripts/bindings-parity-allow.txt](../../../scripts/bindings-parity-allow.txt). The
 > `ALL`-exemptions the gate consumes are exactly the .NET-lead surface below, so a green
@@ -20,11 +22,15 @@
 > should not.
 >
 > Status legend: **Phase 1 LANDED** (2026-07-08, `afc6ee4`) — the mechanical Cluster 1
-> rollout. **Phase 2 STARTED** — the §Z1 in-process whole-window trio, out-of-process stealth
-> + crash-proof whole-window capture, version-aware render, and the §D0.4 async-hop merge have
-> LANDED in Node/Java (`c2327bc` ff.; see CHANGELOG.md); the .NET deep live-JIT per-method
-> resolution (E3) has since LANDED. **Phase 3 planned**
-> (grow-a-use, per binding). The clean-path validation is PT-hardware-gated (this host is AMD).
+> rollout. **Phase 2 LANDED** (was "STARTED" until 2026-07-16) — the §Z1 in-process
+> whole-window trio, out-of-process stealth + crash-proof whole-window capture, version-aware
+> render, and the §D0.4 async-hop merge landed in Node/Java (`c2327bc` ff.; see CHANGELOG.md);
+> the .NET deep live-JIT per-method resolution (E3) landed; and since then **Node's
+> `AsyncLocalStorage` hop hook + V8-jitdump resolution** and **Java's `libperf-jvmti` live JIT
+> resolution + executor-decorator hop producer** have all landed — i.e. every §D1 item and
+> every §D2 item except the optional JVMTI hook. **Phase 3 on-demand** (grow-a-use, per
+> binding — deliberately not bulk-built). The clean-path validation is PT-hardware-gated
+> (this host is AMD).
 
 ## Why this is not "wrap 13 symbols × 9 bindings"
 
@@ -55,16 +61,17 @@ not by symbol count.
 ## The feature clusters
 
 Symbol contracts are in [include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h);
-line anchors below are current as of 2026-07-08.
+line anchors below were re-grounded against the header on **2026-07-16** (the original
+2026-07-08 anchors had all drifted ~100 lines as the header grew).
 
 | Cluster | Symbols (header line) | Capability | Portable to |
 |---|---|---|---|
-| **1 · Registry-free scoped call** | `call_scoped_ex` ([:273](../../../include/asmtest_hwtrace.h#L273)), `render_scope` ([:282](../../../include/asmtest_hwtrace.h#L282)); also `begin_scope` ([:234](../../../include/asmtest_hwtrace.h#L234)), `call_scoped` ([:249](../../../include/asmtest_hwtrace.h#L249)), `call_scoped_fp` ([:259](../../../include/asmtest_hwtrace.h#L259)) | Arm → call native leaf → disarm entirely in native code; `_ex` is registry-free so no `MAX_REGIONS` exhaustion in a tight loop | **All** — the ergonomic win; already in python/node/java/ruby |
-| **2 · Whole-window empty scope (§Z1)** | `begin_window` ([:318](../../../include/asmtest_hwtrace.h#L318)), `end_window` ([:326](../../../include/asmtest_hwtrace.h#L326)), `render_window` ([:334](../../../include/asmtest_hwtrace.h#L334)) | `using (new AsmTrace())` — capture whatever runs, no region; records ABSOLUTE addresses | All (native leaf, single-step); managed value needs PT/ptrace |
-| **3 · Version render + noise attribution** | `render_versioned` ([:289](../../../include/asmtest_hwtrace.h#L289)), `symbolize_bucket` ([:465](../../../include/asmtest_hwtrace.h#L465)) | Decode moved/tiered bytes against a code-image; bucket whole-window IPs by JIT symbol / mapped region | All wrap-able; value is managed-runtime noise attribution |
-| **4 · Async-hop stitching (§D4/§D0.4)** | `stitch_handles` ([:384](../../../include/asmtest_hwtrace.h#L384)) | Merge per-thread slices of one logical operation in `seq` order | Generic merge is portable; **the producer (per-runtime hop hook) is managed-only** |
-| **5 · Out-of-process stepper (§D3)** | `stealth_trace` ([:413](../../../include/asmtest_hwtrace.h#L413)) | Exact single-step of a native leaf via a reverse-attached helper — no TF armed on the caller's own thread; runs on no-PT hosts (Zen 2, Docker-on-Mac) | All (`run_region` is a **non-capturing** callback) |
-| **0 · Diagnostic** | `arm_tid` ([:189](../../../include/asmtest_hwtrace.h#L189)) | OS tid that armed the active capture — a managed-thread-level single-region assert | All (trivial) |
+| **1 · Registry-free scoped call** | `call_scoped_ex` ([:378](../../../include/asmtest_hwtrace.h#L378)), `render_scope` ([:387](../../../include/asmtest_hwtrace.h#L387)); also `begin_scope` ([:339](../../../include/asmtest_hwtrace.h#L339)), `call_scoped` ([:354](../../../include/asmtest_hwtrace.h#L354)), `call_scoped_fp` ([:364](../../../include/asmtest_hwtrace.h#L364)) | Arm → call native leaf → disarm entirely in native code; `_ex` is registry-free so no `MAX_REGIONS` exhaustion in a tight loop | **All** — the ergonomic win; **`_ex` + `render_scope` now wrapped in all ten** (Phase 1) |
+| **2 · Whole-window empty scope (§Z1)** | `begin_window` ([:423](../../../include/asmtest_hwtrace.h#L423)), `end_window` ([:431](../../../include/asmtest_hwtrace.h#L431)), `render_window` ([:439](../../../include/asmtest_hwtrace.h#L439)) | `using (new AsmTrace())` — capture whatever runs, no region; records ABSOLUTE addresses | All (native leaf, single-step); managed value needs PT/ptrace. **Now wrapped in all ten** (§Z0) |
+| **3 · Version render + noise attribution** | `render_versioned` ([:394](../../../include/asmtest_hwtrace.h#L394)), `symbolize_bucket` ([:648](../../../include/asmtest_hwtrace.h#L648)); also `region_name` ([:640](../../../include/asmtest_hwtrace.h#L640)), `attribute_window` ([:671](../../../include/asmtest_hwtrace.h#L671)) | Decode moved/tiered bytes against a code-image; bucket whole-window IPs by JIT symbol / mapped region | All wrap-able; value is managed-runtime noise attribution |
+| **4 · Async-hop stitching (§D4/§D0.4)** | `stitch_handles` ([:489](../../../include/asmtest_hwtrace.h#L489)) | Merge per-thread slices of one logical operation in `seq` order | Generic merge is portable; **the producer (per-runtime hop hook) is managed-only** |
+| **5 · Out-of-process stepper (§D3)** | `stealth_trace` ([:518](../../../include/asmtest_hwtrace.h#L518)) | Exact single-step of a native leaf via a reverse-attached helper — no TF armed on the caller's own thread; runs on no-PT hosts (Zen 2, Docker-on-Mac) | All (`run_region` is a **non-capturing** callback) |
+| **0 · Diagnostic** | `arm_tid` ([:294](../../../include/asmtest_hwtrace.h#L294)) | OS tid that armed the active capture — a managed-thread-level single-region assert | All (trivial) — **now wrapped in all ten**; the side item below is retired |
 
 **Two symbols are deliberately *not* binding targets.** `asmtest_hwtrace_stitch`
 ([:371](../../../include/asmtest_hwtrace.h#L371)) passes `asmtest_hwtrace_slice_t` **by
@@ -94,17 +101,21 @@ over `_ex`.
 
 ## Per-binding state → to-do
 
+> **Table re-grounded 2026-07-16** against `scripts/check-bindings-parity.sh --report`
+> (116 × 10, green). Four rows were stale: python's and node's `Next` cells were largely
+> already done, and the `arm_tid` / `dr_under_dynamorio` side items had both closed.
+
 | Binding | FFI | Has today | Next (ordered) | Effort | Notes |
 |---|---|---|---|---|---|
-| **python** | ctypes | Cluster 1 (via `_ex`), `arm_tid`, `dr_under_dynamorio` | grow-a-use: window trio, `stealth_trace`, `symbolize_bucket` | ~2–3d (mostly low-value) | Closest. **Leads .NET** on `dr_under_dynamorio`. No live JIT → not a managed target |
-| **ruby** | Fiddle | Cluster 1 (`_ex`+`render_scope`+`call_scoped`) | optional generics; `arm_tid` | ~2–3d | Handle packed `LONG_LONG`; capturing upcall blocked (descent stays exempt) |
-| **node** | koffi | Cluster 1, §D1 `using`-scope, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)** | **§D1 managed**: `AsyncLocalStorage` hop hook, `render_versioned`, V8-jitdump resolution | ~4–6d | **Managed target.** `worker_threads` hops escape (disclosed gap) |
-| **java** | FFM/Panama | Cluster 1, §D2 `AsmTrace` t-w-r, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)**, **`libperf-jvmti` live JIT resolution ✅ (2026-07-15)** | **§D2 managed**: JVMTI value-changed hop hook | ~4–6d | **Managed target.** `libperf-jvmti.so` is an external build dep |
-| **cpp** | dlopen | Cluster 1 ✅, `arm_tid` | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | Struct-by-value trivial (real C decls); capturing upcall blocked |
-| **rust** | libloading | Cluster 1 ✅ | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `#[repr(C)]` by value trivial; capturing upcall blocked |
-| **zig** | std.DynLib | Cluster 1 ✅ | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `extern struct` by value trivial; capturing upcall blocked |
-| **lua** | LuaJIT FFI | Cluster 1 ✅, descent upcalls | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | FFI callbacks OK; `cdef` struct by value trivial |
-| **go** | cgo | Cluster 1 ✅, descent upcalls | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | Async-hop N/A; render pinned with `LockOSThread` (handle-keyed, capturing-thread TLS) |
+| **python** | ctypes | Cluster 1 (via `_ex`), `arm_tid`, `dr_under_dynamorio`, **window trio ✅ `35b80df`**, **`symbolize_bucket` + `region_name` ✅ `402e080`**, **`call_scoped_fp` ✅ `304957e`**, descent upcalls | grow-a-use: `stealth_trace` (the only named item left); then optionally `render_versioned` / `stitch_handles` / `attribute_window` | ~1d | Closest of the ten. **Leads .NET** on `region_name` (see the reverse gaps below). No live JIT → not a managed target |
+| **ruby** | Fiddle | Cluster 1 (`_ex`+`render_scope`+`call_scoped`), `arm_tid` ✅, **window trio ✅ `a1608c8`** | optional generics only | ~2–3d | Handle packed `LONG_LONG`; capturing upcall blocked (descent stays exempt) |
+| **node** | koffi | Cluster 1, §D1 `using`-scope, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)**, **`AsyncLocalStorage` hop hook ✅ `b3db344`/`60d74a7`**, **`render_versioned` ✅ `8a42e42`**, **V8-jitdump resolution ✅ `3cfd7bb`/`80f49bc`**, `stitch`/`stitch_handles`, `region_name`, `symbolize_bucket`, `attribute_window`, `stealth_window`, `windowCall` | **— nothing named.** §D1 is complete; grow-a-use only | done | **Managed target — AT PARITY.** `worker_threads` hops escape, but that is structural (each Worker has its own ALS), not a to-do |
+| **java** | FFM/Panama | Cluster 1, §D2 `AsmTrace` t-w-r, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)**, **`libperf-jvmti` live JIT resolution ✅ (2026-07-15, `df66e2b`)**, **async-hop producer ✅ `7ecaaec`/`719f021` (propagating executor decorator)**, `stitch_handles`, `region_name`, `symbolize_bucket`, `attribute_window`, `stealth_window` | **§D2 managed**: the **zero-touch JVMTI** value-changed hop hook — *optional*; the executor decorator already produces hops, at the cost of wrapping the executor | ~4–6d | **Managed target.** The one binding with a named managed item left. `libperf-jvmti.so` is an external build dep — and is the JIT *resolver*, not the hop hook |
+| **cpp** | dlopen | Cluster 1 ✅, `arm_tid` ✅, **window trio ✅ `35b80df`** | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | Struct-by-value trivial (real C decls); capturing upcall blocked |
+| **rust** | libloading | Cluster 1 ✅, `arm_tid` ✅, **window trio ✅ `a1608c8`** | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `#[repr(C)]` by value trivial; capturing upcall blocked |
+| **zig** | std.DynLib | Cluster 1 ✅, `arm_tid` ✅, **window trio ✅ `a1608c8`** | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `extern struct` by value trivial; capturing upcall blocked |
+| **lua** | LuaJIT FFI | Cluster 1 ✅, `arm_tid` ✅, **window trio ✅ `a1608c8`**, descent upcalls | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | FFI callbacks OK; `cdef` struct by value trivial |
+| **go** | cgo | Cluster 1 ✅, `arm_tid` ✅, **window trio ✅ `a1608c8`**, descent upcalls | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | Async-hop N/A; render pinned with `LockOSThread` (handle-keyed, capturing-thread TLS) |
 
 ## Phased sequencing
 
@@ -208,10 +219,13 @@ removed (stale exemptions fail the gate, so they *must* be removed).
 > Java executor-decorator hop hooks), Node's V8 jitdump JIT-address resolution, and **(2026-07-15)**
 > Java's `libperf-jvmti` live JIT-method resolution (`findJavaJitdump` + `javaResolveJitMethod`,
 > CI-covered by `docker-hwtrace-java` with an address-keyed jcmd perf-map cross-check). **What
-> remains genuinely forward-look**: the Java **JVMTI value-changed hop hook** (a greenfield native
-> agent, no CI coverage today); the merge/attribution *substrate* they feed is now wrapped and
-> host-tested. The remaining ALL-exempt symbols are hardware-gated (AMD
-> LBR/MSR survey) or superseded (registry `call_scoped`, `begin_scope`).
+> remains genuinely forward-look**: the Java **zero-touch JVMTI value-changed hop hook** (a
+> greenfield native agent — no source in the tree, no CI coverage today). **It is OPTIONAL**:
+> Java's executor-decorator producer already drives the merge, so JVMTI buys zero-touch
+> capture (no wrapping the executor), not a missing capability. The merge/attribution
+> *substrate* they feed is now wrapped and host-tested, and the hook→merge seam is CI-covered
+> by `test_stitch_hops_scripted` (`5c35a71`). The remaining ALL-exempt symbols are
+> hardware-gated (AMD LBR/MSR survey) or superseded (registry `call_scoped`, `begin_scope`).
 
 **Bindings:** node, java only. **~8–12d** (§D1 ~4–6d, §D2 ~4–6d, per the [managed
 slice](scoped-tracing-managed-plan.md#effort--risks)). This is the only place
@@ -246,17 +260,36 @@ attribution (`begin_window` + `symbolize_bucket`), or a multi-region native merg
 
 ### Side items — decide, likely skip
 
-- **`arm_tid`** to the seven lacking it (rust, zig, node, java, ruby, lua, go): only if a
-  binding wants the tighter managed-thread assert. Otherwise keep the exemption — they
-  rely on the C `asmtest_hwtrace_end()` cross-thread `truncated` backstop, as the
-  allow-list documents.
+*(Two of the three below CLOSED since drafting; retained with their outcomes, since the
+"decide" framing is what the reader needs to know was decided.)*
+
+- **`arm_tid`** ~~to the seven lacking it (rust, zig, node, java, ruby, lua, go)~~ —
+  **CLOSED: it is now `Y` in all ten** per the live gate matrix, so the exemption is gone
+  and the "only if a binding wants the tighter managed-thread assert" call is moot. The C
+  `asmtest_hwtrace_end()` cross-thread `truncated` backstop remains the belt-and-braces
+  under it.
 - **`begin_scope` / `call_scoped` (registry form) / `call_scoped_fp`**: superseded by
-  `_ex` for native bindings. Only worth it for a named-region managed-method form;
-  `call_scoped_fp` only if a binding traces `double→double` leaves.
-- **Reverse gap:** python wraps `asmtest_dr_under_dynamorio` and .NET does not — the one
-  symbol where a binding leads the reference. For strict two-way parity, add a one-line
-  P/Invoke to the .NET binding; or leave it python-only (it is a managed-host-gate
-  diagnostic with no .NET caller today).
+  `_ex` for native bindings. Only worth it for a named-region managed-method form.
+  `call_scoped_fp` was framed as "only if a binding traces `double→double` leaves" —
+  **python since wrapped it** (`304957e`), so it is `Y` in python + dotnet and exempt for
+  the other eight. `begin_scope` / `call_scoped` stay dotnet-only, as designed.
+- **Reverse gaps — where a binding leads the reference.** ~~python wraps
+  `asmtest_dr_under_dynamorio` and .NET does not~~ — **CLOSED** (`65234d7` added the
+  P/Invoke; `bindings/dotnet/drtrace/DrTrace.cs:158`, surfaced as
+  `DrNative.UnderDynamoRio()`), so both python and dotnet are `Y`. **But two new reverse
+  gaps have opened since**, both from Phase 2 landing in node/java ahead of the reference:
+  - **`asmtest_hwtrace_region_name`** — `Y` in **python, node, java**; `-` in **dotnet**.
+    .NET does carry `SymbolizeBuckets` ([HwTrace.cs:1045](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1045))
+    but has no `RegionName`, so it cannot do the named-region attribution that splits
+    identical-byte leaves symbol/disasm attribution cannot.
+  - **`asmtest_hwtrace_attribute_window`** — `Y` in **node, java**; `-` in **dotnet**.
+    Same shape: the whole-window noise-attribution helper the two followers wrapped in
+    Phase 2 Inc 4, which the reference never grew.
+
+  Both are allow-list-exempt today, so the gate stays green. For strict two-way parity, add
+  the two P/Invokes; or accept that .NET attributes whole-window captures through its own
+  managed `JitMethodMap` resolver and does not need the C helpers. **Decide, do not drift** —
+  the reference leading on everything is an assumption this roadmap no longer supports.
 
 ## The ceiling (state it in docs, do not treat as a gap)
 

@@ -21,7 +21,7 @@ forward from the audit.
 > LANDED 2026-07-12** (the Wave-1 hardening batch + the tuning guide; verified on the
 > Zen 5 box — `hwtrace-test` 358/358 with the new synthetic-ring coverage). **Phase 7
 > (IBS-Op survey fallback) is SUPERSEDED + LANDED 2026-07-12** via
-> [zen2-ibs-tracing-plan.md](../../plans/zen2-ibs-tracing-plan.md) (its Phase 4 shipped the same
+> [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md) (its Phase 4 shipped the same
 > integration — including this plan's `ASMTEST_FORCE_IBS_SURVEY` env — on the
 > standalone `asmtest_ibs_*` engine instead of 7a–7d's in-`amd_backend.c` shape).
 > Grounding that reorders priorities versus the 2026-07-09 audit: development runs on
@@ -53,7 +53,7 @@ by risk, dependency, and how much of each is testable on the generic CI host.
 | **2** | 3 | Observability — `EPERM` vs `EUNAVAIL` + paranoid reader | Standalone diagnostics; the errno it threads also enriches Phase 4's log lines (each independently shippable) | Yes (invariants) + cap lane for the positive `EPERM` |
 | **3** | 1 | ABI-guard the options struct (10-binding flag day) | High blast radius; do it deliberately, after the cheap wins | Yes (ASan, single-step) |
 | **4** | 5 → 6 | Multi-exit deterministic snapshot; then the cascade-comment fix it enables | 6 is comment-only and only correct *after* 5 | Exit-enum: yes · live snapshot: cap lane |
-| **5** | 7 (7a–7d) | IBS-Op survey fallback — **superseded + landed** via [zen2-ibs-tracing-plan.md](../../plans/zen2-ibs-tracing-plan.md) | Largest / most speculative; self-skips by default | Decoder + probe: yes · capture: unprivileged (`swfilt`) |
+| **5** | 7 (7a–7d) | IBS-Op survey fallback — **superseded + landed** via [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md) | Largest / most speculative; self-skips by default | Decoder + probe: yes · capture: unprivileged (`swfilt`) |
 | **6** | 10 | Document the AMD LBR window-reach levers | Naturally documents Phase 5's snapshot + the levers | Docs build only |
 
 ---
@@ -300,7 +300,7 @@ multi-exit regions.
 
 ## Phase 7 — IBS-Op survey fallback (`src/hwtrace.c`, `src/amd_backend.c`) *(SUPERSEDED + LANDED 2026-07-12)*
 
-> **Superseded by [zen2-ibs-tracing-plan.md](../../plans/zen2-ibs-tracing-plan.md), whose Phase 4
+> **Superseded by [zen2-ibs-tracing-plan.md](zen2-ibs-tracing-plan.md), whose Phase 4
 > landed this integration 2026-07-12.** The shipped shape differs from 7a–7d below: the
 > probe/decoder/capture live in the standalone `asmtest_ibs_*` engine
 > (`include/asmtest_ibs.h`, `src/ibs_backend.c`) rather than `amd_backend.c`, with internal

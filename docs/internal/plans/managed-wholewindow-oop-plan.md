@@ -6,60 +6,66 @@ work), not a single registered leaf. It is the one investment that turns the
 already-shipping out-of-process stepper from a **region** primitive into a
 **whole-window** capture the in-process single-step tier is *forbidden* to attempt.
 
-> **Status update (2026-07-08): W-0/W-1/W-3 LANDED; W-2 LANDED for native fixtures.**
-> The native substrate this plan called "net-new" **already shipped** and is live-tested:
-> `asmtest_ptrace_trace_attached_windowed` (region-free absolute-PC capture across a window
-> frame + channel-published regions) with the `PTRACE_STREAM_CAP` budget → `truncated`
-> (W-0/W-3), and the cross-process JIT-address channel
-> ([asmtest_addr_channel.h](../../../include/asmtest_addr_channel.h)) — both covered by
-> `test_ptrace_windowed`. **Added 2026-07-08 (this task):** the fork-internal
-> `asmtest_ptrace_trace_window_call` (the plan's W-0 "fork path" — owns its tracee, so a
-> caller that cannot fork safely gets a whole-window trace with no attach/run_to
-> bookkeeping), exported `asmtest_addr_channel_{new,publish_rec,free}` FFI shims,
-> `test_ptrace_window_call` (5 checks, green in `make hwtrace-test`), the .NET
-> `Ptrace.TraceWindowCall` + `AddrChannel` wrappers, and the
-> [examples/dotnet/localscope_oop](../../../examples/dotnet/localscope_oop/) demo
-> (validated live, captures a frame + two published leaves out-of-process). **Remaining
-> forward-look:** W-1 BTF block-step *windowed* variant (per-instruction windowed ships;
-> the `PTRACE_SINGLEBLOCK` windowed path is not yet wired), and a **live-CoreCLR** W-2
-> (`new AsmTrace(outOfProcess: true)` self-attach via the stealth helper + the runtime's
-> `MethodLoadVerbose` listener publishing to the channel) — the native fixture proves the
-> mechanism; wiring a managed runtime's live JIT addresses in is the remaining integration.
+> **Status (consolidated 2026-07-16): all four phases landed for native fixtures *and*
+> live CoreCLR; one variant remains.** W-0, W-2, and W-3 are complete; **W-1 is partial**
+> — its begin/end delimiting ships, but the `PTRACE_SINGLEBLOCK` driver is wired only for
+> the **region** form (`asmtest_ptrace_trace_attached_blockstep`,
+> [asmtest_ptrace.h:125](../../../include/asmtest_ptrace.h#L125)); the **windowed** entry
+> ([:142](../../../include/asmtest_ptrace.h#L142)) takes no blockstep flag and no
+> `*_windowed_blockstep` symbol exists. That is a **cost** upgrade (~4–10× fewer stops on a
+> large managed window), not a correctness gap — the per-instruction windowed path is exact
+> today. *(This block consolidates the three dated status updates that previously stacked
+> here; their provenance is preserved below.)*
 >
-> **Status update (2026-07-08b): the MANAGED whole-window path LANDED (partial).**
-> `asmtest_hwtrace_stealth_trace_windowed` (a reverse-attach helper child single-steps the
-> CALLING thread — SYS_gettid, not the process leader — out of band, capturing the whole
-> window + a SHARED address channel), the fork-valid shared channel
-> (`asmtest_addr_channel_new_shared`), the windowed loop's step backstop + **forward-all-
-> signals** hardening (a managed runtime RAISES AND HANDLES SIGSEGV as normal operation, so
-> treating faults as terminal truncated the window on the runtime's first internal fault),
-> and the managed `AsmTrace.Window(() => { …block… })` + a `test_stealth_windowed` C test
-> (green in `make hwtrace-test`, 296 checks) all ship. The
-> [examples/dotnet/localscope_oop_managed](../../../examples/dotnet/localscope_oop_managed/)
-> demo runs a whole block of managed C# out-of-process, **crash-proof** — it survives an
-> in-scope thrown/caught exception the in-process `localscope` must omit (validated: exit 0,
-> deterministic, the block's own JIT'd code named).
+> - **2026-07-08 — W-0/W-3 substrate + the fork path.** The native substrate this plan
+>   called "net-new" **already shipped** and is live-tested:
+>   `asmtest_ptrace_trace_attached_windowed` (region-free absolute-PC capture across a
+>   window frame + channel-published regions) with the `PTRACE_STREAM_CAP` budget →
+>   `truncated` (W-0/W-3), and the cross-process JIT-address channel
+>   ([asmtest_addr_channel.h](../../../include/asmtest_addr_channel.h)) — both covered by
+>   `test_ptrace_windowed`. Added that day: the fork-internal
+>   `asmtest_ptrace_trace_window_call` (the plan's W-0 "fork path" — owns its tracee, so a
+>   caller that cannot fork safely gets a whole-window trace with no attach/run_to
+>   bookkeeping), exported `asmtest_addr_channel_{new,publish_rec,free}` FFI shims,
+>   `test_ptrace_window_call` (5 checks, green in `make hwtrace-test`), the .NET
+>   `Ptrace.TraceWindowCall` + `AddrChannel` wrappers, and the
+>   [examples/dotnet/localscope_oop](../../../examples/dotnet/localscope_oop/) demo
+>   (validated live, captures a frame + two published leaves out-of-process).
+> - **2026-07-08b — W-2, the MANAGED whole-window path.**
+>   `asmtest_hwtrace_stealth_trace_windowed` (a reverse-attach helper child single-steps the
+>   CALLING thread — SYS_gettid, not the process leader — out of band, capturing the whole
+>   window + a SHARED address channel), the fork-valid shared channel
+>   (`asmtest_addr_channel_new_shared`), the windowed loop's step backstop + **forward-all-
+>   signals** hardening (a managed runtime RAISES AND HANDLES SIGSEGV as normal operation, so
+>   treating faults as terminal truncated the window on the runtime's first internal fault),
+>   and the managed `AsmTrace.Window(() => { …block… })` + a `test_stealth_windowed` C test
+>   (green in `make hwtrace-test`, 296 checks) all ship. The
+>   [examples/dotnet/localscope_oop_managed](../../../examples/dotnet/localscope_oop_managed/)
+>   demo runs a whole block of managed C# out-of-process, **crash-proof** — it survives an
+>   in-scope thrown/caught exception the in-process `localscope` must omit (validated: exit 0,
+>   deterministic, the block's own JIT'd code named). This retired the "live-CoreCLR W-2"
+>   forward-look the 2026-07-08 block had recorded.
+> - **2026-07-12 — the last gap, deep mid-window JIT attribution, CLOSED** *(extensions plan
+>   [E3](asmtrace-extensions-plan.md), commit `4416071`)*. `JitMethodMap.SetPublishChannel`
+>   now arms the sibling-thread publisher (EventPipe callback → lock-free queue →
+>   never-stepped publisher thread → shared channel, joined before the channel is freed);
+>   `AsmTrace.Window` reports it via `LiveJitPublished`. So a method JIT'd FRESH mid-window
+>   (a first-call generic instantiation like `Enumerable.Where<int>`, a local function) is
+>   now captured, not elided — the OOP managed window reaches deep-BCL parity with the
+>   in-process form. *Pre-E3 rationale, retained:* coarse `/proc/self/maps` ranges (JIT heap
+>   + R2R BCL `.dll` images) were pre-published, so the block's OWN code + the already-mapped
+>   BCL were captured, but a fresh mid-window JIT landed outside them. The live per-method
+>   publish was BUILT yet **left OFF**, because firing the managed EventPipe callback ON the
+>   thread being single-stepped re-enters the runtime under step and ABORTS it (SIGABRT,
+>   observed). Publishing from a SIBLING thread — what E3 implemented — is the safe form.
 >
-> **The one remaining gap — deep mid-window JIT attribution — CLOSED 2026-07-12**
-> *(extensions plan [E3](asmtrace-extensions-plan.md)): `JitMethodMap.SetPublishChannel`
-> now arms exactly the sibling-thread publisher described below (EventPipe callback →
-> lock-free queue → never-stepped publisher thread → shared channel, joined before the
-> channel is freed); `AsmTrace.Window` reports it via `LiveJitPublished`. The paragraph
-> below records the pre-E3 rationale.* Coarse `/proc/self/maps`
-> ranges (JIT heap + R2R BCL `.dll` images) are pre-published, so the block's OWN code + the
-> already-mapped BCL are captured; but a method JIT'd FRESH mid-window (a first-call generic
-> instantiation like `Enumerable.Where<int>`, a local function) lands OUTSIDE the pre-window
-> ranges and is elided. The fix is the LIVE per-method publish (the `MethodLoadVerbose`
-> listener → shared channel). It is BUILT (`JitMethodMap.SetPublishChannel` +
-> `asmtest_addr_channel_publish_rec` in `OnEventWritten`) but **left OFF**: firing the managed
-> EventPipe callback ON the thread being single-stepped re-enters the runtime under step and
-> ABORTS it (SIGABRT, observed). The safe form is to publish from a SIBLING thread (drain the
-> runtime's `MethodLoad` events off a second thread that is not stepped, and publish those to
-> the channel) — the documented follow-up. Until then the OOP managed window is honest-partial:
-> crash-proof + own-code, not full deep-BCL parity with the in-process form.
+> **Shipped outside the phasing.** `asmtest_ptrace_trace_attached_window_stop`
+> ([asmtest_ptrace.h:147](../../../include/asmtest_ptrace.h#L147)) — a stop-flag-driven
+> windowed stepper used internally by the bundled stealth helper — belongs to no W-phase
+> below; it arrived with the W-2 managed wiring as an implementation need.
 >
 > This document is the design + phasing; the sections below are the original proposal,
-> now largely landed per the updates above.
+> now landed per the status above.
 > Related: [managed-singlestep-posture-plan.md](../archive/plans/managed-singlestep-posture-plan.md)
 > (why in-process whole-window cannot be crash-proof),
 > [scoped-tracing-managed-plan.md](scoped-tracing-managed-plan.md) (§D3 is item 7's
@@ -178,13 +184,16 @@ default that changes a whole-window scope's cost/permission profile:
 2. **W-1 — BTF block-step driver + delimiting.** Add the `PTRACE_SINGLEBLOCK` path and
    the begin/end breakpoint delimiting; assert identical stream vs W-0 at ~1 stop per
    taken branch; self-skip where a hypervisor masks `DEBUGCTL.BTF`
-   (`blockstep_available`).
+   (`blockstep_available`). *(PARTIAL — the delimiting ships and `PTRACE_SINGLEBLOCK`
+   drives the **region** form; the **windowed** blockstep variant is the one remaining
+   forward-look in this plan. See the status block above.)*
 3. **W-2 — .NET whole-window `outOfProcess: true`.** Wire the ctor flag through the
    stealth self-attach helper; capture a whole inline block (the localscope body) on
    the managed thread; fold absolute addresses through the existing `JitMethodMap` +
    rundown; a companion example (`examples/dotnet/localscope_oop_managed/`) proving the
-   caught exception that crashes the in-process form is captured cleanly (LANDED; deep
-   mid-window JITs elided — see the live-publish follow-up). `localscope_oop/` is the
+   caught exception that crashes the in-process form is captured cleanly (LANDED
+   2026-07-08b; the deep mid-window JIT elision it originally shipped with was CLOSED by
+   E3 on 2026-07-12 — see the status block above). `localscope_oop/` is the
    native-fixture demo of the same primitive.
 4. **W-3 — cost controls + honesty.** An instruction/stop budget with self-truncation
    (a ~1M managed window is seconds out-of-process — bound it and flag `truncated`

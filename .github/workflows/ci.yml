@@ -432,6 +432,42 @@ jobs:
       - name: GC-move survival — profiler-fed live remap + managed seed->move->sink
         run: make docker-gcprofiler-probe
 
+  # DR ATTACH tier (Increments 1, 3-5) — attach the taint tracer to a NATIVE process that is
+  # already running and that we did not start, configure it entirely from outside (the target
+  # calls no markers), capture a bounded window, then detach and leave it running native.
+  #
+  # These increments landed with docker lanes but no CI job, so five increments' worth of
+  # capability had no regression gate while the launch-only tier next door had four. The
+  # external-attach image is the reason: it needs --cap-add=SYS_PTRACE for the seize, and its
+  # in-file comment still describes it as the Increment-2 research probe — "a manual
+  # diagnostic, not in the main gate". That was true when written, but Increments 4 and 5 were
+  # later added to the SAME image, so landed capability inherited a research probe's CI
+  # posture. A hosted runner grants SYS_PTRACE, so the gate is affordable:
+  #   docker-taint-attach        cooperative dr_app_* attach/detach (Inc 1) + the marker-less
+  #                              interactive nudge arm/disarm (Inc 3). Plain run, no caps.
+  #   docker-taint-attach-probe  `drrun -attach <pid>` into a RUNNING native victim (Inc 2's
+  #                              GO probe), then Inc 4's marker-less external taint capture and
+  #                              Inc 5's K=3 attach/capture/detach cycling over ONE pid with the
+  #                              shadow-leaf leak assertion between rounds.
+  #
+  # The two MANAGED probes (docker-taint-managed-attach-probe, docker-suspendprof-probe) stay
+  # OUT by design: they are throwaway diagnostics that record a reproducible NO-GO (DR's seize
+  # of a running .NET trips glibc stack-smashing; parking managed threads at safepoints does
+  # not help, because the fatal takeover is the runtime's NATIVE threads), not capability to
+  # protect. See docs/internal/plans/dynamorio-attach-tier-plan.md.
+  taint-attach:
+    name: taint (DR attach tier)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Cooperative attach (Inc 1) + marker-less nudge arm/disarm (Inc 3)
+        run: make docker-taint-attach
+
+      - name: External attach (Inc 2) + marker-less taint capture (Inc 4) + K-round detach cycling (Inc 5)
+        run: make docker-taint-attach-probe
+
   # Optional hardware-assisted trace tier. The live capture backends (Intel PT,
   # ARM CoreSight, AMD LBR) need bare-metal hardware that GitHub-hosted runners do
   # not expose, so they self-skip — but the AMD branch-record RECONSTRUCTION is

@@ -11,8 +11,10 @@ work for EVERY trace form, IN ADDITION to the delegate factories (`AsmTrace.Wind
 [asmtrace-extensions-plan.md](asmtrace-extensions-plan.md).
 
 > Status: **AMD-LBR inline LANDED** and **R4 (out-of-process inline) LANDED** (`578caed`,
-> ahead of R1–R3); **R1 (`_kind` refactor) + R3 (SingleStep via the unified ctor) now LANDED**,
-> only **R2 (Intel PT inline)** remains roadmap.
+> ahead of R1–R3); **R1 (`_kind` refactor) + R3 (SingleStep via the unified ctor) now LANDED**.
+> **R2 (Intel PT inline) is the SOLE remainder**, and it is **hardware-gated**: wiring it needs
+> bare-metal Intel PT to validate against, which the AMD Zen 5 / Zen 2 dev boxes cannot
+> provide. Its ctor path is reserved and self-skips today.
 
 ## The general requirement + the two backend classes
 
@@ -38,8 +40,8 @@ can meet it is decided by **how its backend is armed**:
 | Whole-window single-step `new AsmTrace()` / `(byMethod:,withRundown:)` | START/STOP (TF) | **YES (was already)** | best-effort on managed code (exit-133 hazard) |
 | Region `new AsmTrace(code)` | START/STOP | **YES (was already)** | traces a native routine; works on any inited backend (single-step / AMD LBR) |
 | **AMD-LBR statistical** `new AsmTrace(HwBackend.AmdLbr)` | START/STOP (perf) | **YES — LANDED** | one-cut native begin/end split + a backend-keyed ctor; *sheds* the delegate marshaling |
-| **Intel PT** `new AsmTrace(HwBackend.IntelPt)` | START/STOP (perf AUX) | forward-look | same ctor; self-skips `EUNAVAIL` until a bare-metal PT begin/end pair + libipt decode-on-close is wired |
-| **Out-of-process** (today `AsmTrace.Window`) | COORDINATION | not built | feasible via async stop-flag split, but *strictly worse* — see below |
+| **Intel PT** `new AsmTrace(HwBackend.IntelPt)` | START/STOP (perf AUX) | forward-look (hardware-gated) | same ctor; path reserved, self-skips with a `"forward-look (not wired)"` `SkipReason` ([HwTrace.cs:2328](../../../bindings/dotnet/hwtrace/HwTrace.cs#L2328)) until a bare-metal PT begin/end pair + libipt decode-on-close is wired |
+| **Out-of-process** `new AsmTrace(outOfProcess: true)` | COORDINATION | **YES — LANDED (R4)** | built via the async stop-flag split, but *strictly worse* than the `AsmTrace.Window` factory — keep the factory; see R4 |
 | Named-method `AsmTrace.Method` | — | **N/A** | category mismatch — see below |
 
 ## What LANDED (AMD-LBR inline)
@@ -67,11 +69,17 @@ can meet it is decided by **how its backend is armed**:
 Dispose from accreting parallel bools. Not required for the AMD form (which shipped with a
 minimal `_amdWindow` flag) but is the clean spine before PT/OOP cases.
 
-**R2 — Intel PT inline (forward-look).** Same backend-keyed ctor; add `pt_begin_window` (perf
-AUX `intel_pt` + ENABLE) / `pt_end_window` (DISABLE + libipt decode → fill `Addresses`,
-`IsStatistical=false`). Reserve the ctor path now (self-skips `EUNAVAIL`); wire when bare-metal
-PT is available to validate. PT is the *ideal* inline backend (hardware start/stop, exact,
-near-native).
+**R2 — Intel PT inline (forward-look; the SOLE remainder, hardware-gated).** Same backend-keyed
+ctor; add `pt_begin_window` (perf AUX `intel_pt` + ENABLE) / `pt_end_window` (DISABLE + libipt
+decode → fill `Addresses`, `IsStatistical=false`) — neither exists yet, and
+[pt_backend.c](../../../src/pt_backend.c) is decode-only (gated on `-DASMTEST_HAVE_LIBIPT`),
+itself recording that end-to-end libipt decode is forward-look for want of a PT packet fixture.
+The ctor path IS reserved and self-skips today — with a `"{backend} inline whole-window is
+forward-look (not wired)"` `SkipReason`
+([HwTrace.cs:2328](../../../bindings/dotnet/hwtrace/HwTrace.cs#L2328)), not an `EUNAVAIL` code.
+**The gate is silicon:** wire it when bare-metal Intel PT is available to validate against —
+the dev boxes are AMD Zen 5 / Zen 2, so PT is not coming locally. PT is the *ideal* inline
+backend (hardware start/stop, exact, near-native).
 
 **R3 — SingleStep via the unified ctor (LANDED).** Make `new
 AsmTrace(HwBackend.SingleStep)` forward to the existing whole-window arming (extract it into a
@@ -81,7 +89,7 @@ to `new AsmTrace()`. Cosmetic.
 **R4 — Out-of-process inline (LANDED, `578caed`).** Shipped ahead of R1–R3: added a `volatile
 int stop` to the shared stealth scratch, split `stealth_trace_windowed` into begin/end, replaced
 `pc == win_ret` with `*stop` in a new loop variant, and added a **distinct** ctor (`new
-AsmTrace(bool outOfProcess)` — [HwTrace.cs:1923](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1923)),
+AsmTrace(bool outOfProcess)` — [HwTrace.cs:2369](../../../bindings/dotnet/hwtrace/HwTrace.cs#L2369)),
 never a peer bool on the backend-keyed ctor (its lifecycle is a live helper context +
 stop→waitpid→read-back, a different teardown). It is crash-proof (ptrace-stops) but
 **strictly worse** than `AsmTrace.Window`: it re-exposes the ctor/Dispose to the stepper

@@ -182,7 +182,8 @@ exercises.
 asmspy --list [active|scan]        # list processes; active=recent CPU, scan=string-rich memory first
 asmspy --syms   <pid> [filter]     # resolved function symbols (addr, size, name, module)
 asmspy --log    <pid> [n]          # stream n syscalls with decoded data (default 20)
-asmspy --trace  <pid> <sym> [n]    # n live samples of a function (default 3)
+asmspy --trace  <pid> <sym> [n] [--tid=<t>]            # n live samples of a function (default 3;
+                                   # samples whichever thread reaches it first, --tid pins one)
 asmspy --stream <pid> [n] [--tid=<t>]                  # stream n instructions live (default 20)
 asmspy --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] [--tid=<t>]
                                    # whole-process call graph over n calls (default 200)

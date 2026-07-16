@@ -1,7 +1,7 @@
 # Findings: .NET GC-move {old,new,len} range extraction (taint tier, Increment 7)
 
 *Status: findings / research record (2026-07-14). Produced for
-[dynamorio-taint-tier-plan.md](../plans/dynamorio-taint-tier-plan.md) **Increment 7**
+[dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md) **Increment 7**
 (GC-move umbra shadow remap), whose full path is hard-blocked on getting .NET's
 compaction object-move ranges out of the runtime to feed the byte-granular tag-shadow
 remap `at_gc_remap` (already landed behind the disabled `ASMTEST_TAINT_GCREMAP` flag,
@@ -26,7 +26,7 @@ feed: the concrete per-move `{old, new, len}` triples out of the running .NET ru
 (Linux x86-64, .NET 8), delivered at a point where the remap can run coherently against the
 Increment-4 concurrent-writer policy.
 
-The plan's standing assumption ([dynamorio-taint-tier-plan.md](../plans/dynamorio-taint-tier-plan.md)
+The plan's standing assumption ([dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md)
 Increment 7, as-planned text) was that this triple must come from the runtime's
 `GCBulkMovedObjectRanges` ETW/EventPipe event, parsed **out of process** via nettrace. The
 in-proc `EventListener` shipped only *detection* (`GcMoveMap`) because it hands back a

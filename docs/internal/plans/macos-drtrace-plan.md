@@ -16,6 +16,24 @@ DynamoRIO-based tier is addressed here.
 
 > Status legend: **planned** unless noted. Update as phases land.
 
+> **STATUS 2026-07-16 — 0 of 3 phases landed. BLOCKED UPSTREAM, not on hardware.**
+>
+> **Buying a Mac does not unblock this plan.** The gate is that DynamoRIO has
+> **never published a macOS release asset**, so there is nothing to attach *with*
+> — Apple hardware, on its own, buys you nothing here. Do not schedule M0/M1/M2,
+> and do not treat "get a Mac" as the unblocking step. The only avenue is a
+> from-source macOS DR build (out of scope; see below).
+>
+> **Before anyone touches this plan, re-run the upstream check** (it is one
+> command and it is the whole go/no-go):
+>
+> ```
+> gh api --paginate '/repos/DynamoRIO/dynamorio/releases' --jq '.[].assets[].name' \
+>   | grep -iE 'mac|darwin|osx' || echo 'still no macOS asset — plan stays blocked'
+> ```
+>
+> Nothing else in this document matters until that command prints an asset.
+
 > **Phase M0 status (2026-06-30): BLOCKED UPSTREAM — no-go via the documented path.**
 > The Step-0 prerequisite — an official macOS DynamoRIO *release* — **does not
 > exist and never has.** A scan of the DynamoRIO GitHub releases API across **all
@@ -32,6 +50,23 @@ DynamoRIO-based tier is addressed here.
 > path), so M1/M2 stay **held** as the plan directs. See [Phase M0 → Step 0
 > result](#phase-m0--x86-64-attach--compiled-function-tracing-planned) below. The
 > Linux Phase 1–7 tier is unaffected.
+
+> **Re-confirmed 2026-07-16 — unchanged, on a wider scan. Still NO-GO.**
+> Re-ran the releases-API query against **all 454 releases** (the 2026-06-30 scan
+> saw ~295; latest cronbuild is now `11.91.20644`, was `11.91.20630`). Result:
+> **still zero macOS/Mac/Darwin/dylib assets, in any release, ever.** Upstream's
+> README is also unchanged — *"IA-32, AMD64, ARM, and AArch64 hardware. Mac OSX
+> support is in progress."*
+>
+> One correction to the 2026-06-30 block above, which does not affect its
+> conclusion: that scan's "only four asset platforms" was an **under-count** of the
+> enumeration (not of macOS). The full set across 454 releases is **seven**
+> platform prefixes — `DynamoRIO-Windows` (441), `DynamoRIO-Linux` (351),
+> `DynamoRIO-ARM-Linux-EABIHF` (346), `DynamoRIO-AArch64-Linux` (344),
+> `DynamoRIO-ARM-Android-EABI` (283), `DynamoRIO-i386-Linux` (98), and
+> `DynamoRIO-x86_64-Linux` (95) — plus some tutorial PDFs. The load-bearing fact is
+> the same and is now established over a broader sample: **macOS is not among
+> them.** M0 stays NO-GO; M1/M2 stay held.
 
 ---
 
@@ -170,8 +205,10 @@ If the macOS tarball does not exist or does not ship the Application Interface
 > | `DynamoRIO-Windows-` | ~293 |
 > | `DynamoRIO-MacOS-` / `-Mac-` / `-Darwin-` | **0** |
 >
-> There is **no** macOS/Mac/Darwin release asset, in any release, ever. The
-> `DynamoRIO-MacOS-<ver>.tar.gz` name this step assumed is hypothetical. The
+> There is **no** macOS/Mac/Darwin release asset, in any release, ever.
+> *(Re-confirmed 2026-07-16 over all 454 releases — see the re-confirmation block
+> at the top of this doc, which also corrects this table's prefix enumeration.)*
+> The `DynamoRIO-MacOS-<ver>.tar.gz` name this step assumed is hypothetical. The
 > project README confirms the status — *"Mac OSX support is in progress"* — and the
 > [releases page](https://dynamorio.org/page_releases.html) advertises only the
 > Windows + Linux variants. **Conclusion: Step 0 fails its own gate → STOP.** A

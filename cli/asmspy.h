@@ -214,19 +214,28 @@ typedef void (*asmspy_region_sink)(void *ctx, unsigned sample_no, long result,
 /* Returned by asmspy_engine_region when it detached cleanly but NEVER observed the
  * region execute (zero samples, not user-cancelled). Distinct positive value (the
  * engine's failure codes are the negative ASMTEST_PTRACE_*), so callers can tell
- * "nothing ran here" from a real attach failure — most often a multi-threaded target
- * whose function runs on a worker thread (this engine attaches only the leader). */
+ * "nothing ran here" from a real attach failure. Since the engine races EVERY thread
+ * to the entry, this now means the region genuinely did not execute in the sample
+ * window — it no longer implies "it ran on a worker thread we weren't watching". */
 #define ASMSPY_REGION_NEVER_RAN 1
 
-/* Attach to `pid`, then repeatedly run_to(base) + trace_attached the region
- * [base, base+len), invoking `sink` per captured invocation, until `max`
- * samples, `stop`, or the target exits; detach. Returns 0 on clean detach,
+/* SEIZE every thread of `pid`, then repeatedly race them all to the region
+ * [base, base+len) — sampling whichever thread ARRIVES FIRST — invoking `sink` per
+ * captured invocation, until `max` samples, `stop`, or the target exits; detach so
+ * the target survives. `only_tid` (0 = any) pins the sample to one thread; it filters
+ * the race rather than narrowing the SEIZE, because the shared entry breakpoint would
+ * kill an unseized thread that reached it. Returns 0 on clean detach,
  * ASMSPY_REGION_NEVER_RAN if the region was never seen executing, or a negative
- * ASMTEST_PTRACE_* on an attach/availability failure. NOTE: attaches only the
- * thread-group leader — a function that runs only on a worker thread yields
- * ASMSPY_REGION_NEVER_RAN (unlike the whole-process syscall/stream engines). */
-int asmspy_engine_region(pid_t pid, uint64_t base, size_t len, long max,
-                         atomic_bool *stop, asmspy_region_sink sink, void *ctx);
+ * ASMTEST_PTRACE_* on an attach/availability failure.
+ *
+ * Worker threads ARE covered (asmspy-plan Theme B): a function that runs only off the
+ * leader — as managed methods almost always do — is sampled like any other. A
+ * genuinely W^X-enforced JIT page refuses the POKETEXT entry breakpoint and self-skips
+ * via ASMTEST_PTRACE_ETRACE (no DR0 fallback here yet, the same gap the data-flow tier
+ * carries) rather than being traced wrong. */
+int asmspy_engine_region(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
+                         long max, atomic_bool *stop, asmspy_region_sink sink,
+                         void *ctx);
 
 /* ------------------------------------------------------------------ */
 /* Data-flow value capture (asmspy_engine.c) — the scoped L0 value      */

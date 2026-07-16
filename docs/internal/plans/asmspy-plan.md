@@ -19,6 +19,20 @@
 
 ## The view family (current — all landed)
 
+> **Complete as of 2026-07-16** — this table is the whole shipped surface: **11
+> headless subcommands** (`--list`, `--syms`, `--log`, `--trace`, `--dataflow`,
+> `--stream`, `--graph`, `--tree`, `--procs`, `--sample`, `--watch`) and **9 TUI
+> modes** (1 Syscall log · 2 Assembly & funcs · 3 Live stream · 4 Call graph ·
+> 5 Call tree · 6 Process tree · 7 Hot edges · 8 Process details · 9 Data flow),
+> reached from the process picker (`asmspy` with no args). *(Correction: mode 8
+> "Process details" and the `--list`/`--syms` helpers shipped but were missing from
+> this table, which billed itself as the full family — added 2026-07-16.)*
+>
+> Cross-cutting TUI keys: `space` freezes a live snapshot; up/down·PgUp/PgDn·Home/End
+> scroll; `Tab` toggles a view option or moves pane focus; `F3` refreshes; `Enter`
+> drills in; `b`/ESC goes back. Headless: a **negative `n`** runs until the target
+> exits or you interrupt (Ctrl-C).
+
 | View | Headless | TUI | Engine | Mechanism | Safe on any target? |
 |---|---|---|---|---|---|
 | Syscall log (strace-ish, fd→path) | `--log` | mode 1 | `asmspy_engine_syscalls` | `PTRACE_SYSCALL`, all threads | **yes** |
@@ -28,11 +42,19 @@
 | Live call **tree** (indented by depth; TUI two-pane w/ assembly) | `--tree` | mode 5 | `asmspy_engine_tree` | single-step, all threads | **no** (single-step) |
 | Process/thread **topology** (procs+threads+children, drill-in) | `--procs` | mode 6 | `asmspy_engine_procs` | `PTRACE_SYSCALL` **or** single-step, whole tree | **yes** in `--count=syscalls` |
 | **Statistical hot edges** (IBS-Op `from→to`, named endpoints, misp/ret tags, `--json`) | `--sample` | mode 7 | `asmspy_engine_sample` | **AMD IBS-Op statistical sampling, OUT OF BAND** (no ptrace/step) | **yes** — the only *rich* view safe on any target (incl. a live JIT) |
+| **Process details** / fingerprint (runtime badge — JVM/.NET/CPython/Node·V8/Go/…, thread makeup, notable modules, ELF traits) | — | mode 8 | `asmspy_fingerprint` | `/proc` + the mapped ELF only — **no ptrace attach at all** | **yes** — nothing is attached |
 | **Data flow** (L0 values + L1 def-use + L2 slice nav) | `--dataflow` | mode 9 | `asmspy_engine_dataflow` | JIT-aware scoped-ptrace L0 value producer (`attach_jit`: SEIZE-all-threads-and-race + signal split), UI-side slice navigation | **no** (single-step); worker-thread + managed targets now reached |
 | **Data watchpoint** (who-wrote-this-field + value) | `--watch` | — | `asmspy_engine_watch` | x86 HW data watchpoint (DR0-3, per-thread arm), native speed between hits | **yes** — near-zero perturbation |
 
+Two attach-free helpers complete the surface (no engine — they feed the views):
+
+| Helper | Headless | TUI | Backend | Mechanism | Safe on any target? |
+|---|---|---|---|---|---|
+| Process **list/picker** (`active` = recent CPU; `scan` = string-rich memory first) | `--list [active\|scan]` | the entry picker screen | `asmspy_proclist` / `asmspy_sort_t` | `/proc` walk (+ a memory probe under `ASMSPY_SORT_SCAN`) | **yes** |
+| Resolved **function symbols** (ELF + PLT `name@plt`, C++-demangled; `addr`/`size`/`name`/`module`, optional substring filter) | `--syms <pid> [filter]` | feeds every view's symbol picker | `asmspy_symtab_load` | ELF symtab/dynsym + PLT; no attach. **Static symbols only — `--syms` does *not* layer the JIT/perf-map** (`cmd_syms` calls `asmspy_symtab_load` alone; `asmspy_resolve`'s ELF→JIT→refresh chain lives in the single-step engines + `--sample`), so managed frames are absent here even when `--stream`/`--graph` name them | **yes** |
+
 > The **Data flow** and **Data watchpoint** views landed **2026-07-15** via the
-> [live-attach data-flow plan](live-attach-dataflow-plan.md) (Inc 6 headless `--dataflow` +
+> [live-attach data-flow plan](../archive/plans/live-attach-dataflow-plan.md) (Inc 6 headless `--dataflow` +
 > Inc 7 TUI mode 9) and its followup **F3** (`--watch`); `asmspy_engine_watch` per-thread-arms
 > across `/proc/<pid>/task/*`. **Live-attach Increment 5 (`attach_jit` + the signal split)
 > LANDED 2026-07-15**: the Data-flow view now SEIZEs every thread and races whichever one
@@ -69,7 +91,7 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 
 | Item | Sev | Eff |
 |---|---|---|
-| Region sampler (mode 2) attaches only the thread-group leader — silently empty for a function that runs on a worker thread; seize all threads and arm the region across them | med | L |
+| ~~Region sampler (mode 2) attaches only the thread-group leader — silently empty for a function that runs on a worker thread; seize all threads and arm the region across them~~ — **landed 2026-07-16**: `asmspy_engine_region` now SEIZEs every thread (`PTRACE_O_TRACECLONE`, so one spawned mid-run can win a later round) and races them to the entry, sampling **whichever arrives first**; `--trace` gained `--tid=<t>` to pin one, mirroring the other engines. This closes the shape that mattered — a **managed method almost never runs on the leader**, so the view was structurally blind to the JIT'd code asmspy exists to show. Reuses the design of the data-flow tier's oracle-validated race (`dfp_seize_all`/`dfp_run_to_multi`, live-attach Increment 4) rather than inventing a second one, reimplemented over asmspy's own `thr_tab` per the standing precedent that an engine stays in `cli/` and leaves `src/ptrace_backend.c` untouched (as `asmspy_engine_watch` does). Two findings worth carrying: (1) `--tid` **cannot** narrow the SEIZE — a shared int3 would kill an unseized thread that reached it — so it pins via a **per-thread hardware execution breakpoint** (the alternative, stepping hot non-target threads back over a shared int3, was MEASURED not to converge); (2) the entry trap and the debug registers both survive `PTRACE_DETACH` and are both refused on a *running* thread, so the disarm must stop each thread first — skipping that still passes an immediate liveness check and then kills the target seconds later by SIGTRAP (exit 133) on its next arrival. `cli_smoke.sh` asserts the worker sample, both `--tid` directions, and survival past a settle; `make docker-cli` → cli-smoke PASS. Carryover: the entry breakpoint is `POKETEXT`-only in the any-thread path (no DR0 fallback for a W^X JIT page — it self-skips), and the TUI has no thread picker (mode 9's follow-on). | med | L |
 | No exec-stop re-resolution in stream/graph/tree — after a traced launcher `execve`s, the symtab + exebase go stale (`--procs` already sets `TRACEEXEC`; the others do not) | low | M |
 | Child-process following limited to `--procs` — stream/graph/tree/syscalls do **not** follow forked children (`TRACEFORK` unset there); `strace -f` parity gap | low | S |
 
@@ -109,7 +131,7 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 | Single-step engines are **x86-64-hardcoded** (`rip`/`eflags`-TF/`orig_rax`, `ASMTEST_ARCH_X86_64`) though the disassembler already does ARM64 — needs a reg/single-step/detach abstraction + `PSTATE.SS` | med | L |
 | No architecture gate — on arm64 `make cli` emits raw `SYS_open undeclared` / `no member rip` instead of self-skipping like other tiers | low | S |
 | 32-bit/i386 tracees silently mishandled — pragmatic fix: read `/proc/<pid>/exe` `EI_CLASS` at attach and refuse with a clear message | low | S |
-| CI tests asmspy only against apt Capstone 4, never the pinned 5.0.1 that docs/docker ship; no documented kernel-version floor (a too-old-kernel `SEIZE` failure misreports as a permission problem) | low | S |
+| ~~CI tests asmspy only against apt Capstone 4, never the pinned 5.0.1 that docs/docker ship; no documented kernel-version floor (a too-old-kernel `SEIZE` failure misreports as a permission problem)~~ — **landed (both halves; marker corrected 2026-07-16 — this row had gone stale)**: the `cli` job builds the **pinned Capstone 5.0.1 from source** (`.github/workflows/ci.yml`, cached per the K1 pattern), explicitly *"NOT apt's Capstone 4 — the older library silently degrades some disassembly, so the smoke must run against what users actually get"*; the **kernel floor is documented** in the user guide ([asmspy.md](../../guides/tracing/asmspy.md) — `PTRACE_SEIZE`+`PTRACE_INTERRUPT` need **Linux 3.4+**, and the guide names the too-old-kernel failure so it isn't misread as a permission problem) | low | S |
 
 ### Theme G — Process/docs
 
