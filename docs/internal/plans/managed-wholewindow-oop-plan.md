@@ -24,6 +24,25 @@ already-shipping out-of-process stepper from a **region** primitive into a
 > *(This block consolidates the three dated status updates that previously stacked here;
 > their provenance is preserved below.)*
 >
+> - **2026-07-17b — the same-target-conditional ambiguity, closed in BOTH reconstructors.**
+>   An adversarial review found the amd-tracing-plan's own
+>   [prescription](amd-tracing-plan.md) (§"Same-target-conditional ambiguity → truncated")
+>   had been specified but never built. The greedy "first `Jcc` whose target == next-stop"
+>   rule silently drops instructions on the `||` / dual-guard shape (`je T; …; je T`, first
+>   not taken, second taken) — reported `rc == OK`, `truncated == false`. This was **not**
+>   only the new windowed driver: the shipped region-form `blockstep_reconstruct` carried
+>   the identical rule, so `asmtest_ptrace_trace_call_blockstep` and
+>   `asmtest_ptrace_trace_attached_blockstep` (and F1's block-step value tier, which rides
+>   on them) dropped instructions too. Both now implement the plan's rule — count the
+>   candidates statically targeting next-stop, hard-stop at the first always-taken
+>   instruction, and report **ambiguous → truncated** rather than guess. `trace_auto`
+>   improves for free: it escalates on `!truncated`, so ambiguous code now falls through to
+>   the exact per-instruction tier instead of returning a short stream as complete.
+>   Residual, deliberately accepted and not statically decidable: a conditional that was NOT
+>   taken followed by a `ret`/indirect whose *runtime* target happens to equal that
+>   conditional's static target still resolves to the conditional (a `ret` hard-stops the
+>   scan but is not itself a candidate, which is what keeps "taken conditional, then the
+>   function's ret" unambiguous).
 > - **2026-07-17 — W-1's windowed block-step driver.** One caveat is recorded rather than
 >   papered over: BTF only records control transfers the CPU takes, so a KERNEL-injected
 >   transfer (signal delivery / sigreturn) is invisible to block-step reconstruction. Since
