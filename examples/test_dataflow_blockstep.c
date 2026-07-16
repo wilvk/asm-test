@@ -21,6 +21,26 @@
  *      DETECTED at the next real boundary and the capture drops to truncated — never silently
  *      wrong.
  *
+ * VECTOR BREADTH (increment 2) adds the YMM/ZMM half, and every one of its claims is proved by
+ * REPRODUCING THE BUG FIRST — each case has a hook that restores the pre-fix behaviour and an
+ * assertion that the trace then really is wrong:
+ *
+ *   5. XMM LIVE-IN SEEDING. A region whose input arrives in xmm0/xmm1 (established by entry
+ *      glue before opts.region_off, on the REAL cpu) replays byte-identically to the
+ *      single-step oracle. NEGATIVE CONTROL (`no_vec_seed` + `no_vec_canary` = exactly the
+ *      pre-increment-2 tier): the capture returns OK and NOT truncated while its trace
+ *      DIFFERS from the oracle — the silent wrongness this increment exists to kill. A third
+ *      run (`no_vec_seed` alone) shows the vector canary CATCHES it (truncated).
+ *   6. VEX-128 IS A SILENT LIAR. `vpaddq xmm0,xmm1,xmm2` is gated off the replay. NEGATIVE
+ *      CONTROL (`force_replay`): Unicorn returns UC_ERR_OK and a WRONG value — it drops
+ *      VEX.vvvv and runs the legacy 2-operand form — so the forced trace diverges from the
+ *      oracle. That is what the gate prevents, and it is why the gate is an ENCODING rule.
+ *   7. AVX / AVX-512 REGIONS. VEX-256 and EVEX regions are gated to single-step and produce a
+ *      CORRECT trace carrying REAL 256-/512-bit vector values (read off silicon via
+ *      NT_X86_XSTATE, asserted against the exact expected bytes). NEGATIVE CONTROL
+ *      (`force_replay`): the capture FAULTS + truncates (UC_ERR_INSN_INVALID) rather than
+ *      self-skipping or lying. Hardware-gated: skipped where the cpu lacks AVX2 / AVX-512.
+ *
  * Self-skips cleanly where ptrace is blocked (seccomp/yama) or PTRACE_SINGLEBLOCK is
  * non-functional (a hypervisor masking DEBUGCTL.BTF), and — via the makefile gate — is built
  * only where libunicorn is present. Off Linux x86-64 / without Capstone+Unicorn the producer
@@ -48,6 +68,12 @@ typedef struct {
     int force_singlestep;
     int inject_divergence;
     int inject_block;
+    uint64_t region_off;
+    int no_vec_seed;
+    int no_mxcsr_seed;
+    int no_vec_canary;
+    int force_replay;
+    uint64_t stack_hi_pad;
 } asmtest_blockstep_opts_t;
 
 typedef struct {
@@ -56,11 +82,21 @@ typedef struct {
     uint64_t stops;
     uint64_t steps;
     uint64_t entry_rsp;
+    int vec_width;
+    int vec_nregs;
+    int uc_vec_width;
+    int vec_seeded;
+    int mxcsr_seeded;
 } asmtest_blockstep_info_t;
 
 int asmtest_dataflow_blockstep_probe(void);
 int asmtest_dataflow_blockstep_is_pure(const uint8_t *code, size_t code_len,
                                        const char **reason);
+int asmtest_dataflow_blockstep_is_replayable(const uint8_t *code,
+                                             size_t code_len,
+                                             const char **reason);
+int asmtest_dataflow_blockstep_vec_width(int *nregs);
+int asmtest_dataflow_blockstep_uc_vec_width(void);
 int asmtest_dataflow_blockstep_run(const uint8_t *code, size_t code_len,
                                    const long *args, int nargs,
                                    const asmtest_blockstep_opts_t *opts,
@@ -130,6 +166,205 @@ static const uint8_t imp_rdtsc[] = {0x0f, 0x31, 0xc3};
 static const uint8_t imp_rdrand[] = {0x0f, 0xc7, 0xf0, 0xc3};
 static const uint8_t imp_int80[] = {0xb8, 0x14, 0x00, 0x00,
                                     0x00, 0xcd, 0x80, 0xc3};
+
+/* ------------------------------------------------------------------ */
+/* Vector fixtures (increment 2)                                        */
+/*                                                                      */
+/* Each is one blob with TWO parts. The bytes BEFORE region_off are ENTRY GLUE: the tracee   */
+/* really executes them on the real cpu, but the capture neither traces nor replays them —   */
+/* they exist to establish LIVE-IN VECTOR STATE, which is the only way a vector value can    */
+/* enter the region from outside and so the only thing boundary seeding can be tested on.    */
+/* (Vector state computed INSIDE the region would replay self-consistently in a persistent   */
+/* Unicorn even with no seeding at all, and would prove nothing.) The glue always ends in a  */
+/* `jmp` — a TAKEN branch — so PTRACE_SINGLEBLOCK stops exactly AT region_off rather than    */
+/* running past it to the region's own first branch.                                          */
+/* ------------------------------------------------------------------ */
+
+/* sse_live_in(a,b): the XMM boundary-seeding case. The region consumes xmm0/xmm1 as LIVE-IN
+ * state and commits the result to MEMORY, never to a GP register — which is precisely the
+ * shape the GP-only canary is blind to, so an unseeded replay is silently wrong rather than
+ * loudly wrong. Returns arg0 (the GP path is deliberately unaffected); the observable is the
+ * 16-byte store of xmm0 = a+b. Legacy SSE only, so Unicorn CAN replay it: this is the case
+ * the whole increment's perturbation win rests on. Baseline x86-64 — no AVX needed. */
+#define SSE_LIVE_IN_ROFF 0x0c
+static const uint8_t sse_live_in[] = {
+    0x66, 0x48, 0x0f, 0x6e, 0xc7, /* 0x00 movq xmm0, rdi        (glue) */
+    0x66, 0x48, 0x0f, 0x6e, 0xce, /* 0x05 movq xmm1, rsi        (glue) */
+    0xeb, 0x00,                   /* 0x0a jmp 0x0c              (glue) */
+    0x66, 0x0f, 0xd4, 0xc1,       /* 0x0c paddq xmm0, xmm1  <- LIVE-IN */
+    0x0f, 0x11, 0x44, 0x24, 0xf0, /* 0x10 movups [rsp-16], xmm0        */
+    0x48, 0x89, 0xf8,             /* 0x15 mov rax, rdi                 */
+    0xc3,                         /* 0x18 ret                          */
+};
+
+/* vex128_liar(a,b): the VEX-128 SILENT-MISDECODE case. `vpaddq xmm0,xmm1,xmm2` means
+ * xmm0 = xmm1+xmm2 = b+a on real silicon. Every released Unicorn drops VEX.vvvv and executes
+ * the legacy 2-operand `paddq xmm0,xmm2` = a+a instead — returning UC_ERR_OK. With a=7,b=5:
+ * real 12, Unicorn 14. The result again reaches only MEMORY, so nothing but the vector canary
+ * or the encoding gate can catch it. */
+#define VEX128_LIAR_ROFF 0x11
+static const uint8_t vex128_liar[] = {
+    0x66, 0x48, 0x0f, 0x6e, 0xc7, /* 0x00 movq xmm0, rdi        (glue) */
+    0x66, 0x48, 0x0f, 0x6e, 0xce, /* 0x05 movq xmm1, rsi        (glue) */
+    0x66, 0x48, 0x0f, 0x6e, 0xd7, /* 0x0a movq xmm2, rdi        (glue) */
+    0xeb, 0x00,                   /* 0x0f jmp 0x11              (glue) */
+    0xc5, 0xf1, 0xd4, 0xc2,       /* 0x11 vpaddq xmm0,xmm1,xmm2  VEX128 */
+    0x0f, 0x11, 0x44, 0x24, 0xf0, /* 0x15 movups [rsp-16], xmm0        */
+    0x48, 0x89, 0xf8,             /* 0x1a mov rax, rdi                 */
+    0xc3,                         /* 0x1d ret                          */
+};
+
+/* avx_ymm(a): a VEX-256 region. ymm0 is broadcast from arg0 by the glue, so the region has
+ * 256-bit LIVE-IN state; it doubles it and returns the low lane. Gated to single-step (no
+ * released Unicorn executes VEX-256), where its full 32-byte ymm0 value IS captured from
+ * hardware. Returns 2*a. Needs AVX2 (vpbroadcastq ymm). */
+#define AVX_YMM_ROFF 0x0c
+static const uint8_t avx_ymm[] = {
+    0x66, 0x48, 0x0f, 0x6e, 0xc7, /* 0x00 movq xmm0, rdi          (glue) */
+    0xc4, 0xe2, 0x7d, 0x59, 0xc0, /* 0x05 vpbroadcastq ymm0, xmm0 (glue) */
+    0xeb, 0x00,                   /* 0x0a jmp 0x0c                (glue) */
+    0xc5, 0xfd, 0xd4, 0xc0,       /* 0x0c vpaddq ymm0, ymm0, ymm0        */
+    0xc4, 0xe1, 0xf9, 0x7e, 0xc0, /* 0x10 vmovq rax, xmm0                */
+    0xc3,                         /* 0x15 ret                            */
+};
+
+/* avx512_zmm(a): the EVEX analogue — 512-bit live-in state, doubled. Gated to single-step;
+ * its full 64-byte zmm0 value is captured from hardware (ZMM_Hi256 + the legacy/YMM halves
+ * reassembled). Returns 2*a. Needs AVX-512F. */
+#define AVX512_ZMM_ROFF 0x0d
+static const uint8_t avx512_zmm[] = {
+    0x66, 0x48, 0x0f, 0x6e, 0xc7, /* 0x00 movq xmm0, rdi           (glue) */
+    0x62, 0xf2, 0xfd, 0x48, 0x59,
+    0xc0,       /* 0x05 vpbroadcastq zmm0, xmm0  (glue) */
+    0xeb, 0x00, /* 0x0b jmp 0x0d                 (glue) */
+    0x62, 0xf1, 0xfd, 0x48, 0xd4,
+    0xc0,                         /* 0x0d vpaddq zmm0, zmm0, zmm0         */
+    0xc4, 0xe1, 0xf9, 0x7e, 0xc0, /* 0x13 vmovq rax, xmm0                 */
+    0xc3,                         /* 0x18 ret                             */
+};
+
+/* hi16_zmm(a): the Hi16_ZMM (zmm16-31) case. zmm16 lives ONLY in XSAVE component 7, reassembled
+ * by a code path nothing else reaches — untested reassembly of a register file we cannot replay
+ * would be exactly the silent-zeroing this increment exists to kill, so it is covered rather
+ * than deleted. Returns 2*a via zmm16. Needs AVX-512F. */
+#define HI16_ZMM_ROFF 0x0d
+static const uint8_t hi16_zmm[] = {
+    0x66, 0x48, 0x0f, 0x6e, 0xc7, /* 0x00 movq xmm0, rdi            (glue) */
+    0x62, 0xe2, 0xfd, 0x48, 0x59,
+    0xc0,       /* 0x05 vpbroadcastq zmm16, xmm0  (glue) */
+    0xeb, 0x00, /* 0x0b jmp 0x0d                  (glue) */
+    0x62, 0xa1, 0xfd, 0x40, 0xd4,
+    0xc0, /* 0x0d vpaddq zmm16, zmm16, zmm16       */
+    0x62, 0xe1, 0xfd, 0x08, 0x7e,
+    0xc0, /* 0x13 vmovq rax, xmm16                 */
+    0xc3, /* 0x19 ret                              */
+};
+
+/* evex_invis(a): the fixture that makes the ENCODING-vs-METADATA decision LOAD-BEARING. EVERY
+ * instruction in its region is invisible to Capstone's AVX taxonomy — `vpbroadcastq zmm0,xmm0`
+ * decodes with correct mnemonic and operands yet reports NO registers and belongs to NO
+ * X86_GRP_AVX/AVX2/AVX512 group, and mov/ret are not AVX either. So a gate built on that
+ * metadata calls this region REPLAYABLE and hands an EVEX instruction to an emulator with no
+ * decoder for it; only the encoding rule (the 0x62 prefix byte) catches it. Returns arg0.
+ * Needs AVX-512F. */
+#define EVEX_INVIS_ROFF 0x07
+static const uint8_t evex_invis[] = {
+    0x66, 0x48, 0x0f, 0x6e, 0xc7, /* 0x00 movq xmm0, rdi            (glue) */
+    0xeb, 0x00,                   /* 0x05 jmp 0x07                  (glue) */
+    0x62, 0xf2, 0xfd, 0x48, 0x59,
+    0xc0,             /* 0x07 vpbroadcastq zmm0,xmm0 INVISIBLE */
+    0x48, 0x89, 0xf8, /* 0x0d mov rax, rdi                     */
+    0xc3,             /* 0x10 ret                              */
+};
+
+/* vex_bmi(a): the same decision with NO hardware gate. `andn` is VEX-encoded but GP-only:
+ * Unicorn executes it faithfully (measured against silicon), yet the encoding rule gates it —
+ * the deliberate over-gate, whose only cost is the perturbation win. Capstone puts it in no AVX
+ * group, so a metadata gate would call this region replayable. Asserting the over-gate pins the
+ * encoding rule on EVERY x86-64 box, not just AVX-512 ones. Returns arg0. */
+#define VEX_BMI_ROFF 0x02
+static const uint8_t vex_bmi[] = {
+    0xeb, 0x00,                   /* 0x00 jmp 0x02              (glue) */
+    0xc4, 0xe2, 0x60, 0xf2, 0xc7, /* 0x02 andn eax, ebx, edi (VEX-GP)  */
+    0x48, 0x89, 0xf8,             /* 0x07 mov rax, rdi                 */
+    0xc3,                         /* 0x0a ret                          */
+};
+
+/* island(a,b): a CONSTANT-POOL ISLAND inside the region — the shape a JIT method-map (this
+ * tier's stated target) routinely contains. The `jmp` hops two data bytes at 0x13 that a LINEAR
+ * scan instead decodes as the start of a `movabs rax, imm64`, swallowing the VEX prefix of the
+ * `vpaddq` at 0x15 as immediate data and then desyncing outright (remaining=5 of 17). The scan
+ * NEVER SEES the VEX-128, so before the fail-closed fix BOTH verdicts stayed optimistic: the
+ * VEX-128 reached Unicorn ungated AND touches_vec=0 removed both the seed and the vector canary
+ * that would have caught the lie. Executes correctly (the jmp hops the island): the real vpaddq
+ * stores xmm1+xmm2 = b+a to memory. Returns arg0. */
+#define ISLAND_ROFF 0x11
+static const uint8_t island[] = {
+    0x66, 0x48, 0x0f, 0x6e, 0xc7, /* 0x00 movq xmm0, rdi        (glue) */
+    0x66, 0x48, 0x0f, 0x6e, 0xce, /* 0x05 movq xmm1, rsi        (glue) */
+    0x66, 0x48, 0x0f, 0x6e, 0xd7, /* 0x0a movq xmm2, rdi        (glue) */
+    0xeb, 0x00,                   /* 0x0f jmp 0x11              (glue) */
+    0xeb, 0x02,                   /* 0x11 jmp 0x15  <- REGION: hop it  */
+    0x48, 0xb8,                   /* 0x13 ISLAND (data, not code)      */
+    0xc5, 0xf1, 0xd4, 0xc2,       /* 0x15 vpaddq xmm0, xmm1, xmm2      */
+    0x0f, 0x11, 0x44, 0x24, 0xf0, /* 0x19 movups [rsp-16], xmm0        */
+    0x48, 0x89, 0xf8,             /* 0x1e mov rax, rdi                 */
+    0xc3,                         /* 0x21 ret                          */
+};
+
+/* imp_vec(a,b): an IMPURE region that ALSO touches vector state — ordinary in real JIT'd code
+ * (a cpuid/rdtsc beside SSE). The impurity gate settles `pure` at the cpuid, but the sweep must
+ * keep classifying: before the fix it BROKE there, so the paddq after it was never seen,
+ * touches_vec came back 0, xstate_read was never called on the single-step fallback, and every
+ * vector record was emitted value_valid=0 at rc=OK — the headline "values in the trace"
+ * deliverable failing silently on the exact path all AVX code is routed to. Returns arg0; the
+ * observable is the 16-byte store of xmm0 = a+b. */
+#define IMP_VEC_ROFF 0x0c
+static const uint8_t imp_vec[] = {
+    0x66, 0x48, 0x0f, 0x6e, 0xc7, /* 0x00 movq xmm0, rdi        (glue) */
+    0x66, 0x48, 0x0f, 0x6e, 0xce, /* 0x05 movq xmm1, rsi        (glue) */
+    0xeb, 0x00,                   /* 0x0a jmp 0x0c              (glue) */
+    0x31, 0xc0,                   /* 0x0c xor eax, eax  <- REGION      */
+    0x0f, 0xa2,                   /* 0x0e cpuid         (impure)       */
+    0x66, 0x0f, 0xd4, 0xc1,       /* 0x10 paddq xmm0, xmm1  <- AFTER   */
+    0x0f, 0x11, 0x44, 0x24, 0xf0, /* 0x14 movups [rsp-16], xmm0        */
+    0x48, 0x89, 0xf8,             /* 0x19 mov rax, rdi                 */
+    0xc3,                         /* 0x1c ret                          */
+};
+
+/* imp_vex: scan-only. `cpuid; vpaddq xmm0,xmm1,xmm2; ret` — the region that made the PUBLIC
+ * is_replayable() lie: the old sweep broke at the cpuid, so it answered "yes, Unicorn can
+ * faithfully replay this" (reason=NULL) about a region containing the instruction this tier
+ * calls a silent liar. run() masked it (impurity single-steps the region anyway), so no check
+ * caught it — but the entry point is public and the answer was wrong. */
+static const uint8_t imp_vex[] = {
+    0x0f, 0xa2,             /* cpuid                   */
+    0xc5, 0xf1, 0xd4, 0xc2, /* vpaddq xmm0, xmm1, xmm2 */
+    0xc3,                   /* ret                     */
+};
+
+/* fp_round(bits_a, bits_b): the MXCSR case. The glue installs RC=toward-zero (MXCSR 0x7F80) and
+ * loads two doubles; the region divides them, commits the result to MEMORY, then CLEARS xmm0 —
+ * so the register canary is blind and the stored value is the only witness. An unseeded MXCSR
+ * replays at Unicorn's default 0x1F80 (round-to-nearest): 1.0/5.0 gives oracle
+ * 0x3fc9999999999999 (RZ) but replay 0x3fc999999999999a (RN) at rc=OK, truncated=0, pure=1 — a
+ * silent lie on the legacy-SSE path the whole perturbation win rests on. Non-default rounding is
+ * not exotic: -ffast-math's crtfastmath.o and JIT/managed runtimes both install it. Returns
+ * arg0. Baseline x86-64 (SSE2) — no AVX needed. */
+#define FP_ROUND_ROFF 0x19
+static const uint8_t fp_round[] = {
+    0xc7, 0x44, 0x24, 0xf8, 0x80, 0x7f,
+    0x00, 0x00,                         /* 0x00 mov [rsp-8],0x7F80 */
+    0x0f, 0xae, 0x54, 0x24, 0xf8,       /* 0x08 ldmxcsr [rsp-8]    (RC=RZ) */
+    0x66, 0x48, 0x0f, 0x6e, 0xc7,       /* 0x0d movq xmm0, rdi        (1.0) */
+    0x66, 0x48, 0x0f, 0x6e, 0xce,       /* 0x12 movq xmm1, rsi        (5.0) */
+    0xeb, 0x00,                         /* 0x17 jmp 0x19                    */
+    0xf2, 0x0f, 0x5e, 0xc1,             /* 0x19 divsd xmm0,xmm1  <- REGION  */
+    0xf2, 0x0f, 0x11, 0x44, 0x24, 0xf0, /* 0x1d movsd [rsp-16], xmm0        */
+    0x0f, 0x57, 0xc0,                   /* 0x23 xorps xmm0,xmm0 (blind it)  */
+    0x48, 0x89, 0xf8,                   /* 0x26 mov rax, rdi                */
+    0xc3,                               /* 0x29 ret                         */
+};
 
 /* ------------------------------------------------------------------ */
 /* rsp-relative normalization + byte-identical comparison               */
@@ -238,10 +473,12 @@ static void run_identity_case(const char *name, const uint8_t *code, size_t len,
 
     long ra = 0, rb = 0;
     asmtest_blockstep_info_t ia = {0}, ib = {0};
-    asmtest_blockstep_opts_t oracle = {0, 1, 0,
-                                       -1}; /* force_singlestep = the oracle */
-    asmtest_blockstep_opts_t block = {0, 0, 0,
-                                      -1}; /* purity-gated: pure -> replay  */
+    asmtest_blockstep_opts_t oracle, block;
+    memset(&oracle, 0, sizeof oracle);
+    oracle.inject_block = -1;
+    oracle.force_singlestep = 1; /* the ground-truth oracle */
+    memset(&block, 0, sizeof block);
+    block.inject_block = -1; /* gated: pure + replayable -> replay */
 
     int rca = asmtest_dataflow_blockstep_run(code, len, args, nargs, &oracle,
                                              &ra, A, &ia);
@@ -301,7 +538,9 @@ static void run_impure_case(void) {
     }
     long r = 0;
     asmtest_blockstep_info_t info = {0};
-    asmtest_blockstep_opts_t opts = {0, 0, 0, -1}; /* purity-gated */
+    asmtest_blockstep_opts_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.inject_block = -1; /* purity-gated */
     int rc = asmtest_dataflow_blockstep_run(imp_cpuid, sizeof imp_cpuid, args,
                                             1, &opts, &r, v, &info);
     CHECK(rc == DF_BLOCKSTEP_OK, "impure: capture completed (rc=%d)", rc);
@@ -331,14 +570,665 @@ static void run_canary_case(void) {
     }
     long r = 0;
     asmtest_blockstep_info_t info = {0};
-    asmtest_blockstep_opts_t opts = {0, 0, 1,
-                                     1}; /* inject at interior block 1 */
+    asmtest_blockstep_opts_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.inject_divergence = 1;
+    opts.inject_block = 1; /* inject at interior block 1 */
     int rc = asmtest_dataflow_blockstep_run(loop_poly, sizeof loop_poly, args,
                                             1, &opts, &r, v, &info);
     CHECK(rc == DF_BLOCKSTEP_FAULT && v->truncated,
           "canary: injected replay-input divergence DETECTED -> truncated "
           "(rc=%d truncated=%d)",
           rc, (int)v->truncated);
+    asmtest_valtrace_free(v);
+}
+
+/* ------------------------------------------------------------------ */
+/* Vector cases (increment 2)                                           */
+/* ------------------------------------------------------------------ */
+
+/* Capture `code` both ways and report whether the traces agree. Returns 1 = identical,
+ * 0 = DIFFER, -1 = a capture failed. Both captures are rsp-normalized first, exactly as
+ * run_identity_case does, so a difference means a real VALUE divergence. */
+static int vec_compare(const uint8_t *code, size_t len, uint64_t roff,
+                       const long *args, int nargs,
+                       const asmtest_blockstep_opts_t *block_opts, long *r_out,
+                       int *truncated_out, int *rc_out,
+                       asmtest_blockstep_info_t *info_out) {
+    asmtest_valtrace_t *A = asmtest_valtrace_new(4096, 65536, 65536);
+    asmtest_valtrace_t *B = asmtest_valtrace_new(4096, 65536, 65536);
+    int verdict = -1;
+    if (A == NULL || B == NULL)
+        goto done;
+    {
+        asmtest_blockstep_opts_t oracle;
+        memset(&oracle, 0, sizeof oracle);
+        oracle.inject_block = -1;
+        oracle.force_singlestep = 1;
+        oracle.region_off = roff;
+
+        asmtest_blockstep_opts_t blk = *block_opts;
+        blk.region_off = roff;
+
+        long ra = 0, rb = 0;
+        asmtest_blockstep_info_t ia, ib;
+        memset(&ia, 0, sizeof ia);
+        memset(&ib, 0, sizeof ib);
+        int rca = asmtest_dataflow_blockstep_run(code, len, args, nargs,
+                                                 &oracle, &ra, A, &ia);
+        int rcb = asmtest_dataflow_blockstep_run(code, len, args, nargs, &blk,
+                                                 &rb, B, &ib);
+        if (rc_out)
+            *rc_out = rcb;
+        if (r_out)
+            *r_out = rb;
+        if (truncated_out)
+            *truncated_out = (int)B->truncated;
+        if (info_out)
+            *info_out = ib;
+        if (rca != DF_BLOCKSTEP_OK) {
+            printf("#   oracle capture failed rc=%d\n", rca);
+            goto done;
+        }
+        (void)rcb;
+        normalize_rsp_relative(A, ia.entry_rsp);
+        normalize_rsp_relative(B, ib.entry_rsp);
+        int raw = 0;
+        verdict = traces_identical(A, B, &raw) ? 1 : 0;
+    }
+done:
+    asmtest_valtrace_free(A);
+    asmtest_valtrace_free(B);
+    return verdict;
+}
+
+/* Case 5 — XMM live-in seeding, proved by reproducing the bug first.
+ *
+ *   (a) FIXED:            seeded  -> byte-identical to the single-step oracle.
+ *   (b) NEGATIVE CONTROL: no seed + no vector canary (== the pre-increment-2 tier)
+ *                         -> rc=OK, NOT truncated, and the trace DIFFERS. Silently wrong.
+ *   (c) CANARY:           no seed, canary ON -> the divergence is DETECTED (truncated).
+ *
+ * (b) is the load-bearing one: it proves this suite can FAIL, that the bug was real, and that
+ * it was invisible to the GP-only canary. Without it, (a) passing would prove nothing. */
+static void run_vec_seed_case(void) {
+    long args[2] = {7, 5};
+    asmtest_blockstep_opts_t o;
+    long r = 0;
+    int trunc = 0, rc = 0;
+    asmtest_blockstep_info_t info;
+
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    int same = vec_compare(sse_live_in, sizeof sse_live_in, SSE_LIVE_IN_ROFF,
+                           args, 2, &o, &r, &trunc, &rc, &info);
+    CHECK(same == 1 && rc == DF_BLOCKSTEP_OK && !trunc,
+          "vec-seed: SSE region with LIVE-IN xmm0/xmm1 replays "
+          "BYTE-IDENTICALLY to the "
+          "single-step oracle (same=%d rc=%d truncated=%d)",
+          same, rc, trunc);
+    CHECK(info.pure == 1 && info.vec_seeded == 16,
+          "vec-seed: took the replay path with all 16 XMM regs seeded AND "
+          "verified by "
+          "read-back (pure=%d vec_seeded=%d)",
+          info.pure, info.vec_seeded);
+    CHECK(r == 7, "vec-seed: replayed region returned arg0 = 7 (got %ld)", r);
+
+    /* (b) NEGATIVE CONTROL — restore the pre-fix behaviour and prove it is SILENTLY wrong. */
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.no_vec_seed = 1;
+    o.no_vec_canary = 1;
+    same = vec_compare(sse_live_in, sizeof sse_live_in, SSE_LIVE_IN_ROFF, args,
+                       2, &o, &r, &trunc, &rc, &info);
+    CHECK(same == 0 && rc == DF_BLOCKSTEP_OK && !trunc,
+          "vec-seed NEGATIVE CONTROL: WITHOUT vector seeding the replay is "
+          "SILENTLY WRONG "
+          "— trace differs from the oracle yet rc=OK and truncated=0 "
+          "(differs=%d rc=%d "
+          "truncated=%d)",
+          same == 0, rc, trunc);
+
+    /* (c) The vector canary catches exactly what (b) showed slipping through. */
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.no_vec_seed = 1;
+    (void)vec_compare(sse_live_in, sizeof sse_live_in, SSE_LIVE_IN_ROFF, args,
+                      2, &o, &r, &trunc, &rc, &info);
+    CHECK(rc == DF_BLOCKSTEP_FAULT && trunc,
+          "vec-seed CANARY: the same unseeded divergence is DETECTED by the "
+          "vector canary "
+          "-> truncated (rc=%d truncated=%d)",
+          rc, trunc);
+}
+
+/* Case 5b — the PARTIALLY-MAPPED STACK WINDOW, made deterministic.
+ *
+ * A pre-existing increment-1 bug, found because this lane finally RUNS on bare metal (it
+ * self-skips on GitHub's BTF-masked runners, so nothing ever exercised it): the replay's stack
+ * window can extend past the top of the tracee's [stack] VMA, process_vm_readv is atomic per
+ * iovec and so fails for the WHOLE window, and the old code "recovered" by zeroing it — after
+ * which the replayed `ret` popped 0 and the capture died UC_ERR_FETCH_UNMAPPED. It fired on
+ * ~27% of runs in the dataflow-attach container and 0% on the host, i.e. it was a coin-flip on
+ * stack layout, not something a passing run could be trusted to cover.
+ *
+ * stack_hi_pad forces the window 2 MiB above rsp, which is unconditionally past the stack top,
+ * so the case is reproduced ON DEMAND rather than by luck. With the per-page reader the mapped
+ * pages — including the one holding the return address — are still recovered and the capture is
+ * byte-identical to the oracle. Reverting mr_tracee_window to a single all-or-nothing
+ * process_vm_readv makes this case fail every time. */
+static void run_stack_window_case(void) {
+    long args[1] = {50};
+    asmtest_blockstep_opts_t o;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.stack_hi_pad =
+        0x200000; /* 2 MiB above rsp: certainly past the [stack] VMA top */
+    long r = 0;
+    int trunc = 0, rc = 0;
+    asmtest_blockstep_info_t info;
+    int same = vec_compare(loop_poly, sizeof loop_poly, 0, args, 1, &o, &r,
+                           &trunc, &rc, &info);
+    CHECK(same == 1 && rc == DF_BLOCKSTEP_OK && !trunc && r == 3725,
+          "stack-window: a replay window running 2MiB PAST the top of the "
+          "tracee's [stack] "
+          "VMA still replays byte-identically — the per-page reader recovers "
+          "the mapped "
+          "pages instead of zeroing the whole window (same=%d rc=%d "
+          "truncated=%d r=%ld)",
+          same, rc, trunc, r);
+}
+
+/* Case 5c — MXCSR seeding (HIGH 2). The XMM file is only HALF the state an SSE instruction
+ * reads: MXCSR's rounding-control bits are inputs to every FP result. The region commits its
+ * quotient to memory and then clears xmm0, so the register canary is blind — exactly the shape
+ * that makes a wrong value SILENT rather than caught.
+ *   (a) FIXED:            MXCSR seeded -> byte-identical to the oracle.
+ *   (b) NEGATIVE CONTROL: no_vec_seed + no_vec_canary -> rc=OK, NOT truncated, trace DIFFERS
+ *                         (oracle 0x3fc9999999999999 RZ vs replay 0x3fc999999999999a RN).
+ * Seeding MXCSR is only legitimate because Unicorn HONOURS it — verified against silicon under
+ * both RN and RZ. Had it merely stored the value, the honest move would have been to gate FP
+ * regions off the replay rather than lie about them. */
+static void run_mxcsr_case(void) {
+    /* 1.0 and 5.0 as raw doubles; 1.0/5.0 is inexact, so the rounding mode is observable. */
+    long args[2] = {(long)0x3FF0000000000000LL, (long)0x4014000000000000LL};
+    asmtest_blockstep_opts_t o;
+    long r = 0;
+    int trunc = 0, rc = 0;
+    asmtest_blockstep_info_t info;
+
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    int same = vec_compare(fp_round, sizeof fp_round, FP_ROUND_ROFF, args, 2,
+                           &o, &r, &trunc, &rc, &info);
+    CHECK(same == 1 && rc == DF_BLOCKSTEP_OK && !trunc && info.pure == 1,
+          "mxcsr: an FP region running under RC=toward-zero replays "
+          "BYTE-IDENTICALLY to the "
+          "oracle (same=%d rc=%d truncated=%d pure=%d)",
+          same, rc, trunc, info.pure);
+    CHECK(info.mxcsr_seeded == 1,
+          "mxcsr: MXCSR seeded into the replay AND verified by read-back "
+          "(mxcsr_seeded=%d)",
+          info.mxcsr_seeded);
+
+    /* NEGATIVE CONTROL — isolate MXCSR. It must be `no_mxcsr_seed`, NOT `no_vec_seed`: with the
+     * whole vector seed off, xmm0/xmm1 are ZERO and the region computes 0.0/0.0 = NaN, so the
+     * trace would differ for the XMM reason and the control would pass while proving nothing
+     * about rounding. Here the XMM file IS seeded correctly and ONLY the rounding mode is
+     * wrong, so the divergence can have exactly one cause. */
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.no_mxcsr_seed = 1;
+    o.no_vec_canary = 1;
+    same = vec_compare(fp_round, sizeof fp_round, FP_ROUND_ROFF, args, 2, &o,
+                       &r, &trunc, &rc, &info);
+    CHECK(same == 0 && rc == DF_BLOCKSTEP_OK && !trunc &&
+              info.vec_seeded == 16 && info.mxcsr_seeded == 0,
+          "mxcsr NEGATIVE CONTROL: with the XMM file correctly seeded but "
+          "MXCSR left at "
+          "Unicorn's default, the replay rounds to NEAREST while the cpu "
+          "rounds toward ZERO — "
+          "silently wrong at rc=OK truncated=0 (differs=%d xmm_seeded=%d "
+          "mxcsr_seeded=%d)",
+          same == 0, info.vec_seeded, info.mxcsr_seeded);
+
+    /* ...and the MXCSR half of the canary catches exactly what the control showed slipping. */
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.no_mxcsr_seed = 1;
+    (void)vec_compare(fp_round, sizeof fp_round, FP_ROUND_ROFF, args, 2, &o, &r,
+                      &trunc, &rc, &info);
+    CHECK(rc == DF_BLOCKSTEP_FAULT && trunc,
+          "mxcsr CANARY: the same rounding-mode divergence is DETECTED (MXCSR "
+          "control bits) -> "
+          "truncated (rc=%d truncated=%d)",
+          rc, trunc);
+}
+
+/* Case 5d — region_scan FAILS CLOSED on decoder desync (HIGH 1). A constant-pool island makes
+ * the linear sweep swallow a VEX prefix as immediate data and desync; the VEX-128 that follows
+ * is never classified. The scan must therefore refuse to vouch for bytes it never decoded:
+ * replayable=0 ("decode") AND touches_vec=1.
+ *   (a) FIXED:            gated to single-step, trace correct.
+ *   (b) NEGATIVE CONTROL: force_replay past the gate -> the unseen VEX-128 is mis-executed and
+ *                         the trace DIFFERS. That is what failing closed buys. */
+static void run_desync_case(void) {
+    const char *why = NULL;
+    CHECK(asmtest_dataflow_blockstep_is_replayable(
+              island + ISLAND_ROFF, sizeof island - ISLAND_ROFF, &why) == 0 &&
+              why != NULL && strcmp(why, "decode") == 0,
+          "desync: a region the sweep cannot fully decode is NOT vouched for — "
+          "replayable=0 "
+          "(reason=%s), not the optimistic initial verdict",
+          why ? why : "(null)");
+
+    long args[2] = {7, 5};
+    asmtest_blockstep_opts_t o;
+    long r = 0;
+    int trunc = 0, rc = 0;
+    asmtest_blockstep_info_t info;
+
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    int same = vec_compare(island, sizeof island, ISLAND_ROFF, args, 2, &o, &r,
+                           &trunc, &rc, &info);
+    CHECK(same == 1 && rc == DF_BLOCKSTEP_OK && !trunc && info.pure == 0 &&
+              info.reason != NULL && strcmp(info.reason, "decode") == 0,
+          "desync: gated to single-step -> CORRECT trace over a region "
+          "carrying an "
+          "undecodable island (same=%d rc=%d pure=%d reason=%s)",
+          same, rc, info.pure, info.reason ? info.reason : "(null)");
+
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.force_replay = 1;
+    o.no_vec_canary = 1;
+    same = vec_compare(island, sizeof island, ISLAND_ROFF, args, 2, &o, &r,
+                       &trunc, &rc, &info);
+    CHECK(same == 0,
+          "desync NEGATIVE CONTROL: forcing the replay over the un-decoded "
+          "bytes IS wrong — "
+          "the VEX-128 the sweep never saw gets mis-executed (differs=%d rc=%d "
+          "truncated=%d)",
+          same == 0, rc, trunc);
+}
+
+/* Case 5e — the impurity verdict must NOT truncate the sweep (HIGH 3). An impure region that
+ * also touches vector state is ordinary JIT'd code. Purity is settled at the cpuid; touches_vec
+ * is not, and getting it wrong silently strips the XSTATE read from the single-step fallback —
+ * the path this change routes ALL AVX/AVX-512 code to. Asserts the vector VALUES really land. */
+static void run_impure_vector_case(void) {
+    long args[2] = {7, 5};
+    asmtest_valtrace_t *v = asmtest_valtrace_new(4096, 65536, 65536);
+    if (v == NULL) {
+        CHECK(0, "impure-vec: valtrace_new");
+        return;
+    }
+    asmtest_blockstep_opts_t o;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.region_off = IMP_VEC_ROFF;
+    long r = 0;
+    asmtest_blockstep_info_t info;
+    memset(&info, 0, sizeof info);
+    int rc = asmtest_dataflow_blockstep_run(imp_vec, sizeof imp_vec, args, 2,
+                                            &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_OK && !v->truncated && info.pure == 0 &&
+              info.reason != NULL && strcmp(info.reason, "cpuid") == 0 &&
+              r == 7,
+          "impure-vec: impure+vector region single-stepped, complete trace "
+          "(rc=%d pure=%d "
+          "reason=%s r=%ld)",
+          rc, info.pure, info.reason ? info.reason : "?", r);
+
+    /* The deliverable: the vector instructions AFTER the cpuid still get real values. Count XMM
+     * register records and how many carry a value; the two must agree. */
+    int xmm_recs = 0, xmm_valued = 0, store_ok = 0;
+    for (size_t i = 0; i < v->recs_len; i++) {
+        const at_val_rec_t *rec = &v->recs[i];
+        if (rec->kind == AT_LOC_REG && rec->size == 16) {
+            xmm_recs++;
+            if (rec->value_valid && rec->wide)
+                xmm_valued++;
+        }
+        if (rec->kind != AT_LOC_REG && rec->is_write && rec->size == 16 &&
+            rec->value_valid && rec->wide &&
+            (size_t)rec->wide_off + 16 <= v->wide_len) {
+            uint64_t lo;
+            memcpy(&lo, v->wide + rec->wide_off, 8);
+            if (lo == 12) /* xmm0 = a + b */
+                store_ok = 1;
+        }
+    }
+    CHECK(xmm_recs > 0 && xmm_valued == xmm_recs && store_ok,
+          "impure-vec: every XMM record AFTER the cpuid carries a REAL value "
+          "and the store is "
+          "a+b=12 — the sweep kept classifying past the impurity verdict "
+          "(xmm_recs=%d "
+          "valued=%d store_ok=%d)",
+          xmm_recs, xmm_valued, store_ok);
+    asmtest_valtrace_free(v);
+}
+
+/* Case 6 — VEX-128 is a silent liar, and the encoding gate is what stops it. */
+static void run_vex128_case(void) {
+    const char *reason = NULL;
+    CHECK(asmtest_dataflow_blockstep_is_replayable(
+              vex128_liar + VEX128_LIAR_ROFF,
+              sizeof vex128_liar - VEX128_LIAR_ROFF, &reason) == 0 &&
+              reason != NULL && strcmp(reason, "vex/evex") == 0,
+          "vex128: region carrying a VEX-128 encoding is classified "
+          "NON-REPLAYABLE "
+          "(reason=%s)",
+          reason ? reason : "?");
+
+    long args[2] = {7, 5};
+    asmtest_blockstep_opts_t o;
+    long r = 0;
+    int trunc = 0, rc = 0;
+    asmtest_blockstep_info_t info;
+
+    /* Gated (the production path): single-stepped, correct. */
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    int same = vec_compare(vex128_liar, sizeof vex128_liar, VEX128_LIAR_ROFF,
+                           args, 2, &o, &r, &trunc, &rc, &info);
+    CHECK(same == 1 && rc == DF_BLOCKSTEP_OK && !trunc && info.pure == 0 &&
+              info.reason != NULL && strcmp(info.reason, "vex/evex") == 0,
+          "vex128: gated off the replay -> single-stepped to a CORRECT trace "
+          "(same=%d "
+          "rc=%d pure=%d reason=%s)",
+          same, rc, info.pure, info.reason ? info.reason : "?");
+
+    /* NEGATIVE CONTROL — force the replay the gate refuses and watch Unicorn lie: it returns
+     * UC_ERR_OK having executed the legacy 2-operand form, so the trace diverges with no
+     * fault at all. This is what the gate buys, and why it keys on the ENCODING. */
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.force_replay = 1;
+    o.no_vec_canary = 1;
+    same = vec_compare(vex128_liar, sizeof vex128_liar, VEX128_LIAR_ROFF, args,
+                       2, &o, &r, &trunc, &rc, &info);
+    CHECK(same == 0 && rc == DF_BLOCKSTEP_OK && !trunc,
+          "vex128 NEGATIVE CONTROL: forcing the replay past the gate is "
+          "SILENTLY WRONG — "
+          "Unicorn drops VEX.vvvv, returns UC_ERR_OK, and the trace differs "
+          "(differs=%d "
+          "rc=%d truncated=%d)",
+          same == 0, rc, trunc);
+}
+
+/* Case 7 — an AVX (VEX-256) / AVX-512 (EVEX) region: gated to single-step, CORRECT, and
+ * carrying REAL full-width vector values read off silicon. Hardware-gated by `need_width`. */
+static void run_avx_case(const char *name, const uint8_t *code, size_t len,
+                         uint64_t roff, int need_width, int val_width) {
+    int hw = asmtest_dataflow_blockstep_vec_width(NULL);
+    if (hw < need_width) {
+        printf("# SKIP %s: cpu exposes %d-byte vector state, need %d (hardware "
+               "gate)\n",
+               name, hw, need_width);
+        return;
+    }
+    const char *reason = NULL;
+    CHECK(asmtest_dataflow_blockstep_is_replayable(code + roff, len - roff,
+                                                   &reason) == 0 &&
+              reason != NULL && strcmp(reason, "vex/evex") == 0,
+          "%s: region is classified NON-REPLAYABLE (reason=%s)", name,
+          reason ? reason : "?");
+
+    long args[1] = {7};
+    asmtest_valtrace_t *v = asmtest_valtrace_new(4096, 65536, 65536);
+    if (v == NULL) {
+        CHECK(0, "%s: valtrace_new", name);
+        return;
+    }
+    asmtest_blockstep_opts_t o;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.region_off = roff;
+    long r = 0;
+    asmtest_blockstep_info_t info;
+    memset(&info, 0, sizeof info);
+    int rc =
+        asmtest_dataflow_blockstep_run(code, len, args, 1, &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_OK && !v->truncated && info.pure == 0 &&
+              info.reason != NULL && strcmp(info.reason, "vex/evex") == 0,
+          "%s: gated to the single-step fallback, complete trace (rc=%d "
+          "truncated=%d "
+          "pure=%d reason=%s)",
+          name, rc, (int)v->truncated, info.pure,
+          info.reason ? info.reason : "?");
+    CHECK(r == 14, "%s: single-stepped region returned 2*arg0 = 14 (got %ld)",
+          name, r);
+
+    /* The deliverable: REAL vector values, at full architectural width, in the trace. The
+     * region doubles a broadcast of arg0, so after `vpaddq` every 64-bit lane of the vector
+     * register holds 14. The region's only val_width-wide REGISTER write is that vpaddq
+     * destination, so keying on the width identifies it without dragging Capstone's reg-id
+     * enum into this suite. `found` and `matched` are reported separately so a missing record
+     * cannot be confused with a wrong one. */
+    int found = 0, matched = 0;
+    for (size_t i = 0; i < v->recs_len; i++) {
+        const at_val_rec_t *rec = &v->recs[i];
+        if (rec->kind != AT_LOC_REG || !rec->is_write ||
+            rec->size != (uint16_t)val_width)
+            continue;
+        found = 1;
+        if (!rec->wide || !rec->value_valid)
+            continue;
+        if ((size_t)rec->wide_off + (size_t)val_width > v->wide_len)
+            continue;
+        const uint8_t *b = v->wide + rec->wide_off;
+        int all = 1;
+        for (int lane = 0; lane < val_width / 8; lane++) {
+            uint64_t q;
+            memcpy(&q, b + lane * 8, 8);
+            if (q != 14)
+                all = 0;
+        }
+        if (all)
+            matched = 1;
+    }
+    CHECK(found && matched,
+          "%s: the trace carries the REAL %d-bit vector value from silicon — "
+          "every lane of "
+          "the %d-byte wide[] record is 2*arg0 = 14 (found=%d matched=%d)",
+          name, val_width * 8, val_width, found, matched);
+
+    /* NEGATIVE CONTROL — force the replay past the gate. No released Unicorn executes
+     * VEX-256/EVEX, so this must FAULT + truncate. It must NOT return the ETRACE self-skip
+     * code (which would read as "no ptrace here" and quietly pass the lane), and it must not
+     * return a clean trace. */
+    asmtest_valtrace_t *w = asmtest_valtrace_new(4096, 65536, 65536);
+    if (w != NULL) {
+        asmtest_blockstep_opts_t f;
+        memset(&f, 0, sizeof f);
+        f.inject_block = -1;
+        f.region_off = roff;
+        f.force_replay = 1;
+        long r2 = 0;
+        asmtest_blockstep_info_t i2;
+        memset(&i2, 0, sizeof i2);
+        int rc2 =
+            asmtest_dataflow_blockstep_run(code, len, args, 1, &f, &r2, w, &i2);
+        CHECK(rc2 == DF_BLOCKSTEP_FAULT && w->truncated,
+              "%s NEGATIVE CONTROL: forcing the replay FAULTS + truncates "
+              "(UC_ERR_INSN_INVALID) — never a silent trace, never the ETRACE "
+              "self-skip "
+              "(rc=%d truncated=%d)",
+              name, rc2, (int)w->truncated);
+        asmtest_valtrace_free(w);
+    }
+    asmtest_valtrace_free(v);
+}
+
+/* Case 8 — the ENCODING gate is LOAD-BEARING, not merely argued (MEDIUM 5).
+ *
+ * This tier's central design claim is that the replayability gate must key on the ENCODING and
+ * NOT on Capstone's AVX metadata. Until these checks existed the claim was unfalsifiable by this
+ * suite: every scanned region happened to contain an instruction Capstone DOES put in an AVX
+ * group, so swapping insn_is_vex_evex() for a X86_GRP_AVX/AVX2/AVX512 check passed all 47
+ * checks — the suite could not tell the design apart from the one it rejects. (The instruction
+ * that proves the gap, `vpbroadcastq zmm0,xmm0`, sat in the entry glue, which region_scan never
+ * scans.) These two regions are gated ONLY by the encoding rule, so the metadata gate FAILS
+ * them:
+ *   - vex_bmi:    `andn` is VEX-encoded, GP-only, in no AVX group. No hardware gate, so this
+ *                 pins the rule on every x86-64 box. Also pins the deliberate OVER-gate.
+ *   - evex_invis: every region instruction is metadata-invisible, so a metadata gate would hand
+ *                 a real EVEX instruction to an emulator with no decoder for it. AVX-512-gated. */
+static void run_encoding_gate_case(void) {
+    const char *why = NULL;
+    CHECK(asmtest_dataflow_blockstep_is_replayable(
+              vex_bmi + VEX_BMI_ROFF, sizeof vex_bmi - VEX_BMI_ROFF, &why) ==
+                  0 &&
+              why != NULL && strcmp(why, "vex/evex") == 0,
+          "encoding-gate: VEX-GP (`andn`, in NO Capstone AVX group) is gated "
+          "by the ENCODING "
+          "rule — a metadata gate would call it replayable (reason=%s)",
+          why ? why : "(null)");
+
+    long args[1] = {7};
+    asmtest_blockstep_opts_t o;
+    long r = 0;
+    int trunc = 0, rc = 0;
+    asmtest_blockstep_info_t info;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    int same = vec_compare(vex_bmi, sizeof vex_bmi, VEX_BMI_ROFF, args, 1, &o,
+                           &r, &trunc, &rc, &info);
+    CHECK(same == 1 && rc == DF_BLOCKSTEP_OK && info.pure == 0 &&
+              info.reason != NULL && strcmp(info.reason, "vex/evex") == 0,
+          "encoding-gate: the over-gated VEX-GP region single-steps to a "
+          "correct trace — "
+          "over-gating costs only the perturbation win (same=%d rc=%d pure=%d "
+          "reason=%s)",
+          same, rc, info.pure, info.reason ? info.reason : "?");
+
+    int hw = asmtest_dataflow_blockstep_vec_width(NULL);
+    if (hw < 64) {
+        printf("# SKIP encoding-gate/evex_invis: cpu exposes %d-byte vector "
+               "state, need 64 "
+               "(hardware gate)\n",
+               hw);
+        return;
+    }
+    why = NULL;
+    CHECK(asmtest_dataflow_blockstep_is_replayable(
+              evex_invis + EVEX_INVIS_ROFF, sizeof evex_invis - EVEX_INVIS_ROFF,
+              &why) == 0 &&
+              why != NULL && strcmp(why, "vex/evex") == 0,
+          "encoding-gate: a region whose EVERY instruction is invisible to "
+          "Capstone's AVX "
+          "metadata is still gated by the ENCODING rule (reason=%s)",
+          why ? why : "(null)");
+
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    same = vec_compare(evex_invis, sizeof evex_invis, EVEX_INVIS_ROFF, args, 1,
+                       &o, &r, &trunc, &rc, &info);
+    CHECK(same == 1 && rc == DF_BLOCKSTEP_OK && info.pure == 0 && r == 7,
+          "encoding-gate: the metadata-invisible EVEX region single-steps to a "
+          "correct trace "
+          "(same=%d rc=%d pure=%d r=%ld)",
+          same, rc, info.pure, r);
+
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.force_replay = 1;
+    asmtest_valtrace_t *w = asmtest_valtrace_new(4096, 65536, 65536);
+    if (w != NULL) {
+        long r2 = 0;
+        asmtest_blockstep_info_t i2;
+        memset(&i2, 0, sizeof i2);
+        o.region_off = EVEX_INVIS_ROFF;
+        int rc2 = asmtest_dataflow_blockstep_run(evex_invis, sizeof evex_invis,
+                                                 args, 1, &o, &r2, w, &i2);
+        CHECK(rc2 == DF_BLOCKSTEP_FAULT && w->truncated,
+              "encoding-gate NEGATIVE CONTROL: what a metadata gate would have "
+              "allowed — "
+              "forcing the EVEX replay FAULTS + truncates (rc=%d truncated=%d)",
+              rc2, (int)w->truncated);
+        asmtest_valtrace_free(w);
+    }
+}
+
+/* Case 9 — the PUBLIC is_replayable() must not let purity mask its answer (MEDIUM 4). */
+static void run_is_replayable_independence_case(void) {
+    const char *why = NULL;
+    int rep =
+        asmtest_dataflow_blockstep_is_replayable(imp_vex, sizeof imp_vex, &why);
+    CHECK(rep == 0 && why != NULL && strcmp(why, "vex/evex") == 0,
+          "is_replayable: `cpuid; vpaddq xmm0,xmm1,xmm2; ret` is NOT "
+          "replayable (reason=%s) — "
+          "the impurity verdict must not mask a VEX-128 from a PUBLIC caller",
+          why ? why : "(null)");
+    const char *pw = NULL;
+    CHECK(asmtest_dataflow_blockstep_is_pure(imp_vex, sizeof imp_vex, &pw) ==
+                  0 &&
+              pw != NULL && strcmp(pw, "cpuid") == 0,
+          "is_replayable: ...while is_pure() on the same region still names "
+          "the impurity "
+          "(reason=%s) — the two verdicts are independent",
+          pw ? pw : "(null)");
+}
+
+/* Case 10 — Hi16_ZMM / zmm16-31 reassembly (LOW 7). Component 7 is the only source for these
+ * registers; nothing else in the suite reaches that path, and silently zeroing a register file
+ * is the failure mode this whole increment exists to kill. */
+static void run_hi16_zmm_case(void) {
+    int hw = asmtest_dataflow_blockstep_vec_width(NULL);
+    if (hw < 64) {
+        printf("# SKIP hi16_zmm: cpu exposes %d-byte vector state, need 64 "
+               "(hardware gate)\n",
+               hw);
+        return;
+    }
+    long args[1] = {7};
+    asmtest_valtrace_t *v = asmtest_valtrace_new(4096, 65536, 65536);
+    if (v == NULL) {
+        CHECK(0, "hi16_zmm: valtrace_new");
+        return;
+    }
+    asmtest_blockstep_opts_t o;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.region_off = HI16_ZMM_ROFF;
+    long r = 0;
+    asmtest_blockstep_info_t info;
+    memset(&info, 0, sizeof info);
+    int rc = asmtest_dataflow_blockstep_run(hi16_zmm, sizeof hi16_zmm, args, 1,
+                                            &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_OK && !v->truncated && r == 14,
+          "hi16_zmm: region computing through zmm16 single-steps to a complete "
+          "trace, "
+          "returned 2*arg0 = 14 (rc=%d truncated=%d r=%ld)",
+          rc, (int)v->truncated, r);
+
+    int found = 0, matched = 0;
+    for (size_t i = 0; i < v->recs_len; i++) {
+        const at_val_rec_t *rec = &v->recs[i];
+        if (rec->kind != AT_LOC_REG || !rec->is_write || rec->size != 64)
+            continue;
+        found = 1;
+        if (!rec->wide || !rec->value_valid ||
+            (size_t)rec->wide_off + 64 > v->wide_len)
+            continue;
+        const uint8_t *b = v->wide + rec->wide_off;
+        int all = 1;
+        for (int lane = 0; lane < 8; lane++) {
+            uint64_t q;
+            memcpy(&q, b + lane * 8, 8);
+            if (q != 14)
+                all = 0;
+        }
+        if (all)
+            matched = 1;
+    }
+    CHECK(found && matched,
+          "hi16_zmm: zmm16's REAL 512-bit value is reassembled from XSAVE "
+          "component 7 — every "
+          "lane is 2*arg0 = 14 (found=%d matched=%d)",
+          found, matched);
     asmtest_valtrace_free(v);
 }
 
@@ -379,6 +1269,67 @@ int main(void) {
     run_purity_check("imp_rdrand", imp_rdrand, sizeof imp_rdrand, 0, "rdrand");
     run_purity_check("imp_int80", imp_int80, sizeof imp_int80, 0, "int 0x80");
 
+    /* Replayability classification (Capstone only) — the encoding-level VEX/EVEX gate. SSE is
+     * replayable; every VEX/EVEX form is not. The pure-GP fixtures must stay replayable, or
+     * the gate would have silently cost increment 1 its entire perturbation win. */
+    {
+        const char *why = NULL;
+        CHECK(asmtest_dataflow_blockstep_is_replayable(
+                  loop_poly, sizeof loop_poly, &why) == 1,
+              "replayable: loop_poly (GP only) stays REPLAYABLE — the gate "
+              "does not "
+              "over-reach");
+        CHECK(asmtest_dataflow_blockstep_is_replayable(
+                  mem_chain, sizeof mem_chain, &why) == 1,
+              "replayable: mem_chain (GP only) stays REPLAYABLE");
+        CHECK(
+            asmtest_dataflow_blockstep_is_replayable(
+                sse_live_in + SSE_LIVE_IN_ROFF,
+                sizeof sse_live_in - SSE_LIVE_IN_ROFF, &why) == 1,
+            "replayable: legacy-SSE region is REPLAYABLE (Unicorn executes SSE "
+            "correctly)");
+        CHECK(asmtest_dataflow_blockstep_is_replayable(
+                  avx_ymm + AVX_YMM_ROFF, sizeof avx_ymm - AVX_YMM_ROFF,
+                  &why) == 0 &&
+                  why != NULL && strcmp(why, "vex/evex") == 0,
+              "replayable: VEX-256 region is NOT replayable (reason=%s)",
+              why ? why : "?");
+        CHECK(asmtest_dataflow_blockstep_is_replayable(
+                  avx512_zmm + AVX512_ZMM_ROFF,
+                  sizeof avx512_zmm - AVX512_ZMM_ROFF, &why) == 0 &&
+                  why != NULL && strcmp(why, "vex/evex") == 0,
+              "replayable: EVEX region is NOT replayable (reason=%s)",
+              why ? why : "?");
+    }
+
+    /* Scan-only regression checks (Capstone, no ptrace): the three ways region_scan used to
+     * fail OPEN. It is a single point of failure feeding BOTH the gate and — via touches_vec —
+     * the vector seed and canary, so a wrong verdict does not merely lose a check, it lets the
+     * instruction through AND removes the witness. */
+    run_is_replayable_independence_case();
+
+    /* What this box and this Unicorn can actually do — reported, never assumed. */
+    {
+        int nregs = 0;
+        int hw = asmtest_dataflow_blockstep_vec_width(&nregs);
+        int ucw = asmtest_dataflow_blockstep_uc_vec_width();
+        printf("#   hardware vector state: %d-byte x %d regs (%s)\n", hw, nregs,
+               hw >= 64   ? "AVX-512"
+               : hw >= 32 ? "AVX"
+                          : "SSE");
+        printf("#   unicorn round-trips:   %d-byte (2.0.1 accepts a ZMM write "
+               "and stores "
+               "NOTHING; 2.1.x fixed it)\n",
+               ucw);
+        printf("#   replayed vector width: 16-byte (legacy SSE only — no "
+               "released unicorn "
+               "executes VEX/EVEX)\n");
+        CHECK(ucw >= 16,
+              "unicorn holds at least XMM (128-bit) state, proven by read-back "
+              "(width=%d)",
+              ucw);
+    }
+
     if (probe != 1) {
         printf(
             "# SKIP live block-step/replay: ptrace unavailable (seccomp/yama) "
@@ -396,6 +1347,19 @@ int main(void) {
     }
     run_impure_case();
     run_canary_case();
+
+    /* Vector breadth (increment 2). */
+    run_vec_seed_case();
+    run_mxcsr_case();
+    run_stack_window_case();
+    run_desync_case();
+    run_impure_vector_case();
+    run_encoding_gate_case();
+    run_vex128_case();
+    run_avx_case("avx_ymm(7)", avx_ymm, sizeof avx_ymm, AVX_YMM_ROFF, 32, 32);
+    run_avx_case("avx512_zmm(7)", avx512_zmm, sizeof avx512_zmm,
+                 AVX512_ZMM_ROFF, 64, 64);
+    run_hi16_zmm_case();
 
 report:
     printf("1..%d\n", checks);
