@@ -149,6 +149,14 @@ $(BUILD)/exec_victim: $(BUILD)/exec_victim.o
 $(BUILD)/exec_stage2: cli/exec_stage2.c | $(BUILD)
 	$(CC) $(CFLAGS) -static $< -o $@
 
+# fork_victim forks; parent and child run DISTINCT functions and each open a
+# DIFFERENT file at the SAME fd number (3, opened after the fork). Backs the
+# --follow (strace -f parity) smoke: following the child, and resolving its fds
+# through ITS OWN fd table rather than the parent's. Optional argv[1] = a binary
+# the child execs, which also puts it in an image of its own.
+$(BUILD)/fork_victim: $(BUILD)/fork_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 # debuglink_victim carries a function (debuglink_only_fn) that lands in .symtab
 # but NOT .dynsym, so the smoke can strip a copy, prove asmspy resolves nothing,
 # then attach the debug info back as a separate .gnu_debuglink / build-id file and
@@ -200,7 +208,8 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/watch_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
-           $(BUILD)/test_treefilter $(BUILD)/exec_victim $(BUILD)/exec_stage2
+           $(BUILD)/test_treefilter $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
+           $(BUILD)/fork_victim
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
 	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"

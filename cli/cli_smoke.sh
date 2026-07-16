@@ -74,7 +74,8 @@ MVPID=""
 HWPID=""
 DLPID=""
 EXPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
+FKPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -676,6 +677,123 @@ echo "  stream: pre-exec AND post-exec text each named from their own image"
 kill "$EXPID" 2>/dev/null || true
 wait "$EXPID" 2>/dev/null || true
 EXPID=""
+
+# ---------------------------------------------------------------------------
+# CHILD-PROCESS FOLLOWING: --follow (asmspy-plan Theme B, `strace -f` parity)
+# ---------------------------------------------------------------------------
+# fork_victim forks; parent and child run DISTINCT functions (parent_fn /
+# child_fn) and each open a DIFFERENT file at the SAME fd number (3, opened
+# after the fork).
+#
+# --follow is OPT-IN, which hands every case below a real negative control: the
+# identical run without the flag must never show the child. That is the control
+# the whole section rests on — "the child appeared" means nothing unless the same
+# command without --follow proves it does not appear by default.
+#
+# fork_victim waits 2s before forking and we attach after 1, because
+# PTRACE_O_TRACEFORK reports forks that happen WHILE traced and cannot adopt a
+# child that already existed (the same semantics as `strace -f -p`). Attaching
+# late would silently test nothing — hence the parent_fn/child_fn counts below,
+# not just a "child appeared" grep.
+fk_spawn() { # fk_spawn [stage2] -> $FKPID, attached-before-the-fork
+    "$BUILD/fork_victim" ${1:+"$1"} 2>/dev/null &
+    FKPID=$!
+    sleep 1
+}
+fk_kill() {
+    kill "$FKPID" 2>/dev/null || true # the child dies with it (PR_SET_PDEATHSIG)
+    wait "$FKPID" 2>/dev/null || true
+    FKPID=""
+}
+
+echo "--- asmspy --log --follow (child processes, strace -f parity) ---"
+# CONTROL: no --follow -> the child must be invisible
+fk_spawn
+set +e
+nfout=$(timeout 60 "$ASM" --log "$FKPID" 300 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--log (control) hung"
+fk_kill
+[ "$(printf '%s\n' "$nfout" | grep -c asmspy_fork_parent)" -gt 0 ] \
+    || fail "--log control: the PARENT's own writes are missing — the run is broken, so the --follow comparison below would be meaningless"
+printf '%s\n' "$nfout" | grep -q asmspy_fork_child \
+    && fail "--log without --follow: the child's writes appeared — following is supposed to be OPT-IN (and this destroys the control for the check below)"
+echo "  control: without --follow the forked child is invisible (parent-only)"
+
+# --follow: BOTH processes
+fk_spawn
+set +e
+fout=$(timeout 60 "$ASM" --log "$FKPID" 300 --follow 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--log --follow hung"
+fk_kill
+printf '%s\n' "$fout" | grep -q asmspy_fork_parent \
+    || fail "--log --follow: parent's writes missing"
+printf '%s\n' "$fout" | grep -q asmspy_fork_child \
+    || fail "--log --follow: the forked child's writes never appeared (TRACEFORK not set / child not followed)"
+[ "$(printf '%s\n' "$fout" | grep -oE '^\[[0-9]+\]' | sort -u | wc -l)" -ge 2 ] \
+    || fail "--log --follow: expected syscalls tagged with >=2 distinct pids"
+# THE fd-table assertion. Parent and child BOTH write to fd 3, pointing at
+# different files. A followed child has its OWN fd table, so resolving its
+# write(3) through the PARENT's /proc/<pid>/fd yields the parent's path — the
+# right syscall with a confidently wrong argument, rendering as a perfectly
+# plausible line. Each fd=3 must name its own process's file.
+printf '%s\n' "$fout" | grep -q 'write(fd=3</tmp/asmspy_fork_child.txt>' \
+    || fail "--log --follow: the child's fd 3 does not resolve to the CHILD's file — fd->path is being decoded through the parent's fd table"
+printf '%s\n' "$fout" | grep -q 'write(fd=3</tmp/asmspy_fork_parent.txt>' \
+    || fail "--log --follow: the parent's fd 3 no longer resolves to the parent's file"
+echo "  --follow: both processes logged; each one's fd 3 resolves to its OWN file"
+
+echo "--- asmspy --stream --follow (single-step both processes) ---"
+# CONTROL first, again: the child's code must not appear by default
+fk_spawn
+set +e
+nsout=$(timeout 90 "$ASM" --stream "$FKPID" 4000 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--stream (control) hung"
+fk_kill
+[ "$(printf '%s\n' "$nsout" | grep -c parent_fn)" -gt 0 ] \
+    || fail "--stream control: parent_fn missing — run is broken"
+printf '%s\n' "$nsout" | grep -q child_fn \
+    && fail "--stream without --follow: child_fn appeared — following must be opt-in"
+echo "  control: without --follow only the parent's code is stepped"
+
+fk_spawn
+set +e
+fsout=$(timeout 90 "$ASM" --stream "$FKPID" 4000 --follow 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--stream --follow hung"
+fk_kill
+printf '%s\n' "$fsout" | grep -q parent_fn || fail "--stream --follow: parent_fn missing"
+printf '%s\n' "$fsout" | grep -q child_fn \
+    || fail "--stream --follow: child_fn never appeared — the forked child is not being stepped"
+echo "  --follow: both the parent's and the forked child's code are stepped"
+
+echo "--- asmspy --graph --follow with a child that EXECs (per-process symbols) ---"
+# The child forks AND THEN execs exec_stage2, so the two followed processes are
+# in different images at unrelated load biases: parent_fn is PIE-relocated in
+# fork_victim, postexec_fn is at a static address in exec_stage2. Naming BOTH in
+# one graph is only possible with a per-PROCESS symbol table — a single table
+# (whichever image it came from) cannot resolve the other.
+fk_spawn "$BUILD/exec_stage2"
+set +e
+fgout=$(timeout 90 "$ASM" --graph "$FKPID" 6000 --follow --json 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--graph --follow hung"
+fk_kill
+printf '%s' "$fgout" | grep -q '"name":"parent_fn","module":"fork_victim"' \
+    || fail "--graph --follow: parent_fn [fork_victim] missing"
+printf '%s' "$fgout" | grep -q '"name":"postexec_fn","module":"exec_stage2"' \
+    || fail "--graph --follow: postexec_fn [exec_stage2] missing — a followed child that EXECs is not getting its own symbol table"
+echo "  --follow + exec: two processes, two images, two symbol tables, one graph"
+
+# --tid pins ONE task; --follow adds whole processes. Asking for both is a
+# contradiction, so it is a usage error rather than a silent precedence rule.
+expect_badarg "$ASM" --stream 1 --tid=1 --follow
+expect_badarg "$ASM" --graph 1 --tid=1 --follow
+expect_badarg "$ASM" --tree 1 --tid=1 --follow
+echo "  --tid with --follow rejected (contradictory scopes)"
+rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt 2>/dev/null || true
 
 # statistical hot-edge sampler: attach AMD IBS-Op to a CPU-busy victim OUT OF
 # BAND (no ptrace, no single-step) and check the hot function is named. IBS-Op is

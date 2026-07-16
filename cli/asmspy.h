@@ -200,7 +200,7 @@ typedef void (*asmspy_syscall_sink)(void *ctx, const char *line,
  * data via `sink`, detach. When more than one thread is followed each `line` is
  * prefixed "[tid] " so the interleaved streams stay distinguishable. Returns 0
  * on clean detach, negative (an ASMTEST_PTRACE_* spirit code) on attach failure. */
-int asmspy_engine_syscalls(pid_t pid, long max, atomic_bool *stop,
+int asmspy_engine_syscalls(pid_t pid, int follow, long max, atomic_bool *stop,
                            asmspy_syscall_sink sink, void *ctx);
 
 /* One captured invocation of the traced region, handed to the front-end to
@@ -306,9 +306,9 @@ typedef void (*asmspy_stream_sink)(void *ctx, const char *line);
  * full speed (isolation + no per-step slowdown on them); 0 = whole process (all
  * threads). Returns 0 on clean detach, negative on an attach/availability
  * failure. `syms` may be NULL (raw addrs). */
-int asmspy_engine_stream(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
-                         const asmspy_symtab_t *syms, asmspy_stream_sink sink,
-                         void *ctx);
+int asmspy_engine_stream(pid_t pid, pid_t only_tid, int follow, long max,
+                         atomic_bool *stop, const asmspy_symtab_t *syms,
+                         asmspy_stream_sink sink, void *ctx);
 
 /* One node of the whole-process call graph: a function seen as a caller and/or
  * a callee. `invocations` = how many times it was CALLED; `out_calls` = how many
@@ -353,9 +353,9 @@ typedef void (*asmspy_graph_sink)(void *ctx, const asmspy_gnode_t *nodes,
  * while traced. `only_tid` (non-0) restricts the trace to that one thread (see
  * asmspy_engine_stream). Returns 0 on clean detach, negative on an attach/
  * availability failure. */
-int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
-                        const asmspy_symtab_t *syms, asmspy_graph_sink sink,
-                        void *ctx);
+int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
+                        atomic_bool *stop, const asmspy_symtab_t *syms,
+                        asmspy_graph_sink sink, void *ctx);
 
 /* One call-tree entry, structured — so a front-end can do more than print the
  * pre-rendered line (the TUI disassembles `addr`; the headless --json/--dot
@@ -397,8 +397,8 @@ typedef void (*asmspy_tree_sink)(void *ctx, const char *line,
  *
  * Returns 0 on clean detach, negative on an attach/availability failure. `syms`
  * may be NULL. */
-int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
-                       const asmspy_symtab_t *syms,
+int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
+                       atomic_bool *stop, const asmspy_symtab_t *syms,
                        const asmspy_tree_filter_t *filter,
                        asmspy_tree_sink sink, void *ctx);
 

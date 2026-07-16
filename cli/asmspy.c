@@ -12,9 +12,9 @@
  *   asmspy --trace  <pid> <sym> [n] [--tid=<t>]  n live samples: disassembly + functions called
  *   asmspy --dataflow <pid> <sym|0xADDR[:LEN]> [--json] [--tid=<t>] [--max=<n>]
  *                                     scoped L0 value trace + L1 def-use of one invocation
- *   asmspy --stream <pid> [n] [--tid=<t>]   stream n instructions live (function + asm)
+ *   asmspy --stream <pid> [n] [--tid=<t>] [--follow]   stream n instructions live (function + asm)
  *   asmspy --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] [--tid=<t>]  whole-process call graph
- *   asmspy --tree   <pid> [n] [--depth=<d>] [--focus=<sym>] [--module=<m>] [--json|--dot] [--tid=<t>]  whole-process live call tree (indented by depth)
+ *   asmspy --tree   <pid> [n] [--depth=<d>] [--focus=<sym>] [--module=<m>] [--json|--dot] [--tid=<t>] [--follow]  whole-process live call tree (indented by depth)
  *   asmspy --procs  <pid> [n] [--count=syscalls|calls]  process/thread topology tree
  *
  * A negative n streams until the target exits or you interrupt.
@@ -758,8 +758,8 @@ static void log_print_sink(void *ctx, const char *line, const char *str) {
     fflush(stdout);
 }
 
-static int cmd_log(pid_t pid, long n) {
-    int rc = asmspy_engine_syscalls(pid, n, NULL, log_print_sink, NULL);
+static int cmd_log(pid_t pid, int follow, long n) {
+    int rc = asmspy_engine_syscalls(pid, follow, n, NULL, log_print_sink, NULL);
     if (rc != 0) {
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
@@ -775,11 +775,11 @@ static void stream_print_sink(void *ctx, const char *line) {
     fflush(stdout);
 }
 
-static int cmd_stream(pid_t pid, pid_t tid, long n) {
+static int cmd_stream(pid_t pid, pid_t tid, int follow, long n) {
     asmspy_symtab_t t;
     asmspy_symtab_load(pid, &t); /* best-effort; raw addresses if empty */
-    int rc =
-        asmspy_engine_stream(pid, tid, n, NULL, &t, stream_print_sink, NULL);
+    int rc = asmspy_engine_stream(pid, tid, follow, n, NULL, &t,
+                                  stream_print_sink, NULL);
     asmspy_symtab_free(&t);
     if (rc != 0) {
         char e[128];
@@ -950,13 +950,13 @@ static void tree_export_json(const tree_capture *tc, pid_t pid) {
     printf("%s]}\n", tc->n ? "\n" : "");
 }
 
-static int cmd_tree(pid_t pid, pid_t tid, long n,
+static int cmd_tree(pid_t pid, pid_t tid, int follow, long n,
                     const asmspy_tree_filter_t *filter, int json, int dot) {
     asmspy_symtab_t t;
     asmspy_symtab_load(pid, &t); /* best-effort; raw addrs if empty */
     tree_capture tc = {0};
     int export = json || dot;
-    int rc = asmspy_engine_tree(pid, tid, n, NULL, &t, filter,
+    int rc = asmspy_engine_tree(pid, tid, follow, n, NULL, &t, filter,
                                 export ? tree_capture_sink : tree_print_sink,
                                 export ? &tc : NULL);
     asmspy_symtab_free(&t);
@@ -982,14 +982,14 @@ static void graph_capture_sink(void *ctx, const asmspy_gnode_t *nodes,
                     ne); /* keep only the latest snapshot */
 }
 
-static int cmd_graph(pid_t pid, pid_t tid, long n, gsort_t sort, int json,
-                     int dot) {
+static int cmd_graph(pid_t pid, pid_t tid, int follow, long n, gsort_t sort,
+                     int json, int dot) {
     asmspy_symtab_t t;
     asmspy_symtab_load(pid,
                        &t); /* best-effort; raw addrs (all internal) if empty */
     graph_snap snap = {0};
-    int rc =
-        asmspy_engine_graph(pid, tid, n, NULL, &t, graph_capture_sink, &snap);
+    int rc = asmspy_engine_graph(pid, tid, follow, n, NULL, &t,
+                                 graph_capture_sink, &snap);
     asmspy_symtab_free(&t);
     if (rc != 0) {
         char e[128];
@@ -2051,18 +2051,21 @@ static void *tracer_thread(void *arg) {
     live_t *L = arg;
     int rc;
     if (L->mode == 0)
-        rc = asmspy_engine_syscalls(L->pid, -1, &L->stop, live_syscall_sink, L);
+        /* follow = 0: the TUI has no --follow switch; its views are scoped to
+         * the one process the picker selected. */
+        rc = asmspy_engine_syscalls(L->pid, 0, -1, &L->stop, live_syscall_sink,
+                                    L);
     else if (L->mode == 2)
-        rc = asmspy_engine_stream(L->pid, 0, -1, &L->stop, L->syms,
+        rc = asmspy_engine_stream(L->pid, 0, 0, -1, &L->stop, L->syms,
                                   live_stream_sink, L);
     else if (L->mode == 3)
-        rc = asmspy_engine_graph(L->pid, 0, -1, &L->stop, L->syms,
+        rc = asmspy_engine_graph(L->pid, 0, 0, -1, &L->stop, L->syms,
                                  live_graph_sink, L);
     else if (L->mode == 4)
         /* filter = NULL: the TUI has no filter widget yet (the headless
          * --tree --depth/--focus/--module carry the feature); mode 5 stays the
          * unfiltered live feed it has always been. */
-        rc = asmspy_engine_tree(L->pid, 0, -1, &L->stop, L->syms, NULL,
+        rc = asmspy_engine_tree(L->pid, 0, 0, -1, &L->stop, L->syms, NULL,
                                 live_tree_sink, L);
     else if (L->mode == 5)
         rc = asmspy_engine_procs(L->pid, -1, &L->stop, L->count_mode,
@@ -4403,18 +4406,18 @@ static int usage(const char *argv0) {
         "  %s --list [active|scan]    list processes (active=recent CPU; "
         "scan=string-rich memory)\n"
         "  %s --syms   <pid> [filter] list resolved function symbols\n"
-        "  %s --log    <pid> [n]      stream n syscalls with data\n"
+        "  %s --log    <pid> [n] [--follow]  stream n syscalls with data\n"
         "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n] [--tid=<t>]  live samples "
         "of a function/region (any thread)\n"
         "  %s --dataflow <pid> <sym|0xADDR[:LEN]> [--json] [--tid=<t>] "
         "[--max=<n>]  scoped L0 value trace + L1 def-use of one invocation "
         "(native targets)\n"
-        "  %s --stream <pid> [n] [--tid=<t>]  stream n instructions live "
-        "(function + asm)\n"
+        "  %s --stream <pid> [n] [--tid=<t>] [--follow]  stream n "
+        "instructions live (function + asm)\n"
         "  %s --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] "
-        "[--tid=<t>]  whole-process call graph over n calls\n"
+        "[--tid=<t>] [--follow]  whole-process call graph over n calls\n"
         "  %s --tree   <pid> [n] [--depth=<d>] [--focus=<sym>] "
-        "[--module=<m>] [--json|--dot] [--tid=<t>]  whole-process "
+        "[--module=<m>] [--json|--dot] [--tid=<t>] [--follow]  whole-process "
         "live call tree, indented by depth (n call lines)\n"
         "                                   (--depth=<d> shows d levels; "
         "--focus=<sym> roots the tree at a symbol's subtree and re-bases its "
@@ -4422,6 +4425,9 @@ static int usage(const char *argv0) {
         "substring-matched and cut the firehose on a busy process)\n"
         "                                   (--tid=<t> traces only thread t; "
         "others run full speed)\n"
+        "                                   (--follow also traces child "
+        "PROCESSES the target forks, like strace -f — each followed process "
+        "gets its OWN symbols/fds; not combinable with --tid)\n"
         "  %s --procs  <pid> [n] [--count=syscalls|calls]  process/thread tree "
         "(procs+threads+children) with counts\n"
         "  %s --sample <pid> [ms] [--json]  statistical hot edges via AMD "
@@ -4473,9 +4479,14 @@ int main(int argc, char **argv) {
         if (parse_pid(argv[2], &pid) != 0)
             return bad_arg("pid", argv[2]);
         n = 20;
-        if (argc >= 4 && parse_count(argv[3], &n) != 0)
-            return bad_arg("count", argv[3]);
-        return cmd_log(pid, n);
+        int follow = 0;
+        for (int i = 3; i < argc; i++) { /* [n] and --follow in any order */
+            if (strcmp(argv[i], "--follow") == 0)
+                follow = 1;
+            else if (parse_count(argv[i], &n) != 0)
+                return bad_arg("count", argv[i]);
+        }
+        return cmd_log(pid, follow, n);
     }
     if (strcmp(argv[1], "--trace") == 0 && argc >= 4) {
         if (parse_pid(argv[2], &pid) != 0)
@@ -4519,22 +4530,30 @@ int main(int argc, char **argv) {
             return bad_arg("pid", argv[2]);
         n = 20;
         pid_t tid = 0;
-        for (int i = 3; i < argc; i++) { /* [n] and --tid= in any order */
+        int follow = 0;
+        for (int i = 3; i < argc; i++) { /* [n], --tid=, --follow, any order */
             if (strncmp(argv[i], "--tid=", 6) == 0) {
                 if (parse_pid(argv[i] + 6, &tid) != 0)
                     return bad_arg("tid", argv[i] + 6);
+            } else if (strcmp(argv[i], "--follow") == 0) {
+                follow = 1;
             } else if (parse_count(argv[i], &n) != 0) {
                 return bad_arg("count", argv[i]);
             }
         }
-        return cmd_stream(pid, tid, n);
+        if (tid && follow) /* --tid means "exactly this task"; --follow means
+                            * "and everything it spawns" — pick one */
+            return bad_arg("combination (--tid pins ONE task; --follow adds "
+                           "child processes)",
+                           "--tid with --follow");
+        return cmd_stream(pid, tid, follow, n);
     }
     if (strcmp(argv[1], "--tree") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)
             return bad_arg("pid", argv[2]);
         n = 40;
         pid_t tid = 0;
-        int json = 0, dot = 0;
+        int json = 0, dot = 0, follow = 0;
         asmspy_tree_filter_t filt = {0};
         for (int i = 3; i < argc;
              i++) { /* [n], --json/--dot, --tid=, --depth=/--focus=/--module= */
@@ -4557,6 +4576,8 @@ int main(int argc, char **argv) {
                 if (!argv[i][9])
                     return bad_arg("module (want a module substring)", "");
                 filt.module = argv[i] + 9;
+            } else if (strcmp(argv[i], "--follow") == 0) {
+                follow = 1;
             } else if (strcmp(argv[i], "--json") == 0) {
                 json = 1;
             } else if (strcmp(argv[i], "--dot") == 0) {
@@ -4565,7 +4586,11 @@ int main(int argc, char **argv) {
                 return bad_arg("count", argv[i]);
             }
         }
-        return cmd_tree(pid, tid, n, &filt, json, dot);
+        if (tid && follow)
+            return bad_arg("combination (--tid pins ONE task; --follow adds "
+                           "child processes)",
+                           "--tid with --follow");
+        return cmd_tree(pid, tid, follow, n, &filt, json, dot);
     }
     if (strcmp(argv[1], "--procs") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)
@@ -4592,7 +4617,7 @@ int main(int argc, char **argv) {
             return bad_arg("pid", argv[2]);
         n = 200; /* calls to record before reporting; negative = until exit */
         gsort_t sort = GSORT_INVOCATIONS;
-        int json = 0, dot = 0;
+        int json = 0, dot = 0, follow = 0;
         pid_t tid = 0;
         for (int i = 3; i < argc;
              i++) { /* [n], --sort=, --json/--dot, --tid= */
@@ -4612,11 +4637,17 @@ int main(int argc, char **argv) {
             } else if (strncmp(argv[i], "--tid=", 6) == 0) {
                 if (parse_pid(argv[i] + 6, &tid) != 0)
                     return bad_arg("tid", argv[i] + 6);
+            } else if (strcmp(argv[i], "--follow") == 0) {
+                follow = 1;
             } else if (parse_count(argv[i], &n) != 0) {
                 return bad_arg("count", argv[i]);
             }
         }
-        return cmd_graph(pid, tid, n, sort, json, dot);
+        if (tid && follow)
+            return bad_arg("combination (--tid pins ONE task; --follow adds "
+                           "child processes)",
+                           "--tid with --follow");
+        return cmd_graph(pid, tid, follow, n, sort, json, dot);
     }
     if (strcmp(argv[1], "--sample") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)
