@@ -62,6 +62,7 @@ static gccanon_channel_t *g_ch;    // the tracer handshake; NULL if the map fail
 static bool g_in_fence;
 static uint32_t g_gc_seq;          // 1-based GC index
 static uint32_t g_cur_s0;          // S0 of the GC currently open
+static uint32_t g_cur_s0_recs;     // the trace's recs_len when it opened — see gccanon_gcinfo_t
 static uint32_t g_cur_traced;      // was the tracer live when it opened?
 static uint32_t g_cur_reloc;       // relocating ranges in the GC currently open
 
@@ -150,10 +151,12 @@ static HRESULT STDMETHODCALLTYPE Prof_GCStarted(ICorProfilerCallback4 *This, int
     g_gc_seq++;
     g_cur_reloc = 0;
     g_cur_s0 = 0;
+    g_cur_s0_recs = 0;
     g_cur_traced = 0;
     if (g_ch) {
         g_cur_traced = (g_ch->magic == GCCANON_MAGIC) ? 1u : 0u;
         g_cur_s0 = g_ch->step_counter;   // <-- S0
+        g_cur_s0_recs = g_ch->recs_counter;
         g_ch->fence_active = 1;
         g_ch->gcs_seen++;
         if (g_cur_traced) { g_ch->gcs_traced++; g_ch->last_s0 = g_cur_s0; }
@@ -190,7 +193,25 @@ static HRESULT STDMETHODCALLTYPE Prof_MovedReferences2(ICorProfilerCallback4 *Th
 static HRESULT STDMETHODCALLTYPE Prof_GCFinished(ICorProfilerCallback4 *This) {
     (void)This;
     if (!g_in_fence) return S_OK;
-    if (g_ch) g_ch->fence_active = 0;
+    if (g_ch) {
+        // THE EVIDENCE FOR CHAINING (increment 2). Close this GC's fence record: the live trace's
+        // counters as they were at the START of the fence and as they are NOW, at its end. The
+        // tracer keeps only the GCs of the window under test (by seq) and requires all their samples
+        // to agree — which is what says no record was appended across the fences or the gaps
+        // between them, i.e. that no record can lie BETWEEN two of the window's moves. Recorded for
+        // TRACED, non-zero-S0 GCs only: the same liveness rule the move ranges use, and it keeps the
+        // victim's out-of-window fragmentation GCs (whose counter legitimately differs) out of it.
+        if (g_cur_traced && g_cur_s0 != 0 && g_ch->ngcinfo < GCCANON_MAX_GCINFO) {
+            uint32_t n = g_ch->ngcinfo;
+            g_ch->gcs[n].seq = g_gc_seq;
+            g_ch->gcs[n].s0_steps = g_cur_s0;
+            g_ch->gcs[n].s0_recs = g_cur_s0_recs;
+            g_ch->gcs[n].s1_steps = g_ch->step_counter;
+            g_ch->gcs[n].s1_recs = g_ch->recs_counter;
+            g_ch->ngcinfo = n + 1;
+        }
+        g_ch->fence_active = 0;
+    }
     g_in_fence = false;
     // One line per GC, so the raw feed survives even if the shm drain is lost.
     fprintf(stderr, "GCCANONPROF: GC seq=%u traced=%u S0=%u reloc_ranges=%u\n",

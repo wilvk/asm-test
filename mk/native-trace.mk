@@ -3036,6 +3036,15 @@ GCCANON_CLSID          ?= {C9E5F4A3-1111-2222-3333-444455556666}
 GCCANON_VICTIM_SECONDS ?= 90
 GCCANON_METHOD         ?= Region
 GCCANON_SHM_FILE       := /dev/shm/asmtest_gccanon_attach
+# One PHASE = one victim + one profiler attach + one scoped capture, with that many compacting GCs
+# choreographed into the ONE call-out window the capture spans. Each phase is a fresh process and a
+# fresh shm channel: two captures against one victim would restart the step counter from 0 and stamp
+# two different windows with colliding S0s, which is precisely the confusion this lane exists to
+# police. `1` is increment 1's lane, unchanged and still asserting that no two GCs share a step;
+# `2` and `3` are increment 2's, provoking the collapse with an object that really is moved that many
+# times inside one window. Increment 2's PURE proof (the composition against the shipping transform,
+# on randomized N-GC feeds) runs first as `--selftest`, needing no dotnet at all.
+GCCANON_PHASES         ?= 1 2 3
 # PARSE-time tool gate, like `attachprof-probe` / `gcfence-probe` and NOT like the DR lanes:
 # `command -v X || { echo SKIP; exit 0; }` written as a recipe LINE only exits that one line's shell,
 # so make cheerfully runs the next line; that idiom is only sound behind an `ifndef DR_AVAILABLE`
@@ -3084,46 +3093,58 @@ else
 	 $(DOTNET) build -c Release examples/gccanon_attach/attacher/attacher.csproj -o $(BUILD)/gccanon_attacher_out \
 	    >$(BUILD)/gccanon_attacher_build.log 2>&1 || { echo "== gccanon-attach =="; echo "# SKIP: could not build the attacher (Microsoft.Diagnostics.NETCore.Client restore failed — no network?):"; tail -8 $(BUILD)/gccanon_attacher_build.log | sed 's/^/#   /'; echo "1..0 # skipped"; touch $(BUILD)/.gccanon_skip; }
 	@[ -f $(BUILD)/.gccanon_skip ] && exit 0; \
-	 vlog=$(BUILD)/gccanon_victim.log; alog=$(BUILD)/gccanon_attacher.log; tlog=$(BUILD)/gccanon_tracer.log; \
-	 rm -f $$vlog $$alog $$tlog $(GCCANON_SHM_FILE); \
-	 env -u CORECLR_ENABLE_PROFILING -u CORECLR_PROFILER -u CORECLR_PROFILER_PATH \
-	     DOTNET_PerfMapEnabled=1 DOTNET_TieredCompilation=0 DOTNET_EnableWriteXorExecute=0 \
-	     GCCANON_VICTIM_SECONDS=$(GCCANON_VICTIM_SECONDS) \
-	     $(DOTNET) $(abspath $(BUILD)/gccanon_victim_out/gccanon_victim.dll) >$$vlog 2>&1 & lpid=$$!; \
-	 vpid=""; wtid=""; \
-	 for t in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
-	   vpid=$$(sed -n 's/.*GCCANON_VICTIM_START pid=\([0-9]*\).*/\1/p' $$vlog 2>/dev/null | head -1); \
-	   wtid=$$(sed -n 's/.*GCCANON_VICTIM_WORKER tid=\([0-9]*\).*/\1/p' $$vlog 2>/dev/null | head -1); \
-	   [ -n "$$vpid" ] && [ -n "$$wtid" ] && break; sleep 1; \
-	 done; \
-	 if [ -z "$$vpid" ] || [ -z "$$wtid" ]; then echo "== gccanon-attach =="; echo "not ok 1 - plain dotnet victim never reported pid/worker tid (pid='$$vpid' tid='$$wtid')"; \
-	   sed 's/^/#   /' $$vlog; kill $$lpid 2>/dev/null; echo "1..1"; exit 1; fi; \
-	 echo "# plain victim pid=$$vpid managed region worker tid=$$wtid (no CORECLR_* env; DOTNET_PerfMapEnabled=1 DOTNET_TieredCompilation=0 for JIT method resolution at a stable address)"; \
-	 echo "# ORDER: profiler FIRST (attach travels the diagnostics IPC socket, which needs a RUNNING runtime), ptrace tracer SECOND"; \
-	 $(DOTNET) $(abspath $(BUILD)/gccanon_attacher_out/gccanon_attacher.dll) \
-	     $$vpid '$(GCCANON_CLSID)' $(abspath $(BUILD)/libgccanonprof.so) 30 >$$alog 2>&1; arc=$$?; \
-	 sed 's/^/#   /' $$alog; \
-	 for t in 1 2 3 4 5 6 7 8 9 10; do \
-	   complete=$$(grep -c 'ProfilerAttachComplete' $$vlog 2>/dev/null || true); [ -z "$$complete" ] && complete=0; \
-	   [ "$$complete" -ge 1 ] && break; sleep 1; \
-	 done; \
-	 for t in 1 2 3 4 5 6 7 8 9 10 11 12; do \
-	   ready=$$(grep -c 'GCCANON_VICTIM_READY' $$vlog 2>/dev/null || true); [ -z "$$ready" ] && ready=0; \
-	   [ "$$ready" -ge 1 ] && break; sleep 1; \
-	 done; \
-	 $(BUILD)/gccanon_tracer $$vpid $$wtid '$(GCCANON_METHOD)' 60 >$$tlog 2>&1; trc=$$?; \
-	 kill $$lpid 2>/dev/null; wait $$lpid 2>/dev/null; vrc=$$?; \
-	 echo "# --- the victim's OWN ground truth (pin/unpin either side of the traced invocation) ---"; \
-	 grep -E 'GCCANON_VICTIM_ROUND' $$vlog | head -6 | sed 's/^/#   /'; \
-	 grep -E '^GCCANONPROF: (InitializeForAttach|ProfilerAttachComplete|GC seq)' $$vlog | head -8 | sed 's/^/#   /'; \
-	 echo "# --- the tracer ---"; \
-	 cat $$tlog; \
-	 crash=$$(grep -icE 'stack smashing|SIGSEGV|SIGILL|SIGABRT|Segmentation fault|Fatal error|double free|core dumped' $$vlog 2>/dev/null || true); [ -z "$$crash" ] && crash=0; \
-	 rounds=$$(grep -c 'GCCANON_VICTIM_ROUND' $$vlog 2>/dev/null || true); [ -z "$$rounds" ] && rounds=0; \
-	 moved=$$(grep -c 'GCCANON_VICTIM_ROUND.*moved=1' $$vlog 2>/dev/null || true); [ -z "$$moved" ] && moved=0; \
-	 echo "# VICTIM: rounds=$$rounds (of which the object RELOCATED on $$moved) crash=$$crash attacher_rc=$$arc tracer_rc=$$trc"; \
-	 rm -f $(GCCANON_SHM_FILE); \
-	 [ "$$trc" -eq 0 ] && [ "$$crash" -eq 0 ]
+	 run_phase() { \
+	   gcs=$$1; \
+	   vlog=$(BUILD)/gccanon_victim_$$gcs.log; alog=$(BUILD)/gccanon_attacher_$$gcs.log; tlog=$(BUILD)/gccanon_tracer_$$gcs.log; \
+	   rm -f $$vlog $$alog $$tlog $(GCCANON_SHM_FILE); \
+	   echo ""; \
+	   echo "# ======== PHASE: $$gcs compacting GC(s) per call-out window ========"; \
+	   env -u CORECLR_ENABLE_PROFILING -u CORECLR_PROFILER -u CORECLR_PROFILER_PATH \
+	       DOTNET_PerfMapEnabled=1 DOTNET_TieredCompilation=0 DOTNET_EnableWriteXorExecute=0 \
+	       GCCANON_VICTIM_SECONDS=$(GCCANON_VICTIM_SECONDS) GCCANON_GCS_PER_WINDOW=$$gcs \
+	       $(DOTNET) $(abspath $(BUILD)/gccanon_victim_out/gccanon_victim.dll) >$$vlog 2>&1 & lpid=$$!; \
+	   vpid=""; wtid=""; \
+	   for t in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
+	     vpid=$$(sed -n 's/.*GCCANON_VICTIM_START pid=\([0-9]*\).*/\1/p' $$vlog 2>/dev/null | head -1); \
+	     wtid=$$(sed -n 's/.*GCCANON_VICTIM_WORKER tid=\([0-9]*\).*/\1/p' $$vlog 2>/dev/null | head -1); \
+	     [ -n "$$vpid" ] && [ -n "$$wtid" ] && break; sleep 1; \
+	   done; \
+	   if [ -z "$$vpid" ] || [ -z "$$wtid" ]; then echo "== gccanon-attach =="; echo "not ok 1 - plain dotnet victim never reported pid/worker tid (pid='$$vpid' tid='$$wtid')"; \
+	     sed 's/^/#   /' $$vlog; kill $$lpid 2>/dev/null; echo "1..1"; return 1; fi; \
+	   echo "# plain victim pid=$$vpid managed region worker tid=$$wtid (no CORECLR_* env; DOTNET_PerfMapEnabled=1 DOTNET_TieredCompilation=0 for JIT method resolution at a stable address)"; \
+	   echo "# ORDER: profiler FIRST (attach travels the diagnostics IPC socket, which needs a RUNNING runtime), ptrace tracer SECOND"; \
+	   $(DOTNET) $(abspath $(BUILD)/gccanon_attacher_out/gccanon_attacher.dll) \
+	       $$vpid '$(GCCANON_CLSID)' $(abspath $(BUILD)/libgccanonprof.so) 30 >$$alog 2>&1; arc=$$?; \
+	   sed 's/^/#   /' $$alog; \
+	   for t in 1 2 3 4 5 6 7 8 9 10; do \
+	     complete=$$(grep -c 'ProfilerAttachComplete' $$vlog 2>/dev/null || true); [ -z "$$complete" ] && complete=0; \
+	     [ "$$complete" -ge 1 ] && break; sleep 1; \
+	   done; \
+	   for t in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+	     ready=$$(grep -c 'GCCANON_VICTIM_READY' $$vlog 2>/dev/null || true); [ -z "$$ready" ] && ready=0; \
+	     [ "$$ready" -ge 1 ] && break; sleep 1; \
+	   done; \
+	   $(BUILD)/gccanon_tracer $$vpid $$wtid '$(GCCANON_METHOD)' 60 $$gcs >$$tlog 2>&1; trc=$$?; \
+	   kill $$lpid 2>/dev/null; wait $$lpid 2>/dev/null; vrc=$$?; \
+	   echo "# --- the victim's OWN ground truth (pin/unpin either side of the traced invocation, and"; \
+	   echo "#     the object's address after EACH of the window's GCs — the chain, from the victim) ---"; \
+	   grep -E 'GCCANON_VICTIM_ROUND' $$vlog | head -4 | sed 's/^/#   /'; \
+	   grep -E 'GCCANON_VICTIM_WINDOW' $$vlog | head -4 | sed 's/^/#   /'; \
+	   grep -E '^GCCANONPROF: (InitializeForAttach|ProfilerAttachComplete|GC seq)' $$vlog | head -8 | sed 's/^/#   /'; \
+	   echo "# --- the tracer ---"; \
+	   cat $$tlog; \
+	   crash=$$(grep -icE 'stack smashing|SIGSEGV|SIGILL|SIGABRT|Segmentation fault|Fatal error|double free|core dumped' $$vlog 2>/dev/null || true); [ -z "$$crash" ] && crash=0; \
+	   rounds=$$(grep -c 'GCCANON_VICTIM_ROUND' $$vlog 2>/dev/null || true); [ -z "$$rounds" ] && rounds=0; \
+	   moved=$$(grep -c 'GCCANON_VICTIM_ROUND.*moved=1' $$vlog 2>/dev/null || true); [ -z "$$moved" ] && moved=0; \
+	   allmoved=$$(grep -c "GCCANON_VICTIM_WINDOW.*real_moves=$$gcs/$$gcs" $$vlog 2>/dev/null || true); [ -z "$$allmoved" ] && allmoved=0; \
+	   echo "# VICTIM: rounds=$$rounds (of which the object RELOCATED on $$moved; $$allmoved window(s) moved it on ALL $$gcs GCs) crash=$$crash attacher_rc=$$arc tracer_rc=$$trc"; \
+	   rm -f $(GCCANON_SHM_FILE); \
+	   [ "$$trc" -eq 0 ] && [ "$$crash" -eq 0 ]; \
+	 }; \
+	 rc=0; \
+	 $(BUILD)/gccanon_tracer --selftest || rc=1; \
+	 for gcs in $(GCCANON_PHASES); do run_phase $$gcs || rc=1; done; \
+	 exit $$rc
 endif
 
 # The tracer links the SHIPPING tier, not a copy of it: the scoped ptrace L0 producer

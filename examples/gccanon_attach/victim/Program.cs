@@ -2,9 +2,10 @@ using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 
-// F4 increment 1 VICTIM — the managed fixture whose memory def-use must survive a GC compaction
+// F4 increments 1+2 VICTIM — the managed fixture whose memory def-use must survive a GC compaction
 // captured on a LIVE ATTACH (docs/internal/plans/live-attach-dataflow-followup-plan.md F4).
 //
 // A PLAIN long-running dotnet process: no CORECLR_* environment variables at all, because the
@@ -34,12 +35,25 @@ using System.Threading;
 // So Region() is: store to the heap object (OLD address) -> call out (the GC relocates it here) ->
 // load it back (NEW address). That is exactly the def-use edge F4 exists to preserve.
 //
-// EXACTLY ONE compacting GC per call-out window is required, and is choreographed rather than hoped
-// for: the step counter is FROZEN across the call-out (the region-gated counter records nothing over
-// the helper), so every GC in one window is stamped with the SAME S0 — and asmtest_gcmove_canon
-// applies at most ONE relocation per step-group, because a group models ONE GCBulkMovedObjectRanges
-// batch whose old ranges are disjoint. Two GCs sharing a step would violate that model. Hence the
-// driver prepares its fragmentation OUTSIDE the window and does a single blocking GC inside it.
+// HOW MANY compacting GCs land in one call-out window is the fixture's MAIN KNOB
+// (GCCANON_GCS_PER_WINDOW, default 1), and it is choreographed rather than hoped for. The step
+// counter is FROZEN across the call-out (the region-gated counter records nothing over the helper),
+// so every GC in one window is stamped with the SAME S0 — and asmtest_gcmove_canon applies at most
+// ONE relocation per step-group, because a group models ONE GCBulkMovedObjectRanges batch whose old
+// ranges are disjoint.
+//
+//   GCCANON_GCS_PER_WINDOW=1  increment 1's choreography, unchanged: one GC per window, so no two
+//                             GCs ever share a step and the batch model holds as shipped.
+//   GCCANON_GCS_PER_WINDOW=N  increment 2's: N compacting GCs inside ONE window, each moving the
+//                             SAME object again (A->B->C->...). All N are stamped with the SAME S0
+//                             and collapse into one batch — the limitation increment 1 landed with,
+//                             provoked on purpose so the tracer can reproduce the resulting missing
+//                             edge as a FAILING case and then fix it by CHAINING the moves.
+//
+// Moving the object AGAIN on the window's second GC is not automatic and is the whole trick: a
+// compaction only slides a survivor down into holes BELOW it, and the window's first GC just closed
+// all of them. So each of the window's GCs gets its own WAVE of fresh garbage to close — see
+// DropWave — dropped between GCs, on the driver thread, allocating nothing.
 static class GcCanonVictim
 {
     [DllImport("libc", SetLastError = true)]
@@ -61,9 +75,18 @@ static class GcCanonVictim
     static volatile int s_armed;   // 1 once the driver/worker handshake is live
     static volatile int s_ready;   // driver: fragmentation prepared, worker may enter the region
     static volatile int s_inPark;  // worker: parked inside the region's call-out
-    static volatile int s_gcDone;  // driver: the one compacting GC for this window has run
+    static volatile int s_gcDone;  // driver: ALL of this window's compacting GCs have run
     static volatile bool s_stop;
     static long s_rounds, s_moved, s_sink;
+
+    // How many compacting gen2 GCs the driver puts inside ONE call-out window. 1 = increment 1's
+    // choreography (no two GCs share a step); >1 provokes increment 2's collapse with a REAL
+    // multiply-moved object. Capped at 3 by the four-bucket wave scheme in DropWave.
+    static int s_gcsPerWindow = 1;
+    // The object's address after each of the window's GCs — chain[0]=A (before any), chain[g]=its
+    // home after GC g. The victim's OWN ground truth for the chain, allocated ONCE (outside any
+    // window) so that recording it never allocates between two of the window's GCs.
+    static long[] s_chain;
 
     // ---- THE TRACED REGION ---------------------------------------------------------------------
     // NoInlining => its own JIT'd body and its own perf-map entry, which is how the tracer resolves
@@ -121,15 +144,40 @@ static class GcCanonVictim
         var obj = new long[8];
         // 3. ... promote the lot to gen2, so a gen2 compaction is what relocates them ...
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
-        // 4. ... and drop three quarters of the garbage: the holes BELOW the object that the next
-        //    compaction closes, sliding the object DOWN.
-        for (int i = 0; i < s_fill.Length; i++) if ((i & 3) != 0) s_fill[i] = null;
         s_obj = obj;
+        // 4. ... and drop this window's FIRST wave of garbage: the holes BELOW the object that the
+        //    window's first compaction closes, sliding the object DOWN. The later waves are held
+        //    back for the window's later GCs (DropWave), because a second compaction with nothing
+        //    left to close would not move the object at all.
+        DropWave(1);
+    }
+
+    // Drop wave `k`'s garbage — the holes the window's k-th GC closes. Buckets are `i & 3`:
+    //
+    //   bucket 0    NEVER dropped. A quarter of the fill survives every round, so the object always
+    //               has live neighbours below it and a compaction has something to slide it over.
+    //   buckets 1-3 shared out over the waves, so EVERY GC in the window has fresh holes beneath the
+    //               object and moves it AGAIN. With s_gcsPerWindow=1 all three go in wave 1, which
+    //               is exactly increment 1's "drop three quarters" — its fixture is unchanged, so
+    //               its asserts stay a regression test rather than a rewrite. With 2 they split
+    //               2:1 (~2.4 MB then ~1.2 MB of holes), with 3, 1:1:1.
+    //
+    // Allocates NOTHING (a reference store is a write barrier, not an allocation), which is what
+    // lets it run BETWEEN two of the window's GCs without perturbing the window it is choreographing.
+    static void DropWave(int k)
+    {
+        int waves = s_gcsPerWindow;
+        for (int i = 0; i < s_fill.Length; i++)
+        {
+            int b = i & 3;
+            if (b == 0) continue;                 // the permanent survivors
+            if (1 + (b - 1) * waves / 3 == k) s_fill[i] = null;
+        }
     }
 
     static void Driver()
     {
-        Console.WriteLine("GCCANON_VICTIM_DRIVER tid=" + gettid());
+        Console.WriteLine("GCCANON_VICTIM_DRIVER tid=" + gettid() + " gcs_per_window=" + s_gcsPerWindow);
         Console.Out.Flush();
         while (!s_stop)
         {
@@ -141,11 +189,35 @@ static class GcCanonVictim
             for (int i = 0; i < 20000 && s_inPark == 0 && !s_stop; i++) Thread.Sleep(1);
             if (s_stop) break;
             if (s_inPark == 0) { s_ready = 0; continue; }
-            // THE WINDOW: exactly one blocking, compacting gen2 GC that relocates survivors.
-            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            // THE WINDOW. The worker is parked in the region's call-out, so the tracer's
+            // region-gated step counter is frozen and EVERY GC from here until s_gcDone is stamped
+            // with the same S0. s_gcsPerWindow blocking compacting gen2 GCs go in, each preceded by
+            // its own fresh wave of holes below the object so that each one moves it AGAIN:
+            // A -> B -> C. Nothing here allocates (DropWave stores nulls; the chain array is
+            // pre-allocated), so the window contains exactly the GCs it is meant to contain.
+            s_chain[0] = (long)DataAddr(s_obj);       // A — before any of the window's GCs
+            for (int g = 1; g <= s_gcsPerWindow; g++)
+            {
+                if (g > 1) DropWave(g);               // fresh holes BELOW the object for THIS GC
+                GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                s_chain[g] = (long)DataAddr(s_obj);   // ... -> B -> C
+            }
             s_gcDone = 1;
             s_ready = 0;
             for (int i = 0; i < 5000 && s_inPark == 1 && !s_stop; i++) Thread.Sleep(1);
+            // Report the chain only AFTER the worker has left the call-out: formatting allocates,
+            // and an allocation-triggered gen0 GC while the worker was still parked would land an
+            // UNPLANNED extra GC in the window being measured.
+            var sb = new StringBuilder("GCCANON_VICTIM_WINDOW gcs=" + s_gcsPerWindow + " chain=0x")
+                .Append(s_chain[0].ToString("x"));
+            int real = 0;
+            for (int g = 1; g <= s_gcsPerWindow; g++)
+            {
+                sb.Append("->0x").Append(s_chain[g].ToString("x"));
+                if (s_chain[g] != s_chain[g - 1]) real++;
+            }
+            Console.WriteLine(sb.Append(" real_moves=" + real + "/" + s_gcsPerWindow).ToString());
+            Console.Out.Flush();
         }
     }
 
@@ -186,7 +258,13 @@ static class GcCanonVictim
     static void Main()
     {
         int seconds = Env("GCCANON_VICTIM_SECONDS", 90);
-        Console.WriteLine("GCCANON_VICTIM_START pid=" + Environment.ProcessId + " seconds=" + seconds);
+        // 1 = increment 1's one-GC window. >1 = increment 2's collapse fixture: that many
+        // compacting GCs inside ONE call-out window, all stamped with the same S0.
+        s_gcsPerWindow = Env("GCCANON_GCS_PER_WINDOW", 1);
+        if (s_gcsPerWindow > 3) s_gcsPerWindow = 3;   // DropWave's bucket scheme: 1 survivor + 3 waves
+        s_chain = new long[s_gcsPerWindow + 1];
+        Console.WriteLine("GCCANON_VICTIM_START pid=" + Environment.ProcessId + " seconds=" + seconds +
+                          " gcs_per_window=" + s_gcsPerWindow);
         Console.Out.Flush();
 
         s_fill = new object[60000];

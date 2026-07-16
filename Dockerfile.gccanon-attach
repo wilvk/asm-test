@@ -1,4 +1,4 @@
-# Dockerfile.gccanon-attach — F4 increment 1: LIVE GC-move canonicalization on the ptrace
+# Dockerfile.gccanon-attach — F4 increments 1+2: LIVE GC-move canonicalization on the ptrace
 # live-attach tier (docs/internal/plans/live-attach-dataflow-followup-plan.md F4).
 #
 # NOT a probe — the WIRING plus its live validation lane. F4's two halves both already existed: a
@@ -8,6 +8,14 @@
 # lane joins them on a LIVE ATTACH and proves the join with a NEGATIVE CONTROL: the same capture is
 # def-use-built twice, once WITHOUT canonicalization (the store->load edge across the compaction must
 # be MISSING — the bug is real) and once WITH it (the edge must APPEAR).
+#
+# Increment 2 closes the limitation increment 1 landed with: the region-gated step counter freezes
+# across the call-out, so every GC in one window carries the same S0 and two of them collapsed into
+# one batch, under-forwarding a twice-moved object (A->B->C canonicalized to B while the load read
+# C). The lane now runs a pure --selftest (the composition vs. the shipping transform on randomized
+# N-GC feeds — no dotnet at all) and then one phase per GCCANON_PHASES value, each a fresh victim
+# choreographing that many compacting GCs into ONE call-out window: the collapse is REPRODUCED as a
+# failing case (the edge is still missing) and then fixed by CHAINING the window's moves.
 #
 # Deliberately NO DynamoRIO: this is the out-of-band ptrace tier. The image is the .NET SDK + a
 # C/C++ toolchain + git (the pinned CoreCLR profiler headers cor.h/corprof.h + the PAL from

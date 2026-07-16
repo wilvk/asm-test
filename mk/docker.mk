@@ -354,15 +354,24 @@ docker-gcfence-probe:
 	  --build-arg BASE=$(DOCKER_BASE) -t asmtest-gcfence-probe .
 	$(DOCKER) run --rm --cap-add=SYS_PTRACE $(_docker_plat) asmtest-gcfence-probe
 
-# F4 INCREMENT 1 — the live GC-move canonicalization LANE (live-attach-dataflow-followup-plan.md F4).
-# NOT a probe: the two probes above settled the questions (the feed attaches to a running dotnet; the
-# stamp must be the profiler-sampled S0, because the freeze assumption measured FALSE), and this is
-# the WIRING plus its validation. It joins the proven feed to the landed pure transform
+# F4 INCREMENTS 1+2 — the live GC-move canonicalization LANE (live-attach-dataflow-followup-plan.md
+# F4). NOT a probe: the two probes above settled the questions (the feed attaches to a running dotnet;
+# the stamp must be the profiler-sampled S0, because the freeze assumption measured FALSE), and this
+# is the WIRING plus its validation. It joins the proven feed to the landed pure transform
 # (asmtest_gcmove_canonicalize) on a live attach, and proves the join with a NEGATIVE CONTROL — the
 # same capture is def-use-built WITHOUT canonicalization (the store->load edge across the compaction
-# must be MISSING) and WITH it (it must APPEAR). No DynamoRIO (out-of-band ptrace tier), but — like
-# docker-gcfence-probe and UNLIKE docker-attachprof-probe — it DOES need `--cap-add=SYS_PTRACE`,
-# because the tracer ptrace-attaches to a SIBLING process. Runs `make gccanon-attach`.
+# must be MISSING) and WITH it (it must APPEAR).
+#
+# Increment 2 adds the phases that close increment 1's open limitation — a window's GCs all share one
+# S0, so two of them collapsed into one batch and under-forwarded a twice-moved object. `--selftest`
+# (pure, no dotnet) proves the composition against the SHIPPING transform on randomized N-GC feeds;
+# then one phase per GCCANON_PHASES value runs a fresh victim with that many compacting GCs
+# choreographed into ONE call-out window, reproducing the collapse as a FAILING case (the edge is
+# still missing) before the chained feed restores it.
+#
+# No DynamoRIO (out-of-band ptrace tier), but — like docker-gcfence-probe and UNLIKE
+# docker-attachprof-probe — it DOES need `--cap-add=SYS_PTRACE`, because the tracer ptrace-attaches
+# to a SIBLING process. Runs `make gccanon-attach`.
 .PHONY: docker-gccanon-attach
 docker-gccanon-attach:
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.gccanon-attach \

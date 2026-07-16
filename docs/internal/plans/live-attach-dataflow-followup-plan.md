@@ -8,20 +8,22 @@ uncanonicalized. This plan lands the improvements that were held out of the crit
 each one either **reduces perturbation**, **raises fidelity on managed targets**, or
 **broadens the target set** — ordered so the highest-value, lowest-risk work comes first.
 
-> Status *(reconciled 2026-07-16)*: **F3 LANDED (asmspy `--watch`); F1 increment 1 LANDED
-> (pure-method block-step tier); F4 UNBLOCKED and now the top candidate; F2/F5–F7 + F1 vector
-> breadth open.** The two bets this plan was written around have both been settled in its
-> favour. F1 was the marquee item and carried a spike increment because its
-> value-reconstruction claim was the one genuinely **unproven** bet in the whole design — that
-> spike came back **GO** (byte-identical to single-step by literal `memcmp`, ~6× fewer stops),
-> so the design holds and F2/F5, which build on the replay, did not fall away with it. F3 was
-> the cheapest high-value item (a near-zero-perturbation targeted mode from a one-line DR7
-> change) and landed as `asmspy --watch`. **F4 is no longer runtime-gated** — its EventPipe
-> blocker was disproved and the profiler feed it needs is proven and shipping in the taint
-> tier, leaving wiring plus one honest spike (attaching a profiler to a process we did not
-> launch); see F4 below. F5 remains **hardware-gated** on bare-metal Intel PT and self-skips;
-> the dev boxes are AMD, so it is a ceiling to demonstrate elsewhere, not a default path.
-> House rule unchanged: foreign targets are never killed; every tier self-skips where its
+> Status *(reconciled 2026-07-16, after F4)*: **F3 LANDED (asmspy `--watch`); F1 increment 1
+> LANDED (pure-method block-step tier); F4 increments 1+2 LANDED — its exit criterion is MET on
+> a live attach; F2/F5–F7 + F1 vector breadth open.** The two bets this plan was written around
+> have both been settled in its favour. F1 was the marquee item and carried a spike increment
+> because its value-reconstruction claim was the one genuinely **unproven** bet in the whole
+> design — that spike came back **GO** (byte-identical to single-step by literal `memcmp`, ~6×
+> fewer stops), so the design holds and F2/F5, which build on the replay, did not fall away with
+> it. F3 was the cheapest high-value item (a near-zero-perturbation targeted mode from a
+> one-line DR7 change) and landed as `asmspy --watch`. **F4 is DONE for its stated criterion**:
+> two spikes settled its open questions (a profiler CAN attach to a process we did not launch;
+> the `step` stamp MUST come from the profiler-sampled S0, because the "counter freezes across
+> the fence" assumption measured **FALSE**), increment 1 landed the join, and increment 2 chained
+> the same-window GC collapse it landed with — `make docker-gccanon-attach`, 37 assertions, each
+> half proven by a negative control. F5 remains **hardware-gated** on bare-metal Intel PT and
+> self-skips; the dev boxes are AMD, so it is a ceiling to demonstrate elsewhere, not a default
+> path. House rule unchanged: foreign targets are never killed; every tier self-skips where its
 > substrate is absent.
 
 ---
@@ -171,10 +173,12 @@ enforced; self-skips under qemu-user (which emulates zero breakpoint slots,
 
 ---
 
-## F4 — Live GC-move canonicalization for managed memory def-use *(**INCREMENT 1 LANDED 2026-07-16** — exit criterion met on a live attach; one open limitation, see below)*
+## F4 — Live GC-move canonicalization for managed memory def-use *(**INCREMENTS 1+2 LANDED 2026-07-16** — exit criterion met on a live attach; increment 1's one open limitation is now CLOSED, see below)*
 
 > **UPDATE 2026-07-16 — INCREMENT 1 LANDED; the exit criterion is MET.**
-> `make docker-gccanon-attach` (7/7, `examples/gccanon_attach/`): a plain `dotnet` victim (no
+> `make docker-gccanon-attach` (increment 1's lane was 7/7; the same command now also runs
+> increment 2's `--selftest` and its 2- and 3-GC-per-window phases — 37 assertions, see the
+> limitation block below), `examples/gccanon_attach/`: a plain `dotnet` victim (no
 > `CORECLR_*` env) → an attach-mode `MovedReferences2` profiler → ranges stamped with a
 > profiler-sampled **S0** → the **shipping** scoped L0 producer
 > (`asmtest_dataflow_ptrace_attach_jit`) over one managed region invocation →
@@ -203,15 +207,62 @@ enforced; self-skips under qemu-user (which emulates zero breakpoint slots,
 > single-stepped* thread, which this scoped tier never does. **Region scoping is what makes F4
 > reachable, not an obstacle.**
 >
-> **OPEN LIMITATION (the honest next question).** The region-gated step counter freezes across the
-> call-out, so **every GC in one call-out window is stamped with the same S0**, and
-> `asmtest_gcmove_canon` applies at most one relocation per step-group. **Two GCs in one window
-> would silently collapse into a single batch and under-forward a twice-moved object** (A→B→C
-> canonicalizes to B while the load reads C), presenting as a missing edge that looks like a
-> transform bug. The lane choreographs exactly one GC per window and `ok 7` **checks** that via a
-> `gc_seq` field rather than assuming it — but that choreography is the least representative part
-> of the lane, and a high-GC-rate target could put two GCs in one window. Separating them needs a
-> finer boundary than a frozen region-gated counter can express.
+> **~~OPEN LIMITATION~~ — CLOSED 2026-07-16 by INCREMENT 2 (the composition).** The limitation was
+> real and is now fixed, reproduced as a failing case first. It read: the region-gated step counter
+> freezes across the call-out, so **every GC in one call-out window is stamped with the same S0**,
+> `asmtest_gcmove_canon` applies at most one relocation per step-group, and **two GCs in one window
+> collapse into a single batch and under-forward a twice-moved object** (A→B→C canonicalizes to B
+> while the load reads C). Increment 1 choreographed exactly one GC per window and checked it via
+> `gc_seq`; that choreography was the least representative part of the lane.
+>
+> **The fix is CHAINING, not separating** — and the freeze that causes the problem is what licenses
+> it. `step` is the only ordering information the trace carries, so two GCs sharing one means **no
+> record can lie between them**: every record is before *all* the window's moves or after *all* of
+> them, and the correct canonical address for a pre-window record is the **composition** of the
+> moves (A→B→C ⇒ A→C). That is now **measured, not assumed** (`ok 9`): the profiler samples the live
+> trace's `steps_len` *and* `recs_len` at the start **and** end of every fence, and for the window's
+> GCs — selected by `gc_seq`, so the victim's out-of-window fragmentation GCs cannot pollute it —
+> all of them are identical, so nothing was appended across the fences **or the gaps between them**.
+> (Structurally it could not be otherwise: [dataflow_ptrace.c](../../../src/dataflow_ptrace.c) runs
+> a call-out via int3 + `PTRACE_CONT` and records nothing over the helper, so the producer is blocked
+> in `waitpid` for the whole window. The samples travel a 20 µs mirror, so they corroborate that
+> structural fact rather than replace it.)
+>
+> **`asmtest_gcmove_canon` is UNTOUCHED.** Its one-relocation-per-batch rule is load-bearing, not an
+> oversight — it stops a relocated address being re-relocated by a *sibling* of the same GC whose old
+> span the compaction slid a new range over. Relaxing it or iterating within a batch would fix the
+> two-GC case by breaking the one-GC case. So the fix lives on the **feed** side, where the collapse
+> is caused: `gccanon_compose` (in the lane's tracer) pre-composes each boundary's GCs in `gc_seq`
+> order into ONE batch whose ranges are **already chained A→C**, and hands that to the shipping
+> transform. Composed OLD ranges stay disjoint because part 2 subtracts the earlier GC's **domain**
+> (subtracting its *image* instead both breaks disjointness and deviates — a mutant that does so is
+> caught by the oracle on 884/691,200 probes). Partial overlaps — an earlier range's image landing
+> only *partly* inside a later one, routine because the runtime coalesces adjacent objects into one
+> range and the next GC may split the run — are **split exactly**, since a delta is uniform within a
+> range; no truncation is needed. The conservative-truncation path — for a GC whose own old ranges
+> overlap, which would break the composition's proof — drops **both** sides, a missing edge rather
+> than a guessed one. It **never fired on live data** (the feed's per-GC old ranges were disjoint
+> across ~90k ranges), so it is covered by a dedicated `--selftest` case instead: an independent
+> review found the first cut compared only *adjacent* ranges, which silently let a long range's
+> non-adjacent overlapper survive and **forward** the doubly-claimed address (`0x55` → `0x9005`) —
+> a false edge, the exact thing the policy forbids. Fixed with a running max of ends; the new case
+> fails against the old code.
+>
+> **The spec, and why this is not a second opinion about GC semantics:** the composed batch must make
+> `asmtest_gcmove_canon` compute exactly what it *would* have computed for the same GCs had the
+> counter given them distinct boundaries. That is an identity, and it is checked against the shipping
+> transform itself — `build_separated` re-stamps the same GCs into a scaled step space where canon's
+> own multi-batch walk chains them the long way. It agrees on the live feed (`ok 11`) and, in
+> `gccanon_tracer --selftest` (pure, no dotnet/ptrace), on **691,200 probes** over 300 randomized
+> feeds of up to **5 GCs at one boundary** — every address of a synthetic heap, both sides of the
+> boundary — with the collapsed feed disagreeing on 16,250/25,600 as that oracle's own negative
+> control. Three mutants (drop part 2; subtract the image; ignore a split) are all caught.
+>
+> **What the composition does NOT fix** (unchanged from increment 1, and inherent to the transform's
+> address-identity model): a pre-window record touching memory that a GC then slides a *live* object
+> into aliases that object. That exists in the one-GC case too and is retired only by real object
+> identity (`GCBulkType`/`Node`/`Edge`), which
+> [asmtest_valtrace.h](../../../include/asmtest_valtrace.h#L316) explicitly defers.
 
 > **UPDATE 2026-07-16 — F4's stated blocker is obsolete, and the plan's own risk note was
 > wrong.** This item was written as "hard-gated on a runtime feed the .NET in-proc
@@ -263,9 +314,14 @@ without pre/post-move aliasing on a **live attach** (not just the landed pure un
 a value is attributed to the correct method+version after a tiered re-JIT (already landed for
 control, re-validated for the live data path).
 
-> **MET 2026-07-16 for the first clause** — `docker-gccanon-attach` ok 3/4/5/6: the def-use edge
-> survives a real compaction on a live attach (negative control: missing without the transform),
-> with no false alias forged. Caveat as above: exactly one GC per call-out window. The
+> **MET 2026-07-16 for the first clause** — `docker-gccanon-attach`: the def-use edge survives a
+> real compaction on a live attach (negative control: missing without the transform), with no false
+> alias forged. **Increment 2 removed the caveat** ("exactly one GC per call-out window"): the lane
+> now runs a pure `--selftest` plus one phase per `GCCANON_PHASES` value (**1, 2 and 3** compacting
+> GCs choreographed into ONE window), and at 2 and 3 the object really is moved that many times
+> — `0x…d700 → 0x…7ed8 → 0x…5a98 → 0x…3658` on 44/44 windows — with the collapse reproduced as a
+> FAILING case (the edge still missing, under-forwarded to the intermediate) before the chained feed
+> restores it at the true final address. 37 assertions green over two consecutive runs. The
 > method+version clause rides the already-landed Increment-3 attribution and is not re-proven by
 > this lane.
 
