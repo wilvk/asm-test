@@ -10,24 +10,37 @@
  * DECLINED). So the assertions below are about COVERAGE and PROVENANCE, never completeness.
  *
  * ANTI-VACUITY. Each claim carries an oracle that can actually fail:
- *   1. real checkpoint   -> islands >= 1, ntiled >= 1        (HARD; the breakpoint fired)
+ *   1. real checkpoint -> islands >= 1 AND ntiled == islands * lbr_depth. The DEPTH
+ *      equality is the assertion, not "ntiled >= 1": one hit freezes the whole 16-deep
+ *      stack, so a complete merge contributes exactly 16 endpoints. The weak form is
+ *      satisfied by island[0] ALONE — and island[0] is present BY HARDWARE CONSTRUCTION
+ *      (the breakpoint sits on the entry, so the newest retired edge is necessarily the
+ *      call that reached it), so it can never fail and leaves [1..15] compared to
+ *      nothing. Proven: dropping every other entry (i += 2) halves ntiled 16 -> 8 and
+ *      every weak check stays green.
  *   2. NEGATIVE CONTROL: a never-executed checkpoint -> islands == 0 AND ntiled == 0.
  *      Without this, "islands > 0" could be an artifact of arming rather than evidence
  *      of execution — the same shape as a test that passes because nothing moved.
  *   3. the island prefix ips[0..ntiled) CONTAINS the cold leaf's entry PC. Deterministic,
  *      not statistical: the breakpoint sits ON that entry, so the newest retired LBR
- *      entry is necessarily the call that reached it (to == the entry). This is the one
- *      that dies if the merge is dropped.
+ *      entry is necessarily the call that reached it (to == the entry).
  *   4. DIFFERENTIAL ORACLE: the same body, same period, tiled vs. UNTILED. The cold leaf
  *      runs ONCE among ~10^7 branches, so a survey at a realistic period is blind to it
  *      while tiling sees it every time. Coverage the sampler cannot reach is exactly the
  *      gap E6 exists to fill, and a merge that did nothing would collapse this to a tie.
  *
- * "covered OR truncated" (the repo's AMD-LBR rule for small fixtures): every coverage
- * claim is asserted in that shape, because LBR truncates on tiny fixtures and a bare
- * "covered" would be flaky on privileged AMD. Note the disjunction is NOT load-bearing
- * here — the test PRINTS truncated and the live lane reports 0 — so it is a robustness
- * guard, not an escape hatch that could hollow the assert out.
+ * "covered OR truncated" — the repo's rule for LBR-derived coverage on small fixtures,
+ * and it is applied here with the term that MATTERS: tile_truncated (the ISLAND merge
+ * lost endpoints), NEVER the survey-wide truncated. The rule is sound only when the
+ * truncation term is CAUSALLY TIED to the property asserted. `truncated` is owned by the
+ * SAMPLER — it also fires when the sampler's 256 KiB ring runs near-full, which says
+ * nothing whatever about whether this island kept its endpoints. Disjoining island
+ * content with it is escapable by an unrelated producer, and it was: clobbering the
+ * island data and growing the hot loop until the ring filled made the managed sibling
+ * report GREEN while printing "covered? TILED=False". "We measured truncated=0" does not
+ * rescue it — that holds only for today's fixture size, and a 20-30% branch-count drift
+ * (a different Zen part, a JIT change) would pin it true forever and silently retire the
+ * assert. Pick the causally-tied term instead of sizing the fixture and hoping.
  *
  * Self-skips (exit 0) without the BPF toolchain / CAP_BPF+CAP_PERFMON / AMD LbrExtV2 —
  * but the docker-hwtrace-codeimage lane HAS all three, so on a Zen 4/5 box it runs live.
@@ -51,7 +64,10 @@ int asmtest_hwtrace_tile_window_amd(void (*run_fn)(void *), void *arg,
                                     int period, const uint64_t *checkpoints,
                                     int ncheckpoints, uint64_t *ips, size_t cap,
                                     size_t *nips, size_t *ntiled, int *islands,
-                                    int *truncated);
+                                    int *tile_truncated, int *truncated);
+/* Runtime AMD branch-stack depth (CPUID 0x80000022 EBX; 16 on every shipping part) —
+ * the exact number of endpoints ONE island must contribute. */
+int asmtest_amd_lbr_depth(void);
 
 static volatile long g_sink;
 
@@ -138,7 +154,10 @@ struct cap_result {
     size_t nips;
     size_t ntiled;
     int islands;
-    int truncated;
+    int tile_truncated; /* the ISLAND merge lost endpoints (the ONLY term an
+                         * island-content assert may honestly disjoin with) */
+    int truncated;      /* survey-wide prefix: ALSO fires on SAMPLER-ring loss,
+                         * which says nothing about island content */
     int cold_in_tiles; /* cold_leaf entry present in the ISLAND prefix        */
     int cold_anywhere; /* cold_leaf entry present anywhere in ips[]           */
     int hot_anywhere; /* hot_work entry present anywhere (sanity: we sampled) */
@@ -150,7 +169,7 @@ static void capture(const uint64_t *cps, int ncp, struct cap_result *out) {
     memset(ips, 0, sizeof ips);
     out->rc = asmtest_hwtrace_tile_window_amd(
         body, NULL, SURVEY_PERIOD, cps, ncp, ips, IPS_CAP, &out->nips,
-        &out->ntiled, &out->islands, &out->truncated);
+        &out->ntiled, &out->islands, &out->tile_truncated, &out->truncated);
     if (out->rc != ASMTEST_HW_OK)
         return;
     uint64_t cold = (uint64_t)(uintptr_t)&cold_leaf;
@@ -199,18 +218,38 @@ int main(void) {
             "checkpoint "
             "was never reached — ASMTEST_AMD_DEBUG=1 tells which");
 
-    /* --- 1. a REAL checkpoint yields islands + island-sourced endpoints -------- */
-    printf(
-        "branchtile arm: rc=%d islands=%d ntiled=%zu nips=%zu truncated=%d\n",
-        probe.rc, probe.islands, probe.ntiled, probe.nips, probe.truncated);
-    if (probe.islands >= 1 && probe.ntiled >= 1)
-        printf("ok - branchtile: a real checkpoint froze %d island(s) and "
-               "merged %zu island endpoint(s) into the survey stream\n",
-               probe.islands, probe.ntiled);
+    /* --- 1. a REAL checkpoint yields islands + a COMPLETE island ---------------- */
+    /* `depth` is the runtime branch-stack depth (16 on every shipping AMD part). ONE
+     * checkpoint hit freezes the whole stack, so a complete merge contributes EXACTLY
+     * depth endpoints — assert that, not `ntiled >= 1`. The weak form is satisfied by
+     * island[0] ALONE, and island[0] is present BY HARDWARE CONSTRUCTION (the breakpoint
+     * sits on cold_leaf's entry, so the newest retired edge is necessarily the call that
+     * reached it) — it can never fail, leaving entries [1..15] compared to nothing. That
+     * is 15 of the 16 endpoints E6 exists to add, unverified. Proven: dropping every
+     * other entry (`i += 2`) halves ntiled 16 -> 8 and the weak form stays green. */
+    const int depth = asmtest_amd_lbr_depth();
+    printf("branchtile arm: rc=%d islands=%d ntiled=%zu nips=%zu lbr_depth=%d "
+           "tile_truncated=%d truncated=%d\n",
+           probe.rc, probe.islands, probe.ntiled, probe.nips, depth,
+           probe.tile_truncated, probe.truncated);
+    if (depth <= 0) {
+        printf("not ok - branchtile: asmtest_amd_lbr_depth() returned %d on a "
+               "host that just captured an island\n",
+               depth);
+        fails++;
+    } else if (probe.islands >= 1 &&
+               probe.ntiled == (size_t)probe.islands * (size_t)depth)
+        printf("ok - branchtile: %d island(s) merged EXACTLY %zu endpoints "
+               "(islands * lbr_depth = %d * %d) — the whole frozen window, not "
+               "just its newest edge\n",
+               probe.islands, probe.ntiled, probe.islands, depth);
     else {
-        printf("not ok - branchtile: real checkpoint produced islands=%d "
-               "ntiled=%zu\n",
-               probe.islands, probe.ntiled);
+        printf(
+            "not ok - branchtile: islands=%d merged ntiled=%zu, expected "
+            "%zu (islands * lbr_depth=%d) — a partial island means endpoints "
+            "were silently dropped from the merge\n",
+            probe.islands, probe.ntiled, (size_t)probe.islands * (size_t)depth,
+            depth);
         fails++;
     }
 
@@ -232,19 +271,26 @@ int main(void) {
     }
 
     /* --- 3. the island prefix names the checkpoint's own entry ----------------- */
-    /* "covered OR truncated": the repo's rule for LBR-derived coverage on small
-     * fixtures (AMD LBR truncates; a bare "covered" flakes on privileged AMD). The
-     * printed truncated= above shows the disjunction is not what carries this. */
-    if (probe.cold_in_tiles || probe.truncated)
-        printf("ok - branchtile: the island prefix ips[0..%zu) contains the "
-               "checkpoint's entry PC 0x%llx (cold_in_tiles=%d truncated=%d) — "
-               "the frozen window's newest edge IS the call that reached it\n",
-               probe.ntiled, (unsigned long long)cold_cp, probe.cold_in_tiles,
-               probe.truncated);
+    /* "covered OR truncated" — but disjoined with tile_truncated, NEVER with the
+     * survey-wide truncated. The repo's rule is sound only when the truncation term is
+     * CAUSALLY TIED to the property asserted: `truncated` ALSO fires when the SAMPLER's
+     * ring goes near-full, which says nothing whatever about whether this island kept its
+     * endpoints — a fixture that grew until the sampler lost records would satisfy this
+     * assert forever with the island never checked again. tile_truncated means only "the
+     * island merge lost endpoints", which is exactly the honest escape for this claim. */
+    if (probe.cold_in_tiles || probe.tile_truncated)
+        printf(
+            "ok - branchtile: the island prefix ips[0..%zu) contains the "
+            "checkpoint's entry PC 0x%llx (cold_in_tiles=%d "
+            "tile_truncated=%d) — the frozen window's newest edge IS the call "
+            "that reached it\n",
+            probe.ntiled, (unsigned long long)cold_cp, probe.cold_in_tiles,
+            probe.tile_truncated);
     else {
         printf(
             "not ok - branchtile: island prefix missing the checkpoint entry "
-            "PC 0x%llx and truncated=0\n",
+            "PC 0x%llx and the island merge lost nothing "
+            "(tile_truncated=0)\n",
             (unsigned long long)cold_cp);
         fails++;
     }
@@ -262,9 +308,20 @@ int main(void) {
         capture(NULL, 0, &b);     /* untiled */
         if (a.rc == ASMTEST_HW_OK) {
             tiled_cov += a.cold_anywhere;
-            tiled_trunc += a.truncated;
+            tiled_trunc += a.tile_truncated;
             tiled_nips_tot += a.nips;
             islands_tot += a.islands;
+            /* Every trial's island must be COMPLETE, not just the probe's — a drop that
+             * only bites under repetition (ringbuf pressure) would otherwise hide here. */
+            if (depth > 0 && a.islands >= 1 &&
+                a.ntiled != (size_t)a.islands * (size_t)depth &&
+                !a.tile_truncated) {
+                printf("not ok - branchtile: trial %d merged ntiled=%zu for "
+                       "islands=%d (expected %zu) with tile_truncated=0\n",
+                       t, a.ntiled, a.islands,
+                       (size_t)a.islands * (size_t)depth);
+                fails++;
+            }
         }
         if (b.rc == ASMTEST_HW_OK) {
             untiled_cov += b.cold_anywhere;
@@ -281,16 +338,17 @@ int main(void) {
     }
     printf("branchtile differential over %d trials @ period=%d: "
            "TILED cold-leaf covered %d/%d (islands=%d, %zu endpoints, "
-           "truncated %d/%d) vs UNTILED covered %d/%d (%zu endpoints, "
+           "tile_truncated %d/%d) vs UNTILED covered %d/%d (%zu endpoints, "
            "truncated %d/%d)\n",
            TRIALS, SURVEY_PERIOD, tiled_cov, TRIALS, islands_tot,
            tiled_nips_tot, tiled_trunc, TRIALS, untiled_cov, TRIALS,
            untiled_nips_tot, untiled_trunc, TRIALS);
     /* Assert the tiled arm covers the leaf EVERY trial (deterministic), in the
-     * covered-or-truncated shape; and that it strictly beats the sampler, which is the
-     * claim E6 makes. untiled_cov is expected 0 — a sampler that somehow caught the
-     * leaf in every trial would mean SURVEY_PERIOD no longer selects the blind regime
-     * and the differential must be re-tuned, so failing loudly there is correct. */
+     * covered-or-TILE-truncated shape (never the survey-wide flag — see check 3); and
+     * that it strictly beats the sampler, which is the claim E6 makes. untiled_cov is
+     * expected 0 — a sampler that somehow caught the leaf in every trial would mean
+     * SURVEY_PERIOD no longer selects the blind regime and the differential must be
+     * re-tuned, so failing loudly there is correct. */
     if ((tiled_cov == TRIALS || tiled_trunc == TRIALS) &&
         tiled_cov > untiled_cov)
         printf("ok - branchtile differential: tiling covers the one-shot cold "

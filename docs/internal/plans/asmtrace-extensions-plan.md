@@ -174,10 +174,22 @@ this entry specified.
   documented non-goal. Legitimate for `WindowHot` precisely because that surface is a
   hot-address histogram with no completeness claim — `IsStatistical` stays TRUE for a tiled
   scope (a better-covered SURVEY, never an exact trace), and tiled endpoints never feed the
-  exact `insns[]`/`blocks[]` parity cascade. `truncated` keeps its survey meaning (endpoints
-  were LOST) and is NOT set for the inherent 16-deep island bound — that is the producer's
-  defined granularity, and making it always-true would render a caller's `covered || truncated`
-  check vacuous.
+  exact `insns[]`/`blocks[]` parity cascade.
+- **Two truncation signals, and the split is load-bearing** (`tile_truncated` /
+  `AsmTrace.TiledTruncated` vs. the survey-wide `truncated` / `Truncated`). Neither is set for
+  the inherent 16-deep island bound — that is the producer's defined granularity, and an
+  always-true flag makes every assert disjoined with it vacuous. The reason they are SEPARATE
+  is sharper, and was found by adversarial review: this repo's rule *"assert covered OR
+  truncated, never bare covered"* is sound **only when the truncation term is causally tied to
+  the property asserted**. Applied mechanically it becomes a vacuity vector — `truncated` is
+  owned by the SAMPLER (it fires when the sampler's 256 KiB ring runs near-full), which says
+  nothing about whether an island kept its endpoints. Disjoining island content with it was
+  escapable, and was escaped: clobbering island data + growing the hot loop until the ring
+  filled made the managed lane exit **0 GREEN** while printing `covered? TILED=False`. The
+  defence "we measured truncated=0" is **not** sufficient — it holds only for today's fixture
+  size, and a 20–30% branch-count drift (a different Zen part, a JIT change) would pin it true
+  and silently retire the assert forever. An island-content assert must disjoin with
+  `tile_truncated` only.
 - **Boundary assumption.** Tiling inherits the Zen 4/5 property Phase 9 validated for the region
   path: a `#DB` execution breakpoint does not evict the recent branch history before the BPF
   helper reads it. Phase 9 validated it for a `ret` boundary; the tail-`jmp` boundary assumption
@@ -189,17 +201,36 @@ this entry specified.
   island's boundary.
 - **Measured live on Zen 5** (Ryzen 9 9950X, kernel 6.17), not self-skipped —
   `make docker-hwtrace-codeimage` (native, [examples/test_branchtile.c](../../../examples/test_branchtile.c)):
-  islands=1, ntiled=16, nips=8528, truncated=0; negative control (a never-executed checkpoint)
-  islands=0/ntiled=0; differential 5/5 tiled vs **0/5** untiled @ period=50000.
-  `make docker-hwtrace-dotnet-amd` (managed): a JIT'd `ColdLeaf` entry, 16 island endpoints from
-  1 island, covered TILED=True / UNTILED=False.
-- **A managed checkpoint is not a C function entry**, and that distinction was not free:
-  `MethodHandle.GetFunctionPointer()` returns a **precode stub**, so the snapshot armed cleanly
-  (`tile_begin: armed ncp=1`) and reported `islands=0` — a silent total miss indistinguishable
-  from "the method never ran". `AsmTrace.Checkpoints` therefore resolves through the **rundown
-  jitdump** (the same path E1's `WindowHybrid` uses), which is the address that actually
-  executes. This is why the managed claim needed its own live lane rather than inheriting the
-  native test's result.
+  islands=1, **ntiled=16 == islands × lbr_depth**, nips=8528, tile_truncated=0; negative control
+  (a never-executed checkpoint) islands=0/ntiled=0; differential 5/5 tiled vs **0/5** untiled @
+  period=50000. `make docker-hwtrace-dotnet-amd` (managed): a JIT'd `ColdLeaf` entry, 16 island
+  endpoints from 1 island, covered TILED=True / UNTILED=False, `ColdLeaf` resolved distinct from
+  the later-JIT'd `ColdLeafExtra`, `Over(int32)`/`Over(string)` not conflated.
+- **The island assertion is the depth equality**, not `ntiled >= 1`. The weak form is satisfied
+  by island[0] alone — which is present by HARDWARE CONSTRUCTION (the breakpoint sits on the
+  entry, so the newest retired edge is necessarily the call that reached it) and therefore can
+  never fail, leaving 15 of the 16 endpoints E6 exists to add unverified. Proven: dropping every
+  other entry (`i += 2`) halved ntiled 16 → 8 with every weak check still green. Do NOT try to
+  assert "the `hot_work` call site appears in the island" — the body calls it 200k times with a
+  64-iteration inner loop, so `&hot_work` is >16 branches back and is legitimately ABSENT; the
+  island is [0]=the entry, [1..15]=three distinct inner-loop branch addresses.
+- **A managed checkpoint is not a C function entry**, and that distinction was not free — it
+  bit TWICE, the same way. The failure class: *an address that is real, arms cleanly, and is
+  not the requested method's.* A hardware breakpoint makes that class severe, because the
+  wrong body still yields `TiledIslands==1, TiledAddresses==16` — indistinguishable from
+  success, with the caller's coverage silently absent.
+  1. `MethodHandle.GetFunctionPointer()` returns a **precode stub**: armed
+     (`tile_begin: armed ncp=1`), never fired, `islands=0`.
+  2. Resolving by bare-name substring + newest-wins (`TryResolveHotMethod`'s ladder, correct
+     for LABELLING a sampled address where a wrong guess costs one mis-attributed sample)
+     silently arms the WRONG body: `Program::ColdLeaf` is a substring of
+     `Program::ColdLeafExtra`, and overloads share `Program::Over`.
+  `AsmTrace.Checkpoints` therefore resolves through the **rundown jitdump** (E1's path) with a
+  signature-qualified key (`Type::Method(int32)`), anchors on `(` so a prefix cannot collide,
+  and **REFUSES** — reporting via `LastCheckpointSkips` — when more than one distinct method
+  still matches. Tier bodies of the *same* method are not an ambiguity (newest runs); two
+  different methods are, and there is no honest way to pick. This is why the managed claim
+  needed its own live lane rather than inheriting the native test's result.
 
 Gated on Zen 4/5 + `CAP_BPF` + `CAP_PERFMON` + a BPF-toolchain build + Linux >= 6.10 (it
 self-skips otherwise). `ASMTEST_TILE_REQUIRE=1` turns those self-skips into FAILURES for the one

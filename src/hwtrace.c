@@ -1323,8 +1323,8 @@ size_t asmtest_amd_block_weight_sample(const struct perf_branch_entry *e,
 static int sample_window_amd_impl(void (*run_fn)(void *), void *arg, int period,
                                   const uint64_t *cps, int ncp, uint64_t *ips,
                                   size_t cap, size_t *nips, size_t *ntiled,
-                                  int *islands, int *truncated,
-                                  int block_weight) {
+                                  int *islands, int *tile_truncated,
+                                  int *truncated, int block_weight) {
     if (run_fn == NULL || ips == NULL || cap == 0)
         return ASMTEST_HW_EINVAL;
     if (nips != NULL)
@@ -1333,6 +1333,8 @@ static int sample_window_amd_impl(void (*run_fn)(void *), void *arg, int period,
         *ntiled = 0;
     if (islands != NULL)
         *islands = 0;
+    if (tile_truncated != NULL)
+        *tile_truncated = 0;
     if (truncated != NULL)
         *truncated = 0;
     if (period < 2)
@@ -1418,6 +1420,18 @@ static int sample_window_amd_impl(void (*run_fn)(void *), void *arg, int period,
                 *ntiled = tn;
             if (islands != NULL)
                 *islands = isl;
+            /* Report the tile's truncation SEPARATELY as well as folding it into the
+             * survey-wide flag. The two are NOT interchangeable, and conflating them is
+             * an anti-vacuity hazard, not a nicety: *truncated also fires when the
+             * SAMPLER's ring goes near-full, which has no causal relation to whether an
+             * island kept its endpoints. A caller asserting "the island contains X OR the
+             * capture truncated" against the survey-wide flag can therefore be satisfied
+             * by an unrelated producer's loss — the assert silently stops testing the
+             * island. *tile_truncated means ONLY: this merge lost island endpoints
+             * (ringbuf drop / ips[] full). That is the term an island-content assert may
+             * honestly be disjoined with. */
+            if (tile_truncated != NULL)
+                *tile_truncated = ttrunc;
             if (ttrunc)
                 lost = 1; /* an island was DROPPED: the merge is a prefix */
         }
@@ -1508,7 +1522,7 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
                                       int period, uint64_t *ips, size_t cap,
                                       size_t *nips, int *truncated) {
     return sample_window_amd_impl(run_fn, arg, period, NULL, 0, ips, cap, nips,
-                                  NULL, NULL, truncated, 0);
+                                  NULL, NULL, NULL, truncated, 0);
 }
 
 /* E6 variant: the SAME survey, plus the deterministic branchsnap TILED at up to
@@ -1527,19 +1541,34 @@ int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
  * crowded out); [*ntiled..*nips) is sampled. *islands = checkpoint hits merged — 0 means
  * NO island landed (checkpoint never executed, or tiling could not arm: no BPF toolchain,
  * no CAP_BPF/CAP_PERFMON, no LbrExtV2, a debugger holding a debug register), in which
- * case this degrades EXACTLY to the plain survey rather than failing. *truncated keeps
- * its survey meaning — the stream is a PREFIX (dropped/throttled sample, dropped island,
- * or ips[] full) — and is NOT set merely because tiling is islands-not-a-stream, which is
- * this producer's defined granularity. Same self-skip contract as the plain survey;
- * tiling is silently off on the Zen-2 IBS fallback (no branch stack to freeze). */
+ * case this degrades EXACTLY to the plain survey rather than failing.
+ *
+ * TWO truncation outputs, and the distinction is load-bearing — do not conflate them:
+ *   *truncated      the SURVEY-wide prefix flag, unchanged from the plain survey: a
+ *                   dropped/throttled sample, the sampler's ring near-full, a dropped
+ *                   island, or ips[] full.
+ *   *tile_truncated ONLY: this merge lost ISLAND endpoints (ringbuf drop / ips[] full).
+ *
+ * A caller asserting island CONTENT in the repo's "covered OR truncated" shape must
+ * disjoin with *tile_truncated, NEVER with *truncated. The rule exists because AMD LBR
+ * truncates on tiny fixtures — but it is only sound when the truncation term is CAUSALLY
+ * TIED to the property asserted. *truncated is owned by the SAMPLER: a fixture whose
+ * branch count grows until the sampler's ring runs near-full would make it permanently
+ * true and silently satisfy an island-content assert forever, with the island never
+ * checked again. Neither flag is set merely because tiling is islands-not-a-stream —
+ * that is this producer's defined granularity, and a truncation flag that is always true
+ * makes every assert disjoined with it vacuous.
+ *
+ * Same self-skip contract as the plain survey; tiling is silently off on the Zen-2 IBS
+ * fallback (no branch stack to freeze). */
 int asmtest_hwtrace_tile_window_amd(void (*run_fn)(void *), void *arg,
                                     int period, const uint64_t *checkpoints,
                                     int ncheckpoints, uint64_t *ips, size_t cap,
                                     size_t *nips, size_t *ntiled, int *islands,
-                                    int *truncated) {
+                                    int *tile_truncated, int *truncated) {
     return sample_window_amd_impl(run_fn, arg, period, checkpoints,
                                   ncheckpoints, ips, cap, nips, ntiled, islands,
-                                  truncated, 0);
+                                  tile_truncated, truncated, 0);
 }
 
 /* E5 variant: the AutoFDO/BOLT block-frequency reweighting behind the same survey
@@ -1551,7 +1580,7 @@ int asmtest_hwtrace_sample_window_amd_weighted(void (*run_fn)(void *),
                                                uint64_t *ips, size_t cap,
                                                size_t *nips, int *truncated) {
     return sample_window_amd_impl(run_fn, arg, period, NULL, 0, ips, cap, nips,
-                                  NULL, NULL, truncated, 1);
+                                  NULL, NULL, NULL, truncated, 1);
 }
 
 /* BEGIN/END split of the survey above — lets a caller ARM the sampler, run a block INLINE,
@@ -1758,7 +1787,7 @@ int asmtest_hwtrace_tile_window_amd(void (*run_fn)(void *), void *arg,
                                     int period, const uint64_t *checkpoints,
                                     int ncheckpoints, uint64_t *ips, size_t cap,
                                     size_t *nips, size_t *ntiled, int *islands,
-                                    int *truncated) {
+                                    int *tile_truncated, int *truncated) {
     (void)run_fn;
     (void)arg;
     (void)period;
@@ -1769,6 +1798,7 @@ int asmtest_hwtrace_tile_window_amd(void (*run_fn)(void *), void *arg,
     (void)nips;
     (void)ntiled;
     (void)islands;
+    (void)tile_truncated;
     (void)truncated;
     return ASMTEST_HW_ENOSYS;
 }

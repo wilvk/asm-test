@@ -522,10 +522,13 @@ namespace Asmtest
         // them out); [ntiled..nips) is sampled. islands = checkpoint hits merged; 0 means
         // tiling did not arm or the checkpoint never ran, and this degrades EXACTLY to the
         // plain survey. Same self-skip contract; needs CAP_BPF on top of the survey's needs.
+        // tileTruncated and truncated are DISTINCT and must not be conflated: tileTruncated
+        // means the ISLAND merge lost endpoints; truncated is the survey-wide prefix flag and
+        // ALSO fires on SAMPLER-ring loss. Only the former is causally tied to island content.
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_tile_window_amd(
             IntPtr runFn, IntPtr arg, int period, ulong[] checkpoints, int ncheckpoints,
             ulong[] ips, UIntPtr cap, out UIntPtr nips, out UIntPtr ntiled,
-            out int islands, out int truncated);
+            out int islands, out int tileTruncated, out int truncated);
         // Begin/end split of the AMD-LBR survey: arm in a ctor, drain in Dispose, so the block
         // runs INLINE between them (`using (new AsmTrace(HwBackend.AmdLbr)) { block }`). _end's
         // ips may be null (a drain-less release of a leaked scope's fd+mapping).
@@ -1849,9 +1852,10 @@ namespace Asmtest
         public int TiledIslands { get; private set; }
         /// <summary>
         /// §E6: how many leading entries of <see cref="Addresses"/> came from checkpoint
-        /// islands rather than the sampler — <c>Addresses[0..TiledIslands.._)</c>, precisely
-        /// <c>Addresses.Take(TiledAddresses)</c>. Islands are merged FIRST so the sampler can
-        /// never crowd them out of the bounded buffer.
+        /// islands rather than the sampler — exactly <c>Addresses.Take(TiledAddresses)</c>.
+        /// Islands are merged FIRST so the sampler can never crowd them out of the bounded
+        /// buffer. On a complete merge this is <see cref="TiledIslands"/> * the AMD branch-stack
+        /// depth (16 on every shipping part): one checkpoint hit freezes the whole stack.
         ///
         /// WHAT THESE GUARANTEE, exactly: at each checkpoint HIT, the ~16 most recently retired
         /// branch targets, EXACTLY. WHAT THEY DO NOT: anything about the code BETWEEN hits. The
@@ -1864,6 +1868,26 @@ namespace Asmtest
         /// survey yields a better-covered SURVEY, not an exact trace.
         /// </summary>
         public int TiledAddresses { get; private set; }
+        /// <summary>
+        /// §E6: true if the ISLAND MERGE lost endpoints — a saturated BPF ringbuf dropped a
+        /// checkpoint hit, or <see cref="Addresses"/> filled with islands left to merge.
+        ///
+        /// This is NOT <see cref="Truncated"/>, and the difference is load-bearing.
+        /// <see cref="Truncated"/> is the SURVEY-wide prefix flag and also fires when the
+        /// SAMPLER's ring goes near-full — which says nothing whatever about whether an island
+        /// kept its endpoints. An island-content assertion written in this repo's
+        /// "covered OR truncated" shape must therefore disjoin with THIS flag, never with
+        /// <see cref="Truncated"/>: that rule is sound only when the truncation term is
+        /// CAUSALLY TIED to the property asserted, and a fixture whose branch count grew until
+        /// the sampler lost records would otherwise satisfy such an assert forever, with the
+        /// island silently never checked again.
+        ///
+        /// Like <see cref="Truncated"/>, it does NOT mean "the coverage is partial" — tiled
+        /// coverage is ALWAYS partial by construction (a ~16-branch tail per hit). A flag that
+        /// is always true makes every assertion disjoined with it vacuous, so it means only:
+        /// endpoints were LOST.
+        /// </summary>
+        public bool TiledTruncated { get; private set; }
         /// <summary>§E1: for a <see cref="WindowHybrid"/> scope, the pass-1 <see cref="WindowHot"/>
         /// AMD-LBR statistical survey used to pick the hot method set that this (pass-2, exact)
         /// scope captured — inspect its <see cref="Methods"/> for the sampled hot histogram and
@@ -2542,6 +2566,19 @@ namespace Asmtest
         public const int MaxTileCheckpoints = 4;
 
         /// <summary>
+        /// §E6: one line per method the last <see cref="Checkpoints(MethodBase[], int)"/> call
+        /// could NOT resolve to an unambiguous JIT'd body, and why — an AMBIGUOUS match
+        /// (overloads / generic instantiations / a name that is a prefix of another) or no
+        /// match at all. Empty when every method resolved.
+        ///
+        /// Read it. A returned array that is quietly SHORT is indistinguishable from success
+        /// with fewer islands, and the alternative — resolving a bare name to whichever body
+        /// JIT'd last — is worse: the breakpoint arms cleanly on the WRONG method and reports
+        /// a perfect 16-entry island for code you did not ask about.
+        /// </summary>
+        public static string[] LastCheckpointSkips { get; private set; } = System.Array.Empty<string>();
+
+        /// <summary>
         /// §E6: resolve managed methods to the JIT'd-body entry PCs <see cref="WindowHot"/>'s
         /// <c>tileCheckpoints</c> wants. Each method is JIT-PREPARED
         /// (<see cref="RuntimeHelpers.PrepareMethod"/>) so a body EXISTS, and then resolved
@@ -2590,12 +2627,22 @@ namespace Asmtest
                 map.LoadJitDump(dump);
                 var addrs = new List<ulong>(methods.Length);
                 var seen = new HashSet<ulong>();
+                var unresolved = new List<string>();
                 foreach (var m in methods)
                 {
                     if (m == null) continue;
-                    if (TryResolveMethodEntry(map, m, out ulong start) && start != 0 && seen.Add(start))
-                        addrs.Add(start);
+                    if (TryResolveMethodEntry(map, m, out ulong start, out string why)
+                        && start != 0)
+                    {
+                        if (seen.Add(start)) addrs.Add(start);
+                    }
+                    else unresolved.Add(m.Name + ": " + why);
                 }
+                // A method we could not resolve UNAMBIGUOUSLY is not a checkpoint we may
+                // silently omit — the caller asked for coverage of it, and an array that is
+                // quietly short looks exactly like success with fewer islands. Record the
+                // reasons so a caller (and the demo) can print them.
+                LastCheckpointSkips = unresolved.ToArray();
                 return addrs.ToArray();
             }
             catch { return System.Array.Empty<ulong>(); }
@@ -2611,26 +2658,109 @@ namespace Asmtest
         /// default settle budget, in <c>params</c> shape.</summary>
         public static ulong[] Checkpoints(params MethodBase[] methods) => Checkpoints(methods, 300);
 
-        // §E6: one method -> its JIT'd body entry, trying progressively looser keys (most
-        // specific first) against the jitdump's "[asm] Type::Method(sig)[tier]" spelling.
-        // Mirrors TryResolveHotMethod's ladder, but keyed from reflection rather than from a
-        // sampled AsmMethod name.
-        static bool TryResolveMethodEntry(JitMethodMap map, MethodBase m, out ulong start)
+        // §E6: one method -> its JIT'd body entry, against the jitdump's real spelling
+        // (observed: "void [amd-tile] Program::ColdLeaf()[MinOptJitted]").
+        //
+        // This deliberately does NOT reuse TryResolveHotMethod's loosening ladder, and the
+        // difference matters. That ladder ends in a BARE-NAME substring match and takes the
+        // NEWEST hit — correct there (a wrong guess mislabels one sampled address) and unsafe
+        // here for two reasons a hardware breakpoint makes severe:
+        //
+        //   (a) PREFIX COLLISION. "Program::ColdLeaf" is a substring of
+        //       "...Program::ColdLeafExtra()...", and if ColdLeafExtra JIT'd later it WINS.
+        //   (b) OVERLOADS / generic instantiations. "Program::Over" matches both Over(int32)
+        //       and Over(System.String) — whichever JIT'd last wins.
+        //
+        // Either way the breakpoint arms cleanly, fires on the WRONG body, and merges a real
+        // 16-entry island: TiledIslands==1, TiledAddresses==16 — INDISTINGUISHABLE from
+        // success, with the caller's requested coverage silently absent. That is the same
+        // class as the precode-stub bug (an address that is real but not the requested
+        // method's), and the same trap the DR taint tier records: "methodscan substring must
+        // be UNIQUE to the sink method".
+        //
+        // So: anchor on '(' (which alone kills (a) — "ColdLeafExtra(" does not contain
+        // "ColdLeaf("), prefer the full signature (which kills (b)), and REFUSE rather than
+        // guess when more than one distinct method still matches.
+        static bool TryResolveMethodEntry(JitMethodMap map, MethodBase m, out ulong start,
+                                          out string why)
         {
-            start = 0;
-            ulong size;
+            start = 0; why = null;
             string type = m.DeclaringType != null ? m.DeclaringType.Name : null;
-            // "Type::Method" — specific enough to separate same-named methods on other types.
-            if (!string.IsNullOrEmpty(type)
-                && map.TryResolveEntry(type + "::" + m.Name, out start, out size)) return true;
-            if (!string.IsNullOrEmpty(type)
-                && map.TryResolveEntry(type + "." + m.Name, out start, out size)) return true;
-            // Bare method token. Last (least specific): a substring match could collide with an
-            // unrelated method whose name contains this one, so it is the fallback, not the rule.
-            if (!string.IsNullOrEmpty(m.Name)
-                && map.TryResolveEntry(m.Name, out start, out size)) return true;
-            start = 0;
-            return false;
+            if (string.IsNullOrEmpty(type)) { why = "method has no declaring type"; return false; }
+
+            // "Type::Method(p1,p2)" — the jitdump's own signature spelling.
+            var ps = m.GetParameters();
+            var spelled = new string[ps.Length];
+            for (int i = 0; i < ps.Length; i++) spelled[i] = SpellType(ps[i].ParameterType);
+            string sigKey = type + "::" + m.Name + "(" + string.Join(",", spelled) + ")";
+            // "Type::Method(" — the paren-anchored fallback for when our spelling misses the
+            // runtime's (an exotic type). Still collision-proof; not overload-proof, so the
+            // uniqueness check below is what keeps it honest.
+            string anchored = type + "::" + m.Name + "(";
+
+            List<string> names = map.MatchingNames(sigKey);
+            string key = sigKey;
+            if (names.Count == 0) { names = map.MatchingNames(anchored); key = anchored; }
+            if (names.Count == 0) { why = "no JIT'd body matches \"" + anchored + "\""; return false; }
+
+            // Distinct METHODS matching, ignoring the trailing "[tier]": the SAME method
+            // re-JIT'd at a higher tier is not an ambiguity — it is one method with two
+            // bodies, and the newest is the one that runs. Two DIFFERENT methods is an
+            // ambiguity, and there is no honest way to pick.
+            var distinct = new HashSet<string>();
+            foreach (string n in names) distinct.Add(StripTier(n));
+            if (distinct.Count > 1)
+            {
+                why = "AMBIGUOUS: " + distinct.Count + " different JIT'd methods match \"" + key
+                    + "\" (overloads, generic instantiations, or a name that is a prefix of "
+                    + "another). Refusing to guess — a checkpoint on the wrong body arms "
+                    + "cleanly and reports a perfect island for code you did not ask about.";
+                return false;
+            }
+            ulong size;
+            if (!map.TryResolveEntry(key, out start, out size)) { why = "resolve failed"; return false; }
+            return true;
+        }
+
+        // §E6: the CoreCLR jitdump's type spelling (observed: "int64 [amd-tile]
+        // Program::HotWork(int64)[MinOptJitted]"). Primitives use the runtime's short names;
+        // everything else falls back to the full name. A miss is SAFE, not silent: the
+        // signature key simply finds nothing and resolution falls back to the paren-anchored
+        // key, which still refuses an ambiguous match.
+        static string SpellType(Type t)
+        {
+            if (t == typeof(void)) return "void";
+            if (t == typeof(bool)) return "bool";
+            if (t == typeof(char)) return "char";
+            if (t == typeof(sbyte)) return "int8";
+            if (t == typeof(byte)) return "uint8";
+            if (t == typeof(short)) return "int16";
+            if (t == typeof(ushort)) return "uint16";
+            if (t == typeof(int)) return "int32";
+            if (t == typeof(uint)) return "uint32";
+            if (t == typeof(long)) return "int64";
+            if (t == typeof(ulong)) return "uint64";
+            if (t == typeof(float)) return "float32";
+            if (t == typeof(double)) return "float64";
+            if (t == typeof(IntPtr)) return "native int";
+            if (t == typeof(UIntPtr)) return "native uint";
+            // OBSERVED, not assumed: the runtime writes "void [amd-tile] Program::Over(string)",
+            // not "System.String" — it uses the ILDASM short names for these two as well.
+            if (t == typeof(string)) return "string";
+            if (t == typeof(object)) return "object";
+            return t.FullName ?? t.Name;
+        }
+
+        // §E6: drop the jitdump name's trailing "[tier]" ("...ColdLeaf()[MinOptJitted]" ->
+        // "...ColdLeaf()"), so one method's tier bodies collapse to one identity while two
+        // different methods stay two.
+        static string StripTier(string jitName)
+        {
+            if (string.IsNullOrEmpty(jitName)) return jitName;
+            int close = jitName.LastIndexOf(']');
+            if (close != jitName.Length - 1) return jitName;
+            int open = jitName.LastIndexOf('[');
+            return open > 0 ? jitName.Substring(0, open) : jitName;
         }
 
         void RunWindowHotAmd(Action body, int period, bool blockWeighted = false,
@@ -2657,6 +2787,7 @@ namespace Asmtest
             int trunc;
             UIntPtr ntiled = UIntPtr.Zero;
             int islands = 0;
+            int tileTrunc = 0;
             bool tiling = tileCheckpoints != null && tileCheckpoints.Length > 0;
             Thread.BeginThreadAffinity(); // the sampled event is on this OS thread
             try
@@ -2671,7 +2802,8 @@ namespace Asmtest
                 rc = tiling
                     ? HwNative.asmtest_hwtrace_tile_window_amd(
                         fn, IntPtr.Zero, period, tileCheckpoints, tileCheckpoints.Length,
-                        ips, (UIntPtr)ips.Length, out nips, out ntiled, out islands, out trunc)
+                        ips, (UIntPtr)ips.Length, out nips, out ntiled, out islands,
+                        out tileTrunc, out trunc)
                     : blockWeighted
                         ? HwNative.asmtest_hwtrace_sample_window_amd_weighted(
                             fn, IntPtr.Zero, period, ips, (UIntPtr)ips.Length, out nips, out trunc)
@@ -2698,6 +2830,7 @@ namespace Asmtest
             // reads TiledIslands to tell "tiling added nothing" from "tiling never ran".
             TiledIslands = islands;
             TiledAddresses = (int)(ulong)ntiled;
+            TiledTruncated = tileTrunc != 0;
             Truncated = trunc != 0;            // a prefix (dropped/throttled samples)
             // Pin the code-image version AFTER Stop() (mirrors the in-process Dispose order),
             // so a method JIT'd mid-window disassembles against the version that actually ran.
@@ -3719,6 +3852,27 @@ namespace Asmtest
                     }
             }
             return false;
+        }
+
+        /// <summary>
+        /// §E6: every recorded method name CONTAINING <paramref name="nameSubstring"/>, newest
+        /// first. <see cref="TryResolveEntry"/> answers "give me the newest match", which is
+        /// right for labelling a sampled address (a wrong guess costs a mis-attributed sample)
+        /// and WRONG for planting a hardware breakpoint (a wrong guess arms on the wrong method
+        /// and reports a perfect, indistinguishable success). A caller that must not guess uses
+        /// this to SEE the ambiguity and refuse it.
+        /// </summary>
+        internal List<string> MatchingNames(string nameSubstring)
+        {
+            var hits = new List<string>();
+            if (string.IsNullOrEmpty(nameSubstring)) return hits;
+            lock (_lock)
+            {
+                for (int i = _methods.Count - 1; i >= 0; i--)
+                    if (_methods[i].Name.Contains(nameSubstring))
+                        hits.Add(_methods[i].Name);
+            }
+            return hits;
         }
 
         protected override void OnEventSourceCreated(EventSource src)

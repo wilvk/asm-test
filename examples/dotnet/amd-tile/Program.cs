@@ -44,6 +44,23 @@ internal static class Program
         _sink += 0x5a5a;
     }
 
+    // §E6 HIGH-2 fixtures. ColdLeafExtra exists ONLY to make "Program::ColdLeaf" an
+    // ambiguous key: it is a strict PREFIX of this name, so a bare-substring resolver that
+    // takes the newest JIT'd match resolves ColdLeaf -> ColdLeafExtra's body. The breakpoint
+    // then arms cleanly, fires on the wrong method, and merges a real 16-entry island —
+    // indistinguishable from success. Checkpoints() anchors on '(' so "ColdLeaf(" cannot
+    // match "ColdLeafExtra(".
+    static void ColdLeafExtra()
+    {
+        _sink += 0x3c3c;
+    }
+
+    // An OVERLOAD PAIR: both share "Program::Over(", which the '(' anchor cannot separate.
+    // Checkpoints() prefers the full signature key ("Program::Over(int32)"), and if that
+    // ever fails to match it REFUSES rather than picking whichever JIT'd last.
+    static void Over(int x) { _sink += x; }
+    static void Over(string s) { _sink += s.Length; }
+
     // Runs HotIters times: the branchy work that dominates the window.
     static long HotWork(long x)
     {
@@ -64,6 +81,15 @@ internal static class Program
         for (long i = 0; i < HotIters; i++) a += HotWork(i);
         ColdLeaf();               // exactly once, at the very end
         _sink += (int)(a & 0xff);
+    }
+
+    // Force the collision fixtures to JIT so they are REALLY in the jitdump when Checkpoints()
+    // reads it — an unJIT'd decoy proves nothing about ambiguity.
+    static void JitTheDecoys()
+    {
+        ColdLeafExtra();
+        Over(1);
+        Over("xy");
     }
 
     // A realistic near-native survey period. The WindowHot default (16) samples so densely that
@@ -108,9 +134,46 @@ internal static class Program
         // its JIT'd-BODY entry out of the rundown jitdump — NOT MethodHandle.GetFunctionPointer(),
         // which returns a precode stub the runtime backpatches away (a breakpoint there arms
         // cleanly and never fires; see AsmTrace.Checkpoints).
-        MethodInfo cold = typeof(Program).GetMethod(
-            nameof(ColdLeaf), BindingFlags.NonPublic | BindingFlags.Static);
+        // ORDER IS THE FIXTURE. A newest-wins bare-name resolver only picks ColdLeafExtra for
+        // "Program::ColdLeaf" when ColdLeafExtra is the NEWER jitdump record — so JIT ColdLeaf
+        // FIRST and the decoys AFTER. Reversed, the trap never springs and the oracle below
+        // passes for the wrong reason (verified: with the decoys JIT'd first, the old resolver
+        // resolves ColdLeaf correctly by luck and the prefix-collision check goes green).
+        ColdLeaf();        // JIT the real target first...
+        JitTheDecoys();    // ...so ColdLeafExtra / Over are NEWER records than it
+
+        const BindingFlags PS = BindingFlags.NonPublic | BindingFlags.Static;
+        MethodInfo cold = typeof(Program).GetMethod(nameof(ColdLeaf), PS);
         ulong[] cps = AsmTrace.Checkpoints(cold);
+        foreach (string skip in AsmTrace.LastCheckpointSkips)
+            Console.WriteLine($"# checkpoint skipped — {skip}");
+
+        // HIGH-2 oracle A: ColdLeaf must resolve to ColdLeaf, NOT to the later-JIT'd
+        // ColdLeafExtra whose name contains it. A bare-substring resolver returns
+        // ColdLeafExtra's entry here; the breakpoint would arm, fire, and merge a perfect
+        // island for the wrong method. So compare against ColdLeafExtra's own resolution.
+        ulong[] extraCp = AsmTrace.Checkpoints(typeof(Program).GetMethod(nameof(ColdLeafExtra), PS));
+        if (cps.Length == 1 && extraCp.Length == 1 && cps[0] == extraCp[0])
+        {
+            Console.WriteLine($"# FAIL: ColdLeaf resolved to ColdLeafExtra's body (0x{cps[0]:x}) — "
+                              + "a prefix collision silently armed the wrong method");
+            return 1;
+        }
+
+        // HIGH-2 oracle B: an OVERLOAD pair must never resolve to one shared guess. Either the
+        // signature key separates them (two different entries) or resolution REFUSES both.
+        // What must never happen is both "resolving" to the same body.
+        ulong[] oi = AsmTrace.Checkpoints(typeof(Program).GetMethod(nameof(Over), PS, null, new[] { typeof(int) }, null));
+        ulong[] os_ = AsmTrace.Checkpoints(typeof(Program).GetMethod(nameof(Over), PS, null, new[] { typeof(string) }, null));
+        if (oi.Length == 1 && os_.Length == 1 && oi[0] == os_[0])
+        {
+            Console.WriteLine($"# FAIL: Over(int) and Over(string) both resolved to 0x{oi[0]:x} — "
+                              + "an overload collision silently armed one body for both");
+            return 1;
+        }
+        Console.WriteLine($"resolution: ColdLeaf distinct from ColdLeafExtra ✓; "
+                          + $"Over(int)/{(oi.Length == 1 ? "resolved" : "refused")} vs "
+                          + $"Over(string)/{(os_.Length == 1 ? "resolved" : "refused")} not conflated ✓");
         if (cps.Length == 0)
             return SkipOrFail("could not resolve a managed entry PC to checkpoint "
                               + "(needs the diagnostics rundown / jitdump)");
@@ -168,14 +231,54 @@ internal static class Program
         Console.WriteLine("hardware dead end on AMD (the LBR is 16 deep) and a documented non-goal.");
         Console.WriteLine("IsStatistical stays true: a better-covered SURVEY, never an exact trace.");
 
-        // The demo's own oracle, in the repo's covered-OR-truncated shape (AMD LBR truncates on
-        // small fixtures, so a bare "covered" would flake on privileged AMD).
-        if (!(tiledInIslands || tiled.Truncated))
+        // --- the demo's own ORACLES ------------------------------------------------
+        // (1) Island content, in the repo's covered-OR-truncated shape — but disjoined with
+        //     TiledTruncated (the ISLAND merge lost endpoints), NEVER with Truncated (the
+        //     survey-wide flag, which ALSO fires when the SAMPLER's 256 KiB ring goes
+        //     near-full). That rule is sound only when the truncation term is CAUSALLY TIED
+        //     to the property asserted. It is not, here: with Truncated, clobbering the island
+        //     data and growing the hot loop until the sampler's ring filled made this lane
+        //     report GREEN while printing "covered? TILED=False". The fixture is also sized
+        //     (HotIters) so sampler truncation does not occur at all — but sizing alone is a
+        //     drift hazard, so the CORRECT term is what actually guards it.
+        // (2) The differential, asserted rather than printed: tiling must cover the one-shot
+        //     leaf and the untiled survey must miss it. Printing it and asserting nothing left
+        //     the managed lane's headline claim untested.
+        int fails = 0;
+        if (!(tiledInIslands || tiled.TiledTruncated))
         {
-            Console.WriteLine("\n# FAIL: the island prefix did not contain the checkpoint entry "
-                              + "and the capture was not truncated");
-            return 1;
+            Console.WriteLine("# FAIL: the island prefix does not contain the checkpoint entry "
+                              + "and the island merge lost nothing (TiledTruncated=false)");
+            fails++;
         }
+        if (!tiledCovers)
+        {
+            Console.WriteLine("# FAIL: the tiled scope does not cover the one-shot ColdLeaf at all");
+            fails++;
+        }
+        if (plainCovers)
+        {
+            // Not a tiling bug — it means Period no longer selects the regime where the
+            // sampler is blind, so the differential has stopped demonstrating anything and
+            // must be re-tuned. Failing loudly beats printing a tie and claiming a win.
+            Console.WriteLine($"# FAIL: the UNTILED survey also covered ColdLeaf at period={Period} — "
+                              + "the differential no longer isolates what tiling adds; re-tune "
+                              + "Period/HotIters so the one-shot leaf is outside the sampler's reach");
+            fails++;
+        }
+        // (3) A complete island is TiledIslands * the 16-deep AMD branch stack. Asserting only
+        //     "> 0" is satisfied by island[0] alone — which is present by hardware construction
+        //     (the breakpoint sits on the entry, so the newest retired edge IS the call that
+        //     reached it) and can never fail, leaving 15 of 16 endpoints unverified.
+        const int LbrDepth = 16;
+        if (!tiled.TiledTruncated && tiled.TiledAddresses != tiled.TiledIslands * LbrDepth)
+        {
+            Console.WriteLine($"# FAIL: {tiled.TiledIslands} island(s) merged {tiled.TiledAddresses} "
+                              + $"endpoints, expected {tiled.TiledIslands * LbrDepth} "
+                              + "(islands * 16-deep branch stack) with no island loss reported");
+            fails++;
+        }
+        if (fails > 0) return 1;
         return 0;
     }
 }
