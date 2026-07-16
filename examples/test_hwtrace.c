@@ -3929,6 +3929,73 @@ static void test_ptrace_blockstep(void) {
     asmtest_trace_free(ss);
     asmtest_trace_free(lb);
     munmap(q, sizeof LOOP_X86);
+
+    /* --- GUARD: the same-target-conditional ambiguity (amd-tracing-plan
+     * "Same-target-conditional ambiguity -> truncated"). Two direct conditionals to the
+     * SAME label — the `||` / dual-guard shape every bounds check and null check
+     * compiles to — with the first NOT taken and the second taken. BTF gives no signal
+     * for WHICH jumped, so the greedy "first Jcc whose target == next-stop" rule ends
+     * the block at the FIRST one and silently drops the instructions between them. The
+     * plan's prescription is to detect the >1-candidate case and set truncated rather
+     * than guess. Single-step is the oracle that those instructions really ran. --- */
+    static const unsigned char GUARD_X86[] = {
+        0x48, 0x85, 0xff,                         /*  0 test rdi,rdi   */
+        0x74, 0x0c,                               /*  3 je  17         */
+        0x48, 0x85, 0xf6,                         /*  5 test rsi,rsi   */
+        0x74, 0x07,                               /*  8 je  17         */
+        0x48, 0x89, 0xf8,                         /* 10 mov rax,rdi    */
+        0x48, 0x01, 0xf0,                         /* 13 add rax,rsi    */
+        0xc3,                                     /* 16 ret            */
+        0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff, /* 17 mov rax,-1    */
+        0xc3,                                     /* 24 ret            */
+    };
+    void *g = mmap(NULL, sizeof GUARD_X86, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (g == MAP_FAILED)
+        return;
+    memcpy(g, GUARD_X86, sizeof GUARD_X86);
+    mprotect(g, sizeof GUARD_X86, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)g, (char *)g + sizeof GUARD_X86);
+
+    /* rdi=5 (first je NOT taken), rsi=0 (second je TAKEN). */
+    long gargs[2] = {5, 0}, gsres = 0, gbres = 0;
+    asmtest_trace_t *gs = asmtest_trace_new(64, 64);
+    asmtest_trace_t *gb = asmtest_trace_new(64, 64);
+    int grs =
+        asmtest_ptrace_trace_call(g, sizeof GUARD_X86, gargs, 2, &gsres, gs);
+    int grb = asmtest_ptrace_trace_call_blockstep(g, sizeof GUARD_X86, gargs, 2,
+                                                  &gbres, gb);
+    static const uint64_t G_EXP[6] = {0, 3, 5, 8, 17, 24};
+    int gseq =
+        (grs == ASMTEST_PTRACE_OK && asmtest_emu_trace_insns_total(gs) == 6);
+    for (int i = 0; gseq && i < 6; i++)
+        gseq = (gs->insns[i] == G_EXP[i]);
+    CHECK(gseq && !asmtest_emu_trace_truncated(gs),
+          "block-step guard oracle: single-step proves 0,3,5,8,17,24 all ran "
+          "(both same-target je's execute)");
+    CHECK(
+        gsres == -1 && gbres == -1,
+        "block-step guard: both drivers run the frame identically (returns -1 "
+        "via the second je)");
+    /* The block-step stream may legitimately be SHORT here — what it must never be is
+     * short AND reported complete. That is the whole rule. */
+    CHECK(grb == ASMTEST_PTRACE_OK && asmtest_emu_trace_truncated(gb),
+          "block-step guard: two conditionals sharing a target make the block "
+          "AMBIGUOUS -> truncated, never a silently short stream called "
+          "complete");
+    int gsub = 1, gi = 0; /* block-step must never invent an address */
+    for (unsigned long long i = 0; gsub && i < asmtest_emu_trace_insns_len(gb);
+         i++) {
+        while (gi < 6 && G_EXP[gi] != gb->insns[i])
+            gi++;
+        gsub = (gi < 6);
+        gi++;
+    }
+    CHECK(gsub, "block-step guard: every reconstructed address is one that "
+                "single-step saw execute, in order (an ordered subsequence)");
+    asmtest_trace_free(gs);
+    asmtest_trace_free(gb);
+    munmap(g, sizeof GUARD_X86);
 #else
     printf("# SKIP ptrace block-step: Linux x86-64 only (no AArch64 "
            "PTRACE_SINGLEBLOCK)\n");
@@ -4277,6 +4344,77 @@ static int wsig_run(int blockstep, const void *frame, long arg, long *res_out,
     return rc;
 }
 
+/* WCUT — a window frame that never returns: it calls out to wcut_die, which _exit()s.
+ * The tracee therefore dies WHILE the driver is inside its own SINGLEBLOCK/waitpid, with
+ * a partial stream already recorded — the only way to reach the driver's "the window
+ * never hit win_ret" guard. (Killing the tracee BEFORE the call instead kills it one
+ * layer earlier: the driver's first read_pc_ret gets ESRCH and returns ETRACE from the
+ * prologue, having never recorded, stopped, or evaluated reached_end.)
+ *
+ *   push rbx; mov rbx,rdi; add rbx,rbx; movabs rax,wcut_die; call rax
+ *   mov rax,rbx; pop rbx; ret        <- never reached
+ */
+#define WCUT_LEN 24u
+static const unsigned char WCUT[WCUT_LEN] = {
+    0x53,                                  /*  0 push rbx           */
+    0x48, 0x89, 0xfb,                      /*  1 mov rbx,rdi        */
+    0x48, 0x01, 0xdb,                      /*  4 add rbx,rbx        */
+    0x48, 0xb8, 0,    0, 0, 0, 0, 0, 0, 0, /*  7 movabs rax,wcut_die*/
+    0xff, 0xd0,                            /* 17 call rax           */
+    0x48, 0x89, 0xd8,                      /* 19 mov rax,rbx        */
+    0x5b,                                  /* 22 pop rbx            */
+    0xc3,                                  /* 23 ret                */
+};
+__attribute__((noinline)) static void wcut_die(void) { _exit(0); }
+
+/* WVANISH — a window frame that exit_group()s with NO taken branch first:
+ *
+ *   mov eax,231 (__NR_exit_group); xor edi,edi; syscall
+ *
+ * `syscall` is not a branch, an interrupt or an exception, so BTF raises no #DB: the
+ * driver's FIRST PTRACE_SINGLEBLOCK returns WIFEXITED without one block having closed —
+ * the window vanished having recorded nothing.
+ *
+ * This shape exists because it is the ONLY way to falsify the driver's "never reached
+ * win_ret" guard. Every path to that guard leaves the tracee dead, and whenever the
+ * stream is NON-empty the materializer independently sets truncated (its foreign reads
+ * of the dead tracee's memory all fail). So the guard's one observable effect is exactly
+ * this: an EMPTY stream from a vanished window must be reported truncated, not as a
+ * clean complete capture of nothing. A frame that merely dies mid-window (WCUT above)
+ * does NOT exercise it — it passes on the materializer's behaviour instead. */
+#define WVANISH_LEN 10u
+static const unsigned char WVANISH[WVANISH_LEN] = {
+    0xb8, 0xe7, 0x00, 0x00, 0x00, /* 0 mov eax,231 (exit_group) */
+    0x31, 0xff,                   /* 5 xor edi,edi              */
+    0x0f, 0x05,                   /* 7 syscall                  */
+    0xc3,                         /* 9 ret (never reached)      */
+};
+
+/* Run a two-argument window frame (rdi=5, rsi=0) once under `blockstep` or the
+ * per-instruction windowed entry. Used by the same-target-conditional guard leg. */
+static int wguard_run(int blockstep, const void *frame, size_t flen,
+                      long *res_out, asmtest_trace_t *tr) {
+    pid_t pid = fork();
+    if (pid < 0)
+        return ASMTEST_PTRACE_ETRACE;
+    if (pid == 0) {
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        raise(SIGSTOP);
+        ((void (*)(long, long))frame)(5, 0);
+        _exit(0);
+    }
+    int st = 0, rc = ASMTEST_PTRACE_ETRACE;
+    if (waitpid(pid, &st, 0) >= 0 && WIFSTOPPED(st) &&
+        asmtest_ptrace_run_to(pid, frame) == ASMTEST_PTRACE_OK)
+        rc = blockstep ? asmtest_ptrace_trace_attached_windowed_blockstep(
+                             pid, frame, flen, NULL, res_out, tr)
+                       : asmtest_ptrace_trace_attached_windowed(
+                             pid, frame, flen, NULL, res_out, tr);
+    kill(pid, SIGKILL);
+    waitpid(pid, &st, 0);
+    return rc;
+}
+
 /* Compare two captures of the same window instruction-for-instruction. */
 static int wdrv_streams_identical(const asmtest_trace_t *a,
                                   const asmtest_trace_t *b) {
@@ -4477,35 +4615,99 @@ static void test_ptrace_windowed_blockstep(void) {
     asmtest_trace_free(ss3);
     asmtest_trace_free(bs3);
 
-    /* ---- leg 4: a window cut short must be flagged, never reported complete ---- */
+    /* ---- leg 4: a window cut short must be flagged, never reported complete ----
+     * The tracee _exit()s from INSIDE the window, so it dies while the driver is in its
+     * own SINGLEBLOCK/waitpid with a partial stream already recorded. That is the only
+     * route to the driver's "never reached win_ret" guard: the asserts below are an
+     * unconditional conjunction (rc == OK AND truncated AND a non-empty partial), so a
+     * capture that errored out of the prologue instead cannot satisfy them. */
     {
-        asmtest_trace_t *tr4 = asmtest_trace_new(8192, 4096);
-        asmtest_addr_channel_init(chan);
-        pid_t pid = fork();
-        if (pid == 0) {
-            ptrace(PTRACE_TRACEME, 0, NULL, NULL);
-            raise(SIGSTOP);
-            ((void (*)(long))drv)(TRIPS);
-            _exit(0);
-        }
-        int st = 0, rc4 = ASMTEST_PTRACE_ETRACE;
-        if (waitpid(pid, &st, 0) >= 0 && WIFSTOPPED(st) &&
-            asmtest_ptrace_run_to(pid, drv) == ASMTEST_PTRACE_OK) {
-            /* PTRACE_O_EXITKILL is not set here (the caller owns the target), so a
-             * mid-window SIGKILL is exactly "the tracee died before the frame
-             * returned" — the window never reaches win_ret. */
-            ptrace(PTRACE_SINGLEBLOCK, pid, NULL, NULL);
-            waitpid(pid, &st, 0);
+        void *cf = mmap(NULL, WCUT_LEN, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (cf == MAP_FAILED) {
+            printf("# SKIP windowed block-step cut-short leg: mmap failed\n");
+        } else {
+            unsigned char cut[WCUT_LEN];
+            memcpy(cut, WCUT, WCUT_LEN);
+            uint64_t die = (uint64_t)(uintptr_t)&wcut_die;
+            memcpy(cut + 9, &die, 8);
+            memcpy(cf, cut, WCUT_LEN);
+            mprotect(cf, WCUT_LEN, PROT_READ | PROT_EXEC);
+            __builtin___clear_cache((char *)cf, (char *)cf + WCUT_LEN);
+
+            asmtest_trace_t *tr4 = asmtest_trace_new(8192, 4096);
+            pid_t pid = fork();
+            if (pid == 0) {
+                ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+                raise(SIGSTOP);
+                ((void (*)(long))cf)(3);
+                _exit(0);
+            }
+            int st = 0, rc4 = ASMTEST_PTRACE_ETRACE;
+            if (waitpid(pid, &st, 0) >= 0 && WIFSTOPPED(st) &&
+                asmtest_ptrace_run_to(pid, cf) == ASMTEST_PTRACE_OK)
+                rc4 = asmtest_ptrace_trace_attached_windowed_blockstep(
+                    pid, cf, WCUT_LEN, NULL, NULL, tr4);
             kill(pid, SIGKILL);
-            rc4 = asmtest_ptrace_trace_attached_windowed_blockstep(
-                pid, drv, WDRV_LEN, NULL, NULL, tr4);
+            waitpid(pid, &st, 0);
+            /* The frame runs 0,1,4,7,17 and then never comes back. */
+            uint64_t cv = (uint64_t)(uintptr_t)cf;
+            static const uint64_t COFF[5] = {0, 1, 4, 7, 17};
+            int partial = (asmtest_emu_trace_insns_len(tr4) == 5);
+            for (int i = 0; partial && i < 5; i++)
+                partial = (tr4->insns[i] == cv + COFF[i]);
+            CHECK(rc4 == ASMTEST_PTRACE_OK && partial,
+                  "windowed block-step: a tracee that dies INSIDE the window "
+                  "still yields its partial stream (0,1,4,7,17)");
+            CHECK(
+                rc4 == ASMTEST_PTRACE_OK && asmtest_emu_trace_truncated(tr4),
+                "windowed block-step: that partial is flagged TRUNCATED — a "
+                "window that never reached win_ret is never reported complete");
+            asmtest_trace_free(tr4);
+            munmap(cf, WCUT_LEN);
         }
-        kill(pid, SIGKILL);
-        waitpid(pid, &st, 0);
-        CHECK(rc4 != ASMTEST_PTRACE_OK || asmtest_emu_trace_truncated(tr4),
-              "windowed block-step: a window cut short is truncated, never a "
-              "partial stream reported complete");
-        asmtest_trace_free(tr4);
+    }
+
+    /* ---- leg 4b: the window that VANISHES — the ONLY falsifier of the
+     * "never reached win_ret" guard (see WVANISH). The tracee exit_group()s with no
+     * taken branch, so nothing is recorded and the materializer has no failed read to
+     * set truncated from: only the guard can. Without it this returns a clean, complete,
+     * EMPTY capture of a window that ran and died. ---- */
+    {
+        void *vf = mmap(NULL, WVANISH_LEN, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (vf == MAP_FAILED) {
+            printf("# SKIP windowed block-step vanish leg: mmap failed\n");
+        } else {
+            memcpy(vf, WVANISH, WVANISH_LEN);
+            mprotect(vf, WVANISH_LEN, PROT_READ | PROT_EXEC);
+            __builtin___clear_cache((char *)vf, (char *)vf + WVANISH_LEN);
+            asmtest_trace_t *tr4b = asmtest_trace_new(64, 64);
+            pid_t pid = fork();
+            if (pid == 0) {
+                ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+                raise(SIGSTOP);
+                ((void (*)(void))vf)();
+                _exit(0);
+            }
+            int st = 0, rc4b = ASMTEST_PTRACE_ETRACE;
+            if (waitpid(pid, &st, 0) >= 0 && WIFSTOPPED(st) &&
+                asmtest_ptrace_run_to(pid, vf) == ASMTEST_PTRACE_OK)
+                rc4b = asmtest_ptrace_trace_attached_windowed_blockstep(
+                    pid, vf, WVANISH_LEN, NULL, NULL, tr4b);
+            kill(pid, SIGKILL);
+            waitpid(pid, &st, 0);
+            CHECK(rc4b == ASMTEST_PTRACE_OK &&
+                      asmtest_emu_trace_insns_len(tr4b) == 0,
+                  "windowed block-step: a window that exit_group()s before any "
+                  "block closes records nothing and still returns OK");
+            CHECK(rc4b == ASMTEST_PTRACE_OK &&
+                      asmtest_emu_trace_truncated(tr4b),
+                  "windowed block-step: that EMPTY vanished window is flagged "
+                  "TRUNCATED — the !reached_end guard's one observable effect");
+            asmtest_trace_free(tr4b);
+            munmap(vf, WVANISH_LEN);
+        }
     }
 
     /* ---- leg 5: a SIGSEGV raised and handled INSIDE the window ---- */
@@ -4550,6 +4752,70 @@ static void test_ptrace_windowed_blockstep(void) {
             asmtest_trace_free(ssg);
             asmtest_trace_free(bsg);
             munmap(sf, WSIG_LEN);
+        }
+    }
+
+    /* ---- leg 6: the same-target-conditional ambiguity, through the WINDOW ----
+     * The `||` / dual-guard shape (two direct conditionals to one label, first not
+     * taken, second taken). BTF cannot say which jumped, so the block is ambiguous and
+     * must be reported truncated rather than silently short. Same rule and same fixture
+     * shape as the region-form leg in test_ptrace_blockstep. */
+    {
+        static const unsigned char WGUARD[] = {
+            0x48, 0x85, 0xff,                         /*  0 test rdi,rdi */
+            0x74, 0x0c,                               /*  3 je  17       */
+            0x48, 0x85, 0xf6,                         /*  5 test rsi,rsi */
+            0x74, 0x07,                               /*  8 je  17       */
+            0x48, 0x89, 0xf8,                         /* 10 mov rax,rdi  */
+            0x48, 0x01, 0xf0,                         /* 13 add rax,rsi  */
+            0xc3,                                     /* 16 ret          */
+            0x48, 0xc7, 0xc0, 0xff, 0xff, 0xff, 0xff, /* 17 mov rax,-1   */
+            0xc3,                                     /* 24 ret          */
+        };
+        void *gf = mmap(NULL, sizeof WGUARD, PROT_READ | PROT_WRITE,
+                        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (gf == MAP_FAILED) {
+            printf("# SKIP windowed block-step guard leg: mmap failed\n");
+        } else {
+            memcpy(gf, WGUARD, sizeof WGUARD);
+            mprotect(gf, sizeof WGUARD, PROT_READ | PROT_EXEC);
+            __builtin___clear_cache((char *)gf, (char *)gf + sizeof WGUARD);
+            asmtest_trace_t *gsw = asmtest_trace_new(64, 64);
+            asmtest_trace_t *gbw = asmtest_trace_new(64, 64);
+            long grw = 0, gbw_res = 0;
+            int rcgs = wguard_run(0, gf, sizeof WGUARD, &grw, gsw);
+            int rcgb = wguard_run(1, gf, sizeof WGUARD, &gbw_res, gbw);
+            uint64_t gv = (uint64_t)(uintptr_t)gf;
+            static const uint64_t GW_EXP[6] = {0, 3, 5, 8, 17, 24};
+            int gwseq = (rcgs == ASMTEST_PTRACE_OK &&
+                         asmtest_emu_trace_insns_len(gsw) == 6);
+            for (int i = 0; gwseq && i < 6; i++)
+                gwseq = (gsw->insns[i] == gv + GW_EXP[i]);
+            CHECK(
+                gwseq && !asmtest_emu_trace_truncated(gsw),
+                "windowed block-step guard oracle: the per-instruction window "
+                "proves 0,3,5,8,17,24 all ran");
+            CHECK(grw == -1 && gbw_res == -1,
+                  "windowed block-step guard: both drivers run the frame "
+                  "identically (returns -1 via the second je)");
+            CHECK(
+                rcgb == ASMTEST_PTRACE_OK && asmtest_emu_trace_truncated(gbw),
+                "windowed block-step guard: two conditionals sharing a target "
+                "make the block AMBIGUOUS -> truncated, never silently short");
+            int gwsub = 1, gwi = 0;
+            for (unsigned long long i = 0;
+                 gwsub && i < asmtest_emu_trace_insns_len(gbw); i++) {
+                while (gwi < 6 && gv + GW_EXP[gwi] != gbw->insns[i])
+                    gwi++;
+                gwsub = (gwi < 6);
+                gwi++;
+            }
+            CHECK(gwsub,
+                  "windowed block-step guard: every reconstructed address "
+                  "is one the per-instruction window saw execute, in order");
+            asmtest_trace_free(gsw);
+            asmtest_trace_free(gbw);
+            munmap(gf, sizeof WGUARD);
         }
     }
 
