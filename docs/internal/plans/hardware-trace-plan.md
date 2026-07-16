@@ -132,11 +132,54 @@ strictly hardware-gated; the second is gated on the first:
   `test_wholewindow_decode`). Note the distinction, which earlier revisions of this plan
   blurred: the **decode** is *not* hardware-gated — the synthetic fixture validates it
   end-to-end here today. What genuinely needs silicon is **PT capture**: producing a real
-  AUX stream from a real `intel_pt` PMU against a live PID. So the honest reason the
-  wiring stays forward-look is that **the capture it would dispatch from does not exist**,
-  not that the wiring is unvalidatable — a fixture-fed facade test could cover most of it.
-  The residual hardware-gated risk is narrow: whether real-silicon AUX (PSB cadence,
-  overflow/`ovf`, timing packets, perf AUX wraparound) matches what the encoder emits.
+  AUX stream from a real `intel_pt` PMU against a live PID. The residual hardware-gated
+  risk is narrow: whether real-silicon AUX (PSB cadence, overflow/`ovf`, timing packets,
+  perf AUX wraparound) matches what the encoder emits.
+
+  > **Correction (2026-07-17): "a fixture-fed facade test could cover most of it" was
+  > OVERSTATED — retracted.** An earlier revision of this bullet claimed the wiring was
+  > merely gated on the capture existing and that a fixture-fed facade test could cover
+  > most of it. Checked against the code, that is wrong on both halves:
+  >
+  > 1. **No facade entry point can reach ANY PT code on a non-PT host — by construction,
+  >    not by omission.** `asmtest_hwtrace_init` refuses the backend up front:
+  >    `if (!asmtest_hwtrace_available(opts->backend)) return ASMTEST_HW_EUNAVAIL;`
+  >    ([hwtrace.c:594-595](../../../src/hwtrace.c)). For `INTEL_PT`, `available()` requires
+  >    `cpu_matches` -> `vendor_is("GenuineIntel")` ([hwtrace.c:212](../../../src/hwtrace.c),
+  >    read from `/proc/cpuinfo`) **and** `pmu_type` >= 0 (the
+  >    `/sys/bus/event_source/devices/intel_pt/type` node). Both are hardware facts. So on
+  >    the dev boxes (`AuthenticAMD`, no `intel_pt` node — both verified) `init(INTEL_PT)`
+  >    returns `EUNAVAIL`, `g_inited` is never set with `backend == INTEL_PT`, and
+  >    `begin` / `end` / `begin_window` / `end_window` cannot execute a single line of PT
+  >    code. A "fixture-fed facade test" of the PT dispatch would therefore have to
+  >    **subvert the availability gate** — which tests a mock of the hardware detector, not
+  >    the facade.
+  > 2. **There is no honest wiring to add ahead of the capture.** `begin_window`'s PT arm
+  >    *is* the capture (`perf_event_open` on the `intel_pt` PMU + AUX mmap + a recorder
+  >    `when`); it self-skips at [hwtrace.c:2585-2587](../../../src/hwtrace.c). Wiring only
+  >    `end_window`'s PT arm would create a decode arm that `begin_window` can never arm —
+  >    dead code with no production caller, i.e. exactly the "half-path no real caller would
+  >    take". Writing the capture blind instead would ship untested hardware code, which the
+  >    house rule forbids.
+  >
+  > **What is actually left after `test_wholewindow_decode`** is the capture arm (hardware,
+  > and all of the risk) plus a ~2-line truncation policy (`overflow || rc != OK ->
+  > truncated`, the shape at [hwtrace.c:2081](../../../src/hwtrace.c)) that is unreachable
+  > without it. That is a small minority of the path, not "most of it". **The facade
+  > dispatch for PT is genuinely Intel-PT-gated; it stays forward-look, and this plan should
+  > stop implying a test could close it.**
+  >
+  > **What WAS coverable here, and is now done — the decode's discriminating power.**
+  > `asmtest_pt_encode_fixture` could previously emit only the **taken**-`jle` walk, so
+  > `test_wholewindow_decode`'s `{0,3,6,c,11}` assertion could not distinguish a decoder
+  > that FOLLOWS the TNT from one whose expected answer was merely baked into the single
+  > stream the fixture could produce — a non-exhaustive fixture, the failure mode this repo
+  > keeps hitting. The fixture now takes a `taken` argument and both sides are driven
+  > through **both** real libipt bodies (`asmtest_pt_decode` and `asmtest_pt_decode_window`):
+  > taken -> `{0,3,6,0xc,0x11}` / blocks `{0,0x11}`; not-taken -> `{0,3,6,0xc,0xe,0x11}` /
+  > blocks `{0,0xe}`. The `0xe` `dec` is the discriminator — same bytes, same address, one
+  > flipped TNT bit. Mutation-proof that these can fail: hardcoding the encoder's TNT
+  > payload back to `1` fails checks 108, 109 and 116 while the taken assertions stay green.
 
 ---
 
@@ -349,8 +392,14 @@ position.
   [:3217](../../../examples/test_hwtrace.c) against a synthetic AUX stream from
   `asmtest_pt_encode_fixture` ([pt_backend.c:294](../../../src/pt_backend.c)) and asserts
   offsets `{0,3,6,0xc,0x11}` / blocks `{0,0x11}` / not-truncated through the real libipt
-  body — **no PT hardware required**. What it lacks is a **production caller**: the PT
-  capture that would drive it does not exist yet (see Status).
+  body — **no PT hardware required**. Since 2026-07-17 the fixture takes a `taken` argument
+  and BOTH sides of the `jle` are driven through both decode entries, so the assertion is
+  no longer one-sided: not-taken yields `{0,3,6,0xc,0xe,0x11}` / blocks `{0,0xe}`, and the
+  `0xe` `dec` block discriminates a decoder that follows the TNT from a baked-in answer.
+  What it lacks is a **production caller**: the PT capture that would drive it does not
+  exist yet, and — see the Phase 2 correction above — no facade entry point can reach it on
+  a non-Intel host anyway, because `asmtest_hwtrace_init` refuses the backend at the
+  `available()` gate (see Status).
 - libipt (or libxdc) decode; reuse the Capstone layer to render recovered bytes —
   no new decoder API in the bindings.
 - The hypervisor/EPT frontier as the research-grade, maximum-stealth option:
@@ -369,12 +418,18 @@ ptrace stepper (the AMD-host route that needs no PT). The **recorder-backed libi
 is written *and* end-to-end validated** — `asmtest_pt_decode_window`
 ([src/pt_backend.c:221](../../../src/pt_backend.c)) reconstructs the ground-truth walk from
 a synthetic AUX stream (`asmtest_pt_encode_fixture`) in `test_wholewindow_decode`, on
-hosts with no PT silicon; it simply has no production caller. What remains forward-look is
-strictly the **PT capture and its wiring**: attach-to-live-PID PT capture, dispatched into
-that decode entry. The **capture** is genuinely gated on **bare-metal Intel PT hardware,
-which neither dev box provides** (Zen 5 9950X / Zen 2 4900HS). The wiring is gated on the
-capture existing, not on hardware per se — the fixture shows the decode side is testable
-here. Distinct from the
+hosts with no PT silicon, now for BOTH sides of the `jle` (the not-taken control proves the
+decode follows the TNT rather than reproducing a baked-in answer); it simply has no
+production caller. What remains forward-look is strictly the **PT capture and its wiring**:
+attach-to-live-PID PT capture, dispatched into that decode entry. The **capture** is
+genuinely gated on **bare-metal Intel PT hardware, which neither dev box provides** (Zen 5
+9950X / Zen 2 4900HS). **The wiring is gated on the same hardware, not merely on the
+capture existing** — a 2026-07-17 correction to what this paragraph used to claim: every
+facade entry refuses `INTEL_PT` at the `asmtest_hwtrace_init` -> `asmtest_hwtrace_available`
+-> `vendor_is("GenuineIntel")` + `intel_pt`-PMU gate, so on a non-Intel host no facade code
+path reaches the decode at all and a fixture-fed *facade* test is not constructible without
+faking that gate. The fixture shows the **decode** side is testable here; it does not make
+the **dispatch** testable here. See the Phase 2 correction above. Distinct from the
 Phase 0-8 work of the native-trace plan, which traces code asm-test generates itself;
 depends on this plan's Phase 1 (PT substrate) and **native-trace Phase 5**
 (instruction-mode semantics). See the analysis doc for the ranked approaches, per-runtime

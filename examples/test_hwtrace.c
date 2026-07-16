@@ -114,7 +114,7 @@ int asmtest_pt_decode_window(const uint8_t *aux, size_t aux_len,
                              const asmtest_codeimage_t *img, uint64_t when,
                              asmtest_trace_t *trace);
 int asmtest_pt_encode_fixture(uint8_t *buf, size_t cap, uint64_t base_ip,
-                              size_t *out_len);
+                              int taken, size_t *out_len);
 
 /* mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two blocks). */
 static const unsigned char ROUTINE[] = {0x48, 0x89, 0xf8, 0x48, 0x01, 0xf0,
@@ -3183,7 +3183,7 @@ static void test_wholewindow_decode(void) {
     uint8_t aux[256];
     size_t aux_len = 0;
     int enc = asmtest_pt_encode_fixture(aux, sizeof aux, (uint64_t)(uintptr_t)p,
-                                        &aux_len);
+                                        1, &aux_len);
     CHECK(enc == ASMTEST_HW_OK && aux_len > 0,
           "wholewindow decode: libipt encoded a synthetic PT AUX stream");
 
@@ -3206,7 +3206,49 @@ static void test_wholewindow_decode(void) {
                   asmtest_trace_covered(rt, 0x11) &&
                   asmtest_emu_trace_blocks_len(rt) == 2,
               "pt_decode (region-scoped): block partition == {0, 0x11}");
+        CHECK(!asmtest_trace_covered(rt, 0xe),
+              "pt_decode (region-scoped): the 0xe dec block is NOT covered — "
+              "the taken TNT skipped it (see the not-taken control below)");
         asmtest_trace_free(rt);
+    }
+
+    /* (A2) NOT-TAKEN CONTROL — the fixture's discriminating other side.
+     * Everything above asserts a walk the fixture could only ever emit ONE of, so on
+     * its own it cannot tell a decoder that FOLLOWS the TNT from one whose answer is
+     * merely baked in: {0,3,6,c,11} is the only stream the encoder produced. Flip the
+     * TNT to NOT-taken and the jle falls through, so the `dec` at 0xe RUNS and the walk
+     * becomes {0,3,6,c,e,11} with blocks {0,0xe}. The 0xe `dec` is the discriminator:
+     * present here, absent above, from the SAME bytes at the SAME address — the only
+     * difference is the one TNT bit. That is the proof the decode is driven by the
+     * packet stream. (Mutation-checked: hardcoding the encoder's TNT payload back to 1
+     * makes exactly this block fail.) */
+    if (enc == ASMTEST_HW_OK) {
+        uint8_t naux[256];
+        size_t naux_len = 0;
+        int nenc = asmtest_pt_encode_fixture(
+            naux, sizeof naux, (uint64_t)(uintptr_t)p, 0, &naux_len);
+        CHECK(nenc == ASMTEST_HW_OK && naux_len > 0,
+              "pt_decode (not-taken control): libipt encoded the NOT-taken TNT "
+              "variant");
+        if (nenc == ASMTEST_HW_OK) {
+            static const uint64_t NEXPECT[] = {0x0, 0x3, 0x6, 0xc, 0xe, 0x11};
+            asmtest_trace_t *nt = asmtest_trace_new(64, 64);
+            int rc = asmtest_pt_decode(naux, naux_len, p, sizeof ROUTINE, nt);
+            CHECK(
+                rc == ASMTEST_HW_OK,
+                "pt_decode (not-taken control): decodes the NOT-taken stream");
+            int seq = (asmtest_emu_trace_insns_total(nt) == 6);
+            for (size_t i = 0; seq && i < 6; i++)
+                seq = (nt->insns[i] == NEXPECT[i]);
+            CHECK(seq,
+                  "pt_decode (not-taken control): offsets == "
+                  "{0,3,6,c,e,11} — the decode FOLLOWS the TNT bit (the "
+                  "0xe dec runs), so the taken walk above is not baked in");
+            CHECK(asmtest_trace_covered(nt, 0xe),
+                  "pt_decode (not-taken control): the 0xe dec block IS covered "
+                  "— the discriminator the taken walk must lack");
+            asmtest_trace_free(nt);
+        }
     }
 
     /* (B) Whole-window decode: read_recorder over a self (pid==0) code-image timeline,
@@ -3236,7 +3278,34 @@ static void test_wholewindow_decode(void) {
             CHECK(!asmtest_emu_trace_truncated(tr),
                   "pt_decode_window: complete — no in-region filter truncated "
                   "it");
+            CHECK(!asmtest_trace_covered(tr, 0xe),
+                  "pt_decode_window: the 0xe dec block is NOT covered (taken "
+                  "TNT skipped it)");
             asmtest_trace_free(tr);
+
+            /* The whole-window path's own NOT-TAKEN control: same recorder-backed
+             * image, same bytes, one flipped TNT bit -> the 0xe dec must appear.
+             * Without this, pt_decode_window's assertions above are one-sided too. */
+            uint8_t waux[256];
+            size_t waux_len = 0;
+            if (asmtest_pt_encode_fixture(waux, sizeof waux,
+                                          (uint64_t)(uintptr_t)p, 0,
+                                          &waux_len) == ASMTEST_HW_OK) {
+                static const uint64_t WNEXPECT[] = {0x0, 0x3, 0x6,
+                                                    0xc, 0xe, 0x11};
+                asmtest_trace_t *wn = asmtest_trace_new(64, 64);
+                int wrc =
+                    asmtest_pt_decode_window(waux, waux_len, img, when, wn);
+                int wseq = (wrc == ASMTEST_HW_OK &&
+                            asmtest_emu_trace_insns_total(wn) == 6);
+                for (size_t i = 0; wseq && i < 6; i++)
+                    wseq = (wn->insns[i] == WNEXPECT[i]);
+                CHECK(wseq && asmtest_trace_covered(wn, 0xe),
+                      "pt_decode_window (not-taken control): offsets == "
+                      "{0,3,6,c,e,11} and the 0xe dec block IS covered — the "
+                      "recorder-backed decode follows the TNT too");
+                asmtest_trace_free(wn);
+            }
         }
         asmtest_codeimage_free(img);
     } else if (enc == ASMTEST_HW_OK) {
