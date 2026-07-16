@@ -41,8 +41,15 @@ jobs:
           # `if` (not `&& … || true`) so a genuine Linux apt failure fails the
           # step — else the payload silently ships hwtrace without PT/CoreSight
           # decoders — while still no-op'ing on the non-Linux (macOS) slots.
-          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y \
-            patchelf cmake libipt-dev libopencsd-dev; fi
+          # libipt (Intel PT decode) is x86-only — no libipt-dev exists on Ubuntu
+          # ports/arm64 — so install it only on x86_64 and keep OpenCSD (CoreSight)
+          # on both. Same split as the ci.yml payload lane (921e711); without it the
+          # arm64 slot dies on `E: Unable to locate package libipt-dev`, and since
+          # native-all `needs: [native]` the WHOLE release produces no payload.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get install -y patchelf cmake libopencsd-dev
+            if [ "$(uname -m)" = "x86_64" ]; then sudo apt-get install -y libipt-dev; fi
+          fi
       - name: Build Keystone + Capstone from source (pinned optional tiers)
         run: ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
       - name: Stage the host's native payload (superset + vendored deps + tiers + licenses)
@@ -158,9 +165,12 @@ jobs:
       - name: Install build deps + patchelf + tier deps, build Keystone + Capstone
         run: |
           make deps DEPS_ARGS=--asm
-          # `if` so a real Linux apt failure fails the step (see native job).
-          if [ "$RUNNER_OS" = "Linux" ]; then sudo apt-get install -y \
-            patchelf cmake libipt-dev libopencsd-dev; fi
+          # `if` so a real Linux apt failure fails the step, and libipt only on
+          # x86_64 — it does not exist on Ubuntu ports/arm64 (see native job).
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get install -y patchelf cmake libopencsd-dev
+            if [ "$(uname -m)" = "x86_64" ]; then sudo apt-get install -y libipt-dev; fi
+          fi
           ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
       - name: Build the platform-tagged wheel (superset + tiers + vendored deps)
         run: pip install build twine auditwheel delocate && make python-package
