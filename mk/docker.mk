@@ -325,6 +325,19 @@ docker-gcprofiler-probe:
 	  -t asmtest-gcprofiler-probe .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-gcprofiler-probe
 
+# F4 ATTACH-MODE profiler go/no-go PROBE (live-attach-dataflow-followup-plan.md F4). Unlike the
+# gcprofiler probe this needs NO DynamoRIO and no SYS_PTRACE — it is the out-of-band ptrace tier's
+# question (dotnet SDK + C++ toolchain + git only): can a CLR profiler be ATTACHED to an
+# already-running dotnet over its diagnostics port (CORECLR_ENABLE_PROFILING is startup-read, so the
+# live-attach tier cannot use the DR tier's env-var wiring) and still receive
+# ICorProfilerCallback4::MovedReferences2 GC-move ranges? Runs `make attachprof-probe`. See
+# docs/internal/analysis/f4-attach-profiler-probe-findings.md.
+.PHONY: docker-attachprof-probe
+docker-attachprof-probe:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.attachprof-probe \
+	  --build-arg BASE=$(DOCKER_BASE) -t asmtest-attachprof-probe .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-attachprof-probe
+
 # MANAGED-ATTACH SAFEPOINT plan Increment-1 suspend-primitive probe. Same image shape as the
 # gcprofiler probe (DynamoRIO + .NET SDK + git for the CoreCLR profiler headers), no SYS_PTRACE
 # (launch, not attach): drives ICorProfilerInfo10::SuspendRuntime/ResumeRuntime cycles natively and

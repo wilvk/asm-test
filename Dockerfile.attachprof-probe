@@ -1,0 +1,36 @@
+# Dockerfile.attachprof-probe — the F4 ATTACH-MODE profiler go/no-go PROBE
+# (docs/internal/plans/live-attach-dataflow-followup-plan.md F4; findings in
+# docs/internal/analysis/f4-attach-profiler-probe-findings.md). Answers the one open question the
+# plan named for the ptrace live-attach tier: CORECLR_ENABLE_PROFILING is read at STARTUP, so the
+# tier — which attaches to processes asmspy did NOT launch — cannot reuse the DR tier's
+# startup-env-var profiler wiring. Can a profiler instead be ATTACHED to an already-running dotnet
+# over its diagnostics port and still receive ICorProfilerCallback4::MovedReferences2 GC-move
+# {old,new,len} triples?
+#
+# Deliberately NO DynamoRIO: this is the out-of-band ptrace tier, so the image is only the .NET SDK
+# + a C++ toolchain + git (to fetch the pinned CoreCLR profiler headers corprof.h/cor.h + the PAL
+# from dotnet/runtime). Linux x86-64 only. No SYS_PTRACE either — the attach goes through the
+# runtime's own diagnostics IPC socket, not ptrace.
+# Build + run:  make docker-attachprof-probe
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential pkg-config curl ca-certificates git \
+      dotnet-sdk-8.0 \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+# The lane fetches the pinned CoreCLR profiler headers, builds the attach-mode profiler, a PLAIN
+# compacting-GC victim (started with NO CORECLR_* env vars), and the
+# Microsoft.Diagnostics.NETCore.Client attacher; starts the victim, attaches MID-RUN, and asserts
+# InitializeForAttach + SetEventMask + post-attach MovedReferences2 ranges + victim survival.
+# Self-skips cleanly if any prerequisite is absent, but here all are installed, so it executes.
+CMD set -eux; \
+    make attachprof-probe

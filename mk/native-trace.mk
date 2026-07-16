@@ -1414,6 +1414,133 @@ else
 	 [ "$$init" -ge 1 ] && [ "$$rc" -eq 0 ] && [ "$$hello" -ge 1 ] && [ "$$crash" -eq 0 ] && [ "$$dr" -ge 1 ]
 endif
 
+# --- F4 ATTACH-MODE profiler PROBE: MovedReferences2 on a process we did NOT launch (go/no-go) ---
+# The spike named in docs/internal/plans/live-attach-dataflow-followup-plan.md (F4). The DR taint
+# tier gets its GC-move {old,new,len} triples from an ICorProfilerCallback4::MovedReferences2
+# profiler wired in with CORECLR_ENABLE_PROFILING — but that variable is read at STARTUP, and the
+# ptrace live-attach tier attaches to processes asmspy did NOT launch. So: can a profiler be
+# attached to an ALREADY-RUNNING dotnet over its diagnostics port (dotnet-diagnostic-<pid>) and
+# STILL receive the move ranges? An attaching profiler gets ICorProfilerCallback3::
+# InitializeForAttach (never Initialize) + ProfilerAttachComplete, and must set its event mask from
+# there; COR_PRF_MONITOR_GC is inside COR_PRF_ALLOWABLE_AFTER_ATTACH, so it SHOULD be settable.
+#
+# Lane: build the attach-mode profiler (examples/attachprof_probe/attachprof.cpp), a PLAIN
+# long-running compacting-GC victim started with NO CORECLR_* env at all, and an attacher driving
+# Microsoft.Diagnostics.NETCore.Client's DiagnosticsClient.AttachProfiler; attach MID-RUN and assert
+# InitializeForAttach fires, SetEventMask succeeds, MovedReferences2 delivers ranges AFTER the
+# attach (zero before it), and the victim survives. Needs NO DynamoRIO — this is the out-of-band
+# ptrace tier, so the lane is just the .NET SDK + a C++ toolchain + git (pinned CoreCLR profiler
+# headers, shared with the gcprofiler probe). Kill criteria (any = NO-GO, a valid result): attach
+# rejected / InitializeForAttach never fires; SetEventMask fails (e.g.
+# CORPROF_E_UNSUPPORTED_FOR_ATTACHING_PROFILER 0x80131363); no MovedReferences2 post-attach; victim
+# crashes or hangs. The body of `make docker-attachprof-probe`; findings in
+# docs/internal/analysis/f4-attach-profiler-probe-findings.md.
+ATTACHPROF_CLSID  ?= {C6D4E3F2-3333-4444-5555-666677778888}
+ATTACHPROF_ROUNDS ?= 30
+# Self-skip like the DR lanes do — but note the DIFFERENCE. The sibling probes write their tool
+# checks as recipe lines (`command -v dotnet || { echo SKIP; exit 0; }`); that idiom is only sound
+# BEHIND an `ifndef DR_AVAILABLE` gate, because `exit 0` ends that ONE recipe line's shell and make
+# cheerfully runs the next line anyway. This lane has no DR gate (it needs no DynamoRIO), so the
+# check has to be a PARSE-time conditional or a `make attachprof-probe` on a dotnet-less host prints
+# "1..0 # skipped" and then fails for real on the next line. Hence ATTACHPROF_MISSING.
+ATTACHPROF_MISSING :=
+ifeq ($(shell command -v $(DOTNET) >/dev/null 2>&1 && echo y),)
+ATTACHPROF_MISSING += dotnet-SDK
+endif
+ifeq ($(shell command -v git >/dev/null 2>&1 && echo y),)
+ATTACHPROF_MISSING += git(for-the-CoreCLR-profiler-headers)
+endif
+.PHONY: attachprof-probe
+attachprof-probe:
+ifneq ($(ATTACHPROF_MISSING),)
+	@echo "== attachprof-probe =="
+	@echo "# SKIP: not found: $(ATTACHPROF_MISSING)"
+	@echo "1..0 # skipped"
+else
+	@mkdir -p $(BUILD)
+	@rm -f $(BUILD)/.attachprof_skip
+	@if [ ! -f $(GCPROBE_RT)/src/coreclr/pal/prebuilt/inc/corprof.h ]; then \
+	   echo "# fetching CoreCLR profiler headers (dotnet/runtime $(GCPROBE_RT_TAG))..."; \
+	   rm -rf $(GCPROBE_RT); \
+	   git clone --depth 1 --filter=blob:none --sparse -b $(GCPROBE_RT_TAG) https://github.com/dotnet/runtime $(GCPROBE_RT) >/dev/null 2>&1 \
+	     && git -C $(GCPROBE_RT) sparse-checkout set src/coreclr/pal/inc src/coreclr/pal/prebuilt/inc src/coreclr/inc >/dev/null 2>&1 \
+	     || { echo "== attachprof-probe =="; echo "# SKIP: could not fetch CoreCLR headers (no network?)"; echo "1..0 # skipped"; touch $(BUILD)/.attachprof_skip; }; \
+	 fi
+	@[ -f $(BUILD)/.attachprof_skip ] && exit 0; \
+	 R=$(abspath $(GCPROBE_RT))/src/coreclr; \
+	 $(CXX) -std=c++17 -shared -fPIC -o $(BUILD)/libattachprof.so examples/attachprof_probe/attachprof.cpp \
+	   -DPAL_STDCPP_COMPAT -DHOST_UNIX -DHOST_64BIT -DHOST_AMD64 -DTARGET_UNIX -DTARGET_64BIT -DTARGET_AMD64 \
+	   -DBIT64 -DUNIX -DPLATFORM_UNIX -DFEATURE_PAL \
+	   -I$$R/pal/inc/rt -I$$R/pal/inc -I$$R/pal/prebuilt/inc -I$$R/inc -Iinclude \
+	   || { echo "# attach profiler build failed"; exit 1; }
+	@[ -f $(BUILD)/.attachprof_skip ] && exit 0; \
+	 rm -rf $(BUILD)/attachprof_victim_out $(BUILD)/attachprof_attacher_out; \
+	 $(DOTNET) build -c Release examples/attachprof_probe/victim/victim.csproj -o $(BUILD)/attachprof_victim_out \
+	    >$(BUILD)/attachprof_victim_build.log 2>&1 || { echo "# victim dotnet build failed:"; tail -15 $(BUILD)/attachprof_victim_build.log; exit 1; }
+	@[ -f $(BUILD)/.attachprof_skip ] && exit 0; \
+	 $(DOTNET) build -c Release examples/attachprof_probe/attacher/attacher.csproj -o $(BUILD)/attachprof_attacher_out \
+	    >$(BUILD)/attachprof_attacher_build.log 2>&1 || { echo "== attachprof-probe =="; echo "# SKIP: could not build the attacher (Microsoft.Diagnostics.NETCore.Client restore failed — no network?):"; tail -8 $(BUILD)/attachprof_attacher_build.log | sed 's/^/#   /'; echo "1..0 # skipped"; touch $(BUILD)/.attachprof_skip; }
+	@[ -f $(BUILD)/.attachprof_skip ] && exit 0; \
+	 echo "== attachprof-probe (F4: attach ICorProfilerCallback4::MovedReferences2 to a RUNNING dotnet) =="; \
+	 vlog=$(BUILD)/attachprof_victim.log; alog=$(BUILD)/attachprof_attacher.log; \
+	 rm -f $$vlog $$alog; \
+	 env -u CORECLR_ENABLE_PROFILING -u CORECLR_PROFILER -u CORECLR_PROFILER_PATH \
+	     ATTACHPROF_VICTIM_ROUNDS=$(ATTACHPROF_ROUNDS) \
+	     $(DOTNET) $(abspath $(BUILD)/attachprof_victim_out/attachprof_victim.dll) >$$vlog 2>&1 & lpid=$$!; \
+	 vpid=""; \
+	 for t in 1 2 3 4 5 6 7 8 9 10 11 12; do \
+	   vpid=$$(sed -n 's/.*ATTACHPROF_VICTIM_START pid=\([0-9]*\).*/\1/p' $$vlog 2>/dev/null | head -1); \
+	   [ -n "$$vpid" ] && break; sleep 1; \
+	 done; \
+	 if [ -z "$$vpid" ]; then echo "not ok 1 - plain dotnet victim never reported its pid (did not start)"; \
+	   kill $$lpid 2>/dev/null; echo "1..1"; echo "ATTACH PROFILER PROBE NO-GO — victim failed to start"; exit 1; fi; \
+	 sleep 3; \
+	 pre_beats=$$(grep -c ATTACHPROF_VICTIM_HEARTBEAT $$vlog 2>/dev/null || true); [ -z "$$pre_beats" ] && pre_beats=0; \
+	 pre_moved=$$(grep -c 'MovedReferences2 ranges' $$vlog 2>/dev/null || true); [ -z "$$pre_moved" ] && pre_moved=0; \
+	 echo "# plain victim pid=$$vpid ($$pre_beats compacting-GC rounds done, no CORECLR_* env, pre-attach MovedReferences2=$$pre_moved); attaching profiler over the diagnostics port ..."; \
+	 $(DOTNET) $(abspath $(BUILD)/attachprof_attacher_out/attachprof_attacher.dll) \
+	     $$vpid '$(ATTACHPROF_CLSID)' $(abspath $(BUILD)/libattachprof.so) 30 >$$alog 2>&1; arc=$$?; \
+	 sed 's/^/#   /' $$alog; \
+	 sleep 6; \
+	 mid_moved=$$(grep -c 'MovedReferences2 ranges' $$vlog 2>/dev/null || true); [ -z "$$mid_moved" ] && mid_moved=0; \
+	 echo "# ~6 s after attach: MovedReferences2 calls in victim log = $$mid_moved"; \
+	 wait $$lpid 2>/dev/null; vrc=$$?; \
+	 accepted=$$(grep -c 'AttachProfiler ACCEPTED' $$alog 2>/dev/null || true); [ -z "$$accepted" ] && accepted=0; \
+	 ifa=$$(grep -c 'InitializeForAttach ENTERED' $$vlog 2>/dev/null || true); [ -z "$$ifa" ] && ifa=0; \
+	 maskok=$$(grep -c 'InitializeForAttach — SetEventMask.*(S_OK)' $$vlog 2>/dev/null || true); [ -z "$$maskok" ] && maskok=0; \
+	 complete=$$(grep -c 'ProfilerAttachComplete' $$vlog 2>/dev/null || true); [ -z "$$complete" ] && complete=0; \
+	 moved=$$(grep -c 'MovedReferences2 ranges' $$vlog 2>/dev/null || true); [ -z "$$moved" ] && moved=0; \
+	 reloc=$$(grep -c 'MovedReferences2 ranges.*reloc\[0\]=' $$vlog 2>/dev/null || true); [ -z "$$reloc" ] && reloc=0; \
+	 ended=$$(grep -c ATTACHPROF_VICTIM_END $$vlog 2>/dev/null || true); [ -z "$$ended" ] && ended=0; \
+	 crash=$$(grep -icE 'stack smashing|SIGSEGV|SIGTRAP|SIGILL|SIGABRT|Segmentation fault|Fatal error|double free|core dumped' $$vlog 2>/dev/null || true); [ -z "$$crash" ] && crash=0; \
+	 signame=none; if [ "$$vrc" -gt 128 ]; then n=$$((vrc-128)); \
+	   case $$n in 11) signame=SIGSEGV;; 6) signame=SIGABRT;; 5) signame=SIGTRAP;; 4) signame=SIGILL;; 9) signame=SIGKILL;; *) signame=SIG$$n;; esac; fi; \
+	 hr=$$(grep -m1 'InitializeForAttach — SetEventMask' $$vlog 2>/dev/null | sed 's/^ATTACHPROF: //'); \
+	 echo "# --- profiler lines from inside the RUNNING victim ---"; \
+	 grep '^ATTACHPROF:' $$vlog 2>/dev/null | head -6 | sed 's/^/#   /'; \
+	 grep -m1 'reloc\[0\]=' $$vlog 2>/dev/null | sed 's/^ATTACHPROF: /# sample (a range that ACTUALLY relocated): /'; \
+	 grep -m1 'Shutdown (moved_calls' $$vlog 2>/dev/null | sed 's/^ATTACHPROF: /# totals: /'; \
+	 echo "# SUMMARY: attacher_rc=$$arc accepted=$$accepted init_for_attach=$$ifa mask_s_ok=$$maskok attach_complete=$$complete pre_attach_moved=$$pre_moved post_attach_moved=$$moved post_attach_reloc_calls=$$reloc victim_end=$$ended crash=$$crash victim_rc=$$vrc ($$signame)"; \
+	 fail=0; \
+	 if [ "$$accepted" -ge 1 ] && [ "$$arc" -eq 0 ]; then echo "ok 1 - DiagnosticsClient.AttachProfiler accepted by the RUNNING victim (diagnostics port, no CORECLR_* env)"; \
+	   else echo "not ok 1 - AttachProfiler rejected/timed out (rc=$$arc) — KILL CRITERION 1"; fail=1; fi; \
+	 if [ "$$ifa" -ge 1 ] && [ "$$complete" -ge 1 ]; then echo "ok 2 - ICorProfilerCallback3::InitializeForAttach + ProfilerAttachComplete fired inside the running process"; \
+	   else echo "not ok 2 - InitializeForAttach never fired (ifa=$$ifa complete=$$complete) — KILL CRITERION 1"; fail=1; fi; \
+	 if [ "$$maskok" -ge 1 ]; then echo "ok 3 - SetEventMask(COR_PRF_MONITOR_GC) succeeded post-attach [$$hr]"; \
+	   else echo "not ok 3 - SetEventMask failed post-attach [$$hr] — KILL CRITERION 2 (CORPROF_E_UNSUPPORTED_FOR_ATTACHING_PROFILER is 0x80131363)"; fail=1; fi; \
+	 if [ "$$pre_moved" -eq 0 ] && [ "$$moved" -ge 1 ] && [ "$$reloc" -ge 1 ]; then echo "ok 4 - MovedReferences2 delivered {old,new,len} ranges ONLY AFTER attach ($$moved calls, $$reloc of them with ranges that ACTUALLY relocated old!=new; 0 before) — the feed works on a process we did not launch"; \
+	   else echo "not ok 4 - no MovedReferences2 / no relocating range after attach (pre=$$pre_moved post=$$moved reloc_calls=$$reloc) — KILL CRITERION 3"; fail=1; fi; \
+	 if [ "$$ended" -ge 1 ] && [ "$$vrc" -eq 0 ] && [ "$$crash" -eq 0 ]; then echo "ok 5 - victim SURVIVED the attach and exited clean (rc=0, reached ATTACHPROF_VICTIM_END, no fatal signal)"; \
+	   else echo "not ok 5 - victim crashed/hung on attach (end=$$ended rc=$$vrc/$$signame crash=$$crash) — KILL CRITERION 4"; fail=1; fi; \
+	 echo "1..5"; \
+	 if [ "$$fail" -eq 0 ]; then \
+	   echo "ATTACH PROFILER PROBE OK — GO: a CLR profiler attached to an already-running dotnet (no CORECLR_* env) and MovedReferences2 delivered GC-move ranges. The ptrace live-attach tier can have the F4 feed."; \
+	 else \
+	   echo "ATTACH PROFILER PROBE NO-GO — see the tripped kill criterion above; record it in docs/internal/analysis/f4-attach-profiler-probe-findings.md."; \
+	 fi; \
+	 [ "$$fail" -eq 0 ]
+endif
+
 # --- MANAGED-ATTACH SAFEPOINT plan, Increment 1: suspend/resume primitive under DR launch ------
 # Proves the suspension primitive the Option-2 managed-attach path depends on
 # (dynamorio-managed-attach-safepoint-plan.md): a co-loaded CLR profiler (examples/suspendprof_probe/

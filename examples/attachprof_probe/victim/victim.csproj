@@ -1,0 +1,13 @@
+<!-- Managed victim for the F4 attach-mode GC-move probe (live-attach-dataflow-followup-plan.md
+     F4). A long-running loop of compacting gen2 GCs that RELOCATE survivors, run as a PLAIN
+     dotnet process with NO CORECLR_* env vars — the harness attaches a profiler to it mid-run
+     over the diagnostics port. See mk/native-trace.mk `attachprof-probe`. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>attachprof_victim</AssemblyName>
+  </PropertyGroup>
+</Project>
