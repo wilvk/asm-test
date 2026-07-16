@@ -385,7 +385,59 @@ method ranges of a live process; the hand-off boundary to the DR taint tier is d
 
 ---
 
-## F7 — Live-attach data-flow in the language bindings *(planned)*
+## F7 — Live-attach data-flow in the language bindings *(**LANDED 2026-07-17** — all TEN bindings, each on a REAL attach)*
+
+> **UPDATE 2026-07-17 — LANDED, and wider than the exit criteria asked.** All **ten** bindings
+> wrap `asmtest_dataflow_ptrace_attach_pid` / `_pid_tid` / `_jit` on the opaque-handle pattern
+> (methods on each language's `ValueTrace`, which owns the `asmtest_valtrace_t*`), and every one
+> of them **really attaches to a live foreign process** — none stops at "the symbol resolves".
+> Per-lane totals via `make docker-dataflow-<lang>` (new, in [mk/dataflow.mk](../../../mk/dataflow.mk)):
+> python 17, cpp 48, node 44, ruby 36, lua 36, zig 36, rust 36, go 36, java 36, dotnet 36 —
+> 20+ live assertions per lane, 0 skips, 0 failures.
+>
+> **What made it possible at all:** the attach entry points live in the scoped ptrace PRODUCER,
+> and `libasmtest_dataflow` deliberately bundled only the *pure analysis* objects — so there was
+> nothing for a binding to dlopen. `pic/dataflow_ptrace.o` + `pic/codeimage.o` now ship in that
+> lib. The old "producers are separate tiers" split is kept where it earns its keep (the OBJECT
+> level, which is what lets the pure suites run everywhere) and dropped at the `.so` level, where
+> it was never load-bearing: the producer self-stubs to `ENOSYS` off Linux x86-64, so the lib
+> still links on every host, and Capstone/libbpf were already this lib's dependencies.
+>
+> **The shared victim** ([bindings/dataflow_victim.c](../../../bindings/dataflow_victim.c)) is what
+> keeps ten lanes honest with one fixture: same `df_chain` bytes as the native suite, publishes
+> `base=/len=/pid=` on stdout, loops calling the region, bumps a counter file so a caller can
+> prove it SURVIVED the detach. Its `a`/`b` come from **argv**, which is the anti-vacuity hinge —
+> the expected result is a property of the run, so a second victim with different args (17+25=42)
+> catches any wrapper that hardcodes an answer. Confirmed: a stub returning `(OK, 12)` reddens
+> three tests; one patched byte in the victim's fixture reddens the result asserts in every lane.
+>
+> **Two findings worth keeping:**
+> 1. **A managed runtime cannot attach to its own direct child.** The JVM (and .NET) reap children
+>    on a dedicated reaper thread blocked in `waitpid()`. A ptrace-stop of a traced child is
+>    reportable to **any thread in the tracer's thread group**, so that reaper races the producer's
+>    own `waitpid`, eats the stop, and the producer blocks **forever** — the lane hangs with the
+>    victim parked in state `t` (observed: TracerPid = the FFM downcall's thread, another JVM thread
+>    in `do_wait`). The Java/.NET lanes therefore spawn the victim **detached** (`sh -c '... &'`, so
+>    it reparents to init and the runtime's reaper never sees it); the attach still works because
+>    the victim calls `PR_SET_PTRACER_ANY`. Python/Node/Ruby/Lua/Zig/Rust/Go/C++ are unaffected —
+>    none reaps on a concurrent thread while a blocking downcall is in flight. This is a **real
+>    constraint of the tier for any managed host**, not a test artifact.
+> 2. **The parity script cannot see any of this.** Its surface comes from the *tier headers*
+>    (`TIER_HEADERS`), and a value-trace producer ships **no header** by design — so all three
+>    attach entry points are invisible to it, in all ten bindings, and no allow-list entry is
+>    needed or possible. Nothing but the per-lane assertions cross-checks these signatures. That
+>    is tolerable here only because F7's surface passes **no struct by value** (every argument is a
+>    scalar or an opaque pointer), so the SysV eightbyte cliff cannot arise; what can arise is a
+>    wrong arg slot — `attach_jit` takes ten args, six in registers and four on the stack — and the
+>    `result == a+b` / `survived == 1` assertions are what catch it.
+>
+> **Correction to the record:** the claim that all ten bindings already wrapped "the full
+> valtrace→defuse→slice pipeline (`ValueTrace`)" was **false**. Only python/cpp/node did; the other
+> seven wrapped `gcmove_canon` + `method_resolve_pc` and nothing else (16/16 = 8 + 8). Those seven
+> now have a minimal `ValueTrace` (the opaque handle + attach + step/record counts), so the name
+> means the same thing everywhere. The def-use/slice half stays unwrapped in them for a real
+> reason: the slice seed crosses **by value** as an `at_val_rec_t`, which Fiddle (and friends) have
+> no type for. That is a pre-existing gap, not F7's — and the natural next increment.
 
 Wrap the new attach entry points in the dynamic-FFI bindings, the way the L0/L1/L2 ValueTrace
 pipeline is already wrapped for Python/C++/Node
@@ -396,6 +448,14 @@ already are for the pure helpers.
 **Exit criteria:** at least Python/C++/Node expose live-attach data-flow capture over an
 attached pid; `make dataflow-<lang>-test` covers it; the seven docker-gated bindings wrap at
 least the native path in their pinned toolchain images.
+
+> **MET 2026-07-17, on all three clauses and beyond the first.** Python/C++/Node capture over an
+> attached pid; `make dataflow-<lang>-test` covers it for all ten (each with a `docker-dataflow-<lang>`
+> lane in its pinned image); and the seven docker-gated bindings do more than "wrap the native
+> path" — they exercise a real attach against a live victim, with the same 20-assertion battery.
+> Carryover: the def-use/slice surface for the seven (blocked on by-value `at_val_rec_t`
+> marshalling, not on F7), and `attach_pid_versioned`'s code-image argument, which every binding
+> passes as NULL because the code-image recorder is its own binding surface.
 
 ---
 

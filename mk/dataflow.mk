@@ -213,18 +213,16 @@ dataflow-go-test: $(DATAFLOW_LIVE_DEPS)
 # FFM). Needs JDK 22+ (the docker bindings image uses openjdk-25); validated in JDK 23.
 JAVA ?= java
 .PHONY: dataflow-java-test
-dataflow-java-test: shared-dataflow
+dataflow-java-test: $(DATAFLOW_LIVE_DEPS)
 	$(JAVAC) --release 22 -d $(BUILD)/java-df bindings/java/TestDataflow.java
-	ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
+	$(dataflow_live_env) \
 	  $(JAVA) --enable-native-access=ALL-UNNAMED -cp $(BUILD)/java-df TestDataflow
 
 # Phase 6 — the .NET data-flow binding (bindings/dotnet/dataflow_smoke, P/Invoke).
 # Needs the .NET SDK (the docker bindings image); validated in dotnet/sdk:8.0.
 .PHONY: dataflow-dotnet-test
-dataflow-dotnet-test: shared-dataflow
-	cd bindings/dotnet/dataflow_smoke && \
-	  ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
-	  $(DOTNET) run -c Release
+dataflow-dotnet-test: $(DATAFLOW_LIVE_DEPS)
+	cd bindings/dotnet/dataflow_smoke && $(dataflow_live_env) $(DOTNET) run -c Release
 
 # All-bindings convenience target (each self-selects its interpreter/compiler).
 .PHONY: dataflow-bindings-test
