@@ -711,7 +711,8 @@ CLANG_FORMAT ?= clang-format
 # out of the otherwise-broad include/*.h glob — it keeps its own asm conventions.
 FMT_SOURCES  := $(filter-out include/asm.h, \
                  $(wildcard src/*.c src/*.h include/*.h tests/*.c \
-                 tests/win64/*.c tests/win64/*.h bindings/conformance/*.c \
+                 tests/win64/*.c tests/win64/*.h \
+                 bindings/*.c bindings/conformance/*.c \
                  examples/*.c scripts/gen-manifest.c \
                  cli/*.c cli/*.h \
                  tools/*.c tools/*.h))
