@@ -2544,6 +2544,13 @@ hwtrace-go-test: shared-hwtrace shared-emu $(CORPUS_LIB)
 hwtrace-node-test: shared-hwtrace
 	@echo "== hwtrace-node-test =="
 	cd bindings/node && $(hwtrace_env) $(NODE) test_hwtrace.js
+	@# §D1 `using`/Symbol.dispose scope. Its own file (and so its own run) because `using`
+	@# is SYNTAX: a file containing it fails to PARSE on a Node below the Explicit Resource
+	@# Management floor, which no in-file guard can catch. test_hwtrace_using.js parses on
+	@# any Node and drives the disposer itself; it requires the syntax-only sibling ONLY
+	@# where the parser accepts `using` (Node 24+), self-skipping below — which is what the
+	@# ubuntu:24.04 image's Node 18 does today.
+	cd bindings/node && $(hwtrace_env) $(NODE) test_hwtrace_using.js
 
 hwtrace-java-test: shared-hwtrace
 	@echo "== hwtrace-java-test =="

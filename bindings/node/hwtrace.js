@@ -202,15 +202,20 @@ const CodeImageEvent = koffi.struct('asmtest_codeimage_event_t', {
   fd: 'int32',
 });
 
-// koffi struct layout mirroring asmtest_hwtrace_scope_t (8 bytes): an opaque
+// koffi struct layout mirroring asmtest_hwtrace_scope_t (12 bytes): an opaque
 // per-scope capture handle — a TLS range-stack index tagged with a generation
-// counter. asmtest_hwtrace_call_scoped_ex fills one through an _Out_ pointer;
-// asmtest_hwtrace_render_scope takes it BY VALUE (a two-uint32 8-byte struct is a
-// single INTEGER-class eightbyte on SysV x86-64, passed in one register, which koffi
-// marshals straight from the koffi.struct — no manual packing needed).
+// counter, plus the OS tid that armed it (§Z4, -1 when unarmed / a sentinel). The
+// tid is part of the handle because idx/gen are unique only WITHIN one thread —
+// every thread's first scope is {0, 1} — so a close from another thread would
+// otherwise resolve to that thread's own frame and close the wrong scope.
+// asmtest_hwtrace_call_scoped_ex fills one through an _Out_ pointer;
+// asmtest_hwtrace_render_scope takes it BY VALUE (at 12 bytes this is TWO
+// INTEGER-class eightbytes on SysV x86-64 — two registers, not one — which koffi
+// marshals straight from the koffi.struct; no manual packing needed).
 const HwScope = koffi.struct('asmtest_hwtrace_scope_t', {
   idx: 'uint32',
   gen: 'uint32',
+  arm_tid: 'int32',
 });
 
 // The generated code is invoked through this function-pointer prototype: each
@@ -1021,7 +1026,8 @@ class HwTrace {
 
   /** A block scope over the register-then-begin/end pair with the shared-core
    *  render-on-close — the callback form of the *import + scope* surface (the
-   *  version-independent fallback; the `using` + Symbol.dispose sugar needs Node 24+).
+   *  version-independent fallback; the `using` + Symbol.dispose sugar over the same pair
+   *  is `AsmTrace`, whose SYNTAX needs Node 24+ — this form needs no `using` at all).
    *  `code` is the traced region; the name auto-generates as `basename:line` from the
    *  call site (override with `opts.name`). Renders the executed assembly on close and
    *  (when `opts.emit !== false`) writes it. The C core flags the trace `truncated` on
@@ -1085,6 +1091,150 @@ class HwTrace {
       this._handle = null;
     }
   }
+}
+
+/** §D1 — the disposer key for the `using` scope below, guarded because the
+ *  `Symbol.dispose` well-known symbol is itself only native from Node 18.18 / 20.4 (not
+ *  the whole 18 floor this binding supports). Where it is missing, fall back to the key
+ *  Node uses internally, `Symbol.for('nodejs.dispose')`: an UNGUARDED `Symbol.dispose`
+ *  would not throw there — it would silently key the method off the *string* `'undefined'`
+ *  (ToPropertyKey), a disposer no `using` would ever call. `using` itself looks up
+ *  `Symbol.dispose`, so wherever the syntax exists (Node 24+) the two are the same symbol
+ *  and the fallback is inert; below it, `kDispose` is still a stable, computable key for
+ *  the manual `t[kDispose]()` close — which is the whole point of keying off the const.
+ *  Exported so callers can dispose portably without assuming `Symbol.dispose` resolves. */
+const kDispose = Symbol.dispose ?? Symbol.for('nodejs.dispose');
+
+// §D1 ownership backstop — one immortal, never-rendered, never-freed trace used as a
+// TOMBSTONE for a closed AsmTrace's registry slot.
+//
+// WHY IT MUST EXIST: `AsmTrace` owns its trace and frees it on close, but the C region
+// registry keeps the pointer it was registered with FOREVER — there is no unregister, and
+// register_region rejects a NULL trace (src/hwtrace.c:611), so a slot cannot be cleared,
+// only REPOINTED. Left alone, every closed AsmTrace would leave its name's slot holding a
+// freed pointer, and any later name-keyed op on that name (a bare `region(name, fn)` /
+// `begin`, whose C path both READS r->trace and lets the SIGTRAP handler WRITE through it)
+// would use-after-free. Repointing the slot at this empty trace makes that hazard inert:
+// a stray render walks 0 insns and yields '', a stray flag-write lands here harmlessly.
+// One per process, sized minimally — it never records anything.
+let _tombstoneTrace = null;
+function _tombstone() {
+  if (_tombstoneTrace === null) _tombstoneTrace = HwTrace.create({ blocks: 1, instructions: 0 });
+  return _tombstoneTrace;
+}
+
+/** §D1 — the `using`-compatible scope construct: an explicit-resource-management scope
+ *  over the same register-then-begin / end pair as `HwTrace.scope`, with the shared-core
+ *  render-on-close. The Node counterpart to dotnet's `AsmTrace : IDisposable` and Java's
+ *  `AsmTrace implements AutoCloseable`, and the sugar over this module's
+ *  version-independent callback forms (`region(name, fn)` / `scope(code, fn, opts)`),
+ *  which stay the fallback wherever `using` does not parse.
+ *
+ *    using t = new AsmTrace(code);   // Node 24+ (V8 13.6; Node 22 needs
+ *    r = code.call(20, 22);          // --harmony-explicit-resource-management)
+ *    // block exit -> t[Symbol.dispose]() -> end + render; t.path is the listing
+ *
+ *  The constructor auto-names the region `basename:line` from the call site (override
+ *  with `opts.name`), allocates its own trace handle, registers the traced range, and
+ *  brackets `try_begin` (a nonzero return is a clean self-skip -> `armed === false`).
+ *  Disposal ends the region, always renders to populate `path`, and — when
+ *  `opts.emit !== false` — writes that text to stdout. Requires the tier to be up
+ *  (`HwTrace.init`); the C core flags the trace `truncated` on a cross-thread close
+ *  (§0.2/§1), the tid assert this scope surfaces via `truncated`. Genuine cross-thread
+ *  work (Worker / libuv pool) is a disclosed gap — untraced, flagged, not stitched.
+ *
+ *  `using` is SYNTAX, so a source file containing it fails to PARSE on an older Node —
+ *  the construct cannot be feature-detected from inside the file that uses it. This class
+ *  needs no `using` to work: dispose is reachable everywhere as `t[kDispose]()` (or the
+ *  `close()` alias), which is exactly what `using` calls at block exit. */
+class AsmTrace {
+  /** Open a scope tracing `code`. `opts.name` overrides the call-site auto-name;
+   *  `opts.emit === false` suppresses the stdout write; `opts.blocks` /
+   *  `opts.instructions` size the trace handle (defaults mirror the Java sibling). */
+  constructor(code, opts = {}) {
+    // Keep `new Error().stack` in the constructor body: _scopeName reads frame [2],
+    // which is the caller only at this depth (a helper hop would re-point it).
+    this._name = opts.name || _scopeName(new Error().stack);
+    this._emit = opts.emit !== false;
+    // Retain the range by VALUE, not the NativeCode object: close() must re-register
+    // (below) long after the caller may have freed the code, and register_region only
+    // stores [base, len) — it never dereferences it.
+    this._base = code.base;
+    this._len = code.length;
+    this._trace = HwTrace.create({
+      blocks: opts.blocks === undefined ? 64 : opts.blocks,
+      instructions: opts.instructions === undefined ? 256 : opts.instructions,
+    });
+    this._path = '';
+    this._truncated = false;
+    this._disposed = false;
+    this._armed = false;
+    try {
+      // register-then-begin (Core §0.4 idempotent-by-name: a scope in a loop refreshes
+      // its one slot in place rather than exhausting the fixed region table).
+      this._trace.register(this._name, code);
+      this._armed = _fn.tryBegin(this._name) === ASMTEST_HW_OK; // nonzero -> clean self-skip
+    } catch (e) {
+      this._trace.free(); // ctor threw: no disposer runs for a scope that never existed
+      throw e;
+    }
+  }
+
+  /** The auto-generated (or explicit) region name. */
+  get name() { return this._name; }
+  /** The rendered assembly listing (populated on close; '' before it, or without a
+   *  decoder). */
+  get path() { return this._path; }
+  /** True if the scope armed (a backend was available and try_begin succeeded). */
+  get armed() { return this._armed; }
+  /** True if the close hopped OS threads / the capture overflowed (§0.2/§1). */
+  get truncated() { return this._truncated; }
+
+  /** End the region, render the executed assembly into `path`, and (when `emit`) write
+   *  it. Idempotent — a second close is a no-op, so an explicit close inside a `using`
+   *  block does not double-end at block exit. This is the manual form of disposal; it is
+   *  what the `kDispose` method delegates to.
+   *
+   *  Two hazards are handled here, both born of coupling a PER-SCOPE owned trace to a
+   *  call-site-CONSTANT (so inherently SHARED) region name — see the block comments. */
+  close() {
+    if (this._disposed) return this;
+    this._disposed = true;
+    const range = { base: this._base, length: this._len };
+    try {
+      // Only a scope that actually ARMED may end. `end()` is name-keyed but its
+      // single-step path closes the calling thread's TOP range-stack frame
+      // (src/hwtrace.c:1889) — it does not check that the frame is OURS. An unarmed
+      // scope (try_begin returned EFULL/EUNAVAIL — a clean self-skip) owns no frame, so
+      // ending would silently pop a SIBLING's, disarming a live scope mid-capture.
+      if (this._armed) {
+        // RECLAIM the slot before end/render. §0.4 refreshes the slot in place, so a
+        // NESTED scope at this same call-site name has repointed it at ITS trace; both
+        // `end` (whose cross-thread backstop writes through r->trace) and the name-keyed
+        // `render` would then resolve to that sibling's trace — rendering its slice, or,
+        // once it has closed and freed, a dangling pointer. Re-registering our own trace
+        // makes both name lookups resolve to US again. Our capture itself was never at
+        // risk: the range-stack frame snapshots the trace at begin, so each nested scope
+        // always RECORDED into its own.
+        this._trace.register(this._name, range);
+        _fn.end(this._name);
+        this._path = _renderRegion(this._name);
+        this._truncated = this._trace.truncated();
+      }
+    } finally {
+      // Hand the slot to the tombstone BEFORE freeing, so the registry never holds our
+      // freed pointer (it has no release path — see _tombstone above).
+      _tombstone().register(this._name, range);
+      this._trace.free();
+    }
+    if (this._emit && this._path) process.stdout.write(this._path);
+    return this;
+  }
+
+  /** The `using` disposer — invoked by the language at block exit (and safe to call by
+   *  hand on a Node without the syntax). Keyed off the guarded `kDispose`, so it lands on
+   *  `Symbol.dispose` wherever that exists and on Node's own key below it. */
+  [kDispose]() { this.close(); }
 }
 
 /** §D0.4 — the LIVE async-hop producer: follow ONE logical operation across await /
@@ -1841,7 +1991,8 @@ function _renderWindow(scope) {
 }
 
 module.exports = {
-  HwTrace, NativeCode, AddrChannel, AsyncStitchedTrace, Ptrace, Descent, CodeImage,
+  HwTrace, NativeCode, AddrChannel, AsmTrace, kDispose, AsyncStitchedTrace, Ptrace,
+  Descent, CodeImage,
   ASMTEST_HW_OK, ASMTEST_HW_EUNAVAIL, ASMTEST_HW_EPERM,
   INTEL_PT, CORESIGHT, AMD_LBR, SINGLESTEP,
   BEST, CEILING_FREE,

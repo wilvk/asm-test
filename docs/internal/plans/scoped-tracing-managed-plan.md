@@ -251,37 +251,91 @@ PT-host lanes self-skip; the ptrace fallback (§D3) runs the exactness check.
 
 ---
 
-## §D1 — Node scope construct + async-hop stitching *(LANDED, except the `using` / `Symbol.dispose` sugar)*
+## §D1 — Node scope construct + async-hop stitching *(LANDED, including the `using` / `Symbol.dispose` sugar — whose SYNTAX half self-skips below Node 24)*
 
-**Construct — the callback form LANDED; the `using` sugar is NOT built.** What ships is the
-**callback** pair on `class HwTrace`
+**Construct — the callback forms LANDED; the `using` sugar LANDED 2026-07-16.** What ships
+is the **callback** pair on `class HwTrace`
 ([bindings/node/hwtrace.js:524](../../../bindings/node/hwtrace.js#L524)): `region(name, fn)`
 ([:1013](../../../bindings/node/hwtrace.js#L1013)), the plain begin/`fn`/`end`-in-a-`finally`
-bracket, and `scope(code, fn, opts)` ([:1031](../../../bindings/node/hwtrace.js#L1031)), the
+bracket, and `scope(code, fn, opts)` ([:1032](../../../bindings/node/hwtrace.js#L1032)), the
 register-then-`try_begin` / `end` block scope with the shared-core render-on-close, the tid
 assert, and a call-site-derived `basename:line` name. That is this section's own
-**version-independent fallback** — and it is *all* that ships.
+**version-independent fallback** — and it is what runs wherever `using` does not parse.
 
-**OPEN — the `using` / `Symbol.dispose` construct (unbuilt; gated on Node 24+).** The design
-below is still the spec; nothing in the binding implements it (no `Symbol.dispose`,
-`Symbol.for('nodejs.dispose')`, or `kDispose` — only a doc comment at
-[:1024](../../../bindings/node/hwtrace.js#L1024) recording that the sugar needs Node 24+ and
-that the callback form is the fallback standing in for it). Add a `using`-compatible scope via
-`Symbol.dispose` — `using t = new AsmTrace()` — over the same
+**LANDED — the `using` / `Symbol.dispose` construct (2026-07-16).** The design below was the
+spec and the binding now implements it: `class AsmTrace`
+([bindings/node/hwtrace.js:1127](../../../bindings/node/hwtrace.js#L1127)) is the
+`using`-compatible scope — `using t = new AsmTrace(code)` — over the same
 register-then-`try_begin` / `end` pair, with the shared-core render-on-close and tid
-assert. The **reason it is not built: the version gate.** The `using` **declaration** ships unflagged in **Node 24+** (Node 24 GA bundles V8 13.6
+assert (surfaced as `truncated`), the call-site `basename:line` auto-name, and its own trace
+handle. Its disposer ([:1186](../../../bindings/node/hwtrace.js#L1186)) is keyed off the
+guarded `kDispose` ([:1101](../../../bindings/node/hwtrace.js#L1101)) and delegates to an
+idempotent `close()` ([:1169](../../../bindings/node/hwtrace.js#L1169)) — the manual form,
+which is what makes the construct's *semantics* reachable (and testable) below the syntax
+gate. Both are exported. It mirrors dotnet's `AsmTrace : IDisposable` and Java's `AsmTrace
+implements AutoCloseable`. The **version gate the sugar was blocked on is now a runtime
+self-skip, not an absence.** The `using` **declaration** ships unflagged in **Node 24+** (Node 24 GA bundles V8 13.6
 and enables Explicit Resource Management itself; upstream it was default-on in the V8
 engine at v13.8 / Chrome 138 — Chrome had turned it on earlier at Chromium 134 on V8 13.4,
 which is why Node 24 on V8 13.6 still had to flip it manually); on
-Node 22 it needs `--harmony-explicit-resource-management`, so gate the sugar on Node 24
-and keep the existing `region(name, fn)` callback form as the version-independent
-fallback (it needs no `using`) — **which is exactly the posture that shipped: the fallback,
-and only the fallback.** **The `Symbol.dispose` well-known symbol is itself only
-native from Node 18.18 / 20.4** (not the whole 18.0 floor), so key the manual-dispose
-method off a guarded `const kDispose = Symbol.dispose ?? Symbol.for('nodejs.dispose');`
+Node 22 it needs `--harmony-explicit-resource-management`; the `region(name, fn)` /
+`scope(code, fn, opts)` callback forms remain the version-independent fallback (they need no
+`using`). **The `Symbol.dispose` well-known symbol is itself only
+native from Node 18.18 / 20.4** (not the whole 18.0 floor), so the manual-dispose method is
+keyed off the guarded `const kDispose = Symbol.dispose ?? Symbol.for('nodejs.dispose');`
 (Node uses `Symbol.for('nodejs.dispose')` internally) rather than assuming
-`Symbol.dispose` exists across the 18 floor. Arm hook is the existing top-level `require` IIFE
-([hwtrace.js:172-282](../../../bindings/node/hwtrace.js#L172)); keep it lazy-first-scope.
+`Symbol.dispose` exists across the 18 floor — an unguarded `Symbol.dispose` would not throw
+on those runtimes, it would silently key the disposer off the *string* `'undefined'`.
+Arm hook is the existing top-level `require` IIFE
+([hwtrace.js:172-282](../../../bindings/node/hwtrace.js#L172)); it stays lazy-first-scope.
+
+**Ownership model — why a per-scope OWNED trace needed more than "allocate and free"
+(2026-07-16, post-review).** The scope owns its trace, but its region name is call-site
+CONSTANT, i.e. *shared*: §0.4 refreshes the one slot in place, and the registry has **no
+release path** (nothing clears `r->trace`; `register_region` rejects a NULL trace,
+[src/hwtrace.c:611](../../../src/hwtrace.c#L611)). Coupling the two naively is what an
+adversarial review caught, twice over. Two scopes live at once on one name — *recursion
+through one auto-named call site is enough* — leave the slot pointing at whichever
+registered LAST, so the outer's name-keyed `render`/`end` resolve to the INNER's trace:
+a use-after-free once the inner has closed and freed it (reproduced: SIGSEGV, and ASan
+`heap-use-after-free` READ at `render_trace_into` / `asmtest_hwtrace_render`), or — when
+the freed read lands on still-mapped memory — a silently WRONG listing (observed: 512
+rendered lines where 5 were due). The capture itself was never at risk: each range-stack
+frame snapshots its trace at begin, so every nested scope always RECORDED into its own; only
+the name lookups were ambiguous. `HwTrace.scope()` runs the same register/render-by-name
+pair and was always safe *because it never frees* — the caller owns the trace.
+`close()` therefore (i) **reclaims** the slot by re-registering its own trace before
+`end`/`render`, so both name lookups resolve to it, and (ii) hands the slot to an immortal
+empty **tombstone** trace before freeing, so the registry never retains a freed pointer for a
+later name-keyed op to fault on. Both use only §0.4's documented refresh — **no new C
+surface, no ABI/parity change**. `end` is additionally guarded on `armed`: it is name-keyed
+but its single-step path pops the calling thread's TOP range-stack frame without checking
+ownership ([src/hwtrace.c:1889](../../../src/hwtrace.c#L1889)), so a self-skipped scope that
+ended anyway silently disarmed a live SIBLING mid-capture (reproduced: an armed,
+never-closed scope captured 0 instructions). **Residual, and exactly when it is reachable:**
+the reclaim serialises the slot per THREAD, which is all a `using` block can need (block
+scopes nest LIFO on one thread). Two threads entering the same auto-named site
+*concurrently* — only `worker_threads`, which share the process-global registry — would
+still race for the slot; that is what §1's handle-keyed `begin_scope`/`render_scope` pair
+exists for, and adopting it in this binding is a parity-allow-list decision
+(`begin_scope` is presently an `ALL` exemption), not a §D1 one. The §0.2 tid assert flags a
+cross-thread close today.
+
+**What the gate means in practice — the sugar ships, its syntax half is dark in this repo's
+container.** `using` is *syntax*: a file containing it fails to PARSE wholesale on an older
+Node, before any in-file guard could run — so the construct cannot be feature-detected from
+inside the file that uses it, and the test is split in two (below). `AsmTrace` itself needs
+no `using` and is exercised on every supported Node via `t[kDispose]()`, the exact call the
+language makes at block exit. The `docker-hwtrace-node` image is `ubuntu:24.04` + apt
+`nodejs`, i.e. **Node 18.19.1**, so the *syntax* case self-skips there — the lane is
+Node-agnostic and picks the syntax half up automatically under a newer `NODE`
+(`make hwtrace-node-test NODE=/path/to/node24`). Verified 2026-07-16 across three runtimes:
+**18.17.1** (pre-backport: `Symbol.dispose` absent → the guard's fallback branch taken, module
+loads, callback forms unaffected, 157 + 15 pass), **18.19.1** (the lane's own Node: 157 + 15,
+syntax half self-skips), and **24.18.0** (real `using`: 157 + 26 — the block-exit and
+throw-unwind disposals both assert a rendered listing). Bumping the image's Node to 24 would
+light the syntax half up in CI; that is a `mk/docker.mk` `DOCKER_APT_node` change, not a
+binding one.
 
 **Async-hop stitching (piece D) — weaker for Node than for .NET, by construction.**
 Node's per-`ScopeId` hook for the shared
@@ -305,11 +359,26 @@ not stitched. Live JS needs PT/LBR or the ptrace stepper (single-step is unsafe 
 the V8 runtime). Explicit opt-in; default stays the honest thread-scope with a mismatch
 flag.
 
-**§D1 tests.** **OPEN — neither case is built.** Extend the `hwtrace-node-test` lane
-([mk/native-trace.mk:2417](../../../mk/native-trace.mk#L2417)) with a `using`-scope
-case over a native leaf (blocked with the construct above on the Node 24+ gate; the lane
-would need a version guard, unlike the callback form, which works today), and an opt-in
-async-hop case asserting slices stitch by `ScopeId` (PT/ptrace host; self-skips otherwise).
+**§D1 tests.** **The `using`-scope case is BUILT (2026-07-16); the async-hop case is
+unchanged by that work.** The `hwtrace-node-test` lane
+([mk/native-trace.mk:2544](../../../mk/native-trace.mk#L2544)) now runs a second file after
+`test_hwtrace.js`, split in two because `using` is syntax:
+[bindings/node/test_hwtrace_using.js](../../../bindings/node/test_hwtrace_using.js) parses on
+any Node and asserts the guard (`kDispose` resolves to `Symbol.dispose` where native, to
+`Symbol.for('nodejs.dispose')` below it) plus the disposal *semantics* over a native leaf —
+`path` empty before dispose and a 5-line rendered listing after, `armed`, not `truncated`,
+the `basename:line` auto-name, dispose idempotence, and a 4-iteration loop at one call site
+proving Core §0.4 slot reuse (the case the core's own comment calls out for `using`/RAII
+scopes). It then requires
+[test_hwtrace_using_syntax.js](../../../bindings/node/test_hwtrace_using_syntax.js) — the real
+`using t = new AsmTrace(code)` — **only** where the parser accepts a `using` declaration,
+compile-probed with `new Function` rather than version-sniffed (Node 22's flag would make a
+`>= 24` test lie); below that it prints a `# SKIP` naming the version and the fallback. That
+file asserts the two things only the syntax can prove: nothing renders *inside* the block and
+a listing exists *at block exit*, and that an exception unwinding the block still disposes.
+The **async-hop case** (opt-in, asserting slices stitch by `ScopeId`; PT/ptrace host,
+self-skips otherwise) was outside this increment — `AsyncStitchedTrace` assertions already
+run in `test_hwtrace.js`, so this line needs its own audit rather than a status flip here.
 
 ---
 
