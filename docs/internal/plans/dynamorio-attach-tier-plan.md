@@ -432,7 +432,66 @@ concrete failure mode. **Effort: XL / research.**
 
 ---
 
-## Increment 7 - asmspy `--attach-dataflow` surface *(optional — **NOT BUILT; two premises corrected 2026-07-16**. Still open, but no longer as specced below)*
+## Increment 7 - asmspy `--attach-dataflow` surface *(**CLOSED 2026-07-17 — not redundant; UNAIMABLE**)*
+
+> **CLOSED 2026-07-17. Not redundant; unaimable.** Re-decided by a four-angle panel after the
+> 2026-07-16 decline's stated decider collapsed. The decline reached the right verdict for
+> reasons that were largely wrong; this is the reason.
+>
+> **`--attach-dataflow` is dead BY NAME.** `asmspy --dataflow <pid> <sym|0xADDR[:LEN]>` already
+> attaches to a foreign pid — [cli/asmspy_engine.c:1329](../../../cli/asmspy_engine.c#L1329) drives
+> `asmtest_dataflow_ptrace_attach_jit` (ptrace SEIZE of every thread, JIT-aware, one signal path for
+> **native AND managed** with no runtime gate, DETACHes so the target survives) into
+> `asmtest_defuse_build`. F4 GC-move canonicalization landed on that same tier (`3e37bf9`,
+> `a6bc2f5`). Whatever else happens, nothing may ship under this name.
+>
+> **But it is NOT closed for redundancy** — that would put a false statement in the plan and invite
+> reopening. Taint is not def-use; the DR-attach tier's distinct capability is seed→sink
+> propagation, which `--dataflow` cannot do.
+>
+> **It is closed because no UI can be aimed at a real target.** `seed=` accepts ONLY
+> `<module>+<hexoff>`: `ml_parse_mod_off`
+> ([dataflow_dr_client_inlined.c:2210](../../../src/dataflow_dr_client_inlined.c#L2210)) scans for
+> `'+'` and returns `NULL` without one — a raw address is not merely unsupported, it is
+> *unparseable* — and `nudge_arm` (:2292) always computes `on_seed(nudge_module_base() +
+> g_ml_seed_off, …)`, so the runtime nudge does not relax it. `examples/taint_markerless_victim.c`
+> is shaped around the constraint by construction (a static `g_seedbuf`, a page-aligned static
+> `g_fixture[4096]`, "so `region=<module>+offsetof(g_fixture)` resolves"). **Heap and dynamic
+> seeds — what every real taint question concerns — are inexpressible at any price.** A view over a
+> tier that cannot be pointed at anything is not a product.
+>
+> **Testability is NOT the reason.** Leg 3 of the decline ("no lane can test it — `asmtest-cli` has
+> no DynamoRIO") is DEAD per [CLAUDE.md](../../../CLAUDE.md) (`9d6e4ac`): the five-line pinned block
+> at `Dockerfile.drtrace:34-41` drops into any image. If DR is ever added for this, it belongs in a
+> derived `Dockerfile.cli-taint`, never the shared `cli` lane. **The feature fails on value at zero
+> image cost.**
+>
+> **Option (c) — widen `asmtest_taint_shm.h` to feed the def-use rendering — CLOSED PERMANENTLY.**
+> Three independent kills: `drval.mem` is NULL by design ("the taint SET needs no values");
+> `AT_SHM_STEPS_CAP = 64` is not a product; and decisively the landed `prod` posture (`g_prod`,
+> :1944) emits **no drx_buf record at all** (:1775, "NO step witness store — production has no taint
+> SET (the sink is the proof)"). (c) would mandate keeping, as a user-facing requirement, exactly
+> the machinery Increment 9's top band lever exists to delete — to render a strictly worse duplicate
+> of shipped `--dataflow`.
+>
+> *Correction to the 2026-07-16 decline, recorded so it is not repeated:* its leg 1 claimed
+> `build_valtrace` is "welded to the launch driver" by type. FALSE. It takes
+> `(vt, code, code_len, const at_drval_t *dv)` ([dataflow_dr.c:269](../../../src/dataflow_dr.c#L269))
+> and **synthesizes** `at_val_rec_t` app-side from `dv->steps[].gpr` via `asmtest_operands()`. The
+> channel already carries its exact input type; the operand stream is *derived, not transported*.
+> Option (c) is still wrong — for the three reasons above, not that one.
+>
+> **Successor (NOT scheduled): DYNAMIC SEED — a capability, not a view.** Extend the nudge (already
+> disarmed-then-armed at runtime) to accept a resolved absolute address, or a "seed the buffer in
+> `<reg>` at `<call>` return" form. Proof: a heap-seeded victim in the existing `dr-taint-cycle-test`
+> / `taint-attach` lane.
+>
+> **Reopen only if** a named user with a real target whose seed genuinely IS a module+offset needs
+> more than a printf of ≤16 hits. **If dynamic seed ever lands, the right view is `--attach-taint`**
+> (read `hits[]` by offset; zero `src/`/`include/` change) — never `--attach-dataflow` — and it MUST
+> hard-refuse managed pids (scan `/proc/<pid>/maps` for `libcoreclr`/`libjvm`): Increment 6 proved a
+> DR seize there is a reproducible stack-smashing SIGSEGV **on the user's live process**. That
+> footgun is itself why the name must encode the native-only contract the tier actually has.
 
 Surface native attach-based data-flow in the asmspy CLI (a `--attach-dataflow <pid>`
 subcommand + a TUI window), the DR-attach counterpart of the ptrace live-attach plan's
@@ -575,15 +634,21 @@ Increments 3 (marker-less config + nudge), 4 (first external-attach taint captur
 correctness + K=3 re-attach cycling + the shadow-leaf leak fix). Increment 6 (managed attach) is a
 closed **NO-GO** — the kill criterion fired and both escape routes were exhausted.
 
-**What is left:** only **Increment 7** (the optional asmspy `--attach-dataflow` UI surface, not
-started — no `--attach-dataflow`/`attach_dataflow` exists in `src/`, `include/`, `examples/`, or the
-makefiles today). That is the tier's sole genuine remainder. ~~and it is not capture work~~ —
-**corrected 2026-07-16: it *is* capture work.** Feeding asmspy's landed def-use/value rendering from
-the attach path requires widening the results channel (`asmtest_taint_shm.h` carries `drval.mem`
-NULL and caps at 64 steps) and exposing the `static` `build_valtrace` bridge, plus a lane that can
-actually run it (`asmtest-cli` ships no DynamoRIO, so the subcommand could only self-skip in the one
-job that gates `cli/`). See Increment 7 for the full evidence and the two re-scoping options. None
-of this touches the tier's headline capability — take over a native process we did not start, taint
-a scoped region in band, drain it out of process, and let the process go, repeatably — which is
-landed and now **CI-gated** by the `taint-attach` job as well as make-gated. The one-time CI-wiring
-gap the risk register carried is closed (2026-07-16).
+**What is left: NOTHING. The tier is COMPLETE as of 2026-07-17** — Increments 1-5 landed and
+CI-gated by the `taint-attach` job, Increment 6 a documented NO-GO (kill criterion fired, both
+escape routes exhausted), Increment 7 **CLOSED**.
+
+**Increment 7 is closed as UNAIMABLE, not redundant** (see its section for the full record). In
+short: `--attach-dataflow` is dead by name — `asmspy --dataflow <pid>` already attaches to a foreign
+pid for native *and* managed, with F4 GC-move canonicalization — but the tier's distinct capability
+is **taint**, which `--dataflow` cannot do, so redundancy is *not* the reason. The reason is that
+`seed=` accepts only `<module>+<hexoff>` (`ml_parse_mod_off` returns `NULL` without a `+`, and the
+nudge does not relax it), so **no UI can be aimed at the heap or dynamic memory every real taint
+question concerns**. Testability is emphatically not the reason: that objection died with
+[CLAUDE.md](../../../CLAUDE.md) (`9d6e4ac`) — the feature fails on value at zero image cost. The
+successor worth having is **dynamic seed** — a capability, not a view — and it is not scheduled.
+
+None of this touches the tier's headline capability — take over a native process we did not start,
+taint a scoped region in band, drain it out of process, and let the process go, repeatably — which
+is landed and CI-gated as well as make-gated. The one-time CI-wiring gap the risk register carried
+is closed (2026-07-16).
