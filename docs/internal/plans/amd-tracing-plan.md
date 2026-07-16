@@ -1623,9 +1623,11 @@ continue;` — the `|| spec` term dropped exactly as prescribed here.)*
   identical for a `ret` and a tail-`jmp`, and `amd_replay` never needs that edge (it stops at the
   last recorded branch's target, [amd_backend.c:289-291](../../../src/amd_backend.c)). The Zen-5
   non-eviction property (a `#DB` not evicting in-region branches before the snapshot read,
-  [branchsnap.c:14-15](../../../src/branchsnap.c)) is validated for a `ret` exit and *expected*
-  to hold for a tail-`jmp` by the identical mechanism, but the plan carries it as an assumption to
-  re-confirm on the target substrate.
+  [branchsnap.c:14-15](../../../src/branchsnap.c)) was validated for a `ret` exit and expected to
+  hold for a tail-`jmp` by the identical mechanism; that expectation is **now confirmed live on
+  Zen 5** — see the Phase-9 entry in [Risks](#risks) for the fixture, the measurement
+  (`5 insns, dec-block(0x0e)=0, truncated=0`, `best_inregion=2`), the controls, and the mutation
+  that proves the measurement discriminates.
 - **[hygiene / latent-UB] Introduce a shared `src/amd_backend.h` internal header.** The `amd_*`
   prototypes are forward-declared inline — in `hwtrace.c` a `perf_branch_entry`-typed block under
   `#if defined(__linux__) && defined(__x86_64__)` ([hwtrace.c:90-119](../../../src/hwtrace.c):
@@ -1827,9 +1829,56 @@ next to the other CPUID probes) rather than `hwtrace.c`.*
   re-runs the routine per tier. The honesty pattern (`call_auto_reset` before the attempt;
   `truncated` on any miss; fall through, never early-return) is the guard — get it wrong and a
   failed MSR attempt reads as an empty-yet-complete trace.
-- **Tail-`jmp` boundary non-eviction (Phase 9).** The Zen-5-validated property that a planted
-  `#DB` breakpoint does not evict the region's in-region branches before the BPF helper reads
-  the frozen stack was established with a `ret`-exit fixture; the tail-call widening *expects*
-  it to hold identically for a region-leaving `jmp` (same mechanism, the breakpoint fires when
-  execution reaches the CTI, before it transfers) but carries it as an **assumption to
-  re-confirm live** on the target substrate before the widened default ships enabled.
+- **Tail-`jmp` boundary non-eviction (Phase 9). — CONFIRMED live 2026-07-17; no longer an
+  assumption.** The property (a planted `#DB` does not evict the region's in-region branches
+  before the BPF helper reads the frozen stack) was originally established with a `ret`-exit
+  fixture and *expected* to hold for a region-leaving `jmp` by the identical mechanism. It has
+  now been **measured on the target substrate** (bare-metal Zen 5 / Ryzen 9 9950X, `amd_lbr_v2`,
+  kernel 6.17, `make docker-hwtrace-codeimage`) by the Phase-9 fixtures in
+  [examples/test_branchsnap.c](../../../examples/test_branchsnap.c) and it **HOLDS**:
+  - **Fixture.** `TAILJMP` — body identical to `ROUTINE` (taken `jle` at `0x0c` skipping the
+    `dec` at `0x0e`) but exiting via a region-leaving direct `jmp` at `0x11`; region registered
+    as `[base, 0x16)` so the jmp target `0x16` (a `ret` stub) is the first byte OUTSIDE it.
+    Zero ret-class instructions in-region. Driven with `opts.snapshot` **UNSET** — the
+    default-on path.
+  - **Routing (confirms the "subsumes it" claim above).** `ASMTEST_AMD_DEBUG=1` shows
+    `begin_amd: nexit=1 last_exit=17 snapshot_opt=0` -> `snapshot_begin: armed nbp=1
+    exit_off[0]=17` -> `mode=snapshot nbp=1 (deterministic boundary)`. So
+    `asmtest_amd_all_exits` does classify the tail-`jmp` as the single exit and the default-on
+    gate does arm a breakpoint on it — the multi-exit arm's *enumeration/routing* genuinely
+    subsumes the Phase-9 widening. It does **not** subsume this *property*: routing a tail-jmp
+    to a `#DB` boundary is precisely what makes non-eviction load-bearing there.
+  - **Measurement.** `tailjmp/jle-taken`: `fn(20,22)=42; decoded 5 insns, dec-block(0x0e)=0,
+    truncated=0` — the exact `{0,3,6,0xc,0x11}` reconstruction. Raw-window corroboration from
+    the same run: `snapshot_end: best_nr=16 best_inregion=2 trimmed=2 boundary=1` (the call
+    edge **and** the `jle` edge both survived to the read), versus `best_inregion=1` on the
+    not-taken control where the `jle` is genuinely unrecorded.
+  - **Why it discriminates** (a test that passed either way would be worthless): the `jle`'s
+    survival is observable as the ABSENCE of the `dec` block at `0x0e`. Had the `#DB` evicted
+    that edge, `amd_replay` would reach `0x0c` with no recorded edge, treat it as a not-taken
+    conditional, fall through and decode `0x0e` — a **silently wrong** trace with
+    `truncated==0` ([amd_backend.c:378-379](../../../src/amd_backend.c)). Total eviction
+    instead yields `best_inregion==0` -> `truncated`
+    ([branchsnap.c:360](../../../src/branchsnap.c)). `!covered(0x0e) && !truncated` fails under
+    both modes. NOTE the entry block is **not** usable as the evidence: `amd_replay` appends
+    block 0 unconditionally ([amd_backend.c:267](../../../src/amd_backend.c)), so
+    `covered(t, 0)` is **vacuous** and is asserted for shape only.
+  - **Controls.** A *negative* control (same fixture, `jle` NOT taken, `fn(200,1)=200`) reports
+    `decoded 6 insns, dec-block(0x0e)=1` — proving `0x0e` IS producible by this fixture, so its
+    absence in the taken run is a real observation and not a shape the fixture can never emit.
+    A *positive* control (the already-validated `ret` exit, same body) reports the identical
+    `5 insns, dec-block=0, truncated=0`.
+  - **Mutation evidence (the test can fail).** Simulating the eviction inside
+    `asmtest_amd_snapshot_end` — dropping the newest in-region edge from the decoded window for
+    this fixture only — flips the taken run to `decoded 6 insns, dec-block(0x0e)=1,
+    truncated=0` and the assertion fails, while the `ret` control stays green. This also proves
+    `truncated` does **not** catch partial eviction, so `!truncated` alone would have been a
+    worthless assertion; `!covered(0x0e)` is the load-bearing discriminator.
+
+  **Consequence for the widened default:** the precondition the plan set ("re-confirm live
+  before the widened default ships enabled") is **met** — default-on for a single tail-`jmp`
+  exit is empirically sound on Zen 5. **Residual (unmeasured, honest):** this is one part
+  (Zen 5 / `amd_lbr_v2`); Zen 4 and Zen 3 BRS remain under the standing "Hardware coverage"
+  gate above. The tiling consumer's inherited assumption
+  ([branchsnap.c:415-422](../../../src/branchsnap.c)) is a CALL-target checkpoint, which is a
+  third shape and still not literally either validated case.

@@ -15,6 +15,10 @@
  *
  * Feasibility confirmed on a Zen 5 (Ryzen 9 9950X): a #DB breakpoint does NOT evict the
  * region's in-region branches before the helper reads them (the AMD freeze path holds).
+ * Confirmed for BOTH exit shapes the snapshot arms: a `ret` exit (original spike) and a
+ * region-leaving tail-`jmp` exit (re-confirmed live 2026-07-17 — test_branchsnap.c's phase9
+ * fixtures, with a not-taken negative control proving the measurement discriminates). Zen 4
+ * and Zen 3 BRS remain unmeasured (see the AMD plan's "Hardware coverage" risk).
  *
  * Real body under ASMTEST_HAVE_LIBBPF (built only in the BPF-toolchain image); the #else
  * stub self-skips so this TU always links. Needs CAP_BPF + CAP_PERFMON + AMD LbrExtV2 +
@@ -415,11 +419,11 @@ int asmtest_amd_snapshot_end(asmtest_trace_t *trace) {
  * BOUNDARY ASSUMPTION (inherited, and load-bearing here): tiling relies on the same
  * Zen 4/5 property Phase 9 validated for the region path — a #DB execution breakpoint
  * does NOT evict the recent branch history before the BPF helper reads it (the AMD
- * freeze path holds). Phase 9 validated it for a `ret` boundary; a tail-`jmp` boundary
- * carries an assumption yet to be re-confirmed. A managed method-entry checkpoint is
+ * freeze path holds). That is now validated live on Zen 5 for BOTH region-exit shapes:
+ * a `ret` boundary and a tail-`jmp` boundary. A managed method-entry checkpoint is
  * neither — it is a CALL target — so it is nearer the validated shape (the call retires,
- * then the breakpoint fires on the entry instruction) but is not literally the validated
- * case. The test asserts the entry edge is present rather than assuming it. */
+ * then the breakpoint fires on the entry instruction) but is still not literally either
+ * validated case. The test asserts the entry edge is present rather than assuming it. */
 struct btile_state {
     int active;
     int nbp; /* armed checkpoints (bfd/link[0..nbp))    */

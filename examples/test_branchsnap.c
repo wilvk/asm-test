@@ -118,6 +118,102 @@ static int snap_default_run(void *cp, size_t nbytes, long a, long b,
     return ok;
 }
 
+/* --- Phase 9: the tail-`jmp` boundary NON-EVICTION experiment -------------------
+ *
+ * The AMD plan validated the Zen-5 non-eviction property (a planted #DB does NOT evict
+ * the region's in-region branches before bpf_get_branch_snapshot() reads the frozen
+ * stack) with a `ret` exit, and carried the tail-`jmp` exit as an ASSUMPTION to
+ * re-confirm live. These fixtures settle it on the target substrate.
+ *
+ * WHY THIS MEASUREMENT DISCRIMINATES (the whole point — a test that passes either way
+ * would be worthless). Both fixtures run the SAME body: a taken `jle` at 0x0c that
+ * SKIPS the `dec rax` at 0x0e. Reconstruction of that skip is what depends on the
+ * jle's in-region LBR edge surviving to the snapshot read:
+ *
+ *   - Non-eviction HOLDS  -> the jle edge {from=0x0c, to=0x11} is in the frozen window,
+ *                            amd_replay FOLLOWS it, and 0x0e is NEVER decoded.
+ *   - The #DB EVICTED it  -> the jle edge is gone; amd_replay reaches 0x0c with no
+ *                            recorded edge there, treats it as a NOT-taken conditional,
+ *                            FALLS THROUGH, and decodes 0x0e — a SILENTLY WRONG trace
+ *                            with truncated==0 (amd_backend.c:378-379).
+ *   - TOTAL eviction      -> best_inregion==0 -> branchsnap.c:360 sets truncated.
+ *
+ * So `!covered(0x0e) && !truncated` fails under BOTH eviction modes. The discriminator
+ * is the DEC block at 0x0e, not the entry block: amd_replay appends block 0
+ * UNCONDITIONALLY (amd_backend.c:267), so `covered(0, ...)` is VACUOUS here and is
+ * asserted only as a shape check, never as the eviction evidence.
+ *
+ * NEGATIVE CONTROL (proves 0x0e is PRODUCIBLE, so its absence above is an observation
+ * and not a structural impossibility of the fixture): the same routine run with the jle
+ * NOT taken (a=200,b=1 -> 201 > 100) must decode 0x0e and report covered(0x0e)==1. If
+ * that control did not pass, `!covered(0x0e)` in the taken runs would prove nothing.
+ *
+ * POSITIVE CONTROL: the identical body exiting via `ret` — the shape the plan ALREADY
+ * validated — must give the identical answer, tying the new tail-jmp measurement to the
+ * known-good one. */
+struct snap_facts {
+    int ran; /* the capture was live (tier up + region registered) */
+    int truncated;
+    int cov0; /* entry block 0 — VACUOUS (block 0 is unconditional); shape only */
+    int cov_dec; /* the 0x0e `dec` block — THE discriminator */
+    unsigned long long ni;
+    long result;
+};
+
+/* Run `code(a,b)` through the ordinary begin/end markers with opts.snapshot UNSET (the
+ * DEFAULT-ON boundary snapshot), registering only [base, base+reglen) so a tail `jmp`
+ * whose target sits at/after `reglen` is a genuine region-LEAVING exit. Reports the
+ * decoded facts; ran==0 means the tier self-skipped (never a pass). */
+static struct snap_facts snap_facts_run(const unsigned char *code,
+                                        size_t nbytes, size_t reglen, long a,
+                                        long b, const char *what) {
+    struct snap_facts f;
+    memset(&f, 0, sizeof f);
+    void *cp = mmap(NULL, nbytes, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (cp == MAP_FAILED) {
+        printf("# SKIP branchsnap phase9 %s: mmap failed\n", what);
+        return f;
+    }
+    memcpy(cp, code, nbytes);
+    mprotect(cp, nbytes, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)cp, (char *)cp + nbytes);
+
+    asmtest_hwtrace_options_t opts;
+    memset(&opts, 0, sizeof opts);
+    opts.struct_size = sizeof opts; /* self-describe (flag-day ABI guard) */
+    opts.backend = ASMTEST_HWTRACE_AMD_LBR;
+    /* opts.snapshot intentionally UNSET: this drives the DEFAULT-ON exit selection,
+     * which is exactly what e9ca70e widened to cover a region-leaving tail jmp. */
+    if (asmtest_hwtrace_init(&opts) != ASMTEST_HW_OK) {
+        printf("# SKIP branchsnap phase9 %s: AMD LBR tier unavailable\n", what);
+        munmap(cp, nbytes);
+        return f;
+    }
+    asmtest_trace_t *t = asmtest_trace_new(64, 64);
+    if (asmtest_hwtrace_register_region("bsnap9", cp, reglen, t) ==
+        ASMTEST_HW_OK) {
+        add2_fn fn = (add2_fn)cp;
+        asmtest_hwtrace_begin("bsnap9");
+        f.result = fn(a, b);
+        asmtest_hwtrace_end("bsnap9");
+        f.ran = 1;
+        f.truncated = asmtest_emu_trace_truncated(t);
+        f.cov0 = asmtest_trace_covered(t, 0);
+        f.cov_dec = asmtest_trace_covered(t, 0x0e);
+        f.ni = asmtest_emu_trace_insns_total(t);
+        printf("branchsnap phase9 %s: fn(%ld,%ld)=%ld; decoded %llu insns, "
+               "entry=%d, dec-block(0x0e)=%d, truncated=%d\n",
+               what, a, b, f.result, f.ni, f.cov0, f.cov_dec, f.truncated);
+    } else {
+        printf("not ok - branchsnap phase9 %s: register_region failed\n", what);
+    }
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(t);
+    munmap(cp, nbytes);
+    return f;
+}
+
 int main(void) {
     printf("== branchsnap-test (AMD deterministic LBR snapshot) ==\n");
     if (!asmtest_amd_snapshot_available()) {
@@ -405,6 +501,100 @@ int main(void) {
             munmap(p, sizeof ROUTINE);
             return 1;
         }
+    }
+
+    /* --- Phase 9: tail-`jmp` boundary non-eviction, live on the target substrate ---
+     * Gated on the direct capture above having run live (rc==OK): where the caps /
+     * substrate are absent the whole tier self-skips and this would prove nothing. */
+    if (rc == ASMTEST_HW_OK) {
+        /* TAILJMP — identical body to ROUTINE, but the exit at 0x11 is a region-LEAVING
+         * direct `jmp` (a tail call), not a ret. The registered region is [base, 0x16);
+         * the jmp's target 0x16 is the FIRST byte OUTSIDE it, where a `ret` stub returns
+         * to our caller. So: zero ret-class instructions in-region, exactly one exit,
+         * and that exit is a tail jmp — the shape e9ca70e widened default-on to cover.
+         *   0x00 mov rax,rdi | 0x03 add rax,rsi | 0x06 cmp rax,100 | 0x0c jle 0x11
+         *   0x0e dec rax     | 0x11 jmp 0x16 (rel32=0, leaves the region)
+         *   ---- region ends at 0x16 ----      | 0x16 ret  (outside; the tail callee) */
+        static const unsigned char TAILJMP[] = {
+            0x48, 0x89, 0xf8,                   /* 0x00 mov rax, rdi     */
+            0x48, 0x01, 0xf0,                   /* 0x03 add rax, rsi     */
+            0x48, 0x3d, 0x64, 0x00, 0x00, 0x00, /* 0x06 cmp rax, 100     */
+            0x7e, 0x03,                         /* 0x0c jle 0x11         */
+            0x48, 0xff, 0xc8,                   /* 0x0e dec rax          */
+            0xe9, 0x00, 0x00, 0x00, 0x00,       /* 0x11 jmp 0x16 (tail)  */
+            0xc3};                              /* 0x16 ret (OUT of rgn) */
+#define TAILJMP_REGLEN 0x16
+
+        /* (1) THE MEASUREMENT: tail-jmp exit, jle TAKEN (42 <= 100 -> dec skipped).
+         *     !cov_dec proves the jle's in-region edge SURVIVED the #DB at the tail jmp. */
+        struct snap_facts tj =
+            snap_facts_run(TAILJMP, sizeof TAILJMP, TAILJMP_REGLEN, 20, 22,
+                           "tailjmp/jle-taken");
+
+        /* (2) NEGATIVE CONTROL: same fixture, jle NOT taken (201 > 100 -> dec RUNS).
+         *     cov_dec MUST be 1 here — proving 0x0e is producible by this fixture, so
+         *     !cov_dec in (1) is a real observation rather than a shape the fixture can
+         *     never emit. This is the guard against a vacuously-passing (1). */
+        struct snap_facts nt =
+            snap_facts_run(TAILJMP, sizeof TAILJMP, TAILJMP_REGLEN, 200, 1,
+                           "tailjmp/jle-not-taken(control)");
+
+        /* (3) POSITIVE CONTROL: the ALREADY-VALIDATED `ret`-exit shape, same body and
+         *     same taken jle, through the same default-on path — the tail-jmp answer
+         *     must match the known-good ret answer. */
+        struct snap_facts rt =
+            snap_facts_run(ROUTINE, sizeof ROUTINE, sizeof ROUTINE, 20, 22,
+                           "ret-exit(control)");
+
+        if (!tj.ran || !nt.ran || !rt.ran) {
+            printf("# SKIP branchsnap phase9: default-on snapshot not live\n");
+        } else {
+            /* The control FIRST: if 0x0e cannot be produced, the measurement is void. */
+            int ctl_ok = (nt.result == 200) && nt.cov_dec && !nt.truncated;
+            if (!ctl_ok)
+                printf("not ok - branchsnap phase9 control: the not-taken run "
+                       "did not produce the 0x0e dec block (result=%ld "
+                       "dec=%d truncated=%d) — the measurement below would be "
+                       "vacuous\n",
+                       nt.result, nt.cov_dec, nt.truncated);
+
+            /* The measurement. !cov_dec is the non-eviction evidence; !truncated rules
+             * out the total-eviction mode; ni==5 pins the exact reconstruction
+             * {0,3,6,0xc,0x11}. cov0 is asserted for shape only (it is vacuous). */
+            int meas_ok = (tj.result == 42) && !tj.truncated && !tj.cov_dec &&
+                          (tj.ni == 5) && tj.cov0;
+            /* The ret twin must agree — same body, same taken jle, validated exit. */
+            int pos_ok = (rt.result == 42) && !rt.truncated && !rt.cov_dec &&
+                         (rt.ni == 5) && rt.cov0;
+
+            if (ctl_ok && meas_ok && pos_ok) {
+                printf(
+                    "ok - branchsnap phase9: the #DB at a region-leaving tail "
+                    "`jmp` does NOT evict the region's in-region branches "
+                    "before the snapshot read — the jle edge survived (0x0e "
+                    "unreached, 5/5 insns, !truncated), matching the "
+                    "validated `ret` exit; the not-taken control shows 0x0e "
+                    "IS producible, so the measurement discriminates\n");
+            } else {
+                if (!meas_ok)
+                    printf("not ok - branchsnap phase9: tail-jmp boundary "
+                           "NON-EVICTION VIOLATED or reconstruction wrong "
+                           "(result=%ld truncated=%d dec-block=%d insns=%llu "
+                           "entry=%d) — dec-block=1 with truncated=0 means the "
+                           "#DB evicted the jle edge and the trace is silently "
+                           "WRONG\n",
+                           tj.result, tj.truncated, tj.cov_dec, tj.ni, tj.cov0);
+                if (!pos_ok)
+                    printf("not ok - branchsnap phase9: the validated ret-exit "
+                           "control itself failed (result=%ld truncated=%d "
+                           "dec-block=%d insns=%llu)\n",
+                           rt.result, rt.truncated, rt.cov_dec, rt.ni);
+                munmap(p, sizeof ROUTINE);
+                return 1;
+            }
+        }
+    } else {
+        printf("# SKIP branchsnap phase9: snapshot capture not live\n");
     }
 
     munmap(p, sizeof ROUTINE);
