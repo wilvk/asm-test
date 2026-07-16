@@ -1,12 +1,19 @@
-"""Data-flow tier Python binding (Phase 6, increment 1): the GC-move canonicalizer.
+"""Data-flow tier Python binding: the pure analysis pipeline + F7 live attach.
 
 Mirrors the C suite test_dataflow_gcmove's forward-to-final semantics through the
-ctypes wrapper. Runs under pytest, or standalone (`python3 test_dataflow.py`) as a
-TAP-ish reporter so it validates on a host without pytest installed.
+ctypes wrapper, exercises the L0/L1/L2 pipeline, and — F7 — captures data flow off
+a REAL live victim process by pid (see the live-attach section at the bottom).
+Runs under pytest, or standalone (`python3 test_dataflow.py`) as a TAP-ish reporter
+so it validates on a host without pytest installed. The live tests need the lane's
+env (`make dataflow-python-test`), which builds the lib and the victim.
 """
 
 import os
+import platform
+import struct
+import subprocess
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from asmtest import dataflow  # noqa: E402
@@ -142,7 +149,197 @@ def test_pipeline_no_spurious_edge():
         assert vt.forward_slice(2) == {2, 3}   # r3 chain only, no cross-link
 
 
+# ---------------------------------------------------------------------------
+# F7 — live-attach data flow: capture over an ATTACHED PID.
+#
+# These attach to a REAL, independently-running victim process (bindings/
+# dataflow_victim.c), not to a mock and not to a child we trace-forked. What makes
+# them non-vacuous: every assertion below is POSITIVE and keyed to a value only a
+# working capture can produce — the region's return value, the exact step count,
+# the def-use shape. There is deliberately no `assert not truncated`-style check,
+# the shape that let the Python hwtrace lane pass while blind: a failed capture
+# leaves an EMPTY trace, so a test whose real assertions sit behind "if we got
+# anything" skips itself exactly when it should shout.
+# ---------------------------------------------------------------------------
+
+# The tier is Linux x86-64 only (src/dataflow_ptrace.c's own #if). On such a host
+# the live tests MUST run: an unavailable tier there means the lib was linked
+# without Capstone — a build defect that has to be RED, not a skip. Anywhere else
+# the ISA genuinely lacks the tier and skipping is the honest answer.
+_LIVE_EXPECTED = platform.system() == "Linux" and platform.machine() == "x86_64"
+_VICTIM = os.environ.get("ASMTEST_DATAFLOW_VICTIM")
+
+
+class _Victim:
+    """A live victim process to attach to: spawn it, learn its region base.
+
+    The victim publishes `base=0x<hex> len=<n>` on stdout and then loops calling
+    that region with (a, b) forever, bumping an 8-byte counter file. `a` and `b`
+    are OURS, so the expected result is a property of this run — a wrapper that
+    hardcodes an answer cannot satisfy two victims with different args.
+    """
+
+    def __init__(self, tmpdir, a, b):
+        self.a, self.b = a, b
+        self.counter_path = os.path.join(tmpdir, f"victim-{a}-{b}.counter")
+        self.proc = subprocess.Popen(
+            [_VICTIM, self.counter_path, str(a), str(b)],
+            stdout=subprocess.PIPE, text=True,
+        )
+        line = self.proc.stdout.readline()  # blocks until the victim is looping
+        if not line.startswith("base=0x"):
+            self.close()
+            raise AssertionError(f"victim handshake failed: {line!r}")
+        base_s, len_s = line.split()
+        self.base = int(base_s[len("base="):], 16)
+        self.len = int(len_s[len("len="):])
+        self.pid = self.proc.pid
+
+    def counter(self):
+        with open(self.counter_path, "rb") as f:
+            return struct.unpack("<Q", f.read(8))[0]
+
+    def close(self):
+        self.proc.kill()
+        self.proc.wait()
+        if self.proc.stdout:
+            self.proc.stdout.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+        return False
+
+
+def _tmpdir():
+    import tempfile
+
+    return tempfile.mkdtemp(prefix="asmtest-df-")
+
+
+def _check_rc(rc, what):
+    # ETRACE is NOT a skip here. ptrace is a capability the lane can be GIVEN
+    # (--cap-add=SYS_PTRACE / seccomp=unconfined), and the victim opts in via
+    # PR_SET_PTRACER_ANY, so a refusal means the lane is misconfigured — which
+    # must be loud. Only genuinely absent hardware/ISA earns a skip.
+    if rc == dataflow.PTRACE_ETRACE:
+        raise AssertionError(
+            f"{what}: ptrace refused (ETRACE). The lane needs ptrace permission — "
+            "run it with --cap-add=SYS_PTRACE (and seccomp=unconfined if the "
+            "default profile blocks ptrace). Not a valid skip."
+        )
+    assert rc == dataflow.PTRACE_OK, f"{what}: rc={rc}"
+
+
+def test_live_attach_tier_is_real():
+    if not _LIVE_EXPECTED:
+        return  # genuinely off-tier ISA
+    # Probe, not a symbol-resolves check: EINVAL (real) vs ENOSYS (stub).
+    assert dataflow.live_attach_available(), (
+        "live-attach tier reports ENOSYS on linux/x86_64 — libasmtest_dataflow was "
+        "built without Capstone or without src/dataflow_ptrace.c"
+    )
+
+
+def test_attach_pid_captures_live_region():
+    if not _LIVE_EXPECTED or not _VICTIM:
+        return  # pytest without the lane's env; _main() bails instead of skipping
+    tmp = _tmpdir()
+    with _Victim(tmp, 7, 5) as vic, dataflow.ValueTrace(64, 512) as vt:
+        rc, result = vt.attach_pid(vic.pid, vic.base, vic.len)
+        _check_rc(rc, "attach_pid")
+        # The region really executed IN the victim: rax = rdi + rsi.
+        assert result == 12, f"attach_pid: result={result}, want 12"
+        # Exactly the six in-region instructions of df_chain — not "some".
+        assert vt.steps == 6, f"attach_pid: steps={vt.steps}, want 6"
+        assert vt.recs > 0, "attach_pid: no operand records captured"
+
+        # SURVIVAL: we attached to a process we did not own; it must outlive the
+        # detach. The counter is written by the victim, so movement proves it runs.
+        c0 = vic.counter()
+        time.sleep(0.05)
+        assert vic.counter() > c0, "attach_pid: victim did not survive the detach"
+
+        # The def-use built over the LIVE trace has the real shape: the store at
+        # step 1 feeds the load at step 2 (a MEMORY edge through [rsp-8]), which
+        # chains to the lea and the final mov.
+        assert vt.backward_slice(4) == {0, 1, 2, 3, 4}, (
+            f"attach_pid: backward_slice(4)={vt.backward_slice(4)}"
+        )
+        fwd = vt.forward_slice(0)
+        assert 4 in fwd, "attach_pid: forward_slice(0) misses the final mov"
+        # Negative control on the SHAPE: the `ret` (step 5) consumes none of the
+        # chain, so a slice containing it would mean the graph links everything.
+        assert 5 not in fwd, "attach_pid: forward_slice(0) wrongly reached the ret"
+
+
+def test_attach_pid_result_tracks_the_victims_args():
+    # THE anti-hardcode control. A second victim, different args, same wrapper: a
+    # stubbed/faked capture cannot return 12 here and 42 there.
+    if not _LIVE_EXPECTED or not _VICTIM:
+        return  # pytest without the lane's env; _main() bails instead of skipping
+    tmp = _tmpdir()
+    with _Victim(tmp, 17, 25) as vic, dataflow.ValueTrace(64, 512) as vt:
+        rc, result = vt.attach_pid(vic.pid, vic.base, vic.len)
+        _check_rc(rc, "attach_pid(17,25)")
+        assert result == 42, f"attach_pid: result={result}, want 42"
+        assert vt.steps == 6
+
+
+def test_attach_pid_tid_any_thread():
+    if not _LIVE_EXPECTED or not _VICTIM:
+        return  # pytest without the lane's env; _main() bails instead of skipping
+    tmp = _tmpdir()
+    with _Victim(tmp, 9, 4) as vic, dataflow.ValueTrace(64, 512) as vt:
+        # only_tid=0: step whichever thread enters the region (here, the only one).
+        rc, result = vt.attach_pid_tid(vic.pid, 0, vic.base, vic.len)
+        _check_rc(rc, "attach_pid_tid")
+        assert result == 13, f"attach_pid_tid: result={result}, want 13"
+        assert vt.steps == 6
+
+
+def test_attach_jit_reports_survival():
+    if not _LIVE_EXPECTED or not _VICTIM:
+        return  # pytest without the lane's env; _main() bails instead of skipping
+    tmp = _tmpdir()
+    with _Victim(tmp, 20, 3) as vic, dataflow.ValueTrace(64, 512) as vt:
+        rc, result, survived = vt.attach_jit(vic.pid, 0, vic.base, vic.len)
+        _check_rc(rc, "attach_jit")
+        assert result == 23, f"attach_jit: result={result}, want 23"
+        assert vt.steps == 6
+        # The entry point's own survival report — the house rule that a foreign
+        # target is never killed, asserted from the producer's side.
+        assert survived == 1, "attach_jit: did not report the target as survived"
+        c0 = vic.counter()
+        time.sleep(0.05)
+        assert vic.counter() > c0, "attach_jit: victim did not survive the detach"
+
+
+def test_attach_rejects_bad_arguments():
+    # Negative control: the wrapper must surface the producer's rejections rather
+    # than manufacture success. A zero-length region and a nonexistent pid are the
+    # two the C entry point separates (EINVAL vs a seize failure).
+    if not _LIVE_EXPECTED:
+        return
+    with dataflow.ValueTrace(8, 8) as vt:
+        rc, _ = vt.attach_pid(12345, 0x1000, 0)  # code_len = 0
+        assert rc == dataflow.PTRACE_EINVAL, f"zero-length region: rc={rc}"
+        rc, _ = vt.attach_pid(0, 0x1000, 21)  # pid <= 0
+        assert rc == dataflow.PTRACE_EINVAL, f"pid 0: rc={rc}"
+    with dataflow.ValueTrace(8, 8) as vt:
+        # A pid that does not exist cannot be seized: never OK.
+        rc, _ = vt.attach_pid(0x7FFFFFF0, 0x1000, 21)
+        assert rc != dataflow.PTRACE_OK, "attaching to a nonexistent pid returned OK"
+
+
 def _main():
+    if _LIVE_EXPECTED and not _VICTIM:
+        # The make lane always exports this. Missing == misconfigured lane, and a
+        # silent skip of every live test is exactly the hole this suite must not have.
+        print("Bail out! ASMTEST_DATAFLOW_VICTIM unset; run `make dataflow-python-test`")
+        return 1
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     n = 0
     failed = False

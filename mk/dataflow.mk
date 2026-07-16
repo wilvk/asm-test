@@ -64,12 +64,34 @@ $(BUILD)/dataflow_ptrace.o: src/dataflow_ptrace.c \
                             $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
 
-# --- Phase 6: the data-flow ANALYSIS shared lib (libasmtest_dataflow) --------
+# --- Phase 6: the data-flow shared lib (libasmtest_dataflow) -----------------
 # The L0 value sink + L1 def-use + L2 slice + method identity + GC-move
 # canonicalization + runtime-helper summaries — the pure analysis pipeline, the
-# packaging target the language bindings (Phase 6) dlopen. The value-trace
-# PRODUCERS (emu / ptrace / DR) are separate tiers and are NOT bundled here.
+# packaging target the language bindings (Phase 6) dlopen.
 # Links Capstone (the operand enumerator dataflow_operands uses in detail mode).
+#
+# F7 (live-attach-dataflow-followup-plan.md) ADDS the scoped ptrace L0 producer
+# (dataflow_ptrace.o + the codeimage.o byte source it calls) to this lib. That
+# reverses this rule's original "PRODUCERS are separate tiers and are NOT bundled
+# here" line, deliberately and for one reason: a binding can only wrap what it can
+# dlopen. F7's exit criterion is the language bindings capturing data flow over an
+# ATTACHED PID, and the attach entry points live in the producer, so a lib without
+# it leaves nothing to wrap. The three arguments the original split rested on do
+# not survive the move:
+#   - "it would not build everywhere" — it does. Off Linux x86-64 / without
+#     Capstone, src/dataflow_ptrace.c compiles to ENOSYS stubs by its own #if, so
+#     the lib links on every host and the bindings' live_attach_available() reports
+#     the truth instead of failing to load.
+#   - "it drags in Capstone" — this lib ALREADY links Capstone for the operand
+#     enumerator, so the producer adds no new dependency tier.
+#   - "it drags in libbpf" — codeimage.o's libbpf use is already optional and
+#     $(LINK_LIBBPF)-gated; libasmtest_hwtrace bundles the same pic/codeimage.o on
+#     the same terms.
+# The pure/impure SPLIT still exists where it earns its keep — at the OBJECT level
+# (dataflow.o has no Capstone), which is what lets the pure suites run everywhere.
+# It was never load-bearing at the .so level. The emulator producer stays out: it
+# needs libunicorn, a genuinely absent-by-default dependency, and no binding wraps
+# it.
 $(BUILD)/pic/dataflow.o: src/dataflow.c include/asmtest_valtrace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/dataflow_method.o: src/dataflow_method.c include/asmtest_valtrace.h | $(BUILD)/pic
@@ -80,25 +102,50 @@ $(BUILD)/pic/dataflow_helpers.o: src/dataflow_helpers.c include/asmtest_valtrace
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/dataflow_operands.o: src/dataflow_operands.c include/asmtest_valtrace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -fPIC -c $< -o $@
+# F7: the scoped ptrace L0 PRODUCER, PIC — the live-attach entry points the
+# bindings wrap (asmtest_dataflow_ptrace_attach_pid / _pid_tid / _jit). Same
+# cflags as the static $(BUILD)/dataflow_ptrace.o above; without Capstone / off
+# Linux x86-64 the file's own #if compiles it to ENOSYS stubs, so this object
+# exists on every host and the lib always links.
+$(BUILD)/pic/dataflow_ptrace.o: src/dataflow_ptrace.c include/asmtest_valtrace.h \
+                                include/asmtest_codeimage.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -fPIC -c $< -o $@
 
+# pic/codeimage.o is native-trace.mk's (included before this file); the producer
+# calls asmtest_codeimage_bytes_at for its versioned decode, so the lib needs it.
 DATAFLOW_SHLIB_OBJS := $(BUILD)/pic/dataflow.o $(BUILD)/pic/dataflow_operands.o \
                        $(BUILD)/pic/dataflow_method.o $(BUILD)/pic/dataflow_gcmove.o \
-                       $(BUILD)/pic/dataflow_helpers.o
+                       $(BUILD)/pic/dataflow_helpers.o \
+                       $(BUILD)/pic/dataflow_ptrace.o $(BUILD)/pic/codeimage.o
 
 .PHONY: shared-dataflow dataflow-python-test
 shared-dataflow: $(call shlib_dev,libasmtest_dataflow)
 $(call shlib_real,libasmtest_dataflow): $(DATAFLOW_SHLIB_OBJS)
-	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_dataflow) $^ $(CAPSTONE_LIBS) -o $@
+	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_dataflow) $^ \
+	  $(CAPSTONE_LIBS) $(LINK_LIBBPF) -o $@
 $(call shlib_dev,libasmtest_dataflow): $(call shlib_real,libasmtest_dataflow)
 	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_dataflow)
 	ln -sf $(notdir $(call shlib_compat,libasmtest_dataflow)) $@
 
+# --- F7: the shared live-attach victim -------------------------------------
+# The process every binding's live-attach test ATTACHES to (bindings/dataflow_victim.c
+# — see its header for the stdout base= handshake and the survival counter). ONE
+# fixture for all ten lanes: they must differ in the FFI under test and nothing else.
+# Plain CFLAGS — no Capstone, no libbpf; it is a victim, not a tracer.
+$(BUILD)/dataflow_victim: bindings/dataflow_victim.c | $(BUILD)
+	$(CC) $(CFLAGS) $< -o $@
+
+# What every dataflow-<lang>-test lane exports: the lib to dlopen + the victim to
+# spawn. Defined once so a lane cannot drift into pointing at a stale copy of either.
+DATAFLOW_LIVE_DEPS := shared-dataflow $(BUILD)/dataflow_victim
+dataflow_live_env = ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
+                    ASMTEST_DATAFLOW_VICTIM=$(abspath $(BUILD)/dataflow_victim)
+
 # Phase 6 — the Python data-flow binding (bindings/python/asmtest/dataflow.py).
 # Runs the standalone TAP reporter (no pytest dependency) against the freshly
 # built analysis lib, so it validates the ctypes wrapper on any host.
-dataflow-python-test: shared-dataflow
-	ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
-	  python3 bindings/python/tests/test_dataflow.py
+dataflow-python-test: $(DATAFLOW_LIVE_DEPS)
+	$(dataflow_live_env) python3 bindings/python/tests/test_dataflow.py
 
 # Phase 6 — the C++ data-flow binding (bindings/cpp/asmtest_dataflow.hpp): a
 # header-only typed wrapper. Links the two PURE analysis objects it calls
