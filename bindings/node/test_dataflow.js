@@ -1,5 +1,7 @@
-// Node data-flow binding smoke (Phase 6): GC-move canonicalizer + method resolver,
-// mirroring the Python/C++ suites' semantics. Self-skips when the lib is not built.
+// Node data-flow binding smoke: GC-move canonicalizer + method resolver + the
+// L0/L1/L2 pipeline, mirroring the Python/C++ suites' semantics — and (F7) a REAL
+// live attach to a victim process by pid. Self-skips when the lib is not built;
+// the live section does NOT self-skip on a linux/x64 host (see its comment).
 'use strict';
 
 const df = require('./dataflow');
@@ -75,6 +77,174 @@ const MEM = df.LOC_MEM_ABS;
   vt.step(0x06, [[REG, 3]], [[REG, 4]]);
   check(setEq(vt.forwardSlice(0), new Set([0, 1])), 'pipeline: no spurious cross-link');
   vt.free();
+}
+
+// ---------------------------------------------------------------------------
+// F7 — live-attach data flow: capture over a REAL attached pid.
+//
+// Every assertion below is POSITIVE and keyed to something only a working capture
+// can produce (the region's return value, the exact step count, the def-use shape).
+// None of it hides behind "if we captured anything" — an EMPTY capture IS the
+// failure signature, so a guard like that skips exactly when it should shout.
+// ---------------------------------------------------------------------------
+const { spawn } = require('child_process');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+
+// A real blocking sleep: this suite is a straight-line script, so it cannot await.
+// Atomics.wait on a never-notified SharedArrayBuffer is the standard synchronous
+// sleep and needs no child process.
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// The tier is Linux x86-64 only (src/dataflow_ptrace.c's own #if). On such a host
+// the live tests MUST run: an unavailable tier there means the lib was linked
+// without Capstone — a build defect that has to be RED, not a skip.
+const liveExpected = process.platform === 'linux' && process.arch === 'x64';
+const victimExe = process.env.ASMTEST_DATAFLOW_VICTIM;
+
+// A live victim: spawn it, learn its region base. `a`/`b` are OURS, so the expected
+// result is a property of THIS run — a wrapper that hardcodes an answer cannot
+// satisfy two victims with different args.
+function spawnVictim(tag, a, b) {
+  const counterPath = path.join(os.tmpdir(), `asmtest-df-node-${tag}.counter`);
+  const outPath = path.join(os.tmpdir(), `asmtest-df-node-${tag}.hs`);
+  // Redirect the victim's stdout to a FILE and poll it for the handshake line
+  // ("base=0x<hex> len=<n>"), rather than reading a pipe: node's synchronous
+  // stream reads are not portable here (proc.stdout.fd is undefined on node 18,
+  // and this suite has no event loop to await on).
+  const fd = fs.openSync(outPath, 'w');
+  const proc = spawn(victimExe, [counterPath, String(a), String(b)], {
+    stdio: ['ignore', fd, 'inherit'],
+  });
+  fs.closeSync(fd);
+  let line = '';
+  for (let i = 0; i < 500 && !line; i++) {
+    const s = fs.readFileSync(outPath, 'latin1');
+    const nl = s.indexOf('\n');
+    if (nl >= 0) line = s.slice(0, nl);
+    else sleepMs(10);
+  }
+  const m = /^base=0x([0-9a-f]+) len=(\d+) pid=(\d+)$/.exec(line);
+  if (!m) throw new Error(`victim handshake failed: ${JSON.stringify(line)}`);
+  return {
+    proc,
+    // The victim's OWN pid (see bindings/dataflow_victim.c) — right in every
+    // binding, including those whose spawn goes through a shell.
+    pid: Number(m[3]),
+    base: BigInt('0x' + m[1]),
+    len: Number(m[2]),
+    counter: () => fs.readFileSync(counterPath).readBigUInt64LE(0),
+    kill: () => proc.kill('SIGKILL'),
+  };
+}
+
+function setEqA(s, arr) {
+  return s.size === arr.length && arr.every((x) => s.has(x));
+}
+
+// ETRACE is NOT a skip. ptrace is a capability the lane can be GIVEN
+// (--cap-add=SYS_PTRACE / seccomp=unconfined), and the victim opts in via
+// PR_SET_PTRACER_ANY, so a refusal means the lane is misconfigured — be loud.
+function checkRc(rc, what) {
+  if (rc === df.PTRACE_ETRACE) {
+    console.log(`# ${what}: ptrace refused (ETRACE) — the lane needs ` +
+      '--cap-add=SYS_PTRACE; this is NOT a valid skip');
+  }
+  check(rc === df.PTRACE_OK, what);
+}
+
+if (!liveExpected) {
+  console.log('# SKIP live-attach: not linux/x64 (the tier is Linux x86-64 only)');
+} else if (!victimExe) {
+  // The lane always exports this; missing means a misconfigured lane, and silently
+  // skipping every live test is the hole this suite must not have.
+  console.log('Bail out! ASMTEST_DATAFLOW_VICTIM unset; run `make dataflow-node-test`');
+  process.exit(1);
+} else {
+  // Probed, not a symbol-resolves check: EINVAL (real) vs ENOSYS (stub).
+  check(df.liveAttachAvailable(), 'live: tier is real on linux/x64 (EINVAL, not ENOSYS)');
+
+  {
+    const vic = spawnVictim('1', 7, 5);
+    const vt = new df.ValueTrace(64, 512);
+    const r = vt.attachPid(vic.pid, vic.base, vic.len);
+    checkRc(r.rc, 'live: attach_pid a FOREIGN running pid + stepped the region');
+    // The region really executed IN the victim: rax = rdi + rsi.
+    check(r.result === 12, `live: attach_pid region returned 12 (got ${r.result})`);
+    // Exactly df_chain's six in-region instructions — not "some".
+    check(vt.steps === 6, `live: six in-region steps captured (got ${vt.steps})`);
+    check(vt.recs > 0, 'live: operand records captured');
+
+    // SURVIVAL: we attached to a process we do not own; it must outlive the detach.
+    const c0 = vic.counter();
+    sleepMs(50);
+    check(vic.counter() > c0, 'live: victim SURVIVED the detach (counter advanced)');
+
+    // The def-use over the LIVE trace has the real shape: the store at step 1 feeds
+    // the load at step 2 (a MEMORY edge through [rsp-8]), which chains onward.
+    check(setEqA(vt.backwardSlice(4), [0, 1, 2, 3, 4]),
+      'live: backward slice(step4) = {0,1,2,3,4} over the live capture');
+    const fwd = vt.forwardSlice(0);
+    check(fwd.has(4), 'live: forward slice(step0) reaches the final mov');
+    // Negative control on the SHAPE: the `ret` consumes none of the chain, so
+    // reaching it would mean the graph links everything to everything.
+    check(!fwd.has(5), 'live: forward slice(step0) excludes the ret');
+    vt.free();
+    vic.kill();
+  }
+  {
+    // THE anti-hardcode control: a second victim, different args, same wrapper.
+    const vic = spawnVictim('2', 17, 25);
+    const vt = new df.ValueTrace(64, 512);
+    const r = vt.attachPid(vic.pid, vic.base, vic.len);
+    checkRc(r.rc, 'live: attach_pid the second victim');
+    check(r.result === 42, `live: result TRACKS the victim's args (17+25=42, got ${r.result})`);
+    check(vt.steps === 6, 'live: six steps on the second victim too');
+    vt.free();
+    vic.kill();
+  }
+  {
+    const vic = spawnVictim('3', 9, 4);
+    const vt = new df.ValueTrace(64, 512);
+    // onlyTid 0: step whichever thread enters the region (here, the only one).
+    const r = vt.attachPidTid(vic.pid, 0, vic.base, vic.len);
+    checkRc(r.rc, 'live: attach_pid_tid stepped the entering thread');
+    check(r.result === 13, `live: attach_pid_tid region returned 13 (got ${r.result})`);
+    check(vt.steps === 6, 'live: attach_pid_tid captured six steps');
+    vt.free();
+    vic.kill();
+  }
+  {
+    const vic = spawnVictim('4', 20, 3);
+    const vt = new df.ValueTrace(64, 512);
+    const r = vt.attachJit(vic.pid, 0, vic.base, vic.len);
+    checkRc(r.rc, 'live: attach_jit stepped the region');
+    check(r.result === 23, `live: attach_jit region returned 23 (got ${r.result})`);
+    check(vt.steps === 6, 'live: attach_jit captured six steps');
+    // The producer's OWN survival report — the house rule that a foreign target is
+    // never killed, asserted from its side.
+    check(r.survived === 1, 'live: attach_jit reported the target as survived');
+    const c0 = vic.counter();
+    sleepMs(50);
+    check(vic.counter() > c0, 'live: attach_jit victim kept running after detach');
+    vt.free();
+    vic.kill();
+  }
+  {
+    // Negative control: the wrapper must surface the producer's rejections rather
+    // than manufacture success.
+    const vt = new df.ValueTrace(8, 8);
+    check(vt.attachPid(12345, 0x1000, 0).rc === df.PTRACE_EINVAL,
+      'live: zero-length region is rejected (EINVAL)');
+    check(vt.attachPid(0, 0x1000, 21).rc === df.PTRACE_EINVAL,
+      'live: pid 0 is rejected (EINVAL)');
+    check(vt.attachPid(0x7ffffff0, 0x1000, 21).rc !== df.PTRACE_OK,
+      'live: attaching to a nonexistent pid never returns OK');
+    vt.free();
+  }
 }
 
 console.log('1..' + n);

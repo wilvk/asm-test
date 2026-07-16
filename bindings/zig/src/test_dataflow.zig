@@ -1,13 +1,36 @@
-// Zig data-flow binding smoke (Phase 6): GC-move canonicalizer + method resolver,
-// mirroring the Python/C++/Node/Ruby/Lua suites. dlopen's libasmtest_dataflow via
-// std.DynLib (like hwtrace.zig) and calls the two pure helpers. Run:
-//   zig run bindings/zig/src/test_dataflow.zig   (ASMTEST_DATAFLOW_LIB set)
+// Zig data-flow binding smoke (Phase 6 + F7): GC-move canonicalizer + method
+// resolver, mirroring the Python/C++/Node/Ruby/Lua suites — and (F7) a REAL live
+// attach to a victim process by pid. dlopen's libasmtest_dataflow via std.DynLib
+// (like hwtrace.zig). Run:
+//   zig run -lc bindings/zig/src/test_dataflow.zig  (ASMTEST_DATAFLOW_LIB +
+//                                                    ASMTEST_DATAFLOW_VICTIM set)
 const std = @import("std");
 
 const GcMove = extern struct { old_base: u64, new_base: u64, len: u64, step: u32 };
 const Method = extern struct { addr: u64, size: u64, name: [*:0]const u8, version: u64 };
 const GcmoveCanonFn = *const fn (?[*]const GcMove, usize, u32, u64) callconv(.C) u64;
 const MethodResolveFn = *const fn (?[*]const Method, usize, u64) callconv(.C) c_int;
+
+// The L0 sink handle is opaque — passed around, never inspected.
+const ValtraceNewFn = *const fn (usize, usize, usize) callconv(.C) ?*anyopaque;
+const ValtraceFreeFn = *const fn (?*anyopaque) callconv(.C) void;
+const ValtraceStepsFn = *const fn (?*anyopaque) callconv(.C) usize;
+const ValtraceRecsFn = *const fn (?*anyopaque) callconv(.C) usize;
+
+// F7 — the LIVE-ATTACH producer entry points (src/dataflow_ptrace.c). The producer
+// ships NO header on purpose (a value-trace PRODUCER is a tier, not part of the
+// shared sink API), so — exactly as its own C suite does — this binding re-declares
+// them. Keep in step with that file. No struct crosses by value; `img` (the
+// versioned-decode code image) is opaque and always null here.
+const AttachPidFn = *const fn (c_int, u64, usize, u64, *c_long, ?*anyopaque) callconv(.C) c_int;
+const AttachPidTidFn = *const fn (c_int, c_int, u64, usize, u64, *c_long, ?*anyopaque) callconv(.C) c_int;
+const AttachJitFn = *const fn (c_int, c_int, u64, usize, ?*anyopaque, u64, u64, *c_long, *c_int, ?*anyopaque) callconv(.C) c_int;
+
+// The producer's return codes, re-declared for the same reason.
+const PTRACE_OK: c_int = 0; // a complete scoped trace
+const PTRACE_EINVAL: c_int = -1; // bad arguments
+const PTRACE_ENOSYS: c_int = -3; // off Linux x86-64 / no Capstone: tier absent
+const PTRACE_ETRACE: c_int = -4; // ptrace/wait failure (seccomp/yama)
 
 var n: u32 = 0;
 var failed: bool = false;
@@ -68,6 +91,183 @@ pub fn main() !void {
     };
     check(method_resolve_pc(&rj, rj.len, 0x1010) == 1, "method: tiered re-JIT newest version wins");
     check(method_resolve_pc(null, 0, 0x1000) == -1, "method: empty map -> -1");
+
+    // ------------------------------------------------------------------
+    // F7 — live-attach data flow over a REAL attached pid.
+    //
+    // Every assertion is POSITIVE and keyed to something only a working capture can
+    // produce (the region's return value, the exact step count, the survival
+    // report). Nothing hides behind "if we captured anything" — an EMPTY capture IS
+    // the failure signature, so a guard like that skips exactly when it should shout.
+    // ------------------------------------------------------------------
+    const builtin = @import("builtin");
+    // The tier is Linux x86-64 only (src/dataflow_ptrace.c's own #if). On such a
+    // host the live tests MUST run: an unavailable tier there means the lib was
+    // linked without Capstone — a build defect that has to be RED, not a skip.
+    const live_expected = builtin.os.tag == .linux and builtin.cpu.arch == .x86_64;
+    if (!live_expected) {
+        std.debug.print("# SKIP live-attach: not linux/x86_64 (the tier is Linux x86-64 only)\n", .{});
+    } else {
+        const victim = std.process.getEnvVarOwned(alloc, "ASMTEST_DATAFLOW_VICTIM") catch {
+            // The lane always exports this; missing means a misconfigured lane, and
+            // silently skipping every live test is the hole this suite must not have.
+            std.debug.print("Bail out! ASMTEST_DATAFLOW_VICTIM unset; run `make dataflow-zig-test`\n", .{});
+            std.process.exit(1);
+        };
+        defer alloc.free(victim);
+
+        const valtrace_new = lib.lookup(ValtraceNewFn, "asmtest_valtrace_new") orelse return error.SymNotFound;
+        const valtrace_free = lib.lookup(ValtraceFreeFn, "asmtest_valtrace_free") orelse return error.SymNotFound;
+        const valtrace_steps = lib.lookup(ValtraceStepsFn, "asmtest_valtrace_steps") orelse return error.SymNotFound;
+        const valtrace_recs = lib.lookup(ValtraceRecsFn, "asmtest_valtrace_recs") orelse return error.SymNotFound;
+        const attach_pid = lib.lookup(AttachPidFn, "asmtest_dataflow_ptrace_attach_pid") orelse return error.SymNotFound;
+        const attach_pid_tid = lib.lookup(AttachPidTidFn, "asmtest_dataflow_ptrace_attach_pid_tid") orelse return error.SymNotFound;
+        const attach_jit = lib.lookup(AttachJitFn, "asmtest_dataflow_ptrace_attach_jit") orelse return error.SymNotFound;
+
+        // Probed, not a symbol-resolves check: EINVAL (real) vs ENOSYS (stub) — the
+        // symbol above resolves either way, so only the return code tells them apart.
+        {
+            const v = valtrace_new(1, 1, 0);
+            var out: c_long = 0;
+            const rc = attach_pid(0, 0, 0, 0, &out, v);
+            valtrace_free(v);
+            check(rc != PTRACE_ENOSYS, "live: tier is real on linux/x86_64 (EINVAL, not ENOSYS)");
+        }
+
+        // A live victim: spawn it, learn its region base + its OWN reported pid
+        // (see bindings/dataflow_victim.c). `a`/`b` are OURS, so the expected result
+        // is a property of THIS run, not a constant a stubbed wrapper could hardcode.
+        const Victim = struct {
+            child: std.process.Child,
+            base: u64,
+            len: usize,
+            pid: c_int,
+            counter_path: []const u8,
+
+            fn spawn(a: std.mem.Allocator, exe: []const u8, tag: []const u8, x: i64, y: i64) !@This() {
+                const cpath = try std.fmt.allocPrint(a, "/tmp/asmtest-df-zig-{s}.counter", .{tag});
+                const xs = try std.fmt.allocPrint(a, "{d}", .{x});
+                defer a.free(xs);
+                const ys = try std.fmt.allocPrint(a, "{d}", .{y});
+                defer a.free(ys);
+                var child = std.process.Child.init(&[_][]const u8{ exe, cpath, xs, ys }, a);
+                child.stdout_behavior = .Pipe;
+                try child.spawn();
+                // Blocks until the victim flushes its handshake and starts looping.
+                const line = try child.stdout.?.reader().readUntilDelimiterAlloc(a, '\n', 256);
+                defer a.free(line);
+                var it = std.mem.tokenizeScalar(u8, line, ' ');
+                const base_tok = it.next() orelse return error.BadHandshake;
+                const len_tok = it.next() orelse return error.BadHandshake;
+                const pid_tok = it.next() orelse return error.BadHandshake;
+                return .{
+                    .child = child,
+                    .base = try std.fmt.parseInt(u64, base_tok["base=0x".len..], 16),
+                    .len = try std.fmt.parseInt(usize, len_tok["len=".len..], 10),
+                    .pid = try std.fmt.parseInt(c_int, pid_tok["pid=".len..], 10),
+                    .counter_path = cpath,
+                };
+            }
+            fn counter(self: *@This()) u64 {
+                const f = std.fs.cwd().openFile(self.counter_path, .{}) catch return 0;
+                defer f.close();
+                var buf: [8]u8 = undefined;
+                const got = f.readAll(&buf) catch return 0;
+                if (got != 8) return 0;
+                return std.mem.readInt(u64, &buf, .little);
+            }
+            fn close(self: *@This(), a: std.mem.Allocator) void {
+                _ = self.child.kill() catch {};
+                a.free(self.counter_path);
+            }
+        };
+
+        // ETRACE is NOT a skip. ptrace is a capability the lane can be GIVEN
+        // (--cap-add=SYS_PTRACE / seccomp=unconfined), and the victim opts in via
+        // PR_SET_PTRACER_ANY, so a refusal means the lane is misconfigured — be loud.
+        const H = struct {
+            fn checkRc(rc: c_int, desc: []const u8) void {
+                if (rc == PTRACE_ETRACE)
+                    std.debug.print("# {s}: ptrace refused (ETRACE) — the lane needs " ++
+                        "--cap-add=SYS_PTRACE; this is NOT a valid skip\n", .{desc});
+                check(rc == PTRACE_OK, desc);
+            }
+        };
+
+        {
+            var vic = try Victim.spawn(alloc, victim, "1", 7, 5);
+            const v = valtrace_new(64, 512, 0);
+            var out: c_long = 0;
+            H.checkRc(attach_pid(vic.pid, vic.base, vic.len, 0, &out, v),
+                "live: attach_pid a FOREIGN running pid + stepped the region");
+            // The region really executed IN the victim: rax = rdi + rsi.
+            check(out == 12, "live: attach_pid region returned 12 (rax = rdi + rsi)");
+            // Exactly df_chain's six in-region instructions — not "some".
+            check(valtrace_steps(v) == 6, "live: six in-region steps captured over the victim");
+            check(valtrace_recs(v) > 0, "live: operand records captured");
+            // SURVIVAL: we attached to a process we do not own; it must outlive the detach.
+            const c0 = vic.counter();
+            std.time.sleep(50 * std.time.ns_per_ms);
+            check(vic.counter() > c0, "live: victim SURVIVED the detach (counter advanced)");
+            valtrace_free(v);
+            vic.close(alloc);
+        }
+        {
+            // THE anti-hardcode control: a second victim, different args, same wrapper.
+            var vic = try Victim.spawn(alloc, victim, "2", 17, 25);
+            const v = valtrace_new(64, 512, 0);
+            var out: c_long = 0;
+            H.checkRc(attach_pid(vic.pid, vic.base, vic.len, 0, &out, v),
+                "live: attach_pid the second victim");
+            check(out == 42, "live: result TRACKS the victim's args (17+25=42)");
+            check(valtrace_steps(v) == 6, "live: six steps on the second victim too");
+            valtrace_free(v);
+            vic.close(alloc);
+        }
+        {
+            var vic = try Victim.spawn(alloc, victim, "3", 9, 4);
+            const v = valtrace_new(64, 512, 0);
+            var out: c_long = 0;
+            // only_tid 0: step whichever thread enters the region (here, the only one).
+            H.checkRc(attach_pid_tid(vic.pid, 0, vic.base, vic.len, 0, &out, v),
+                "live: attach_pid_tid stepped the entering thread");
+            check(out == 13, "live: attach_pid_tid region returned 13 (9+4)");
+            check(valtrace_steps(v) == 6, "live: attach_pid_tid captured six steps");
+            valtrace_free(v);
+            vic.close(alloc);
+        }
+        {
+            var vic = try Victim.spawn(alloc, victim, "4", 20, 3);
+            const v = valtrace_new(64, 512, 0);
+            var out: c_long = 0;
+            var survived: c_int = 0;
+            H.checkRc(attach_jit(vic.pid, 0, vic.base, vic.len, null, 0, 0, &out, &survived, v),
+                "live: attach_jit stepped the region");
+            check(out == 23, "live: attach_jit region returned 23 (20+3)");
+            check(valtrace_steps(v) == 6, "live: attach_jit captured six steps");
+            // The producer's OWN survival report — the house rule that a foreign
+            // target is never killed, asserted from its side.
+            check(survived == 1, "live: attach_jit reported the target as survived");
+            const c0 = vic.counter();
+            std.time.sleep(50 * std.time.ns_per_ms);
+            check(vic.counter() > c0, "live: attach_jit victim kept running after detach");
+            valtrace_free(v);
+            vic.close(alloc);
+        }
+        {
+            // Negative control: the wrapper must surface the producer's rejections
+            // rather than manufacture success.
+            const v = valtrace_new(8, 8, 0);
+            var out: c_long = 0;
+            check(attach_pid(12345, 0x1000, 0, 0, &out, v) == PTRACE_EINVAL,
+                "live: zero-length region is rejected (EINVAL)");
+            check(attach_pid(0, 0x1000, 21, 0, &out, v) == PTRACE_EINVAL,
+                "live: pid 0 is rejected (EINVAL)");
+            check(attach_pid(0x7FFFFFF0, 0x1000, 21, 0, &out, v) != PTRACE_OK,
+                "live: attaching to a nonexistent pid never returns OK");
+            valtrace_free(v);
+        }
+    }
 
     std.debug.print("1..{d}\n", .{n});
     if (failed) std.process.exit(1);

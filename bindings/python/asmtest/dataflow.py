@@ -1,14 +1,23 @@
-"""asmtest.dataflow — Python binding for the data-flow analysis tier.
+"""asmtest.dataflow — Python binding for the data-flow tier.
 
-Phase 6, increment 1. Wraps ``libasmtest_dataflow`` (built with
-``make shared-dataflow``) — the pure L0/L1/L2 analysis pipeline: the value-trace
-sink, the def-use graph, the slicer, method identity, GC-move canonicalization,
-and runtime-helper summaries. This first increment exposes the pure,
-allocation-free **GC-move canonicalizer** (:func:`gcmove_canon`); the remaining
-surface (value-trace build, def-use, slicing) is wrapped in later increments.
+Wraps ``libasmtest_dataflow`` (built with ``make shared-dataflow``):
 
-The value-trace PRODUCERS (emulator / ptrace / DynamoRIO) are separate native
-tiers and are not part of this analysis library.
+* the pure L0/L1/L2 analysis pipeline — the value-trace sink, the def-use graph,
+  the slicer, method identity (:func:`method_resolve_pc`), GC-move
+  canonicalization (:func:`gcmove_canon`), and runtime-helper summaries;
+* **F7** — the scoped ptrace **live-attach** producer: :meth:`ValueTrace.attach_pid`,
+  :meth:`ValueTrace.attach_pid_tid` and :meth:`ValueTrace.attach_jit` capture a real
+  per-step value trace off a LIVE process by pid, out of band, then detach and leave
+  it running.
+
+Both halves meet at one opaque handle. :class:`ValueTrace` owns an
+``asmtest_valtrace_t*``; a live capture fills that same sink a hand-built trace
+does, so :meth:`~ValueTrace.forward_slice` / :meth:`~ValueTrace.backward_slice`
+work identically over either — the tier's whole design point.
+
+Live attach is Linux x86-64 only and needs ptrace permission over the target;
+:func:`live_attach_available` probes for the tier and the ``PTRACE_*`` codes report
+the rest. The Unicorn emulator producer remains a separate tier, not in this lib.
 """
 
 import ctypes as _C
@@ -72,6 +81,32 @@ def _load():
         lib.asmtest_slice_free.argtypes = [_C.c_void_p]
         lib.asmtest_slice_contains.restype = _C.c_int
         lib.asmtest_slice_contains.argtypes = [_C.c_void_p, _C.c_uint32]
+        lib.asmtest_valtrace_steps.restype = _C.c_size_t
+        lib.asmtest_valtrace_steps.argtypes = [_C.c_void_p]
+        lib.asmtest_valtrace_recs.restype = _C.c_size_t
+        lib.asmtest_valtrace_recs.argtypes = [_C.c_void_p]
+        # F7 — the LIVE-ATTACH producer entry points (src/dataflow_ptrace.c).
+        # Declared unconditionally: this lib is the one `make shared-dataflow`
+        # builds, and it always contains them (off Linux x86-64 / without Capstone
+        # they are ENOSYS stubs, which is a RUNTIME answer live_attach_available()
+        # reports honestly — not a missing symbol). A getattr-guarded registration
+        # here would turn a mislinked lib into a silent skip.
+        lib.asmtest_dataflow_ptrace_attach_pid.restype = _C.c_int
+        lib.asmtest_dataflow_ptrace_attach_pid.argtypes = [
+            _C.c_int, _C.c_uint64, _C.c_size_t, _C.c_uint64,
+            _C.POINTER(_C.c_long), _C.c_void_p,
+        ]
+        lib.asmtest_dataflow_ptrace_attach_pid_tid.restype = _C.c_int
+        lib.asmtest_dataflow_ptrace_attach_pid_tid.argtypes = [
+            _C.c_int, _C.c_int, _C.c_uint64, _C.c_size_t, _C.c_uint64,
+            _C.POINTER(_C.c_long), _C.c_void_p,
+        ]
+        lib.asmtest_dataflow_ptrace_attach_jit.restype = _C.c_int
+        lib.asmtest_dataflow_ptrace_attach_jit.argtypes = [
+            _C.c_int, _C.c_int, _C.c_uint64, _C.c_size_t, _C.c_void_p,
+            _C.c_uint64, _C.c_uint64, _C.POINTER(_C.c_long),
+            _C.POINTER(_C.c_int), _C.c_void_p,
+        ]
         _lib = lib
         return _lib
     raise OSError(
@@ -141,6 +176,36 @@ def method_resolve_pc(methods, pc):
         keepalive.append(nb)
         arr[i] = _Method(addr, size, nb, version)
     return int(lib.asmtest_method_resolve_pc(arr, n, int(pc)))
+
+
+# --- F7: live-attach data-flow capture ------------------------------------
+# The scoped ptrace producer's return codes (src/dataflow_ptrace.c). The producer
+# ships NO header on purpose (a value-trace PRODUCER is a tier, not part of the
+# shared sink API), so — exactly as its own C suite does — the binding re-declares
+# them. Keep in step with that file.
+PTRACE_OK = 0  # a complete scoped trace
+PTRACE_FAULT = 1  # the routine faulted; a partial trace is filled
+PTRACE_EINVAL = -1  # bad arguments
+PTRACE_ENOSYS = -3  # off Linux x86-64 / no Capstone: the tier is absent
+PTRACE_ETRACE = -4  # ptrace/wait failure (seccomp/yama): the caller self-skips
+
+
+def live_attach_available():
+    """True iff this build's live-attach tier is real (Linux x86-64 + Capstone).
+
+    Probed, not guessed: an argument-rejecting call (pid 0) returns ``EINVAL`` from
+    the real producer but ``ENOSYS`` from the off-platform stub, which is the only
+    honest way to tell them apart — the symbol resolves either way. Side-effect
+    free; it attaches to nothing.
+    """
+    lib = _load()
+    v = lib.asmtest_valtrace_new(1, 1, 0)
+    try:
+        out = _C.c_long(0)
+        rc = lib.asmtest_dataflow_ptrace_attach_pid(0, 0, 0, 0, _C.byref(out), v)
+    finally:
+        lib.asmtest_valtrace_free(v)
+    return rc != PTRACE_ENOSYS
 
 
 # at_loc_kind_t (include/asmtest_valtrace.h): the location space of an operand.
@@ -214,6 +279,84 @@ class ValueTrace:
         self._n_steps += 1
         self._g = None  # invalidate a stale def-use graph
         return self
+
+    # --- F7: live-attach capture (fills this same trace) -------------------
+    # The producer fills the very asmtest_valtrace_t this handle owns, so a live
+    # capture flows into the SAME def-use / slice methods a hand-built trace does
+    # — which is the whole point of the tier sharing one L0 sink. Each of these
+    # RESYNCS _n_steps from the native trace afterwards (the producer appends
+    # behind our back) and drops any stale def-use graph.
+
+    def _post_attach(self):
+        self._n_steps = self._lib.asmtest_valtrace_steps(self._v)
+        if self._g:
+            self._lib.asmtest_defuse_free(self._g)
+        self._g = None
+
+    def attach_pid(self, pid, base, code_len, max_insns=0):
+        """Attach to LIVE pid, single-step the region [base, base+code_len), detach.
+
+        Steps the thread-group LEADER (a routine that only ever runs on a worker
+        thread needs :meth:`attach_pid_tid`). Returns ``(rc, result)``: an
+        ``PTRACE_*`` code and the region's return value. On ``PTRACE_OK`` this
+        trace holds the captured steps. The target is NOT killed — it survives the
+        detach and keeps running.
+        """
+        out = _C.c_long(0)
+        rc = self._lib.asmtest_dataflow_ptrace_attach_pid(
+            int(pid), int(base), int(code_len), int(max_insns), _C.byref(out), self._v
+        )
+        self._post_attach()
+        return int(rc), int(out.value)
+
+    def attach_pid_tid(self, pid, only_tid, base, code_len, max_insns=0):
+        """:meth:`attach_pid`, but step whichever THREAD first enters the region.
+
+        SEIZEs every thread of `pid`, plants one shared region-entry breakpoint and
+        steps the thread that arrives — identified by its own tid, never assumed to
+        be the leader — while the siblings run free. ``only_tid=0`` means any
+        thread; a nonzero value pins exactly one. This is the entry managed methods
+        need: they run on workers. Returns ``(rc, result)``.
+        """
+        out = _C.c_long(0)
+        rc = self._lib.asmtest_dataflow_ptrace_attach_pid_tid(
+            int(pid), int(only_tid), int(base), int(code_len), int(max_insns),
+            _C.byref(out), self._v,
+        )
+        self._post_attach()
+        return int(rc), int(out.value)
+
+    def attach_jit(self, pid, only_tid, base, code_len, max_insns=0, when=0):
+        """The JIT-aware live attach: worker-targeting + an explicit survival report.
+
+        Returns ``(rc, result, survived)`` — ``survived`` is 1 when the detach left
+        the target alive and running. This is the entry point F4's live GC-move
+        canonicalization lane drives.
+
+        The versioned-decode code-image (the ``img``/``when`` byte source that makes
+        a mid-capture re-JIT decode at the bytes that were live *then*) is passed as
+        NULL here, i.e. operands decode from a live snapshot of the target. Wrapping
+        the code-image recorder is a separate binding surface (asmtest_codeimage.h);
+        ``when`` is accepted so the argument order matches the C entry point.
+        """
+        out = _C.c_long(0)
+        survived = _C.c_int(0)
+        rc = self._lib.asmtest_dataflow_ptrace_attach_jit(
+            int(pid), int(only_tid), int(base), int(code_len), None, int(when),
+            int(max_insns), _C.byref(out), _C.byref(survived), self._v,
+        )
+        self._post_attach()
+        return int(rc), int(out.value), int(survived.value)
+
+    @property
+    def steps(self):
+        """Steps stored in the trace (the live producer's, or the hand-built ones)."""
+        return int(self._lib.asmtest_valtrace_steps(self._v))
+
+    @property
+    def recs(self):
+        """Operand records stored in the trace."""
+        return int(self._lib.asmtest_valtrace_recs(self._v))
 
     def _defuse(self):
         if self._g is None:
