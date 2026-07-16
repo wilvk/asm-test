@@ -128,6 +128,13 @@ $(BUILD)/sample_victim: $(BUILD)/sample_victim.o
 $(BUILD)/watch_victim: $(BUILD)/watch_victim.o
 	$(CC) $(CFLAGS) -pthread $^ -o $@
 
+# debuglink_victim carries a function (debuglink_only_fn) that lands in .symtab
+# but NOT .dynsym, so the smoke can strip a copy, prove asmspy resolves nothing,
+# then attach the debug info back as a separate .gnu_debuglink / build-id file and
+# prove the symbol returns. Compiles via the cli/ .o pattern rule.
+$(BUILD)/debuglink_victim: $(BUILD)/debuglink_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 # test_logview — headless unit test for the TUI scrollback viewport math
 # (cli/asmspy_logview.h); no ncurses, so it runs anywhere the smoke does.
 $(BUILD)/test_logview: cli/test_logview.c cli/asmspy_logview.h | $(BUILD)
@@ -161,7 +168,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/cpp_victim \
            $(BUILD)/jit_victim $(BUILD)/jitdump_victim $(BUILD)/int3_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/watch_victim \
-           $(BUILD)/test_logview \
+           $(BUILD)/debuglink_victim $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \

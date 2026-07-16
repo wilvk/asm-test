@@ -517,6 +517,324 @@ static uint8_t *map_file(const char *path, size_t *len) {
     return m;
 }
 
+/* Validate a mapped file as an ELF64 with a usable section table. Every later
+ * walk indexes sections through ASMSPY_SHDR below, so this is the single place
+ * that proves the table itself is inside the mapping. */
+static int elf_ok(const uint8_t *base, size_t flen) {
+    if (flen < sizeof(Elf64_Ehdr))
+        return 0;
+    const Elf64_Ehdr *eh = (const Elf64_Ehdr *)base;
+    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 ||
+        eh->e_ident[EI_CLASS] != ELFCLASS64)
+        return 0;
+    if (!eh->e_shoff || eh->e_shentsize < sizeof(Elf64_Shdr))
+        return 0;
+    /* overflow-safe: never add two attacker-controlled uint64 (they can wrap) */
+    if (eh->e_shoff > flen ||
+        eh->e_shnum > (flen - eh->e_shoff) / eh->e_shentsize)
+        return 0;
+    return 1;
+}
+
+/* Stride section headers by e_shentsize (>= sizeof(Elf64_Shdr), checked by
+ * elf_ok), NOT sizeof — a non-standard ELF with a larger entsize would otherwise
+ * misalign every header past index 0. Mirrors the sh_entsize walk in the symbol
+ * loop. Reads `base` + `eh` from the caller's scope; every user validates the
+ * file with elf_ok() first. */
+#define ASMSPY_SHDR(idx)                                                       \
+    ((const Elf64_Shdr *)(base + eh->e_shoff +                                 \
+                          (uint64_t)(idx) * eh->e_shentsize))
+
+/* Find a section by name in a mapped ELF. On success returns its header and
+ * (when `data` is non-NULL) a pointer to its bytes plus a length CLAMPED to the
+ * mapping, so the caller can walk it without re-checking. NULL if absent, if the
+ * section-name table is unusable, or if the contents are not in the file. */
+static const Elf64_Shdr *find_section(const uint8_t *base, size_t flen,
+                                      const char *want, const uint8_t **data,
+                                      size_t *dlen) {
+    if (!elf_ok(base, flen))
+        return NULL;
+    const Elf64_Ehdr *eh = (const Elf64_Ehdr *)base;
+    if (!eh->e_shstrndx || eh->e_shstrndx >= eh->e_shnum)
+        return NULL;
+    const Elf64_Shdr *shstr = ASMSPY_SHDR(eh->e_shstrndx);
+    if (shstr->sh_offset >= flen)
+        return NULL;
+    const char *names = (const char *)(base + shstr->sh_offset);
+    size_t nmax = shstr->sh_size <= flen - shstr->sh_offset
+                      ? shstr->sh_size
+                      : flen - shstr->sh_offset;
+    for (unsigned i = 0; i < eh->e_shnum; i++) {
+        const Elf64_Shdr *s = ASMSPY_SHDR(i);
+        if (s->sh_name >= nmax)
+            continue;
+        const char *nm = names + s->sh_name;
+        if (memchr(nm, '\0', nmax - s->sh_name) == NULL)
+            continue;
+        if (strcmp(nm, want) != 0)
+            continue;
+        if (s->sh_type == SHT_NOBITS || s->sh_offset >= flen ||
+            s->sh_size > flen - s->sh_offset)
+            return NULL; /* header present, contents not in the file */
+        if (data) {
+            *data = base + s->sh_offset;
+            *dlen = s->sh_size;
+        }
+        return s;
+    }
+    return NULL;
+}
+
+/* ================================================================== */
+/* Separate debug info (.gnu_debuglink / build-id)                     */
+/* ================================================================== */
+
+/* A distro ships /usr/bin/foo stripped and its symbols in a separate -dbg(sym)
+ * package, so the symtab walk above finds NOTHING on a stock binary. GDB and the
+ * perf tools recover it through two independent keys, and so do we:
+ *
+ *   1. build-id — the module's .note.gnu.build-id (SHF_ALLOC, so it SURVIVES
+ *      strip) indexes <debugdir>/.build-id/ab/cdef….debug;
+ *   2. .gnu_debuglink — a section naming a debug file + a CRC-32 of it, looked
+ *      up next to the module (<dir>/, <dir>/.debug/) and under <debugdir>/<dir>/.
+ *
+ * Both keys are VERIFIED, never trusted: a build-id candidate must carry the
+ * same build-id, and a debuglink candidate must match the recorded CRC-32. So a
+ * stale debug file — the classic "-dbg package one version behind the binary" —
+ * resolves NOTHING rather than confidently naming every address wrong, which is
+ * the failure mode that matters for a tracer: a wrong name is worse than none.
+ */
+
+/* Where distro debug packages install. GDB calls this the "debug-file-directory"
+ * and takes an override; ASMSPY_DEBUG_DIR is ours — it lets a user with debug
+ * info staged elsewhere (and the smoke, which must not write to a root-owned
+ * system path) point the search at another root. */
+static const char *debug_dir(void) {
+    const char *d = getenv("ASMSPY_DEBUG_DIR");
+    return (d && d[0]) ? d : "/usr/lib/debug";
+}
+
+/* Copy a mapped ELF's NT_GNU_BUILD_ID note bytes into `out`. Returns the byte
+ * count, or 0. Walks every note in the section: the build-id is not required to
+ * be the first, and GNU lays notes out 4-byte aligned (not the 8 the ELF64 spec
+ * nominally asks for), which is what every real toolchain emits. */
+static size_t elf_build_id(const uint8_t *base, size_t flen, uint8_t *out,
+                           size_t outcap) {
+    const uint8_t *nd = NULL;
+    size_t nlen = 0;
+    if (!find_section(base, flen, ".note.gnu.build-id", &nd, &nlen))
+        return 0;
+    size_t p = 0;
+    while (p + sizeof(Elf64_Nhdr) <= nlen) {
+        Elf64_Nhdr nh;
+        memcpy(&nh, nd + p, sizeof nh); /* may not be naturally aligned */
+        size_t rest = nlen - p - sizeof nh;
+        size_t np = ((size_t)nh.n_namesz + 3) & ~(size_t)3;
+        if (np > rest) /* overflow-safe: sizes are file-controlled */
+            break;
+        size_t dp = ((size_t)nh.n_descsz + 3) & ~(size_t)3;
+        if (dp > rest - np)
+            break;
+        const uint8_t *name = nd + p + sizeof nh;
+        if (nh.n_type == NT_GNU_BUILD_ID && nh.n_namesz == 4 &&
+            memcmp(name, "GNU", 4) == 0 && nh.n_descsz &&
+            nh.n_descsz <= outcap) {
+            memcpy(out, name + np, nh.n_descsz);
+            return nh.n_descsz;
+        }
+        p += sizeof nh + np + dp;
+    }
+    return 0;
+}
+
+/* CRC-32 over a whole file — the standard reflected IEEE polynomial, as zlib and
+ * GDB's gnu_debuglink_crc32 compute it (verified byte-for-byte against what
+ * `objcopy --add-gnu-debuglink` records). Sets *ok=0 when the file cannot be
+ * read; map_file's ELF-header size floor doubles as a sanity gate, since a debug
+ * file too small to hold an ELF header is never a usable candidate anyway.
+ *
+ * The 256-entry table is built PER CALL: ~2 k iterations against a file read of
+ * megabytes is free, and it keeps this a pure function with no shared state for
+ * the UI and tracer threads to race over. */
+static uint32_t crc32_file(const char *path, int *ok) {
+    *ok = 0;
+    size_t len = 0;
+    uint8_t *m = map_file(path, &len);
+    if (!m)
+        return 0;
+    uint32_t tab[256];
+    for (uint32_t i = 0; i < 256; i++) {
+        uint32_t c = i;
+        for (int k = 0; k < 8; k++)
+            c = (c & 1) ? (0xedb88320u ^ (c >> 1)) : (c >> 1);
+        tab[i] = c;
+    }
+    uint32_t crc = 0xffffffffu;
+    for (size_t i = 0; i < len; i++)
+        crc = tab[(crc ^ m[i]) & 0xff] ^ (crc >> 8);
+    munmap(m, len);
+    *ok = 1;
+    return crc ^ 0xffffffffu;
+}
+
+/* Does the candidate at `path` carry exactly this build-id? The path already
+ * encodes the id, so this only catches a stale or hand-placed file — but it is
+ * the build-id analogue of the debuglink CRC check, and the same policy applies:
+ * verify, never trust. */
+static int debug_id_matches(const char *path, const uint8_t *id, size_t idlen) {
+    size_t len = 0;
+    uint8_t *m = map_file(path, &len);
+    if (!m)
+        return 0;
+    uint8_t got[64];
+    size_t n = elf_build_id(m, len, got, sizeof got);
+    int ok = (n == idlen && memcmp(got, id, idlen) == 0);
+    munmap(m, len);
+    return ok;
+}
+
+/* Read a mapped ELF's .gnu_debuglink: a NUL-terminated filename, NUL-padded to a
+ * 4-byte boundary, then a 4-byte CRC-32 of the intended debug file. Returns 0 on
+ * success. The CRC is stored in target byte order, so the raw copy is correct
+ * here for the same reason the rest of cli/ is: x86-64 (little-endian) only. */
+static int elf_debuglink(const uint8_t *base, size_t flen, char *name,
+                         size_t namecap, uint32_t *crc) {
+    const uint8_t *d = NULL;
+    size_t dlen = 0;
+    if (!find_section(base, flen, ".gnu_debuglink", &d, &dlen))
+        return -1;
+    const uint8_t *nul = memchr(d, '\0', dlen);
+    if (!nul)
+        return -1;
+    size_t nlen = (size_t)(nul - d);
+    if (!nlen || nlen >= namecap)
+        return -1;
+    size_t crcoff = (nlen + 4) & ~(size_t)3; /* name + NUL, padded to 4 */
+    if (dlen < 4 || crcoff > dlen - 4)
+        return -1;
+    memcpy(name, d, nlen);
+    name[nlen] = '\0';
+    memcpy(crc, d + crcoff, 4);
+    return 0;
+}
+
+/* Locate a verified separate debug-info file for `modpath`, whose bytes are
+ * mapped at `base`. Returns 0 and fills `out`, or -1 when there is none (or none
+ * that passes its check). See the block comment above for the search order. */
+static int find_debug_file(const uint8_t *base, size_t flen,
+                           const char *modpath, char *out, size_t outcap) {
+    /* 1. build-id — survives strip, and is the key distros actually index by. */
+    uint8_t id[64];
+    size_t idlen = elf_build_id(base, flen, id, sizeof id);
+    if (idlen >= 2) {
+        char hex[2 * sizeof id + 1];
+        for (size_t i = 0; i < idlen; i++)
+            snprintf(hex + 2 * i, 3, "%02x", id[i]);
+        char cand[PATH_MAX];
+        int n = snprintf(cand, sizeof cand, "%s/.build-id/%.2s/%s.debug",
+                         debug_dir(), hex, hex + 2);
+        if (n > 0 && n < (int)sizeof cand &&
+            debug_id_matches(cand, id, idlen)) {
+            snprintf(out, outcap, "%s", cand);
+            return 0;
+        }
+    }
+
+    /* 2. .gnu_debuglink — a filename + the CRC-32 that must match. */
+    char link[PATH_MAX];
+    uint32_t want = 0;
+    if (elf_debuglink(base, flen, link, sizeof link, &want) != 0)
+        return -1;
+    /* objcopy records only the BASENAME (verified: --add-gnu-debuglink=<path>
+     * stores "<file>", never the directories), and every search path below is
+     * built as directory + name — so take the basename defensively. It also
+     * keeps a hostile ELF's "../../.." out of the candidate paths. */
+    const char *bn = strrchr(link, '/');
+    bn = bn ? bn + 1 : link;
+    if (!bn[0] || strcmp(bn, ".") == 0 || strcmp(bn, "..") == 0)
+        return -1;
+
+    char dir[PATH_MAX];
+    snprintf(dir, sizeof dir, "%s", modpath);
+    char *slash = strrchr(dir, '/');
+    if (slash)
+        *slash = '\0'; /* "/usr/bin/foo" -> "/usr/bin" */
+    else
+        dir[0] = '\0';
+
+    for (int i = 0; i < 3; i++) {
+        char cand[PATH_MAX];
+        int n;
+        if (i == 0)
+            n = snprintf(cand, sizeof cand, "%s/%s", dir, bn);
+        else if (i == 1)
+            n = snprintf(cand, sizeof cand, "%s/.debug/%s", dir, bn);
+        else /* the global debug tree mirrors the module's own path */
+            n = snprintf(cand, sizeof cand, "%s%s/%s", debug_dir(), dir, bn);
+        if (n <= 0 || n >= (int)sizeof cand)
+            continue;
+        int ok = 0;
+        uint32_t got = crc32_file(cand, &ok);
+        if (!ok)
+            continue; /* no such file */
+        if (got != want)
+            continue; /* WRONG debug file — reject it, never resolve from it */
+        snprintf(out, outcap, "%s", cand);
+        return 0;
+    }
+    return -1;
+}
+
+/* Push the STT_FUNC symbols of one mapped ELF's `want` section type (SHT_SYMTAB
+ * or SHT_DYNSYM) into the table, biased to runtime addresses. Returns 1 if a
+ * section of that type was present, 0 if not, -1 on allocation failure. */
+static int scan_elf_syms(const uint8_t *base, size_t flen, int want,
+                         uint64_t bias, const char *modname,
+                         asmspy_symtab_t *t, size_t *cap) {
+    if (!elf_ok(base, flen))
+        return 0;
+    const Elf64_Ehdr *eh = (const Elf64_Ehdr *)base;
+    int found = 0;
+    for (unsigned i = 0; i < eh->e_shnum; i++) {
+        const Elf64_Shdr *s = ASMSPY_SHDR(i);
+        if ((int)s->sh_type != want)
+            continue;
+        found = 1;
+        if (s->sh_entsize < sizeof(Elf64_Sym) || s->sh_link >= eh->e_shnum)
+            continue;
+        const Elf64_Shdr *strh = ASMSPY_SHDR(s->sh_link);
+        if (strh->sh_offset >= flen)
+            continue;
+        const char *strtab = (const char *)(base + strh->sh_offset);
+        /* overflow-safe clamp (sh_offset < flen already checked above) */
+        size_t strmax = strh->sh_size <= flen - strh->sh_offset
+                            ? strh->sh_size
+                            : flen - strh->sh_offset;
+        if (s->sh_offset > flen || s->sh_size > flen - s->sh_offset)
+            continue;
+        size_t count = s->sh_size / s->sh_entsize;
+        for (size_t j = 0; j < count; j++) {
+            const Elf64_Sym *sy =
+                (const Elf64_Sym *)(base + s->sh_offset + j * s->sh_entsize);
+            if (ELF64_ST_TYPE(sy->st_info) != STT_FUNC)
+                continue;
+            if (sy->st_shndx == SHN_UNDEF || sy->st_value == 0)
+                continue;
+            if (sy->st_name >= strmax)
+                continue;
+            const char *nm = strtab + sy->st_name;
+            /* the name must be NUL-terminated inside the mapped strtab,
+             * else strdup's strlen would over-read past the mmap end */
+            if (memchr(nm, '\0', strmax - sy->st_name) == NULL)
+                continue;
+            if (sym_push(t, cap, bias + sy->st_value, sy->st_size, nm,
+                         modname) != 0)
+                return -1;
+        }
+    }
+    return found;
+}
+
 /* Read the STT_FUNC symbols of one ELF file into the table, biased to runtime. */
 static void load_module_syms(pid_t pid, const module_t *mod, asmspy_symtab_t *t,
                              size_t *cap) {
@@ -535,8 +853,7 @@ static void load_module_syms(pid_t pid, const module_t *mod, asmspy_symtab_t *t,
     modname = modname ? modname + 1 : mod->path;
 
     const Elf64_Ehdr *eh = (const Elf64_Ehdr *)base;
-    if (memcmp(eh->e_ident, ELFMAG, SELFMAG) != 0 ||
-        eh->e_ident[EI_CLASS] != ELFCLASS64)
+    if (!elf_ok(base, flen))
         goto done;
 
     /* load bias = base of the offset-0 mapping minus the lowest PT_LOAD vaddr;
@@ -556,65 +873,31 @@ static void load_module_syms(pid_t pid, const module_t *mod, asmspy_symtab_t *t,
         min_vaddr = 0;
     uint64_t bias = mod->load_start - min_vaddr;
 
-    if (!eh->e_shoff || eh->e_shentsize < sizeof(Elf64_Shdr))
-        goto done;
-    /* overflow-safe: never add two attacker-controlled uint64 (they can wrap) */
-    if (eh->e_shoff > flen ||
-        eh->e_shnum > (flen - eh->e_shoff) / eh->e_shentsize)
-        goto done;
-
-        /* Stride section headers by e_shentsize (>= sizeof(Elf64_Shdr), checked above),
-     * NOT sizeof — a non-standard ELF with a larger entsize would otherwise misalign
-     * every header past index 0. Mirrors the sh_entsize walk in the symbol loop. */
-#define ASMSPY_SHDR(idx)                                                       \
-    ((const Elf64_Shdr *)(base + eh->e_shoff +                                 \
-                          (uint64_t)(idx) * eh->e_shentsize))
-
-    /* prefer .symtab (superset); fall back to .dynsym for stripped libs */
-    const int order[2] = {SHT_SYMTAB, SHT_DYNSYM};
-    for (int oi = 0; oi < 2; oi++) {
-        int want = order[oi];
-        int found = 0;
-        for (unsigned i = 0; i < eh->e_shnum; i++) {
-            const Elf64_Shdr *s = ASMSPY_SHDR(i);
-            if ((int)s->sh_type != want)
-                continue;
-            found = 1;
-            if (s->sh_entsize < sizeof(Elf64_Sym) || s->sh_link >= eh->e_shnum)
-                continue;
-            const Elf64_Shdr *strh = ASMSPY_SHDR(s->sh_link);
-            if (strh->sh_offset >= flen)
-                continue;
-            const char *strtab = (const char *)(base + strh->sh_offset);
-            /* overflow-safe clamp (sh_offset < flen already checked above) */
-            size_t strmax = strh->sh_size <= flen - strh->sh_offset
-                                ? strh->sh_size
-                                : flen - strh->sh_offset;
-            if (s->sh_offset > flen || s->sh_size > flen - s->sh_offset)
-                continue;
-            size_t count = s->sh_size / s->sh_entsize;
-            for (size_t j = 0; j < count; j++) {
-                const Elf64_Sym *sy = (const Elf64_Sym *)(base + s->sh_offset +
-                                                          j * s->sh_entsize);
-                if (ELF64_ST_TYPE(sy->st_info) != STT_FUNC)
-                    continue;
-                if (sy->st_shndx == SHN_UNDEF || sy->st_value == 0)
-                    continue;
-                if (sy->st_name >= strmax)
-                    continue;
-                const char *nm = strtab + sy->st_name;
-                /* the name must be NUL-terminated inside the mapped strtab,
-                 * else strdup's strlen would over-read past the mmap end */
-                if (memchr(nm, '\0', strmax - sy->st_name) == NULL)
-                    continue;
-                if (sym_push(t, cap, bias + sy->st_value, sy->st_size, nm,
-                             modname) != 0)
-                    goto done;
+    /* Symbol precedence: the module's own .symtab (a superset) > a VERIFIED
+     * separate debug file's .symtab (the stripped-distro-binary case) > .dynsym
+     * (exported names only). Exactly one of the three is read, so a module never
+     * contributes duplicate entries — and a module carrying its own .symtab never
+     * pays for a debug-file search. */
+    int got = scan_elf_syms(base, flen, SHT_SYMTAB, bias, modname, t, cap);
+    if (got == 0) {
+        char dbg[PATH_MAX];
+        if (find_debug_file(base, flen, mod->path, dbg, sizeof dbg) == 0) {
+            size_t dlen = 0;
+            uint8_t *dbase = map_file(dbg, &dlen);
+            if (dbase) {
+                /* The debug file is the same ELF with the contents carved out —
+                 * it keeps the original section addresses and st_values — so the
+                 * bias computed from the RUNNING module applies unchanged. */
+                got =
+                    scan_elf_syms(dbase, dlen, SHT_SYMTAB, bias, modname, t, cap);
+                munmap(dbase, dlen);
             }
         }
-        if (found) /* symtab present -> don't also read dynsym (dupes) */
-            break;
     }
+    if (got == 0)
+        got = scan_elf_syms(base, flen, SHT_DYNSYM, bias, modname, t, cap);
+    if (got < 0)
+        goto done; /* allocation failure: keep what we have, stop here */
 
     /* PLT thunks: name each stub "<sym>@plt" so a call THROUGH the PLT resolves
      * to the imported function instead of an anonymous stub. Each .rela.plt[i]

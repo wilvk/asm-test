@@ -70,7 +70,8 @@ IPID=""
 YPID=""
 MVPID=""
 HWPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true' EXIT INT TERM
+DLPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -176,6 +177,161 @@ fi
 expect_badarg "$ASM" --dataflow "$AVPID" hotfn --tid=nope
 expect_badarg "$ASM" --dataflow "$AVPID" hotfn --max=0
 expect_badarg "$ASM" --dataflow nginx hotfn
+
+# ---------------------------------------------------------------------------
+# separate debug info: .gnu_debuglink + build-id (the stripped-distro-binary case)
+# ---------------------------------------------------------------------------
+# Reproduce what a distro actually ships — /usr/bin/foo with no .symtab, symbols
+# in a separate -dbg(sym) file — by stripping a copy of debuglink_victim and
+# attaching its debug info back as a separate file.
+#
+# The NEGATIVE control is the whole test: assert first that the stripped victim
+# resolves NOTHING, so "the name appeared" cannot pass on a build that never
+# reads the debug file. Then each search path is added in turn and must bring the
+# symbol back. The CRC check gets the same treatment from the other side: the
+# mismatched debug file is a byte-appended copy of the GOOD one — still a
+# perfectly parseable ELF with the right symbols, differing ONLY in its CRC-32 —
+# and it must be REJECTED, while the build-id case below re-resolves from that
+# very same file (build-id is keyed by id, not CRC), proving the rejection was
+# the CRC gate and not an unreadable file.
+DLDIR="$BUILD/debuglink_t"
+if ! command -v objcopy >/dev/null 2>&1 || ! command -v strip >/dev/null 2>&1 \
+   || ! command -v readelf >/dev/null 2>&1; then
+    echo "# SKIP separate-debug-info (binutils objcopy/strip/readelf absent)"
+else
+    rm -rf "$DLDIR"
+    mkdir -p "$DLDIR/bin" "$DLDIR/debugroot"
+    cp "$BUILD/debuglink_victim" "$DLDIR/bin/dlv"
+    # the debug file (full .symtab, contents carved out), then strip the binary and
+    # record the link. --add-gnu-debuglink must come AFTER strip: .gnu_debuglink is
+    # non-alloc, so --strip-all would remove it again. objcopy stores the BASENAME
+    # ("dlv.debug") plus the CRC-32 of the file's bytes.
+    objcopy --only-keep-debug "$DLDIR/bin/dlv" "$DLDIR/dlv.debug"
+    strip --strip-all "$DLDIR/bin/dlv"
+    objcopy --add-gnu-debuglink="$DLDIR/dlv.debug" "$DLDIR/bin/dlv"
+    readelf -S "$DLDIR/bin/dlv" 2>/dev/null | grep -q '\.gnu_debuglink' \
+        || fail "fixture: objcopy did not add a .gnu_debuglink section"
+    readelf -S "$DLDIR/bin/dlv" 2>/dev/null | grep -q '\.symtab' \
+        && fail "fixture: strip left a .symtab — the negative control would be vacuous"
+    # search the hermetic debug root, never the host's /usr/lib/debug: the smoke
+    # must not need root, and a real -dbg package installed in the image must not
+    # be able to satisfy (or mask) any of these cases.
+    ASMSPY_DEBUG_DIR="$DLDIR/debugroot"
+    export ASMSPY_DEBUG_DIR
+    DLABS=$(cd "$DLDIR/bin" && pwd)   # maps reports the absolute path
+
+    # run the stripped victim and count how many symbols asmspy names -> DLN
+    dl_run_syms() {
+        "$DLDIR/bin/dlv" 2>/dev/null &
+        DLPID=$!
+        sleep 1
+        kill -0 "$DLPID" 2>/dev/null || fail "debuglink_victim did not start"
+        DLN=$("$ASM" --syms "$DLPID" debuglink_only_fn 2>/dev/null \
+              | grep -c debuglink_only_fn || true)
+        DLN=${DLN:-0}
+    }
+    dl_stop() { kill "$DLPID" 2>/dev/null || true; wait "$DLPID" 2>/dev/null || true; DLPID=""; }
+
+    echo "--- separate debug info: stripped victim, NO debug file (negative control) ---"
+    dl_run_syms; dl_stop
+    [ "$DLN" -eq 0 ] \
+        || fail "stripped victim resolved 'debuglink_only_fn' ($DLN) with NO debug file present — the negative control is broken, every case below would pass vacuously"
+    echo "  unresolved, as it must be (0 symbols)"
+
+    # (1) <dir>/<name> — the debug file beside the binary
+    echo "--- .gnu_debuglink: <dir>/dlv.debug ---"
+    cp "$DLDIR/dlv.debug" "$DLDIR/bin/dlv.debug"
+    dl_run_syms
+    [ "$DLN" -ge 1 ] || { dl_stop; fail ".gnu_debuglink <dir>/: symbol NOT recovered from the matching debug file"; }
+    echo "  resolved ($DLN symbol(s))"
+    # the payoff, and the proof the ADDRESS is right and not just the name: trace
+    # the recovered symbol. A symbol resolved at a wrong load bias would never hit.
+    echo "--- asmspy --trace $DLPID debuglink_only_fn 2 (from separate debug info) ---"
+    out=$(timeout 40 "$ASM" --trace "$DLPID" debuglink_only_fn 2 2>&1) || true
+    printf '%s\n' "$out" | grep -q 'ret=51' \
+        || { printf '%s\n' "$out" | head -5; dl_stop; fail "--trace on the debuglink-resolved symbol: expected ret=51 from debuglink_only_fn(6,7) — the recovered address is not the runtime address"; }
+    echo "  traced ret=51 — the recovered symbol is at the real runtime address"
+    dl_stop
+    rm -f "$DLDIR/bin/dlv.debug"
+
+    # (2) <dir>/.debug/<name>
+    echo "--- .gnu_debuglink: <dir>/.debug/dlv.debug ---"
+    mkdir -p "$DLDIR/bin/.debug"
+    cp "$DLDIR/dlv.debug" "$DLDIR/bin/.debug/dlv.debug"
+    dl_run_syms; dl_stop
+    [ "$DLN" -ge 1 ] || fail ".gnu_debuglink <dir>/.debug/: symbol not recovered"
+    echo "  resolved ($DLN symbol(s))"
+    rm -rf "$DLDIR/bin/.debug"
+
+    # (3) <debugdir>/<dir>/<name> — the global debug tree mirrors the real path
+    echo "--- .gnu_debuglink: \$ASMSPY_DEBUG_DIR/<dir>/dlv.debug ---"
+    mkdir -p "$DLDIR/debugroot$DLABS"
+    cp "$DLDIR/dlv.debug" "$DLDIR/debugroot$DLABS/dlv.debug"
+    dl_run_syms; dl_stop
+    [ "$DLN" -ge 1 ] || fail ".gnu_debuglink \$ASMSPY_DEBUG_DIR/<dir>/: symbol not recovered"
+    echo "  resolved ($DLN symbol(s))"
+    rm -rf "$DLDIR/debugroot$DLABS"
+
+    # (4) CRC MISMATCH must be REJECTED. The candidate is the good debug file with
+    # one byte appended: trailing bytes past the last section leave the ELF fully
+    # valid (case (5) below reads this very file), so the ONLY thing that can
+    # reject it is the recorded CRC-32.
+    echo "--- .gnu_debuglink: CRC MISMATCH must be rejected ---"
+    cp "$DLDIR/dlv.debug" "$DLDIR/bad.debug"
+    printf 'X' >> "$DLDIR/bad.debug"
+    cp "$DLDIR/bad.debug" "$DLDIR/bin/dlv.debug"
+    dl_run_syms; dl_stop
+    [ "$DLN" -eq 0 ] \
+        || fail "a CRC-MISMATCHED debug file resolved $DLN symbol(s) — a stale -dbg package would name every address wrong"
+    echo "  rejected (0 symbols) — the recorded CRC-32 is honoured"
+    rm -f "$DLDIR/bin/dlv.debug"
+
+    # (5) build-id: <debugdir>/.build-id/ab/cdef....debug, keyed by the note that
+    # SURVIVES strip. Uses the byte-appended file from (4) — no CRC is involved on
+    # this path, so it must resolve, which is also what proves (4)'s rejection was
+    # the CRC check rather than a file asmspy simply could not read.
+    BID=$(readelf -n "$DLDIR/bin/dlv" 2>/dev/null \
+          | sed -n 's/.*Build ID: \([0-9a-f][0-9a-f]*\).*/\1/p' | head -1)
+    if [ -z "$BID" ]; then
+        echo "# SKIP build-id (this toolchain emits no .note.gnu.build-id)"
+    else
+        echo "--- build-id: \$ASMSPY_DEBUG_DIR/.build-id/${BID%${BID#??}}/... ---"
+        mkdir -p "$DLDIR/debugroot/.build-id/$(printf '%s' "$BID" | cut -c1-2)"
+        cp "$DLDIR/bad.debug" \
+           "$DLDIR/debugroot/.build-id/$(printf '%s' "$BID" | cut -c1-2)/$(printf '%s' "$BID" | cut -c3-).debug"
+        dl_run_syms; dl_stop
+        [ "$DLN" -ge 1 ] \
+            || fail "build-id: symbol not recovered from \$ASMSPY_DEBUG_DIR/.build-id/ (note survives strip, so this is the key distros index by)"
+        echo "  resolved ($DLN symbol(s)) — from the same file (4) rejected on CRC"
+
+        # A file at the right PATH but carrying the wrong build-id must be
+        # rejected. The fixture is the good debug file with spy_victim's build-id
+        # grafted in: it still holds debuglink_only_fn in .symtab, so without the
+        # id check it WOULD resolve — which is what makes this non-vacuous (a file
+        # that simply lacked the symbol would "pass" with no check at all).
+        rm -rf "$DLDIR/debugroot/.build-id"
+        if objcopy --dump-section .note.gnu.build-id="$DLDIR/foreign.note" \
+                   "$BUILD/spy_victim" 2>/dev/null \
+           && objcopy --remove-section=.note.gnu.build-id \
+                      --add-section .note.gnu.build-id="$DLDIR/foreign.note" \
+                      "$DLDIR/dlv.debug" "$DLDIR/wrongid.debug" 2>/dev/null \
+           && ! readelf -n "$DLDIR/wrongid.debug" 2>/dev/null | grep -q "$BID"; then
+            echo "--- build-id: WRONG build-id at the right path must be rejected ---"
+            mkdir -p "$DLDIR/debugroot/.build-id/$(printf '%s' "$BID" | cut -c1-2)"
+            cp "$DLDIR/wrongid.debug" \
+               "$DLDIR/debugroot/.build-id/$(printf '%s' "$BID" | cut -c1-2)/$(printf '%s' "$BID" | cut -c3-).debug"
+            dl_run_syms; dl_stop
+            [ "$DLN" -eq 0 ] \
+                || fail "a debug file with a FOREIGN build-id resolved $DLN symbol(s) — the build-id is assumed from the path, not verified"
+            echo "  rejected (0 symbols) — the build-id is verified, not assumed from the path"
+        else
+            echo "# SKIP wrong-build-id (objcopy cannot graft a foreign note here)"
+        fi
+    fi
+    unset ASMSPY_DEBUG_DIR
+    rm -rf "$DLDIR"
+    echo "separate debug info: .gnu_debuglink (3 paths + CRC gate) + build-id OK"
+fi
 
 # call-graph: attach to spy_victim (work() calls helper()) and check the callee
 # is resolved by name in the "functions called" view.

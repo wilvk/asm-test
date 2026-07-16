@@ -432,20 +432,73 @@ concrete failure mode. **Effort: XL / research.**
 
 ---
 
-## Increment 7 - asmspy `--attach-dataflow` surface *(optional — **NOT STARTED**; the only increment of this tier that has not been built or closed)*
+## Increment 7 - asmspy `--attach-dataflow` surface *(optional — **NOT BUILT; two premises corrected 2026-07-16**. Still open, but no longer as specced below)*
 
 Surface native attach-based data-flow in the asmspy CLI (a `--attach-dataflow <pid>`
 subcommand + a TUI window), the DR-attach counterpart of the ptrace live-attach plan's
 asmspy increments. Shares the JSON/def-use rendering; differs only in the producer. Kept
 last + optional; the capture tiers above stand without a UI.
 
+> **UPDATE 2026-07-16 — scoped, NOT built; this increment's two load-bearing premises are FALSE
+> as written.** An asmspy lane picked this up alongside the `.gnu_debuglink` work and stopped at
+> the scoping step, deliberately. The increment is still open and still optional — but it is not
+> the thin wiring job the text above describes, and building it as specced would have produced
+> UI that no lane can test. The evidence, so the next attempt starts from facts:
+>
+> **1. "Shares the JSON/def-use rendering; differs only in the producer" — false for the ATTACH
+> path.** The snapshot→record bridge does exist (`build_valtrace`, [dataflow_dr.c:269](../../../src/dataflow_dr.c#L269))
+> and DR-produced data *does* reach `asmtest_defuse_build` — but only on the **launch/in-process**
+> path, where the driver holds a stack-local `at_drval_t` **and the region's code bytes**, which
+> the bridge must re-decode (`asmtest_operands`) because `at_vstep_t` is a per-step **GP
+> register-file snapshot** (`{off, gpr[16], rip, rflags, mem_first, mem_n}`), *not* the per-operand
+> read/write `at_val_rec_t` stream the def-use builder and `cli/asmspy_dataview.h` consume. The
+> **attach** producer does not deliver that: it publishes through
+> [asmtest_taint_shm.h](../../../include/asmtest_taint_shm.h), whose channel carries `drval.mem`
+> **NULL** by construction (*"the taint SET needs no values"*, [:64](../../../include/asmtest_taint_shm.h#L64))
+> and caps at **`AT_SHM_STEPS_CAP` = 64** steps. `taint_validator` accordingly reads only
+> `steps[i].off` + `step_taint[i]` + the sink hits — of `at_vstep_t` it touches **nothing but
+> `.off`**. So the attach channel today carries a **taint set**, which is a different *analysis*,
+> not a different *producer* of the same L0 value/def-use data.
+>
+> **2. "It is not capture work" ([the closing section below](#recommended-first-milestone) says so
+> too) — false.** Making the attach path feed the landed rendering means widening the shm channel
+> (memory values + a step cap beyond 64) and exposing the `static` bridge — i.e. producer changes
+> in `src/dataflow_dr.c` + `include/asmtest_taint_shm.h`, which is capture work by any reading.
+> The alternative (re-deriving records inside `cli/` from `gpr[]` + code bytes asmspy reads itself)
+> means a **second copy** of `build_valtrace`'s subtle logic — the deferred-write model, the
+> high-byte sub-register cases, the documented region-exit gap — which is exactly the duplication
+> "share the rendering" was meant to avoid, and it still cannot recover memory-load values the
+> channel never carried.
+>
+> **3. The blocker that decides it regardless: no lane can test it.** `cli/` is gated by
+> `make docker-cli` / the `cli` CI job, and **`asmtest-cli` has no DynamoRIO** (`Dockerfile.cli` =
+> bindings-base + libipt-dev + libncurses-dev; no `drrun`, no `DYNAMORIO_HOME`, no
+> `--cap-add=SYS_PTRACE`). A `--attach-dataflow` shipped there could only ever **self-skip**, in
+> the only lane that guards asmspy. A subcommand whose test can never fail is not tested, and the
+> DR images that *do* carry `drrun` + the capability ([docker.mk:267,280](../../../mk/docker.mk#L267))
+> do not build asmspy. Closing that gap is a `Dockerfile.cli` / `mk/docker.mk` / CI decision —
+> ~2 GB of DynamoRIO added to the CLI image, or a fifth lane in the external-attach image that
+> builds ncursesw + Capstone — and it should be taken deliberately, not smuggled in under an
+> optional UI increment.
+>
+> **Recommendation for whoever picks this up.** Do **not** build `--attach-dataflow` as a
+> def-use/value view; that framing is what makes it look cheap. Either (a) leave it closed — the
+> honest default, since the tier's headline capability is landed + CI-gated and the ptrace
+> `--dataflow` (mode 9) already gives asmspy a data-flow view on native **and** managed targets at
+> higher per-step cost; or (b) re-spec it for what the attach channel actually produces — a
+> **taint-set view** (sink hits: kind/offset/tag, + the tainted step offsets), which would share
+> `cli/asmspy_dataview.h`'s *slice-highlight* idiom rather than its def-use split — and pay for a
+> testable lane first. Option (b) is a real, if narrow, capability; it is just not the increment
+> written above.
+>
 > **Status 2026-07-15 — not started, and not blocking.** No `--attach-dataflow` / `attach_dataflow`
 > surface exists in `src/`, `include/`, `examples/`, or the makefiles. Note the **ptrace** plan's
 > counterpart DID land (its headless `--dataflow` subcommand + the Increment-7 Data-flow TUI window,
 > mode 9) — those belong to [live-attach-dataflow-plan.md](../archive/plans/live-attach-dataflow-plan.md), not this
 > tier, so this tier's DR-attach producer still has no UI. Every capture increment above stands
-> without one, exactly as this increment anticipated; when it is built, it should share that
-> landed JSON/def-use rendering and differ only in the producer.
+> without one, exactly as this increment anticipated. *(Correction 2026-07-16: the last clause of
+> this status — "when it is built, it should share that landed JSON/def-use rendering and differ
+> only in the producer" — is the premise refuted above, and has been struck.)*
 
 ---
 
@@ -524,8 +577,13 @@ closed **NO-GO** — the kill criterion fired and both escape routes were exhaus
 
 **What is left:** only **Increment 7** (the optional asmspy `--attach-dataflow` UI surface, not
 started — no `--attach-dataflow`/`attach_dataflow` exists in `src/`, `include/`, `examples/`, or the
-makefiles today). That is the tier's sole genuine remainder, and it is not capture work: the tier's
-headline capability — take over a native process we did not start, taint a scoped region in band,
-drain it out of process, and let the process go, repeatably — is landed, and now **CI-gated** by the
-`taint-attach` job as well as make-gated. The one-time CI-wiring gap the risk register carried is
-closed (2026-07-16).
+makefiles today). That is the tier's sole genuine remainder. ~~and it is not capture work~~ —
+**corrected 2026-07-16: it *is* capture work.** Feeding asmspy's landed def-use/value rendering from
+the attach path requires widening the results channel (`asmtest_taint_shm.h` carries `drval.mem`
+NULL and caps at 64 steps) and exposing the `static` `build_valtrace` bridge, plus a lane that can
+actually run it (`asmtest-cli` ships no DynamoRIO, so the subcommand could only self-skip in the one
+job that gates `cli/`). See Increment 7 for the full evidence and the two re-scoping options. None
+of this touches the tier's headline capability — take over a native process we did not start, taint
+a scoped region in band, drain it out of process, and let the process go, repeatably — which is
+landed and now **CI-gated** by the `taint-attach` job as well as make-gated. The one-time CI-wiring
+gap the risk register carried is closed (2026-07-16).
