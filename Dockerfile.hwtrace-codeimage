@@ -26,4 +26,4 @@ RUN apt-get update \
       /usr/local/bin/bpftool \
  && rm -rf /var/lib/apt/lists/*
 COPY . .
-CMD ["sh", "-c", "make codeimage-test && make branchsnap-test"]
+CMD ["sh", "-c", "make codeimage-test && make branchsnap-test && make branchtile-test"]

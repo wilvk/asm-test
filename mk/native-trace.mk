@@ -2068,6 +2068,18 @@ $(BUILD)/test_branchsnap: $(HWTRACE_OBJS) $(BUILD)/test_branchsnap.o
 branchsnap-test: $(BUILD)/test_branchsnap
 	$(BUILD)/test_branchsnap
 
+# E6 — the branchsnap TILED at checkpoints and merged into the WindowHot sampled-endpoint
+# surface (asmtest_hwtrace_tile_window_amd). Same objects and the same self-skip contract
+# as branchsnap-test above: without the BPF toolchain / CAP_BPF+CAP_PERFMON / AMD LbrExtV2
+# it exits 0. The docker-hwtrace-codeimage lane carries all three, so it runs LIVE there
+# on a Zen 4/5 host — the fixture's negative control and tiled-vs-untiled differential
+# only mean anything on a live capture.
+$(BUILD)/test_branchtile: $(HWTRACE_OBJS) $(BUILD)/test_branchtile.o
+	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -lpthread -o $@
+.PHONY: branchtile-test
+branchtile-test: $(BUILD)/test_branchtile
+	$(BUILD)/test_branchtile
+
 # Statistical AMD IBS-Op edge lane. test_ibs's PURE decoder checks (synthetic raw
 # records) run and pass on ANY host; its live out-of-band capture self-skips (exit 0)
 # off AMD IBS-Op. Links only ibs_backend.o (a self-contained producer, no Capstone /

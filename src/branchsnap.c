@@ -376,6 +376,243 @@ int asmtest_amd_snapshot_end(asmtest_trace_t *trace) {
     return rc;
 }
 
+/* --- E6: TILING the boundary snapshot at checkpoints ---------------------------
+ *
+ * The sibling above is a REGION capture: one [base,len), boundaries at its exits, and a
+ * decode of the single RICHEST window into an exact in-region instruction stream. Tiling
+ * is the other consumer of the same BPF machinery, and it wants the opposite of each:
+ *
+ *   - CHECKPOINTS, not exits. The addresses are ABSOLUTE and need not belong to one
+ *     region (they are managed method entries scattered across the JIT heap), so there
+ *     is no [base,len) to filter or decode against.
+ *   - EVERY island, not the richest. Each checkpoint hit freezes its own ~16-branch
+ *     tail; tiling MERGES them all, because coverage is the union of the tiles.
+ *   - ENDPOINT PCs, not an instruction stream. The output is the survey's ips[] — the
+ *     same sampled-endpoint surface WindowHot buckets by method — so an island is a
+ *     PRODUCER into that histogram, not a new API.
+ *
+ * What tiling therefore is, exactly: at each checkpoint hit the ~16 most recent branch
+ * TARGETS are known EXACTLY; between checkpoint hits NOTHING is known. The merged result
+ * is SAMPLED / PARTIAL COVERAGE — a set of exact islands in an unobserved sea — and NOT
+ * an exact whole-window trace (that is a hardware dead end on AMD and is DECLINED; see
+ * docs/internal/plans/amd-tracing-plan.md). It is a legitimate producer into WindowHot
+ * precisely because WindowHot is a HOT-ADDRESS surface: unlike the exact insns[]/blocks[]
+ * parity cascade, it makes no completeness claim for a tile to violate.
+ *
+ * Kept in a state slot of its OWN (never g_bsnap): the two consumers differ in every
+ * field, and entangling them would put the proven region path at risk. The single-active
+ * invariant is enforced ACROSS both slots.
+ *
+ * LBR DEPENDENCY (deliberate): unlike _begin_multi, tile_begin does NOT open its own
+ * LBR-on event — it requires the CALLER to already have a branch-stack event enabled on
+ * the calling thread, which is exactly what the survey core (sample_window_amd_impl)
+ * arms before it calls here. bpf_get_branch_snapshot() reads whatever the hardware
+ * holds, so the survey's event powers both producers, and tiling costs one breakpoint
+ * per checkpoint and NOT a second LBR user (which would need a filter-compatible event
+ * and could multiplex the very survey it is meant to enrich). A caller without LBR on
+ * gets empty islands, never a wrong answer.
+ *
+ * BOUNDARY ASSUMPTION (inherited, and load-bearing here): tiling relies on the same
+ * Zen 4/5 property Phase 9 validated for the region path — a #DB execution breakpoint
+ * does NOT evict the recent branch history before the BPF helper reads it (the AMD
+ * freeze path holds). Phase 9 validated it for a `ret` boundary; a tail-`jmp` boundary
+ * carries an assumption yet to be re-confirmed. A managed method-entry checkpoint is
+ * neither — it is a CALL target — so it is nearer the validated shape (the call retires,
+ * then the breakpoint fires on the entry instruction) but is not literally the validated
+ * case. The test asserts the entry edge is present rather than assuming it. */
+struct btile_state {
+    int active;
+    int nbp; /* armed checkpoints (bfd/link[0..nbp))    */
+    int bfd
+        [ASMTEST_AMD_MAX_EXITS]; /* HW execution breakpoint per checkpoint  */
+    struct branchsnap_bpf *skel;
+    struct bpf_link *link[ASMTEST_AMD_MAX_EXITS];
+    struct ring_buffer *rb;
+    /* Drain sink — set by tile_end immediately before ring_buffer__consume (the
+     * callback ctx is bound at ring_buffer__new time, so the sink is threaded
+     * through the state rather than through the ctx argument). */
+    uint64_t *ips;
+    size_t cap;
+    size_t n;
+    int islands; /* checkpoint hits drained (0 = never hit: honest, not an error) */
+    int overflow; /* ips[] filled with island entries left to merge                */
+};
+static struct btile_state g_btile;
+
+static void btile_reset_fds(void) {
+    memset(&g_btile, 0, sizeof g_btile);
+    for (int i = 0; i < ASMTEST_AMD_MAX_EXITS; i++)
+        g_btile.bfd[i] = -1;
+}
+
+static void btile_teardown(void) {
+    if (g_btile.rb != NULL)
+        ring_buffer__free(g_btile.rb);
+    for (int i = 0; i < ASMTEST_AMD_MAX_EXITS; i++)
+        if (g_btile.link[i] != NULL)
+            bpf_link__destroy(g_btile.link[i]);
+    if (g_btile.skel != NULL)
+        branchsnap_bpf__destroy(g_btile.skel);
+    for (int i = 0; i < ASMTEST_AMD_MAX_EXITS; i++)
+        if (g_btile.bfd[i] >= 0)
+            close(g_btile.bfd[i]);
+    btile_reset_fds();
+}
+
+/* One island -> the endpoint stream. Append every RETIRED branch target in the frozen
+ * window to ips[] — the same {one endpoint per taken branch} shape the survey's plain
+ * drain emits (hwtrace.c), so the caller's bucket-by-method histogram cannot tell a
+ * tiled endpoint from a sampled one. That is the point: one surface, two producers.
+ *
+ * The checkpoint PC itself is NOT synthesized. Where a checkpoint is a branch target —
+ * a managed method entry, the intended use — the window's NEWEST entry IS the call that
+ * reached it, so `to` == the checkpoint and it enters the histogram naturally. A
+ * checkpoint planted mid-block would not appear, which is honest: we record what the
+ * hardware retired, never what we assume ran. */
+static int btile_on_event(void *ctx, void *data, size_t sz) {
+    struct btile_state *s = (struct btile_state *)ctx;
+    if (sz < sizeof(struct bsnap_event))
+        return 0;
+    const struct bsnap_event *ev = (const struct bsnap_event *)data;
+    unsigned long long nr = ev->nr <= BSNAP_MAX ? ev->nr : BSNAP_MAX;
+    s->islands++; /* the hit happened, even if the window came back empty */
+    for (unsigned long long i = 0; i < nr; i++) {
+        struct perf_branch_entry e;
+        memcpy(&e, ev->raw + i * BSNAP_ENTRY_SZ, sizeof e);
+        if (e.abort)
+            continue; /* transactional abort: never retired */
+        if (e.to == 0)
+            continue; /* empty slot */
+        if (s->n >= s->cap) {
+            s->overflow = 1;
+            return 0;
+        }
+        s->ips[s->n++] = e.to;
+    }
+    return 0;
+}
+
+/* ARM tiling at `ncp` ABSOLUTE checkpoint addresses: one HW execution breakpoint each
+ * (its own debug register) + the SAME BPF snapshot program attached to each (N links,
+ * ONE shared ringbuf). The caller must already have LBR on (see the note above).
+ * ALL-OR-NOTHING, mirroring _begin_multi: a partially-armed checkpoint set would
+ * silently tile less than asked, and nothing downstream could tell that from "the
+ * checkpoint never ran" — so any failure releases everything and returns nonzero. The
+ * caller then runs the survey UNTILED and reports islands == 0, which is honest and
+ * visible rather than a quiet shortfall. */
+int asmtest_amd_tile_begin(const uint64_t *cp_addrs, int ncp) {
+    if (cp_addrs == NULL || ncp < 1 || ncp > ASMTEST_AMD_MAX_EXITS)
+        return ASMTEST_HW_EINVAL;
+    if (g_btile.active || g_bsnap.active) /* single-active across BOTH slots */
+        return ASMTEST_HW_ESTATE;
+    if (!asmtest_amd_snapshot_available())
+        return ASMTEST_HW_EUNAVAIL;
+
+    btile_reset_fds();
+    for (int i = 0; i < ncp; i++) {
+        if (cp_addrs[i] == 0) {
+            btile_teardown();
+            return ASMTEST_HW_EINVAL;
+        }
+        struct perf_event_attr ba;
+        memset(&ba, 0, sizeof ba);
+        ba.size = sizeof ba;
+        ba.type = PERF_TYPE_BREAKPOINT;
+        ba.bp_type = HW_BREAKPOINT_X;
+        ba.bp_addr = cp_addrs[i];
+        ba.bp_len = sizeof(long);
+        ba.sample_period = 1;
+        ba.exclude_kernel = 1;
+        ba.exclude_hv = 1;
+        ba.disabled = 1;
+        long bfd = bsnap_perf_open(&ba, 0, -1, -1, 0);
+        if (bfd < 0) {
+            btile_teardown();
+            return ASMTEST_HW_EUNAVAIL;
+        }
+        g_btile.bfd[i] = (int)bfd;
+        g_btile.nbp = i + 1;
+    }
+    g_btile.skel = branchsnap_bpf__open();
+    if (g_btile.skel == NULL || branchsnap_bpf__load(g_btile.skel) != 0) {
+        btile_teardown();
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    for (int i = 0; i < ncp; i++) {
+        LIBBPF_OPTS(bpf_perf_event_opts, popts, .bpf_cookie = cp_addrs[i]);
+        g_btile.link[i] = bpf_program__attach_perf_event_opts(
+            g_btile.skel->progs.asmtest_branchsnap, g_btile.bfd[i], &popts);
+        if (g_btile.link[i] == NULL) {
+            btile_teardown();
+            return ASMTEST_HW_EUNAVAIL;
+        }
+    }
+    g_btile.rb = ring_buffer__new(bpf_map__fd(g_btile.skel->maps.snaps),
+                                  btile_on_event, &g_btile, NULL);
+    if (g_btile.rb == NULL) {
+        btile_teardown();
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    for (int i = 0; i < ncp; i++) {
+        ioctl(g_btile.bfd[i], PERF_EVENT_IOC_RESET, 0);
+        if (ioctl(g_btile.bfd[i], PERF_EVENT_IOC_ENABLE, 0) != 0) {
+            btile_teardown();
+            return ASMTEST_HW_EUNAVAIL;
+        }
+    }
+    g_btile.active = 1;
+    ASMTEST_HWDBG("tile_begin: armed ncp=%d cp[0]=0x%llx", ncp,
+                  (unsigned long long)cp_addrs[0]);
+    return ASMTEST_HW_OK;
+}
+
+/* DRAIN every island into ips[cap): disable the breakpoints, consume the ringbuf, merge
+ * all frozen windows' retired branch targets, release. *nips = endpoints appended,
+ * *islands = checkpoint hits seen, *truncated = endpoints were LOST.
+ *
+ * `truncated` deliberately does NOT mean "the coverage is partial". Tiled coverage is
+ * ALWAYS partial by construction (a ~16-branch tail per hit), exactly as the survey's
+ * is always partial at sample_period=N. Making it always-true would render a caller's
+ * `covered || truncated` check VACUOUS — the very failure mode that assertion shape
+ * exists to guard against. So it means here what it means on the survey: the endpoint
+ * stream is a PREFIX of what this producer actually observed — a saturated ringbuf
+ * DROPPED a boundary hit, or ips[] filled with islands still to merge. Bounded
+ * granularity is the producer's defined shape; lost data is truncation. */
+int asmtest_amd_tile_end(uint64_t *ips, size_t cap, size_t *nips, int *islands,
+                         int *truncated) {
+    if (!g_btile.active)
+        return ASMTEST_HW_ESTATE;
+    if (ips == NULL || cap == 0) {
+        btile_teardown();
+        return ASMTEST_HW_EINVAL;
+    }
+    for (int i = 0; i < g_btile.nbp; i++)
+        ioctl(g_btile.bfd[i], PERF_EVENT_IOC_DISABLE, 0);
+    /* Non-blocking, for the reason snapshot_end documents: every breakpoint fires
+     * synchronously during run_fn and submits immediately, and the disable above
+     * guarantees no later producer — so the records are already committed and a poll
+     * would only burn its timeout on the never-hit path. */
+    g_btile.ips = ips;
+    g_btile.cap = cap;
+    g_btile.n = 0;
+    g_btile.islands = 0;
+    g_btile.overflow = 0;
+    ring_buffer__consume(g_btile.rb);
+    int lost = g_btile.overflow || g_btile.skel->bss->asmtest_bsnap_drops > 0;
+    ASMTEST_HWDBG("tile_end: islands=%d endpoints=%zu drops=%llu overflow=%d",
+                  g_btile.islands, g_btile.n,
+                  (unsigned long long)g_btile.skel->bss->asmtest_bsnap_drops,
+                  g_btile.overflow);
+    if (nips != NULL)
+        *nips = g_btile.n;
+    if (islands != NULL)
+        *islands = g_btile.islands;
+    if (truncated != NULL)
+        *truncated = lost ? 1 : 0;
+    btile_teardown();
+    return ASMTEST_HW_OK;
+}
+
 int asmtest_amd_snapshot_trace(const void *base, size_t len, size_t exit_off,
                                void (*run_fn)(void *), void *arg,
                                asmtest_trace_t *trace) {
@@ -414,6 +651,25 @@ int asmtest_amd_snapshot_begin(const void *base, size_t len, size_t exit_off,
 
 int asmtest_amd_snapshot_end(asmtest_trace_t *trace) {
     (void)trace;
+    return ASMTEST_HW_ENOSYS;
+}
+
+/* E6 tiling stubs — the survey core calls tile_begin unconditionally when checkpoints
+ * are supplied and simply runs UNTILED on a nonzero return, so an image without the BPF
+ * toolchain degrades to the plain sampled survey (islands == 0) instead of failing. */
+int asmtest_amd_tile_begin(const uint64_t *cp_addrs, int ncp) {
+    (void)cp_addrs;
+    (void)ncp;
+    return ASMTEST_HW_ENOSYS;
+}
+
+int asmtest_amd_tile_end(uint64_t *ips, size_t cap, size_t *nips, int *islands,
+                         int *truncated) {
+    (void)ips;
+    (void)cap;
+    (void)nips;
+    (void)islands;
+    (void)truncated;
     return ASMTEST_HW_ENOSYS;
 }
 
