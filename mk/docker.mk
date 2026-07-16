@@ -354,6 +354,21 @@ docker-gcfence-probe:
 	  --build-arg BASE=$(DOCKER_BASE) -t asmtest-gcfence-probe .
 	$(DOCKER) run --rm --cap-add=SYS_PTRACE $(_docker_plat) asmtest-gcfence-probe
 
+# F4 INCREMENT 1 — the live GC-move canonicalization LANE (live-attach-dataflow-followup-plan.md F4).
+# NOT a probe: the two probes above settled the questions (the feed attaches to a running dotnet; the
+# stamp must be the profiler-sampled S0, because the freeze assumption measured FALSE), and this is
+# the WIRING plus its validation. It joins the proven feed to the landed pure transform
+# (asmtest_gcmove_canonicalize) on a live attach, and proves the join with a NEGATIVE CONTROL — the
+# same capture is def-use-built WITHOUT canonicalization (the store->load edge across the compaction
+# must be MISSING) and WITH it (it must APPEAR). No DynamoRIO (out-of-band ptrace tier), but — like
+# docker-gcfence-probe and UNLIKE docker-attachprof-probe — it DOES need `--cap-add=SYS_PTRACE`,
+# because the tracer ptrace-attaches to a SIBLING process. Runs `make gccanon-attach`.
+.PHONY: docker-gccanon-attach
+docker-gccanon-attach:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.gccanon-attach \
+	  --build-arg BASE=$(DOCKER_BASE) -t asmtest-gccanon-attach .
+	$(DOCKER) run --rm --cap-add=SYS_PTRACE $(_docker_plat) asmtest-gccanon-attach
+
 # MANAGED-ATTACH SAFEPOINT plan Increment-1 suspend-primitive probe. Same image shape as the
 # gcprofiler probe (DynamoRIO + .NET SDK + git for the CoreCLR profiler headers), no SYS_PTRACE
 # (launch, not attach): drives ICorProfilerInfo10::SuspendRuntime/ResumeRuntime cycles natively and

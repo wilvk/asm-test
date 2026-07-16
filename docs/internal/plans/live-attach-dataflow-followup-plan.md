@@ -171,7 +171,47 @@ enforced; self-skips under qemu-user (which emulates zero breakpoint slots,
 
 ---
 
-## F4 — Live GC-move canonicalization for managed memory def-use *(**UNBLOCKED 2026-07-14/16** — the feed is proven and shipping on the DR side; this is now wiring, and it is the highest-value remaining item in this plan)*
+## F4 — Live GC-move canonicalization for managed memory def-use *(**INCREMENT 1 LANDED 2026-07-16** — exit criterion met on a live attach; one open limitation, see below)*
+
+> **UPDATE 2026-07-16 — INCREMENT 1 LANDED; the exit criterion is MET.**
+> `make docker-gccanon-attach` (7/7, `examples/gccanon_attach/`): a plain `dotnet` victim (no
+> `CORECLR_*` env) → an attach-mode `MovedReferences2` profiler → ranges stamped with a
+> profiler-sampled **S0** → the **shipping** scoped L0 producer
+> (`asmtest_dataflow_ptrace_attach_jit`) over one managed region invocation →
+> `asmtest_gcmove_canonicalize` → `asmtest_defuse_build`. It links the real tier and the real
+> transform, not copies, and modifies no shipping source.
+> `asmtest_gcmove_canonicalize` now has a **live caller** (previously: its unit test only).
+>
+> The proof is the **negative control** (`raw_edge=0, canon_edge=1`): WITHOUT canonicalization the
+> store(step 5) → load(step 7) def-use edge is **missing** from the live trace — the GC-aliasing
+> bug is real and the capture provokes it — and WITH canonicalization the edge **appears** at the
+> canonical address. The lane also asserts no false alias is forged for an object reusing the
+> vacated slot.
+>
+> **Two prior spikes settled the design** and are recorded in
+> [f4-attach-profiler-probe-findings.md](../analysis/f4-attach-profiler-probe-findings.md) (the
+> feed: a profiler CAN attach to a process we did not launch) and
+> [f4-gc-fence-freeze-probe-findings.md](../analysis/f4-gc-fence-freeze-probe-findings.md) (the
+> stamp: `step` MUST come from the profiler-sampled S0, because the "step counter freezes across
+> the fence" assumption measured FALSE — single-stepping a futex-blocked thread is what un-blocks
+> it).
+>
+> **The ~19.8 s GC stall that probe found never materialised here, for a structural reason worth
+> recording:** the region's `call` becomes a **call-out step-over** (`dfp_run_to` = int3 +
+> `PTRACE_CONT` + signal forwarding), so the traced thread runs at **native speed** through the GC
+> and parks in preemptive mode — no hijack, no `SIGRTMIN`. The stall needs a *continuously
+> single-stepped* thread, which this scoped tier never does. **Region scoping is what makes F4
+> reachable, not an obstacle.**
+>
+> **OPEN LIMITATION (the honest next question).** The region-gated step counter freezes across the
+> call-out, so **every GC in one call-out window is stamped with the same S0**, and
+> `asmtest_gcmove_canon` applies at most one relocation per step-group. **Two GCs in one window
+> would silently collapse into a single batch and under-forward a twice-moved object** (A→B→C
+> canonicalizes to B while the load reads C), presenting as a missing edge that looks like a
+> transform bug. The lane choreographs exactly one GC per window and `ok 7` **checks** that via a
+> `gc_seq` field rather than assuming it — but that choreography is the least representative part
+> of the lane, and a high-GC-rate target could put two GCs in one window. Separating them needs a
+> finer boundary than a frozen region-gated counter can express.
 
 > **UPDATE 2026-07-16 — F4's stated blocker is obsolete, and the plan's own risk note was
 > wrong.** This item was written as "hard-gated on a runtime feed the .NET in-proc
@@ -222,6 +262,12 @@ missing is the live feed.
 without pre/post-move aliasing on a **live attach** (not just the landed pure unit test);
 a value is attributed to the correct method+version after a tiered re-JIT (already landed for
 control, re-validated for the live data path).
+
+> **MET 2026-07-16 for the first clause** — `docker-gccanon-attach` ok 3/4/5/6: the def-use edge
+> survives a real compaction on a live attach (negative control: missing without the transform),
+> with no false alias forged. Caveat as above: exactly one GC per call-out window. The
+> method+version clause rides the already-landed Increment-3 attribution and is not re-proven by
+> this lane.
 
 ---
 

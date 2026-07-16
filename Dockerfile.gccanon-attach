@@ -1,0 +1,43 @@
+# Dockerfile.gccanon-attach — F4 increment 1: LIVE GC-move canonicalization on the ptrace
+# live-attach tier (docs/internal/plans/live-attach-dataflow-followup-plan.md F4).
+#
+# NOT a probe — the WIRING plus its live validation lane. F4's two halves both already existed: a
+# proven live GC-move feed (an attach-mode ICorProfilerCallback4::MovedReferences2 profiler —
+# docs/internal/analysis/f4-attach-profiler-probe-findings.md) and a landed pure transform
+# (asmtest_gcmove_canonicalize, src/dataflow_gcmove.c, whose only caller was its unit test). This
+# lane joins them on a LIVE ATTACH and proves the join with a NEGATIVE CONTROL: the same capture is
+# def-use-built twice, once WITHOUT canonicalization (the store->load edge across the compaction must
+# be MISSING — the bug is real) and once WITH it (the edge must APPEAR).
+#
+# Deliberately NO DynamoRIO: this is the out-of-band ptrace tier. The image is the .NET SDK + a
+# C/C++ toolchain + git (the pinned CoreCLR profiler headers cor.h/corprof.h + the PAL from
+# dotnet/runtime, shared with the gcprofiler/attachprof/gcfence probes) + Capstone (the scoped
+# producer's operand enumerator). Linux x86-64 only. Like Dockerfile.gcfence-probe and UNLIKE
+# Dockerfile.attachprof-probe this lane DOES need --cap-add=SYS_PTRACE, because the tracer
+# ptrace-attaches to a SIBLING process (the profiler attach itself still travels the diagnostics IPC
+# socket, not ptrace) — see `docker-gccanon-attach` in mk/docker.mk.
+# Build + run:  make docker-gccanon-attach
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential pkg-config curl ca-certificates git \
+      libcapstone-dev \
+      dotnet-sdk-8.0 \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+# Builds the GC-move-feed attach profiler, the tracer (which links the SHIPPING scoped ptrace L0
+# producer + the landed pure GC-move transform, not copies of them), a PLAIN managed victim (started
+# with NO CORECLR_* env vars) and the Microsoft.Diagnostics.NETCore.Client attacher; starts the
+# victim, attaches the profiler MID-RUN, then drives one scoped capture of the managed region across
+# an induced compacting gen2 GC and asserts the def-use edge is absent without canonicalization and
+# present with it. Self-skips cleanly if any prerequisite is absent, but here all are installed.
+CMD set -eux; \
+    make gccanon-attach

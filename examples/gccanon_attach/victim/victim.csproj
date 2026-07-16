@@ -1,0 +1,17 @@
+<!-- Managed victim for F4 increment 1: live GC-move canonicalization on the ptrace live-attach tier
+     (docs/internal/plans/live-attach-dataflow-followup-plan.md F4). A plain dotnet process — NO
+     CORECLR_* env vars — whose traced worker runs a store -> call-out -> load region over a
+     GC-movable object while a SEPARATE driver thread forces the one compacting gen2 GC that
+     relocates it. The harness attaches a profiler over the diagnostics port, then drives the
+     shipping scoped ptrace L0 producer over one invocation of the region.
+     See mk/native-trace.mk `gccanon-attach`. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>gccanon_victim</AssemblyName>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+</Project>
