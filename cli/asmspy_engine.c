@@ -427,6 +427,10 @@ typedef struct {
     uint64_t
         call_site; /* graph engine: call-site addr of that pending call     */
     int depth;     /* tree engine: live call depth (push on call, pop on ret) */
+    int focus_depth; /* tree engine: real depth at which this thread entered the
+                      * --focus subtree, ASMSPY_TF_NO_FOCUS when outside one.
+                      * Per-thread because thread A being inside the focused
+                      * function says nothing about thread B.                 */
     unsigned long long
         inv;     /* procs engine: per-task invocation count (syscalls/calls) */
     int armed;   /* watch engine: its debug-register watchpoint is installed  */
@@ -469,6 +473,7 @@ static thr_t *thr_get(thr_tab_t *t, pid_t tid) {
     e->pending_call = 0;
     e->call_site = 0;
     e->depth = 0;
+    e->focus_depth = ASMSPY_TF_NO_FOCUS;
     e->inv = 0;
     e->armed = 0;
     e->stopped = 0;
@@ -1855,23 +1860,47 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
 /* Whole-process live call TREE                                        */
 /* ------------------------------------------------------------------ */
 
-/* Emit one "entered a function" line, indented by the caller's live depth,
- * plus the structured entry (tid/depth/addr/name/module) so a front-end can
- * disassemble the callee or export the tree without re-parsing the text. */
-static void tree_emit(asmspy_tree_sink sink, void *ctx, int multi, pid_t tid,
-                      const asmspy_symtab_t *syms, asmspy_jitmap_t *jit,
-                      uint64_t callee, int depth) {
+/* Emit one "entered a function" line, indented by the caller's live depth, plus
+ * the structured entry (tid/depth/addr/name/module) so a front-end can
+ * disassemble the callee or export the tree without re-parsing the text.
+ *
+ * `filt`/`focus_depth` apply the view's output filter (depth cap / symbol focus
+ * / module — asmspy_treefilter.h). Returns 1 if a line was emitted, 0 if the
+ * filter suppressed it: the CALLER still pushes the depth either way, because
+ * the shadow counter tracks the target's real control flow, not the filtered
+ * view of it. Resolution happens here (before the filter) because focus and
+ * module both match on the RESOLVED name/module, not the raw address. */
+static int tree_emit(asmspy_tree_sink sink, void *ctx, int multi, pid_t tid,
+                     const asmspy_symtab_t *syms, asmspy_jitmap_t *jit,
+                     uint64_t callee, int depth,
+                     const asmspy_tree_filter_t *filt, int *focus_depth) {
     if (!sink)
-        return;
+        return 0;
     const asmspy_sym_t *s = asmspy_resolve(syms, jit, callee);
-    char name[200], raw[24];
+    char raw[24];
+    const char *nm, *mod;
     if (s) {
-        snprintf(name, sizeof name, "%s [%s]", s->name, s->module);
+        nm = s->name;
+        mod = s->module;
     } else {
         snprintf(raw, sizeof raw, "0x%llx", (unsigned long long)callee);
-        snprintf(name, sizeof name, "%s", raw);
+        nm = raw;
+        mod = "?";
     }
-    int ind = depth * 2;
+
+    /* Match on what the view SHOWS: an unresolved frame is "0x…"/"?", so
+     * --focus=0x7f… can still pin a raw JIT address and --module='?' can single
+     * out the unresolved frames, while --module=libc correctly skips them. */
+    int eff = depth;
+    if (!asmspy_tree_filter_call(filt, nm, mod, depth, focus_depth, &eff))
+        return 0;
+
+    char name[200];
+    if (s)
+        snprintf(name, sizeof name, "%s [%s]", nm, mod);
+    else
+        snprintf(name, sizeof name, "%s", raw);
+    int ind = eff * 2;
     if (ind > 60) /* clamp runaway / drifted indentation to a sane width */
         ind = 60;
     char line[320];
@@ -1879,14 +1908,15 @@ static void tree_emit(asmspy_tree_sink sink, void *ctx, int multi, pid_t tid,
         snprintf(line, sizeof line, "[%d] %*s-> %s", (int)tid, ind, "", name);
     else
         snprintf(line, sizeof line, "%*s-> %s", ind, "", name);
-    asmspy_tree_call_t call = {tid, depth, callee, s ? s->name : raw,
-                               s ? s->module : "?"};
+    asmspy_tree_call_t call = {tid, eff, callee, nm, mod};
     sink(ctx, line, &call);
+    return 1;
 }
 
 int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
-                       const asmspy_symtab_t *syms, asmspy_tree_sink sink,
-                       void *ctx) {
+                       const asmspy_symtab_t *syms,
+                       const asmspy_tree_filter_t *filter,
+                       asmspy_tree_sink sink, void *ctx) {
     if (!asmtest_ptrace_available())
         return ASMTEST_PTRACE_EUNAVAIL;
 
@@ -1958,13 +1988,15 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
                 struct iovec riov = {(void *)(uintptr_t)rip, sizeof code};
                 ssize_t got = process_vm_readv(pid, &liov, 1, &riov, 1, 0);
 
-                /* a pending INDIRECT call resolves at its callee entry (= rip) */
+                /* a pending INDIRECT call resolves at its callee entry (= rip).
+                 * `emitted` counts SURVIVING lines, but the depth push is
+                 * unconditional: the shadow counter tracks the target's real
+                 * control flow, never the filtered view of it. */
                 if (ts && ts->pending_call) {
-                    tree_emit(sink, ctx, multi, tid, syms, &jit, rip,
-                              ts->depth);
+                    emitted += tree_emit(sink, ctx, multi, tid, syms, &jit, rip,
+                                         ts->depth, filter, &ts->focus_depth);
                     ts->depth++;
                     ts->pending_call = 0;
-                    emitted++;
                 }
 
                 int isc = 0, isr = 0;
@@ -1975,16 +2007,20 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
                     uint64_t tgt = 0;
                     if (asmtest_disas_call_target(ASMTEST_ARCH_X86_64, code,
                                                   (size_t)got, rip, 0, &tgt)) {
-                        tree_emit(sink, ctx, multi, tid, syms, &jit, tgt,
-                                  ts->depth);
+                        emitted +=
+                            tree_emit(sink, ctx, multi, tid, syms, &jit, tgt,
+                                      ts->depth, filter, &ts->focus_depth);
                         ts->depth++;
-                        emitted++;
                     } else {
                         ts->pending_call = 1; /* indirect: resolve next step */
                         ts->call_site = rip;
                     }
-                } else if (isr && ts && ts->depth > 0) {
-                    ts->depth--; /* returned: pop a level (clamped at 0) */
+                } else if (isr && ts) {
+                    if (ts->depth > 0)
+                        ts->depth--; /* returned: pop a level (clamped at 0) */
+                    /* left the --focus subtree? (unconditional, so a drifted
+                     * counter resting at 0 still releases a depth-0 focus) */
+                    asmspy_tree_filter_ret(filter, ts->depth, &ts->focus_depth);
                 }
             }
             ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);

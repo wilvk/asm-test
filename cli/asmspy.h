@@ -24,6 +24,7 @@
 #include <stdint.h>
 #include <sys/types.h>
 
+#include "asmspy_treefilter.h" /* --tree: depth cap / symbol focus / module   */
 #include "asmtest_ptrace.h"
 #include "asmtest_trace.h"
 #include "asmtest_valtrace.h" /* --dataflow: L0 value trace + L1 def-use graph */
@@ -362,7 +363,10 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
  * `name`/`module` are transient (valid only for the sink call — copy to keep). */
 typedef struct {
     pid_t tid;        /* thread that made the call                          */
-    int depth;        /* that thread's live call depth at entry (0 = top)   */
+    int depth;        /* EFFECTIVE call depth at entry (0 = top). Equals the
+                       * thread's live call depth, except under a --focus
+                       * filter, which re-bases it so the focused function
+                       * sits at depth 0 (see asmspy_treefilter.h).         */
     uint64_t addr;    /* callee entry address                               */
     const char *name; /* resolved symbol name, or "0x…" if unresolved       */
     const char *module; /* backing module basename, "jit", or "?" if unknown  */
@@ -382,11 +386,21 @@ typedef void (*asmspy_tree_sink)(void *ctx, const char *line,
  * `max` bounds the call lines emitted (<0 = until stop / exit). Whole-process
  * single-stepping is slow, so the target crawls while traced. Each line is
  * prefixed "[tid] " once more than one thread is followed. `only_tid` (non-0)
- * restricts the trace to that one thread (see asmspy_engine_stream). Returns 0 on
- * clean detach, negative on an attach/availability failure. `syms` may be NULL. */
+ * restricts the trace to that one thread (see asmspy_engine_stream).
+ *
+ * `filter` (NULL = unfiltered) caps the depth / focuses on a symbol's subtree /
+ * restricts to a module — the difference between a readable tree and a firehose
+ * on a busy process (asmspy_treefilter.h). It bounds only what is EMITTED: every
+ * call and return is still tracked, so the depths of the surviving lines stay
+ * true, and `max` therefore counts SURVIVING lines (a capped run reaches its
+ * budget in filtered lines, not raw calls).
+ *
+ * Returns 0 on clean detach, negative on an attach/availability failure. `syms`
+ * may be NULL. */
 int asmspy_engine_tree(pid_t pid, pid_t only_tid, long max, atomic_bool *stop,
-                       const asmspy_symtab_t *syms, asmspy_tree_sink sink,
-                       void *ctx);
+                       const asmspy_symtab_t *syms,
+                       const asmspy_tree_filter_t *filter,
+                       asmspy_tree_sink sink, void *ctx);
 
 /* What the process/thread topology counts per task. */
 typedef enum {

@@ -31,7 +31,7 @@ $(BUILD)/asmspy_syscall_names.inc: cli/gen-syscall-names.sh | $(BUILD)
 # cli/ sources compile like examples/, but with -pthread (a dedicated tracer
 # thread owns the ptrace loop while the ncurses UI thread stays responsive).
 $(BUILD)/%.o: cli/%.c cli/asmspy.h cli/asmspy_graphsort.h \
-              cli/asmspy_dataview.h \
+              cli/asmspy_dataview.h cli/asmspy_treefilter.h \
               include/asmtest_ptrace.h \
               include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -I$(BUILD) -pthread -c $< -o $@
@@ -155,6 +155,15 @@ $(BUILD)/test_graphsort: cli/test_graphsort.c cli/asmspy_graphsort.h \
                          cli/asmspy.h | $(BUILD)
 	$(CC) $(CFLAGS) -Icli -o $@ cli/test_graphsort.c
 
+# test_treefilter — headless unit test for the call-tree output filter
+# (cli/asmspy_treefilter.h: --tree --depth/--focus/--module). Replays scripted
+# call/ret streams through the filter, so the focus open/close and depth re-base
+# sequences are asserted directly instead of only via whatever shapes a live
+# single-stepped victim happens to run.
+$(BUILD)/test_treefilter: cli/test_treefilter.c cli/asmspy_treefilter.h \
+                          | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -o $@ cli/test_treefilter.c
+
 # test_jitdump — unit test for the binary jitdump reader + the two-tier JIT
 # resolve chain. Links the resolver TU (asmspy_proc.o) directly; -lstdc++
 # supplies its __cxa_demangle just like the asmspy link line.
@@ -169,7 +178,8 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/jit_victim $(BUILD)/jitdump_victim $(BUILD)/int3_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/watch_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_logview \
-           $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view
+           $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
+           $(BUILD)/test_treefilter
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
 	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"

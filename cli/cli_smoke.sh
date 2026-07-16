@@ -21,6 +21,8 @@ echo "--- test_jitdump (binary jitdump reader + JIT resolve chain) ---"
 "$BUILD/test_jitdump" || fail "test_jitdump"
 echo "--- test_view (data-flow view: annotation + def-use split + L2 slice) ---"
 "$BUILD/test_view" || fail "test_view"
+echo "--- test_treefilter (call-tree depth cap / symbol focus / module filter) ---"
+"$BUILD/test_treefilter" || fail "test_treefilter"
 
 echo "--- asmspy --list (head) ---"
 # capture first: a bare `... | head` pipeline masks asmspy's exit status (sh has
@@ -491,6 +493,116 @@ if command -v dot >/dev/null 2>&1; then
 else
     echo "  dot structural checks passed (graphviz absent)"
 fi
+
+# ---------------------------------------------------------------------------
+# CALL-TREE OUTPUT FILTERS: --depth / --focus / --module (asmspy-plan Theme E)
+# ---------------------------------------------------------------------------
+# The unfiltered tree above is this test's NEGATIVE CONTROL, and it is the whole
+# point: it PROVES the lines each filter must remove are present when the filter
+# is off. spy_victim's shape supplies a control for every case --
+#
+#   -> work [spy_victim]            real depth 0
+#     -> helper [spy_victim]        real depth 1   (x5 per iteration)
+#   -> usleep@plt [spy_victim]      real depth 0   <- same depth as work
+#     -> __nanosleep [libc.so.6]    real depth 1
+#       -> clock_nanosleep [libc.so.6]  real depth 2
+#
+# -- so "--focus=work dropped usleep@plt" cannot pass by dropping deep lines (it
+# is at the SAME depth as the surviving work), and "--focus=helper printed helper
+# at column 0" cannot pass without a real re-base (unfiltered, helper only ever
+# appears indented two columns).
+tf_capture() { # tf_capture <n> <flag...> -> sets $out; fails on hang/error
+    set +e
+    out=$(timeout 60 "$ASM" --tree "$WVPID" "$@" 2>&1); rc=$?
+    set -e
+    [ "$rc" -eq 124 ] && fail "--tree $* hung (whole-process single-step)"
+    [ "$rc" -eq 0 ] || fail "--tree $* exited rc=$rc"
+    [ -n "$out" ] || fail "--tree $* produced no output at all"
+}
+
+echo "--- asmspy --tree --depth=1 (depth cap) ---"
+tf_capture 8 --depth=1
+printf '%s\n' "$out" | head -3
+printf '%s\n' "$out" | grep -qE '^-> work ' || fail "--depth=1: work (depth 0) missing"
+# the cap must remove the depth-1 callee the unfiltered run proved was there
+printf '%s\n' "$out" | grep -q 'helper' && fail "--depth=1: helper (depth 1) leaked past the cap"
+# and it must not just be dropping everything but the first line
+printf '%s\n' "$out" | grep -qE '^-> usleep@plt ' || fail "--depth=1: usleep@plt (depth 0) wrongly dropped"
+# n must count SURVIVING lines, not raw calls: unfiltered, 8 calls yield only ~2
+# depth-0 lines, so a budget spent on filtered-away calls lands far short of 8.
+[ "$(printf '%s\n' "$out" | grep -c '^-> ')" -ge 8 ] \
+    || fail "--depth=1: fewer than 8 lines — n is counting raw calls, not surviving lines"
+echo "  depth cap: only depth-0 calls, and n counts surviving lines"
+
+echo "--- asmspy --tree --focus=helper (symbol focus + depth re-base) ---"
+tf_capture 6 --focus=helper
+printf '%s\n' "$out" | head -3
+# helper runs at real depth 1 (unfiltered: indented two columns). Under focus it
+# roots the tree, so it must render at column 0 — a filter that suppressed lines
+# without re-basing would print "  -> helper" and fail here.
+printf '%s\n' "$out" | grep -qE '^-> helper \[spy_victim\]' \
+    || fail "--focus=helper: helper not re-based to depth 0"
+printf '%s\n' "$out" | grep -q '  -> ' && fail "--focus=helper: leaked an indented non-root line"
+# work is helper's CALLER: focusing on a callee must not show it
+printf '%s\n' "$out" | grep -q -- '-> work ' && fail "--focus=helper: caller 'work' leaked"
+echo "  focus: subtree rooted + re-based to depth 0, caller excluded"
+
+echo "--- asmspy --tree --focus=work (subtree scope) ---"
+tf_capture 8 --focus=work
+printf '%s\n' "$out" | head -3
+printf '%s\n' "$out" | grep -qE '^-> work \[spy_victim\]' || fail "--focus=work: root missing"
+printf '%s\n' "$out" | grep -qE '^  -> helper \[spy_victim\]' \
+    || fail "--focus=work: work's callee helper missing (focus must keep the SUBTREE)"
+# THE scope assertion: usleep@plt runs at the SAME real depth as work but OUTSIDE
+# it, so a "focus" implemented as a plain name filter (or as a depth cut) keeps it.
+printf '%s\n' "$out" | grep -q 'usleep' \
+    && fail "--focus=work: usleep@plt leaked — focus is not scoping to the subtree"
+echo "  focus: keeps the subtree, drops a same-depth sibling outside it"
+
+echo "--- asmspy --tree --module=libc (module filter) ---"
+tf_capture 4 --module=libc
+printf '%s\n' "$out" | head -3
+printf '%s\n' "$out" | grep -q '\[libc' || fail "--module=libc: no libc frames captured"
+# the victim's own functions dominate the unfiltered tree and must all be gone
+printf '%s\n' "$out" | grep -q '\[spy_victim\]' \
+    && fail "--module=libc: the target's own [spy_victim] frames leaked"
+echo "  module filter: libc callees only, target's own frames dropped"
+
+echo "--- asmspy --tree --focus=usleep --depth=2 (composition) ---"
+# Depth must measure from the RE-BASED root: usleep@plt roots at eff 0,
+# __nanosleep is eff 1 (kept), clock_nanosleep is eff 2 (cut). Its REAL depth is
+# 2, so a cap applied to the real depth would keep it and fail here.
+tf_capture 4 --focus=usleep --depth=2
+printf '%s\n' "$out" | head -3
+printf '%s\n' "$out" | grep -qE '^-> usleep@plt ' || fail "--focus=usleep: root missing"
+printf '%s\n' "$out" | grep -qE '^  -> __nanosleep \[libc' \
+    || fail "--focus=usleep --depth=2: __nanosleep (eff depth 1) missing"
+printf '%s\n' "$out" | grep -q 'clock_nanosleep' \
+    && fail "--focus=usleep --depth=2: clock_nanosleep (eff depth 2) leaked past the cap"
+echo "  composition: --depth measures from the --focus root, not the real depth"
+
+# the re-base must survive the JSON export too: helper is exported at depth 1
+# unfiltered (asserted above) and MUST be depth 0 under --focus=helper — same
+# symbol, same run shape, the depth difference is the filter's alone.
+echo "--- asmspy --tree --focus=helper --json (re-based depth survives export) ---"
+set +e
+tfj=$(timeout 60 "$ASM" --tree "$WVPID" 4 --focus=helper --json 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--tree --focus --json hung"
+printf '%s' "$tfj" | grep -qE '"depth":0,"addr":"0x[0-9a-f]+","name":"helper"' \
+    || fail "--tree --focus=helper --json: helper not exported at re-based depth 0"
+printf '%s' "$tfj" | grep -q '"name":"work"' \
+    && fail "--tree --focus=helper --json: out-of-focus caller leaked into the export"
+echo "  json: focused subtree exported with re-based depths"
+
+# bad filter arguments are rejected up front (rc=2), not silently coerced.
+# --depth=0 is a usage error, NOT "unlimited": it can only ever print nothing.
+expect_badarg "$ASM" --tree "$WVPID" --depth=0
+expect_badarg "$ASM" --tree "$WVPID" --depth=-1
+expect_badarg "$ASM" --tree "$WVPID" --depth=abc
+expect_badarg "$ASM" --tree "$WVPID" --focus=
+expect_badarg "$ASM" --tree "$WVPID" --module=
+echo "  bad --depth/--focus/--module rejected up front"
 kill "$WVPID" 2>/dev/null || true
 
 # statistical hot-edge sampler: attach AMD IBS-Op to a CPU-busy victim OUT OF

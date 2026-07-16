@@ -14,7 +14,7 @@
  *                                     scoped L0 value trace + L1 def-use of one invocation
  *   asmspy --stream <pid> [n] [--tid=<t>]   stream n instructions live (function + asm)
  *   asmspy --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] [--tid=<t>]  whole-process call graph
- *   asmspy --tree   <pid> [n] [--json|--dot] [--tid=<t>]  whole-process live call tree (indented by depth)
+ *   asmspy --tree   <pid> [n] [--depth=<d>] [--focus=<sym>] [--module=<m>] [--json|--dot] [--tid=<t>]  whole-process live call tree (indented by depth)
  *   asmspy --procs  <pid> [n] [--count=syscalls|calls]  process/thread topology tree
  *
  * A negative n streams until the target exits or you interrupt.
@@ -950,12 +950,13 @@ static void tree_export_json(const tree_capture *tc, pid_t pid) {
     printf("%s]}\n", tc->n ? "\n" : "");
 }
 
-static int cmd_tree(pid_t pid, pid_t tid, long n, int json, int dot) {
+static int cmd_tree(pid_t pid, pid_t tid, long n,
+                    const asmspy_tree_filter_t *filter, int json, int dot) {
     asmspy_symtab_t t;
     asmspy_symtab_load(pid, &t); /* best-effort; raw addrs if empty */
     tree_capture tc = {0};
     int export = json || dot;
-    int rc = asmspy_engine_tree(pid, tid, n, NULL, &t,
+    int rc = asmspy_engine_tree(pid, tid, n, NULL, &t, filter,
                                 export ? tree_capture_sink : tree_print_sink,
                                 export ? &tc : NULL);
     asmspy_symtab_free(&t);
@@ -2058,7 +2059,10 @@ static void *tracer_thread(void *arg) {
         rc = asmspy_engine_graph(L->pid, 0, -1, &L->stop, L->syms,
                                  live_graph_sink, L);
     else if (L->mode == 4)
-        rc = asmspy_engine_tree(L->pid, 0, -1, &L->stop, L->syms,
+        /* filter = NULL: the TUI has no filter widget yet (the headless
+         * --tree --depth/--focus/--module carry the feature); mode 5 stays the
+         * unfiltered live feed it has always been. */
+        rc = asmspy_engine_tree(L->pid, 0, -1, &L->stop, L->syms, NULL,
                                 live_tree_sink, L);
     else if (L->mode == 5)
         rc = asmspy_engine_procs(L->pid, -1, &L->stop, L->count_mode,
@@ -4409,8 +4413,13 @@ static int usage(const char *argv0) {
         "(function + asm)\n"
         "  %s --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] "
         "[--tid=<t>]  whole-process call graph over n calls\n"
-        "  %s --tree   <pid> [n] [--json|--dot] [--tid=<t>]  whole-process "
+        "  %s --tree   <pid> [n] [--depth=<d>] [--focus=<sym>] "
+        "[--module=<m>] [--json|--dot] [--tid=<t>]  whole-process "
         "live call tree, indented by depth (n call lines)\n"
+        "                                   (--depth=<d> shows d levels; "
+        "--focus=<sym> roots the tree at a symbol's subtree and re-bases its "
+        "depth; --module=<m> keeps only that module's callees — all three are "
+        "substring-matched and cut the firehose on a busy process)\n"
         "                                   (--tid=<t> traces only thread t; "
         "others run full speed)\n"
         "  %s --procs  <pid> [n] [--count=syscalls|calls]  process/thread tree "
@@ -4526,10 +4535,28 @@ int main(int argc, char **argv) {
         n = 40;
         pid_t tid = 0;
         int json = 0, dot = 0;
-        for (int i = 3; i < argc; i++) { /* [n], --json/--dot, --tid= */
+        asmspy_tree_filter_t filt = {0};
+        for (int i = 3; i < argc;
+             i++) { /* [n], --json/--dot, --tid=, --depth=/--focus=/--module= */
             if (strncmp(argv[i], "--tid=", 6) == 0) {
                 if (parse_pid(argv[i] + 6, &tid) != 0)
                     return bad_arg("tid", argv[i] + 6);
+            } else if (strncmp(argv[i], "--depth=", 8) == 0) {
+                long d;
+                /* 0/negative is a usage error, not "unlimited": --depth=0 asks
+                 * for a tree with no levels, which can only ever print nothing.
+                 * Omitting the flag is how you ask for unlimited. */
+                if (parse_count(argv[i] + 8, &d) != 0 || d < 1 || d > 1000)
+                    return bad_arg("depth (want 1..1000)", argv[i] + 8);
+                filt.max_depth = (int)d;
+            } else if (strncmp(argv[i], "--focus=", 8) == 0) {
+                if (!argv[i][8])
+                    return bad_arg("focus (want a symbol substring)", "");
+                filt.focus = argv[i] + 8;
+            } else if (strncmp(argv[i], "--module=", 9) == 0) {
+                if (!argv[i][9])
+                    return bad_arg("module (want a module substring)", "");
+                filt.module = argv[i] + 9;
             } else if (strcmp(argv[i], "--json") == 0) {
                 json = 1;
             } else if (strcmp(argv[i], "--dot") == 0) {
@@ -4538,7 +4565,7 @@ int main(int argc, char **argv) {
                 return bad_arg("count", argv[i]);
             }
         }
-        return cmd_tree(pid, tid, n, json, dot);
+        return cmd_tree(pid, tid, n, &filt, json, dot);
     }
     if (strcmp(argv[1], "--procs") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)
