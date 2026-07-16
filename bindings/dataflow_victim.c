@@ -18,13 +18,20 @@
  *
  * Protocol (a binding wrapper's side of it is ~5 lines in any language):
  *   argv: dataflow_victim <counter_path> <a> <b>
- *   stdout, one line, then flushed:   base=0x<hex> len=<decimal>
+ *   stdout, one line, then flushed:   base=0x<hex> len=<decimal> pid=<decimal>
  *   then: loop forever calling region(a, b) and bumping a counter in the
  *         8-byte little-endian file at <counter_path>.
  * The caller attaches at `base`, expects the region to return a+b, then reads the
  * counter file twice to prove the victim SURVIVED the detach. Passing a/b in
  * makes the expected result a property of THIS run, not a constant a stubbed
  * wrapper could hardcode.
+ *
+ * The victim reports its OWN pid because not every binding's spawn primitive can
+ * tell the caller: Lua's io.popen returns a stream and no pid at all, and the
+ * popen family runs the command under `sh -c`, so a caller-side pid can silently
+ * be the SHELL's rather than the victim's — and attaching to the wrong pid is a
+ * failure that looks like "the region was never entered". getpid() here is the one
+ * answer that is right in every language.
  *
  * PR_SET_PTRACER_ANY: the victim OPTS IN to being traced, so the lanes work under
  * Yama ptrace_scope=1 (the common host default, and non-namespaced — a container
@@ -113,9 +120,10 @@ int main(int argc, char **argv) {
     }
     *counter = 0;
 
-    /* Publish the base the caller attaches at, and FLUSH — the caller blocks on
-     * this line, so a buffered newline would deadlock the lane. */
-    printf("base=0x%llx len=%zu\n", (unsigned long long)(uintptr_t)ex, len);
+    /* Publish the base the caller attaches at, our pid, and FLUSH — the caller
+     * blocks on this line, so a buffered newline would deadlock the lane. */
+    printf("base=0x%llx len=%zu pid=%d\n", (unsigned long long)(uintptr_t)ex, len,
+           (int)getpid());
     fflush(stdout);
 
     /* Independent hot loop: call the region, bump the counter, forever. The sleep

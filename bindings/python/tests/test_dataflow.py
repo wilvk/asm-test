@@ -190,10 +190,12 @@ class _Victim:
         if not line.startswith("base=0x"):
             self.close()
             raise AssertionError(f"victim handshake failed: {line!r}")
-        base_s, len_s = line.split()
+        base_s, len_s, pid_s = line.split()
         self.base = int(base_s[len("base="):], 16)
         self.len = int(len_s[len("len="):])
-        self.pid = self.proc.pid
+        # The victim's OWN pid (see bindings/dataflow_victim.c): the one answer that
+        # is right in every binding, including those whose spawn goes through a shell.
+        self.pid = int(pid_s[len("pid="):])
 
     def counter(self):
         with open(self.counter_path, "rb") as f:

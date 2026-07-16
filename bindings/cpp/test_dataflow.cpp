@@ -59,8 +59,15 @@ struct Victim {
         char c;
         while (read(fds[0], &c, 1) == 1 && c != '\n') line += c;
         close(fds[0]);
-        return std::sscanf(line.c_str(), "base=0x%llx len=%zu",
-                           reinterpret_cast<unsigned long long*>(&base), &len) == 2;
+        // The victim's OWN pid (see bindings/dataflow_victim.c) — right in every
+        // binding, including those whose spawn goes through a shell.
+        int reported = 0;
+        if (std::sscanf(line.c_str(), "base=0x%llx len=%zu pid=%d",
+                        reinterpret_cast<unsigned long long*>(&base), &len,
+                        &reported) != 3)
+            return false;
+        pid = reported;
+        return true;
     }
     std::uint64_t counter() const {
         int fd = open(counterPath.c_str(), O_RDONLY);

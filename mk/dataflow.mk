@@ -176,18 +176,14 @@ dataflow-node-test: $(DATAFLOW_LIVE_DEPS)
 # Phase 6 — the Ruby data-flow binding (bindings/ruby/dataflow.rb, Fiddle). Needs a
 # Ruby interpreter (the docker bindings image); validated in ubuntu:24.04 locally.
 .PHONY: dataflow-ruby-test
-dataflow-ruby-test: shared-dataflow
-	cd bindings/ruby && \
-	  ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
-	  $(RUBY) test_dataflow.rb
+dataflow-ruby-test: $(DATAFLOW_LIVE_DEPS)
+	cd bindings/ruby && $(dataflow_live_env) $(RUBY) test_dataflow.rb
 
 # Phase 6 — the Lua data-flow binding (bindings/lua/dataflow.lua, LuaJIT FFI). Needs
 # LuaJIT (the docker bindings image); validated in ubuntu:24.04 locally.
 .PHONY: dataflow-lua-test
-dataflow-lua-test: shared-dataflow
-	cd bindings/lua && \
-	  ASMTEST_DATAFLOW_LIB=$(abspath $(call shlib_dev,libasmtest_dataflow)) \
-	  $(LUAJIT) test_dataflow.lua
+dataflow-lua-test: $(DATAFLOW_LIVE_DEPS)
+	cd bindings/lua && $(dataflow_live_env) $(LUAJIT) test_dataflow.lua
 
 # Phase 6 — the Zig data-flow binding (bindings/zig/src/dataflow via std.DynLib). Needs
 # zig 0.13.x (the docker bindings image). `-lc` selects the libc dlopen backend (zig's

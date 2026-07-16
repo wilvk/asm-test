@@ -38,5 +38,137 @@ rj = [[0x1000, 0x40, "Foo", 1], [0x1000, 0x40, "Foo", 5]]
 check(DF.method_resolve_pc(rj, 0x1010) == 1, "method: tiered re-JIT newest version wins")
 check(DF.method_resolve_pc([], 0x1000) == -1, "method: empty map -> -1")
 
+
+# ---------------------------------------------------------------------------
+# F7 — live-attach data flow: capture over a REAL attached pid.
+#
+# Every assertion is POSITIVE and keyed to something only a working capture can
+# produce (the region's return value, the exact step count, the survival report).
+# Nothing hides behind "if we captured anything" — an EMPTY capture IS the failure
+# signature, so a guard like that would skip exactly when it should shout.
+# ---------------------------------------------------------------------------
+
+# The tier is Linux x86-64 only (src/dataflow_ptrace.c's own #if). On such a host
+# the live tests MUST run: an unavailable tier there means the lib was linked
+# without Capstone — a build defect that has to be RED, not a skip.
+LIVE_EXPECTED = RUBY_PLATFORM.include?("linux") && RUBY_PLATFORM.include?("x86_64")
+VICTIM = ENV["ASMTEST_DATAFLOW_VICTIM"]
+
+# A live victim: spawn it, learn its region base + pid. `a`/`b` are OURS, so the
+# expected result is a property of THIS run — a wrapper that hardcodes an answer
+# cannot satisfy two victims with different args.
+class Victim
+  attr_reader :pid, :base, :len
+
+  def initialize(tag, a, b)
+    @counter_path = "/tmp/asmtest-df-ruby-#{tag}.counter"
+    @io = IO.popen([VICTIM, @counter_path, a.to_s, b.to_s])
+    line = @io.gets.to_s.strip # blocks until the victim is looping
+    m = /\Abase=0x([0-9a-f]+) len=(\d+) pid=(\d+)\z/.match(line)
+    raise "victim handshake failed: #{line.inspect}" unless m
+
+    @base = m[1].to_i(16)
+    @len = m[2].to_i
+    @pid = m[3].to_i # the victim's OWN pid (see bindings/dataflow_victim.c)
+  end
+
+  def counter
+    File.binread(@counter_path, 8).unpack1("Q<")
+  end
+
+  def close
+    Process.kill("KILL", @pid)
+  rescue Errno::ESRCH
+    nil
+  ensure
+    @io.close rescue nil
+  end
+end
+
+# ETRACE is NOT a skip. ptrace is a capability the lane can be GIVEN
+# (--cap-add=SYS_PTRACE / seccomp=unconfined), and the victim opts in via
+# PR_SET_PTRACER_ANY, so a refusal means the lane is misconfigured — be loud.
+def check_rc(rc, what)
+  if rc == DF::PTRACE_ETRACE
+    puts "# #{what}: ptrace refused (ETRACE) — the lane needs --cap-add=SYS_PTRACE; " \
+         "this is NOT a valid skip"
+  end
+  check(rc == DF::PTRACE_OK, what)
+end
+
+if !LIVE_EXPECTED
+  puts "# SKIP live-attach: not linux/x86_64 (the tier is Linux x86-64 only)"
+elsif VICTIM.nil?
+  # The lane always exports this; missing means a misconfigured lane, and silently
+  # skipping every live test is the hole this suite must not have.
+  puts "Bail out! ASMTEST_DATAFLOW_VICTIM unset; run `make dataflow-ruby-test`"
+  exit(1)
+else
+  # Probed, not a symbol-resolves check: EINVAL (real) vs ENOSYS (stub).
+  check(DF.live_attach_available?, "live: tier is real on linux/x86_64 (EINVAL, not ENOSYS)")
+
+  vic = Victim.new("1", 7, 5)
+  vt = DF::ValueTrace.new(64, 512)
+  rc, result = vt.attach_pid(vic.pid, vic.base, vic.len)
+  check_rc(rc, "live: attach_pid a FOREIGN running pid + stepped the region")
+  # The region really executed IN the victim: rax = rdi + rsi.
+  check(result == 12, "live: attach_pid region returned 12 (got #{result})")
+  # Exactly df_chain's six in-region instructions — not "some".
+  check(vt.steps == 6, "live: six in-region steps captured (got #{vt.steps})")
+  check(vt.recs > 0, "live: operand records captured")
+  # SURVIVAL: we attached to a process we do not own; it must outlive the detach.
+  c0 = vic.counter
+  sleep 0.05
+  check(vic.counter > c0, "live: victim SURVIVED the detach (counter advanced)")
+  vt.free
+  vic.close
+
+  # THE anti-hardcode control: a second victim, different args, same wrapper.
+  vic = Victim.new("2", 17, 25)
+  vt = DF::ValueTrace.new(64, 512)
+  rc, result = vt.attach_pid(vic.pid, vic.base, vic.len)
+  check_rc(rc, "live: attach_pid the second victim")
+  check(result == 42, "live: result TRACKS the victim's args (17+25=42, got #{result})")
+  check(vt.steps == 6, "live: six steps on the second victim too")
+  vt.free
+  vic.close
+
+  vic = Victim.new("3", 9, 4)
+  vt = DF::ValueTrace.new(64, 512)
+  # only_tid 0: step whichever thread enters the region (here, the only one).
+  rc, result = vt.attach_pid_tid(vic.pid, 0, vic.base, vic.len)
+  check_rc(rc, "live: attach_pid_tid stepped the entering thread")
+  check(result == 13, "live: attach_pid_tid region returned 13 (got #{result})")
+  check(vt.steps == 6, "live: attach_pid_tid captured six steps")
+  vt.free
+  vic.close
+
+  vic = Victim.new("4", 20, 3)
+  vt = DF::ValueTrace.new(64, 512)
+  rc, result, survived = vt.attach_jit(vic.pid, 0, vic.base, vic.len)
+  check_rc(rc, "live: attach_jit stepped the region")
+  check(result == 23, "live: attach_jit region returned 23 (got #{result})")
+  check(vt.steps == 6, "live: attach_jit captured six steps")
+  # The producer's OWN survival report — the house rule that a foreign target is
+  # never killed, asserted from its side.
+  check(survived == 1, "live: attach_jit reported the target as survived")
+  c0 = vic.counter
+  sleep 0.05
+  check(vic.counter > c0, "live: attach_jit victim kept running after detach")
+  vt.free
+  vic.close
+
+  # Negative control: the wrapper must surface the producer's rejections rather
+  # than manufacture success.
+  vt = DF::ValueTrace.new(8, 8)
+  check(vt.attach_pid(12345, 0x1000, 0)[0] == DF::PTRACE_EINVAL,
+        "live: zero-length region is rejected (EINVAL)")
+  check(vt.attach_pid(0, 0x1000, 21)[0] == DF::PTRACE_EINVAL,
+        "live: pid 0 is rejected (EINVAL)")
+  check(vt.attach_pid(0x7FFFFFF0, 0x1000, 21)[0] != DF::PTRACE_OK,
+        "live: attaching to a nonexistent pid never returns OK")
+  vt.free
+end
+
 puts "1..#{$n}"
 exit($failed ? 1 : 0)

@@ -127,11 +127,13 @@ function spawnVictim(tag, a, b) {
     if (nl >= 0) line = s.slice(0, nl);
     else sleepMs(10);
   }
-  const m = /^base=0x([0-9a-f]+) len=(\d+)$/.exec(line);
+  const m = /^base=0x([0-9a-f]+) len=(\d+) pid=(\d+)$/.exec(line);
   if (!m) throw new Error(`victim handshake failed: ${JSON.stringify(line)}`);
   return {
     proc,
-    pid: proc.pid,
+    // The victim's OWN pid (see bindings/dataflow_victim.c) — right in every
+    // binding, including those whose spawn goes through a shell.
+    pid: Number(m[3]),
     base: BigInt('0x' + m[1]),
     len: Number(m[2]),
     counter: () => fs.readFileSync(counterPath).readBigUInt64LE(0),

@@ -73,5 +73,102 @@ module Asmtest
       name_bufs.clear
       result
     end
+
+    # --- F7: live-attach data-flow capture -------------------------------- #
+    # The scoped ptrace producer's return codes (src/dataflow_ptrace.c). The
+    # producer ships NO header on purpose (a value-trace PRODUCER is a tier, not
+    # part of the shared sink API), so — exactly as its own C suite does — this
+    # binding re-declares them. Keep in step with that file.
+    PTRACE_OK = 0       # a complete scoped trace
+    PTRACE_FAULT = 1    # the routine faulted; a partial trace is filled
+    PTRACE_EINVAL = -1  # bad arguments
+    PTRACE_ENOSYS = -3  # off Linux x86-64 / no Capstone: the tier is absent
+    PTRACE_ETRACE = -4  # ptrace/wait failure (seccomp/yama)
+
+    VOID = Fiddle::TYPE_VOID
+    VALTRACE_NEW = Fiddle::Function.new(LIB["asmtest_valtrace_new"], [SZ, SZ, SZ], VOIDP)
+    VALTRACE_FREE = Fiddle::Function.new(LIB["asmtest_valtrace_free"], [VOIDP], VOID)
+    VALTRACE_STEPS = Fiddle::Function.new(LIB["asmtest_valtrace_steps"], [VOIDP], SZ)
+    VALTRACE_RECS = Fiddle::Function.new(LIB["asmtest_valtrace_recs"], [VOIDP], SZ)
+    # pid_t is int; base/max_insns/when are uint64; result is long* (8 bytes here);
+    # survived is int*; img and vt are opaque pointers. No struct crosses by value.
+    ATTACH_PID = Fiddle::Function.new(
+      LIB["asmtest_dataflow_ptrace_attach_pid"], [INT, LL, SZ, LL, VOIDP, VOIDP], INT
+    )
+    ATTACH_PID_TID = Fiddle::Function.new(
+      LIB["asmtest_dataflow_ptrace_attach_pid_tid"],
+      [INT, INT, LL, SZ, LL, VOIDP, VOIDP], INT
+    )
+    ATTACH_JIT = Fiddle::Function.new(
+      LIB["asmtest_dataflow_ptrace_attach_jit"],
+      [INT, INT, LL, SZ, VOIDP, LL, LL, VOIDP, VOIDP, VOIDP], INT
+    )
+
+    # True iff this build's live-attach tier is real (Linux x86-64 + Capstone)
+    # rather than the off-platform ENOSYS stub. PROBED, not guessed: an argument-
+    # rejecting call returns EINVAL from the real producer and ENOSYS from the
+    # stub, which is the only way to tell them apart — the symbol resolves either
+    # way. Attaches to nothing.
+    def live_attach_available?
+      v = VALTRACE_NEW.call(1, 1, 0)
+      begin
+        out = Fiddle::Pointer.malloc(8)
+        ATTACH_PID.call(0, 0, 0, 0, out, v) != PTRACE_ENOSYS
+      ensure
+        VALTRACE_FREE.call(v)
+      end
+    end
+
+    # An L0 value trace handle (opaque) filled by the LIVE-ATTACH producer. The
+    # same asmtest_valtrace_t the pure analysis layers consume, so a capture made
+    # here is the sink's own shape — this binding exposes the attach + the step /
+    # record counts; the def-use + slice surface is the Python/C++/Node ValueTrace's
+    # and is not wrapped in Fiddle yet (the slice seed crosses BY VALUE as an
+    # at_val_rec_t, which Fiddle has no type for).
+    class ValueTrace
+      def initialize(steps_cap = 256, recs_cap = 2048)
+        @v = VALTRACE_NEW.call(steps_cap, recs_cap, 0)
+        raise "asmtest_valtrace_new failed" if @v.null?
+      end
+
+      # Attach to LIVE `pid`, single-step [base, base+code_len), then DETACH leaving
+      # the target running. Steps the thread-group LEADER. Returns [rc, result].
+      def attach_pid(pid, base, code_len, max_insns = 0)
+        out = Fiddle::Pointer.malloc(8)
+        rc = ATTACH_PID.call(pid, base, code_len, max_insns, out, @v)
+        [rc, out[0, 8].unpack1("q<")]
+      end
+
+      # As attach_pid, but SEIZE every thread and step whichever one first ENTERS
+      # the region (by its own tid, never assumed to be the leader); only_tid 0 =
+      # any. The entry managed methods need — they run on workers. [rc, result].
+      def attach_pid_tid(pid, only_tid, base, code_len, max_insns = 0)
+        out = Fiddle::Pointer.malloc(8)
+        rc = ATTACH_PID_TID.call(pid, only_tid, base, code_len, max_insns, out, @v)
+        [rc, out[0, 8].unpack1("q<")]
+      end
+
+      # The JIT-aware live attach: worker-targeting plus an explicit survival
+      # report. Returns [rc, result, survived]; survived == 1 means the detach left
+      # the target alive. The versioned-decode code-image (img/when) is NULL here —
+      # operands decode from a live snapshot.
+      def attach_jit(pid, only_tid, base, code_len, max_insns = 0, when_seq = 0)
+        out = Fiddle::Pointer.malloc(8)
+        survived = Fiddle::Pointer.malloc(4)
+        rc = ATTACH_JIT.call(pid, only_tid, base, code_len, Fiddle::NULL, when_seq,
+                             max_insns, out, survived, @v)
+        [rc, out[0, 8].unpack1("q<"), survived[0, 4].unpack1("l<")]
+      end
+
+      def steps = VALTRACE_STEPS.call(@v)
+      def recs = VALTRACE_RECS.call(@v)
+
+      def free
+        return if @v.nil? || @v.null?
+
+        VALTRACE_FREE.call(@v)
+        @v = nil
+      end
+    end
   end
 end
