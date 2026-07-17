@@ -1045,6 +1045,67 @@ CLPID=""
 # expected strings are DERIVED from the run rather than hardcoded — the
 # assertions below cannot pass against a stale/wrong socket, and cannot be
 # satisfied by echoing the inode back.
+# ---------------------------------------------------------------------------
+# SYSCALL ARGUMENT DECODING (asmspy-plan Theme E)
+# ---------------------------------------------------------------------------
+# argdecode_victim makes a fixed set of calls with KNOWN arguments, so each
+# assertion below pins RENDERED TEXT rather than "something plausible appeared".
+# Every one of these was three raw hex slots (or a bare pointer) before.
+#
+# The arity assertions are the point of the item: an undescribed syscall used to
+# print exactly three slots and thereby ASSERT an arity it had never
+# established. getpid() proves 0 is now expressible; mmap proves 6 is; the two
+# opens prove it is CONDITIONAL (mode is an argument only when a creating flag
+# is set); and the "..." proves an unknown shape now says so.
+echo "--- asmspy --log syscall argument decoding (flags/vectors/sigsets/arity) ---"
+"$BUILD/argdecode_victim" 2>/dev/null &
+SGPID=$!
+sleep 2
+set +e
+adout=$(timeout 90 "$ASM" --log "$SGPID" 400 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--log on argdecode_victim hung"
+kill -9 "$SGPID" 2>/dev/null || true
+wait "$SGPID" 2>/dev/null || true
+SGPID=""
+rm -f /tmp/asmspy_argdecode.txt
+ad_has() {
+    printf '%s\n' "$adout" | grep -qF "$1" \
+        || { printf '%s\n' "$adout" | sort -u | head -30; \
+             fail "arg decode: expected to render $2 — did not find: $1"; }
+}
+# flag WORDS, not hex
+ad_has 'O_WRONLY|O_CREAT|O_TRUNC, 0644' "open flags + octal mode"
+ad_has 'PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS' "mmap prot + map flags"
+ad_has 'mprotect(' "mprotect"
+ad_has ', PROT_READ) = 0' "a single-bit prot word"
+# a VECTOR: the bytes, not the array's address
+ad_has 'writev(fd=' "writev with a resolved fd"
+ad_has '["iovec-one", "iovec-two"], 2' "the iovec CONTENTS"
+# a sigset BITMASK and a how enum
+ad_has 'rt_sigprocmask(SIG_BLOCK, [SIGUSR2]' "sigprocmask how + sigset members"
+# a signal NUMBER as a name
+ad_has ', SIGUSR1) = 0' "tgkill's signal number as a name"
+# a struct read out of the target (glibc routes nanosleep -> clock_nanosleep)
+ad_has '{0.002000000}' "a timespec's contents"
+# enum
+ad_has 'SEEK_END' "lseek whence"
+# ARITY: zero, six, and conditional
+ad_has 'getpid() = ' "arity ZERO (no invented argument slots)"
+ad_has 'mmap(0x0, 4096,' "arity 6 (mmap's later args are no longer truncated away)"
+ad_has 'O_RDONLY) = ' "a non-creating open with NO mode slot"
+# mmap's fd is -1: an int arg arrives zero-extended, and must be shown as -1
+ad_has 'fd=-1' "mmap's -1 fd sign-extended (not 4294967295)"
+# an UNKNOWN shape must say it is unknown rather than claim three
+printf '%s\n' "$adout" | grep -qE '\.\.\.\) = ' \
+    || fail "arg decode: no '...' anywhere — an undescribed syscall is still claiming an arity of exactly three"
+# CONTROL: the ellipsis must NOT appear on a shape we DO know, or it would just
+# be decoration rather than a statement about arity.
+printf '%s\n' "$adout" | grep -E '^(openat|mmap|getpid|writev|tgkill)\(' \
+    | grep -q '\.\.\.' \
+    && fail "arg decode: a KNOWN shape rendered '...' — the ellipsis is supposed to mark an unknown arity, not decorate every line"
+echo "  flags/mode/prot/iovec/sigset/signo/timespec/whence decoded; arity 0, 6 and conditional all correct; unknown shapes say so"
+
 echo "--- asmspy --log fd->endpoint (socket:[inode] -> real endpoint) ---"
 "$BUILD/sock_victim" 2>"$BUILD/sock_victim.log" &
 SKPID=$!
