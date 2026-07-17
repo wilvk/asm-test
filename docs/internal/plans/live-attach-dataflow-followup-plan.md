@@ -11,7 +11,8 @@ each one either **reduces perturbation**, **raises fidelity on managed targets**
 > Status *(reconciled 2026-07-17, after F1 increment 2)*: **F3 LANDED (asmspy `--watch`); F1
 > increments 1+2 LANDED (pure-method block-step tier + vector breadth — the YMM/ZMM carryover is
 > CLOSED, with AVX-instruction replay recorded as an upstream Unicorn/QEMU gate); F4 increments
-> 1+2 LANDED — its exit criterion is MET on a live attach; F2/F5–F7 open.** The two bets this plan was written around
+> 1+2 LANDED — its exit criterion is MET on a live attach; **F2 increment 1 LANDED — the syscall
+> half of record-and-inject, exit criterion MET**; F5–F7 open (F7 LANDED).** The two bets this plan was written around
 > have both been settled in its favour. F1 was the marquee item and carried a spike increment
 > because its value-reconstruction claim was the one genuinely **unproven** bet in the whole
 > design — that spike came back **GO** (byte-identical to single-step by literal `memcmp`, ~6×
@@ -45,7 +46,7 @@ x86-64 first, AArch64 where the primitive exists).
 
 ---
 
-## F1 — Block-step + emulator-replay value optimization *(**increments 1+2 LANDED** — increment 2 closes the vector-breadth carryover 2026-07-17; **HOST-gated, not CI-gatable**; F2 unblocked)*
+## F1 — Block-step + emulator-replay value optimization *(**increments 1+2 LANDED** — increment 2 closes the vector-breadth carryover 2026-07-17; **HOST-gated, not CI-gatable**; F2 increment 1 has since LANDED on top)*
 
 > **UPDATE 2026-07-17 — INCREMENT 2 LANDED: vector breadth (the YMM/ZMM carryover) is CLOSED,
 > and the honest boundary is narrower than the carryover assumed.** `make docker-dataflow-attach`
@@ -124,8 +125,9 @@ x86-64 first, AArch64 where the primitive exists).
 > vector test hooks; `vec_width`/`vec_nregs`/`uc_vec_width`/`vec_seeded`), and they cross no FFI
 > boundary — the tier ships no header and its suite re-declares them.
 >
-> **Carryover:** F2 (impure via record-inject) — now **unblocked**; the replay it rides on is
-> unchanged and the fallback it must displace is the same single-step path. One bounded
+> ~~**Carryover:** F2 (impure via record-inject) — now **unblocked**~~ — **F2 increment 1 LANDED
+> 2026-07-17**: the replay it rides on was indeed unchanged, and F2 displaced exactly the ONE
+> fallback caller flagged here (`!pure`, syscall half only); `!replayable` is untouched. One bounded
 > follow-on: revisit the pin the day QEMU's AVX TCG reaches a Unicorn release — at which point
 > YMM/ZMM seeding becomes *observable* and this increment's deliberate XMM-only choice should be
 > revisited. (A BMI allowlist was considered and **measured to be worth nothing**; see the
@@ -197,7 +199,8 @@ x86-64 first, AArch64 where the primitive exists).
 > block-step+replay is **byte-identical** (literal `memcmp`) to single-step on `loop_poly` (303→50 stops,
 > 6.06×) and `mem_chain` (6→1, 6.00×), impure `cpuid` falls back, the canary truncates. ~~Carryover: YMM/ZMM
 > boundary seeding~~ — **CLOSED by increment 2, see above** (and note this 22/22 was, on bare metal, a ~27%
-> coin flip that increment 2 diagnosed and fixed); F2 (impure via record-inject) remains.
+> coin flip that increment 2 diagnosed and fixed); ~~F2 (impure via record-inject) remains~~ —
+> **F2 increment 1 LANDED 2026-07-17** (syscall record-and-inject; rdtsc/cpuid still gated).
 > Increment-0 spike evidence retained below.
 
 > **SPIKE (increment 0) — GO, 2026-07-15.** On the oracle fixtures the block-step + Unicorn-replay value
@@ -238,7 +241,9 @@ cross-thread deadlock window on a live runtime. Decouple values from stops.
 - **Region-granularity purity classification** to avoid emulating through the OS: static-scan
   the method's (time-correct) bytes once for `syscall`/`sysenter`/`int 0x80`/`rdtsc`/
   `rdtscp`/`rdrand`/`rdseed`/`cpuid`; a **pure** method gets block-step + replay, an
-  **impure** one falls back to direct single-step (F2 lifts that restriction). This
+  **impure** one falls back to direct single-step (F2 lifts that restriction **for the syscall
+  half** — see F2 below; the ordering trap this bullet names is what BTF's free post-syscall
+  boundary resolves). This
   sidesteps the ordering trap — block-step advances the *real* process, so a syscall in a
   block has already run by the boundary — by classifying per region up front, never
   retroactively.
@@ -257,7 +262,111 @@ silently wrong.
 
 ---
 
-## F2 — Record-and-inject OS-interaction fidelity *(planned — **UNBLOCKED 2026-07-17**: F1 increments 1+2 have landed)*
+## F2 — Record-and-inject OS-interaction fidelity *(**INCREMENT 1 LANDED 2026-07-17** — the syscall half; the exit criterion is MET. `rdtsc`/`cpuid`/`rdrand` remain gated on a PRIMITIVE, not a decode — see below. **HOST-gated, not CI-gatable**, exactly as F1)*
+
+> **UPDATE 2026-07-17 — LANDED, and the design is far SMALLER than this plan assumed, because
+> one measured fact removed most of it.** `make docker-dataflow-attach` / `make
+> dataflow-blockstep-test` — **118/118** (65/65 before F2), deterministic, **0 skips**, on both
+> the host and in-container.
+>
+> **THE MEASUREMENT THAT DECIDED EVERYTHING.** `PTRACE_SINGLEBLOCK` (DEBUGCTL.BTF) **already
+> traps `syscall` and `int 0x80`** — they are control transfers — and **does not** trap
+> `rdtsc`/`rdtscp`/`rdrand`/`rdseed`/`cpuid`, which are not. Probed on this Zen 5: one
+> SINGLEBLOCK over `mov eax,39; syscall` lands at **syscall+2 with the kernel's return already
+> in rax**; the same probe over `cpuid`/`rdtsc` runs straight through to the `ret`. Three
+> consequences, and they are the whole increment:
+>
+> | | |
+> |---|---|
+> | **The syscall boundary is FREE** | The forward pass ALREADY stops immediately after the syscall retires, with the real result in the real registers and the kernel's memory delta already in the real process. F2 adds **no stop**: `sc_pread` 9→2 in-region stops, `sc_loop` 34→10. The perturbation win is kept, not traded for fidelity. |
+> | **Nothing is fabricated; there is NO syscall table** | This plan expected a decoder that knows which argument is an output buffer and how many bytes the kernel filled ("a syscall that fills a buffer is the hard case"). **None is needed.** rax/rcx/r11 are read from the real boundary snapshot; the kernel's MEMORY delta is delivered by the per-boundary ground-truth re-snapshot **F1 already performs**. There is zero per-syscall knowledge in the tier. |
+> | **No memory is injected — structurally** | Because the syscall **terminates** the block, no replayed instruction runs after it, so Unicorn's stale memory can never be read; the next block is seeded from the post-syscall snapshot. This matters because the coherence canary compares **registers only** — it has no memory comparison. F2's answer is not to add a witness but to **leave nothing to witness**. Exposure is zero by construction, not by checking. |
+>
+> **THE PLAN'S "reuse asmspy's syscall decoder" PREMISE DOES NOT HOLD, and did not need to.**
+> asmspy's decoder is a NUMBER→name table plus a path-argument formatter **for display**
+> ([cli/gen-syscall-names.sh](../../../cli/gen-syscall-names.sh)); it has no model of output
+> buffers, which is the only thing record-and-inject would have needed from it. It is also in
+> `cli/`, which ships no such surface. Nothing was reused, and the tier is **safer** for it: a
+> per-syscall table is exactly the fabrication surface this tier exists to avoid.
+>
+> **WHAT IS SUPPORTED vs GATED — a hardware boundary, not a preference.**
+> - **Supported (injected):** `syscall` and `int 0x80`, *any* number — including ones that fill a
+>   buffer (`pread`), ones whose result is consumed (`getppid`), and the plan's own named example
+>   `clock_gettime`. The tier never looks at the syscall number.
+> - **Gated to single-step:** `rdtsc`/`rdtscp`/`rdrand`/`rdseed`/`cpuid`/`sysenter`. **Not an
+>   oversight and not a decode gap**: BTF gives no boundary at which their retired value could be
+>   recorded, so record-and-inject has nothing to record. Reaching them needs a different
+>   **primitive** — a hardware exec breakpoint at the site (the DR0-3 plumbing F3 already
+>   landed), or single-stepping to it — which is the natural **increment 2**, and is why this
+>   plan's "same treatment for rdtsc/rdrand/cpuid" bullet is *deferred rather than done*.
+> - **Refused at runtime:** a syscall that does not return to the next instruction. `execve` is
+>   the reachable case (the address space is replaced) and it **truncates**.
+>
+> **F2 DISPLACES ONLY ONE OF THE TWO CALLERS OF THE FALLBACK**, exactly as F1's author flagged.
+> `!scan.pure` is now lifted for the syscall half; `!scan.replayable` (a VEX/EVEX encoding no
+> released Unicorn executes) is **untouched and unrelated** — record-and-inject cannot give
+> Unicorn a decoder it does not have. An impure AVX region is still single-stepped.
+>
+> **"UC_ERR_OK" PROVES NOTHING — MEASURED AGAIN, ON NEW INSTRUCTIONS.** Unicorn **executes**
+> `syscall` and returns `UC_ERR_OK`, simply advancing rip with rax still holding the syscall
+> NUMBER; **executes** `rdtsc` returning a FABRICATED counter (`0x132f2_1638543f`); **executes**
+> `cpuid` returning zeros. Only `rdrand` faults. So `step_block` decodes at its **own pc** and
+> refuses — a defence deliberately NOT sharing region_scan's answer, which is F1's central
+> lesson applied: region_scan is a linear sweep that **desyncs on a constant-pool island** (its
+> own `island` fixture proves it), so an impurity hidden behind one is invisible to it, and the
+> gate would pass the instruction through *and* remove the scan-derived witness.
+>
+> **THE INJECTION IS THREE REGISTERS, AND THE CANARY STILL SEES THE REST.** Only rax/rcx/r11
+> (rax alone for `int 0x80` — measured: an interrupt gate leaves rcx/r11 untouched) and rip.
+> Those are necessarily **tautological** at the syscall boundary — compared against the snapshot
+> they were copied from — and that is stated rather than glossed. Every *other* register, rsp and
+> the arithmetic flags remain genuinely checked, so the canary still validates the block's whole
+> pure prefix. **r11 cannot be computed honestly**: measured, it returns as the pre-syscall
+> rflags OR'd with **TF (0x100)** — the ptrace stepping bit — so "computing" it would mean
+> modelling the debug mechanism's own perturbation of the value it reports.
+>
+> **THE TRACE RECORDS THE SYSCALL'S DEF, which it otherwise could not.** Measured: the shared
+> operand enumerator reports `syscall`/`int 0x80` as touching **no registers at all** (0 reads, 0
+> writes) — Capstone models the instruction, not the ABI. So the kernel's result would never
+> appear in the value trace, and the L1 def-use edge from a `read()` to its consumer could not
+> exist. `open_step` supplies the architectural write set producer-locally, on the ONE path both
+> value sources share, so the oracle and the replay grow identical records automatically.
+>
+> **MUTATION-PROVEN — 8 mutants, each caught by the checks claiming that capability.** Boundary
+> rule → check 72 *(and the detail is the point: unguarded, `execve` reports **injected=1** — a
+> fabricated injection for a syscall that never returned. The capture still truncated, but only
+> via the canary, by downstream accident — the LOW-6 pattern F1's review named. The guard turns
+> an accidental catch into an explicit refusal.)*; per-step decode → the `blind_rdtsc` NC only
+> *(a fixture that overwrites **both** of rdtsc's outputs so the canary is blind — a naive one
+> would have been saved by the canary and proved nothing)*; syscall write set → 6; `int 0x80`
+> forging rcx/r11 defs → exactly 53; `injectable` settled at the first impurity → **exactly 14**;
+> F2's gate reverted to F1's → 10; rcx/r11 uninjected → 4; one-shot injection → `sc_loop`.
+>
+> **THE ORACLE CONSTRAINT WORTH INHERITING.** The byte-identical oracle captures the region in
+> **two separate forked tracees**, so it can only judge a syscall whose result is the same in
+> both — which rules out `getpid` and, notably, **`clock_gettime`, this plan's own example**.
+> Hence `getppid` (returns the *test's* pid: equal in both children AND externally checkable) and
+> `pread` with an **explicit offset** into a seeded `memfd` (immune to the shared file offset the
+> two children inherit — a plain `read()` would have given the second child different bytes and
+> silently broken the oracle rather than the code). `clock_gettime` is covered by a **second
+> oracle that needs no determinism**: the replay's recorded LOAD value vs the REAL tracee's own
+> returned rax from the same capture — independent sources, agreeing iff the replay's
+> post-syscall memory matched reality. That is also the answer to "no memory comparison in the
+> canary".
+>
+> **KNOWN LIMITS (what the fixtures cannot produce).** (1) No fixture uses a **blocking** syscall
+> (futex/poll/read-on-empty-pipe); the boundary arrives after the syscall returns either way, but
+> it is not demonstrated — and `futex` is where the concurrency residual actually bites, since a
+> wake means a sibling changed memory the boundary snapshot may not reflect. (2) A kernel write
+> **outside the replay's stack window** (heap/mmap) is memory the guest never mapped — this is
+> **F1's scope, inherited, not introduced by F2** — and is now *proven* to fail closed rather than
+> assumed to (`sc_pread_heap`: the replay truncates; the same region single-steps to the correct
+> value, so the truncation is attributable to the memory scope and not to a broken fixture).
+> (3) No multi-threaded/concurrent-memory fixture — the plan's stated residual, unchanged.
+>
+> **Carryover:** increment 2 — `rdtsc`/`cpuid`/`rdrand` via a hardware exec breakpoint at the
+> impure site (per-BLOCK rather than per-REGION gating), which would let a region with a `rdtsc`
+> on a cold path keep the replay for every other block. F5 inherits all of this tiering.
 
 > **F1 increment 2 does not change what F2 must do**, and is worth reading before starting it for
 > three reasons. (1) The **single-step fallback F2 exists to displace now has two callers**, not
@@ -285,6 +394,17 @@ Let block-step + replay cover **impure** methods too, instead of falling back to
 post-syscall values via injected effects and matches the single-step oracle; the concurrency
 residual (a sibling writing shared memory the region loads, with no syscall to anchor the
 value) is documented as the remaining limit and detected via the real endpoints.
+
+> **MET 2026-07-17 for the syscall half, on both clauses.** `sc_pread` — a `pread64` whose kernel
+> buffer-fill the region then LOADS — replays **byte-identically** to the single-step oracle (9
+> steps, 18 records, raw `memcmp` identical) while cutting in-region stops 9→2; `sc_clock_gettime`
+> replays with the real kernel value, checked by the independent memory oracle since two captures
+> at two different times cannot be byte-compared. A region storing a **sentinel** into the buffer
+> the kernel is about to overwrite makes a stale-snapshot replay return `0x1111111111111111`
+> rather than unpredictable red-zone garbage — so the fixture can distinguish its own failure
+> mode. The concurrency residual is unchanged and documented above; the endpoints still detect it.
+> **`rdtsc`/`rdrand`/`cpuid` are NOT met and are deliberately deferred** — they need a hardware
+> exec breakpoint, not a decoder (BTF does not trap them; measured).
 
 ---
 
@@ -635,7 +755,9 @@ least the native path in their pinned toolchain images.
 > question first (it is the only real unknown left, and a NO-GO there scopes F4 to launched
 > targets rather than killing it), then wire triples → `asmtest_gcmove_canonicalize` →
 > `asmtest_defuse_build`. After F4, **F7** (bindings) is the cheapest remaining item and is
-> pure software; **F2** extends F1's replay to impure methods; **F6** is scope-gated; **F5**
+> pure software; ~~**F2** extends F1's replay to impure methods~~ (**increment 1 LANDED** — the
+> syscall half; increment 2, rdtsc/cpuid via a hw exec breakpoint, is the open remainder);
+> **F6** is scope-gated; **F5**
 > waits on silicon this project does not have.
 >
 > The original recommendation is retained below for provenance.
