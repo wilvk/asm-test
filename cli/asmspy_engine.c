@@ -615,6 +615,13 @@ typedef struct {
     int pending_call; /* graph engine: an INDIRECT call awaits its callee entry */
     uint64_t
         call_site; /* graph engine: call-site addr of that pending call     */
+    /* What that call PROMISED, captured AT the call site. The next stop is its
+     * callee entry only if BOTH hold there — and a signal delivered before the
+     * call retired lands the next stop on a handler entry, where NEITHER does.
+     * See call_pend_at_callee: this is what makes the resolution a verified
+     * fact rather than an assumption about wherever the next step landed. */
+    uint64_t pend_ret; /* [rsp] at the callee entry = call site + insn length */
+    uint64_t pend_sp;  /* rsp at the callee entry   = call-site rsp - 8       */
     /* tree engine: the thread's live call stack. Depth is stk_n — NOT a counter
      * incremented on call and decremented on ret; see frm_unwind for why that
      * distinction is the whole point. */
@@ -689,6 +696,8 @@ static thr_t *thr_get(thr_tab_t *t, pid_t tid) {
     memset(&e->entry, 0, sizeof e->entry);
     e->pending_call = 0;
     e->call_site = 0;
+    e->pend_ret = 0;
+    e->pend_sp = 0;
     e->stk = NULL;
     e->stk_n = e->stk_cap = 0;
     e->focus_depth = ASMSPY_TF_NO_FOCUS;
@@ -751,6 +760,81 @@ static void frm_push(thr_t *t, uint64_t ret, uint64_t sp) {
 static void frm_unwind(thr_t *t, uint64_t rsp) {
     while (t->stk_n > 0 && rsp > t->stk[t->stk_n - 1].sp)
         t->stk_n--;
+}
+
+/* ---- pending INDIRECT call: arm at the call site, VERIFY at the callee ----
+ *
+ * A `call rax` / `call [rbx+8]` does not carry its target in its bytes, so both
+ * stepping engines resolve it at the NEXT stop and take that stop's rip as the
+ * callee. That inference is wrong at a signal boundary. Single-stepping the call
+ * site does not guarantee the call retires: if a signal is pending, the kernel
+ * delivers it FIRST — nothing executes, the tracee gets a signal-delivery-stop
+ * still at the call site, and the stop after that is the HANDLER's entry. The
+ * old code attributed that entry to the call, fabricating a caller -> handler
+ * edge that the target never executed. (The call is not lost: sigreturn returns
+ * rip to the call site, the engine re-observes it, and it resolves for real.)
+ *
+ * The cure is to stop inferring. A call site already knows exactly what its call
+ * must produce — a return address of rip + insn_len at rsp - 8 — because
+ * asmtest_disas_probe hands back the instruction length. So record that, and at
+ * the next stop REQUIRE it. This reuses the same insight as the return-address
+ * stack next door: what a call promises is knowable at the call site, and never
+ * has to be guessed from where a step lands.
+ *
+ * Cheaper than decoding the indirect operand (a new disassembler API, plus an
+ * x86 reg-id -> user_regs_struct mapping) and strictly stronger: it validates
+ * the ACTUAL post-call machine state instead of re-deriving a prediction from
+ * registers that the same signal could have changed underneath it. */
+static void call_pend_arm(thr_t *t, uint64_t rip, size_t ilen, uint64_t rsp) {
+    t->pending_call = 1;
+    t->call_site = rip;
+    t->pend_ret = rip + ilen;
+    t->pend_sp = rsp - 8;
+}
+
+/* 1 only if `regs` really is the armed call's callee entry: the call must have
+ * pushed pend_ret and left rsp at pend_sp. A handler entry fails both — the
+ * kernel's signal frame sits ~1KB BELOW pend_sp (past the 128-byte red zone),
+ * and the word at its rsp is the sigreturn trampoline, not our return address.
+ * A failed read is a failed check: never attribute what could not be confirmed. */
+static int call_pend_at_callee(const thr_t *t, pid_t tgid,
+                               const struct user_regs_struct *regs) {
+    if (regs->rsp != t->pend_sp)
+        return 0;
+    uint64_t ra = 0;
+    struct iovec lv = {&ra, sizeof ra};
+    struct iovec rv = {(void *)(uintptr_t)regs->rsp, sizeof ra};
+    if (process_vm_readv(tgid, &lv, 1, &rv, 1, 0) != (ssize_t)sizeof ra)
+        return 0;
+    return ra == t->pend_ret;
+}
+
+/* Test-only lever for the boundary above (ASMSPY_TEST_SIGRACE=<signo>).
+ *
+ * The bug needs a signal to arrive in a ONE-INSTRUCTION window — after the
+ * engine has armed a pending call, before that call retires. Racing a signal
+ * storm against it hits that window only by luck, and a test that only
+ * SOMETIMES reproduces the bug it guards is a test that silently stops testing.
+ * So force it: the tracee is stopped at the call site right now with the pend
+ * armed, so a signal queued HERE is guaranteed to be delivered before the call
+ * executes. That makes the boundary deterministic without faking any of it —
+ * every line of the resolution path under test is the production one; only the
+ * signal's timing is chosen rather than waited for.
+ *
+ * Fires ONCE (latched): one forced race proves the property, and re-arming on
+ * every indirect call would bury it in an unreadable storm. Unset = disabled. */
+static void call_pend_sigrace_inject(pid_t tid, pid_t tgid) {
+    static int signo = -2; /* -2 = unread, -1 = disabled */
+    if (signo == -2) {
+        const char *e = getenv("ASMSPY_TEST_SIGRACE");
+        signo = (e && *e) ? atoi(e) : -1;
+    }
+    if (signo <= 0)
+        return;
+    /* glibc ships no tgkill wrapper; kill(2) would race a recycled pid and
+     * cannot target one THREAD, which is the whole point here. */
+    syscall(SYS_tgkill, (long)tgid, (long)tid, (long)signo);
+    signo = -1; /* latch: exactly one forced race per run */
 }
 
 /* SEIZE every thread of `pid` with `opts` and INTERRUPT each so it stops and can
@@ -2496,26 +2580,36 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
                 struct iovec riov = {(void *)(uintptr_t)rip, sizeof code};
                 ssize_t got = process_vm_readv(tgid, &liov, 1, &riov, 1, 0);
 
-                /* consume a pending INDIRECT call: this rip is its callee entry */
+                /* consume a pending INDIRECT call — but only if this rip is
+                 * CONFIRMED to be its callee entry. A signal delivered before
+                 * the call retired lands this stop on a handler entry, and
+                 * recording that would put an edge the target never executed
+                 * into the call graph (see call_pend_at_callee). */
                 if (ts && ts->pending_call) {
-                    recorded += grecord(&g, ps->syms, &ps->jit, ps->exebase,
-                                        ts->call_site, rip);
+                    if (call_pend_at_callee(ts, tgid, &regs))
+                        recorded += grecord(&g, ps->syms, &ps->jit, ps->exebase,
+                                            ts->call_site, rip);
                     ts->pending_call = 0;
                 }
 
-                if (got >= 1 && asmtest_disas_available() &&
-                    asmtest_disas_is_call(ASMTEST_ARCH_X86_64, code,
-                                          (size_t)got, 0)) {
+                /* one decode for is_call AND length: the length is what the
+                 * indirect arm below verifies its callee entry against */
+                int isc = 0;
+                size_t ilen = 0;
+                if (got >= 1 && asmtest_disas_available())
+                    ilen = asmtest_disas_probe(ASMTEST_ARCH_X86_64, code,
+                                               (size_t)got, 0, &isc, NULL);
+                if (isc) {
                     uint64_t tgt = 0;
                     if (asmtest_disas_call_target(ASMTEST_ARCH_X86_64, code,
                                                   (size_t)got, rip, 0, &tgt)) {
                         /* DIRECT call: target known now — record immediately */
                         recorded += grecord(&g, ps->syms, &ps->jit, ps->exebase,
                                             rip, tgt);
-                    } else if (ts) {
-                        /* INDIRECT call: resolve the callee at the next step */
-                        ts->pending_call = 1;
-                        ts->call_site = rip;
+                    } else if (ts && ilen) {
+                        /* INDIRECT call: arm, and VERIFY at the next stop */
+                        call_pend_arm(ts, rip, ilen, regs.rsp);
+                        call_pend_sigrace_inject(tid, tgid);
                     }
                 }
 
@@ -2755,16 +2849,25 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
                                                &ts->focus_depth);
                 }
 
-                /* a pending INDIRECT call resolves at its callee entry (= rip).
+                /* a pending INDIRECT call resolves at its callee entry — but
+                 * ONLY once this stop is CONFIRMED to be that entry. A signal
+                 * delivered before the call retired lands here on a handler
+                 * entry instead; attributing that to the call invents a
+                 * caller -> handler edge (see call_pend_at_callee). Drop it
+                 * instead: sigreturn puts rip back on the call site and the
+                 * call is re-armed and resolved for real.
+                 *
                  * Its frame was pushed at the call site, so the CALLER's depth
                  * is stk_n-1. `emitted` counts SURVIVING lines, but the frame
                  * push is unconditional: the stack tracks the target's real
                  * control flow, never the filtered view of it. */
                 if (ts && ts->pending_call) {
-                    int d = ts->stk_n ? (int)ts->stk_n - 1 : 0;
-                    emitted +=
-                        tree_emit(sink, ctx, multi, tid, ps->syms, &ps->jit,
-                                  rip, d, filter, &ts->focus_depth);
+                    if (call_pend_at_callee(ts, tgid, &regs)) {
+                        int d = ts->stk_n ? (int)ts->stk_n - 1 : 0;
+                        emitted +=
+                            tree_emit(sink, ctx, multi, tid, ps->syms, &ps->jit,
+                                      rip, d, filter, &ts->focus_depth);
+                    }
                     ts->pending_call = 0;
                 }
 
@@ -2789,9 +2892,12 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
                         emitted +=
                             tree_emit(sink, ctx, multi, tid, ps->syms, &ps->jit,
                                       tgt, d, filter, &ts->focus_depth);
-                    } else {
-                        ts->pending_call = 1; /* indirect: resolve next step */
-                        ts->call_site = rip;
+                    } else if (ilen) {
+                        /* indirect: arm, and VERIFY at the next stop. Without a
+                         * length there is nothing to verify against, so leave
+                         * it unarmed rather than attribute on a guess. */
+                        call_pend_arm(ts, rip, ilen, regs.rsp);
+                        call_pend_sigrace_inject(tid, tgid);
                     }
                 }
             }

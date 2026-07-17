@@ -81,7 +81,8 @@ CLPID=""
 IVPID=""
 SKPID=""
 LJPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
+SGPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} ${SGPID:+"$SGPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -676,6 +677,97 @@ printf '%s\n' "$ljout" | grep -qE '^-> after_jump \[' \
 printf '%s\n' "$ljout" | grep -qE '^ +-> after_jump \[' \
     && fail "longjmp: after_jump ALSO appears indented — the depth drifted after a longjmp"
 echo "  nesting tracked (jump_out at depth 2) AND after_jump back at depth 0"
+
+# ---------------------------------------------------------------------------
+# INDIRECT-CALL ATTRIBUTION AT A SIGNAL BOUNDARY (asmspy-plan Theme C)
+# ---------------------------------------------------------------------------
+# A `call *reg` carries no target in its bytes, so both stepping engines resolve
+# it at the NEXT stop. Stepping the call site does not guarantee the call RETIRES:
+# a signal pending at that moment is delivered first, and the stop after it is the
+# HANDLER's entry. Taking that as the callee fabricates a caller -> handler edge
+# the target never executed.
+#
+# The window is one instruction wide, so a signal storm hits it only by luck — and
+# a test that only sometimes reproduces the bug it guards silently stops testing.
+# ASMSPY_TEST_SIGRACE=<signo> makes it deterministic instead: the engine queues one
+# signal while the tracee is stopped AT the call site with the pend armed, so the
+# kernel must deliver it before the call executes. Only the signal's TIMING is
+# chosen; every line of the resolution path under test is the production one.
+#
+# Three names, three separate things that must be true (each covers a way the
+# other two could pass while testing nothing):
+#   * indirect_target present  => the real edge SURVIVES. Guards against a "fix"
+#                                 that just drops indirect calls, and against a
+#                                 run that never traced the loop at all.
+#   * handler_helper present   => the injected signal really WAS delivered and the
+#                                 handler really ran under the tracer. Without it
+#                                 the sig_handler_fn assertion below would pass on
+#                                 a run where no race ever happened.
+#   * sig_handler_fn ABSENT    => the payload. Nothing CALLS the handler, so an
+#                                 edge into it can only be the fabrication.
+echo "--- asmspy --tree: indirect call racing a signal (forced) ---"
+"$BUILD/sigcall_victim" 2>/dev/null &
+SGPID=$!
+sleep 1
+set +e
+sgout=$(ASMSPY_TEST_SIGRACE=10 timeout 60 "$ASM" --tree "$SGPID" 40 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--tree on sigcall_victim hung"
+printf '%s\n' "$sgout" | head -5
+# the forced race really happened: the handler ran under the tracer
+printf '%s\n' "$sgout" | grep -q -- '-> handler_helper \[' \
+    || fail "sigrace: handler_helper absent — the injected signal was never delivered, so the sig_handler_fn check below would be vacuous"
+# the real edge survived the race (sigreturn re-runs the call site; it re-resolves)
+printf '%s\n' "$sgout" | grep -q -- '-> indirect_target \[' \
+    || fail "sigrace: indirect_target absent — indirect calls are not being attributed AT ALL (a fix that drops them is not a fix)"
+# THE PAYLOAD: the handler entry must never be attributed to the call site
+printf '%s\n' "$sgout" | grep -q -- '-> sig_handler_fn' \
+    && fail "sigrace: caller -> sig_handler_fn edge FABRICATED — the pending indirect call resolved against a signal handler's entry instead of its callee"
+echo "  handler ran + indirect_target attributed, and NO caller -> sig_handler_fn edge"
+
+# Control: with the lever OFF, nothing in sigcall_victim raises a signal at all.
+# handler_helper must therefore VANISH — which is what proves the run above was
+# testing an injected race rather than passing because the trace was empty.
+echo "--- asmspy --tree: same victim, NO injection (control) ---"
+set +e
+sgc=$(timeout 60 "$ASM" --tree "$SGPID" 40 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--tree on sigcall_victim (control) hung"
+printf '%s\n' "$sgc" | grep -q -- '-> indirect_target \[' \
+    || fail "sigrace control: indirect_target absent — the victim is not being traced"
+printf '%s\n' "$sgc" | grep -q -- '-> handler_helper' \
+    && fail "sigrace control: handler_helper appeared with the lever OFF — a signal arrived from somewhere else, so the injected run proves nothing about injection"
+echo "  no injection => no handler activity (the lever is the only signal source)"
+
+# The GRAPH engine resolves pending indirect calls the same way and needs the same
+# proof. Here the bogus edge is not a name but a COUNT: the handler legitimately
+# appears as a CALLER (it calls handler_helper), so grepping for its name would
+# always match. `invocations` counts exactly "was recorded as a CALLEE" — which is
+# precisely the bug — so it must be 0 for the handler and nonzero for the others.
+echo "--- asmspy --graph: indirect call racing a signal (forced) ---"
+set +e
+sgg=$(ASMSPY_TEST_SIGRACE=10 timeout 90 "$ASM" --graph "$SGPID" 60 --json 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--graph on sigcall_victim hung"
+[ "$rc" -eq 0 ] || fail "--graph on sigcall_victim exited rc=$rc"
+# invocations of node $1 in the --graph JSON, empty if the node is absent
+ginv() {
+    printf '%s' "$sgg" |
+        grep -o "\"name\":\"$1\"[^}]*\"invocations\":[0-9]*" |
+        sed 's/.*"invocations"://'
+}
+gt=$(ginv indirect_target); gh=$(ginv handler_helper); gs=$(ginv sig_handler_fn)
+echo "  invocations: indirect_target=${gt:-absent} handler_helper=${gh:-absent} sig_handler_fn=${gs:-absent}"
+[ -n "$gt" ] && [ "$gt" -gt 0 ] \
+    || fail "sigrace graph: indirect_target has no invocations — the indirect call was never recorded, so the handler check below would be vacuous"
+[ -n "$gh" ] && [ "$gh" -gt 0 ] \
+    || fail "sigrace graph: handler_helper has no invocations — the injected signal was never delivered, so the handler check below would be vacuous"
+[ -z "$gs" ] || [ "$gs" -eq 0 ] \
+    || fail "sigrace graph: sig_handler_fn recorded as a CALLEE ($gs invocations) — a call-graph edge into a signal handler that nothing calls"
+echo "  handler never recorded as a callee (graph engine verifies the same way)"
+kill -9 "$SGPID" 2>/dev/null || true
+wait "$SGPID" 2>/dev/null || true
+SGPID=""
 
 # ---------------------------------------------------------------------------
 # EXEC-STOP RE-RESOLUTION (asmspy-plan Theme B): PTRACE_O_TRACEEXEC
