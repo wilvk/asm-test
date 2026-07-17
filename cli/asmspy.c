@@ -3985,7 +3985,8 @@ static int syms_sample_hot(pid_t pid, const asmspy_symtab_t *t,
     asmspy_autocand_t stackc[AUTO_MAX_CANDS];
     asmspy_autocand_t *cands = stackc;
     size_t cap = AUTO_MAX_CANDS;
-    if (snap.n > cap) { /* size by edge count so the fold can't drop a late symbol */
+    /* size by edge count so the fold can't drop a late symbol */
+    if (snap.n > cap) {
         asmspy_autocand_t *heap = malloc(snap.n * sizeof *heap);
         if (heap) {
             cands = heap;
@@ -4021,7 +4022,8 @@ static int syms_sort_cmp(const void *a, const void *b) {
     size_t i = *(const size_t *)a, j = *(const size_t *)b;
     const asmspy_sym_t *si = &syms_sort_tab->v[i], *sj = &syms_sort_tab->v[j];
     if (syms_sort_key == SYMS_SORT_HOT) {
-        unsigned long long ai = syms_sort_arrivals[i], aj = syms_sort_arrivals[j];
+        unsigned long long ai = syms_sort_arrivals[i],
+                           aj = syms_sort_arrivals[j];
         if (ai != aj)
             return ai < aj ? 1 : -1; /* descending */
     } else if (syms_sort_key == SYMS_SORT_NAME) {
@@ -4029,7 +4031,9 @@ static int syms_sort_cmp(const void *a, const void *b) {
         if (c != 0)
             return c;
     }
-    return si->addr < sj->addr ? -1 : si->addr > sj->addr ? 1 : 0; /* tiebreak */
+    return si->addr < sj->addr   ? -1
+           : si->addr > sj->addr ? 1
+                                 : 0; /* tiebreak */
 }
 
 /* symbol picker (shared by modes 2 and 9); returns 0 and fills the region on
@@ -4053,8 +4057,7 @@ static int screen_syms(pid_t pid, uint64_t *base, size_t *len,
                      AUTO_WINDOW_MS);
             refresh();
             char reason[160];
-            if (syms_sample_hot(pid, t, arrivals, reason, sizeof reason) !=
-                0) {
+            if (syms_sample_hot(pid, t, arrivals, reason, sizeof reason) != 0) {
                 erase();
                 mvprintw(0, 0, "hot-edge sort needs an AMD IBS-Op host — %s",
                          reason);
@@ -4113,7 +4116,8 @@ static int screen_syms(pid_t pid, uint64_t *base, size_t *len,
             getmaxyx(stdscr, rows, cols);
             erase();
             attron(A_BOLD);
-            mvprintw(0, 0, "asmspy — pick a function to trace (pid %d)  [sort: %s]",
+            mvprintw(0, 0,
+                     "asmspy — pick a function to trace (pid %d)  [sort: %s]",
                      (int)pid, syms_sort_label(sortmode));
             attroff(A_BOLD);
             list_render(&L, 1, rows - 3, cols);
