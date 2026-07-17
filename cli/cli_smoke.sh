@@ -1926,6 +1926,51 @@ printf '%s\n' "$wout" | grep -q 'never executed' \
     && fail "--trace: reported NEVER_RAN for a function a worker runs constantly"
 echo "  worker-thread region sampled (no longer NEVER_RAN)"
 
+# ---------------------------------------------------------------------------
+# "never executed" must mean THE REGION DID NOT RUN — not "we failed to look"
+# ---------------------------------------------------------------------------
+# rgn_race_to_entry distinguishes four outcomes (caught / user-quit / idle / gone /
+# unarmable) and asmspy_engine_region used to throw three of them away: a bare
+# `if (rc != 0) break;` then decided everything from `sample == 0`. So a target that
+# EXITED, and an entry we could not ARM, both reported "never executed" — a claim
+# about what the TARGET's code does, inferred from a failure of the TRACER. The
+# unarmable case is the one asmspy.h documents as self-skipping via ETRACE for a
+# W^X-enforced JIT page: that self-skip never happened.
+#
+# Both are asserted DETERMINISTICALLY, no W^X page required:
+#   - an explicit range at an UNMAPPED address cannot be POKETEXT'd => unarmable
+#   - killing the victim while the race waits on a never-re-entered symbol => gone
+# The assertion is the ABSENCE of "never executed" in both — that string is the bug.
+echo "--- asmspy --trace: an unarmable entry is ETRACE, not 'never executed' ---"
+set +e
+uaout=$(timeout 25 "$ASM" --trace "$YPID" 0xdeadbeef000:16 1 2>&1); uarc=$?
+set -e
+[ "$uarc" -eq 124 ] && fail "--trace on an unmappable range hung"
+[ "$uarc" -eq 0 ] && fail "--trace on an unmappable range reported success"
+printf '%s\n' "$uaout" | grep -q 'never executed' \
+    && fail "--trace: an UNARMABLE entry reported 'never executed' — that is a claim about the target drawn from a tracer failure (asmspy.h documents ETRACE here)"
+printf '%s\n' "$uaout" | grep -q 'ptrace/attach failure' \
+    || fail "--trace: an unarmable entry should self-skip via ETRACE, got: $uaout"
+echo "  unarmable entry -> ETRACE (the documented W^X self-skip, now real)"
+
+echo "--- asmspy --trace: a target that EXITS is ENOENT, not 'never executed' ---"
+"$BUILD/attach_victim" >/dev/null 2>&1 &
+GVPID=$!
+sleep 1
+( sleep 1; kill -9 "$GVPID" 2>/dev/null ) &
+set +e
+# main() is entered once, before the attach, so the race is still waiting when the
+# victim dies — the zero-sample path, which is the only one that had to guess.
+gnout=$(timeout 25 "$ASM" --trace "$GVPID" main 1 2>&1); gnrc=$?
+set -e
+[ "$gnrc" -eq 124 ] && fail "--trace hung on a dying target"
+printf '%s\n' "$gnout" | grep -q 'never executed' \
+    && fail "--trace: a target that EXITED reported 'never executed' about its code"
+printf '%s\n' "$gnout" | grep -q 'exited before' \
+    || fail "--trace: a dead target should say so, got: $gnout"
+echo "  target gone -> 'exited before ...' (not a claim about the code)"
+kill "$GVPID" 2>/dev/null || true
+
 # --tid pins the sample to one thread. Pinning to the thread that DOES run the
 # region samples it; pinning to the one that never does must report "never
 # executed" — promptly and without perturbing the busy non-target thread. (This

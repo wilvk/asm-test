@@ -237,15 +237,30 @@ typedef void (*asmspy_region_sink)(void *ctx, unsigned sample_no, long result,
  * captured invocation, until `max` samples, `stop`, or the target exits; detach so
  * the target survives. `only_tid` (0 = any) pins the sample to one thread; it filters
  * the race rather than narrowing the SEIZE, because the shared entry breakpoint would
- * kill an unseized thread that reached it. Returns 0 on clean detach,
- * ASMSPY_REGION_NEVER_RAN if the region was never seen executing, or a negative
- * ASMTEST_PTRACE_* on an attach/availability failure.
+ * kill an unseized thread that reached it. Returns 0 on clean detach (at least one
+ * sample, or the caller's stop flag fired), ASMSPY_REGION_NEVER_RAN if the region was
+ * never seen executing, or a negative ASMTEST_PTRACE_* on an attach/availability
+ * failure.
+ *
+ * Those three are now genuinely distinguished, which they were NOT: the engine used to
+ * decide from `sample == 0` alone, so a target that EXITED and an entry we could not
+ * ARM both reported "never executed" — a claim about the target inferred from a
+ * failure of the tracer. Zero samples now returns ASMTEST_PTRACE_ETRACE when the entry
+ * was unarmable, ASMTEST_PTRACE_ENOENT when the target went away, and NEVER_RAN only
+ * when we really did watch and nothing came.
+ *
+ * The wait for an arrival is BOUNDED twice, and both are load-bearing: an idle window
+ * (RGN_ENTRY_WAIT_MS) for the common "the region is quiet" case, and a CLOCK_MONOTONIC
+ * WALL bound (RGN_ENTRY_WALL_MS) because the idle counter resets on every event — so a
+ * target that keeps stopping for other reasons (a 1 Hz timer, a chatty clone, a JIT's
+ * own traps) would otherwise reset it forever and block indefinitely.
  *
  * Worker threads ARE covered (asmspy-plan Theme B): a function that runs only off the
  * leader — as managed methods almost always do — is sampled like any other. A
  * genuinely W^X-enforced JIT page refuses the POKETEXT entry breakpoint and self-skips
  * via ASMTEST_PTRACE_ETRACE (no DR0 fallback here yet, the same gap the data-flow tier
- * carries) rather than being traced wrong. */
+ * carries) rather than being traced wrong — which is now TRUE: that path previously
+ * returned NEVER_RAN, so the documented self-skip never happened. */
 int asmspy_engine_region(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
                          long max, atomic_bool *stop, asmspy_region_sink sink,
                          void *ctx);

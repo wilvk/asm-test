@@ -1463,6 +1463,16 @@ static int cmd_trace(pid_t pid, const char *sym, pid_t only_tid, long n) {
                     "  sample window — try a longer run, or a function the "
                     "target actually calls\n",
                     sym, (int)pid);
+    } else if (rc == ASMTEST_PTRACE_ENOENT) {
+        /* The engine returns ENOENT from exactly one place: the target (or the
+         * pinned thread) went away before we saw the region run. Say THAT. The
+         * generic strerror for this code is "region/symbol not found" — true of the
+         * library's other users, and actively misleading here, where the symbol was
+         * resolved fine and it is the process that stopped existing. Until this
+         * fix the same case reported "never executed", which was worse still: a
+         * claim about what the code does, drawn from the target's death. */
+        fprintf(stderr, "pid %d exited before %s was seen executing\n",
+                (int)pid, sym);
     } else if (rc != 0) {
         char e[128];
         asmspy_strerror(rc, e, sizeof e);

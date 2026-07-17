@@ -29,6 +29,7 @@
 #include <sys/uio.h>
 #include <sys/user.h>
 #include <sys/wait.h>
+#include <time.h> /* CLOCK_MONOTONIC: the entry-wait wall bound */
 #include <unistd.h>
 
 #include "asmspy.h"
@@ -2219,6 +2220,47 @@ static void rgn_disarm_entry(thr_tab_t *tab, int hw, pid_t only_tid,
 #define RGN_ENTRY_WAIT_MS 3000
 #define RGN_POLL_US       200
 
+/* The wait is ALSO bounded in WALL time, and that is not redundant with the idle
+ * rule above — it is the only thing that makes this a bound at all.
+ *
+ * `idle_us` resets to 0 on EVERY waitpid event, before every handler: a clone, a
+ * group-stop, a forwarded signal, the target's own SIGTRAP. So it ceilings ONE
+ * uninterrupted quiet spell, never the wait. A target that stops for any other
+ * reason more often than RGN_ENTRY_WAIT_MS — a 1 Hz timer, a chatty clone, a JIT
+ * tripping its own traps — resets the budget forever and --trace blocks
+ * indefinitely on a region that is never arriving. A bound whose whole job is to
+ * bound must not be resettable by the thing it is bounding.
+ *
+ * Both rules are kept, because they answer different questions and the honest
+ * answer differs: idle => "the region is quiet" (the fast, common case); wall =>
+ * "we waited this long and it never came". 30 s is deliberately ~10x the idle
+ * window — it is a backstop for the pathological target, not a second opinion on
+ * the quiet one, and a --trace that legitimately needs longer than 30 s to see one
+ * arrival wanted a different tool. Mirrors DFP_ENTRY_WAIT_MS in the data-flow
+ * producer (src/dataflow_ptrace.c), which had the identical hazard. */
+#define RGN_ENTRY_WALL_MS 30000
+
+/* rgn_race_to_entry's outcomes. Named because the caller USED to discard them —
+ * a bare `if (rc != 0) break;` then decided everything from sample==0, so "the
+ * region did not run", "the target exited" and "we could not arm the breakpoint"
+ * all rendered as "never executed". Three different facts, three different things
+ * for an operator to do. */
+#define RGN_RACE_CAUGHT 0    /* a thread reached the entry (*entering set)   */
+#define RGN_RACE_QUIT   1    /* the user's stop flag fired                   */
+#define RGN_RACE_IDLE   2    /* nobody arrived within the bounds above       */
+#define RGN_RACE_EGONE  (-1) /* the target (or the pinned thread) is gone  */
+#define RGN_RACE_EUNARMABLE                                                    \
+    (-2) /* the entry could not be armed (W^X / DR)    */
+
+/* Milliseconds since `t0` on CLOCK_MONOTONIC — immune to settimeofday/NTP, which a
+ * CLOCK_REALTIME deadline would let jump the bound in either direction. */
+static long rgn_elapsed_ms(const struct timespec *t0) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (now.tv_sec - t0->tv_sec) * 1000L +
+           (now.tv_nsec - t0->tv_nsec) / 1000000L;
+}
+
 /* Race the target's threads to the region entry, arming whichever primitive fits:
  *
  *   only_tid == 0 — a SHARED int3 at `base` planted through `planter` (any stopped
@@ -2245,11 +2287,18 @@ static int rgn_race_to_entry(thr_tab_t *tab, pid_t planter, uint64_t base,
     const int hw = (only_tid != 0);
     long orig = 0;
 
+    /* An ARM failure is NOT "the region did not run" — it is "we could not watch
+     * for it", and the two send an operator to opposite places. This is the exact
+     * case asmspy.h:245-248 documents as self-skipping via ASMTEST_PTRACE_ETRACE:
+     * a genuinely W^X-enforced JIT page refuses the POKETEXT. It never did — the
+     * caller flattened this -1 into sample==0 and reported "never executed", i.e.
+     * it told you a region that may be executing constantly does not run. Hence a
+     * DISTINCT code the caller can honour. */
     if (hw) {
         if (rgn_hw_bp_arm(only_tid, base) != 0)
-            return -1;
+            return RGN_RACE_EUNARMABLE;
     } else if (rgn_plant_bp(planter, base, &orig) != 0) {
-        return -1;
+        return RGN_RACE_EUNARMABLE;
     }
 
     /* Release every thread we are holding into the race. A thread we already let run
@@ -2263,17 +2312,26 @@ static int rgn_race_to_entry(thr_tab_t *tab, pid_t planter, uint64_t base,
     }
 
     unsigned long idle_us = 0;
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     for (;;) {
         if (stop && atomic_load(stop)) {
             rgn_disarm_entry(tab, hw, only_tid, base, orig);
-            return 1;
+            return RGN_RACE_QUIT;
+        }
+        /* THE WALL BOUND, checked unconditionally — including on the paths that
+         * reset idle_us below. A busy-but-never-arriving target keeps this loop
+         * fed with events forever, and the idle rule alone would never fire. */
+        if (rgn_elapsed_ms(&t0) >= RGN_ENTRY_WALL_MS) {
+            rgn_disarm_entry(tab, hw, only_tid, base, orig);
+            return RGN_RACE_IDLE;
         }
         int st = 0;
         pid_t w = waitpid(-1, &st, __WALL | WNOHANG);
         if (w == 0) { /* nothing ready: the target is running free */
             if (idle_us >= (unsigned long)RGN_ENTRY_WAIT_MS * 1000UL) {
                 rgn_disarm_entry(tab, hw, only_tid, base, orig);
-                return 2;
+                return RGN_RACE_IDLE;
             }
             struct timespec nap = {0, RGN_POLL_US * 1000};
             nanosleep(&nap, NULL);
@@ -2283,18 +2341,18 @@ static int rgn_race_to_entry(thr_tab_t *tab, pid_t planter, uint64_t base,
         if (w < 0) {
             if (errno == EINTR)
                 continue;
-            return -1; /* ECHILD: target gone, the bp died with it */
+            return RGN_RACE_EGONE; /* ECHILD: target gone, the bp died with it */
         }
         idle_us = 0; /* something happened: the target is alive and moving */
 
         if (WIFEXITED(st) || WIFSIGNALED(st)) {
             thr_del(tab, w);
             if (tab->n == 0)
-                return -1; /* target gone */
+                return RGN_RACE_EGONE; /* target gone */
             if (hw && w == only_tid) {
                 /* The pinned thread died: nothing can arrive. Report idle rather
                  * than poll out the full window. */
-                return 2;
+                return RGN_RACE_IDLE;
             }
             continue;
         }
@@ -2347,9 +2405,9 @@ static int rgn_race_to_entry(thr_tab_t *tab, pid_t planter, uint64_t base,
                 else
                     rgn_remove_bp(w, base, orig);
                 if (!hw && !rgn_rewind_from_bp(w, base))
-                    return -1;
+                    return RGN_RACE_EGONE; /* rewind failed: it died under us */
                 *entering = w; /* stays marked stopped: the caller steps it */
-                return 0;
+                return RGN_RACE_CAUGHT;
             }
             /* Not our breakpoint. The target's OWN int3/hardware bp is delivered so
              * its signal machinery runs as it would untraced; anything else (a stray
@@ -2478,19 +2536,27 @@ int asmspy_engine_region(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
      * left stopped at the region exit, so it plants the next round. */
     pid_t planter = tab.v[0].tid;
     unsigned sample = 0;
-    int idle = 0; /* consecutive rounds that produced NO sample */
+    int idle = 0;               /* consecutive rounds that produced NO sample */
+    int last = RGN_RACE_CAUGHT; /* why the loop ended — see below */
     while ((max < 0 || (long)sample < max) && !(stop && atomic_load(stop))) {
         pid_t entrant = 0;
         int rc =
             rgn_race_to_entry(&tab, planter, base, only_tid, stop, &entrant);
-        /* rc: 0 = entrant caught; 1 = user quit; 2 = region idle for the whole
-         * wait window; -1 = target gone / entry unarmable. Only 0 continues. A 2
-         * ends sampling rather than retrying: the round already waited longer than
-         * the pre-Theme-B engine's entire give-up budget, so retrying would only
-         * delay an honest "it isn't running" (and, with samples already taken, the
-         * region has simply gone quiet). */
-        if (rc != 0)
+        /* Only CAUGHT continues. IDLE ends sampling rather than retrying: the round
+         * already waited longer than the pre-Theme-B engine's entire give-up budget,
+         * so retrying would only delay an honest "it isn't running" (and, with
+         * samples already taken, the region has simply gone quiet).
+         *
+         * KEEP the reason. This used to be a bare `break` that dropped rc on the
+         * floor, after which sample==0 alone decided the answer — so "the region did
+         * not run", "the target exited" and "we could not ARM the entry" all came
+         * out as ASMSPY_REGION_NEVER_RAN. The last of those is the W^X/JIT case
+         * asmspy.h promises self-skips via ETRACE, and it reported that a region
+         * which may be executing constantly never ran. */
+        if (rc != RGN_RACE_CAUGHT) {
+            last = rc;
             break;
+        }
 
         asmtest_trace_t *tr = asmtest_trace_new(8192, 512);
         asmtest_descent_t *dsc =
@@ -2527,12 +2593,29 @@ int asmspy_engine_region(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
 
     free(code);
     rgn_detach_all(&tab, base);
-    /* Detached cleanly but never saw the region run (and the user didn't quit).
-     * Since the race now covers every thread, this no longer means "it ran on a
-     * worker" — it means the region genuinely did not execute in the sample window. */
-    if (sample == 0 && !(stop && atomic_load(stop)))
+    /* Any sample at all means the region ran; how the LAST round ended is then just
+     * "it went quiet", which is not news. */
+    if (sample > 0 || (stop && atomic_load(stop)))
+        return 0;
+    /* Zero samples: now the reason matters, and each one sends an operator somewhere
+     * different. Report what the race actually observed instead of collapsing all of
+     * it into "never executed". */
+    switch (last) {
+    case RGN_RACE_EUNARMABLE:
+        /* The W^X/JIT case asmspy.h:245-248 documents — we could not plant the
+         * entry breakpoint, so we never got to watch. Saying "never executed" here
+         * is a claim about the TARGET made from a failure of the TRACER. */
+        return ASMTEST_PTRACE_ETRACE;
+    case RGN_RACE_EGONE:
+        /* It exited (or the pinned thread did). Also not "never executed" — we
+         * simply stopped being able to look. */
+        return ASMTEST_PTRACE_ENOENT;
+    default:
+        /* RGN_RACE_IDLE (or a first round that never ran): the race covers every
+         * thread, so this is no longer the "it ran on a worker" case — the region
+         * genuinely did not execute in the window we watched. */
         return ASMSPY_REGION_NEVER_RAN;
-    return 0;
+    }
 }
 
 /* ------------------------------------------------------------------ */
