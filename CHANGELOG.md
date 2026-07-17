@@ -8,6 +8,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`cli/asmspy_ghash.h` + `test_ghash.c` — the graph's hash index gets the
+  collision test its honest-gap note demanded.** The `--graph` engine's
+  open-addressed index shipped with a measured blind spot: a probe loop that
+  trusts the hash and skips the key compare emits byte-identical smoke output,
+  because ≤7-node graphs in a 128-slot table never collide (on a larger graph
+  that mutant silently over-merged an edge). The mechanism now lives in a pure
+  header (`asmspy_gh_find`'s eq callback owns the key compare; the engine's
+  node/edge lookups supply it) and a unit test brute-forces three keys into one
+  slot, so exactly that mutant fails. Mutation-proven 3/3 (measured):
+  accept-first-slot → 5 FAILs, idx-not-idx+1 slot encoding → 3 FAILs,
+  grow-without-rehash → 1 FAIL. Engine behavior unchanged (`make docker-cli`
+  PASS, `--graph` uniqueness e2e included).
+
 - **asmspy TUI symbol picker (modes 2 and 9) gains a `Tab`-cycle sort: address ->
   hot edges -> name.** The picker used to be a flat, address-ordered list with no way
   to find "what's actually running" short of guessing a name to filter by. **Hot

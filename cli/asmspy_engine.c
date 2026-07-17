@@ -2948,49 +2948,37 @@ typedef struct {
 /* the longer a trace usefully runs, the more of each call it spends    */
 /* re-walking its own results.                                          */
 /*                                                                      */
-/* Slots hold `table index + 1`, so 0 means empty and no separate       */
-/* tombstone/occupancy array is needed (nothing is ever deleted from    */
-/* either table). Capacity is a power of two; linear probing; grown at  */
-/* 70% load. On OOM the index is simply left behind and the callers     */
-/* fall back to the linear scan — slower, never wrong.                  */
+/* The mechanism lives in cli/asmspy_ghash.h (slot = index+1 so 0 is empty,  */
+/* power-of-two cap, linear probing, grown at 70% load, index DROPPED on     */
+/* OOM so callers fall back to the linear scan — slower, never wrong), where */
+/* test_ghash.c forces the collisions these graphs are too small to produce. */
 /* ------------------------------------------------------------------ */
-typedef struct {
-    uint32_t *slot;
-    size_t cap; /* power of two; 0 = unallocated (callers scan linearly) */
-} ghash_t;
-
-/* splitmix64 finalizer: cheap, and mixes the low bits that matter here —
- * node keys are function addresses, whose low bits are alignment zeros. */
-static uint64_t gh_mix(uint64_t x) {
-    x += 0x9E3779B97F4A7C15ULL;
-    x = (x ^ (x >> 30)) * 0xBF58476D1CE4E5B9ULL;
-    x = (x ^ (x >> 27)) * 0x94D049BB133111EBULL;
-    return x ^ (x >> 31);
-}
-
-/* Insert `idx` under hash `h64`. The caller must already have established that
- * the key is absent (it just probed for it). No-op if the index is unallocated. */
-static void gh_put(ghash_t *h, uint64_t h64, size_t idx) {
-    if (!h->cap)
-        return;
-    size_t m = h->cap - 1, i = (size_t)(h64 & m);
-    while (h->slot[i])
-        i = (i + 1) & m;
-    h->slot[i] = (uint32_t)(idx + 1);
-}
+#include "asmspy_ghash.h"
 
 typedef struct {
     asmspy_gnode_t *node;
     size_t nn, ncap;
-    ghash_t nidx; /* node addr -> node index */
+    asmspy_ghash_t nidx; /* node addr -> node index */
     gedge_t *edge;
     size_t ne, ecap;
-    ghash_t eidx; /* (caller,callee) -> edge index */
+    asmspy_ghash_t eidx; /* (caller,callee) -> edge index */
 } graph_t;
 
 /* Hash of a node's key (its resolved address). */
-static uint64_t gh_node_hash(const graph_t *g, size_t i) {
-    return gh_mix(g->node[i].addr);
+static uint64_t gh_node_hash(const void *ctx, size_t i) {
+    const graph_t *g = ctx;
+    return asmspy_gh_mix(g->node[i].addr);
+}
+
+/* eq for the node index: is entry k the node whose key (resolved address) is
+ * being sought? Compares the KEY, not the hash. */
+typedef struct {
+    const graph_t *g;
+    uint64_t key;
+} gnode_eq_ctx;
+static int gnode_eq(const void *ctx, size_t k) {
+    const gnode_eq_ctx *c = ctx;
+    return c->g->node[k].addr == c->key;
 }
 
 /* Hash of an edge's key. The two endpoints are mixed SEPARATELY before being
@@ -2998,47 +2986,23 @@ static uint64_t gh_node_hash(const graph_t *g, size_t i) {
  * and every pair summing alike), which would degrade the probe chain to the very
  * linear scan this replaces. */
 static uint64_t gh_edge_hash_kv(size_t caller, size_t callee) {
-    return gh_mix((uint64_t)caller * 0x9E3779B97F4A7C15ULL) ^
-           gh_mix((uint64_t)callee + 0x165667B19E3779F9ULL);
+    return asmspy_gh_mix((uint64_t)caller * 0x9E3779B97F4A7C15ULL) ^
+           asmspy_gh_mix((uint64_t)callee + 0x165667B19E3779F9ULL);
 }
-static uint64_t gh_edge_hash(const graph_t *g, size_t i) {
+static uint64_t gh_edge_hash(const void *ctx, size_t i) {
+    const graph_t *g = ctx;
     return gh_edge_hash_kv(g->edge[i].caller, g->edge[i].callee);
 }
 
-/* Grow the index to hold `n+1` entries below a 70% load factor, re-inserting
- * every live entry. Returns 0 on success (or when no growth is needed), -1 on
- * OOM — after which the index is left EMPTY and the caller scans linearly, so a
- * failure here costs speed, never correctness. */
-static int gh_grow(ghash_t *h, size_t n, const graph_t *g,
-                   uint64_t (*hashof)(const graph_t *, size_t)) {
-    if (h->cap && (n + 1) * 10 < h->cap * 7)
-        return 0;
-    size_t nc = h->cap ? h->cap * 2 : 128;
-    while ((n + 1) * 10 >= nc * 7)
-        nc *= 2;
-    uint32_t *ns = calloc(nc, sizeof *ns);
-    if (!ns) {
-        /* DROP the index rather than keep a stale one. The caller skips its
-         * gh_put when we fail, so the entry it is adding would exist in the
-         * table but not in the index — and the next lookup for that key would
-         * MISS and create a duplicate node/edge. Falling back to the linear
-         * scan (cap == 0) is slow; a silently duplicated node is wrong. */
-        free(h->slot);
-        h->slot = NULL;
-        h->cap = 0;
-        return -1;
-    }
-    free(h->slot);
-    h->slot = ns;
-    h->cap = nc;
-    size_t m = nc - 1;
-    for (size_t k = 0; k < n; k++) {
-        size_t i = (size_t)(hashof(g, k) & m);
-        while (h->slot[i])
-            i = (i + 1) & m;
-        h->slot[i] = (uint32_t)(k + 1);
-    }
-    return 0;
+/* eq for the edge index: is entry k the (caller,callee) pair being sought? */
+typedef struct {
+    const graph_t *g;
+    size_t caller, callee;
+} gedge_eq_ctx;
+static int gedge_eq(const void *ctx, size_t k) {
+    const gedge_eq_ctx *c = ctx;
+    return c->g->edge[k].caller == c->caller &&
+           c->g->edge[k].callee == c->callee;
 }
 
 /* Basename of the target's own executable (for the internal/external split);
@@ -3068,15 +3032,12 @@ static long gnode_get(graph_t *g, const asmspy_symtab_t *syms,
 
     /* indexed lookup; the linear scan is the fallback when the index could not
      * be allocated (correct, just O(n)) */
-    uint64_t h64 = gh_mix(key);
+    uint64_t h64 = asmspy_gh_mix(key);
     if (g->nidx.cap) {
-        size_t m = g->nidx.cap - 1, i = (size_t)(h64 & m);
-        while (g->nidx.slot[i]) {
-            size_t k = g->nidx.slot[i] - 1;
-            if (g->node[k].addr == key) /* compare the KEY, not the hash */
-                return (long)k;
-            i = (i + 1) & m;
-        }
+        gnode_eq_ctx c = {g, key};
+        long k = asmspy_gh_find(&g->nidx, h64, &c, gnode_eq);
+        if (k >= 0)
+            return k;
     } else {
         for (size_t i = 0; i < g->nn; i++)
             if (g->node[i].addr == key)
@@ -3111,10 +3072,10 @@ static long gnode_get(graph_t *g, const asmspy_symtab_t *syms,
         snprintf(e->module, sizeof e->module, "?"); /* row shows [?] */
         e->external = 0;
     }
-    /* index the new node. gh_grow first (it rehashes what is already there and
+    /* index the new node. grow first (it rehashes what is already there and
      * may reallocate), then place this one. */
-    if (gh_grow(&g->nidx, g->nn, g, gh_node_hash) == 0)
-        gh_put(&g->nidx, h64, g->nn);
+    if (asmspy_gh_grow(&g->nidx, g->nn, g, gh_node_hash) == 0)
+        asmspy_gh_put(&g->nidx, h64, g->nn);
     return (long)g->nn++;
 }
 
@@ -3131,16 +3092,8 @@ static int grecord(graph_t *g, const asmspy_symtab_t *syms,
     uint64_t eh = gh_edge_hash_kv((size_t)ci, (size_t)ki);
     long hit = -1;
     if (g->eidx.cap) {
-        size_t m = g->eidx.cap - 1, i = (size_t)(eh & m);
-        while (g->eidx.slot[i]) {
-            size_t k = g->eidx.slot[i] - 1;
-            if (g->edge[k].caller == (size_t)ci &&
-                g->edge[k].callee == (size_t)ki) { /* the KEY, not the hash */
-                hit = (long)k;
-                break;
-            }
-            i = (i + 1) & m;
-        }
+        gedge_eq_ctx c = {g, (size_t)ci, (size_t)ki};
+        hit = asmspy_gh_find(&g->eidx, eh, &c, gedge_eq);
     } else {
         for (size_t i = 0; i < g->ne; i++)
             if (g->edge[i].caller == (size_t)ci &&
@@ -3166,8 +3119,8 @@ static int grecord(graph_t *g, const asmspy_symtab_t *syms,
     g->edge[g->ne].caller = (size_t)ci;
     g->edge[g->ne].callee = (size_t)ki;
     g->edge[g->ne].count = 1;
-    if (gh_grow(&g->eidx, g->ne, g, gh_edge_hash) == 0)
-        gh_put(&g->eidx, eh, g->ne);
+    if (asmspy_gh_grow(&g->eidx, g->ne, g, gh_edge_hash) == 0)
+        asmspy_gh_put(&g->eidx, eh, g->ne);
     g->ne++;
     g->node[ci].out_calls++;
     g->node[ci].fanout++; /* a callee not seen from this caller before */
