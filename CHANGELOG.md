@@ -6,53 +6,6 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Fixed
-
-- **Data-flow `--dataflow`'s call-out step-over lied about WHY it truncated, and two
-  test suites carried assertions that could not fail.** Three small, independently
-  diagnosed defects closed together:
-  - **`dataflow_ptrace.c`'s call-out step-over conflated a BOUND with a FAILURE**
-    (the sibling site to the `--max` fix: `9d55611`/`0129b1e`). Hitting the whole-run
-    step backstop mid-call-out and `dfp_run_to` actually failing shared one `||` and
-    one `DF_PTRACE_ETRACE`, so a region that simply ran a lot of call-outs surfaced as
-    *"ptrace/attach failure (permission? ptrace_scope? … W^X JIT page)"* — sending an
-    operator to Yama/seccomp for a budget, not a bug. The backstop is now its own
-    branch (`DF_PTRACE_OK`, `truncated=true`, same shape `--max` already got right);
-    `dfp_run_to` failing (the callee exited, faulted, or its return byte could not be
-    trapped) keeps `DF_PTRACE_ETRACE`. The 2^20-step backstop is now also overridable
-    via `ASMTEST_DF_STEP_BACKSTOP` (mirroring `ASMTEST_DF_ENTRY_WAIT_MS`), which is
-    what makes the bound reachable in a test at all — a real 2^20-step fixture was
-    exactly the kind of "never exercised, needs 1M hits" gap this codebase already
-    flags elsewhere. A new attach-based test (`test_callout_step_backstop`, needs the
-    attach path's exact `pre_positioned` entry so the trip point is deterministic
-    rather than a coin flip on the fork prologue's step parity) proves it: mutation
-    (reverting the split) turns the check back into ETRACE.
-  - **`test_branchsnap.c`'s multi-exit test asserted `covered(t, 0)` as its entry
-    evidence — vacuously.** `amd_replay` appends block 0 unconditionally
-    (`amd_backend.c:267`), so `covered(t, 0)` is always true by construction; the
-    check was carried entirely by the `ni > 0` conjunct beside it, same fact the
-    Phase 9 tail-`jmp` tests in the same file had already found and correctly
-    stopped relying on. `snap_default_run` now asserts the PATH-SPECIFIC block
-    instead (`covered(want_off) && !covered(other_off)`, the two exits' own `mov`
-    blocks) — real evidence that the default-on snapshot captured the exit that
-    actually ran, not just "some" data regardless of which path executed.
-  - **`test_dataflow_blockstep.c` re-declared `asmtest_blockstep_info_t` with no
-    layout guard.** The tier ships no header by design (keeps the producer off the
-    public ABI), so the suite hand-copies the struct — exactly the skew that cost
-    F6's sibling telemetry struct 3 green checks before a `sizeof`+`offsetof` guard
-    caught it. `asmtest_dataflow_blockstep_info_layout()` (mirroring
-    `asmtest_dataflow_ptrace_win_info_layout`) now lets the suite check its copy
-    against the producer's real layout before trusting any `info.*` field.
-
-  All three were filed as open follow-ups
-  ([2026-07-17-dataflow-tier-open-followups.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/2026-07-17-dataflow-tier-open-followups.md))
-  after the same day's F1/F2/F6/F7 batch landed, deliberately deferred out of that
-  diff to avoid scope creep. Verified: `make docker-dataflow-attach` (126+118 checks,
-  0 skips, 0 failures) and `make dataflow-blockstep-test` natively on the Zen 5 dev
-  box (119/119). `test_branchsnap.c`'s live leg needs the BPF toolchain
-  (clang/libbpf-dev), absent on this host and gated behind a `sudo` password this
-  session could not supply — verified by compilation + the ENOSYS stub path only.
-
 ### Added
 
 - **asmspy TUI symbol picker (modes 2 and 9) gains a `Tab`-cycle sort: address ->
@@ -700,6 +653,47 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   are written per the plan's spec and clearly banner-marked UNVALIDATED — they need
   Apple-Silicon-tart / bare-metal-KVM hosts this environment lacks.
 
+- **AMD tracing plan Phase 2 & 3 follow-ups — attached block-step + snapshot marker
+  routing.** Completes the two sub-items the earlier block-step / snapshot commits left open:
+  - **`asmtest_ptrace_trace_attached_blockstep`** — the third public block-step symbol.
+    Block-steps a SEPARATE, externally-attached process (one debug exception per taken
+    branch, intra-block instructions reconstructed with Capstone), reading foreign bytes via
+    `process_vm_readv` and leaving the target stopped past the region for the caller — the
+    rootless managed-runtime completeness fallback. Wrapped in all ten bindings; a new
+    `test_ptrace_attach_blockstep` asserts the stream is byte-identical to the per-instruction
+    attached tracer over a true external attach.
+  - **`opts.snapshot` begin/end routing on AMD** — the deterministic boundary LBR snapshot
+    (`bpf_get_branch_snapshot` at a region-exit hardware breakpoint) is now reachable through
+    the ordinary `begin`/`end` markers, not just the standalone `asmtest_amd_snapshot_trace`.
+    The capture split into `asmtest_amd_snapshot_begin`/`_end` (armed single-slot); the AMD
+    marker path derives the exit from the region's last `ret` and falls back to the
+    `sample_period=1` sampled path when the BPF toolchain/caps/LbrExtV2 substrate is absent.
+
+- **AMD hardware-trace improvements — Phases 0, 4, 5 of the
+  [AMD tracing plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/amd-tracing-plan.md).**
+  Completes the P0/P1 near-term work on the AMD LBR backend, all validated live on the
+  Zen 5 dev box (Ryzen 9 9950X, `amd_lbr_v2`) via `make docker-hwtrace-amd`:
+  - **Phase 4 — LbrExtV2 speculation-bit filtering.** `amd_replay` now drops a
+    `perf_branch_entry` whose `spec == PERF_BR_SPEC_WRONG_PATH` (a speculative,
+    never-retired phantom edge) before reconstruction; dropping it is expected, so it does
+    not set `truncated`. The `spec` field (Linux ≥ 6.1) is gated behind a
+    `-fsyntax-only` struct-member build probe (`ASMTEST_HAVE_PERF_BR_SPEC`), so the filter
+    compiles out cleanly on older headers / Zen 3 BRS. `amd_edge_eq` (the stitcher's
+    from+to overlap key) is untouched.
+  - **Phase 5 — Tier-B stitch hardening.** `asmtest_amd_stitch` gained a
+    decodable-distance guard: a smallest-overlap match is accepted only if the adjacency
+    it splices is real straight-line code, so a dropped/throttled-sample mis-stitch
+    becomes an honest gap instead of a silently-wrong trace. The AMD data ring default
+    grew 64 KB → 256 KB to extend gapless stitch reach before the kernel drops samples;
+    the `data_size` header comment now documents both backend defaults.
+  - **Phase 0 — runtime branch-stack depth.** `asmtest_amd_lbr_depth()` reads the true
+    depth from CPUID `0x80000022` EBX[9:4] (`lbr_v2_stack_sz`), replacing the hardcoded 16
+    in the Tier-A/Tier-B split, stitch bound, and LOST heuristic. A no-op today (every
+    shipping Zen reports 16) that removes the assumption.
+  - Phases 6 (Zen 3 BRS period-adjust) and 7 (IBS-Op coverage) remain forward-look — they
+    require Zen 3 / Zen 2 silicon the dev box lacks, and the project does not ship
+    hardware code it cannot self-validate.
+
 ### Changed
 
 - **Internal plan docs reconciled against the code; four completed plans archived.** An audit
@@ -886,6 +880,73 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   43 → 49.
 
 ### Fixed
+
+- **`test_callout_step_backstop` raced its own victim — and reported the loss as
+  a Yama/seccomp skip.** The victim called the region once and `_exit(0)`'d, so on
+  a slow host the child finished and died before the parent's `PTRACE_SEIZE`
+  landed (3/3 GitHub runs today), and the resulting `ESRCH` surfaced as
+  `# SKIP … PTRACE_SEIZE unavailable here (yama/seccomp)` — a double lie, since
+  SEIZE worked for every other attach test in the same job — which the lane's
+  anti-vacuity gate rightly turned into a hard failure. The victim now LOOPS the
+  region at the same 2 ms cadence as every other attach victim in the file, so
+  the attach always finds a live process and a fresh entry. Proven discriminating
+  in the docker lane: the once-and-exit victim plus a deliberate 200 ms
+  pre-attach sleep reproduces the exact CI skip; the looping victim passes under
+  the same handicap. The gate's stale bookkeeping was recalibrated in the same
+  change: the 8 suites total 389 on bare metal (the comment said 257), the VM
+  runs ~293, and the floor moved 230 → 285 — preserving the original tightness
+  (the smallest suite vanishing still trips it).
+
+- **`cli/asmspy.c`'s new picker-sort code failed the clang-format gate.** The
+  Tab-cycle sort landed verified by `make docker-cli` (build + smoke) but not by
+  `make fmt-check`; the format job caught 7 violations. Mechanical reflow, plus
+  one comment hoisted above its `if` so the formatter keeps the condition on one
+  line.
+
+- **Data-flow `--dataflow`'s call-out step-over lied about WHY it truncated, and two
+  test suites carried assertions that could not fail.** Three small, independently
+  diagnosed defects closed together:
+  - **`dataflow_ptrace.c`'s call-out step-over conflated a BOUND with a FAILURE**
+    (the sibling site to the `--max` fix: `9d55611`/`0129b1e`). Hitting the whole-run
+    step backstop mid-call-out and `dfp_run_to` actually failing shared one `||` and
+    one `DF_PTRACE_ETRACE`, so a region that simply ran a lot of call-outs surfaced as
+    *"ptrace/attach failure (permission? ptrace_scope? … W^X JIT page)"* — sending an
+    operator to Yama/seccomp for a budget, not a bug. The backstop is now its own
+    branch (`DF_PTRACE_OK`, `truncated=true`, same shape `--max` already got right);
+    `dfp_run_to` failing (the callee exited, faulted, or its return byte could not be
+    trapped) keeps `DF_PTRACE_ETRACE`. The 2^20-step backstop is now also overridable
+    via `ASMTEST_DF_STEP_BACKSTOP` (mirroring `ASMTEST_DF_ENTRY_WAIT_MS`), which is
+    what makes the bound reachable in a test at all — a real 2^20-step fixture was
+    exactly the kind of "never exercised, needs 1M hits" gap this codebase already
+    flags elsewhere. A new attach-based test (`test_callout_step_backstop`, needs the
+    attach path's exact `pre_positioned` entry so the trip point is deterministic
+    rather than a coin flip on the fork prologue's step parity) proves it: mutation
+    (reverting the split) turns the check back into ETRACE.
+  - **`test_branchsnap.c`'s multi-exit test asserted `covered(t, 0)` as its entry
+    evidence — vacuously.** `amd_replay` appends block 0 unconditionally
+    (`amd_backend.c:267`), so `covered(t, 0)` is always true by construction; the
+    check was carried entirely by the `ni > 0` conjunct beside it, same fact the
+    Phase 9 tail-`jmp` tests in the same file had already found and correctly
+    stopped relying on. `snap_default_run` now asserts the PATH-SPECIFIC block
+    instead (`covered(want_off) && !covered(other_off)`, the two exits' own `mov`
+    blocks) — real evidence that the default-on snapshot captured the exit that
+    actually ran, not just "some" data regardless of which path executed.
+  - **`test_dataflow_blockstep.c` re-declared `asmtest_blockstep_info_t` with no
+    layout guard.** The tier ships no header by design (keeps the producer off the
+    public ABI), so the suite hand-copies the struct — exactly the skew that cost
+    F6's sibling telemetry struct 3 green checks before a `sizeof`+`offsetof` guard
+    caught it. `asmtest_dataflow_blockstep_info_layout()` (mirroring
+    `asmtest_dataflow_ptrace_win_info_layout`) now lets the suite check its copy
+    against the producer's real layout before trusting any `info.*` field.
+
+  All three were filed as open follow-ups
+  ([2026-07-17-dataflow-tier-open-followups.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/2026-07-17-dataflow-tier-open-followups.md))
+  after the same day's F1/F2/F6/F7 batch landed, deliberately deferred out of that
+  diff to avoid scope creep. Verified: `make docker-dataflow-attach` (126+118 checks,
+  0 skips, 0 failures) and `make dataflow-blockstep-test` natively on the Zen 5 dev
+  box (119/119). `test_branchsnap.c`'s live leg needs the BPF toolchain
+  (clang/libbpf-dev), absent on this host and gated behind a `sudo` password this
+  session could not supply — verified by compilation + the ENOSYS stub path only.
 
 - **`asmspy --dataflow` on a symbol that is not running HUNG instead of erroring.** The
   producer's step backstop counts single-steps, and a region that never arrives burns
@@ -1116,49 +1177,6 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bug it guards can fail it; the EINTR pressure is unchanged. (`asmtest_hwtrace_call_scoped`
   also joins the parity allow-list under the same dotnet-only posture as the
   window trio, restoring the gate the lazy-arm commit tripped.)
-
-### Added
-
-- **AMD tracing plan Phase 2 & 3 follow-ups — attached block-step + snapshot marker
-  routing.** Completes the two sub-items the earlier block-step / snapshot commits left open:
-  - **`asmtest_ptrace_trace_attached_blockstep`** — the third public block-step symbol.
-    Block-steps a SEPARATE, externally-attached process (one debug exception per taken
-    branch, intra-block instructions reconstructed with Capstone), reading foreign bytes via
-    `process_vm_readv` and leaving the target stopped past the region for the caller — the
-    rootless managed-runtime completeness fallback. Wrapped in all ten bindings; a new
-    `test_ptrace_attach_blockstep` asserts the stream is byte-identical to the per-instruction
-    attached tracer over a true external attach.
-  - **`opts.snapshot` begin/end routing on AMD** — the deterministic boundary LBR snapshot
-    (`bpf_get_branch_snapshot` at a region-exit hardware breakpoint) is now reachable through
-    the ordinary `begin`/`end` markers, not just the standalone `asmtest_amd_snapshot_trace`.
-    The capture split into `asmtest_amd_snapshot_begin`/`_end` (armed single-slot); the AMD
-    marker path derives the exit from the region's last `ret` and falls back to the
-    `sample_period=1` sampled path when the BPF toolchain/caps/LbrExtV2 substrate is absent.
-
-- **AMD hardware-trace improvements — Phases 0, 4, 5 of the
-  [AMD tracing plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/amd-tracing-plan.md).**
-  Completes the P0/P1 near-term work on the AMD LBR backend, all validated live on the
-  Zen 5 dev box (Ryzen 9 9950X, `amd_lbr_v2`) via `make docker-hwtrace-amd`:
-  - **Phase 4 — LbrExtV2 speculation-bit filtering.** `amd_replay` now drops a
-    `perf_branch_entry` whose `spec == PERF_BR_SPEC_WRONG_PATH` (a speculative,
-    never-retired phantom edge) before reconstruction; dropping it is expected, so it does
-    not set `truncated`. The `spec` field (Linux ≥ 6.1) is gated behind a
-    `-fsyntax-only` struct-member build probe (`ASMTEST_HAVE_PERF_BR_SPEC`), so the filter
-    compiles out cleanly on older headers / Zen 3 BRS. `amd_edge_eq` (the stitcher's
-    from+to overlap key) is untouched.
-  - **Phase 5 — Tier-B stitch hardening.** `asmtest_amd_stitch` gained a
-    decodable-distance guard: a smallest-overlap match is accepted only if the adjacency
-    it splices is real straight-line code, so a dropped/throttled-sample mis-stitch
-    becomes an honest gap instead of a silently-wrong trace. The AMD data ring default
-    grew 64 KB → 256 KB to extend gapless stitch reach before the kernel drops samples;
-    the `data_size` header comment now documents both backend defaults.
-  - **Phase 0 — runtime branch-stack depth.** `asmtest_amd_lbr_depth()` reads the true
-    depth from CPUID `0x80000022` EBX[9:4] (`lbr_v2_stack_sz`), replacing the hardcoded 16
-    in the Tier-A/Tier-B split, stitch bound, and LOST heuristic. A no-op today (every
-    shipping Zen reports 16) that removes the assumption.
-  - Phases 6 (Zen 3 BRS period-adjust) and 7 (IBS-Op coverage) remain forward-look — they
-    require Zen 3 / Zen 2 silicon the dev box lacks, and the project does not ship
-    hardware code it cannot self-validate.
 
 ## [1.1.0] — 2026-07-06
 
