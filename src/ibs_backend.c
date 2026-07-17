@@ -81,11 +81,17 @@ static uint64_t ld_u64(const uint8_t *p) {
     memcpy(&v, p, sizeof v);
     return v;
 }
+/* Guarded, unlike its ld_u64/bit siblings above: every ld_u32 caller lives in the
+ * Linux/x86-64 block below (the perf-record readers), so off that platform it is an
+ * unused static and -Werror=unused-function fails the build. That is not theoretical —
+ * this file compiles on macOS/arm64 whenever HWTRACE_OBJS is pulled in there. */
+#if defined(__linux__) && defined(__x86_64__)
 static uint32_t ld_u32(const uint8_t *p) {
     uint32_t v;
     memcpy(&v, p, sizeof v);
     return v;
 }
+#endif
 static int bit(uint64_t v, unsigned b) { return (int)((v >> b) & 1u); }
 
 /* ---- Pure decoder + free: defined for ALL platforms (no perf, no hardware) ---- */

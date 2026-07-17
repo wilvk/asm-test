@@ -61,7 +61,7 @@ SUITE_EXCLUDES := test_robust test_failure_demo test_bench \
                   test_bittricks test_vm \
                   test_emu test_emu_usecases test_asm \
                   test_drtrace test_hwtrace test_codeimage test_branchsnap \
-                  test_ibs \
+                  test_branchtile test_ibs \
                   test_dataflow test_operands test_dataflow_emu \
                   test_dataflow_ptrace test_dataflow_method \
                   test_dataflow_gcmove test_dataflow_helpers \

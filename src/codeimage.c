@@ -128,6 +128,7 @@ static int ci_region_dirty(asmtest_codeimage_t *img, const ci_region_t *r,
     memset(dirty, 0, r->npages);
     int any = 0;
 
+#ifdef PAGEMAP_SCAN
     if (img->pagemap_scan_ok) {
         int fd = ci_open_proc(img->pid, "pagemap", O_RDONLY);
         if (fd >= 0) {
@@ -170,6 +171,7 @@ static int ci_region_dirty(asmtest_codeimage_t *img, const ci_region_t *r,
         }
         /* ioctl failed at runtime — fall through to the manual path this call. */
     }
+#endif /* PAGEMAP_SCAN */
 
     for (size_t i = 0; i < r->npages; i++) {
         uint64_t pa = r->first_page + (uint64_t)i * (uint64_t)img->page_size;
@@ -260,7 +262,13 @@ static int ci_probe_softdirty(int *pagemap_scan_ok) {
         close(pm);
     }
 
-    /* Probe PAGEMAP_SCAN (read-only) so refresh() can batch reads when supported. */
+    /* Probe PAGEMAP_SCAN (read-only) so refresh() can batch reads when supported.
+     * Compile-time gated: the ioctl and its structs landed in linux/fs.h with kernel
+     * 6.7, and this file is built wherever libasmtest_dataflow links — including
+     * Debian bookworm images whose headers are 6.1. Absent at build time, the manual
+     * per-page pagemap read above is the whole story (pagemap_scan_ok stays 0), which
+     * is the same path taken when the runtime ioctl is refused. */
+#ifdef PAGEMAP_SCAN
     if (ok) {
         int pm2 = open("/proc/self/pagemap", O_RDONLY);
         if (pm2 >= 0) {
@@ -278,6 +286,7 @@ static int ci_probe_softdirty(int *pagemap_scan_ok) {
             close(pm2);
         }
     }
+#endif /* PAGEMAP_SCAN */
 
     munmap(p, (size_t)ps);
     return ok;
