@@ -227,6 +227,7 @@
  */
 #define _GNU_SOURCE
 
+#include <stddef.h> /* offsetof — the re-declared-struct layout guard */
 #include <string.h> /* memset — the ENOSYS stubs below need it on EVERY platform */
 #include <sys/types.h> /* pid_t — part of the entry-point signatures on every platform */
 
@@ -302,6 +303,21 @@ typedef struct {
                    * >0 is the only positive evidence that F2's path really ran:
                    * `pure` cannot say it, since it means "the replay was used". */
 } asmtest_blockstep_info_t;
+
+/* The tier ships no header (deliberately, see the file comment above), so
+ * examples/test_dataflow_blockstep.c re-declares this struct rather than including it —
+ * exactly the shape that skewed silently once already (F6's asmtest_dfwin_info_t, caught
+ * only by adding this same guard: `size` alone is NOT sufficient, since a field landing
+ * in tail padding leaves sizeof unchanged — `last_off`, the FINAL field's offset, moves
+ * whenever any earlier field is added/removed/resized, padding or no padding). Defined
+ * unconditionally (the struct itself is not behind the platform gate below) so both the
+ * real producer and its ENOSYS stub build report the same true layout. */
+void asmtest_dataflow_blockstep_info_layout(size_t *size, size_t *last_off) {
+    if (size != NULL)
+        *size = sizeof(asmtest_blockstep_info_t);
+    if (last_off != NULL)
+        *last_off = offsetof(asmtest_blockstep_info_t, injected);
+}
 
 #if defined(__linux__) && defined(__x86_64__) &&                               \
     defined(ASMTEST_HAVE_CAPSTONE) && defined(ASMTEST_HAVE_UNICORN)

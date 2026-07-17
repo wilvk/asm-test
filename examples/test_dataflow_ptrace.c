@@ -1625,6 +1625,88 @@ static void test_callout_noreturn(void) {
     munmap(helper, sizeof callout_helper_noreturn);
 }
 
+typedef long (*fn1_t)(long);
+
+static void test_callout_step_backstop(void) {
+    /* dataflow_ptrace.c's call-out step-over used to fuse two different facts into one
+     * DF_PTRACE_ETRACE: hitting the whole-run step backstop (an honest BOUND, same
+     * shape --max already gets right) and dfp_run_to failing (a real ptrace FAILURE).
+     * ASMTEST_DF_STEP_BACKSTOP shrinks the 2^20-step bound to 2 so it trips
+     * deterministically: 1 step for `mov`, 1 for `call`, then the call-out check's own
+     * increment is what crosses the bound — dfp_run_to is never even reached.
+     *
+     * Needs the ATTACH path (not asmtest_dataflow_ptrace_run's fork+PTRACE_TRACEME),
+     * because dfp_run_to's pre-positioning is what makes `total` start at exactly 0 AT
+     * the region entry — the fork path's prologue (raise(SIGSTOP) back to the region,
+     * an unknown, -O0-dependent number of steps) would make a step_backstop=2 crossing
+     * land on a coin flip between this check and the OTHER (still-ETRACE, unfixed by
+     * design) backstop check earlier in the same loop, since the two alternate 1:1. */
+    size_t len = sizeof call_region;
+    void *ex = mmap(NULL, len, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void *helper = map_rx(callout_helper, sizeof callout_helper);
+    if (ex == MAP_FAILED || helper == NULL) {
+        printf("# SKIP callout-step-backstop: mmap failed\n");
+        if (ex != MAP_FAILED)
+            munmap(ex, len);
+        if (helper != NULL)
+            munmap(helper, sizeof callout_helper);
+        return;
+    }
+    memcpy(ex, call_region, len);
+    if (mprotect(ex, len, PROT_READ | PROT_EXEC) != 0) {
+        printf("# SKIP callout-step-backstop: mprotect failed\n");
+        munmap(ex, len);
+        munmap(helper, sizeof callout_helper);
+        return;
+    }
+    uint64_t base = (uint64_t)(uintptr_t)ex;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        printf("# SKIP callout-step-backstop: fork failed\n");
+        munmap(ex, len);
+        munmap(helper, sizeof callout_helper);
+        return;
+    }
+    if (pid == 0) {
+        /* Independent victim (no PTRACE_TRACEME): call the region once and exit. The
+         * attacher SEIZEs it and runs it to the region entry itself. */
+        volatile long r = ((fn1_t)base)((long)(uintptr_t)helper);
+        (void)r;
+        _exit(0);
+    }
+
+    setenv("ASMTEST_DF_STEP_BACKSTOP", "2", 1);
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    long result = -1;
+    int rc = asmtest_dataflow_ptrace_attach_pid(pid, base, len, 0, &result, v);
+    unsetenv("ASMTEST_DF_STEP_BACKSTOP");
+    if (rc == DF_PTRACE_ETRACE) {
+        printf("# SKIP callout-step-backstop: PTRACE_SEIZE unavailable here "
+               "(yama/seccomp)\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        asmtest_valtrace_free(v);
+        munmap(ex, len);
+        munmap(helper, sizeof callout_helper);
+        return;
+    }
+    CHECK(rc == DF_PTRACE_OK,
+          "callout-step-backstop: bound reached is OK, not ETRACE (mutation: "
+          "un-splitting the || makes this ETRACE again)");
+    CHECK(v->truncated,
+          "callout-step-backstop: truncated HONESTLY at the bound");
+    CHECK(v->steps_len == 2 && v->insn_off[0] == 0x00 && v->insn_off[1] == 0x03,
+          "callout-step-backstop: captured exactly mov+call before the bound, "
+          "never reached the helper's return");
+    asmtest_valtrace_free(v);
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+    munmap(ex, len);
+    munmap(helper, sizeof callout_helper);
+}
+
 /* ---- Increment 3: time-correct bytes + method attribution (JIT patch survival) ---- */
 
 /* The FIRST register READ record captured at `step` — its reg id (into *reg_out) and inline
@@ -2349,6 +2431,7 @@ static void test_attach_jit_worker(void) {
 static void test_attach_pid(void) {}
 static void test_callout(void) {}
 static void test_callout_noreturn(void) {}
+static void test_callout_step_backstop(void) {}
 static void test_versioned(void) {}
 static void test_attach_worker(void) {}
 static void test_attach_worker_tid(void) {}
@@ -2386,6 +2469,7 @@ int main(void) {
     test_attach_pid();
     test_callout();
     test_callout_noreturn();
+    test_callout_step_backstop();
     test_versioned();
     test_attach_worker();
     test_attach_worker_tid();

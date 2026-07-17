@@ -1,8 +1,9 @@
 # Data-flow tier — open follow-ups after the 2026-07-17 batch (F1/F2/F6/F7 + W-1)
 
-**Status: all OPEN. None is a regression; each was surfaced (not introduced) while landing the
-batch, and each is recorded here rather than fixed, because fixing them inside the diff that found
-them would have been scope creep — or, in one case, would have disturbed a neighbouring oracle.**
+**Status: items 2 and 3 landed 2026-07-17 (same day, separate diff). Items 1, 4, 5 remain OPEN.**
+None was a regression; each was surfaced (not introduced) while landing the batch, and each was
+recorded here rather than fixed inline, because fixing them inside the diff that found them would
+have been scope creep — or, in one case, would have disturbed a neighbouring oracle.
 
 Ordered by how much they can lie to a user.
 
@@ -35,7 +36,7 @@ alias's own bit slice (`dataflow.c:219` keys raw Capstone ids with no canonicali
 byte. Note F6 measured that a *blanket* barrier deletes the exit-criterion slice — precision is
 load-bearing, so this is not a one-line change.
 
-## 2. `covered(t, 0)` is vacuous — `amd_replay` appends block 0 unconditionally
+## 2. `covered(t, 0)` is vacuous — `amd_replay` appends block 0 unconditionally — LANDED 2026-07-17
 
 [`src/amd_backend.c:267`](../../../src/amd_backend.c#L267) does `trace_append_block(trace, 0)`
 unconditionally ("Block start at the region entry"). So `covered(t, 0)` is **always true** and can
@@ -50,7 +51,16 @@ alone was found to be a **worthless** assertion for that property — it does no
 eviction. `!covered(0x0e)` was the load-bearing discriminator. Both facts point the same way: on this
 tier, "covered" and "truncated" assertions need their discriminating power checked, not assumed.
 
-## 3. `examples/test_dataflow_blockstep.c` re-declares `asmtest_blockstep_info_t` with no layout guard
+**Fixed**: `test_branchsnap.c`'s `snap_default_run` (the multi-exit test, a DIFFERENT call site from
+the Phase 9 one this item was found next to) was the one shipped instance actually asserting `cov0`
+as evidence, exactly as described above. It now asserts the PATH-SPECIFIC block instead —
+`covered(want_off) && !covered(other_off)`, the two exits' own `mov` blocks — real evidence that the
+default-on snapshot captured the exit that actually ran. `amd_backend.c:267` itself is unchanged and
+correct (block 0 SHOULD be appended unconditionally); the fix was entirely at the assertion site.
+Live-hardware verification blocked this session on a missing BPF toolchain (clang/libbpf-dev) and a
+`sudo` password this session could not supply; verified by compilation and the ENOSYS stub path only.
+
+## 3. `examples/test_dataflow_blockstep.c` re-declares `asmtest_blockstep_info_t` with no layout guard — LANDED 2026-07-17
 
 The tier ships no header (deliberately — it keeps the producer off the public ABI), so its suite
 **re-declares the producer's structs**: 27 references to `asmtest_blockstep_info_t`, and **0**
@@ -62,6 +72,12 @@ padding**, so `sizeof` was unchanged and the guard passed on an already-skewed s
 works pins **size AND final-field offset**.
 
 The same skew is available to the blockstep suite today. Cheap to close; the failure mode is silent.
+
+**Fixed**: `asmtest_dataflow_blockstep_info_layout()` added to `src/dataflow_blockstep.c` (mirrors
+`asmtest_dataflow_ptrace_win_info_layout`, defined unconditionally since the struct itself sits
+before the platform gate), and `test_dataflow_blockstep.c` now checks its re-declared copy against
+it before trusting any `info.*` field. Verified: `make dataflow-blockstep-test` natively on the
+Zen 5 dev box, 119/119 checks, 0 skips.
 
 ## 4. F2 increment 2 — `rdtsc`/`cpuid` are a PRIMITIVE gap, not a decode gap
 

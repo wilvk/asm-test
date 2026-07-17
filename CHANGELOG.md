@@ -6,7 +6,66 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Data-flow `--dataflow`'s call-out step-over lied about WHY it truncated, and two
+  test suites carried assertions that could not fail.** Three small, independently
+  diagnosed defects closed together:
+  - **`dataflow_ptrace.c`'s call-out step-over conflated a BOUND with a FAILURE**
+    (the sibling site to the `--max` fix: `9d55611`/`0129b1e`). Hitting the whole-run
+    step backstop mid-call-out and `dfp_run_to` actually failing shared one `||` and
+    one `DF_PTRACE_ETRACE`, so a region that simply ran a lot of call-outs surfaced as
+    *"ptrace/attach failure (permission? ptrace_scope? … W^X JIT page)"* — sending an
+    operator to Yama/seccomp for a budget, not a bug. The backstop is now its own
+    branch (`DF_PTRACE_OK`, `truncated=true`, same shape `--max` already got right);
+    `dfp_run_to` failing (the callee exited, faulted, or its return byte could not be
+    trapped) keeps `DF_PTRACE_ETRACE`. The 2^20-step backstop is now also overridable
+    via `ASMTEST_DF_STEP_BACKSTOP` (mirroring `ASMTEST_DF_ENTRY_WAIT_MS`), which is
+    what makes the bound reachable in a test at all — a real 2^20-step fixture was
+    exactly the kind of "never exercised, needs 1M hits" gap this codebase already
+    flags elsewhere. A new attach-based test (`test_callout_step_backstop`, needs the
+    attach path's exact `pre_positioned` entry so the trip point is deterministic
+    rather than a coin flip on the fork prologue's step parity) proves it: mutation
+    (reverting the split) turns the check back into ETRACE.
+  - **`test_branchsnap.c`'s multi-exit test asserted `covered(t, 0)` as its entry
+    evidence — vacuously.** `amd_replay` appends block 0 unconditionally
+    (`amd_backend.c:267`), so `covered(t, 0)` is always true by construction; the
+    check was carried entirely by the `ni > 0` conjunct beside it, same fact the
+    Phase 9 tail-`jmp` tests in the same file had already found and correctly
+    stopped relying on. `snap_default_run` now asserts the PATH-SPECIFIC block
+    instead (`covered(want_off) && !covered(other_off)`, the two exits' own `mov`
+    blocks) — real evidence that the default-on snapshot captured the exit that
+    actually ran, not just "some" data regardless of which path executed.
+  - **`test_dataflow_blockstep.c` re-declared `asmtest_blockstep_info_t` with no
+    layout guard.** The tier ships no header by design (keeps the producer off the
+    public ABI), so the suite hand-copies the struct — exactly the skew that cost
+    F6's sibling telemetry struct 3 green checks before a `sizeof`+`offsetof` guard
+    caught it. `asmtest_dataflow_blockstep_info_layout()` (mirroring
+    `asmtest_dataflow_ptrace_win_info_layout`) now lets the suite check its copy
+    against the producer's real layout before trusting any `info.*` field.
+
+  All three were filed as open follow-ups
+  ([2026-07-17-dataflow-tier-open-followups.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/2026-07-17-dataflow-tier-open-followups.md))
+  after the same day's F1/F2/F6/F7 batch landed, deliberately deferred out of that
+  diff to avoid scope creep. Verified: `make docker-dataflow-attach` (126+118 checks,
+  0 skips, 0 failures) and `make dataflow-blockstep-test` natively on the Zen 5 dev
+  box (119/119). `test_branchsnap.c`'s live leg needs the BPF toolchain
+  (clang/libbpf-dev), absent on this host and gated behind a `sudo` password this
+  session could not supply — verified by compilation + the ENOSYS stub path only.
+
 ### Added
+
+- **asmspy TUI symbol picker (modes 2 and 9) gains a `Tab`-cycle sort: address ->
+  hot edges -> name.** The picker used to be a flat, address-ordered list with no way
+  to find "what's actually running" short of guessing a name to filter by. **Hot
+  edges** reuses the exact entry-arrival rule `--dataflow --auto` picks with
+  (`asmspy_autoregion_rank`, one AMD IBS-Op window) rather than minting a second
+  definition of "hot" — so the picker's ranking and `--auto`'s pick always agree. An
+  IBS-less host (or one where perf is locked down) falls back to address order with
+  an on-screen reason rather than silently doing nothing. **Name** sorts
+  case-insensitively. The row permutation is kept separate from the symtab's own
+  address-sorted storage (`asmspy_symtab_at`'s binary search depends on it), mirroring
+  the process picker's existing `order[]` indirection.
 
 - **`asmspy --dataflow <pid> --auto [--module=<m>]` — trace what a process is DOING,
   no symbol needed.** Auto-targeting samples the target OUT OF BAND (AMD IBS-Op, no

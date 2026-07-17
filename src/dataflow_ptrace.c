@@ -161,6 +161,22 @@ typedef struct {
  * bounds wall time if the tracee never enters or never leaves [code, code+len). */
 #define DFP_STEP_BACKSTOP (1u << 20)
 
+/* The step backstop above, or ASMTEST_DF_STEP_BACKSTOP when set: real hardware needs
+ * ~2^20 steps to trip it (impractical to drive routinely in a test — see the "1 M
+ * non-target int3 hits" note in dfp_run_to_multi below), so a test shrinks the bound
+ * instead of the step count, the same override idiom as dfp_entry_wait_ms. Read once
+ * per dfp_step_loop call, not cached across calls: not a hot path (once per capture). */
+static uint64_t dfp_step_backstop(void) {
+    const char *e = getenv("ASMTEST_DF_STEP_BACKSTOP");
+    if (e != NULL && *e != '\0') {
+        char *end = NULL;
+        unsigned long long v = strtoull(e, &end, 10);
+        if (end != e && *end == '\0' && v > 0)
+            return (uint64_t)v;
+    }
+    return DFP_STEP_BACKSTOP;
+}
+
 /* Bound on the wait for a thread to ARRIVE at the region entry (dfp_run_to_multi).
  *
  * WHY THIS EXISTS: the step backstop above LOOKS like it covers this and does not.
@@ -860,6 +876,7 @@ static int dfp_step_loop(dfp_ctx *c, uint64_t base_ip, size_t code_len,
     pid_t pid = c->pid;
     int status = 0, entered = 0, pending_sig = 0;
     uint64_t recorded = 0, total = 0;
+    const uint64_t step_backstop = dfp_step_backstop();
     int skip_step =
         c->pre_positioned; /* examine the run_to entry stop before stepping */
     *left_stopped = 0;
@@ -927,7 +944,7 @@ static int dfp_step_loop(dfp_ctx *c, uint64_t base_ip, size_t code_len,
                 return dfp_dirty_exit(c, DF_PTRACE_FAULT, SIGTRAP,
                                       left_stopped);
             }
-            if (++total > DFP_STEP_BACKSTOP) {
+            if (++total > step_backstop) {
                 c->vt->truncated = true;
                 return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
             }
@@ -993,12 +1010,20 @@ static int dfp_step_loop(dfp_ctx *c, uint64_t base_ip, size_t code_len,
             if (dfp_is_callout(c, base_ip, code_len, last_off, &regs,
                                &resume_off)) {
                 /* Bound the step-over with the existing whole-run backstop so a runaway
-                 * sequence of call-outs self-truncates rather than looping unbounded. */
-                if (++total > DFP_STEP_BACKSTOP ||
-                    dfp_run_to(pid, base_ip + resume_off) != 0) {
-                    /* Over budget, or the callee never reached its return address (it
-                     * exited, faulted, or its return byte could not be trapped — e.g. a
-                     * W^X helper page): truncate HONESTLY rather than hang. */
+                 * sequence of call-outs self-truncates rather than looping unbounded.
+                 * These are two different facts and must not share one return code (the
+                 * --max fix above got this right; this site didn't): hitting the
+                 * backstop is an honest BOUND — whatever finalize_step already appended
+                 * to vt above is a valid truncated prefix, same shape as --max — while
+                 * dfp_run_to failing is a real ptrace FAILURE (the callee exited,
+                 * faulted, or its return byte could not be trapped, e.g. a W^X helper
+                 * page). Folding the bound into ETRACE told the operator "permission?
+                 * ptrace_scope? W^X JIT page?" when the truth was "ran out of budget". */
+                if (++total > step_backstop) {
+                    c->vt->truncated = true;
+                    return dfp_dirty_exit(c, DF_PTRACE_OK, 0, left_stopped);
+                }
+                if (dfp_run_to(pid, base_ip + resume_off) != 0) {
                     c->vt->truncated = true;
                     return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
                 }

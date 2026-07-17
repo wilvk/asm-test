@@ -82,8 +82,17 @@ static unsigned long long snap_reach(const unsigned char *code, size_t nbytes,
  * truncated==false: the sampled fallback honestly TRUNCATES a tiny single-shot
  * routine, so a clean non-truncated reconstruction proves the deterministic path
  * armed and the taken exit hit its breakpoint. Returns 1 on pass. */
+/* `want_off`/`other_off` are the two exits' own path-specific blocks (NOT block 0 —
+ * amd_replay appends block 0 unconditionally, amd_backend.c:267, so `covered(t, 0)` is
+ * VACUOUS and cannot discriminate a real capture from one that always reports "some
+ * data decoded" regardless of which path actually ran; see the Phase 9 comment below
+ * for the same fact established the first time). The real evidence that THIS path's
+ * exit was captured is want_off covered AND other_off NOT covered — a snapshot that
+ * decoded both blocks regardless of which one actually executed would pass a bare
+ * `ni > 0` check but fail this one. */
 static int snap_default_run(void *cp, size_t nbytes, long a, long b,
-                            long expect, const char *what) {
+                            long expect, uint64_t want_off, uint64_t other_off,
+                            const char *what) {
     asmtest_hwtrace_options_t opts;
     memset(&opts, 0, sizeof opts);
     opts.struct_size = sizeof opts; /* self-describe (flag-day ABI guard) */
@@ -102,13 +111,16 @@ static int snap_default_run(void *cp, size_t nbytes, long a, long b,
         asmtest_hwtrace_begin("bsnapmx");
         long r = fn(a, b);
         asmtest_hwtrace_end("bsnapmx");
-        int cov0 = asmtest_trace_covered(t, 0);
+        int cov_want = asmtest_trace_covered(t, want_off);
+        int cov_other = asmtest_trace_covered(t, other_off);
         unsigned long long ni = asmtest_emu_trace_insns_total(t);
         int trunc = asmtest_emu_trace_truncated(t);
         printf("branchsnap multi-exit %s: max2(%ld,%ld)=%ld; default-on "
-               "snapshot decoded %llu insns, entry=%d, truncated=%d\n",
-               what, a, b, r, ni, cov0, trunc);
-        ok = (r == expect) && cov0 && ni > 0 && !trunc;
+               "snapshot decoded %llu insns, want(0x%02llx)=%d, "
+               "other(0x%02llx)=%d, truncated=%d\n",
+               what, a, b, r, ni, (unsigned long long)want_off, cov_want,
+               (unsigned long long)other_off, cov_other, trunc);
+        ok = (r == expect) && ni > 0 && !trunc && cov_want && !cov_other;
     } else {
         printf("not ok - branchsnap multi-exit %s: register_region failed\n",
                what);
@@ -345,9 +357,12 @@ int main(void) {
             memcpy(mp, MAX2, sizeof MAX2);
             mprotect(mp, sizeof MAX2, PROT_READ | PROT_EXEC);
             __builtin___clear_cache((char *)mp, (char *)mp + sizeof MAX2);
-            int ok_a = snap_default_run(mp, sizeof MAX2, 10, 3, 10,
+            /* path A (a>=b, jl NOT taken): falls through into the 0x05 "mov
+             * rax,rdi" block and must NEVER touch path B's 0x09 block, which a
+             * taken jl alone reaches. want/other reversed for path B. */
+            int ok_a = snap_default_run(mp, sizeof MAX2, 10, 3, 10, 0x05, 0x09,
                                         "path-A(ret@0x08)");
-            int ok_b = snap_default_run(mp, sizeof MAX2, 3, 10, 10,
+            int ok_b = snap_default_run(mp, sizeof MAX2, 3, 10, 10, 0x09, 0x05,
                                         "path-B(ret@0x0c)");
             munmap(mp, sizeof MAX2);
             if (ok_a && ok_b)

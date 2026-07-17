@@ -51,6 +51,7 @@
 #include "asmtest_valtrace.h"
 
 #include <errno.h>
+#include <stddef.h> /* offsetof — the re-declared-struct layout guard */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -114,6 +115,7 @@ int asmtest_dataflow_blockstep_run(const uint8_t *code, size_t code_len,
                                    const asmtest_blockstep_opts_t *opts,
                                    long *result, asmtest_valtrace_t *vt,
                                    asmtest_blockstep_info_t *info);
+void asmtest_dataflow_blockstep_info_layout(size_t *size, size_t *last_off);
 
 static int checks, failures;
 #define CHECK(c, ...)                                                          \
@@ -1889,6 +1891,23 @@ int main(void) {
                "Capstone+Unicorn\n"
                "1..0\n");
         return 0;
+    }
+
+    /* Before ANY telemetry below is trusted: this suite re-declares
+     * asmtest_blockstep_info_t (the tier ships no header), and a silent layout skew
+     * between the two copies corrupts every field read out of `info` from here on —
+     * exactly the skew that cost F6's sibling telemetry struct 3 green checks before
+     * this same guard caught it (2026-07-17-dataflow-tier-open-followups.md #3). Check
+     * it, do not assume it. */
+    {
+        size_t isz = 0, ioff = 0;
+        asmtest_dataflow_blockstep_info_layout(&isz, &ioff);
+        CHECK(isz == sizeof(asmtest_blockstep_info_t) &&
+                  ioff == offsetof(asmtest_blockstep_info_t, injected),
+              "info: the suite's re-declared telemetry struct matches the "
+              "producer's SIZE and final-field OFFSET (a skew here silently "
+              "corrupts every info.* read below; size alone misses a field "
+              "that tail padding absorbs)");
     }
 
     /* Purity classification (Capstone only) — always runs in the real build. */
