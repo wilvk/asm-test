@@ -74,6 +74,7 @@
  * re-declared here and kept in step with src/dataflow_ptrace.c. */
 #define DF_PTRACE_OK 0      /* clean, complete scoped trace                  */
 #define DF_PTRACE_FAULT 1   /* region faulted; a partial trace is filled     */
+#define DF_PTRACE_NEVER 2   /* nobody reached the entry within the bound     */
 #define DF_PTRACE_EINVAL -1 /* bad arguments                                 */
 #define DF_PTRACE_ENOSYS -3 /* off Linux x86-64 / no Capstone: self-skip     */
 #define DF_PTRACE_ETRACE -4 /* SEIZE/ptrace/wait failure (seccomp/yama)      */
@@ -1042,6 +1043,17 @@ int main(int argc, char **argv) {
                "ptrace refused)\n", prc);
         printf("1..0 # skipped\n");
         return 0;
+    }
+    /* NEVER is NOT a skip: the producer worked, the region simply did not arrive inside
+     * the entry-wait bound. Before that bound existed this case HUNG here, so anything
+     * that reaches this line is new information, not a regression. Fail loudly rather
+     * than fall through and drain an empty feed as though the capture succeeded — and
+     * name the lever, because on a slow/loaded box the honest fix is a longer wait, not
+     * a code change. */
+    if (prc == DF_PTRACE_NEVER) {
+        printf("not ok - the traced region never arrived within the entry-wait bound "
+               "(rc=%d). Raise ASMTEST_DF_ENTRY_WAIT_MS if this box is merely slow.\n", prc);
+        return 1;
     }
 
     /* ---- drain the stamped feed ------------------------------------------------------------ */

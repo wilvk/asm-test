@@ -184,6 +184,65 @@ assert isinstance(d["defuse"], list)' \
         echo "  json structural checks passed (python3 absent; strict parse skipped)"
     fi
 fi
+# ---------------------------------------------------------------------------
+# BOUNDED ENTRY WAIT (asmspy-plan Theme H)
+# ---------------------------------------------------------------------------
+# --dataflow arms an int3 at the region ENTRY and waits for a thread to arrive.
+# That wait was UNBOUNDED: naming a function that is not currently running did not
+# error, it HUNG. Measured before the fix, on one victim/function/thread:
+#   --trace    rc=1   4s   "alpha_work never executed on thread N"   <- honest
+#   --dataflow rc=124 25s  (header only, killed by timeout)          <- hung
+# The producer's DFP_STEP_BACKSTOP did NOT cover this: it counts single-steps, and a
+# region that never arrives burns zero steps, so the counter never advanced.
+#
+# main() IS THE FIXTURE, because of what it is: entered exactly ONCE, before we
+# attached, and never re-entered — the precise shape that blocks. hotfn on the SAME
+# victim is the control: a bound that also broke the happy path would show up there.
+#
+# ASMTEST_DF_ENTRY_WAIT_MS forces the deadline in ~0.8s instead of the 10s default.
+echo "--- asmspy --dataflow $AVPID main (bounded entry wait: must REPORT, not hang) ---"
+set +e
+t0=$(date +%s)
+nvout=$(ASMTEST_DF_ENTRY_WAIT_MS=800 timeout 30 "$ASM" --dataflow "$AVPID" main 2>&1)
+nvrc=$?
+t1=$(date +%s)
+set -e
+[ "$nvrc" -eq 124 ] && fail "--dataflow on a never-re-entered region HUNG (the entry wait is unbounded again)"
+[ "$nvrc" -eq 1 ] || fail "--dataflow main: expected rc=1 (not-seen-entering), got $nvrc"
+printf '%s\n' "$nvout" | grep -q 'not seen entering' \
+    || fail "--dataflow main: no honest not-seen-entering report: $nvout"
+# The name must be the SYMBOL, not freed memory: dc.func borrows into the symtab,
+# which is released before this message is formatted. A use-after-free here printed
+# plausible-looking garbage rather than crashing.
+printf '%s\n' "$nvout" | grep -q '^main not seen entering' \
+    || fail "--dataflow main: region name wrong/garbled (symtab use-after-free?): $nvout"
+[ $((t1 - t0)) -lt 15 ] \
+    || fail "--dataflow main took $((t1-t0))s — the 800ms bound did not drive it"
+echo "  bounded: reported in $((t1-t0))s instead of hanging"
+
+# THE CONTROL, and it is the whole test's guard: the SAME victim's hotfn must still
+# capture. Without this, "rc=1 and a message" would also be produced by a --dataflow
+# that had simply stopped working.
+echo "--- asmspy --dataflow $AVPID hotfn (control: the bound must not break capture) ---"
+set +e
+# NB no --max: a --max BELOW the region's step count makes the producer FAIL
+# (pre-existing, filed under Theme H; hotfn is 83 steps, so --max=5 => rc=1).
+ctlout=$(timeout 40 "$ASM" --dataflow "$AVPID" hotfn 2>&1); ctlrc=$?
+set -e
+[ "$ctlrc" -eq 0 ] || fail "--dataflow hotfn broke under the entry bound (rc=$ctlrc)"
+printf '%s\n' "$ctlout" | grep -q 'ret=57' \
+    || fail "--dataflow hotfn: no capture under the entry bound"
+echo "  control: hotfn still captures (ret=57)"
+
+# The target must OUTLIVE the timeout path. The disarm INTERRUPTs a thread, restores
+# the byte, rewinds rip if it sits AT the trap, and CONTs it. Skip any of that and the
+# victim does not fail here — it dies of SIGTRAP on its NEXT arrival, seconds later,
+# looking unrelated to the tool. Sleep past several hotfn calls (~5Hz) before asserting.
+sleep 2
+kill -0 "$AVPID" 2>/dev/null \
+    || fail "attach_victim DIED after the bounded --dataflow (entry int3 left armed?)"
+echo "  target survived the timeout path + settle"
+
 # bad --tid / --max / pid are rejected up front (rc=2), before any attach
 expect_badarg "$ASM" --dataflow "$AVPID" hotfn --tid=nope
 expect_badarg "$ASM" --dataflow "$AVPID" hotfn --max=0

@@ -2565,6 +2565,7 @@ int asmspy_engine_region(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
  * header, kept in step with src/dataflow_ptrace.c and its test suite. */
 #define DF_PTRACE_OK     0    /* clean, complete scoped trace                 */
 #define DF_PTRACE_FAULT  1    /* region faulted; a partial trace is filled    */
+#define DF_PTRACE_NEVER  2    /* nobody reached the entry within the bound    */
 #define DF_PTRACE_EINVAL (-1) /* bad arguments                                */
 #define DF_PTRACE_ENOSYS (-3) /* off Linux x86-64 / no Capstone: self-skip    */
 #define DF_PTRACE_ETRACE (-4) /* SEIZE/ptrace/wait failure (seccomp/yama)     */
@@ -2638,6 +2639,15 @@ int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
         rc = 0;
         break;
     }
+    case DF_PTRACE_NEVER:
+        /* The attach worked; no thread reached the entry inside the bound. Reuse the
+         * REGION engine's positive rather than minting a fourth code: it is the SAME
+         * fact about the SAME target ("this region did not execute in the window"), so
+         * a second spelling would only let the two views disagree in words about an
+         * identical observation. cli/asmspy.h numbers these across engines, not per
+         * engine, precisely so a shared meaning can share a code. */
+        rc = ASMSPY_REGION_NEVER_RAN;
+        break;
     case DF_PTRACE_ENOSYS:
         rc =
             ASMSPY_DATAFLOW_UNAVAIL; /* off-platform / no Capstone: clean skip */

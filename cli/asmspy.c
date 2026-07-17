@@ -1856,6 +1856,10 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
             "data-flow capture of %s @ 0x%llx (%zu bytes) in pid %d%s\n",
             s ? s->name : region, (unsigned long long)base, len, (int)pid,
             tid ? " [--tid]" : "");
+    /* Copy the name BEFORE the symtab dies: dc.func borrows into `t` (or argv), and the
+     * messages below outlive asmspy_symtab_free. */
+    char fname[160];
+    snprintf(fname, sizeof fname, "%s", dc.func);
     int rc = asmspy_engine_dataflow(pid, tid, base, len, max, NULL,
                                     dataflow_render_sink, &dc);
     asmspy_symtab_free(&t);
@@ -1866,6 +1870,33 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         asmspy_strerror(rc, e, sizeof e);
         fprintf(stderr, "# SKIP --dataflow: %s\n", e);
         return 0;
+    }
+    if (rc == ASMSPY_REGION_NEVER_RAN) {
+        /* No thread reached the entry inside the bound. Before the bound existed this
+         * HUNG here. Word it as what was MEASURED — "not seen in <window>" — not as
+         * "never runs": we watched one window, and a region that is merely between
+         * phases is not a region that does not exist. --trace's wording is the model;
+         * the exit code (1) matches it too. */
+        const char *w = getenv("ASMTEST_DF_ENTRY_WAIT_MS");
+        if (tid)
+            fprintf(
+                stderr,
+                "%s not seen entering on thread %d in pid %d (waited %s ms)\n"
+                "  --tid=%d pins the capture to one thread; drop it to take "
+                "whichever\n"
+                "  thread reaches %s first\n",
+                fname, (int)tid, (int)pid, w && *w ? w : "10000", (int)tid,
+                fname);
+        else
+            fprintf(stderr,
+                    "%s not seen entering in pid %d (waited %s ms)\n"
+                    "  the region is not being called right now — check the "
+                    "symbol, "
+                    "or retry\n"
+                    "  while the code path is active (ASMTEST_DF_ENTRY_WAIT_MS "
+                    "lengthens the wait)\n",
+                    fname, (int)pid, w && *w ? w : "10000");
+        return 1;
     }
     if (rc != 0) {
         char e[128];

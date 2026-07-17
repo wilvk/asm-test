@@ -87,8 +87,14 @@
 #include "asmtest_valtrace.h"
 
 /* Return codes from the scoped ptrace producers (kept in step with the test's copy). */
-#define DF_PTRACE_OK     0 /* returned cleanly; a complete scoped trace     */
-#define DF_PTRACE_FAULT  1 /* routine faulted; a partial trace is filled    */
+#define DF_PTRACE_OK    0 /* returned cleanly; a complete scoped trace     */
+#define DF_PTRACE_FAULT 1 /* routine faulted; a partial trace is filled    */
+/* No thread reached the region entry within the entry-wait bound. A POSITIVE, like
+ * FAULT: an honest OUTCOME, not a failure — the attach worked, the region simply is
+ * not arriving. It must NOT be folded into ETRACE: "we could not trace you" and "the
+ * code you named is not running" send an operator to opposite places (ptrace_scope /
+ * seccomp vs. a wrong symbol or an idle phase). */
+#define DF_PTRACE_NEVER  2
 #define DF_PTRACE_EINVAL (-1) /* bad arguments                               */
 #define DF_PTRACE_ENOSYS (-3) /* off Linux x86-64 / no Capstone: self-skip   */
 #define DF_PTRACE_ETRACE                                                       \
@@ -148,11 +154,46 @@ typedef struct {
 #include <sys/uio.h>
 #include <sys/user.h>
 #include <sys/wait.h>
+#include <time.h> /* CLOCK_MONOTONIC: the entry-wait deadline (dfp_elapsed_ms) */
 #include <unistd.h>
 
 /* Hard backstop on TOTAL steps (prologue/libc to the region entry, plus the region):
  * bounds wall time if the tracee never enters or never leaves [code, code+len). */
 #define DFP_STEP_BACKSTOP (1u << 20)
+
+/* Bound on the wait for a thread to ARRIVE at the region entry (dfp_run_to_multi).
+ *
+ * WHY THIS EXISTS: the step backstop above LOOKS like it covers this and does not.
+ * It counts single-steps; the entry wait plants an int3 and CONTs, so a region that
+ * never arrives burns ZERO steps and the backstop never advances. The wait was a
+ * blocking waitpid, so `--dataflow <pid> <a symbol that is not running>` did not
+ * error — it HUNG (measured: 25 s to a SIGTERM, vs --trace answering "never
+ * executed" in 4 s on the identical target/function/thread).
+ *
+ * WHY A MONOTONIC DEADLINE, NOT the region engine's idle accumulator: rgn_race_to_entry
+ * (cli/asmspy_engine.c) resets its `idle_us` on EVERY waitpid event, so it ceilings one
+ * uninterrupted quiet spell rather than the wait. A target that stops for any other
+ * reason more often than the window — a 1 Hz timer signal, a chatty clone — resets the
+ * budget forever and is UNBOUNDED. A bound whose whole job is to bound must not be
+ * resettable by the thing it is bounding, so this is wall time on CLOCK_MONOTONIC
+ * (immune to settimeofday/NTP), checked unconditionally every iteration.
+ *
+ * WHY 10 s AND NOT RGN_ENTRY_WAIT_MS's 3000: the numbers are not comparable, because the
+ * postures are not. 3000 ms of RESETTABLE idleness tolerates an arrival that is slow but
+ * active for as long as the target keeps making noise; 3000 ms of WALL time does not. A
+ * wall bound is therefore strictly more aggressive at the same number, and the failure it
+ * buys is the one this tracer refuses everywhere else — telling an operator a region
+ * "never ran" when it was merely about to. So the number is chosen for the slowest
+ * legitimate arrival we know of, not for symmetry with a bound that means something else:
+ * a managed target that must JIT and warm up before re-entering (cf. the ~19.8 s stall the
+ * F4 GC-canonicalization work measured, which region scoping dodges but which sets the
+ * scale). 10 s is still finite, which is the entire point; the old behaviour was infinite.
+ *
+ * ASMTEST_DF_ENTRY_WAIT_MS overrides it — a test lever in the spirit of ASMSPY_TEST_THR_OOM
+ * so the smoke can force the deadline in ~0.5 s instead of 10, and a real escape hatch for
+ * a target slower than we guessed. 0 restores the old unbounded wait exactly. */
+#define DFP_ENTRY_WAIT_MS 10000
+#define DFP_ENTRY_POLL_US 200
 
 /* waitpid on a SEIZE'd foreign target's THREADS (clone children) needs __WALL to report
  * their ptrace-stops — Increment 4 enumerates every thread and steps whichever WORKER
@@ -1382,6 +1423,29 @@ static int dfp_thrset_add(dfp_thrset *s, pid_t tid) {
 
 /* Plant a shared int3 at `base` via `tid` (any stopped thread — one address space); the
  * original word is returned in *orig for the later restore. 0 on success, -1 on failure. */
+/* The entry-wait bound in ms: DFP_ENTRY_WAIT_MS, or ASMTEST_DF_ENTRY_WAIT_MS when set
+ * (0 = unbounded, the pre-bound behaviour). Read per call, not cached: the smoke drives
+ * both postures from one process, and this is not a hot path (once per attach). */
+static long dfp_entry_wait_ms(void) {
+    const char *e = getenv("ASMTEST_DF_ENTRY_WAIT_MS");
+    if (e != NULL && *e != '\0') {
+        char *end = NULL;
+        long v = strtol(e, &end, 10);
+        if (end != e && *end == '\0' && v >= 0)
+            return v;
+    }
+    return DFP_ENTRY_WAIT_MS;
+}
+
+/* Milliseconds elapsed since `t0` on CLOCK_MONOTONIC — immune to settimeofday/NTP, which
+ * a CLOCK_REALTIME deadline would let jump the bound in either direction. */
+static long dfp_elapsed_ms(const struct timespec *t0) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (now.tv_sec - t0->tv_sec) * 1000L +
+           (now.tv_nsec - t0->tv_nsec) / 1000000L;
+}
+
 static int dfp_plant_bp(pid_t tid, uint64_t base, long *orig) {
     errno = 0;
     long o = ptrace(PTRACE_PEEKTEXT, tid, (void *)(uintptr_t)base, NULL);
@@ -1403,19 +1467,43 @@ static void dfp_remove_bp(pid_t tid, uint64_t base, long orig) {
 
 /* Remove the shared int3 via ANY thread we can stop (POKETEXT needs a stopped tracee) —
  * used on failure teardown when the thread that would naturally restore it is gone. */
+/* Restore the shared entry byte and leave EVERY thread RUNNING again.
+ *
+ * Callers reach here with all threads CONT'd into the race, and hand the set straight
+ * to dfp_detach_others, which INTERRUPTs each thread and BLOCKS in waitpid for its
+ * stop. So this must not leave the thread it stopped stopped: PTRACE_INTERRUPT on an
+ * already-ptrace-stopped tracee RETURNS 0 (the caller cannot detect it) and queues NO
+ * event, so that waitpid never returns. MEASURED on 6.17 — a blocking waitpid there
+ * dies only to SIGALRM. Hence the CONT before returning.
+ *
+ * The rewind is not optional either. Whichever thread we INTERRUPT may already be
+ * trap-stopped AT the int3 (rip == base+1) — it can arrive in the window between a
+ * caller's last poll and this call. Resuming it without rewinding restarts it ONE BYTE
+ * into the instruction we just restored: the target dies, seconds later, somewhere
+ * unrelated. Same safety net as the region engine's (cli/asmspy_engine.c).
+ *
+ * One thread suffices for the POKETEXT itself — the int3 is shared, one address space. */
 static void dfp_remove_bp_any(dfp_thrset *set, uint64_t base, long orig) {
     for (size_t i = 0; i < set->n; i++) {
         pid_t tid = set->v[i];
-        ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
+        if (ptrace(PTRACE_INTERRUPT, tid, NULL, NULL) != 0)
+            continue; /* vanished: try the next one */
         int st = 0;
         pid_t w;
         do {
             w = waitpid(tid, &st, __WALL);
         } while (w < 0 && errno == EINTR);
-        if (w == tid && WIFSTOPPED(st)) {
-            dfp_remove_bp(tid, base, orig);
-            return;
+        if (w != tid || !WIFSTOPPED(st))
+            continue; /* exited under us: its stop is gone, try the next */
+        dfp_remove_bp(tid, base, orig);
+        struct user_regs_struct regs;
+        if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0 &&
+            regs.rip == base + 1) {
+            regs.rip = base;
+            ptrace(PTRACE_SETREGS, tid, NULL, &regs);
         }
+        ptrace(PTRACE_CONT, tid, NULL, NULL);
+        return;
     }
 }
 
@@ -1529,11 +1617,30 @@ static int dfp_run_to_multi(dfp_thrset *set, uint64_t base, pid_t only_tid,
     for (size_t i = 0; i < set->n; i++)
         ptrace(PTRACE_CONT, set->v[i], NULL, NULL);
 
-    /* 4. Catch the first thread to reach base (respecting only_tid). */
+    /* 4. Catch the first thread to reach base (respecting only_tid), BOUNDED: a region
+     *    that is not arriving must be reported, not waited on forever (DFP_ENTRY_WAIT_MS).
+     *    Polled (WNOHANG + a short nap) rather than signal-driven, so we do not interact
+     *    with the SIGALRM/ITIMER watchdog the descent tracer arms elsewhere. */
     uint64_t budget = 0;
+    const long wait_ms = dfp_entry_wait_ms();
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
     for (;;) {
         int st = 0;
-        pid_t w = waitpid(-1, &st, __WALL);
+        pid_t w = waitpid(-1, &st, __WALL | WNOHANG);
+        if (w == 0) { /* nothing ready: every thread is running free */
+            if (wait_ms > 0 && dfp_elapsed_ms(&t0) >= wait_ms) {
+                /* Nothing arrived in the window. Restore the byte and leave the threads
+                 * running (dfp_remove_bp_any's contract) so the caller's detach walk does
+                 * not block on an already-stopped thread, then report the honest outcome
+                 * rather than flattening it into a trace failure. */
+                dfp_remove_bp_any(set, base, orig);
+                return -2;
+            }
+            struct timespec nap = {0, DFP_ENTRY_POLL_US * 1000};
+            nanosleep(&nap, NULL);
+            continue;
+        }
         if (w < 0) {
             if (errno == EINTR)
                 continue;
@@ -1666,10 +1773,17 @@ static int dfp_attach_worker(pid_t pid, pid_t only_tid, uint64_t base,
 
     /* Plant the shared entry breakpoint, release all threads, catch whichever enters. */
     pid_t entering = 0;
-    if (dfp_run_to_multi(&set, base, only_tid, &entering) != 0) {
+    /* -2 = nobody arrived within the entry-wait bound. Keep it DISTINCT: flattening it
+     * into ETRACE would tell an operator "we could not trace you" (go check
+     * ptrace_scope, seccomp, W^X) when the truth is "the code you named is not running"
+     * (go check the symbol, or the target's phase). The int3 is already restored and
+     * every thread left running by dfp_run_to_multi, so the detach walk below is the
+     * same one the success path uses. */
+    int rrc = dfp_run_to_multi(&set, base, only_tid, &entering);
+    if (rrc != 0) {
         dfp_detach_others(&set, 0, base);
         free(set.v);
-        return DF_PTRACE_ETRACE;
+        return rrc == -2 ? DF_PTRACE_NEVER : DF_PTRACE_ETRACE;
     }
 
     /* The entering thread is trap-stopped at base. Detach the SIBLINGS so they run free. */

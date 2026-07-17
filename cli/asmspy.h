@@ -296,10 +296,20 @@ typedef void (*asmspy_dataflow_sink)(void *ctx, long result,
  * (bounded by the producer's step backstop). `stop` may be NULL (checked once
  * before the capture; the producer's own run-to / step loop is not interruptible
  * mid-capture — the tier is single-shot and fast). Returns 0 on a clean capture
- * (sink invoked once), ASMSPY_DATAFLOW_UNAVAIL if the producer is unavailable, or
- * a negative ASMTEST_PTRACE_* on an attach/permission failure. A region that never
- * executes on ANY thread blocks the producer at its entry breakpoint — bound live
- * use accordingly (the CLI timeout-guards its smoke). */
+ * (sink invoked once), ASMSPY_DATAFLOW_UNAVAIL if the producer is unavailable,
+ * ASMSPY_REGION_NEVER_RAN if no thread reached the entry within the producer's
+ * entry-wait bound, or a negative ASMTEST_PTRACE_* on an attach/permission failure.
+ *
+ * The NEVER_RAN case shares the REGION engine's code deliberately: it is the same
+ * fact about the same target, so the two views cannot disagree in words about an
+ * identical observation. It means "not seen entering during the window we watched" —
+ * NOT "never runs"; a region between phases is not a region that does not exist.
+ *
+ * This wait WAS unbounded — a region that never executed on any thread blocked the
+ * producer at its entry breakpoint forever, so the CLI timeout-guarded its smoke.
+ * It is now bounded (DFP_ENTRY_WAIT_MS, 10 s; ASMTEST_DF_ENTRY_WAIT_MS overrides,
+ * 0 restores the old unbounded behaviour). The guard stays as a backstop: it must
+ * now never fire, which is exactly what makes it worth keeping. */
 int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
                            long max, atomic_bool *stop,
                            asmspy_dataflow_sink sink, void *ctx);

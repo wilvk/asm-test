@@ -34,6 +34,7 @@
  * points and return codes here, exactly as it re-declares the emulator producer below. */
 #define DF_PTRACE_OK     0
 #define DF_PTRACE_FAULT  1
+#define DF_PTRACE_NEVER  2 /* nobody reached the entry within the bound */
 #define DF_PTRACE_EINVAL (-1)
 #define DF_PTRACE_ENOSYS (-3)
 #define DF_PTRACE_ETRACE (-4)
