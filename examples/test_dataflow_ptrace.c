@@ -1670,10 +1670,16 @@ static void test_callout_step_backstop(void) {
         return;
     }
     if (pid == 0) {
-        /* Independent victim (no PTRACE_TRACEME): call the region once and exit. The
-         * attacher SEIZEs it and runs it to the region entry itself. */
-        volatile long r = ((fn1_t)base)((long)(uintptr_t)helper);
-        (void)r;
+        /* Independent victim (no PTRACE_TRACEME): LOOP the region like every other
+         * attach victim in this file. A call-once-and-exit victim RACES the attach —
+         * on a slow host the child finishes and dies before the parent's SEIZE lands,
+         * and the ESRCH surfaced as a bogus "yama/seccomp" skip (3/3 on CI runners). */
+        struct timespec ts = {0, 2 * 1000 * 1000};
+        for (;;) {
+            volatile long r = ((fn1_t)base)((long)(uintptr_t)helper);
+            (void)r;
+            nanosleep(&ts, NULL);
+        }
         _exit(0);
     }
 

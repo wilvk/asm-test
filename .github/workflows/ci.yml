@@ -660,15 +660,19 @@ jobs:
             exit 1
           fi
           # A floor, not an exact count: new assertions should not break the gate, but a
-          # truncated or half-run suite must not pass. On bare metal the 8 suites total 257
+          # truncated or half-run suite must not pass. On bare metal the 8 suites total 389
           # (test_dataflow 23, method 29, gcmove 26, helpers 36, operands 20, emu 10,
-          # ptrace 91, blockstep 22). On a GitHub VM block-step's 22 self-skip (BTF masked,
-          # see above), leaving 235 — so the floor is 230. Note test_dataflow_ptrace's 91 DO
-          # run here: it drives PTRACE_SINGLESTEP, which the hypervisor does not mask; only
-          # SINGLEBLOCK is affected. If that 91 ever vanishes, this floor catches it.
+          # ptrace 126, blockstep 119 — measured 2026-07-17; the old 257 here predated the
+          # F-batch growth). On a GitHub VM the live block-step/replay slice self-skips
+          # (BTF masked, see above): the last green VM run counted 290, +3 now that the
+          # callout-backstop test's victim loops instead of racing the attach — so ~293.
+          # The floor sits a few below that ON PURPOSE, tight enough that even the smallest
+          # suite (emu's 10) vanishing trips it. Note test_dataflow_ptrace's 126 DO run
+          # here: it drives PTRACE_SINGLESTEP, which the hypervisor does not mask; only
+          # SINGLEBLOCK is affected.
           n=$(grep -c '^ok ' "$log" || true)
-          if [ "$n" -lt 230 ]; then
-            echo "::error::the data-flow C suite ran only $n assertions, expected >= 230 — a suite is missing or the run was truncated."
+          if [ "$n" -lt 285 ]; then
+            echo "::error::the data-flow C suite ran only $n assertions, expected >= 285 — a suite is missing or the run was truncated."
             exit 1
           fi
           echo "data-flow C suite: $n assertions, no unexpected skips, block-step chain intact."
