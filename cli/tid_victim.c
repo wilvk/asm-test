@@ -1,7 +1,11 @@
 /* tid_victim.c — two threads running DISTINCT hot functions (alpha_work /
- * beta_work), for asmspy's per-thread (--tid) filter smoke. Each worker prints
- * its own tid, so the smoke can trace exactly one and assert the stream contains
- * that thread's function and NOT the other's. Opts in via PR_SET_PTRACER_ANY.
+ * beta_work), for asmspy's per-thread (--tid) filter smoke and its --tree [tid]
+ * tagging smoke. Each worker prints its own tid, so the smoke can trace exactly
+ * one and assert the stream contains that thread's function and NOT the other's.
+ * Opts in via PR_SET_PTRACER_ANY.
+ *
+ * The two workers are the ONLY sources of call lines here — main blocks in
+ * pause() rather than sleeping in a loop. That is deliberate: see main().
  */
 #define _GNU_SOURCE
 #include <pthread.h>
@@ -34,16 +38,31 @@ __attribute__((noinline)) static long beta_work(long n) {
     return s;
 }
 
+/* MANY SMALL calls per round rather than one huge one, and that shape matters to
+ * two different views:
+ *
+ *  --stream counts INSTRUCTIONS, so it only needs the thread to be inside
+ *  *_work almost always. 64 iterations of work per ~5 instructions of call
+ *  overhead keeps that true (~98% of steps land inside), which is what the --tid
+ *  filter smoke relies on.
+ *
+ *  --tree counts CALLS, and this used to be one alpha_work(8000) call wrapping
+ *  an 8000-iteration loop with no calls in it — ONE call line per ~80,000
+ *  single-steps. A bounded --tree window therefore contained almost nothing from
+ *  these threads. 128x64 keeps the compute per round (~8192 iterations) while
+ *  emitting 128 call lines instead of 1.
+ */
+#define WORK_CALLS 128
+#define WORK_ITERS 64
+
 static void *alpha(void *a) {
     (void)a;
     fprintf(stderr, "alpha tid=%ld\n", gettid_());
     fflush(stderr);
-    /* Heavy compute, a tiny nap only every so often, so the thread is almost
-     * always executing alpha_work — a bounded single-step window reliably lands
-     * in it (the --tid filter smoke asserts alpha_work appears, beta_work never). */
     struct timespec nap = {0, 50 * 1000}; /* 0.05 ms */
     for (unsigned r = 0;; r++) {
-        g_sink += alpha_work(8000);
+        for (int k = 0; k < WORK_CALLS; k++)
+            g_sink += alpha_work(WORK_ITERS);
         if ((r & 7) == 0)
             nanosleep(&nap, NULL);
     }
@@ -55,7 +74,8 @@ static void *beta(void *a) {
     fflush(stderr);
     struct timespec nap = {0, 50 * 1000};
     for (unsigned r = 0;; r++) {
-        g_sink += beta_work(8000);
+        for (int k = 0; k < WORK_CALLS; k++)
+            g_sink += beta_work(WORK_ITERS);
         if ((r & 7) == 0)
             nanosleep(&nap, NULL);
     }
@@ -67,8 +87,16 @@ int main(void) {
     pthread_t a, b;
     pthread_create(&a, NULL, alpha, NULL);
     pthread_create(&b, NULL, beta, NULL);
-    struct timespec nap = {0, 5 * 1000 * 1000};
+    /* BLOCK, do not loop. main used to nanosleep(5ms) forever, which emitted
+     * FOUR call lines every 5ms (nanosleep@plt -> clock_nanosleep -> two libc
+     * frames) — MEASURED as ~34 of any 40-line --tree window, i.e. it drowned
+     * the two worker threads the [tid] test is actually about. It got them for
+     * free, too: a sleeping thread costs the single-stepper nothing, so main's
+     * line rate is WALL-CLOCK bound while the workers' is stepper-throughput
+     * bound. On a slower box main's share only grows and theirs only shrinks,
+     * which is precisely how this test went red on CI. pause() blocks forever
+     * and emits one call line, ever. */
     for (;;)
-        nanosleep(&nap, NULL);
+        pause();
     return 0;
 }

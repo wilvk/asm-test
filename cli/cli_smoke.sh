@@ -1605,10 +1605,22 @@ TLOG="$BUILD/tid_victim.log"
 : > "$TLOG"
 "$BUILD/tid_victim" 2>"$TLOG" &
 YPID=$!
-sleep 1
+# BARRIER, not a bet: each worker prints its tid as the first thing it does, so
+# "both tids printed" means both threads exist and are entering their work loops.
+# A bare `sleep 1` only assumes they got there — and everything below depends on
+# both being runnable, so that assumption is the test's foundation, not a detail.
+ATID=""; BTID=""
+_i=0
+while [ "$_i" -lt 100 ]; do
+    ATID=$(sed -n 's/^alpha tid=\([0-9][0-9]*\).*/\1/p' "$TLOG" | head -1)
+    BTID=$(sed -n 's/^beta tid=\([0-9][0-9]*\).*/\1/p' "$TLOG" | head -1)
+    [ -n "$ATID" ] && [ -n "$BTID" ] && break
+    _i=$((_i + 1))
+    sleep 0.1
+done
 kill -0 "$YPID" 2>/dev/null || fail "tid_victim did not start"
-ATID=$(sed -n 's/^alpha tid=\([0-9][0-9]*\).*/\1/p' "$TLOG" | head -1)
 [ -n "$ATID" ] || fail "tid_victim did not report alpha's tid"
+[ -n "$BTID" ] || fail "tid_victim did not report beta's tid"
 # control: whole-process stream sees BOTH distinct functions
 set +e
 cout=$(timeout 40 "$ASM" --stream "$YPID" 800 2>/dev/null); rc=$?
@@ -1645,9 +1657,26 @@ echo "  per-thread filter: alpha only (beta_work absent)"
 # threads' call trees interleave into one indented column that reads like a
 # single nonsensical call chain. tid_victim runs alpha_work and beta_work on
 # DISTINCT threads, so both must appear, each tagged, under >=2 distinct tids.
+#
+# Why this is now a real margin rather than a lucky one. --tree counts CALLS, and
+# tid_victim's main() used to nanosleep(5ms) in a loop, emitting FOUR call lines
+# every 5ms for free (a sleeping thread costs the single-stepper nothing) while
+# each worker emitted ONE line per ~80,000 steps. MEASURED: 34 of 40 lines were
+# main's, and the workers contributed 2-4 apiece — entirely from the attach
+# transient. Worse, main's rate is WALL-CLOCK bound and the workers' is
+# stepper-throughput bound, so on a slower box main's share only grows: at
+# --cpus=0.2 a worker was observed contributing ZERO lines. Worst of all, "main +
+# one worker" already satisfies ">=2 tids", so the check passed while the thing
+# it names was absent.
+#
+# main now blocks in pause() (zero call lines) and the workers make many small
+# calls, so the workers are the ONLY sources and split the window ~50/50.
+# MEASURED after the fix: 21/19, 20/20, 21/19 with main at 0; both tids appear
+# within 2 lines and both *_work names within 4. 200 is a ~100x/50x margin and
+# still runs in ~0.2s (it was ~0.45s at 40).
 echo "--- asmspy --tree $YPID (multi-thread [tid] tagging) ---"
 set +e
-tt=$(timeout 60 "$ASM" --tree "$YPID" 40 2>/dev/null); rc=$?
+tt=$(timeout 60 "$ASM" --tree "$YPID" 200 2>/dev/null); rc=$?
 set -e
 [ "$rc" -eq 124 ] && fail "--tree on tid_victim hung"
 printf '%s
@@ -1656,6 +1685,16 @@ printf '%s
 ' "$tt" | grep -qE '^\[[0-9]+\] '     || fail "--tree: no [tid] prefix on a multi-threaded target — two threads' trees would interleave indistinguishably"
 [ "$(printf '%s
 ' "$tt" | grep -oE '^\[[0-9]+\]' | sort -u | wc -l)" -ge 2 ]     || fail "--tree: expected entries from >=2 distinct tids on a multi-threaded target"
+# NAME the two threads, do not just count tids. ">=2 distinct tids" was
+# satisfiable by "main + one worker" — MEASURED at --cpus=0.1 before this fix:
+# 39 lines from main and 1 from a single worker PASSED the count while the OTHER
+# worker was entirely absent. Requiring alpha's and beta's own tids (from the
+# barrier above) is what the check always meant, and no bystander thread can
+# satisfy it.
+printf '%s\n' "$tt" | grep -qE "^\[$ATID\] " \
+    || fail "--tree: no entries tagged with alpha's tid ($ATID) — that thread was not followed/tagged"
+printf '%s\n' "$tt" | grep -qE "^\[$BTID\] " \
+    || fail "--tree: no entries tagged with beta's tid ($BTID) — that thread was not followed/tagged"
 # and the tags are real: the two threads' DISTINCT functions each appear
 printf '%s
 ' "$tt" | grep -q 'alpha_work' || fail "--tree: alpha_work missing"
