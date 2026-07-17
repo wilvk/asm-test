@@ -8,6 +8,45 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **AMD hardware review + follow-up plan — an adversarial pass over the AMD
+  tiers in which four of nine candidate findings were REFUTED and recorded as
+  such.** [2026-07-17-amd-hardware-review.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/2026-07-17-amd-hardware-review.md)
+  and [amd-review-followup-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/amd-review-followup-plan.md).
+  Every claim resting on kernel or silicon behaviour was checked against
+  **fetched primary source at pinned tags** (v6.10/v6.12/v6.14), not recall —
+  one verifier caught `master` shifting line numbers mid-review and re-pinned.
+  Confirmed: **Zen 3 BRS cannot open** (the probe/capture use
+  `PERF_COUNT_HW_BRANCH_INSTRUCTIONS` → `0x00c2`, but `amd_brs_hw_config` demands
+  raw `0xc4` *and* `sample_period > lbr_nr(16)`; `EINVAL` is then reported as
+  `AMD_NOHW`, so a real Zen 3 owner is told "no AMD branch records") — code fix
+  hardware-blocked per the house rule, but three docs assert the working path,
+  including a **Phase 0 marked _landed_ that specifies the exact missing arm**;
+  `branchsnap`'s synthetic boundary edge inflates the depth check so a complete
+  `use == 15` window is spuriously `truncated` → a real re-execution
+  (`n_dec = use + 1` vs a check counting hardware slots only); `IBS_MAX_RECORD`
+  is **pre-callchain** (112B vs ~1032-1184B — it landed in `68b53850`, callchain
+  in `a266b91` two days later and never touched it), leaving the loss heuristic
+  ~10× short where `PERF_RECORD_LOST` provably cannot cover the gap →
+  `lost==0 && throttled==0` **silent** loss in an honesty-first lane; and
+  `asmtest_amd_freeze_available()` is dead (`nm`: one definition, zero undefined
+  refs) with a **flatly false string printed to a human**. The organising finding
+  is process, not code: **no CI lane exercises AMD silicon** — the one
+  AMD-targeted job is named `hwtrace-privileged (PERFMON; AMD-exact self-skips
+  off Zen)` and runs on `ubuntu-latest` — so the only gate is a manual checklist
+  with **exactly one commit**, timestamped identically to the fix for the bug it
+  still calls open, which now instructs treating a `truncated=0` **regression**
+  as a known issue and gates on two signals this project measured false five days
+  later. Refuted and recorded so they are not re-raised (the Matrix 3
+  convention): the MSR TOS-rotation claim (transplants *Intel* architecture —
+  LbrExtV2 pins `From[0]/To[0]` by register renaming and hard-codes `hw_idx = 0`
+  *because* rotation is impossible; the linear read is **correct**), "IBS opts are
+  unreachable" (NULL *is* the designed contract; `SYSTEM_WIDE` is tested live
+  under `--cap-add=PERFMON`), the `RipInvalidChk` impact (the affected silicon
+  population is empty — Family 10h hardwires `BrnTrgt = 0`, so the existing gate
+  rejects it first), and the unread-IBS-regs "gap" (a dated non-goal in
+  `data-flow-tracing-plan.md:94`; the original grep was a false negative on
+  "address sampling").
+
 - **`asmspy --dataflow --auto` works off AMD now: a portable software-clock
   sampler (`--sampler=ibs|sw`), with the residency hazard owned out loud.**
   Auto-targeting was AMD-IBS-only; `asmtest_swclock_survey_process` (new in
