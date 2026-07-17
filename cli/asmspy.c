@@ -36,6 +36,7 @@
 #include <unistd.h>
 
 #include "asmspy.h"
+#include "asmspy_autoregion.h" /* --dataflow --auto: rank the hottest ENTRY edge */
 #include "asmspy_dataview.h" /* --dataflow value annotation + slice/def-use logic */
 #include "asmspy_graphsort.h" /* gsort_t + gnode_cmp (unit-tested separately) */
 #include "asmspy_logview.h"
@@ -1830,8 +1831,101 @@ static void dataflow_render_sink(void *ctx, long result,
     fflush(stdout);
 }
 
+/* --dataflow --auto: resolve one hot-edge endpoint for asmspy_autoregion_rank.
+ * Wraps asmspy_symtab_at so the picker stays pure (and unit-testable off an IBS
+ * box); asmspy_symtab_at is the SAME function every view names addresses through,
+ * including its exact-start-only rule for unsized symbols — which is precisely the
+ * rule the picker's size>0 guard exists to neutralise. */
+static int auto_resolve_sym(void *ctx, uint64_t addr, uint64_t *start,
+                            uint64_t *size, const char **name,
+                            const char **module) {
+    const asmspy_symtab_t *t = (const asmspy_symtab_t *)ctx;
+    const asmspy_sym_t *s = asmspy_symtab_at(t, addr);
+    if (!s)
+        return -1;
+    *start = s->addr;
+    *size = s->size;
+    *name = s->name;
+    *module = s->module;
+    return 0;
+}
+
+/* Sample the target OUT OF BAND, rank the entry arrivals, and hand back the
+ * winner's (base,len). Returns 0 on a pick, <0 for a clean self-skip (no IBS
+ * substrate / perf refused), >0 when the sampler ran but nothing qualified.
+ *
+ * This is the ADAPTER, and it is deliberately thin: everything that can be WRONG
+ * about the choice lives in asmspy_autoregion_rank, which is pure and unit-tested
+ * on every host (cli/test_autoregion.c). The sampler underneath is AMD IBS-Op
+ * hardware and self-skips elsewhere — so keeping this function to "drain the
+ * window, call the picker" is what stops the feature's correctness from depending
+ * on a lane most machines cannot run. */
+#define AUTO_WINDOW_MS 400
+#define AUTO_MAX_CANDS 16
+static int auto_pick(pid_t pid, const asmspy_symtab_t *t, const char *module,
+                     uint64_t *base, size_t *len) {
+    if (!asmtest_ibs_available()) {
+        fprintf(stderr, "# SKIP --dataflow --auto: %s\n",
+                asmtest_ibs_unavail_reason());
+        return -1;
+    }
+    /* The JIT map is layered so a hot MANAGED method can win too — the sampler
+     * already names those, and it is the one rich view safe on a live JIT. */
+    asmspy_jitmap_t jit;
+    asmspy_jitmap_init(&jit, pid);
+    asmspy_jitmap_refresh(&jit);
+    sample_snap snap = {0};
+    int rc = asmspy_engine_sample(pid, AUTO_WINDOW_MS, NULL, t, &jit,
+                                  sample_capture_sink, &snap);
+    asmspy_jitmap_free(&jit);
+    if (rc == ASMSPY_SAMPLE_UNAVAIL) {
+        fprintf(stderr, "# SKIP --dataflow --auto: %s\n",
+                asmtest_ibs_unavail_reason());
+        free(snap.v);
+        return -1;
+    }
+    if (rc != 0) {
+        char e[128];
+        asmspy_strerror(rc, e, sizeof e);
+        fprintf(stderr, "--auto: sampling failed: %s\n", e);
+        free(snap.v);
+        return 1;
+    }
+
+    asmspy_autocand_t cands[AUTO_MAX_CANDS];
+    size_t nc =
+        asmspy_autoregion_rank(snap.v, snap.n, auto_resolve_sym, (void *)t,
+                               module, cands, AUTO_MAX_CANDS);
+    if (nc == 0) {
+        /* An honest refusal, not a guess. Most processes are idle most of the
+         * time, and an idle target yields no edges at all — picking SOMETHING
+         * from nothing is how you arm a breakpoint that never fires. */
+        fprintf(stderr,
+                "--auto: no function was observed being ENTERED in pid %d "
+                "(%d ms, %llu edges%s%s)\n"
+                "  the target may be idle, or its work may be in a module the "
+                "filter excludes;\n"
+                "  name a function explicitly, or widen --module=\n",
+                (int)pid, AUTO_WINDOW_MS, (unsigned long long)snap.n,
+                module ? ", --module=" : "", module ? module : "");
+        free(snap.v);
+        return 1;
+    }
+    *base = cands[0].addr;
+    *len = (size_t)cands[0].size;
+    fprintf(stderr,
+            "--auto: %s [%s] — %llu entry samples from %u call site%s "
+            "(of %zu candidate%s in %d ms)\n",
+            cands[0].name ? cands[0].name : "?",
+            cands[0].module ? cands[0].module : "?", cands[0].arrivals,
+            cands[0].sites, cands[0].sites == 1 ? "" : "s", nc,
+            nc == 1 ? "" : "s", AUTO_WINDOW_MS);
+    free(snap.v);
+    return 0;
+}
+
 static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
-                        int json) {
+                        int json, int auto_region, const char *module) {
     asmspy_symtab_t t;
     if (asmspy_symtab_load(pid, &t) < 0) {
         fprintf(stderr, "cannot read symbols for pid %d\n", (int)pid);
@@ -1839,7 +1933,14 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
     }
     uint64_t base = 0;
     size_t len = 0;
-    if (resolve_region(&t, region, &base, &len) != 0) {
+    if (auto_region) {
+        /* No symbol given: find what the target is DOING and trace that. */
+        int arc = auto_pick(pid, &t, module, &base, &len);
+        if (arc != 0) {
+            asmspy_symtab_free(&t);
+            return arc < 0 ? 0 : 1; /* <0 = clean skip (no IBS), >0 = no pick */
+        }
+    } else if (resolve_region(&t, region, &base, &len) != 0) {
         fprintf(
             stderr,
             "cannot resolve '%s' to a region in pid %d\n"
@@ -1850,12 +1951,14 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         return 1;
     }
     const asmspy_sym_t *s = asmspy_symtab_at(&t, base);
-    dataflow_ctx dc = {pid, s ? s->name : region, json};
+    /* With --auto the "region" argv is the flag itself, so fall back to the resolved
+     * symbol rather than printing "--auto" as the function name. */
+    dataflow_ctx dc = {pid, s ? s->name : (auto_region ? "?" : region), json};
     /* status to STDERR so --json stdout stays a single clean object */
     fprintf(stderr,
             "data-flow capture of %s @ 0x%llx (%zu bytes) in pid %d%s\n",
-            s ? s->name : region, (unsigned long long)base, len, (int)pid,
-            tid ? " [--tid]" : "");
+            s ? s->name : (auto_region ? "?" : region),
+            (unsigned long long)base, len, (int)pid, tid ? " [--tid]" : "");
     /* Copy the name BEFORE the symtab dies: dc.func borrows into `t` (or argv), and the
      * messages below outlive asmspy_symtab_free. */
     char fname[160];
@@ -4538,9 +4641,12 @@ static int usage(const char *argv0) {
         "  %s --log    <pid> [n] [--follow]  stream n syscalls with data\n"
         "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n] [--tid=<t>]  live samples "
         "of a function/region (any thread)\n"
-        "  %s --dataflow <pid> <sym|0xADDR[:LEN]> [--json] [--tid=<t>] "
-        "[--max=<n>]  scoped L0 value trace + L1 def-use of one invocation "
-        "(native targets)\n"
+        "  %s --dataflow <pid> <sym|0xADDR[:LEN]|--auto> [--json] [--tid=<t>] "
+        "[--max=<n>] [--module=<m>]  scoped L0 value trace + L1 def-use of one "
+        "invocation (native targets). --auto picks the function the target is "
+        "most often ENTERING right now, sampled out of band (AMD IBS; needs no "
+        "ptrace and self-skips elsewhere) — --module=<m> scopes the pick, and "
+        "--auto cannot be combined with --tid\n"
         "  %s --stream <pid> [n] [--tid=<t>] [--follow]  stream n "
         "instructions live (function + asm)\n"
         "  %s --graph  <pid> [n] [--sort=invocations|fanout|functions-called] "
@@ -4640,8 +4746,15 @@ int main(int argc, char **argv) {
         pid_t tid = 0;
         long max = 0; /* 0 = capture until the region returns */
         int json = 0;
+        const char *module = NULL;
+        /* --auto occupies the REGION slot: "trace what it is doing" is an
+         * alternative to naming a region, not an option on one. Keeping it in
+         * argv[3] also leaves the option loop (and its terminal bad_arg) exactly
+         * as it was — starting the loop at 3 instead would silently swallow the
+         * bare-symbol form into bad_arg. */
+        int auto_region = (strcmp(argv[3], "--auto") == 0);
         for (int i = 4; i < argc;
-             i++) { /* [--json] [--tid=N] [--max=N] in any order */
+             i++) { /* [--json] [--tid=N] [--max=N] [--module=M] in any order */
             if (strcmp(argv[i], "--json") == 0)
                 json = 1;
             else if (strncmp(argv[i], "--tid=", 6) == 0) {
@@ -4650,11 +4763,31 @@ int main(int argc, char **argv) {
             } else if (strncmp(argv[i], "--max=", 6) == 0) {
                 if (parse_count(argv[i] + 6, &max) != 0 || max <= 0)
                     return bad_arg("max (positive)", argv[i] + 6);
+            } else if (strncmp(argv[i], "--module=", 9) == 0) {
+                module = argv[i] + 9;
             } else {
                 return bad_arg("dataflow option", argv[i]);
             }
         }
-        return cmd_dataflow(pid, argv[3], tid, max, json);
+        /* --auto + --tid is a USAGE ERROR, not a precedence rule — the same call
+         * the --tid/--follow row made, for a harder reason. asmspy_sample_edge_t
+         * carries no tid and neither does the IBS record path (ibs_drain reads the
+         * sample's pid and drops the tid), so the sampler physically cannot say
+         * WHICH thread arrived at an entry. --auto --tid could therefore only pin
+         * the capture to a thread that may never enter the region it picked: a
+         * hang generator. Refuse it instead of silently preferring one. */
+        if (auto_region && tid)
+            return bad_arg("--auto with --tid (the sampler cannot attribute an "
+                           "entry to a thread; drop one)",
+                           "--auto --tid");
+        /* --module= only scopes the automatic PICK; with a named region the user
+         * has already made that choice, so accepting it would be a no-op that
+         * reads like a filter. */
+        if (!auto_region && module)
+            return bad_arg("--module= without --auto (it scopes the automatic "
+                           "pick; a named region needs no filter)",
+                           module);
+        return cmd_dataflow(pid, argv[3], tid, max, json, auto_region, module);
     }
     if (strcmp(argv[1], "--stream") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)

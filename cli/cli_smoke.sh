@@ -288,6 +288,83 @@ printf '%s\n' "$bigout" | grep -qE '[^0-9]83 steps,' \
     || fail "--dataflow --max=200: expected the full 83 steps"
 echo "  control: --max=200 (> 83) captures in full, ret=57"
 
+# ---------------------------------------------------------------------------
+# --dataflow --auto: trace what the target is DOING, no symbol named (Theme H)
+# ---------------------------------------------------------------------------
+# auto_victim's SHAPE is the test, because the intuitive rule and the correct one
+# disagree on it:
+#   grind_forever()  entered ONCE, never returns, burns the CPU  -> the RESIDENCY
+#                    winner. A PC histogram picks it; an entry breakpoint there can
+#                    never fire again, so that pick HANGS (until the entry bound).
+#   entered_often()  called from grind_forever's inner loop      -> the only pick
+#                    the producer can actually catch.
+# So "picked entered_often" cannot pass by accident: a residency rule yields
+# grind_forever, and a hottest-EDGE-outright rule yields grind_forever's loop
+# back-edge (mid-function, not a region at all). Only an ENTRY-ARRIVAL rule lands
+# here. quiet_helper() is never called: it must never be named.
+#
+# The picker itself is unit-tested on every host (build/test_autoregion, 19 checks).
+# THIS block covers only the wiring, and it self-skips off AMD IBS — real hardware,
+# a legitimate gate per CLAUDE.md. `make docker-cli-ibs` is the lane that runs it.
+echo "--- asmspy --dataflow --auto (pick the hot ENTRY, no symbol given) ---"
+"$BUILD/auto_victim" 2>"$BUILD/auto_victim.log" &
+UVPID=$!
+sleep 1
+kill -0 "$UVPID" 2>/dev/null || fail "auto_victim did not start"
+set +e
+auout=$(timeout 60 "$ASM" --dataflow "$UVPID" --auto 2>&1); aurc=$?
+set -e
+[ "$aurc" -eq 124 ] && fail "--dataflow --auto hung"
+if printf '%s\n' "$auout" | grep -q '^# SKIP --dataflow --auto'; then
+    printf '%s\n' "$auout" | grep '^# SKIP' | sed 's/^/  /'
+    echo "  (IBS-Op unavailable — --auto self-skipped; assertions NOT run. Use make docker-cli-ibs)"
+else
+    [ "$aurc" -eq 0 ] || fail "--dataflow --auto exited $aurc: $auout"
+    # THE assertion: the callee, not the residency winner.
+    printf '%s\n' "$auout" | grep -q 'entered_often' \
+        || fail "--auto did not pick entered_often: $auout"
+    # THE CONTROL, and the whole reason the fixture has two functions: the rival
+    # rule's answer must be ABSENT. grind_forever has no entry edge at all (it was
+    # entered before we attached), so a picker that names it is ranking residency.
+    printf '%s\n' "$auout" | grep -q 'grind_forever' \
+        && fail "--auto picked grind_forever — that is the RESIDENCY winner, and an entry breakpoint there can never fire"
+    # Never called => never observed => never picked.
+    printf '%s\n' "$auout" | grep -q 'quiet_helper' \
+        && fail "--auto named quiet_helper, which is never called"
+    # It must actually TRACE the pick, not just name it — the point is the data flow.
+    printf '%s\n' "$auout" | grep -q 'data flow — entered_often' \
+        || fail "--auto picked but did not capture: $auout"
+    printf '%s\n' "$auout" | grep -qE '#0 .*endbr64|#0 .*\+0x' \
+        || fail "--auto: no value trace from the auto-picked region"
+    # The provenance line must report real evidence, not a guess.
+    printf '%s\n' "$auout" | grep -qE '\-\-auto: entered_often \[auto_victim\] — [0-9]+ entry samples' \
+        || fail "--auto: no entry-sample provenance: $auout"
+    echo "  --auto picked + traced entered_often (grind_forever correctly rejected)"
+
+    # --module= scopes the pick. A module that matches nothing must REFUSE
+    # honestly rather than fall back to a wrong region.
+    set +e
+    amout=$(timeout 60 "$ASM" --dataflow "$UVPID" --auto --module=no_such_module 2>&1); amrc=$?
+    set -e
+    [ "$amrc" -eq 124 ] && fail "--auto --module hung"
+    printf '%s\n' "$amout" | grep -q 'no function was observed being ENTERED' \
+        || fail "--auto --module=no_such_module should refuse honestly, got: $amout"
+    printf '%s\n' "$amout" | grep -q 'entered_often' \
+        && fail "--auto --module=no_such_module still picked entered_often (the filter does not filter)"
+    echo "  --auto --module= filters the pick (and refuses honestly when empty)"
+fi
+# The victim must survive being sampled + traced.
+sleep 1
+kill -0 "$UVPID" 2>/dev/null || fail "auto_victim died under --dataflow --auto"
+kill "$UVPID" 2>/dev/null || true
+rm -f "$BUILD/auto_victim.log"
+
+# --auto + --tid is a USAGE error, not a precedence rule: the sampler carries no
+# tid, so it could only ever pin the capture to a thread that may never arrive.
+expect_badarg "$ASM" --dataflow 1 --auto --tid=1
+# --module= without --auto would be a silent no-op that reads like a filter.
+expect_badarg "$ASM" --dataflow 1 hotfn --module=libc
+
 # bad --tid / --max / pid are rejected up front (rc=2), before any attach
 expect_badarg "$ASM" --dataflow "$AVPID" hotfn --tid=nope
 expect_badarg "$ASM" --dataflow "$AVPID" hotfn --max=0

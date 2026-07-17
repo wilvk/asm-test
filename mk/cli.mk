@@ -32,6 +32,7 @@ $(BUILD)/asmspy_syscall_names.inc: cli/gen-syscall-names.sh | $(BUILD)
 # thread owns the ptrace loop while the ncurses UI thread stays responsive).
 $(BUILD)/%.o: cli/%.c cli/asmspy.h cli/asmspy_graphsort.h \
               cli/asmspy_dataview.h cli/asmspy_treefilter.h \
+              cli/asmspy_autoregion.h \
               include/asmtest_ptrace.h \
               include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -I$(BUILD) -pthread -c $< -o $@
@@ -119,6 +120,17 @@ $(BUILD)/int3_victim: $(BUILD)/int3_victim.o
 # --sample (AMD IBS-Op, out of band) has retired taken branches to sample and the
 # smoke can assert the function is named. Self-skips off IBS like the ibs tier.
 $(BUILD)/sample_victim: $(BUILD)/sample_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+# auto_victim backs the --dataflow --auto smoke, and its SHAPE is the test:
+# grind_forever() is entered ONCE and never returns (the residency winner — what a
+# PC histogram picks, and an entry breakpoint there can never fire again), while
+# entered_often() is called from its inner loop (the only pick the producer can
+# actually catch). The two rules disagree, so "--auto picked entered_often" cannot
+# pass by accident. quiet_helper() is never called: the negative control. Spins for
+# real because IBS-Op samples retired ops — attach_victim's 5Hz hotfn yields ZERO
+# samples in a 400ms window (measured). Compiles via the cli/ .o pattern rule.
+$(BUILD)/auto_victim: $(BUILD)/auto_victim.o
 	$(CC) $(CFLAGS) $^ -o $@
 
 # watch_victim's WORKER thread (not the leader) stores a known magic into a known
@@ -260,6 +272,17 @@ $(BUILD)/test_treefilter: cli/test_treefilter.c cli/asmspy_treefilter.h \
                           | $(BUILD)
 	$(CC) $(CFLAGS) -Icli -o $@ cli/test_treefilter.c
 
+# test_autoregion — headless unit test for the --dataflow --auto region picker
+# (cli/asmspy_autoregion.h: rank the hottest ENTRY edge). This test carries the
+# real burden for that feature: the sampler feeding the picker is AMD IBS-Op
+# HARDWARE and self-skips everywhere else (including every GitHub runner), so a
+# rule verified only end-to-end would be verified almost nowhere. The ranking is
+# pure over hand-built edges, so it runs on ANY host — the live lane
+# (docker-cli-ibs) is then only responsible for the wiring.
+$(BUILD)/test_autoregion: cli/test_autoregion.c cli/asmspy_autoregion.h \
+                          cli/asmspy.h | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -o $@ cli/test_autoregion.c
+
 # test_symtab — unit test for the symbol REVERSE lookup (asmspy_symtab_at), the
 # one function every view that names an address goes through. Pins the edges
 # where a resolver lies quietly instead of failing: one byte past a function,
@@ -283,9 +306,11 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/cpp_victim \
            $(BUILD)/jit_victim $(BUILD)/jitdump_victim $(BUILD)/int3_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/watch_victim \
+           $(BUILD)/auto_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
-           $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
+           $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/test_autoregion \
+           $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
            $(BUILD)/fork_victim $(BUILD)/clone_victim \
            $(BUILD)/sock_victim $(BUILD)/longjmp_victim \
            $(BUILD)/sigcall_victim $(BUILD)/argdecode_victim $(CLI_I386_VICTIM)
