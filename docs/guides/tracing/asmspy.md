@@ -119,7 +119,11 @@ Run `asmspy` with no arguments. It walks four screens:
 3. **Symbol picker** (modes 2 and 9 — the views that trace one chosen
    function) — the target's resolved function symbols, filterable; `Enter`
    picks the function to trace, `F3` reloads the symbols (picking up
-   newly-mapped libraries or fresh JIT code).
+   newly-mapped libraries or fresh JIT code). **`Tab`** cycles the row order —
+   **address** (the default), **hot edges** (a live AMD IBS-Op sample ranking
+   by entry-arrival count, the same rule `--dataflow --auto` picks with — an
+   IBS-less host falls back to address order with an explanation), and
+   **name** (alphabetical) — mirroring the process picker's Tab-cycle sort.
 4. **Live view** — depends on the mode:
    - *Syscall log* — a **split** feed: the syscall stream on the left, and the
      strings it carried (paths and read/write buffers, decoded up to 200 bytes)

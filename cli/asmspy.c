@@ -31,6 +31,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h> /* strcasecmp — the symbol picker's name sort */
 #include <sys/uio.h> /* process_vm_readv — read a function's bytes to disassemble */
 #include <time.h>
 #include <unistd.h>
@@ -3916,46 +3917,209 @@ static int screen_mode(const asmspy_proc_t *p) {
     }
 }
 
-/* symbol picker; returns 0 and fills the region on selection, -1 on back.
- * 'r' reloads the target's function symbols in place (so `t` stays current for
- * the caller, which passes it on to the live view for callee naming). */
+/* How the symbol picker (screen_syms) orders its rows. */
+typedef enum {
+    SYMS_SORT_ADDR = 0, /* ascending address — symtab_load's native order    */
+    SYMS_SORT_HOT = 1,  /* descending hot ENTRY-edge arrivals (AMD IBS-Op)   */
+    SYMS_SORT_NAME = 2, /* case-insensitive by name                         */
+} syms_sort_t;
+
+static const char *syms_sort_label(syms_sort_t s) {
+    switch (s) {
+    case SYMS_SORT_HOT:
+        return "hot edges";
+    case SYMS_SORT_NAME:
+        return "name";
+    default:
+        return "address";
+    }
+}
+
+/* Resolve callback for asmspy_autoregion_rank bound to a plain symtab (no JIT
+ * layering): the picker only reorders rows already IN `t`, so a JIT method —
+ * which has no row here to reorder — has nothing to win. */
+typedef struct {
+    const asmspy_symtab_t *t;
+} syms_resolve_ctx;
+static int syms_resolve_sym(void *ctx, uint64_t addr, uint64_t *start,
+                            uint64_t *size, const char **name,
+                            const char **module) {
+    const syms_resolve_ctx *c = ctx;
+    const asmspy_sym_t *s = asmspy_symtab_at(c->t, addr);
+    if (!s)
+        return -1;
+    *start = s->addr;
+    *size = s->size;
+    *name = s->name;
+    *module = s->module;
+    return 0;
+}
+
+/* Sample the target for hot ENTRY edges (AMD IBS-Op, out of band, one
+ * AUTO_WINDOW_MS window — the same substrate and the same entry-arrival rule
+ * asmspy_autoregion_rank gives --dataflow --auto, so "hot" means the same
+ * thing here as it does there rather than a second, competing definition) and
+ * fill arrivals[i] with t->v[i]'s summed arrival count (0 if never observed
+ * entering). Returns 0 once arrivals is filled (possibly all zero — an idle
+ * target legitimately samples no edges), -1 if IBS is unavailable or the
+ * sample failed outright, with a one-line reason either way. */
+static int syms_sample_hot(pid_t pid, const asmspy_symtab_t *t,
+                           unsigned long long *arrivals, char *reason,
+                           size_t reason_cap) {
+    if (!asmtest_ibs_available()) {
+        snprintf(reason, reason_cap, "%s", asmtest_ibs_skip_reason());
+        return -1;
+    }
+    sample_snap snap = {0};
+    int rc = asmspy_engine_sample(pid, AUTO_WINDOW_MS, NULL, t, NULL,
+                                  sample_capture_sink, &snap);
+    if (rc != 0) {
+        if (rc == ASMSPY_SAMPLE_UNAVAIL)
+            snprintf(reason, reason_cap, "%s", asmtest_ibs_unavail_reason());
+        else
+            asmspy_strerror(rc, reason, reason_cap);
+        free(snap.v);
+        return -1;
+    }
+
+    asmspy_autocand_t stackc[AUTO_MAX_CANDS];
+    asmspy_autocand_t *cands = stackc;
+    size_t cap = AUTO_MAX_CANDS;
+    if (snap.n > cap) { /* size by edge count so the fold can't drop a late symbol */
+        asmspy_autocand_t *heap = malloc(snap.n * sizeof *heap);
+        if (heap) {
+            cands = heap;
+            cap = snap.n;
+        }
+    }
+    syms_resolve_ctx rctx = {t};
+    size_t nc = asmspy_autoregion_rank(snap.v, snap.n, syms_resolve_sym, &rctx,
+                                       NULL, cands, cap);
+    for (size_t i = 0; i < nc; i++) {
+        const asmspy_sym_t *s = asmspy_symtab_at(t, cands[i].addr);
+        if (s)
+            arrivals[s - t->v] = cands[i].arrivals;
+    }
+    snprintf(reason, reason_cap, "%zu candidate%s from %llu edge%s", nc,
+             nc == 1 ? "" : "s", (unsigned long long)snap.n,
+             snap.n == 1 ? "" : "s");
+    if (cands != stackc)
+        free(cands);
+    free(snap.v);
+    return 0;
+}
+
+/* qsort context for the picker's row order: set immediately before each
+ * qsort, mirroring sedge_cmp's file-scope-selector convention (single-
+ * threaded under the UI, so no closure is needed). Sorts a permutation of
+ * INDICES into t->v rather than t->v itself, since t->v's address order is a
+ * lookup invariant other code (asmspy_symtab_at's binary search) relies on. */
+static const asmspy_symtab_t *syms_sort_tab;
+static const unsigned long long *syms_sort_arrivals;
+static syms_sort_t syms_sort_key = SYMS_SORT_ADDR;
+static int syms_sort_cmp(const void *a, const void *b) {
+    size_t i = *(const size_t *)a, j = *(const size_t *)b;
+    const asmspy_sym_t *si = &syms_sort_tab->v[i], *sj = &syms_sort_tab->v[j];
+    if (syms_sort_key == SYMS_SORT_HOT) {
+        unsigned long long ai = syms_sort_arrivals[i], aj = syms_sort_arrivals[j];
+        if (ai != aj)
+            return ai < aj ? 1 : -1; /* descending */
+    } else if (syms_sort_key == SYMS_SORT_NAME) {
+        int c = strcasecmp(si->name ? si->name : "", sj->name ? sj->name : "");
+        if (c != 0)
+            return c;
+    }
+    return si->addr < sj->addr ? -1 : si->addr > sj->addr ? 1 : 0; /* tiebreak */
+}
+
+/* symbol picker (shared by modes 2 and 9); returns 0 and fills the region on
+ * selection, -1 on back. 'r'/F3 reloads the target's function symbols in
+ * place (so `t` stays current for the caller, which passes it on to the live
+ * view for callee naming); Tab cycles the row order address -> hot edges ->
+ * name, mirroring the process picker's Tab-cycle sort. */
 static int screen_syms(pid_t pid, uint64_t *base, size_t *len,
                        asmspy_symtab_t *t) {
-    for (;;) { /* (re-)build loop — 'r' reloads t and re-enters */
+    syms_sort_t sortmode = SYMS_SORT_ADDR;
+    for (;;) { /* (re-)build loop — Tab re-sorts, F3 reloads, both re-enter */
         if (t->n == 0)
             return -1;
-        char **items = malloc(t->n * sizeof *items);
-        if (!items)
+
+        unsigned long long *arrivals = calloc(t->n, sizeof *arrivals);
+        if (!arrivals)
             return -1;
-        for (size_t i = 0; i < t->n; i++) {
+        if (sortmode == SYMS_SORT_HOT) {
+            erase();
+            mvprintw(0, 0, "sampling hot entry edges (AMD IBS-Op, ~%d ms)...",
+                     AUTO_WINDOW_MS);
+            refresh();
+            char reason[160];
+            if (syms_sample_hot(pid, t, arrivals, reason, sizeof reason) !=
+                0) {
+                erase();
+                mvprintw(0, 0, "hot-edge sort needs an AMD IBS-Op host — %s",
+                         reason);
+                mvprintw(2, 0, "press a key (falling back to address order)");
+                refresh();
+                getch();
+                sortmode = SYMS_SORT_ADDR;
+            }
+        }
+
+        size_t *perm = malloc(t->n * sizeof *perm);
+        if (!perm) {
+            free(arrivals);
+            return -1;
+        }
+        for (size_t i = 0; i < t->n; i++)
+            perm[i] = i;
+        syms_sort_tab = t;
+        syms_sort_arrivals = arrivals;
+        syms_sort_key = sortmode;
+        qsort(perm, t->n, sizeof *perm, syms_sort_cmp);
+
+        char **items = malloc(t->n * sizeof *items);
+        if (!items) {
+            free(perm);
+            free(arrivals);
+            return -1;
+        }
+        for (size_t k = 0; k < t->n; k++) {
+            const asmspy_sym_t *s = &t->v[perm[k]];
             char b[256];
-            snprintf(b, sizeof b, "%-40s %6llu  0x%llx  [%s]", t->v[i].name,
-                     (unsigned long long)t->v[i].size,
-                     (unsigned long long)t->v[i].addr, t->v[i].module);
-            items[i] = strdup(b);
+            if (sortmode == SYMS_SORT_HOT)
+                snprintf(b, sizeof b, "%-40s %8llu  0x%llx  [%s]", s->name,
+                         arrivals[perm[k]], (unsigned long long)s->addr,
+                         s->module);
+            else
+                snprintf(b, sizeof b, "%-40s %6llu  0x%llx  [%s]", s->name,
+                         (unsigned long long)s->size,
+                         (unsigned long long)s->addr, s->module);
+            items[k] = strdup(b);
         }
         List L;
         if (list_init(&L, items, (int)t->n) != 0) {
             for (size_t i = 0; i < t->n; i++)
                 free(items[i]);
             free(items);
+            free(perm);
+            free(arrivals);
             return -1;
         }
 
-        int outcome = 0; /* 1 pick, 2 back, 3 reload */
-        int selidx = -1;
+        int outcome = 0; /* 1 pick, 2 back, 3 reload, 4 re-sort */
+        size_t realidx = 0;
         while (outcome == 0) {
             int rows, cols;
             getmaxyx(stdscr, rows, cols);
             erase();
             attron(A_BOLD);
-            mvprintw(0, 0, "asmspy — pick a function to trace (pid %d)",
-                     (int)pid);
+            mvprintw(0, 0, "asmspy — pick a function to trace (pid %d)  [sort: %s]",
+                     (int)pid, syms_sort_label(sortmode));
             attroff(A_BOLD);
             list_render(&L, 1, rows - 3, cols);
             mvprintw(rows - 1, 0,
-                     "type: filter   Enter: trace   F3: reload   ESC: back   "
-                     "(%d/%zu)",
+                     "type: filter   Enter: trace   Tab: sort   F3: reload   "
+                     "ESC: back   (%d/%zu)",
                      L.nmatch, t->n);
             clrtoeol();
             refresh();
@@ -3964,32 +4128,42 @@ static int screen_syms(pid_t pid, uint64_t *base, size_t *len,
                 outcome = 2;
             else if (ch == KEY_F(3))
                 outcome = 3;
-            else {
+            else if (ch == '\t') {
+                sortmode = (syms_sort_t)((sortmode + 1) % 3);
+                outcome = 4;
+            } else {
                 int sel = list_key(&L, ch, rows - 3);
-                if (sel >= 0 && t->v[sel].size > 0) { /* need a sized region */
-                    selidx = sel;
-                    outcome = 1;
+                if (sel >= 0) {
+                    size_t real = perm[sel];
+                    if (t->v[real].size > 0) { /* need a sized region */
+                        realidx = real;
+                        outcome = 1;
+                    }
                 }
             }
         }
 
         if (outcome == 1) {
-            *base = t->v[selidx].addr;
-            *len = t->v[selidx].size;
+            *base = t->v[realidx].addr;
+            *len = t->v[realidx].size;
         }
         list_done(&L);
         for (size_t i = 0; i < t->n; i++)
             free(items[i]);
         free(items);
+        free(perm);
+        free(arrivals);
 
         if (outcome == 1)
             return 0;
         if (outcome == 2)
             return -1;
-        /* outcome == 3: reload the target's symbols in place, then rebuild */
-        asmspy_symtab_free(t);
-        if (asmspy_symtab_load(pid, t) < 0)
-            return -1;
+        if (outcome == 3) { /* reload the target's symbols in place */
+            asmspy_symtab_free(t);
+            if (asmspy_symtab_load(pid, t) < 0)
+                return -1;
+        }
+        /* outcome == 4: just re-sort (and re-sample, if now SYMS_SORT_HOT) */
     }
 }
 
