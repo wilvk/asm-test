@@ -217,6 +217,29 @@ int main(void) {
         CHECK(n == 2, "out_cap: never writes more than out_cap candidates");
     }
 
+    /* ---- 10. A full fold table drops candidates; sizing by edge count is
+     * the fix, and it is the CALLER's job (auto_pick sizes by the window's
+     * edge count) --------------------------------------------------------
+     * Accumulation is streaming: mid_warm's FIRST edge loses to leaf_hot, but
+     * its SUM wins. With out_cap=1 the fold never admits it — the "a
+     * lower-ranked candidate cannot win anyway" fallacy this test pins down —
+     * while out_cap >= the edge count restores the true winner. */
+    {
+        asmspy_sample_edge_t e[] = {
+            mk(0x9990, 0x1000, 5, 0), /* leaf_hot: one site, 5 arrivals    */
+            mk(0x9991, 0x2000, 3, 0), /* mid_warm site 1: 3                */
+            mk(0x9992, 0x2000, 4, 0), /* mid_warm site 2: 4 — sum 7 wins */
+        };
+        size_t n = asmspy_autoregion_rank(e, 3, t_resolve, NULL, NULL, out, 1);
+        CHECK(n == 1 && out[0].addr == 0x1000,
+              "cap-full: out_cap=1 drops mid_warm and leaf_hot wins on a "
+              "technicality (the documented degradation)");
+        n = asmspy_autoregion_rank(e, 3, t_resolve, NULL, NULL, out, 3);
+        CHECK(n == 2 && out[0].addr == 0x2000 && out[0].arrivals == 7,
+              "cap-full: out_cap >= edge count restores the true winner "
+              "(mid_warm, 3+4=7)");
+    }
+
     printf("1..%d\n", checks);
     if (failures) {
         printf("# %d/%d FAILED\n", failures, checks);

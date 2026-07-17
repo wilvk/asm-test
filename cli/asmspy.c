@@ -1842,15 +1842,27 @@ static void dataflow_render_sink(void *ctx, long result,
 }
 
 /* --dataflow --auto: resolve one hot-edge endpoint for asmspy_autoregion_rank.
- * Wraps asmspy_symtab_at so the picker stays pure (and unit-testable off an IBS
- * box); asmspy_symtab_at is the SAME function every view names addresses through,
- * including its exact-start-only rule for unsized symbols — which is precisely the
+ * Layered like every view's naming chain — the ELF symtab first, then the JIT
+ * map (perf-map/jitdump) — so a hot MANAGED method, which lives in an anonymous
+ * executable mapping the ELF symtab cannot see, can WIN the pick rather than
+ * merely be named in --sample output. Both lookups are the pure _at forms,
+ * deliberately: asmspy_resolve's refresh-on-miss can realloc the map mid-rank,
+ * which would dangle the name/module pointers already folded into earlier
+ * candidates — auto_pick refreshes ONCE, after the window, instead. Both tables
+ * share the exact-start-only rule for unsized symbols, which is precisely the
  * rule the picker's size>0 guard exists to neutralise. */
+typedef struct {
+    const asmspy_symtab_t *syms;
+    const asmspy_jitmap_t *jit;
+} auto_resolve_ctx;
+
 static int auto_resolve_sym(void *ctx, uint64_t addr, uint64_t *start,
                             uint64_t *size, const char **name,
                             const char **module) {
-    const asmspy_symtab_t *t = (const asmspy_symtab_t *)ctx;
-    const asmspy_sym_t *s = asmspy_symtab_at(t, addr);
+    const auto_resolve_ctx *c = (const auto_resolve_ctx *)ctx;
+    const asmspy_sym_t *s = asmspy_symtab_at(c->syms, addr);
+    if (!s)
+        s = asmspy_jitmap_at(c->jit, addr);
     if (!s)
         return -1;
     *start = s->addr;
@@ -1871,26 +1883,30 @@ static int auto_resolve_sym(void *ctx, uint64_t addr, uint64_t *start,
  * window, call the picker" is what stops the feature's correctness from depending
  * on a lane most machines cannot run. */
 #define AUTO_WINDOW_MS 400
+/* OOM-fallback size only: the real candidate table is sized by the window's
+ * edge count, so the picker's fold can never drop a candidate (see below). */
 #define AUTO_MAX_CANDS 16
 static int auto_pick(pid_t pid, const asmspy_symtab_t *t, const char *module,
-                     uint64_t *base, size_t *len) {
+                     uint64_t *base, size_t *len, char *name, size_t name_cap) {
     if (!asmtest_ibs_available()) {
         fprintf(stderr, "# SKIP --dataflow --auto: %s\n",
                 asmtest_ibs_unavail_reason());
         return -1;
     }
-    /* The JIT map is layered so a hot MANAGED method can win too — the sampler
-     * already names those, and it is the one rich view safe on a live JIT. */
+    /* The JIT map rides through BOTH halves: the sampler names managed frames
+     * in its edge table, and the ranking below resolves through it too — so a
+     * hot JIT'd method can actually WIN the pick, which is the point on the
+     * targets this view is safest on (a live JIT). */
     asmspy_jitmap_t jit;
     asmspy_jitmap_init(&jit, pid);
     asmspy_jitmap_refresh(&jit);
     sample_snap snap = {0};
     int rc = asmspy_engine_sample(pid, AUTO_WINDOW_MS, NULL, t, &jit,
                                   sample_capture_sink, &snap);
-    asmspy_jitmap_free(&jit);
     if (rc == ASMSPY_SAMPLE_UNAVAIL) {
         fprintf(stderr, "# SKIP --dataflow --auto: %s\n",
                 asmtest_ibs_unavail_reason());
+        asmspy_jitmap_free(&jit);
         free(snap.v);
         return -1;
     }
@@ -1898,14 +1914,36 @@ static int auto_pick(pid_t pid, const asmspy_symtab_t *t, const char *module,
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
         fprintf(stderr, "--auto: sampling failed: %s\n", e);
+        asmspy_jitmap_free(&jit);
         free(snap.v);
         return 1;
     }
 
-    asmspy_autocand_t cands[AUTO_MAX_CANDS];
-    size_t nc =
-        asmspy_autoregion_rank(snap.v, snap.n, auto_resolve_sym, (void *)t,
-                               module, cands, AUTO_MAX_CANDS);
+    /* One deliberate re-read AFTER the window — a method the runtime emitted
+     * mid-window is in the map by now — so the ranking below can use the pure
+     * _at lookups: a refresh-on-miss inside the rank loop could realloc the
+     * map and dangle the name/module pointers already stored in cands[]. */
+    asmspy_jitmap_refresh(&jit);
+
+    /* Size the candidate table by the EDGE count: each edge introduces at most
+     * one candidate, so out_cap >= n means the fold can never drop a late
+     * symbol whose SUMMED arrivals would have won (test_autoregion #10 shows a
+     * fixed cap doing exactly that). On OOM, degrade to a capped-but-ranked
+     * stack table rather than refusing outright. */
+    asmspy_autocand_t stackc[AUTO_MAX_CANDS];
+    asmspy_autocand_t *cands = stackc;
+    size_t cap = AUTO_MAX_CANDS;
+    if (snap.n > cap) {
+        asmspy_autocand_t *heap = malloc(snap.n * sizeof *heap);
+        if (heap) {
+            cands = heap;
+            cap = snap.n;
+        }
+    }
+    auto_resolve_ctx rctx = {t, &jit};
+    size_t nc = asmspy_autoregion_rank(snap.v, snap.n, auto_resolve_sym, &rctx,
+                                       module, cands, cap);
+    int ret;
     if (nc == 0) {
         /* An honest refusal, not a guess. Most processes are idle most of the
          * time, and an idle target yields no edges at all — picking SOMETHING
@@ -1918,20 +1956,29 @@ static int auto_pick(pid_t pid, const asmspy_symtab_t *t, const char *module,
                 "  name a function explicitly, or widen --module=\n",
                 (int)pid, AUTO_WINDOW_MS, (unsigned long long)snap.n,
                 module ? ", --module=" : "", module ? module : "");
-        free(snap.v);
-        return 1;
+        ret = 1;
+    } else {
+        *base = cands[0].addr;
+        *len = (size_t)cands[0].size;
+        /* COPY the winner's name out (a JIT winner's is borrowed from the map,
+         * which dies with this function): the caller names the capture with it,
+         * since a JIT method is invisible to asmspy_symtab_at. */
+        if (name && name_cap)
+            snprintf(name, name_cap, "%s", cands[0].name ? cands[0].name : "?");
+        fprintf(stderr,
+                "--auto: %s [%s] — %llu entry samples from %u call site%s "
+                "(of %zu candidate%s in %d ms)\n",
+                cands[0].name ? cands[0].name : "?",
+                cands[0].module ? cands[0].module : "?", cands[0].arrivals,
+                cands[0].sites, cands[0].sites == 1 ? "" : "s", nc,
+                nc == 1 ? "" : "s", AUTO_WINDOW_MS);
+        ret = 0;
     }
-    *base = cands[0].addr;
-    *len = (size_t)cands[0].size;
-    fprintf(stderr,
-            "--auto: %s [%s] — %llu entry samples from %u call site%s "
-            "(of %zu candidate%s in %d ms)\n",
-            cands[0].name ? cands[0].name : "?",
-            cands[0].module ? cands[0].module : "?", cands[0].arrivals,
-            cands[0].sites, cands[0].sites == 1 ? "" : "s", nc,
-            nc == 1 ? "" : "s", AUTO_WINDOW_MS);
+    if (cands != stackc)
+        free(cands);
+    asmspy_jitmap_free(&jit);
     free(snap.v);
-    return 0;
+    return ret;
 }
 
 static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
@@ -1943,9 +1990,11 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
     }
     uint64_t base = 0;
     size_t len = 0;
+    char autoname[160] = "";
     if (auto_region) {
         /* No symbol given: find what the target is DOING and trace that. */
-        int arc = auto_pick(pid, &t, module, &base, &len);
+        int arc =
+            auto_pick(pid, &t, module, &base, &len, autoname, sizeof autoname);
         if (arc != 0) {
             asmspy_symtab_free(&t);
             return arc < 0 ? 0 : 1; /* <0 = clean skip (no IBS), >0 = no pick */
@@ -1961,13 +2010,16 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         return 1;
     }
     const asmspy_sym_t *s = asmspy_symtab_at(&t, base);
-    /* With --auto the "region" argv is the flag itself, so fall back to the resolved
-     * symbol rather than printing "--auto" as the function name. */
-    dataflow_ctx dc = {pid, s ? s->name : (auto_region ? "?" : region), json};
+    /* With --auto the "region" argv is the flag itself, so fall back to the
+     * picker's own name — which is also the ONLY name a JIT winner has, since a
+     * perf-map/jitdump method is invisible to asmspy_symtab_at — and never
+     * print "--auto" as the function name. */
+    const char *rname =
+        s ? s->name : (auto_region ? (autoname[0] ? autoname : "?") : region);
+    dataflow_ctx dc = {pid, rname, json};
     /* status to STDERR so --json stdout stays a single clean object */
     fprintf(stderr,
-            "data-flow capture of %s @ 0x%llx (%zu bytes) in pid %d%s\n",
-            s ? s->name : (auto_region ? "?" : region),
+            "data-flow capture of %s @ 0x%llx (%zu bytes) in pid %d%s\n", rname,
             (unsigned long long)base, len, (int)pid, tid ? " [--tid]" : "");
     /* Copy the name BEFORE the symtab dies: dc.func borrows into `t` (or argv), and the
      * messages below outlive asmspy_symtab_free. */

@@ -69,6 +69,7 @@ TVPID=""
 DVPID=""
 CVPID=""
 JVPID=""
+AJPID=""
 UPID=""
 IPID=""
 YPID=""
@@ -82,7 +83,7 @@ IVPID=""
 SKPID=""
 LJPID=""
 SGPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} ${SGPID:+"$SGPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} ${SGPID:+"$SGPID"} ${AJPID:+"$AJPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${AJPID:+"/tmp/perf-$AJPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -358,6 +359,41 @@ sleep 1
 kill -0 "$UVPID" 2>/dev/null || fail "auto_victim died under --dataflow --auto"
 kill "$UVPID" 2>/dev/null || true
 rm -f "$BUILD/auto_victim.log"
+
+# --auto must be able to pick a JIT'd method. jit_victim publishes jit_hot_loop
+# (10 bytes, size > 0) in /tmp/perf-<pid>.map and re-enters it ~1M times/s from
+# main's call site — the only entry arrival in the process, and one the ELF
+# symtab CANNOT resolve (the code lives in an anonymous mapping). The pre-fix
+# resolver consulted only the ELF symtab, so --auto REFUSED on exactly this
+# victim; the pick assertion below fails on that build. main can never win
+# instead (entered once, before we attached), so a pick here proves the JIT
+# layer, not a fallback.
+"$BUILD/jit_victim" 2>/dev/null &
+AJPID=$!
+sleep 1
+kill -0 "$AJPID" 2>/dev/null || fail "jit_victim did not start (--auto JIT leg)"
+set +e
+ajout=$(timeout 60 "$ASM" --dataflow "$AJPID" --auto 2>&1); ajrc=$?
+set -e
+[ "$ajrc" -eq 124 ] && fail "--dataflow --auto hung on jit_victim"
+if printf '%s\n' "$ajout" | grep -q '^# SKIP --dataflow --auto'; then
+    printf '%s\n' "$ajout" | grep '^# SKIP' | sed 's/^/  /'
+    echo "  (IBS-Op unavailable — JIT --auto leg self-skipped; use make docker-cli-ibs)"
+else
+    [ "$ajrc" -eq 0 ] || fail "--dataflow --auto on jit_victim exited $ajrc: $ajout"
+    printf '%s\n' "$ajout" | grep -qE '\-\-auto: jit_hot_loop \[jit\]' \
+        || fail "--auto did not pick the JIT method jit_hot_loop: $ajout"
+    # The capture must be NAMED too: a JIT winner is invisible to
+    # asmspy_symtab_at, so this line is the auto_pick name plumbing, not the
+    # symtab fallback.
+    printf '%s\n' "$ajout" | grep -q 'data flow — jit_hot_loop' \
+        || fail "--auto picked jit_hot_loop but did not capture/name it: $ajout"
+    echo "  --auto picked + traced the JIT method (perf-map layered into the pick)"
+fi
+sleep 1
+kill -0 "$AJPID" 2>/dev/null || fail "jit_victim died under --dataflow --auto"
+kill "$AJPID" 2>/dev/null || true
+rm -f "/tmp/perf-$AJPID.map"
 
 # --auto + --tid is a USAGE error, not a precedence rule: the sampler carries no
 # tid, so it could only ever pin the capture to a thread that may never arrive.

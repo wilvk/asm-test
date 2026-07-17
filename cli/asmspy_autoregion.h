@@ -112,6 +112,14 @@ static inline int asmspy_ar_match(const char *hay, const char *needle) {
  * statistical sampler is a coin flip that would make the pick unreproducible run
  * to run on identical behaviour.
  *
+ * out_cap sizes BOTH the output and the fold table. Accumulation is streaming,
+ * so once the table is full a NEW symbol is dropped even though its SUMMED
+ * arrivals could have overtaken an admitted one — an edge's own count says
+ * nothing about its symbol's eventual total. A caller that must never lose a
+ * candidate sizes out_cap by the EDGE count (each edge introduces at most one
+ * candidate), as auto_pick does; a small fixed cap means "the first out_cap
+ * symbols seen", not "the top out_cap". test_autoregion #10 pins this down.
+ *
  * Pure: reads `edges` and whatever resolve() returns, writes only `out`. */
 static inline size_t
 asmspy_autoregion_rank(const asmspy_sample_edge_t *edges, size_t n,
@@ -155,7 +163,9 @@ asmspy_autoregion_rank(const asmspy_sample_edge_t *edges, size_t n,
             continue;
         }
         if (nout == out_cap)
-            continue; /* full: a lower-ranked candidate cannot win anyway */
+            continue; /* full: a NEW symbol is dropped — sound only when
+                       * out_cap >= the edge count (see the doc comment); a
+                       * late symbol could still out-SUM an admitted one */
         out[nout].addr = start;
         out[nout].size = size;
         out[nout].name = name;
