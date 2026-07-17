@@ -625,7 +625,7 @@ tiering.
 
 ---
 
-## F6 — Toward whole-process / continuous data flow *(planned — bridges to the DR tier)*
+## F6 — Toward whole-process / continuous data flow *(**INCREMENT 1 LANDED 2026-07-17** — the WINDOWED survey; the exit criteria are MET. "Whole-process / continuous" is **declined with a measured number**, not deferred — see the ceiling below. **HOST-gated, not CI-gatable**, exactly as F1/F2)*
 
 Lift the scoped-region bound. The windowed steppers + the addr-channel already follow a live
 JIT's methods across a whole window for control flow
@@ -638,6 +638,94 @@ producer already landed) rather than pushing single-step past its cost envelope.
 **Exit criteria:** a windowed capture produces a def-use survey spanning multiple JIT'd
 method ranges of a live process; the hand-off boundary to the DR taint tier is documented
 (single-step/replay for scoped exactness; DR for whole-process breadth).
+
+> **MET 2026-07-17 on both clauses — and the second clause is now a NUMBER, not a
+> judgement call.** `asmtest_dataflow_ptrace_attach_window` (in the scoped ptrace producer,
+> `src/dataflow_ptrace.c`) run_to's a window frame, steps until it returns to its caller, and
+> records values for every instruction in the frame OR any body published on the
+> address-channel — one valtrace whose backward slice from a sink in M2 reaches through the
+> frame into M1, i.e. **a def-use survey spanning three ranges of a live process**, which
+> then SURVIVES the detach. A method published while the window is **already open** is picked
+> up and recorded (the channel is drained at every stop, not sampled at entry). **Zero diff
+> under `include/`** — the tier ships no header, so its suite re-declares the entry and its
+> telemetry, exactly as F1's does. Lane: `make docker-dataflow-attach`, **123/123**, ran for
+> real (not skipped) in-container; the F1/F2 blockstep suite is unchanged at 118/118.
+>
+> **THE LIFT'S REAL CONTENT IS NOT THE LIFT — IT IS WHAT THE LIFT BREAKS.** A windowed survey
+> **elides the runtime glue** between managed methods (that elision is the entire point: the
+> glue is the noise a managed capture exists to drop). Elision is also precisely where a
+> def-use graph starts **FABRICATING EDGES**: an in-region step writes a location, the elided
+> glue overwrites it, a later in-region step reads it — and the shared last-writer builder,
+> having no record of the glue, hands the edge to the **stale in-region writer**. Note what
+> this defeats: **the VALUE at the read is honest** (it is read from silicon), so no
+> value-level oracle, and no byte-identical cross-producer comparison, can catch it. It is
+> only the *edge* that lies. Mutation-proven: with the barrier's register half disabled the
+> fabricated edge appears **while the value assertion still passes**.
+>
+> **The bound that makes it fixable.** A fabricated edge REQUIRES a prior *recorded* write to
+> that location — a location the survey never wrote has no last writer and yields no edge at
+> all. So the **at-risk set is exactly the set of locations the survey has recorded a write
+> to**: finite, observable, and cheap to re-check. At each gap entry it is snapshotted; at gap
+> exit it is diffed and **one synthetic GAP step** is appended whose write set is precisely
+> what the glue changed. Registers compare the **alias's own bit slice** (the last-writer map
+> keys raw Capstone ids with *no* sub-register canonicalization — `src/dataflow.c:219` — so a
+> gap that changes `AH` must not shadow a live `AL` edge); memory compares **per byte**
+> (`src/dataflow.c:251`). It **fails closed** — over its caps, or on any location it cannot
+> decide, it flags `risk_overflow`/`truncated` rather than guessing. Both directions are
+> proven: disabling the barrier fabricates edges (M1/M2); making it a **blanket** invalidation
+> **deletes the true cross-method edge the exit criterion rests on** (M3), so its precision is
+> load-bearing, not decorative.
+>
+> **THE CEILING, MEASURED — and why "whole-process / continuous" is declined rather than
+> deferred.** The scoped tier's cost model does not survive the lift and cannot be made to. A
+> window pays **one ptrace round-trip per instruction the target retires inside it, recorded
+> or not**: the tracer must see every instruction just to learn whether it is in a region.
+> The glue is elided from the RECORD but never from the BILL. Proven as an exact identity,
+> not a benchmark: two windows differing only in glue length — **2000 extra glue iterations
+> cost exactly 4000 extra stops while `recorded` stays pinned at 16**. Subtracting the two
+> runs cancels SEIZE/run_to/detach and leaves the price of a stop:
+>
+> | | measured (bare-metal Zen 5, kernel 6.17) |
+> |---|---|
+> | per-stop cost | **~2.7 µs** (2730 ns in-container; 2721–3167 ns across host runs) |
+> | window vs native, same frame | **~34,000x** (33,811x in-container) |
+> | DR taint tier, in-band, whole-process | **~11x** (already landed, measured) |
+>
+> Those two tiers are **~3,000x apart**, and the gap is structural, not an optimization
+> backlog: nothing in this producer can stop paying ~2.7 µs for an instruction it must
+> classify. An unbounded window is an unbounded bill. **So the hand-off is not a preference,
+> it is arithmetic** — ptrace for a BOUNDED window answered exactly off a live process with
+> no code modification; **DynamoRIO for whole-process breadth**
+> ([dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md)). Lifting
+> the window further does not approach whole-process; it just makes the bill bigger while
+> re-opening every hazard region scoping dodges.
+>
+> **KNOWN LIMITS (what the fixtures cannot produce).** (1) **Single-threaded target, leader
+> only.** Like `attach_pid`, this SEIZEs the thread-group leader and surveys the window IT
+> runs; siblings run free. The barrier is sound against **the elided glue of the surveyed
+> thread** — which is NOT the same as sound against a concurrent mutator. **The plan's
+> concurrency residual is unchanged and explicitly NOT closed here**, and widening the seize
+> re-opens the deadlock / GC-fence-stall hazards (~19.8s, measured) that scoping dodges. (2)
+> **`decode_fail` is a fail-closed branch asserted ZERO but never fired**: the fixtures cannot
+> produce a window PC whose bytes will not read or decode (that needs a JIT to free a page
+> mid-window). (3) **Sub-register aliases `gp_value` cannot resolve** (`R8D`/`R8W`/`R8B`…) put
+> a location at risk the barrier must then decline to decide (→ `truncated`). That is a
+> **pre-existing gap in this producer's register map**, surfaced by F6, not introduced by it —
+> and no fixture here writes those aliases. (4) **No vector clobber across a gap** is
+> exercised: the barrier diffs XMM/YMM (one batched snapshot per gap) but no fixture makes the
+> glue clobber a vector register the survey recorded. (5) The glue-tax **ratio** (314x) is a
+> property of the fixture's chosen glue:method mix and means nothing on its own — the
+> transferable numbers are the per-stop cost and the exact 2-stops-per-glue-iteration identity.
+>
+> **A HAZARD OF THIS TIER'S OWN CONVENTION, found the hard way.** A value-trace producer
+> "ships no header", so every suite **re-declares** its telemetry struct. A field added on one
+> side only does not fail to compile — it **silently shifts every later field**, corrupting the
+> exact numbers the tier is judged by. This cost three green checks during development.
+> `asmtest_dataflow_ptrace_win_info_layout()` now exports size **and the final field's
+> offset**, and callers assert both: size alone is provably insufficient — a mutation adding a
+> `uint32_t` to the caller's copy landed in **tail padding**, left `sizeof` unchanged, and the
+> size-only guard passed on a struct that was already skewed. **F1's and F2's suites re-declare
+> `asmtest_blockstep_info_t` under exactly this convention and have no such guard.**
 
 ---
 

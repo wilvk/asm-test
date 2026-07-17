@@ -2244,6 +2244,18 @@ void asmtest_dataflow_ptrace_win_info_layout(size_t *size, size_t *last_off) {
  * The target SURVIVES: this never kills a process it did not create; on any exit it is
  * PTRACE_DETACHed (forwarding a fault signal so the target's own handler runs).
  *
+ * THREAD SCOPE — the limit that keeps this a WINDOW and not a PROCESS. Like attach_pid
+ * (and unlike attach_pid_tid / attach_jit), this SEIZEs the thread-group LEADER only
+ * and surveys the window IT runs. Sibling threads are never stopped: they keep running
+ * free, and anything they write to memory this survey has recorded is a change the gap
+ * barrier will attribute to the next gap it happens to see, or miss entirely. That is
+ * the plan's concurrency residual, unchanged and NOT closed here — the barrier is
+ * sound against the ELIDED GLUE OF THE SURVEYED THREAD, which is a different thing
+ * from being sound against a concurrent mutator. A managed method that runs on a
+ * worker needs the attach_pid_tid-style multi-thread seize this entry deliberately
+ * does not do, and widening it re-opens exactly the deadlock / GC-fence-stall hazards
+ * (~19.8s, measured) that region scoping exists to dodge.
+ *
  * Returns DF_PTRACE_OK on a clean window end, ETRACE where ptrace is denied / the
  * window ran past its backstop (self-skip), FAULT where the target faulted or hit its
  * own trap mid-window. `info` is filled on every non-EINVAL return — READ info->stops
