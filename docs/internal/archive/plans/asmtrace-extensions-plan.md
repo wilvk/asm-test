@@ -6,12 +6,12 @@ overhead trade. This plan captures what has LANDED and the remaining extensions,
 family stays coherent rather than accreting one-off flags.
 
 > Status legend: **landed** unless marked *(planned)* / *(forward-look)*. All forms live in
-> [bindings/dotnet/hwtrace/HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs); the native
-> substrate is in [src/hwtrace.c](../../../src/hwtrace.c), [src/ptrace_backend.c](../../../src/ptrace_backend.c),
-> [src/stealth_helper.c](../../../src/stealth_helper.c), [src/amd_backend.c](../../../src/amd_backend.c).
-> Related: [managed-singlestep-posture-plan.md](../archive/plans/managed-singlestep-posture-plan.md),
+> [bindings/dotnet/hwtrace/HwTrace.cs](../../../../bindings/dotnet/hwtrace/HwTrace.cs); the native
+> substrate is in [src/hwtrace.c](../../../../src/hwtrace.c), [src/ptrace_backend.c](../../../../src/ptrace_backend.c),
+> [src/stealth_helper.c](../../../../src/stealth_helper.c), [src/amd_backend.c](../../../../src/amd_backend.c).
+> Related: [managed-singlestep-posture-plan.md](managed-singlestep-posture-plan.md),
 > [managed-wholewindow-oop-plan.md](managed-wholewindow-oop-plan.md),
-> [amd-tracing-plan.md](amd-tracing-plan.md).
+> [amd-tracing-plan.md](../../plans/amd-tracing-plan.md).
 
 ## The AsmTrace whole-window family (current)
 
@@ -30,7 +30,7 @@ sibling-thread publish landed, so mid-window JIT is no longer elided), the AMD f
 (`WindowHot` delegate + `new AsmTrace(HwBackend.AmdLbr)` inline) are statistical-but-near-native
 and — because the block runs at native speed — give the RICHEST managed attribution (deep BCL
 named). The extensions below close the remaining gaps. See
-[asmtrace-inline-using-plan.md](asmtrace-inline-using-plan.md) for the inline-`using`
+[asmtrace-inline-using-plan.md](../../plans/asmtrace-inline-using-plan.md) for the inline-`using`
 conformance of each form.
 
 > **This plan is CLOSED (2026-07-17).** E1–E7 have all landed; E6's branchsnap-at-managed-
@@ -46,17 +46,17 @@ hot methods), take the smallest method prefix reaching a `hotFraction` of the sa
 resolve each to its `[base,len)` via `_map`, then run `AsmTrace.Window(body)` **publishing
 only those hot regions** to the shared channel instead of the full `EnumerateManagedCodeRanges()`
 set. The stepper already step-overs unpublished regions (`in_region_set`,
-[ptrace_backend.c](../../../src/ptrace_backend.c)), so this gives **exact per-instruction
+[ptrace_backend.c](../../../../src/ptrace_backend.c)), so this gives **exact per-instruction
 capture on the hot managed slice and cheap step-overs for the cold million instructions —
 with no new native stepper code.** Degrades to plain `Window` when LBR is unavailable.
 - API: `public static AsmTrace WindowHybrid(Action body, double hotFraction = 0.9, bool
   byMethod = true, bool withRundown = true, int rundownSettleMs = 300, …)`, with a `Survey`
   property exposing the pass-1 `WindowHot` result. Implemented in
-  [HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs) as managed glue over the injectable
+  [HwTrace.cs](../../../../bindings/dotnet/hwtrace/HwTrace.cs) as managed glue over the injectable
   `RunWindowOutOfProcess(body, regionsOrNull)` seam (null == the byte-identical all-managed
   `Window` publish); the hot-set prefix is the pure/testable `HotPrefix`. Pass-2 resolution
   folds in the rundown jitdump so the survey's already-JIT'd hot methods resolve to their
-  pass-2 regions (cross-spelling name match). Demo: [examples/dotnet/windowhybrid](../../../examples/dotnet/windowhybrid/).
+  pass-2 regions (cross-spelling name match). Demo: [examples/dotnet/windowhybrid](../../../../examples/dotnet/windowhybrid/).
 - Caveat: runs `body` **twice** (survey + exact) — the body must be deterministic enough that
   pass-1's hot set applies to pass-2; non-idempotent bodies use `WindowHot` (survey) or
   `Window` (exact, one pass). A LONG hot loop under the exact pass must avoid mid-window
@@ -97,11 +97,11 @@ ordering). See [managed-wholewindow-oop-plan.md](managed-wholewindow-oop-plan.md
 
 ### E4 — inline `using (new AsmTrace(outOfProcess: true))` OOP form — **LANDED (`578caed`)**
 
-> **Consolidated in [asmtrace-inline-using-plan.md](asmtrace-inline-using-plan.md) R4** — the
+> **Consolidated in [asmtrace-inline-using-plan.md](../../plans/asmtrace-inline-using-plan.md) R4** — the
 > same item (the async stop-flag split of the OOP stepper), which **shipped there ahead of
 > R1–R3**: a `volatile int stop` in the shared stealth scratch, a begin/end split of
 > `stealth_trace_windowed`, and a **distinct** ctor `new AsmTrace(bool outOfProcess)`
-> ([HwTrace.cs:2369](../../../bindings/dotnet/hwtrace/HwTrace.cs#L2369)) routed through
+> ([HwTrace.cs:2369](../../../../bindings/dotnet/hwtrace/HwTrace.cs#L2369)) routed through
 > `Kind.OopInlineWindow`. The inline-using plan is authoritative; this entry is a pointer.
 > **The verdict below still stands** — it was built, but it is *strictly worse* than the
 > factory, so `AsmTrace.Window` remains the recommended OOP entry point for exactly the
@@ -128,7 +128,7 @@ behind the same `WindowHot` surface. Effort: ~3d.
 ### E6 — snapshot-tiling / IBS producers into the `WindowHot` surface — **LANDED (both producers)**
 
 Feed additional AMD facilities into the same sampled-endpoint surface: the deterministic
-`bpf_get_branch_snapshot` boundary snapshot ([branchsnap.c](../../../src/branchsnap.c)) at a
+`bpf_get_branch_snapshot` boundary snapshot ([branchsnap.c](../../../../src/branchsnap.c)) at a
 handful of managed checkpoints (method entry/exit, throw/catch) for **exact 16-branch islands**
 on Zen 4/5 + `CAP_BPF`; and **IBS** op-sampling for statistical PC coverage to fill gaps.
 Both are optional producers into `WindowHot.Addresses`, not new APIs. Effort: ~3–4d each.
@@ -137,7 +137,7 @@ Both are optional producers into `WindowHot.Addresses`, not new APIs. Effort: ~3
 API, a producer into the same `ips[]` endpoint stream behind
 `asmtest_hwtrace_sample_window_amd`. On Zen 2 the branch stack (BRS/LbrExtV2) does not exist,
 so the branch-stack open fails and the survey core falls back to `sample_window_ibs`
-([hwtrace.c:1344](../../../src/hwtrace.c)), which flattens each sampled `{from->to}` edge's
+([hwtrace.c:1344](../../../../src/hwtrace.c)), which flattens each sampled `{from->to}` edge's
 target `count` times — reconstructing the per-sample endpoint stream the branch-stack path
 emits, so the caller's bucket-by-method hot histogram is identical in shape. Still purely
 STATISTICAL (it never feeds the exact `insns[]`/`blocks[]` parity cascade), and
@@ -146,18 +146,18 @@ cross-validation on Zen 3+/CI.
 
 **Landed (the branchsnap tiling).** The boundary-snapshot substrate already shipped as a
 **separate region API** — `AmdSnapshot.Trace(code, exitOff, body, tr)`
-([HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs),
-[examples/dotnet/amd-snapshot](../../../examples/dotnet/amd-snapshot/)): one `[base,len)`,
+([HwTrace.cs](../../../../bindings/dotnet/hwtrace/HwTrace.cs),
+[examples/dotnet/amd-snapshot](../../../../examples/dotnet/amd-snapshot/)): one `[base,len)`,
 breakpoints at its exits, the RICHEST window decoded to an exact in-region stream. Tiling is the
 OTHER consumer of that same BPF machinery and inverts all three axes: absolute **checkpoints**
 (no region, no decode), **every** island (coverage is their union), and **endpoint PCs** merged
 into the survey's `ips[]` — a producer into `WindowHot.Addresses`, not a new API, exactly as
 this entry specified.
 
-- Native: `asmtest_amd_tile_begin` / `_end` ([branchsnap.c](../../../src/branchsnap.c), its own
+- Native: `asmtest_amd_tile_begin` / `_end` ([branchsnap.c](../../../../src/branchsnap.c), its own
   state slot; the single-active invariant is enforced across both slots) plant one HW execution
   breakpoint per checkpoint and merge every frozen window's retired branch targets.
-  `asmtest_hwtrace_tile_window_amd` ([hwtrace.c](../../../src/hwtrace.c)) is the survey core
+  `asmtest_hwtrace_tile_window_amd` ([hwtrace.c](../../../../src/hwtrace.c)) is the survey core
   threaded with checkpoints. Kept OFF the public tier header, mirroring how E5's `_weighted`
   producer is wired, so the bindings-parity surface is unchanged.
 - Composition: `tile_begin` deliberately does **not** open its own LBR event — the survey's
@@ -167,7 +167,7 @@ this entry specified.
   the bounded buffer by tens of thousands of sampled endpoints; `ntiled` records the split.
 - .NET: `AsmTrace.WindowHot(…, tileCheckpoints:)` + `TiledIslands` / `TiledAddresses`, and
   `AsmTrace.Checkpoints(methods)` to resolve managed methods to entry PCs. Demo:
-  [examples/dotnet/amd-tile](../../../examples/dotnet/amd-tile/).
+  [examples/dotnet/amd-tile](../../../../examples/dotnet/amd-tile/).
 - **Honest boundary.** Tiled coverage is **SAMPLED / PARTIAL** — at each checkpoint HIT the ~16
   most recently retired branch targets, EXACTLY; between hits, nothing but what the sampler
   caught. It is **not** an exact whole-window trace; that stays a hardware dead end on AMD and a
@@ -200,7 +200,7 @@ this entry specified.
   the straight-line span between adjacent sampled branches, which is undefined across an
   island's boundary.
 - **Measured live on Zen 5** (Ryzen 9 9950X, kernel 6.17), not self-skipped —
-  `make docker-hwtrace-codeimage` (native, [examples/test_branchtile.c](../../../examples/test_branchtile.c)):
+  `make docker-hwtrace-codeimage` (native, [examples/test_branchtile.c](../../../../examples/test_branchtile.c)):
   islands=1, **ntiled=16 == islands × lbr_depth**, nips=8528, tile_truncated=0; negative control
   (a never-executed checkpoint) islands=0/ntiled=0; differential 5/5 tiled vs **0/5** untiled @
   period=50000. `make docker-hwtrace-dotnet-amd` (managed): a JIT'd `ColdLeaf` entry, 16 island
@@ -242,11 +242,11 @@ pattern, so the lane cannot go green by skipping the thing it exists to prove.
 `using (new AsmTrace(code))` traces a native `NativeCode` blob on the AMD LBR tier — the
 region ctor respects a pre-inited backend (`begin_scope` → `try_begin` → `hwtrace_begin_amd`);
 the only requirement is `HwTrace.Init(HwBackend.AmdLbr)` first (no auto-init on the region
-form). [examples/dotnet/amdlbr](../../../examples/dotnet/amdlbr/) demonstrates it (with a retry,
+form). [examples/dotnet/amdlbr](../../../../examples/dotnet/amdlbr/) demonstrates it (with a retry,
 since AMD region sampling is non-deterministic per attempt), self-skipping off Zen/`CAP_PERFMON`.
 Distinct from `amdhot`, which is the region-FREE statistical whole-window (also LANDED, as the
 inline `using (new AsmTrace(HwBackend.AmdLbr))` — see
-[asmtrace-inline-using-plan.md](asmtrace-inline-using-plan.md)).
+[asmtrace-inline-using-plan.md](../../plans/asmtrace-inline-using-plan.md)).
 
 ## Priority
 
@@ -262,8 +262,8 @@ inline `using (new AsmTrace(HwBackend.AmdLbr))` — see
 
 ## Non-goals
 
-- Exact whole-window on AMD (hardware dead end — see [amd-tracing-plan.md](amd-tracing-plan.md)).
-- Making the in-process whole-window crash-proof (impossible in-process — see [managed-singlestep-posture-plan.md](../archive/plans/managed-singlestep-posture-plan.md)).
+- Exact whole-window on AMD (hardware dead end — see [amd-tracing-plan.md](../../plans/amd-tracing-plan.md)).
+- Making the in-process whole-window crash-proof (impossible in-process — see [managed-singlestep-posture-plan.md](managed-singlestep-posture-plan.md)).
 - A dedicated permissioned CI lane for the AMD dotnet examples — they self-skip in the plain
   lane and are validated on a self-hosted Zen runner (mirroring `docker-hwtrace-amd`); a
   `docker-hwtrace-dotnet-amd` lane is optional operational plumbing, not a capability.

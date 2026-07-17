@@ -753,7 +753,7 @@ class HwTrace {
    *  SIGTRAP or spawns threads (`pthread_create` — glibc masks SIGTRAP around clone) turns
    *  the #DB into a fatal blocked signal and KILLS the process. To trace a whole block of
    *  arbitrary managed code, use the crash-proof out-of-process path (see
-   *  docs/internal/plans/managed-wholewindow-oop-plan.md), never this in-process form.
+   *  docs/internal/archive/plans/managed-wholewindow-oop-plan.md), never this in-process form.
    *
    *  `insnsCap` sizes the capture buffer. Single-stepping a managed runtime records a
    *  LOT — a single V8-dispatched call runs ~100k instructions — so the default is

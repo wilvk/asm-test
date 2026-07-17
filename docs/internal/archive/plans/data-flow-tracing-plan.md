@@ -2,13 +2,13 @@
 
 A phased roadmap for adding **data-flow tracing** on top of the existing control-flow
 substrate. Today every backend fills the shared
-[`asmtest_trace_t`](../../../include/asmtest_trace.h#L44) — *which instructions ran*
+[`asmtest_trace_t`](../../../../include/asmtest_trace.h#L44) — *which instructions ran*
 (ordered offsets + basic blocks). This plan adds *how data moved*: a per-step **value
 trace** (L0), a **def-use graph** (L1), and **taint / slicing** (L2), with the analysis
 layers shared across every tier exactly as `asmtest_trace_t` is shared today.
 
 This operationalizes the design investigation in
-[analysis/data-flow-capture.md](../analysis/data-flow-capture.md) (and its 2026-07-12
+[analysis/data-flow-capture.md](../../analysis/data-flow-capture.md) (and its 2026-07-12
 adversarial cross-reference), which is the source of truth for the fidelity/overhead
 trade-offs; this document is the build order. The two committed end-goals are **(a) real
 live values on an attached, running process** (out-of-band ptrace tier) and **(b)
@@ -25,9 +25,9 @@ through the DynamoRIO and .NET-interpretability phases rather than stopping at t
 > emulator L0 oracle (RIP-relative EA, gs-base, XMM/YMM wide values, live SEIZE+detach).
 > Phase 3 has since grown its two committed extensions, both complete: the **live-attach**
 > producer + asmspy Data-flow view (all seven increments,
-> [live-attach-dataflow-plan.md](../archive/plans/live-attach-dataflow-plan.md)) and the followup tier's
+> [live-attach-dataflow-plan.md](live-attach-dataflow-plan.md)) and the followup tier's
 > **F1 block-step + emulator replay** and **F3 hardware data-watchpoint** modes
-> ([live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md)).
+> ([live-attach-dataflow-followup-plan.md](../../plans/live-attach-dataflow-followup-plan.md)).
 >
 > **Phase 4 (.NET interpretability): Increments 1–3 LANDED 2026-07-12/13; the `{old,new,len}`
 > wiring LANDED 2026-07-16 as followup F4** — the pure host-independent PC→method+version
@@ -38,24 +38,24 @@ through the DynamoRIO and .NET-interpretability phases rather than stopping at t
 > exact triples at a fully-suspended-EE GC fence, was proven to coexist with DynamoRIO
 > (`make docker-gcprofiler-probe`), and already ships on the DR side — taint Increment 7 wires it
 > through a POSIX-shm handshake into `at_gc_remap_live`
-> ([dataflow_dr_client_inlined.c:737](../../../src/dataflow_dr_client_inlined.c#L737)),
+> ([dataflow_dr_client_inlined.c:737](../../../../src/dataflow_dr_client_inlined.c#L737)),
 > remapping 60,021 real ranges on a live compacting GC. See
-> [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
+> [gc-move-range-extraction-findings.md](../../analysis/gc-move-range-extraction-findings.md).
 > **That feed is now pointed at the landed transform on a live attach.** The ptrace-tier
 > canonicalizer `asmtest_gcmove_canonicalize`
-> ([dataflow_gcmove.c:74](../../../src/dataflow_gcmove.c#L74)) — for which this legend previously
+> ([dataflow_gcmove.c:74](../../../../src/dataflow_gcmove.c#L74)) — for which this legend previously
 > recorded "no caller outside its unit test" — is driven by
-> [gccanon_tracer.c:1285](../../../examples/gccanon_attach/gccanon_tracer.c#L1285) over an
+> [gccanon_tracer.c:1285](../../../../examples/gccanon_attach/gccanon_tracer.c#L1285) over an
 > attach-mode profiler feed, with same-window multi-GC chaining. `make docker-gccanon-attach`,
 > 37 assertions, negative control included. See
-> [live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md) F4.
+> [live-attach-dataflow-followup-plan.md](../../plans/live-attach-dataflow-followup-plan.md) F4.
 >
 > **Phase 5 (DynamoRIO taint tier): ALL NINE INCREMENTS LANDED** *(1–3 2026-07-13; 4–9 through
 > 2026-07-15)* — in-band tag propagation, the launch-under-DR container, GC-move shadow remap,
 > SIMD taint, and the overhead work are **complete**, not planned. Production (record-free)
 > propagation measures **~11× bare**, inside the target ~10–50× band, and is held there by a
-> build-failing CI gate (`BAND_MAX = 50`, [mk/native-trace.mk:1292](../../../mk/native-trace.mk#L1292)).
-> Details in the standalone [dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md).
+> build-failing CI gate (`BAND_MAX = 50`, [mk/native-trace.mk:1292](../../../../mk/native-trace.mk#L1292)).
+> Details in the standalone [dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md).
 >
 > **Phase 6 (bindings/docs/CI) LANDED 2026-07-13.**
 >
@@ -63,11 +63,11 @@ through the DynamoRIO and .NET-interpretability phases rather than stopping at t
 > `{old,new,len}` wiring — the last open item this legend carried — landed 2026-07-16 as followup
 > F4; Phases 3 and 5 are the two target tiers and both are delivered. Work that continues *near*
 > this plan lives in the followup tier
-> ([live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md)): F2, F5–F7 and
+> ([live-attach-dataflow-followup-plan.md](../../plans/live-attach-dataflow-followup-plan.md)): F2, F5–F7 and
 > F1's vector breadth, plus F4's optional extension to full object identity
 > (`GCBulkType`/`Node`/`Edge`), which the address-identity model defers by design
 > (`asmtest_valtrace.h`). Update this file as phases land, the way
-> [dynamorio-native-trace-plan.md](../archive/plans/dynamorio-native-trace-plan.md) tracks its own.
+> [dynamorio-native-trace-plan.md](dynamorio-native-trace-plan.md) tracks its own.
 
 ---
 
@@ -103,14 +103,14 @@ the scaffolding each tier needs already exists:
 
 | Piece | Already present | Gap |
 |---|---|---|
-| Operand decode | Capstone `CS_OPT_DETAIL` on; operand loop iterates `operands[]` ([disasm.c:375](../../../src/disasm.c#L375)) | reads only `X86_OP_IMM`; no read/write-set, no `.access`, no implicit operands |
-| Emulator values | mem hook gets `(type,addr,size,value)` ([emu.c:145](../../../src/emu.c#L145)); `uc_reg_read` available | value discarded; hooks armed only under a watchpoint ([emu.c:388](../../../src/emu.c#L388)) |
-| ptrace values | full `GETREGS` every step ([ptrace_backend.c:431](../../../src/ptrace_backend.c#L431)); `process_vm_readv` ([:315](../../../src/ptrace_backend.c#L315)) | extracts only rip/rax/rsp; no XMM/YMM; no per-operand mem peek; no `gs:` math |
-| DR instrumentation | instruments registered ranges ([asmtest_drtrace.h:17](../../../include/asmtest_drtrace.h#L17)) | clean-call offset recorder, `drreg` excluded; no operand/value/taint; no launch container |
-| Managed metadata | code-image recorder ([asmtest_codeimage.h](../../../include/asmtest_codeimage.h)); jitdump/MethodLoadVerbose addr-channel | no GC-move canonicalization; no var map |
+| Operand decode | Capstone `CS_OPT_DETAIL` on; operand loop iterates `operands[]` ([disasm.c:375](../../../../src/disasm.c#L375)) | reads only `X86_OP_IMM`; no read/write-set, no `.access`, no implicit operands |
+| Emulator values | mem hook gets `(type,addr,size,value)` ([emu.c:145](../../../../src/emu.c#L145)); `uc_reg_read` available | value discarded; hooks armed only under a watchpoint ([emu.c:388](../../../../src/emu.c#L388)) |
+| ptrace values | full `GETREGS` every step ([ptrace_backend.c:431](../../../../src/ptrace_backend.c#L431)); `process_vm_readv` ([:315](../../../../src/ptrace_backend.c#L315)) | extracts only rip/rax/rsp; no XMM/YMM; no per-operand mem peek; no `gs:` math |
+| DR instrumentation | instruments registered ranges ([asmtest_drtrace.h:17](../../../../include/asmtest_drtrace.h#L17)) | clean-call offset recorder, `drreg` excluded; no operand/value/taint; no launch container |
+| Managed metadata | code-image recorder ([asmtest_codeimage.h](../../../../include/asmtest_codeimage.h)); jitdump/MethodLoadVerbose addr-channel | no GC-move canonicalization; no var map |
 
 **Address-space normalization contract (must be fixed in Phase 0).** The existing sink is
-not address-uniform — [emu.c:113](../../../src/emu.c#L113) appends routine-relative
+not address-uniform — [emu.c:113](../../../../src/emu.c#L113) appends routine-relative
 offsets, the single-step backend stores absolute in whole-window mode but offsets in region
 mode. A value trace mixes an effective **memory** address (absolute) with instruction
 offsets, so every `location` must carry its space tag and the L1 linker normalizes per
@@ -159,9 +159,9 @@ asmtest_slice_t  *asmtest_slice_backward(const asmtest_defuse_t *g, at_val_rec_t
 The tier-neutral spine — highest leverage, mostly extension of existing code.
 
 - Add `asmtest_valtrace_t` + `asmtest_valtrace_append` beside
-  [`trace_append_insn`](../../../src/trace.c#L24) (same buffer/truncate discipline). Encode
+  [`trace_append_insn`](../../../../src/trace.c#L24) (same buffer/truncate discipline). Encode
   the **address-space tag** in every record.
-- Extend the operand loop at [disasm.c:375](../../../src/disasm.c#L375) from IMM-only to the
+- Extend the operand loop at [disasm.c:375](../../../../src/disasm.c#L375) from IMM-only to the
   full read/write set: consume per-operand `.access` (`CS_AC_READ`/`WRITE`) for **direction**;
   `x86_op_mem{base,index,scale,disp,segment}` for effective addresses; `regs_read[]` /
   `regs_write[]` + `detail->x86.eflags` for **implicit** operands (`eflags`, `rsp` on
@@ -195,10 +195,10 @@ as a known limitation.
 Least-work producer; proves L0→L1→L2 end-to-end with no hardware; doubles as the reference
 oracle for the live tiers.
 
-- Read source regs via `uc_reg_read` in [`on_code`](../../../src/emu.c#L108) (fires
+- Read source regs via `uc_reg_read` in [`on_code`](../../../../src/emu.c#L108) (fires
   pre-instruction → source state). Un-discard the value in
-  [`on_mem_access`](../../../src/emu.c#L145); install mem hooks **unconditionally** (today
-  only under a watchpoint, [emu.c:388](../../../src/emu.c#L388)). Loads need
+  [`on_mem_access`](../../../../src/emu.c#L145); install mem hooks **unconditionally** (today
+  only under a watchpoint, [emu.c:388](../../../../src/emu.c#L388)). Loads need
   `UC_HOOK_MEM_READ_AFTER` (plain `READ` delivers value 0); stores use `UC_HOOK_MEM_WRITE`;
   capture destination regs at the next code hook.
 
@@ -212,19 +212,19 @@ The differentiated capability: real data flow on an **attached, running** proces
 to a `using` region.
 
 - Per step, feed the sink from the **full** GP file (the `GETREGS` at
-  [:431](../../../src/ptrace_backend.c#L431) already fetches it — extraction only). Add one
+  [:431](../../../../src/ptrace_backend.c#L431) already fetches it — extraction only). Add one
   `PTRACE_GETFPREGS` / `GETREGSET NT_X86_XSTATE` read for **XMM/YMM**.
 - Decode read/write locations (Phase 0); for each mem operand compute EA `base+index*scale+disp`
   from the just-read regs, add **segment-base** resolution (`fs_base`/`gs_base` from `GETREGS`)
-  for `gs:`-relative .NET TLS, then [`process_vm_readv`](../../../src/ptrace_backend.c#L315) the
+  for `gs:`-relative .NET TLS, then [`process_vm_readv`](../../../../src/ptrace_backend.c#L315) the
   address; capture writes at the next stop.
 - Bound cost with the scoped model (the call-descent machinery at
-  [asmtest_ptrace.h:243](../../../include/asmtest_ptrace.h#L243) already frames the region).
+  [asmtest_ptrace.h:243](../../../../include/asmtest_ptrace.h#L243) already frames the region).
 - *Optional* Phase 3b: ptrace-snapshot → **emulator replay** for the value work off the live
   thread — valid only for **OS-interaction-free** regions (a syscall/futex/vDSO/signal in the
   region has no kernel under the emulator); anything else escalates to full input-capture
   record/replay. Nice-to-have, not on the critical path. **Realized 2026-07-15** as followup
-  **F1 increment 1** ([live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md)) —
+  **F1 increment 1** ([live-attach-dataflow-followup-plan.md](../../plans/live-attach-dataflow-followup-plan.md)) —
   the block-step + Unicorn-replay value tier `src/dataflow_blockstep.c`: purity-gated, byte-identical
   to single-step, ~6× fewer stops; impure regions fall back to single-step (F2 record-inject is the
   input-capture escalation).
@@ -246,16 +246,16 @@ cost is documented per-region, not per-run.
 > which receives the exact per-range triples at a **fully-suspended-EE GC fence** — a stronger
 > coherence position than any event-stream consumer, since no mutator can race the remap.
 > It is not hypothetical: taint Increment 7 ships it, and it drives `at_gc_remap_live`
-> ([dataflow_dr_client_inlined.c:737](../../../src/dataflow_dr_client_inlined.c#L737)) under
+> ([dataflow_dr_client_inlined.c:737](../../../../src/dataflow_dr_client_inlined.c#L737)) under
 > DynamoRIO across 60,021 real move ranges. Findings:
-> [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
+> [gc-move-range-extraction-findings.md](../../analysis/gc-move-range-extraction-findings.md).
 >
 > The residue is therefore narrow and named. The DR tier's shadow remap is **done**; the
 > *ptrace* tier's pure transform `asmtest_gcmove_canonicalize`
-> ([dataflow_gcmove.c:74](../../../src/dataflow_gcmove.c#L74)) is **landed and unit-tested but
+> ([dataflow_gcmove.c:74](../../../../src/dataflow_gcmove.c#L74)) is **landed and unit-tested but
 > has no live caller** — its only callers are `examples/test_dataflow_gcmove.c`. Pointing the
 > proven profiler feed at that transform is followup **F4**
-> ([live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md)), and it is
+> ([live-attach-dataflow-followup-plan.md](../../plans/live-attach-dataflow-followup-plan.md)), and it is
 > ordinary wiring work, not a research lift. Note the two tiers legitimately need different
 > plumbing even from the same profiler: the DR client is in-process with the target (shm
 > handshake, DR-API-free remap at the fence), whereas the ptrace tier is out-of-process and
@@ -265,7 +265,7 @@ cost is documented per-region, not per-run.
 Raw L0 gives `rdx ← load @0x7f…`; managed taint needs method + object identity.
 
 - **PC → method identity + version:** reuse the code-image recorder
-  ([asmtest_codeimage.h](../../../include/asmtest_codeimage.h)) + the jitdump /
+  ([asmtest_codeimage.h](../../../../include/asmtest_codeimage.h)) + the jitdump /
   `MethodLoadVerbose` (event id **143** on modern .NET) addr-channel to attribute values to
   the right method version across tiered re-JIT.
 - **GC-move canonicalization (the hard one):** consume EventPipe/ETW
@@ -298,7 +298,7 @@ tiered re-JIT.
 > YMM/AVX); Increment 9 the overhead work. **Overhead, measured in-repo** (`dr-taint-overhead-test`):
 > DR baseline ≈1× bare, full taint ≈437–452×, production (value-trace-free) ≈216×, and
 > **record-free production propagation ≈11× bare — inside the target ~10–50× band**, held by a
-> build-failing gate (`BAND_MAX = 50`, [mk/native-trace.mk:1292](../../../mk/native-trace.mk#L1292)).
+> build-failing gate (`BAND_MAX = 50`, [mk/native-trace.mk:1292](../../../../mk/native-trace.mk#L1292)).
 > The decisive finding was that the cost was never the taint: per-instruction *value capture*
 > (oracle-validation machinery) and the `drx_buf` record skeleton dominated, and propagation
 > itself adds only ~1.4×. Deliberate deferrals, documented in-code: ZMM upper lanes, VSIB
@@ -308,19 +308,19 @@ tiered re-JIT.
 
 The largest lift — production-grade taint over live JIT'd managed code — is a re-architecture of
 the current tier, not an extension, and has its own standalone plan:
-**[dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md)**.
+**[dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md)**.
 
 Increment 1 (the in-band L0 VALUE producer `libasmtest_drval_client.so`, a clean-call
 per-instruction register/memory value snapshot cross-validated against the emulator oracle,
-[dataflow_dr_client.c](../../../src/dataflow_dr_client.c)) **LANDED 2026-07-13**. Increment 2 (the
-extension-load probe [drclient/probe_extensions.c](../../../drclient/probe_extensions.c)) **LANDED
+[dataflow_dr_client.c](../../../../src/dataflow_dr_client.c)) **LANDED 2026-07-13**. Increment 2 (the
+extension-load probe [drclient/probe_extensions.c](../../../../drclient/probe_extensions.c)) **LANDED
 2026-07-13** and settled the gating question: the prebuilt `drmgr`/`drreg`/`drx` load under DR's
 private loader on glibc 2.39 (blocker does not reproduce → **option (c) version-pin**), and the
 license resolved to a **split** — `drmgr`/`drreg`/`drx` are BSD, but **`umbra` is LGPL-2.1** (Dr.
 Memory Framework), so the byte-granular shadow must hand-roll a BSD map or explicitly accept LGPL
-([dr-extension-load-probe-findings.md](../analysis/dr-extension-load-probe-findings.md)). Increment
+([dr-extension-load-probe-findings.md](../../analysis/dr-extension-load-probe-findings.md)). Increment
 3 (CORE) then re-platformed the value client onto inlined `drmgr`/`drreg`/`drx_buf` instrumentation
-([dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c)), oracle-validated
+([dataflow_dr_client_inlined.c](../../../../src/dataflow_dr_client_inlined.c)), oracle-validated
 identically to the clean-call client (`make dr-valtrace-inlined-test`). What this paragraph used
 to call "the deferred remainder" — in-band tag propagation (`dst_tag = ∪ src_tags`, the ~10–50×
 band), the launch-under-DR container (`drrun -c … -- dotnet app.dll`), the shadow remap on GC
@@ -333,14 +333,14 @@ The signal half was already mitigated (`DR_SIGNAL_DELIVER`); external attach sta
 for managed, and that boundary held — the DR attach tier's Increment 6 probed managed attach
 twice (external seize, then a safepoint-parked variant) and closed it **NO-GO** both times, the
 fatal takeover being the runtime's *native* threads
-([dynamorio-managed-attach-safepoint-plan.md](../archive/plans/dynamorio-managed-attach-safepoint-plan.md)).
+([dynamorio-managed-attach-safepoint-plan.md](dynamorio-managed-attach-safepoint-plan.md)).
 
 **Exit criteria — MET 2026-07-15.** A launched `dotnet` workload runs under DR with a taint seed
 at a source detected at a sink over real JIT'd managed code (Increment 5); taint survives a
 compacting GC (Increment 7, live-wired); overhead is measured on a representative workload and
 band-gated in CI at ~11× bare (Increment 9); it validates well beyond the offset-only dotnet
 smoke (`bindings/dotnet/drtrace/`). See
-[dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md) for the full increment sequence.
+[dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md) for the full increment sequence.
 
 ## Phase 6 - Bindings, docs, CI *(LANDED 2026-07-13: libasmtest_dataflow shared lib; ALL 10 language bindings (Python/C++/Node/Ruby/Lua/Zig/Rust/Go/Java/.NET) wrap the pure gcmove+method helpers, each `make dataflow-<lang>-test`-validated (host or docker); Python/C++/Node also wrap the full L0/L1/L2 ValueTrace pipeline; data-flow guide page; `dataflow` CI job gates python+cpp, and a `dataflow-bindings` matrix job gates the other seven in their pinned toolchain images. Phase 6 fully landed — only hardware/upstream/credential-gated forward-look items remain across the plan set)*
 

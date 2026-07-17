@@ -1,4 +1,4 @@
-# dataflow.mk — data-flow tracing tier (docs/internal/plans/data-flow-tracing-plan.md).
+# dataflow.mk — data-flow tracing tier (docs/internal/archive/plans/data-flow-tracing-plan.md).
 #
 # Included by ../Makefile (split out by concern). All knobs (CSTD, WERROR,
 # ASM_SYNTAX, BUILD, CAPSTONE_*, UNICORN_*, ...) come from the parent Makefile,

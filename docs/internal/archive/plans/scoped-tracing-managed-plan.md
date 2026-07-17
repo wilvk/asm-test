@@ -9,11 +9,11 @@
 > 2026-07-17 (§D2), not left open.
 
 The **hard** half of the [scoped in-process tracing
-plan](../archive/plans/scoped-inprocess-tracing-plan.md) — extending the scope model to the three
+plan](scoped-inprocess-tracing-plan.md) — extending the scope model to the three
 **JIT-managed** runtimes where the scope must capture the runtime's **own live JIT
 output**, not a separately-materialised native leaf. This is new-item **7** from the
 umbrella's
-[what-is-new list](../archive/plans/scoped-inprocess-tracing-plan.md#what-already-ships-vs-what-is-new):
+[what-is-new list](scoped-inprocess-tracing-plan.md#what-already-ships-vs-what-is-new):
 `MethodLoadVerbose` address resolution, `AsyncLocal`/piece-D async-hop stitching,
 and the concealed out-of-process ptrace stepper scope.
 
@@ -51,7 +51,7 @@ thread → logical-operation model change). It is deliberately sequenced **last*
 >   §D2 (Java propagating executor) per-runtime async-hop producers.
 > - **2026-07 — the §D3 live-JIT cross-process address channel LANDED**, retiring what this
 >   block previously called its standing forward-look: the header-only SPSC ring
->   ([asmtest_addr_channel.h](../../../include/asmtest_addr_channel.h)) +
+>   ([asmtest_addr_channel.h](../../../../include/asmtest_addr_channel.h)) +
 >   `asmtest_ptrace_trace_attached_windowed`, covered by `test_ptrace_windowed`.
 > - **2026-07-12 — the .NET composition on top of that channel LANDED** (extensions plan
 >   E3, commit `4416071`): `JitMethodMap.SetPublishChannel` drives a sibling-thread
@@ -65,17 +65,17 @@ thread → logical-operation model change). It is deliberately sequenced **last*
 > per-hop slices — it needs the shared-core libipt glue on bare-metal Intel PT to validate.
 > The ptrace fallback runs on ordinary CI-adjacent hosts (Zen 2 / Docker) but exercises a
 > second process, and so cannot exercise a cross-thread hop. See
-> [docs/scoped-tracing-implementation.md](../../scoped-tracing-implementation.md).
+> [docs/scoped-tracing-implementation.md](../../../scoped-tracing-implementation.md).
 
 **Hard dependencies:**
 
-- [shared-core §1](../archive/plans/scoped-tracing-core-plan.md#1--per-thread-hwtrace-state-planned-analysis-phase-c-before-the-managed-bindings)
+- [shared-core §1](scoped-tracing-core-plan.md#1--per-thread-hwtrace-state-planned-analysis-phase-c-before-the-managed-bindings)
   (per-thread hwtrace state) — a managed runtime is multithreaded by construction;
   the process-global slot cannot serve it.
-- [shared-core §2](../archive/plans/scoped-tracing-core-plan.md#2--libipt-decode-against-self-code-image-glue-planned-forward-look-analysis-phase-c)
+- [shared-core §2](scoped-tracing-core-plan.md#2--libipt-decode-against-self-code-image-glue-planned-forward-look-analysis-phase-c)
   (libipt decode-against-self-code-image glue) — the *clean* in-process path for
   live JIT code is PT/LBR + recorder bytes; this slice is its first consumer.
-- [bindings slice](../archive/plans/scoped-tracing-bindings-plan.md) — the `.NET AsmTrace` reference
+- [bindings slice](scoped-tracing-bindings-plan.md) — the `.NET AsmTrace` reference
   construct; this slice adds `.NET`'s managed-code capability on top and builds the
   **Node** and **Java** scope constructs (rated "medium," same tier as .NET).
 
@@ -92,14 +92,14 @@ of §2.
 
 Pointing **single-step** at live managed code is a documented footgun: it swaps the
 process-wide SIGTRAP disposition the runtime's PAL also owns
-([src/ss_backend.c:129](../../../src/ss_backend.c#L129)), can put a sibling runtime
+([src/ss_backend.c:129](../../../../src/ss_backend.c#L129)), can put a sibling runtime
 thread into runaway stepping (the handler re-asserts TF in whatever context it
-interrupted, [src/ss_backend.c:107](../../../src/ss_backend.c#L107)), fights the JIT's
+interrupted, [src/ss_backend.c:107](../../../../src/ss_backend.c#L107)), fights the JIT's
 relocating/self-modifying bytes, and adds ~100–1000× slowdown on exactly the thread
 the GC/JIT coordinate with. So tracing the runtime's own execution requires **either**:
 
 1. **Out-of-band hardware trace** (Intel PT / AMD LBR) + the self code-image
-   recorder for bytes — the [shared-core §2](../archive/plans/scoped-tracing-core-plan.md#2--libipt-decode-against-self-code-image-glue-planned-forward-look-analysis-phase-c)
+   recorder for bytes — the [shared-core §2](scoped-tracing-core-plan.md#2--libipt-decode-against-self-code-image-glue-planned-forward-look-analysis-phase-c)
    clean path. Privilege- and bare-metal-gated (never most cloud/CI, never macOS).
 2. **The concealed out-of-process ptrace stepper** on hosts with no hardware trace
    (Zen 2, Docker-on-Mac) — exact, state-safe, timing-intrusive; a second process
@@ -117,10 +117,10 @@ and filters at decode; a stepper must decide per instruction what to step into.*
 the scope's promise degrades differently by backend:
 
 - **Whole-window ("trace whatever runs in this scope").** Clean under PT (the
-  decoder already region-filters, [src/pt_backend.c:108](../../../src/pt_backend.c#L108));
+  decoder already region-filters, [src/pt_backend.c:108](../../../../src/pt_backend.c#L108));
   under a stepper it is descent-**L3** (`DESCEND_ALL`) — default-off,
   denylist/budget/watchdog-guarded, **expected to self-truncate** on a live runtime
-  ([call-descent-plan.md](../archive/plans/call-descent-plan.md)). Best-effort by design.
+  ([call-descent-plan.md](call-descent-plan.md)). Best-effort by design.
 - **One JIT'd method ("trace this method's full body").** A region + step-over
   (descent OFF / `DESCEND_KNOWN`) — reliable, and already shipping via the W2
   attached path. It costs the extra knowledge the empty scope avoids: keep the
@@ -145,7 +145,7 @@ per-language analogues).
 > decision, see the zero-config plan's §Z1 routing note). **§D0.2 landed**
 > dependency-free: `DiagnosticsIpc` hand-rolls the `DOTNET_IPC_V1`
 > `EnablePerfMap(JitDump)` wire command instead of taking a `DiagnosticsClient`
-> dependency (see [dotnet-perfmap-rundown-plan.md](../archive/plans/dotnet-perfmap-rundown-plan.md)).
+> dependency (see [dotnet-perfmap-rundown-plan.md](dotnet-perfmap-rundown-plan.md)).
 > **§D0.3 named-method form LANDED (2026-07):** `AsmTrace.Method(Delegate)` resolves a
 > method's own JIT'd body (PrepareMethod + the `MethodLoadVerbose` listener, jitdump
 > rundown for a warm/R2R body), registers it as a region, and traces it with step-over
@@ -182,10 +182,10 @@ surface) at arm time that consumes `MethodLoadVerbose_V2` under `JITKeyword` (0x
 carrying `MethodStartAddress` / `MethodSize` / `ReJITID`, and maintain a
 name→(address, size, version) map. Feed each (address, size) into the self
 code-image recorder (`asmtest_codeimage_track`,
-[include/asmtest_codeimage.h:90](../../../include/asmtest_codeimage.h#L90)) — the byte
+[include/asmtest_codeimage.h:90](../../../../include/asmtest_codeimage.h#L90)) — the byte
 source the shared-core §2 decoder reads. New code lives in the .NET binding
 (`bindings/dotnet/hwtrace/`); a new `AsmTrace.Method(Delegate|MethodInfo)` static in
-[HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs). **Two in-process caveats
+[HwTrace.cs](../../../../bindings/dotnet/hwtrace/HwTrace.cs). **Two in-process caveats
 (confirmed against the runtime): (i)** an in-proc `EventListener` sees only methods
 JIT'd **after** it enables `JITKeyword` — there is **no** in-proc rundown of
 already-jitted methods the way an out-of-proc EventPipe session gets one on stop, so the
@@ -209,13 +209,13 @@ dotnet/runtime #45518, where reading rundown events can itself trigger a JIT); t
 lives in the issue tracker, not formal docs. `EnablePerfMap` is light, but this is a
 reason to keep the self recorder as
 the no-IPC path), whose jitdump the shipped `asmtest_jitdump_find`
-([include/asmtest_ptrace.h:331](../../../include/asmtest_ptrace.h#L331)) /
-`asmtest_proc_perfmap_symbol` ([:303](../../../include/asmtest_ptrace.h#L303)) already
+([include/asmtest_ptrace.h:331](../../../../include/asmtest_ptrace.h#L331)) /
+`asmtest_proc_perfmap_symbol` ([:303](../../../../include/asmtest_ptrace.h#L303)) already
 read. The design does **not** depend on this for the pure in-process case (the self
 recorder needs none of it); it is the lowest-overhead byte source when enableable.
 
 **§D0.3 — Named-method form.** *(LANDED 2026-07 —
-[HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs) `AsmTrace.Method`.)*
+[HwTrace.cs](../../../../bindings/dotnet/hwtrace/HwTrace.cs) `AsmTrace.Method`.)*
 `using var t = AsmTrace.Method(HotPath); var r = t.Invoke(data); …t.Path;` — `Invoke`
 is the library's own call site, pinned `NoInlining | NoOptimization`, so the
 standalone JIT'd body is what runs; the arm-time listener resolves the address and
@@ -249,11 +249,11 @@ re-arms a fresh per-thread PT event on the resuming one; §D4 owns the merge. De
 stays the honest thread-scope-with-mismatch-flag; the stitched mode is an explicit
 opt-in.
 
-**§D0 tests.** Extend [examples/dotnet/jit_dotnet/Program.cs](../../../examples/dotnet/jit_dotnet/Program.cs)
-and the `jit_trace` harness ([examples/jit_trace.c](../../../examples/jit_trace.c)); run
+**§D0 tests.** Extend [examples/dotnet/jit_dotnet/Program.cs](../../../../examples/dotnet/jit_dotnet/Program.cs)
+and the `jit_trace` harness ([examples/jit_trace.c](../../../../examples/jit_trace.c)); run
 under the existing `docker-hwtrace-jit-dotnet` lane
-([mk/docker.mk:222-272](../../../mk/docker.mk#L222), recipe
-[mk/native-trace.mk:261-325](../../../mk/native-trace.mk#L261)). Assert the listener map
+([mk/docker.mk:222-272](../../../../mk/docker.mk#L222), recipe
+[mk/native-trace.mk:261-325](../../../../mk/native-trace.mk#L261)). Assert the listener map
 resolves a JIT'd method to (address, size), that a tier-up produces a fresh event at
 a new address, and that decode against the version-live bytes matches ground truth.
 PT-host lanes self-skip; the ptrace fallback (§D3) runs the exactness check.
@@ -264,22 +264,22 @@ PT-host lanes self-skip; the ptrace fallback (§D3) runs the exactness check.
 
 **Construct — the callback forms LANDED; the `using` sugar LANDED 2026-07-16.** What ships
 is the **callback** pair on `class HwTrace`
-([bindings/node/hwtrace.js:524](../../../bindings/node/hwtrace.js#L524)): `region(name, fn)`
-([:1013](../../../bindings/node/hwtrace.js#L1013)), the plain begin/`fn`/`end`-in-a-`finally`
-bracket, and `scope(code, fn, opts)` ([:1032](../../../bindings/node/hwtrace.js#L1032)), the
+([bindings/node/hwtrace.js:524](../../../../bindings/node/hwtrace.js#L524)): `region(name, fn)`
+([:1013](../../../../bindings/node/hwtrace.js#L1013)), the plain begin/`fn`/`end`-in-a-`finally`
+bracket, and `scope(code, fn, opts)` ([:1032](../../../../bindings/node/hwtrace.js#L1032)), the
 register-then-`try_begin` / `end` block scope with the shared-core render-on-close, the tid
 assert, and a call-site-derived `basename:line` name. That is this section's own
 **version-independent fallback** — and it is what runs wherever `using` does not parse.
 
 **LANDED — the `using` / `Symbol.dispose` construct (2026-07-16).** The design below was the
 spec and the binding now implements it: `class AsmTrace`
-([bindings/node/hwtrace.js:1127](../../../bindings/node/hwtrace.js#L1127)) is the
+([bindings/node/hwtrace.js:1127](../../../../bindings/node/hwtrace.js#L1127)) is the
 `using`-compatible scope — `using t = new AsmTrace(code)` — over the same
 register-then-`try_begin` / `end` pair, with the shared-core render-on-close and tid
 assert (surfaced as `truncated`), the call-site `basename:line` auto-name, and its own trace
-handle. Its disposer ([:1186](../../../bindings/node/hwtrace.js#L1186)) is keyed off the
-guarded `kDispose` ([:1101](../../../bindings/node/hwtrace.js#L1101)) and delegates to an
-idempotent `close()` ([:1169](../../../bindings/node/hwtrace.js#L1169)) — the manual form,
+handle. Its disposer ([:1186](../../../../bindings/node/hwtrace.js#L1186)) is keyed off the
+guarded `kDispose` ([:1101](../../../../bindings/node/hwtrace.js#L1101)) and delegates to an
+idempotent `close()` ([:1169](../../../../bindings/node/hwtrace.js#L1169)) — the manual form,
 which is what makes the construct's *semantics* reachable (and testable) below the syntax
 gate. Both are exported. It mirrors dotnet's `AsmTrace : IDisposable` and Java's `AsmTrace
 implements AutoCloseable`. The **version gate the sugar was blocked on is now a runtime
@@ -296,13 +296,13 @@ keyed off the guarded `const kDispose = Symbol.dispose ?? Symbol.for('nodejs.dis
 `Symbol.dispose` exists across the 18 floor — an unguarded `Symbol.dispose` would not throw
 on those runtimes, it would silently key the disposer off the *string* `'undefined'`.
 Arm hook is the existing top-level `require` IIFE
-([hwtrace.js:172-282](../../../bindings/node/hwtrace.js#L172)); it stays lazy-first-scope.
+([hwtrace.js:172-282](../../../../bindings/node/hwtrace.js#L172)); it stays lazy-first-scope.
 
 **Ownership model — why a per-scope OWNED trace needed more than "allocate and free"
 (2026-07-16, post-review).** The scope owns its trace, but its region name is call-site
 CONSTANT, i.e. *shared*: §0.4 refreshes the one slot in place, and the registry has **no
 release path** (nothing clears `r->trace`; `register_region` rejects a NULL trace,
-[src/hwtrace.c:611](../../../src/hwtrace.c#L611)). Coupling the two naively is what an
+[src/hwtrace.c:611](../../../../src/hwtrace.c#L611)). Coupling the two naively is what an
 adversarial review caught, twice over. Two scopes live at once on one name — *recursion
 through one auto-named call site is enough* — leave the slot pointing at whichever
 registered LAST, so the outer's name-keyed `render`/`end` resolve to the INNER's trace:
@@ -319,7 +319,7 @@ empty **tombstone** trace before freeing, so the registry never retains a freed 
 later name-keyed op to fault on. Both use only §0.4's documented refresh — **no new C
 surface, no ABI/parity change**. `end` is additionally guarded on `armed`: it is name-keyed
 but its single-step path pops the calling thread's TOP range-stack frame without checking
-ownership ([src/hwtrace.c:1889](../../../src/hwtrace.c#L1889)), so a self-skipped scope that
+ownership ([src/hwtrace.c:1889](../../../../src/hwtrace.c#L1889)), so a self-skipped scope that
 ended anyway silently disarmed a live SIBLING mid-capture (reproduced: an armed,
 never-closed scope captured 0 instructions). **Residual, and exactly when it is reachable:**
 the reclaim serialises the slot per THREAD, which is all a `using` block can need (block
@@ -350,7 +350,7 @@ binding one.
 Node's per-`ScopeId` hook for the shared
 [§D4 model](#d4--async-hop-stitching-piece-d-the-shared-logical-operation-model) is
 `AsyncLocalStorage` / `async_hooks` — **both now ship in the binding** as
-`AsyncStitchedTrace` ([bindings/node/hwtrace.js](../../../bindings/node/hwtrace.js), which
+`AsyncStitchedTrace` ([bindings/node/hwtrace.js](../../../../bindings/node/hwtrace.js), which
 requires `async_hooks` at :38 and backs the class with an `AsyncLocalStorage` store at
 :1253); *this section originally recorded that neither appeared in the binding.* But Node's
 threading model changes what the hook can do: **normal
@@ -370,16 +370,16 @@ flag.
 
 **§D1 tests.** **The `using`-scope case is BUILT (2026-07-16); the async-hop case is
 unchanged by that work.** The `hwtrace-node-test` lane
-([mk/native-trace.mk:2544](../../../mk/native-trace.mk#L2544)) now runs a second file after
+([mk/native-trace.mk:2544](../../../../mk/native-trace.mk#L2544)) now runs a second file after
 `test_hwtrace.js`, split in two because `using` is syntax:
-[bindings/node/test_hwtrace_using.js](../../../bindings/node/test_hwtrace_using.js) parses on
+[bindings/node/test_hwtrace_using.js](../../../../bindings/node/test_hwtrace_using.js) parses on
 any Node and asserts the guard (`kDispose` resolves to `Symbol.dispose` where native, to
 `Symbol.for('nodejs.dispose')` below it) plus the disposal *semantics* over a native leaf —
 `path` empty before dispose and a 5-line rendered listing after, `armed`, not `truncated`,
 the `basename:line` auto-name, dispose idempotence, and a 4-iteration loop at one call site
 proving Core §0.4 slot reuse (the case the core's own comment calls out for `using`/RAII
 scopes). It then requires
-[test_hwtrace_using_syntax.js](../../../bindings/node/test_hwtrace_using_syntax.js) — the real
+[test_hwtrace_using_syntax.js](../../../../bindings/node/test_hwtrace_using_syntax.js) — the real
 `using t = new AsmTrace(code)` — **only** where the parser accepts a `using` declaration,
 compile-probed with `new Function` rather than version-sniffed (Node 22's flag would make a
 `>= 24` test lie); below that it prints a `# SKIP` naming the version and the fallback. That
@@ -413,15 +413,15 @@ run in `test_hwtrace.js`, so this line needed its own audit rather than a status
 ## §D2 — JVM scope construct *(LANDED — and the optional zero-touch JVMTI hop hook is now DECIDED: NO-GO, 2026-07-17)*
 
 **Construct.** Java's `region(String, Runnable)` ships at
-[bindings/java/HwTrace.java:779](../../../bindings/java/HwTrace.java#L779) on the
-`AutoCloseable NativeTrace` ([:758](../../../bindings/java/HwTrace.java#L758)); add a
+[bindings/java/HwTrace.java:779](../../../../bindings/java/HwTrace.java#L779) on the
+`AutoCloseable NativeTrace` ([:758](../../../../bindings/java/HwTrace.java#L758)); add a
 try-with-resources `AsmTrace implements AutoCloseable` over register-then-`try_begin`
 / `close`-end, with render-on-close + tid assert. Arm hook is the existing class
-`static{}` ([HwTrace.java:279](../../../bindings/java/HwTrace.java#L279)); keep it
+`static{}` ([HwTrace.java:279](../../../../bindings/java/HwTrace.java#L279)); keep it
 lazy-first-scope. Address resolution for JIT'd methods reuses the **jitdump agent**
 (`-agentpath libperf-jvmti.so` for HotSpot) to emit a `jit-<pid>.dump`, read
 **in-process** via the shipped `asmtest_jitdump_find`
-([src/ptrace_backend.c](../../../src/ptrace_backend.c)) — the same in-process *reader* the
+([src/ptrace_backend.c](../../../../src/ptrace_backend.c)) — the same in-process *reader* the
 V8/CoreCLR jitdumps already exercise, feeding the recorder. **Two caveats the "same
 reader" framing hides:** (i) `libperf-jvmti.so` is a **Linux perf-tools** artifact
 (`tools/perf/jvmti`), not a HotSpot/OpenJDK-shipped agent, and is often absent from distro
@@ -497,7 +497,7 @@ ptrace; DynamoRIO self-skips (guarded) and is never used against the runtime.
 > mount/unmount events promoted to spec *and* extended to platform-thread task handoff).
 >
 > **What landed instead (`stitchedTraceZeroTouchAcrossVirtualThreadRemount`,
-> [bindings/java/HwTraceTest.java](../../../bindings/java/HwTraceTest.java)):** the constructive
+> [bindings/java/HwTraceTest.java](../../../../bindings/java/HwTraceTest.java)):** the constructive
 > half of this NO-GO — proof that on virtual threads the zero-touch *outcome* §D2 wanted is
 > **already delivered by shipped code, with no agent**. 15 asserts in `hwtrace-java-test`
 > (`ok 143`–`ok 157`, lane green): one `AsmStitchedTrace` operation whose hop site is a bare
@@ -508,8 +508,8 @@ ptrace; DynamoRIO self-skips (guarded) and is never used against the runtime.
 > JIT-method *resolver* (§D2's address side), not the hop hook — do not read one as the other.
 
 **§D2 tests.** Extend the `hwtrace-java-test` lane and the
-[examples/jit_java/](../../../examples/jit_java/) fixture under `docker-hwtrace-jit-java`
-([mk/docker.mk:222-272](../../../mk/docker.mk#L222)); assert a JIT'd method resolves and
+[examples/jit_java/](../../../../examples/jit_java/) fixture under `docker-hwtrace-jit-java`
+([mk/docker.mk:222-272](../../../../mk/docker.mk#L222)); assert a JIT'd method resolves and
 decodes; PT lanes self-skip, ptrace fallback checks exactness.
 
 ---
@@ -518,16 +518,16 @@ decodes; PT lanes self-skip, ptrace fallback checks exactness.
 
 > **Status: reverse-attach stealth stepper + standalone-binary bundling landed +
 > CI-runnable.** `asmtest_hwtrace_stealth_trace`
-> ([src/hwtrace.c](../../../src/hwtrace.c)) reverse-attaches to the caller
+> ([src/hwtrace.c](../../../../src/hwtrace.c)) reverse-attaches to the caller
 > (`prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY)` + `PTRACE_SEIZE`), `run_to`s it to the
 > region entry, and single-steps the region out of band (reusing
 > `asmtest_ptrace_trace_attached`), with a shared shadow trace copied back to the
 > caller. The stepping body + bundled-binary discovery now live in
-> [src/stealth_helper.c](../../../src/stealth_helper.c) so the SAME code runs either as an
+> [src/stealth_helper.c](../../../../src/stealth_helper.c) so the SAME code runs either as an
 > in-process forked child (the fallback) or as the **standalone `asmtest-stealth-helper`
 > binary** — a real separate process the managed packages can ship — which the caller
 > discovers via a dladdr-sibling lookup (mirroring
-> [drtrace_app.c](../../../src/drtrace_app.c)'s `dr_bundled_lib`) or the
+> [drtrace_app.c](../../../../src/drtrace_app.c)'s `dr_bundled_lib`) or the
 > `ASMTEST_STEALTH_HELPER` override and hands the shared scratch over a memfd
 > (survives `execv`, unlike the anonymous mapping the fork path inherits).
 > `test_ptrace_scoped_stealth` (checks 158–166) asserts **both** paths reconstruct the
@@ -535,26 +535,26 @@ decodes; PT lanes self-skip, ptrace fallback checks exactness.
 > refuses the attach, and an `alarm()` watchdog means it never hangs CI. Build/install:
 > the `$(BUILD)/asmtest-stealth-helper` target + `install-stealth-helper` (next to
 > `libasmtest_hwtrace`, where the sibling lookup resolves), in
-> [mk/native-trace.mk](../../../mk/native-trace.mk). **Package embedding is now also done:**
+> [mk/native-trace.mk](../../../../mk/native-trace.mk). **Package embedding is now also done:**
 > the helper is staged into every native payload slot beside `libasmtest_hwtrace`,
 > `$ORIGIN`-rpath'd so it resolves the co-vendored Capstone in-package
-> ([scripts/package-native.sh](../../../scripts/package-native.sh)), copied into every
+> ([scripts/package-native.sh](../../../../scripts/package-native.sh)), copied into every
 > managed payload (NuGet `runtimes/<rid>/native`, npm/Maven/gem/rock via `emu_lib_slots`,
 > the Python wheel `_libs/`), and asserted present + `$ORIGIN`-rpath'd (and not leaked
 > into a darwin slot) by a fail-closed `package-libs-verify` gate
-> ([mk/bindings.mk](../../../mk/bindings.mk)). Clean-room-verified on this Linux host: a
+> ([mk/bindings.mk](../../../../mk/bindings.mk)). Clean-room-verified on this Linux host: a
 > full `package-libs` slot passes the complete-set gate, `ldd asmtest-stealth-helper`
 > resolves the in-slot `libcapstone.so.5`, and a `dlopen` of the bundled
 > `libasmtest_hwtrace.so` discovers the helper as its dladdr sibling with the environment
 > scrubbed. **The cross-process address channel LANDED (2026-07):** a header-only SPSC
-> ring ([include/asmtest_addr_channel.h](../../../include/asmtest_addr_channel.h)) the parent
+> ring ([include/asmtest_addr_channel.h](../../../../include/asmtest_addr_channel.h)) the parent
 > publishes each JIT'd method's `(base, len, version)` into and the stepper drains between
 > steps, plus `asmtest_ptrace_trace_attached_windowed`
-> ([src/ptrace_backend.c](../../../src/ptrace_backend.c)) — a whole-window multi-region
+> ([src/ptrace_backend.c](../../../../src/ptrace_backend.c)) — a whole-window multi-region
 > capture that single-steps an attached tracee across a window frame and records the
 > ABSOLUTE address of every instruction in the frame OR any channel-published region,
 > following calls into published methods and eliding the runtime noise between them.
-> `test_ptrace_windowed` ([examples/test_hwtrace.c](../../../examples/test_hwtrace.c)) proves
+> `test_ptrace_windowed` ([examples/test_hwtrace.c](../../../../examples/test_hwtrace.c)) proves
 > the cross-process handoff with a driver blob calling two channel-published leaves — the
 > stepper records both without knowing their addresses at fork time. **The .NET-binding
 > composition on top of the channel LANDED 2026-07-12** (extensions plan E3, commit
@@ -566,7 +566,7 @@ decodes; PT lanes self-skip, ptrace fallback checks exactness.
 > [managed-wholewindow-oop-plan.md](managed-wholewindow-oop-plan.md).
 
 The hardware-free path, hidden behind the same scope constructs, for hosts with no
-PT/LBR (Zen 2 — [src/hwtrace.c:183](../../../src/hwtrace.c#L183) classifies it
+PT/LBR (Zen 2 — [src/hwtrace.c:183](../../../../src/hwtrace.c#L183) classifies it
 no-hardware — and Docker-on-Intel-Mac). The W2 tracer already exists
 (`src/ptrace_backend.c`, `asmtest_ptrace_trace_attached_versioned`, paired with the
 self code-image recorder) and touches none of the target's signals, code bytes, or
@@ -579,7 +579,7 @@ helper is the caller's *child*, so the nomination is what makes the reverse atta
 legal), the helper `PTRACE_SEIZE`s the calling thread and steps it from a sentinel at
 the scope open to a sentinel at the scope close; `Dispose()`/`close()` joins the helper
 and renders via the **version-aware** render variant `asmtest_hwtrace_render_versioned`
-(pinned in [Core §1](../archive/plans/scoped-tracing-core-plan.md#1--per-thread-hwtrace-state-planned-analysis-phase-c-before-the-managed-bindings);
+(pinned in [Core §1](scoped-tracing-core-plan.md#1--per-thread-hwtrace-state-planned-analysis-phase-c-before-the-managed-bindings);
 §0.3's `render` is region-scoped and version-blind, but the stepped managed bytes
 tier/move, so the plain primitive would render stale text). Developer footprint stays **import + scope**. Works on Zen 2 and
 inside Docker on an Intel Mac — the default seccomp profile permits `ptrace(2)` when the
@@ -604,29 +604,29 @@ perturbation, not deadlock, form of the L3 hazard). Document this prominently.
 - A bundled helper binary + spawn/`PR_SET_PTRACER`/`PTRACE_SEIZE`/sentinel-step glue,
   reusing `asmtest_ptrace_trace_attached_versioned` against the **foreign-pid**
   recorder (above). This is the
-  [zen2-singlestep-trace-plan.md](../plans/zen2-singlestep-trace-plan.md) W2 machinery in a
+  [zen2-singlestep-trace-plan.md](../../plans/zen2-singlestep-trace-plan.md) W2 machinery in a
   scope wrapper — no new *tracer*, but the reverse-attach protocol (`PR_SET_PTRACER` +
   `PTRACE_SEIZE` of the parent), the sentinels, and the cross-process address channel
   **are** new.
 - The helper's **build target + install path** in
-  [mk/native-trace.mk](../../../mk/native-trace.mk) (reusing `ptrace_backend.o`), its
+  [mk/native-trace.mk](../../../../mk/native-trace.mk) (reusing `ptrace_backend.o`), its
   **runtime discovery** (dladdr-on-own-symbol sibling lookup, matching the DynamoRIO
-  payload's [src/drtrace_app.c](../../../src/drtrace_app.c) pattern), and its **bundling**
+  payload's [src/drtrace_app.c](../../../../src/drtrace_app.c) pattern), and its **bundling**
   into each managed package (NuGet / npm / Maven) — the packaging + supply-chain surface
   the risks list flags.
 - Scope-façade wiring in each managed binding so `new AsmTrace()` on a no-hardware
   host silently routes to the helper instead of self-skipping.
 
 **§D3 tests.** A new C harness case in
-[examples/test_hwtrace.c](../../../examples/test_hwtrace.c) (`test_ptrace_scoped_stealth`)
+[examples/test_hwtrace.c](../../../../examples/test_hwtrace.c) (`test_ptrace_scoped_stealth`)
 alongside the existing `test_ptrace_versioned`
-([:1153](../../../examples/test_hwtrace.c#L1153)) / `test_ptrace_attach`
-([:852](../../../examples/test_hwtrace.c#L852)): spawn the helper, SEIZE self, step
+([:1153](../../../../examples/test_hwtrace.c#L1153)) / `test_ptrace_attach`
+([:852](../../../../examples/test_hwtrace.c#L852)): spawn the helper, SEIZE self, step
 between sentinels, assert exact offsets vs `asmtest_disas` ground truth. Runs on any
 ptrace-capable Linux (the Zen 2 / Docker target class) — **not** hardware-gated, so
 it is CI-runnable in the `hwtrace` job / a Docker lane with `--cap-add=SYS_PTRACE`
 (the `docker-hwtrace-codeimage` lane already runs with that cap,
-[mk/docker.mk:294-301](../../../mk/docker.mk#L294)).
+[mk/docker.mk:294-301](../../../../mk/docker.mk#L294)).
 
 ---
 
@@ -635,13 +635,13 @@ it is CI-runnable in the `hwtrace` job / a Docker lane with `--cap-add=SYS_PTRAC
 > **Status: merge core landed + two of three live producers landed.** The slice/bound ABI
 > (`asmtest_hwtrace_slice_t`, `asmtest_hwtrace_slice_bound_t`) and the pure ordered
 > merge `asmtest_hwtrace_stitch` are implemented in
-> [src/hwtrace.c](../../../src/hwtrace.c) / declared in
-> [include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h); `test_stitch_slices`
+> [src/hwtrace.c](../../../../src/hwtrace.c) / declared in
+> [include/asmtest_hwtrace.h](../../../../include/asmtest_hwtrace.h); `test_stitch_slices`
 > (checks 6–10) passes with no PT hardware and no real threads — the CI-runnable
 > deliverable that closes the async-hop merge test hole. **The per-runtime hooks that drive
 > live capture→tag→merge are no longer a blanket gap:** .NET's `AsyncLocal` value-changed
 > hook (`AsmStitchedTrace`) and Node's `AsyncLocalStorage` hook (`AsyncStitchedTrace`,
-> [bindings/node/hwtrace.js](../../../bindings/node/hwtrace.js)) both ship as live
+> [bindings/node/hwtrace.js](../../../../bindings/node/hwtrace.js)) both ship as live
 > producers, feeding the merge through the `asmtest_hwtrace_stitch_handles` bridge. The
 > hook→merge **seam** is now CI-covered by `test_stitch_hops_scripted` (a fake-hook harness
 > scripting hops out of `seq` order). **Remaining: NOTHING** *(reconciled 2026-07-17)* — the
@@ -675,7 +675,7 @@ signals a thread hop.
 1. **Open.** Allocate a monotonic `ScopeId`; open a per-thread PT event (the Core §1
    per-thread state) on the calling thread; tag its state slot with `(ScopeId,
    seq=0)` and the start version from the code-image recorder
-   (`asmtest_codeimage_now`, [include/asmtest_codeimage.h:102](../../../include/asmtest_codeimage.h#L102)).
+   (`asmtest_codeimage_now`, [include/asmtest_codeimage.h:102](../../../../include/asmtest_codeimage.h#L102)).
 2. **Leaving thread A** (hook fires): `PERF_EVENT_IOC_DISABLE` A's event; park A's
    slice keyed `(ScopeId, seq, tid=A, start-version)`.
 3. **Resuming on thread B** (hook fires): open a **fresh** per-thread PT event (own
@@ -728,7 +728,7 @@ int asmtest_hwtrace_stitch(const asmtest_hwtrace_slice_t *slices, size_t n,
 time it reaches `stitch` it already carries offsets. `stitch` is then a pure ordered
 merge by `seq` — which is exactly what makes `test_stitch_slices` host-testable from
 synthetic pre-decoded slices with no PT hardware and no real threads. Because
-`asmtest_trace_t` ([include/asmtest_trace.h:44](../../../include/asmtest_trace.h#L44)) has
+`asmtest_trace_t` ([include/asmtest_trace.h:44](../../../../include/asmtest_trace.h#L44)) has
 **no** field for per-slice boundaries, the "(which thread, which version)" annotations
 the contract promises are returned in the companion `bounds` array (one entry per
 slice), **not** smuggled into `out`.
@@ -754,7 +754,7 @@ host-testable unit test, not the ptrace lane.
   concatenated ordered stream equals the expected logical-operation sequence and that
   the `bounds` array attributes each run to its `(tid, version)`. No PT hardware, no
   real threads — it validates the merge algorithm itself, mirroring the §2
-  reconstruction-half posture. Lives in [examples/test_hwtrace.c](../../../examples/test_hwtrace.c).
+  reconstruction-half posture. Lives in [examples/test_hwtrace.c](../../../../examples/test_hwtrace.c).
 - Per-runtime opt-in async case (.NET/Node/JVM) that drives a real `await`/continuation
   hop and asserts slices stitch by `ScopeId` — **self-skips** off a PT/ptrace host
   (the honest known validation gap: the live hook has no CI coverage; the merge core
@@ -772,7 +772,7 @@ unhandled hop as `truncated`. **Coverage honesty (updated 2026-07-16):** the hoo
 test — `test_stitch_slices` builds correct tags itself, and §D3 is single-thread — so the
 live capture→tag→merge chain shipped with no CI coverage. **The fake-hook harness this
 section called for now exists:** `test_stitch_hops_scripted`
-([examples/test_hwtrace.c](../../../examples/test_hwtrace.c), commit `5c35a71`) drives the
+([examples/test_hwtrace.c](../../../../examples/test_hwtrace.c), commit `5c35a71`) drives the
 merge from a scripted hop sequence rather than pre-tagged slices, covering the hook→merge
 seam. What remains uncovered is the *live* per-runtime hook itself — a disclosed
 forward-look gap, since exercising a real cross-thread hop needs bare-metal Intel PT.
@@ -794,23 +794,23 @@ still intact (trading the host-testable-at-disable property for lower per-hop co
 ## Docs
 
 - **Managed-tier guide** — a new section in
-  [docs/guides/tracing/hardware-tracing.md](../../guides/tracing/hardware-tracing.md)
+  [docs/guides/tracing/hardware-tracing.md](../../../guides/tracing/hardware-tracing.md)
   (or the scoped-tracing guide from the bindings slice) on tracing live managed code:
   the PT/LBR-vs-ptrace fork, why single-step is forbidden here, the whole-scope-vs-
   method contract, and the §D4 async-hop model — its explicit opt-in and the
   multi-slice output contract (a logical operation returns an ordered set of
   per-thread slices, not one thread window).
-- **.NET page** — extend [docs/bindings/dotnet.md](../../bindings/dotnet.md) with the
+- **.NET page** — extend [docs/bindings/dotnet.md](../../../bindings/dotnet.md) with the
   `AsmTrace.Method(HotPath)` named form, the .NET-8 leak-closing (events/rundown),
   and the tiering/inlining notes.
-- **Node / Java pages** — [docs/bindings/node.md](../../bindings/node.md) (the
+- **Node / Java pages** — [docs/bindings/node.md](../../../bindings/node.md) (the
   `using`+`Symbol.dispose` scope, `AsyncLocalStorage` opt-in) and
-  [docs/bindings/java.md](../../bindings/java.md) (try-with-resources, JVMTI/`ScopedValue`
+  [docs/bindings/java.md](../../../bindings/java.md) (try-with-resources, JVMTI/`ScopedValue`
   opt-in).
-- **Reference** — [docs/reference/features.md](../../reference/features.md) (managed-tier
-  matrix rows), [docs/reference/portability.md](../../reference/portability.md) (Zen 2 /
+- **Reference** — [docs/reference/features.md](../../../reference/features.md) (managed-tier
+  matrix rows), [docs/reference/portability.md](../../../reference/portability.md) (Zen 2 /
   Docker-on-Mac / macOS degradation), and
-  [docs/internal/analysis/trace-parity-matrix.md](../analysis/trace-parity-matrix.md) (managed
+  [docs/internal/analysis/trace-parity-matrix.md](../../analysis/trace-parity-matrix.md) (managed
   decode parity status).
 
 ---
@@ -821,14 +821,14 @@ still intact (trading the host-testable-at-disable property for lower per-hop co
   trees; no new shared lib. The §D4 `asmtest_hwtrace_stitch` merge helper compiles
   into the existing `hwtrace.o`; the ptrace helper (§D3) is a new small binary built
   alongside the native-trace objects in
-  [mk/native-trace.mk](../../../mk/native-trace.mk) (reusing `ptrace_backend.o`,
-  [:206-211](../../../mk/native-trace.mk#L206)).
+  [mk/native-trace.mk](../../../../mk/native-trace.mk) (reusing `ptrace_backend.o`,
+  [:206-211](../../../../mk/native-trace.mk#L206)).
 - CI: the managed lanes run under the existing `docker-hwtrace-jit*` targets
-  ([mk/docker.mk:222-272](../../../mk/docker.mk#L222)). **Two parts gate on ordinary CI**
+  ([mk/docker.mk:222-272](../../../../mk/docker.mk#L222)). **Two parts gate on ordinary CI**
   (the real automated protection in this slice): the §D3 ptrace-stealth test (the
   `hwtrace` job or a `--cap-add=SYS_PTRACE` Docker lane, no PT hardware) and the §D4
   `test_stitch_slices` host-testable merge unit test (`make hwtrace-test`,
-  [.github/workflows/ci.yml:247](../../../.github/workflows/ci.yml)). The PT clean-path
+  [.github/workflows/ci.yml:247](../../../../.github/workflows/ci.yml)). The PT clean-path
   lanes and the live per-runtime async-hop cases self-skip off bare-metal Intel PT /
   a PT-or-ptrace host, as everywhere.
 
@@ -869,12 +869,12 @@ the live per-runtime async-hop cases are forward-look, gated on PT hardware.
 
 The managed-tier analysis (JIT-hostility, the whole-scope-vs-method fork, closing
 the leaks on .NET 8+, the concealed ptrace path, and piece-D async-hop stitching):
-[the scoped `using` analysis](../analysis/scoped-inprocess-tracing.md#closing-the-leaks-on-net-8)
+[the scoped `using` analysis](../../analysis/scoped-inprocess-tracing.md#closing-the-leaks-on-net-8)
 and its
-[case-by-case](../analysis/scoped-inprocess-tracing.md#the-scoped-model-case-by-case)
+[case-by-case](../../analysis/scoped-inprocess-tracing.md#the-scoped-model-case-by-case)
 and
-[four-qualifications](../analysis/scoped-inprocess-tracing.md#qualification-1--the-threadasync-boundary-the-deep-one)
+[four-qualifications](../../analysis/scoped-inprocess-tracing.md#qualification-1--the-threadasync-boundary-the-deep-one)
 sections. Foreign-JIT and W2 background:
-[jit-runtime-tracing.md](../analysis/jit-runtime-tracing.md),
-[zen2-singlestep-trace-plan.md](../plans/zen2-singlestep-trace-plan.md),
-[hardware-trace-plan.md](../plans/hardware-trace-plan.md).
+[jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md),
+[zen2-singlestep-trace-plan.md](../../plans/zen2-singlestep-trace-plan.md),
+[hardware-trace-plan.md](../../plans/hardware-trace-plan.md).

@@ -21,7 +21,7 @@
  *     Capstone, no Unicorn — they compile and unit-test on every host.
  *   - the operand read/write-set enumerator (src/dataflow_operands.c) needs
  *     Capstone detail mode; it degrades to a no-op (returns 0) without it.
- * See docs/internal/plans/data-flow-tracing-plan.md (Phases 0-2).
+ * See docs/internal/archive/plans/data-flow-tracing-plan.md (Phases 0-2).
  */
 #ifndef ASMTEST_VALTRACE_H
 #define ASMTEST_VALTRACE_H

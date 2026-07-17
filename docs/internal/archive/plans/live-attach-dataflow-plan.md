@@ -6,7 +6,7 @@ and run caller-supplied code bytes" to **attach to an arbitrary live process —
 JIT/managed runtime — and capture a scoped region's data flow out of band**, then surface
 that as a new **Data flow** view in the asmspy CLI ([cli/asmspy.c](../../../../cli/asmspy.c)).
 
-This builds directly on [data-flow-tracing-plan.md](../../plans/data-flow-tracing-plan.md) — it turns
+This builds directly on [data-flow-tracing-plan.md](data-flow-tracing-plan.md) — it turns
 that plan's Phase 3 (scoped ptrace L0, LANDED) into a real attach-to-a-running-PID producer
 and gives it a UI. The design investigation behind the JIT half is
 [analysis/jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md) ("stop instrumenting

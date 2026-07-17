@@ -1,7 +1,7 @@
 # asm-test — Managed single-step posture: design proposal (the open decision)
 
 The one design decision the 2026-07-06 review of the
-[managed tier](../../plans/scoped-tracing-managed-plan.md) left open, now forced by hard
+[managed tier](scoped-tracing-managed-plan.md) left open, now forced by hard
 evidence: **what contract should in-process EFLAGS.TF single-step offer against
 a managed runtime's threads?**
 
@@ -150,6 +150,6 @@ Suggested phasing if B is approved:
   §Z1 form's own definition. PT (§Z2) is the strong hardware tier for that (Intel,
   hardware permitting); on AMD the crash-proof route is **out-of-process** — the §D3
   whole-window channel, now specified in
-  [managed-wholewindow-oop-plan.md](../../plans/managed-wholewindow-oop-plan.md) (the tracee's
+  [managed-wholewindow-oop-plan.md](managed-wholewindow-oop-plan.md) (the tracee's
   signal mask is irrelevant to a ptrace-stop, so `pthread_create`/exception dispatch
   cannot force-kill it).

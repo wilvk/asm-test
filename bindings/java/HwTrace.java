@@ -1151,7 +1151,7 @@ public final class HwTrace {
      *  SIGTRAP or spawns threads ({@code pthread_create} masks SIGTRAP around clone) turns the
      *  #DB into a fatal blocked signal and KILLS the JVM. To trace a whole block of arbitrary
      *  managed code, use the crash-proof out-of-process path (see
-     *  docs/internal/plans/managed-wholewindow-oop-plan.md), never this in-process form. */
+     *  docs/internal/archive/plans/managed-wholewindow-oop-plan.md), never this in-process form. */
     public static WindowResult window(Runnable body) {
         return window(body, 1 << 20);
     }
@@ -1813,7 +1813,7 @@ public final class HwTrace {
      * {@code Unmount} extension events fire only for the virtual-thread case above — where nothing
      * needs propagating — and never for an executor submit. A bytecode agent rewriting JDK executor
      * internals is the only zero-touch route to a submit, and is declined on cost/benefit; see §D2
-     * of docs/internal/plans/scoped-tracing-managed-plan.md. ({@code libperf-jvmti.so}, which DID
+     * of docs/internal/archive/plans/scoped-tracing-managed-plan.md. ({@code libperf-jvmti.so}, which DID
      * land, is the live JIT-method resolver — not a hop hook.)
      * <pre>{@code
      * try (var op = new HwTrace.AsmStitchedTrace()) {

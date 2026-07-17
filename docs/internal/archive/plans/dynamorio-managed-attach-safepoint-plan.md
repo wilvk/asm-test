@@ -5,7 +5,7 @@ every managed thread at a **GC-safe point before the seize**, then taking DR ove
 resuming — the one credible path left after the Increment-6 probe closed the naive approach.
 
 This is the **Option-2** follow-on to
-[dynamorio-attach-tier-plan.md](../../plans/dynamorio-attach-tier-plan.md) Increment 6, whose probe
+[dynamorio-attach-tier-plan.md](dynamorio-attach-tier-plan.md) Increment 6, whose probe
 ([dr-managed-attach-probe-findings.md](../../analysis/dr-managed-attach-probe-findings.md))
 returned a definitive **NO-GO**: `drrun -attach <dotnet-pid>` *delivers* the client
 (`dr_client_main` runs) but the takeover immediately crashes the process

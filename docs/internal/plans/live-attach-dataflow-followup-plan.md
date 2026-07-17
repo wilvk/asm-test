@@ -238,7 +238,7 @@ cross-thread deadlock window on a live runtime. Decouple values from stops.
   and memory faulted in lazily from the tracee, to reconstruct the per-instruction values
   *between* boundaries. The endpoints are always real observations, so replay only ever
   fills a bounded pure interior — the plan's Phase-3b idea
-  ([data-flow-tracing-plan.md:183-186](data-flow-tracing-plan.md#L183)), promoted to the
+  ([data-flow-tracing-plan.md:183-186](../archive/plans/data-flow-tracing-plan.md#L183)), promoted to the
   primary perturbation win.
 - **Region-granularity purity classification** to avoid emulating through the OS: static-scan
   the method's (time-correct) bytes once for `syscall`/`sysenter`/`int 0x80`/`rdtsc`/
@@ -388,7 +388,7 @@ Let block-step + replay cover **impure** methods too, instead of falling back to
   decode is reused). During replay, when the emulator reaches that syscall, **inject** the
   recorded result and memory delta rather than executing it — the rr / WinDbg-TTD model, the
   "full input-capture record/replay" escalation the base plan names
-  ([data-flow-tracing-plan.md:184-186](data-flow-tracing-plan.md#L184)).
+  ([data-flow-tracing-plan.md:184-186](../archive/plans/data-flow-tracing-plan.md#L184)).
 - Same treatment for nondeterministic instructions (`rdtsc`/`rdrand`/`cpuid`): record the
   real retired value on the forward pass, inject on replay.
 
@@ -787,7 +787,7 @@ method ranges of a live process; the hand-off boundary to the DR taint tier is d
 
 Wrap the new attach entry points in the dynamic-FFI bindings, the way the L0/L1/L2 ValueTrace
 pipeline is already wrapped for Python/C++/Node
-([data-flow-tracing-plan.md:237](data-flow-tracing-plan.md#L237)) — opaque-handle pattern,
+([data-flow-tracing-plan.md:237](../archive/plans/data-flow-tracing-plan.md#L237)) — opaque-handle pattern,
 each gated by a `make dataflow-<lang>-test` lane (host or docker) as the other seven bindings
 already are for the pure helpers.
 

@@ -264,7 +264,7 @@ docker-taint-native:
 # SYS_PTRACE — a plain `docker run` (the external foreign-PID injector landed separately as
 # docker-taint-attach-probe below, which does need the cap). Also carries Increment 3's
 # marker-less interactive nudge arm/disarm. CI-gated by the `taint-attach` job in
-# .github/workflows/ci.yml. See docs/internal/plans/dynamorio-attach-tier-plan.md.
+# .github/workflows/ci.yml. See docs/internal/archive/plans/dynamorio-attach-tier-plan.md.
 .PHONY: docker-taint-attach
 docker-taint-attach:
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.taint-attach \

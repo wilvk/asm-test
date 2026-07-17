@@ -4,7 +4,7 @@
  * process under DynamoRIO, and fills the SAME asmtest_valtrace_t the emulator
  * (dataflow_emu.c) and scoped ptrace (dataflow_ptrace.c) producers fill — so the
  * shared L1 def-use + L2 slicer (dataflow.c) work UNCHANGED on an in-band capture.
- * See docs/internal/plans/data-flow-tracing-plan.md, Phase 5.
+ * See docs/internal/archive/plans/data-flow-tracing-plan.md, Phase 5.
  *
  * This is the APP side. It reuses the native-trace tier's DR lifecycle (drtrace_app.c:
  * asmtest_dr_init/start/shutdown + the W^X asmtest_exec_alloc) but loads a DEDICATED

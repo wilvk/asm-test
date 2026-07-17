@@ -458,7 +458,7 @@ jobs:
   # OUT by design: they are throwaway diagnostics that record a reproducible NO-GO (DR's seize
   # of a running .NET trips glibc stack-smashing; parking managed threads at safepoints does
   # not help, because the fatal takeover is the runtime's NATIVE threads), not capability to
-  # protect. See docs/internal/plans/dynamorio-attach-tier-plan.md.
+  # protect. See docs/internal/archive/plans/dynamorio-attach-tier-plan.md.
   taint-attach:
     name: taint (DR attach tier)
     runs-on: ubuntu-latest

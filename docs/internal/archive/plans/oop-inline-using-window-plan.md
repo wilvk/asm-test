@@ -228,7 +228,7 @@ ALL asmtest_hwtrace_stealth_window_end      #   (paired with stealth_window_begi
 dotnet wraps the pair; the other nine reach the windowed capture C-internally and gain the
 inline shape only if they grow one. Run `scripts/check-bindings-parity.sh` after — a green gate
 means "wrapped or documented-exempt," not feature parity (the roadmap framing in
-[dotnet-parity-roadmap.md](../../plans/dotnet-parity-roadmap.md)).
+[dotnet-parity-roadmap.md](dotnet-parity-roadmap.md)).
 
 ## Why this is strictly worse than `AsmTrace.Window` (state it, don't hide it)
 

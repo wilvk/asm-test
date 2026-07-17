@@ -244,5 +244,5 @@ gives no gain on loops.)*
   `truncated`. This is the one-call answer for **3a "don't want to choose"** and is validated
   live escalating LBR→block-step on the Zen 5 box.
 - The managed bindings pick their Class-3 posture per
-  [scoped-tracing-managed-plan.md](../plans/scoped-tracing-managed-plan.md) and
+  [scoped-tracing-managed-plan.md](../archive/plans/scoped-tracing-managed-plan.md) and
   [managed-singlestep-posture-plan.md](../archive/plans/managed-singlestep-posture-plan.md).

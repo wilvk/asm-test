@@ -2,12 +2,12 @@
 
 Take the in-band DynamoRIO data-flow / taint tier — today a **launch-under-DR** producer
 (`drrun -c libasmtest_drtaint_client.so -- <app>`, DR owns the process from a clean start;
-[dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md), **all Increments 1-9 LANDED**) — and
+[dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md), **all Increments 1-9 LANDED**) — and
 make it **attach to a process that is already running**, instrument a scoped region in
 band, drain the results out of process, and **detach**, leaving the target running native.
 
 This is the *third* DR integration model, and the one the taint tier deliberately did not
-use ([data-flow-capture.md:211-241](../analysis/data-flow-capture.md#L211)):
+use ([data-flow-capture.md:211-241](../../analysis/data-flow-capture.md#L211)):
 
 | Model | Mechanism | Who owns it | Cost | Status |
 |---|---|---|---|---|
@@ -19,25 +19,25 @@ use ([data-flow-capture.md:211-241](../analysis/data-flow-capture.md#L211)):
 for native already-running targets* — it keeps the DBI overhead band and, once detached,
 costs the target nothing — while a clean **managed** attach "really wants safepoint
 coordination … parking managed threads at GC-safe points before takeover"
-([data-flow-capture.md:227-240](../analysis/data-flow-capture.md#L227)). So the taint
-plan's [rejection of external attach](../archive/plans/dynamorio-taint-tier-plan.md) was scoped to **managed
+([data-flow-capture.md:227-240](../../analysis/data-flow-capture.md#L227)). So the taint
+plan's [rejection of external attach](dynamorio-taint-tier-plan.md) was scoped to **managed
 processes**; for a **native** process it is the *right* tool — the only in-band model that
 can data-flow a program you did not start and then let go of it. The pragmatic split the
 analysis lands on is the frame for this whole plan: **launch-under-DR (or ptrace) for
 managed; DR-attach for native; ptrace-attach + emulator replay when the value cost must
-stay off the live thread** ([data-flow-capture.md:240](../analysis/data-flow-capture.md#L240)).
+stay off the live thread** ([data-flow-capture.md:240](../../analysis/data-flow-capture.md#L240)).
 
 **What is already built and reused unchanged** (this is why the tier is mostly net-new
 *wiring*, not net-new capture). The in-band client is attach-agnostic: it instruments
 whatever DR hands it, however DR got into the process. So the taint tier's landed pieces
 carry over verbatim —
 - the taint client `libasmtest_drtaint_client.so`
-  ([dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c), `-DASMTEST_TAINT`):
+  ([dataflow_dr_client_inlined.c](../../../../src/dataflow_dr_client_inlined.c), `-DASMTEST_TAINT`):
   BSD tag shadow, per-thread reg tags, inline `dst_tag = ∪ src_tags`, create-on-touch
   stores, byte-granular tags, the branch-condition sink;
-- the cross-process results channel [asmtest_taint_shm.h](../../../include/asmtest_taint_shm.h)
+- the cross-process results channel [asmtest_taint_shm.h](../../../../include/asmtest_taint_shm.h)
   (sink report + value/taint trace; consumer reads by OFFSET, never producer pointers);
-- the out-of-process validator [taint_validator.c](../../../examples/taint_validator.c)
+- the out-of-process validator [taint_validator.c](../../../../examples/taint_validator.c)
   (drains + oracle-diffs against the emulator forward slice);
 - the **thread-safe** sink-report append (atomic fetch-add slot, landed with the
   concurrent-writer stress) — already multi-writer ready.
@@ -79,7 +79,7 @@ C-harness markers**, and **(c)** proving it on DR's *experimental* external-atta
   managed threads via the runtime's diagnostics IPC or an injected managed helper — which
   is a research increment here, not a milestone. The **default managed path stays
   launch-under-DR** (LANDED) or **ptrace-attach out-of-band**
-  ([live-attach-dataflow-plan.md](../archive/plans/live-attach-dataflow-plan.md)).
+  ([live-attach-dataflow-plan.md](live-attach-dataflow-plan.md)).
 - **Duplicating the ptrace live-attach tier.** That plan attaches *out-of-band* (ptrace
   single-step, works on managed + native at far higher per-step cost) and produces L0
   **value / def-use**, not the in-band **taint shadow**. This plan is its low-overhead,
@@ -148,7 +148,7 @@ this sound; attach is the first tier where those threads are *not* ones we spawn
 
 > **UPDATE 2026-07-14 — cooperative attach/detach LANDED** (commit `790b1b3`). The recommended
 > first milestone, shipped as scoped and reusing every landed taint asset unchanged.
-> [examples/taint_attach_coop.c](../../../examples/taint_attach_coop.c) starts as a PLAIN native
+> [examples/taint_attach_coop.c](../../../../examples/taint_attach_coop.c) starts as a PLAIN native
 > process (**not** under `drrun`) and walks the full lifecycle:
 > **native** (DR absent, `asmtest_dr_under_dynamorio() == 0`, nothing captured) →
 > **attach** (`asmtest_dr_init` + `asmtest_dr_start` = `dr_app_setup` + `dr_app_start` bring DR + the
@@ -161,9 +161,9 @@ this sound; attach is the first tier where those threads are *not* ones we spawn
 > proving detach left a clean, native, still-running process). The program emits its own TAP for the
 > attach-LIFECYCLE assertions (the `under_dynamorio()` false→true→false transitions,
 > capture-only-while-armed, exit 0), printed AFTER detach in native mode — never under DR — while the
-> out-of-process oracle diff stays [taint_validator](../../../examples/taint_validator.c)'s job.
+> out-of-process oracle diff stays [taint_validator](../../../../examples/taint_validator.c)'s job.
 > **17/17 in `docker-taint-attach`.** Lane `make dr-taint-attach-coop-test`
-> ([native-trace.mk:542](../../../mk/native-trace.mk#L542)); image `Dockerfile.taint-attach`, which
+> ([native-trace.mk:542](../../../../mk/native-trace.mk#L542)); image `Dockerfile.taint-attach`, which
 > also runs the Increment-3 `dr-taint-nudge-test`. No client changes: the client + shm + validator +
 > atomic report were reused verbatim, exactly as the increment predicted. This de-risked
 > takeover-mid-run + clean detach on the **proven** API before the experimental injector (Increment 2)
@@ -199,10 +199,10 @@ lifecycle + the "native-then-armed-then-native" harness).
 > running victim over, the client's `drmgr` bb event instruments its live code (**1.6 billion
 > instructions executed** in the probe), the victim KEEPS RUNNING (heartbeats continued past the
 > attach) and exits native, all with `--cap-add=SYS_PTRACE`. Artifacts:
-> [attach_probe_victim.c](../../../examples/attach_probe_victim.c),
-> [attach_probe.c](../../../drclient/attach_probe.c) (opt-in `-DASMTEST_BUILD_ATTACH_PROBE`),
+> [attach_probe_victim.c](../../../../examples/attach_probe_victim.c),
+> [attach_probe.c](../../../../drclient/attach_probe.c) (opt-in `-DASMTEST_BUILD_ATTACH_PROBE`),
 > `make dr-taint-attach-probe` / `make docker-taint-attach-probe`. **Load-bearing gotchas** (full
-> record: [dr-attach-probe-findings.md](../analysis/dr-attach-probe-findings.md)): (1) `-attach <pid>`
+> record: [dr-attach-probe-findings.md](../../analysis/dr-attach-probe-findings.md)): (1) `-attach <pid>`
 > must PRECEDE `-c <client>` — drrun parses everything after `-c` as client options, so the
 > mis-ordered `-c <client> -attach <pid>` fails with a misleading `ERROR: no app specified` (reads as
 > "unsupported"; it is not — `drrun -h` lists `-attach`); (2) `--cap-add=SYS_PTRACE` is required AND
@@ -325,14 +325,14 @@ config path; the attach lane, capturing a variable multi-run window, gates SINK-
 > detach (returned to native between rounds), and (c) the surviving native victim does not accumulate
 > memory. **RESULT: external DR re-attach is RELIABLE on this DR — 3/3 rounds took over, captured,
 > and detached-to-native on the same pid, victim exited clean (`rc=0`)** — so the "in-process
-> re-attach is unreliable" caveat ([asmtest_drtrace.h:87](../../../include/asmtest_drtrace.h#L87))
+> re-attach is unreliable" caveat ([asmtest_drtrace.h:87](../../../../include/asmtest_drtrace.h#L87))
 > does NOT extend to the EXTERNAL attach path. **Leak assertion — and a real leak it caught + FIXED:**
 > `event_exit` (fires on each detach) freed the 1 GiB shadow DIRECTORY + reg-tag TLS + drx buffers but
 > NOT the installed 1 MiB shadow LEAVES, so cycling orphaned ~2 leaves (~2 MiB) per round (measured
 > native VmSize growth +2124 kB/round). Fixed by an installed-leaf registry (a lock-free atomic-index
 > table recording each leaf + its allocator provenance so `event_exit` frees each with its matching
 > deallocator — `dr_raw_mem_free` for hot-path leaves, `raw_munmap` for the bare-mmap GC-path leaves;
-> [dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c)). Post-fix round-over-round
+> [dataflow_dr_client_inlined.c](../../../../src/dataflow_dr_client_inlined.c)). Post-fix round-over-round
 > growth dropped to **+68 kB/round** (a fixed one-time ~2.4 MiB DR-attach VA footprint that external
 > detach does not fully return is paid once in round 1). The lane gates it two ways: round 1 must not
 > jump a shadow-DIRECTORY scale (~1 GiB), rounds ≥2 must not grow a shadow-LEAF scale (~1 MiB) over the
@@ -361,7 +361,7 @@ Launch's "one lifecycle per process" contract is *replaced* by attach's take-ove
 - **Attach/detach cycling:** attach → capture → detach → (native) → attach again on the
   *same* PID, N times, results intact each window — the capability the taint plan's header
   flagged as *unreliable* for the in-process re-attach path
-  ([asmtest_drtrace.h:86](../../../include/asmtest_drtrace.h#L86)); attach is where it must
+  ([asmtest_drtrace.h:86](../../../../include/asmtest_drtrace.h#L86)); attach is where it must
   either work or be documented as bounded.
 
 **Exit criteria: MET 2026-07-14.** `make dr-taint-cycle-test` shows K=3 attach/detach rounds over one
@@ -389,7 +389,7 @@ each detach (round-over-round native VmSize flat at ~+68 kB after the leaf-free 
 > native external attach is unaffected (GO, Increments 2-5). The research tail (diagnostics-IPC
 > safepoint park, `DR_SIGNAL_DELIVER` pass-through, `-late` posture) was deliberately NOT chased —
 > a bounded spike, not the XL effort. Findings + the exact failure mode:
-> [dr-managed-attach-probe-findings.md](../analysis/dr-managed-attach-probe-findings.md). Docker:
+> [dr-managed-attach-probe-findings.md](../../analysis/dr-managed-attach-probe-findings.md). Docker:
 > `make docker-taint-managed-attach-probe` (DR + .NET SDK, `--cap-add=SYS_PTRACE`); THROWAWAY
 > diagnostic, not in the main CI gate.
 >
@@ -403,7 +403,7 @@ each detach (round-over-round native VmSize flat at ~+68 kB after the leaf-free 
 > 11.91.20644 identical; newest stable 11.3.0 fails differently — exit 255 — but still no survival).
 > Option 1 is exhausted. The one credible remaining path — **park all managed threads at GC-safe
 > points BEFORE the seize** — was planned + then EXECUTED as a spike
-> ([dynamorio-managed-attach-safepoint-plan.md](../archive/plans/dynamorio-managed-attach-safepoint-plan.md)):
+> ([dynamorio-managed-attach-safepoint-plan.md](dynamorio-managed-attach-safepoint-plan.md)):
 > **Increment 1 GO** (a co-loaded profiler's `SuspendRuntime`/`ResumeRuntime` cycles the runtime
 > clean, natively and under DR), but **Increment 2 NO-GO** — a runtime with ALL managed threads
 > parked at GC-safe points **still crashes identically** at the DR seize (stack-smashing → SIGSEGV
@@ -439,7 +439,7 @@ concrete failure mode. **Effort: XL / research.**
 > reasons that were largely wrong; this is the reason.
 >
 > **`--attach-dataflow` is dead BY NAME.** `asmspy --dataflow <pid> <sym|0xADDR[:LEN]>` already
-> attaches to a foreign pid — [cli/asmspy_engine.c:1329](../../../cli/asmspy_engine.c#L1329) drives
+> attaches to a foreign pid — [cli/asmspy_engine.c:1329](../../../../cli/asmspy_engine.c#L1329) drives
 > `asmtest_dataflow_ptrace_attach_jit` (ptrace SEIZE of every thread, JIT-aware, one signal path for
 > **native AND managed** with no runtime gate, DETACHes so the target survives) into
 > `asmtest_defuse_build`. F4 GC-move canonicalization landed on that same tier (`3e37bf9`,
@@ -451,7 +451,7 @@ concrete failure mode. **Effort: XL / research.**
 >
 > **It is closed because no UI can be aimed at a real target.** `seed=` accepts ONLY
 > `<module>+<hexoff>`: `ml_parse_mod_off`
-> ([dataflow_dr_client_inlined.c:2210](../../../src/dataflow_dr_client_inlined.c#L2210)) scans for
+> ([dataflow_dr_client_inlined.c:2210](../../../../src/dataflow_dr_client_inlined.c#L2210)) scans for
 > `'+'` and returns `NULL` without one — a raw address is not merely unsupported, it is
 > *unparseable* — and `nudge_arm` (:2292) always computes `on_seed(nudge_module_base() +
 > g_ml_seed_off, …)`, so the runtime nudge does not relax it. `examples/taint_markerless_victim.c`
@@ -461,7 +461,7 @@ concrete failure mode. **Effort: XL / research.**
 > tier that cannot be pointed at anything is not a product.
 >
 > **Testability is NOT the reason.** Leg 3 of the decline ("no lane can test it — `asmtest-cli` has
-> no DynamoRIO") is DEAD per [CLAUDE.md](../../../CLAUDE.md) (`9d6e4ac`): the five-line pinned block
+> no DynamoRIO") is DEAD per [CLAUDE.md](../../../../CLAUDE.md) (`9d6e4ac`): the five-line pinned block
 > at `Dockerfile.drtrace:34-41` drops into any image. If DR is ever added for this, it belongs in a
 > derived `Dockerfile.cli-taint`, never the shared `cli` lane. **The feature fails on value at zero
 > image cost.**
@@ -476,7 +476,7 @@ concrete failure mode. **Effort: XL / research.**
 >
 > *Correction to the 2026-07-16 decline, recorded so it is not repeated:* its leg 1 claimed
 > `build_valtrace` is "welded to the launch driver" by type. FALSE. It takes
-> `(vt, code, code_len, const at_drval_t *dv)` ([dataflow_dr.c:269](../../../src/dataflow_dr.c#L269))
+> `(vt, code, code_len, const at_drval_t *dv)` ([dataflow_dr.c:269](../../../../src/dataflow_dr.c#L269))
 > and **synthesizes** `at_val_rec_t` app-side from `dv->steps[].gpr` via `asmtest_operands()`. The
 > channel already carries its exact input type; the operand stream is *derived, not transported*.
 > Option (c) is still wrong — for the three reasons above, not that one.
@@ -505,15 +505,15 @@ last + optional; the capture tiers above stand without a UI.
 > UI that no lane can test. The evidence, so the next attempt starts from facts:
 >
 > **1. "Shares the JSON/def-use rendering; differs only in the producer" — false for the ATTACH
-> path.** The snapshot→record bridge does exist (`build_valtrace`, [dataflow_dr.c:269](../../../src/dataflow_dr.c#L269))
+> path.** The snapshot→record bridge does exist (`build_valtrace`, [dataflow_dr.c:269](../../../../src/dataflow_dr.c#L269))
 > and DR-produced data *does* reach `asmtest_defuse_build` — but only on the **launch/in-process**
 > path, where the driver holds a stack-local `at_drval_t` **and the region's code bytes**, which
 > the bridge must re-decode (`asmtest_operands`) because `at_vstep_t` is a per-step **GP
 > register-file snapshot** (`{off, gpr[16], rip, rflags, mem_first, mem_n}`), *not* the per-operand
 > read/write `at_val_rec_t` stream the def-use builder and `cli/asmspy_dataview.h` consume. The
 > **attach** producer does not deliver that: it publishes through
-> [asmtest_taint_shm.h](../../../include/asmtest_taint_shm.h), whose channel carries `drval.mem`
-> **NULL** by construction (*"the taint SET needs no values"*, [:64](../../../include/asmtest_taint_shm.h#L64))
+> [asmtest_taint_shm.h](../../../../include/asmtest_taint_shm.h), whose channel carries `drval.mem`
+> **NULL** by construction (*"the taint SET needs no values"*, [:64](../../../../include/asmtest_taint_shm.h#L64))
 > and caps at **`AT_SHM_STEPS_CAP` = 64** steps. `taint_validator` accordingly reads only
 > `steps[i].off` + `step_taint[i]` + the sink hits — of `at_vstep_t` it touches **nothing but
 > `.off`**. So the attach channel today carries a **taint set**, which is a different *analysis*,
@@ -534,7 +534,7 @@ last + optional; the capture tiers above stand without a UI.
 > bindings-base + libipt-dev + libncurses-dev; no `drrun`, no `DYNAMORIO_HOME`, no
 > `--cap-add=SYS_PTRACE`). A `--attach-dataflow` shipped there could only ever **self-skip**, in
 > the only lane that guards asmspy. A subcommand whose test can never fail is not tested, and the
-> DR images that *do* carry `drrun` + the capability ([docker.mk:267,280](../../../mk/docker.mk#L267))
+> DR images that *do* carry `drrun` + the capability ([docker.mk:267,280](../../../../mk/docker.mk#L267))
 > do not build asmspy. Closing that gap is a `Dockerfile.cli` / `mk/docker.mk` / CI decision —
 > ~2 GB of DynamoRIO added to the CLI image, or a fifth lane in the external-attach image that
 > builds ncursesw + Capstone — and it should be taken deliberately, not smuggled in under an
@@ -553,7 +553,7 @@ last + optional; the capture tiers above stand without a UI.
 > **Status 2026-07-15 — not started, and not blocking.** No `--attach-dataflow` / `attach_dataflow`
 > surface exists in `src/`, `include/`, `examples/`, or the makefiles. Note the **ptrace** plan's
 > counterpart DID land (its headless `--dataflow` subcommand + the Increment-7 Data-flow TUI window,
-> mode 9) — those belong to [live-attach-dataflow-plan.md](../archive/plans/live-attach-dataflow-plan.md), not this
+> mode 9) — those belong to [live-attach-dataflow-plan.md](live-attach-dataflow-plan.md), not this
 > tier, so this tier's DR-attach producer still has no UI. Every capture increment above stands
 > without one, exactly as this increment anticipated. *(Correction 2026-07-16: the last clause of
 > this status — "when it is built, it should share that landed JSON/def-use rendering and differ
@@ -584,7 +584,7 @@ last + optional; the capture tiers above stand without a UI.
   heartbeats keep advancing past the detach (measured 5 → 10) with a clean `rc=0` exit;
   `dr-taint-cycle-test` cycles **K=3** attach/capture/detach rounds over ONE pid, all 3 taking over,
   capturing, and returning to native. So the in-process re-attach caveat
-  ([asmtest_drtrace.h:87](../../../include/asmtest_drtrace.h#L87)) does **not** extend to the
+  ([asmtest_drtrace.h:87](../../../../include/asmtest_drtrace.h#L87)) does **not** extend to the
   external path. The check also caught a **real leak**: `event_exit` freed the shadow directory + TLS
   + drx buffers but not the installed 1 MiB shadow LEAVES (~2 MiB orphaned per round), fixed by an
   installed-leaf registry that frees each leaf with its matching deallocator — round-over-round
@@ -596,23 +596,23 @@ last + optional; the capture tiers above stand without a UI.
   proved **required AND sufficient** for the seize (it bypasses the container's
   `yama/ptrace_scope=1`, which matters because the injector and victim are siblings rather than
   parent/child; no seccomp-unconfined needed), and a hosted runner grants it — so no self-skip was
-  needed. The **`taint-attach`** job ([ci.yml:458](../../../.github/workflows/ci.yml#L458)) now joins
+  needed. The **`taint-attach`** job ([ci.yml:458](../../../../.github/workflows/ci.yml#L458)) now joins
   `drtrace`, `drext-probe`, `taint`, and `taint-gcmove` in the DR job set. It runs the two
-  capability-bearing lanes ([docker.mk:267,280](../../../mk/docker.mk#L267)):
+  capability-bearing lanes ([docker.mk:267,280](../../../../mk/docker.mk#L267)):
   `docker-taint-attach` (cooperative `dr_app_*` attach/detach — Increment 1 — plus Increment 3's
   marker-less interactive nudge arm/disarm; plain run, no caps), and `docker-taint-attach-probe`,
   whose CMD runs **all four** SYS_PTRACE lanes in one image — `dr-taint-attach-probe` (Increment 2's
   GO probe), `dr-taint-attach-test` (Increment 4's marker-less external capture),
   `dr-taint-detach-test`, and `dr-taint-cycle-test` (Increment 5's K=3 cycling + the shadow-leaf leak
   assertion). So **Increments 1-5 are CI-gated**, meeting this tier's "docker-CI-checkable" goal. The
-  managed-attach + suspendprof probes ([docker.mk:293,329](../../../mk/docker.mk#L293)) stay out by
+  managed-attach + suspendprof probes ([docker.mk:293,329](../../../../mk/docker.mk#L293)) stay out by
   design: they are THROWAWAY diagnostics recording a reproducible NO-GO, not capability to protect.
 - **Managed attach may simply not be viable** on this DR; that is an accepted outcome
   (Increment 6's kill criterion), not a failure — the managed default stays launch/ptrace.
   **→ RESOLVED (Increment 6, 2026-07-14): the risk MATERIALIZED — NO-GO, and exhaustively closed.**
   Both options are dead: Option 1 (DR flags/versions) swept, including a zero-instrumentation
   `noinstr` seize-only control that crashes identically; Option 2 (GC-safepoint parking,
-  [dynamorio-managed-attach-safepoint-plan.md](../archive/plans/dynamorio-managed-attach-safepoint-plan.md)) executed
+  [dynamorio-managed-attach-safepoint-plan.md](dynamorio-managed-attach-safepoint-plan.md)) executed
   and refuted. The fatal takeover is the **native** runtime threads DR also seizes, which no managed
   suspend can park. Managed stays launch-under-DR / ptrace — the accepted outcome this risk named.
 
@@ -645,7 +645,7 @@ is **taint**, which `--dataflow` cannot do, so redundancy is *not* the reason. T
 `seed=` accepts only `<module>+<hexoff>` (`ml_parse_mod_off` returns `NULL` without a `+`, and the
 nudge does not relax it), so **no UI can be aimed at the heap or dynamic memory every real taint
 question concerns**. Testability is emphatically not the reason: that objection died with
-[CLAUDE.md](../../../CLAUDE.md) (`9d6e4ac`) — the feature fails on value at zero image cost. The
+[CLAUDE.md](../../../../CLAUDE.md) (`9d6e4ac`) — the feature fails on value at zero image cost. The
 successor worth having is **dynamic seed** — a capability, not a view — and it is not scheduled.
 
 None of this touches the tier's headline capability — take over a native process we did not start,

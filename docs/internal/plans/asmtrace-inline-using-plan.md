@@ -8,7 +8,7 @@ work for EVERY trace form, IN ADDITION to the delegate factories (`AsmTrace.Wind
 `AsmTrace.WindowHot`, `AsmTrace.Method`). All refs in
 [bindings/dotnet/hwtrace/HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs) /
 [src/hwtrace.c](../../../src/hwtrace.c). Companion to
-[asmtrace-extensions-plan.md](asmtrace-extensions-plan.md).
+[asmtrace-extensions-plan.md](../archive/plans/asmtrace-extensions-plan.md).
 
 > Status: **AMD-LBR inline LANDED** and **R4 (out-of-process inline) LANDED** (`578caed`,
 > ahead of R1–R3); **R1 (`_kind` refactor) + R3 (SingleStep via the unified ctor) now LANDED**.

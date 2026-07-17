@@ -341,7 +341,7 @@ Build order, each step naming the existing code it extends:
 
 None of this is shipped; it is scoped here so the effort and fidelity trade-offs are on
 record. **The build order is now committed as a phased plan:**
-[data-flow-tracing-plan.md](../plans/data-flow-tracing-plan.md) (targets: real live
+[data-flow-tracing-plan.md](../archive/plans/data-flow-tracing-plan.md) (targets: real live
 out-of-band values via the scoped ptrace tier, and production managed taint via
 DynamoRIO).
 

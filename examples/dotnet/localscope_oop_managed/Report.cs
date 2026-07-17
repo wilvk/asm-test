@@ -51,7 +51,7 @@ internal static class Report
                           + "function): the JIT listener hands each one to a SIBLING thread that publishes it\n"
                           + "to the stepper live — never from the single-stepped thread, where the publish\n"
                           + "re-enters the runtime under step and aborts it\n"
-                          + $"(docs/internal/plans/managed-wholewindow-oop-plan.md). Live-published here: {ww.LiveJitPublished}.");
+                          + $"(docs/internal/archive/plans/managed-wholewindow-oop-plan.md). Live-published here: {ww.LiveJitPublished}.");
         return true;
     }
 }

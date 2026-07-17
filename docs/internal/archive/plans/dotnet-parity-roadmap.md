@@ -5,9 +5,9 @@
 > native-trace tier symbols the other nine bindings do not. This roadmap enumerates the
 > concrete per-binding work to close that gap — the "temporal" gaps the parity gate
 > deliberately `ALL`-exempts, **not** the structural FFI limits it exempts per-binding.
-> It complements the [trace-parity-matrix analysis](../analysis/trace-parity-matrix.md)
+> It complements the [trace-parity-matrix analysis](../../analysis/trace-parity-matrix.md)
 > (which backend runs where) and consumes the same source of record: the tier headers +
-> [scripts/check-bindings-parity.sh](../../../scripts/check-bindings-parity.sh).
+> [scripts/check-bindings-parity.sh](../../../../scripts/check-bindings-parity.sh).
 
 > **Status (revised 2026-07-17): Phase 1 LANDED; Phase 2 LANDED (all four increments); Phase 3
 > is on-demand by design. No named items remain.** The last one — Java's **zero-touch JVMTI**
@@ -22,7 +22,7 @@
 > now wraps `region_name` + `attribute_window`.** The formal parity gate is
 > **green** — `bindings-parity: OK — 117 tier symbols x 10 bindings in sync` — but green means only
 > that every binding either wraps each tier symbol *or carries a documented exemption* in
-> [scripts/bindings-parity-allow.txt](../../../scripts/bindings-parity-allow.txt). The
+> [scripts/bindings-parity-allow.txt](../../../../scripts/bindings-parity-allow.txt). The
 > `ALL`-exemptions the gate consumes are exactly the .NET-lead surface below, so a green
 > gate is **not** feature-parity with .NET. This roadmap is the plan to retire those
 > exemptions where a binding should grow the capability, and to state plainly where it
@@ -50,11 +50,11 @@ The symbols .NET leads on split into two kinds, and the split sets a hard ceilin
   stitching a logical operation across `await`/continuation thread hops. These exist only
   inside a managed JIT runtime. The reference constructs that embody them —
   `AsmTrace.Method(Delegate)` (JIT'd managed-method resolution via `JitMethodMap` /
-  `MethodLoadVerbose`, [HwTrace.cs:3203](../../../bindings/dotnet/hwtrace/HwTrace.cs#L3203)
-  / [:3873](../../../bindings/dotnet/hwtrace/HwTrace.cs#L3873)), the `DiagnosticsIpc`
-  pre-arm rundown ([:4364](../../../bindings/dotnet/hwtrace/HwTrace.cs#L4364)), and the
+  `MethodLoadVerbose`, [HwTrace.cs:3203](../../../../bindings/dotnet/hwtrace/HwTrace.cs#L3203)
+  / [:3873](../../../../bindings/dotnet/hwtrace/HwTrace.cs#L3873)), the `DiagnosticsIpc`
+  pre-arm rundown ([:4364](../../../../bindings/dotnet/hwtrace/HwTrace.cs#L4364)), and the
   `AsyncLocal<ScopeId>` hop hook behind `AsmStitchedTrace`
-  ([:4953](../../../bindings/dotnet/hwtrace/HwTrace.cs#L4953)) — have **no analog** in
+  ([:4953](../../../../bindings/dotnet/hwtrace/HwTrace.cs#L4953)) — have **no analog** in
   C++, Rust, Zig, Go, or Lua. Those runtimes AOT-compile or interpret; there is no live
   JIT method stream to follow.
 
@@ -67,7 +67,7 @@ not by symbol count.
 
 ## The feature clusters
 
-Symbol contracts are in [include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h);
+Symbol contracts are in [include/asmtest_hwtrace.h](../../../../include/asmtest_hwtrace.h);
 line anchors below were re-grounded against the header on **2026-07-17** (the 2026-07-08
 anchors had drifted ~100 lines, and the 2026-07-16 re-grounding had already drifted ~19
 more — the header keeps growing, so treat every anchor here as needing a re-check, not as
@@ -75,15 +75,15 @@ a fact).
 
 | Cluster | Symbols (header line) | Capability | Portable to |
 |---|---|---|---|
-| **1 · Registry-free scoped call** | `call_scoped_ex` ([:397](../../../include/asmtest_hwtrace.h#L397)), `render_scope` ([:406](../../../include/asmtest_hwtrace.h#L406)); also `begin_scope` ([:358](../../../include/asmtest_hwtrace.h#L358)), `call_scoped` ([:373](../../../include/asmtest_hwtrace.h#L373)), `call_scoped_fp` ([:383](../../../include/asmtest_hwtrace.h#L383)) | Arm → call native leaf → disarm entirely in native code; `_ex` is registry-free so no `MAX_REGIONS` exhaustion in a tight loop | **All** — the ergonomic win; **`_ex` + `render_scope` now wrapped in all ten** (Phase 1) |
-| **2 · Whole-window empty scope (§Z1)** | `begin_window` ([:442](../../../include/asmtest_hwtrace.h#L442)), `end_window` ([:450](../../../include/asmtest_hwtrace.h#L450)), `render_window` ([:458](../../../include/asmtest_hwtrace.h#L458)) | `using (new AsmTrace())` — capture whatever runs, no region; records ABSOLUTE addresses | All (native leaf, single-step); managed value needs PT/ptrace. **Now wrapped in all ten** (§Z0) |
-| **3 · Version render + noise attribution** | `render_versioned` ([:413](../../../include/asmtest_hwtrace.h#L413)), `symbolize_bucket` ([:667](../../../include/asmtest_hwtrace.h#L667)); also `region_name` ([:659](../../../include/asmtest_hwtrace.h#L659)), `attribute_window` ([:690](../../../include/asmtest_hwtrace.h#L690)) | Decode moved/tiered bytes against a code-image; bucket whole-window IPs by JIT symbol / mapped region | All wrap-able; value is managed-runtime noise attribution |
-| **4 · Async-hop stitching (§D4/§D0.4)** | `stitch_handles` ([:508](../../../include/asmtest_hwtrace.h#L508)) | Merge per-thread slices of one logical operation in `seq` order | Generic merge is portable; **the producer (per-runtime hop hook) is managed-only** |
-| **5 · Out-of-process stepper (§D3)** | `stealth_trace` ([:537](../../../include/asmtest_hwtrace.h#L537)) | Exact single-step of a native leaf via a reverse-attached helper — no TF armed on the caller's own thread; runs on no-PT hosts (Zen 2, Docker-on-Mac) | All (`run_region` is a **non-capturing** callback) |
-| **0 · Diagnostic** | `arm_tid` ([:294](../../../include/asmtest_hwtrace.h#L294)) | OS tid that armed the active capture — a managed-thread-level single-region assert | All (trivial) — **now wrapped in all ten**; the side item below is retired |
+| **1 · Registry-free scoped call** | `call_scoped_ex` ([:397](../../../../include/asmtest_hwtrace.h#L397)), `render_scope` ([:406](../../../../include/asmtest_hwtrace.h#L406)); also `begin_scope` ([:358](../../../../include/asmtest_hwtrace.h#L358)), `call_scoped` ([:373](../../../../include/asmtest_hwtrace.h#L373)), `call_scoped_fp` ([:383](../../../../include/asmtest_hwtrace.h#L383)) | Arm → call native leaf → disarm entirely in native code; `_ex` is registry-free so no `MAX_REGIONS` exhaustion in a tight loop | **All** — the ergonomic win; **`_ex` + `render_scope` now wrapped in all ten** (Phase 1) |
+| **2 · Whole-window empty scope (§Z1)** | `begin_window` ([:442](../../../../include/asmtest_hwtrace.h#L442)), `end_window` ([:450](../../../../include/asmtest_hwtrace.h#L450)), `render_window` ([:458](../../../../include/asmtest_hwtrace.h#L458)) | `using (new AsmTrace())` — capture whatever runs, no region; records ABSOLUTE addresses | All (native leaf, single-step); managed value needs PT/ptrace. **Now wrapped in all ten** (§Z0) |
+| **3 · Version render + noise attribution** | `render_versioned` ([:413](../../../../include/asmtest_hwtrace.h#L413)), `symbolize_bucket` ([:667](../../../../include/asmtest_hwtrace.h#L667)); also `region_name` ([:659](../../../../include/asmtest_hwtrace.h#L659)), `attribute_window` ([:690](../../../../include/asmtest_hwtrace.h#L690)) | Decode moved/tiered bytes against a code-image; bucket whole-window IPs by JIT symbol / mapped region | All wrap-able; value is managed-runtime noise attribution |
+| **4 · Async-hop stitching (§D4/§D0.4)** | `stitch_handles` ([:508](../../../../include/asmtest_hwtrace.h#L508)) | Merge per-thread slices of one logical operation in `seq` order | Generic merge is portable; **the producer (per-runtime hop hook) is managed-only** |
+| **5 · Out-of-process stepper (§D3)** | `stealth_trace` ([:537](../../../../include/asmtest_hwtrace.h#L537)) | Exact single-step of a native leaf via a reverse-attached helper — no TF armed on the caller's own thread; runs on no-PT hosts (Zen 2, Docker-on-Mac) | All (`run_region` is a **non-capturing** callback) |
+| **0 · Diagnostic** | `arm_tid` ([:294](../../../../include/asmtest_hwtrace.h#L294)) | OS tid that armed the active capture — a managed-thread-level single-region assert | All (trivial) — **now wrapped in all ten**; the side item below is retired |
 
 **Two symbols are deliberately *not* binding targets.** `asmtest_hwtrace_stitch`
-([:495](../../../include/asmtest_hwtrace.h#L495)) passes `asmtest_hwtrace_slice_t` **by
+([:495](../../../../include/asmtest_hwtrace.h#L495)) passes `asmtest_hwtrace_slice_t` **by
 value with embedded heap pointers a binding cannot marshal** — the header ships
 `stitch_handles` (opaque trace handles + blittable scalar arrays) as the binding-facing
 form. `asmtest_hwtrace_begin_scope` / `call_scoped` (registry form) are **superseded by
@@ -95,14 +95,14 @@ over `_ex`.
 
 - **Struct-by-value — and the SysV eightbyte cliff.** `render_scope`, `end_window`,
   `render_window`, and `attribute_window` take the `asmtest_hwtrace_scope_t` handle
-  ([:340](../../../include/asmtest_hwtrace.h#L340)) **by value**. It is **12 bytes /
+  ([:340](../../../../include/asmtest_hwtrace.h#L340)) **by value**. It is **12 bytes /
   align 4** (`{u32 idx; u32 gen; i32 arm_tid}`) — **not 8**, as this section claimed until
   2026-07-17. That difference is an ABI boundary, not a detail: at 8 bytes the handle was
   **one** INTEGER eightbyte (one argument register); at 12 it is **two**, so a by-value
   handle now occupies **two** registers and *every following argument shifts down a slot*.
   A binding that hand-flattens it to a single 64-bit scalar therefore passes its second
   argument where the callee reads the handle's own second half. §Z4's `arm_tid` is what
-  pushed it over; the header states the rule at [:336](../../../include/asmtest_hwtrace.h#L336).
+  pushed it over; the header states the rule at [:336](../../../../include/asmtest_hwtrace.h#L336).
   - Native in the compiled / `cdef` bindings (cpp, rust, zig, lua/LuaJIT, go).
   - **ruby** (Fiddle) cannot declare a by-value struct, so it passes **two** consecutive
     `LONG_LONG`s — `idx|(gen<<32)` then `arm_tid` — which is register-identical to the
@@ -176,7 +176,7 @@ over `_ex`.
 > **Landed 2026-07-08 (`afc6ee4`).** All five bindings (cpp, rust, zig, lua, go) now wrap
 > `call_scoped_ex` + `render_scope`, each with the canonical `add2` test + 40-call loop,
 > green in every `docker-hwtrace-<lang>` lane. The two `ALL` exemptions were removed from
-> [bindings-parity-allow.txt](../../../scripts/bindings-parity-allow.txt); the gate is green
+> [bindings-parity-allow.txt](../../../../scripts/bindings-parity-allow.txt); the gate is green
 > (103 × 10). A go `runtime.LockOSThread` pin (handle-keyed render must run on the capturing
 > thread) and a cpp RAII trace guard (free on a throwing render) were surfaced by an
 > adversarial review pass. **`call_scoped_ex` + `render_scope` are now wrapped in all ten
@@ -184,7 +184,7 @@ over `_ex`.
 
 **Bindings:** cpp, rust, zig, lua, go. **~3–5d total** (~0.5–1d each — the scope construct
 already ships in every binding via the [bindings
-slice](../archive/plans/scoped-tracing-bindings-plan.md); this adds only the two symbols).
+slice](scoped-tracing-bindings-plan.md); this adds only the two symbols).
 
 Mirror commit `19d5646` (which added the same to ruby/node/java, itself mirroring the
 python `8941860`): wrap `asmtest_hwtrace_call_scoped_ex` + `asmtest_hwtrace_render_scope`,
@@ -196,7 +196,7 @@ each `docker-hwtrace-<lang>` lane.
 
 **Gate effect:** retires the five-binding `ALL`-exemption consumption on
 `call_scoped_ex` / `render_scope` in
-[bindings-parity-allow.txt](../../../scripts/bindings-parity-allow.txt) — after this the
+[bindings-parity-allow.txt](../../../../scripts/bindings-parity-allow.txt) — after this the
 matrix shows those two symbols wrapped in all ten bindings, and the two `ALL` lines are
 removed (stale exemptions fail the gate, so they *must* be removed).
 
@@ -235,7 +235,7 @@ removed (stale exemptions fail the gate, so they *must* be removed).
 > HotSpot runs Java `main()` on a JVM thread whose tid ≠ pid — so the helper stepped the wrong
 > (idle) thread and the `run_to` breakpoint fired on the **untraced** calling thread → fatal
 > SIGTRAP (exit 133). Node and CoreCLR were unaffected only because their calling thread *is* the
-> leader (tid == pid). One-line fix in [src/hwtrace.c](../../../src/hwtrace.c): seize
+> leader (tid == pid). One-line fix in [src/hwtrace.c](../../../../src/hwtrace.c): seize
 > `(pid_t)syscall(SYS_gettid)` (the calling thread), matching what
 > `asmtest_hwtrace_stealth_trace_windowed` already did. After the fix Java stealth returns a
 > **complete, exact** trace (`[0,3,6,c,11]`, not truncated) on both the forked-child and the
@@ -340,9 +340,9 @@ attribution (`begin_window` + `symbolize_bucket`), or a multi-region native merg
 - **Reverse gaps — where a binding leads the reference.** ~~python wraps
   `asmtest_dr_under_dynamorio` and .NET does not~~ — **CLOSED** (`65234d7` added the
   P/Invoke on the internal `DrNative`
-  ([DrTrace.cs:158](../../../bindings/dotnet/drtrace/DrTrace.cs#L158)), surfaced publicly as
+  ([DrTrace.cs:158](../../../../bindings/dotnet/drtrace/DrTrace.cs#L158)), surfaced publicly as
   `DrTrace.UnderDynamoRio()`
-  ([:286](../../../bindings/dotnet/drtrace/DrTrace.cs#L286))), so both python and dotnet are
+  ([:286](../../../../bindings/dotnet/drtrace/DrTrace.cs#L286))), so both python and dotnet are
   `Y`. Two further reverse gaps opened after it, both from Phase 2 landing in node/java
   ahead of the reference — **both now DECIDED and CLOSED (2026-07-17, `2f450ef`): WRAP.**
   - **`asmtest_hwtrace_region_name`** — was `Y` in python/node/java, `-` in dotnet;
@@ -395,7 +395,7 @@ not yet have in CI.
   ptrace-stealth exactness check and the §D4 host-side merge tests are the automated
   protection; the live hook is the disclosed forward-look gap.
 - **Phase 3:** per-symbol test as each is grown; no new corpus entries — the scoped forms
-  replay the existing [conformance corpus](../../../bindings/conformance/).
+  replay the existing [conformance corpus](../../../../bindings/conformance/).
 
 ## Build & CI
 
@@ -422,18 +422,18 @@ now-stale allow-list lines (stale exemptions fail the gate).
 
 ## Sources
 
-- Matrix + gate: [scripts/check-bindings-parity.sh](../../../scripts/check-bindings-parity.sh),
-  [scripts/bindings-parity-allow.txt](../../../scripts/bindings-parity-allow.txt)
+- Matrix + gate: [scripts/check-bindings-parity.sh](../../../../scripts/check-bindings-parity.sh),
+  [scripts/bindings-parity-allow.txt](../../../../scripts/bindings-parity-allow.txt)
   (`--report` prints the symbol × binding matrix).
 - Header contracts:
-  [include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h) §1/§Z1/§D3/§D4/§3.1(c).
-- .NET reference: [bindings/dotnet/hwtrace/HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs)
+  [include/asmtest_hwtrace.h](../../../../include/asmtest_hwtrace.h) §1/§Z1/§D3/§D4/§3.1(c).
+- .NET reference: [bindings/dotnet/hwtrace/HwTrace.cs](../../../../bindings/dotnet/hwtrace/HwTrace.cs)
   (`AsmTrace`, `AsmStitchedTrace`, `JitMethodMap`, `DiagnosticsIpc`). Its line anchors above
   were re-grounded **2026-07-17** — they had drifted ~1700 lines (the 2026-07-16 pass
   re-grounded only the header's).
 - Managed tier: [scoped-tracing-managed-plan.md](scoped-tracing-managed-plan.md)
   (§D0–§D4). Scope construct (already shipped everywhere):
-  [scoped-tracing-bindings-plan.md](../archive/plans/scoped-tracing-bindings-plan.md).
-- Backend/host reach: [trace-parity-matrix.md](../analysis/trace-parity-matrix.md).
+  [scoped-tracing-bindings-plan.md](scoped-tracing-bindings-plan.md).
+- Backend/host reach: [trace-parity-matrix.md](../../analysis/trace-parity-matrix.md).
 - Landed follower commits: `8941860` (python `call_scoped`), `19d5646`
   (ruby/node/java `call_scoped`).

@@ -364,7 +364,7 @@ public final class HwTraceTest {
     // com.sun.hotspot.events.VirtualThreadMount/Unmount extension events fire only for this case,
     // where nothing needs propagating, and never for a platform-thread executor submit, where
     // propagatingExecutor() is what carries the id. See the §D2 NO-GO note in
-    // docs/internal/plans/scoped-tracing-managed-plan.md.)
+    // docs/internal/archive/plans/scoped-tracing-managed-plan.md.)
     //
     // Proves (1) the operation really ran on a virtual thread, (2) it really REMOUNTED onto a
     // different carrier between the two hops, so hop 1's native single-step runs on a different OS

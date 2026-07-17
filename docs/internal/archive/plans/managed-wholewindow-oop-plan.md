@@ -10,7 +10,7 @@ already-shipping out-of-process stepper from a **region** primitive into a
 > CoreCLR.** W-0, W-1, W-2 and W-3 are done; this plan has no remaining forward-looks.
 > W-1's last variant — the `PTRACE_SINGLEBLOCK` driver for the **windowed** entry — landed
 > 2026-07-17 as `asmtest_ptrace_trace_attached_windowed_blockstep`
-> ([asmtest_ptrace.h:174](../../../include/asmtest_ptrace.h#L174)), a distinct symbol
+> ([asmtest_ptrace.h:174](../../../../include/asmtest_ptrace.h#L174)), a distinct symbol
 > mirroring the region form's `*_blockstep` spelling rather than a flag on the shipped
 > windowed entry (the §"Opt-in surface" rule below: *a distinct entry point, not a mode
 > bit*; it also leaves the windowed ABI and the bindings untouched). It is a **cost**
@@ -26,7 +26,7 @@ already-shipping out-of-process stepper from a **region** primitive into a
 >
 > - **2026-07-17b — the same-target-conditional ambiguity, closed in BOTH reconstructors.**
 >   An adversarial review found the amd-tracing-plan's own
->   [prescription](amd-tracing-plan.md) (§"Same-target-conditional ambiguity → truncated")
+>   [prescription](../../plans/amd-tracing-plan.md) (§"Same-target-conditional ambiguity → truncated")
 >   had been specified but never built. The greedy "first `Jcc` whose target == next-stop"
 >   rule silently drops instructions on the `||` / dual-guard shape (`je T; …; je T`, first
 >   not taken, second taken) — reported `rc == OK`, `truncated == false`. This was **not**
@@ -62,14 +62,14 @@ already-shipping out-of-process stepper from a **region** primitive into a
 >   `asmtest_ptrace_trace_attached_windowed` (region-free absolute-PC capture across a
 >   window frame + channel-published regions) with the `PTRACE_STREAM_CAP` budget →
 >   `truncated` (W-0/W-3), and the cross-process JIT-address channel
->   ([asmtest_addr_channel.h](../../../include/asmtest_addr_channel.h)) — both covered by
+>   ([asmtest_addr_channel.h](../../../../include/asmtest_addr_channel.h)) — both covered by
 >   `test_ptrace_windowed`. Added that day: the fork-internal
 >   `asmtest_ptrace_trace_window_call` (the plan's W-0 "fork path" — owns its tracee, so a
 >   caller that cannot fork safely gets a whole-window trace with no attach/run_to
 >   bookkeeping), exported `asmtest_addr_channel_{new,publish_rec,free}` FFI shims,
 >   `test_ptrace_window_call` (5 checks, green in `make hwtrace-test`), the .NET
 >   `Ptrace.TraceWindowCall` + `AddrChannel` wrappers, and the
->   [examples/dotnet/localscope_oop](../../../examples/dotnet/localscope_oop/) demo
+>   [examples/dotnet/localscope_oop](../../../../examples/dotnet/localscope_oop/) demo
 >   (validated live, captures a frame + two published leaves out-of-process).
 > - **2026-07-08b — W-2, the MANAGED whole-window path.**
 >   `asmtest_hwtrace_stealth_trace_windowed` (a reverse-attach helper child single-steps the
@@ -80,7 +80,7 @@ already-shipping out-of-process stepper from a **region** primitive into a
 >   treating faults as terminal truncated the window on the runtime's first internal fault),
 >   and the managed `AsmTrace.Window(() => { …block… })` + a `test_stealth_windowed` C test
 >   (green in `make hwtrace-test`, 296 checks) all ship. The
->   [examples/dotnet/localscope_oop_managed](../../../examples/dotnet/localscope_oop_managed/)
+>   [examples/dotnet/localscope_oop_managed](../../../../examples/dotnet/localscope_oop_managed/)
 >   demo runs a whole block of managed C# out-of-process, **crash-proof** — it survives an
 >   in-scope thrown/caught exception the in-process `localscope` must omit (validated: exit 0,
 >   deterministic, the block's own JIT'd code named). This retired the "live-CoreCLR W-2"
@@ -100,23 +100,23 @@ already-shipping out-of-process stepper from a **region** primitive into a
 >   observed). Publishing from a SIBLING thread — what E3 implemented — is the safe form.
 >
 > **Shipped outside the phasing.** `asmtest_ptrace_trace_attached_window_stop`
-> ([asmtest_ptrace.h:147](../../../include/asmtest_ptrace.h#L147)) — a stop-flag-driven
+> ([asmtest_ptrace.h:147](../../../../include/asmtest_ptrace.h#L147)) — a stop-flag-driven
 > windowed stepper used internally by the bundled stealth helper — belongs to no W-phase
 > below; it arrived with the W-2 managed wiring as an implementation need.
 >
 > This document is the design + phasing; the sections below are the original proposal,
 > now landed per the status above.
-> Related: [managed-singlestep-posture-plan.md](../archive/plans/managed-singlestep-posture-plan.md)
+> Related: [managed-singlestep-posture-plan.md](managed-singlestep-posture-plan.md)
 > (why in-process whole-window cannot be crash-proof),
 > [scoped-tracing-managed-plan.md](scoped-tracing-managed-plan.md) (§D3 is item 7's
 > "concealed out-of-process ptrace stepper scope"),
-> [zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md) Phase 5 (the W2 ptrace
+> [zen2-singlestep-trace-plan.md](../../plans/zen2-singlestep-trace-plan.md) Phase 5 (the W2 ptrace
 > tier this extends).
 
 ## The forcing problem
 
 The in-process whole-window form (`new AsmTrace()` on a managed thread — what
-[examples/dotnet/localscope](../../../examples/dotnet/localscope/) demonstrates) is
+[examples/dotnet/localscope](../../../../examples/dotnet/localscope/) demonstrates) is
 **best-effort by construction and cannot be made crash-proof** (posture plan §"forcing
 evidence"): any code that blocks `SIGTRAP` — glibc `pthread_create` around `clone()`,
 the CLR's two-pass exception dispatch — turns the next single-step `#DB` into a masked
@@ -126,7 +126,7 @@ beats `force_sig`; interposition is a time bomb (posture plan §Non-goals).
 The **out-of-process** stepper does not have this failure mode *at all*: it drives the
 tracee with `PTRACE_SINGLESTEP`/`PTRACE_SINGLEBLOCK`, and the `#DB` is delivered to the
 **tracer** via `waitpid` — a ptrace-stop is **not** gated by the tracee's signal mask
-([src/ptrace_backend.c](../../../src/ptrace_backend.c) `~1264-1299`). So the tracee may
+([src/ptrace_backend.c](../../../../src/ptrace_backend.c) `~1264-1299`). So the tracee may
 freely block `SIGTRAP` and never dies. This is exactly why the
 `ptrace_dotnet`/`blockstep`/`descent_dotnet` examples call themselves "the scenario
 in-process single-step is forbidden to do."
@@ -140,17 +140,17 @@ the **§D3 whole-window live-JIT address channel** — is this plan.
 ## What already ships (the substrate this builds on)
 
 - **Out-of-process steppers.** `asmtest_ptrace_trace_attached[_blockstep|_versioned]`
-  ([asmtest_ptrace.h](../../../include/asmtest_ptrace.h)) — exact per-instruction or
+  ([asmtest_ptrace.h](../../../../include/asmtest_ptrace.h)) — exact per-instruction or
   per-taken-branch (BTF) capture of a region in a foreign/attached process; reads
   target bytes via `process_vm_readv`; `run_to` plants a breakpoint to reach a method
   entry with no cooperative go-flag.
 - **Self-attach without an external harness.** `asmtest_hwtrace_stealth_trace`
-  ([src/stealth_helper.c](../../../src/stealth_helper.c)) spawns a bundled helper
+  ([src/stealth_helper.c](../../../../src/stealth_helper.c)) spawns a bundled helper
   **child** that `prctl(PR_SET_PTRACER)` + `PTRACE_SEIZE`es back onto its parent — so a
   process traces *itself* out-of-process, in a plain unprivileged container. This is
   what `AsmTrace.Method(outOfProcess: true)` already rides.
 - **Time-versioned code image.** `asmtest_codeimage_*`
-  ([asmtest_codeimage.h](../../../include/asmtest_codeimage.h)) records a timestamped
+  ([asmtest_codeimage.h](../../../../include/asmtest_codeimage.h)) records a timestamped
   byte timeline so a stepper decodes against the bytes that were **live when the code
   ran** — correct under re-JIT / address reuse.
 - **Managed method resolution.** `asmtest_proc_perfmap_symbol` (perf-map by name) and

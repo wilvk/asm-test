@@ -12,7 +12,7 @@ name? For the capture machinery it leans on see the siblings
 face), [scoped-inprocess-tracing.md](scoped-inprocess-tracing.md) (the cooperative
 `using`-block face) and [data-flow-capture.md](data-flow-capture.md) (the
 data-value sibling); the managed-runtime address plumbing is planned in
-[scoped-tracing-managed-plan.md](../plans/scoped-tracing-managed-plan.md). Terms
+[scoped-tracing-managed-plan.md](../archive/plans/scoped-tracing-managed-plan.md). Terms
 (`JIT`, `jitdump`, `ReadyToRun`, `CoreCLR`, `BCL`) are in the
 [glossary](../../project/glossary.md).*
 

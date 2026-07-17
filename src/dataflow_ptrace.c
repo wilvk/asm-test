@@ -3,7 +3,7 @@
  * a REAL per-step value trace off a LIVE, single-stepped process, OUT OF BAND, and
  * fills the same asmtest_valtrace_t the emulator producer (dataflow_emu.c) fills, so
  * the shared L1 def-use + L2 slicer (dataflow.c) work UNCHANGED on live captures.
- * See docs/internal/plans/data-flow-tracing-plan.md, Phase 3.
+ * See docs/internal/archive/plans/data-flow-tracing-plan.md, Phase 3.
  *
  * Where the emulator REPLAYS the bytes under Unicorn, this OBSERVES the real CPU: a
  * tracer parent single-steps a tracee that calls the registered code, and at each stop

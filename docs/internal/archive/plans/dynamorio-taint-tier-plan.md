@@ -2,7 +2,7 @@
 
 This is the standalone child plan for **goal (b)** of the data-flow effort — production-grade
 taint over live JIT'd managed (.NET) code under DynamoRIO. It splits out of Phase 5 of the
-parent [data-flow-tracing-plan.md](../../plans/data-flow-tracing-plan.md), whose Phase-5 section is now a
+parent [data-flow-tracing-plan.md](data-flow-tracing-plan.md), whose Phase-5 section is now a
 pointer stub retaining only the landed-Increment-1 status; the detail lives here. The
 source-of-truth analysis note for every overhead figure, launch-vs-attach decision, and
 integration-model claim below is [data-flow-capture.md](../../analysis/data-flow-capture.md); the
@@ -74,7 +74,7 @@ closes each phase the same way.
 > production propagation put production at ~11× bare (IN the ~10-50× band), the HARD BAND GATE + the
 > GC-survival CI job landed; all exit criteria MET — the plan is ready to archive)*. Update this file as increments land, the
 > way [dynamorio-native-trace-plan.md](dynamorio-native-trace-plan.md) tracks its
-> own; keep the parent [data-flow-tracing-plan.md](../../plans/data-flow-tracing-plan.md) Phase-5 stub's
+> own; keep the parent [data-flow-tracing-plan.md](data-flow-tracing-plan.md) Phase-5 stub's
 > status tag in sync with this child.
 
 ---
@@ -831,7 +831,7 @@ assumes we are not tag-tracking the entire runtime).
   ([:70](../../../../src/dataflow_dr_client.c#L70)) as ranges arrive.
 - Auto-register ranges under launch from .NET **method-load events** (reuse the Phase-4 PC→method
   identity channel; `MethodLoadVerbose` event id **143**,
-  [data-flow-tracing-plan.md:199](../../plans/data-flow-tracing-plan.md#L199)) so a launched dotnet workload
+  [data-flow-tracing-plan.md:199](data-flow-tracing-plan.md#L199)) so a launched dotnet workload
   populates ranges without the C-harness marker.
 - Keep propagation **correct across un-instrumented gaps**: the shadow is process-wide even
   though *instrumentation* is scoped, so a tag written inside a scoped range must persist when it
@@ -930,7 +930,7 @@ with it, or a compacting GC silently drops/aliases taint. **Hard dependency:** t
 4's concrete `GCBulkMovedObjectRanges` `{OldRangeBase, NewRangeBase, RangeLength}` triple (via
 EventPipe), which is **still deferred** — the in-proc `EventListener` landed only the DETECTION
 feed (`GcMoveMap`) and does not surface the `Values` struct-array
-([data-flow-tracing-plan.md:193](../../plans/data-flow-tracing-plan.md#L193)). *(Superseded 2026-07-14: the
+([data-flow-tracing-plan.md:193](data-flow-tracing-plan.md#L193)). *(Superseded 2026-07-14: the
 recommended extraction mechanism is now the `ICorProfilerCallback4::MovedReferences2` in-process
 profiler, not out-of-process EventPipe — see the update note above and
 [gc-move-range-extraction-findings.md](../../analysis/gc-move-range-extraction-findings.md).)*
@@ -1173,7 +1173,7 @@ managed data-flow assertion with a measured cost, replacing the offset-only dotn
   `prod` path is validated sink-only, since it keeps no witness). In the CI `drtrace` job.
 
 This validates beyond the offset-only `bindings/dotnet/drtrace/` smoke, matching
-[data-flow-tracing-plan.md:215](../../plans/data-flow-tracing-plan.md#L215). Per the archive rule, on landing this
+[data-flow-tracing-plan.md:215](data-flow-tracing-plan.md#L215). Per the archive rule, on landing this
 plan moves to `docs/internal/archive/plans/` and the parent Phase-5 stub is updated to LANDED.
 
 **Effort.** **M** in code — mostly composition of 5–8 plus the CI/threshold wiring — but gated on
@@ -1242,7 +1242,7 @@ hard gate, not new instrumentation.
   ([asmtest_drtrace.h:78-93](../../../../include/asmtest_drtrace.h#L78))". **Superseded 2026-07-14** —
   Increment 5 landed the launch-under-DR path (`drrun -c <client> -- <app>`, `make
   dr-taint-launch-test` / `dr-taint-dotnet-test`), and the ATTACH tier
-  ([dynamorio-attach-tier-plan.md](../../plans/dynamorio-attach-tier-plan.md)) has since added the cooperative
+  ([dynamorio-attach-tier-plan.md](dynamorio-attach-tier-plan.md)) has since added the cooperative
   `dr_app_*` mid-run attach/detach AND the **external** `drrun -attach <pid>` injector path. All
   three DR integration models now exist in-tree.)* In-process, `dr_valtrace`
   hosts the replay/diff in the same address space; the out-of-process validator (Increment 5)
@@ -1255,8 +1255,8 @@ hard gate, not new instrumentation.
   and the static-link nuance [:914](dynamorio-native-trace-plan.md#L914); the
   `__memcpy_chk` loader symptom is [macos-drtrace-plan.md:466](../../plans/macos-drtrace-plan.md#L466); the
   `MethodLoadVerbose` event id 143 addr-channel and the GC-move deferral are
-  [data-flow-tracing-plan.md:199](../../plans/data-flow-tracing-plan.md#L199) and
-  [:193](../../plans/data-flow-tracing-plan.md#L193).
+  [data-flow-tracing-plan.md:199](data-flow-tracing-plan.md#L199) and
+  [:193](data-flow-tracing-plan.md#L193).
 
 ## Risks and open points
 
@@ -1341,7 +1341,7 @@ hard gate, not new instrumentation.
 - **GC-move coherence + external block.** A missed `GCBulkMovedObjectRanges` event silently
   aliases pre/post-move taint; Increment 7 needs a coherence canary, and it is **hard-blocked** on
   Phase 4's still-deferred `{old,new,len}` extraction
-  ([data-flow-tracing-plan.md:193](../../plans/data-flow-tracing-plan.md#L193)) — mitigated by the disabled-
+  ([data-flow-tracing-plan.md:193](data-flow-tracing-plan.md#L193)) — mitigated by the disabled-
   flag + synthetic-triple partial path so the chain does not fully stall.
   **→ RESOLVED (Increment 7, 2026-07-14): the external block never had to be cleared.** Phase 4's
   deferred EventPipe feed was **side-stepped**, not waited on: an in-process
@@ -1423,7 +1423,7 @@ umbra/BSD-shadow license decision was settled in favour of the **hand-rolled BSD
 criterion is MET** — production taint runs at ~11× bare inside the ~10–50× band with a hard CI gate
 (`BAND_MAX=50`), a seed reaches a sink over real JIT'd managed code, and taint survives a compacting
 GC. Per the archive rule this plan is **ready to archive** to `docs/internal/archive/plans/`, with
-the parent [data-flow-tracing-plan.md](../../plans/data-flow-tracing-plan.md) Phase-5 stub updated to LANDED in
+the parent [data-flow-tracing-plan.md](data-flow-tracing-plan.md) Phase-5 stub updated to LANDED in
 the same change.
 
 **Follow-on work, all optional and none blocking** (each documented at its site above and in-code):
