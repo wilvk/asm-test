@@ -496,7 +496,96 @@ static class HwTraceProgram
             Check(hasUnknown, "symbolize_bucket: the unmapped address (1) buckets under [unknown]");
             Check(HwTrace.SymbolizeBuckets(Array.Empty<ulong>()).Length == 0,
                   "symbolize_bucket: empty input yields no buckets");
+
+            // --- region_name: address→name REVERSE resolver (the reverse-parity gap) --- //
+            // The single-address counterpart of SymbolizeBuckets, and the only surface that
+            // returns the region EXTENT. Positive: a known interior address resolves to a
+            // named mapping whose extent CONTAINS it. Negative control: address 1 is in no
+            // mapping and must return null — a resolver that fabricated a hit would pass the
+            // positive assert alone.
+            HwRegion? rn = HwTrace.RegionName(known);
+            Check(rn.HasValue && rn.Value.Start <= known && known < rn.Value.End
+                  && rn.Value.Name.Length > 0,
+                  $"region_name: resolves the containing mapping + extent ({rn?.Name}, "
+                  + $"[0x{rn?.Start:x}, 0x{rn?.End:x}))");
+            Check(!HwTrace.RegionName(1UL).HasValue,
+                  "region_name: an unmapped address (1) is a MISS, not a fabricated hit");
+            // The extent must actually bound the region: a stub returning [0, ~0) would
+            // satisfy "contains", so pin that the extent is a real, finite mapping.
+            Check(rn.HasValue && rn.Value.End - rn.Value.Start >= (ulong)codeSym.Length
+                  && rn.Value.End - rn.Value.Start < (1UL << 40),
+                  "region_name: the extent is a real bounded mapping, not [0, ~0)");
             codeSym.Free();
+
+            // --- attribute_window: named-region whole-window attribution (reverse-parity) --- //
+            // Two IDENTICAL-byte leaves in DISTINCT mappings. The named-region path (exact
+            // address range) splits them into separate buckets; symbol/disasm attribution
+            // provably cannot, which is asserted directly below as the contrast. Mirrors the
+            // C oracle test_wholewindow_buckets and node's attributeWindow case.
+            {
+                var leafA = NativeCode.FromBytes(ROUTINE);
+                var leafB = NativeCode.FromBytes(ROUTINE); // identical bytes, distinct mapping
+                long ra = 0, rb = 0;
+                var regions = new[]
+                {
+                    new AsmNamedRegion("leafA", leafA),
+                    new AsmNamedRegion("leafB", leafB),
+                };
+                AsmTrace w;
+                using (w = new AsmTrace(emit: false, regions: regions))
+                {
+                    ra = leafA.Call(20, 22);
+                    rb = leafB.Call(30, 12);
+                }
+                Check(ra == 42 && rb == 42, "attribute_window: both traced leaves still return their results");
+                if (!w.Armed)
+                {
+                    Console.WriteLine($"# SKIP attribute_window asserts: window did not arm ({w.SkipReason})");
+                }
+                else
+                {
+                    var byName = new Dictionary<string, ulong>();
+                    foreach (HwBucket b in w.Buckets) byName[b.Label] = b.Count;
+                    Check(byName.ContainsKey("leafA") && byName.ContainsKey("leafB"),
+                          "attribute_window: identical-byte leaves split into SEPARATE named buckets "
+                          + $"leafA/leafB (got {w.Buckets.Length} buckets)");
+                    // Each leaf executed exactly the 5 in-region instructions of the taken path
+                    // (0x0,0x3,0x6,0xc,0x11) — the same oracle the region scope asserts.
+                    Check(byName.TryGetValue("leafA", out ulong ca) && ca == 5
+                          && byName.TryGetValue("leafB", out ulong cb2) && cb2 == 5,
+                          "attribute_window: each named leaf bucket counts its 5 executed instructions");
+                    // The buckets must ACCOUNT for the capture, not be a fabricated pair: every
+                    // bucket count sums to the whole window (named leaves + runtime remainder).
+                    ulong sum = 0; foreach (HwBucket b in w.Buckets) sum += b.Count;
+                    Check(sum == (ulong)w.Addresses.Length,
+                          $"attribute_window: buckets account for the whole window "
+                          + $"({sum} == {w.Addresses.Length} addresses)");
+                    // THE CONTRAST — the reason this symbol is not redundant with the .NET
+                    // surface that already shipped. SymbolizeBuckets resolves by symbol/mapping,
+                    // so the two identical-byte leaves are indistinguishable to it: neither
+                    // "leafA" nor "leafB" can appear, and their addresses collapse together.
+                    // If this ever fails, .NET no longer NEEDS attribute_window.
+                    var symOnly = HwTrace.SymbolizeBuckets(w.Addresses);
+                    bool named = false;
+                    foreach (HwBucket b in symOnly) if (b.Label == "leafA" || b.Label == "leafB") named = true;
+                    Check(!named,
+                          "attribute_window: SymbolizeBuckets(Addresses) CANNOT name the leaves — "
+                          + "the named-region path is the only thing that splits them");
+                }
+                leafA.Free();
+                leafB.Free();
+            }
+
+            // A whole-window scope WITHOUT regions leaves Buckets empty — the opt-in is real,
+            // so the attribution cost is not paid by every window.
+            {
+                var leafC = NativeCode.FromBytes(ROUTINE);
+                AsmTrace w2;
+                using (w2 = new AsmTrace(emit: false)) { leafC.Call(20, 22); }
+                Check(w2.Buckets.Length == 0,
+                      "attribute_window: no regions passed -> Buckets stays empty (opt-in)");
+                leafC.Free();
+            }
 
             // --- auto-select: selection invariants (hold on every host) --- //
             // Mirrors test_auto_resolve_selection_invariants: resolve(BEST) returns

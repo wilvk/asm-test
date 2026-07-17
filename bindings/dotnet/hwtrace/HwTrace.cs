@@ -405,6 +405,34 @@ namespace Asmtest
         [DllImport(HWTRACE)] public static extern UIntPtr asmtest_hwtrace_symbolize_bucket(
             int pid, ulong[] ips, UIntPtr n, byte[] buckets, UIntPtr cap);
 
+        // §3.1(c) address->name REVERSE resolver: the mapped-file pathname (or a "[...]"
+        // pseudo-name) + extent containing `addr` in `pid` (0 == self). Returns 1 on a hit
+        // (fills name/start/end), 0 on a miss. The counterpart of symbolize_bucket for ONE
+        // address, and the only surface that yields the region EXTENT — asmtest_proc_region_by_addr
+        // returns the extent but DISCARDS the pathname, and symbolize_bucket returns labels
+        // with counts but no extent and needs an IP list.
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_region_name(
+            int pid, ulong addr, byte[] name, UIntPtr namelen, out ulong start, out ulong end);
+
+        // asmtest_hwtrace_named_region_t: an inline char[64] name then two uint64 — a flat
+        // 80 bytes on x86-64 (64 is 8-aligned, so no padding before base). Marshalled as a
+        // raw byte buffer (nregions * 80) built by hand, the same idiom BucketSize uses,
+        // which sidesteps the ByValArray round-trip.
+        public const int NamedRegionSize = 80; // sizeof(asmtest_hwtrace_named_region_t)
+        public const int NamedRegionNameLen = 64;
+
+        // §3.1(c) whole-window attribution keyed to a live whole-window SCOPE HANDLE.
+        // ABI: HwScope is 12 bytes / TWO INTEGER eightbytes on SysV x86-64, so it consumes
+        // rdi+rsi and every later argument shifts down one register accordingly. It is passed
+        // BY VALUE as the real 3-field struct (never hand-flattened to one ulong, which would
+        // pass `regions` where the callee reads the handle's second half). `regions` is the raw
+        // byte backing of an asmtest_hwtrace_named_region_t[nregions], `buckets` of an
+        // asmtest_hwtrace_bucket_t[cap]. Must run BEFORE asmtest_trace_free on the scope's
+        // trace: it reads the frame's recorded addresses, not a copy.
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_attribute_window(
+            HwScope handle, byte[] regions, UIntPtr nregions,
+            byte[] buckets, UIntPtr cap, out UIntPtr nbuckets);
+
         // ---- host-native executable code (out-param form, NOT a struct) ----
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_exec_alloc(
             byte[] bytes, UIntPtr len, out IntPtr baseOut, out UIntPtr lenOut);
@@ -827,6 +855,53 @@ namespace Asmtest
     }
 
     /// <summary>
+    /// The mapped region containing an address (mirrors the <c>asmtest_hwtrace_region_name</c>
+    /// out-params): its <see cref="Name"/> and its <c>[Start, End)</c> extent. See
+    /// <see cref="HwTrace.RegionName"/>.
+    /// </summary>
+    public readonly struct HwRegion
+    {
+        public HwRegion(string name, ulong start, ulong end) { Name = name; Start = start; End = end; }
+        /// <summary>The mapped-file pathname, or a "[...]" pseudo-name (<c>[anon]</c>,
+        /// <c>[stack]</c>, <c>[heap]</c>) for an unnamed mapping.</summary>
+        public string Name { get; }
+        /// <summary>First address of the containing mapping (inclusive).</summary>
+        public ulong Start { get; }
+        /// <summary>One past the last address of the containing mapping (exclusive).</summary>
+        public ulong End { get; }
+        public override string ToString() => $"HwRegion(name={Name}, start=0x{Start:x}, end=0x{End:x})";
+    }
+
+    /// <summary>
+    /// A caller-known code region for whole-window attribution (mirrors
+    /// <c>asmtest_hwtrace_named_region_t</c>): every captured address in
+    /// <c>[Base, Base+Len)</c> is labelled <see cref="Name"/>.
+    /// <para>This is what lets SEVERAL native leaves come back as separate, named buckets.
+    /// Maps-based resolution collapses every <c>exec_alloc</c>'d blob into a single
+    /// <c>[anon]</c>, and symbol/disassembly attribution cannot tell two leaves with
+    /// IDENTICAL BYTES apart at all — only an exact address range can. Pass these to the
+    /// whole-window <see cref="AsmTrace"/> ctor's <c>regions</c> parameter to get
+    /// <see cref="AsmTrace.Buckets"/>.</para>
+    /// <para><see cref="Name"/> is truncated to 63 bytes + NUL to fit the C
+    /// <c>char[64]</c>.</para>
+    /// </summary>
+    public readonly struct AsmNamedRegion
+    {
+        public AsmNamedRegion(string name, ulong @base, ulong len) { Name = name; Base = @base; Len = len; }
+        /// <summary>Convenience overload for a <see cref="NativeCode"/> leaf: label its
+        /// whole <c>[Base, Base+Length)</c> extent.</summary>
+        public AsmNamedRegion(string name, NativeCode code)
+            : this(name, (ulong)(long)code.Base, (ulong)code.Length) { }
+        /// <summary>The label captured addresses in this range are attributed to.</summary>
+        public string Name { get; }
+        /// <summary>Absolute base address of the region.</summary>
+        public ulong Base { get; }
+        /// <summary>Length of the region in bytes.</summary>
+        public ulong Len { get; }
+        public override string ToString() => $"AsmNamedRegion(name={Name}, base=0x{Base:x}, len={Len})";
+    }
+
+    /// <summary>
     /// A coverage recorder for a registered native region, via the hardware tier.
     /// Bring the tier up once with <see cref="Init"/>, allocate per-trace recorders
     /// with <see cref="Create"/>, register a <see cref="NativeCode"/> under a name,
@@ -1083,6 +1158,30 @@ namespace Asmtest
                 outb[i] = new HwBucket(label, count);
             }
             return outb;
+        }
+
+        /// <summary>
+        /// §3.1(c) — reverse-resolve ONE absolute <paramref name="addr"/> to the name +
+        /// extent of the mapped region containing it, in process <paramref name="pid"/>
+        /// (0 = self). Returns <c>null</c> on a miss (the address is in no mapping).
+        /// <para>The single-address counterpart of <see cref="SymbolizeBuckets"/>, and the
+        /// only surface here that yields the region's EXTENT: <c>SymbolizeBuckets</c>
+        /// returns labels with counts but no bounds and needs a whole IP list, while
+        /// <see cref="Ptrace.ProcRegionByAddr"/> returns the extent but DISCARDS the maps
+        /// pathname. Use it to range-classify a whole-window <see cref="AsmTrace.Addresses"/>
+        /// against a known mapping, or to name the module an address landed in.</para>
+        /// <para>Post-close safe: it reads <c>/proc/&lt;pid&gt;/maps</c>, not the trace.</para>
+        /// </summary>
+        public static HwRegion? RegionName(ulong addr, int pid = 0)
+        {
+            if (!HwNative.LibAvailable) return null;
+            var name = new byte[256];
+            int rc = HwNative.asmtest_hwtrace_region_name(
+                pid, addr, name, (UIntPtr)(nuint)name.Length, out ulong start, out ulong end);
+            if (rc != 1) return null; // 0 = miss; the C contract returns 1 on a hit
+            int z = Array.IndexOf(name, (byte)0);
+            if (z < 0) z = name.Length;
+            return new HwRegion(System.Text.Encoding.UTF8.GetString(name, 0, z), start, end);
         }
 
         /// <summary>
@@ -1783,6 +1882,7 @@ namespace Asmtest
         IntPtr _oopWinChan;         // the shared address channel for JIT regions
         ulong[] _amdIps;            // the endpoint buffer drained in Dispose
         readonly bool _renderPath;  // §Z5 opt-in: render the whole window into Path
+        readonly AsmNamedRegion[] _regions; // §3.1(c) opt-in: named-region attribution -> Buckets
         bool _rundownRequested;     // §D0.2: pair DisablePerfMap with the REQUEST (R3: also set by ArmWholeWindow)
         readonly int _rundownSettleMs;   // §D0.2: opt-in bound to let the async R2R jitdump flush before Dispose reads it
         JitMethodMap _map;          // §D0.1: managed-method labelling (byMethod only; R3: also set by ArmWholeWindow)
@@ -1809,6 +1909,16 @@ namespace Asmtest
         /// execution order (empty for the region-scoped form). Range-classify these
         /// against known native regions to tell multiple leaves apart.</summary>
         public ulong[] Addresses { get; private set; } = System.Array.Empty<ulong>();
+        /// <summary>§3.1(c): the whole-window capture's ABSOLUTE addresses attributed to
+        /// labelled buckets — each matched against the ctor's <c>regions</c> FIRST (exact,
+        /// symbol-free), then falling back to the perf-map JIT symbol / mapped-file region
+        /// for the runtime remainder. Empty unless <c>regions</c> was passed to a
+        /// whole-window scope (and on a scope that never armed).
+        /// <para>This is the attribution <see cref="HwTrace.SymbolizeBuckets"/> CANNOT do:
+        /// it resolves by symbol/mapping, so several <c>exec_alloc</c>'d leaves all collapse
+        /// into one <c>[anon]</c> — and two leaves with identical bytes are indistinguishable
+        /// to it. An exact address range is the only thing that separates them.</para></summary>
+        public HwBucket[] Buckets { get; private set; } = System.Array.Empty<HwBucket>();
         /// <summary>§D0.1: for a <c>byMethod</c> whole-window scope, the managed methods
         /// that executed in the window, sorted by attributed instruction count
         /// (descending); empty otherwise. The native-runtime remainder is not included —
@@ -1982,8 +2092,19 @@ namespace Asmtest
         /// so those methods are named. Default 0 keeps the current no-wait close latency
         /// (the load is still attempted, just without waiting). Ignored without
         /// <paramref name="withRundown"/>.</param>
+        /// <param name="regions">§3.1(c) (opt-in): caller-known code regions to attribute the
+        /// captured window against, exposing <see cref="Buckets"/> on close (via the native
+        /// <c>attribute_window</c>). Each captured address is matched to these EXACT ranges
+        /// first, then falls back to perf-map / maps for the runtime remainder. This is the
+        /// only way to tell several native leaves apart: maps collapses every
+        /// <c>exec_alloc</c>'d blob into one <c>[anon]</c>, and two leaves with IDENTICAL
+        /// BYTES defeat symbol/disassembly attribution entirely. Attribution runs while the
+        /// frame is still live (before the trace is freed), so it cannot be done after the
+        /// scope closes — pass the regions up front. Null/empty leaves <see cref="Buckets"/>
+        /// empty.</param>
         public AsmTrace(bool emit = true, bool byMethod = false, bool withRundown = false,
                         bool renderPath = false, int rundownSettleMs = 0,
+                        AsmNamedRegion[] regions = null,
                         [CallerMemberName] string member = null,
                         [CallerLineNumber] int line = 0)
         {
@@ -1991,6 +2112,7 @@ namespace Asmtest
             _emit = emit;
             _kind = Kind.WholeWindow;
             _renderPath = renderPath;
+            _regions = regions;
             _rundownSettleMs = rundownSettleMs;
             _armTid = Environment.CurrentManagedThreadId;
             // Honor the "never throws" contract: with no native lib loaded, the first P/Invoke
@@ -2119,6 +2241,50 @@ namespace Asmtest
                 SkipReason = brc == HwNative.ASMTEST_HW_ESTATE
                     ? "hwtrace tier not up — call HwTrace.Init (the region scope does not auto-init)"
                     : $"region scope did not arm (rc={brc})";
+        }
+
+        // §3.1(c) named-region attribution (opt-in via the whole-window ctor's `regions`).
+        // Marshals AsmNamedRegion[] into the raw asmtest_hwtrace_named_region_t[] byte
+        // backing (80 B each: char[64] name, u64 base, u64 len) and calls attribute_window
+        // with the LIVE scope handle BY VALUE. Fills Buckets; on any non-OK status (a stale
+        // handle, a REGION-scope handle whose insns are relative offsets, or a host without
+        // the whole-window path) Buckets stays EMPTY rather than partial — the tier's
+        // conservative-miss default, never a silent wrong answer.
+        void AttributeNamedRegions()
+        {
+            if (_regions == null || _regions.Length == 0) return;
+            if (!Armed || _handle == IntPtr.Zero) return;
+            int n = _regions.Length;
+            var regs = new byte[n * HwNative.NamedRegionSize];
+            for (int i = 0; i < n; i++)
+            {
+                int off = i * HwNative.NamedRegionSize;
+                // name[64], NUL-padded: truncate to 63 bytes so the terminator always fits.
+                var nb = System.Text.Encoding.UTF8.GetBytes(_regions[i].Name ?? "");
+                Array.Copy(nb, 0, regs, off, Math.Min(nb.Length, HwNative.NamedRegionNameLen - 1));
+                BitConverter.TryWriteBytes(
+                    new Span<byte>(regs, off + HwNative.NamedRegionNameLen, 8), _regions[i].Base);
+                BitConverter.TryWriteBytes(
+                    new Span<byte>(regs, off + HwNative.NamedRegionNameLen + 8, 8), _regions[i].Len);
+            }
+            int cap = n + 32; // the named regions plus room for the runtime remainder's labels
+            var raw = new byte[cap * HwNative.BucketSize];
+            int rc = HwNative.asmtest_hwtrace_attribute_window(
+                _scope, regs, (UIntPtr)(nuint)n, raw, (UIntPtr)(nuint)cap, out var nbOut);
+            if (rc != HwNative.ASMTEST_HW_OK) return;
+            int nb2 = (int)(nuint)nbOut;
+            if (nb2 > cap) nb2 = cap; // surplus labels were dropped C-side; never over-read
+            var outb = new HwBucket[nb2];
+            for (int i = 0; i < nb2; i++)
+            {
+                int off = i * HwNative.BucketSize;
+                int z = Array.IndexOf(raw, (byte)0, off, HwNative.BucketLabelLen);
+                int len = (z < 0 ? off + HwNative.BucketLabelLen : z) - off;
+                outb[i] = new HwBucket(
+                    System.Text.Encoding.UTF8.GetString(raw, off, len),
+                    BitConverter.ToUInt64(raw, off + HwNative.BucketLabelLen));
+            }
+            Buckets = outb;
         }
 
         // §D0.1/§D0.2 attribution, shared by the in-process Dispose and the §D3
@@ -3426,6 +3592,14 @@ namespace Asmtest
                     // §D0.1/§D0.2: attribute the captured addresses to managed methods (shared
                     // with the §D3 out-of-process window path). DATA only; the caller presents it.
                     AttributeAddresses(img, when);
+                    // §3.1(c) (opt-in): attribute the captured ABSOLUTE addresses to the
+                    // caller's NAMED regions first, then perf-map / maps. Must run HERE —
+                    // after end_window (the frame is still resolvable) but BEFORE the
+                    // trace_free below, which the frame's trace points into — so it cannot
+                    // be offered as a post-Dispose method. This is the named-region split
+                    // that SymbolizeBuckets(Addresses) cannot reproduce: identical-byte
+                    // leaves are one [anon] to symbol/maps resolution.
+                    AttributeNamedRegions();
                     // §D0.2: turn perf-map generation back off so it is not left on
                     // process-wide (unbounded jitdump growth / per-JIT overhead). Keyed on
                     // the REQUEST, not RundownEnabled — EnablePerfMap can succeed runtime-side
