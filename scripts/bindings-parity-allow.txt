@@ -56,16 +56,29 @@ ruby asmtest_descent_set_denylist   # allow-set only: Fiddle hosts no GC-safe ca
 ALL asmtest_hwtrace_begin_scope       # §1 handle-keyed begin: additive over the name-keyed try_begin path the shims use (its render sibling, asmtest_hwtrace_render_scope, is now wrapped in all ten via call_scoped)
 ALL asmtest_hwtrace_render_versioned  # §1/§D4 version-aware render: dotnet (P/Invoke), node + java (CodeImage.renderVersioned) wrap it against a self code-image; the other seven gain it when they grow a codeimage-backed render path
 ALL asmtest_hwtrace_stitch            # §D4 async-hop merge core: pure C concatenation, host-tested (test_stitch_slices)
-ALL asmtest_hwtrace_stealth_trace     # §D3 out-of-process ptrace-stealth stepper: dotnet (AsmTrace.Method outOfProcess), node + java (HwTrace.stealthTrace) wrap it as the crash-proof managed-capture route; the other seven reach it C-internally / gain it when they grow a stealth scope
+# §D3 out-of-process ptrace-stealth stepper (the crash-proof, no-PT-host exact stepper):
+# dotnet (AsmTrace.Method outOfProcess), node + java (HwTrace.stealthTrace) and python
+# (HwTrace.stealth_trace) wrap it — the former ALL exemption was retired 2026-07-17 when
+# python grew the use (Phase 3 grow-a-use; the roadmap's only named python item). Its
+# run_region callback is NON-capturing, so the capturing-upcall limit does NOT block the
+# six below; they reach it C-internally and gain it when they grow a stealth scope.
+cpp asmtest_hwtrace_stealth_trace
+rust asmtest_hwtrace_stealth_trace
+zig asmtest_hwtrace_stealth_trace
+ruby asmtest_hwtrace_stealth_trace
+lua asmtest_hwtrace_stealth_trace
+go asmtest_hwtrace_stealth_trace
 # §3.1(c) address→name reverse resolver (whole-window noise attribution): python
-# (HwTrace.region_name), node + java (HwTrace.regionName) wrap it as the maps/perf-map
-# reverse lookup — the former ALL exemption was retired 2026-07-14 when python grew the
-# use (Phase 3 grow-a-use). The remaining seven gain it with a whole-window scope;
+# (HwTrace.region_name), node + java (HwTrace.regionName) and dotnet (HwTrace.RegionName)
+# wrap it as the maps/perf-map reverse lookup — the ALL exemption was retired 2026-07-14
+# when python grew the use, and the dotnet line 2026-07-17 when the REVERSE-parity gap it
+# recorded was closed (the roadmap's "decide, do not drift" side item: .NET led on
+# SymbolizeBuckets but lacked the single-address reverse resolver, the only surface that
+# yields a region EXTENT). The remaining six gain it with a whole-window scope;
 # host-tested (test_symbolize_bucket, test_symbolize_bucket_and_region_name).
 cpp asmtest_hwtrace_region_name
 rust asmtest_hwtrace_region_name
 zig asmtest_hwtrace_region_name
-dotnet asmtest_hwtrace_region_name
 ruby asmtest_hwtrace_region_name
 lua asmtest_hwtrace_region_name
 go asmtest_hwtrace_region_name
@@ -80,7 +93,22 @@ zig asmtest_hwtrace_symbolize_bucket
 ruby asmtest_hwtrace_symbolize_bucket
 lua asmtest_hwtrace_symbolize_bucket
 go asmtest_hwtrace_symbolize_bucket
-ALL asmtest_hwtrace_attribute_window  # §3.1(c) whole-window noise attribution: node + java (HwTrace.attributeWindow) wrap it against a live whole-window scope (named-region + perf-map fallback); the other eight gain it with a whole-window scope
+# §3.1(c) whole-window noise attribution keyed to a LIVE whole-window scope handle:
+# node + java (HwTrace.attributeWindow) and dotnet (the AsmTrace whole-window ctor's
+# `regions` -> AsmTrace.Buckets) wrap it — the ALL exemption was retired 2026-07-17 when
+# the reverse-parity gap was closed. It is NOT redundant with symbolize_bucket: the
+# named-region path matches EXACT address ranges, which is the only thing that can split
+# leaves with IDENTICAL BYTES (symbol/maps resolution collapses every exec_alloc'd blob
+# into one "[anon]"). The dotnet lane asserts that contrast directly — SymbolizeBuckets
+# over the same window provably cannot name the leaves. The seven below gain it when they
+# grow a whole-window scope; host-tested (test_wholewindow_buckets).
+python asmtest_hwtrace_attribute_window
+cpp asmtest_hwtrace_attribute_window
+rust asmtest_hwtrace_attribute_window
+zig asmtest_hwtrace_attribute_window
+ruby asmtest_hwtrace_attribute_window
+lua asmtest_hwtrace_attribute_window
+go asmtest_hwtrace_attribute_window
 ALL asmtest_hwtrace_call_scoped       # Option B lazy-arm NAMED-call scope (managed-singlestep-lazy-arm-plan): dotnet wraps it (AsmTrace.Method's Invoke); the other nine ship the registry-FREE call_scoped_ex form instead (no fixed-table slot), so none bind the registry-keyed call_scoped
 # FP (double…)->double sibling of call_scoped: python (HwTrace.call_scoped_fp) + dotnet
 # (AsmTrace.Method's Invoke FP path) wrap it — the former ALL exemption was retired

@@ -427,6 +427,59 @@ def test_ptrace_trace_call_blockstep():
     code.free()
 
 
+def test_stealth_trace_out_of_process():
+    """§D3 REVERSE-attach stealth stepper: a helper child seizes THIS thread and steps
+    the leaf out of band, so no EFLAGS.TF is ever armed on our own thread.
+
+    Unlike Ptrace.trace_call (which FORKS a tracee it owns), the leaf runs in THIS
+    process — so this is the no-PT-host exact stepper for code that must run here. It
+    must agree with the C oracle and with trace_call's fork-internal stream, since both
+    single-step the same ROUTINE: [0x0, 0x3, 0x6, 0xC, 0x11].
+
+    NOT a self-skip test: past the ptrace substrate gate, a refused reverse-attach is a
+    FAILURE here (armed is asserted), because `armed` False with an empty stream is
+    exactly what a silently-broken wrapper also returns."""
+    _skip_if_no_ptrace()
+    code = NativeCode.from_bytes(ROUTINE)
+    try:
+        r = HwTrace.stealth_trace(code, 20, 22)
+        # The reverse-attach must actually happen: PR_SET_PTRACER covers Yama
+        # ptrace_scope=1, so past _skip_if_no_ptrace a refusal is a real defect.
+        assert r.armed, f"reverse-attach refused (rc={r.rc}) — the helper never seized us"
+        # EXACT: read from RAX at the ret by the helper, not from our own call.
+        assert r.result == 42
+        # The stream is best-effort in general, but CPython raises no async signals at a
+        # native leaf (unlike V8/HotSpot), so it is complete here — and must equal the C
+        # oracle. This is the assertion an empty capture CANNOT vacuously satisfy.
+        assert r.offsets == [0x0, 0x3, 0x6, 0xC, 0x11]
+        assert not r.truncated
+        assert r.blocks == 2  # jle taken -> two basic blocks
+
+        # DATA-DEPENDENT control: the SAME leaf on the other branch must produce a
+        # DIFFERENT stream (the jle falls through, so dec at 0xE executes) and a
+        # different exact result. A wrapper returning a canned stream/result — or
+        # replaying the first capture — fails this even though it passed above.
+        r2 = HwTrace.stealth_trace(code, 200, 1)
+        assert r2.armed
+        assert r2.result == 200  # 200 + 1 = 201 > 100 -> dec -> 200
+        assert r2.offsets == [0x0, 0x3, 0x6, 0xC, 0xE, 0x11]
+        assert r2.offsets != r.offsets
+    finally:
+        code.free()
+
+
+def test_stealth_trace_rejects_null_region():
+    """Negative control for the FFI seam itself: a zero-length region is EINVAL, a clean
+    self-skip result (armed False, result None) — never a fabricated capture. Proves the
+    wrapper propagates the C status rather than inventing one."""
+    _skip_if_no_ptrace()
+    r = HwTrace.stealth_trace(NativeCode(0, 0))
+    assert not r.armed
+    assert r.result is None
+    assert r.offsets == []
+    assert r.rc != ASMTEST_HW_OK
+
+
 def test_descent_edges_and_frames():
     """Call descent (asmtest.hwtrace.Descent): a region that calls an in-blob leaf S
     records the call as an edge at level 1 and descends S as a nested frame at level 2."""

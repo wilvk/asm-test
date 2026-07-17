@@ -363,6 +363,14 @@ def _declare(lib):
     lib.asmtest_hwtrace_render_window.argtypes = [_HwScope, cc, sz]
     lib.asmtest_hwtrace_render_window.restype = ci
     lib.asmtest_hwtrace_arm_tid.restype = ci
+    # §D3 out-of-process ptrace-stealth stepper. Its run_region callback is
+    # NON-capturing — void (*)(void *) plus a SEPARATE void *arg — so an ordinary
+    # ctypes CFUNCTYPE hosts it. This is why stealth_trace is wrappable here at all:
+    # the capturing-upcall limit that blocks descent_set_resolver in cpp/rust/zig/ruby
+    # does not apply, and ctypes closes over the Python state it needs anyway.
+    lib.asmtest_hwtrace_stealth_trace.argtypes = [
+        v, sz, v, C.POINTER(C.c_long), _RunRegionFn, v]
+    lib.asmtest_hwtrace_stealth_trace.restype = ci
     # §3.1(c) whole-window noise attribution: address->name reverse resolver + IP bucketer.
     lib.asmtest_hwtrace_region_name.argtypes = [
         ci, u64, cc, sz, C.POINTER(u64), C.POINTER(u64)]
@@ -519,6 +527,44 @@ class _HwScope(C.Structure):
     at 12 bytes this is passed by value in TWO integer registers, not one.
     """
     _fields_ = [("idx", C.c_uint32), ("gen", C.c_uint32), ("arm_tid", C.c_int32)]
+
+
+#: §D3 ``void (*run_region)(void *)`` — the stealth stepper's NON-capturing region
+#: runner. The single ``void *`` is the companion ``arg`` the C side passes straight
+#: back; this binding leaves it NULL and closes over the call in Python instead.
+_RunRegionFn = C.CFUNCTYPE(None, C.c_void_p)
+
+
+class StealthResult:
+    """The outcome of :meth:`HwTrace.stealth_trace`: the §D3 out-of-process stepper's
+    EXACT :attr:`result` plus its best-effort instruction stream.
+
+    The two honesty bits are not interchangeable. :attr:`result` is EXACT — the helper
+    reads it from the caller's RAX at the region's ``ret``, so it witnesses that the leaf
+    really ran to completion under the reverse-attach. :attr:`offsets` is BEST-EFFORT:
+    single-stepping a live runtime out of band can be interrupted by its async signals,
+    in which case :attr:`truncated` is set and the stream is a prefix. A test must
+    therefore assert on :attr:`result` + :attr:`armed`; asserting only on
+    :attr:`offsets` would pass vacuously on the very failure it is meant to catch (an
+    empty stream is also what a refused attach leaves behind).
+
+    :attr:`armed` is ``False`` when the reverse-attach was REFUSED (Yama / no ptrace) —
+    a clean self-skip, in which case the leaf is still called so the result is never lost,
+    but ``result`` is ``None`` because no helper observed RAX."""
+    __slots__ = ("result", "offsets", "blocks", "truncated", "armed", "rc")
+
+    def __init__(self, result, offsets, blocks, truncated, armed, rc):
+        self.result = result
+        self.offsets = offsets
+        self.blocks = blocks
+        self.truncated = truncated
+        self.armed = armed
+        self.rc = rc
+
+    def __repr__(self):
+        return (f"StealthResult(result={self.result}, armed={self.armed}, "
+                f"truncated={self.truncated}, insns={len(self.offsets)}, "
+                f"rc={self.rc})")
 
 
 class CallScopedResult:
@@ -1015,6 +1061,81 @@ class HwTrace:
             trunc = bool(lib.asmtest_emu_trace_truncated(handle))
             insns = int(lib.asmtest_emu_trace_insns_len(handle))
             return WindowResult(path, trunc, True, insns)
+        finally:
+            lib.asmtest_trace_free(handle)
+
+    @classmethod
+    def stealth_trace(cls, code: "NativeCode", *args,
+                      instructions=256, blocks=64) -> "StealthResult":
+        """§D3 OUT-OF-PROCESS ptrace-stealth stepper — the crash-proof counterpart of
+        :meth:`call_scoped` (``asmtest_hwtrace_stealth_trace``), mirroring node's
+        ``HwTrace.stealthTrace`` / dotnet's ``AsmTrace.Method(..., outOfProcess: true)``.
+
+        A helper CHILD reverse-attaches to this process (``PR_SET_PTRACER`` so a Yama
+        ``ptrace_scope=1`` host permits it, then ``PTRACE_SEIZE``), drives this thread to
+        the region entry, and single-steps ``[code.base, +code.length)`` out of band while
+        we run it. **No ``EFLAGS.TF`` is armed on our own thread** — the in-process
+        single-step footgun :meth:`window` warns about — so this is the path for a no-PT
+        host (Zen 2, Docker-on-Mac) and the safe one next to a runtime that uses SIGTRAP.
+
+        Only the LEAF is stepped: the helper breakpoints ``code.base`` and lets the
+        interpreter reach it at full speed, so CPython's own ctypes dispatch is not
+        single-stepped (it is not in the region).
+
+        THREADING: the helper seizes the CALLING thread (``SYS_gettid``, the C-side fix for
+        the JVM's tid != pid SIGTRAP), and ctypes invokes ``run_region`` synchronously on
+        that same thread — a Python callback cannot migrate — so the arming thread and the
+        stepped thread always agree. This binding therefore needs no ``LockOSThread``-style
+        pin (the Go binding's requirement); do NOT hand the leaf off to another thread.
+
+        Args pass as C longs (SysV integer ABI). Returns a :class:`StealthResult`:
+        ``.result`` is EXACT (read from RAX at the ``ret``), ``.offsets`` are
+        region-RELATIVE and BEST-EFFORT (see :class:`StealthResult`). SELF-SKIPS cleanly
+        (``.armed`` ``False``, ``.result`` ``None``) where the reverse-attach is REFUSED
+        (``EUNAVAIL`` — Yama / no ptrace), and calls the leaf anyway so the call itself is
+        never lost. On ``EINVAL`` (a region the C side rejected) it does NOT call: there
+        the region is the thing that was wrong."""
+        lib = _get()
+        handle = lib.asmtest_trace_new(instructions, blocks)
+        if not handle:
+            raise RuntimeError("asmtest_trace_new returned NULL")
+        # The thunk must invoke the leaf so control ENTERS [base, len) and trips the
+        # helper's entry breakpoint. Its return is discarded: result_out (RAX at the
+        # ret, read by the helper) is authoritative, so an FFI-level raise here must not
+        # lose the capture the helper already made.
+        ran = [False]
+
+        def _thunk(_arg):
+            ran[0] = True
+            try:
+                code.call(*args)
+            except Exception:  # pragma: no cover - result_out is authoritative
+                pass
+
+        cb = _RunRegionFn(_thunk)  # keep alive across the call
+        try:
+            result = C.c_long(0)
+            rc = int(lib.asmtest_hwtrace_stealth_trace(
+                code.base, code.length, handle, C.byref(result), cb, None))
+            if rc != ASMTEST_HW_OK:  # EUNAVAIL (Yama/no ptrace) / EINVAL -> self-skip
+                # Never lose the call itself — but ONLY where the REGION was fine and
+                # merely the attach was refused (EUNAVAIL). On EINVAL the region is what
+                # the C side rejected, so calling it is not a fallback, it is a jump to a
+                # bad address: NativeCode(0, 0) would dereference NULL, and a SIGSEGV is
+                # not catchable by `except Exception`.
+                if not ran[0] and rc == ASMTEST_HW_EUNAVAIL:
+                    try:
+                        code.call(*args)
+                    except Exception:
+                        pass
+                return StealthResult(None, [], 0, False, False, rc)
+            n = int(lib.asmtest_emu_trace_insns_len(handle))
+            offsets = [int(lib.asmtest_emu_trace_insn_at(handle, i))
+                       for i in range(n)]
+            return StealthResult(int(result.value), offsets,
+                                 int(lib.asmtest_emu_trace_blocks_len(handle)),
+                                 bool(lib.asmtest_emu_trace_truncated(handle)),
+                                 True, rc)
         finally:
             lib.asmtest_trace_free(handle)
 

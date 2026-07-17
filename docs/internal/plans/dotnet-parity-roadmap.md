@@ -9,11 +9,13 @@
 > (which backend runs where) and consumes the same source of record: the tier headers +
 > [scripts/check-bindings-parity.sh](../../../scripts/check-bindings-parity.sh).
 
-> **Status (revised 2026-07-16): Phase 1 LANDED; Phase 2 LANDED (all four increments, one
+> **Status (revised 2026-07-17): Phase 1 LANDED; Phase 2 LANDED (all four increments, one
 > optional item open); Phase 3 is on-demand by design.** The one named item left in the whole
 > roadmap is Java's **zero-touch JVMTI** hop hook — optional, since the executor-decorator
-> producer already ships. The formal parity gate is
-> **green** — `bindings-parity: OK — 116 tier symbols x 10 bindings in sync` — but green means only
+> producer already ships. **Python's `stealth_trace` (its last named item) landed 2026-07-17
+> (`05ac0d4`), and the two reverse-parity gaps below are DECIDED and CLOSED (`2f450ef`) — .NET
+> now wraps `region_name` + `attribute_window`.** The formal parity gate is
+> **green** — `bindings-parity: OK — 117 tier symbols x 10 bindings in sync` — but green means only
 > that every binding either wraps each tier symbol *or carries a documented exemption* in
 > [scripts/bindings-parity-allow.txt](../../../scripts/bindings-parity-allow.txt). The
 > `ALL`-exemptions the gate consumes are exactly the .NET-lead surface below, so a green
@@ -43,11 +45,11 @@ The symbols .NET leads on split into two kinds, and the split sets a hard ceilin
   stitching a logical operation across `await`/continuation thread hops. These exist only
   inside a managed JIT runtime. The reference constructs that embody them —
   `AsmTrace.Method(Delegate)` (JIT'd managed-method resolution via `JitMethodMap` /
-  `MethodLoadVerbose`, [HwTrace.cs:1500](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1500)
-  / [:2113](../../../bindings/dotnet/hwtrace/HwTrace.cs#L2113)), the `DiagnosticsIpc`
-  pre-arm rundown ([:2361](../../../bindings/dotnet/hwtrace/HwTrace.cs#L2361)), and the
+  `MethodLoadVerbose`, [HwTrace.cs:3203](../../../bindings/dotnet/hwtrace/HwTrace.cs#L3203)
+  / [:3873](../../../bindings/dotnet/hwtrace/HwTrace.cs#L3873)), the `DiagnosticsIpc`
+  pre-arm rundown ([:4364](../../../bindings/dotnet/hwtrace/HwTrace.cs#L4364)), and the
   `AsyncLocal<ScopeId>` hop hook behind `AsmStitchedTrace`
-  ([:2917](../../../bindings/dotnet/hwtrace/HwTrace.cs#L2917)) — have **no analog** in
+  ([:4953](../../../bindings/dotnet/hwtrace/HwTrace.cs#L4953)) — have **no analog** in
   C++, Rust, Zig, Go, or Lua. Those runtimes AOT-compile or interpret; there is no live
   JIT method stream to follow.
 
@@ -61,20 +63,22 @@ not by symbol count.
 ## The feature clusters
 
 Symbol contracts are in [include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h);
-line anchors below were re-grounded against the header on **2026-07-16** (the original
-2026-07-08 anchors had all drifted ~100 lines as the header grew).
+line anchors below were re-grounded against the header on **2026-07-17** (the 2026-07-08
+anchors had drifted ~100 lines, and the 2026-07-16 re-grounding had already drifted ~19
+more — the header keeps growing, so treat every anchor here as needing a re-check, not as
+a fact).
 
 | Cluster | Symbols (header line) | Capability | Portable to |
 |---|---|---|---|
-| **1 · Registry-free scoped call** | `call_scoped_ex` ([:378](../../../include/asmtest_hwtrace.h#L378)), `render_scope` ([:387](../../../include/asmtest_hwtrace.h#L387)); also `begin_scope` ([:339](../../../include/asmtest_hwtrace.h#L339)), `call_scoped` ([:354](../../../include/asmtest_hwtrace.h#L354)), `call_scoped_fp` ([:364](../../../include/asmtest_hwtrace.h#L364)) | Arm → call native leaf → disarm entirely in native code; `_ex` is registry-free so no `MAX_REGIONS` exhaustion in a tight loop | **All** — the ergonomic win; **`_ex` + `render_scope` now wrapped in all ten** (Phase 1) |
-| **2 · Whole-window empty scope (§Z1)** | `begin_window` ([:423](../../../include/asmtest_hwtrace.h#L423)), `end_window` ([:431](../../../include/asmtest_hwtrace.h#L431)), `render_window` ([:439](../../../include/asmtest_hwtrace.h#L439)) | `using (new AsmTrace())` — capture whatever runs, no region; records ABSOLUTE addresses | All (native leaf, single-step); managed value needs PT/ptrace. **Now wrapped in all ten** (§Z0) |
-| **3 · Version render + noise attribution** | `render_versioned` ([:394](../../../include/asmtest_hwtrace.h#L394)), `symbolize_bucket` ([:648](../../../include/asmtest_hwtrace.h#L648)); also `region_name` ([:640](../../../include/asmtest_hwtrace.h#L640)), `attribute_window` ([:671](../../../include/asmtest_hwtrace.h#L671)) | Decode moved/tiered bytes against a code-image; bucket whole-window IPs by JIT symbol / mapped region | All wrap-able; value is managed-runtime noise attribution |
-| **4 · Async-hop stitching (§D4/§D0.4)** | `stitch_handles` ([:489](../../../include/asmtest_hwtrace.h#L489)) | Merge per-thread slices of one logical operation in `seq` order | Generic merge is portable; **the producer (per-runtime hop hook) is managed-only** |
-| **5 · Out-of-process stepper (§D3)** | `stealth_trace` ([:518](../../../include/asmtest_hwtrace.h#L518)) | Exact single-step of a native leaf via a reverse-attached helper — no TF armed on the caller's own thread; runs on no-PT hosts (Zen 2, Docker-on-Mac) | All (`run_region` is a **non-capturing** callback) |
+| **1 · Registry-free scoped call** | `call_scoped_ex` ([:397](../../../include/asmtest_hwtrace.h#L397)), `render_scope` ([:406](../../../include/asmtest_hwtrace.h#L406)); also `begin_scope` ([:358](../../../include/asmtest_hwtrace.h#L358)), `call_scoped` ([:373](../../../include/asmtest_hwtrace.h#L373)), `call_scoped_fp` ([:383](../../../include/asmtest_hwtrace.h#L383)) | Arm → call native leaf → disarm entirely in native code; `_ex` is registry-free so no `MAX_REGIONS` exhaustion in a tight loop | **All** — the ergonomic win; **`_ex` + `render_scope` now wrapped in all ten** (Phase 1) |
+| **2 · Whole-window empty scope (§Z1)** | `begin_window` ([:442](../../../include/asmtest_hwtrace.h#L442)), `end_window` ([:450](../../../include/asmtest_hwtrace.h#L450)), `render_window` ([:458](../../../include/asmtest_hwtrace.h#L458)) | `using (new AsmTrace())` — capture whatever runs, no region; records ABSOLUTE addresses | All (native leaf, single-step); managed value needs PT/ptrace. **Now wrapped in all ten** (§Z0) |
+| **3 · Version render + noise attribution** | `render_versioned` ([:413](../../../include/asmtest_hwtrace.h#L413)), `symbolize_bucket` ([:667](../../../include/asmtest_hwtrace.h#L667)); also `region_name` ([:659](../../../include/asmtest_hwtrace.h#L659)), `attribute_window` ([:690](../../../include/asmtest_hwtrace.h#L690)) | Decode moved/tiered bytes against a code-image; bucket whole-window IPs by JIT symbol / mapped region | All wrap-able; value is managed-runtime noise attribution |
+| **4 · Async-hop stitching (§D4/§D0.4)** | `stitch_handles` ([:508](../../../include/asmtest_hwtrace.h#L508)) | Merge per-thread slices of one logical operation in `seq` order | Generic merge is portable; **the producer (per-runtime hop hook) is managed-only** |
+| **5 · Out-of-process stepper (§D3)** | `stealth_trace` ([:537](../../../include/asmtest_hwtrace.h#L537)) | Exact single-step of a native leaf via a reverse-attached helper — no TF armed on the caller's own thread; runs on no-PT hosts (Zen 2, Docker-on-Mac) | All (`run_region` is a **non-capturing** callback) |
 | **0 · Diagnostic** | `arm_tid` ([:294](../../../include/asmtest_hwtrace.h#L294)) | OS tid that armed the active capture — a managed-thread-level single-region assert | All (trivial) — **now wrapped in all ten**; the side item below is retired |
 
 **Two symbols are deliberately *not* binding targets.** `asmtest_hwtrace_stitch`
-([:476](../../../include/asmtest_hwtrace.h#L476)) passes `asmtest_hwtrace_slice_t` **by
+([:495](../../../include/asmtest_hwtrace.h#L495)) passes `asmtest_hwtrace_slice_t` **by
 value with embedded heap pointers a binding cannot marshal** — the header ships
 `stitch_handles` (opaque trace handles + blittable scalar arrays) as the binding-facing
 form. `asmtest_hwtrace_begin_scope` / `call_scoped` (registry form) are **superseded by
@@ -84,13 +88,27 @@ over `_ex`.
 
 ## FFI constraints that set per-binding difficulty
 
-- **Struct-by-value.** `render_scope`, `end_window`, and `render_window` take the 8-byte
-  `asmtest_hwtrace_scope_t` handle ([:217](../../../include/asmtest_hwtrace.h#L217)) **by
-  value**. Native in the compiled / `cdef` bindings (cpp, rust, zig, lua/LuaJIT, go);
-  Fiddle (ruby) has no struct-by-value and packs it as a `LONG_LONG`
-  (`idx | gen<<32`, ABI-identical on SysV x86-64) — the pattern already shipped in
-  commit `19d5646`. koffi (node) and FFM (java) pass it by value directly / as a packed
-  `JAVA_LONG`.
+- **Struct-by-value — and the SysV eightbyte cliff.** `render_scope`, `end_window`,
+  `render_window`, and `attribute_window` take the `asmtest_hwtrace_scope_t` handle
+  ([:340](../../../include/asmtest_hwtrace.h#L340)) **by value**. It is **12 bytes /
+  align 4** (`{u32 idx; u32 gen; i32 arm_tid}`) — **not 8**, as this section claimed until
+  2026-07-17. That difference is an ABI boundary, not a detail: at 8 bytes the handle was
+  **one** INTEGER eightbyte (one argument register); at 12 it is **two**, so a by-value
+  handle now occupies **two** registers and *every following argument shifts down a slot*.
+  A binding that hand-flattens it to a single 64-bit scalar therefore passes its second
+  argument where the callee reads the handle's own second half. §Z4's `arm_tid` is what
+  pushed it over; the header states the rule at [:336](../../../include/asmtest_hwtrace.h#L336).
+  - Native in the compiled / `cdef` bindings (cpp, rust, zig, lua/LuaJIT, go).
+  - **ruby** (Fiddle) cannot declare a by-value struct, so it passes **two** consecutive
+    `LONG_LONG`s — `idx|(gen<<32)` then `arm_tid` — which is register-identical to the
+    two-eightbyte struct. (The single-`LONG_LONG` packing this section used to describe as
+    "ABI-identical" was only ever correct while the struct was 8 bytes.)
+  - **java** (FFM) declares the real `HW_SCOPE_LAYOUT` struct layout and passes a
+    `MemorySegment` — not a packed `JAVA_LONG`. **node** (koffi) passes it by value
+    directly. **dotnet** passes the real 3-field `HwScope`.
+  - **The parity gate cannot check any of this**: it greps FUNCTION NAMES only, and stayed
+    green at 116×10 through the entire 8→12-byte change. Layout is verified per binding, by
+    a test that fails when the handle is mis-passed — never by the gate.
 - **Capturing upcalls (structural — NOT a roadmap item).** `descent_set_resolver` /
   `descent_set_denylist` need a GC-safe *capturing* upcall, which cpp (dlopen), rust
   (`extern "C" fn`), zig (`std.DynLib`), and ruby (Fiddle) cannot host — hence their
@@ -101,8 +119,9 @@ over `_ex`.
 
 ## Per-binding state → to-do
 
-> **Table re-grounded 2026-07-16** against `scripts/check-bindings-parity.sh --report`
-> (116 × 10, green). Four rows were stale: python's and node's `Next` cells were largely
+> **Table re-grounded 2026-07-17** against `scripts/check-bindings-parity.sh --report`
+> (**117** × 10, green — the tier surface grew by one since the 2026-07-16 pass, which
+> recorded 116). Four rows were stale: python's and node's `Next` cells were largely
 > already done, and the `arm_tid` / `dr_under_dynamorio` side items had both closed.
 > **Node corrected 2026-07-16 (second pass):** the row had claimed §D1 complete with
 > "nothing named". Only §D1's **callback** form (`region`/`scope`) ships; the
@@ -120,10 +139,22 @@ over `_ex`.
 > scope's `end` popping a live sibling's range-stack frame); both are fixed with **no new C
 > surface and no parity change**, and are regression-tested. Ownership model + the one
 > residual (concurrent same-name scopes across `worker_threads`) are recorded in §D1.
+>
+> **Python closed 2026-07-17 (`05ac0d4`):** `stealth_trace` — the row's only named item, and
+> the last named item outside Java's optional JVMTI hook — now ships, so python's `Next` is
+> empty for the first time.
+>
+> **Two upstream landings this table does NOT track, for context.** **E6** added a .NET
+> tiled-coverage surface (`TiledIslands` / `TiledAddresses` / `TiledTruncated` on `AsmTrace`)
+> — a reference-side capability, not a follower gap. **F7** added live-attach data flow to all
+> ten bindings; it is a **producer**, so the parity gate **cannot see it at all** — a producer
+> ships no header, and the gate derives its symbol set from `TIER_HEADERS`. Neither moves a
+> cell below, and F7 in particular is a standing reminder that a green gate says nothing about
+> surfaces that never enter the tier headers.
 
 | Binding | FFI | Has today | Next (ordered) | Effort | Notes |
 |---|---|---|---|---|---|
-| **python** | ctypes | Cluster 1 (via `_ex`), `arm_tid`, `dr_under_dynamorio`, **window trio ✅ `35b80df`**, **`symbolize_bucket` + `region_name` ✅ `402e080`**, **`call_scoped_fp` ✅ `304957e`**, descent upcalls | grow-a-use: `stealth_trace` (the only named item left); then optionally `render_versioned` / `stitch_handles` / `attribute_window` | ~1d | Closest of the ten. **Leads .NET** on `region_name` (see the reverse gaps below). No live JIT → not a managed target |
+| **python** | ctypes | Cluster 1 (via `_ex`), `arm_tid`, `dr_under_dynamorio`, **window trio ✅ `35b80df`**, **`symbolize_bucket` + `region_name` ✅ `402e080`**, **`call_scoped_fp` ✅ `304957e`**, **`stealth_trace` ✅ `05ac0d4` (2026-07-17)**, descent upcalls | *(nothing named — its last item closed 2026-07-17)*; then optionally `render_versioned` / `stitch_handles` / `attribute_window` | done | Closest of the ten. No live JIT → not a managed target. `stealth_trace`'s stream is COMPLETE and deterministic from CPython (unlike V8/HotSpot, whose async signals interrupt the step), so its lane asserts the exact oracle stream, and it needs **no thread pin** (the Go `LockOSThread` hazard): ctypes runs `run_region` synchronously on the seized (`SYS_gettid`) thread. Runs in the PLAIN `docker-hwtrace` container — no `--cap-add=SYS_PTRACE` |
 | **ruby** | Fiddle | Cluster 1 (`_ex`+`render_scope`+`call_scoped`), `arm_tid` ✅, **window trio ✅ `a1608c8`** | optional generics only | ~2–3d | Handle packed `LONG_LONG`; capturing upcall blocked (descent stays exempt) |
 | **node** | koffi | Cluster 1, §D1 scope construct **complete** — `region`/`scope` callback forms **+ the `using`/`Symbol.dispose` sugar ✅ (2026-07-16)**: `AsmTrace` + guarded `kDispose`, `using`-scope case in the `hwtrace-node-test` lane —, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)**, **`AsyncLocalStorage` hop hook ✅ `b3db344`/`60d74a7`**, **`render_versioned` ✅ `8a42e42`**, **V8-jitdump resolution ✅ `3cfd7bb`/`80f49bc`**, `stitch`/`stitch_handles`, `region_name`, `symbolize_bucket`, `attribute_window`, `stealth_window`, `windowCall` | *(nothing named — §D1 closed; capture and ergonomics are both at parity)* | — | **Managed target.** The one caveat is a runtime gate, not a gap: `using` is **syntax**, so its test case self-skips on the lane's Node 18.19.1 (`ubuntu:24.04` apt) and lights up under a newer `NODE` — verified live on 24.18.0. The construct's *semantics* are asserted on every supported Node via `t[kDispose]()`, and the guard's fallback branch is verified on 18.17.1. `worker_threads` hops escape, but that is structural (each Worker has its own ALS), not a to-do |
 | **java** | FFM/Panama | Cluster 1, §D2 `AsmTrace` t-w-r, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)**, **`libperf-jvmti` live JIT resolution ✅ (2026-07-15, `df66e2b`)**, **async-hop producer ✅ `7ecaaec`/`719f021` (propagating executor decorator)**, `stitch_handles`, `region_name`, `symbolize_bucket`, `attribute_window`, `stealth_window` | **§D2 managed**: the **zero-touch JVMTI** value-changed hop hook — *optional*; the executor decorator already produces hops, at the cost of wrapping the executor | ~4–6d | **Managed target.** The **only** binding with a named managed item left, as of 2026-07-16 — node's §D1 `using`/`Symbol.dispose` sugar has since shipped. Optional ergonomics over a shipped fallback (the executor decorator). `libperf-jvmti.so` is an external build dep — and is the JIT *resolver*, not the hop hook |
@@ -295,20 +326,36 @@ attribution (`begin_window` + `symbolize_bucket`), or a multi-region native merg
   ([DrTrace.cs:158](../../../bindings/dotnet/drtrace/DrTrace.cs#L158)), surfaced publicly as
   `DrTrace.UnderDynamoRio()`
   ([:286](../../../bindings/dotnet/drtrace/DrTrace.cs#L286))), so both python and dotnet are
-  `Y`. **But two new reverse
-  gaps have opened since**, both from Phase 2 landing in node/java ahead of the reference:
-  - **`asmtest_hwtrace_region_name`** — `Y` in **python, node, java**; `-` in **dotnet**.
-    .NET does carry `SymbolizeBuckets` ([HwTrace.cs:1045](../../../bindings/dotnet/hwtrace/HwTrace.cs#L1045))
-    but has no `RegionName`, so it cannot do the named-region attribution that splits
-    identical-byte leaves symbol/disasm attribution cannot.
-  - **`asmtest_hwtrace_attribute_window`** — `Y` in **node, java**; `-` in **dotnet**.
-    Same shape: the whole-window noise-attribution helper the two followers wrapped in
-    Phase 2 Inc 4, which the reference never grew.
+  `Y`. Two further reverse gaps opened after it, both from Phase 2 landing in node/java
+  ahead of the reference — **both now DECIDED and CLOSED (2026-07-17, `2f450ef`): WRAP.**
+  - **`asmtest_hwtrace_region_name`** — was `Y` in python/node/java, `-` in dotnet;
+    **now `Y` in all four**, as `HwTrace.RegionName(addr, pid) → HwRegion?`. .NET carried
+    `SymbolizeBuckets` but had no address→name reverse resolver at all: `SymbolizeBuckets`
+    returns labels + counts but **no EXTENT** and needs a whole IP list, while
+    `Ptrace.ProcRegionByAddr` returns the extent but **discards the maps pathname**.
+  - **`asmtest_hwtrace_attribute_window`** — was `Y` in node/java, `-` in dotnet; **now `Y`
+    in all three**, as the whole-window `AsmTrace` ctor's `regions` opt-in →
+    `AsmTrace.Buckets`.
 
-  Both are allow-list-exempt today, so the gate stays green. For strict two-way parity, add
-  the two P/Invokes; or accept that .NET attributes whole-window captures through its own
-  managed `JitMethodMap` resolver and does not need the C helpers. **Decide, do not drift** —
-  the reference leading on everything is an assumption this roadmap no longer supports.
+  **Why "the reference already covers it" was the wrong answer** — the evidence that decided
+  it, now asserted live in `docker-hwtrace-dotnet`: `SymbolizeBuckets` resolves by perf-map
+  symbol / mapped-file region, so every `exec_alloc`'d leaf collapses into a single `[anon]`,
+  and two leaves with **identical bytes** are indistinguishable to it. The managed
+  `JitMethodMap` resolves *managed methods*, so it cannot separate two native leaves either.
+  Only an exact address range can — which is what the named-region path is. .NET's own
+  `Addresses` doc comment had been telling callers to "range-classify these against known
+  native regions" **by hand**: the reference was pushing the capability onto the user, not
+  covering it. The lane asserts the contrast directly — `SymbolizeBuckets` over the *same*
+  window provably cannot name the leaves `attribute_window` splits.
+
+  **Two implementation facts worth keeping.** (1) `attribute_window` reads the frame's trace,
+  so it must run after `end_window` but **before** the `trace_free` in `Dispose` — it cannot
+  be offered as a post-close method, hence the up-front `regions` opt-in (mirroring
+  `renderPath`). (2) The parity gate greps **function names only**: it went green on the bare
+  P/Invoke, before any public surface or test existed. Green was never evidence here — the
+  ABI is pinned instead by the by-value `HwScope` (12 bytes = **two** SysV eightbytes, never
+  hand-flattened to a packed `uint64`) and the 80-byte `named_region_t` stride, each proven
+  by a mutation that fails the lane.
 
 ## The ceiling (state it in docs, do not treat as a gap)
 
@@ -364,7 +411,9 @@ now-stale allow-list lines (stale exemptions fail the gate).
 - Header contracts:
   [include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h) §1/§Z1/§D3/§D4/§3.1(c).
 - .NET reference: [bindings/dotnet/hwtrace/HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs)
-  (`AsmTrace`, `AsmStitchedTrace`, `JitMethodMap`, `DiagnosticsIpc`).
+  (`AsmTrace`, `AsmStitchedTrace`, `JitMethodMap`, `DiagnosticsIpc`). Its line anchors above
+  were re-grounded **2026-07-17** — they had drifted ~1700 lines (the 2026-07-16 pass
+  re-grounded only the header's).
 - Managed tier: [scoped-tracing-managed-plan.md](scoped-tracing-managed-plan.md)
   (§D0–§D4). Scope construct (already shipped everywhere):
   [scoped-tracing-bindings-plan.md](../archive/plans/scoped-tracing-bindings-plan.md).
