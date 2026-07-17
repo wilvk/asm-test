@@ -362,6 +362,58 @@ kill -0 "$UVPID" 2>/dev/null || fail "auto_victim died under --dataflow --auto"
 kill "$UVPID" 2>/dev/null || true
 rm -f "$BUILD/auto_victim.log"
 
+# --sampler=sw: the PORTABLE --auto path (software-clock residency rule +
+# candidate walk; asmspy-plan §H). auto_victim's residency winner IS
+# grind_forever by construction, so when this runs for real the walk is what
+# lands entered_often: grind is refused at the (shortened) entry wait, the
+# next-ranked candidate is tried. Runs wherever perf_event_open is allowed —
+# docker-cli-ibs, or a bare host at perf_event_paranoid<=2 — on ANY vendor;
+# under Docker's default seccomp it self-skips, and the skip REASON must be
+# real (the --sample lesson: an empty reason lands on exactly the host where
+# the reason matters).
+echo "--- asmspy --dataflow --auto --sampler=sw (portable residency + candidate walk) ---"
+"$BUILD/auto_victim" 2>"$BUILD/auto_victim.log" &
+SWPID=$!
+sleep 1
+kill -0 "$SWPID" 2>/dev/null || fail "auto_victim did not start (sw)"
+set +e
+swout=$(timeout 60 env ASMTEST_DF_ENTRY_WAIT_MS=1500 "$ASM" --dataflow "$SWPID" --auto --sampler=sw 2>&1); swrc=$?
+set -e
+[ "$swrc" -eq 124 ] && fail "--auto --sampler=sw hung (the entry wait or the candidate walk is unbounded)"
+if printf '%s\n' "$swout" | grep -q '^# SKIP --dataflow --auto'; then
+    printf '%s\n' "$swout" | grep -qE '^# SKIP --dataflow --auto: .*perf' \
+        || fail "--sampler=sw skipped with an empty/vague reason (the --sample lesson): $swout"
+    echo "  (perf_event_open blocked here — sw sampler self-skipped WITH a real reason. Use make docker-cli-ibs)"
+else
+    [ "$swrc" -eq 0 ] || fail "--auto --sampler=sw exited $swrc: $swout"
+    # The rule must be NAMED: an operator reading a transcript can tell which
+    # evidence (entry edges vs residency) picked the region.
+    printf '%s\n' "$swout" | grep -q -- '--auto\[sw-clock\]:' \
+        || fail "--sampler=sw did not name its rule: $swout"
+    printf '%s\n' "$swout" | grep -q 'data flow — entered_often' \
+        || fail "--sampler=sw never captured entered_often: $swout"
+    printf '%s\n' "$swout" | grep -q 'quiet_helper' \
+        && fail "--sampler=sw named quiet_helper, which is never called"
+    printf '%s\n' "$swout" | grep -qE '#0 .*endbr64|#0 .*\+0x' \
+        || fail "--sampler=sw: no value trace from the walked-to region"
+    # If grind_forever topped residency (the expected shape), its attempt must
+    # end in the honest refusal — captured-grind would mean the entry wait let
+    # a never-re-entered region through, which cannot happen.
+    if printf '%s\n' "$swout" | grep -q 'data-flow capture of grind_forever'; then
+        printf '%s\n' "$swout" | grep -q 'not seen ENTERING' \
+            || fail "--sampler=sw captured grind_forever — a residency winner whose entry can never fire: $swout"
+    fi
+    if printf '%s\n' "$swout" | grep -q 'trying candidate'; then
+        echo "  sw walk exercised: residency winner refused at the entry wait, next candidate captured"
+    else
+        echo "  sw picked entered_often directly (grind did not top residency this window)"
+    fi
+fi
+sleep 1
+kill -0 "$SWPID" 2>/dev/null || fail "auto_victim died under --sampler=sw"
+kill "$SWPID" 2>/dev/null || true
+rm -f "$BUILD/auto_victim.log"
+
 # --auto must be able to pick a JIT'd method. jit_victim publishes jit_hot_loop
 # (10 bytes, size > 0) in /tmp/perf-<pid>.map and re-enters it ~1M times/s from
 # main's call site — the only entry arrival in the process, and one the ELF

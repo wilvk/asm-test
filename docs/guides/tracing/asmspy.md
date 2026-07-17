@@ -208,7 +208,7 @@ asmspy --syms   <pid> [filter]     # resolved function symbols (addr, size, name
 asmspy --log    <pid> [n] [--follow]                   # stream n syscalls with decoded data (default 20)
 asmspy --trace  <pid> <sym|0xADDR[:LEN]> [n] [--tid=<t>]   # n live samples of a function (default 3;
                                    # samples whichever thread reaches it first, --tid pins one)
-asmspy --dataflow <pid> <sym|0xADDR[:LEN]|--auto> [--json] [--tid=<t>] [--max=<n>] [--module=<m>]
+asmspy --dataflow <pid> <sym|0xADDR[:LEN]|--auto> [--json] [--tid=<t>] [--max=<n>] [--module=<m>] [--sampler=ibs|sw]
                                    # value trace + def-use of ONE invocation; --auto picks the target
 asmspy --stream <pid> [n] [--tid=<t>] [--follow]       # stream n instructions live (default 20)
 asmspy --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] [--tid=<t>] [--follow]
@@ -477,10 +477,32 @@ loop) — a breakpoint there never fires. A JIT'd/managed method can win too:
 the pick resolves through the ELF symtab *and* the JIT perf-map/jitdump. An
 idle target — most targets, most of the time — gets an honest refusal
 (`no function was observed being ENTERED`), not a guess. `--module=<m>` scopes
-the pick (without it a hot libc routine often wins); `--auto` needs an AMD IBS
-host (elsewhere it prints `# SKIP` and exits 0) and cannot combine with
-`--tid` — the sampler carries no thread id, so pinning could only arm a
+the pick (without it a hot libc routine often wins); `--auto` cannot combine
+with `--tid` — the sampler carries no thread id, so pinning could only arm a
 breakpoint on a thread that may never arrive.
+
+Off AMD-IBS hosts (Intel, VMs, containers with perf allowed), `--auto` falls
+back to a **portable software-clock sampler** (`PERF_COUNT_SW_TASK_CLOCK` +
+`PERF_SAMPLE_IP`: no PMU at all; `--sampler=ibs|sw` forces either side). The
+portable rule is honestly **weaker**: an IP histogram measures *residency* —
+where time is spent — and residency's winner is often exactly the
+entered-once-never-returns shape the entry rule rejects. So the sw path ranks
+up to three candidates and **walks** them: a winner that is never seen
+entering is refused at the bounded entry wait (an honest statement about that
+candidate, reported as such), and the next-ranked candidate — usually the hot
+callee — is tried:
+
+```text
+$ asmspy --dataflow 1234 --auto --sampler=sw
+--auto[sw-clock]: grind_forever [auto_victim] — 391 residency samples at 7 offsets (of 3 candidates in 400 ms). Residency is NOT entry evidence; up to 3 candidates will be tried
+data-flow capture of grind_forever @ 0x... (74 bytes) in pid 1234
+--auto[sw-clock]: grind_forever was not seen ENTERING — a residency winner that never re-enters is the rule's known failure shape; trying candidate 2/3: entered_often (203 samples)
+data flow — entered_often @ 0x... of pid 1234   ret=...   10 steps, 24 records
+```
+
+Where perf refuses the open entirely (Docker's default seccomp profile blocks
+`perf_event_open`; `perf_event_paranoid` > 2 without `CAP_PERFMON`), both
+samplers print a `# SKIP` naming the real errno and exit 0.
 
 **Data watchpoint** — `--watch` answers *who touches this field, and with
 what value*: it arms an x86 hardware **data** watchpoint (DR0-3; writes by

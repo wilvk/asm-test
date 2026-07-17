@@ -8,6 +8,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`asmspy --dataflow --auto` works off AMD now: a portable software-clock
+  sampler (`--sampler=ibs|sw`), with the residency hazard owned out loud.**
+  Auto-targeting was AMD-IBS-only; `asmtest_swclock_survey_process` (new in
+  the IBS lane's backend: `PERF_COUNT_SW_TASK_CLOCK` + `PERF_SAMPLE_IP`, no
+  PMU at all) samples any-vendor hosts and VMs under the same out-of-band,
+  unprivileged envelope, with availability probed BY DOING and an
+  errno-carrying reason (`asmtest_swclock_unavail_reason`) from birth — the
+  `--sample` lesson, applied rather than re-learned. The pure ranking half
+  (`asmspy_autoregion_rank_ip`) is honest about being the WEAKER rule: an IP
+  histogram measures residency, and residency's winner is often the
+  entered-once-never-returns shape whose entry breakpoint can never fire —
+  test_autoregion #15 pins the two rules DISAGREEING on the same behaviour.
+  So the sw path ranks up to 3 candidates and `cmd_dataflow` WALKS them: a
+  winner never seen entering is refused at the bounded entry wait and the
+  next-ranked candidate is tried, each refusal reported. Proven live in
+  `docker-cli-ibs` on the built-to-disagree `auto_victim`: sw picks
+  `grind_forever`, the wait refuses it, the walk captures `entered_often`.
+  9 new pure checks (31 total); both cli lanes PASS.
+
 - **`cli/asmspy_ghash.h` + `test_ghash.c` — the graph's hash index gets the
   collision test its honest-gap note demanded.** The `--graph` engine's
   open-addressed index shipped with a measured blind spot: a probe loop that

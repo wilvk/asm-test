@@ -192,4 +192,111 @@ asmspy_autoregion_rank(const asmspy_sample_edge_t *edges, size_t n,
     return nout;
 }
 
+/* ---------------------------------------------------------------------------
+ * THE PORTABLE RULE: rank RESIDENCY, and own the hazard out loud.
+ *
+ * The software-clock sampler (asmtest_swclock_survey_process) exists so --auto
+ * is not AMD-only, but it delivers IPs, not edges — and a time-based IP
+ * histogram measures where time is SPENT, which is dominated by exactly the
+ * functions the entry rule above exists to reject: entered once, never return
+ * (main, an event loop, auto_victim's grind_forever). There is no entry
+ * evidence in this input BY CONSTRUCTION; no fold over it can recover the
+ * entry rule.
+ *
+ * So this ranking is honest about being the WEAKER rule: its top candidate can
+ * be a region whose entry breakpoint never fires. A caller MUST pair it with
+ * the producer's bounded entry wait (which turns that case from "hangs" into
+ * "not seen entering") and SHOULD walk the ranked candidates on that refusal —
+ * the correct pick is usually a few rows down (the hot callee), and each
+ * refusal is itself a truthful statement about the target.
+ *
+ * One raw input bucket: an address the target was observed EXECUTING, and how
+ * many samples landed exactly there. */
+typedef struct {
+    uint64_t ip;
+    unsigned long long count;
+} asmspy_ip_hit_t;
+
+/* Rank residency candidates from an IP histogram into `out` (descending
+ * samples, ties by ascending address — the same determinism rule as the entry
+ * ranking), returning how many were written (<= out_cap).
+ *
+ * An ip counts toward a symbol iff:
+ *   - it resolves                  (resolve() == 0)
+ *   - it lies INSIDE the symbol    (start <= ip < start + size — containment,
+ *                                   NOT the entry test: residency accrues over
+ *                                   the whole body)
+ *   - the symbol has size > 0      (unsized symbols resolve exact-start-only,
+ *                                   so containment would be vacuous — and there
+ *                                   is no extent to hand the engine anyway)
+ *   - its module passes `module_filter` (NULL/"" = everything)
+ *
+ * In `out`, `arrivals` carries SAMPLES (residency weight, not entry arrivals)
+ * and `sites` counts DISTINCT SAMPLED OFFSETS inside the symbol — a body with
+ * many hot offsets is a loop; a single hot offset is usually a stall point.
+ *
+ * out_cap sizes both the output and the fold table, with the same streaming
+ * caveat as asmspy_autoregion_rank: size it by the bucket count (each bucket
+ * introduces at most one candidate) to make the fold lossless.
+ *
+ * Pure: reads `hits` and whatever resolve() returns, writes only `out`. */
+static inline size_t
+asmspy_autoregion_rank_ip(const asmspy_ip_hit_t *hits, size_t n,
+                          asmspy_auto_resolve_fn resolve, void *ctx,
+                          const char *module_filter, asmspy_autocand_t *out,
+                          size_t out_cap) {
+    size_t nout = 0;
+    if (!hits || !resolve || !out || out_cap == 0)
+        return 0;
+
+    for (size_t i = 0; i < n; i++) {
+        const asmspy_ip_hit_t *hit = &hits[i];
+        uint64_t start = 0, size = 0;
+        const char *name = NULL, *module = NULL;
+        if (resolve(ctx, hit->ip, &start, &size, &name, &module) != 0)
+            continue;
+        if (size == 0)
+            continue; /* see the vacuity note on the entry rule */
+        /* CONTAINMENT, not entry: a resolver that returns a symbol not
+         * actually covering the ip (a gap answered with a neighbour) must not
+         * be trusted — test_symtab pins the resolver, this pins the fold. */
+        if (hit->ip < start || hit->ip >= start + size)
+            continue;
+        if (!asmspy_ar_match(module, module_filter))
+            continue;
+
+        size_t j = 0;
+        for (; j < nout; j++)
+            if (out[j].addr == start)
+                break;
+        if (j < nout) {
+            out[j].arrivals += hit->count;
+            out[j].sites++; /* one more distinct sampled offset */
+            continue;
+        }
+        if (nout == out_cap)
+            continue; /* full: lossless only when out_cap >= bucket count */
+        out[nout].addr = start;
+        out[nout].size = size;
+        out[nout].name = name;
+        out[nout].module = module;
+        out[nout].arrivals = hit->count;
+        out[nout].sites = 1;
+        nout++;
+    }
+
+    for (size_t i = 1; i < nout; i++) {
+        asmspy_autocand_t key = out[i];
+        size_t j = i;
+        while (j > 0 && (out[j - 1].arrivals < key.arrivals ||
+                         (out[j - 1].arrivals == key.arrivals &&
+                          out[j - 1].addr > key.addr))) {
+            out[j] = out[j - 1];
+            j--;
+        }
+        out[j] = key;
+    }
+    return nout;
+}
+
 #endif /* ASMSPY_AUTOREGION_H */

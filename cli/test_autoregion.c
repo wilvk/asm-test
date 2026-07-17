@@ -240,6 +240,101 @@ int main(void) {
               "(mid_warm, 3+4=7)");
     }
 
+    /* ==== The PORTABLE rule: asmspy_autoregion_rank_ip ==================
+     * Residency ranking over software-clock IP buckets. The cases mirror the
+     * entry rule's where the semantics coincide and DIVERGE where they must —
+     * ending with the disagreement that defines the hazard. */
+
+    /* ---- 11. Containment attribution, summing, sites, order ------------ */
+    {
+        asmspy_ip_hit_t h[] = {
+            {0x2010, 40}, /* mid_warm, offset 0x10  */
+            {0x2030, 30}, /* mid_warm, offset 0x30 — sums to 70, 2 offsets */
+            {0x1005, 50}, /* leaf_hot, one offset                          */
+            {0x0900, 25}, /* resolves to NOTHING: dropped                  */
+        };
+        size_t n =
+            asmspy_autoregion_rank_ip(h, 4, t_resolve, NULL, NULL, out, 8);
+        CHECK(n == 2, "rank_ip: 2 candidates (the unresolvable ip dropped)");
+        CHECK(n >= 1 && out[0].addr == 0x2000 && out[0].arrivals == 70,
+              "rank_ip: mid_warm wins on SUMMED residency (40+30=70) — "
+              "mid-body ips count, unlike the entry rule");
+        CHECK(n >= 1 && out[0].sites == 2,
+              "rank_ip: sites counts DISTINCT sampled offsets (2)");
+        CHECK(n >= 2 && out[1].addr == 0x1000 && out[1].arrivals == 50,
+              "rank_ip: leaf_hot second (50)");
+    }
+
+    /* ---- 12. The zero-size trap holds here too -------------------------- */
+    {
+        asmspy_ip_hit_t h[] = {
+            {0x4000, 99}, /* unsized_stub's exact start — resolvable! */
+            {0x1000, 1},  /* leaf_hot entry, 1 sample                 */
+        };
+        size_t n =
+            asmspy_autoregion_rank_ip(h, 2, t_resolve, NULL, NULL, out, 8);
+        CHECK(n == 1 && out[0].addr == 0x1000,
+              "rank_ip: an unsized symbol cannot win on its exact-start "
+              "resolution technicality (same vacuity rule as rank)");
+    }
+
+    /* ---- 13. Module filter, same substring semantics -------------------- */
+    {
+        asmspy_ip_hit_t h[] = {
+            {0x5010, 90}, /* memcpy [libc.so.6]  */
+            {0x1010, 10}, /* leaf_hot [victim]   */
+        };
+        size_t n =
+            asmspy_autoregion_rank_ip(h, 2, t_resolve, NULL, "victim", out, 8);
+        CHECK(n == 1 && out[0].addr == 0x1000,
+              "rank_ip: --module=victim excludes the hotter libc symbol");
+    }
+
+    /* ---- 14. Determinism: ties break by ascending address --------------- */
+    {
+        asmspy_ip_hit_t h[] = {
+            {0x3008, 5}, /* outer_cold */
+            {0x1008, 5}, /* leaf_hot — equal residency */
+        };
+        size_t n =
+            asmspy_autoregion_rank_ip(h, 2, t_resolve, NULL, NULL, out, 8);
+        CHECK(n == 2 && out[0].addr == 0x1000 && out[1].addr == 0x3000,
+              "rank_ip: equal counts order by ascending address, not input "
+              "order (a statistical sampler's input order is a coin flip)");
+    }
+
+    /* ---- 15. THE DISAGREEMENT — the hazard as a tested contract ---------
+     * auto_victim's shape, hand-built: grind (mid_warm here) burns its own
+     * cycles and calls leaf_hot from the loop. The ENTRY rule must pick the
+     * callee (its entry is arrived at constantly); the RESIDENCY rule must
+     * pick the griper whose entry breakpoint can never fire again. BOTH
+     * pickers seeing the same behaviour and answering differently is not a
+     * bug in either — it is why the sw path returns a candidate LIST and the
+     * caller walks it on "not seen entering". If this check ever fails,
+     * rank_ip has quietly become an entry ranker (or vice versa) and the
+     * candidate walk's reason to exist should be re-examined. */
+    {
+        asmspy_sample_edge_t e[] = {
+            mk(0x2020, 0x1000, 500, 0), /* mid_warm's loop -> leaf_hot ENTRY */
+            mk(0x2028, 0x2014, 400, 0), /* mid_warm's own back-edge          */
+        };
+        asmspy_ip_hit_t h[] = {
+            {0x2018, 700}, /* time accrues in mid_warm's OWN loop body */
+            {0x1004, 300}, /* some in the callee                        */
+        };
+        size_t ne = asmspy_autoregion_rank(e, 2, t_resolve, NULL, NULL, out, 8);
+        CHECK(ne >= 1 && out[0].addr == 0x1000,
+              "disagreement: the ENTRY rule picks the hot CALLEE (leaf_hot)");
+        size_t ni =
+            asmspy_autoregion_rank_ip(h, 2, t_resolve, NULL, NULL, out, 8);
+        CHECK(ni >= 1 && out[0].addr == 0x2000,
+              "disagreement: the RESIDENCY rule picks the looping CALLER — "
+              "the documented hazard the candidate walk exists for");
+        CHECK(ni >= 2 && out[1].addr == 0x1000,
+              "disagreement: the correct pick is next in the sw ranking, "
+              "which is what makes the walk land it");
+    }
+
     printf("1..%d\n", checks);
     if (failures) {
         printf("# %d/%d FAILED\n", failures, checks);

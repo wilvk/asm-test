@@ -1982,8 +1982,136 @@ static int auto_pick(pid_t pid, const asmspy_symtab_t *t, const char *module,
     return ret;
 }
 
+/* Which sampler --auto uses. AUTO detects: IBS-Op where the substrate exists
+ * (the entry-arrival rule — the strong one), the portable software clock
+ * everywhere else. Explicit ibs/sw force one — sw being how the portable path
+ * is exercised (and tested, in docker-cli-ibs) on an AMD host where AUTO would
+ * always pick IBS. */
+typedef enum {
+    SAMPLER_AUTO = 0,
+    SAMPLER_IBS = 1,
+    SAMPLER_SW = 2,
+} sampler_mode_t;
+
+/* How many ranked sw candidates cmd_dataflow will try. Residency's winner can
+ * be a function that never re-enters (main-shaped), so one try is a coin flip;
+ * each extra try costs at most one entry-wait. 3 covers "the event loop, its
+ * hot callee, and one more" without turning a refusal into a minute of waits. */
+#define AUTO_SW_TRIES 3
+
+/* One picked candidate with its name COPIED out: a JIT winner's name borrows
+ * from a map that dies with the picker, so borrowing is not an option, and
+ * copying uniformly beats remembering which winners borrow from where. */
+typedef struct {
+    uint64_t base;
+    size_t len;
+    unsigned long long weight; /* residency samples (sw) */
+    unsigned sites;            /* distinct sampled offsets */
+    char name[160];
+} auto_cand_copy;
+
+/* The PORTABLE pick: software-clock IP survey -> residency ranking
+ * (asmspy_autoregion_rank_ip). Returns how many candidates were written
+ * (> 0), 0 when the sampler ran but nothing qualified (honest refusal,
+ * printed), <0 for a clean self-skip (perf refused; reason printed).
+ *
+ * Residency's top pick can be a function that never re-enters — the hazard
+ * the picker header documents — so this hands back up to `max_out` RANKED
+ * candidates and cmd_dataflow WALKS them on NEVER_RAN. The walk is the
+ * difference between "portable --auto hangs on main-shaped winners" and
+ * "portable --auto lands the hot callee two rows down, reporting each honest
+ * refusal on the way". */
+static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
+                        auto_cand_copy *out, int max_out) {
+    asmtest_swclock_survey_t sv;
+    int rc = asmtest_swclock_survey_process(pid, AUTO_WINDOW_MS, 0, &sv);
+    if (rc != ASMTEST_IBS_OK) {
+        fprintf(stderr, "# SKIP --dataflow --auto: %s\n",
+                asmtest_swclock_unavail_reason());
+        asmtest_swclock_survey_free(&sv);
+        return -1;
+    }
+
+    /* JIT map: the same one-refresh-after-the-window rule as auto_pick, for
+     * the same dangling-pointer reason. */
+    asmspy_jitmap_t jit;
+    asmspy_jitmap_init(&jit, pid);
+    asmspy_jitmap_refresh(&jit);
+
+    /* Survey buckets -> picker input. On OOM keep the heaviest 64: sv.ips is
+     * sorted descending, so truncation degrades coverage, never the ORDER of
+     * what it kept — the same honest-degradation posture as auto_pick's. */
+    asmspy_ip_hit_t stackh[64];
+    asmspy_ip_hit_t *hits = stackh;
+    size_t nh = sv.n;
+    if (nh > 64) {
+        asmspy_ip_hit_t *heap = malloc(nh * sizeof *heap);
+        if (heap)
+            hits = heap;
+        else
+            nh = 64;
+    }
+    for (size_t i = 0; i < nh; i++) {
+        hits[i].ip = sv.ips[i].ip;
+        hits[i].count = sv.ips[i].count;
+    }
+
+    /* Candidate table sized by the bucket count so the fold is lossless
+     * (each bucket introduces at most one candidate), as auto_pick does by
+     * edge count. */
+    asmspy_autocand_t stackc[AUTO_MAX_CANDS];
+    asmspy_autocand_t *cands = stackc;
+    size_t cap = AUTO_MAX_CANDS;
+    if (nh > cap) {
+        asmspy_autocand_t *heap = malloc(nh * sizeof *heap);
+        if (heap) {
+            cands = heap;
+            cap = nh;
+        }
+    }
+    auto_resolve_ctx rctx = {t, &jit};
+    size_t nc = asmspy_autoregion_rank_ip(hits, nh, auto_resolve_sym, &rctx,
+                                          module, cands, cap);
+    int nout = 0;
+    if (nc == 0) {
+        fprintf(stderr,
+                "--auto[sw-clock]: no function was observed EXECUTING in pid "
+                "%d (%d ms, %llu samples over %zu addresses%s%s)\n"
+                "  the target may be idle, or its work may be in a module the "
+                "filter excludes;\n"
+                "  name a function explicitly, or widen --module=\n",
+                (int)pid, AUTO_WINDOW_MS, (unsigned long long)sv.samples, sv.n,
+                module ? ", --module=" : "", module ? module : "");
+    } else {
+        for (size_t i = 0; i < nc && nout < max_out; i++, nout++) {
+            out[nout].base = cands[i].addr;
+            out[nout].len = (size_t)cands[i].size;
+            out[nout].weight = cands[i].arrivals;
+            out[nout].sites = cands[i].sites;
+            snprintf(out[nout].name, sizeof out[nout].name, "%s",
+                     cands[i].name ? cands[i].name : "?");
+        }
+        fprintf(stderr,
+                "--auto[sw-clock]: %s [%s] — %llu residency samples at %u "
+                "offset%s (of %zu candidate%s in %d ms). Residency is NOT "
+                "entry evidence; up to %d candidates will be tried\n",
+                cands[0].name ? cands[0].name : "?",
+                cands[0].module ? cands[0].module : "?", cands[0].arrivals,
+                cands[0].sites, cands[0].sites == 1 ? "" : "s", nc,
+                nc == 1 ? "" : "s", AUTO_WINDOW_MS, nout);
+    }
+    if (cands != stackc)
+        free(cands);
+    if (hits != stackh)
+        free(hits);
+    asmspy_jitmap_free(&jit);
+    asmtest_swclock_survey_free(&sv);
+    return nout;
+}
+
 static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
-                        int json, int auto_region, const char *module) {
+                        int json, int auto_region, const char *module,
+                        sampler_mode_t sampler) {
     asmspy_symtab_t t;
     if (asmspy_symtab_load(pid, &t) < 0) {
         fprintf(stderr, "cannot read symbols for pid %d\n", (int)pid);
@@ -1992,13 +2120,33 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
     uint64_t base = 0;
     size_t len = 0;
     char autoname[160] = "";
+    auto_cand_copy swcands[AUTO_SW_TRIES];
+    int nswcand = 0; /* >0 => the sw candidate walk below is armed */
     if (auto_region) {
-        /* No symbol given: find what the target is DOING and trace that. */
-        int arc =
-            auto_pick(pid, &t, module, &base, &len, autoname, sizeof autoname);
-        if (arc != 0) {
-            asmspy_symtab_free(&t);
-            return arc < 0 ? 0 : 1; /* <0 = clean skip (no IBS), >0 = no pick */
+        /* No symbol given: find what the target is DOING and trace that.
+         * AUTO mode picks the sampler by SUBSTRATE (is this an IBS box?), not
+         * by whether perf will allow the open — if IBS exists but perf is
+         * locked down, the sw open would be refused by the same lockdown, and
+         * one skip naming CAP_PERFMON beats two. --sampler=sw forces the
+         * portable path (how an AMD host exercises and tests it). */
+        int use_sw = sampler == SAMPLER_SW ||
+                     (sampler == SAMPLER_AUTO && !asmtest_ibs_available());
+        if (use_sw) {
+            nswcand = auto_pick_sw(pid, &t, module, swcands, AUTO_SW_TRIES);
+            if (nswcand <= 0) {
+                asmspy_symtab_free(&t);
+                return nswcand < 0 ? 0 : 1; /* <0 clean skip, 0 no pick */
+            }
+            base = swcands[0].base;
+            len = swcands[0].len;
+            snprintf(autoname, sizeof autoname, "%s", swcands[0].name);
+        } else {
+            int arc = auto_pick(pid, &t, module, &base, &len, autoname,
+                                sizeof autoname);
+            if (arc != 0) {
+                asmspy_symtab_free(&t);
+                return arc < 0 ? 0 : 1; /* <0 = clean skip, >0 = no pick */
+            }
         }
     } else if (resolve_region(&t, region, &base, &len) != 0) {
         fprintf(
@@ -2010,24 +2158,49 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         asmspy_symtab_free(&t);
         return 1;
     }
-    const asmspy_sym_t *s = asmspy_symtab_at(&t, base);
-    /* With --auto the "region" argv is the flag itself, so fall back to the
-     * picker's own name — which is also the ONLY name a JIT winner has, since a
-     * perf-map/jitdump method is invisible to asmspy_symtab_at — and never
-     * print "--auto" as the function name. */
-    const char *rname =
-        s ? s->name : (auto_region ? (autoname[0] ? autoname : "?") : region);
-    dataflow_ctx dc = {pid, rname, json};
-    /* status to STDERR so --json stdout stays a single clean object */
-    fprintf(stderr,
-            "data-flow capture of %s @ 0x%llx (%zu bytes) in pid %d%s\n", rname,
-            (unsigned long long)base, len, (int)pid, tid ? " [--tid]" : "");
-    /* Copy the name BEFORE the symtab dies: dc.func borrows into `t` (or argv), and the
-     * messages below outlive asmspy_symtab_free. */
     char fname[160];
-    snprintf(fname, sizeof fname, "%s", dc.func);
-    int rc = asmspy_engine_dataflow(pid, tid, base, len, max, NULL,
+    int rc;
+    int attempt = 0;
+    for (;;) {
+        const asmspy_sym_t *s = asmspy_symtab_at(&t, base);
+        /* With --auto the "region" argv is the flag itself, so fall back to the
+         * picker's own name — which is also the ONLY name a JIT winner has, since a
+         * perf-map/jitdump method is invisible to asmspy_symtab_at — and never
+         * print "--auto" as the function name. */
+        const char *rname =
+            s ? s->name
+              : (auto_region ? (autoname[0] ? autoname : "?") : region);
+        dataflow_ctx dc = {pid, rname, json};
+        /* status to STDERR so --json stdout stays a single clean object */
+        fprintf(stderr,
+                "data-flow capture of %s @ 0x%llx (%zu bytes) in pid %d%s\n",
+                rname, (unsigned long long)base, len, (int)pid,
+                tid ? " [--tid]" : "");
+        /* Copy the name BEFORE the symtab dies: dc.func borrows into `t` (or argv),
+         * and the messages below outlive asmspy_symtab_free. */
+        snprintf(fname, sizeof fname, "%s", dc.func);
+        rc = asmspy_engine_dataflow(pid, tid, base, len, max, NULL,
                                     dataflow_render_sink, &dc);
+        /* The sw candidate walk: residency's winner can be a function that
+         * never re-enters (the picker header's documented hazard), and
+         * NEVER_RAN is the bounded entry wait saying exactly that — an honest
+         * refusal about THIS candidate, not about the target. Move to the
+         * next-ranked one; every other outcome is final. */
+        if (rc == ASMSPY_REGION_NEVER_RAN && attempt + 1 < nswcand) {
+            attempt++;
+            fprintf(stderr,
+                    "--auto[sw-clock]: %s was not seen ENTERING — a residency "
+                    "winner that never re-enters is the rule's known failure "
+                    "shape; trying candidate %d/%d: %s (%llu samples)\n",
+                    fname, attempt + 1, nswcand, swcands[attempt].name,
+                    swcands[attempt].weight);
+            base = swcands[attempt].base;
+            len = swcands[attempt].len;
+            snprintf(autoname, sizeof autoname, "%s", swcands[attempt].name);
+            continue;
+        }
+        break;
+    }
     asmspy_symtab_free(&t);
     if (rc == ASMSPY_DATAFLOW_UNAVAIL) {
         /* Off Linux x86-64 / built without Capstone — a clean skip (exit 0), the
@@ -4882,11 +5055,14 @@ static int usage(const char *argv0) {
         "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n] [--tid=<t>]  live samples "
         "of a function/region (any thread)\n"
         "  %s --dataflow <pid> <sym|0xADDR[:LEN]|--auto> [--json] [--tid=<t>] "
-        "[--max=<n>] [--module=<m>]  scoped L0 value trace + L1 def-use of one "
-        "invocation (native targets). --auto picks the function the target is "
-        "most often ENTERING right now, sampled out of band (AMD IBS; needs no "
-        "ptrace and self-skips elsewhere) — --module=<m> scopes the pick, and "
-        "--auto cannot be combined with --tid\n"
+        "[--max=<n>] [--module=<m>] [--sampler=ibs|sw]  scoped L0 value trace "
+        "+ L1 def-use of one invocation (native targets). --auto picks the "
+        "function the target is most often ENTERING right now, sampled out of "
+        "band (AMD IBS-Op entry edges where available; elsewhere a portable "
+        "software-clock RESIDENCY sampler that walks up to 3 candidates, since "
+        "residency is not entry evidence) — --sampler= forces one of the two, "
+        "--module=<m> scopes the pick, and --auto cannot be combined with "
+        "--tid\n"
         "  %s --stream <pid> [n] [--tid=<t>] [--follow]  stream n "
         "instructions live (function + asm)\n"
         "  %s --graph  <pid> [n] [--sort=invocations|fanout|functions-called] "
@@ -4993,8 +5169,10 @@ int main(int argc, char **argv) {
          * as it was — starting the loop at 3 instead would silently swallow the
          * bare-symbol form into bad_arg. */
         int auto_region = (strcmp(argv[3], "--auto") == 0);
-        for (int i = 4; i < argc;
-             i++) { /* [--json] [--tid=N] [--max=N] [--module=M] in any order */
+        sampler_mode_t sampler = SAMPLER_AUTO;
+        for (int i = 4; i < argc; i++) { /* [--json] [--tid=N] [--max=N]
+                                          * [--module=M] [--sampler=S], any
+                                          * order */
             if (strcmp(argv[i], "--json") == 0)
                 json = 1;
             else if (strncmp(argv[i], "--tid=", 6) == 0) {
@@ -5005,6 +5183,13 @@ int main(int argc, char **argv) {
                     return bad_arg("max (positive)", argv[i] + 6);
             } else if (strncmp(argv[i], "--module=", 9) == 0) {
                 module = argv[i] + 9;
+            } else if (strncmp(argv[i], "--sampler=", 10) == 0) {
+                if (strcmp(argv[i] + 10, "ibs") == 0)
+                    sampler = SAMPLER_IBS;
+                else if (strcmp(argv[i] + 10, "sw") == 0)
+                    sampler = SAMPLER_SW;
+                else
+                    return bad_arg("sampler (ibs|sw)", argv[i] + 10);
             } else {
                 return bad_arg("dataflow option", argv[i]);
             }
@@ -5027,7 +5212,16 @@ int main(int argc, char **argv) {
             return bad_arg("--module= without --auto (it scopes the automatic "
                            "pick; a named region needs no filter)",
                            module);
-        return cmd_dataflow(pid, argv[3], tid, max, json, auto_region, module);
+        /* Same posture as --module: --sampler selects HOW the automatic pick
+         * samples, so with a named region it is a no-op that reads like it
+         * did something. Refuse rather than silently ignore. */
+        if (!auto_region && sampler != SAMPLER_AUTO)
+            return bad_arg("--sampler= without --auto (it selects the "
+                           "automatic pick's sampler; a named region samples "
+                           "nothing)",
+                           argv[3]);
+        return cmd_dataflow(pid, argv[3], tid, max, json, auto_region, module,
+                            sampler);
     }
     if (strcmp(argv[1], "--stream") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)

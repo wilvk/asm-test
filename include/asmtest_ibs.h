@@ -181,6 +181,57 @@ int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
 /* Free the edge array a survey owns and zero the struct (idempotent; NULL-safe). */
 void asmtest_ibs_survey_free(asmtest_ibs_survey_t *s);
 
+/* --- portable software-clock IP sampler (any vendor; works in VMs) ------------- */
+/* PERF_TYPE_SOFTWARE / PERF_COUNT_SW_TASK_CLOCK + PERF_SAMPLE_IP: no PMU at all,
+ * so it samples where IBS-Op cannot — Intel hosts, VMs, containers — under the
+ * same out-of-band, unprivileged envelope (exclude_kernel; perf_event_paranoid
+ * <= 2 or CAP_PERFMON; the target runs unperturbed, no ptrace).
+ *
+ * WHAT IT MEASURES, honestly: a time-based IP histogram is RESIDENCY — where
+ * the target SPENDS TIME — not control flow. There are no edges here and no
+ * entry evidence: a function entered once that never returns (main, an event
+ * loop) DOMINATES a residency ranking even though an entry breakpoint on it
+ * would never fire again. A caller ranking these to pick a trace region must
+ * pair the pick with a bounded entry wait and be prepared to walk candidates
+ * (asmspy_autoregion_rank_ip documents the same hazard from the picker side). */
+typedef struct {
+    uint64_t ip;    /* sampled user-space instruction pointer */
+    uint64_t count; /* samples aggregated at this exact ip    */
+} asmtest_swclock_ip_t;
+
+typedef struct {
+    asmtest_swclock_ip_t *ips; /* malloc'd; DESCENDING count, ties ascending ip
+                                * (deterministic run to run); free via _free  */
+    size_t n;                  /* number of distinct sampled ips              */
+    uint64_t samples;          /* PERF_RECORD_SAMPLEs drained (provenance)    */
+    uint64_t lost;             /* samples the kernel reported dropped         */
+    int throttled;             /* kernel throttled, or a ring neared overflow */
+} asmtest_swclock_survey_t;
+
+/* Sample EVERY thread of `pid` (0 => the calling process) for `ms` milliseconds
+ * at `freq_hz` (0 => 997 Hz — a prime, so a periodic workload cannot hide
+ * between evenly-spaced ticks) and return the aggregated user-IP histogram.
+ * Threads are enumerated from /proc/<pid>/task with one mid-window rescan,
+ * exactly like asmtest_ibs_survey_process.
+ *
+ * Availability is probed BY DOING — there is no substrate to detect, and a
+ * probe that does not open reports "available" on precisely the hosts where no
+ * capture can open (the --sample lesson). Returns ASMTEST_IBS_OK,
+ * ASMTEST_IBS_EINVAL on bad args, or ASMTEST_IBS_EUNAVAIL when no thread's
+ * event could open (or off Linux) — asmtest_swclock_unavail_reason() then
+ * carries the real errno. *out is always zero-initialised first. */
+int asmtest_swclock_survey_process(pid_t pid, unsigned ms, unsigned freq_hz,
+                                   asmtest_swclock_survey_t *out);
+
+/* Free the ip array a survey owns and zero the struct (idempotent; NULL-safe). */
+void asmtest_swclock_survey_free(asmtest_swclock_survey_t *s);
+
+/* The errno-carrying reason the LAST asmtest_swclock_survey_process returned
+ * EUNAVAIL ("" when none has failed): EACCES/EPERM name perf_event_paranoid /
+ * CAP_PERFMON / seccomp — the operator's one-liner, mirroring
+ * asmtest_ibs_unavail_reason. A static string; do not free. */
+const char *asmtest_swclock_unavail_reason(void);
+
 /* One normalized basic-block leader lifted from the edge stream: a block-start
  * offset plus how many sampled edges entered it. STATISTICAL — it marks a block that
  * WAS seen entered, never proves one was not (see asmtest_ibs_normalize_blocks). */

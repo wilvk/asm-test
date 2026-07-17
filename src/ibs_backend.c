@@ -137,6 +137,15 @@ void asmtest_ibs_survey_free(asmtest_ibs_survey_t *s) {
     memset(s, 0, sizeof *s);
 }
 
+/* Pure like survey_free above: defined for every platform, so a caller can
+ * unconditionally free what the (possibly stubbed) survey returned. */
+void asmtest_swclock_survey_free(asmtest_swclock_survey_t *s) {
+    if (s == NULL)
+        return;
+    free(s->ips);
+    memset(s, 0, sizeof *s);
+}
+
 /* ---- Phase 6: edge -> basic-block normalization (pure, host-independent) ------- */
 /* Ascending by block-start offset so the output is a deterministic, deduplicated
  * block set (the merge pass below relies on equal starts being adjacent). */
@@ -1034,6 +1043,267 @@ int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
     return ASMTEST_IBS_OK;
 }
 
+/* --- portable software-clock IP sampler ----------------------------------------- */
+/* The same channel/ring plumbing pointed at PERF_TYPE_SOFTWARE instead of the
+ * ibs_op PMU, so it samples on any vendor and inside VMs. The attr is built
+ * FRESH here, deliberately NOT via ibs_cfg/ibs_fill_attr: that path defaults
+ * cnt_dispatched from ibs_has_opcnt() and then sets attr.config bit 19
+ * (IbsOpCntCtl) — and for a software event `config` IS the event id, so bit 19
+ * would turn TASK_CLOCK into a nonsense id and the open hard-fails (the carry
+ * recorded when asmspy-plan.md §H filed this row). Frequency mode replaces the
+ * period+jitter machinery: the kernel adapts the period to hold freq_hz, and a
+ * PRIME default de-aliases a periodic loop the way jitter does for IBS. */
+#define SWCLOCK_DEFAULT_FREQ 997u
+
+static int g_sw_open_errno = 0;
+
+static void sw_fill_attr(struct perf_event_attr *a, unsigned freq_hz) {
+    memset(a, 0, sizeof *a);
+    a->size = sizeof *a;
+    a->type = PERF_TYPE_SOFTWARE;
+    a->config = PERF_COUNT_SW_TASK_CLOCK;
+    a->freq = 1;
+    a->sample_freq = freq_hz ? freq_hz : SWCLOCK_DEFAULT_FREQ;
+    a->exclude_kernel = 1; /* user-only — the same unprivileged envelope */
+    a->exclude_hv = 1;
+    a->sample_type = PERF_SAMPLE_IP | PERF_SAMPLE_TID;
+    a->disabled = 1;
+}
+
+/* Open + mmap + enable one software-clock channel on `tid`. Mirrors
+ * ibs_chan_open (and shares ibs_chan + the ring geometry, so the disable/free
+ * teardown helpers are reused verbatim); only the attr and the errno slot
+ * differ — the sw sampler's failure reason must not overwrite IBS's. */
+static int sw_chan_open(ibs_chan *ch, pid_t tid, unsigned freq_hz, size_t pg,
+                        size_t dsz) {
+    ch->fd = -1;
+    ch->base_map = MAP_FAILED;
+    ch->base_sz = 0;
+    ch->tid = tid;
+    struct perf_event_attr a;
+    sw_fill_attr(&a, freq_hz);
+    long fd = perf_open(&a, tid, -1, -1, 0);
+    if (fd < 0) {
+        g_sw_open_errno = errno; /* the reason the operator will be shown */
+        return -1;
+    }
+    size_t base_sz = pg + dsz;
+    void *m =
+        mmap(NULL, base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, (int)fd, 0);
+    if (m == MAP_FAILED) {
+        close((int)fd);
+        return -1;
+    }
+    ioctl((int)fd, PERF_EVENT_IOC_RESET, 0);
+    if (ioctl((int)fd, PERF_EVENT_IOC_ENABLE, 0) != 0) {
+        munmap(m, base_sz);
+        close((int)fd);
+        return -1;
+    }
+    ch->fd = fd;
+    ch->base_map = m;
+    ch->base_sz = base_sz;
+    return 0;
+}
+
+/* Drain one software-clock ring: PERF_SAMPLE_IP|TID records ({u64 ip; u32 pid,
+ * tid} bodies — no RAW payload to decode), aggregated as {ip -> count} in the
+ * edge hash with to = 0. That reuse is INTERNAL only: the public surface
+ * exports honest ip buckets (asmtest_swclock_ip_t), never fake edges. The ring
+ * walk mirrors ibs_drain, including the near-full-ring loss heuristic. */
+static void sw_drain(void *base_map, size_t pg, size_t dsz, uint8_t *scratch,
+                     edge_hash *h, asmtest_swclock_survey_t *out) {
+    struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)base_map;
+    uint8_t *data = (uint8_t *)base_map + pg;
+    uint64_t head = mp->data_head;
+    __sync_synchronize(); /* read data_head before the records (smp_rmb) */
+    uint64_t tail = mp->data_tail;
+    size_t span = (size_t)(head - tail);
+    if (span == 0)
+        return;
+    if (span > dsz)
+        span = dsz;
+    if (span + IBS_MAX_RECORD > dsz)
+        out->throttled = 1;
+
+    for (size_t i = 0; i < span; i++)
+        scratch[i] = data[(tail + i) % dsz];
+
+    for (size_t off = 0; off + sizeof(struct perf_event_header) <= span;) {
+        struct perf_event_header hd;
+        memcpy(&hd, scratch + off, sizeof hd);
+        if (hd.size == 0 || off + hd.size > span)
+            break;
+        if (hd.type == PERF_RECORD_SAMPLE) {
+            if (hd.size >= sizeof hd + 8 + 8) { /* u64 ip; u32 pid, tid */
+                out->samples++;
+                eh_add(h, ld_u64(scratch + off + sizeof hd), 0, 0, 0);
+            }
+        } else if (hd.type == PERF_RECORD_LOST) {
+            if (hd.size >= sizeof hd + 16)
+                out->lost += ld_u64(scratch + off + sizeof hd + 8);
+            else
+                out->lost += 1;
+        } else if (hd.type == PERF_RECORD_THROTTLE) {
+            out->throttled = 1;
+        }
+        off += hd.size;
+    }
+
+    __sync_synchronize(); /* publish reads before advancing data_tail (smp_mb) */
+    mp->data_tail = tail + span;
+}
+
+/* Descending count, ties ascending ip — deterministic run to run, the same
+ * posture as eh_cmp_desc and the picker's own tie rule. */
+static int sw_cmp_desc(const void *a, const void *b) {
+    const asmtest_swclock_ip_t *x = (const asmtest_swclock_ip_t *)a;
+    const asmtest_swclock_ip_t *y = (const asmtest_swclock_ip_t *)b;
+    if (x->count != y->count)
+        return x->count < y->count ? 1 : -1;
+    return x->ip < y->ip ? -1 : x->ip > y->ip ? 1 : 0;
+}
+
+static int sw_export(edge_hash *h, asmtest_swclock_survey_t *out) {
+    if (h->n == 0) {
+        out->ips = NULL;
+        out->n = 0;
+        return 0;
+    }
+    asmtest_swclock_ip_t *arr =
+        (asmtest_swclock_ip_t *)calloc(h->n, sizeof *arr);
+    if (arr == NULL)
+        return -1;
+    size_t k = 0;
+    for (size_t i = 0; i < h->cap && k < h->n; i++) {
+        eh_slot *s = &h->slots[i];
+        if (!s->used)
+            continue;
+        arr[k].ip = s->from;
+        arr[k].count = s->count;
+        k++;
+    }
+    qsort(arr, k, sizeof *arr, sw_cmp_desc);
+    out->ips = arr;
+    out->n = k;
+    return 0;
+}
+
+int asmtest_swclock_survey_process(pid_t pid, unsigned ms, unsigned freq_hz,
+                                   asmtest_swclock_survey_t *out) {
+    if (out == NULL)
+        return ASMTEST_IBS_EINVAL;
+    memset(out, 0, sizeof *out);
+    if (pid == 0)
+        pid = getpid();
+    if (ms == 0)
+        ms = 300;
+
+    size_t pg = ibs_page();
+    size_t dsz = pg * IBS_RING_DATA_PAGES;
+    ibs_chan *chans = (ibs_chan *)calloc(IBS_MAX_CHANS, sizeof *chans);
+    uint8_t *scratch = (uint8_t *)malloc(dsz);
+    edge_hash h;
+    if (chans == NULL || scratch == NULL || eh_init(&h, 2048) != 0) {
+        free(chans);
+        free(scratch);
+        return ASMTEST_IBS_EUNAVAIL;
+    }
+
+    int nch = 0;
+    pid_t tids[IBS_MAX_CHANS];
+    int ntid = ibs_list_tids(pid, tids, IBS_MAX_CHANS);
+    if (ntid <= 0) { /* no such process / empty task list */
+        g_sw_open_errno = ESRCH;
+        eh_free(&h);
+        free(scratch);
+        free(chans);
+        return ASMTEST_IBS_EUNAVAIL;
+    }
+    for (int i = 0; i < ntid; i++) {
+        if (sw_chan_open(&chans[nch], tids[i], freq_hz, pg, dsz) == 0)
+            nch++;
+    }
+    if (nch == 0) { /* perf_event_open refused for every thread */
+        eh_free(&h);
+        free(scratch);
+        free(chans);
+        return ASMTEST_IBS_EUNAVAIL;
+    }
+
+    /* Drain for `ms`, with one mid-window /proc rescan for threads spawned
+     * after the start — the same coverage posture (and the same residual
+     * born-and-died race) as asmtest_ibs_survey_process. */
+    int rescanned = 0;
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (;;) {
+        for (int i = 0; i < nch; i++)
+            sw_drain(chans[i].base_map, pg, dsz, scratch, &h, out);
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        uint64_t el = elapsed_ms(&t0, &now);
+        if (!rescanned && el >= (uint64_t)ms / 2) {
+            rescanned = 1;
+            if (nch < IBS_MAX_CHANS) {
+                pid_t cur[IBS_MAX_CHANS];
+                int m = ibs_list_tids(pid, cur, IBS_MAX_CHANS);
+                for (int i = 0; i < m && nch < IBS_MAX_CHANS; i++) {
+                    int known = 0;
+                    for (int j = 0; j < nch; j++) {
+                        if (chans[j].tid == cur[i]) {
+                            known = 1;
+                            break;
+                        }
+                    }
+                    if (!known && sw_chan_open(&chans[nch], cur[i], freq_hz, pg,
+                                               dsz) == 0)
+                        nch++;
+                }
+            }
+        }
+        if (el >= ms)
+            break;
+        struct timespec slice = {0, 2 * 1000 * 1000}; /* 2 ms */
+        nanosleep(&slice, NULL);
+    }
+
+    for (int i = 0; i < nch; i++)
+        ibs_chan_disable(&chans[i]);
+    for (int i = 0; i < nch; i++)
+        sw_drain(chans[i].base_map, pg, dsz, scratch, &h, out); /* final */
+
+    int xrc = sw_export(&h, out);
+    eh_free(&h);
+    free(scratch);
+    for (int i = 0; i < nch; i++)
+        ibs_chan_free(&chans[i]);
+    free(chans);
+    return xrc == 0 ? ASMTEST_IBS_OK : ASMTEST_IBS_EUNAVAIL;
+}
+
+const char *asmtest_swclock_unavail_reason(void) {
+    switch (g_sw_open_errno) {
+    case 0:
+        return "";
+    case EACCES:
+    case EPERM:
+        return "perf_event_open refused (EACCES/EPERM): the software-clock "
+               "sampler needs perf_event_paranoid<=2 or CAP_PERFMON, and "
+               "Docker's default seccomp profile blocks perf_event_open "
+               "outright (--cap-add=PERFMON, or the docker-cli-ibs lane)";
+    case ESRCH:
+        return "perf_event_open: target process/thread exited (ESRCH)";
+    case EMFILE:
+    case ENFILE:
+        return "perf_event_open hit the open-file limit (EMFILE)";
+    case EINVAL:
+        return "perf_event_open rejected the software-clock attr (EINVAL)";
+    default:
+        return "perf_event_open failed";
+    }
+}
+
 /* --- window primitives (arm on the calling thread, run body, drain) ------------ */
 /* The begin/run/end shape hwtrace.c's F6 fallback needs: unlike survey_pid (which
  * owns a timed drain loop), here the CALLER runs its own workload between begin and
@@ -1443,6 +1713,24 @@ int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
         memset(out, 0, sizeof *out);
     return ASMTEST_IBS_EUNAVAIL;
 }
+/* Portable software-clock sampler: perf_event_open is Linux-only, so off Linux
+ * these self-skip. (On Linux non-x86-64 they are stubbed out today only
+ * because this file's whole live half is x86-64-gated — nothing about
+ * SW_TASK_CLOCK is arch-specific; lifting that is part of the ARM64 rows.) */
+int asmtest_swclock_survey_process(pid_t pid, unsigned ms, unsigned freq_hz,
+                                   asmtest_swclock_survey_t *out) {
+    (void)pid;
+    (void)ms;
+    (void)freq_hz;
+    if (out != NULL)
+        memset(out, 0, sizeof *out);
+    return ASMTEST_IBS_EUNAVAIL;
+}
+const char *asmtest_swclock_unavail_reason(void) {
+    return "software-clock sampling needs Linux perf_event_open (this build's "
+           "live half is Linux/x86-64-gated)";
+}
+
 int asmtest_ibs_window_begin(const asmtest_ibs_opts_t *opts, void **ctx_out) {
     (void)opts;
     if (ctx_out != NULL)
