@@ -182,18 +182,23 @@ $(BUILD)/clone_victim: $(BUILD)/clone_victim.o
 $(BUILD)/exec_victim: $(BUILD)/exec_victim.o
 	$(CC) $(CFLAGS) $^ -o $@
 
-# exec_stage2 is linked -static ON PURPOSE. After an execve the dynamic loader
-# runs first, and relocating a PIE against a shared libc costs well over 20k
-# instructions before main() is ever reached — so a single-step smoke would burn
-# its whole budget inside ld.so and never see postexec_fn, whether or not the
-# re-resolution works. Static linking removes ld.so from the post-exec path
-# (_start -> __libc_start_main -> main), which puts postexec_fn within a few
-# thousand steps. This is a TEST-RUNTIME concession, not a narrowing of the
-# feature: the reload is keyed off the exec-stop and /proc/<pid>/maps, neither of
-# which cares how the new image is linked. Built from the source directly — the
-# cli/ .o pattern rule's object is shared with the dynamic link line.
+# exec_stage2 is FREESTANDING on purpose (-nostdlib): it is single-stepped from
+# the exec-stop onwards, so anything it runs before postexec_fn is charged to the
+# smoke's step budget. It used to be an ordinary -static glibc program, and
+# MEASURED, 134,848 of its 136,072 steps were startup — 118,941 of those (88%)
+# glibc registering the unwind tables (classify_object_over_fdes /
+# read_encoded_value_with_base) of a libc this test never calls. That left a
+# 1.47x margin on a count that moves with the environment (136,629 -> 140,893
+# from ifunc dispatch alone), which is what turned CI red. -nostdlib drops the
+# loader AND libc: postexec_fn is now ~20 steps past the exec.
+#
+# EXPLICIT flags, not $(CFLAGS), and that is the point of this rule: a
+# freestanding TU must not inherit SAN=1 / COV=1 / the distro's default
+# -fstack-protector-strong, all of which reference libc symbols that -nostdlib
+# will not link. This is the one object here that cannot use the shared flags.
 $(BUILD)/exec_stage2: cli/exec_stage2.c | $(BUILD)
-	$(CC) $(CFLAGS) -static $< -o $@
+	$(CC) -std=gnu11 -Wall -Wextra -O0 -g -static -nostdlib -nostartfiles \
+	  -fno-stack-protector -fno-asynchronous-unwind-tables $< -o $@
 
 # fork_victim forks; parent and child run DISTINCT functions and each open a
 # DIFFERENT file at the SAME fd number (3, opened after the fork). Backs the

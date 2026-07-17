@@ -529,8 +529,12 @@ fi
 #   -> work [spy_victim]            real depth 0
 #     -> helper [spy_victim]        real depth 1   (x5 per iteration)
 #   -> usleep@plt [spy_victim]      real depth 0   <- same depth as work
-#     -> __nanosleep [libc.so.6]    real depth 1
-#       -> clock_nanosleep [libc.so.6]  real depth 2
+#     -> (libc frames under usleep)  real depth 1+
+#
+# Only the first three are relied on: they are spy_victim's OWN functions and its
+# own PLT stub, fixed by its source. What libc does UNDER usleep is a glibc
+# implementation detail that varies between hosts, so nothing below asserts on it
+# (an earlier version did, and broke on a host that routes usleep differently).
 #
 # -- so "--focus=work dropped usleep@plt" cannot pass by dropping deep lines (it
 # is at the SAME depth as the surviving work), and "--focus=helper printed helper
@@ -593,18 +597,12 @@ printf '%s\n' "$out" | grep -q '\[spy_victim\]' \
     && fail "--module=libc: the target's own [spy_victim] frames leaked"
 echo "  module filter: libc callees only, target's own frames dropped"
 
-echo "--- asmspy --tree --focus=usleep --depth=2 (composition) ---"
-# Depth must measure from the RE-BASED root: usleep@plt roots at eff 0,
-# __nanosleep is eff 1 (kept), clock_nanosleep is eff 2 (cut). Its REAL depth is
-# 2, so a cap applied to the real depth would keep it and fail here.
-tf_capture 4 --focus=usleep --depth=2
-printf '%s\n' "$out" | head -3
-printf '%s\n' "$out" | grep -qE '^-> usleep@plt ' || fail "--focus=usleep: root missing"
-printf '%s\n' "$out" | grep -qE '^  -> __nanosleep \[libc' \
-    || fail "--focus=usleep --depth=2: __nanosleep (eff depth 1) missing"
-printf '%s\n' "$out" | grep -q 'clock_nanosleep' \
-    && fail "--focus=usleep --depth=2: clock_nanosleep (eff depth 2) leaked past the cap"
-echo "  composition: --depth measures from the --focus root, not the real depth"
+# (--depth measured from the --focus root is asserted end-to-end further down,
+# against longjmp_victim's OWN three-deep chain. It used to be tested here with
+# --focus=usleep --depth=2, expecting usleep@plt -> __nanosleep ->
+# clock_nanosleep — which hardcoded GLIBC'S INTERNAL call chain and broke on a
+# host that routes usleep differently. The composition is a property of the
+# filter, not of libc, so it is now tested against code this repo owns.)
 
 # the re-base must survive the JSON export too: helper is exported at depth 1
 # unfiltered (asserted above) and MUST be depth 0 under --focus=helper — same
@@ -677,6 +675,43 @@ printf '%s\n' "$ljout" | grep -qE '^ +-> after_jump \[' \
     && fail "longjmp: after_jump ALSO appears indented — the depth drifted after a longjmp"
 echo "  nesting tracked (jump_out at depth 2) AND after_jump back at depth 0"
 
+# COMPOSITION: --depth must measure from the RE-BASED --focus root, not from the
+# real call depth (asmspy-plan Theme E). longjmp_victim's chain is
+# level_one(0) -> level_two(1) -> jump_out(2) -> longjmp@plt(3), all of it code
+# THIS REPO OWNS — deliberately, because the previous version of this check
+# expected usleep@plt -> __nanosleep -> clock_nanosleep and so depended on
+# glibc's internal routing of usleep, which differs between hosts.
+#
+# --focus=level_two roots at REAL depth 1, so:
+#   level_two   real 1 -> eff 0   (kept, re-based)
+#   jump_out    real 2 -> eff 1   (kept)  <- a cap on the REAL depth cuts this
+#   longjmp@plt real 3 -> eff 2   (cut by --depth=2)
+echo "--- asmspy --tree --focus=level_two --depth=2 (composition) ---"
+"$BUILD/longjmp_victim" 2>/dev/null &
+LJPID=$!
+sleep 1
+set +e
+cjout=$(timeout 60 "$ASM" --tree "$LJPID" 6 --focus=level_two --depth=2 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--tree --focus=level_two hung"
+kill -9 "$LJPID" 2>/dev/null || true
+wait "$LJPID" 2>/dev/null || true
+LJPID=""
+printf '%s\n' "$cjout" | head -3
+printf '%s\n' "$cjout" | grep -qE '^-> level_two \[longjmp_victim\]' \
+    || fail "--focus=level_two: root not re-based to depth 0 (it runs at real depth 1)"
+# THE discriminator: jump_out is at REAL depth 2, so a --depth=2 cap applied to
+# the real depth would cut it. It must survive, because its EFFECTIVE depth is 1.
+printf '%s\n' "$cjout" | grep -qE '^  -> jump_out \[longjmp_victim\]' \
+    || fail "--focus=level_two --depth=2: jump_out (eff depth 1, REAL depth 2) was cut — the cap is measuring the real depth, not the re-based one"
+# and eff depth 2 (longjmp@plt, real depth 3) is cut: nothing indented 4+ columns
+printf '%s\n' "$cjout" | grep -qE '^    -> ' \
+    && fail "--focus=level_two --depth=2: a line at effective depth 2 leaked past the cap"
+# the caller is outside the focus
+printf '%s\n' "$cjout" | grep -q 'level_one' \
+    && fail "--focus=level_two: the caller level_one leaked into the focused subtree"
+echo "  composition: --depth measures from the --focus root, not the real depth"
+
 # ---------------------------------------------------------------------------
 # EXEC-STOP RE-RESOLUTION (asmspy-plan Theme B): PTRACE_O_TRACEEXEC
 # ---------------------------------------------------------------------------
@@ -735,13 +770,21 @@ echo "--- asmspy --stream across an execve (fresh pre-exec victim) ---"
 EXPID=$!
 sleep 1
 set +e
-sxout=$(timeout 120 "$ASM" --stream "$EXPID" 200000 2>/dev/null); rc=$?
+# Budget: postexec_fn is reached at ~620 steps (MEASURED, and stable across
+# runs), so 20000 is a ~32x margin. It used to be 200000 against a first
+# appearance at 136,072 — a 1.47x margin, 87% of which was glibc's static
+# startup registering unwind tables. That is what turned CI red: the count moves
+# with the environment (136,629 -> 140,893 from ifunc dispatch alone) and a
+# slower runner ran out of budget before reaching the symbol. See exec_stage2.c.
+sxout=$(timeout 120 "$ASM" --stream "$EXPID" 20000 2>/dev/null); rc=$?
 set -e
 [ "$rc" -eq 124 ] && fail "--stream across execve hung"
-# control first: we were attached BEFORE the exec
-printf '%s' "$sxout" | grep -q 'preexec_fn.*\[exec_victim\]' \
+# control first: we were attached BEFORE the exec. (grep -c, not grep -q: -q
+# exits on the first match and SIGPIPEs the printf feeding it, which dash reports
+# as "printf: I/O error" — harmless, but it buries the real failure.)
+printf '%s' "$sxout" | grep -c 'preexec_fn.*\[exec_victim\]' >/dev/null \
     || fail "--stream: preexec_fn absent — attached after the exec, so the postexec_fn check below would be vacuous"
-printf '%s' "$sxout" | grep -q 'postexec_fn.*\[exec_stage2\]' \
+printf '%s' "$sxout" | grep -c 'postexec_fn.*\[exec_stage2\]' >/dev/null \
     || fail "--stream: postexec_fn [exec_stage2] never named — no exec re-resolution in the stream engine"
 echo "  stream: pre-exec AND post-exec text each named from their own image"
 kill "$EXPID" 2>/dev/null || true
