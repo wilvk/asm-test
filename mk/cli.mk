@@ -8,6 +8,18 @@
 # ncursesw dev files ship in libncurses-dev on Ubuntu (Dockerfile.cli adds it).
 NCURSES_LIBS ?= $(shell pkg-config --libs ncursesw 2>/dev/null || echo -lncursesw)
 
+# asmspy's single-step engines are x86-64-hardcoded (rip / eflags-TF /
+# orig_rax; the reg/step/detach abstraction that would lift this is the open
+# asmspy-plan.md Theme F row) — on any other architecture the compile dumps raw
+# errors (`SYS_open undeclared`, `no member named 'rip'`) instead of gating.
+# An architecture is a REAL gate (CLAUDE.md): unlike the CLI_MISSING branch
+# below there is nothing to apt-install, so it is checked FIRST — falling
+# through would tell an arm64 user to install libncurses-dev, which cannot fix
+# it. This also covers `make docker-cli` on an arm64 HOST: _docker_plat follows
+# the host unless DOCKER_PLATFORM is set, so the in-container make sees aarch64
+# and hits this same gate instead of the raw compile errors.
+CLI_ARCH := $(shell uname -m)
+
 # asmspy needs Capstone (disassembly, via the hwtrace tier) AND ncursesw (the TUI).
 # Both are present in the asmtest-cli / asmtest-hwtrace images; a bare host often
 # lacks them, so detect that and point at the container instead of dumping a raw
@@ -57,7 +69,14 @@ $(BUILD)/asmspy: $(HWTRACE_OBJS) $(ASMSPY_OBJS) $(ASMSPY_DATAFLOW_OBJS)
 	  $(LINK_LIBBPF) -ldl $(NCURSES_LIBS) -lstdc++ -o $@
 
 .PHONY: cli
-ifeq ($(strip $(CLI_MISSING)),)
+ifneq ($(CLI_ARCH),x86_64)
+cli:
+	@echo "# SKIP cli: asmspy is x86-64-only and this host is $(CLI_ARCH)."
+	@echo "#   Its single-step engines read rip/eflags-TF/orig_rax directly; the"
+	@echo "#   ARM64 reg/step/detach abstraction is the open asmspy-plan.md Theme F"
+	@echo "#   row. Nothing to install — this is an architecture gate, not a"
+	@echo "#   missing dependency."
+else ifeq ($(strip $(CLI_MISSING)),)
 cli: $(BUILD)/asmspy
 	@echo "built $(BUILD)/asmspy — run it with no args for the TUI, or --help"
 else
@@ -302,6 +321,15 @@ $(BUILD)/test_jitdump: cli/test_jitdump.c $(BUILD)/asmspy_proc.o \
 	  -lstdc++ -o $@
 
 .PHONY: cli-smoke
+ifneq ($(CLI_ARCH),x86_64)
+# Same architecture gate as `cli` above: without it, the smoke's prerequisites
+# try to compile the x86-64-only TUs and dump the raw errors the gate exists to
+# replace. A green skip here is honest — the smoke measures asmspy, and there
+# is no asmspy to measure on this architecture (recorded, per CLAUDE.md's
+# hardware-gate rule, in asmspy-plan.md Theme F).
+cli-smoke:
+	@echo "# SKIP cli-smoke: asmspy is x86-64-only and this host is $(CLI_ARCH)"
+else
 cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/cpp_victim \
            $(BUILD)/jit_victim $(BUILD)/jitdump_victim $(BUILD)/int3_victim \
@@ -318,6 +346,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
 	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"
 	BUILD=$(BUILD) ASMSPY_HAVE_M32='$(CLI_M32_PROBE)' sh cli/cli_smoke.sh
+endif
 
 # Build the CLI image (bindings base + libipt-dev + libncurses-dev) and run the
 # headless smoke. Interactive use: `docker run --rm -it asmtest-cli bash` then

@@ -881,7 +881,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **`test_callout_step_backstop` raced its own victim — and reported the loss as
+- **`make cli` / `make cli-smoke` on arm64 now self-skip like the other tiers
+  instead of dumping raw compile errors.** asmspy's single-step engines are
+  x86-64-hardcoded (`rip`/`eflags`-TF/`orig_rax`), so on aarch64 the build died
+  mid-compile with `SYS_open undeclared` / `no member named 'rip'` — or worse,
+  fell into the missing-dependency branch and advised installing libncurses-dev,
+  which cannot fix an architecture. A `uname -m` gate (checked before
+  `CLI_MISSING`, for exactly that reason) now prints an honest `# SKIP` naming
+  the open ARM64-abstraction plan row and exits 0. Measured in a real
+  linux/arm64 container: skip + rc 0 both targets; x86-64 unchanged.
   a Yama/seccomp skip.** The victim called the region once and `_exit(0)`'d, so on
   a slow host the child finished and died before the parent's `PTRACE_SEIZE`
   landed (3/3 GitHub runs today), and the resulting `ESRCH` surfaced as
