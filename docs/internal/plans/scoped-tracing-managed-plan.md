@@ -4,8 +4,9 @@
 > `archive/` — at the time this plan was **partially landed**, so it belonged with the
 > active plans. It recorded the §D3 live-JIT cross-process address channel as the standing
 > **forward-look**; that channel has since landed, as has the .NET composition on top of it
-> (E3). See the status block below for the current accounting — the plan is now effectively
-> complete, with the JVM's zero-touch JVMTI hop hook the one optional remainder.
+> (E3). See the status block below for the current accounting — the plan is now **complete**:
+> its last item, the JVM's zero-touch JVMTI hop hook, was decided **NO-GO on evidence**
+> 2026-07-17 (§D2), not left open.
 
 The **hard** half of the [scoped in-process tracing
 plan](../archive/plans/scoped-inprocess-tracing-plan.md) — extending the scope model to the three
@@ -23,9 +24,17 @@ thread → logical-operation model change). It is deliberately sequenced **last*
 > **Status (revised 2026-07-16): effectively landed — 5 of 5 sections ship.** §D0 (.NET),
 > §D1 (Node), §D2 (Java), §D3 (the out-of-process stepper *and* its live-JIT address
 > channel), and §D4 (the merge core + its live producers) are all implemented and tested.
-> **The single genuine remainder is the JVM's zero-touch JVMTI hop hook** — see §D2 below;
-> it is **optional**, since Java's shipped async-hop producer (the propagating executor
-> decorator) already drives the merge, just at the cost of wrapping the executor.
+> **Nothing remains** *(reconciled 2026-07-17)*. The JVM's zero-touch JVMTI hop hook — the
+> item this line carried as the single genuine remainder — is now **decided NO-GO on
+> evidence** (§D2). It is not "optional and unbuilt": JVMTI has **no value-changed event**,
+> and HotSpot's non-spec mount/unmount extension events are **complementary to the need** —
+> they fire only where a vthread *is* the `Thread` object (so the scope id already follows,
+> zero-touch, with no hook) and **never** for the platform-thread `submit()` the decorator
+> exists to serve. The agent would work and buy nothing. Java's shipped async-hop producer
+> stays the propagating executor decorator, at the cost of wrapping the executor; and the
+> zero-touch *outcome* is already delivered on virtual threads by shipped code
+> (`stitchedTraceZeroTouchAcrossVirtualThreadRemount`, 15 asserts, carrier migration proven
+> live).
 >
 > Dated provenance:
 >
@@ -635,12 +644,18 @@ it is CI-runnable in the `hwtrace` job / a Docker lane with `--cap-add=SYS_PTRAC
 > [bindings/node/hwtrace.js](../../../bindings/node/hwtrace.js)) both ship as live
 > producers, feeding the merge through the `asmtest_hwtrace_stitch_handles` bridge. The
 > hook→merge **seam** is now CI-covered by `test_stitch_hops_scripted` (a fake-hook harness
-> scripting hops out of `seq` order). **Remaining:** only the JVM's **zero-touch JVMTI**
-> value-changed hook — Java's shipped producer is the propagating executor decorator, which
-> works but requires wrapping the executor (§D2). **Forward-look (hardware):** the *clean*
+> scripting hops out of `seq` order). **Remaining: NOTHING** *(reconciled 2026-07-17)* — the
+> JVM's zero-touch JVMTI value-changed hook, the last item this line carried, is now **decided
+> NO-GO on evidence**, not merely unbuilt: JVMTI has no value-changed event at all, and
+> HotSpot's non-spec mount/unmount extension events fire *only* where the hop is already free
+> (a vthread **is** the `Thread` object, so the id follows with no hook) and *never* for the
+> platform-thread `submit()` the decorator exists to serve — the two populations are
+> complementary, so the agent would work and buy nothing. See §D2. Java's shipped producer
+> remains the propagating executor decorator. **Forward-look (hardware):** the *clean*
 > PT-decoded per-hop slice path still needs bare-metal Intel PT.
 
-*(planned; explicit opt-in — the deepest piece in the set.)* This is the analysis's
+*(merge core + per-runtime producers LANDED; the escalation below is explicit opt-in — the
+deepest piece in the set.)* This is the analysis's
 Q1 redesign: the one qualification that is **not a knob but a model change** — the
 scope stops being a *thread* window and becomes a **stitched trace of one logical
 operation**. It is factored out here because .NET (§D0.4), Node (§D1), and the JVM
