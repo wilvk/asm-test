@@ -401,7 +401,7 @@ run in `test_hwtrace.js`, so this line needed its own audit rather than a status
 
 ---
 
-## §D2 — JVM scope construct *(LANDED, except the optional zero-touch JVMTI hop hook)*
+## §D2 — JVM scope construct *(LANDED — and the optional zero-touch JVMTI hop hook is now DECIDED: NO-GO, 2026-07-17)*
 
 **Construct.** Java's `region(String, Runnable)` ships at
 [bindings/java/HwTrace.java:779](../../../bindings/java/HwTrace.java#L779) on the
@@ -427,31 +427,76 @@ jitdump format's canonical **offline** consumer — it merges a jitdump into a r
 duplicate the in-process reader and contradict the clean in-process PT thesis.)
 
 **Async-hop.** The JVM's hook for the shared
-[§D4 model](#d4--async-hop-stitching-piece-d-the-shared-logical-operation-model) is
-**JVMTI** (or bytecode-agent instrumentation of the executor) — `ScopedValue` only
-*propagates* a binding across `StructuredTaskScope` forks and has **no** value-changed
-callback that fires as the flow moves on/off a thread, so it is **not** the JVM analog
-of .NET's `AsyncLocal` value-changed handler; §D4 owns the merge. (`ScopedValue` /
+[§D4 model](#d4--async-hop-stitching-piece-d-the-shared-logical-operation-model) is the
+**propagating executor decorator** (SHIPPED). `ScopedValue` only *propagates* a binding across
+`StructuredTaskScope` forks and has **no** value-changed callback that fires as the flow moves
+on/off a thread, so it is **not** the JVM analog of .NET's `AsyncLocal` value-changed handler;
+§D4 owns the merge. ~~JVMTI~~ **This line originally named JVMTI as that analog — measured false
+on 2026-07-17 (see the NO-GO below): JVMTI has no value-changed event, and HotSpot's
+mount/unmount extension events are silent for the executor submit that actually needs
+propagating.** Bytecode-agent instrumentation of the executor remains the only zero-touch route
+to the submit, and is declined on cost/benefit below. (`ScopedValue` /
 `StructuredTaskScope` are also **preview** APIs at the JDK 22 the binding targets —
 `--enable-preview` — a further reason the load-bearing hook is JVMTI/agent, not them.)
-This is the **least-proven** of the three per-runtime hooks. Scoped to the opt-in async form, same
-posture as Node/.NET. Live managed JIT needs PT/LBR or ptrace; DynamoRIO self-skips
-(guarded) and is never used against the runtime.
+This was the **least-proven** of the three per-runtime hooks; as of 2026-07-17 it is decided —
+the executor decorator is the hook, and the JVMTI alternative is a measured NO-GO (below).
+Scoped to the opt-in async form, same posture as Node/.NET. Live managed JIT needs PT/LBR or
+ptrace; DynamoRIO self-skips (guarded) and is never used against the runtime.
 
-> **Status (2026-07-16): the executor route SHIPPED; the JVMTI route is the one remaining
-> item in this plan — and it is OPTIONAL.** Java's live async-hop producer ships as
-> `AsmStitchedTrace` (commits `7ecaaec` / `719f021`) — a **propagating executor decorator**
-> that carries the `ScopeId` across a hop and feeds the §D4 merge via `stitchHandles`. It
-> works, at one cost: the caller must let the binding wrap the executor. **JVMTI (or a
-> bytecode agent) is the zero-touch alternative that would remove that cost** — no source
-> or wiring change at the hop site. It is **not built**: there is no JVMTI agent source in
-> the tree, and every `JVMTI` mention in
-> [bindings/java/HwTrace.java](../../../bindings/java/HwTrace.java) is a doc comment
-> pointing at this gap (e.g. :1801, "a JVMTI executor bytecode agent *would be* the
-> zero-touch alternative"). It is a greenfield native agent with no CI coverage today —
-> hence "least-proven" above. Note the distinct `libperf-jvmti.so` **did** land (2026-07-15,
-> `df66e2b`), but that is the live JIT-method *resolver* (§D2's address side), not the
-> value-changed hop hook — do not read one as the other.
+> **DECIDED 2026-07-17 — NO-GO, and not on cost: the "zero-touch JVMTI value-changed hop
+> hook" cannot be built as specified, because the JVMTI signal that looks like a hop fires
+> exactly where nothing needs propagating and is silent exactly where something does.**
+> Java's live async-hop producer ships as `AsmStitchedTrace` (commits `7ecaaec` / `719f021`)
+> — a **propagating executor decorator** carrying the `ScopeId` across a hop into the §D4
+> merge via `stitchHandles` — at one cost: the caller lets the binding wrap the executor.
+> JVMTI was the hoped-for zero-touch alternative. Measured against the java lane's own
+> image (`openjdk-25-jdk-headless`, **JDK 25.0.3**):
+>
+> 1. **There is no value-changed event, and none is hiding in the header.** The whole
+>    `jvmtiEvent` enum ends at `VIRTUAL_THREAD_START`/`_END` (87/88), and no `jvmtiCapabilities`
+>    bit is hop-shaped (`can_support_virtual_threads` gates only those two). .NET's hook exists
+>    because `AsyncLocal<T>` is a *library* feature with an explicit value-changed handler; the
+>    JVM has no equivalent at the JVMTI layer.
+> 2. **HotSpot does expose mount/unmount — but as non-spec EXTENSION events**, invisible to the
+>    header and discoverable only at runtime via `GetExtensionEvents`:
+>    `com.sun.hotspot.events.VirtualThreadMount` / `…Unmount` (plus `GetVirtualThread` /
+>    `GetCarrierThread` ext functions). They are real and they fire. **Trap for anyone who
+>    retries this:** they need `SetExtensionEventCallback` **and**
+>    `SetEventNotificationMode(JVMTI_ENABLE, index)`. The callback alone returns `err=0` on every
+>    call and delivers **nothing** — a silently inert agent that looks fully wired.
+> 3. **They fire only where the hop is already free.** Measured: **60 mount + 60 unmount** across
+>    a virtual-thread phase and **0** for a platform-thread `ExecutorService.submit()` — the exact
+>    case `propagatingExecutor()` exists for. A submit moves work to a *different*
+>    `java.lang.Thread`; JVMTI never sees it.
+> 4. **And where they do fire, there is nothing to carry.** A virtual thread *is* the
+>    `java.lang.Thread` object, so its `ThreadLocal` map follows it across an unmount/remount
+>    onto a different carrier. Measured: **8/8 vthreads migrated carriers, 8/8 kept their plain
+>    `ThreadLocal`.** The carrier is an implementation detail of a flow the ThreadLocal is already
+>    pinned to.
+>
+> So the two populations are **complementary, not overlapping**: mount/unmount fires ⟺ same
+> `Thread` object ⟺ the id already follows ⟺ no hook needed; propagation is needed ⟺ a different
+> `Thread` object ⟺ no JVMTI event exists. A "value-changed hop hook" built on these events would
+> be a working agent that buys nothing.
+>
+> **The one route that would see the submit is declined on cost/benefit, not impossibility:**
+> `CLASS_FILE_LOAD_HOOK` bytecode instrumentation of JDK executor internals
+> (`ThreadPoolExecutor` / `ForkJoinPool` / `CompletableFuture`). That is a bytecode agent, *not*
+> a value-changed hook, and it means rewriting JDK-internal classes — an open-ended set, across
+> JDK versions — to save the caller one `propagatingExecutor(pool)` call. **What would change
+> the answer:** the JDK growing a real hop callback (a `ScopedValue` value-changed event, or the
+> mount/unmount events promoted to spec *and* extended to platform-thread task handoff).
+>
+> **What landed instead (`stitchedTraceZeroTouchAcrossVirtualThreadRemount`,
+> [bindings/java/HwTraceTest.java](../../../bindings/java/HwTraceTest.java)):** the constructive
+> half of this NO-GO — proof that on virtual threads the zero-touch *outcome* §D2 wanted is
+> **already delivered by shipped code, with no agent**. 15 asserts in `hwtrace-java-test`
+> (`ok 143`–`ok 157`, lane green): one `AsmStitchedTrace` operation whose hop site is a bare
+> `Thread.sleep()` — no `propagate()`, no `propagatingExecutor()` — remounts onto a **different
+> carrier** and still has its ambient scope id, with both hops stitching by seq. It asserts
+> `isVirtual()` first, so it cannot quietly pass on a platform thread and prove nothing.
+> Note the distinct `libperf-jvmti.so` **did** land (2026-07-15, `df66e2b`), but that is the live
+> JIT-method *resolver* (§D2's address side), not the hop hook — do not read one as the other.
 
 **§D2 tests.** Extend the `hwtrace-java-test` lane and the
 [examples/jit_java/](../../../examples/jit_java/) fixture under `docker-hwtrace-jit-java`
@@ -608,7 +653,7 @@ signals a thread hop.
 |---|---|
 | .NET | `AsyncLocal<ScopeId>` value-changed (`AsyncLocalValueChangedArgs.ThreadContextChanged`) |
 | Node | `AsyncLocalStorage` / `async_hooks` `init`/`before`/`after` (orders **same-thread** async only; does **not** propagate across `worker_threads`, so genuine OS-thread hops escape — see §D1) |
-| JVM | JVMTI callback / executor bytecode-agent instrumentation (`ScopedValue` only *propagates* context — not a value-changed hop signal); least-proven |
+| JVM | **Propagating executor decorator** (`AsmStitchedTrace`, SHIPPED) — a `ThreadLocal<ScopeId>` re-asserted around each submitted task. There is **no** JVMTI value-changed callback to use instead (measured NO-GO 2026-07-17, §D2): JVMTI has no such event, and HotSpot's `VirtualThreadMount`/`Unmount` extension events fire **only** for virtual threads — where the `ThreadLocal` already follows the flow unaided — and **never** for the platform-thread submit that needs propagating. `ScopedValue` only *propagates* context, so it is not a hop signal either. On **virtual** threads the decorator is unnecessary: the hop is zero-touch already (`ok 143`–`ok 157`) |
 
 **The merge core (shared) — the concrete algorithm:**
 

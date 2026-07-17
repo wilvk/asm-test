@@ -159,6 +159,7 @@ public final class HwTraceTest {
             callScopedTracesANativeCall();
             stitchedTraceProducerAcrossHops();
             stitchedTraceAutoPropagatesAcrossExecutor();
+            stitchedTraceZeroTouchAcrossVirtualThreadRemount();
             windowTracesAWholeScope();
             attributeWindowSplitsNamedLeaves();
         } catch (Throwable t) {
@@ -340,6 +341,156 @@ public final class HwTraceTest {
             ok(!op.truncated(), "autoPropagate: the merged trace is complete (not truncated)");
         } finally {
             raw.shutdown();
+            code.free();
+        }
+    }
+
+    // The carrier platform thread a MOUNTED virtual thread is currently running on, parsed from
+    // VirtualThread.toString() ("VirtualThread[#39]/runnable@ForkJoinPool-1-worker-1" -> the text
+    // after the last '@'). "" when there is no carrier suffix. Only meaningful when read from
+    // INSIDE the virtual thread — it is mounted precisely then.
+    private static String carrierOf(Thread t) {
+        String s = String.valueOf(t);
+        int at = s.lastIndexOf('@');
+        return at < 0 ? "" : s.substring(at + 1);
+    }
+
+    // §D2 ZERO-TOUCH async-hop capture on a VIRTUAL thread (no executor decorator, no propagate()).
+    //
+    // This is the case the plan's optional "zero-touch JVMTI value-changed hop hook" was meant to
+    // buy, and it already works with NO agent: a virtual thread IS the java.lang.Thread object, so
+    // AsmStitchedTrace's ThreadLocal scope id follows the logical flow across an unmount/remount for
+    // free — including onto a DIFFERENT carrier. (Measured on JDK 25: HotSpot's
+    // com.sun.hotspot.events.VirtualThreadMount/Unmount extension events fire only for this case,
+    // where nothing needs propagating, and never for a platform-thread executor submit, where
+    // propagatingExecutor() is what carries the id. See the §D2 NO-GO note in
+    // docs/internal/plans/scoped-tracing-managed-plan.md.)
+    //
+    // Proves (1) the operation really ran on a virtual thread, (2) it really REMOUNTED onto a
+    // different carrier between the two hops, so hop 1's native single-step runs on a different OS
+    // thread than hop 0's (TF is per-OS-thread — the thing that could actually break), (3) the
+    // ambient scope id is intact on the far side, read BEFORE step() so it is the remount and not
+    // step()'s re-assert being tested, and (4) both hops stitch by seq under the one operation.
+    // Nothing here wraps anything: the hop site is a plain Thread.sleep().
+    //
+    // MEASURED, because the first cut of this test asserted a shape its fixture could never
+    // produce: a LONE parked virtual thread never migrates — it is handed straight back to its old
+    // carrier (0/1 migrations in 200 parks). Migration needs carrier CONTENTION, so a few background
+    // virtual threads churn the pool while the flow is parked. With that, migration is reliable and
+    // near-immediate: measured 25/25 at 4 churn threads, and 25/25 with the scheduler forced to 2
+    // carriers (the small-CI-runner shape), always within 3 parks against the 200-park bound.
+    private static void stitchedTraceZeroTouchAcrossVirtualThreadRemount() throws Exception {
+        // A carrier change needs at least two carriers; the scheduler's default parallelism follows
+        // availableProcessors(). On a 1-cpu host a remount can only ever land on the same carrier —
+        // a property of the host, not the binding — so that ONE assert is skipped there and said out
+        // loud. Every other assert still runs.
+        boolean canMigrate = Runtime.getRuntime().availableProcessors() >= 2;
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
+        final boolean[] stopChurn = new boolean[1];
+        Thread[] churn = new Thread[4];
+        for (int i = 0; i < churn.length; i++) {
+            churn[i] = Thread.ofVirtual().start(() -> {
+                while (!stopChurn[0]) {
+                    try { Thread.sleep(1); } catch (InterruptedException e) { return; }
+                }
+            });
+        }
+        try {
+            final long[] opId = new long[1];
+            final long[] results = new long[2];
+            final long[] scopes = new long[2];
+            final int[] tids = new int[2];
+            final String[] carriers = new String[2];
+            final boolean[] virtual = new boolean[1];
+            final int[] parks = new int[1];
+            final HwTrace.StitchBound[][] bounds = new HwTrace.StitchBound[1][];
+            final int[] hopCount = new int[1];
+            final boolean[] truncated = new boolean[1];
+            final Throwable[] err = new Throwable[1];
+
+            // The WHOLE operation lives on one virtual thread. No propagate(), no
+            // propagatingExecutor() — the zero-touch shape.
+            Thread vt = Thread.ofVirtual().unstarted(() -> {
+                try (HwTrace.AsmStitchedTrace op = new HwTrace.AsmStitchedTrace()) {
+                    opId[0] = op.scopeId();
+                    virtual[0] = Thread.currentThread().isVirtual();
+                    carriers[0] = carrierOf(Thread.currentThread());
+                    scopes[0] = HwTrace.AsmStitchedTrace.currentScopeId();
+                    tids[0] = (int) Thread.currentThread().threadId();
+                    results[0] = op.step(code, 20, 22); // hop 0 on carrier A -> 42
+
+                    // Park until the scheduler remounts us on a DIFFERENT carrier. Each sleep
+                    // unmounts (releasing the carrier) and remounts on whichever worker picks the
+                    // continuation up, so this is a bounded retry rather than a spin on luck.
+                    for (int i = 0; i < 200; i++) {
+                        Thread.sleep(2);
+                        parks[0]++;
+                        if (!carrierOf(Thread.currentThread()).equals(carriers[0])) break;
+                    }
+
+                    carriers[1] = carrierOf(Thread.currentThread());
+                    // Read the ambient id BEFORE step() re-asserts it: this is the load-bearing
+                    // observation — the id survived the remount with nothing wrapping the hop.
+                    scopes[1] = HwTrace.AsmStitchedTrace.currentScopeId();
+                    tids[1] = (int) Thread.currentThread().threadId();
+                    results[1] = op.step(code, 1, 2); // hop 1 on carrier B -> 3
+
+                    op.complete();
+                    bounds[0] = op.hops();
+                    hopCount[0] = op.hopCount();
+                    truncated[0] = op.truncated();
+                } catch (Throwable t) {
+                    err[0] = t;
+                }
+            });
+            vt.start();
+            vt.join();
+            if (err[0] != null) throw new RuntimeException("virtual-thread operation threw", err[0]);
+
+            // Without this, every assert below would pass just as well on a platform thread and
+            // prove nothing about virtual threads at all.
+            ok(virtual[0], "vthreadZeroTouch: the operation really ran on a VIRTUAL thread");
+            ok(opId[0] != 0 && scopes[0] == opId[0],
+                "vthreadZeroTouch: the scope id is ambient on the virtual thread at hop 0");
+            ok(results[0] == 42, "vthreadZeroTouch: hop 0 ran on the virtual thread (result 42)");
+            ok(results[1] == 3, "vthreadZeroTouch: hop 1 ran after the remount (result 3)");
+            ok(!carriers[0].isEmpty() && !carriers[1].isEmpty(),
+                "vthreadZeroTouch: the carrier is observable at both hops (" + carriers[0]
+                    + " -> " + carriers[1] + ")");
+            if (canMigrate) {
+                ok(!carriers[0].equals(carriers[1]),
+                    "vthreadZeroTouch: the flow REMOUNTED onto a different carrier after "
+                        + parks[0] + " park(s) (" + carriers[0] + " -> " + carriers[1]
+                        + ") — hop 1 single-steps on a different OS thread than hop 0");
+            } else {
+                System.out.println("# SKIP vthreadZeroTouch: carrier migration needs >= 2 "
+                    + "processors (availableProcessors() = "
+                    + Runtime.getRuntime().availableProcessors() + "); every other assert ran");
+            }
+            // THE zero-touch claim: nothing wrapped the hop, and the id is still here.
+            ok(scopes[1] == opId[0],
+                "vthreadZeroTouch: the scope id survives the remount with NO executor wrapping and "
+                    + "NO propagate() — read before step() re-asserts it");
+            ok(tids[0] == tids[1],
+                "vthreadZeroTouch: the virtual thread's id is stable across the remount — it is the "
+                    + "logical flow's identity, which is WHY the ThreadLocal follows it");
+
+            ok(hopCount[0] == 2, "vthreadZeroTouch: two hops attempted");
+            ok(bounds[0].length == 2,
+                "vthreadZeroTouch: both hops captured and stitched (got " + bounds[0].length + ")");
+            ok(bounds[0][0].seq() == 0 && bounds[0][0].insnOff() == 0,
+                "vthreadZeroTouch: slice 0 is hop 0 at merged offset 0");
+            ok(bounds[0][1].seq() == 1 && bounds[0][1].insnOff() > 0,
+                "vthreadZeroTouch: slice 1 is hop 1, stitched AFTER hop 0 (off "
+                    + bounds[0][1].insnOff() + ")");
+            ok(bounds[0][0].scopeId() == opId[0] && bounds[0][1].scopeId() == opId[0],
+                "vthreadZeroTouch: every slice carries the one operation's scope id");
+            ok(bounds[0][0].tid() == tids[0] && bounds[0][1].tid() == tids[1],
+                "vthreadZeroTouch: each slice is tagged with the virtual thread's id");
+            ok(!truncated[0], "vthreadZeroTouch: the merged trace is complete (not truncated)");
+        } finally {
+            stopChurn[0] = true;
+            for (Thread t : churn) t.join();
             code.free();
         }
     }

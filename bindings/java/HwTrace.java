@@ -1800,10 +1800,21 @@ public final class HwTrace {
      * Each hop reuses the managed-safe lazy-arm path ({@code call_scoped_ex} — no runtime
      * machinery is single-stepped, no {@code MAX_REGIONS} slot is consumed), so a long operation
      * with many hops is safe; {@link #complete} merges the captured hops by seq via the shipped
-     * {@link #stitchHandles} core. A JVMTI executor bytecode agent would be the zero-touch
-     * alternative and {@code libperf-jvmti.so} the live JIT-method resolver (both external build
-     * deps, forward-look); this pure-Java thread-local path is the CI-runnable producer over a
-     * native leaf per hop.
+     * {@link #stitchHandles} core.
+     *
+     * <p>On a <b>virtual</b> thread none of this wrapping is needed: a virtual thread IS the
+     * {@link Thread} object, so this thread-local follows the flow across an unmount/remount onto a
+     * different carrier for free — zero-touch hop capture, covered by {@code hwtrace-java-test}'s
+     * {@code vthreadZeroTouch} checks. Wrapping is what carries the id across a hop to a
+     * <i>different</i> {@link Thread} (a pool submit, or a forked virtual thread).
+     *
+     * <p>A JVMTI <i>value-changed</i> hook is <b>not</b> an available alternative and was decided
+     * NO-GO (2026-07-17): JVMTI has no such event, and HotSpot's {@code VirtualThreadMount} /
+     * {@code Unmount} extension events fire only for the virtual-thread case above — where nothing
+     * needs propagating — and never for an executor submit. A bytecode agent rewriting JDK executor
+     * internals is the only zero-touch route to a submit, and is declined on cost/benefit; see §D2
+     * of docs/internal/plans/scoped-tracing-managed-plan.md. ({@code libperf-jvmti.so}, which DID
+     * land, is the live JIT-method resolver — not a hop hook.)
      * <pre>{@code
      * try (var op = new HwTrace.AsmStitchedTrace()) {
      *     long r0 = op.step(work, 20, 22);                 // hop 0, this thread
