@@ -12,7 +12,9 @@ each one either **reduces perturbation**, **raises fidelity on managed targets**
 > increments 1+2 LANDED (pure-method block-step tier + vector breadth — the YMM/ZMM carryover is
 > CLOSED, with AVX-instruction replay recorded as an upstream Unicorn/QEMU gate); F4 increments
 > 1+2 LANDED — its exit criterion is MET on a live attach; **F2 increment 1 LANDED — the syscall
-> half of record-and-inject, exit criterion MET**; F5–F7 open (F7 LANDED).** The two bets this plan was written around
+> half of record-and-inject, exit criterion MET**; **F6 increment 1 LANDED — the gap barrier,
+> with whole-process DECLINED on measured arithmetic rather than deferred**; **F7 LANDED — all
+> ten bindings, every one on a real attach. So F5 alone is open, and only on hardware.** The two bets this plan was written around
 > have both been settled in its favour. F1 was the marquee item and carried a spike increment
 > because its value-reconstruction claim was the one genuinely **unproven** bet in the whole
 > design — that spike came back **GO** (byte-identical to single-step by literal `memcmp`, ~6×
