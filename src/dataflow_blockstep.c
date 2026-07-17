@@ -23,8 +23,87 @@
  * (time-correct) bytes are static-scanned ONCE up front for OS-interacting / nondeterministic
  * instructions (syscall / sysenter / int 0x80 / rdtsc / rdtscp / rdrand / rdseed / cpuid):
  * a PURE region gets block-step + replay; an IMPURE one falls back to direct single-step
- * (the same shared capture core, driven one instruction at a time). F2 lifts the fallback
- * via record-and-inject.
+ * (the same shared capture core, driven one instruction at a time). F2 (below) lifts that
+ * fallback for the SYSCALL half via record-and-inject.
+ *
+ * ============================ F2 — RECORD-AND-INJECT ============================
+ *
+ * F2 extends the tier from PURE methods to OS-INTERACTING ones. The design is much smaller
+ * than the plan anticipated, and the reason is a MEASURED hardware fact:
+ *
+ *   PTRACE_SINGLEBLOCK (DEBUGCTL.BTF) ALREADY TRAPS `syscall` AND `int 0x80`, because they are
+ *   control transfers. It does NOT trap rdtsc / rdtscp / rdrand / rdseed / cpuid, which are not.
+ *
+ * Measured on this Zen 5 (`mov eax,39; syscall; ...` — one SINGLEBLOCK lands at syscall+2 with
+ * the kernel's return already in rax). That single fact decides everything:
+ *
+ *  1. THE SYSCALL IS AN INDUCED BOUNDARY, FOR FREE. The forward pass already stops immediately
+ *     after the syscall retires, with the real result in the real registers and the kernel's
+ *     memory delta already written to the real process. F2 costs ZERO extra perturbation: it
+ *     adds no stop that block-stepping did not already take.
+ *  2. THERE IS NOTHING TO FABRICATE, AND SO NO SYSCALL TABLE. The plan expected a decoder that
+ *     knows which argument is an output buffer and how many bytes the kernel filled ("a syscall
+ *     that fills a buffer is the hard case"). None is needed, and asmspy's decoder would not
+ *     have helped: it maps NUMBER->name and formats path arguments FOR DISPLAY, and has no model
+ *     of output buffers at all. Instead the effect is simply CARRIED ACROSS from the real
+ *     tracee: rax/rcx/r11 are read from the real boundary snapshot, and the kernel's MEMORY
+ *     delta is delivered by the re-snapshot F1 already performs at every boundary. Every
+ *     injected byte is a real observation. There is no per-syscall knowledge in this file.
+ *  3. NO MEMORY IS INJECTED, AND NO MEMORY *CAN* GO STALE — STRUCTURALLY. Because the syscall
+ *     TERMINATES the block, no replayed instruction executes after it within that block, so
+ *     there is no window in which Unicorn's (pre-syscall) memory could be read. The next block
+ *     is seeded from the post-syscall ground-truth snapshot. This matters because the coherence
+ *     canary compares registers only — it has NO memory comparison — so an injected result
+ *     landing in memory would be unwitnessed. F2's answer is not to add a witness but to leave
+ *     nothing to witness: the exposure is zero by construction rather than by checking.
+ *
+ * WHAT IS INJECTED, AND WHAT THE CANARY CAN STILL SEE. Only rax/rcx/r11 (rax alone for int 0x80
+ * — measured: an interrupt gate leaves rcx/r11 untouched) and rip. Those four are necessarily
+ * TAUTOLOGICAL at the syscall boundary: they are compared against the snapshot they were copied
+ * from. Every OTHER register, rsp, and the arithmetic flags are still genuinely checked, so the
+ * canary continues to validate the block's whole pure prefix. Flags survive a syscall (SYSCALL
+ * saves rflags to r11, SYSRET restores them), which is why that check stays real. r11 is
+ * injected rather than computed for a concrete reason: measured, it returns as the pre-syscall
+ * rflags OR'd with TF (0x100) — the ptrace stepping bit — so "computing" it would mean modelling
+ * the debug mechanism's own perturbation.
+ *
+ * WHY rdtsc / cpuid / rdrand / rdseed ARE STILL GATED. Not an oversight and not a decode
+ * problem: BTF gives no boundary at which their retired value could be recorded, so
+ * record-and-inject has nothing to record. Reaching them needs a different primitive (a hardware
+ * exec breakpoint at the site, or single-stepping to it) — a separate increment, not a wider
+ * table. They keep the single-step fallback, which is CORRECT, just unoptimized. Note this means
+ * F2 displaces only ONE of the two callers of that fallback; the OTHER (`!replayable`, a
+ * VEX/EVEX encoding no released Unicorn can execute) is untouched and unrelated — record-and-
+ * inject cannot give Unicorn a decoder it does not have.
+ *
+ * THE REPLAY MUST NEVER EXECUTE AN IMPURE INSTRUCTION, AND "UC_ERR_OK" DOES NOT SAY IT DIDN'T.
+ * Measured against the bundled Unicorn: `syscall` returns UC_ERR_OK and just advances rip (rax
+ * keeps the syscall NUMBER); `rdtsc` returns UC_ERR_OK with a FABRICATED counter; `cpuid`
+ * returns UC_ERR_OK with zeros. (`rdrand` does fault, so it alone fails closed unaided.) None of
+ * them fails loudly — the identical failure mode F1 documented for VEX-128. So step_block
+ * decodes at its OWN pc and refuses. That decode is deliberately INDEPENDENT of region_scan,
+ * which is F1's central lesson applied: region_scan is a linear sweep that DESYNCS on a
+ * constant-pool island (its `island` fixture proves it), so an impurity hidden behind one is
+ * invisible to it — the gate would pass the instruction through AND the scan-derived witness
+ * would be gone. The per-step decode follows real control flow and cannot desync.
+ *
+ * FAIL-CLOSED ON THE PREMISE ITSELF. The design rests on "BTF always traps the syscall", so the
+ * replay REQUIRES it at runtime rather than trusting it: the real next boundary must be exactly
+ * syscall+len, or there is no recorded effect to inject and the capture truncates. That covers a
+ * host where BTF behaves differently, a signal at the syscall, and a syscall that does not
+ * return where expected.
+ *
+ * WHAT F2 PUTS IN THE TRACE. The shared operand enumerator reports `syscall`/`int 0x80` as
+ * touching NO registers (measured: 0 reads, 0 writes) — Capstone models the instruction, not the
+ * ABI — so the kernel's result would otherwise never appear in the value trace at all, and the
+ * def-use edge from a `read()` to its consumer could not exist. open_step therefore supplies the
+ * syscall's architectural write set producer-locally, on the ONE path both value sources share,
+ * so the oracle and the replay grow identical records.
+ *
+ * THE DOCUMENTED RESIDUAL. A sibling thread writing shared memory the region loads, with no
+ * syscall to anchor it, is still not reconstructible — the endpoints detect it (the canary
+ * truncates) but the replay cannot reproduce it. Unchanged by F2, and inherent to the model.
+ * ===============================================================================
  *
  * COHERENCE CANARY. Replay is only correct if the emulator's inputs match reality; a sibling
  * that rewrites a loaded byte between the boundary snapshot and the real block's execution
@@ -189,6 +268,11 @@ typedef struct {
         stack_hi_pad; /* test hook: grow the replay's stack window this many bytes ABOVE
                             * rsp, forcing it past the top of the tracee's [stack] VMA so the
                             * partially-mapped-window case is reproducible on demand */
+    int no_syscall_inject; /* test hook (F2): reach a syscall in the replay but do NOT inject
+                            * the recorded effect — reproduces the pre-F2 behaviour, where the
+                            * replay carried the syscall NUMBER in rax instead of the kernel's
+                            * result. Proves the injection is load-bearing and that the canary
+                            * catches its absence. */
 } asmtest_blockstep_opts_t;
 
 /* Capture telemetry, filled on every non-EINVAL return. */
@@ -210,6 +294,13 @@ typedef struct {
                        * read-back (2.0.1 accepts a ZMM write and stores nothing) */
     int vec_seeded; /* XMM registers seeded into the replay AND verified by read-back */
     int mxcsr_seeded; /* 1 = MXCSR (FP rounding / FTZ / DAZ) seeded AND verified too */
+    /* --- F2 (record-and-inject) --- */
+    int injectable; /* the scan's verdict: every impurity in the region is a syscall /
+                     * int 0x80, so record-and-inject can carry it (1 also when PURE) */
+    uint64_t
+        injected; /* syscalls whose recorded effect was injected into the replay.
+                   * >0 is the only positive evidence that F2's path really ran:
+                   * `pure` cannot say it, since it means "the replay was used". */
 } asmtest_blockstep_info_t;
 
 #if defined(__linux__) && defined(__x86_64__) &&                               \
@@ -424,6 +515,49 @@ static int vec_reg_info(uint32_t reg, int *idx, int *width) {
     return 0;
 }
 
+/* How an impure instruction relates to the F2 record-and-inject path. THE SPLIT IS A MEASURED
+ * HARDWARE FACT, not a preference — see the file header's F2 section:
+ *
+ *   DFB_IMP_SYSCALL / DFB_IMP_INT80 — PTRACE_SINGLEBLOCK (DEBUGCTL.BTF) traps these, because
+ *     SYSCALL and INT are control transfers. The forward pass therefore gets a real boundary
+ *     IMMEDIATELY AFTER the instruction retires, for free, with the kernel's result already in
+ *     the registers and its memory delta already in the tracee. That boundary is the entire
+ *     mechanism F2 needs.
+ *   DFB_IMP_OTHER — rdtsc / rdtscp / rdrand / rdseed / cpuid / sysenter. MEASURED on this Zen 5:
+ *     BTF does NOT trap them (they are not control transfers), so a block runs straight through
+ *     them and there is NO boundary at which their retired value could be recorded. Recording
+ *     them needs a DIFFERENT primitive (a hardware exec breakpoint, or single-stepping to the
+ *     site) — not a different decode. They stay on the single-step fallback.
+ */
+typedef enum {
+    DFB_IMP_NONE = 0,
+    DFB_IMP_SYSCALL, /* `syscall`  — clobbers rax (result), rcx (next rip), r11 (rflags) */
+    DFB_IMP_INT80, /* `int 0x80` — clobbers rax ONLY (measured: rcx/r11 survive)       */
+    DFB_IMP_OTHER /* no BTF boundary exists: not injectable                            */
+} dfb_imp_t;
+
+static dfb_imp_t dfb_impurity_kind(const cs_insn *insn) {
+    switch (insn->id) {
+    case X86_INS_SYSCALL:
+        return DFB_IMP_SYSCALL;
+    case X86_INS_INT:
+        if (insn->detail->x86.op_count == 1 &&
+            insn->detail->x86.operands[0].type == X86_OP_IMM &&
+            insn->detail->x86.operands[0].imm == 0x80)
+            return DFB_IMP_INT80;
+        return DFB_IMP_NONE;
+    case X86_INS_SYSENTER:
+    case X86_INS_RDTSC:
+    case X86_INS_RDTSCP:
+    case X86_INS_RDRAND:
+    case X86_INS_RDSEED:
+    case X86_INS_CPUID:
+        return DFB_IMP_OTHER;
+    default:
+        return DFB_IMP_NONE;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Shared capture core: one record stream, two value sources           */
 /* ------------------------------------------------------------------ */
@@ -460,7 +594,45 @@ typedef struct {
     mem_reader_fn mr;
     void *mr_ctx;
     int want_vec; /* the region references vector state: capture + seed it */
+    /* --- F2: per-step impurity classification ---------------------------------
+     * A SECOND, INDEPENDENT decoder, deliberately NOT sharing region_scan's answer. region_scan
+     * is a LINEAR sweep and can DESYNC (F1's `island` fixture proves it: a constant-pool island
+     * makes a `movabs` swallow the next instruction's prefix), so a syscall or an rdtsc hidden
+     * behind an island is INVISIBLE to it. This handle decodes at the replay's ACTUAL pc, which
+     * follows real control flow — it cannot desync, and it is what stops an unclassified impure
+     * instruction reaching Unicorn. F1's own design lesson, applied: the gate and the witness
+     * must not be fed by the same scan. */
+    csh cs;
+    int cs_ok;
+    dfb_imp_t
+        cur_imp; /* the impurity class of the step open_step just opened */
+    uint64_t injected; /* syscalls whose recorded effect the replay injected */
 } cap_ctx;
+
+/* Classify the instruction at blob offset `off` — impurity class, and its byte length via
+ * *len_out. Decodes ONE instruction at the real pc. Fails CLOSED: an undecodable byte is
+ * reported DFB_IMP_OTHER, i.e. "not something the replay may execute", because an instruction
+ * we cannot decode is precisely one we cannot vouch for. */
+static dfb_imp_t dfb_classify_at(cap_ctx *c, uint64_t off, size_t *len_out) {
+    if (len_out != NULL)
+        *len_out = 0;
+    if (!c->cs_ok || off >= c->code_len)
+        return DFB_IMP_OTHER;
+    cs_insn *insn = cs_malloc(c->cs);
+    if (insn == NULL)
+        return DFB_IMP_OTHER;
+    const uint8_t *p = c->code + off;
+    size_t remaining = c->code_len - (size_t)off;
+    uint64_t addr = off;
+    dfb_imp_t k = DFB_IMP_OTHER;
+    if (cs_disasm_iter(c->cs, &p, &remaining, &addr, insn)) {
+        k = dfb_impurity_kind(insn);
+        if (len_out != NULL)
+            *len_out = insn->size;
+    }
+    cs_free(insn, 1);
+    return k;
+}
 
 /* Map a Capstone x86 register id to its 64-bit container value in a GP register file,
  * folding sub-registers to the container. EFLAGS is masked of the debug-stepping bits so
@@ -671,11 +843,50 @@ static size_t open_step(cap_ctx *c, const dfb_snap_t *s) {
     c->cur.n = 0;
     c->cur_off = off;
     c->have_cur = 1;
+    /* Classify THIS step's instruction from its real pc. Both value sources call through here,
+     * so the single-step oracle and the replay agree on the syscall write set below; step_block
+     * additionally reads c->cur_imp to decide whether the replay may execute it at all. */
+    c->cur_imp = dfb_classify_at(c, off, NULL);
 
     at_val_rec_t rd[64], wr[64];
     size_t nr = 64, nw = 64;
     size_t insn_len = asmtest_operands(ASMTEST_ARCH_X86_64, c->code,
                                        c->code_len, off, rd, &nr, wr, &nw);
+
+    /* F2 — THE SYSCALL'S OWN WRITE SET, supplied producer-locally.
+     *
+     * MEASURED: the shared operand enumerator reports `syscall` and `int 0x80` as touching NO
+     * registers at all (0 reads, 0 writes) — Capstone models the instruction, not the ABI. So
+     * without this, the syscall step would carry ZERO records and the kernel's result would
+     * never appear in the value trace: the L1 def-use builder would see the downstream `add
+     * rax, rax` READ a register that nothing in the trace ever DEFINED, and the edge back to
+     * the syscall — the one edge a reader of an impure method actually wants — would not exist.
+     * "Record the syscall's effect" is precisely this record.
+     *
+     * The set is architectural, not a per-syscall table: SYSCALL clobbers rax (the kernel's
+     * return), rcx (= the next rip) and r11 (= the pre-syscall rflags). INT 0x80 goes through
+     * an interrupt gate and clobbers rax ONLY — measured on this host, and the distinction is
+     * real: claiming rcx/r11 defs for int 0x80 would forge two defs that never happened.
+     *
+     * Both value sources go through this ONE function, so the single-step oracle and the
+     * block-step replay grow the same records automatically and stay comparable. The values are
+     * deferred like any other write and land from the NEXT snapshot — which on both paths is a
+     * REAL post-syscall boundary, never a fabrication. */
+    if (c->cur_imp == DFB_IMP_SYSCALL || c->cur_imp == DFB_IMP_INT80) {
+        static const uint32_t sc_regs[] = {X86_REG_RAX, X86_REG_RCX,
+                                           X86_REG_R11};
+        size_t n_sc = (c->cur_imp == DFB_IMP_SYSCALL) ? 3 : 1;
+        for (size_t i = 0; i < n_sc && nw < 64; i++) {
+            at_val_rec_t r;
+            memset(&r, 0, sizeof r);
+            r.kind = AT_LOC_REG;
+            r.reg = sc_regs[i];
+            r.size = 8;
+            r.is_write = true;
+            wr[nw++] = r;
+        }
+    }
+
     for (size_t i = 0; i < nr; i++) {
         at_val_rec_t r = rd[i];
         if (r.kind == AT_LOC_REG) {
@@ -759,6 +970,8 @@ static size_t mr_tracee_window(pid_t pid, uint64_t addr, uint8_t *buf,
  * single-step fallback, but for different reasons, so they are reported separately. */
 typedef struct {
     int pure; /* no syscall / sysenter / int 0x80 / rdtsc[p] / rdrand / rdseed / cpuid */
+    int injectable; /* F2: impure, but EVERY impurity found is a syscall / int 0x80 —
+                       * an impurity record-and-inject can carry (see dfb_impurity_kind) */
     int replayable; /* no VEX/EVEX-encoded instruction (see insn_is_vex_evex)                */
     int touches_vec; /* references vector state, so the capture must snapshot + seed it      */
     /* The two verdicts have INDEPENDENT reasons, because a region can fail both gates and
@@ -769,10 +982,16 @@ typedef struct {
         replay_reason; /* "vex/evex" or "decode", when !replayable             */
 } dfb_scan_t;
 
-/* Why the replay path was declined, if it was. Impurity is the stronger verdict, so it names
- * the region when both gates fire. */
+/* Does the region get the block-step + replay path? F2 widens F1's rule: a region is no longer
+ * required to be PURE, only to have no impurity the replay cannot honestly carry. */
+static int scan_replay_ok(const dfb_scan_t *s) {
+    return (s->pure || s->injectable) && s->replayable;
+}
+
+/* Why the replay path was declined, if it was. An impurity we cannot inject is the stronger
+ * verdict, so it names the region when both gates fire. */
 static const char *scan_reason(const dfb_scan_t *s) {
-    if (!s->pure)
+    if (!s->pure && !s->injectable)
         return s->impure_reason;
     if (!s->replayable)
         return s->replay_reason;
@@ -897,6 +1116,8 @@ static const char *insn_impurity(const cs_insn *insn) {
 static void region_scan(const uint8_t *code, size_t len, dfb_scan_t *out) {
     memset(out, 0, sizeof *out);
     out->pure = 1;
+    out->injectable =
+        1; /* vacuously, until an impurity we cannot inject is seen */
     out->replayable = 1;
     csh h;
     if (cs_open(CS_ARCH_X86, CS_MODE_64, &h) != CS_ERR_OK) {
@@ -929,13 +1150,27 @@ static void region_scan(const uint8_t *code, size_t len, dfb_scan_t *out) {
                 0; /* the FIRST impure instruction names the region... */
             out->impure_reason = imp;
         }
+        /* F2: `injectable` is NOT settled early — it is an ALL-quantifier ("every impurity in
+         * this region is one the replay can carry"), so it must see the WHOLE region. A region
+         * whose first impurity is a syscall and whose second is a cpuid is NOT injectable, and
+         * settling at the first would be exactly the HIGH-3 early-break bug in a new costume. */
+        if (imp != NULL && dfb_impurity_kind(insn) == DFB_IMP_OTHER) {
+            out->injectable = 0;
+            /* Name the impurity that actually DISQUALIFIES the region, not merely the first one
+             * seen: with `syscall; cpuid` the honest reason is "cpuid" — a caller told "syscall"
+             * would go looking for a gate that no longer exists. */
+            out->impure_reason = imp;
+        }
         /* ...but the sweep RUNS ON: purity is decided, replayability and touches_vec are not. */
     }
     cs_free(insn, 1);
     cs_close(&h);
     if (remaining != 0) {
         /* Desync: the bytes past this point were never classified, so no optimistic verdict
-         * over them is earned. Decline the replay and force the vector machinery on. */
+         * over them is earned. Decline the replay and force the vector machinery on.
+         * `injectable` is deliberately NOT cleared here: `replayable = 0` already gates the
+         * region off the replay (scan_replay_ok ANDs them), and clearing it would make the
+         * reason "the impurity" rather than the truthful "decode". */
         out->replayable = 0;
         out->replay_reason = "decode";
         out->touches_vec = 1;
@@ -1284,7 +1519,8 @@ static int regs_coherent(const struct user_regs_struct *uc,
  * branched somewhere OTHER than the real boundary (divergence), -1 on a Unicorn fault /
  * undecodable step. The terminating branch is left as the open step (finalized by the next
  * block's seed, or at region exit). */
-static int step_block(cap_ctx *c, uc_engine *uc, uint64_t pc_next) {
+static int step_block(cap_ctx *c, uc_engine *uc, uint64_t pc_next,
+                      const dfb_snap_t *next, int no_inject) {
     dfb_snap_t S;
     for (size_t guard = 0; guard <= c->code_len + 4; guard++) {
         memset(&S, 0, sizeof S);
@@ -1295,6 +1531,54 @@ static int step_block(cap_ctx *c, uc_engine *uc, uint64_t pc_next) {
         size_t len = capture_at(c, &S); /* finalize prev + open current */
         if (len == 0)
             return -1;
+
+        /* ---- F2: the replay must never EXECUTE an impure instruction ----------------
+         *
+         * This check is the reason the tier is not silently wrong, and "UC_ERR_OK" is exactly
+         * why it is needed. MEASURED against the bundled Unicorn: `syscall` returns UC_ERR_OK
+         * and simply advances rip (rax keeps the syscall NUMBER); `rdtsc` returns UC_ERR_OK
+         * with a FABRICATED counter (0x132f2_1638543f); `cpuid` returns UC_ERR_OK with all
+         * zeros. None of them fails. They lie — the same failure mode F1 found in VEX-128.
+         *
+         * It is deliberately INDEPENDENT of region_scan rather than trusting its verdict, which
+         * is F1's own hard-won lesson (a gate and the witness that would catch the gate's
+         * failure must not share an input). region_scan is a linear sweep that DESYNCS on a
+         * constant-pool island — the shape this tier's JIT targets routinely contain — so it
+         * can miss an impurity entirely. This decode is at the replay's real pc. */
+        if (c->cur_imp == DFB_IMP_SYSCALL || c->cur_imp == DFB_IMP_INT80) {
+            /* FAIL CLOSED on the premise itself. The whole design rests on a measured fact —
+             * DEBUGCTL.BTF traps SYSCALL/INT, so the forward pass ALWAYS has a real boundary
+             * immediately after the instruction retires. Rather than assume that, require it:
+             * the real next boundary must be exactly the instruction after this one. If it is
+             * not (BTF masked or behaving differently, a signal, a syscall that did not return
+             * where expected), we have no recorded effect to inject and MUST NOT guess. */
+            if (next == NULL || pc + len != pc_next || no_inject)
+                return -1;
+            /* INJECT. Note what this is and is not: every value written here was READ FROM THE
+             * REAL TRACEE at the real boundary. Nothing is fabricated, no syscall-specific
+             * table is consulted, and no argument is decoded — the kernel's own retired result
+             * is simply carried across. rcx/r11 are injected rather than computed because r11
+             * provably CANNOT be computed honestly: measured, it comes back as the pre-syscall
+             * rflags OR'd with TF (0x100) — the ptrace single-step bit — so a "computed" r11
+             * would have to model the debug mechanism perturbing the value it reports. */
+            uint64_t v = next->gp.rax;
+            uc_reg_write(uc, UC_X86_REG_RAX, &v);
+            if (c->cur_imp == DFB_IMP_SYSCALL) {
+                /* int 0x80 goes through an interrupt gate and leaves rcx/r11 ALONE (measured);
+                 * writing them there would corrupt two live registers. */
+                v = next->gp.rcx;
+                uc_reg_write(uc, UC_X86_REG_RCX, &v);
+                v = next->gp.r11;
+                uc_reg_write(uc, UC_X86_REG_R11, &v);
+            }
+            v = pc + len;
+            uc_reg_write(uc, UC_X86_REG_RIP, &v);
+            c->injected++;
+            return 0; /* the syscall TERMINATES the block, exactly at the real boundary */
+        }
+        if (c->cur_imp == DFB_IMP_OTHER)
+            return -1; /* rdtsc/cpuid/... : no boundary exists to record from — truncate */
+
         if (uc_emu_start(uc, pc, (uint64_t)-1, 0, 1) != UC_ERR_OK)
             return -1;
         uint64_t next = 0;
@@ -1463,12 +1747,14 @@ static int capture_blockstep(cap_ctx *c, pid_t pid, uint64_t base, size_t len,
             uc_reg_write(uc, UC_X86_REG_RAX, &bad);
         }
 
-        int brc = step_block(c, uc, S_next.gp.rip);
+        int brc =
+            step_block(c, uc, S_next.gp.rip, &S_next, o->no_syscall_inject);
         if (brc < 0) {
             /* A Unicorn fault / undecodable step — e.g. UC_ERR_INSN_INVALID on a VEX/EVEX
-             * instruction that slipped past the replayability gate. This is a DIVERGENCE, not
-             * a missing substrate: it must truncate, never masquerade as the ETRACE self-skip
-             * that ret was initialized to. */
+             * instruction that slipped past the replayability gate, or (F2) an impure
+             * instruction the replay may not execute and has no boundary to inject from. This
+             * is a DIVERGENCE, not a missing substrate: it must truncate, never masquerade as
+             * the ETRACE self-skip that ret was initialized to. */
             c->vt->truncated = true;
             ret = DF_BLOCKSTEP_FAULT;
             goto out;
@@ -1646,6 +1932,33 @@ int asmtest_dataflow_blockstep_is_replayable(const uint8_t *code,
     return 0;
 }
 
+/* F2: can the replay carry this region's OS interaction by RECORD-AND-INJECT? 1 = yes (which
+ * includes a PURE region, vacuously); 0 = no, and *reason names the impurity that disqualifies
+ * it. Deliberately a THIRD verdict rather than a redefinition of is_pure(): "pure" is a property
+ * of the code and ten other things ask it, whereas this is a property of what THIS tier can
+ * carry. A caller wanting F1's question still gets F1's answer.
+ *
+ * The honest boundary, MEASURED rather than assumed (see dfb_impurity_kind): `syscall` and
+ * `int 0x80` are trapped by DEBUGCTL.BTF because they are control transfers, so the forward pass
+ * gets a real post-retirement boundary for free. `rdtsc` / `rdtscp` / `rdrand` / `rdseed` /
+ * `cpuid` are NOT trapped — a block runs straight through them — so there is no boundary at
+ * which their retired value could be recorded, and no amount of decoding creates one. */
+int asmtest_dataflow_blockstep_is_injectable(const uint8_t *code,
+                                             size_t code_len,
+                                             const char **reason) {
+    if (reason != NULL)
+        *reason = NULL;
+    if (code == NULL || code_len == 0)
+        return DF_BLOCKSTEP_EINVAL;
+    dfb_scan_t s;
+    region_scan(code, code_len, &s);
+    if (s.injectable)
+        return 1;
+    if (reason != NULL)
+        *reason = s.impure_reason;
+    return 0;
+}
+
 /* The widest vector register width the HARDWARE + OS expose through XSTATE (0/16/32/64), and
  * — when nregs is non-NULL — how many vector registers exist (16, or 32 with AVX-512). Lets a
  * suite hardware-gate its YMM/ZMM cases rather than fail on a box without the silicon. */
@@ -1696,7 +2009,7 @@ int asmtest_dataflow_blockstep_run(const uint8_t *code, size_t code_len,
      * force_singlestep still runs the scan so info.reason stays informative. */
     dfb_scan_t scan;
     region_scan(code + o.region_off, code_len - (size_t)o.region_off, &scan);
-    int gated_off = (!scan.pure || !scan.replayable) && !o.force_replay;
+    int gated_off = !scan_replay_ok(&scan) && !o.force_replay;
     int use_replay = !gated_off && !o.force_singlestep;
 
     void *ex = map_exec(code, code_len);
@@ -1718,6 +2031,14 @@ int asmtest_dataflow_blockstep_run(const uint8_t *code, size_t code_len,
     c.code_len = code_len;
     c.base = base;
     c.want_vec = scan.touches_vec && dfb_xlayout()->ok;
+    /* The per-step decoder (F2). Independent of region_scan's handle by design, and shared by
+     * BOTH value sources so the syscall write set is identical on the oracle and the replay.
+     * cs_ok = 0 makes dfb_classify_at answer DFB_IMP_OTHER for every step, which fails closed:
+     * the replay refuses to execute anything, so a decoder-less build truncates rather than
+     * emulating instructions it cannot vouch for. */
+    c.cs_ok = (cs_open(CS_ARCH_X86, CS_MODE_64, &c.cs) == CS_ERR_OK);
+    if (c.cs_ok)
+        cs_option(c.cs, CS_OPT_DETAIL, CS_OPT_ON);
 
     uint64_t stops = 0, steps = 0, entry_rsp = 0;
     int vec_seeded = 0, mxcsr_seeded = 0;
@@ -1748,9 +2069,13 @@ int asmtest_dataflow_blockstep_run(const uint8_t *code, size_t code_len,
         info->uc_vec_width = uc_vec_width_probe();
         info->vec_seeded = vec_seeded;
         info->mxcsr_seeded = mxcsr_seeded;
+        info->injectable = scan.injectable;
+        info->injected = c.injected;
     }
 
     free(c.cur.v);
+    if (c.cs_ok)
+        cs_close(&c.cs);
     reap(pid);
     munmap(ex, code_len);
     return rc;
@@ -1770,6 +2095,16 @@ int asmtest_dataflow_blockstep_is_pure(const uint8_t *code, size_t code_len,
 }
 
 int asmtest_dataflow_blockstep_is_replayable(const uint8_t *code,
+                                             size_t code_len,
+                                             const char **reason) {
+    (void)code;
+    (void)code_len;
+    if (reason != NULL)
+        *reason = NULL;
+    return DF_BLOCKSTEP_ENOSYS;
+}
+
+int asmtest_dataflow_blockstep_is_injectable(const uint8_t *code,
                                              size_t code_len,
                                              const char **reason) {
     (void)code;
