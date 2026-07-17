@@ -112,6 +112,7 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 | ~~**No regression test for the crash-safe two-phase detach** — the exact bug the fix closed has zero guard, and every smoke victim is killed right after tracing, so a regression that silently kills the target looks like success. Trace a multi-threaded victim, then assert it **survives** detach~~ — **landed** as a happy-path survival tripwire (single-step via `--stream`+`--tree`, then assert alive) in `cli_smoke.sh`. Honest scope: the historical fatal SIGTRAP reproduced *reliably only on a real V8/Node JIT* (per 6aaad45's own notes — simple victims survive even the pre-fix detach), so this guards gross regressions, not that JIT crash (which needs a live JIT, an inherent limit) | med | S |
 | ~~Graph sort comparator (`gnode_cmp`) ordering/tiebreaks unasserted — extract into a testable header + `test_graphsort.c`~~ — **landed 2026-07-12**: `cli/asmspy_graphsort.h` + `cli/test_graphsort.c` (ties included), wired into the smoke | med | M |
 | ~~`asmspy_symtab_at` reverse-lookup edge cases~~ **(landed 2026-07-17: `cli/test_symtab.c`, 20 checks. Every view that names an address goes through this one function, and its edges are exactly where a resolver lies quietly rather than fails — one byte past a function, the GAP between two functions, a zero-SIZE symbol, an address below the first, and n==1's binary-search collapse. Each returns a plausible NAME when wrong, which is worse than nothing. **Mutation-proven 3/3:** containment `<`→`<=` → the gap at 0x1020 answers 'beta' (3 FAILs); no containment test → 7 FAILs; search boundary `<=`→`<` → every entry address misses (5 FAILs))**; ~~multi-thread `[tid]` tagging for graph/tree~~ **(landed 2026-07-17 for `--tree`: `tid_victim`'s two threads must both appear, tagged, under ≥2 distinct tids — without the prefix two threads' trees interleave into one indented column that reads like a single nonsensical call chain — plus the `--tid` control, where a single-thread trace must NOT carry it. Mutation-proven: `multi` forced 0 → tagged lines 40→**0**, distinct tids 3→**0**. `--graph` is **N/A, not skipped**: its nodes are aggregated ACROSS threads by design and carry no tid, so there is nothing to tag)**; attach-failure + `REGION_NEVER_RAN`; negative-`n` "until exit"; ~~`--tree` depth > 1~~ **(covered 2026-07-17 by the Theme C longjmp test — `jump_out` asserted at depth 2 — and by `test_treefilter`'s depth-cap/re-base cases)**; ~~post-attach clone-following~~ **(landed 2026-07-17: `cli/clone_victim.c` stays single-threaded until after the attach, so `spawned_fn` runs only on threads `seize_threads`' one-shot `/proc` scan can never have seen — 2366 lines across 6 tids; mutation-proven, `TRACECLONE` unset → 0)**; job-control group-stop; syscall-decoder breadth; region edge aggregation; ~~a pure TUI view-model (`test_view.c`)~~ **(landed 2026-07-15: `cli/asmspy_dataview.h` + `cli/test_view.c`, unit-testing the Data-flow annotation/slice/def-use logic, wired into `cli_smoke.sh`)** | low | S–M each |
+| **The `--sample` block is VACUOUS in `make docker-cli` — and always has been** (2026-07-17, MEASURED). `mk/cli.mk:304` runs `docker run --rm $(_docker_plat) asmtest-cli` — no `--cap-add`, no `--security-opt` — and Docker's **default seccomp profile blocks `perf_event_open`** (`mk/docker.mk:561` says so explicitly). So `--sample` always self-skips, and `cli_smoke.sh:1281`'s `if grep -q '^# SKIP --sample'; then <accept>; else <EVERY assertion> fi` takes the skip branch **every time**: the `hot_spin` naming check, the `--json` `"mode":"ibs-op"` check, the `"from_name":"hot_spin` resolution check have **never executed in the only lane that runs them**. End-to-end evidence on a Zen 5 9950X (`ibs_op` PMU + `swfilt` both present): the smoke prints **`SMOKE_RC=0`** while line 440 is `# SKIP --sample: ` and line 441 is `(IBS-Op unavailable on this host — sampler self-skipped, OK)` — **a false statement**; IBS *is* available here, `perf_event_open(ibs_op)` returns **fd=3** under `--cap-add=PERFMON --security-opt seccomp=unconfined` (measured; unprivileged it is EACCES, bare-container EPERM). So the view this plan calls *"the only rich view safe on any target"* is **untested**, and the gate is green. Same class as the format/parity gates that globbed the wrong directory. **Fix**: a `docker-cli-ibs` lane mirroring **`docker-hwtrace-amd`** (`mk/docker.mk:541-545`), which already carries exactly these two flags for exactly this reason. Per CLAUDE.md, IBS *hardware* is a legitimate gate but **a capability flag on a `docker run` line is not** — the hardware is present, only the run line is missing; `Dockerfile.cli` makes this argument verbatim for `gcc-multilib` ("a 32-bit process is not hardware, so it is not a real gate — it is an apt line"). **Correction to carry**: `mk/docker.mk:536` claims the AMD lane "still needs an AMD host **with `perf_event_paranoid` lowered**" — **MEASURED FALSE**: `CAP_PERFMON` bypasses paranoid entirely (this host is at paranoid=**4**; unprivileged EACCES, `--cap-add=PERFMON` → fd=3). Do not lower a host sysctl on this evidence | **high** | S |
 | **Already landed, previously unrecorded here** (bookkeeping, no work implied) — **`cli/test_logview.c`** (`cli/asmspy_logview.h`, `mk/cli.mk:133-134`) unit-tests the TUI scrollback viewport math with no ncurses, so it runs anywhere the smoke does; **`cli/test_jitdump.c`** (`mk/cli.mk:154-157`) unit-tests the binary jitdump reader + the two-tier JIT resolve chain, linking `asmspy_proc.o` directly. Both are `cli-smoke` prereqs (`mk/cli.mk:159-165`) — so the landed view-model surface is four tests (`test_view`, `test_logview`, `test_jitdump`, `test_graphsort`), not one | — | — |
 
 ### Theme E — TUI / UX & interop
@@ -127,6 +128,8 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 | *(2026-07-17 note on the row above — **NOT done**, but two concrete findings from adjacent work.)* **(1)** The fd→endpoint work (Theme E) hit this directly: `sendto` is not in the decoded set, so a socket send renders `sendto(0x6, 0x6422497c607c, 0x1)` — three raw hex slots, **no fd to enrich**, which is why `cli/sock_victim.c` had to use a self-connected DGRAM socket and plain `write()` instead. The socket-syscall family (`sendto`/`recvfrom`/`connect`/`accept`/`bind`) is where the always-3-hex default is most visible now that fds resolve to real endpoints. **(2)** The i386 gate (Theme F3) measured what a *wrong* decode looks like — `stat("", 0xf20f0e34, 0x1) = 1` for a `write` — a useful reference for how confidently this decoder renders nonsense when its inputs are wrong | low | L |
 | ~~fd→path shows `socket:[inode]`/`pipe:[inode]`, not the endpoint; graph node/edge lookups are O(n) per call; `usage()` accepts the `functions-called` sort synonym but omits it from the `--sort=` `bad_arg` text~~ — **all three landed 2026-07-17.** **(1) fd→ENDPOINT**: `fd_endpoint()` resolves `socket:[<ino>]` through **`/proc/<TARGET-pid>/net`** — the target's pid deliberately, so a container's socket is looked up in *its* netns, not ours — across `tcp`/`tcp6`/`udp`/`udp6`/`unix`, rendering `TCP 127.0.0.1:40730->127.0.0.1:54681`, `TCP LISTEN 127.0.0.1:54681`, `unix:/tmp/foo.sock`. **`pipe:[inode]` is left alone deliberately**: its peer is not in `/proc/<pid>/net` at all, and naming it would mean scanning every process's fds for the same inode — not something an attach path should do per syscall. New fixture `cli/sock_victim.c` binds to **port 0 and prints the port the kernel picked**, so the expected strings are *derived from the run*, not hardcoded, and cannot be satisfied by echoing the inode back; it holds both ends of one loopback connection, so each must show its own local→remote direction. Two fixture findings: `sendto` is **not** one of the hand-decoded syscalls (it renders as raw hex with no fd to enrich, i.e. would have tested nothing — hence a self-connected DGRAM socket and plain `write()`); and `write()` to a **listening** TCP socket raises **SIGPIPE**, not just EPIPE (`tcp_sendmsg`→`sk_stream_error`), which killed the victim outright (exit 141) until it ignored SIGPIPE. **Mutation-proven (2/2):** always-decline → raw `socket:[inode]` **0→64** and all four endpoint assertions **16→0**; enrichment-swallows-everything → endpoints→0 **and** the downstream regular-file `fd=<path>` assertion **4→0**, catching the additivity regression the endpoint checks alone cannot see. **(2) graph hash index**: open-addressed (`ghash_t`, splitmix64, slot = index+1 so 0 is empty, power-of-two cap, linear probing, grown at 70%) over both the node table (by addr) and the edge table (by caller,callee). The two endpoints are mixed **separately** before combining — a plain xor of two small indices collides trivially (`a→b` vs `b→a`), degrading the probe chain into the very scan it replaces. On index-allocation OOM the index is **dropped entirely** (`cap=0`) rather than left stale, so lookups fall back to the linear scan: a half-populated index would MISS and silently duplicate a node, which is wrong, whereas the scan is merely slow. Guarded by a **node/edge uniqueness** assertion on `--graph --json` — both lookups are "find it, else append", so a broken index does not error, it appends a second node for an address it already has and splits the counts across the duplicates. **Mutation-proven:** `gh_put` no-op → nodes **7→90** (unique still 7), edges **5→60**; assertion fires. **⚠ Honest gap:** the uniqueness check catches the index MISSING hits (what a `gh_put`/`gh_grow` bug produces) but **cannot** catch a hash-vs-key confusion — MEASURED, a mutant that accepts the first probe slot without comparing the key emits **byte-identical** output, because the smoke's graphs (≤7 nodes in a 128-slot table) never collide, so the first probe slot is always the right one. That failure over-merges rather than duplicating (on a larger graph it silently dropped an edge, 4→3). Closing it properly means extracting `ghash_t` into a header + a collision-forcing unit test, the `asmspy_graphsort.h` treatment — **not done; a real follow-up**. **(3) `--sort=` synonym**: `functions-called` now appears in **both** the `bad_arg` text and `usage()` (marked as a synonym for `fanout`) — omitting it told a user who typed a near-miss that their working spelling does not exist. The `<sym|0xADDR[:LEN]>` half was already done | low | S–M |
 
+| **`# SKIP --sample: ` prints an EMPTY reason on exactly the host where the reason matters** (2026-07-17, MEASURED). `ibs_probe()` (`src/ibs_backend.c:319-358`) is **CPUID + sysfs only — it never calls `perf_event_open`**, so `asmtest_ibs_available() == 1` does **not** mean sampling will work; it means the *substrate* is present. On this Zen 5 all six detect checks pass (AMD, IBS caps, OpSam, BrnTrgt, `ibs_op` PMU, `swfilt`) → `g_avail = 1`, `g_reason = ""`. Then `perf_event_open` is refused, the engine returns `ASMSPY_SAMPLE_UNAVAIL`, and `cmd_sample` prints `asmtest_ibs_skip_reason()`, which is `return g_avail == 1 ? "" : g_reason` (`:366`) — **the empty string, by construction, on precisely this path**. `cli/asmspy.c:1177` even *names* it: `/* substrate present but perf_open blocked */`, then prints the passing detect chain's reason. MEASURED: `./build/asmspy --sample <pid> 200` on this host emits `# SKIP --sample: ` and nothing else — an operator on their own AMD box gets no reason at all. **Root cause**: `ibs_chan_open` (`:745-747`) does `long fd = perf_open(...); if (fd < 0) return -1;` — **errno is discarded**, so EACCES (permission), EINVAL (bad attr), EMFILE (fd limit), ENOENT (bad PMU type) and ESRCH (thread exited) all collapse into one indistinguishable code. Fix: carry the errno out of the open and report it on the UNAVAIL path (paranoid/CAP_PERFMON for EACCES). This is exactly the operator-one-liner discipline Theme F3's i386 gate was built for, inverted. **Two adjacent instances of the same root cause, both MEASURED**: `examples/ibs_probe.c` *actively misreports* this host — it prints "IBS-Op statistical edge sampling: AVAILABLE" and "A live, out-of-band from→to edge survey is buildable on this host" when no survey can open; and **`make ibs-test` is vacuously green here** — all six live paths self-skip on `EUNAVAIL` while printing substrate-present messages, so only the pure-decode tests actually run. A confidently-wrong "AVAILABLE" is the same defect this tracer rejects everywhere else (an honest `0x…` beats a confident wrong name) | med | S |
+
 ### Theme F — Portability & build
 
 | Item | Sev | Eff |
@@ -139,6 +142,144 @@ F3 refreshes**; headless subcommands under [cli-smoke](../../../cli/cli_smoke.sh
 ### Theme G — Process/docs
 
 - ~~No dedicated asmspy plan/roadmap doc~~ — **this document** closes it.
+
+### Theme H — Auto-targeting: `--dataflow <pid>` with no symbol *(planned)*
+
+> **The ask**: identify what a process is *actually doing right now* and trace that, without
+> the operator naming a function. Today `--dataflow <pid> <sym|0xADDR[:LEN]>` requires the
+> answer as input — you must already know what you want to look at.
+
+**This needs no engine change.** `asmspy_engine_dataflow(pid, only_tid, base, len, …)`
+(`asmspy.h:303`) takes an **address range**; the symbol requirement lives entirely in
+`cmd_dataflow` (`asmspy.c:1829`) → `resolve_region`. Auto-targeting is a **resolution-layer**
+feature. `asmspy_engine_sample` already produces the input out of band (no ptrace, no
+single-step, target unperturbed, endpoints resolved through **both** the ELF symtab and the
+JIT perf-map), and `asmspy_sample_edge_t` already carries **`uint64_t from_addr, to_addr`**
+plus `is_return` (`asmspy.h:474-481`) — everything the rule needs.
+
+**The rule: rank the hottest ENTRY edge, not the hottest edge and not the hottest PC.**
+An IBS-Op edge whose `to_addr` equals a symbol's *start* is a call/tail-jump to a function
+**entry**; its count is a statistical proxy for **invocation rate**. Aggregate per entry
+symbol (multiple call sites sum), drop `is_return` edges, prefer the target's own module,
+pick the max → `(sym->addr, sym->size)` → the existing engine.
+
+**MEASURED 2026-07-17** (Zen 5 9950X, `--cap-add=PERFMON`, a 3-level victim: `main` →
+`outer_cold` → `mid_warm` ×2 → `leaf_hot` ×8):
+
+```
+3903  mid_warm+0x17   -> leaf_hot            <- ENTRY edge (renders with NO +0x)
+ 249  outer_cold+0x15 -> mid_warm            <- ENTRY, call site 1
+ 238  outer_cold+0x9  -> mid_warm            <- ENTRY, call site 2 (sums to 487)
+ 237  main+0x36       -> outer_cold          <- ENTRY
+3744  leaf_hot+0x11   -> mid_warm+0x1c [ret] <- return: tagged, lands mid-function
+3377  mid_warm+0x23   -> mid_warm+0x14       <- loop back-edge: mid-function
+```
+
+The entry-edge counts **reproduce the true invocation ratios**: 3903/487 = **8.0×** (the exact
+loop trip count), 487/237 = **2.05×** (the exact call-site count). The proxy is quantitative,
+not hand-wavy. Because IBS samples on a *period*, one entry sample stands for ~16 k arrivals
+(95% one-sided Poisson lower bound ≈ 820 in a 300 ms window ≈ 2.7 calls/ms) — and the engine
+needs exactly **one** arrival, so the expected wait is sub-millisecond.
+
+**Why this is the rule that (mostly) cannot hang.** `asmspy.h`'s own contract: *"A region that
+never executes on ANY thread **blocks the producer at its entry breakpoint**"* — a wrong pick
+does not error, it **hangs** (which is why `cli_smoke.sh:130` timeout-guards it). Type-match
+the evidence to the event: the engine blocks on exactly one event — a thread's RIP reaching
+`base` — and an edge with `to_addr == sym->addr` **is a direct observation of that same
+event**. Everything else is a different event wearing the same clothes. In the capture above
+**`main` has no entry edge at all**, because it was entered once, before we attached — *an
+entry edge is evidence of re-entry by construction*, so "hottest entry edge" and "the
+breakpoint fires promptly" are nearly the same predicate. A **PC histogram picks `main`** and
+blocks forever; that contrast is the test's control (the rival rule's answer **hangs**). An
+independent 3-way design panel converged on this rule **3/3 — including the agent assigned to
+argue the PC-histogram case**, which reported back that residency-ranking is wrong "and the
+failure is not an edge case — it is the modal case. Every event loop, every `main`".
+
+**⚠ Honest scope — "cannot hang" is overstated, and the real fix is elsewhere.** The evidence
+is gathered in a window ending *milliseconds before* the attach. A target that changes phase
+in that gap (the winner's entry stops arriving at `t0 + W·ms + 1`) still blocks forever.
+`--auto` reduces P(hang); it cannot **bound** it, and no resolution-layer rule can — the hole
+is non-stationarity, not the ranking. The actual elimination is a **bounded entry wait inside
+`asmspy_engine_dataflow`**, and there is precedent in this very tree: **`--trace` already has
+one** (`ASMSPY_REGION_NEVER_RAN`; `cli_smoke.sh:1755` asserts a non-runner `--tid` reports
+"never executed" promptly rather than hanging). `--dataflow` should grow the same bounded wait
+— arguably before `--auto`, since it makes *every* pick safe, not just the automatic one.
+
+**⚠ The vacuity trap this rule walks into** — `sym_at`'s zero-`size` branch is
+`query == s->addr`, **exact-start-only**. So for any zero-size symbol (hand-written asm, some
+PLT/JIT entries) resolution succeeds *only* at the entry, and `to_addr == sym->addr` is
+**100% true by construction, not by measurement** — every such symbol looks like a pure entry
+and wins. The rule must **require `sym->size > 0`** (it needs a real `len` for the region
+anyway) and the unit test must include a zero-size symbol as a negative control. Related:
+`asmspy.h:137-139`'s doc comment claims a "nearest addr<=" fallback in `asmspy_symtab_at`
+that **does not exist** in `sym_at` — do not design around it (docs fix, separately).
+
+**Module filtering is load-bearing, not polish.** A raw hot endpoint lands in
+`__memmove_avx_unaligned` or a JIT stub far more often than in the operator's code; without a
+filter the feature reliably picks libc and reads as broken. Reuse `--module=`'s substring
+idiom (`asmspy_treefilter.h:45`) — but **not** `--graph`'s `[int]`/`[EXT]` split as a module
+predicate: `external == 0` means "internal **OR unknown OR jit**" (an unresolved address takes
+the same branch), `exebase` is a **name**, not a load address (`char[64]`, silently truncated
+>63 chars), and PLT stubs live in the exe yet are `[EXT]` **by design**. Those two questions
+("is this address in the exe" vs "is this node internal") are different.
+
+**Shape**: a pure header-only decision module + unit test, per the
+`asmspy_graphsort.h` / `asmspy_treefilter.h` / `asmspy_dataview.h` precedent — the ranking is
+pure over `(edges, symtab)` and must be testable without IBS hardware, which is what keeps the
+feature's core covered on **every** host while the live leg gates on AMD.
+
+**⚠ But the pure module is not the risky half — the ADAPTER is** (adversarial review, 2/3
+lenses raised it independently). The ranking is easy to unit-test and easy to get right. The
+part that can actually be wrong is the **accumulation sink**: the callback that drains
+`asmspy_engine_sample`'s per-window edges, resolves each `to_addr`, applies the entry test,
+and sums per symbol. It lives *outside* the pure header (it needs the symtab and the engine),
+so a `docker-cli`-only lane tests **neither** half — the unit test does not reach it and the
+live block self-skips. Its most likely mutant (drop the accumulation, keep the last window)
+**keeps every block green**. So the pure module must be given the widest possible seam — take
+`(edges[], n, symtab)` and return the ranked list, so the adapter shrinks to "call the engine,
+hand it the edges" — and the `docker-cli-ibs` lane must assert the *summed* count, not just
+the winning name. Note the two-call-site sum in the measurement above (`mid_warm` = 249 + 238)
+is exactly the property a last-window-only mutant loses.
+
+**Fixture**: `cli/sample_victim.c` exists and carries the two things any new victim needs —
+`noinline` (a real, resolvable ELF symbol) and the **`prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY)`**
+opt-in every victim here carries. **Do not omit that prctl**: Yama `ptrace_scope=1` is the
+Ubuntu default and is *not* namespaced, so without it a sibling attach is denied and the
+failure reads exactly like a tracer bug (cost me a wrong diagnosis — I briefly concluded
+`docker-cli` was missing `--cap-add=SYS_PTRACE`; it is not, the victims opt in instead).
+
+But **`sample_victim` cannot test the happy path — MEASURED 2026-07-17**, in the new lane, it
+yields **3 edges, ALL of them `hot_spin`→`hot_spin` back-edges, and NO entry edge whatsoever**:
+
+```
+5340  hot_spin+0x56 -> hot_spin+0x1e      2663  hot_spin+0x32 -> hot_spin+0x4d
+2631  hot_spin+0x25 -> hot_spin+0x34      (main -> hot_spin: ABSENT)
+```
+
+because `hot_spin(2000000)` is entered ~once per 2 M iterations — far too rare to sample. So
+it is the **refusal control**, and a good one: the rule must find zero candidates and say so
+honestly. It also shows what the naive rule does — raw-hottest-edge picks `hot_spin+0x56`, a
+**mid-function** address, which is not an entry the producer can ever break on cleanly. The
+happy path needs a **new** victim with a genuinely re-entered function (the measured 3-level
+shape above: `leaf_hot` at 3903 entry samples).
+
+**`--auto` + `--tid` is a usage error (rc=2), not a precedence rule** — the same call the
+Theme B `--tid`/`--follow` row made, for a harder reason: `asmspy_sample_edge_t` carries **no
+tid**, and neither does `asmtest_ibs_edge_t` (`ibs_drain` reads the record's `pid`,
+`ibs_backend.c:509`, and drops the tid). The sampler physically cannot say *which thread*
+arrived at an entry, so `--auto --tid=<t>` could only pin the capture to a thread that may
+never enter the region — i.e. it is a **hang generator**. Refuse it up front.
+
+**Blocked on Theme D/E above**: built today, this feature's live test would self-skip in
+`docker-cli` forever — a **fourth** vacuously-green block in a file that already has one. Fix
+the lane first.
+
+| Item | Sev | Eff |
+|---|---|---|
+| **Bounded entry wait in `asmspy_engine_dataflow`** — port `--trace`'s `ASMSPY_REGION_NEVER_RAN` posture to the data-flow producer, so a region that is not arriving reports honestly instead of blocking at its int3. **Arguably lands BEFORE `--auto`**: it makes *every* pick safe (including the hand-typed symbol that hangs today), it is the only thing that **bounds** the hazard rather than reducing it, and it turns `--auto`'s residual non-stationarity hole from "hangs" into "says so". `--trace` already proves the shape and `cli_smoke.sh:1755` already asserts it | med | M |
+| `--dataflow <pid>` with no symbol → sample, rank hottest **entry** edge, capture it *(design MEASURED above; needs the `docker-cli-ibs` lane first)*. **AMD-IBS-only** at first — self-skips elsewhere, matching `--sample`'s discipline. `--auto --tid` = rc=2 | med | M |
+| Portable IP sampler so auto-targeting is not AMD-only: `PERF_SAMPLE_IP` appears **once** in the tree (`src/ibs_backend.c:711`, inside the AMD IBS attr) — a `PERF_COUNT_SW_TASK_CLOCK` sampler (software event: no PMU, works in VMs) reusing `ibs_backend.c`'s ring-buffer mmap/read plumbing. **Carry**: a generic `PERF_TYPE_SOFTWARE` open **must clear `cfg.cnt_dispatched`** — `ibs_cfg_from_opts` defaults it to `ibs_has_opcnt()` (true here) and `ibs_fill_attr` then sets `config` bit 19, which hard-fails a non-IBS PMU. NB a PC sampler re-opens the blocking hazard the entry rule closes for free | med | L |
+| TUI: mode 7 (hot edges) → `Enter` → mode 9 (data flow) scoped to that endpoint — the existing "`Enter` drills in" idiom, no new UI concept; doubles as mode 9's missing thread picker | low | M |
 
 ## Top priorities
 
