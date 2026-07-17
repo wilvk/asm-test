@@ -243,6 +243,51 @@ kill -0 "$AVPID" 2>/dev/null \
     || fail "attach_victim DIED after the bounded --dataflow (entry int3 left armed?)"
 echo "  target survived the timeout path + settle"
 
+# ---------------------------------------------------------------------------
+# --max TRUNCATES, it does not FAIL (asmspy-plan Theme H)
+# ---------------------------------------------------------------------------
+# asmspy.h documents --max as bounding the in-region steps captured. It did not
+# truncate, it FAILED: the producer reached its cap, appended the partial trace, set
+# vt->truncated — and then returned DF_PTRACE_ETRACE ("fork/ptrace/wait failure"), so
+# a valid --max surfaced as "ptrace/attach failure (permission? ptrace_scope? … W^X
+# JIT page)" and sent the operator to Yama when the truth was "your cap was smaller
+# than the function". MEASURED on hotfn (83 steps): --max=3 -> rc=1, --max=5 -> rc=1,
+# --max=200 -> rc=0. The flag worked ONLY when it did nothing, which is exactly why no
+# test caught it: the suite only ever asserted expect_badarg --max=0.
+#
+# THE ASSERTION IS THE EXACT STEP COUNT, not merely rc=0. "It did not fail" would also
+# pass if --max were ignored entirely — and an ignored cap is the other way this breaks.
+# n steps for --max=n can only come from a cap that caps.
+for m in 3 5; do
+    echo "--- asmspy --dataflow $AVPID hotfn --max=$m (must truncate to exactly $m) ---"
+    set +e
+    mxout=$(timeout 40 "$ASM" --dataflow "$AVPID" hotfn --max=$m 2>&1); mxrc=$?
+    set -e
+    [ "$mxrc" -eq 0 ] || fail "--dataflow --max=$m failed (rc=$mxrc) instead of truncating: $mxout"
+    printf '%s\n' "$mxout" | grep -qE "[^0-9]$m steps," \
+        || fail "--dataflow --max=$m did not truncate to $m steps: $(printf '%s' "$mxout" | grep -o '[0-9]* steps, [0-9]* records')"
+    echo "  truncated to exactly $m steps"
+done
+# JSON must ANNOUNCE the truncation — a prefix that claims to be a whole capture is the
+# same confidently-wrong shape the ETRACE return had.
+mjout=$(timeout 40 "$ASM" --dataflow "$AVPID" hotfn --max=5 --json 2>/dev/null)
+printf '%s' "$mjout" | grep -q '"steps":5' \
+    || fail "--dataflow --max=5 --json: steps != 5"
+printf '%s' "$mjout" | grep -q '"truncated":true' \
+    || fail "--dataflow --max=5 --json: a truncated capture did not set truncated"
+echo "  json: steps=5, truncated=true"
+# THE CONTROL: a cap ABOVE the region's size must be indistinguishable from no cap —
+# proves --max truncates at the CAP rather than just capping everything short.
+set +e
+bigout=$(timeout 40 "$ASM" --dataflow "$AVPID" hotfn --max=200 2>&1); bigrc=$?
+set -e
+[ "$bigrc" -eq 0 ] || fail "--dataflow --max=200 (above hotfn's 83 steps) failed: $bigrc"
+printf '%s\n' "$bigout" | grep -q 'ret=57' \
+    || fail "--dataflow --max=200: no full capture (a cap above the region must not truncate)"
+printf '%s\n' "$bigout" | grep -qE '[^0-9]83 steps,' \
+    || fail "--dataflow --max=200: expected the full 83 steps"
+echo "  control: --max=200 (> 83) captures in full, ret=57"
+
 # bad --tid / --max / pid are rejected up front (rc=2), before any attach
 expect_badarg "$ASM" --dataflow "$AVPID" hotfn --tid=nope
 expect_badarg "$ASM" --dataflow "$AVPID" hotfn --max=0

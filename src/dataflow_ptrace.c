@@ -947,11 +947,26 @@ static int dfp_step_loop(dfp_ctx *c, uint64_t base_ip, size_t code_len,
             open_step(c, &regs, pc - base_ip);
             if (max_insns != 0 && ++recorded >= max_insns) {
                 /* Bounded scope reached: append what we have (its writes stay
-                 * unfilled), flag truncated, and leave the tracee. */
+                 * unfilled), flag truncated, and leave the tracee.
+                 *
+                 * This is a SUCCESS — the caller asked for exactly this many steps and
+                 * got them; `truncated` is how a prefix announces itself, and the
+                 * engine already reads it ("vt->truncated tells the story"). It
+                 * returned DF_PTRACE_ETRACE, i.e. "fork/ptrace/wait failure (seccomp)",
+                 * so a documented, perfectly valid --max FAILED — and blamed
+                 * "ptrace/attach failure (permission? ptrace_scope? … W^X JIT page)",
+                 * sending the operator to Yama when the truth was "your cap was smaller
+                 * than the function". MEASURED on hotfn (83 steps): --max=3 -> rc=1,
+                 * --max=5 -> rc=1, --max=200 -> rc=0 — the flag worked only when it did
+                 * nothing. Nothing else here changes: dirty_exit's foreign path already
+                 * leaves the tracee stopped for the caller to DETACH, so the target
+                 * still survives exactly as before. There is deliberately no *result:
+                 * the region has not returned, so there is no return value to report,
+                 * and `truncated` is what says so. */
                 asmtest_valtrace_append(c->vt, c->cur_off, c->cur.v, c->cur.n);
                 c->have_cur = 0;
                 c->vt->truncated = true;
-                return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
+                return dfp_dirty_exit(c, DF_PTRACE_OK, 0, left_stopped);
             }
         } else if (entered) {
             /* Left the region. This stop's registers are the previous in-region step's
