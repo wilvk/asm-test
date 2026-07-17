@@ -136,6 +136,22 @@ $(BUILD)/watch_victim: $(BUILD)/watch_victim.o
 $(BUILD)/longjmp_victim: $(BUILD)/longjmp_victim.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# sigcall_victim: main spins on an INDIRECT call while a SIGUSR1 handler waits.
+# The tracer forces a signal into the one-instruction window between arming the
+# pending call and the call retiring (ASMSPY_TEST_SIGRACE), where the engine used
+# to attribute the handler's entry to the call site. Backs the indirect-call
+# attribution smoke (Theme C). Compiles via the cli/ .o pattern rule.
+$(BUILD)/sigcall_victim: $(BUILD)/sigcall_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+# argdecode_victim makes a fixed set of syscalls with KNOWN arguments (creating
+# and non-creating opens, mmap/mprotect flag words, writev iovecs, a sigset, a
+# signal number, an arity-0 getpid, a timespec) so the syscall arg-decoding smoke
+# can assert the RENDERED TEXT exactly rather than "something plausible
+# appeared". Backs Theme E. Compiles via the cli/ .o pattern rule.
+$(BUILD)/argdecode_victim: $(BUILD)/argdecode_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 # sock_victim opens a LISTENing TCP socket, a connected TCP pair (both ends in
 # one process, so the expected endpoints are derivable from the port it prints)
 # and an AF_UNIX socket bound to a path — for the fd->endpoint smoke, which
@@ -271,7 +287,8 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
            $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
            $(BUILD)/fork_victim $(BUILD)/clone_victim \
-           $(BUILD)/sock_victim $(BUILD)/longjmp_victim $(CLI_I386_VICTIM)
+           $(BUILD)/sock_victim $(BUILD)/longjmp_victim \
+           $(BUILD)/sigcall_victim $(BUILD)/argdecode_victim $(CLI_I386_VICTIM)
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
 	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"

@@ -81,7 +81,8 @@ CLPID=""
 IVPID=""
 SKPID=""
 LJPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
+SGPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} ${SGPID:+"$SGPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -713,6 +714,97 @@ printf '%s\n' "$cjout" | grep -q 'level_one' \
 echo "  composition: --depth measures from the --focus root, not the real depth"
 
 # ---------------------------------------------------------------------------
+# INDIRECT-CALL ATTRIBUTION AT A SIGNAL BOUNDARY (asmspy-plan Theme C)
+# ---------------------------------------------------------------------------
+# A `call *reg` carries no target in its bytes, so both stepping engines resolve
+# it at the NEXT stop. Stepping the call site does not guarantee the call RETIRES:
+# a signal pending at that moment is delivered first, and the stop after it is the
+# HANDLER's entry. Taking that as the callee fabricates a caller -> handler edge
+# the target never executed.
+#
+# The window is one instruction wide, so a signal storm hits it only by luck — and
+# a test that only sometimes reproduces the bug it guards silently stops testing.
+# ASMSPY_TEST_SIGRACE=<signo> makes it deterministic instead: the engine queues one
+# signal while the tracee is stopped AT the call site with the pend armed, so the
+# kernel must deliver it before the call executes. Only the signal's TIMING is
+# chosen; every line of the resolution path under test is the production one.
+#
+# Three names, three separate things that must be true (each covers a way the
+# other two could pass while testing nothing):
+#   * indirect_target present  => the real edge SURVIVES. Guards against a "fix"
+#                                 that just drops indirect calls, and against a
+#                                 run that never traced the loop at all.
+#   * handler_helper present   => the injected signal really WAS delivered and the
+#                                 handler really ran under the tracer. Without it
+#                                 the sig_handler_fn assertion below would pass on
+#                                 a run where no race ever happened.
+#   * sig_handler_fn ABSENT    => the payload. Nothing CALLS the handler, so an
+#                                 edge into it can only be the fabrication.
+echo "--- asmspy --tree: indirect call racing a signal (forced) ---"
+"$BUILD/sigcall_victim" 2>/dev/null &
+SGPID=$!
+sleep 1
+set +e
+sgout=$(ASMSPY_TEST_SIGRACE=10 timeout 60 "$ASM" --tree "$SGPID" 40 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--tree on sigcall_victim hung"
+printf '%s\n' "$sgout" | head -5
+# the forced race really happened: the handler ran under the tracer
+printf '%s\n' "$sgout" | grep -q -- '-> handler_helper \[' \
+    || fail "sigrace: handler_helper absent — the injected signal was never delivered, so the sig_handler_fn check below would be vacuous"
+# the real edge survived the race (sigreturn re-runs the call site; it re-resolves)
+printf '%s\n' "$sgout" | grep -q -- '-> indirect_target \[' \
+    || fail "sigrace: indirect_target absent — indirect calls are not being attributed AT ALL (a fix that drops them is not a fix)"
+# THE PAYLOAD: the handler entry must never be attributed to the call site
+printf '%s\n' "$sgout" | grep -q -- '-> sig_handler_fn' \
+    && fail "sigrace: caller -> sig_handler_fn edge FABRICATED — the pending indirect call resolved against a signal handler's entry instead of its callee"
+echo "  handler ran + indirect_target attributed, and NO caller -> sig_handler_fn edge"
+
+# Control: with the lever OFF, nothing in sigcall_victim raises a signal at all.
+# handler_helper must therefore VANISH — which is what proves the run above was
+# testing an injected race rather than passing because the trace was empty.
+echo "--- asmspy --tree: same victim, NO injection (control) ---"
+set +e
+sgc=$(timeout 60 "$ASM" --tree "$SGPID" 40 2>&1); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--tree on sigcall_victim (control) hung"
+printf '%s\n' "$sgc" | grep -q -- '-> indirect_target \[' \
+    || fail "sigrace control: indirect_target absent — the victim is not being traced"
+printf '%s\n' "$sgc" | grep -q -- '-> handler_helper' \
+    && fail "sigrace control: handler_helper appeared with the lever OFF — a signal arrived from somewhere else, so the injected run proves nothing about injection"
+echo "  no injection => no handler activity (the lever is the only signal source)"
+
+# The GRAPH engine resolves pending indirect calls the same way and needs the same
+# proof. Here the bogus edge is not a name but a COUNT: the handler legitimately
+# appears as a CALLER (it calls handler_helper), so grepping for its name would
+# always match. `invocations` counts exactly "was recorded as a CALLEE" — which is
+# precisely the bug — so it must be 0 for the handler and nonzero for the others.
+echo "--- asmspy --graph: indirect call racing a signal (forced) ---"
+set +e
+sgg=$(ASMSPY_TEST_SIGRACE=10 timeout 90 "$ASM" --graph "$SGPID" 60 --json 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--graph on sigcall_victim hung"
+[ "$rc" -eq 0 ] || fail "--graph on sigcall_victim exited rc=$rc"
+# invocations of node $1 in the --graph JSON, empty if the node is absent
+ginv() {
+    printf '%s' "$sgg" |
+        grep -o "\"name\":\"$1\"[^}]*\"invocations\":[0-9]*" |
+        sed 's/.*"invocations"://'
+}
+gt=$(ginv indirect_target); gh=$(ginv handler_helper); gs=$(ginv sig_handler_fn)
+echo "  invocations: indirect_target=${gt:-absent} handler_helper=${gh:-absent} sig_handler_fn=${gs:-absent}"
+[ -n "$gt" ] && [ "$gt" -gt 0 ] \
+    || fail "sigrace graph: indirect_target has no invocations — the indirect call was never recorded, so the handler check below would be vacuous"
+[ -n "$gh" ] && [ "$gh" -gt 0 ] \
+    || fail "sigrace graph: handler_helper has no invocations — the injected signal was never delivered, so the handler check below would be vacuous"
+[ -z "$gs" ] || [ "$gs" -eq 0 ] \
+    || fail "sigrace graph: sig_handler_fn recorded as a CALLEE ($gs invocations) — a call-graph edge into a signal handler that nothing calls"
+echo "  handler never recorded as a callee (graph engine verifies the same way)"
+kill -9 "$SGPID" 2>/dev/null || true
+wait "$SGPID" 2>/dev/null || true
+SGPID=""
+
+# ---------------------------------------------------------------------------
 # EXEC-STOP RE-RESOLUTION (asmspy-plan Theme B): PTRACE_O_TRACEEXEC
 # ---------------------------------------------------------------------------
 # exec_victim runs preexec_fn, then execv()s exec_stage2, which runs postexec_fn.
@@ -996,6 +1088,67 @@ CLPID=""
 # expected strings are DERIVED from the run rather than hardcoded — the
 # assertions below cannot pass against a stale/wrong socket, and cannot be
 # satisfied by echoing the inode back.
+# ---------------------------------------------------------------------------
+# SYSCALL ARGUMENT DECODING (asmspy-plan Theme E)
+# ---------------------------------------------------------------------------
+# argdecode_victim makes a fixed set of calls with KNOWN arguments, so each
+# assertion below pins RENDERED TEXT rather than "something plausible appeared".
+# Every one of these was three raw hex slots (or a bare pointer) before.
+#
+# The arity assertions are the point of the item: an undescribed syscall used to
+# print exactly three slots and thereby ASSERT an arity it had never
+# established. getpid() proves 0 is now expressible; mmap proves 6 is; the two
+# opens prove it is CONDITIONAL (mode is an argument only when a creating flag
+# is set); and the "..." proves an unknown shape now says so.
+echo "--- asmspy --log syscall argument decoding (flags/vectors/sigsets/arity) ---"
+"$BUILD/argdecode_victim" 2>/dev/null &
+SGPID=$!
+sleep 2
+set +e
+adout=$(timeout 90 "$ASM" --log "$SGPID" 400 2>/dev/null); rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--log on argdecode_victim hung"
+kill -9 "$SGPID" 2>/dev/null || true
+wait "$SGPID" 2>/dev/null || true
+SGPID=""
+rm -f /tmp/asmspy_argdecode.txt
+ad_has() {
+    printf '%s\n' "$adout" | grep -qF "$1" \
+        || { printf '%s\n' "$adout" | sort -u | head -30; \
+             fail "arg decode: expected to render $2 — did not find: $1"; }
+}
+# flag WORDS, not hex
+ad_has 'O_WRONLY|O_CREAT|O_TRUNC, 0644' "open flags + octal mode"
+ad_has 'PROT_READ|PROT_WRITE, MAP_PRIVATE|MAP_ANONYMOUS' "mmap prot + map flags"
+ad_has 'mprotect(' "mprotect"
+ad_has ', PROT_READ) = 0' "a single-bit prot word"
+# a VECTOR: the bytes, not the array's address
+ad_has 'writev(fd=' "writev with a resolved fd"
+ad_has '["iovec-one", "iovec-two"], 2' "the iovec CONTENTS"
+# a sigset BITMASK and a how enum
+ad_has 'rt_sigprocmask(SIG_BLOCK, [SIGUSR2]' "sigprocmask how + sigset members"
+# a signal NUMBER as a name
+ad_has ', SIGUSR1) = 0' "tgkill's signal number as a name"
+# a struct read out of the target (glibc routes nanosleep -> clock_nanosleep)
+ad_has '{0.002000000}' "a timespec's contents"
+# enum
+ad_has 'SEEK_END' "lseek whence"
+# ARITY: zero, six, and conditional
+ad_has 'getpid() = ' "arity ZERO (no invented argument slots)"
+ad_has 'mmap(0x0, 4096,' "arity 6 (mmap's later args are no longer truncated away)"
+ad_has 'O_RDONLY) = ' "a non-creating open with NO mode slot"
+# mmap's fd is -1: an int arg arrives zero-extended, and must be shown as -1
+ad_has 'fd=-1' "mmap's -1 fd sign-extended (not 4294967295)"
+# an UNKNOWN shape must say it is unknown rather than claim three
+printf '%s\n' "$adout" | grep -qE '\.\.\.\) = ' \
+    || fail "arg decode: no '...' anywhere — an undescribed syscall is still claiming an arity of exactly three"
+# CONTROL: the ellipsis must NOT appear on a shape we DO know, or it would just
+# be decoration rather than a statement about arity.
+printf '%s\n' "$adout" | grep -E '^(openat|mmap|getpid|writev|tgkill)\(' \
+    | grep -q '\.\.\.' \
+    && fail "arg decode: a KNOWN shape rendered '...' — the ellipsis is supposed to mark an unknown arity, not decorate every line"
+echo "  flags/mode/prot/iovec/sigset/signo/timespec/whence decoded; arity 0, 6 and conditional all correct; unknown shapes say so"
+
 echo "--- asmspy --log fd->endpoint (socket:[inode] -> real endpoint) ---"
 "$BUILD/sock_victim" 2>"$BUILD/sock_victim.log" &
 SKPID=$!

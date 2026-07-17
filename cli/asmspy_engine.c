@@ -16,12 +16,14 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <pthread.h>
+#include <sched.h> /* CLONE_* — the clone flag table */
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h> /* PROT_* / MAP_* — the mmap flag tables */
 #include <sys/ptrace.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
@@ -477,6 +479,620 @@ static size_t ap_fd(char *b, size_t cap, size_t o, pid_t pid, long long fd) {
     return o;
 }
 
+/* ================================================================== */
+/* Syscall ARGUMENT shapes (asmspy-plan Theme E)                       */
+/*                                                                      */
+/* Two separate questions, with two different answers.                  */
+/*                                                                      */
+/* HOW MANY args does a syscall take? Not derivable here. sc_names is   */
+/* generated from the compiling host's own <sys/syscall.h> precisely so */
+/* it cannot drift, and the obvious move is to get arity from the same  */
+/* place — but it is not there to get. MEASURED in the asmtest-cli      */
+/* image: 741 __NR_* macros, and ZERO macros carrying an arity or arg   */
+/* count; no syscall_64.tbl (that is kernel-source-only), no man2 pages.*/
+/* Every __NR_ is a NUMBER. There is no __NR_x_NARGS to expand.         */
+/*                                                                      */
+/* WHAT do the args MEAN? Not derivable even in principle: "this word   */
+/* is an open-flags mask, that one is a signal number" is semantics no  */
+/* header states. strace carries this as curated tables for the same    */
+/* reason.                                                              */
+/*                                                                      */
+/* So this table IS hand-maintained — but it is guarded against the rot */
+/* that argument warns about. Every entry is #ifdef __NR_x, so a kernel */
+/* without a syscall cannot break the build (the same protection the    */
+/* generated name list gets); an entry that is merely WRONG is caught by */
+/* the smoke, which drives a victim through known calls with known       */
+/* arguments and asserts the rendered text.                             */
+/*                                                                      */
+/* And an UNdescribed syscall no longer claims an arity it does not     */
+/* know: the default prints its first three words followed by "...", not */
+/* exactly three slots as if three were the truth. That is the whole    */
+/* difference between the old default and this one — confidently        */
+/* rendering nonsense (stat("", 0xf20f0e34, 0x1) = 1, for a write) is   */
+/* how this decoder failed before.                                      */
+/* ================================================================== */
+
+typedef enum {
+    A_END = 0,  /* no argument here — this is what makes arity exact */
+    A_HEX,      /* raw word / opaque pointer */
+    A_INT,      /* signed decimal */
+    A_SIZE,     /* unsigned decimal (a length/count) */
+    A_FD,       /* fd + the endpoint behind it (ap_fd) */
+    A_DIRFD,    /* AT_FDCWD or an fd */
+    A_PATH,     /* char* — decoded as a C string */
+    A_OFLAGS,   /* open/openat flags word */
+    A_MODE,     /* octal creation mode */
+    A_PROT,     /* mmap/mprotect protection */
+    A_MAPFLAGS, /* mmap flags */
+    A_CLONEFL,  /* clone flags (low byte is the exit signal) */
+    A_SIGNO,    /* signal number -> SIGxxx */
+    A_SIGSET,   /* sigset_t* -> [SIGxxx SIGyyy] */
+    A_SIGHOW,   /* rt_sigprocmask how */
+    A_IOVEC,    /* struct iovec* — count comes from the NEXT arg */
+    A_TIMESPEC, /* struct timespec* -> {sec, nsec} */
+    A_WHENCE    /* lseek whence */
+} argcls_t;
+
+typedef struct {
+    unsigned char c[6];
+} argshape_t; /* arg classes in register order; A_END = absent */
+
+/* x86-64 syscall arg registers, in order. */
+static unsigned long long scarg(const struct user_regs_struct *e, int i) {
+    switch (i) {
+    case 0:
+        return e->rdi;
+    case 1:
+        return e->rsi;
+    case 2:
+        return e->rdx;
+    case 3:
+        return e->r10;
+    case 4:
+        return e->r8;
+    case 5:
+        return e->r9;
+    default:
+        return 0;
+    }
+}
+
+#define SHAPE(...)                                                             \
+    do {                                                                       \
+        static const unsigned char t_[] = {__VA_ARGS__};                       \
+        memcpy(sh->c, t_, sizeof t_);                                          \
+        return 1;                                                              \
+    } while (0)
+
+/* 1 and fills *sh if this syscall's argument shape is known, else 0. */
+static int arg_shape(long nr, argshape_t *sh) {
+    memset(sh, 0, sizeof *sh);
+    switch (nr) {
+#ifdef __NR_openat
+    case __NR_openat:
+        SHAPE(A_DIRFD, A_PATH, A_OFLAGS, A_MODE);
+#endif
+#ifdef __NR_open
+    case __NR_open:
+        SHAPE(A_PATH, A_OFLAGS, A_MODE);
+#endif
+#ifdef __NR_mmap
+    case __NR_mmap:
+        SHAPE(A_HEX, A_SIZE, A_PROT, A_MAPFLAGS, A_FD, A_INT);
+#endif
+#ifdef __NR_mprotect
+    case __NR_mprotect:
+        SHAPE(A_HEX, A_SIZE, A_PROT);
+#endif
+#ifdef __NR_munmap
+    case __NR_munmap:
+        SHAPE(A_HEX, A_SIZE);
+#endif
+#ifdef __NR_brk
+    case __NR_brk:
+        SHAPE(A_HEX);
+#endif
+#ifdef __NR_clone
+    case __NR_clone:
+        SHAPE(A_CLONEFL, A_HEX, A_HEX, A_HEX, A_HEX);
+#endif
+#ifdef __NR_kill
+    case __NR_kill:
+        SHAPE(A_INT, A_SIGNO);
+#endif
+#ifdef __NR_tkill
+    case __NR_tkill:
+        SHAPE(A_INT, A_SIGNO);
+#endif
+#ifdef __NR_tgkill
+    case __NR_tgkill:
+        SHAPE(A_INT, A_INT, A_SIGNO);
+#endif
+#ifdef __NR_rt_sigprocmask
+    case __NR_rt_sigprocmask:
+        SHAPE(A_SIGHOW, A_SIGSET, A_SIGSET, A_SIZE);
+#endif
+#ifdef __NR_rt_sigaction
+    case __NR_rt_sigaction:
+        SHAPE(A_SIGNO, A_HEX, A_HEX, A_SIZE);
+#endif
+#ifdef __NR_rt_sigsuspend
+    case __NR_rt_sigsuspend:
+        SHAPE(A_SIGSET, A_SIZE);
+#endif
+#ifdef __NR_writev
+    case __NR_writev:
+        SHAPE(A_FD, A_IOVEC, A_INT);
+#endif
+#ifdef __NR_readv
+    case __NR_readv:
+        SHAPE(A_FD, A_IOVEC, A_INT);
+#endif
+#ifdef __NR_nanosleep
+    case __NR_nanosleep:
+        SHAPE(A_TIMESPEC, A_HEX);
+#endif
+#ifdef __NR_clock_nanosleep
+    case __NR_clock_nanosleep:
+        SHAPE(A_INT, A_INT, A_TIMESPEC, A_HEX);
+#endif
+#ifdef __NR_lseek
+    case __NR_lseek:
+        SHAPE(A_FD, A_INT, A_WHENCE);
+#endif
+#ifdef __NR_fstat
+    case __NR_fstat:
+        SHAPE(A_FD, A_HEX);
+#endif
+#ifdef __NR_ioctl
+    case __NR_ioctl:
+        SHAPE(A_FD, A_HEX, A_HEX);
+#endif
+#ifdef __NR_fcntl
+    case __NR_fcntl:
+        SHAPE(A_FD, A_INT, A_HEX);
+#endif
+#ifdef __NR_dup2
+    case __NR_dup2:
+        SHAPE(A_FD, A_INT);
+#endif
+#ifdef __NR_dup
+    case __NR_dup:
+        SHAPE(A_FD);
+#endif
+#ifdef __NR_ftruncate
+    case __NR_ftruncate:
+        SHAPE(A_FD, A_SIZE);
+#endif
+#ifdef __NR_fsync
+    case __NR_fsync:
+        SHAPE(A_FD);
+#endif
+#ifdef __NR_socket
+    case __NR_socket:
+        SHAPE(A_INT, A_INT, A_INT);
+#endif
+#ifdef __NR_connect
+    case __NR_connect:
+        SHAPE(A_FD, A_HEX, A_INT);
+#endif
+#ifdef __NR_bind
+    case __NR_bind:
+        SHAPE(A_FD, A_HEX, A_INT);
+#endif
+#ifdef __NR_listen
+    case __NR_listen:
+        SHAPE(A_FD, A_INT);
+#endif
+#ifdef __NR_accept
+    case __NR_accept:
+        SHAPE(A_FD, A_HEX, A_HEX);
+#endif
+#ifdef __NR_sendto
+    case __NR_sendto: /* the case 4760d4f flagged: 3 raw hex, no fd */
+        SHAPE(A_FD, A_HEX, A_SIZE, A_HEX, A_HEX, A_INT);
+#endif
+#ifdef __NR_recvfrom
+    case __NR_recvfrom:
+        SHAPE(A_FD, A_HEX, A_SIZE, A_HEX, A_HEX, A_HEX);
+#endif
+#ifdef __NR_shutdown
+    case __NR_shutdown:
+        SHAPE(A_FD, A_INT);
+#endif
+#ifdef __NR_futex
+    case __NR_futex:
+        SHAPE(A_HEX, A_INT, A_INT, A_HEX, A_HEX, A_INT);
+#endif
+#ifdef __NR_exit_group
+    case __NR_exit_group:
+        SHAPE(A_INT);
+#endif
+#ifdef __NR_exit
+    case __NR_exit:
+        SHAPE(A_INT);
+#endif
+        /* Arity ZERO — the shape the old always-3-hex default could not express
+     * at all, and got most visibly wrong. */
+#ifdef __NR_getpid
+    case __NR_getpid:
+        SHAPE(A_END);
+#endif
+#ifdef __NR_gettid
+    case __NR_gettid:
+        SHAPE(A_END);
+#endif
+#ifdef __NR_getppid
+    case __NR_getppid:
+        SHAPE(A_END);
+#endif
+#ifdef __NR_getuid
+    case __NR_getuid:
+        SHAPE(A_END);
+#endif
+#ifdef __NR_geteuid
+    case __NR_geteuid:
+        SHAPE(A_END);
+#endif
+#ifdef __NR_getgid
+    case __NR_getgid:
+        SHAPE(A_END);
+#endif
+#ifdef __NR_sched_yield
+    case __NR_sched_yield:
+        SHAPE(A_END);
+#endif
+    default:
+        return 0;
+    }
+}
+#undef SHAPE
+
+/* Signal number -> "SIGxxx", NULL if unknown.
+ *
+ * Not glibc's sigabbrev_np (glibc >= 2.32 only, and it yields "USR1" without the
+ * prefix); not strsignal, which yields a SENTENCE ("User defined signal 1"). A
+ * trace wants the token a reader would grep for. Real-time signals are a RANGE,
+ * so they are computed rather than tabulated. */
+static const char *signame(int s) {
+    /* __thread: each engine formats on its own tracer thread, and the TUI can
+     * have more than one running at once (precedent: src/platform_win32.c). */
+    static __thread char rt[16];
+    switch (s) {
+    case SIGHUP:
+        return "SIGHUP";
+    case SIGINT:
+        return "SIGINT";
+    case SIGQUIT:
+        return "SIGQUIT";
+    case SIGILL:
+        return "SIGILL";
+    case SIGTRAP:
+        return "SIGTRAP";
+    case SIGABRT:
+        return "SIGABRT";
+    case SIGBUS:
+        return "SIGBUS";
+    case SIGFPE:
+        return "SIGFPE";
+    case SIGKILL:
+        return "SIGKILL";
+    case SIGUSR1:
+        return "SIGUSR1";
+    case SIGSEGV:
+        return "SIGSEGV";
+    case SIGUSR2:
+        return "SIGUSR2";
+    case SIGPIPE:
+        return "SIGPIPE";
+    case SIGALRM:
+        return "SIGALRM";
+    case SIGTERM:
+        return "SIGTERM";
+    case SIGSTKFLT:
+        return "SIGSTKFLT";
+    case SIGCHLD:
+        return "SIGCHLD";
+    case SIGCONT:
+        return "SIGCONT";
+    case SIGSTOP:
+        return "SIGSTOP";
+    case SIGTSTP:
+        return "SIGTSTP";
+    case SIGTTIN:
+        return "SIGTTIN";
+    case SIGTTOU:
+        return "SIGTTOU";
+    case SIGURG:
+        return "SIGURG";
+    case SIGXCPU:
+        return "SIGXCPU";
+    case SIGXFSZ:
+        return "SIGXFSZ";
+    case SIGVTALRM:
+        return "SIGVTALRM";
+    case SIGPROF:
+        return "SIGPROF";
+    case SIGWINCH:
+        return "SIGWINCH";
+    case SIGIO:
+        return "SIGIO";
+    case SIGPWR:
+        return "SIGPWR";
+    case SIGSYS:
+        return "SIGSYS";
+    default:
+        break;
+    }
+    if (s >= SIGRTMIN && s <= SIGRTMAX) {
+        snprintf(rt, sizeof rt, "SIGRT%d", s - SIGRTMIN);
+        return rt;
+    }
+    return NULL;
+}
+
+typedef struct {
+    unsigned long long v;
+    const char *n;
+} flagent_t;
+
+/* OR'd flag word -> "A|B|0x40". Multi-bit entries must precede the single bits
+ * they contain, so an exact multi-bit match wins (O_TMPFILE contains
+ * O_DIRECTORY). Whatever is left over prints as hex rather than vanishing —
+ * a decoder that silently drops bits it does not know is how a trace lies. */
+static size_t ap_flagset(char *b, size_t cap, size_t o, unsigned long long v,
+                         const flagent_t *t, const char *none) {
+    int first = 1;
+    for (; t->n; t++)
+        if (t->v && (v & t->v) == t->v) {
+            o = apf(b, cap, o, "%s%s", first ? "" : "|", t->n);
+            first = 0;
+            v &= ~t->v;
+        }
+    if (v)
+        o = apf(b, cap, o, "%s0x%llx", first ? "" : "|", v);
+    else if (first)
+        o = apf(b, cap, o, "%s", none);
+    return o;
+}
+
+static const flagent_t oflag_tab[] = {
+#ifdef O_TMPFILE
+    {O_TMPFILE, "O_TMPFILE"}, /* multi-bit: contains O_DIRECTORY */
+#endif
+    {O_CREAT, "O_CREAT"},
+    {O_EXCL, "O_EXCL"},
+    {O_NOCTTY, "O_NOCTTY"},
+    {O_TRUNC, "O_TRUNC"},
+    {O_APPEND, "O_APPEND"},
+    {O_NONBLOCK, "O_NONBLOCK"},
+    {O_DSYNC, "O_DSYNC"},
+    {O_DIRECT, "O_DIRECT"},
+    {O_LARGEFILE, "O_LARGEFILE"},
+    {O_DIRECTORY, "O_DIRECTORY"},
+    {O_NOFOLLOW, "O_NOFOLLOW"},
+    {O_NOATIME, "O_NOATIME"},
+    {O_CLOEXEC, "O_CLOEXEC"},
+#ifdef O_PATH
+    {O_PATH, "O_PATH"},
+#endif
+    {0, NULL}};
+
+/* O_RDONLY is 0, so the access mode is a 2-bit FIELD, not a flag: it can only be
+ * read out of the low bits, never matched as a set bit. */
+static size_t ap_oflags(char *b, size_t cap, size_t o, unsigned long long v) {
+    static const char *const acc[4] = {"O_RDONLY", "O_WRONLY", "O_RDWR",
+                                       "O_ACCMODE"};
+    o = apf(b, cap, o, "%s", acc[v & O_ACCMODE]);
+    v &= ~(unsigned long long)O_ACCMODE;
+    if (v) {
+        o = apf(b, cap, o, "|");
+        o = ap_flagset(b, cap, o, v, oflag_tab, "0");
+    }
+    return o;
+}
+
+static const flagent_t prot_tab[] = {{PROT_READ, "PROT_READ"},
+                                     {PROT_WRITE, "PROT_WRITE"},
+                                     {PROT_EXEC, "PROT_EXEC"},
+                                     {0, NULL}};
+
+static const flagent_t mapflag_tab[] = {
+#ifdef MAP_SHARED_VALIDATE
+    {MAP_SHARED_VALIDATE,
+     "MAP_SHARED_VALIDATE"}, /* multi-bit: SHARED|PRIVATE */
+#endif
+    {MAP_SHARED, "MAP_SHARED"},
+    {MAP_PRIVATE, "MAP_PRIVATE"},
+    {MAP_FIXED, "MAP_FIXED"},
+    {MAP_ANONYMOUS, "MAP_ANONYMOUS"},
+    {MAP_GROWSDOWN, "MAP_GROWSDOWN"},
+    {MAP_DENYWRITE, "MAP_DENYWRITE"},
+    {MAP_EXECUTABLE, "MAP_EXECUTABLE"},
+    {MAP_LOCKED, "MAP_LOCKED"},
+    {MAP_NORESERVE, "MAP_NORESERVE"},
+    {MAP_POPULATE, "MAP_POPULATE"},
+    {MAP_NONBLOCK, "MAP_NONBLOCK"},
+    {MAP_STACK, "MAP_STACK"},
+#ifdef MAP_HUGETLB
+    {MAP_HUGETLB, "MAP_HUGETLB"},
+#endif
+    {0, NULL}};
+
+static const flagent_t clone_tab[] = {
+    {CLONE_VM, "CLONE_VM"},
+    {CLONE_FS, "CLONE_FS"},
+    {CLONE_FILES, "CLONE_FILES"},
+    {CLONE_SIGHAND, "CLONE_SIGHAND"},
+    {CLONE_PTRACE, "CLONE_PTRACE"},
+    {CLONE_VFORK, "CLONE_VFORK"},
+    {CLONE_PARENT, "CLONE_PARENT"},
+    {CLONE_THREAD, "CLONE_THREAD"},
+    {CLONE_NEWNS, "CLONE_NEWNS"},
+    {CLONE_SYSVSEM, "CLONE_SYSVSEM"},
+    {CLONE_SETTLS, "CLONE_SETTLS"},
+    {CLONE_PARENT_SETTID, "CLONE_PARENT_SETTID"},
+    {CLONE_CHILD_CLEARTID, "CLONE_CHILD_CLEARTID"},
+    {CLONE_UNTRACED, "CLONE_UNTRACED"},
+    {CLONE_CHILD_SETTID, "CLONE_CHILD_SETTID"},
+    {CLONE_NEWUTS, "CLONE_NEWUTS"},
+    {CLONE_NEWIPC, "CLONE_NEWIPC"},
+    {CLONE_NEWUSER, "CLONE_NEWUSER"},
+    {CLONE_NEWPID, "CLONE_NEWPID"},
+    {CLONE_NEWNET, "CLONE_NEWNET"},
+    {CLONE_IO, "CLONE_IO"},
+    {0, NULL}};
+
+/* clone's low byte is the EXIT SIGNAL, not a flag — masking it in with the
+ * flags would print a spurious CLONE_* for SIGCHLD's bits. */
+static size_t ap_cloneflags(char *b, size_t cap, size_t o,
+                            unsigned long long v) {
+    unsigned long long sig = v & 0xff;
+    o = ap_flagset(b, cap, o, v & ~0xffULL, clone_tab, "0");
+    if (sig)
+        o = apf(b, cap, o, "|%s", signame((int)sig));
+    return o;
+}
+
+static size_t ap_signo(char *b, size_t cap, size_t o, long long v) {
+    const char *n = signame((int)v);
+    if (n)
+        return apf(b, cap, o, "%s", n);
+    return apf(b, cap, o, "%d", (int)v);
+}
+
+/* A kernel sigset_t is a bitmask; render the members, not the pointer. */
+static size_t ap_sigset(char *b, size_t cap, size_t o, pid_t pid,
+                        uint64_t addr) {
+    if (!addr)
+        return apf(b, cap, o, "NULL");
+    uint64_t m = 0;
+    if (rd(pid, addr, &m, sizeof m) != 0)
+        return apf(b, cap, o, "0x%llx", (unsigned long long)addr);
+    o = apf(b, cap, o, "[");
+    int first = 1;
+    for (int s = 1; s <= 64; s++)
+        if (m & (1ULL << (s - 1))) {
+            const char *n = signame(s);
+            if (n)
+                o = apf(b, cap, o, "%s%s", first ? "" : " ", n);
+            else
+                o = apf(b, cap, o, "%s%d", first ? "" : " ", s);
+            first = 0;
+        }
+    return apf(b, cap, o, "]");
+}
+
+/* An iovec is a VECTOR of buffers — the datum a reader wants is the bytes, not
+ * the array's address. `cnt` comes from the syscall's next argument. */
+static size_t ap_iovec(char *b, size_t cap, size_t o, pid_t pid, uint64_t addr,
+                       long long cnt) {
+    if (!addr)
+        return apf(b, cap, o, "NULL");
+    if (cnt < 0 || cnt > 8) /* bound the work; a huge iovcnt is not a reason to
+                             * read megabytes out of the target per line */
+        cnt = cnt < 0 ? 0 : 8;
+    o = apf(b, cap, o, "[");
+    for (long long i = 0; i < cnt; i++) {
+        struct {
+            uint64_t base, len;
+        } iv;
+        if (rd(pid, addr + (uint64_t)i * sizeof iv, &iv, sizeof iv) != 0)
+            break;
+        if (i)
+            o = apf(b, cap, o, ", ");
+        o = ap_data(b, cap, o, pid, iv.base, (uint32_t)iv.len);
+    }
+    return apf(b, cap, o, "]");
+}
+
+static size_t ap_timespec(char *b, size_t cap, size_t o, pid_t pid,
+                          uint64_t addr) {
+    if (!addr)
+        return apf(b, cap, o, "NULL");
+    struct {
+        int64_t sec, nsec;
+    } ts;
+    if (rd(pid, addr, &ts, sizeof ts) != 0)
+        return apf(b, cap, o, "0x%llx", (unsigned long long)addr);
+    return apf(b, cap, o, "{%lld.%09lld}", (long long)ts.sec,
+               (long long)ts.nsec);
+}
+
+/* Render one argument of class `cl`. */
+static size_t ap_arg(char *b, size_t cap, size_t o, pid_t pid, int cl,
+                     const struct user_regs_struct *e, int i) {
+    unsigned long long v = scarg(e, i);
+    switch (cl) {
+    case A_FD:
+        /* through (int): an fd is an int, and the ABI leaves the register's top
+         * half undefined — so mmap's -1 arrives as 0xffffffff and renders as
+         * fd=4294967295 (MEASURED) unless it is sign-extended back first. */
+        return ap_fd(b, cap, o, pid, (long long)(int)v);
+    case A_DIRFD:
+        return ap_dirfd(b, cap, o, (long long)v);
+    case A_PATH:
+        return ap_cstr(b, cap, o, pid, v);
+    case A_INT:
+        return apf(b, cap, o, "%d", (int)v);
+    case A_SIZE:
+        return apf(b, cap, o, "%llu", v);
+    case A_OFLAGS:
+        return ap_oflags(b, cap, o, v);
+    case A_MODE:
+        return apf(b, cap, o, "0%llo", v);
+    case A_PROT:
+        return ap_flagset(b, cap, o, v, prot_tab, "PROT_NONE");
+    case A_MAPFLAGS:
+        return ap_flagset(b, cap, o, v, mapflag_tab, "0");
+    case A_CLONEFL:
+        return ap_cloneflags(b, cap, o, v);
+    case A_SIGNO:
+        return ap_signo(b, cap, o, (long long)v);
+    case A_SIGSET:
+        return ap_sigset(b, cap, o, pid, v);
+    case A_SIGHOW:
+        switch ((int)v) {
+        case SIG_BLOCK:
+            return apf(b, cap, o, "SIG_BLOCK");
+        case SIG_UNBLOCK:
+            return apf(b, cap, o, "SIG_UNBLOCK");
+        case SIG_SETMASK:
+            return apf(b, cap, o, "SIG_SETMASK");
+        default:
+            return apf(b, cap, o, "%d", (int)v);
+        }
+    case A_IOVEC:
+        return ap_iovec(b, cap, o, pid, v, (long long)scarg(e, i + 1));
+    case A_TIMESPEC:
+        return ap_timespec(b, cap, o, pid, v);
+    case A_WHENCE:
+        switch ((int)v) {
+        case SEEK_SET:
+            return apf(b, cap, o, "SEEK_SET");
+        case SEEK_CUR:
+            return apf(b, cap, o, "SEEK_CUR");
+        case SEEK_END:
+            return apf(b, cap, o, "SEEK_END");
+        default:
+            return apf(b, cap, o, "%d", (int)v);
+        }
+    default:
+        return apf(b, cap, o, "0x%llx", v);
+    }
+}
+
+/* open/openat take `mode` only when they may CREATE. Printing it otherwise is
+ * printing a register the kernel ignored — the arity is genuinely conditional,
+ * so the shape table's last slot is dropped unless the flags ask for it. */
+static int oflags_create(unsigned long long fl) {
+    int c = (fl & O_CREAT) != 0;
+#ifdef O_TMPFILE
+    c = c || (fl & O_TMPFILE) == O_TMPFILE;
+#endif
+    return c;
+}
+
 static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
                            pid_t pid, long nr, const struct user_regs_struct *e,
                            long ret) {
@@ -503,14 +1119,6 @@ static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
             o = apf(b, cap, o, "%ld", ret);
         }
         break;
-    case SYS_openat:
-        o = apf(b, cap, o, "openat(");
-        o = ap_dirfd(b, cap, o, (long long)e->rdi);
-        o = apf(b, cap, o, ", ");
-        o = ap_cstr(b, cap, o, pid, e->rsi);
-        o = apf(b, cap, o, ", 0x%llx) = %ld", (unsigned long long)e->rdx, ret);
-        decode_cstr(pid, e->rsi, sout, scap);
-        break;
     case SYS_close:
         o = apf(b, cap, o, "close(");
         o = ap_fd(b, cap, o, pid, (long long)e->rdi);
@@ -518,30 +1126,57 @@ static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
         break;
     default: {
         const char *nm = scname(nr);
-        path_kind_t pk = nm ? path_kind(nr) : PATH_NONE;
         if (nm)
             o = apf(b, cap, o, "%s(", nm);
         else
             o = apf(b, cap, o, "syscall#%ld(", nr);
 
+        argshape_t sh;
+        if (arg_shape(nr, &sh)) {
+            /* KNOWN shape: exact arity, each argument decoded as what it is. */
+            int n = 0;
+            while (n < 6 && sh.c[n] != A_END)
+                n++;
+            /* the conditional-arity case: no mode without a creating flag */
+            if (n && sh.c[n - 1] == A_MODE && !oflags_create(scarg(e, n - 2)))
+                n--;
+            for (int i = 0; i < n; i++) {
+                if (i)
+                    o = apf(b, cap, o, ", ");
+                o = ap_arg(b, cap, o, pid, sh.c[i], e, i);
+                /* the string pane shows this call's primary datum */
+                if (sh.c[i] == A_PATH && !sout[0])
+                    decode_cstr(pid, scarg(e, i), sout, scap);
+            }
+            o = apf(b, cap, o, ") = %ld", ret);
+            break;
+        }
+
+        /* UNKNOWN shape. The path tables still name the datum that matters. */
+        path_kind_t pk = nm ? path_kind(nr) : PATH_NONE;
         if (pk == PATH_RDI) {
             o = ap_cstr(b, cap, o, pid, e->rdi);
-            o = apf(b, cap, o, ", 0x%llx, 0x%llx) = %ld",
-                    (unsigned long long)e->rsi, (unsigned long long)e->rdx,
-                    ret);
+            o = apf(b, cap, o, ", 0x%llx, 0x%llx", (unsigned long long)e->rsi,
+                    (unsigned long long)e->rdx);
             decode_cstr(pid, e->rdi, sout, scap);
         } else if (pk == PATH_AT_RSI) {
             o = ap_dirfd(b, cap, o, (long long)e->rdi);
             o = apf(b, cap, o, ", ");
             o = ap_cstr(b, cap, o, pid, e->rsi);
-            o = apf(b, cap, o, ", 0x%llx) = %ld", (unsigned long long)e->rdx,
-                    ret);
+            o = apf(b, cap, o, ", 0x%llx", (unsigned long long)e->rdx);
             decode_cstr(pid, e->rsi, sout, scap);
         } else {
-            o = apf(b, cap, o, "0x%llx, 0x%llx, 0x%llx) = %ld",
+            o = apf(b, cap, o, "0x%llx, 0x%llx, 0x%llx",
                     (unsigned long long)e->rdi, (unsigned long long)e->rsi,
-                    (unsigned long long)e->rdx, ret);
+                    (unsigned long long)e->rdx);
         }
+        /* "..." because the arity is UNKNOWN, not because it is three. The old
+         * default printed exactly three slots and thereby ASSERTED an arity it
+         * had never established — which is how it rendered a write as
+         * stat("", 0xf20f0e34, 0x1) = 1 and looked confident doing it. The same
+         * three words are still shown (they are free, and often the useful
+         * ones); the ellipsis is the part that is now honest. */
+        o = apf(b, cap, o, ", ...) = %ld", ret);
         break;
     }
     }
@@ -615,6 +1250,13 @@ typedef struct {
     int pending_call; /* graph engine: an INDIRECT call awaits its callee entry */
     uint64_t
         call_site; /* graph engine: call-site addr of that pending call     */
+    /* What that call PROMISED, captured AT the call site. The next stop is its
+     * callee entry only if BOTH hold there — and a signal delivered before the
+     * call retired lands the next stop on a handler entry, where NEITHER does.
+     * See call_pend_at_callee: this is what makes the resolution a verified
+     * fact rather than an assumption about wherever the next step landed. */
+    uint64_t pend_ret; /* [rsp] at the callee entry = call site + insn length */
+    uint64_t pend_sp;  /* rsp at the callee entry   = call-site rsp - 8       */
     /* tree engine: the thread's live call stack. Depth is stk_n — NOT a counter
      * incremented on call and decremented on ret; see frm_unwind for why that
      * distinction is the whole point. */
@@ -689,6 +1331,8 @@ static thr_t *thr_get(thr_tab_t *t, pid_t tid) {
     memset(&e->entry, 0, sizeof e->entry);
     e->pending_call = 0;
     e->call_site = 0;
+    e->pend_ret = 0;
+    e->pend_sp = 0;
     e->stk = NULL;
     e->stk_n = e->stk_cap = 0;
     e->focus_depth = ASMSPY_TF_NO_FOCUS;
@@ -751,6 +1395,81 @@ static void frm_push(thr_t *t, uint64_t ret, uint64_t sp) {
 static void frm_unwind(thr_t *t, uint64_t rsp) {
     while (t->stk_n > 0 && rsp > t->stk[t->stk_n - 1].sp)
         t->stk_n--;
+}
+
+/* ---- pending INDIRECT call: arm at the call site, VERIFY at the callee ----
+ *
+ * A `call rax` / `call [rbx+8]` does not carry its target in its bytes, so both
+ * stepping engines resolve it at the NEXT stop and take that stop's rip as the
+ * callee. That inference is wrong at a signal boundary. Single-stepping the call
+ * site does not guarantee the call retires: if a signal is pending, the kernel
+ * delivers it FIRST — nothing executes, the tracee gets a signal-delivery-stop
+ * still at the call site, and the stop after that is the HANDLER's entry. The
+ * old code attributed that entry to the call, fabricating a caller -> handler
+ * edge that the target never executed. (The call is not lost: sigreturn returns
+ * rip to the call site, the engine re-observes it, and it resolves for real.)
+ *
+ * The cure is to stop inferring. A call site already knows exactly what its call
+ * must produce — a return address of rip + insn_len at rsp - 8 — because
+ * asmtest_disas_probe hands back the instruction length. So record that, and at
+ * the next stop REQUIRE it. This reuses the same insight as the return-address
+ * stack next door: what a call promises is knowable at the call site, and never
+ * has to be guessed from where a step lands.
+ *
+ * Cheaper than decoding the indirect operand (a new disassembler API, plus an
+ * x86 reg-id -> user_regs_struct mapping) and strictly stronger: it validates
+ * the ACTUAL post-call machine state instead of re-deriving a prediction from
+ * registers that the same signal could have changed underneath it. */
+static void call_pend_arm(thr_t *t, uint64_t rip, size_t ilen, uint64_t rsp) {
+    t->pending_call = 1;
+    t->call_site = rip;
+    t->pend_ret = rip + ilen;
+    t->pend_sp = rsp - 8;
+}
+
+/* 1 only if `regs` really is the armed call's callee entry: the call must have
+ * pushed pend_ret and left rsp at pend_sp. A handler entry fails both — the
+ * kernel's signal frame sits ~1KB BELOW pend_sp (past the 128-byte red zone),
+ * and the word at its rsp is the sigreturn trampoline, not our return address.
+ * A failed read is a failed check: never attribute what could not be confirmed. */
+static int call_pend_at_callee(const thr_t *t, pid_t tgid,
+                               const struct user_regs_struct *regs) {
+    if (regs->rsp != t->pend_sp)
+        return 0;
+    uint64_t ra = 0;
+    struct iovec lv = {&ra, sizeof ra};
+    struct iovec rv = {(void *)(uintptr_t)regs->rsp, sizeof ra};
+    if (process_vm_readv(tgid, &lv, 1, &rv, 1, 0) != (ssize_t)sizeof ra)
+        return 0;
+    return ra == t->pend_ret;
+}
+
+/* Test-only lever for the boundary above (ASMSPY_TEST_SIGRACE=<signo>).
+ *
+ * The bug needs a signal to arrive in a ONE-INSTRUCTION window — after the
+ * engine has armed a pending call, before that call retires. Racing a signal
+ * storm against it hits that window only by luck, and a test that only
+ * SOMETIMES reproduces the bug it guards is a test that silently stops testing.
+ * So force it: the tracee is stopped at the call site right now with the pend
+ * armed, so a signal queued HERE is guaranteed to be delivered before the call
+ * executes. That makes the boundary deterministic without faking any of it —
+ * every line of the resolution path under test is the production one; only the
+ * signal's timing is chosen rather than waited for.
+ *
+ * Fires ONCE (latched): one forced race proves the property, and re-arming on
+ * every indirect call would bury it in an unreadable storm. Unset = disabled. */
+static void call_pend_sigrace_inject(pid_t tid, pid_t tgid) {
+    static int signo = -2; /* -2 = unread, -1 = disabled */
+    if (signo == -2) {
+        const char *e = getenv("ASMSPY_TEST_SIGRACE");
+        signo = (e && *e) ? atoi(e) : -1;
+    }
+    if (signo <= 0)
+        return;
+    /* glibc ships no tgkill wrapper; kill(2) would race a recycled pid and
+     * cannot target one THREAD, which is the whole point here. */
+    syscall(SYS_tgkill, (long)tgid, (long)tid, (long)signo);
+    signo = -1; /* latch: exactly one forced race per run */
 }
 
 /* SEIZE every thread of `pid` with `opts` and INTERRUPT each so it stops and can
@@ -2496,26 +3215,36 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
                 struct iovec riov = {(void *)(uintptr_t)rip, sizeof code};
                 ssize_t got = process_vm_readv(tgid, &liov, 1, &riov, 1, 0);
 
-                /* consume a pending INDIRECT call: this rip is its callee entry */
+                /* consume a pending INDIRECT call — but only if this rip is
+                 * CONFIRMED to be its callee entry. A signal delivered before
+                 * the call retired lands this stop on a handler entry, and
+                 * recording that would put an edge the target never executed
+                 * into the call graph (see call_pend_at_callee). */
                 if (ts && ts->pending_call) {
-                    recorded += grecord(&g, ps->syms, &ps->jit, ps->exebase,
-                                        ts->call_site, rip);
+                    if (call_pend_at_callee(ts, tgid, &regs))
+                        recorded += grecord(&g, ps->syms, &ps->jit, ps->exebase,
+                                            ts->call_site, rip);
                     ts->pending_call = 0;
                 }
 
-                if (got >= 1 && asmtest_disas_available() &&
-                    asmtest_disas_is_call(ASMTEST_ARCH_X86_64, code,
-                                          (size_t)got, 0)) {
+                /* one decode for is_call AND length: the length is what the
+                 * indirect arm below verifies its callee entry against */
+                int isc = 0;
+                size_t ilen = 0;
+                if (got >= 1 && asmtest_disas_available())
+                    ilen = asmtest_disas_probe(ASMTEST_ARCH_X86_64, code,
+                                               (size_t)got, 0, &isc, NULL);
+                if (isc) {
                     uint64_t tgt = 0;
                     if (asmtest_disas_call_target(ASMTEST_ARCH_X86_64, code,
                                                   (size_t)got, rip, 0, &tgt)) {
                         /* DIRECT call: target known now — record immediately */
                         recorded += grecord(&g, ps->syms, &ps->jit, ps->exebase,
                                             rip, tgt);
-                    } else if (ts) {
-                        /* INDIRECT call: resolve the callee at the next step */
-                        ts->pending_call = 1;
-                        ts->call_site = rip;
+                    } else if (ts && ilen) {
+                        /* INDIRECT call: arm, and VERIFY at the next stop */
+                        call_pend_arm(ts, rip, ilen, regs.rsp);
+                        call_pend_sigrace_inject(tid, tgid);
                     }
                 }
 
@@ -2755,16 +3484,25 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
                                                &ts->focus_depth);
                 }
 
-                /* a pending INDIRECT call resolves at its callee entry (= rip).
+                /* a pending INDIRECT call resolves at its callee entry — but
+                 * ONLY once this stop is CONFIRMED to be that entry. A signal
+                 * delivered before the call retired lands here on a handler
+                 * entry instead; attributing that to the call invents a
+                 * caller -> handler edge (see call_pend_at_callee). Drop it
+                 * instead: sigreturn puts rip back on the call site and the
+                 * call is re-armed and resolved for real.
+                 *
                  * Its frame was pushed at the call site, so the CALLER's depth
                  * is stk_n-1. `emitted` counts SURVIVING lines, but the frame
                  * push is unconditional: the stack tracks the target's real
                  * control flow, never the filtered view of it. */
                 if (ts && ts->pending_call) {
-                    int d = ts->stk_n ? (int)ts->stk_n - 1 : 0;
-                    emitted +=
-                        tree_emit(sink, ctx, multi, tid, ps->syms, &ps->jit,
-                                  rip, d, filter, &ts->focus_depth);
+                    if (call_pend_at_callee(ts, tgid, &regs)) {
+                        int d = ts->stk_n ? (int)ts->stk_n - 1 : 0;
+                        emitted +=
+                            tree_emit(sink, ctx, multi, tid, ps->syms, &ps->jit,
+                                      rip, d, filter, &ts->focus_depth);
+                    }
                     ts->pending_call = 0;
                 }
 
@@ -2789,9 +3527,12 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
                         emitted +=
                             tree_emit(sink, ctx, multi, tid, ps->syms, &ps->jit,
                                       tgt, d, filter, &ts->focus_depth);
-                    } else {
-                        ts->pending_call = 1; /* indirect: resolve next step */
-                        ts->call_site = rip;
+                    } else if (ilen) {
+                        /* indirect: arm, and VERIFY at the next stop. Without a
+                         * length there is nothing to verify against, so leave
+                         * it unarmed rather than attribute on a guess. */
+                        call_pend_arm(ts, rip, ilen, regs.rsp);
+                        call_pend_sigrace_inject(tid, tgid);
                     }
                 }
             }
