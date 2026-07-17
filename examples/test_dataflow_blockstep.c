@@ -46,12 +46,18 @@
  * only where libunicorn is present. Off Linux x86-64 / without Capstone+Unicorn the producer
  * is an ENOSYS stub and this suite prints a skip. Linux x86-64 only.
  */
+#define _GNU_SOURCE /* memfd_create */
+
 #include "asmtest_valtrace.h"
 
+#include <errno.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <time.h>
+#include <unistd.h>
 
 /* The block-step producer ships NO header — a value-trace PRODUCER is a tier, not part of the
  * shared asmtest_valtrace.h sink API — so this suite re-declares its entry points, option/info
@@ -74,6 +80,7 @@ typedef struct {
     int no_vec_canary;
     int force_replay;
     uint64_t stack_hi_pad;
+    int no_syscall_inject;
 } asmtest_blockstep_opts_t;
 
 typedef struct {
@@ -87,12 +94,17 @@ typedef struct {
     int uc_vec_width;
     int vec_seeded;
     int mxcsr_seeded;
+    int injectable;
+    uint64_t injected;
 } asmtest_blockstep_info_t;
 
 int asmtest_dataflow_blockstep_probe(void);
 int asmtest_dataflow_blockstep_is_pure(const uint8_t *code, size_t code_len,
                                        const char **reason);
 int asmtest_dataflow_blockstep_is_replayable(const uint8_t *code,
+                                             size_t code_len,
+                                             const char **reason);
+int asmtest_dataflow_blockstep_is_injectable(const uint8_t *code,
                                              size_t code_len,
                                              const char **reason);
 int asmtest_dataflow_blockstep_vec_width(int *nregs);
@@ -364,6 +376,168 @@ static const uint8_t fp_round[] = {
     0x0f, 0x57, 0xc0,                   /* 0x23 xorps xmm0,xmm0 (blind it)  */
     0x48, 0x89, 0xf8,                   /* 0x26 mov rax, rdi                */
     0xc3,                               /* 0x29 ret                         */
+};
+
+/* ------------------------------------------------------------------ */
+/* F2 fixtures — record-and-inject over OS-interacting regions           */
+/*                                                                      */
+/* THE ORACLE CONSTRAINT THAT SHAPES ALL OF THESE. The tier's oracle captures the SAME region  */
+/* twice, in TWO SEPARATE forked tracees, and demands byte-identical traces. So a fixture can  */
+/* only use a syscall whose result is the SAME in both children. That rules out getpid and     */
+/* clock_gettime — the plan's own example! — and it is why these use:                          */
+/*   - getppid: returns the TEST's pid, so both children agree AND the value is externally     */
+/*     checkable against the suite's own getpid(). A syscall result nothing hardcodes.         */
+/*   - pread with an EXPLICIT offset into a seeded memfd: repeatable, and immune to the shared */
+/*     file offset the two children inherit (a plain read() would give the 2nd child different */
+/*     bytes and silently break the oracle rather than the code).                              */
+/* clock_gettime is still covered, by a DIFFERENT oracle that does not need determinism —      */
+/* see run_syscall_mem_case: the replay's recorded LOAD value is compared against the REAL     */
+/* tracee's own returned rax from the same capture, which are independent sources.             */
+/* ------------------------------------------------------------------ */
+
+/* sc_getppid(): the syscall whose RESULT IS CONSUMED. getppid() == the test's own pid — equal
+ * across both forked captures (unlike getpid) and checkable from outside. `add rax, rax` reads
+ * the kernel's return back out of the register file, so the injected value reaches the TRACE as
+ * a read record: without injection the replay would carry rax = 110, the syscall NUMBER.
+ * Returns 2*testpid. */
+static const uint8_t sc_getppid[] = {
+    0xb8, 0x6e, 0x00, 0x00, 0x00, /* 0x00 mov eax, 110   (SYS_getppid) */
+    0x0f, 0x05,                   /* 0x05 syscall        IMPURE        */
+    0x48, 0x01, 0xc0,             /* 0x07 add rax, rax   consumes rax  */
+    0xc3,                         /* 0x0a ret                          */
+};
+
+/* sc_int80(): the LEGACY gate. i386 __NR_getppid = 64. Distinct from `syscall` in a way that
+ * matters to the write set: an interrupt gate clobbers rax ONLY, leaving rcx/r11 intact
+ * (measured), so claiming rcx/r11 defs here would forge two defs that never happened.
+ * Returns 2*testpid. */
+static const uint8_t sc_int80[] = {
+    0xb8, 0x40, 0x00, 0x00, 0x00, /* 0x00 mov eax, 64  (i386 getppid) */
+    0xcd, 0x80,                   /* 0x05 int 0x80     IMPURE         */
+    0x48, 0x01, 0xc0,             /* 0x07 add rax, rax                */
+    0xc3,                         /* 0x0a ret                         */
+};
+
+/* sc_pread(fd): THE EXIT CRITERION — the kernel FILLS A BUFFER and the region LOADS it. This is
+ * the case the plan calls "the hard case", and the one where a stale replay snapshot would be
+ * silently wrong rather than loudly wrong.
+ *
+ * The SENTINEL is what makes it unambiguous. The region first stores 0x1111111111111111 into
+ * the very buffer the kernel is about to overwrite, so the two hypotheses give DIFFERENT,
+ * PREDICTABLE answers: a replay reading the post-syscall ground-truth snapshot returns the
+ * file's bytes; one reading its own stale pre-syscall memory returns the sentinel. Without it a
+ * stale read would return whatever the red zone happened to hold — unpredictable, and a fixture
+ * that cannot distinguish its own failure mode proves nothing.
+ * Returns SC_PREAD_MAGIC. */
+#define SC_PREAD_SENTINEL 0x1111111111111111ULL
+#define SC_PREAD_MAGIC    0x0BADF00DDEADBEEFULL
+static const uint8_t sc_pread[] = {
+    0x48, 0xb8, 0x11, 0x11, 0x11, 0x11,
+    0x11, 0x11, 0x11, 0x11,             /* 0x00 movabs rax, SENTINEL     */
+    0x48, 0x89, 0x44, 0x24, 0xc0,       /* 0x0a mov [rsp-64], rax        */
+    0xb8, 0x11, 0x00, 0x00, 0x00,       /* 0x0f mov eax, 17 (pread64)    */
+    0x48, 0x8d, 0x74, 0x24, 0xc0,       /* 0x14 lea rsi, [rsp-64]  buf   */
+    0xba, 0x08, 0x00, 0x00, 0x00,       /* 0x19 mov edx, 8         count */
+    0x41, 0xba, 0x00, 0x00, 0x00, 0x00, /* 0x1e mov r10d, 0        offset*/
+    0x0f, 0x05,                         /* 0x24 syscall            IMPURE*/
+    0x48, 0x8b, 0x44, 0x24, 0xc0,       /* 0x26 mov rax, [rsp-64]  LOAD  */
+    0xc3,                               /* 0x2b ret                      */
+};
+
+/* sc_clock(): the plan's OWN named example, clock_gettime — and the one the byte-identical
+ * oracle structurally CANNOT judge, because two captures happen at two different times. It is
+ * covered anyway, by comparing the replay's recorded load value against the REAL tracee's
+ * returned rax from the SAME capture (independent sources — see run_syscall_mem_case). Same
+ * sentinel trick: a stale snapshot yields 0x1111111111111111, never a plausible tv_sec.
+ * Returns tv_sec (CLOCK_MONOTONIC). */
+static const uint8_t sc_clock[] = {
+    0x48, 0xb8, 0x11, 0x11, 0x11,
+    0x11, 0x11, 0x11, 0x11, 0x11, /* 0x00 movabs rax, SENTINEL      */
+    0x48, 0x89, 0x44, 0x24, 0xc0, /* 0x0a mov [rsp-64], rax         */
+    0xbf, 0x01, 0x00, 0x00, 0x00, /* 0x0f mov edi, 1 CLOCK_MONOTONIC*/
+    0x48, 0x8d, 0x74, 0x24, 0xc0, /* 0x14 lea rsi, [rsp-64]         */
+    0xb8, 0xe4, 0x00, 0x00, 0x00, /* 0x19 mov eax, 228              */
+    0x0f, 0x05,                   /* 0x1e syscall            IMPURE */
+    0x48, 0x8b, 0x44, 0x24, 0xc0, /* 0x20 mov rax, [rsp-64]  tv_sec */
+    0xc3,                         /* 0x25 ret                       */
+};
+
+/* blind_rdtsc(a): the fixture that makes the PER-STEP DECODE load-bearing, by reproducing the
+ * silent wrongness it prevents.
+ *
+ * MEASURED: Unicorn EXECUTES rdtsc and returns UC_ERR_OK with a fabricated counter. The
+ * coherence canary would normally catch that at the next boundary — so a naive fixture proves
+ * nothing about the decode, because the canary alone would have saved it. This region therefore
+ * OVERWRITES BOTH of rdtsc's outputs (rax AND rdx) with rdi before the boundary, leaving the
+ * canary completely blind: every register it compares matches. The only thing standing between
+ * this region and a confidently-reported fabricated TSC in the trace is step_block's refusal to
+ * execute an impure instruction. Returns arg0. */
+static const uint8_t blind_rdtsc[] = {
+    0x0f, 0x31,       /* 0x00 rdtsc        writes eax + edx    */
+    0x48, 0x89, 0xf8, /* 0x02 mov rax, rdi kill rax            */
+    0x48, 0x89, 0xfa, /* 0x05 mov rdx, rdi kill rdx -> BLIND   */
+    0xc3,             /* 0x08 ret                              */
+};
+
+/* sc_loop(n): a syscall in a LOOP — the ONLY fixture here that injects more than once.
+ * Every other F2 case injects exactly one syscall, so a defect that only appears on the SECOND
+ * injection (state carried between blocks, a re-seed that happens once, an injection consumed
+ * rather than repeated) would be invisible to all of them. r8/r9 carry the accumulator across
+ * the syscalls precisely because they are caller-saved AND untouched by `syscall`, which
+ * clobbers only rax/rcx/r11 — so the loop also proves the injection does not damage live state
+ * around it. Returns n * testpid; injected == n. */
+static const uint8_t sc_loop[] = {
+    0x41, 0xb8, 0x00, 0x00, 0x00, 0x00, /* 0x00 mov r8d, 0    sum      */
+    0x41, 0xb9, 0x00, 0x00, 0x00, 0x00, /* 0x06 mov r9d, 0    i        */
+    0xb8, 0x6e, 0x00, 0x00, 0x00,       /* 0x0c mov eax, 110           */
+    0x0f, 0x05,                         /* 0x11 syscall       IMPURE   */
+    0x49, 0x01, 0xc0,                   /* 0x13 add r8, rax   sum+=pid */
+    0x49, 0x83, 0xc1, 0x01,             /* 0x16 add r9, 1              */
+    0x49, 0x39, 0xf9,                   /* 0x1a cmp r9, rdi            */
+    0x7c, 0xed,                         /* 0x1d jl 0x0c                */
+    0x4c, 0x89, 0xc0,                   /* 0x1f mov rax, r8            */
+    0xc3,                               /* 0x22 ret                    */
+};
+
+/* sc_pread_heap(fd, buf): the kernel fills a buffer OUTSIDE the replay's stack window, and the
+ * region then LOADS it. This pins the exact SCOPE of F2's memory story, which is inherited from
+ * F1 rather than introduced here: the Unicorn guest maps only the code pages and a window
+ * around rsp, so a kernel write to the heap is memory the replay never had. The load therefore
+ * hits unmapped guest memory and the capture TRUNCATES — the honest outcome — while the
+ * single-step fallback still reports the region correctly. Returns SC_PREAD_MAGIC when
+ * single-stepped. */
+static const uint8_t sc_pread_heap[] = {
+    0xb8, 0x11, 0x00, 0x00, 0x00, /* 0x00 mov eax, 17  (rdi=fd, rsi=buf) */
+    0xba, 0x08, 0x00, 0x00, 0x00, /* 0x05 mov edx, 8                     */
+    0x41, 0xba, 0x00, 0x00, 0x00,
+    0x00,             /* 0x0a mov r10d, 0                    */
+    0x0f, 0x05,       /* 0x10 syscall               IMPURE   */
+    0x48, 0x8b, 0x06, /* 0x12 mov rax, [rsi]  HEAP load      */
+    0xc3,             /* 0x15 ret                            */
+};
+
+/* sc_execve(path): the syscall that DOES NOT RETURN — see run_fail_closed_case. On success the
+ * kernel replaces the address space and control resurfaces at the new program's entry, so the
+ * boundary after the syscall is NOT syscall+2 and there is no result to carry across. The
+ * static scan cannot know this (it is a property of the run, not of the bytes), so it is the
+ * runtime boundary check that must refuse. */
+static const uint8_t sc_execve[] = {
+    0xbe, 0x00, 0x00, 0x00, 0x00, /* 0x00 mov esi, 0     argv = NULL   */
+    0xba, 0x00, 0x00, 0x00, 0x00, /* 0x05 mov edx, 0     envp = NULL   */
+    0xb8, 0x3b, 0x00, 0x00, 0x00, /* 0x0a mov eax, 59    SYS_execve    */
+    0x0f, 0x05,                   /* 0x0f syscall        NEVER RETURNS */
+    0xc3,                         /* 0x11 ret            (on failure)  */
+};
+
+/* sc_then_cpuid(): scan-only. The ALL-quantifier case: an injectable impurity FOLLOWED by a
+ * non-injectable one. If `injectable` were settled at the FIRST impurity — the exact shape of
+ * the HIGH-3 early-break bug F1's review found — this region would be called injectable and its
+ * cpuid would reach the replay. The honest reason is "cpuid", not "syscall". */
+static const uint8_t sc_then_cpuid[] = {
+    0xb8, 0x6e, 0x00, 0x00, 0x00, /* mov eax, 110 */
+    0x0f, 0x05,                   /* syscall      */
+    0x0f, 0xa2,                   /* cpuid        */
+    0xc3,                         /* ret          */
 };
 
 /* ------------------------------------------------------------------ */
@@ -1234,6 +1408,464 @@ static void run_hi16_zmm_case(void) {
 
 /* The purity static-scan classification, run whenever the real (non-stub) producer is built —
  * it needs only Capstone, not ptrace/SINGLEBLOCK, so it reports even on a locked-down host. */
+/* ------------------------------------------------------------------ */
+/* F2 drivers — record-and-inject                                       */
+/* ------------------------------------------------------------------ */
+
+/* Capstone's register id for RAX, DERIVED rather than hardcoded: the suite links no Capstone
+ * header, and pinning the literal 35 would silently rot the day the pinned Capstone renumbers
+ * its enum. asmtest_operands is in the shared valtrace header, so asking it what `add rax, rax`
+ * writes gets the answer from the very decoder that produced the records under test. */
+static uint32_t reg_rax_id(void) {
+    static const uint8_t add_rax_rax[] = {0x48, 0x01, 0xc0};
+    at_val_rec_t rd[8], wr[8];
+    size_t nr = 8, nw = 8;
+    asmtest_operands(ASMTEST_ARCH_X86_64, add_rax_rax, sizeof add_rax_rax, 0,
+                     rd, &nr, wr, &nw);
+    /* The READ set, deliberately: `add rax, rax` reads rax and NOTHING else, whereas its WRITE
+     * set is {EFLAGS, RAX} in that order — taking the first write returns EFLAGS. */
+    if (nr == 1 && rd[0].kind == AT_LOC_REG)
+        return rd[0].reg;
+    return 0;
+}
+
+/* The step index whose instruction offset is `off`, or -1. */
+static long step_at_off(const asmtest_valtrace_t *v, uint64_t off) {
+    for (size_t i = 0; i < v->steps_len; i++)
+        if (v->insn_off[i] == off)
+            return (long)i;
+    return -1;
+}
+
+/* The value a given step WROTE to register `reg`, via *out. Returns 1 if such a record exists
+ * and carries a value. */
+static int step_write_value(const asmtest_valtrace_t *v, long step,
+                            uint32_t reg, uint64_t *out) {
+    for (size_t i = 0; i < v->recs_len; i++) {
+        const at_val_rec_t *r = &v->recs[i];
+        if ((long)r->step == step && r->is_write && r->kind == AT_LOC_REG &&
+            r->reg == reg && r->value_valid) {
+            *out = r->value;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Register-write records a step carries. */
+static size_t step_nwrites(const asmtest_valtrace_t *v, long step) {
+    size_t n = 0;
+    for (size_t i = 0; i < v->recs_len; i++)
+        if ((long)v->recs[i].step == step && v->recs[i].is_write &&
+            v->recs[i].kind == AT_LOC_REG)
+            n++;
+    return n;
+}
+
+/* The F2 EXIT CRITERION driver, for a syscall whose result is DETERMINISTIC across the two
+ * forked captures. Captures the same OS-interacting region both ways and demands the same bar
+ * F1 set for pure methods: byte-identical to the single-step oracle, or gated.
+ *
+ * `want_nwrites` pins the syscall's architectural write set: 3 for `syscall` (rax/rcx/r11), 1
+ * for `int 0x80` (rax only — an interrupt gate leaves rcx/r11 alone). Asserting the COUNT is
+ * what stops the int-0x80 path quietly forging two register defs that never happened; the
+ * byte-identical check cannot see that, because both paths would forge them identically. */
+static void run_syscall_identity_case(const char *name, const uint8_t *code,
+                                      size_t len, const long *args, int nargs,
+                                      long want_result, uint64_t sc_off,
+                                      long want_sc_rax, size_t want_nwrites) {
+    asmtest_valtrace_t *A = asmtest_valtrace_new(4096, 65536, 4096);
+    asmtest_valtrace_t *B = asmtest_valtrace_new(4096, 65536, 4096);
+    if (A == NULL || B == NULL) {
+        CHECK(0, "%s: valtrace_new", name);
+        goto done;
+    }
+    long ra = 0, rb = 0;
+    asmtest_blockstep_info_t ia = {0}, ib = {0};
+    asmtest_blockstep_opts_t oracle, block;
+    memset(&oracle, 0, sizeof oracle);
+    oracle.inject_block = -1;
+    oracle.force_singlestep = 1;
+    memset(&block, 0, sizeof block);
+    block.inject_block = -1;
+
+    int rca = asmtest_dataflow_blockstep_run(code, len, args, nargs, &oracle,
+                                             &ra, A, &ia);
+    int rcb = asmtest_dataflow_blockstep_run(code, len, args, nargs, &block,
+                                             &rb, B, &ib);
+    if (rca != DF_BLOCKSTEP_OK || rcb != DF_BLOCKSTEP_OK) {
+        CHECK(0, "%s: capture failed (single-step rc=%d, block-replay rc=%d)",
+              name, rca, rcb);
+        goto done;
+    }
+    CHECK(ra == want_result && rb == want_result,
+          "%s: both paths returned the real kernel-derived result %ld "
+          "(oracle=%ld block=%ld)",
+          name, want_result, ra, rb);
+    /* THE F2 HEADLINE: an OS-interacting region that F1 sent to the single-step fallback now
+     * takes the block-step + replay path. `injected` is the only positive evidence of it —
+     * `pure` just means "the replay was used", which force_replay could also produce. */
+    CHECK(ib.pure == 1 && ib.injected > 0,
+          "%s: IMPURE region took the block-step+replay path via "
+          "record-and-inject (pure=%d injected=%llu)",
+          name, ib.pure, (unsigned long long)ib.injected);
+    CHECK(ia.pure == 0 && ia.injected == 0,
+          "%s: the oracle single-stepped it (no injection on that path)", name);
+    CHECK(!A->truncated && !B->truncated, "%s: neither trace truncated", name);
+
+    normalize_rsp_relative(A, ia.entry_rsp);
+    normalize_rsp_relative(B, ib.entry_rsp);
+    int raw = 0;
+    int same = traces_identical(A, B, &raw);
+    CHECK(same,
+          "%s: block-step+replay value trace is BYTE-IDENTICAL to the "
+          "single-step oracle across the syscall (%zu steps, %zu records)",
+          name, A->steps_len, A->recs_len);
+    if (same)
+        printf("#   raw memcmp of record arrays also identical: %s\n",
+               raw ? "yes" : "no (semantic fields identical; padding differs)");
+
+    /* The RECORD half of record-and-inject: the syscall's own step must carry the kernel's
+     * result as a def. The shared operand enumerator reports `syscall` as touching NO registers
+     * at all, so without the producer-local write set this step would be empty and the def-use
+     * edge from the syscall to its consumer could not exist. */
+    long s = step_at_off(B, sc_off);
+    uint64_t v = 0;
+    int got = (s >= 0) && step_write_value(B, s, reg_rax_id(), &v);
+    CHECK(got && (long)v == want_sc_rax,
+          "%s: the syscall step DEFINES rax = the kernel's real return %ld "
+          "(got %lld) — the def-use edge to its consumer exists",
+          name, want_sc_rax, (long long)v);
+    CHECK(s >= 0 && step_nwrites(B, s) == want_nwrites,
+          "%s: the syscall step's write set is exactly %zu register def(s) "
+          "(got %zu) — no forged defs",
+          name, want_nwrites, s >= 0 ? step_nwrites(B, s) : (size_t)0);
+
+    CHECK(ib.stops < ia.stops,
+          "%s: record-and-inject KEPT the perturbation win — in-region stops "
+          "%llu -> %llu (the syscall boundary is free: BTF already trapped it)",
+          name, (unsigned long long)ia.stops, (unsigned long long)ib.stops);
+done:
+    asmtest_valtrace_free(A);
+    asmtest_valtrace_free(B);
+}
+
+/* THE MEMORY ORACLE — and the answer to "nothing in the canary compares memory".
+ *
+ * The coherence canary compares registers only, so if the kernel's buffer write reached the
+ * replay WRONG, no canary would notice. This case supplies the missing witness WITHOUT needing
+ * the syscall to be deterministic, by comparing two INDEPENDENT sources from the SAME capture:
+ *
+ *   - `result` is read from the REAL tracee's rax at the real region-exit boundary.
+ *   - the trace's LOAD record value is read from UNICORN's memory during the replay.
+ *
+ * The region ends `mov rax, [buf]; ret`, so those two are the same datum via completely
+ * different paths. They agree iff the replay's post-syscall memory matched reality. That works
+ * for clock_gettime — whose value is different in every capture, so the byte-identical oracle
+ * structurally cannot judge it — which is why the plan's own headline example is covered here
+ * rather than above. `plausible` additionally pins the value to reality rather than merely to
+ * self-consistency. */
+static void run_syscall_mem_case(const char *name, const uint8_t *code,
+                                 size_t len, const long *args, int nargs,
+                                 uint64_t load_off, int (*plausible)(long),
+                                 const char *plausible_desc) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(4096, 65536, 4096);
+    if (v == NULL) {
+        CHECK(0, "%s: valtrace_new", name);
+        return;
+    }
+    long r = 0;
+    asmtest_blockstep_info_t info = {0};
+    asmtest_blockstep_opts_t o;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    int rc = asmtest_dataflow_blockstep_run(code, len, args, nargs, &o, &r, v,
+                                            &info);
+    CHECK(rc == DF_BLOCKSTEP_OK && !v->truncated && info.pure == 1 &&
+              info.injected == 1,
+          "%s: replayed via record-and-inject (rc=%d truncated=%d pure=%d "
+          "injected=%llu)",
+          name, rc, (int)v->truncated, info.pure,
+          (unsigned long long)info.injected);
+    if (rc != DF_BLOCKSTEP_OK)
+        goto done;
+
+    CHECK(plausible(r),
+          "%s: the region returned a REAL kernel value — %s (got %ld)", name,
+          plausible_desc, r);
+
+    /* The load AFTER the syscall: its recorded value came from Unicorn's memory, and must equal
+     * what the real tracee actually returned. A replay reading its own stale pre-syscall
+     * snapshot would report the sentinel the region stored there itself. */
+    long s = step_at_off(v, load_off);
+    uint64_t got = 0;
+    int found = 0;
+    for (size_t i = 0; s >= 0 && i < v->recs_len; i++) {
+        const at_val_rec_t *rec = &v->recs[i];
+        if ((long)rec->step == s && !rec->is_write && rec->kind != AT_LOC_REG &&
+            rec->value_valid) {
+            got = rec->value;
+            found = 1;
+            break;
+        }
+    }
+    CHECK(found && (long)got == r,
+          "%s: the replay's LOAD of the kernel-written buffer == the REAL "
+          "tracee's returned value (%lld vs %ld) — the kernel's memory delta "
+          "reached the replay",
+          name, (long long)got, r);
+    CHECK(found && got != SC_PREAD_SENTINEL,
+          "%s: and it is NOT the sentinel the region stored pre-syscall "
+          "(0x%llx) — the replay did not read its own stale snapshot",
+          name, (unsigned long long)SC_PREAD_SENTINEL);
+done:
+    asmtest_valtrace_free(v);
+}
+
+/* NEGATIVE CONTROL for the INJECTION. no_syscall_inject reaches the syscall in the replay and
+ * declines to carry the recorded effect — the pre-F2 behaviour, where Unicorn's rax still held
+ * the syscall NUMBER. Must TRUNCATE, never produce a trace. */
+static void run_no_inject_case(void) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(1024, 8192, 1024);
+    if (v == NULL) {
+        CHECK(0, "no-inject: valtrace_new");
+        return;
+    }
+    long r = 0;
+    asmtest_blockstep_info_t info = {0};
+    asmtest_blockstep_opts_t o;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.no_syscall_inject = 1;
+    int rc = asmtest_dataflow_blockstep_run(sc_getppid, sizeof sc_getppid, NULL,
+                                            0, &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_FAULT && v->truncated && info.injected == 0,
+          "no-inject NEGATIVE CONTROL: a replay that reaches a syscall and "
+          "does NOT inject the recorded effect FAULTS + truncates (rc=%d "
+          "truncated=%d injected=%llu) — the injection is load-bearing",
+          rc, (int)v->truncated, (unsigned long long)info.injected);
+    asmtest_valtrace_free(v);
+}
+
+/* NEGATIVE CONTROL for the PER-STEP DECODE — the check that stops the replay executing an
+ * impure instruction, independently of region_scan.
+ *
+ * blind_rdtsc overwrites BOTH of rdtsc's outputs before the boundary, so the coherence canary
+ * sees every register match and cannot help. force_replay pushes the region past the REGION
+ * gate, exactly as a region_scan desync would (F1's `island` fixture proves a linear sweep can
+ * miss an instruction entirely). What must stop it is step_block's own decode at the real pc.
+ * Measured: Unicorn runs rdtsc and returns UC_ERR_OK with a fabricated counter, so without this
+ * defence the capture would report rc=OK, truncated=0 and a made-up TSC in the trace. */
+static void run_blind_rdtsc_case(void) {
+    long args[1] = {0x1234};
+    asmtest_valtrace_t *v = asmtest_valtrace_new(1024, 8192, 1024);
+    if (v == NULL) {
+        CHECK(0, "blind-rdtsc: valtrace_new");
+        return;
+    }
+    /* First: it is correctly classified NOT injectable, and the reason names rdtsc. */
+    const char *why = NULL;
+    CHECK(asmtest_dataflow_blockstep_is_injectable(
+              blind_rdtsc, sizeof blind_rdtsc, &why) == 0 &&
+              why != NULL && strcmp(why, "rdtsc") == 0,
+          "blind-rdtsc: rdtsc is NOT injectable — BTF does not trap it, so no "
+          "boundary exists to record its retired value (reason=%s)",
+          why ? why : "?");
+
+    long r = 0;
+    asmtest_blockstep_info_t info = {0};
+    asmtest_blockstep_opts_t o;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.force_replay = 1; /* simulate the region gate having missed it */
+    int rc = asmtest_dataflow_blockstep_run(blind_rdtsc, sizeof blind_rdtsc,
+                                            args, 1, &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_FAULT && v->truncated,
+          "blind-rdtsc NEGATIVE CONTROL: forced past the region gate — with "
+          "the canary BLIND (both rdtsc outputs overwritten) — the per-step "
+          "decode still refuses and TRUNCATES (rc=%d truncated=%d), rather "
+          "than reporting Unicorn's fabricated TSC as a real value",
+          rc, (int)v->truncated);
+    asmtest_valtrace_free(v);
+
+    /* And gated normally, it single-steps to a correct trace: over-gating costs only the win. */
+    asmtest_valtrace_t *w = asmtest_valtrace_new(1024, 8192, 1024);
+    if (w == NULL)
+        return;
+    long r2 = 0;
+    asmtest_blockstep_info_t i2 = {0};
+    asmtest_blockstep_opts_t o2;
+    memset(&o2, 0, sizeof o2);
+    o2.inject_block = -1;
+    int rc2 = asmtest_dataflow_blockstep_run(blind_rdtsc, sizeof blind_rdtsc,
+                                             args, 1, &o2, &r2, w, &i2);
+    CHECK(rc2 == DF_BLOCKSTEP_OK && !w->truncated && i2.pure == 0 &&
+              i2.reason != NULL && strcmp(i2.reason, "rdtsc") == 0 &&
+              r2 == 0x1234,
+          "blind-rdtsc: gated to the single-step fallback -> correct trace "
+          "(rc=%d pure=%d reason=%s r=%ld)",
+          rc2, i2.pure, i2.reason ? i2.reason : "?", r2);
+    asmtest_valtrace_free(w);
+}
+
+/* THE FAIL-CLOSED RULE — a syscall that DOES NOT RETURN to the next instruction.
+ *
+ * F2 rests on a measured premise: BTF traps the syscall, so the forward pass always has a real
+ * boundary immediately AFTER it retired, holding the kernel's result. The replay does not trust
+ * that premise, it REQUIRES it (`pc + len == pc_next`). `execve` is the honest way to falsify
+ * it: on success the address space is REPLACED and control resurfaces at the new program's
+ * entry point, so the boundary after the syscall is nowhere near syscall+2. There is no
+ * "result" to carry across — the process that would have received it no longer exists.
+ *
+ * Injecting the boundary's rax here would be pure fabrication. The tier must truncate, and this
+ * asserts that it does. This is also the concrete member of the class the plan asks about —
+ * "what is not faithfully replayable at all" — and it is detected at RUNTIME from the boundary
+ * itself, with no execve-specific knowledge anywhere in the tier. */
+static void run_fail_closed_case(void) {
+    /* An absolute path in the tracee's address space. The tracee is a fork of this process, so
+     * this pointer is valid there — no code-relative addressing needed. */
+    static const char path[] = "/proc/self/exe";
+    asmtest_valtrace_t *v = asmtest_valtrace_new(1024, 8192, 1024);
+    if (v == NULL) {
+        CHECK(0, "fail-closed: valtrace_new");
+        return;
+    }
+    long a[1] = {(long)(uintptr_t)path}, r = 0;
+    asmtest_blockstep_info_t info = {0};
+    asmtest_blockstep_opts_t o;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    int rc = asmtest_dataflow_blockstep_run(sc_execve, sizeof sc_execve, a, 1,
+                                            &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_FAULT && v->truncated && info.injected == 0,
+          "fail-closed: a syscall that NEVER RETURNS to the next instruction "
+          "(execve — the address space is replaced) is refused at the "
+          "boundary check and TRUNCATES (rc=%d truncated=%d injected=%llu); "
+          "the premise \"BTF put the boundary just past the syscall\" is "
+          "REQUIRED at runtime, never assumed",
+          rc, (int)v->truncated, (unsigned long long)info.injected);
+    CHECK(info.injectable == 1,
+          "fail-closed: and the STATIC scan could not have known — it calls "
+          "the region injectable (injectable=%d), because whether a syscall "
+          "returns is a property of the RUN, not of the bytes. The runtime "
+          "check is the only thing standing here",
+          info.injectable);
+    asmtest_valtrace_free(v);
+}
+
+/* REPEATED injection. Every other F2 case injects exactly once, so this is the only one that
+ * can catch a defect appearing on the second injection. Asserts the count is EXACTLY n — not
+ * merely ">0" — so an injection that fires once and then silently stops still fails. */
+static void run_syscall_loop_case(void) {
+    enum { N = 5 };
+    long a[1] = {N};
+    asmtest_valtrace_t *A = asmtest_valtrace_new(4096, 65536, 4096);
+    asmtest_valtrace_t *B = asmtest_valtrace_new(4096, 65536, 4096);
+    if (A == NULL || B == NULL) {
+        CHECK(0, "sc_loop: valtrace_new");
+        goto done;
+    }
+    long ra = 0, rb = 0;
+    asmtest_blockstep_info_t ia = {0}, ib = {0};
+    asmtest_blockstep_opts_t oracle, block;
+    memset(&oracle, 0, sizeof oracle);
+    oracle.inject_block = -1;
+    oracle.force_singlestep = 1;
+    memset(&block, 0, sizeof block);
+    block.inject_block = -1;
+    int rca = asmtest_dataflow_blockstep_run(sc_loop, sizeof sc_loop, a, 1,
+                                             &oracle, &ra, A, &ia);
+    int rcb = asmtest_dataflow_blockstep_run(sc_loop, sizeof sc_loop, a, 1,
+                                             &block, &rb, B, &ib);
+    if (rca != DF_BLOCKSTEP_OK || rcb != DF_BLOCKSTEP_OK) {
+        CHECK(0, "sc_loop: capture failed (oracle rc=%d block rc=%d)", rca,
+              rcb);
+        goto done;
+    }
+    long want = (long)N * (long)getpid();
+    CHECK(ra == want && rb == want,
+          "sc_loop: %d getppid calls summed to %d*testpid = %ld on BOTH paths "
+          "(oracle=%ld block=%ld)",
+          N, N, want, ra, rb);
+    CHECK(ib.injected == (uint64_t)N,
+          "sc_loop: the replay injected EXACTLY %d syscalls (got %llu) — "
+          "repeated injection, not a one-shot",
+          N, (unsigned long long)ib.injected);
+    CHECK(!A->truncated && !B->truncated, "sc_loop: neither trace truncated");
+    normalize_rsp_relative(A, ia.entry_rsp);
+    normalize_rsp_relative(B, ib.entry_rsp);
+    int raw = 0;
+    CHECK(traces_identical(A, B, &raw),
+          "sc_loop: byte-identical to the single-step oracle across %d "
+          "injected syscalls (%zu steps, %zu records)",
+          N, A->steps_len, A->recs_len);
+    CHECK(ib.stops < ia.stops,
+          "sc_loop: still cut the stops %llu -> %llu across a loop of syscalls",
+          (unsigned long long)ia.stops, (unsigned long long)ib.stops);
+done:
+    asmtest_valtrace_free(A);
+    asmtest_valtrace_free(B);
+}
+
+/* THE MEMORY SCOPE BOUNDARY. A kernel write OUTSIDE the replay's stack window is memory the
+ * Unicorn guest never had (it maps code + a window around rsp — F1's scope, inherited). The
+ * load must therefore FAULT the replay rather than return a stale or zero value, while the
+ * single-step fallback still reports the region correctly. Asserting BOTH halves is the point:
+ * "it truncates" alone would also be satisfied by a tier that truncates everything. */
+static void run_pread_heap_case(int fd, void *buf) {
+    long a[2] = {(long)fd, (long)(uintptr_t)buf};
+
+    asmtest_valtrace_t *v = asmtest_valtrace_new(1024, 8192, 1024);
+    if (v == NULL) {
+        CHECK(0, "sc_pread_heap: valtrace_new");
+        return;
+    }
+    long r = 0;
+    asmtest_blockstep_info_t info = {0};
+    asmtest_blockstep_opts_t o;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    int rc = asmtest_dataflow_blockstep_run(sc_pread_heap, sizeof sc_pread_heap,
+                                            a, 2, &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_FAULT && v->truncated,
+          "sc_pread_heap: a kernel write OUTSIDE the replay's stack window "
+          "(heap buffer) faults the replay's load and TRUNCATES (rc=%d "
+          "truncated=%d) — F2's memory scope is F1's guest map, and it fails "
+          "CLOSED rather than reporting stale bytes",
+          rc, (int)v->truncated);
+    asmtest_valtrace_free(v);
+
+    asmtest_valtrace_t *w = asmtest_valtrace_new(1024, 8192, 1024);
+    if (w == NULL)
+        return;
+    long r2 = 0;
+    asmtest_blockstep_info_t i2 = {0};
+    asmtest_blockstep_opts_t o2;
+    memset(&o2, 0, sizeof o2);
+    o2.inject_block = -1;
+    o2.force_singlestep = 1;
+    memset(buf, 0, 8);
+    int rc2 = asmtest_dataflow_blockstep_run(
+        sc_pread_heap, sizeof sc_pread_heap, a, 2, &o2, &r2, w, &i2);
+    CHECK(rc2 == DF_BLOCKSTEP_OK && !w->truncated &&
+              (uint64_t)r2 == SC_PREAD_MAGIC,
+          "sc_pread_heap CONTROL: the SAME region single-steps to the correct "
+          "heap value 0x%llx (rc=%d truncated=%d r=0x%llx) — the truncation "
+          "above is the replay's memory scope, not a broken fixture",
+          (unsigned long long)SC_PREAD_MAGIC, rc2, (int)w->truncated,
+          (unsigned long long)r2);
+    asmtest_valtrace_free(w);
+}
+
+static int plausible_pread(long r) { return (uint64_t)r == SC_PREAD_MAGIC; }
+static int plausible_monotonic(long r) {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0)
+        return 0;
+    /* tv_sec of CLOCK_MONOTONIC, sampled moments apart: equal or a hair behind. */
+    return r >= 0 && r <= ts.tv_sec && r > ts.tv_sec - 60;
+}
+
 static void run_purity_check(const char *name, const uint8_t *code, size_t len,
                              int want_pure, const char *want_reason) {
     const char *reason = NULL;
@@ -1268,6 +1900,58 @@ int main(void) {
     run_purity_check("imp_rdtsc", imp_rdtsc, sizeof imp_rdtsc, 0, "rdtsc");
     run_purity_check("imp_rdrand", imp_rdrand, sizeof imp_rdrand, 0, "rdrand");
     run_purity_check("imp_int80", imp_int80, sizeof imp_int80, 0, "int 0x80");
+
+    /* F2 classification (Capstone only): which impurities record-and-inject can CARRY. The
+     * split is a measured hardware fact — BTF traps syscall/int 0x80 (control transfers) and
+     * does not trap rdtsc/cpuid/rdrand — not a policy choice, so it is asserted as one. */
+    {
+        const char *why = NULL;
+        CHECK(asmtest_dataflow_blockstep_is_injectable(
+                  imp_syscall, sizeof imp_syscall, &why) == 1,
+              "injectable: a `syscall` region IS injectable — BTF traps it, so "
+              "the forward pass gets a real post-retirement boundary for free");
+        CHECK(asmtest_dataflow_blockstep_is_injectable(
+                  imp_int80, sizeof imp_int80, &why) == 1,
+              "injectable: an `int 0x80` region IS injectable (the legacy gate "
+              "is a control transfer too)");
+        CHECK(asmtest_dataflow_blockstep_is_injectable(
+                  loop_poly, sizeof loop_poly, &why) == 1,
+              "injectable: a PURE region is injectable vacuously (nothing to "
+              "carry)");
+        CHECK(asmtest_dataflow_blockstep_is_injectable(
+                  imp_rdtsc, sizeof imp_rdtsc, &why) == 0 &&
+                  why != NULL && strcmp(why, "rdtsc") == 0,
+              "injectable: `rdtsc` is NOT injectable (reason=%s) — BTF does "
+              "not trap it, so there is no boundary to record from",
+              why ? why : "?");
+        CHECK(asmtest_dataflow_blockstep_is_injectable(
+                  imp_cpuid, sizeof imp_cpuid, &why) == 0 &&
+                  why != NULL && strcmp(why, "cpuid") == 0,
+              "injectable: `cpuid` is NOT injectable (reason=%s)",
+              why ? why : "?");
+        CHECK(asmtest_dataflow_blockstep_is_injectable(
+                  imp_rdrand, sizeof imp_rdrand, &why) == 0 &&
+                  why != NULL && strcmp(why, "rdrand") == 0,
+              "injectable: `rdrand` is NOT injectable (reason=%s)",
+              why ? why : "?");
+        /* The ALL-quantifier. `injectable` must see the WHOLE region: settling it at the FIRST
+         * impurity would call this region injectable on the strength of its syscall and hand
+         * its cpuid to the replay — the HIGH-3 early-break bug in a new costume. And the reason
+         * must name the impurity that DISQUALIFIES it, not the first one seen. */
+        CHECK(asmtest_dataflow_blockstep_is_injectable(
+                  sc_then_cpuid, sizeof sc_then_cpuid, &why) == 0 &&
+                  why != NULL && strcmp(why, "cpuid") == 0,
+              "injectable: `syscall; cpuid` is NOT injectable and names the "
+              "DISQUALIFYING impurity (reason=%s, not \"syscall\") — the "
+              "verdict is an ALL-quantifier, not the first impurity seen",
+              why ? why : "?");
+        /* is_pure() must keep F1's meaning: ten other things ask it, and F2 widening what the
+         * TIER accepts must not quietly redefine what PURE means. */
+        CHECK(asmtest_dataflow_blockstep_is_pure(imp_syscall,
+                                                 sizeof imp_syscall, &why) == 0,
+              "injectable: a syscall region is still IMPURE — F2 widened the "
+              "tier's gate, it did not redefine purity");
+    }
 
     /* Replayability classification (Capstone only) — the encoding-level VEX/EVEX gate. SSE is
      * replayable; every VEX/EVEX form is not. The pure-GP fixtures must stay replayable, or
@@ -1347,6 +2031,57 @@ int main(void) {
     }
     run_impure_case();
     run_canary_case();
+
+    /* ---- F2: record-and-inject over OS-interacting regions ---- */
+    {
+        /* getppid() == this test's pid: the same in BOTH forked captures (getpid would not
+         * be), so the byte-identical oracle can judge it, and checkable from outside. */
+        long want = 2L * (long)getpid();
+        run_syscall_identity_case("sc_getppid", sc_getppid, sizeof sc_getppid,
+                                  NULL, 0, want, /*sc_off*/ 0x05,
+                                  /*sc_rax*/ (long)getpid(), /*nwrites*/ 3);
+        /* int 0x80 clobbers rax ONLY — measured. Its write set must be 1, not 3. */
+        run_syscall_identity_case("sc_int80", sc_int80, sizeof sc_int80, NULL,
+                                  0, want, /*sc_off*/ 0x05,
+                                  /*sc_rax*/ (long)getpid(), /*nwrites*/ 1);
+
+        /* THE EXIT CRITERION: a syscall that FILLS A BUFFER the region then loads. */
+        int fd = memfd_create("asmtest_f2", 0);
+        if (fd < 0) {
+            printf("# SKIP sc_pread: memfd_create: %s\n", strerror(errno));
+        } else {
+            uint64_t magic = SC_PREAD_MAGIC;
+            if (write(fd, &magic, sizeof magic) != (ssize_t)sizeof magic) {
+                printf("# SKIP sc_pread: seeding the memfd failed\n");
+            } else {
+                long a[1] = {(long)fd};
+                run_syscall_identity_case(
+                    "sc_pread(kernel fills a stack buffer)", sc_pread,
+                    sizeof sc_pread, a, 1, (long)SC_PREAD_MAGIC,
+                    /*sc_off*/ 0x24, /*sc_rax*/ 8, /*nwrites*/ 3);
+                run_syscall_mem_case("sc_pread/mem", sc_pread, sizeof sc_pread,
+                                     a, 1, /*load_off*/ 0x26, plausible_pread,
+                                     "the exact 8 bytes seeded into the memfd");
+                /* The same kernel write, but landing OUTSIDE the replay's guest map. */
+                void *heap = malloc(64);
+                if (heap != NULL) {
+                    run_pread_heap_case(fd, heap);
+                    free(heap);
+                }
+            }
+            close(fd);
+        }
+
+        /* clock_gettime — the plan's own named example, and one the byte-identical oracle
+         * CANNOT judge (two captures, two different times). Covered by the memory oracle. */
+        run_syscall_mem_case("sc_clock_gettime", sc_clock, sizeof sc_clock,
+                             NULL, 0, /*load_off*/ 0x20, plausible_monotonic,
+                             "a plausible CLOCK_MONOTONIC tv_sec");
+    }
+    run_syscall_loop_case();
+    run_no_inject_case();
+    run_fail_closed_case();
+    run_blind_rdtsc_case();
 
     /* Vector breadth (increment 2). */
     run_vec_seed_case();
