@@ -114,8 +114,13 @@ typedef struct {
     uint64_t
         gap_steps; /* synthetic GAP-BARRIER steps appended (a gap that changed
                     * nothing AT RISK correctly appends none)                */
-    uint64_t gap_recs;   /* write records those barrier steps carry           */
-    uint32_t nregions;   /* regions in the set at the window end (frame+chan) */
+    uint64_t gap_recs; /* write records those barrier steps carry           */
+    uint32_t nregions; /* regions in the set at the window END (frame+chan) */
+    uint32_t nregions_entry; /* regions in the set at the window ENTRY drain.
+                              * nregions > nregions_entry is the ONLY proof that a
+                              * region was published while the window was already
+                              * open — without it a fixture that publishes early
+                              * passes whether or not the in-loop drain exists.  */
     uint32_t risk_regs;  /* distinct register locations put at risk           */
     uint32_t risk_bytes; /* distinct memory bytes put at risk                 */
     int chan_overrun;    /* the addr channel LAPPED: a published region LOST  */
@@ -2202,6 +2207,17 @@ static int dfp_window_loop(dfp_ctx *c, uint64_t win_base, uint64_t win_len,
     }
 }
 
+/* The size of the telemetry struct above, for the suites that must RE-DECLARE it
+ * (this tier ships no header). A field added here and not there does not fail to
+ * compile — it silently shifts every later field in the caller's view, quietly
+ * corrupting the numbers the survey is judged by. That is not hypothetical: it
+ * happened during this increment's own development and cost three green checks.
+ * Callers assert this against their own sizeof, turning a silent skew into a loud
+ * one. */
+size_t asmtest_dataflow_ptrace_win_info_size(void) {
+    return sizeof(asmtest_dfwin_info_t);
+}
+
 /* F6 — attach to a LIVE process and survey a WHOLE WINDOW's def-use across every
  * method range it executes, instead of one scoped region.
  *
@@ -2275,6 +2291,7 @@ int asmtest_dataflow_ptrace_attach_window(pid_t pid, uint64_t win_base,
         if (chan->overrun)
             info->chan_overrun = 1;
     }
+    info->nregions_entry = nreg + 1; /* + the window frame itself */
 
     dfp_ctx c;
     memset(&c, 0, sizeof c);
@@ -2400,6 +2417,10 @@ int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
     if (survived != NULL)
         *survived = 0;
     return DF_PTRACE_ENOSYS;
+}
+
+size_t asmtest_dataflow_ptrace_win_info_size(void) {
+    return sizeof(asmtest_dfwin_info_t);
 }
 
 int asmtest_dataflow_ptrace_attach_window(pid_t pid, uint64_t win_base,

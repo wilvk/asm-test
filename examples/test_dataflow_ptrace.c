@@ -519,6 +519,7 @@ typedef struct {
     uint64_t gap_steps;
     uint64_t gap_recs;
     uint32_t nregions;
+    uint32_t nregions_entry;
     uint32_t risk_regs;
     uint32_t risk_bytes;
     int chan_overrun;
@@ -532,8 +533,22 @@ int asmtest_dataflow_ptrace_attach_window(pid_t pid, uint64_t win_base,
                                           uint64_t max_insns, long *result,
                                           asmtest_dfwin_info_t *info,
                                           asmtest_valtrace_t *vt);
+/* The producer's own sizeof, so a field added there and not here is caught LOUDLY
+ * instead of silently shifting every later field of the struct above. */
+size_t asmtest_dataflow_ptrace_win_info_size(void);
 
 typedef long (*fn1_t)(long);
+
+/* Shared (MAP_SHARED) control block: the victim proves survival on `counter`, and the
+ * mid-window fixture rendezvouses with the parent's publisher thread on flag/ack —
+ * which is what makes "a method JIT'd DURING the window" a DETERMINISTIC test rather
+ * than a sleep-and-hope race. */
+typedef struct {
+    volatile long counter; /* victim loop iterations (survival proof)        */
+    volatile long go;      /* parent -> victim: "start calling the frame"    */
+    volatile long flag;    /* victim GLUE -> parent: "the window is open"    */
+    volatile long ack;     /* parent -> victim GLUE: "the method is live"    */
+} f6_ctl;
 
 /* One inherited RX page holding four DISTINCT, non-overlapping ranges: the window
  * FRAME, two "JIT'd method bodies" M1/M2 (published on the address channel — the only
@@ -599,7 +614,9 @@ typedef struct {
  *   (C) a stack slot the FRAME writes, the GLUE clobbers (via the rbp both share),
  *       and the FRAME then reads.
  * (B) and (C) are the two shapes an elided-glue survey FABRICATES an edge on. */
-static void f6_build_survey(uint8_t *m, uint64_t base, f6_layout *L) {
+static void f6_build_survey(uint8_t *m, uint64_t base, f6_ctl *ctl,
+                            f6_layout *L) {
+    (void)ctl; /* the survey fixture needs no rendezvous */
     memset(L, 0, sizeof *L);
     L->base = base;
 
@@ -703,6 +720,179 @@ static void f6_build_survey(uint8_t *m, uint64_t base, f6_layout *L) {
     L->m2_len = b.n;
 }
 
+/* --- the MID-WINDOW publish fixture ------------------------------------ *
+ * The survey fixture above publishes its whole region set before the window opens, so
+ * it cannot tell "drained once at entry" from "drained at every stop". This one can:
+ * M2 is published only AFTER the window is already open, and the fixture RENDEZVOUSES
+ * rather than sleeps, so the ordering is guaranteed, not raced —
+ *   victim GLUE: ctl->flag = 1, then spin until ctl->ack (bounded, so a dead
+ *                publisher FAILS the test instead of hanging it);
+ *   parent thread: see flag -> publish M2 on the channel -> ctl->ack = 1;
+ *   victim GLUE: returns; the FRAME then calls M2.
+ * So M2 is on the channel strictly before M2's first instruction retires, and the many
+ * stops in between are the tracer's only chance to notice. */
+#define F6_MW_LIMIT 50000 /* glue spin bound: fail, never hang */
+
+static void f6_build_midwindow(uint8_t *m, uint64_t base, f6_ctl *ctl,
+                               f6_layout *L) {
+    memset(L, 0, sizeof *L);
+    L->base = base;
+
+    f6_emit f = {m + F6_FRAME, 0};
+    f6_b(&f, 0x55); /* push rbp             */
+    f6_b(&f, 0x48);
+    f6_b(&f, 0x89);
+    f6_b(&f, 0xe5); /* mov  rbp, rsp        */
+    f6_b(&f, 0x48);
+    f6_b(&f, 0x83);
+    f6_b(&f, 0xec);
+    f6_b(&f, 0x20);                  /* sub  rsp, 0x20       */
+    f6_movabs_rax(&f, base + F6_M1); /* mov  rax, &M1        */
+    f6_call_rax(&f);                 /* call rax             */
+    L->keep_def = base + F6_FRAME + f.n;
+    f6_b(&f, 0x48);
+    f6_b(&f, 0x89);
+    f6_b(&f, 0x45);
+    f6_b(&f, 0xf8);                    /* mov  [rbp-8], rax    */
+    f6_movabs_rax(&f, base + F6_GLUE); /* mov  rax, &GLUE      */
+    f6_call_rax(&f);                   /* call rax -> the GAP  */
+    L->keep_use = base + F6_FRAME + f.n;
+    f6_b(&f, 0x48);
+    f6_b(&f, 0x8b);
+    f6_b(&f, 0x7d);
+    f6_b(&f, 0xf8);                  /* mov  rdi, [rbp-8]    */
+    f6_movabs_rax(&f, base + F6_M2); /* mov  rax, &M2        */
+    f6_call_rax(&f);                 /* call rax  (M2!)      */
+    f6_b(&f, 0xc9);                  /* leave                */
+    f6_b(&f, 0xc3);                  /* ret                  */
+    L->frame_len = f.n;
+
+    f6_emit g = {m + F6_GLUE, 0};
+    f6_movabs_rax(&g, (uint64_t)(uintptr_t)&ctl->flag); /* mov rax, &flag   */
+    f6_b(&g, 0x48);
+    f6_b(&g, 0xc7);
+    f6_b(&g, 0x00);
+    f6_b(&g, 0x01);
+    f6_b(&g, 0x00);
+    f6_b(&g, 0x00);
+    f6_b(&g, 0x00); /* mov qword [rax], 1       */
+    f6_b(&g, 0x48);
+    f6_b(&g, 0xb9);
+    f6_u64(&g, F6_MW_LIMIT); /* mov rcx, LIMIT           */
+    size_t wait = g.n;
+    f6_movabs_rax(&g, (uint64_t)(uintptr_t)&ctl->ack); /* mov rax, &ack     */
+    f6_b(&g, 0x48);
+    f6_b(&g, 0x8b);
+    f6_b(&g, 0x00); /* mov rax, [rax]    */
+    f6_b(&g, 0x48);
+    f6_b(&g, 0x85);
+    f6_b(&g, 0xc0); /* test rax, rax     */
+    f6_b(&g, 0x75);
+    size_t jnz_done = g.n;
+    f6_b(&g, 0x00); /* jnz done  (patched)      */
+    f6_b(&g, 0x48);
+    f6_b(&g, 0x83);
+    f6_b(&g, 0xe9);
+    f6_b(&g, 0x01); /* sub rcx, 1               */
+    f6_b(&g, 0x75);
+    size_t jnz_wait = g.n;
+    f6_b(&g, 0x00); /* jnz wait  (patched)      */
+    size_t done = g.n;
+    f6_b(&g, 0xc3); /* ret                      */
+    g.p[jnz_done] = (uint8_t)(int8_t)((long)done - (long)(jnz_done + 1));
+    g.p[jnz_wait] = (uint8_t)(int8_t)((long)wait - (long)(jnz_wait + 1));
+
+    f6_emit a = {m + F6_M1, 0};
+    f6_b(&a, 0x48);
+    f6_b(&a, 0x89);
+    f6_b(&a, 0xf8); /* mov rax, rdi        */
+    L->m1_add = base + F6_M1 + a.n;
+    f6_b(&a, 0x48);
+    f6_b(&a, 0x83);
+    f6_b(&a, 0xc0);
+    f6_b(&a, 0x01); /* add rax, 1          */
+    f6_b(&a, 0xc3); /* ret                 */
+    L->m1_len = a.n;
+
+    f6_emit b = {m + F6_M2, 0};
+    L->m2_mov = base + F6_M2 + b.n;
+    f6_b(&b, 0x48);
+    f6_b(&b, 0x89);
+    f6_b(&b, 0xf8); /* mov rax, rdi        */
+    L->m2_add = base + F6_M2 + b.n;
+    f6_b(&b, 0x48);
+    f6_b(&b, 0x01);
+    f6_b(&b, 0xc0); /* add rax, rax        */
+    f6_b(&b, 0xc3); /* ret                 */
+    L->m2_len = b.n;
+}
+
+/* --- the COST fixture --------------------------------------------------- *
+ * Two published methods with a long, UNPUBLISHED glue loop between them: the shape
+ * that makes the tier's real cost visible. `f6_cost_n` sets the loop trip count, so
+ * two runs differing ONLY in glue length isolate the per-stop cost from every fixed
+ * overhead (SEIZE, run_to, detach) by subtraction. */
+static long f6_cost_n = 0;
+
+static void f6_build_cost(uint8_t *m, uint64_t base, f6_ctl *ctl,
+                          f6_layout *L) {
+    (void)ctl;
+    memset(L, 0, sizeof *L);
+    L->base = base;
+
+    f6_emit f = {m + F6_FRAME, 0};
+    f6_b(&f, 0x55); /* push rbp             */
+    f6_b(&f, 0x48);
+    f6_b(&f, 0x89);
+    f6_b(&f, 0xe5); /* mov  rbp, rsp        */
+    f6_movabs_rax(&f, base + F6_M1);
+    f6_call_rax(&f); /* M1: recorded         */
+    f6_movabs_rax(&f, base + F6_GLUE);
+    f6_call_rax(&f); /* glue: NOT recorded   */
+    f6_movabs_rax(&f, base + F6_M2);
+    f6_call_rax(&f); /* M2: recorded         */
+    f6_b(&f, 0x5d);  /* pop  rbp             */
+    f6_b(&f, 0xc3);  /* ret                  */
+    L->frame_len = f.n;
+
+    /* mov rcx, N / loop: sub rcx,1 / jnz loop / ret  -> 2N + 2 instructions */
+    f6_emit g = {m + F6_GLUE, 0};
+    f6_b(&g, 0x48);
+    f6_b(&g, 0xb9);
+    f6_u64(&g, (uint64_t)f6_cost_n); /* mov rcx, N               */
+    size_t lp = g.n;
+    f6_b(&g, 0x48);
+    f6_b(&g, 0x83);
+    f6_b(&g, 0xe9);
+    f6_b(&g, 0x01); /* sub rcx, 1               */
+    f6_b(&g, 0x75);
+    size_t j = g.n;
+    f6_b(&g, 0x00); /* jnz loop (patched)       */
+    g.p[j] = (uint8_t)(int8_t)((long)lp - (long)(j + 1));
+    f6_b(&g, 0xc3); /* ret                      */
+
+    f6_emit a = {m + F6_M1, 0};
+    f6_b(&a, 0x48);
+    f6_b(&a, 0x89);
+    f6_b(&a, 0xf8);
+    f6_b(&a, 0x48);
+    f6_b(&a, 0x83);
+    f6_b(&a, 0xc0);
+    f6_b(&a, 0x01);
+    f6_b(&a, 0xc3);
+    L->m1_len = a.n;
+
+    f6_emit b = {m + F6_M2, 0};
+    f6_b(&b, 0x48);
+    f6_b(&b, 0x89);
+    f6_b(&b, 0xf8); /* mov rax, rdi        */
+    f6_b(&b, 0x48);
+    f6_b(&b, 0x01);
+    f6_b(&b, 0xc0); /* add rax, rax        */
+    f6_b(&b, 0xc3);
+    L->m2_len = b.n;
+}
+
 /* First step recorded at absolute address `addr` (each address in a survey window
  * executes exactly once, so this is unambiguous). A GAP-BARRIER step carries the glue
  * ENTRY address, which is in no region — so this also finds the barrier. */
@@ -746,31 +936,36 @@ static int f6_reg_write_value(const asmtest_valtrace_t *v, uint32_t step,
 }
 
 /* Map + build the fixture, fork an INDEPENDENT victim looping the frame, and return
- * its pid (0 on a setup failure the caller SKIPs on). The mapping is built and made
- * executable BEFORE the fork, so the victim inherits it at the identical address. */
-static pid_t f6_spawn_victim(uint8_t **map_out, uint64_t *base_out,
-                             sp_ctl **ctl_out,
-                             void (*build)(uint8_t *, uint64_t, f6_layout *),
-                             f6_layout *L, long arg) {
+ * its pid (0 on a setup failure the caller SKIPs on). The control block is mapped
+ * BEFORE the build so a fixture can bake its absolute address into the code it emits,
+ * and the code mapping is built + made executable BEFORE the fork, so the victim
+ * inherits it at the identical address. */
+static pid_t
+f6_spawn_victim(uint8_t **map_out, uint64_t *base_out, f6_ctl **ctl_out,
+                void (*build)(uint8_t *, uint64_t, f6_ctl *, f6_layout *),
+                f6_layout *L, long arg) {
+    f6_ctl *ctl = mmap(NULL, sizeof *ctl, PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (ctl == MAP_FAILED)
+        return 0;
+    ctl->counter = 0;
+    ctl->flag = 0;
+    ctl->ack = 0;
     void *ex = mmap(NULL, F6_MAP, PROT_READ | PROT_WRITE,
                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (ex == MAP_FAILED)
+    if (ex == MAP_FAILED) {
+        munmap(ctl, sizeof *ctl);
         return 0;
+    }
     memset(ex, 0xcc,
            F6_MAP); /* int3 fill: a stray PC traps rather than wanders */
     uint64_t base = (uint64_t)(uintptr_t)ex;
-    build((uint8_t *)ex, base, L);
+    build((uint8_t *)ex, base, ctl, L);
     if (mprotect(ex, F6_MAP, PROT_READ | PROT_EXEC) != 0) {
         munmap(ex, F6_MAP);
+        munmap(ctl, sizeof *ctl);
         return 0;
     }
-    sp_ctl *ctl = mmap(NULL, sizeof *ctl, PROT_READ | PROT_WRITE,
-                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
-    if (ctl == MAP_FAILED) {
-        munmap(ex, F6_MAP);
-        return 0;
-    }
-    ctl->counter = 0;
     pid_t pid = fork();
     if (pid < 0) {
         munmap(ex, F6_MAP);
@@ -778,7 +973,15 @@ static pid_t f6_spawn_victim(uint8_t **map_out, uint64_t *base_out,
         return 0;
     }
     if (pid == 0) {
+        /* Gate the FIRST frame call on `go`. Without this the victim free-runs the
+         * frame from the moment it forks, so any rendezvous the frame's glue drives
+         * fires microseconds after the fork — long before a window is ever opened.
+         * (That is not hypothetical: it silently made the mid-window-publish test
+         * vacuous until a mutation exposed it.) The caller opens the gate only once
+         * the tracer is armed. */
         struct timespec ts = {0, 2 * 1000 * 1000};
+        while (ctl->go == 0)
+            ;
         for (;;) {
             volatile long r = ((fn1_t)(uintptr_t)(base + F6_FRAME))(arg);
             (void)r;
@@ -793,7 +996,7 @@ static pid_t f6_spawn_victim(uint8_t **map_out, uint64_t *base_out,
     return pid;
 }
 
-static void f6_reap(pid_t pid, uint8_t *map, sp_ctl *ctl) {
+static void f6_reap(pid_t pid, uint8_t *map, f6_ctl *ctl) {
     kill(pid, SIGKILL);
     waitpid(pid, NULL, 0);
     munmap(map, F6_MAP);
@@ -804,8 +1007,15 @@ static void f6_reap(pid_t pid, uint8_t *map, sp_ctl *ctl) {
  * THREE code ranges (the frame + two channel-published method bodies), with the
  * elided glue barriered so no edge crosses it unsourced. */
 static void test_window_survey(void) {
+    /* Before ANY telemetry is trusted: this suite re-declares asmtest_dfwin_info_t
+     * (the tier ships no header), and a silent layout skew between the two copies
+     * corrupts every number below it. Check it, do not assume it. */
+    CHECK(asmtest_dataflow_ptrace_win_info_size() ==
+              sizeof(asmtest_dfwin_info_t),
+          "window: the suite's re-declared telemetry struct matches the "
+          "producer's layout (a skew here silently corrupts every count)");
     uint8_t *map = NULL;
-    sp_ctl *ctl = NULL;
+    f6_ctl *ctl = NULL;
     uint64_t base = 0;
     f6_layout L;
     pid_t pid = f6_spawn_victim(&map, &base, &ctl, f6_build_survey, &L, 7);
@@ -813,6 +1023,7 @@ static void test_window_survey(void) {
         printf("# SKIP window_survey: fixture setup failed\n");
         return;
     }
+    ctl->go = 1; /* this fixture needs no rendezvous: let it free-run */
 
     /* The channel is how an out-of-process stepper learns where a live JIT put a
      * method: publish M1 and M2, and deliberately NOT the glue. Used through the
@@ -975,6 +1186,216 @@ static void test_window_survey(void) {
     asmtest_valtrace_free(v);
 
     f6_reap(pid, map, ctl);
+}
+
+/* The parent-side "JIT listener": wait for the victim's glue to report that the window
+ * is OPEN, publish M2's body on the channel, then release the glue. This is the
+ * runtime's MethodLoadVerbose callback, standing in — the mechanism under test (a
+ * region entering the set while the stepper is mid-window) is identical. */
+typedef struct {
+    asmtest_addr_channel_t *chan;
+    f6_ctl *ctl;
+    uint64_t m2_base, m2_len;
+    volatile int published;
+} f6_pub_arg;
+
+static void *f6_publisher(void *p) {
+    f6_pub_arg *a = (f6_pub_arg *)p;
+    /* Open the victim's gate only AFTER the tracer has certainly SEIZEd and planted
+     * its entry breakpoint (that is microseconds of work; this waits 50ms, a
+     * four-order-of-magnitude margin). So the frame's FIRST-EVER call — and therefore
+     * the first time its glue raises `flag` — happens with the window already armed.
+     * If this margin were ever violated the publish would land before the window and
+     * `nregions_entry` would catch it, so the ordering is checked, not assumed. */
+    struct timespec ts = {0, 50 * 1000 * 1000};
+    nanosleep(&ts, NULL);
+    a->ctl->go = 1;
+    for (long spin = 0; spin < 2000000000L && a->ctl->flag == 0; spin++)
+        ; /* busy-wait: the window is only open for a few ms of stepping */
+    if (a->ctl->flag == 0)
+        return NULL; /* never opened: leave ack clear, the glue self-bounds */
+    asmtest_addr_channel_publish(a->chan, a->m2_base, a->m2_len, 2);
+    a->published = 1;
+    a->ctl->ack = 1;
+    return NULL;
+}
+
+/* F6 — a method published AFTER the window opened is picked up and recorded. This is
+ * the claim that separates "drain the channel once at entry" from "drain it at every
+ * stop", and it is what makes the survey usable against a LIVE JIT, whose methods
+ * appear while you are already looking. */
+static void test_window_midpublish(void) {
+    uint8_t *map = NULL;
+    f6_ctl *ctl = NULL;
+    uint64_t base = 0;
+    f6_layout L;
+    pid_t pid = f6_spawn_victim(&map, &base, &ctl, f6_build_midwindow, &L, 7);
+    if (pid == 0) {
+        printf("# SKIP window_midpublish: fixture setup failed\n");
+        return;
+    }
+
+    /* ONLY M1 is on the channel when the window opens. M2 does not exist yet, as far
+     * as the stepper is concerned. */
+    asmtest_addr_channel_t chanbuf;
+    asmtest_addr_channel_t *chan = &chanbuf;
+    asmtest_addr_channel_init(chan);
+    asmtest_addr_channel_publish(chan, base + F6_M1, L.m1_len, 1);
+
+    f6_pub_arg pa = {chan, ctl, base + F6_M2, L.m2_len, 0};
+    pthread_t th;
+    if (pthread_create(&th, NULL, f6_publisher, &pa) != 0) {
+        printf("# SKIP window_midpublish: pthread_create failed\n");
+        f6_reap(pid, map, ctl);
+        return;
+    }
+
+    asmtest_valtrace_t *v = asmtest_valtrace_new(512, 4096, 4096);
+    asmtest_dfwin_info_t info;
+    long result = 0;
+    int rc = asmtest_dataflow_ptrace_attach_window(
+        pid, base + F6_FRAME, L.frame_len, chan, 0, &result, &info, v);
+    pthread_join(th, NULL);
+    if (rc == DF_PTRACE_ETRACE) {
+        printf("# SKIP window_midpublish: PTRACE_SEIZE unavailable here "
+               "(yama/seccomp)\n");
+        asmtest_valtrace_free(v);
+        f6_reap(pid, map, ctl);
+        return;
+    }
+    CHECK(rc == DF_PTRACE_OK && pa.published == 1,
+          "window_midpublish: the window ran and M2 was published while it "
+          "was OPEN (rendezvoused, not raced)");
+    CHECK(result == 16,
+          "window_midpublish: the frame returned 2*(7+1) = 16 — the glue's "
+          "ack rendezvous really completed");
+
+    int in_m1 = 0, in_m2 = 0;
+    for (size_t i = 0; i < v->steps_len; i++) {
+        uint64_t a = v->insn_off[i];
+        if (f6_in(a, base + F6_M1, L.m1_len))
+            in_m1++;
+        else if (f6_in(a, base + F6_M2, L.m2_len))
+            in_m2++;
+    }
+    CHECK(in_m1 == 3,
+          "window_midpublish: the method published BEFORE the window was "
+          "recorded (M1: 3 steps)");
+    CHECK(in_m2 == 3,
+          "window_midpublish: the method published DURING the window was "
+          "recorded too — the region set is refreshed at every stop, not "
+          "sampled once at the frame entry (M2: 3 steps)");
+    /* THE assertion that makes the two above non-vacuous. Without it, a fixture whose
+     * publish accidentally lands BEFORE the window still records M2 — from the entry
+     * drain — and reports success while the in-loop drain is dead code. Pinning the
+     * ENTRY count to 2 proves M2 was genuinely absent when the window opened, so the
+     * only thing that could have put it in the set is a drain taken mid-window. */
+    CHECK(info.nregions_entry == 2 && info.nregions == 3,
+          "window_midpublish: the set held frame + M1 ONLY at the window "
+          "entry, and frame + M1 + M2 by the end — M2 entered the set while "
+          "the window was already open, which is the whole claim");
+
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    uint32_t s_keep_use = 0, s_m2_mov = 0;
+    if (g != NULL && f6_step_at(v, L.keep_use, &s_keep_use) &&
+        f6_step_at(v, L.m2_mov, &s_m2_mov))
+        CHECK(has_edge(g, s_keep_use, s_m2_mov),
+              "window_midpublish: a def-use edge reaches INTO the "
+              "mid-window-published method — the survey follows a live JIT");
+    else
+        CHECK(0, "window_midpublish: the named steps are present");
+
+    printf("# window_midpublish: stops=%llu recorded=%llu gaps=%llu "
+           "nregions=%u\n",
+           (unsigned long long)info.stops, (unsigned long long)info.recorded,
+           (unsigned long long)info.gaps, info.nregions);
+
+    asmtest_defuse_free(g);
+    asmtest_valtrace_free(v);
+    f6_reap(pid, map, ctl);
+}
+
+/* Run ONE cost window with `n` glue iterations. Returns 1 on a clean window and fills
+ * the out-params; 0 if the tier is unavailable here. */
+static int f6_cost_run(long n, uint64_t *stops, uint64_t *rec, double *ns,
+                       double *native_ns) {
+    uint8_t *map = NULL;
+    f6_ctl *ctl = NULL;
+    uint64_t base = 0;
+    f6_layout L;
+    f6_cost_n = n;
+    pid_t pid = f6_spawn_victim(&map, &base, &ctl, f6_build_cost, &L, 7);
+    if (pid == 0)
+        return 0;
+    ctl->go = 1; /* cost fixture needs no rendezvous */
+
+    asmtest_addr_channel_t chanbuf;
+    asmtest_addr_channel_t *chan = &chanbuf;
+    asmtest_addr_channel_init(chan);
+    asmtest_addr_channel_publish(chan, base + F6_M1, L.m1_len, 1);
+    asmtest_addr_channel_publish(chan, base + F6_M2, L.m2_len, 1);
+
+    /* The SAME frame, run natively in this process, is the untraced baseline. */
+    struct timespec a, b;
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    for (int i = 0; i < 200; i++)
+        ((fn1_t)(uintptr_t)(base + F6_FRAME))(7);
+    clock_gettime(CLOCK_MONOTONIC, &b);
+    *native_ns = ((double)(b.tv_sec - a.tv_sec) * 1e9 +
+                  (double)(b.tv_nsec - a.tv_nsec)) /
+                 200.0;
+
+    asmtest_valtrace_t *v = asmtest_valtrace_new(256, 2048, 2048);
+    asmtest_dfwin_info_t info;
+    long result = 0;
+    clock_gettime(CLOCK_MONOTONIC, &a);
+    int rc = asmtest_dataflow_ptrace_attach_window(
+        pid, base + F6_FRAME, L.frame_len, chan, 0, &result, &info, v);
+    clock_gettime(CLOCK_MONOTONIC, &b);
+    *ns = (double)(b.tv_sec - a.tv_sec) * 1e9 + (double)(b.tv_nsec - a.tv_nsec);
+    *stops = info.stops;
+    *rec = info.recorded;
+    int ok = (rc == DF_PTRACE_OK && result == 14 && !v->truncated);
+    asmtest_valtrace_free(v);
+    f6_reap(pid, map, ctl);
+    return ok;
+}
+
+/* F6 — the COST, measured, not estimated. Two windows differing ONLY in the length of
+ * the unrecorded glue between two published methods. The exact structural claim: stops
+ * grow by 2 per extra glue iteration while `recorded` does not move at all — the
+ * tracer pays for the whole window and keeps only the regions. Subtracting the two
+ * runs cancels every fixed cost (SEIZE, run_to, detach) and leaves the per-stop price. */
+static void test_window_cost(void) {
+    uint64_t s1 = 0, r1 = 0, s2 = 0, r2 = 0;
+    double t1 = 0, t2 = 0, n1 = 0, n2 = 0;
+    if (!f6_cost_run(500, &s1, &r1, &t1, &n1) ||
+        !f6_cost_run(2500, &s2, &r2, &t2, &n2)) {
+        printf("# SKIP window_cost: tier unavailable here\n");
+        return;
+    }
+    CHECK(s2 - s1 == 4000,
+          "window_cost: 2000 more glue iterations cost exactly 4000 more "
+          "STOPS — the tracer is billed for every instruction the target "
+          "retires in the window, recorded or not");
+    CHECK(r1 == 16 && r2 == 16,
+          "window_cost: ...while the YIELD is unchanged at 16 recorded steps "
+          "— the glue tax is a property of the TARGET, and no amount of "
+          "region scoping reduces it once the window is open");
+
+    double per_stop = (t2 - t1) / (double)(s2 - s1);
+    printf("# window_cost: n=500  stops=%llu recorded=%llu window=%.3f ms "
+           "native=%.3f us\n",
+           (unsigned long long)s1, (unsigned long long)r1, t1 / 1e6, n1 / 1e3);
+    printf("# window_cost: n=2500 stops=%llu recorded=%llu window=%.3f ms "
+           "native=%.3f us\n",
+           (unsigned long long)s2, (unsigned long long)r2, t2 / 1e6, n2 / 1e3);
+    printf("# window_cost: MEASURED per-stop cost = %.0f ns "
+           "(by subtraction, so SEIZE/run_to/detach are cancelled)\n",
+           per_stop);
+    printf("# window_cost: glue tax at n=2500 = %.0fx stops per recorded "
+           "step; whole-window slowdown vs native = %.0fx\n",
+           (double)s2 / (double)r2, t2 / n2);
 }
 
 static void test_attach_pid(void) {
@@ -1963,6 +2384,8 @@ int main(void) {
     test_signal_split();
     test_attach_jit_worker();
     test_window_survey();
+    test_window_midpublish();
+    test_window_cost();
 
     printf("1..%d\n", checks);
     if (failures)
