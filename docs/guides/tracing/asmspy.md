@@ -12,7 +12,13 @@ Point it at any running process and watch, live and out of band:
   resolved to its function and disassembled; or
 - its **statistical hot control-flow edges** — sampled by the CPU itself (AMD
   IBS-Op), **without ptrace and without single-stepping**, so it is safe on
-  targets the single-step views can destabilize (a live JIT).
+  targets the single-step views can destabilize (a live JIT); or
+- the **data flowing through one function** — a scoped value trace of a single
+  invocation (each executed instruction with the register/memory values it
+  read and wrote) plus a def-use graph over it; `--auto` picks the function
+  the process is entering most often right now, so you need not name one; or
+- **who writes a field** — a hardware data watchpoint that names each toucher
+  and the value, at native speed between hits.
 
 It is the interactive companion to the C tracer demos
 ([`examples/attach_trace.c`](https://github.com/wilvk/asm-test/blob/main/examples/attach_trace.c),
@@ -106,10 +112,14 @@ Run `asmspy` with no arguments. It walks four screens:
    call tree (indented by call depth), `6` the process/thread topology (the whole
    process tree — threads and child processes — with per-task counts), `7` the
    statistical **hot edges** sampler (AMD IBS-Op, out of band — the only rich
-   view that never ptraces or single-steps).
-3. **Symbol picker** (mode 2 only) — the target's resolved function symbols,
-   filterable; `Enter` picks the function to trace, `F3` reloads the symbols
-   (picking up newly-mapped libraries or fresh JIT code).
+   view that never ptraces or single-steps), `8` the **process details**
+   fingerprint (runtime badge, thread makeup, notable modules — nothing is
+   attached at all), `9` the **data flow** view (a scoped value trace + def-use
+   of one function invocation).
+3. **Symbol picker** (modes 2 and 9 — the views that trace one chosen
+   function) — the target's resolved function symbols, filterable; `Enter`
+   picks the function to trace, `F3` reloads the symbols (picking up
+   newly-mapped libraries or fresh JIT code).
 4. **Live view** — depends on the mode:
    - *Syscall log* — a **split** feed: the syscall stream on the left, and the
      strings it carried (paths and read/write buffers, decoded up to 200 bytes)
@@ -154,6 +164,16 @@ Run `asmspy` with no arguments. It walks four screens:
      ptraced and never single-stepped** — it runs at full speed — so this is
      the safe view for a live JIT. Needs an AMD host with IBS (the menu says
      why when unavailable).
+   - *Process details* — a **no-attach fingerprint** of the target: a runtime
+     badge (JVM / .NET / CPython / Node·V8 / Go / …), its thread makeup,
+     notable modules, and ELF traits — read from `/proc` and the mapped ELF
+     only, so it works even where ptrace would be denied.
+   - *Data flow* — pick a function (the same picker as mode 2); asmspy
+     captures **one invocation** and shows each executed instruction with the
+     **values** it read and wrote (registers and memory), with slice
+     navigation over the def-use graph — select an operand and walk to the
+     instruction that defined it. Single-step based, so the same JIT cautions
+     as the other stepping views apply.
 
    In the two log feeds (syscall log, live stream) press **`space`** to **pause**
    and scroll back through history — `↑`/`↓`, `PgUp`/`PgDn`, `Home`/`End` move
@@ -181,15 +201,20 @@ exercises.
 ```bash
 asmspy --list [active|scan]        # list processes; active=recent CPU, scan=string-rich memory first
 asmspy --syms   <pid> [filter]     # resolved function symbols (addr, size, name, module)
-asmspy --log    <pid> [n]          # stream n syscalls with decoded data (default 20)
-asmspy --trace  <pid> <sym> [n] [--tid=<t>]            # n live samples of a function (default 3;
+asmspy --log    <pid> [n] [--follow]                   # stream n syscalls with decoded data (default 20)
+asmspy --trace  <pid> <sym|0xADDR[:LEN]> [n] [--tid=<t>]   # n live samples of a function (default 3;
                                    # samples whichever thread reaches it first, --tid pins one)
-asmspy --stream <pid> [n] [--tid=<t>]                  # stream n instructions live (default 20)
-asmspy --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] [--tid=<t>]
+asmspy --dataflow <pid> <sym|0xADDR[:LEN]|--auto> [--json] [--tid=<t>] [--max=<n>] [--module=<m>]
+                                   # value trace + def-use of ONE invocation; --auto picks the target
+asmspy --stream <pid> [n] [--tid=<t>] [--follow]       # stream n instructions live (default 20)
+asmspy --graph  <pid> [n] [--sort=invocations|fanout] [--json|--dot] [--tid=<t>] [--follow]
                                    # whole-process call graph over n calls (default 200)
-asmspy --tree   <pid> [n] [--tid=<t>]                  # whole-process live call tree (default 40 lines)
-asmspy --procs  <pid> [n] [--count=syscalls|calls]     # process/thread topology with live counts
+asmspy --tree   <pid> [n] [--depth=<d>] [--focus=<sym>] [--module=<m>] [--json|--dot] [--tid=<t>] [--follow]
+                                   # whole-process live call tree (default 40 lines)
+asmspy --procs  <pid> [n] [--count=syscalls|calls] [--json|--dot]   # process/thread topology, live counts
 asmspy --sample <pid> [ms] [--json]                    # statistical hot edges via AMD IBS-Op (default 300 ms)
+asmspy --watch  <pid> <sym|sym+off|0xADDR> [n] [--rw] [--len=1|2|4|8] [--json]
+                                   # hardware DATA watchpoint: who touches a field, and the value
 ```
 
 A **negative `n`** streams until the target exits or you interrupt. Malformed
@@ -199,6 +224,14 @@ rejected with exit status 2 rather than coerced. On `--stream`/`--tree`/`--graph
 can isolate one worker while the process's other threads keep running at full
 speed — a filtered stream drops the `[tid]` prefix, since only one thread is
 followed.
+
+**`--follow`** (on `--log`/`--stream`/`--graph`/`--tree`) additionally traces
+child **processes** the target forks while traced, like `strace -f`. Each
+followed process gets its **own** symbol table and fd namespace — a forked
+child shares neither with its parent, so without the re-keying its syscalls
+and frames would be decoded against the wrong process. `--follow` and `--tid`
+are mutually exclusive by design: one says *exactly this task*, the other
+*and everything it spawns*.
 
 **Live stream** — every instruction as it runs, resolved to its function and
 disassembled (`function+offset [module]  <disasm>`):
@@ -237,9 +270,13 @@ stub to `name@plt` (from the module's `.rela.plt` relocations) and tags it
 `[EXT]` — the stub lives in the caller's image but the call *leaves* to a
 library. An address no symbol covers (JIT, stripped code) is shown `[?]`.
 
-Direct calls are attributed exactly; an indirect call (`call rax`) is attributed
-to wherever the next step lands, so the graph is best-effort at signal
-boundaries. Whole-process single-stepping is slow, so the target crawls while
+Direct calls are attributed exactly. An indirect call (`call rax`) is resolved
+at the next stop and **verified against the machine state the call actually
+left behind** — the stack pointer must have dropped exactly one slot and the
+return address on the stack must be the call's own fall-through — so a signal
+arriving in that one-instruction window cannot fabricate an edge into its
+handler; the call simply re-arms and resolves for real after `sigreturn`.
+Whole-process single-stepping is slow, so the target crawls while
 the graph is built (and resumes full speed on detach). In the TUI (mode `4`) the
 same view refreshes live and **`Tab`** toggles the sort.
 
@@ -254,9 +291,12 @@ graph as a picture.
 
 **Call tree** — the same whole-process single-step, rendered as the call tree
 unfolding live: one line per function **entry**, indented by the calling
-thread's current **call depth** (a `call` pushes a level, a `ret` pops one).
-Depth is a per-thread shadow counter, so a tail-call / `longjmp` / signal can
-drift the indentation but never desync fatally. `n` bounds the number of call
+thread's current **call depth**. Depth is a real per-thread **return-address
+stack** — a frame is live exactly while the thread's stack pointer sits at or
+below the slot its `call` pushed — so a `ret`, a `longjmp` over ten frames,
+and a C++ unwind all pop correctly and the indentation cannot drift, while a
+signal handler (which runs *below* the interrupted frame) correctly leaves the
+frames beneath it intact. `n` bounds the number of call
 lines (negative = until the target exits); each line is prefixed `[tid]` once
 more than one thread is followed:
 
@@ -277,6 +317,17 @@ the **nesting and order** — the real-time companion to the flat graph. In the
 TUI (mode `5`) the same feed scrolls live, with **`space`** to pause and scroll
 back through history.
 
+On a busy process the tree is a firehose; three substring-matched filters cut
+it: **`--depth=<d>`** keeps `d` levels (like `tree -L`), **`--focus=<sym>`**
+roots the output at a symbol's subtree and re-bases its depth to 0, and
+**`--module=<m>`** keeps only that module's callees. They compose as AND with
+`focus` applied first — `--focus=work --module=libc` means *the libc calls
+`work()` makes*, not *libc calls, and separately work()*. Filtering bounds
+what is **printed**, never what is tracked, so depths stay true and `n` counts
+the surviving lines. (`--depth=0` is a usage error, not "unlimited" — omit the
+flag for unlimited.) `--tree --json`/`--dot` export the same feed
+machine-readably, mirroring the `--graph` exporters.
+
 **Process/thread topology** — `--procs` draws the target's whole process tree —
 each process node, its threads, and its child processes nested underneath with
 `├─`/`└─`/`│` connectors (like `pstree`) — each task annotated with a live
@@ -284,7 +335,12 @@ count. `--count=syscalls` (the default) counts near full speed and is safe on
 any target; `--count=calls` single-steps for richer counts, so the whole tree
 crawls while it runs. Pre-existing children are discovered at attach; ones
 forked later are followed live. In the TUI (mode `6`) `Tab` toggles the count
-mode and `Enter` drills into a node's live call graph.
+mode and `Enter` drills into a node's live call graph. **`--procs --json`**
+exports the flat **task** list (`tid`/`tgid`/`ppid`/`leader`/`comm`/`exe`/
+`inv`, plus a `count` mode marker — the forest the human view draws is
+derivable from `tgid`+`ppid`); **`--procs --dot`** renders it with processes
+as boxes (solid parent→child edges) and threads as dashed ellipses, so the two
+kinds of "child" stay distinguishable.
 
 **Statistical hot edges** — `--sample` is the odd one out, and deliberately so:
 it never attaches `ptrace` and never single-steps. Instead it asks the CPU
@@ -321,13 +377,22 @@ underlying library API is `asmtest_ibs_survey_process()` — see
 contract.
 
 **Syscall log** — **every** syscall is named (the table is generated from the
-host's own `<sys/syscall.h>`, so it never lags the kernel), `write`/`read`
-buffers are decoded up to 200 bytes, and path arguments are decoded for both the
-`open`/`stat`/`access`-style calls and the `openat`/`newfstatat`-style
-`(dirfd, path)` family. A `read`/`write` file descriptor is resolved to the file
-it points at (like `strace -y`), read from `/proc/<pid>/fd` — a regular file
-shows its path, a socket or pipe its `socket:[inode]` / `pipe:[inode]`. Calls
-whose arguments asmspy does not model print their name with raw hex arguments:
+host's own `<sys/syscall.h>`, so it never lags the kernel), and ~40 common
+syscalls decode their arguments precisely, with **exact arity**: `open`/
+`openat` flags (+ octal mode only when a creating flag is set), `mmap`/
+`mprotect` prot+flags, `clone` flags, signal numbers and sigset **bitmasks**,
+`readv`/`writev` iovec **contents**, timespecs, `lseek` whence, socket
+families. `write`/`read` buffers are decoded up to 200 bytes, and path
+arguments are decoded for both the `open`/`stat`/`access`-style calls and the
+`openat`/`newfstatat`-style `(dirfd, path)` family. A file descriptor is
+resolved to what it points at (like `strace -y`), read from `/proc/<pid>/fd` —
+a regular file shows its path, and a **socket resolves through the target's
+own network namespace to its endpoint**: `TCP 127.0.0.1:40730->127.0.0.1:54681`,
+`TCP LISTEN 127.0.0.1:8080`, `unix:/tmp/foo.sock`. (A pipe stays
+`pipe:[inode]` — its peer is not knowable from `/proc` without scanning every
+process's fds.) A syscall asmspy does not model prints its first three raw
+words followed by `...` — it no longer asserts an arity it never established,
+and a no-argument syscall shows none:
 
 ```text
 $ asmspy --log 1234 7
@@ -375,6 +440,53 @@ $ asmspy --trace 1234 0x5598000051e3:71     # same region, resolved by address
 $ asmspy --trace 1234 0x7f00c0de00:0x40     # 64 bytes of code no symbol covers
 ```
 
+**Data flow** — `--dataflow` captures **one invocation** of one function and
+shows what flowed through it: every executed instruction with the **values**
+it read and wrote (register and memory operands), plus a def-use graph over
+the trace — in the TUI (mode `9`) you can select an operand and walk to the
+instruction that defined it. The region argument is the same
+`sym | 0xADDR[:LEN]` form `--trace` takes; `--json` exports the trace,
+`--tid=<t>` pins the capture to one thread, and `--max=<n>` bounds the steps
+captured — a cap smaller than the invocation returns the truncated prefix and
+says so (`"truncated":true` in JSON); it is a bound, not an error. A function
+that is not being called right now is reported honestly rather than waited on
+forever: the entry wait is bounded (default 10 s; `ASMTEST_DF_ENTRY_WAIT_MS`
+overrides, `0` waits without bound) and answers
+`hotfn not seen entering in pid 1234 (waited 10000 ms)`.
+
+**`--auto` — trace what the process is doing**, no symbol needed. With
+`--auto` in place of the symbol, asmspy first samples the target **out of
+band** (the `--sample` machinery: AMD IBS-Op, no ptrace, no perturbation,
+~400 ms), ranks the hottest **entry** edge, and traces the winner:
+
+```text
+$ asmspy --dataflow 1234 --auto
+--auto: entered_often [auto_victim] — 60 entry samples from 1 call site (of 1 candidate in 400 ms)
+data flow — entered_often @ 0x... of pid 1234   ret=7   10 steps, 24 records
+```
+
+The rule deliberately ranks **entries**, not hot instructions: a branch that
+lands on a function's first byte is a direct observation of the exact event
+the capture waits for, while the hottest *address* is usually a loop body
+inside a function entered once, before you attached (`main`, every event
+loop) — a breakpoint there never fires. A JIT'd/managed method can win too:
+the pick resolves through the ELF symtab *and* the JIT perf-map/jitdump. An
+idle target — most targets, most of the time — gets an honest refusal
+(`no function was observed being ENTERED`), not a guess. `--module=<m>` scopes
+the pick (without it a hot libc routine often wins); `--auto` needs an AMD IBS
+host (elsewhere it prints `# SKIP` and exits 0) and cannot combine with
+`--tid` — the sampler carries no thread id, so pinning could only arm a
+breakpoint on a thread that may never arrive.
+
+**Data watchpoint** — `--watch` answers *who touches this field, and with
+what value*: it arms an x86 hardware **data** watchpoint (DR0-3; writes by
+default, `--rw` adds reads; width `--len=1|2|4|8`) on an address in **every**
+thread of the target, and reports each toucher and the value — while the
+target runs at **native speed** between hits (no single-stepping, no code
+patching; near-zero perturbation). The address can be a data symbol,
+`sym+off`, or a raw `0xADDR`. x86-64 only (debug registers); it self-skips
+where arming is refused (qemu-user, some sandboxes).
+
 ## How it works
 
 asmspy is glue over primitives documented elsewhere; the interesting parts:
@@ -392,8 +504,11 @@ asmspy is glue over primitives documented elsewhere; the interesting parts:
   Each line is prefixed `[tid]` once more than one thread is followed. For
   syscalls, entry-vs-exit is read from `PTRACE_GET_SYSCALL_INFO` (Linux 5.3+), so
   seizing a thread mid-syscall does not desync the pairing; on older kernels it
-  falls back to an entry/exit toggle. (The region sampler still steps one thread —
-  it traces a single named function per invocation.)
+  falls back to an entry/exit toggle. (The region sampler seizes every thread
+  too, racing them all to the traced function's entry and sampling **whichever
+  arrives first** — a managed method almost never runs on the thread-group
+  leader — with `--tid=<t>` to pin one thread via a per-thread hardware
+  breakpoint.)
 - **One tracer thread.** `ptrace` is per-thread — every `ptrace` call and
   `waitpid` for a tracee must come from the thread that attached it — so a single
   dedicated tracer thread owns the whole ptrace lifecycle while the ncurses UI
@@ -452,10 +567,16 @@ non-attachable targets with `!`). In a default container, add
 > which can *look like* a permission denial — so check `uname -r` before chasing
 > Yama or `CAP_SYS_PTRACE`.
 
-`--sample` is the exception: it uses `perf_event_open`, not `ptrace`, so Yama's
-`ptrace_scope` does not apply — it can sample any **same-uid** process at the
-default `perf_event_paranoid=2`, no capability needed (in a container the
-perf syscall must be allowed, e.g. `--security-opt seccomp=unconfined`).
+`--sample` (and `--dataflow --auto`, which samples first) is the exception: it
+uses `perf_event_open`, not `ptrace`, so Yama's `ptrace_scope` does not
+apply — it can sample any **same-uid** process at the default
+`perf_event_paranoid=2`, no capability needed. In a container the perf syscall
+must be allowed: either `--security-opt seccomp=unconfined`, or
+**`--cap-add=PERFMON`** under the default profile — which also bypasses a
+raised `perf_event_paranoid` (even the "no unprivileged perf at all" `=4`
+setting), so prefer the capability over lowering a host sysctl. When sampling
+cannot open, the `# SKIP` line names the **real** reason (permission vs
+seccomp vs missing PMU), so trust what it says over guesswork.
 
 ## Limitations
 
@@ -468,20 +589,29 @@ perf syscall must be allowed, e.g. `--security-opt seccomp=unconfined`).
   and surfaced as call-graph edges (see the
   [trace_attached contract](native-tracing.md#out-of-process-variant-w2--ptrace)
   for the re-entrancy caveat).
-- **Call-graph attribution is best-effort.** `--graph` builds a whole-process
-  caller→callee graph by single-stepping every thread — so the target crawls
-  while it runs. Direct calls are exact and PLT stubs resolve to `name@plt`, but
-  an indirect call (`call rax`) is attributed to wherever the next step lands, so
-  attribution can slip at a signal boundary. `--graph` counts *calls* (flat
-  per-function totals); `--tree` preserves the nesting/order but does not
-  aggregate — its depth is a best-effort shadow counter that a tail-call,
-  `longjmp`, or signal can drift.
-- **Argument decoding is a subset.** Every syscall is *named*, and paths plus
-  `write`/`read` buffers are decoded — but other argument types (flags, structs,
-  vectors, signal sets) print as raw hex, and a syscall taking no arguments
-  still shows three hex slots. For exhaustive syscall tracing use `strace`; for
+- **The single-step views crawl.** `--graph`/`--tree`/`--stream` single-step
+  every thread, so the target crawls while they run (and resumes full speed on
+  detach). Direct calls are exact, PLT stubs resolve to `name@plt`, and
+  indirect-call attribution is **verified** against the post-call stack state,
+  so a signal cannot fabricate an edge into its handler; the residual signal
+  cost is cosmetic (in `--tree`, handler frames render one level deep until
+  `sigreturn`, because the interrupted call's frame is genuinely still live).
+- **Argument decoding is a curated subset.** Every syscall is *named* with
+  exact arity, and ~40 decode precisely (flags, sigsets, iovec contents,
+  timespecs, socket families, paths, buffers) — but struct *contents* (`stat`
+  buffers, `sockaddr`s), `ioctl`/`fcntl`/`futex` command decoding, and
+  `execve` vectors are not decoded, and the undescribed remainder prints three
+  raw words + `...`. For exhaustive syscall tracing use `strace`; for
   kernel-side IPC/file payloads use `bpftrace`. asmspy is the *in-tree,
   asm-focused* view, not a general strace replacement.
+- **Data flow and watchpoints have hardware-shaped edges.** `--dataflow`
+  reaches worker threads and JIT regions (the entry race seizes all threads,
+  and a target's own traps are delivered, not swallowed), but a genuinely
+  W^X-enforced JIT page refuses the entry breakpoint (reported as exactly
+  that — a self-skip, not "never executed") and a method re-JIT'd *mid-capture*
+  decodes from the live snapshot. `--watch` is x86-64-only (DR0-3 debug
+  registers) and self-skips where arming is refused (qemu-user, some
+  sandboxes).
 - **`--sample` is statistical and AMD-only.** It reports edges that *were*
   sampled — it can never prove code did not run, cold paths may be missing from
   a short window, and per-thread sampling can miss a thread born and dead

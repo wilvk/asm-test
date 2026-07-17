@@ -134,8 +134,11 @@ void asmspy_symtab_free(asmspy_symtab_t *t);
 /* Forward lookup: first function whose name equals `name` (exact), else NULL. */
 const asmspy_sym_t *asmspy_symtab_by_name(const asmspy_symtab_t *t,
                                           const char *name);
-/* Reverse lookup: the function whose [addr, addr+size) (or nearest addr<=)
- * contains `addr`, else NULL. */
+/* Reverse lookup: the function whose [addr, addr+size) contains `addr`, else
+ * NULL — there is NO nearest-addr<= fallback. A zero-SIZE symbol matches its
+ * exact start only, and an address in the gap between two functions resolves
+ * to nothing: for a tracer an honest NULL beats a confidently wrong neighbour.
+ * test_symtab.c pins these edges. */
 const asmspy_sym_t *asmspy_symtab_at(const asmspy_symtab_t *t, uint64_t addr);
 
 /* ------------------------------------------------------------------ */

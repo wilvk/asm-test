@@ -8,6 +8,40 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`asmspy --dataflow <pid> --auto [--module=<m>]` — trace what a process is DOING,
+  no symbol needed.** Auto-targeting samples the target OUT OF BAND (AMD IBS-Op, no
+  ptrace, no perturbation) for 400 ms, ranks the hottest **entry** edge — an edge whose
+  target is a function's start is a direct observation of the exact event the data-flow
+  producer blocks on, where the intuitive rules fail: the hottest raw edge is usually a
+  mid-function loop back-edge no entry breakpoint can catch, and a PC histogram picks
+  the functions entered once and never again (`main`, every event loop), which HANGS the
+  producer — then hands the winner's `(base, len)` to the existing `--dataflow` engine.
+  Entry-edge counts are quantitative (measured: they reproduce a victim's true 8× loop
+  trip count and 2× call-site ratio). The ranking is a pure header
+  (`cli/asmspy_autoregion.h`, 21-check unit test) so its correctness is covered on every
+  host while the AMD-hardware live leg runs in the `docker-cli-ibs` lane. The resolver
+  layers the **JIT map over the ELF symtab**, so a hot JIT'd/managed method (perf-map or
+  jitdump, real size) can win the pick and names the capture — proven live against a
+  perf-map victim whose only entry arrival is an anonymous-mapping function the ELF
+  symtab cannot see. An idle target gets an honest refusal ("no function was observed
+  being ENTERED"), not a guess; zero-size symbols cannot win on their exact-start-only
+  resolution technicality; `--auto --tid` is a usage error (the sampler carries no tid,
+  so pinning could only arm a breakpoint on a thread that never arrives);
+  `--module=` scopes the pick with the same substring rule as `--tree --module=`.
+
+- **`make docker-cli-ibs` — the lane that actually tests `--sample`, and honest skip
+  reasons everywhere.** The plain `docker-cli` lane runs under Docker's default seccomp,
+  which blocks `perf_event_open` — so every `--sample` assertion had self-skipped since
+  the view landed (a green gate over an untested view, on hosts where IBS works fine).
+  The new lane reruns the same image and smoke with `--cap-add=PERFMON` under the
+  default profile (CAP_PERFMON bypasses `perf_event_paranoid`; no sysctl change needed),
+  so the `--sample` and `--auto` blocks execute their else-branches for real on an AMD
+  IBS host. Alongside it, a new public API `asmtest_ibs_unavail_reason()` carries the
+  real `perf_event_open` errno out of the backend: `# SKIP --sample:` used to print an
+  **empty string** precisely when the substrate probe passed but perf was blocked — the
+  one case an operator on their own AMD box needed the reason most. EACCES now says
+  paranoid/CAP_PERFMON, EPERM names seccomp, instead of one indistinguishable silence.
+
 - **asmspy region view samples WORKER threads (`--trace`, TUI mode 2) + a new `--tid=<t>`
   filter.** `asmspy_engine_region` used to `PTRACE_ATTACH` the thread-group LEADER and run it
   to the region, so a function that runs on a worker thread was never observed and the view
@@ -793,6 +827,41 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   43 → 49.
 
 ### Fixed
+
+- **`asmspy --dataflow` on a symbol that is not running HUNG instead of erroring.** The
+  producer's step backstop counts single-steps, and a region that never arrives burns
+  zero steps — so the blocking wait never advanced (measured: rc=124, killed by
+  `timeout`, where `--trace` on the identical target answered "never executed" in 4 s).
+  The entry wait is now bounded by a `CLOCK_MONOTONIC` deadline (default 10 s,
+  `ASMTEST_DF_ENTRY_WAIT_MS` overrides, 0 restores the old unbounded wait) and reports
+  *"<sym> not seen entering in pid N (waited M ms)"* — an outcome, not a failure: the
+  symbol resolved and the tracer worked; the code just is not being called right now.
+  The unwind re-establishes the all-running invariant (restore the entry byte, rewind a
+  thread stopped at `base+1`, continue), which also fixes a latent hang on the
+  never-exercised step-backstop disarm path.
+
+- **`asmspy --dataflow --max=<n>` failed for every `n` below the region's step count —
+  and blamed ptrace for it.** The truncation branch did everything right (partial trace
+  appended, `truncated:true`) and then returned the generic ptrace-failure code, so a
+  valid cap surfaced as *"ptrace/attach failure (permission? ptrace_scope?…)"*. The flag
+  worked only when it did nothing (measured: `--max=3` rc=1, `--max=200` rc=0 on an
+  83-step region). It now returns OK with the truncated partial trace; the smoke asserts
+  the EXACT step count per cap, so "cap ignored" cannot pass either.
+
+- **Three `asmspy --trace` honesty defects: a bound that wasn't, a diagnosis thrown
+  away, and a documented self-skip that never happened.** (1) The entry wait's idle
+  window reset on EVERY waitpid event — a target that stops more often than the window
+  (a 1 Hz timer, a chatty clone) reset the budget forever and `--trace` blocked
+  indefinitely; a 30 s `CLOCK_MONOTONIC` wall bound now sits alongside the idle rule,
+  checked unconditionally. (2) The entry race's four distinct outcomes were bare
+  integers collapsed by a bare `break`, so "the region never ran", "the target exited",
+  and "the entry could not be armed" all rendered as *"never executed"*; the outcomes
+  are now named and each maps to its own answer ("pid N exited before <sym> was seen
+  executing" for an exit, an attach/ETRACE report for an unarmable entry). (3) That fix
+  makes `asmspy.h`'s promised W^X/JIT self-skip real: an entry page refusing the
+  breakpoint now reports *"possibly a W^X JIT page refusing the entry breakpoint"*
+  instead of the confidently-wrong *"never executed"* — verified against an unmappable
+  explicit range, the same failure shape a genuinely W^X page produces.
 
 - **`asmtest_trace_call_auto` could report a window-overflowing AMD-LBR capture as
   complete, so escalation never fired (a real Zen 5 silicon finding).** The Tier-A

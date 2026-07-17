@@ -534,8 +534,11 @@ docker-hwtrace-jit-jitdump: docker-node
 # backend actually runs instead of self-skipping. Unlike the single-step lane this
 # is NOT a plain container — perf_event_open needs the default seccomp profile
 # relaxed (it blocks the syscall) and CAP_PERFMON; it still needs an AMD Zen 3+/4/5
-# host with perf_event_paranoid lowered. On any other host the AMD test self-skips,
-# so this lane is for a self-hosted AMD runner. (PT remains bare-metal-Intel only.)
+# host, but NOT a lowered perf_event_paranoid: CAP_PERFMON bypasses the sysctl
+# entirely (MEASURED 2026-07-17 at paranoid=4 — unprivileged EACCES, with the cap
+# fd=3; do not lower a host sysctl for this lane). On any other host the AMD test
+# self-skips, so this lane is for a self-hosted AMD runner. (PT remains
+# bare-metal-Intel only.)
 docker-hwtrace-amd: docker-bindings-base
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace \
 	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
