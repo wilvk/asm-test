@@ -78,6 +78,7 @@
  */
 #define _GNU_SOURCE
 
+#include <stddef.h> /* offsetof — the F6 telemetry layout guard */
 #include <string.h> /* memset — the F6 window stub zeroes its info on every platform */
 #include <sys/types.h> /* pid_t — used by the attach_pid signature on every platform */
 
@@ -2207,15 +2208,22 @@ static int dfp_window_loop(dfp_ctx *c, uint64_t win_base, uint64_t win_len,
     }
 }
 
-/* The size of the telemetry struct above, for the suites that must RE-DECLARE it
+/* The LAYOUT of the telemetry struct above, for the suites that must RE-DECLARE it
  * (this tier ships no header). A field added here and not there does not fail to
  * compile — it silently shifts every later field in the caller's view, quietly
- * corrupting the numbers the survey is judged by. That is not hypothetical: it
- * happened during this increment's own development and cost three green checks.
- * Callers assert this against their own sizeof, turning a silent skew into a loud
- * one. */
-size_t asmtest_dataflow_ptrace_win_info_size(void) {
-    return sizeof(asmtest_dfwin_info_t);
+ * corrupting the very numbers the survey is judged by. Not hypothetical: it happened
+ * during this increment's own development and cost three green checks.
+ *
+ * `size` alone is NOT a sufficient guard — also measured, not assumed: adding a
+ * uint32_t to the caller's copy landed in the struct's tail PADDING and left sizeof
+ * unchanged, so a size-only check passed on a struct that was already skewed. Hence
+ * `last_off`, the offset of the FINAL field: it moves whenever any earlier field is
+ * added, removed, or resized, padding or no padding. Callers assert BOTH. */
+void asmtest_dataflow_ptrace_win_info_layout(size_t *size, size_t *last_off) {
+    if (size != NULL)
+        *size = sizeof(asmtest_dfwin_info_t);
+    if (last_off != NULL)
+        *last_off = offsetof(asmtest_dfwin_info_t, decode_fail);
 }
 
 /* F6 — attach to a LIVE process and survey a WHOLE WINDOW's def-use across every
@@ -2419,8 +2427,11 @@ int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
     return DF_PTRACE_ENOSYS;
 }
 
-size_t asmtest_dataflow_ptrace_win_info_size(void) {
-    return sizeof(asmtest_dfwin_info_t);
+void asmtest_dataflow_ptrace_win_info_layout(size_t *size, size_t *last_off) {
+    if (size != NULL)
+        *size = sizeof(asmtest_dfwin_info_t);
+    if (last_off != NULL)
+        *last_off = offsetof(asmtest_dfwin_info_t, decode_fail);
 }
 
 int asmtest_dataflow_ptrace_attach_window(pid_t pid, uint64_t win_base,

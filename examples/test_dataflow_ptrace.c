@@ -23,6 +23,7 @@
 #include "asmtest_codeimage.h" /* Increment 3: the versioned code-image the decode reads from */
 #include "asmtest_valtrace.h"
 
+#include <stddef.h> /* offsetof — the telemetry layout guard */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -533,9 +534,11 @@ int asmtest_dataflow_ptrace_attach_window(pid_t pid, uint64_t win_base,
                                           uint64_t max_insns, long *result,
                                           asmtest_dfwin_info_t *info,
                                           asmtest_valtrace_t *vt);
-/* The producer's own sizeof, so a field added there and not here is caught LOUDLY
- * instead of silently shifting every later field of the struct above. */
-size_t asmtest_dataflow_ptrace_win_info_size(void);
+/* The producer's own layout, so a field added there and not here is caught LOUDLY
+ * instead of silently shifting every later field of the struct above. Size alone is
+ * not enough — tail padding can absorb an added field, measured — so the offset of
+ * the final field comes too. */
+void asmtest_dataflow_ptrace_win_info_layout(size_t *size, size_t *last_off);
 
 typedef long (*fn1_t)(long);
 
@@ -1010,10 +1013,14 @@ static void test_window_survey(void) {
     /* Before ANY telemetry is trusted: this suite re-declares asmtest_dfwin_info_t
      * (the tier ships no header), and a silent layout skew between the two copies
      * corrupts every number below it. Check it, do not assume it. */
-    CHECK(asmtest_dataflow_ptrace_win_info_size() ==
-              sizeof(asmtest_dfwin_info_t),
+    size_t isz = 0, ioff = 0;
+    asmtest_dataflow_ptrace_win_info_layout(&isz, &ioff);
+    CHECK(isz == sizeof(asmtest_dfwin_info_t) &&
+              ioff == offsetof(asmtest_dfwin_info_t, decode_fail),
           "window: the suite's re-declared telemetry struct matches the "
-          "producer's layout (a skew here silently corrupts every count)");
+          "producer's SIZE and final-field OFFSET (a skew here silently "
+          "corrupts every count below; size alone misses a field that tail "
+          "padding absorbs)");
     uint8_t *map = NULL;
     f6_ctl *ctl = NULL;
     uint64_t base = 0;
