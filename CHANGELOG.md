@@ -8,6 +8,32 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Intel Pin vs. DynamoRIO analysis + a four-track umbrella plan — what Pin
+  makes possible that the shipped DynamoRIO tier cannot.**
+  [2026-07-17-intel-pin-vs-dynamorio.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/2026-07-17-intel-pin-vs-dynamorio.md)
+  and [intel-pin-capabilities-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/intel-pin-capabilities-plan.md).
+  Most "Pin advantages" are **maturity, not impossibility** (DR has
+  `drrun -attach`, supports Windows, and the taint ground is already held
+  in-tree), and the note separates those out. Four items survive as separable
+  plan tracks: **PIN-1** an **Intel SDE** lane that runs the existing `TEST()`
+  suites under `sde64 -future` so **APX / AVX10.2 / AMX / AVX-512** assembly
+  gets full register/flag/memory/ABI assertions **on any x86-64 host including
+  CI** — a true impossibility for *both* DR (executes on real silicon) and the
+  Unicorn tier (QEMU 5.0.1 predates AVX TCG; `vaddps ymm` → `UC_ERR_INSN_INVALID`
+  and VEX-128 is silently mis-run as SSE), converting CLAUDE.md's "specific CPU
+  generation" **hardware self-skip into an installable, pinnable dependency**;
+  **PIN-2** an **XED**-decoded Pin trace tier for the newest extensions DR's own
+  decoder rejects (**APX is open — [DR #6226](https://github.com/DynamoRIO/dynamorio/issues/6226)**;
+  VNNI still breaks — [DR #5440](https://github.com/DynamoRIO/dynamorio/issues/5440));
+  **PIN-3** Pin **probe-mode** arg/return capture (original code runs native, no
+  code cache — the `capture-args-returns.md` middle tier DR has no equivalent
+  for); and **PIN-4** **libdft64** as an independent taint oracle diffed
+  byte-for-byte against the shipped DR taint client — the `ASSERT_MATCHES_REF`
+  cross-validation idiom. The reverse gaps are recorded so Pin is not mistaken
+  for a superset (x86-only — no AArch64; no in-process no-IPC model; proprietary
+  freeware). Every track is **fetched-and-pinned, test/oracle-only, never
+  shipped** — DR's exact handling — so none adds a bindings-parity obligation.
+
 - **AMD hardware review + follow-up plan — an adversarial pass over the AMD
   tiers in which four of nine candidate findings were REFUTED and recorded as
   such.** [2026-07-17-amd-hardware-review.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/2026-07-17-amd-hardware-review.md)
