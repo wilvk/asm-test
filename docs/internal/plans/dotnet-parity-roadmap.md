@@ -9,10 +9,15 @@
 > (which backend runs where) and consumes the same source of record: the tier headers +
 > [scripts/check-bindings-parity.sh](../../../scripts/check-bindings-parity.sh).
 
-> **Status (revised 2026-07-17): Phase 1 LANDED; Phase 2 LANDED (all four increments, one
-> optional item open); Phase 3 is on-demand by design.** The one named item left in the whole
-> roadmap is Java's **zero-touch JVMTI** hop hook — optional, since the executor-decorator
-> producer already ships. **Python's `stealth_trace` (its last named item) landed 2026-07-17
+> **Status (revised 2026-07-17): Phase 1 LANDED; Phase 2 LANDED (all four increments); Phase 3
+> is on-demand by design. No named items remain.** The last one — Java's **zero-touch JVMTI**
+> hop hook — is now **DECIDED: NO-GO** (2026-07-17), and not on effort: JVMTI has no
+> value-changed event, and HotSpot's `VirtualThreadMount`/`Unmount` *extension* events fire only
+> for virtual threads (where a plain `ThreadLocal` already follows the flow, so nothing needs
+> propagating) and **never** for the platform-thread executor submit the decorator exists to
+> serve — measured on JDK 25.0.3; see [§D2](scoped-tracing-managed-plan.md#d2--jvm-scope-construct-landed--and-the-optional-zero-touch-jvmti-hop-hook-is-now-decided-no-go-2026-07-17).
+> The executor-decorator producer remains the JVM's hop hook, and on virtual threads the
+> zero-touch outcome is already delivered with no agent (`ok 143`–`ok 157` in `hwtrace-java-test`). **Python's `stealth_trace` (its last named item) landed 2026-07-17
 > (`05ac0d4`), and the two reverse-parity gaps below are DECIDED and CLOSED (`2f450ef`) — .NET
 > now wraps `region_name` + `attribute_window`.** The formal parity gate is
 > **green** — `bindings-parity: OK — 117 tier symbols x 10 bindings in sync` — but green means only
@@ -157,7 +162,7 @@ over `_ex`.
 | **python** | ctypes | Cluster 1 (via `_ex`), `arm_tid`, `dr_under_dynamorio`, **window trio ✅ `35b80df`**, **`symbolize_bucket` + `region_name` ✅ `402e080`**, **`call_scoped_fp` ✅ `304957e`**, **`stealth_trace` ✅ `05ac0d4` (2026-07-17)**, descent upcalls | *(nothing named — its last item closed 2026-07-17)*; then optionally `render_versioned` / `stitch_handles` / `attribute_window` | done | Closest of the ten. No live JIT → not a managed target. `stealth_trace`'s stream is COMPLETE and deterministic from CPython (unlike V8/HotSpot, whose async signals interrupt the step), so its lane asserts the exact oracle stream, and it needs **no thread pin** (the Go `LockOSThread` hazard): ctypes runs `run_region` synchronously on the seized (`SYS_gettid`) thread. Runs in the PLAIN `docker-hwtrace` container — no `--cap-add=SYS_PTRACE` |
 | **ruby** | Fiddle | Cluster 1 (`_ex`+`render_scope`+`call_scoped`), `arm_tid` ✅, **window trio ✅ `a1608c8`** | optional generics only | ~2–3d | Handle packed `LONG_LONG`; capturing upcall blocked (descent stays exempt) |
 | **node** | koffi | Cluster 1, §D1 scope construct **complete** — `region`/`scope` callback forms **+ the `using`/`Symbol.dispose` sugar ✅ (2026-07-16)**: `AsmTrace` + guarded `kDispose`, `using`-scope case in the `hwtrace-node-test` lane —, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)**, **`AsyncLocalStorage` hop hook ✅ `b3db344`/`60d74a7`**, **`render_versioned` ✅ `8a42e42`**, **V8-jitdump resolution ✅ `3cfd7bb`/`80f49bc`**, `stitch`/`stitch_handles`, `region_name`, `symbolize_bucket`, `attribute_window`, `stealth_window`, `windowCall` | *(nothing named — §D1 closed; capture and ergonomics are both at parity)* | — | **Managed target.** The one caveat is a runtime gate, not a gap: `using` is **syntax**, so its test case self-skips on the lane's Node 18.19.1 (`ubuntu:24.04` apt) and lights up under a newer `NODE` — verified live on 24.18.0. The construct's *semantics* are asserted on every supported Node via `t[kDispose]()`, and the guard's fallback branch is verified on 18.17.1. `worker_threads` hops escape, but that is structural (each Worker has its own ALS), not a to-do |
-| **java** | FFM/Panama | Cluster 1, §D2 `AsmTrace` t-w-r, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)**, **`libperf-jvmti` live JIT resolution ✅ (2026-07-15, `df66e2b`)**, **async-hop producer ✅ `7ecaaec`/`719f021` (propagating executor decorator)**, `stitch_handles`, `region_name`, `symbolize_bucket`, `attribute_window`, `stealth_window` | **§D2 managed**: the **zero-touch JVMTI** value-changed hop hook — *optional*; the executor decorator already produces hops, at the cost of wrapping the executor | ~4–6d | **Managed target.** The **only** binding with a named managed item left, as of 2026-07-16 — node's §D1 `using`/`Symbol.dispose` sugar has since shipped. Optional ergonomics over a shipped fallback (the executor decorator). `libperf-jvmti.so` is an external build dep — and is the JIT *resolver*, not the hop hook |
+| **java** | FFM/Panama | Cluster 1, §D2 `AsmTrace` t-w-r, **§Z1 window trio ✅ `c2327bc`**, **`stealth_trace` ✅ (2026-07-09)**, **`libperf-jvmti` live JIT resolution ✅ (2026-07-15, `df66e2b`)**, **async-hop producer ✅ `7ecaaec`/`719f021` (propagating executor decorator)**, **zero-touch hop on virtual threads ✅ (2026-07-17, `ok 143`–`ok 157`)**, `stitch_handles`, `region_name`, `symbolize_bucket`, `attribute_window`, `stealth_window` | **none** — the **zero-touch JVMTI** value-changed hop hook is **DECIDED: NO-GO** (2026-07-17) | — | **Closed, not deferred.** JVMTI has **no** value-changed event; HotSpot's `VirtualThreadMount`/`Unmount` *extension* events fire only for virtual threads — where a plain `ThreadLocal` already follows the flow (8/8 migrated carriers, 8/8 kept it) — and **0** times for a platform-thread `submit()`, the case the decorator serves. The signal's population is the complement of the problem's, so the hook would buy nothing. Bytecode-instrumenting JDK executor internals is the only zero-touch route to the submit and is declined on cost/benefit. `libperf-jvmti.so` is an external build dep — and is the JIT *resolver*, not the hop hook |
 | **cpp** | dlopen | Cluster 1 ✅, `arm_tid` ✅, **window trio ✅ `35b80df`** | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | Struct-by-value trivial (real C decls); capturing upcall blocked |
 | **rust** | libloading | Cluster 1 ✅, `arm_tid` ✅, **window trio ✅ `a1608c8`** | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `#[repr(C)]` by value trivial; capturing upcall blocked |
 | **zig** | std.DynLib | Cluster 1 ✅, `arm_tid` ✅, **window trio ✅ `a1608c8`** | ~~Cluster 1~~ ✅ `afc6ee4`; then optional generics | done | `extern struct` by value trivial; capturing upcall blocked |
@@ -265,22 +270,34 @@ removed (stale exemptions fail the gate, so they *must* be removed).
 > **Since landed**: the LIVE async-hop *producer* on both runtimes (Node `AsyncLocalStorage` /
 > Java executor-decorator hop hooks), Node's V8 jitdump JIT-address resolution, and **(2026-07-15)**
 > Java's `libperf-jvmti` live JIT-method resolution (`findJavaJitdump` + `javaResolveJitMethod`,
-> CI-covered by `docker-hwtrace-java` with an address-keyed jcmd perf-map cross-check). **What
-> remains genuinely forward-look**: the Java **zero-touch JVMTI value-changed hop hook** (a
-> greenfield native agent — no source in the tree, no CI coverage today). **It is OPTIONAL**:
-> Java's executor-decorator producer already drives the merge, so JVMTI buys zero-touch
-> capture (no wrapping the executor), not a missing capability. The merge/attribution
-> *substrate* they feed is now wrapped and host-tested, and the hook→merge seam is CI-covered
-> by `test_stitch_hops_scripted` (`5c35a71`). The remaining ALL-exempt symbols are
-> hardware-gated (AMD LBR/MSR survey) or superseded (registry `call_scoped`, `begin_scope`).
+> CI-covered by `docker-hwtrace-java` with an address-keyed jcmd perf-map cross-check).
+> **Nothing remains forward-look here.** The last candidate — the Java **zero-touch JVMTI
+> value-changed hop hook** — was investigated on 2026-07-17 and **DECIDED: NO-GO**. It was
+> framed as "a greenfield native agent, ~4–6d, optional"; the effort estimate was never the
+> binding constraint. **The hook cannot do the job**: JVMTI exposes no value-changed event, and
+> the one hop-shaped signal HotSpot has (the non-spec `VirtualThreadMount`/`Unmount` *extension*
+> events) fires **only** for virtual threads — where the scope id already follows the flow via a
+> plain `ThreadLocal`, because a virtual thread *is* the `Thread` object — and fired **0** times
+> for a platform-thread `ExecutorService.submit()`, which is precisely what
+> `propagatingExecutor()` exists to carry. Zero-touch capture is therefore either unnecessary
+> (virtual threads — now proven by `ok 143`–`ok 157`, a hop across a real carrier remount with
+> nothing wrapped) or unreachable by JVMTI (platform-thread submit). See
+> [§D2](scoped-tracing-managed-plan.md#d2--jvm-scope-construct-landed--and-the-optional-zero-touch-jvmti-hop-hook-is-now-decided-no-go-2026-07-17)
+> for the measurements and for the `SetEventNotificationMode` trap that makes such an agent look
+> wired while delivering nothing. The merge/attribution *substrate* is wrapped and host-tested,
+> and the hook→merge seam is CI-covered by `test_stitch_hops_scripted` (`5c35a71`). The remaining
+> ALL-exempt symbols are hardware-gated (AMD LBR/MSR survey) or superseded (registry
+> `call_scoped`, `begin_scope`).
 
 **Bindings:** node, java only. **~8–12d** (§D1 ~4–6d, §D2 ~4–6d, per the [managed
 slice](scoped-tracing-managed-plan.md#effort--risks)). This is the only place
 "parity with .NET" is genuinely *definable* — the two runtimes with a live JIT.
 
 Per binding, the managed capability is: the per-runtime async-hop hook (Node
-`AsyncLocalStorage` / `async_hooks`; Java JVMTI or executor bytecode agent — `ScopedValue`
-only *propagates*, it is not a value-changed hop signal), JIT-method address resolution
+`AsyncLocalStorage` / `async_hooks`; Java's **propagating executor decorator** — *not* JVMTI,
+which has no value-changed event and whose mount/unmount extension events never see an executor
+submit (NO-GO, 2026-07-17); `ScopedValue` only *propagates*, so it is not a hop signal either),
+JIT-method address resolution
 (Node V8 jitdump; Java `libperf-jvmti.so` → `jit-<pid>.dump` read in-process via the
 shipped `asmtest_jitdump_find`), the whole-window trio, `stitch_handles` fed by the hook,
 and `stealth_trace` routing so a no-PT host silently steps out of band instead of arming
