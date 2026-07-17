@@ -19,6 +19,7 @@
  *                  lea rdx,[rcx+rsi] / mov rax,rdx / ret     — a load-after-store +
  *                  register move chain; forward(0)=backward(4)={0,1,2,3,4}.
  */
+#include "asmtest_addr_channel.h" /* F6: the region set a windowed survey follows */
 #include "asmtest_codeimage.h" /* Increment 3: the versioned code-image the decode reads from */
 #include "asmtest_valtrace.h"
 
@@ -58,6 +59,7 @@ int asmtest_dataflow_emu_run(const uint8_t *code, size_t code_len,
  * has no direct Capstone dependency of its own; they are ABI-stable enum values. */
 #define REG_XMM0 122
 #define REG_YMM0 154
+#define REG_R10  108 /* F6: the register the survey's glue clobbers */
 
 static int checks, failures;
 #define CHECK(c, m)                                                            \
@@ -502,6 +504,478 @@ typedef long (*fn2_t)(long, long);
 typedef struct {
     volatile long counter;
 } sp_ctl;
+
+/* ------------------------------------------------------------------ */
+/* F6 — the windowed multi-region def-use survey                       */
+/* ------------------------------------------------------------------ */
+
+/* The F6 entry + its telemetry, re-declared verbatim from src/dataflow_ptrace.c
+ * (this tier ships no header — a value-trace PRODUCER is a tier, exactly like the
+ * blockstep info struct its suite re-declares). */
+typedef struct {
+    uint64_t stops;
+    uint64_t recorded;
+    uint64_t gaps;
+    uint64_t gap_steps;
+    uint64_t gap_recs;
+    uint32_t nregions;
+    uint32_t risk_regs;
+    uint32_t risk_bytes;
+    int chan_overrun;
+    int risk_overflow;
+    int decode_fail;
+} asmtest_dfwin_info_t;
+
+int asmtest_dataflow_ptrace_attach_window(pid_t pid, uint64_t win_base,
+                                          size_t win_len,
+                                          asmtest_addr_channel_t *chan,
+                                          uint64_t max_insns, long *result,
+                                          asmtest_dfwin_info_t *info,
+                                          asmtest_valtrace_t *vt);
+
+typedef long (*fn1_t)(long);
+
+/* One inherited RX page holding four DISTINCT, non-overlapping ranges: the window
+ * FRAME, two "JIT'd method bodies" M1/M2 (published on the address channel — the only
+ * way an out-of-process stepper can learn where a live JIT put them), and GLUE — the
+ * unpublished runtime noise between managed methods, which the survey steps over but
+ * must not record. Separated by 0x400 so no range can accidentally cover another. */
+#define F6_FRAME 0x000
+#define F6_GLUE  0x400
+#define F6_M1    0x800
+#define F6_M2    0xc00
+#define F6_MAP   4096
+
+/* Every BYTE differs between each pair, so a clobber changes all 8 tracked bytes and a
+ * partial-byte diff bug cannot hide. */
+#define F6_SENT1 0x1111111111111111ULL /* r10:      written by the FRAME    */
+#define F6_SENT2 0x2222222222222222ULL /* r10:      clobbered by the GLUE   */
+#define F6_MEM1  0x3333333333333333ULL /* [rbp-8]:  written by the FRAME    */
+#define F6_MEM2  0x4444444444444444ULL /* [rbp-8]:  clobbered by the GLUE   */
+
+typedef struct {
+    uint8_t *p;
+    size_t n;
+} f6_emit;
+
+static void f6_b(f6_emit *e, uint8_t b) { e->p[e->n++] = b; }
+static void f6_bytes(f6_emit *e, const void *b, size_t n) {
+    memcpy(e->p + e->n, b, n);
+    e->n += n;
+}
+static void f6_u64(f6_emit *e, uint64_t v) { f6_bytes(e, &v, 8); }
+/* mov rax, imm64 (48 b8 io) — the JIT-address literal an absolute call needs. */
+static void f6_movabs_rax(f6_emit *e, uint64_t v) {
+    f6_b(e, 0x48);
+    f6_b(e, 0xb8);
+    f6_u64(e, v);
+}
+/* call rax (ff d0) */
+static void f6_call_rax(f6_emit *e) {
+    f6_b(e, 0xff);
+    f6_b(e, 0xd0);
+}
+
+/* Absolute addresses of the steps the survey's assertions name. */
+typedef struct {
+    uint64_t base;
+    uint64_t frame_len, m1_len, m2_len;
+    uint64_t r10_def; /* FRAME: mov r10, SENT1      — the STALE r10 writer  */
+    uint64_t mem_def; /* FRAME: mov [rbp-8], rax    — the STALE mem writer  */
+    uint64_t r10_use; /* FRAME: mov rdx, r10        — the post-gap read     */
+    uint64_t mem_use; /* FRAME: mov rcx, [rbp-8]    — the post-gap read     */
+    uint64_t keep_def; /* FRAME: mov [rbp-0x10], rax — M1's result, UNtouched
+                        * by the glue: the barrier must NOT shadow it        */
+    uint64_t keep_use; /* FRAME: mov rdi, [rbp-0x10]                         */
+    uint64_t m1_add; /* M1:    add rax, 1          — M1's value            */
+    uint64_t m2_mov; /* M2:    mov rax, rdi        — M2 consumes it        */
+    uint64_t m2_add; /* M2:    add rax, rax        — the survey's sink     */
+} f6_layout;
+
+/* Build the survey fixture into `m` (mapped at `base`). Shapes, in one window:
+ *   (A) a def-use CHAIN spanning three ranges — M1 computes, the FRAME carries, M2
+ *       consumes — which is the multi-method survey F6's exit criterion asks for;
+ *   (B) a register the FRAME writes, the GLUE clobbers, and the FRAME then reads;
+ *   (C) a stack slot the FRAME writes, the GLUE clobbers (via the rbp both share),
+ *       and the FRAME then reads.
+ * (B) and (C) are the two shapes an elided-glue survey FABRICATES an edge on. */
+static void f6_build_survey(uint8_t *m, uint64_t base, f6_layout *L) {
+    memset(L, 0, sizeof *L);
+    L->base = base;
+
+    f6_emit f = {m + F6_FRAME, 0};
+    f6_b(&f, 0x55); /* push rbp            */
+    f6_b(&f, 0x48);
+    f6_b(&f, 0x89);
+    f6_b(&f, 0xe5); /* mov  rbp, rsp       */
+    f6_b(&f, 0x48);
+    f6_b(&f, 0x83);
+    f6_b(&f, 0xec);
+    f6_b(&f, 0x40); /* sub  rsp, 0x40      */
+
+    L->r10_def = base + F6_FRAME + f.n;
+    f6_b(&f, 0x49);
+    f6_b(&f, 0xba);
+    f6_u64(&f, F6_SENT1); /* mov r10, SENT1 */
+
+    f6_movabs_rax(&f, F6_MEM1); /* mov  rax, MEM1      */
+    L->mem_def = base + F6_FRAME + f.n;
+    f6_b(&f, 0x48);
+    f6_b(&f, 0x89);
+    f6_b(&f, 0x45);
+    f6_b(&f, 0xf8); /* mov  [rbp-8], rax   */
+
+    f6_movabs_rax(&f, base + F6_M1); /* mov  rax, &M1       */
+    f6_call_rax(&f);                 /* call rax  (rdi = a) */
+
+    L->keep_def = base + F6_FRAME + f.n;
+    f6_b(&f, 0x48);
+    f6_b(&f, 0x89);
+    f6_b(&f, 0x45);
+    f6_b(&f, 0xf0); /* mov  [rbp-0x10], rax    */
+
+    f6_movabs_rax(&f, base + F6_GLUE); /* mov  rax, &GLUE     */
+    f6_call_rax(&f);                   /* call rax  -> a GAP  */
+
+    L->r10_use = base + F6_FRAME + f.n;
+    f6_b(&f, 0x4c);
+    f6_b(&f, 0x89);
+    f6_b(&f, 0xd2); /* mov  rdx, r10       */
+
+    L->mem_use = base + F6_FRAME + f.n;
+    f6_b(&f, 0x48);
+    f6_b(&f, 0x8b);
+    f6_b(&f, 0x4d);
+    f6_b(&f, 0xf8); /* mov  rcx, [rbp-8]   */
+
+    L->keep_use = base + F6_FRAME + f.n;
+    f6_b(&f, 0x48);
+    f6_b(&f, 0x8b);
+    f6_b(&f, 0x7d);
+    f6_b(&f, 0xf0); /* mov  rdi, [rbp-0x10]    */
+
+    f6_movabs_rax(&f, base + F6_M2); /* mov  rax, &M2       */
+    f6_call_rax(&f);                 /* call rax            */
+
+    f6_b(&f, 0xc9); /* leave               */
+    f6_b(&f, 0xc3); /* ret                 */
+    L->frame_len = f.n;
+
+    /* GLUE — unpublished: the survey steps it and records NOTHING, but it clobbers
+     * both (B) r10 and (C) [rbp-8]. It inherits the FRAME's rbp, so its store lands on
+     * the SAME absolute address the FRAME wrote — the "runtime helper reuses the
+     * caller's frame slot" shape, which is exactly where an elided survey lies. */
+    f6_emit g = {m + F6_GLUE, 0};
+    f6_b(&g, 0x49);
+    f6_b(&g, 0xba);
+    f6_u64(&g, F6_SENT2);       /* mov r10, SENT2 */
+    f6_movabs_rax(&g, F6_MEM2); /* mov  rax, MEM2      */
+    f6_b(&g, 0x48);
+    f6_b(&g, 0x89);
+    f6_b(&g, 0x45);
+    f6_b(&g, 0xf8); /* mov  [rbp-8], rax   */
+    f6_b(&g, 0xc3); /* ret                 */
+
+    /* M1(rdi) -> rax = rdi + 1 */
+    f6_emit a = {m + F6_M1, 0};
+    f6_b(&a, 0x48);
+    f6_b(&a, 0x89);
+    f6_b(&a, 0xf8); /* mov  rax, rdi       */
+    L->m1_add = base + F6_M1 + a.n;
+    f6_b(&a, 0x48);
+    f6_b(&a, 0x83);
+    f6_b(&a, 0xc0);
+    f6_b(&a, 0x01); /* add  rax, 1         */
+    f6_b(&a, 0xc3); /* ret                 */
+    L->m1_len = a.n;
+
+    /* M2(rdi) -> rax = rdi * 2 */
+    f6_emit b = {m + F6_M2, 0};
+    L->m2_mov = base + F6_M2 + b.n;
+    f6_b(&b, 0x48);
+    f6_b(&b, 0x89);
+    f6_b(&b, 0xf8); /* mov  rax, rdi       */
+    L->m2_add = base + F6_M2 + b.n;
+    f6_b(&b, 0x48);
+    f6_b(&b, 0x01);
+    f6_b(&b, 0xc0); /* add  rax, rax       */
+    f6_b(&b, 0xc3); /* ret                 */
+    L->m2_len = b.n;
+}
+
+/* First step recorded at absolute address `addr` (each address in a survey window
+ * executes exactly once, so this is unambiguous). A GAP-BARRIER step carries the glue
+ * ENTRY address, which is in no region — so this also finds the barrier. */
+static int f6_step_at(const asmtest_valtrace_t *v, uint64_t addr,
+                      uint32_t *out) {
+    for (size_t i = 0; i < v->steps_len; i++)
+        if (v->insn_off[i] == addr) {
+            *out = (uint32_t)i;
+            return 1;
+        }
+    return 0;
+}
+
+static int f6_in(uint64_t a, uint64_t base, uint64_t len) {
+    return a >= base && a < base + len;
+}
+
+/* 1 iff `slice` contains at least one step inside [base, base+len). */
+static int f6_slice_touches(const asmtest_slice_t *s,
+                            const asmtest_valtrace_t *v, uint64_t base,
+                            uint64_t len) {
+    for (size_t i = 0; i < s->n; i++)
+        if (s->steps[i] < v->steps_len &&
+            f6_in(v->insn_off[s->steps[i]], base, len))
+            return 1;
+    return 0;
+}
+
+/* The value a step's WRITE record for `reg` carries (the gap barrier's claim). */
+static int f6_reg_write_value(const asmtest_valtrace_t *v, uint32_t step,
+                              uint32_t reg, uint64_t *out) {
+    for (size_t i = 0; i < v->recs_len; i++) {
+        const at_val_rec_t *r = &v->recs[i];
+        if (r->step == step && r->is_write && r->kind == AT_LOC_REG &&
+            r->reg == reg && r->value_valid) {
+            *out = r->value;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Map + build the fixture, fork an INDEPENDENT victim looping the frame, and return
+ * its pid (0 on a setup failure the caller SKIPs on). The mapping is built and made
+ * executable BEFORE the fork, so the victim inherits it at the identical address. */
+static pid_t f6_spawn_victim(uint8_t **map_out, uint64_t *base_out,
+                             sp_ctl **ctl_out,
+                             void (*build)(uint8_t *, uint64_t, f6_layout *),
+                             f6_layout *L, long arg) {
+    void *ex = mmap(NULL, F6_MAP, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (ex == MAP_FAILED)
+        return 0;
+    memset(ex, 0xcc,
+           F6_MAP); /* int3 fill: a stray PC traps rather than wanders */
+    uint64_t base = (uint64_t)(uintptr_t)ex;
+    build((uint8_t *)ex, base, L);
+    if (mprotect(ex, F6_MAP, PROT_READ | PROT_EXEC) != 0) {
+        munmap(ex, F6_MAP);
+        return 0;
+    }
+    sp_ctl *ctl = mmap(NULL, sizeof *ctl, PROT_READ | PROT_WRITE,
+                       MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    if (ctl == MAP_FAILED) {
+        munmap(ex, F6_MAP);
+        return 0;
+    }
+    ctl->counter = 0;
+    pid_t pid = fork();
+    if (pid < 0) {
+        munmap(ex, F6_MAP);
+        munmap(ctl, sizeof *ctl);
+        return 0;
+    }
+    if (pid == 0) {
+        struct timespec ts = {0, 2 * 1000 * 1000};
+        for (;;) {
+            volatile long r = ((fn1_t)(uintptr_t)(base + F6_FRAME))(arg);
+            (void)r;
+            ctl->counter++;
+            nanosleep(&ts, NULL);
+        }
+        _exit(0);
+    }
+    *map_out = (uint8_t *)ex;
+    *base_out = base;
+    *ctl_out = ctl;
+    return pid;
+}
+
+static void f6_reap(pid_t pid, uint8_t *map, sp_ctl *ctl) {
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+    munmap(map, F6_MAP);
+    munmap(ctl, sizeof *ctl);
+}
+
+/* F6 — the survey: ONE window over a live process yields a def-use graph spanning
+ * THREE code ranges (the frame + two channel-published method bodies), with the
+ * elided glue barriered so no edge crosses it unsourced. */
+static void test_window_survey(void) {
+    uint8_t *map = NULL;
+    sp_ctl *ctl = NULL;
+    uint64_t base = 0;
+    f6_layout L;
+    pid_t pid = f6_spawn_victim(&map, &base, &ctl, f6_build_survey, &L, 7);
+    if (pid == 0) {
+        printf("# SKIP window_survey: fixture setup failed\n");
+        return;
+    }
+
+    /* The channel is how an out-of-process stepper learns where a live JIT put a
+     * method: publish M1 and M2, and deliberately NOT the glue. Used through the
+     * header-only inline API (asmtest_addr_channel.h), not the exported FFI shims —
+     * those live in src/ptrace_backend.c, which this standalone suite does not link. */
+    asmtest_addr_channel_t chanbuf;
+    asmtest_addr_channel_t *chan = &chanbuf;
+    asmtest_addr_channel_init(chan);
+    asmtest_addr_channel_publish(chan, base + F6_M1, L.m1_len, 1);
+    asmtest_addr_channel_publish(chan, base + F6_M2, L.m2_len, 1);
+
+    asmtest_valtrace_t *v = asmtest_valtrace_new(512, 4096, 4096);
+    asmtest_dfwin_info_t info;
+    long result = 0;
+    int rc = asmtest_dataflow_ptrace_attach_window(
+        pid, base + F6_FRAME, L.frame_len, chan, 0, &result, &info, v);
+    if (rc == DF_PTRACE_ETRACE) {
+        printf("# SKIP window_survey: PTRACE_SEIZE unavailable here "
+               "(yama/seccomp)\n");
+        asmtest_valtrace_free(v);
+
+        f6_reap(pid, map, ctl);
+        return;
+    }
+    CHECK(rc == DF_PTRACE_OK,
+          "window_survey: surveyed a WINDOW over a live foreign process");
+    CHECK(result == 16,
+          "window_survey: the window frame returned 2*(7+1) = 16 (got "
+          "the frame's own return value, not a method's)");
+    CHECK(!v->truncated,
+          "window_survey: the survey is COMPLETE — nothing truncated, so the "
+          "gap barrier decided every at-risk location");
+
+    /* --- the survey really spans multiple ranges --- */
+    int in_frame = 0, in_m1 = 0, in_m2 = 0, in_glue = 0;
+    for (size_t i = 0; i < v->steps_len; i++) {
+        uint64_t a = v->insn_off[i];
+        if (f6_in(a, base + F6_FRAME, L.frame_len))
+            in_frame++;
+        else if (f6_in(a, base + F6_M1, L.m1_len))
+            in_m1++;
+        else if (f6_in(a, base + F6_M2, L.m2_len))
+            in_m2++;
+        else
+            in_glue++; /* only the synthetic barrier steps live out here */
+    }
+    printf("# window_survey: steps by range — frame=%d m1=%d m2=%d "
+           "outside=%d\n",
+           in_frame, in_m1, in_m2, in_glue);
+    CHECK(in_frame > 0 && in_m1 == 3 && in_m2 == 3,
+          "window_survey: ONE capture spans THREE ranges — frame + both "
+          "channel-published method bodies, each method's 3 instructions");
+    CHECK(in_glue == (int)info.gap_steps,
+          "window_survey: every recorded step outside the region set is a GAP "
+          "BARRIER — the glue itself was stepped but NOT recorded");
+    CHECK(info.gaps == 1 && info.gap_steps >= 1,
+          "window_survey: exactly ONE glue excursion, and it raised a barrier");
+    CHECK(info.nregions == 3,
+          "window_survey: the region set is frame + 2 published methods");
+
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    uint32_t s_r10_def = 0, s_r10_use = 0, s_mem_def = 0, s_mem_use = 0;
+    uint32_t s_keep_def = 0, s_keep_use = 0, s_m1_add = 0, s_m2_mov = 0,
+             s_m2_add = 0, s_gap = 0;
+    int found = g != NULL && f6_step_at(v, L.r10_def, &s_r10_def) &&
+                f6_step_at(v, L.r10_use, &s_r10_use) &&
+                f6_step_at(v, L.mem_def, &s_mem_def) &&
+                f6_step_at(v, L.mem_use, &s_mem_use) &&
+                f6_step_at(v, L.keep_def, &s_keep_def) &&
+                f6_step_at(v, L.keep_use, &s_keep_use) &&
+                f6_step_at(v, L.m1_add, &s_m1_add) &&
+                f6_step_at(v, L.m2_mov, &s_m2_mov) &&
+                f6_step_at(v, L.m2_add, &s_m2_add) &&
+                f6_step_at(v, base + F6_GLUE, &s_gap);
+    CHECK(found, "window_survey: every named step (and the barrier at the glue "
+                 "entry address) is present in the stream");
+    if (!found) {
+        asmtest_defuse_free(g);
+        asmtest_valtrace_free(v);
+
+        f6_reap(pid, map, ctl);
+        return;
+    }
+
+    /* --- (A) the exit criterion: a def-use chain ACROSS method ranges --- */
+    CHECK(has_edge(g, s_m1_add, s_keep_def),
+          "window_survey/A: M1's computed value flows into the FRAME "
+          "(cross-range edge: M1 add -> frame store)");
+    CHECK(has_edge(g, s_keep_def, s_keep_use),
+          "window_survey/A: the FRAME's slot carries it ACROSS the glue "
+          "excursion untouched (store -> load)");
+    CHECK(has_edge(g, s_keep_use, s_m2_mov),
+          "window_survey/A: the FRAME hands it to M2 (cross-range edge: "
+          "frame load -> M2 consume)");
+    at_val_rec_t sink = {0};
+    sink.step = s_m2_add;
+    asmtest_slice_t *bwd = asmtest_slice_backward(g, sink);
+    CHECK(bwd != NULL && f6_slice_touches(bwd, v, base + F6_M1, L.m1_len) &&
+              f6_slice_touches(bwd, v, base + F6_FRAME, L.frame_len) &&
+              f6_slice_touches(bwd, v, base + F6_M2, L.m2_len),
+          "window_survey/A: ONE backward slice from M2's sink reaches back "
+          "through the FRAME into M1 — a def-use survey spanning THREE "
+          "JIT'd method ranges of a live process (F6's exit criterion)");
+    asmtest_slice_free(bwd);
+
+    /* --- (B) the gap barrier: a register the glue clobbered --- */
+    CHECK(has_edge(g, s_gap, s_r10_use),
+          "window_survey/B: the post-gap r10 read is sourced from the GAP "
+          "BARRIER — the elided glue is named as the writer it is");
+    CHECK(!has_edge(g, s_r10_def, s_r10_use),
+          "window_survey/B: and NOT from the frame's stale r10 write — the "
+          "edge an elided-glue survey FABRICATES is absent");
+    uint64_t gv = 0;
+    CHECK(f6_reg_write_value(v, s_gap, REG_R10, &gv) && gv == F6_SENT2,
+          "window_survey/B: the barrier carries the glue's REAL r10 value "
+          "read back from silicon (SENT2), not a guess");
+    uint64_t uv = 0;
+    CHECK(reg_read_low8(v, s_r10_use, REG_R10, &uv) && uv == F6_SENT2,
+          "window_survey/B: the VALUE at the read was always honest (SENT2) — "
+          "it is the EDGE that elision corrupts, which is why a value-only "
+          "check could never have caught this");
+
+    /* --- (C) the gap barrier: a stack slot the glue reused --- */
+    CHECK(has_edge(g, s_gap, s_mem_use),
+          "window_survey/C: the post-gap [rbp-8] load is sourced from the GAP "
+          "BARRIER (the glue reused the caller's frame slot)");
+    CHECK(!has_edge(g, s_mem_def, s_mem_use),
+          "window_survey/C: and NOT from the frame's stale store — no "
+          "fabricated memory edge across the elided glue");
+    uint64_t mv = 0;
+    CHECK(mem_read_value(v, s_mem_use, &mv) && mv == F6_MEM2,
+          "window_survey/C: the load's real value is the glue's MEM2");
+
+    /* --- the barrier is PRECISE, not a blanket invalidation --- */
+    CHECK(!has_edge(g, s_gap, s_keep_use),
+          "window_survey: the barrier does NOT shadow [rbp-0x10], which the "
+          "glue never touched — a blanket 'the gap wrote everything' would "
+          "have deleted the true cross-method edge asserted in /A");
+    CHECK(info.risk_regs > 0 && info.risk_bytes >= 16,
+          "window_survey: the at-risk set tracked both clobbered slots plus "
+          "the untouched one (>=16 bytes: [rbp-8] and [rbp-0x10])");
+    CHECK(!info.risk_overflow && info.decode_fail == 0,
+          "window_survey: the barrier was COMPLETE and every window PC "
+          "decoded out of the live target");
+
+    /* --- the target survives --- */
+    long c0 = ctl->counter;
+    struct timespec ts = {0, 40 * 1000 * 1000};
+    nanosleep(&ts, NULL);
+    CHECK(ctl->counter > c0,
+          "window_survey: the victim SURVIVED the detach and kept looping");
+
+    printf("# window_survey: stops=%llu recorded=%llu gaps=%llu "
+           "gap_steps=%llu gap_recs=%llu risk_regs=%u risk_bytes=%u\n",
+           (unsigned long long)info.stops, (unsigned long long)info.recorded,
+           (unsigned long long)info.gaps, (unsigned long long)info.gap_steps,
+           (unsigned long long)info.gap_recs, info.risk_regs, info.risk_bytes);
+
+    asmtest_defuse_free(g);
+    asmtest_valtrace_free(v);
+
+    f6_reap(pid, map, ctl);
+}
 
 static void test_attach_pid(void) {
     /* Increment 1: attach to a process we did NOT create. The victim runs INDEPENDENTLY (no
@@ -1488,6 +1962,7 @@ int main(void) {
     test_attach_worker_tid();
     test_signal_split();
     test_attach_jit_worker();
+    test_window_survey();
 
     printf("1..%d\n", checks);
     if (failures)

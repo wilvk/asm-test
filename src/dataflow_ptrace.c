@@ -78,8 +78,10 @@
  */
 #define _GNU_SOURCE
 
+#include <string.h> /* memset — the F6 window stub zeroes its info on every platform */
 #include <sys/types.h> /* pid_t — used by the attach_pid signature on every platform */
 
+#include "asmtest_addr_channel.h" /* F6: the cross-process JIT-address channel (header-only inline) */
 #include "asmtest_codeimage.h" /* asmtest_codeimage_t / _bytes_at (Increment 3 versioned decode) */
 #include "asmtest_valtrace.h"
 
@@ -90,6 +92,38 @@
 #define DF_PTRACE_ENOSYS (-3) /* off Linux x86-64 / no Capstone: self-skip   */
 #define DF_PTRACE_ETRACE                                                       \
     (-4) /* fork/ptrace/wait failure (seccomp): self-skip */
+
+/* ------------------------------------------------------------------ */
+/* F6 — windowed multi-region capture telemetry                        */
+/* ------------------------------------------------------------------ */
+
+/* Filled on every non-EINVAL return of asmtest_dataflow_ptrace_attach_window (F6).
+ * The COST of this tier is `stops`: EVERY instruction the target retires inside the
+ * window costs the tracer one ptrace round-trip, recorded or not — so `stops` counts
+ * the runtime glue the survey deliberately does not record, and `stops / recorded` is
+ * the GLUE TAX. That ratio, not the recorded step count, is what decides whether a
+ * window is worth surveying out-of-process at all or belongs to the in-band
+ * DynamoRIO taint tier. Re-declared verbatim by the producer's suite (this tier ships
+ * no header — a value-trace PRODUCER is a tier, exactly as asmtest_blockstep_info_t). */
+typedef struct {
+    uint64_t
+        stops; /* TOTAL single-step stops across the window (the real cost)  */
+    uint64_t
+        recorded;  /* steps whose values were captured (pc in the region set) */
+    uint64_t gaps; /* glue excursions OUT of the region set and back          */
+    uint64_t
+        gap_steps; /* synthetic GAP-BARRIER steps appended (a gap that changed
+                    * nothing AT RISK correctly appends none)                */
+    uint64_t gap_recs;   /* write records those barrier steps carry           */
+    uint32_t nregions;   /* regions in the set at the window end (frame+chan) */
+    uint32_t risk_regs;  /* distinct register locations put at risk           */
+    uint32_t risk_bytes; /* distinct memory bytes put at risk                 */
+    int chan_overrun;    /* the addr channel LAPPED: a published region LOST  */
+    int risk_overflow;   /* the at-risk set hit its cap -> the gap barrier is
+                          * INCOMPLETE (vt->truncated is set too)             */
+    int decode_fail;     /* >0: a window PC could not be read/decoded out of
+                          * the target (vt->truncated is set too)             */
+} asmtest_dfwin_info_t;
 
 #if defined(__linux__) && defined(__x86_64__) && defined(ASMTEST_HAVE_CAPSTONE)
 
@@ -293,6 +327,18 @@ static int child_read(pid_t pid, uint64_t addr, void *buf, size_t n) {
     return 1;
 }
 
+/* F6 — read the bytes of ONE instruction live out of the target at absolute `at`.
+ * x86-64's longest encoding is 15 bytes, so 16 always suffices; a PC near the end of
+ * a mapping cannot serve 16, and process_vm_readv is all-or-nothing, so shrink until
+ * the read fits inside the mapping. Returns the byte count (0 = nothing readable —
+ * the caller fails closed). The shrink loop only ever runs at a mapping edge. */
+static size_t dfp_read_insn_bytes(pid_t pid, uint64_t at, uint8_t out[16]) {
+    for (size_t n = 16; n > 0; n--)
+        if (child_read(pid, at, out, n))
+            return n;
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* Per-step scratch + value fills                                      */
 /* ------------------------------------------------------------------ */
@@ -314,6 +360,51 @@ static void recbuf_push(recbuf *rb, const at_val_rec_t *r) {
     rb->v[rb->n++] = *r;
 }
 
+/* ------------------------------------------------------------------ */
+/* F6 — the AT-RISK set (what makes glue elision SOUND)                */
+/* ------------------------------------------------------------------ */
+
+/* A windowed survey records the window frame + the channel-published JIT regions and
+ * STEPS OVER the runtime glue between them without recording it — that elision is the
+ * whole point (the glue is the noise a managed capture exists to drop). But elision is
+ * exactly where a def-use graph can FABRICATE an edge: if an in-region step writes a
+ * location, the elided glue then overwrites it, and a later in-region step reads it,
+ * the shared last-writer builder (src/dataflow.c) has no record of the glue and hands
+ * the edge to the STALE in-region writer. The value is real, the edge is a lie.
+ *
+ * The bound that makes this tractable: a fabricated edge REQUIRES a prior RECORDED
+ * write to that same location — an unwritten location the glue touches simply has no
+ * last writer and produces no edge at all. So the set of locations at risk is exactly
+ * the set of locations the survey has already recorded a write to, and it is finite,
+ * observable, and cheap to re-check. This is that set. At every gap entry the producer
+ * snapshots it; at gap exit it re-reads it and appends ONE synthetic GAP step whose
+ * write records are precisely the at-risk locations the glue changed. The last-writer
+ * map then attributes a post-gap read to the GAP, not to the stale in-region writer.
+ *
+ * Registers are keyed by RAW Capstone id (src/dataflow.c:219 `lw_get(map, 0,
+ * rec->reg,...)` — there is NO sub-register canonicalization), so the barrier tracks
+ * whichever alias id the enumerator actually produced and compares THAT alias's own
+ * bit slice, never the 64-bit container: a gap that changes AH must not shadow a true
+ * AL edge. Memory is keyed per BYTE (src/dataflow.c:251), so the set is per byte too.
+ *
+ * FAIL CLOSED: over the caps, or on any location whose change cannot be DECIDED (a
+ * foreign read failure, an alias whose shape this file cannot resolve), the set flags
+ * itself and the capture sets vt->truncated. An incomplete barrier is disclosed, never
+ * silently trusted — the honest-overflow contract the whole sink already uses. */
+#define DFP_WIN_RISK_REGS 96 /* distinct register locations tracked         */
+#define DFP_WIN_RISK_BYTES                                                     \
+    4096 /* distinct memory bytes tracked               */
+
+typedef struct {
+    uint32_t regs[DFP_WIN_RISK_REGS];
+    size_t nregs;
+    uint64_t addrs[DFP_WIN_RISK_BYTES]; /* sorted-insert, deduplicated       */
+    uint8_t snap[DFP_WIN_RISK_BYTES];   /* value at the last gap entry       */
+    uint8_t snapok[DFP_WIN_RISK_BYTES]; /* that snapshot read succeeded      */
+    size_t naddrs;
+    int overflow; /* a cap was hit: the barrier is INCOMPLETE          */
+} dfp_riskset;
+
 typedef struct {
     pid_t pid;
     asmtest_valtrace_t *vt;
@@ -323,6 +414,17 @@ typedef struct {
     int have_cur;
     uint64_t cur_off;
     recbuf cur;
+    /* F6 windowed survey (all three default 0/NULL, which keeps every SCOPED path —
+     * `_run`, `attach`, `attach_pid*`, `attach_jit` — byte-for-byte unchanged).
+     * `win_mode` = there is no bounded code snapshot: the region set spans the window
+     * frame plus every channel-published JIT body at ABSOLUTE addresses, so open_step
+     * reads each instruction's bytes LIVE out of the target at (base + off) instead of
+     * indexing c->code, and `off` IS the absolute pc. `risk` = the at-risk set above,
+     * fed by finalize_step so the gap barrier knows what the elided glue could lie
+     * about. */
+    int win_mode;
+    dfp_riskset *risk;
+    int win_decode_fail; /* window PCs whose bytes would not read/decode      */
     /* Foreign-attach disposition (attach_pid path). `foreign` = the tracee is a process we
      * did NOT create, so dfp_step_loop must NEVER kill it on an error/truncation exit —
      * it leaves it trap-stopped (*left_stopped=1) and the caller PTRACE_DETACHes it (with
@@ -343,6 +445,66 @@ typedef struct {
     asmtest_codeimage_t *img;
     uint64_t when;
 } dfp_ctx;
+
+/* F6 — put a recorded WRITE's location into the at-risk set (see dfp_riskset above).
+ * Reads are never at risk: a fabricated edge needs a stale WRITER to point at. Both
+ * halves dedup, and both FAIL CLOSED at their cap — flagging `overflow` AND setting
+ * vt->truncated, so an incomplete barrier can never pass as a complete survey. */
+static void dfp_risk_flag(dfp_ctx *c) {
+    c->risk->overflow = 1;
+    c->vt->truncated = true;
+}
+
+static void dfp_risk_add(dfp_ctx *c, const at_val_rec_t *r) {
+    if (!r->is_write)
+        return;
+    if (r->kind == AT_LOC_REG) {
+        for (size_t i = 0; i < c->risk->nregs; i++)
+            if (c->risk->regs[i] == r->reg)
+                return;
+        if (c->risk->nregs == DFP_WIN_RISK_REGS) {
+            dfp_risk_flag(c);
+            return;
+        }
+        c->risk->regs[c->risk->nregs++] = r->reg;
+        return;
+    }
+    /* Memory: one entry per touched BYTE, since that is how the last-writer map keys
+     * it. `size` 0 means the enumerator could not size the operand — the byte extent
+     * is then unknown, so the barrier cannot cover it: fail closed. */
+    if (r->size == 0 || r->size > 64) {
+        dfp_risk_flag(c);
+        return;
+    }
+    for (uint16_t b = 0; b < r->size; b++) {
+        uint64_t a = r->addr + b;
+        size_t lo = 0,
+               hi = c->risk->naddrs; /* sorted insert keeps dedup O(log n) */
+        while (lo < hi) {
+            size_t mid = lo + (hi - lo) / 2;
+            if (c->risk->addrs[mid] < a)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        if (lo < c->risk->naddrs && c->risk->addrs[lo] == a)
+            continue; /* already tracked */
+        if (c->risk->naddrs == DFP_WIN_RISK_BYTES) {
+            dfp_risk_flag(c);
+            return;
+        }
+        memmove(&c->risk->addrs[lo + 1], &c->risk->addrs[lo],
+                (c->risk->naddrs - lo) * sizeof c->risk->addrs[0]);
+        memmove(&c->risk->snap[lo + 1], &c->risk->snap[lo],
+                (c->risk->naddrs - lo) * sizeof c->risk->snap[0]);
+        memmove(&c->risk->snapok[lo + 1], &c->risk->snapok[lo],
+                (c->risk->naddrs - lo) * sizeof c->risk->snapok[0]);
+        c->risk->addrs[lo] = a;
+        c->risk->snap[lo] = 0;
+        c->risk->snapok[lo] = 0;
+        c->risk->naddrs++;
+    }
+}
 
 /* Fill a record's value from a register (GP inline, XMM/YMM spilled to wide[]) at the
  * CURRENT register/vector state. Used for reads (source state, at the instruction's own
@@ -442,6 +604,12 @@ static void finalize_step(dfp_ctx *c, const struct user_regs_struct *regs) {
         else
             fill_mem_value(c, r); /* addr resolved when the step opened */
     }
+    /* F6: every WRITE this step records is a location a later elided glue excursion
+     * could overwrite behind the survey's back, so it joins the at-risk set the gap
+     * barrier re-checks. NULL on every scoped path — this is a no-op there. */
+    if (c->risk != NULL)
+        for (size_t i = 0; i < c->cur.n; i++)
+            dfp_risk_add(c, &c->cur.v[i]);
     asmtest_valtrace_append(c->vt, c->cur_off, c->cur.v, c->cur.n);
     c->have_cur = 0;
     c->cur.n = 0;
@@ -468,6 +636,24 @@ static void open_step(dfp_ctx *c, const struct user_regs_struct *regs,
     const uint8_t *dec = c->code;
     size_t dec_len = c->code_len;
     size_t dec_off = off;
+    /* F6 window mode: the region set has no bounded byte extent (it spans the frame
+     * plus every channel-published JIT body, at absolute addresses), so there is no
+     * c->code snapshot to index — read this instruction's bytes LIVE out of the
+     * target at the absolute pc. A PC whose bytes cannot be read at all is a survey
+     * FAILURE, not an empty step: flag it (the caller sets truncated) and record no
+     * operands rather than inventing a decode. */
+    uint8_t winbuf[16];
+    if (c->win_mode) {
+        size_t got = dfp_read_insn_bytes(c->pid, c->base + off, winbuf);
+        if (got == 0) {
+            c->win_decode_fail++;
+            c->vt->truncated = true;
+            return;
+        }
+        dec = winbuf;
+        dec_len = got;
+        dec_off = 0;
+    }
     if (c->img != NULL) {
         const uint8_t *vb = NULL;
         size_t avail = 0;
@@ -485,6 +671,15 @@ static void open_step(dfp_ctx *c, const struct user_regs_struct *regs,
      * EA fixup (the EA is relative to the next instruction). */
     size_t insn_len = asmtest_operands(ASMTEST_ARCH_X86_64, dec, dec_len,
                                        dec_off, rd, &nr, wr, &nw);
+    /* F6 fail-closed: readable bytes that do NOT decode mean the survey cannot know
+     * this step's write set, so it cannot know what a later read depends on. Disclose
+     * it (F1's decoder-desync rule, applied to the window's live byte source) rather
+     * than append a confidently empty step. */
+    if (c->win_mode && insn_len == 0) {
+        c->win_decode_fail++;
+        c->vt->truncated = true;
+        return;
+    }
 
     for (size_t i = 0; i < nr; i++) {
         at_val_rec_t r = rd[i];
@@ -1562,6 +1757,554 @@ int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
                              when, result, survived, vt);
 }
 
+/* ================================================================== */
+/* F6 — the windowed multi-region def-use SURVEY                       */
+/*                                                                     */
+/* Every entry above is SCOPED: one contiguous [base, base+len), and   */
+/* the cost is independent of the rest of the process because the      */
+/* tracer only steps that region. This entry lifts the scope to a      */
+/* WINDOW: run_to a frame, then step until control returns to the      */
+/* frame's caller, recording values for every instruction that lands   */
+/* in the frame OR in any JIT body the target publishes on the         */
+/* cross-process address channel (drained at EVERY stop, so a method   */
+/* JIT'd mid-window is picked up as its (base,len) streams in). The    */
+/* result is ONE valtrace whose def-use graph spans MULTIPLE method    */
+/* ranges — the survey F6 asks for.                                    */
+/*                                                                     */
+/* WHAT THIS COSTS, AND WHY IT IS NOT WHOLE-PROCESS. The scoped tier's */
+/* cost model does not survive the lift. A window pays one ptrace      */
+/* round-trip per instruction the target RETIRES inside it, recorded   */
+/* or not: the runtime glue between managed methods is elided from the */
+/* RECORD but not from the BILL. So the cost is the window's total     */
+/* instruction count — `info->stops` — and the yield is                */
+/* `info->recorded`. Their ratio is the glue tax, and it is a property */
+/* of the TARGET, not of this code: nothing here can make it smaller,  */
+/* because the tracer must see each instruction to know whether it is  */
+/* in a region at all. That is the structural reason "whole process,   */
+/* continuously" is not this tier's job — an unbounded window is an    */
+/* unbounded bill, and the deadlock/GC-stall hazards region scoping    */
+/* dodges all come back with it. Whole-process breadth is the in-band  */
+/* DynamoRIO taint tier's job (~11x, measured); this is the tier that  */
+/* answers a BOUNDED window exactly, off a live process, with no code  */
+/* modification. The hand-off is documented in                         */
+/* docs/internal/plans/live-attach-dataflow-followup-plan.md (F6).     */
+/* ================================================================== */
+
+/* The bit slice a Capstone x86 register alias occupies inside the 64-bit container
+ * gp_value folds it to. The gap barrier needs this because the last-writer map keys on
+ * the RAW alias id: a gap that changes AH must shadow a later AH read but must NOT
+ * shadow a later AL read (AL did not change), and comparing containers would do
+ * exactly that — silently deleting a TRUE edge. Returns 0 for an id whose shape this
+ * file cannot resolve, on which the barrier fails closed.
+ *
+ * Deliberately covers EXACTLY the ids gp_value resolves. Note the gap it inherits:
+ * gp_value has no case for R8D/R8W/R8B..R15D/R15W/R15B, so a survey whose recorded
+ * steps write those aliases puts a location at risk that the barrier must then decline
+ * to decide (truncated). That is a pre-existing property of this producer's register
+ * map, surfaced — not introduced — by F6. */
+static int dfp_alias_shape(uint32_t reg, unsigned *shift, unsigned *width) {
+    switch (reg) {
+    case X86_REG_RAX:
+    case X86_REG_RBX:
+    case X86_REG_RCX:
+    case X86_REG_RDX:
+    case X86_REG_RSI:
+    case X86_REG_RDI:
+    case X86_REG_RBP:
+    case X86_REG_RSP:
+    case X86_REG_R8:
+    case X86_REG_R9:
+    case X86_REG_R10:
+    case X86_REG_R11:
+    case X86_REG_R12:
+    case X86_REG_R13:
+    case X86_REG_R14:
+    case X86_REG_R15:
+    case X86_REG_RIP:
+    case X86_REG_EFLAGS:
+        *shift = 0;
+        *width = 8;
+        return 1;
+    case X86_REG_EAX:
+    case X86_REG_EBX:
+    case X86_REG_ECX:
+    case X86_REG_EDX:
+    case X86_REG_ESI:
+    case X86_REG_EDI:
+    case X86_REG_EBP:
+    case X86_REG_ESP:
+        *shift = 0;
+        *width = 4;
+        return 1;
+    case X86_REG_AX:
+    case X86_REG_BX:
+    case X86_REG_CX:
+    case X86_REG_DX:
+    case X86_REG_SI:
+    case X86_REG_DI:
+    case X86_REG_BP:
+    case X86_REG_SP:
+        *shift = 0;
+        *width = 2;
+        return 1;
+    case X86_REG_AL:
+    case X86_REG_BL:
+    case X86_REG_CL:
+    case X86_REG_DL:
+    case X86_REG_SIL:
+    case X86_REG_DIL:
+    case X86_REG_BPL:
+    case X86_REG_SPL:
+        *shift = 0;
+        *width = 1;
+        return 1;
+    case X86_REG_AH:
+    case X86_REG_BH:
+    case X86_REG_CH:
+    case X86_REG_DH:
+        *shift = 8;
+        *width = 1;
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static uint64_t dfp_alias_slice(uint64_t container, unsigned shift,
+                                unsigned width) {
+    uint64_t v = container >> shift;
+    if (width < 8)
+        v &= (1ULL << (width * 8)) - 1u;
+    return v;
+}
+
+/* A whole-vector-file snapshot in ONE pair of ptrace calls (not read_ymm's per-register
+ * GETREGSET), because the gap barrier diffs up to 16 registers at once and gaps are the
+ * rare event, not the hot path. `have` = the snapshot is usable; a failure leaves it 0
+ * and the barrier fails closed on every vector location at risk. */
+typedef struct {
+    int have;
+    uint8_t ymm[16][32];
+} dfp_vecsnap_t;
+
+static void dfp_vecsnap(pid_t pid, dfp_vecsnap_t *s) {
+    struct user_fpregs_struct fp;
+    s->have = 0;
+    if (ptrace(PTRACE_GETFPREGS, pid, NULL, &fp) != 0)
+        return;
+    for (int i = 0; i < 16; i++)
+        memcpy(s->ymm[i], &fp.xmm_space[i * 4], 16);
+    uint8_t xs[8192];
+    struct iovec iov = {xs, sizeof xs};
+    if (ptrace(PTRACE_GETREGSET, pid, (void *)(uintptr_t)NT_X86_XSTATE, &iov) ==
+        0) {
+        for (int i = 0; i < 16; i++) {
+            const size_t o = 576 + (size_t)i * 16; /* YMM_Hi128 component */
+            if (iov.iov_len >= o + 16)
+                memcpy(s->ymm[i] + 16, xs + o, 16);
+            else
+                memset(s->ymm[i] + 16, 0, 16);
+        }
+    } else {
+        for (int i = 0; i < 16; i++)
+            memset(s->ymm[i] + 16, 0, 16);
+    }
+    s->have = 1;
+}
+
+/* Snapshot the current byte value of every AT-RISK memory location — the gap-entry
+ * state the exit diff compares against. Called AFTER the last in-region step of the
+ * run is finalized, so its writes are already in the set. A byte that will not read
+ * (the target unmapped it) is marked !snapok and fails closed at the diff. */
+static void dfp_risk_snap(dfp_ctx *c) {
+    for (size_t i = 0; i < c->risk->naddrs; i++) {
+        uint8_t b = 0;
+        c->risk->snapok[i] = child_read(c->pid, c->risk->addrs[i], &b, 1);
+        c->risk->snap[i] = b;
+    }
+}
+
+/* Append the synthetic GAP BARRIER step closing a glue excursion that entered at
+ * `gap_pc`. Its write set is EXACTLY the at-risk locations whose value differs between
+ * gap entry and gap exit — i.e. what the elided glue actually clobbered. Appending it
+ * before the re-entering in-region step makes the shared last-writer builder attribute
+ * a post-gap read to the GAP rather than to the stale in-region writer, which is the
+ * whole reason a multi-region survey may elide glue and still be sound.
+ *
+ * `gap_pc` (the glue's entry address, outside every region in the set by construction)
+ * is the step's insn_off: a real address, honestly outside the survey's regions, so a
+ * consumer classifying steps by region sees the barrier for what it is.
+ *
+ * A gap that changed nothing at risk appends NOTHING — the absence of a barrier step is
+ * itself the (correct) claim that no recorded location was disturbed. */
+static void dfp_emit_gap(dfp_ctx *c, const struct user_regs_struct *pre,
+                         const struct user_regs_struct *post,
+                         const dfp_vecsnap_t *vpre, const dfp_vecsnap_t *vpost,
+                         uint64_t gap_pc, asmtest_dfwin_info_t *info) {
+    at_val_rec_t recs[DFP_WIN_RISK_REGS];
+    size_t n = 0;
+
+    for (size_t i = 0; i < c->risk->nregs && n < DFP_WIN_RISK_REGS; i++) {
+        uint32_t reg = c->risk->regs[i];
+        at_val_rec_t r;
+        memset(&r, 0, sizeof r);
+        r.kind = AT_LOC_REG;
+        r.reg = reg;
+        r.is_write = true;
+
+        uint16_t w = vec_width(reg);
+        if (w == 0) {
+            uint64_t a = 0, b = 0;
+            unsigned shift = 0, width = 0;
+            if (!gp_value(pre, reg, &a) || !gp_value(post, reg, &b) ||
+                !dfp_alias_shape(reg, &shift, &width)) {
+                /* Cannot DECIDE whether the glue changed this location: disclose it
+                 * rather than guess either way (shadowing would delete a true edge;
+                 * skipping would leave a fabricated one). */
+                c->vt->truncated = true;
+                continue;
+            }
+            if (dfp_alias_slice(a, shift, width) ==
+                dfp_alias_slice(b, shift, width))
+                continue; /* this alias's own bits survived the glue */
+            r.size = (uint16_t)width;
+            r.value = b; /* container value + size, exactly as fill_reg_value */
+            r.value_valid = true;
+        } else {
+            int idx = (int)(reg - (w == 16 ? X86_REG_XMM0 : X86_REG_YMM0));
+            if (idx < 0 || idx > 15 || !vpre->have || !vpost->have) {
+                c->vt->truncated = true;
+                continue;
+            }
+            if (memcmp(vpre->ymm[idx], vpost->ymm[idx], w) == 0)
+                continue;
+            r.size = w;
+            size_t woff =
+                asmtest_valtrace_stash_wide(c->vt, vpost->ymm[idx], w);
+            if (woff == (size_t)-1) {
+                c->vt->truncated = true; /* stash_wide already flagged it */
+                continue;
+            }
+            r.wide = true;
+            r.wide_off = (uint32_t)woff;
+            r.value_valid = true;
+        }
+        recs[n++] = r;
+    }
+
+    /* Memory: one record per at-risk BYTE the glue changed (the last-writer map keys
+     * memory per byte, so a per-byte record is exact). These go through a second
+     * append when the register batch is full, so a wide barrier is never dropped. */
+    at_val_rec_t mrecs[64];
+    size_t mn = 0;
+    for (size_t i = 0; i < c->risk->naddrs; i++) {
+        uint8_t now = 0;
+        if (!c->risk->snapok[i] ||
+            !child_read(c->pid, c->risk->addrs[i], &now, 1)) {
+            c->vt->truncated = true; /* cannot decide this byte: disclose */
+            continue;
+        }
+        if (now == c->risk->snap[i])
+            continue;
+        at_val_rec_t r;
+        memset(&r, 0, sizeof r);
+        r.kind = AT_LOC_MEM_ABS;
+        r.addr = c->risk->addrs[i];
+        r.size = 1;
+        r.is_write = true;
+        r.value = now;
+        r.value_valid = true;
+        if (n < DFP_WIN_RISK_REGS)
+            recs[n++] = r;
+        else if (mn < 64)
+            mrecs[mn++] = r;
+        else {
+            c->vt->truncated =
+                true; /* barrier wider than one batch: disclose */
+            break;
+        }
+    }
+
+    if (n == 0 && mn == 0)
+        return; /* the glue disturbed nothing the survey had recorded */
+    asmtest_valtrace_append(c->vt, gap_pc, recs, n);
+    info->gap_steps++;
+    info->gap_recs += n;
+    if (mn > 0) {
+        asmtest_valtrace_append(c->vt, gap_pc, mrecs, mn);
+        info->gap_steps++;
+        info->gap_recs += mn;
+    }
+}
+
+/* 1 if `pc` is inside the window frame OR any channel-published JIT region — the
+ * region set the survey records. Mirrors ptrace_backend.c's in_region_set (the
+ * control-flow windowed stepper's), so a value survey and a control-flow window over
+ * the same frame + channel agree on WHICH instructions belong to the capture. */
+static int dfp_in_region_set(uint64_t pc, uint64_t win_base, uint64_t win_len,
+                             const asmtest_addr_rec_t *regs, uint32_t nreg) {
+    if (pc >= win_base && pc < win_base + win_len)
+        return 1;
+    for (uint32_t i = 0; i < nreg; i++)
+        if (regs[i].len && pc >= regs[i].base &&
+            pc < regs[i].base + regs[i].len)
+            return 1;
+    return 0;
+}
+
+/* The windowed survey's step loop. The tracee is already trap-stopped AT `win_base`
+ * (dfp_run_to) and `win_ret` is the address it will return to. Every stop: read regs,
+ * drain the channel, classify pc.
+ *   pc == win_ret        -> the frame returned: the window is over, cleanly.
+ *   pc in the region set -> finalize the previous step, close any open gap FIRST
+ *                           (so the barrier lands between them), open this step.
+ *   otherwise (glue)     -> finalize the previous in-region step against THIS stop
+ *                           (its destination state), then open a gap: snapshot the
+ *                           register file, the vector file, and the at-risk memory.
+ * Bounded by `max_insns` (recorded steps) and DFP_STEP_BACKSTOP (total stops); either
+ * truncates honestly. */
+static int dfp_window_loop(dfp_ctx *c, uint64_t win_base, uint64_t win_len,
+                           uint64_t win_ret, asmtest_addr_channel_t *chan,
+                           asmtest_addr_rec_t *rset, uint32_t nreg,
+                           uint64_t max_insns, long *result,
+                           asmtest_dfwin_info_t *info, int *left_stopped) {
+    pid_t pid = c->pid;
+    int status = 0, pending_sig = 0;
+    int skip_step = 1; /* pre-positioned at win_base by dfp_run_to */
+    int in_gap = 0;
+    uint64_t gap_pc = 0;
+    struct user_regs_struct gap_pre;
+    dfp_vecsnap_t gap_vpre;
+    memset(&gap_pre, 0, sizeof gap_pre);
+    memset(&gap_vpre, 0, sizeof gap_vpre);
+    *left_stopped = 0;
+
+    for (;;) {
+        if (skip_step) {
+            skip_step = 0;
+        } else {
+            if (ptrace(PTRACE_SINGLESTEP, pid, NULL,
+                       (void *)(uintptr_t)pending_sig) != 0)
+                return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
+            pending_sig = 0;
+            if (waitpid(pid, &status, __WALL) < 0) {
+                if (errno == EINTR)
+                    continue;
+                return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
+            }
+            if (WIFEXITED(status) || WIFSIGNALED(status)) {
+                /* The target died inside the window: whatever we have is partial. */
+                c->vt->truncated = true;
+                return DF_PTRACE_ETRACE;
+            }
+            if (!WIFSTOPPED(status))
+                continue;
+            if (WSTOPSIG(status) != SIGTRAP) {
+                int sig = WSTOPSIG(status);
+                if (sig == SIGSEGV || sig == SIGBUS || sig == SIGILL ||
+                    sig == SIGFPE) {
+                    c->vt->truncated = true;
+                    return dfp_dirty_exit(c, DF_PTRACE_FAULT, sig,
+                                          left_stopped);
+                }
+                pending_sig =
+                    sig; /* unrelated signal: forward, keep stepping */
+                continue;
+            }
+            /* The target's OWN trap byte (Increment 5's split): a window cannot step
+             * past it any more safely than a scoped region can — re-arming TF right
+             * after delivering a masked SIGTRAP kills the target. End honestly. */
+            if (dfp_sigtrap_is_app(pid)) {
+                struct user_regs_struct aregs;
+                if (c->have_cur) {
+                    if (ptrace(PTRACE_GETREGS, pid, NULL, &aregs) == 0)
+                        finalize_step(c, &aregs);
+                    else
+                        c->cur.n = 0;
+                    c->have_cur = 0;
+                }
+                c->vt->truncated = true;
+                return dfp_dirty_exit(c, DF_PTRACE_FAULT, SIGTRAP,
+                                      left_stopped);
+            }
+            if (++info->stops > DFP_STEP_BACKSTOP) {
+                c->vt->truncated = true;
+                return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
+            }
+        }
+
+        struct user_regs_struct regs;
+        if (ptrace(PTRACE_GETREGS, pid, NULL, &regs) != 0)
+            return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
+        uint64_t pc = regs.rip;
+
+        /* Drain mid-window publishes at EVERY stop: a method the target JITs while the
+         * window is open must be recorded from its FIRST executed instruction, which
+         * only happens if the set is refreshed before pc is classified. */
+        if (chan != NULL && nreg < ASMTEST_ADDR_CHAN_CAP) {
+            nreg += asmtest_addr_channel_drain(chan, rset + nreg,
+                                               ASMTEST_ADDR_CHAN_CAP - nreg);
+            if (chan->overrun)
+                info->chan_overrun = 1;
+        }
+
+        if (pc == win_ret) {
+            /* The frame returned to its caller: the window is over. This stop is the
+             * last in-region step's destination state. A gap open here means the frame
+             * returned from glue — no barrier is needed, nothing follows it. */
+            if (c->have_cur)
+                finalize_step(c, &regs);
+            if (result != NULL)
+                *result = (long)regs.rax;
+            *left_stopped = 1;
+            info->nregions = nreg + 1;
+            return DF_PTRACE_OK;
+        }
+
+        if (dfp_in_region_set(pc, win_base, win_len, rset, nreg)) {
+            if (in_gap) {
+                dfp_vecsnap_t gap_vpost;
+                dfp_vecsnap(pid, &gap_vpost);
+                dfp_emit_gap(c, &gap_pre, &regs, &gap_vpre, &gap_vpost, gap_pc,
+                             info);
+                in_gap = 0;
+            }
+            if (c->have_cur)
+                finalize_step(c, &regs);
+            open_step(c, &regs,
+                      pc); /* c->base == 0: `off` IS the absolute pc */
+            if (max_insns != 0 && ++info->recorded >= max_insns) {
+                /* Bounded scope reached: append what is open (its writes stay
+                 * unfilled), flag truncated, leave the target for the detach. */
+                asmtest_valtrace_append(c->vt, c->cur_off, c->cur.v, c->cur.n);
+                c->have_cur = 0;
+                c->vt->truncated = true;
+                info->nregions = nreg + 1;
+                return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
+            }
+            if (max_insns == 0)
+                info->recorded++;
+        } else {
+            /* Runtime glue: stepped (we must, to see the re-entry) but not recorded. */
+            if (c->have_cur)
+                finalize_step(c, &regs);
+            if (!in_gap) {
+                in_gap = 1;
+                gap_pc = pc;
+                gap_pre = regs;
+                dfp_vecsnap(pid, &gap_vpre);
+                /* AFTER the finalize above, so the step that jumped INTO the glue has
+                 * already contributed its writes to the set being snapshotted. */
+                dfp_risk_snap(c);
+                info->gaps++;
+            }
+        }
+    }
+}
+
+/* F6 — attach to a LIVE process and survey a WHOLE WINDOW's def-use across every
+ * method range it executes, instead of one scoped region.
+ *
+ * `win_base`/`win_len` are the window FRAME (this call run_to's it, exactly as
+ * attach_pid does for a region — unlike the control-flow windowed entry, whose caller
+ * owns the run_to). `chan` is the cross-process JIT-address channel the TARGET
+ * publishes its method bodies on (asmtest_addr_channel.h; NULL surveys just the
+ * frame). The window ends when the frame returns to its caller. `max_insns` bounds the
+ * RECORDED steps (0 = unbounded up to DFP_STEP_BACKSTOP total stops).
+ *
+ * `vt->insn_off` holds ABSOLUTE addresses (mem_space = AT_LOC_MEM_ABS): classify a step
+ * to its method with the existing asmtest_method_attribute post-pass. The stream
+ * interleaves in-region steps with synthetic GAP BARRIER steps at glue entry addresses
+ * (see dfp_emit_gap) — a step whose address is in no region is a barrier.
+ *
+ * The target SURVIVES: this never kills a process it did not create; on any exit it is
+ * PTRACE_DETACHed (forwarding a fault signal so the target's own handler runs).
+ *
+ * Returns DF_PTRACE_OK on a clean window end, ETRACE where ptrace is denied / the
+ * window ran past its backstop (self-skip), FAULT where the target faulted or hit its
+ * own trap mid-window. `info` is filled on every non-EINVAL return — READ info->stops
+ * vs info->recorded before trusting this tier with a bigger window. */
+int asmtest_dataflow_ptrace_attach_window(pid_t pid, uint64_t win_base,
+                                          size_t win_len,
+                                          asmtest_addr_channel_t *chan,
+                                          uint64_t max_insns, long *result,
+                                          asmtest_dfwin_info_t *info,
+                                          asmtest_valtrace_t *vt) {
+    if (info != NULL)
+        memset(info, 0, sizeof *info);
+    if (vt == NULL || info == NULL || pid <= 0 || win_base == 0 || win_len == 0)
+        return DF_PTRACE_EINVAL;
+    vt->mem_space = AT_LOC_MEM_ABS;
+
+    int status = 0, left_stopped = 0, rc = DF_PTRACE_ETRACE;
+    if (ptrace(PTRACE_SEIZE, pid, NULL, NULL) != 0)
+        return DF_PTRACE_ETRACE;
+    if (ptrace(PTRACE_INTERRUPT, pid, NULL, NULL) != 0)
+        goto detach;
+    for (;;) {
+        pid_t w = waitpid(pid, &status, __WALL);
+        if (w >= 0 || errno != EINTR)
+            break;
+    }
+    if (!WIFSTOPPED(status))
+        goto detach;
+
+    /* Position at the frame entry, then read the return address the frame will use.
+     * At the entry stop the call's pushed return address is exactly at [rsp] — the
+     * same anchor asmtest_ptrace_trace_attached_windowed takes. */
+    if (dfp_run_to(pid, win_base) != 0)
+        goto detach;
+    struct user_regs_struct entry;
+    if (ptrace(PTRACE_GETREGS, pid, NULL, &entry) != 0)
+        goto detach;
+    uint64_t win_ret = 0;
+    if (!child_read(pid, entry.rsp, &win_ret, sizeof win_ret))
+        goto detach;
+
+    dfp_riskset *risk = (dfp_riskset *)calloc(1, sizeof *risk);
+    asmtest_addr_rec_t *rset =
+        (asmtest_addr_rec_t *)calloc(ASMTEST_ADDR_CHAN_CAP, sizeof *rset);
+    if (risk == NULL || rset == NULL) {
+        free(risk);
+        free(rset);
+        goto detach;
+    }
+    uint32_t nreg = 0;
+    if (chan != NULL) {
+        nreg = asmtest_addr_channel_drain(chan, rset, ASMTEST_ADDR_CHAN_CAP);
+        if (chan->overrun)
+            info->chan_overrun = 1;
+    }
+
+    dfp_ctx c;
+    memset(&c, 0, sizeof c);
+    c.pid = pid;
+    c.vt = vt;
+    c.base = 0; /* window mode: `off` is the ABSOLUTE pc                    */
+    c.foreign = 1;
+    c.win_mode = 1;
+    c.risk = risk;
+
+    rc = dfp_window_loop(&c, win_base, win_len, win_ret, chan, rset, nreg,
+                         max_insns, result, info, &left_stopped);
+
+    info->risk_regs = (uint32_t)risk->nregs;
+    info->risk_bytes = (uint32_t)risk->naddrs;
+    info->risk_overflow = risk->overflow;
+    info->decode_fail = c.win_decode_fail;
+    free(c.cur.v);
+    free(risk);
+    free(rset);
+
+    if (left_stopped)
+        ptrace(PTRACE_DETACH, pid, NULL, (void *)(uintptr_t)c.detach_sig);
+    return rc;
+
+detach:
+    ptrace(PTRACE_DETACH, pid, NULL, NULL);
+    return DF_PTRACE_ETRACE;
+}
+
 #else /* not (Linux x86-64 + Capstone) */
 
 int asmtest_dataflow_ptrace_run(const uint8_t *code, size_t code_len,
@@ -1656,6 +2399,24 @@ int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
     (void)vt;
     if (survived != NULL)
         *survived = 0;
+    return DF_PTRACE_ENOSYS;
+}
+
+int asmtest_dataflow_ptrace_attach_window(pid_t pid, uint64_t win_base,
+                                          size_t win_len,
+                                          asmtest_addr_channel_t *chan,
+                                          uint64_t max_insns, long *result,
+                                          asmtest_dfwin_info_t *info,
+                                          asmtest_valtrace_t *vt) {
+    (void)pid;
+    (void)win_base;
+    (void)win_len;
+    (void)chan;
+    (void)max_insns;
+    (void)result;
+    (void)vt;
+    if (info != NULL)
+        memset(info, 0, sizeof *info);
     return DF_PTRACE_ENOSYS;
 }
 
