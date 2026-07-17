@@ -1279,7 +1279,14 @@ set -e
 [ "$rc" -eq 0 ] || fail "--sample exited $rc"
 printf '%s\n' "$out" | head -8
 if printf '%s\n' "$out" | grep -q '^# SKIP --sample'; then
-    echo "(IBS-Op unavailable on this host — sampler self-skipped, OK)"
+    # NOT necessarily "unavailable on this host" — that message was FALSE on an
+    # AMD box whose perf is merely locked down (Docker's default seccomp blocks
+    # perf_event_open, so `make docker-cli` ALWAYS lands here and every assertion
+    # below is skipped: a green gate over an untested view). asmspy now prints the
+    # real perf errno, so echo ITS reason rather than asserting a host property we
+    # did not measure. `make docker-cli-ibs` is the lane that runs the else branch.
+    printf '%s\n' "$out" | grep '^# SKIP --sample' | sed 's/^/  /'
+    echo "  (sampler self-skipped — assertions below NOT run; use make docker-cli-ibs)"
 else
     # on an IBS host the busy hot_spin() back-edge dominates the histogram
     printf '%s\n' "$out" | grep -q 'statistical hot edges' \

@@ -39,6 +39,7 @@
 
 #include "ibs_backend.h" /* internal window primitives (asmtest_ibs_window_*) */
 
+#include <errno.h> /* asmtest_ibs_unavail_reason: the real perf_open failure */
 #include <stdlib.h>
 #include <string.h>
 
@@ -315,6 +316,9 @@ static unsigned ibs_caps_eax(void) {
 
 static int g_avail = -1;
 static const char *g_reason = "";
+/* errno from the last failed perf_event_open — see asmtest_ibs_unavail_reason.
+ * Not cached/memoised like g_avail: it describes the last ATTEMPT, not the host. */
+static int g_open_errno = 0;
 
 static void ibs_probe(void) {
     if (g_avail >= 0)
@@ -364,6 +368,37 @@ int asmtest_ibs_available(void) {
 const char *asmtest_ibs_skip_reason(void) {
     ibs_probe();
     return g_avail == 1 ? "" : g_reason;
+}
+
+const char *asmtest_ibs_unavail_reason(void) {
+    ibs_probe();
+    if (g_avail != 1)
+        return g_reason; /* substrate genuinely absent — that IS the reason */
+    /* Substrate present. If a capture has failed, the errno is the whole story;
+     * skip_reason() returns "" here by construction. */
+    switch (g_open_errno) {
+    case 0:
+        return "";
+    case EACCES:
+    case EPERM:
+        return "perf_event_open refused (EACCES): IBS is present but perf is "
+               "locked down — needs perf_event_paranoid<=2 or CAP_PERFMON "
+               "(in Docker: --cap-add=PERFMON --security-opt "
+               "seccomp=unconfined)";
+    case EINVAL:
+        return "perf_event_open rejected the IBS attr (EINVAL)";
+    case EMFILE:
+    case ENFILE:
+        return "perf_event_open hit the open-file limit (EMFILE)";
+    case ENOENT:
+        return "perf_event_open: no such PMU (ENOENT)";
+    case ESRCH:
+        return "perf_event_open: target thread exited (ESRCH)";
+    case ENOSPC:
+        return "perf_event_open: no free PMU counter (ENOSPC)";
+    default:
+        return "perf_event_open failed";
+    }
 }
 
 /* --- edge aggregation (open-addressing hash keyed on {from,to}) ---------------- */
@@ -743,8 +778,15 @@ static int ibs_chan_open(ibs_chan *ch, pid_t tid, int cpu, int type,
     if (cfg->jitter_frac) /* jitter the opening period too, not just per tick */
         a.sample_period = ibs_jitter_period(cfg->period, cfg->jitter_frac);
     long fd = perf_open(&a, tid, cpu, -1, 0);
-    if (fd < 0)
+    if (fd < 0) {
+        /* Record WHY. Every caller collapses this to ASMTEST_IBS_EUNAVAIL, and
+         * asmtest_ibs_skip_reason() answers only the detect chain — which has
+         * PASSED whenever we get here — so without this the operator is told
+         * "# SKIP --sample: " with an empty reason on exactly the host where the
+         * reason matters (AMD, IBS present, perf locked down). */
+        g_open_errno = errno;
         return -1;
+    }
     size_t base_sz = pg + dsz;
     void *m =
         mmap(NULL, base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, (int)fd, 0);
@@ -1375,6 +1417,11 @@ int asmtest_ibs_survey_fetch_pid(pid_t tid, unsigned ms,
 int asmtest_ibs_available(void) { return 0; }
 const char *asmtest_ibs_skip_reason(void) {
     return "IBS is Linux/x86-64 AMD only";
+}
+const char *asmtest_ibs_unavail_reason(void) {
+    /* No substrate here, so the detect-chain reason IS the whole reason — there
+     * is no perf_event_open on this build to have failed. */
+    return asmtest_ibs_skip_reason();
 }
 int asmtest_ibs_survey_pid(pid_t tid, unsigned ms,
                            const asmtest_ibs_opts_t *opts,

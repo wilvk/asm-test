@@ -1175,7 +1175,11 @@ static int cmd_sample(pid_t pid, long ms, int json) {
 
     if (rc ==
         ASMSPY_SAMPLE_UNAVAIL) { /* substrate present but perf_open blocked */
-        printf("# SKIP --sample: %s\n", asmtest_ibs_skip_reason());
+        /* asmtest_ibs_skip_reason() answers only the detect chain, which PASSED
+         * to get here — it returns "" by construction, so this printed an empty
+         * reason on exactly the host where the reason matters (AMD + IBS present
+         * + perf locked down). _unavail_reason reports the real perf errno. */
+        printf("# SKIP --sample: %s\n", asmtest_ibs_unavail_reason());
         free(snap.v);
         return 0;
     }

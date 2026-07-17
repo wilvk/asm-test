@@ -302,3 +302,31 @@ docker-cli: docker-bindings-base
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.cli \
 	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-cli .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-cli
+
+# docker-cli-ibs — the SAME image and smoke, but with perf access so the --sample
+# (AMD IBS-Op) block actually RUNS instead of self-skipping. Mirrors
+# docker-hwtrace-amd (mk/docker.mk), and exists for the same measured reason.
+#
+# WHY THIS LANE EXISTS. `docker-cli` above is a PLAIN `docker run` — deliberately,
+# because every ptrace engine needs no privilege (the victims opt in via
+# PR_SET_PTRACER_ANY, so Yama ptrace_scope=1 is satisfied without CAP_SYS_PTRACE).
+# But Docker's DEFAULT SECCOMP PROFILE BLOCKS perf_event_open, so --sample there
+# ALWAYS self-skips, and cli_smoke.sh's `if grep -q '^# SKIP --sample'; then
+# <accept>; else <every assertion> fi` takes the skip branch every time. Measured
+# 2026-07-17 on a Zen 5 9950X: `make docker-cli` reports cli-smoke PASS while the
+# sampler's assertions have NEVER run — a green gate over an untested view. Per
+# CLAUDE.md, IBS *hardware* is a legitimate self-skip gate, but a capability flag
+# on a run line is NOT: the hardware is present, only the flags were missing.
+#
+# Both flags are REQUIRED and were measured independently (paranoid=4 host):
+#   plain                                    -> EPERM  (seccomp blocks the syscall)
+#   --cap-add=PERFMON + seccomp=unconfined   -> fd=3   OK
+# CAP_PERFMON BYPASSES perf_event_paranoid — the host sysctl does NOT need
+# lowering (mk/docker.mk:536 claims otherwise; that claim is measured false).
+# On a non-AMD host --sample still self-skips, honestly: that part IS hardware.
+.PHONY: docker-cli-ibs
+docker-cli-ibs: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.cli \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-cli .
+	$(DOCKER) run --rm $(_docker_plat) --security-opt seccomp=unconfined \
+	  --cap-add=PERFMON asmtest-cli

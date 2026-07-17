@@ -112,8 +112,23 @@ int asmtest_ibs_available(void);
 
 /* A human-readable reason asmtest_ibs_available() returned 0 (a static string;
  * empty string when available). e.g. "not AMD", "no ibs_op PMU",
- * "no swfilt (kernel < ~6.2)", "no IBS branch target (BrnTrgt)". */
+ * "no swfilt (kernel < ~6.2)", "no IBS branch target (BrnTrgt)".
+ *
+ * NOTE this answers "why is the SUBSTRATE absent" — CPUID + sysfs only. It does
+ * NOT mean sampling will work: asmtest_ibs_available() never calls
+ * perf_event_open. For "why did a capture return EUNAVAIL", which is the
+ * question an operator is actually asking, use asmtest_ibs_unavail_reason(). */
 const char *asmtest_ibs_skip_reason(void);
+
+/* A human-readable reason the LAST capture attempt returned ASMTEST_IBS_EUNAVAIL
+ * (a static string; empty when nothing has failed). Unlike skip_reason() this
+ * reports the real perf_event_open failure, because "the substrate is present but
+ * perf refused us" is the interesting case and skip_reason() returns "" on it BY
+ * CONSTRUCTION (it answers only the detect chain, which passed). Distinguishes
+ * EACCES (perf_event_paranoid / needs CAP_PERFMON) from EINVAL, EMFILE, ENOENT
+ * and ESRCH, which previously all collapsed into one indistinguishable code.
+ * Prefer this in any user-facing skip message. */
+const char *asmtest_ibs_unavail_reason(void);
 
 /* PURE, host-independent decode of one IBS-Op PERF_SAMPLE_RAW payload into an edge.
  * `raw` points at the raw payload ([u32 caps][u64 regs...] — what follows the
