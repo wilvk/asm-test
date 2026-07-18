@@ -1049,8 +1049,8 @@ void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
              * mid-run fragment that dropped earlier branches.
              *
              * Checked on EVERY part — freeze-capable or not. The check was once gated
-             * behind !asmtest_amd_freeze_available() on the theory that LBR
-             * freeze-on-PMI guarantees the sampled window halts at the region exit. But
+             * behind the freeze-availability CPUID probe (removed) on the theory that
+             * LBR freeze-on-PMI guarantees the sampled window halts at the region exit. But
              * the capture keeps sample_period=1 and then selects the RICHEST-in-region
              * window among whatever sparse samples survived PMI coalescing / throttling
              * — frequently an arbitrary mid-run window that never held the exit. On a

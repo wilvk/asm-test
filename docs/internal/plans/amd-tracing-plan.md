@@ -557,23 +557,23 @@ in Jan 2026); `CAP_PERFMON`/`CAP_BPF`.
 > not in `.github/workflows/ci.yml` — they need a self-hosted AMD runner with the caps, so
 > the AMD hardware path is validated on the dev box, not hosted CI.
 
-**3 — Freeze-availability probe (P0). LANDED (2026-07).** Smallest change, real
-correctness. The 2024 kernel fix made `DEBUGCTLMSR_FREEZE_LBRS_ON_PMI` conditional on
+**3 — Freeze-availability probe (P0). SUPERSEDED — freeze gate REMOVED (5d8e0d2).**
+The 2024 kernel fix made `DEBUGCTLMSR_FREEZE_LBRS_ON_PMI` conditional on
 `X86_FEATURE_AMD_LBR_PMC_FREEZE` (CPUID `0x80000022` EAX[2]) precisely because *"this may
-not be the case for all Zen 4 processors."* Without freeze the recorded stack keeps
-advancing after the overflow transitions to CPL0, so a PMI window can silently **not** end
-at region exit — yet the current AMD capture path trusts it. **As shipped:**
-`asmtest_amd_freeze_available()` ([src/amd_backend.c](../../../src/amd_backend.c)) probes the
-bit (cached); the Tier-A single-window decode in `hwtrace_end_amd`
-([src/hwtrace.c](../../../src/hwtrace.c)) now trusts a freeze-less window as complete **only
-if it actually captured the region-exit branch** (an entry with `from` in-region and `to`
-outside), else flags `truncated` — the honest "do not assume the window reached exit"
-posture. On a freeze-capable part the check is skipped (behavior unchanged).
-`test_amd_freeze_probe` ([examples/test_hwtrace.c](../../../examples/test_hwtrace.c)) asserts
-a definite/stable answer and prints this host's support (the dev Zen 5 / Ryzen 9 9950X
-reports freeze **PRESENT**, so the gate is a no-op there — confirming the concern is
-Zen-4-specific, not universal). Preferring the software-event snapshot (path #2) where
-freeze is absent remains folded into that item.
+not be the case for all Zen 4 processors."* This item originally shipped a freeze probe
+(`asmtest_amd_freeze_available()`) that gated window-trust on the bit. **That gate is
+gone.** Zen 5 (freeze=1) disproved the theory that freeze makes a sampled window complete:
+the capture keeps `sample_period=1` and selects the RICHEST-in-region window among sparse
+survivors, frequently a mid-run window that never held the exit — so freeze-present did NOT
+guarantee an exit-anchored window. `5d8e0d2` replaced the freeze-conditional gate with an
+**unconditional exit-presence check** that runs on **every** part, freeze-capable or not,
+and lives in `asmtest_amd_ring_parse_decode` ([src/hwtrace.c](../../../src/hwtrace.c), the
+Tier-A completeness block), **not** `hwtrace_end_amd`: a window is trusted complete only if
+it recorded the region-exit branch (or its trailing straight-line run reached a region
+exit), else it is honestly `truncated`. The `asmtest_amd_freeze_available` probe was retired
+(zero live consumers); a resurrected probe would re-introduce the vacuous-pass hazard the
+unconditional check fixed. See
+[amd-branchsnap-lbr-docs.md](../implementations/amd-branchsnap-lbr-docs.md) T4.
 
 ### Newly surfaced (2026-07-09 review)
 
@@ -933,7 +933,9 @@ refinements. As of **2026-07-06** all of them ship and are validated on the Zen 
   ([src/hwtrace.c](../../../src/hwtrace.c)). A no-op today (every shipping Zen reports 16 —
   the dev box confirms 16) that removes the assumption. *(The freeze-bit reader this phase
   also scoped shipped earlier with Phase 1.)*
-- **Phase 1 (freeze gate)** — landed (see Part II #3).
+- **Phase 1 (freeze gate)** — SUPERSEDED: the freeze gate was **removed** (5d8e0d2)
+  and the `asmtest_amd_freeze_available` probe retired; the surviving behavior is the
+  unconditional exit-presence check in `asmtest_amd_ring_parse_decode` (see Part II #3).
 - **Phase 2 (BTF block-step)** — landed, now including the attached variant
   `asmtest_ptrace_trace_attached_blockstep` (all three public symbols; wrapped in all ten
   bindings), [src/ptrace_backend.c](../../../src/ptrace_backend.c).
@@ -992,11 +994,13 @@ detection the later phases consume.
 
 ## Improvement Phase 1 — Freeze-on-PMI window-trust gate (`src/hwtrace.c`) *(landed 2026-07-06)*
 
-> **Status (2026-07-06): LANDED** — see Part II #3 for the as-shipped shape
-> (`asmtest_amd_freeze_available` + the exit-branch trust gate in `hwtrace_end_amd`). The
-> freeze-**absent** branch remains covered by the synthetic fixture only, **pending real
-> freeze-absent Zen 4 hardware** (this Zen 5 box reports freeze PRESENT), per the house
-> "no untested hardware code" rule — as the Acceptance below records.
+> **Status (superseded, 5d8e0d2): freeze gate REMOVED.** The freeze-conditional
+> window-trust gate below was replaced by an **unconditional** exit-presence check that
+> runs on every part (freeze-capable or not) in `asmtest_amd_ring_parse_decode`, and the
+> `asmtest_amd_freeze_available` probe was retired — see Part II #3. The "freeze-absent
+> branch pending real Zen 4 hardware" caveat is therefore **moot**: the check no longer
+> branches on the freeze bit, so there is no freeze-absent-only path left to validate.
+> The Work/Acceptance text below records the original (now-replaced) design.
 
 **Goal.** Stop trusting a 16-entry window the hardware never froze. Freeze-on-PMI is
 **not** universal on Zen 4 (gated on the Phase-0 CPUID `0x80000022` EAX[2] bit); when
@@ -1720,15 +1724,17 @@ rule (see Risks).
 *As shipped (2026-07-06). Two small design deltas from the original decomposition, both
 noted inline: runtime depth is a shared cached accessor rather than a decode-function
 parameter (lower blast radius, no ABI churn on the internal decode signatures — depth is
-a pure cached function of the CPU, not a mutable global), and the freeze/depth CPUID
-readers live in `amd_backend.c` (`asmtest_amd_freeze_available` / `asmtest_amd_lbr_depth`,
-next to the other CPUID probes) rather than `hwtrace.c`.*
+a pure cached function of the CPU, not a mutable global), and the depth CPUID reader lives
+in `amd_backend.c` (`asmtest_amd_lbr_depth`, next to the other CPUID probes) rather than
+`hwtrace.c`. (The freeze CPUID reader that originally shipped alongside it,
+`asmtest_amd_freeze_available`, was later removed in 5d8e0d2 — see Part II #3.)*
 
 - **hwtrace.c:** consumes `asmtest_amd_lbr_depth()` (runtime, from CPUID `0x80000022`
   EBX[9:4]) in place of the hardcoded `AMD_LBR_DEPTH` for the Tier-A/B split, stitch cap,
-  and LOST heuristic; freeze-gated Tier-A `truncated` logic in `hwtrace_end_amd`; AMD data
-  ring default 64KB → 256KB; the software-event snapshot capture path; threads
-  `base`/`base_ip`/`len` into the `asmtest_amd_stitch` call.
+  and LOST heuristic; the unconditional exit-presence Tier-A `truncated` check in
+  `asmtest_amd_ring_parse_decode` (the freeze-gated version in `hwtrace_end_amd` was
+  removed in 5d8e0d2); AMD data ring default 64KB → 256KB; the software-event snapshot
+  capture path; threads `base`/`base_ip`/`len` into the `asmtest_amd_stitch` call.
 - **amd_backend.c:** spec/wrong-path filter in `amd_replay` (gated on
   `ASMTEST_HAVE_PERF_BR_SPEC`); `base`/`base_ip`/`len`-threaded `asmtest_amd_stitch` with
   the decodable-distance guard (`amd_span_decodable`); `asmtest_amd_lbr_depth()` cached

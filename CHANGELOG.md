@@ -978,6 +978,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The dead AMD freeze-on-PMI probe (`asmtest_amd_freeze_available`) and its
+  false PRESENT/ABSENT diagnostic are removed.** The probe had zero live
+  consumers after `5d8e0d2` replaced the freeze-conditional window-trust gate
+  with an unconditional exit-presence check that runs on every part
+  (`asmtest_amd_ring_parse_decode`). `test_hwtrace` printed a trust statement
+  ("PRESENT (single-window Tier-A trusted)" / "ABSENT (…)") that was false in
+  both branches — Tier-A completeness is exit-anchored regardless of the freeze
+  bit. The freeze test is retired; the snapshot-substrate/depth probe checks stay
+  (renamed `test_amd_snapshot_substrate_probe`).
+
 - **The AMD deterministic boundary snapshot no longer flags a provably complete
   15-branch window as `truncated`.** The depth-ceiling check in
   `asmtest_amd_decode_reach` counted the total decode-array length, but
