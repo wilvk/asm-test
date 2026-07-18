@@ -49,7 +49,35 @@ land. Legend: ☐ not started (`0/N`) · ◐ in progress · ☑ complete (`N/N`,
 landed) · ✅ verified (`N/N`, exercised end-to-end on the target — not just unit
 tests; see the repo's verify-before-done rule). A doc reaches ✅ only once its
 hardware/credential-gated legs have actually run, or are recorded as gated.
-Everything is ☐ not started — these are freshly authored specs.
+
+## Working process for implementing agents
+
+Implementation and validation are split across agents. If you are **implementing**
+a doc, follow this loop so the status table always reflects reality and every step
+is on `main`:
+
+1. **Mark in progress, then push.** Before writing any code for a task, set the
+   doc's Status cell to `◐ done/total (T<n> wip)` in the table below, commit that
+   change alone (`docs(implementations): mark <doc> T<n> in progress`), and push to
+   `main`. This claims the task so a second agent does not double-work it.
+2. **Implement.** Do the task end to end — code + tests + docs + `CHANGELOG.md` —
+   per the doc's Steps. Format through the pinned path (`make docker-fmt` or
+   `make fmt CLANG_FORMAT=clang-format-18`).
+3. **Mark complete, then push.** Bump the Status cell (`◐ done+1/total`, or `☑ N/N`
+   when the doc's last non-gated task lands), and commit the implementation together
+   with the status bump (`<type>(<area>): <task summary> (<doc> T<n>)`). Push to
+   `main`.
+4. **Hardware/credential-gated legs.** Where a task's *validation* needs silicon or
+   credentials this host lacks (e.g. Zen 3 BRS, a bare-metal PT box, publish creds),
+   implement everything implementable behind the gate, mark the task complete with a
+   `(gated: <reason>)` note in the Status cell, and record the exact gate in the
+   commit message. **Validation of these legs is a separate agent's job** — do not
+   silently self-skip a leg that this host *can* run.
+
+`✅ verified` is set by the **validating** agent, not the implementer: it is
+reached only after the doc's live legs actually run green on the target hardware.
+
+Everything below started ☐ not started — these are freshly authored specs.
 
 ### AMD hardware tracing
 | Document | Tasks | Status | Depends on |
