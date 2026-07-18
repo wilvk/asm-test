@@ -88,6 +88,11 @@ int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
                       size_t len, asmtest_trace_t *trace);
 int asmtest_cs_decode(const uint8_t *aux, size_t aux_len, const void *base,
                       size_t len, asmtest_trace_t *trace);
+/* §Z2 whole-window PT decode (pt_backend.c): recorder-backed image, no in-region
+ * filter, offsets from the first decoded IP. Drives asmtest_hwtrace_pt_end_window. */
+int asmtest_pt_decode_window(const uint8_t *aux, size_t aux_len,
+                             const asmtest_codeimage_t *img, uint64_t when,
+                             asmtest_trace_t *trace);
 
 /* AMD branch-record decode, Tier-B stitch, runtime depth, and boundary-snapshot
  * begin/end decls live in the shared internal header "amd_backend.h" (included above). */
@@ -1832,6 +1837,130 @@ int asmtest_hwtrace_sample_end_amd(void *ctx, uint64_t *ips, size_t cap,
 #endif /* __linux__ && __x86_64__ */
 
 /* ------------------------------------------------------------------ */
+/* Shared perf-AUX intel_pt capture arm — the ONE PT open/stop/close     */
+/*                                                                     */
+/* pt_aux_open opens a per-thread (pid==0 here) perf AUX intel_pt event   */
+/* with NO address filter, maps the data + AUX rings, and ENABLEs it.    */
+/* Both the region-keyed capture (asmtest_hwtrace_try_begin) and the      */
+/* whole-window pair (asmtest_hwtrace_pt_begin_window) arm through this    */
+/* one helper: exactly one perf_open keyed to                            */
+/* pmu_type(ASMTEST_HWTRACE_INTEL_PT) exists in the tree (the "one PT      */
+/* arm" invariant — intel-pt-attach-foreign-pid.md extends this same arm   */
+/* for pid>0, never a parallel open). `pid` and `aux_watermark` are        */
+/* parameters that path needs (a foreign pid, a nonzero wakeup            */
+/* watermark for its live drain); this doc uses only pid==0,              */
+/* aux_watermark==0 (kernel default), the stop-then-drain shape.          */
+/* ------------------------------------------------------------------ */
+#if defined(__linux__)
+static int aux_data_ring_truncated(void *base_map, size_t base_sz);
+
+typedef struct {
+    int fd;
+    void *base_map;
+    size_t base_sz; /* header page + data ring */
+    void *aux_map;
+    size_t aux_sz; /* AUX (PT trace) ring     */
+} pt_aux_t;
+
+static int pt_aux_open(pid_t pid, size_t data_size, size_t aux_size,
+                       uint32_t aux_watermark, int snapshot, pt_aux_t *out) {
+    if (out == NULL)
+        return ASMTEST_HW_EINVAL;
+    memset(out, 0, sizeof *out);
+    out->fd = -1;
+    int type = pmu_type(ASMTEST_HWTRACE_INTEL_PT);
+    if (type < 0)
+        return ASMTEST_HW_EUNAVAIL;
+    struct perf_event_attr attr;
+    memset(&attr, 0, sizeof attr);
+    attr.size = sizeof attr;
+    attr.type = (uint32_t)type;
+    attr.exclude_kernel = 1;
+    attr.exclude_hv = 1;
+    attr.disabled = 1;
+    if (aux_watermark != 0)
+        attr.aux_watermark = aux_watermark;
+    long fd = perf_open(&attr, pid, -1, -1, 0);
+    if (fd < 0)
+        return ASMTEST_HW_EUNAVAIL;
+    long pg = sysconf(_SC_PAGESIZE);
+    if (pg <= 0)
+        pg = 4096;
+    size_t base_sz = (size_t)pg + round_pages(data_size, 8 * 1024);
+    void *base_map =
+        mmap(NULL, base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, (int)fd, 0);
+    if (base_map == MAP_FAILED) {
+        close((int)fd);
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)base_map;
+    size_t aux_sz = round_pages(aux_size, 64 * 1024);
+    mp->aux_offset = base_sz;
+    mp->aux_size = aux_sz;
+    /* PROT_READ-only AUX is a circular snapshot ring; RW is a linear ring. */
+    int aprot = snapshot ? PROT_READ : (PROT_READ | PROT_WRITE);
+    void *aux_map =
+        mmap(NULL, aux_sz, aprot, MAP_SHARED, (int)fd, (off_t)base_sz);
+    if (aux_map == MAP_FAILED) {
+        munmap(base_map, base_sz);
+        close((int)fd);
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    ioctl((int)fd, PERF_EVENT_IOC_RESET, 0);
+    if (ioctl((int)fd, PERF_EVENT_IOC_ENABLE, 0) != 0) {
+        munmap(aux_map, aux_sz);
+        munmap(base_map, base_sz);
+        close((int)fd);
+        return ASMTEST_HW_EUNAVAIL;
+    }
+    out->fd = (int)fd;
+    out->base_map = base_map;
+    out->base_sz = base_sz;
+    out->aux_map = aux_map;
+    out->aux_sz = aux_sz;
+    return ASMTEST_HW_OK;
+}
+
+/* DISABLE the event, then report the linear ring's valid extent [0, *head_out) and
+ * the honest truncation signal: PERF_AUX_FLAG_TRUNCATED seen in the data ring, OR the
+ * head>=aux_sz tiny-buffer clamp. Leaves the mmaps intact for the drain — the caller
+ * decodes [0, head) then pt_aux_close()s. */
+static int pt_aux_stop(pt_aux_t *a, uint64_t *head_out, int *overflow_out) {
+    if (a == NULL || a->fd < 0)
+        return ASMTEST_HW_EINVAL;
+    ioctl(a->fd, PERF_EVENT_IOC_DISABLE, 0);
+    struct perf_event_mmap_page *mp =
+        (struct perf_event_mmap_page *)a->base_map;
+    uint64_t head = mp->aux_head;
+    __sync_synchronize(); /* acquire barrier the aux_head/aux_tail protocol requires */
+    int overflow = aux_data_ring_truncated(a->base_map, a->base_sz);
+    if (head >= a->aux_sz) {
+        head = a->aux_sz;
+        overflow = 1;
+    }
+    if (head_out != NULL)
+        *head_out = head;
+    if (overflow_out != NULL)
+        *overflow_out = overflow;
+    return ASMTEST_HW_OK;
+}
+
+static void pt_aux_close(pt_aux_t *a) {
+    if (a == NULL)
+        return;
+    if (a->aux_map != NULL)
+        munmap(a->aux_map, a->aux_sz);
+    if (a->base_map != NULL)
+        munmap(a->base_map, a->base_sz);
+    if (a->fd >= 0)
+        close(a->fd);
+    a->aux_map = NULL;
+    a->base_map = NULL;
+    a->fd = -1;
+}
+#endif /* __linux__ */
+
+/* ------------------------------------------------------------------ */
 /* Capture lifecycle (Intel PT via perf AUX; CoreSight is analogous)   */
 /* ------------------------------------------------------------------ */
 
@@ -1875,67 +2004,28 @@ int asmtest_hwtrace_try_begin(const char *name) {
         return ASMTEST_HW_OK;
     }
 #endif
-    int type = pmu_type(g_opts.backend);
-    if (type < 0) {
+    /* Intel PT region-keyed capture rides the ONE shared perf-AUX arm (pt_aux_open),
+     * the same helper asmtest_hwtrace_pt_begin_window uses. The CoreSight decoder is a
+     * permanent stub (asmtest_cs_decoder_present()==0), so init() never admits
+     * ASMTEST_HWTRACE_CORESIGHT and no non-PT backend reaches here; the cs_etm open
+     * lands with coresight-live-decode.md when OpenCSD does. */
+    if (g_opts.backend != ASMTEST_HWTRACE_INTEL_PT) {
         g_arm_tid = -1;
         return ASMTEST_HW_EUNAVAIL;
     }
-    struct perf_event_attr attr;
-    memset(&attr, 0, sizeof attr);
-    attr.size = sizeof attr;
-    attr.type = (uint32_t)type;
-    attr.exclude_kernel = 1;
-    attr.exclude_hv = 1;
-    attr.disabled = 1;
-    long fd = perf_open(&attr, 0, -1, -1, 0);
-    if (fd < 0) {
+    pt_aux_t a;
+    int rc = pt_aux_open(0, g_opts.data_size, g_opts.aux_size, 0,
+                         g_opts.snapshot, &a);
+    if (rc != ASMTEST_HW_OK) {
         g_arm_tid = -1;
-        return ASMTEST_HW_EUNAVAIL;
+        return rc;
     }
-    g_fd = (int)fd;
-
-    long pg = sysconf(_SC_PAGESIZE);
-    if (pg <= 0)
-        pg = 4096;
-    g_base_sz = (size_t)pg + round_pages(g_opts.data_size, 8 * 1024);
-    g_base_map =
-        mmap(NULL, g_base_sz, PROT_READ | PROT_WRITE, MAP_SHARED, g_fd, 0);
-    if (g_base_map == MAP_FAILED) {
-        g_base_map = NULL;
-        close(g_fd);
-        g_fd = -1;
-        g_arm_tid = -1;
-        return ASMTEST_HW_EUNAVAIL;
-    }
-    struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)g_base_map;
-    g_aux_sz = round_pages(g_opts.aux_size, 64 * 1024);
-    mp->aux_offset = g_base_sz;
-    mp->aux_size = g_aux_sz;
-    /* PROT_READ-only AUX is a circular snapshot ring; RW is a linear ring. */
-    int aprot = g_opts.snapshot ? PROT_READ : (PROT_READ | PROT_WRITE);
-    g_aux_map = mmap(NULL, g_aux_sz, aprot, MAP_SHARED, g_fd, (off_t)g_base_sz);
-    if (g_aux_map == MAP_FAILED) {
-        g_aux_map = NULL;
-        munmap(g_base_map, g_base_sz);
-        g_base_map = NULL;
-        close(g_fd);
-        g_fd = -1;
-        g_arm_tid = -1;
-        return ASMTEST_HW_EUNAVAIL;
-    }
+    g_fd = a.fd;
+    g_base_map = a.base_map;
+    g_base_sz = a.base_sz;
+    g_aux_map = a.aux_map;
+    g_aux_sz = a.aux_sz;
     g_active = r;
-    ioctl(g_fd, PERF_EVENT_IOC_RESET, 0);
-    if (ioctl(g_fd, PERF_EVENT_IOC_ENABLE, 0) != 0) {
-        munmap(g_aux_map, g_aux_sz);
-        g_aux_map = NULL;
-        munmap(g_base_map, g_base_sz);
-        g_base_map = NULL;
-        g_active = NULL;
-        close(g_fd);
-        g_fd = -1;
-        g_arm_tid = -1;
-        return ASMTEST_HW_EUNAVAIL;
-    }
     return ASMTEST_HW_OK;
 #else /* HWTRACE_LIFECYCLE && !__linux__ (macOS): single-step is the only backend,
         * handled above; a non-single-step backend never passes init()'s available() */
@@ -1968,13 +2058,13 @@ int asmtest_hwtrace_arm_tid(void) {
  * carried PERF_AUX_FLAG_TRUNCATED — the precise "AUX trace was lost" signal that
  * complements the head>=size heuristic. */
 #if defined(__linux__)
-static int aux_data_ring_truncated(void) {
-    struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)g_base_map;
+static int aux_data_ring_truncated(void *base_map, size_t base_sz) {
+    struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)base_map;
     long pg = sysconf(_SC_PAGESIZE);
     if (pg <= 0)
         pg = 4096;
-    uint8_t *data = (uint8_t *)g_base_map + (size_t)pg;
-    size_t dsz = g_base_sz - (size_t)pg;
+    uint8_t *data = (uint8_t *)base_map + (size_t)pg;
+    size_t dsz = base_sz - (size_t)pg;
     uint64_t dhead = mp->data_head;
     __sync_synchronize();
     uint64_t dtail = mp->data_tail;
@@ -2060,18 +2150,13 @@ void asmtest_hwtrace_end(const char *name) {
 #endif
     if (g_fd < 0)
         return; /* PT/CoreSight need the perf fd; nothing captured if open failed */
-    ioctl(g_fd, PERF_EVENT_IOC_DISABLE, 0);
-    struct perf_event_mmap_page *mp = (struct perf_event_mmap_page *)g_base_map;
-    /* Linear ring: valid trace is [0, aux_head). (Snapshot decode would walk the
-     * circular ring from aux_tail; left to the snapshot-mode follow-up.) */
-    uint64_t head = mp->aux_head;
-    /* Precise overflow: PERF_AUX_FLAG_TRUNCATED on a PERF_RECORD_AUX in the data
-     * ring; plus the head>=size heuristic as a backstop for the tiny-buffer case. */
-    int overflow = aux_data_ring_truncated();
-    if (head >= g_aux_sz) {
-        head = g_aux_sz;
-        overflow = 1;
-    }
+    /* Stop + drain via the shared arm; the globals ARE this thread's live pt_aux_t.
+     * pt_aux_stop DISABLEs, reads the linear ring's [0, head) extent, and reports the
+     * precise overflow (PERF_AUX_FLAG_TRUNCATED plus the head>=size tiny-buffer clamp). */
+    pt_aux_t a = {g_fd, g_base_map, g_base_sz, g_aux_map, g_aux_sz};
+    uint64_t head = 0;
+    int overflow = 0;
+    pt_aux_stop(&a, &head, &overflow);
     hw_region_t *r = g_active;
     int rc = (g_opts.backend == ASMTEST_HWTRACE_INTEL_PT)
                  ? asmtest_pt_decode((const uint8_t *)g_aux_map, (size_t)head,
@@ -2080,10 +2165,7 @@ void asmtest_hwtrace_end(const char *name) {
                                      r->base, r->len, r->trace);
     if (r->trace != NULL && (overflow || rc != ASMTEST_HW_OK))
         r->trace->truncated = true;
-
-    munmap(g_aux_map, g_aux_sz);
-    munmap(g_base_map, g_base_sz);
-    close(g_fd);
+    pt_aux_close(&a);
     g_aux_map = NULL;
     g_base_map = NULL;
     g_fd = -1;
@@ -2111,6 +2193,116 @@ void asmtest_hwtrace_shutdown(void) {
 #endif
     g_inited = 0;
     g_nregions = 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* §Z1.2 — STRONG-tier whole-window PT capture, begin/end split         */
+/*                                                                     */
+/* The native pair the .NET `using (new AsmTrace(HwBackend.IntelPt))`   */
+/* shape (T4) and the facade's own begin_window PT arm (T2) both drive.  */
+/* begin opens a per-thread (pid==0) perf AUX intel_pt event with NO     */
+/* address filter through the ONE shared arm (pt_aux_open) and ENABLEs   */
+/* it; end DISABLEs, drains the linear AUX ring, decodes through          */
+/* asmtest_pt_decode_window against `img` as of `when` (img == NULL: the  */
+/* ctx's own self code-image, refreshed at close), fills `trace`, and     */
+/* frees the ctx. Off bare-metal Intel PT / without perf permission,      */
+/* begin self-skips ASMTEST_HW_EUNAVAIL — a clean off-Intel skip.        */
+/* ------------------------------------------------------------------ */
+#if defined(__linux__)
+typedef struct {
+    pt_aux_t aux;
+    asmtest_codeimage_t
+        *img;    /* owned self image (NULL if codeimage substrate absent) */
+    int arm_tid; /* SYS_gettid at arm — the event is per-OS-thread        */
+} pt_window_ctx_t;
+#endif
+
+int asmtest_hwtrace_pt_begin_window(void **ctx_out) {
+    /* Argument validation PRECEDES the availability gate (mirrors
+     * sample_begin_amd), so the (NULL) call returns EINVAL on EVERY host —
+     * including a no-PT dev box, where the self-skip test relies on it. */
+    if (ctx_out == NULL)
+        return ASMTEST_HW_EINVAL;
+    *ctx_out = NULL;
+#if defined(__linux__)
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT))
+        return ASMTEST_HW_EUNAVAIL; /* clean off-Intel / no-permission self-skip */
+    /* Ring sizes: the inited tier's opts when up, else the shipped defaults (0 ->
+     * pt_aux_open's 8 KiB data / 64 KiB aux) so the pair also works pre-init for
+     * the inline ctor. */
+    size_t data_size = g_inited ? g_opts.data_size : 0;
+    size_t aux_size = g_inited ? g_opts.aux_size : 0;
+    int snapshot = g_inited ? g_opts.snapshot : 0;
+    pt_window_ctx_t *c = (pt_window_ctx_t *)calloc(1, sizeof *c);
+    if (c == NULL)
+        return ASMTEST_HW_EUNAVAIL;
+    c->arm_tid = hw_current_tid();
+    if (asmtest_codeimage_available())
+        c->img =
+            asmtest_codeimage_new(0); /* NULL ok: end() then needs caller img */
+    int rc = pt_aux_open(0, data_size, aux_size, 0, snapshot, &c->aux);
+    if (rc != ASMTEST_HW_OK) {
+        if (c->img != NULL)
+            asmtest_codeimage_free(c->img);
+        free(c);
+        return rc; /* fd/mmaps already unwound by pt_aux_open */
+    }
+    *ctx_out = c;
+    return ASMTEST_HW_OK;
+#else
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+int asmtest_hwtrace_pt_end_window(void *ctx, asmtest_codeimage_t *img,
+                                  uint64_t when, asmtest_trace_t *trace) {
+    if (ctx == NULL)
+        return ASMTEST_HW_EINVAL;
+#if defined(__linux__)
+    pt_window_ctx_t *c = (pt_window_ctx_t *)ctx;
+    uint64_t head = 0;
+    int overflow = 0;
+    pt_aux_stop(&c->aux, &head, &overflow);
+    /* trace == NULL: legal drain-less release — teardown only, no decode (the shape
+     * T4's finalizer relies on to free a leaked scope, mirroring the AMD sibling's
+     * documented null-drain contract). */
+    if (trace == NULL) {
+        pt_aux_close(&c->aux);
+        if (c->img != NULL)
+            asmtest_codeimage_free(c->img);
+        free(c);
+        return ASMTEST_HW_OK;
+    }
+    /* Decode against the caller's img as of `when`, else the ctx's own self image,
+     * refreshed at close. No image at all -> EDECODE, but always after a full
+     * teardown (never leak the fd/mmaps). */
+    const asmtest_codeimage_t *dimg = img;
+    uint64_t dwhen = when;
+    if (dimg == NULL && c->img != NULL) {
+        asmtest_codeimage_refresh(c->img);
+        dimg = c->img;
+        dwhen = asmtest_codeimage_now(c->img);
+    }
+    int rc;
+    if (dimg == NULL)
+        rc = ASMTEST_HW_EDECODE;
+    else
+        rc = asmtest_pt_decode_window((const uint8_t *)c->aux.aux_map,
+                                      (size_t)head, dimg, dwhen, trace);
+    /* Truncation policy: overflow OR a decode failure flags the trace truncated. */
+    if (overflow || rc != ASMTEST_HW_OK)
+        trace->truncated = true;
+    pt_aux_close(&c->aux);
+    if (c->img != NULL)
+        asmtest_codeimage_free(c->img);
+    free(c);
+    return rc;
+#else
+    (void)img;
+    (void)when;
+    (void)trace;
+    return ASMTEST_HW_ENOSYS;
+#endif
 }
 
 /* ------------------------------------------------------------------ */

@@ -3850,6 +3850,36 @@ static void test_wholewindow_decode(void) {
 #endif
 }
 
+/* T1 — the native STRONG-tier PT window pair's self-skip envelope, exercised on
+ * EVERY host (the live capture half is T5, hardware-gated). Argument validation
+ * precedes the availability gate, so the (NULL) call is EINVAL everywhere; off the
+ * intel_pt PMU, begin is a clean EUNAVAIL self-skip with *ctx_out left NULL. */
+static void test_pt_window_pair_selfskip(void) {
+    /* (1) NULL ctx_out is EINVAL on every host — the arg check precedes the gate. */
+    CHECK(asmtest_hwtrace_pt_begin_window(NULL) == ASMTEST_HW_EINVAL,
+          "pt window pair: begin(NULL) is EINVAL on every host (arg check "
+          "precedes the availability gate)");
+
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT)) {
+        /* (2) Off the intel_pt PMU: a clean EUNAVAIL self-skip with *ctx == NULL. */
+        void *ctx =
+            (void *)(uintptr_t)0x1; /* poison: begin must overwrite to NULL */
+        int rc = asmtest_hwtrace_pt_begin_window(&ctx);
+        CHECK(
+            rc == ASMTEST_HW_EUNAVAIL && ctx == NULL,
+            "pt window pair: begin self-skips EUNAVAIL with *ctx_out==NULL off "
+            "the intel_pt PMU");
+        printf(
+            "# SKIP pt window pair: no Intel PT on this host (live capture is "
+            "T5, hardware-gated)\n");
+        return;
+    }
+    /* On real Intel PT silicon the live arm/decode is validated by
+     * test_pt_live_selfjit (T5); here we prove only the self-skip envelope. */
+    printf("# NOTE pt window pair: intel_pt present — live arm validated by "
+           "hwtrace-pt-live (T5)\n");
+}
+
 /* §3.1(c) — whole-window noise attribution: the address→name reverse resolver +
  * IP bucketer. Feed a synthetic IP list spanning three distinct "regions" (the test
  * binary's own code, an anonymous mmap, and a synthetic perf-map JIT symbol) and
@@ -9366,6 +9396,7 @@ int main(void) {
      * libipt's encoder and drive the real asmtest_pt_decode[_window] bodies (no PT
      * hardware). Self-skips where libipt is absent. */
     test_wholewindow_decode();
+    test_pt_window_pair_selfskip();
 
     /* §3.1(c): whole-window noise attribution — reverse resolver + IP bucketer. */
     test_symbolize_bucket();

@@ -516,6 +516,32 @@ int asmtest_hwtrace_stitch_handles(const asmtest_trace_t *const *traces,
                                    size_t *nbounds);
 
 /* ------------------------------------------------------------------ */
+/* §Z1.2 — STRONG-tier whole-window Intel PT capture, begin/end split   */
+/* ------------------------------------------------------------------ */
+/* The ONE native pair the .NET `using (new AsmTrace(HwBackend.IntelPt))`
+ * shape and the facade's own begin_window PT arm both drive — there is no
+ * parallel PT arming implementation (intel-pt-attach-foreign-pid.md extends
+ * these same helpers for pid>0).
+ *
+ * begin opens a per-thread (pid==0) perf AUX intel_pt event with NO address
+ * filter and ENABLEs it, returning a heap ctx in *ctx_out. A NULL ctx_out is
+ * ASMTEST_HW_EINVAL (checked FIRST, on every host); off bare-metal Intel PT or
+ * without perf permission it self-skips ASMTEST_HW_EUNAVAIL with *ctx_out left
+ * NULL. Call end on the SAME OS thread (the event is per-thread).
+ *
+ * end DISABLEs, drains the linear AUX ring, decodes through
+ * asmtest_pt_decode_window against `img` as of `when` (img == NULL: the ctx's
+ * own self code-image, refreshed at close), fills `trace` with ABSOLUTE
+ * addresses and honest truncation, then frees the ctx and its fd/mmaps.
+ * `trace == NULL` is a legal drain-less release (teardown only, ASMTEST_HW_OK)
+ * — the shape a finalizer uses to reclaim a leaked scope. `img == NULL` with no
+ * ctx-owned image returns ASMTEST_HW_EDECODE, still after a full teardown
+ * (never leaks). A NULL ctx is ASMTEST_HW_EINVAL. */
+int asmtest_hwtrace_pt_begin_window(void **ctx_out);
+int asmtest_hwtrace_pt_end_window(void *ctx, asmtest_codeimage_t *img,
+                                  uint64_t when, asmtest_trace_t *trace);
+
+/* ------------------------------------------------------------------ */
 /* §D3 — concealed out-of-process ptrace-stealth stepper               */
 /*                                                                     */
 /* The hardware-free path, hidden behind the scope façade, for hosts    */
