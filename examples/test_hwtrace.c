@@ -4121,6 +4121,39 @@ static void test_ptrace_blockstep(void) {
     asmtest_trace_free(gs);
     asmtest_trace_free(gb);
     munmap(g, sizeof GUARD_X86);
+
+    /* --- int3 (T1): the tracee's OWN int3 must never fabricate never-executed
+     * instructions. push rbx; mov rbx,rdi; int3; mov rax,rbx; add rax,rax; pop
+     * rbx; ret. Pre-fix the block-step driver mis-read the app int3 as a BTF #DB
+     * and emitted +0+1+4+5+8+11+12+5+8+11+12 with truncated=0. --- */
+    static const unsigned char INT3_X86[] = {0x53, 0x48, 0x89, 0xfb, 0xCC,
+                                             0x48, 0x89, 0xd8, 0x48, 0x01,
+                                             0xc0, 0x5b, 0xc3};
+    void *ip = mmap(NULL, sizeof INT3_X86, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (ip != MAP_FAILED) {
+        memcpy(ip, INT3_X86, sizeof INT3_X86);
+        mprotect(ip, sizeof INT3_X86, PROT_READ | PROT_EXEC);
+        __builtin___clear_cache((char *)ip, (char *)ip + sizeof INT3_X86);
+        asmtest_trace_t *ib = asmtest_trace_new(64, 64);
+        long iargs[2] = {7, 0}, ires = 0;
+        int irc = asmtest_ptrace_trace_call_blockstep(ip, sizeof INT3_X86,
+                                                      iargs, 2, &ires, ib);
+        static const uint64_t I_EXP[] = {0x0, 0x1, 0x4};
+        int iseq = (irc == ASMTEST_PTRACE_OK &&
+                    asmtest_emu_trace_insns_total(ib) == 3);
+        for (int i = 0; iseq && i < 3; i++)
+            iseq = (ib->insns[i] == I_EXP[i]);
+        CHECK(iseq, "block-step int3: records exactly +0 +1 +4 through the app "
+                    "int3, nothing after");
+        CHECK(
+            asmtest_emu_trace_truncated(ib),
+            "block-step int3: an application int3 truncates (BTF cannot bridge "
+            "into the handler)");
+        (void)ires;
+        asmtest_trace_free(ib);
+        munmap(ip, sizeof INT3_X86);
+    }
 #else
     printf("# SKIP ptrace block-step: Linux x86-64 only (no AArch64 "
            "PTRACE_SINGLEBLOCK)\n");
@@ -5687,6 +5720,63 @@ static void test_ptrace_attach_blockstep(void) {
     asmtest_trace_free(tr);
     munmap(p, sizeof ROUTINE);
     munmap((void *)go, sizeof(int));
+
+    /* --- int3 (T1): a foreign target's OWN int3 must truncate and leave the target
+     * in its SIGTRAP delivery-stop (never killed). --- */
+    static const unsigned char INT3_X86[] = {0x53, 0x48, 0x89, 0xfb, 0xCC,
+                                             0x48, 0x89, 0xd8, 0x48, 0x01,
+                                             0xc0, 0x5b, 0xc3};
+    volatile int *igo = mmap(NULL, sizeof(int), PROT_READ | PROT_WRITE,
+                             MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+    void *iq = mmap(NULL, sizeof INT3_X86, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (igo != MAP_FAILED && iq != MAP_FAILED) {
+        *igo = 0;
+        memcpy(iq, INT3_X86, sizeof INT3_X86);
+        mprotect(iq, sizeof INT3_X86, PROT_READ | PROT_EXEC);
+        __builtin___clear_cache((char *)iq, (char *)iq + sizeof INT3_X86);
+        pid_t ipid = fork();
+        if (ipid == 0) {
+            while (!*igo) {
+            }
+            volatile long r = ((add2_fn)iq)(7, 0);
+            (void)r;
+            _exit(0);
+        }
+        nanosleep(&ts, NULL);
+        int istatus = 0;
+        if (ptrace(PTRACE_ATTACH, ipid, NULL, NULL) == 0 &&
+            waitpid(ipid, &istatus, 0) >= 0) {
+            *igo = 1;
+            asmtest_trace_t *it = asmtest_trace_new(64, 64);
+            long ires = 0;
+            int irc = asmtest_ptrace_trace_attached_blockstep(
+                ipid, iq, sizeof INT3_X86, &ires, it);
+            static const uint64_t I_EXP[] = {0x0, 0x1, 0x4};
+            int iseq = (irc == ASMTEST_PTRACE_OK &&
+                        asmtest_emu_trace_insns_total(it) == 3);
+            for (int i = 0; iseq && i < 3; i++)
+                iseq = (it->insns[i] == I_EXP[i]);
+            CHECK(iseq, "attach block-step int3: stream is exactly +0 +1 +4");
+            CHECK(asmtest_emu_trace_truncated(it),
+                  "attach block-step int3: app int3 truncates");
+            /* Left in the SIGTRAP delivery-stop, NOT killed: a WNOHANG wait shows
+             * no new state change and GETSIGINFO reads the app trap's SI_KERNEL. */
+            int wst = 0;
+            pid_t w = waitpid(ipid, &wst, WNOHANG);
+            siginfo_t si;
+            memset(&si, 0, sizeof si);
+            int gsi = ptrace(PTRACE_GETSIGINFO, ipid, NULL, &si);
+            CHECK(w == 0 && gsi == 0 && si.si_code == SI_KERNEL,
+                  "attach block-step int3: target left stopped at its own int3 "
+                  "(SI_KERNEL), never killed");
+            asmtest_trace_free(it);
+        }
+        kill(ipid, SIGKILL);
+        waitpid(ipid, &istatus, 0);
+        munmap(iq, sizeof INT3_X86);
+        munmap((void *)igo, sizeof(int));
+    }
 #else
     printf("# SKIP ptrace attach block-step: not Linux x86-64\n");
 #endif

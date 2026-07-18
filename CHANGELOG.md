@@ -993,6 +993,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `make install` + `cc -fsyntax-only` against every guide-referenced header)
   so this omission class cannot silently recur.
 
+- **The ptrace block-step reconstructors no longer record never-executed
+  instructions when the traced code contains an application `int3`.** A JVM
+  safepoint poll or .NET breakpoint inside a block-stepped region was misread as
+  a BTF `#DB` block completion, so the region and attached drivers fabricated the
+  instructions after it with `truncated=false`. They now classify the trap via
+  `si_code` (SI_KERNEL / TRAP_HWBKPT), record the executed run up to and including
+  the trap byte, mark the capture truncated, and forward the signal — the region
+  (owned) driver via `PTRACE_CONT`, the attached (foreign) driver by leaving the
+  target in its SIGTRAP delivery-stop for the caller. (The windowed driver's leg
+  lands with the per-instruction SIGTRAP-forwarding change.)
+
 - **`asmtest_ibs.h` no longer describes the shipped system-wide capture flag as
   a future phase** — the `survey_process` residual-race note now names the
   `ASMTEST_IBS_OPT_SYSTEM_WIDE` flag directly.

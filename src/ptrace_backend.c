@@ -1506,6 +1506,21 @@ static int wait_stop_sigtrap(pid_t pid) {
     return 0;
 }
 
+/* Mirrors dfp_sigtrap_is_app / asmspy's sigtrap_is_app: a SIGTRAP the tracee raised
+ * ITSELF (executed int3 -> SI_KERNEL; its own hw breakpoint -> TRAP_HWBKPT). TRAP_TRACE
+ * and TRAP_BRKPT are OUR step/#DB completing (TRAP_BRKPT = a step across a syscall,
+ * MEASURED — see cli/asmspy_engine.c), NOT an app breakpoint. A GETSIGINFO failure or
+ * any other si_code => ours (the pre-fix behaviour — a false negative is a regression to
+ * the prior discard-not-deliver default, not a new hazard). The block-step drivers plant
+ * no int3 of their own (BTF #DB is trap-class), so a positive here is unambiguously the
+ * target's own trap — a JVM safepoint poll, a .NET breakpoint. */
+static int bs_sigtrap_is_app(pid_t pid) {
+    siginfo_t si;
+    if (ptrace(PTRACE_GETSIGINFO, pid, NULL, &si) != 0)
+        return 0;
+    return si.si_code == SI_KERNEL || si.si_code == TRAP_HWBKPT;
+}
+
 static int probe_singleblock(void) {
     static const uint8_t blob[] = {0xCC, 0x90, 0x90, 0x90,
                                    0x90, 0x90, 0xC3}; /* int3; 5x nop; ret */
@@ -1705,6 +1720,36 @@ static int blockstep_reconstruct(const uint8_t *code, size_t len,
     return r;
 }
 
+/* Record the straight-line run [from_off, cut_off) into `stream`, requiring the walk
+ * to land EXACTLY on cut_off. Used when the tracee's OWN int3 traps mid-block: the
+ * trap-stop's PC is one past the 0xCC byte, so the executed run — the int3 included —
+ * ends exactly at cut_off. Any overshoot (cut_off fell inside an instruction) or an
+ * undecodable byte returns BS_FAIL. The region-buffer analog of window_block_walk's
+ * at_mode cut; BTF cannot bridge the kernel-injected transfer into the handler, so the
+ * caller marks the capture truncated. */
+static int blockstep_reconstruct_cut(const uint8_t *code, size_t len,
+                                     uint64_t from_off, uint64_t cut_off,
+                                     uint64_t *stream, uint32_t *pn,
+                                     uint64_t *last_off) {
+    uint64_t walk = from_off;
+    for (size_t guard = 0; guard <= len; guard++) {
+        if (walk == cut_off)
+            return BS_OK; /* landed exactly on the trap PC */
+        if (walk > cut_off || walk >= len)
+            return BS_FAIL;
+        if (*pn >= PTRACE_STREAM_CAP)
+            return BS_FAIL;
+        stream[(*pn)++] = walk;
+        *last_off = walk;
+        size_t l =
+            asmtest_disas(PTRACE_TRACE_ARCH, code, len, 0, walk, NULL, 0);
+        if (l == 0)
+            return BS_FAIL;
+        walk += l;
+    }
+    return BS_FAIL;
+}
+
 int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
                                         const long *args, int nargs,
                                         long *result, asmtest_trace_t *trace) {
@@ -1791,6 +1836,38 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
             break;
         }
         int in_region = (pc >= base_ip && pc < base_ip + len);
+
+        if (bs_sigtrap_is_app(pid)) {
+            /* The TARGET executed its OWN int3 (a JVM safepoint poll, a .NET
+             * breakpoint — the tier's stated managed-runtime target), NOT a BTF
+             * block completion. BTF cannot bridge the kernel-injected transfer into
+             * the handler, so record the executed run up to the trap (the int3
+             * included) and truncate honestly — never fabricate the instructions
+             * after it. Forward the signal to the tracee via PTRACE_CONT: NEVER
+             * SINGLEBLOCK/SINGLESTEP with the signal attached (measured fatal — the
+             * re-armed trap fires inside the masked handler). With no handler the
+             * default SIGTRAP terminates the child (the fixture case). */
+            overflow = 1;
+            if (prev_off != SENTINEL && in_region) {
+                uint64_t cut_last = 0;
+                blockstep_reconstruct_cut((const uint8_t *)code, len, prev_off,
+                                          pc - base_ip, stream, &n, &cut_last);
+            }
+            if (ptrace(PTRACE_CONT, pid, NULL, (void *)(uintptr_t)SIGTRAP) !=
+                0) {
+                kill(pid, SIGKILL);
+                waitpid(pid, &status, 0);
+                rc = ASMTEST_PTRACE_ETRACE;
+                break;
+            }
+            if (waitpid(pid, &status, 0) >= 0 && WIFSTOPPED(status)) {
+                /* A handler ran and re-stopped the child; we are already truncated,
+                 * so reap and stop rather than resume into post-handler code. */
+                kill(pid, SIGKILL);
+                waitpid(pid, &status, 0);
+            }
+            break;
+        }
 
         if (prev_off == SENTINEL) {
             /* Not entered yet: block-step through the entry glue at native speed.
@@ -1958,6 +2035,23 @@ int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
             break;
         }
         int in_region = (pc >= base_ip && pc < base_ip + len);
+
+        if (bs_sigtrap_is_app(pid)) {
+            /* The foreign target executed its OWN int3 (a JVM safepoint poll, a
+             * .NET breakpoint), NOT a BTF block completion. Record the executed run
+             * up to the trap (int3 included) and truncate honestly, then leave the
+             * target in its SIGTRAP signal-delivery stop for the caller — it is
+             * foreign and is NEVER killed. A caller that wants the target's own
+             * breakpoint semantics to proceed detaches with
+             * PTRACE_DETACH(pid, 0, SIGTRAP). */
+            overflow = 1;
+            if (prev_off != SENTINEL && in_region) {
+                uint64_t cut_last = 0;
+                blockstep_reconstruct_cut(code, len, prev_off, pc - base_ip,
+                                          stream, &n, &cut_last);
+            }
+            break;
+        }
 
         if (prev_off == SENTINEL) {
             if (in_region)

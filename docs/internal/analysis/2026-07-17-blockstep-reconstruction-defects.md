@@ -1,6 +1,8 @@
 # Block-step reconstruction — two pre-existing defects, reproduced (2026-07-17)
 
-**Status: OPEN. Both are real, both reproduce against shipped `main` code, neither is fixed.**
+**Defect 1 (application `int3`): Status FIXED (T1, [ptrace-blockstep-tracer-correctness.md](../implementations/ptrace-blockstep-tracer-correctness.md))** in the region + attached block-step drivers — an app int3 is now recorded up to the trap byte, marked truncated, and the signal forwarded (region: PTRACE_CONT; attached: left in the delivery-stop). The windowed driver's leg co-lands with T2.**
+
+**Status (below is the original filing): OPEN. Both are real, both reproduce against shipped `main` code, neither is fixed.**
 Filed so they are not lost: they were found while adversarially reviewing the W-1 windowed
 block-step driver, and were deliberately left out of that change because they are **not**
 introduced by it — they are properties of the block-step reconstruction *approach*, shared by

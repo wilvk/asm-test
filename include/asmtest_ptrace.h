@@ -104,7 +104,12 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
  * contract as asmtest_ptrace_trace_call. Returns ASMTEST_PTRACE_ENOSYS off x86-64
  * Linux or where PTRACE_SINGLEBLOCK / Capstone are unavailable (probe first with
  * asmtest_ptrace_blockstep_available). Complete at moderate overhead, NOT cheap: each
- * block still costs a full ptrace round-trip and perturbs timing heavily. */
+ * block still costs a full ptrace round-trip and perturbs timing heavily.
+ * APP BREAKPOINTS: an application `int3` inside the region (a JVM safepoint poll, a
+ * .NET breakpoint) is recorded up to and including the trap byte, the capture is marked
+ * truncated (BTF cannot bridge the kernel-injected transfer into the handler), and the
+ * signal is forwarded to the tracee via PTRACE_CONT — so the app's own breakpoint
+ * semantics proceed. */
 int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
                                         const long *args, int nargs,
                                         long *result, asmtest_trace_t *trace);
@@ -121,6 +126,11 @@ int asmtest_ptrace_blockstep_available(void);
  * per-instruction attached tracer: the caller owns attach/detach (and run_to), the
  * target is never killed, and on a region return it is left stopped past the region.
  * The rootless managed-runtime completeness fallback at a fraction of the stops.
+ * APP BREAKPOINTS: an application `int3` inside the region is recorded up to and
+ * including the trap byte, the capture is marked truncated, and the target is left in
+ * its SIGTRAP signal-delivery stop for the caller (never killed) — a caller that wants
+ * the target's own breakpoint semantics to proceed detaches with
+ * PTRACE_DETACH(pid, 0, SIGTRAP).
  * Probe with asmtest_ptrace_blockstep_available; ENOSYS where block-step cannot run. */
 int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
                                             size_t len, long *result,
