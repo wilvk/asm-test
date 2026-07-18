@@ -324,6 +324,12 @@ typedef struct {
         injected; /* syscalls whose recorded effect was injected into the replay.
                    * >0 is the only positive evidence that F2's path really ran:
                    * `pure` cannot say it, since it means "the replay was used". */
+    /* --- T5 (F2 increment 2, forward pass) --- */
+    uint64_t
+        hw_hits; /* rdtsc/rdtscp/rdrand/rdseed/cpuid DR exec-breakpoint site boundaries
+                  * taken this capture. Always 0 when force_singlestep skipped the replay
+                  * entirely (nothing arms a DR slot on that path) — an explicit Done-when
+                  * check, not an incidental zero. */
 } asmtest_blockstep_info_t;
 
 /* The tier ships no header (deliberately, see the file comment above), so
@@ -338,7 +344,7 @@ void asmtest_dataflow_blockstep_info_layout(size_t *size, size_t *last_off) {
     if (size != NULL)
         *size = sizeof(asmtest_blockstep_info_t);
     if (last_off != NULL)
-        *last_off = offsetof(asmtest_blockstep_info_t, injected);
+        *last_off = offsetof(asmtest_blockstep_info_t, hw_hits);
 }
 
 #if defined(__linux__) && defined(__x86_64__) &&                               \
@@ -561,17 +567,25 @@ static int vec_reg_info(uint32_t reg, int *idx, int *width) {
  *     IMMEDIATELY AFTER the instruction retires, for free, with the kernel's result already in
  *     the registers and its memory delta already in the tracee. That boundary is the entire
  *     mechanism F2 needs.
- *   DFB_IMP_OTHER — rdtsc / rdtscp / rdrand / rdseed / cpuid / sysenter. MEASURED on this Zen 5:
- *     BTF does NOT trap them (they are not control transfers), so a block runs straight through
- *     them and there is NO boundary at which their retired value could be recorded. Recording
- *     them needs a DIFFERENT primitive (a hardware exec breakpoint, or single-stepping to the
- *     site) — not a different decode. They stay on the single-step fallback.
+ *   DFB_IMP_HWREC (T5, F2 increment 2) — rdtsc / rdtscp / rdrand / rdseed / cpuid. MEASURED on
+ *     this Zen 5: BTF does NOT trap them (they are not control transfers), so a block runs
+ *     straight through them and there is no BTF boundary at which their retired value could be
+ *     recorded. capture_blockstep now arms a hardware DR exec breakpoint at each scanned site
+ *     (region_scan's hwrec_off[]) and single-steps once past a hit, so the boundary DOES exist
+ *     as of this task — but INJECTING the recorded value into the replay is T6's job, so
+ *     step_block still refuses to execute one (returns -1, exactly like DFB_IMP_OTHER always
+ *     has) until T6 lands.
+ *   DFB_IMP_OTHER — sysenter, and any undecodable byte. No sane return-to-next-instruction
+ *     contract (sysenter) or nothing to vouch for (undecodable), so this stays on the
+ *     single-step fallback with no DR-breakpoint primitive planned for it.
  */
 typedef enum {
     DFB_IMP_NONE = 0,
     DFB_IMP_SYSCALL, /* `syscall`  — clobbers rax (result), rcx (next rip), r11 (rflags) */
     DFB_IMP_INT80, /* `int 0x80` — clobbers rax ONLY (measured: rcx/r11 survive)       */
-    DFB_IMP_OTHER /* no BTF boundary exists: not injectable                            */
+    DFB_IMP_HWREC, /* rdtsc/rdtscp/rdrand/rdseed/cpuid — DR-breakpoint boundary (T5); not yet
+                    * injectable (T6) */
+    DFB_IMP_OTHER /* sysenter / undecodable: no BTF boundary, no DR-breakpoint plan either */
 } dfb_imp_t;
 
 static dfb_imp_t dfb_impurity_kind(const cs_insn *insn) {
@@ -584,12 +598,13 @@ static dfb_imp_t dfb_impurity_kind(const cs_insn *insn) {
             insn->detail->x86.operands[0].imm == 0x80)
             return DFB_IMP_INT80;
         return DFB_IMP_NONE;
-    case X86_INS_SYSENTER:
     case X86_INS_RDTSC:
     case X86_INS_RDTSCP:
     case X86_INS_RDRAND:
     case X86_INS_RDSEED:
     case X86_INS_CPUID:
+        return DFB_IMP_HWREC;
+    case X86_INS_SYSENTER:
         return DFB_IMP_OTHER;
     default:
         return DFB_IMP_NONE;
@@ -645,6 +660,10 @@ typedef struct {
     dfb_imp_t
         cur_imp; /* the impurity class of the step open_step just opened */
     uint64_t injected; /* syscalls whose recorded effect the replay injected */
+    uint64_t
+        hw_hits; /* T5: DR exec-breakpoint site boundaries taken (armed slot faulted,
+                        * absorbed by one single-step) — 0 whenever capture_blockstep never runs
+                        * (force_singlestep), by construction: nothing arms a DR slot there. */
     /* --- T4: undefined-EFLAGS classification --------------------------------------
      * `cur_undef` / `cur_defined` are the open step's (undefined, defined_written) pair from
      * dfb_undef_flags, set at open time and consumed by the NEXT finalize_step call (the step
@@ -1165,6 +1184,20 @@ static size_t open_step(cap_ctx *c, const dfb_snap_t *s) {
         }
     }
 
+    /* T5 (F2 increment 2) supplement check, per the same "supply what Capstone under-reports"
+     * pattern as the syscall block above — but PROBED rather than assumed: MEASURED against the
+     * pinned Capstone 5.0.1, cs_regs_access ALREADY reports the complete architectural write set
+     * for all five DFB_IMP_HWREC mnemonics with no supplement needed: rdtsc -> rax,rdx; rdtscp ->
+     * rax,rcx,rdx; cpuid -> reads eax,ecx / writes eax,ebx,ecx,edx; rdrand/rdseed -> the dest reg
+     * PLUS eflags (not merely CF — the whole register, which the shared enumerator already turns
+     * into an EFLAGS write record via put_reg, same as any other flag-writing instruction). So
+     * unlike `syscall`/`int 0x80` (which Capstone models with ZERO register accesses, the ABI
+     * effect being invisible to it), nothing is added here — the read/write sets `rd`/`wr` above
+     * already carry it. Left as a comment, not dead code, so a future Capstone re-sync that
+     * regresses this (the file header documents this pipeline's own metadata lying for AVX
+     * elsewhere) has a place pointing back at the probe that proved it, and a diff that adds a
+     * per-mnemonic supplement here is the fix if it ever does. */
+
     for (size_t i = 0; i < nr; i++) {
         at_val_rec_t r = rd[i];
         if (r.kind == AT_LOC_REG) {
@@ -1258,6 +1291,15 @@ typedef struct {
         impure_reason; /* the offending mnemonic, when !pure                   */
     const char *
         replay_reason; /* "vex/evex" or "decode", when !replayable             */
+    /* T5 (F2 increment 2, forward pass): rdtsc/rdtscp/rdrand/rdseed/cpuid sites the sweep
+     * found, by their offset in THIS scanned buffer — capture_blockstep arms one hardware DR
+     * exec breakpoint per entry (absolute rbase + hwrec_off[i]). Capped at 4, the architectural
+     * DR0-3 slot count: more than 4 DISTINCT sites sets hwrec_overflow and the region keeps the
+     * whole-region single-step fallback rather than lie about a 5th site it cannot watch. Not
+     * yet consulted by `injectable` — DFB_IMP_HWREC stays non-injectable until T6. */
+    uint64_t hwrec_off[4];
+    size_t nhwrec;
+    int hwrec_overflow;
 } dfb_scan_t;
 
 /* Does the region get the block-step + replay path? F2 widens F1's rule: a region is no longer
@@ -1432,12 +1474,28 @@ static void region_scan(const uint8_t *code, size_t len, dfb_scan_t *out) {
          * this region is one the replay can carry"), so it must see the WHOLE region. A region
          * whose first impurity is a syscall and whose second is a cpuid is NOT injectable, and
          * settling at the first would be exactly the HIGH-3 early-break bug in a new costume. */
-        if (imp != NULL && dfb_impurity_kind(insn) == DFB_IMP_OTHER) {
+        dfb_imp_t k = imp != NULL ? dfb_impurity_kind(insn) : DFB_IMP_NONE;
+        if (imp != NULL && k != DFB_IMP_SYSCALL && k != DFB_IMP_INT80) {
+            /* Neither of the two kinds the replay can currently carry (SYSCALL/INT80) — this
+             * covers DFB_IMP_OTHER (sysenter/undecodable) AND, as of T5, DFB_IMP_HWREC too: a
+             * boundary now exists for rdtsc/rdtscp/rdrand/rdseed/cpuid (see hwrec_off below),
+             * but INJECTING it into the replay is T6's job, so scan_replay_ok must still decline
+             * these regions exactly as it did before this task — the forward pass changes what
+             * capture_blockstep OBSERVES, not what asmtest_dataflow_blockstep_run's gate admits. */
             out->injectable = 0;
             /* Name the impurity that actually DISQUALIFIES the region, not merely the first one
              * seen: with `syscall; cpuid` the honest reason is "cpuid" — a caller told "syscall"
              * would go looking for a gate that no longer exists. */
             out->impure_reason = imp;
+        }
+        if (k == DFB_IMP_HWREC) {
+            /* Distinct by construction: a single linear sweep visits each byte offset once, so
+             * consecutive hits can never repeat an address. Cap at 4 (DR0-3); a 5th+ site sets
+             * hwrec_overflow rather than silently dropping it or lying about coverage. */
+            if (out->nhwrec < 4)
+                out->hwrec_off[out->nhwrec++] = insn->address;
+            else
+                out->hwrec_overflow = 1;
         }
         /* ...but the sweep RUNS ON: purity is decided, replayability and touches_vec are not. */
     }
@@ -1513,6 +1571,57 @@ static void reap(pid_t pid) {
     int status;
     kill(pid, SIGKILL);
     waitpid(pid, &status, 0);
+}
+
+/* ------------------------------------------------------------------ */
+/* T5 (F2 increment 2, forward pass) — hardware DR exec-breakpoint plumbing */
+/* ------------------------------------------------------------------ */
+
+/* The x86 debug registers, reached through struct user's u_debugreg[] via PTRACE_POKEUSER —
+ * the same door src/ptrace_backend.c's set_hw_bp/clear_hw_bp and
+ * cli/asmspy_engine.c's rgn_hw_bp_arm/rgn_hw_bp_disarm open, mirrored here as NEW LOCAL
+ * plumbing rather than by widening either: ptrace_backend.c's set_hw_bp is a static,
+ * single-slot API by design (its one caller only ever needs DR0), and this file needs up to 4
+ * LIVE slots at once (one per scanned hwrec site) for the lifetime of one capture — a shape
+ * neither existing copy has. DR0..3 hold breakpoint addresses; DR7 enables them and selects
+ * the condition/length per slot; DR6 reports which slot(s) faulted. */
+#define DFB_DR_OFFSET(n)                                                       \
+    (offsetof(struct user, u_debugreg) + (size_t)(n) * sizeof(long))
+
+/* Arm hardware EXECUTION breakpoint `slot` (0-3) at `addr`, per-thread: DR<slot> = addr, and
+ * DR7's L<slot> bit (bit 2*slot) set — R/W<slot> = 00 (execute) and LEN<slot> = 00 (required
+ * for an execute breakpoint) are left 0, i.e. untouched, exactly as
+ * ptrace_backend.c's set_hw_bp / asmspy_engine.c's rgn_hw_bp_arm encode DR0. `*dr7` is the
+ * caller's running DR7 image (start it at 0): threading it through by pointer, rather than a
+ * PEEKUSER read-modify-write here, sidesteps PTRACE_PEEKUSER's -1-is-ambiguous return
+ * convention entirely — this file always owns DR7 from a freshly forked, never-yet-armed
+ * tracee, so the caller's own accumulator is already the ground truth. Returns 0 on success,
+ * -1 on a ptrace failure (e.g. POKEUSER refused). */
+static int dfb_arm_hw_bp(pid_t pid, int slot, uint64_t addr,
+                         unsigned long *dr7) {
+    if (slot < 0 || slot > 3)
+        return -1;
+    if (ptrace(PTRACE_POKEUSER, pid, (void *)DFB_DR_OFFSET(slot),
+               (void *)(uintptr_t)addr) != 0)
+        return -1;
+    *dr7 |= (1UL << (2 * slot));
+    if (ptrace(PTRACE_POKEUSER, pid, (void *)DFB_DR_OFFSET(7), (void *)*dr7) !=
+        0)
+        return -1;
+    return 0;
+}
+
+/* Disarm ALL four hardware breakpoint slots (DR7 = 0), clear DR0-3, and clear DR6's sticky
+ * status bits. Best-effort (mirrors clear_hw_bp / rgn_hw_bp_disarm), and called on EVERY exit
+ * path before the tracee is reaped: PTRACE_DETACH does not clear the debug registers (measured
+ * in the F3 work, cli/asmspy_engine.c:2443) — this tracee is always SIGKILLed rather than
+ * detached, so nothing outlives it, but disarming here keeps the pattern honest regardless of
+ * how the tracee's lifetime ends. */
+static void dfb_clear_hw_bps(pid_t pid) {
+    ptrace(PTRACE_POKEUSER, pid, (void *)DFB_DR_OFFSET(7), (void *)0UL);
+    for (int i = 0; i < 4; i++)
+        ptrace(PTRACE_POKEUSER, pid, (void *)DFB_DR_OFFSET(i), (void *)0UL);
+    ptrace(PTRACE_POKEUSER, pid, (void *)DFB_DR_OFFSET(6), (void *)0UL);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1863,8 +1972,18 @@ static int step_block(cap_ctx *c, uc_engine *uc, uint64_t pc_next,
             c->injected++;
             return 0; /* the syscall TERMINATES the block, exactly at the real boundary */
         }
+        if (c->cur_imp == DFB_IMP_HWREC)
+            /* T5 is forward-pass only: capture_blockstep now takes a REAL boundary at a scanned
+             * rdtsc/rdtscp/rdrand/rdseed/cpuid site (a DR exec breakpoint + one absorbing
+             * single-step — see dfb_arm_hw_bp and its call site below), so `next` genuinely
+             * carries the retired value here. But copying it INTO the replay (as the syscall
+             * branch above does for rax/rcx/r11) is T6's job — until it lands, refuse exactly
+             * as DFB_IMP_OTHER always has, so Unicorn never gets to execute the instruction
+             * itself and fabricate a value (measured: UC_ERR_OK with garbage, same lie as
+             * `syscall`/`rdtsc` above). */
+            return -1;
         if (c->cur_imp == DFB_IMP_OTHER)
-            return -1; /* rdtsc/cpuid/... : no boundary exists to record from — truncate */
+            return -1; /* sysenter / undecodable: no boundary exists to record from — truncate */
 
         if (uc_emu_start(uc, pc, (uint64_t)-1, 0, 1) != UC_ERR_OK)
             return -1;
@@ -1890,7 +2009,8 @@ static int capture_blockstep(cap_ctx *c, pid_t pid, uint64_t base, size_t len,
                              const asmtest_blockstep_opts_t *o, long *result,
                              uint64_t *stops, uint64_t *steps,
                              uint64_t *entry_rsp, int inject_block,
-                             int *vec_seeded, int *mxcsr_seeded) {
+                             int *vec_seeded, int *mxcsr_seeded,
+                             const uint64_t *hwrec_off, size_t nhwrec) {
     const int no_vec_seed = o->no_vec_seed;
     const int seed_mxcsr = !o->no_mxcsr_seed;
     const int no_vec_canary = o->no_vec_canary;
@@ -1903,6 +2023,8 @@ static int capture_blockstep(cap_ctx *c, pid_t pid, uint64_t base, size_t len,
     uint64_t nstop = 1; /* the entry boundary itself */
     int block_idx = 0;
     long real_result = 0;
+    unsigned long dr7 =
+        0; /* T5: the DR7 image dfb_arm_hw_bp builds up, slot by slot */
 
     memset(&S_cur, 0, sizeof S_cur);
 
@@ -1937,6 +2059,16 @@ static int capture_blockstep(cap_ctx *c, pid_t pid, uint64_t base, size_t len,
         xstate_read(pid, &S_cur.vec); /* the region's LIVE-IN vector state */
     if (entry_rsp != NULL)
         *entry_rsp = S_cur.gp.rsp;
+
+    /* T5 (F2 increment 2, forward pass): arm one hardware exec breakpoint per scanned
+     * rdtsc/rdtscp/rdrand/rdseed/cpuid site, absolute address rbase + hwrec_off[i] — so the
+     * forward pass gets a REAL boundary at each even though BTF alone never traps them (see
+     * dfb_impurity_kind). region_scan already capped nhwrec at 4, the DR0-3 slot count, so no
+     * further bound is needed here. Best-effort per slot: a POKEUSER failure just means that
+     * one site's boundary is missed, and the per-step decode in step_block truncates when the
+     * replay reaches it — same fail-closed outcome as an un-injected site has always had. */
+    for (size_t i = 0; i < nhwrec && i < 4; i++)
+        dfb_arm_hw_bp(pid, (int)i, rbase + hwrec_off[i], &dr7);
 
     /* 2) Stand up Unicorn: code mapped at the REAL base, a stack window at the REAL rsp, both
      *    copied from the (stopped) tracee, and the GP file seeded from the entry boundary. Real
@@ -2001,6 +2133,41 @@ static int capture_blockstep(cap_ctx *c, pid_t pid, uint64_t base, size_t len,
         memset(&S_next, 0, sizeof S_next);
         if (ptrace(PTRACE_GETREGS, pid, NULL, &S_next.gp) != 0)
             goto out;
+
+        /* T5: a DR exec breakpoint on a scanned hwrec site faults BEFORE the instruction
+         * retires (bits 0-3 of DR6 name the slot) — pre-empting the ordinary BTF boundary this
+         * SINGLEBLOCK was chasing, so S_next currently sits AT the site, not past it. Absorb it
+         * with one PTRACE_SINGLESTEP so S_next becomes the real POST-RETIREMENT boundary (the
+         * instruction's actual outputs), then fall through to the SAME per-block flow an
+         * ordinary boundary takes below. A DR6 with only BS (bit 14) set, or 0, is the
+         * unmodified BTF path — this block is then a no-op. */
+        if (nhwrec > 0) {
+            unsigned long dr6 = (unsigned long)ptrace(
+                PTRACE_PEEKUSER, pid, (void *)DFB_DR_OFFSET(6), NULL);
+            if ((dr6 & 0xFUL) != 0) {
+                ptrace(PTRACE_POKEUSER, pid, (void *)DFB_DR_OFFSET(6),
+                       (void *)0UL); /* DR6 is sticky: clear before resuming */
+                if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0)
+                    goto out;
+                int st2 = 0;
+                for (;;) {
+                    pid_t w2 = waitpid(pid, &st2, 0);
+                    if (w2 >= 0 || errno != EINTR)
+                        break;
+                }
+                if (WIFEXITED(st2) || WIFSIGNALED(st2)) {
+                    c->vt->truncated = true;
+                    ret = DF_BLOCKSTEP_FAULT;
+                    goto out;
+                }
+                if (!WIFSTOPPED(st2) || WSTOPSIG(st2) != SIGTRAP)
+                    goto out;
+                if (ptrace(PTRACE_GETREGS, pid, NULL, &S_next.gp) != 0)
+                    goto out;
+                c->hw_hits++;
+            }
+        }
+
         int in_region_next = (S_next.gp.rip >= rbase && S_next.gp.rip < rend);
         if (c->want_vec)
             xstate_read(pid, &S_next.vec); /* ground truth for the canary */
@@ -2093,6 +2260,11 @@ static int capture_blockstep(cap_ctx *c, pid_t pid, uint64_t base, size_t len,
         *result = real_result;
 
 out:
+    /* T5: disarm every DR slot on EVERY exit path before the tracee is reaped — every `goto
+     * out` above, and the clean region-return fallthrough, land here. Harmless when nothing
+     * was ever armed (nhwrec == 0): POKEUSER on an already-0 register is a no-op. */
+    if (nhwrec > 0)
+        dfb_clear_hw_bps(pid);
     if (stops != NULL)
         *stops = nstop;
     if (steps != NULL)
@@ -2251,6 +2423,30 @@ int asmtest_dataflow_blockstep_is_injectable(const uint8_t *code,
     return 0;
 }
 
+/* T5 (F2 increment 2, forward pass): how many DISTINCT rdtsc/rdtscp/rdrand/rdseed/cpuid sites
+ * does a static sweep of this region find, and did it exceed the 4-slot architectural DR cap?
+ * Exposes region_scan's hwrec bookkeeping for testing without a live capture, exactly as
+ * is_pure / is_replayable / is_injectable already expose its other three verdicts. Returns the
+ * count found (0-4, since the scan itself caps `nhwrec` there), or DF_BLOCKSTEP_EINVAL on bad
+ * args. `off` (may be NULL) receives up to `off_cap` of the found offsets; `overflow` (may be
+ * NULL) is set 1 iff a 5th+ site exists (the region then keeps the whole-region single-step
+ * fallback rather than watch only 4 of 5+). */
+int asmtest_dataflow_blockstep_scan_hwrec(const uint8_t *code, size_t code_len,
+                                          uint64_t *off, size_t off_cap,
+                                          int *overflow) {
+    if (overflow != NULL)
+        *overflow = 0;
+    if (code == NULL || code_len == 0)
+        return DF_BLOCKSTEP_EINVAL;
+    dfb_scan_t s;
+    region_scan(code, code_len, &s);
+    if (overflow != NULL)
+        *overflow = s.hwrec_overflow;
+    for (size_t i = 0; off != NULL && i < s.nhwrec && i < off_cap; i++)
+        off[i] = s.hwrec_off[i];
+    return (int)s.nhwrec;
+}
+
 /* The widest vector register width the HARDWARE + OS expose through XSTATE (0/16/32/64), and
  * — when nregs is non-NULL — how many vector registers exist (16, or 32 with AVX-512). Lets a
  * suite hardware-gate its YMM/ZMM cases rather than fail on a box without the silicon. */
@@ -2341,7 +2537,7 @@ int asmtest_dataflow_blockstep_run(const uint8_t *code, size_t code_len,
         int inj = o.inject_divergence ? o.inject_block : -1;
         rc = capture_blockstep(&c, pid, base, code_len, rbase, rend, &o, result,
                                &stops, &steps, &entry_rsp, inj, &vec_seeded,
-                               &mxcsr_seeded);
+                               &mxcsr_seeded, scan.hwrec_off, scan.nhwrec);
     } else {
         c.mr = mr_tracee;
         c.mr_ctx = &pid;
@@ -2364,6 +2560,9 @@ int asmtest_dataflow_blockstep_run(const uint8_t *code, size_t code_len,
         info->mxcsr_seeded = mxcsr_seeded;
         info->injectable = scan.injectable;
         info->injected = c.injected;
+        info->hw_hits =
+            c.hw_hits; /* 0 whenever capture_blockstep never ran (force_singlestep):
+                                    * nothing arms a DR slot on that path (see cap_ctx.hw_hits) */
     }
 
     free(c.cur.v);
@@ -2404,6 +2603,18 @@ int asmtest_dataflow_blockstep_is_injectable(const uint8_t *code,
     (void)code_len;
     if (reason != NULL)
         *reason = NULL;
+    return DF_BLOCKSTEP_ENOSYS;
+}
+
+int asmtest_dataflow_blockstep_scan_hwrec(const uint8_t *code, size_t code_len,
+                                          uint64_t *off, size_t off_cap,
+                                          int *overflow) {
+    (void)code;
+    (void)code_len;
+    (void)off;
+    (void)off_cap;
+    if (overflow != NULL)
+        *overflow = 0;
     return DF_BLOCKSTEP_ENOSYS;
 }
 

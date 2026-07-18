@@ -99,6 +99,7 @@ typedef struct {
     int mxcsr_seeded;
     int injectable;
     uint64_t injected;
+    uint64_t hw_hits;
 } asmtest_blockstep_info_t;
 
 int asmtest_dataflow_blockstep_probe(void);
@@ -110,6 +111,9 @@ int asmtest_dataflow_blockstep_is_replayable(const uint8_t *code,
 int asmtest_dataflow_blockstep_is_injectable(const uint8_t *code,
                                              size_t code_len,
                                              const char **reason);
+int asmtest_dataflow_blockstep_scan_hwrec(const uint8_t *code, size_t code_len,
+                                          uint64_t *off, size_t off_cap,
+                                          int *overflow);
 int asmtest_dataflow_blockstep_vec_width(int *nregs);
 int asmtest_dataflow_blockstep_uc_vec_width(void);
 int asmtest_dataflow_blockstep_run(const uint8_t *code, size_t code_len,
@@ -194,6 +198,41 @@ static const uint8_t imp_rdtsc[] = {0x0f, 0x31, 0xc3};
 static const uint8_t imp_rdrand[] = {0x0f, 0xc7, 0xf0, 0xc3};
 static const uint8_t imp_int80[] = {0xb8, 0x14, 0x00, 0x00,
                                     0x00, 0xcd, 0x80, 0xc3};
+
+/* ------------------------------------------------------------------ */
+/* T5 (F2 increment 2, forward pass) fixtures                          */
+/* ------------------------------------------------------------------ */
+
+/* hwrec_multi(): SCAN-ONLY (never executed) — 3 DISTINCT hwrec sites (rdtsc, cpuid, rdrand) at
+ * known offsets {0, 2, 4}, for the scan-level unit test of region_scan's nhwrec/hwrec_off
+ * bookkeeping (exposed test-side via asmtest_dataflow_blockstep_scan_hwrec). */
+static const uint8_t hwrec_multi[] = {
+    0x0f, 0x31,       /* 0x00 rdtsc      */
+    0x0f, 0xa2,       /* 0x02 cpuid      */
+    0x0f, 0xc7, 0xf0, /* 0x04 rdrand eax */
+    0xc3,             /* 0x07 ret        */
+};
+
+/* hwrec_5site(): SCAN-ONLY — 5 DISTINCT hwrec sites, one past the 4-slot architectural DR cap,
+ * for the hwrec_overflow assertion (first 4 offsets {0, 2, 5, 7} must still be reported). */
+static const uint8_t hwrec_5site[] = {
+    0x0f, 0x31,       /* 0x00 rdtsc      */
+    0x0f, 0x01, 0xf9, /* 0x02 rdtscp     */
+    0x0f, 0xa2,       /* 0x05 cpuid      */
+    0x0f, 0xc7, 0xf0, /* 0x07 rdrand eax */
+    0x0f, 0xc7, 0xf8, /* 0x0a rdseed eax */
+    0xc3,             /* 0x0d ret        */
+};
+
+/* hwrec_rdtsc(): EXECUTED (unlike imp_rdtsc above) — a tiny impure region whose only impurity
+ * is one rdtsc site, for the live forward-pass checks: the DR exec-breakpoint boundary firing
+ * (info.hw_hits) while the externally observable verdict (gated -> single-step OK; forced ->
+ * per-step decode truncates) stays exactly what it was before T5 — T6, not T5, lifts the
+ * truncation. */
+static const uint8_t hwrec_rdtsc[] = {
+    0x0f, 0x31, /* 0x00 rdtsc */
+    0xc3,       /* 0x02 ret   */
+};
 
 /* ------------------------------------------------------------------ */
 /* Undefined-EFLAGS fixtures (T4, BSVS-1)                               */
@@ -1647,6 +1686,36 @@ static void run_is_replayable_independence_case(void) {
           pw ? pw : "(null)");
 }
 
+/* T5 (F2 increment 2, forward pass) — THE LOAD-BEARING NEW CHECK: region_scan's static sweep
+ * finds the right rdtsc/rdtscp/rdrand/rdseed/cpuid sites (offsets, count) and honors the
+ * 4-slot architectural DR cap, exposed test-side via asmtest_dataflow_blockstep_scan_hwrec.
+ * Capstone-only (no ptrace), so it runs on every VM lane, same as the is_injectable checks
+ * above. */
+static void run_hwrec_scan_case(void) {
+    uint64_t off[8];
+    int overflow = -1;
+
+    memset(off, 0xAA, sizeof off);
+    int n = asmtest_dataflow_blockstep_scan_hwrec(
+        hwrec_multi, sizeof hwrec_multi, off, 8, &overflow);
+    CHECK(n == 3 && overflow == 0 && off[0] == 0 && off[1] == 2 && off[2] == 4,
+          "scan_hwrec: hwrec_multi (rdtsc@0, cpuid@2, rdrand@4) -> n=%d "
+          "overflow=%d offs={%llu,%llu,%llu}",
+          n, overflow, (unsigned long long)off[0], (unsigned long long)off[1],
+          (unsigned long long)off[2]);
+
+    memset(off, 0xAA, sizeof off);
+    overflow = -1;
+    int n5 = asmtest_dataflow_blockstep_scan_hwrec(
+        hwrec_5site, sizeof hwrec_5site, off, 8, &overflow);
+    CHECK(n5 == 4 && overflow == 1 && off[0] == 0 && off[1] == 2 &&
+              off[2] == 5 && off[3] == 7,
+          "scan_hwrec: hwrec_5site (5 DISTINCT sites) caps at n=%d (want 4) "
+          "with overflow=%d (want 1) — the architectural DR0-3 slot count, "
+          "honestly reported rather than silently dropping the 5th",
+          n5, overflow);
+}
+
 /* Case 10 — Hi16_ZMM / zmm16-31 reassembly (LOW 7). Component 7 is the only source for these
  * registers; nothing else in the suite reaches that path, and silently zeroing a register file
  * is the failure mode this whole increment exists to kill. */
@@ -2009,6 +2078,89 @@ static void run_blind_rdtsc_case(void) {
     asmtest_valtrace_free(w);
 }
 
+/* T5 (F2 increment 2, forward pass) — THE LIVE EVIDENCE, on the Zen 5 box: the DR exec
+ * breakpoint fires and info.hw_hits counts it, while the EXTERNALLY OBSERVABLE verdict stays
+ * exactly what it was before this task lands (this task alone must not change verdicts — T6
+ * is what lifts the truncation). Three sub-cases over hwrec_rdtsc (`rdtsc; ret`):
+ *
+ *   1. Gated normally (default opts): the region is still classified NOT injectable (T5 keeps
+ *      DFB_IMP_HWREC out of `injectable`, exactly as DFB_IMP_OTHER always was), so it single-
+ *      steps to a correct trace, UNCHANGED from before this task — and hw_hits stays 0, since
+ *      capture_blockstep (the only place that arms a DR slot) never runs on this path.
+ *   2. force_replay=1 (forced past the region gate, mirroring blind_rdtsc's own technique):
+ *      capture_blockstep now arms DR0 at the rdtsc site, takes the boundary, and hw_hits
+ *      becomes >= 1 — but step_block's DFB_IMP_HWREC case still refuses to execute rdtsc in
+ *      the replay (T6 not landed), so the capture still FAULTS + truncates, exactly as it did
+ *      when this was undifferentiated DFB_IMP_OTHER. Same verdict, new telemetry.
+ *   3. force_singlestep=1 (the explicit Done-when check): hw_hits MUST stay 0 — no arming on
+ *      the fallback path, because force_singlestep routes to capture_singlestep, which never
+ *      calls capture_blockstep at all. */
+static void run_hwrec_forward_case(void) {
+    asmtest_valtrace_t *v1 = asmtest_valtrace_new(256, 4096, 256);
+    if (v1 == NULL) {
+        CHECK(0, "hwrec-forward: valtrace_new (gated)");
+        return;
+    }
+    long r1 = 0;
+    asmtest_blockstep_info_t i1 = {0};
+    asmtest_blockstep_opts_t o1;
+    memset(&o1, 0, sizeof o1);
+    o1.inject_block = -1;
+    int rc1 = asmtest_dataflow_blockstep_run(hwrec_rdtsc, sizeof hwrec_rdtsc,
+                                             NULL, 0, &o1, &r1, v1, &i1);
+    CHECK(rc1 == DF_BLOCKSTEP_OK && !v1->truncated && i1.pure == 0 &&
+              i1.hw_hits == 0 && i1.reason != NULL &&
+              strcmp(i1.reason, "rdtsc") == 0,
+          "hwrec-forward: gated normally -> single-step fallback, UNCHANGED "
+          "from before T5 (rc=%d truncated=%d pure=%d hw_hits=%llu "
+          "reason=%s)",
+          rc1, (int)v1->truncated, i1.pure, (unsigned long long)i1.hw_hits,
+          i1.reason ? i1.reason : "?");
+    asmtest_valtrace_free(v1);
+
+    asmtest_valtrace_t *v2 = asmtest_valtrace_new(256, 4096, 256);
+    if (v2 == NULL) {
+        CHECK(0, "hwrec-forward: valtrace_new (forced)");
+        return;
+    }
+    long r2 = 0;
+    asmtest_blockstep_info_t i2 = {0};
+    asmtest_blockstep_opts_t o2;
+    memset(&o2, 0, sizeof o2);
+    o2.inject_block = -1;
+    o2.force_replay = 1; /* push it past the region gate, as blind_rdtsc does */
+    int rc2 = asmtest_dataflow_blockstep_run(hwrec_rdtsc, sizeof hwrec_rdtsc,
+                                             NULL, 0, &o2, &r2, v2, &i2);
+    CHECK(rc2 == DF_BLOCKSTEP_FAULT && v2->truncated && i2.hw_hits >= 1,
+          "hwrec-forward: forced past the gate -> the DR exec breakpoint "
+          "fires and hw_hits counts it (hw_hits=%llu), but the per-step "
+          "decode still refuses to let Unicorn execute rdtsc, so the "
+          "capture still FAULTS + truncates (rc=%d truncated=%d) — SAME "
+          "verdict as before T5, new evidence only",
+          (unsigned long long)i2.hw_hits, rc2, (int)v2->truncated);
+    asmtest_valtrace_free(v2);
+
+    asmtest_valtrace_t *v3 = asmtest_valtrace_new(256, 4096, 256);
+    if (v3 == NULL) {
+        CHECK(0, "hwrec-forward: valtrace_new (force_singlestep)");
+        return;
+    }
+    long r3 = 0;
+    asmtest_blockstep_info_t i3 = {0};
+    asmtest_blockstep_opts_t o3;
+    memset(&o3, 0, sizeof o3);
+    o3.inject_block = -1;
+    o3.force_singlestep = 1;
+    int rc3 = asmtest_dataflow_blockstep_run(hwrec_rdtsc, sizeof hwrec_rdtsc,
+                                             NULL, 0, &o3, &r3, v3, &i3);
+    CHECK(rc3 == DF_BLOCKSTEP_OK && !v3->truncated && i3.hw_hits == 0,
+          "hwrec-forward: force_singlestep=1 -> hw_hits STAYS 0 (Done-when "
+          "check: no arming on the fallback path; hw_hits=%llu rc=%d "
+          "truncated=%d)",
+          (unsigned long long)i3.hw_hits, rc3, (int)v3->truncated);
+    asmtest_valtrace_free(v3);
+}
+
 /* THE FAIL-CLOSED RULE — a syscall that DOES NOT RETURN to the next instruction.
  *
  * F2 rests on a measured premise: BTF traps the syscall, so the forward pass always has a real
@@ -2202,7 +2354,7 @@ int main(void) {
         size_t isz = 0, ioff = 0;
         asmtest_dataflow_blockstep_info_layout(&isz, &ioff);
         CHECK(isz == sizeof(asmtest_blockstep_info_t) &&
-                  ioff == offsetof(asmtest_blockstep_info_t, injected),
+                  ioff == offsetof(asmtest_blockstep_info_t, hw_hits),
               "info: the suite's re-declared telemetry struct matches the "
               "producer's SIZE and final-field OFFSET (a skew here silently "
               "corrupts every info.* read below; size alone misses a field "
@@ -2328,6 +2480,10 @@ int main(void) {
      * instruction through AND removes the witness. */
     run_is_replayable_independence_case();
 
+    /* T5 (F2 increment 2, forward pass): the scan-level unit test — Capstone only, no ptrace,
+     * so it runs on every VM lane same as the checks just above. */
+    run_hwrec_scan_case();
+
     /* What this box and this Unicorn can actually do — reported, never assumed. */
     {
         int nregs = 0;
@@ -2424,6 +2580,7 @@ int main(void) {
     run_no_inject_case();
     run_fail_closed_case();
     run_blind_rdtsc_case();
+    run_hwrec_forward_case();
 
     /* Vector breadth (increment 2). */
     run_vec_seed_case();
