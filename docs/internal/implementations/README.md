@@ -151,7 +151,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 ### Correctness & attribution
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
-| [code-review-plausible-triage.md](code-review-plausible-triage.md) — triage & fix the 2026-07-02 review's still-present findings | 8 | ◐ 6/8 | — |
+| [code-review-plausible-triage.md](code-review-plausible-triage.md) — triage & fix the 2026-07-02 review's still-present findings | 8 | ◐ 6/8 (T7 wip) | — |
 | [native-il-bytecode-attribution.md](native-il-bytecode-attribution.md) — native trace-point → IL/bytecode/source-line attribution | 7 | ☐ 0/7 | — |
 
 ## Parallelism & the critical path
