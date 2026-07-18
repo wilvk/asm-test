@@ -38,6 +38,12 @@ int asmtest_ibs_window_begin(const asmtest_ibs_opts_t *opts, void **ctx_out);
  * argument. */
 int asmtest_ibs_window_end(void *ctx, asmtest_ibs_survey_t *out);
 
+/* INTERNAL test seam (no ABI): the max-record bound the near-full-ring loss
+ * heuristic reserves, callchain-aware. Lets a pure test pin the callchain-sized
+ * sizing without opening perf (a base-bound build returns the base size for
+ * has_callchain=1 and the test fails). */
+size_t asmtest_ibs_max_record(int has_callchain);
+
 /* ===========================================================================
  * IBS-Fetch front-end coverage lane (zen2-ibs-tracing-plan Phase 7). INTERNAL.
  *

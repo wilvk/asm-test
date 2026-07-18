@@ -278,13 +278,39 @@ void asmtest_ibs_fetch_survey_free(asmtest_ibs_fetch_survey_t *s) {
 #define IBS_JITTER_FRAC 8u
 /* 256 KiB data ring (64 * 4 KiB pages). */
 #define IBS_RING_DATA_PAGES 64u
-/* Largest single record we parse: header + IP + TID + RAW(size + caps + 8 regs). */
+/* Largest single record we parse WITHOUT callchain: header + IP + TID + RAW(size +
+ * caps + 8 regs) + 16 slack. Still valid for every no-callchain lane, including a
+ * 9-register BrTarget+OpData4 record (true size 104). */
 #define IBS_MAX_RECORD                                                         \
     (sizeof(struct perf_event_header) + 8u + 8u + 4u + IBS_RAW_MIN_BYTES + 16u)
+/* Pin the kernel's default (PERF_MAX_STACK_DEPTH) explicitly: the sysctl is
+ * tunable to 640K frames, so an unpinned open makes ANY fixed bound unsound.
+ * On a host tuned BELOW this the open fails -EOVERFLOW — a loud, reported
+ * failure (unavail_reason) instead of silent ring loss: the right trade. */
+#define IBS_CALLCHAIN_MAX_STACK 127u
+/* Worst-case callchain record: header+ip+tid (24) + (1+nr)*8 with
+ * nr <= max_stack + 8 context markers + RAW wire 80 (9 regs, u64-padded)
+ * + the same 16-byte slack as the base bound. (= 1208.) */
+#define IBS_MAX_RECORD_CALLCHAIN                                               \
+    (24u + 8u * (1u + IBS_CALLCHAIN_MAX_STACK + 8u) + 80u + 16u)
 
 static long perf_open(struct perf_event_attr *a, pid_t pid, int cpu, int group,
                       unsigned long flags) {
     return syscall(SYS_perf_event_open, a, pid, cpu, group, flags);
+}
+
+/* The largest single record a lane can produce: the callchain worst case when the
+ * lane enables PERF_SAMPLE_CALLCHAIN, else the base bound. The near-full-ring loss
+ * heuristic must reserve this much headroom or callchain-sized records vanish with
+ * lost==0 && throttled==0. */
+static size_t ibs_max_record(int has_callchain) {
+    return has_callchain ? IBS_MAX_RECORD_CALLCHAIN : IBS_MAX_RECORD;
+}
+
+/* INTERNAL test seam (no ABI): the max-record bound the drain uses, exposed so a
+ * pure test can pin the callchain-aware sizing without opening perf. */
+size_t asmtest_ibs_max_record(int has_callchain) {
+    return ibs_max_record(has_callchain);
 }
 
 /* --- capability probe (cached) ------------------------------------------------- */
@@ -592,8 +618,10 @@ static void ibs_drain(void *base_map, size_t pg, size_t dsz, uint8_t *scratch,
         span = dsz; /* defensive: never over-read the scratch buffer */
     /* Ring near-full = the newest samples may have been dropped with NO
      * PERF_RECORD_LOST (a non-overwrite ring stops reserving at the tail). Treat
-     * less than one max record of headroom as loss (mirrors hwtrace.c). */
-    if (span + IBS_MAX_RECORD > dsz)
+     * less than one max record of headroom as loss (mirrors hwtrace.c). The bound
+     * is callchain-aware: a callchain-enabled record is ~10x the base size, so the
+     * base bound would under-reserve and callchain samples would vanish silently. */
+    if (span + ibs_max_record(has_callchain) > dsz)
         out->throttled = 1;
 
     for (size_t i = 0; i < span; i++)
@@ -756,6 +784,10 @@ static void ibs_fill_attr(struct perf_event_attr *a, int type,
     if (cfg->callchain) {
         a->sample_type |= PERF_SAMPLE_CALLCHAIN;
         a->exclude_callchain_kernel = 1; /* user-only caller stack */
+        /* Pin the stack depth so the max-record bound is sound: without this the
+         * sysctl (tunable to 640K frames) makes any fixed bound unsafe. A host
+         * tuned BELOW this fails the open -EOVERFLOW — loud, not silent loss. */
+        a->sample_max_stack = IBS_CALLCHAIN_MAX_STACK;
     }
     a->disabled = 1;
 }
@@ -1331,6 +1363,12 @@ int asmtest_ibs_window_begin(const asmtest_ibs_opts_t *opts, void **ctx_out) {
     if (w == NULL)
         return ASMTEST_IBS_EUNAVAIL;
     ibs_cfg_from_opts(opts, &w->cfg);
+    /* No callchain in the window lane: no in-tree consumer decodes it, and a
+     * callchain-sized record stream can silently overrun the single end-of-window
+     * drain (the ring stays full -> loss with lost==0 && throttled==0). Mirrors
+     * the fetch lane's cfg clear. See docs/internal/archive/plans/
+     * zen2-ibs-tracing-plan.md Phase 5 and amd-review-followup-plan.md P3. */
+    w->cfg.callchain = 0;
     w->pg = ibs_page();
     w->dsz = w->pg * IBS_RING_DATA_PAGES;
     if (ibs_chan_open(&w->ch, 0, -1, type, &w->cfg, w->pg, w->dsz) != 0) {

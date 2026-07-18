@@ -696,6 +696,21 @@ static void test_live_system_wide(void) {
            (unsigned long long)s.samples, s.throttled ? ", throttled" : "");
     asmtest_ibs_survey_free(&s);
 }
+
+/* Pure (no perf): pin the callchain-aware max-record bound. Runs on every
+ * Linux/x86-64 host, AMD or not — the ring-loss heuristic must reserve the
+ * callchain worst case (~1.2 KB), not the 112-byte base, or callchain samples
+ * vanish with lost==0 && throttled==0. A pre-fix build returns 112 for
+ * has_callchain=1 and the second CHECK prints `not ok`. */
+static void test_record_bound(void) {
+    CHECK(asmtest_ibs_max_record(0) == 112,
+          "record-bound: base (no-callchain) bound is 112 (fetch/sw lanes "
+          "unchanged)");
+    CHECK(asmtest_ibs_max_record(1) >= 24u + 8u * 136u + 80u,
+          "record-bound: callchain bound covers the ABI worst case (>= 1192)");
+    CHECK(asmtest_ibs_max_record(1) < 64u * 4096u / 4u,
+          "record-bound: callchain bound still leaves the 256 KiB ring usable");
+}
 #else
 static void test_live(void) {
     printf("# SKIP IBS live capture: not Linux x86-64\n");
@@ -712,6 +727,9 @@ static void test_live_phase5(void) {
 static void test_live_system_wide(void) {
     printf("# SKIP IBS system-wide capture: not Linux x86-64\n");
 }
+static void test_record_bound(void) {
+    printf("# SKIP IBS record-bound: not Linux x86-64\n");
+}
 #endif
 
 int main(void) {
@@ -721,6 +739,7 @@ int main(void) {
     test_opts_abi();
     test_available();
     test_fetch_available();
+    test_record_bound();
     test_live();
     test_live_process();
     test_live_fetch();

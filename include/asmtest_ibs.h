@@ -74,7 +74,13 @@ typedef struct {
 /* opt OUT of the dispatched-op default -> count clock cycles (cnt_ctl=0). */
 #define ASMTEST_IBS_OPT_COUNT_CYCLES (1u << 0)
 /* attach a frame-pointer caller stack per sample (PERF_SAMPLE_CALLCHAIN +
- * exclude_callchain_kernel) for statistical call-graph context. Op lane only. */
+ * exclude_callchain_kernel). HONESTY NOTE: no in-tree consumer decodes the
+ * callchain — the drain parses PAST it to reach the RAW payload — so today
+ * this flag buys no call-graph output; it costs ring bandwidth (records grow
+ * to ~1.2 KB worst case) and a kernel get_callchain_buffers allocation that
+ * can fail perf_event_open with ENOMEM. The internal window lane ignores it
+ * (see ibs_backend.c). A future consumer is recorded in
+ * docs/internal/archive/plans/zen2-ibs-tracing-plan.md Phase 5b. Op lane only. */
 #define ASMTEST_IBS_OPT_CALLCHAIN (1u << 1)
 /* asmtest_ibs_survey_process only: capture SYSTEM-WIDE per-CPU (all present +
  * future threads, no per-thread race), filtered to the target pid in software.

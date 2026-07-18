@@ -978,6 +978,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **IBS ring-loss heuristic now bounds the callchain worst-case record** (was
+  112 bytes, ~10× short — silent sample loss with `lost==0 && throttled==0`);
+  `ibs_fill_attr` pins `sample_max_stack` so the bound is sound, and the
+  internal window lane no longer opens with callchain (no in-tree consumer, and
+  a callchain stream can overrun the single end-of-window drain).
+
+- **`ASMTEST_IBS_OPT_CALLCHAIN` is documented as consumer-less**: it enables
+  kernel-side capture only; nothing in the tree decodes the stack (the drain
+  parses past it to reach RAW), and the window lane ignores it.
+
 - **`ibs_probe` and the `ibs-test` live skips now attempt a real perf open and
   report the real refusal reason instead of claiming AVAILABLE from the
   CPUID/sysfs substrate probe alone.** On a locked-down AMD host (perf blocked by
