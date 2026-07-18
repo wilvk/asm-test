@@ -1573,6 +1573,18 @@ printf '%s\n' "$adout" | grep -qE 'stat\("/nonexistent-asmspy", 0x[0-9a-f]+\) = 
     || fail "stat: a failed stat did not render a raw pointer + negative return"
 echo "  stat/statx buffers decoded on success; a failed stat stays a raw pointer"
 
+# ---- T9: decoder-breadth pins for shapes that landed WITHOUT a rendered-text
+#      assertion (a table-entry typo could land silently) ----
+ad_has 'readv(fd=' "readv with a resolved fd"
+ad_has '["iovec-one", "iovec-two"], 2) = 18' "readv CONTENTS at exit"
+ad_has 'dup2(fd=' "dup2 fd class"
+ad_has ', 17) = 17' "dup2's plain int second arg and return"
+ad_has 'ftruncate(fd=' "ftruncate"
+ad_has ', 4) = 0' "its A_SIZE arg"
+ad_has 'getppid() = ' "a second arity-ZERO shape"
+ad_has 'clock_nanosleep(0, 0, {0.002000000}' "the 4-arg clock_nanosleep shape"
+echo "  breadth: readv contents, dup2, ftruncate, getppid, clock_nanosleep pinned"
+
 echo "--- asmspy --log fd->endpoint (socket:[inode] -> real endpoint) ---"
 "$BUILD/sock_victim" 2>"$BUILD/sock_victim.log" &
 SKPID=$!

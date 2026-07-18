@@ -81,8 +81,24 @@ int main(void) {
         syscall(SYS_stat, "/nonexistent-asmspy", &st);
         /* openat WITHOUT one: mode must NOT be rendered */
         int rf = open(TMP, O_RDONLY);
-        if (rf >= 0)
+        if (rf >= 0) {
+            /* T9: the READ-side iovec CONTENTS (the same 18 bytes writev wrote)
+             * and a plain-int dup2 target/return. */
+            char b0[9], b1[9];
+            struct iovec iov2[2] = {{b0, 9}, {b1, 9}};
+            readv(rf, iov2, 2);
+            dup2(rf, 17);
+            close(17);
             close(rf);
+        }
+        /* T9: an A_SIZE length arg (ftruncate) — after the stat/readv above, so
+         * they still see 18; the next iteration's O_TRUNC restores it. */
+        int wfd = open(TMP, O_WRONLY);
+        if (wfd >= 0) {
+            ftruncate(wfd, 4);
+            close(wfd);
+        }
+        syscall(SYS_getppid); /* T9: a second arity-ZERO shape */
 
         /* two flag words and a 6-arg shape */
         void *m = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
