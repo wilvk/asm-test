@@ -123,7 +123,7 @@ int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
                       size_t len, asmtest_trace_t *trace);
 int asmtest_pt_decode_window(const uint8_t *aux, size_t aux_len,
                              const asmtest_codeimage_t *img, uint64_t when,
-                             asmtest_trace_t *trace);
+                             asmtest_trace_t *trace, uint64_t *base_ip_out);
 int asmtest_pt_encode_fixture(uint8_t *buf, size_t cap, uint64_t base_ip,
                               int taken, size_t *out_len);
 
@@ -3792,7 +3792,8 @@ static void test_wholewindow_decode(void) {
         uint64_t when = img ? asmtest_codeimage_now(img) : 0;
         if (trk == ASMTEST_CI_OK) {
             asmtest_trace_t *tr = asmtest_trace_new(64, 64);
-            int rc = asmtest_pt_decode_window(aux, aux_len, img, when, tr);
+            int rc =
+                asmtest_pt_decode_window(aux, aux_len, img, when, tr, NULL);
             CHECK(rc == ASMTEST_HW_OK,
                   "pt_decode_window: decodes the synthetic stream through the "
                   "recorder-backed image (real libipt body)");
@@ -3824,8 +3825,8 @@ static void test_wholewindow_decode(void) {
                 static const uint64_t WNEXPECT[] = {0x0, 0x3, 0x6,
                                                     0xc, 0xe, 0x11};
                 asmtest_trace_t *wn = asmtest_trace_new(64, 64);
-                int wrc =
-                    asmtest_pt_decode_window(waux, waux_len, img, when, wn);
+                int wrc = asmtest_pt_decode_window(waux, waux_len, img, when,
+                                                   wn, NULL);
                 int wseq = (wrc == ASMTEST_HW_OK &&
                             asmtest_emu_trace_insns_total(wn) == 6);
                 for (size_t i = 0; wseq && i < 6; i++)
@@ -3860,8 +3861,12 @@ static void test_pt_window_pair_selfskip(void) {
           "pt window pair: begin(NULL) is EINVAL on every host (arg check "
           "precedes the availability gate)");
 
+    /* (2) With no PT window armed, the STRONG-tier byte-source accessor is NULL. */
+    CHECK(asmtest_hwtrace_window_image() == NULL,
+          "pt window pair: window_image() is NULL when no PT window is armed");
+
     if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT)) {
-        /* (2) Off the intel_pt PMU: a clean EUNAVAIL self-skip with *ctx == NULL. */
+        /* (3) Off the intel_pt PMU: a clean EUNAVAIL self-skip with *ctx == NULL. */
         void *ctx =
             (void *)(uintptr_t)0x1; /* poison: begin must overwrite to NULL */
         int rc = asmtest_hwtrace_pt_begin_window(&ctx);

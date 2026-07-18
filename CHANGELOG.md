@@ -963,6 +963,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`asmtest_pt_decode_window` gained a trailing `uint64_t *base_ip_out` parameter**
+  (`src/pt_backend.c`) reporting the first decoded IP, so the whole-window PT drain can
+  re-base its recorded offsets to ABSOLUTE addresses. Source-incompatible for a direct C
+  caller of this internal decode entry (pass `NULL` to keep the prior offset-origin
+  behavior); the facade (`asmtest_hwtrace_begin_window`/`_end_window`) and every language
+  binding are unaffected.
+  See [intel-pt-whole-window-substrate.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/intel-pt-whole-window-substrate.md).
+
 - **Internal plan docs reconciled against the code; four completed plans archived.** An audit
   of all 20 active plans against the source, Makefile lanes, CI, and git history found ~30
   stale status markers whose drift was **entirely one-directional — every one under-reported**,

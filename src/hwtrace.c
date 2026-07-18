@@ -89,10 +89,11 @@ int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
 int asmtest_cs_decode(const uint8_t *aux, size_t aux_len, const void *base,
                       size_t len, asmtest_trace_t *trace);
 /* §Z2 whole-window PT decode (pt_backend.c): recorder-backed image, no in-region
- * filter, offsets from the first decoded IP. Drives asmtest_hwtrace_pt_end_window. */
+ * filter, offsets from the first decoded IP (returned via base_ip_out, NULL ok, so
+ * the caller can re-base to ABSOLUTE). Drives asmtest_hwtrace_pt_end_window. */
 int asmtest_pt_decode_window(const uint8_t *aux, size_t aux_len,
                              const asmtest_codeimage_t *img, uint64_t when,
-                             asmtest_trace_t *trace);
+                             asmtest_trace_t *trace, uint64_t *base_ip_out);
 
 /* AMD branch-record decode, Tier-B stitch, runtime depth, and boundary-snapshot
  * begin/end decls live in the shared internal header "amd_backend.h" (included above). */
@@ -2284,11 +2285,25 @@ int asmtest_hwtrace_pt_end_window(void *ctx, asmtest_codeimage_t *img,
         dwhen = asmtest_codeimage_now(c->img);
     }
     int rc;
-    if (dimg == NULL)
+    if (dimg == NULL) {
         rc = ASMTEST_HW_EDECODE;
-    else
+    } else {
+        /* Re-base the appended entries to ABSOLUTE addresses so the window ABI holds
+         * (the header promises "insns[] will hold ABSOLUTE addresses"): snapshot the
+         * append cursors, decode (which records offsets from the first decoded IP and
+         * returns it in base_ip), then add base_ip to ONLY the newly appended insns[]
+         * and blocks[] ranges. */
+        size_t insn0 = trace->insns_len;
+        size_t blk0 = trace->blocks_len;
+        uint64_t base_ip = 0;
         rc = asmtest_pt_decode_window((const uint8_t *)c->aux.aux_map,
-                                      (size_t)head, dimg, dwhen, trace);
+                                      (size_t)head, dimg, dwhen, trace,
+                                      &base_ip);
+        for (size_t i = insn0; i < trace->insns_len; i++)
+            trace->insns[i] += base_ip;
+        for (size_t i = blk0; i < trace->blocks_len; i++)
+            trace->blocks[i] += base_ip;
+    }
     /* Truncation policy: overflow OR a decode failure flags the trace truncated. */
     if (overflow || rc != ASMTEST_HW_OK)
         trace->truncated = true;
@@ -2731,17 +2746,32 @@ int asmtest_hwtrace_render_versioned(asmtest_codeimage_t *img, uint64_t when,
 /* §Z0/§Z1 — the region-free (empty-ctor) whole-window scope surface    */
 /*                                                                     */
 /* The aspirational `using (new AsmTrace())` form: no NativeCode, no    */
-/* [base,len). begin_window arms the calling thread with NO registered  */
-/* region; the single-step handler records the absolute RIP of every    */
-/* instruction the thread runs in the window (the WEAK tier — native    */
-/* leaves only; whole-window PT/LBR is the forward-look STRONG tier and  */
-/* self-skips here). end_window closes the handle's frame and, on a      */
-/* cross-thread close (the handle does not resolve on the closing        */
-/* thread), flags `truncated` — the §Z4 thread-scope honesty default.   */
-/* render_window decodes the recorded ABSOLUTE addresses from LIVE self  */
-/* memory (valid for non-moving native code); moving/managed bytes use   */
-/* asmtest_hwtrace_render_versioned against a code-image instead (§Z3).  */
+/* [base,len). On a single-step tier begin_window arms the calling       */
+/* thread with NO registered region; the handler records the absolute    */
+/* RIP of every instruction it runs (the WEAK tier — native leaves       */
+/* only). On an inited Intel PT tier begin_window instead ARMS the        */
+/* STRONG whole-window PT capture (asmtest_hwtrace_pt_begin_window) and    */
+/* hands back a reserved-sentinel handle; end_window routes that sentinel  */
+/* to the PT drain/decode. AMD LBR / CoreSight stay the forward-look tier  */
+/* here and self-skip (AMD LBR live floor is Zen 4+; the exact whole-      */
+/* window contract can't be met by a sampled survey — callers wanting the  */
+/* quiet sampled complement use the explicit sample_begin_amd path).       */
+/* end_window closes the handle's frame and, on a cross-thread close (the  */
+/* handle does not resolve on the closing thread), flags `truncated` — the */
+/* §Z4 thread-scope honesty default. render_window decodes recorded        */
+/* ABSOLUTE addresses from LIVE self memory (valid for non-moving native   */
+/* code); moving/managed bytes use asmtest_hwtrace_render_versioned (§Z3). */
 /* ------------------------------------------------------------------ */
+
+#if defined(__linux__) && defined(__x86_64__)
+/* §Z1.2 PT window slot: ONE active whole-window PT capture at a time
+ * (process-global, mirroring the region path's single-slot precedent). begin_window
+ * stores the pair's ctx here plus a {gen, tid} the reserved-sentinel handle carries;
+ * end_window matches them, drains via asmtest_hwtrace_pt_end_window, and clears it. */
+static void *g_pt_window;        /* the active pt_window_ctx (opaque here)   */
+static uint32_t g_pt_window_gen; /* bumped each arm; carried in the handle    */
+static int g_pt_window_tid; /* arming OS tid (the perf event is per-thread) */
+#endif
 
 int asmtest_hwtrace_begin_window(asmtest_trace_t *trace,
                                  asmtest_hwtrace_scope_t *out) {
@@ -2773,9 +2803,34 @@ int asmtest_hwtrace_begin_window(asmtest_trace_t *trace,
         }
         return ASMTEST_HW_OK;
     }
+    if (g_opts.backend == ASMTEST_HWTRACE_INTEL_PT) {
+        /* STRONG tier: arm the ONE whole-window PT pair and hand back a reserved
+         * sentinel handle end_window routes to the PT drain. One active PT window at
+         * a time (process-global slot), ASMTEST_HW_ESTATE if busy. */
+        if (g_pt_window != NULL)
+            return ASMTEST_HW_ESTATE;
+        void *ctx = NULL;
+        int rc = asmtest_hwtrace_pt_begin_window(&ctx);
+        if (rc != ASMTEST_HW_OK)
+            return rc; /* clean off-Intel / no-permission EUNAVAIL self-skip */
+        g_pt_window = ctx;
+        g_pt_window_tid = hw_current_tid();
+        g_arm_tid = g_pt_window_tid;
+        if (out != NULL) {
+            out->idx =
+                0xfffffffeu; /* reserved PT-window sentinel (distinct from
+                                       the 0xffffffffu invalid sentinel) */
+            out->gen = ++g_pt_window_gen;
+            out->arm_tid = g_pt_window_tid;
+        }
+        return ASMTEST_HW_OK;
+    }
 #endif
-    /* PT / AMD LBR / CoreSight whole-window capture is the forward-look STRONG tier
-     * (needs bare-metal Intel PT / Zen 3+ to validate live); self-skip cleanly. */
+    /* AMD LBR / CoreSight whole-window capture stays the forward-look tier here and
+     * self-skips: the AMD LBR live floor is Zen 4+, and the exact whole-window
+     * contract cannot be met by a sampled branch survey — callers wanting the quiet
+     * sampled complement use the explicit asmtest_hwtrace_sample_begin_amd path /
+     * new AsmTrace(HwBackend.AmdLbr). */
     return ASMTEST_HW_EUNAVAIL;
 #else
     (void)trace;
@@ -2786,6 +2841,33 @@ int asmtest_hwtrace_begin_window(asmtest_trace_t *trace,
 int asmtest_hwtrace_end_window(asmtest_hwtrace_scope_t handle,
                                asmtest_trace_t *trace) {
 #if defined(__linux__) && defined(__x86_64__)
+    /* STRONG-tier PT window: route the reserved sentinel to the PT drain BEFORE the
+     * single-step frame lookup. The handle names the live window only if BOTH gen and
+     * arm_tid match the process-global slot. */
+    if (handle.idx == 0xfffffffeu) {
+        if (g_pt_window != NULL && handle.gen == g_pt_window_gen &&
+            handle.arm_tid == g_pt_window_tid) {
+            /* Its window: drain + free (never leak the fd/mmaps), even from a
+             * different OS thread than the arm — but a cross-thread close (the traced
+             * work hopped, Dispose ran elsewhere) flags truncated, the §Z4
+             * false-truncated-over-false-complete default. pt_end_window with img==NULL
+             * decodes against the ctx's own self image, refreshed at close. */
+            int crossthread = (hw_current_tid() != g_pt_window_tid);
+            void *ctx = g_pt_window;
+            g_pt_window = NULL;
+            g_pt_window_tid = 0;
+            g_arm_tid = -1;
+            int rc = asmtest_hwtrace_pt_end_window(ctx, NULL, 0, trace);
+            if (crossthread && trace != NULL)
+                trace->truncated = true;
+            return rc;
+        }
+        /* Stale / foreign / already-closed handle: never touch a different live
+         * window — flag truncated and return (the SS path's non-resolving shape). */
+        if (trace != NULL)
+            trace->truncated = true;
+        return ASMTEST_HW_OK;
+    }
     const void *base = NULL;
     size_t len = 0;
     asmtest_trace_t *ftrace = NULL;
@@ -2811,6 +2893,20 @@ int asmtest_hwtrace_end_window(asmtest_hwtrace_scope_t handle,
     if (trace != NULL)
         trace->truncated = true;
     return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+/* §Z1.2 — the active PT window's byte source (the ctx's own self code-image), so a C
+ * caller can asmtest_codeimage_track its exec region after begin_window and then feed
+ * it to render/decode. NULL when no PT window is armed (or the WEAK single-step tier
+ * is). The .NET side passes its own JitMethodMap image and never consults this. */
+asmtest_codeimage_t *asmtest_hwtrace_window_image(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (g_pt_window == NULL)
+        return NULL;
+    return ((pt_window_ctx_t *)g_pt_window)->img;
+#else
+    return NULL;
 #endif
 }
 

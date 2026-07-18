@@ -223,7 +223,9 @@ int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
  * adapter it rides (asmtest_pt_read_codeimage) is host-tested directly. */
 int asmtest_pt_decode_window(const uint8_t *aux, size_t aux_len,
                              const asmtest_codeimage_t *img, uint64_t when,
-                             asmtest_trace_t *trace) {
+                             asmtest_trace_t *trace, uint64_t *base_ip_out) {
+    if (base_ip_out != NULL)
+        *base_ip_out = 0;
     if (aux == NULL || aux_len == 0 || img == NULL || trace == NULL)
         return ASMTEST_HW_EDECODE;
     struct pt_config config;
@@ -274,6 +276,8 @@ int asmtest_pt_decode_window(const uint8_t *aux, size_t aux_len,
     }
     pt_insn_free_decoder(dec);
     pt_image_free(image);
+    if (base_ip_out != NULL)
+        *base_ip_out = base_ip; /* the window's absolute offset origin */
     if (decoded == 0)
         return ASMTEST_HW_EDECODE;
     return ASMTEST_HW_OK;
@@ -374,12 +378,14 @@ int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
 
 int asmtest_pt_decode_window(const uint8_t *aux, size_t aux_len,
                              const asmtest_codeimage_t *img, uint64_t when,
-                             asmtest_trace_t *trace) {
+                             asmtest_trace_t *trace, uint64_t *base_ip_out) {
     (void)aux;
     (void)aux_len;
     (void)img;
     (void)when;
     (void)trace;
+    if (base_ip_out != NULL)
+        *base_ip_out = 0;
     return ASMTEST_HW_ENOSYS;
 }
 

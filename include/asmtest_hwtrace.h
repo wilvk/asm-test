@@ -429,18 +429,24 @@ int asmtest_hwtrace_render_versioned(asmtest_codeimage_t *img, uint64_t when,
 /* single-step tier records every executed instruction and is           */
 /* CI-runnable on any x86-64 Linux for a NATIVE LEAF (pointing          */
 /* single-step at live managed code is forbidden — it fights the        */
-/* runtime's SIGTRAP/JIT). The STRONG whole-window PT / CEILING AMD LBR  */
-/* tiers are forward-look (bare-metal Intel PT / Zen 4+) and            */
-/* begin_window self-skips to ASMTEST_HW_EUNAVAIL on them here. The      */
-/* whole facility is Linux-only.                                        */
+/* runtime's SIGTRAP/JIT). On an inited Intel PT tier begin_window       */
+/* instead ARMS the STRONG whole-window PT capture (silicon-gated: the   */
+/* arm self-skips off bare-metal Intel PT). The CEILING AMD LBR tier is  */
+/* NOT armed here (its live floor is Zen 4+ and the exact whole-window   */
+/* contract cannot be met by a sampled survey — use the explicit         */
+/* asmtest_hwtrace_sample_begin_amd path); begin_window self-skips        */
+/* ASMTEST_HW_EUNAVAIL on AMD LBR / CoreSight. Linux-only.               */
 /* ------------------------------------------------------------------ */
 
 /* Arm a region-free whole-window capture on the calling thread, recording into
- * `trace` (caller-owned; insns[] will hold ABSOLUTE addresses). Returns the scope
- * handle in *out and ASMTEST_HW_OK, or a negative status that is a clean self-skip:
- * ASMTEST_HW_EUNAVAIL on a non-single-step backend (whole-window HW trace is
- * forward-look), ASMTEST_HW_ESTATE if the tier is not up, ASMTEST_HW_EFULL if this
- * thread's range stack is full, ASMTEST_HW_EINVAL on a NULL trace. */
+ * `trace` (caller-owned; insns[] will hold ABSOLUTE addresses). On a single-step
+ * tier this is the WEAK stepper; on an inited Intel PT tier it ARMS the STRONG PT
+ * capture and returns a reserved-sentinel handle end_window routes to the PT drain.
+ * Returns the scope handle in *out and ASMTEST_HW_OK, or a negative status that is a
+ * clean self-skip: ASMTEST_HW_EUNAVAIL on AMD LBR / CoreSight (still forward-look
+ * here) or off bare-metal Intel PT, ASMTEST_HW_ESTATE if the tier is not up or a PT
+ * window is already active, ASMTEST_HW_EFULL if this thread's range stack is full,
+ * ASMTEST_HW_EINVAL on a NULL trace. */
 int asmtest_hwtrace_begin_window(asmtest_trace_t *trace,
                                  asmtest_hwtrace_scope_t *out);
 
@@ -459,6 +465,13 @@ int asmtest_hwtrace_end_window(asmtest_hwtrace_scope_t handle,
  * tiers/relocates) must use asmtest_hwtrace_render_versioned against a code-image. */
 int asmtest_hwtrace_render_window(asmtest_hwtrace_scope_t handle, char *buf,
                                   size_t buflen);
+
+/* The active STRONG-tier PT window's byte source — the ctx's own self code-image, so
+ * a C caller can asmtest_codeimage_track its exec region after begin_window and feed
+ * it to the decode/render. Returns NULL when no Intel PT window is armed (the WEAK
+ * single-step tier, or before begin_window). The .NET inline ctor passes its own
+ * JitMethodMap image instead and never consults this. */
+asmtest_codeimage_t *asmtest_hwtrace_window_image(void);
 
 /* ------------------------------------------------------------------ */
 /* §D4 — async-hop stitching: the shared logical-operation merge core   */
