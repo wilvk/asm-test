@@ -1328,6 +1328,112 @@ static void test_amd_msr(void) {
 #endif
 }
 
+#if defined(__linux__) && defined(__x86_64__)
+static long g_btf_result;
+static void btf_run_add2(void *arg) {
+    typedef long (*add2_fn)(long, long);
+    g_btf_result = ((add2_fn)arg)(20, 22);
+}
+static void btf_run_loop20(void *arg) {
+    long (*fn)(long, long) = (long (*)(long, long))arg;
+    g_btf_result = fn(1, 20); /* AMD_LOOP: 20 trips -> 19 taken back-edges */
+}
+#endif
+
+/* W3 in-process BTF LIVE capture (asmtest_ss_btf_trace): the cross-backend parity
+ * claim — on bare-metal x86-64 Linux with /dev/cpu/N/msr, the branch-granular BTF
+ * stream is byte-identical to the per-instruction EFLAGS.TF stepper's. Needs
+ * CAP_SYS_ADMIN + the msr module (docker-hwtrace-msr); hypervisors that mask
+ * DEBUGCTL.BTF self-skip here too (the T2 functional probe decides, not a build
+ * guard). Runs the shared ROUTINE fixture exactly like test_singlestep_live. */
+static void test_ss_btf_live(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ss_btf_available()) {
+        printf("# SKIP in-process BTF: needs bare-metal x86-64 + "
+               "/dev/cpu/N/msr + CAP_SYS_ADMIN; hypervisors mask "
+               "DEBUGCTL.BTF\n");
+        return;
+    }
+    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP in-process BTF: mmap failed\n");
+        return;
+    }
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+
+    asmtest_trace_t *t = asmtest_trace_new(64, 64);
+    g_btf_result = 0;
+    int rc = asmtest_ss_btf_trace(p, sizeof ROUTINE, btf_run_add2, p, t);
+    printf("# in-process BTF: rc=%d result=%ld insns=%llu truncated=%d\n", rc,
+           g_btf_result, asmtest_emu_trace_insns_total(t),
+           asmtest_emu_trace_truncated(t));
+    CHECK(rc == ASMTEST_HW_OK, "in-process BTF: capture succeeds");
+    CHECK(g_btf_result == 42, "in-process BTF: the region ran (fn(20,22)=42)");
+    CHECK(asmtest_emu_trace_insns_total(t) > 0 ||
+              asmtest_emu_trace_truncated(t),
+          "in-process BTF: honest (in-region instructions reconstructed, or "
+          "truncated)");
+    if (!asmtest_emu_trace_truncated(t)) {
+        static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+        int seq = (asmtest_emu_trace_insns_total(t) == 5);
+        for (size_t i = 0; seq && i < 5; i++)
+            seq = (t->insns[i] == EXPECT[i]);
+        CHECK(seq, "in-process BTF: complete capture matches the exact "
+                   "single-step stream [0,3,6,c,11]");
+        CHECK(asmtest_trace_covered(t, 0) && asmtest_trace_covered(t, 0x11),
+              "in-process BTF: complete capture's block partition {0, 0x11} "
+              "matches single-step/PT/AMD/DynamoRIO");
+    }
+    asmtest_trace_free(t);
+    munmap(p, sizeof ROUTINE);
+#else
+    printf("# SKIP in-process BTF: not Linux x86-64\n");
+#endif
+}
+
+/* W3 differentiator: a 20-trip loop takes 19 taken back-edges — past AMD LBR's
+ * 16-entry window, which would flag truncated — yet BTF's per-branch trap has no
+ * depth ceiling at all. Reuses AMD_LOOP (test_amd_msr's fixture, same mov;add;dec;
+ * jnz;ret shape) since 4 trips there only needs to clear 3 back-edges; this needs 19. */
+static void test_ss_btf_loop(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ss_btf_available())
+        return; /* already reported by test_ss_btf_live */
+    void *q = mmap(NULL, sizeof AMD_LOOP, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (q == MAP_FAILED)
+        return;
+    memcpy(q, AMD_LOOP, sizeof AMD_LOOP);
+    mprotect(q, sizeof AMD_LOOP, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)q, (char *)q + sizeof AMD_LOOP);
+
+    asmtest_trace_t *t = asmtest_trace_new(256, 64);
+    g_btf_result = 0;
+    int rc = asmtest_ss_btf_trace(q, sizeof AMD_LOOP, btf_run_loop20, q, t);
+    printf("# in-process BTF loop: rc=%d result=%ld insns=%llu truncated=%d\n",
+           rc, g_btf_result, asmtest_emu_trace_insns_total(t),
+           asmtest_emu_trace_truncated(t));
+    CHECK(rc == ASMTEST_HW_OK, "in-process BTF loop: capture succeeds");
+    CHECK(g_btf_result == 20,
+          "in-process BTF loop: 20-trip call returns the trip sum");
+    CHECK(asmtest_emu_trace_insns_total(t) == 62 ||
+              asmtest_emu_trace_truncated(t),
+          "in-process BTF loop: honest (all 62 insns past the LBR window, or "
+          "truncated)");
+    if (!asmtest_emu_trace_truncated(t))
+        CHECK(asmtest_emu_trace_insns_total(t) == 62,
+              "in-process BTF loop: complete capture has NO depth ceiling "
+              "(1 + 20*3 + 1 = 62, past AMD LBR's 16-entry window)");
+    asmtest_trace_free(t);
+    munmap(q, sizeof AMD_LOOP);
+#else
+    printf("# SKIP in-process BTF loop: not Linux x86-64\n");
+#endif
+}
+
 /* AMD MSR-direct SPEC FILTER (host-independent, no /dev/cpu/msr): the MSR path reads raw
  * LbrExtV2 FROM/TO MSRs, where TO[63]=valid(retired) and TO[62]=spec(wrong-path). A
  * spec-only slot (valid=0, spec=1) must be DROPPED at the source — it cannot set
@@ -8509,6 +8615,8 @@ int main(void) {
     test_call_auto();
     test_stealth_window_inline();
     test_amd_msr();
+    test_ss_btf_live();
+    test_ss_btf_loop();
 
     /* §1 (AMD): concurrent per-thread AMD-LBR capture (capped lane on AMD). */
     test_concurrent_amd();

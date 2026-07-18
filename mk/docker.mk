@@ -551,6 +551,13 @@ docker-hwtrace-amd: docker-bindings-base
 # LbrExtV2 FROM/TO MSRs directly for a zero-PMU-interrupt Tier-A capture. Needs the host
 # `msr` kernel module loaded and an AMD amd_lbr_v2 host; the MSR test self-skips everywhere
 # else (all other lanes lack /dev/cpu access), so this is a self-hosted AMD lane.
+#
+# Second consumer: W3 in-process BTF branch-granular single-step (src/ss_btf.c,
+# asmtest_ss_btf_trace) rides the exact same /dev/cpu/N/msr access this lane already
+# grants — no new capability, no new rule. Unlike the LBR lane above it needs no AMD
+# amd_lbr_v2 substrate at all (DEBUGCTL.BTF is baseline AMD64/Intel); its own gate is
+# bare-metal (a hypervisor masking DEBUGCTL.BTF self-skips, decided by the T2 functional
+# probe, not a build guard) + the same CAP_SYS_ADMIN + msr module this lane provides.
 docker-hwtrace-msr: docker-bindings-base
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace \
 	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
