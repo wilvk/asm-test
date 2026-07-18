@@ -1,0 +1,25 @@
+<!-- Heap-snapshot dumper for F4 increment 4 (real object identity via GCBulkType/Node/Edge, on the
+     ptrace live-attach tier). Opens an EventPipe session on a running victim's pid with the
+     GCHeapSnapshot keyword (0x1980001) — whose ManagedHeapCollect bit forces one full blocking
+     induced gen2 GC — and parses the GCBulkNode / GCBulkEdge / BulkType events that fire during it
+     into a plain-text {Address,Size,TypeID,typename} node table. The tracer joins that table with the
+     MovedReferences2 feed (increment-2 + the T2 post-capture moves) to key managed memory def-use on
+     (object, offset). Needs a nuget restore (the docker lane has network at build time). See
+     mk/native-trace.mk `gccanon-attach` and dataflow-f4-object-identity.md T3.
+
+     TraceEvent 3.2.5 is the latest stable, MIT (nuget.org, 2026-07-17); NETCore.Client 0.2.510501 is
+     the pin the attacher already uses. NuGet pins live in the csproj exactly as the attacher's do;
+     scripts/third-party-digests.txt covers curl'd tarballs, not NuGet, so no digest line here. -->
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>gccanon_dumper</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.510501" />
+    <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.2.5" />
+  </ItemGroup>
+</Project>
