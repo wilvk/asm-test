@@ -91,6 +91,7 @@ typedef struct {
     int no_syscall_inject;
     int no_undef_mask;
     uint64_t inject_flag_bit;
+    int no_hw_record;
 } asmtest_blockstep_opts_t;
 
 typedef struct {
@@ -135,6 +136,7 @@ void asmtest_dataflow_blockstep_opts_layout(size_t *size, size_t *last_off);
  * (architectural, not Capstone-versioned — safe to hardcode). Duplicated rather than
  * #include'd, exactly like test_dataflow_ptrace.c's REG_* constants. */
 #define REG_EFLAGS 25
+#define REG_RAX    35 /* T6: the HWREC value-trace assertions key on this */
 #define EFLAG_CF   0x0001u
 #define EFLAG_PF   0x0004u
 #define EFLAG_AF   0x0010u
@@ -233,12 +235,60 @@ static const uint8_t hwrec_5site[] = {
 
 /* hwrec_rdtsc(): EXECUTED (unlike imp_rdtsc above) — a tiny impure region whose only impurity
  * is one rdtsc site, for the live forward-pass checks: the DR exec-breakpoint boundary firing
- * (info.hw_hits) while the externally observable verdict (gated -> single-step OK; forced ->
- * per-step decode truncates) stays exactly what it was before T5 — T6, not T5, lifts the
- * truncation. */
+ * (info.hw_hits) and (as of T6) the recorded value actually being INJECTED into the replay,
+ * gating the region onto the block-step+replay path rather than the single-step fallback. */
 static const uint8_t hwrec_rdtsc[] = {
     0x0f, 0x31, /* 0x00 rdtsc */
     0xc3,       /* 0x02 ret   */
+};
+
+/* hwrec_cpuid(): EXECUTED — the CPUID analogue of hwrec_rdtsc, for the byte-identical
+ * block-step-vs-single-step comparison (T6's exit criterion 1 applied to F2 increment 2):
+ * cpuid's full write set (eax/ebx/ecx/edx) is Capstone-reported and needs no producer-local
+ * supplement (see open_step's T5 comment), so nothing but injection stands between this and a
+ * correct trace. Leaf 0 (vendor string) is always safe to query. */
+static const uint8_t hwrec_cpuid[] = {
+    0xb8, 0x00, 0x00, 0x00, 0x00, /* 0x00 mov eax, 0  (leaf 0) */
+    0x0f, 0xa2,                   /* 0x05 cpuid                */
+    0xc3,                         /* 0x07 ret                  */
+};
+
+/* hwrec_rdtsc2(): EXECUTED — TWO DISTINCT rdtsc sites in one region, for the monotonicity
+ * check: the tsc value the SECOND site's boundary records must be >= the first's. Both sites
+ * fit under the DR0-3 cap (distinct addresses by construction — see region_scan). */
+static const uint8_t hwrec_rdtsc2[] = {
+    0x0f, 0x31, /* 0x00 rdtsc (1st) */
+    0x0f, 0x31, /* 0x02 rdtsc (2nd) */
+    0xc3,       /* 0x04 ret         */
+};
+
+/* hwrec_rdrand_jc(): EXECUTED — rdrand's result CONSUMED BY CONTROL FLOW (`jb`, the CF==1
+ * mnemonic; Intel's own assembler alias for this opcode is `jc`), for run_hwrec_rdrand_jc_case:
+ * proves CF was injected — the block terminates exactly at rdrand, so the coherence canary
+ * compares Unicorn's (injected) eflags against the real post-rdrand boundary, and an un-injected
+ * CF would very likely trip it (rdrand DEFINES CF, so it stays canary-checked, not masked). Not
+ * a vec_compare fixture: rdrand draws a genuinely random value per forked capture, so its
+ * destination register can never byte-match across two independent processes. */
+static const uint8_t hwrec_rdrand_jc[] = {
+    0x0f, 0xc7, 0xf0,             /* 0x00 rdrand eax                    */
+    0x72, 0x07,                   /* 0x03 jb   0x0c  (CF=1 -> success)  */
+    0xb8, 0xad, 0x0b, 0x00, 0x00, /* 0x05 mov  eax, 0x0bad   (fail)     */
+    0xeb, 0x05,                   /* 0x0a jmp  0x11                     */
+    0xb8, 0x0d, 0x60, 0x00, 0x00, /* 0x0c mov  eax, 0x600d   (success)  */
+    0xc3,                         /* 0x11 ret                           */
+};
+
+/* hwrec_coldpath(a): EXECUTED — a branch that SKIPS the rdtsc block entirely at runtime
+ * (rdi==0). region_scan's STATIC sweep still finds the (unreached) site and the region stays
+ * gated onto the replay path (injectable), but the DR breakpoint never fires (hw_hits==0) and
+ * nothing is injected (injected==0) — the region is no longer punished for a site it never
+ * executes, T6's "per-block, not per-region" gating claim. Returns arg0 unchanged. */
+static const uint8_t hwrec_coldpath[] = {
+    0x48, 0x85, 0xff, /* 0x00 test rdi, rdi          */
+    0x74, 0x02,       /* 0x03 jz   0x07  (skip rdtsc)*/
+    0x0f, 0x31,       /* 0x05 rdtsc      (cold)      */
+    0x48, 0x89, 0xf8, /* 0x07 mov  rax, rdi          */
+    0xc3,             /* 0x0a ret                    */
 };
 
 /* ------------------------------------------------------------------ */
@@ -639,14 +689,16 @@ static const uint8_t sc_execve[] = {
     0xc3,                         /* 0x11 ret            (on failure)  */
 };
 
-/* sc_then_cpuid(): scan-only. The ALL-quantifier case: an injectable impurity FOLLOWED by a
+/* sc_then_sysenter(): scan-only. The ALL-quantifier case: an injectable impurity FOLLOWED by a
  * non-injectable one. If `injectable` were settled at the FIRST impurity — the exact shape of
  * the HIGH-3 early-break bug F1's review found — this region would be called injectable and its
- * cpuid would reach the replay. The honest reason is "cpuid", not "syscall". */
-static const uint8_t sc_then_cpuid[] = {
+ * sysenter would reach the replay. The honest reason is "sysenter", not "syscall". (cpuid no
+ * longer serves this case as of T6: it is injectable too, so `syscall; cpuid` is now fully
+ * injectable — sysenter is the one impurity with no BTF boundary and no DR-breakpoint plan.) */
+static const uint8_t sc_then_sysenter[] = {
     0xb8, 0x6e, 0x00, 0x00, 0x00, /* mov eax, 110 */
     0x0f, 0x05,                   /* syscall      */
-    0x0f, 0xa2,                   /* cpuid        */
+    0x0f, 0x34,                   /* sysenter     */
     0xc3,                         /* ret          */
 };
 
@@ -1048,8 +1100,12 @@ done:
     asmtest_valtrace_free(B);
 }
 
-/* Exit criterion 3: an IMPURE method is detected by the static purity gate and single-stepped
- * (never replayed through the OS-interacting instruction), still yielding a correct trace. */
+/* Exit criterion 3: an IMPURE method is detected by the static purity gate and (pre-T6)
+ * single-stepped, never replayed through the OS-interacting instruction, still yielding a
+ * correct trace. T6 widened the NATURAL gate to admit cpuid (record-and-inject), so imp_cpuid
+ * on its own now takes the replay path — a separate, already-covered claim (see
+ * run_hwrec_cpuid_replay_case). This case pins force_singlestep to keep exercising the
+ * fallback path itself, and separately confirms is_pure() still calls the region impure. */
 static void run_impure_case(void) {
     long args[1] = {0x1234};
     asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
@@ -1057,18 +1113,25 @@ static void run_impure_case(void) {
         CHECK(0, "impure: valtrace_new");
         return;
     }
+    const char *why = NULL;
+    CHECK(asmtest_dataflow_blockstep_is_pure(imp_cpuid, sizeof imp_cpuid,
+                                             &why) == 0 &&
+              why != NULL && strcmp(why, "cpuid") == 0,
+          "impure: is_pure() still calls the region impure (reason=%s) — T6 "
+          "widened `injectable`, it did not redefine `pure`",
+          why ? why : "?");
+
     long r = 0;
     asmtest_blockstep_info_t info = {0};
     asmtest_blockstep_opts_t opts;
     memset(&opts, 0, sizeof opts);
-    opts.inject_block = -1; /* purity-gated */
+    opts.inject_block = -1;
+    opts.force_singlestep = 1;
     int rc = asmtest_dataflow_blockstep_run(imp_cpuid, sizeof imp_cpuid, args,
                                             1, &opts, &r, v, &info);
     CHECK(rc == DF_BLOCKSTEP_OK, "impure: capture completed (rc=%d)", rc);
-    CHECK(info.pure == 0 && info.reason != NULL &&
-              strcmp(info.reason, "cpuid") == 0,
-          "impure: cpuid detected -> single-step fallback (reason=%s)",
-          info.reason ? info.reason : "?");
+    CHECK(info.pure == 0, "impure: single-step fallback path (pure=%d)",
+          info.pure);
     CHECK(r == 0x1234,
           "impure: single-stepped routine returned arg0 = 0x1234 (got 0x%lx)",
           r);
@@ -1385,22 +1448,36 @@ static void run_impure_vector_case(void) {
         CHECK(0, "impure-vec: valtrace_new");
         return;
     }
+
+    /* T6 widened `injectable` to admit cpuid, so this region's NATURAL gate now routes it to
+     * block-step+replay rather than single-step — a separate, already-covered claim (see
+     * run_hwrec_cpuid_replay_case). What THIS case still needs to prove is specific to the
+     * SINGLE-STEP FALLBACK: that region_scan's sweep classifies PAST the impurity so
+     * touches_vec survives for the fallback path, independent of whichever impurities the
+     * gate currently happens to admit. force_singlestep pins that path directly rather than
+     * depending on cpuid staying non-injectable forever. */
+    const char *why = NULL;
+    CHECK(asmtest_dataflow_blockstep_is_pure(imp_vec + IMP_VEC_ROFF,
+                                             sizeof imp_vec - IMP_VEC_ROFF,
+                                             &why) == 0 &&
+              why != NULL && strcmp(why, "cpuid") == 0,
+          "impure-vec: the region is still IMPURE at the cpuid (reason=%s) "
+          "— T6 widened `injectable`, it did not redefine `pure`",
+          why ? why : "?");
+
     asmtest_blockstep_opts_t o;
     memset(&o, 0, sizeof o);
     o.inject_block = -1;
     o.region_off = IMP_VEC_ROFF;
+    o.force_singlestep = 1;
     long r = 0;
     asmtest_blockstep_info_t info;
     memset(&info, 0, sizeof info);
     int rc = asmtest_dataflow_blockstep_run(imp_vec, sizeof imp_vec, args, 2,
                                             &o, &r, v, &info);
-    CHECK(rc == DF_BLOCKSTEP_OK && !v->truncated && info.pure == 0 &&
-              info.reason != NULL && strcmp(info.reason, "cpuid") == 0 &&
-              r == 7,
-          "impure-vec: impure+vector region single-stepped, complete trace "
-          "(rc=%d pure=%d "
-          "reason=%s r=%ld)",
-          rc, info.pure, info.reason ? info.reason : "?", r);
+    CHECK(rc == DF_BLOCKSTEP_OK && !v->truncated && info.pure == 0 && r == 7,
+          "impure-vec: single-stepped, complete trace (rc=%d pure=%d r=%ld)",
+          rc, info.pure, r);
 
     /* The deliverable: the vector instructions AFTER the cpuid still get real values. Count XMM
      * register records and how many carry a value; the two must agree. */
@@ -2101,44 +2178,53 @@ static void run_no_inject_case(void) {
  * impure instruction, independently of region_scan.
  *
  * blind_rdtsc overwrites BOTH of rdtsc's outputs before the boundary, so the coherence canary
- * sees every register match and cannot help. force_replay pushes the region past the REGION
- * gate, exactly as a region_scan desync would (F1's `island` fixture proves a linear sweep can
- * miss an instruction entirely). What must stop it is step_block's own decode at the real pc.
- * Measured: Unicorn runs rdtsc and returns UC_ERR_OK with a fabricated counter, so without this
- * defence the capture would report rc=OK, truncated=0 and a made-up TSC in the trace. */
+ * sees every register match and cannot help; as of T6 it is also naturally INJECTABLE, so the
+ * defence this fixture proves is no longer "the region gate declined it" but "the per-step
+ * decode requires a real boundary before it will let Unicorn's result reach the replay at
+ * all". no_hw_record (T6's own hook) reproduces exactly that: no DR slot is armed, so the
+ * forward pass runs the WHOLE straight-line region (rdtsc; mov rax,rdi; mov rdx,rdi; ret) in
+ * one block-step stop landing at region exit — nowhere near rdtsc's pc+len — and step_block's
+ * fail-closed boundary check refuses before Unicorn ever touches rdtsc. Measured: Unicorn runs
+ * rdtsc and returns UC_ERR_OK with a fabricated counter, so without this defence the capture
+ * would report rc=OK, truncated=0 and a made-up TSC in the trace. */
 static void run_blind_rdtsc_case(void) {
     long args[1] = {0x1234};
-    asmtest_valtrace_t *v = asmtest_valtrace_new(1024, 8192, 1024);
-    if (v == NULL) {
-        CHECK(0, "blind-rdtsc: valtrace_new");
-        return;
-    }
-    /* First: it is correctly classified NOT injectable, and the reason names rdtsc. */
+
+    /* First: it is correctly classified injectable (T6) — the DR-breakpoint boundary exists
+     * regardless of what the region does with rdtsc's outputs afterward. */
     const char *why = NULL;
     CHECK(asmtest_dataflow_blockstep_is_injectable(
-              blind_rdtsc, sizeof blind_rdtsc, &why) == 0 &&
-              why != NULL && strcmp(why, "rdtsc") == 0,
-          "blind-rdtsc: rdtsc is NOT injectable — BTF does not trap it, so no "
-          "boundary exists to record its retired value (reason=%s)",
-          why ? why : "?");
+              blind_rdtsc, sizeof blind_rdtsc, &why) == 1,
+          "blind-rdtsc: rdtsc IS injectable (T6) — the DR exec breakpoint "
+          "gives the forward pass a real post-retirement boundary regardless "
+          "of what happens to rax/rdx afterward");
 
+    asmtest_valtrace_t *v = asmtest_valtrace_new(1024, 8192, 1024);
+    if (v == NULL) {
+        CHECK(0, "blind-rdtsc: valtrace_new (no_hw_record)");
+        return;
+    }
     long r = 0;
     asmtest_blockstep_info_t info = {0};
     asmtest_blockstep_opts_t o;
     memset(&o, 0, sizeof o);
     o.inject_block = -1;
-    o.force_replay = 1; /* simulate the region gate having missed it */
+    o.no_hw_record = 1; /* no DR slot armed -> no boundary at the rdtsc site */
     int rc = asmtest_dataflow_blockstep_run(blind_rdtsc, sizeof blind_rdtsc,
                                             args, 1, &o, &r, v, &info);
     CHECK(rc == DF_BLOCKSTEP_FAULT && v->truncated,
-          "blind-rdtsc NEGATIVE CONTROL: forced past the region gate — with "
-          "the canary BLIND (both rdtsc outputs overwritten) — the per-step "
-          "decode still refuses and TRUNCATES (rc=%d truncated=%d), rather "
-          "than reporting Unicorn's fabricated TSC as a real value",
+          "blind-rdtsc NEGATIVE CONTROL: no_hw_record=1 — with the canary "
+          "BLIND (both rdtsc outputs overwritten) AND no DR boundary armed — "
+          "the per-step decode still refuses and TRUNCATES (rc=%d "
+          "truncated=%d), rather than reporting Unicorn's fabricated TSC as "
+          "a real value",
           rc, (int)v->truncated);
     asmtest_valtrace_free(v);
 
-    /* And gated normally, it single-steps to a correct trace: over-gating costs only the win. */
+    /* And gated normally (T6): the region is injectable, so it replays with rdtsc's real
+     * recorded value injected — and the final result is correct regardless (the mov rax,rdi /
+     * mov rdx,rdi in the NEXT block overwrite whatever was injected; the injected value being
+     * REAL rather than fabricated is what makes that overwrite sound rather than merely lucky). */
     asmtest_valtrace_t *w = asmtest_valtrace_new(1024, 8192, 1024);
     if (w == NULL)
         return;
@@ -2149,32 +2235,31 @@ static void run_blind_rdtsc_case(void) {
     o2.inject_block = -1;
     int rc2 = asmtest_dataflow_blockstep_run(blind_rdtsc, sizeof blind_rdtsc,
                                              args, 1, &o2, &r2, w, &i2);
-    CHECK(rc2 == DF_BLOCKSTEP_OK && !w->truncated && i2.pure == 0 &&
-              i2.reason != NULL && strcmp(i2.reason, "rdtsc") == 0 &&
-              r2 == 0x1234,
-          "blind-rdtsc: gated to the single-step fallback -> correct trace "
-          "(rc=%d pure=%d reason=%s r=%ld)",
-          rc2, i2.pure, i2.reason ? i2.reason : "?", r2);
+    CHECK(rc2 == DF_BLOCKSTEP_OK && !w->truncated && i2.pure == 1 &&
+              i2.injected >= 1 && r2 == 0x1234,
+          "blind-rdtsc: gated normally -> block-step+replay with rdtsc's "
+          "real value injected (T6) -> correct trace (rc=%d pure=%d "
+          "injected=%llu r=%ld)",
+          rc2, i2.pure, (unsigned long long)i2.injected, r2);
     asmtest_valtrace_free(w);
 }
 
-/* T5 (F2 increment 2, forward pass) — THE LIVE EVIDENCE, on the Zen 5 box: the DR exec
- * breakpoint fires and info.hw_hits counts it, while the EXTERNALLY OBSERVABLE verdict stays
- * exactly what it was before this task lands (this task alone must not change verdicts — T6
- * is what lifts the truncation). Three sub-cases over hwrec_rdtsc (`rdtsc; ret`):
+/* T5+T6 (F2 increment 2) — THE LIVE EVIDENCE, on hardware where BTF works: the DR exec
+ * breakpoint fires (info.hw_hits) AND (as of T6) its recorded value is actually INJECTED into
+ * the replay, so the externally observable verdict CHANGES from before T6: a region whose only
+ * impurity is rdtsc now takes the block-step+replay path instead of falling back to
+ * single-step. Three sub-cases over hwrec_rdtsc (`rdtsc; ret`):
  *
- *   1. Gated normally (default opts): the region is still classified NOT injectable (T5 keeps
- *      DFB_IMP_HWREC out of `injectable`, exactly as DFB_IMP_OTHER always was), so it single-
- *      steps to a correct trace, UNCHANGED from before this task — and hw_hits stays 0, since
- *      capture_blockstep (the only place that arms a DR slot) never runs on this path.
- *   2. force_replay=1 (forced past the region gate, mirroring blind_rdtsc's own technique):
- *      capture_blockstep now arms DR0 at the rdtsc site, takes the boundary, and hw_hits
- *      becomes >= 1 — but step_block's DFB_IMP_HWREC case still refuses to execute rdtsc in
- *      the replay (T6 not landed), so the capture still FAULTS + truncates, exactly as it did
- *      when this was undifferentiated DFB_IMP_OTHER. Same verdict, new telemetry.
- *   3. force_singlestep=1 (the explicit Done-when check): hw_hits MUST stay 0 — no arming on
- *      the fallback path, because force_singlestep routes to capture_singlestep, which never
- *      calls capture_blockstep at all. */
+ *   1. Gated normally (default opts): T6 lifted `injectable` to admit HWREC, so the region now
+ *      takes the replay path — hw_hits >= 1 (the DR breakpoint fired) and injected >= 1 (T6's
+ *      new evidence), rc=OK, not truncated, info.pure == 1 (replay was used).
+ *   2. no_hw_record=1 (T6's own negative control): skips arming entirely, so the forward pass
+ *      never gets a boundary at the site and step_block's `pc + len != pc_next` check refuses —
+ *      hw_hits stays 0 (nothing ever armed to fire) and the capture FAULTS + truncates, proving
+ *      the DR-breakpoint boundary — not luck — is what makes injection possible.
+ *   3. force_singlestep=1 (the explicit Done-when check, unchanged by T6): hw_hits MUST stay 0
+ *      — no arming on the fallback path, because force_singlestep routes to
+ *      capture_singlestep, which never calls capture_blockstep at all. */
 static void run_hwrec_forward_case(void) {
     asmtest_valtrace_t *v1 = asmtest_valtrace_new(256, 4096, 256);
     if (v1 == NULL) {
@@ -2188,19 +2273,18 @@ static void run_hwrec_forward_case(void) {
     o1.inject_block = -1;
     int rc1 = asmtest_dataflow_blockstep_run(hwrec_rdtsc, sizeof hwrec_rdtsc,
                                              NULL, 0, &o1, &r1, v1, &i1);
-    CHECK(rc1 == DF_BLOCKSTEP_OK && !v1->truncated && i1.pure == 0 &&
-              i1.hw_hits == 0 && i1.reason != NULL &&
-              strcmp(i1.reason, "rdtsc") == 0,
-          "hwrec-forward: gated normally -> single-step fallback, UNCHANGED "
-          "from before T5 (rc=%d truncated=%d pure=%d hw_hits=%llu "
-          "reason=%s)",
+    CHECK(rc1 == DF_BLOCKSTEP_OK && !v1->truncated && i1.pure == 1 &&
+              i1.hw_hits >= 1 && i1.injected >= 1,
+          "hwrec-forward: gated normally -> block-step+replay path (T6), the "
+          "DR exec breakpoint fires and its recorded value is injected "
+          "(rc=%d truncated=%d pure=%d hw_hits=%llu injected=%llu)",
           rc1, (int)v1->truncated, i1.pure, (unsigned long long)i1.hw_hits,
-          i1.reason ? i1.reason : "?");
+          (unsigned long long)i1.injected);
     asmtest_valtrace_free(v1);
 
     asmtest_valtrace_t *v2 = asmtest_valtrace_new(256, 4096, 256);
     if (v2 == NULL) {
-        CHECK(0, "hwrec-forward: valtrace_new (forced)");
+        CHECK(0, "hwrec-forward: valtrace_new (no_hw_record)");
         return;
     }
     long r2 = 0;
@@ -2208,15 +2292,15 @@ static void run_hwrec_forward_case(void) {
     asmtest_blockstep_opts_t o2;
     memset(&o2, 0, sizeof o2);
     o2.inject_block = -1;
-    o2.force_replay = 1; /* push it past the region gate, as blind_rdtsc does */
+    o2.no_hw_record = 1; /* T6 negative control: skip arming entirely */
     int rc2 = asmtest_dataflow_blockstep_run(hwrec_rdtsc, sizeof hwrec_rdtsc,
                                              NULL, 0, &o2, &r2, v2, &i2);
-    CHECK(rc2 == DF_BLOCKSTEP_FAULT && v2->truncated && i2.hw_hits >= 1,
-          "hwrec-forward: forced past the gate -> the DR exec breakpoint "
-          "fires and hw_hits counts it (hw_hits=%llu), but the per-step "
-          "decode still refuses to let Unicorn execute rdtsc, so the "
-          "capture still FAULTS + truncates (rc=%d truncated=%d) — SAME "
-          "verdict as before T5, new evidence only",
+    CHECK(rc2 == DF_BLOCKSTEP_FAULT && v2->truncated && i2.hw_hits == 0,
+          "hwrec-forward NEGATIVE CONTROL: no_hw_record=1 -> no DR slot ever "
+          "armed (hw_hits=%llu), the replay reaches rdtsc with no boundary "
+          "to inject from, and step_block's own fail-closed check TRUNCATES "
+          "(rc=%d truncated=%d) — the DR-breakpoint boundary, not luck, is "
+          "what makes injection possible",
           (unsigned long long)i2.hw_hits, rc2, (int)v2->truncated);
     asmtest_valtrace_free(v2);
 
@@ -2239,6 +2323,195 @@ static void run_hwrec_forward_case(void) {
           "truncated=%d)",
           (unsigned long long)i3.hw_hits, rc3, (int)v3->truncated);
     asmtest_valtrace_free(v3);
+}
+
+/* T6 — byte-identical block-step+replay for CPUID, the second HWREC mnemonic, mirroring the F1
+ * exit criterion (run_identity_case) but through the injection path rather than a PURE region:
+ * cpuid's full architectural write set is already Capstone-reported (open_step's T5 comment),
+ * so nothing but the DR-breakpoint boundary + injection stands between this and the oracle. */
+static void run_hwrec_cpuid_replay_case(void) {
+    long r = 0;
+    int trunc = 0, rc = 0;
+    asmtest_blockstep_info_t info;
+    asmtest_blockstep_opts_t o;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    int same = vec_compare(hwrec_cpuid, sizeof hwrec_cpuid, 0, NULL, 0, &o, &r,
+                           &trunc, &rc, &info);
+    CHECK(same == 1 && rc == DF_BLOCKSTEP_OK && !trunc,
+          "hwrec-cpuid: block-step+replay value trace is BYTE-IDENTICAL to "
+          "the single-step oracle (same=%d rc=%d truncated=%d)",
+          same, rc, trunc);
+    CHECK(info.pure == 1 && info.hw_hits >= 1 && info.injected >= 1,
+          "hwrec-cpuid: took the replay path with the DR boundary firing and "
+          "its recorded write set injected (pure=%d hw_hits=%llu "
+          "injected=%llu)",
+          info.pure, (unsigned long long)info.hw_hits,
+          (unsigned long long)info.injected);
+}
+
+/* T6 — rdtsc's OWN oracle problem: two forked captures cannot byte-compare a timestamp (they
+ * run at different times), so this reuses run_syscall_mem_case's independent-sources technique
+ * instead of vec_compare: the replay's recorded rax WRITE value (read out of the value trace)
+ * must equal the SAME capture's real returned rax (hwrec_rdtsc is exactly `rdtsc; ret`, so
+ * nothing between the site and the return could make them differ if injection is honest). Plus
+ * monotonicity across hwrec_rdtsc2's two DISTINCT sites in one region: the second site's
+ * recorded tsc must be > the first's. */
+static void run_hwrec_rdtsc_value_case(void) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(256, 4096, 256);
+    if (v == NULL) {
+        CHECK(0, "hwrec-rdtsc-value: valtrace_new");
+        return;
+    }
+    long r = 0;
+    asmtest_blockstep_info_t info = {0};
+    asmtest_blockstep_opts_t o;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    int rc = asmtest_dataflow_blockstep_run(hwrec_rdtsc, sizeof hwrec_rdtsc,
+                                            NULL, 0, &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_OK && !v->truncated && info.injected >= 1,
+          "hwrec-rdtsc-value: replayed via record-and-inject (rc=%d "
+          "truncated=%d injected=%llu)",
+          rc, (int)v->truncated, (unsigned long long)info.injected);
+    if (rc == DF_BLOCKSTEP_OK) {
+        long s = step_at_off(v, 0x00);
+        uint64_t got = 0;
+        int found = s >= 0 && step_write_value(v, s, REG_RAX, &got);
+        CHECK(found && (long)got == r,
+              "hwrec-rdtsc-value: the replay's INJECTED rax write record == "
+              "the SAME capture's real returned rax (%lld vs %ld) — "
+              "independent sources, same conclusion",
+              (long long)got, r);
+    }
+    asmtest_valtrace_free(v);
+
+    asmtest_valtrace_t *v2 = asmtest_valtrace_new(256, 4096, 256);
+    if (v2 == NULL) {
+        CHECK(0, "hwrec-rdtsc-value: valtrace_new (monotonic)");
+        return;
+    }
+    long r2 = 0;
+    asmtest_blockstep_info_t info2 = {0};
+    asmtest_blockstep_opts_t o2;
+    memset(&o2, 0, sizeof o2);
+    o2.inject_block = -1;
+    int rc2 = asmtest_dataflow_blockstep_run(
+        hwrec_rdtsc2, sizeof hwrec_rdtsc2, NULL, 0, &o2, &r2, v2, &info2);
+    CHECK(rc2 == DF_BLOCKSTEP_OK && !v2->truncated && info2.injected == 2 &&
+              info2.hw_hits == 2,
+          "hwrec-rdtsc-value: two DISTINCT rdtsc sites both injected "
+          "(rc=%d truncated=%d injected=%llu hw_hits=%llu)",
+          rc2, (int)v2->truncated, (unsigned long long)info2.injected,
+          (unsigned long long)info2.hw_hits);
+    if (rc2 == DF_BLOCKSTEP_OK) {
+        long s0 = step_at_off(v2, 0x00), s1 = step_at_off(v2, 0x02);
+        uint64_t tsc0 = 0, tsc1 = 0;
+        int f0 = s0 >= 0 && step_write_value(v2, s0, REG_RAX, &tsc0);
+        int f1 = s1 >= 0 && step_write_value(v2, s1, REG_RAX, &tsc1);
+        CHECK(f0 && f1 && tsc1 > tsc0,
+              "hwrec-rdtsc-value: MONOTONIC across two sites in one region "
+              "(1st=%llu 2nd=%llu)",
+              (unsigned long long)tsc0, (unsigned long long)tsc1);
+    }
+    asmtest_valtrace_free(v2);
+}
+
+/* T6 — rdrand's result CONSUMED BY CONTROL FLOW. NOT a vec_compare case: rdrand draws a
+ * genuinely random value on EACH forked capture, so its destination-register bits can never
+ * byte-match across two independent processes (the same reason sc_clock cannot use the
+ * byte-identical oracle either). What is checkable, and what actually matters here, is that
+ * the block ending EXACTLY at the rdrand site — with CF among the registers the coherence
+ * canary compares (rdrand DEFINES it; see dfb_undef_flags' default case) — does not trip that
+ * canary: if CF were not injected, Unicorn's eflags would still hold whatever the block-local
+ * pre-rdrand state was, which disagrees with the real post-rdrand CF far more often than not,
+ * and the capture would FAULT. Same-capture self-consistency then cross-checks the recorded
+ * CF bit against the branch this SAME real run actually took (jb itself always executes for
+ * real — see the file header's step_block design — so this does not re-prove the branch, only
+ * that the trace's own CF record agrees with the outcome the real tracee is known to have
+ * reached). */
+static void run_hwrec_rdrand_jc_case(void) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(256, 4096, 256);
+    if (v == NULL) {
+        CHECK(0, "hwrec-rdrand-jc: valtrace_new");
+        return;
+    }
+    long r = 0;
+    asmtest_blockstep_info_t info = {0};
+    asmtest_blockstep_opts_t o;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    int rc = asmtest_dataflow_blockstep_run(
+        hwrec_rdrand_jc, sizeof hwrec_rdrand_jc, NULL, 0, &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_OK && !v->truncated && info.pure == 1 &&
+              info.hw_hits >= 1 && info.injected >= 1,
+          "hwrec-rdrand-jc: the block ending exactly at rdrand — with CF "
+          "among the injected, canary-checked registers — did not FAULT "
+          "(rc=%d truncated=%d pure=%d hw_hits=%llu injected=%llu)",
+          rc, (int)v->truncated, info.pure, (unsigned long long)info.hw_hits,
+          (unsigned long long)info.injected);
+    if (rc == DF_BLOCKSTEP_OK) {
+        long s0 = step_at_off(v, 0x00);
+        uint64_t flags = 0;
+        int found = s0 >= 0 && step_write_value(v, s0, REG_EFLAGS, &flags);
+        int cf = found && (flags & EFLAG_CF) != 0;
+        CHECK(found && ((cf && r == 0x600d) || (!cf && r == 0x0bad)),
+              "hwrec-rdrand-jc: the recorded CF bit (cf=%d) agrees with the "
+              "branch this SAME real run took (r=0x%lx)",
+              cf, r);
+    }
+    asmtest_valtrace_free(v);
+}
+
+/* T6 — THE PER-BLOCK CLAIM: a branch that SKIPS the rdtsc site at runtime (rdi==0).
+ * region_scan's STATIC sweep still finds the unreached site and keeps the region gated onto
+ * the replay path (injectable), but nothing fires: hw_hits==0, injected==0. The region is no
+ * longer punished for a site it never executes — T5/pre-T6 would have called this region
+ * merely "not injectable" and single-stepped the WHOLE thing for one byte it never reaches. */
+static void run_hwrec_coldpath_case(void) {
+    long args[1] = {0};
+    long r = 0;
+    int trunc = 0, rc = 0;
+    asmtest_blockstep_info_t info;
+    asmtest_blockstep_opts_t o;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    int same = vec_compare(hwrec_coldpath, sizeof hwrec_coldpath, 0, args, 1,
+                           &o, &r, &trunc, &rc, &info);
+    CHECK(same == 1 && rc == DF_BLOCKSTEP_OK && !trunc && r == 0,
+          "hwrec-coldpath: the unreached rdtsc site costs nothing — "
+          "byte-identical full replay win (same=%d rc=%d truncated=%d r=%ld)",
+          same, rc, trunc, r);
+    CHECK(info.pure == 1 && info.hw_hits == 0 && info.injected == 0,
+          "hwrec-coldpath: pure=1 (replay used) yet hw_hits=%llu "
+          "injected=%llu — the DONE-WHEN check: a region is gated per its "
+          "STATIC sites, but nothing fires for a site the real run never "
+          "reaches",
+          (unsigned long long)info.hw_hits, (unsigned long long)info.injected);
+}
+
+/* T6 — the 4-slot DR0-3 cap, LIVE: a region with 5 DISTINCT hwrec sites is NOT injectable
+ * (region_scan sets hwrec_overflow), so it single-steps the whole region rather than silently
+ * watching only 4 of 5 — and the reason names the cap, not any one mnemonic. */
+static void run_hwrec_overflow_fallback_case(void) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(256, 4096, 256);
+    if (v == NULL) {
+        CHECK(0, "hwrec-overflow-fallback: valtrace_new");
+        return;
+    }
+    long r = 0;
+    asmtest_blockstep_info_t info = {0};
+    asmtest_blockstep_opts_t o;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    int rc = asmtest_dataflow_blockstep_run(
+        hwrec_5site, sizeof hwrec_5site, NULL, 0, &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_OK && !v->truncated && info.pure == 0 &&
+              info.reason != NULL && strcmp(info.reason, "hwrec-overflow") == 0,
+          "hwrec-overflow-fallback: 5 distinct sites -> single-step fallback "
+          "naming the DR0-3 cap (rc=%d pure=%d reason=%s)",
+          rc, info.pure, info.reason ? info.reason : "?");
+    asmtest_valtrace_free(v);
 }
 
 /* THE FAIL-CLOSED RULE — a syscall that DOES NOT RETURN to the next instruction.
@@ -2441,14 +2714,14 @@ int main(void) {
               "that tail padding absorbs)");
     }
 
-    /* T4: the tier's FIRST opts layout guard (no_undef_mask/inject_flag_bit are appended
-     * fields on a struct this suite re-declares field-for-field) — same skew hazard, same
-     * check, before any opts. field below is trusted. */
+    /* T4: the tier's FIRST opts layout guard (no_undef_mask/inject_flag_bit/no_hw_record are
+     * appended fields on a struct this suite re-declares field-for-field) — same skew hazard,
+     * same check, before any opts. field below is trusted. */
     {
         size_t osz = 0, ooff = 0;
         asmtest_dataflow_blockstep_opts_layout(&osz, &ooff);
         CHECK(osz == sizeof(asmtest_blockstep_opts_t) &&
-                  ooff == offsetof(asmtest_blockstep_opts_t, inject_flag_bit),
+                  ooff == offsetof(asmtest_blockstep_opts_t, no_hw_record),
               "opts: the suite's re-declared options struct matches the "
               "producer's SIZE and final-field OFFSET");
     }
@@ -2486,31 +2759,45 @@ int main(void) {
                   loop_poly, sizeof loop_poly, &why) == 1,
               "injectable: a PURE region is injectable vacuously (nothing to "
               "carry)");
+        /* T6: `rdtsc`/`cpuid`/`rdrand` are now injectable — the T5 DR exec breakpoint gives
+         * the forward pass a real boundary at the site, and step_block injects the recorded
+         * post-state from it (see the DFB_IMP_HWREC branch). This is the gate LIFTING, not a
+         * regression of the T5-era assertion above it (T5 landed the boundary; T6 landed the
+         * injection that makes admitting the region honest). */
         CHECK(asmtest_dataflow_blockstep_is_injectable(
-                  imp_rdtsc, sizeof imp_rdtsc, &why) == 0 &&
-                  why != NULL && strcmp(why, "rdtsc") == 0,
-              "injectable: `rdtsc` is NOT injectable (reason=%s) — BTF does "
-              "not trap it, so there is no boundary to record from",
-              why ? why : "?");
+                  imp_rdtsc, sizeof imp_rdtsc, &why) == 1,
+              "injectable: `rdtsc` IS injectable (T6) — the DR exec "
+              "breakpoint gives the forward pass a real post-retirement "
+              "boundary to record from");
         CHECK(asmtest_dataflow_blockstep_is_injectable(
-                  imp_cpuid, sizeof imp_cpuid, &why) == 0 &&
-                  why != NULL && strcmp(why, "cpuid") == 0,
-              "injectable: `cpuid` is NOT injectable (reason=%s)",
-              why ? why : "?");
+                  imp_cpuid, sizeof imp_cpuid, &why) == 1,
+              "injectable: `cpuid` IS injectable (T6)");
         CHECK(asmtest_dataflow_blockstep_is_injectable(
-                  imp_rdrand, sizeof imp_rdrand, &why) == 0 &&
-                  why != NULL && strcmp(why, "rdrand") == 0,
-              "injectable: `rdrand` is NOT injectable (reason=%s)",
+                  imp_rdrand, sizeof imp_rdrand, &why) == 1,
+              "injectable: `rdrand` IS injectable (T6)");
+        /* T6: the DR0-3 slot cap applies to `injectable`, not just to how many sites
+         * capture_blockstep can arm. hwrec_multi has 3 DISTINCT sites (under the cap) and IS
+         * injectable; hwrec_5site has 5 (over it) and is NOT — named "hwrec-overflow" rather
+         * than the first site's own mnemonic, since no single site disqualifies it. */
+        CHECK(asmtest_dataflow_blockstep_is_injectable(
+                  hwrec_multi, sizeof hwrec_multi, &why) == 1,
+              "injectable: hwrec_multi (3 distinct HWREC sites, under the "
+              "DR0-3 cap) IS injectable");
+        CHECK(asmtest_dataflow_blockstep_is_injectable(
+                  hwrec_5site, sizeof hwrec_5site, &why) == 0 &&
+                  why != NULL && strcmp(why, "hwrec-overflow") == 0,
+              "injectable: hwrec_5site (5 distinct HWREC sites, over the "
+              "DR0-3 cap) is NOT injectable (reason=%s)",
               why ? why : "?");
         /* The ALL-quantifier. `injectable` must see the WHOLE region: settling it at the FIRST
          * impurity would call this region injectable on the strength of its syscall and hand
          * its cpuid to the replay — the HIGH-3 early-break bug in a new costume. And the reason
          * must name the impurity that DISQUALIFIES it, not the first one seen. */
         CHECK(asmtest_dataflow_blockstep_is_injectable(
-                  sc_then_cpuid, sizeof sc_then_cpuid, &why) == 0 &&
-                  why != NULL && strcmp(why, "cpuid") == 0,
-              "injectable: `syscall; cpuid` is NOT injectable and names the "
-              "DISQUALIFYING impurity (reason=%s, not \"syscall\") — the "
+                  sc_then_sysenter, sizeof sc_then_sysenter, &why) == 0 &&
+                  why != NULL && strcmp(why, "sysenter") == 0,
+              "injectable: `syscall; sysenter` is NOT injectable and names "
+              "the DISQUALIFYING impurity (reason=%s, not \"syscall\") — the "
               "verdict is an ALL-quantifier, not the first impurity seen",
               why ? why : "?");
         /* is_pure() must keep F1's meaning: ten other things ask it, and F2 widening what the
@@ -2665,6 +2952,14 @@ int main(void) {
     run_fail_closed_case();
     run_blind_rdtsc_case();
     run_hwrec_forward_case();
+
+    /* T6: F2 increment 2, replay half — record-and-inject over rdtsc/rdtscp/rdrand/rdseed/
+     * cpuid, gated per BLOCK rather than per region. */
+    run_hwrec_cpuid_replay_case();
+    run_hwrec_rdtsc_value_case();
+    run_hwrec_rdrand_jc_case();
+    run_hwrec_coldpath_case();
+    run_hwrec_overflow_fallback_case();
 
     /* Vector breadth (increment 2). */
     run_vec_seed_case();

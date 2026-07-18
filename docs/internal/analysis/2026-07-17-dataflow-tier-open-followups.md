@@ -116,7 +116,7 @@ before the platform gate), and `test_dataflow_blockstep.c` now checks its re-dec
 it before trusting any `info.*` field. Verified: `make dataflow-blockstep-test` natively on the
 Zen 5 dev box, 119/119 checks, 0 skips.
 
-## 4. F2 increment 2 — `rdtsc`/`cpuid` are a PRIMITIVE gap, not a decode gap
+## 4. F2 increment 2 — `rdtsc`/`cpuid` are a PRIMITIVE gap, not a decode gap — LANDED 2026-07-18
 
 F2 landed record-and-inject for `syscall`/`int 0x80` and correctly gated
 `rdtsc`/`rdtscp`/`rdrand`/`rdseed`/`cpuid`/`sysenter`. The reason is worth preserving so nobody
@@ -125,6 +125,14 @@ syscall boundary is free — and these instructions are **not** control transfer
 boundary to record from at all. No amount of decoding helps.
 
 Needs a hardware execution breakpoint. Deliberately declined rather than half-landed.
+
+**LANDED** (`dataflow-producer-correctness.md` T5+T6): the hardware execution breakpoint this
+item called for is exactly what T5 added (one DR0-3 slot per scanned
+rdtsc/rdtscp/rdrand/rdseed/cpuid site, absorbed by one single-step past the fault), and T6
+injects that boundary's recorded post-state into the replay — the same shape as `syscall`, minus
+the producer-local write-set synthesis (Capstone already reports the complete write set for all
+five mnemonics). `sysenter` remains gated: it still has no BTF boundary and no DR-breakpoint plan
+either — it was never the primitive gap this item named.
 
 ## 5. Seven bindings still lack the def-use / slice half
 

@@ -284,6 +284,13 @@ typedef struct {
                                * compares it — makes the mask's discrimination testable even
                                * where Unicorn and silicon already happen to agree on every
                                * bit. */
+    int no_hw_record; /* test hook (T6): do NOT arm the T5 DR exec breakpoints, so a scanned
+                       * rdtsc/rdtscp/rdrand/rdseed/cpuid site gets no real boundary — the
+                       * replay then reaches it with `next` describing a LATER boundary,
+                       * step_block's `pc + len != pc_next` check fails, and the capture
+                       * truncates. Reproduces the pre-T6 (T5) forward-pass-only behaviour and
+                       * proves the DR-breakpoint boundary, not luck, is what makes injection
+                       * possible — the `blind_rdtsc` discipline applied to this path. */
 } asmtest_blockstep_opts_t;
 
 /* T4 — the tier's FIRST opts layout guard. Until now every appended opts field was a test
@@ -295,7 +302,7 @@ void asmtest_dataflow_blockstep_opts_layout(size_t *size, size_t *last_off) {
     if (size != NULL)
         *size = sizeof(asmtest_blockstep_opts_t);
     if (last_off != NULL)
-        *last_off = offsetof(asmtest_blockstep_opts_t, inject_flag_bit);
+        *last_off = offsetof(asmtest_blockstep_opts_t, no_hw_record);
 }
 
 /* Capture telemetry, filled on every non-EINVAL return. */
@@ -567,14 +574,15 @@ static int vec_reg_info(uint32_t reg, int *idx, int *width) {
  *     IMMEDIATELY AFTER the instruction retires, for free, with the kernel's result already in
  *     the registers and its memory delta already in the tracee. That boundary is the entire
  *     mechanism F2 needs.
- *   DFB_IMP_HWREC (T5, F2 increment 2) — rdtsc / rdtscp / rdrand / rdseed / cpuid. MEASURED on
- *     this Zen 5: BTF does NOT trap them (they are not control transfers), so a block runs
+ *   DFB_IMP_HWREC (T5+T6, F2 increment 2) — rdtsc / rdtscp / rdrand / rdseed / cpuid. MEASURED
+ *     on this Zen 5: BTF does NOT trap them (they are not control transfers), so a block runs
  *     straight through them and there is no BTF boundary at which their retired value could be
- *     recorded. capture_blockstep now arms a hardware DR exec breakpoint at each scanned site
- *     (region_scan's hwrec_off[]) and single-steps once past a hit, so the boundary DOES exist
- *     as of this task — but INJECTING the recorded value into the replay is T6's job, so
- *     step_block still refuses to execute one (returns -1, exactly like DFB_IMP_OTHER always
- *     has) until T6 lands.
+ *     recorded. capture_blockstep arms a hardware DR exec breakpoint at each scanned site
+ *     (region_scan's hwrec_off[]) and single-steps once past a hit (T5), so the boundary
+ *     exists; step_block then injects the recorded post-state from that boundary into the
+ *     replay and terminates the block there (T6) — the same record-and-inject shape as
+ *     SYSCALL/INT80 above, minus the producer-local write-set synthesis (Capstone already
+ *     reports the complete write set for all five mnemonics).
  *   DFB_IMP_OTHER — sysenter, and any undecodable byte. No sane return-to-next-instruction
  *     contract (sysenter) or nothing to vouch for (undecodable), so this stays on the
  *     single-step fallback with no DR-breakpoint primitive planned for it.
@@ -583,8 +591,8 @@ typedef enum {
     DFB_IMP_NONE = 0,
     DFB_IMP_SYSCALL, /* `syscall`  — clobbers rax (result), rcx (next rip), r11 (rflags) */
     DFB_IMP_INT80, /* `int 0x80` — clobbers rax ONLY (measured: rcx/r11 survive)       */
-    DFB_IMP_HWREC, /* rdtsc/rdtscp/rdrand/rdseed/cpuid — DR-breakpoint boundary (T5); not yet
-                    * injectable (T6) */
+    DFB_IMP_HWREC, /* rdtsc/rdtscp/rdrand/rdseed/cpuid — DR-breakpoint boundary (T5),
+                    * record-and-inject (T6) */
     DFB_IMP_OTHER /* sysenter / undecodable: no BTF boundary, no DR-breakpoint plan either */
 } dfb_imp_t;
 
@@ -1018,6 +1026,122 @@ static int gp_value(const struct user_regs_struct *r, uint32_t reg,
     }
 }
 
+/* T6: map a Capstone x86 GP/EFLAGS register id (any width) to its Unicorn 64-bit CONTAINER
+ * register constant — the write-side mirror of gp_value's read-side grouping, so the two agree
+ * on which container a sub-register record belongs to. Used only for the HWREC injection path:
+ * rdtsc/rdtscp/cpuid/rdrand/rdseed write exclusively to GP registers + EFLAGS (never memory,
+ * never vector), so this need not handle anything else. Returns 0 for a register outside that
+ * set (the caller then leaves the record uninjected — none of the five mnemonics hit it). */
+static int uc_gp_container(uint32_t reg, int *uc_reg_out) {
+    switch (reg) {
+    case X86_REG_RAX:
+    case X86_REG_EAX:
+    case X86_REG_AX:
+    case X86_REG_AL:
+    case X86_REG_AH:
+        *uc_reg_out = UC_X86_REG_RAX;
+        return 1;
+    case X86_REG_RBX:
+    case X86_REG_EBX:
+    case X86_REG_BX:
+    case X86_REG_BL:
+    case X86_REG_BH:
+        *uc_reg_out = UC_X86_REG_RBX;
+        return 1;
+    case X86_REG_RCX:
+    case X86_REG_ECX:
+    case X86_REG_CX:
+    case X86_REG_CL:
+    case X86_REG_CH:
+        *uc_reg_out = UC_X86_REG_RCX;
+        return 1;
+    case X86_REG_RDX:
+    case X86_REG_EDX:
+    case X86_REG_DX:
+    case X86_REG_DL:
+    case X86_REG_DH:
+        *uc_reg_out = UC_X86_REG_RDX;
+        return 1;
+    case X86_REG_RSI:
+    case X86_REG_ESI:
+    case X86_REG_SI:
+    case X86_REG_SIL:
+        *uc_reg_out = UC_X86_REG_RSI;
+        return 1;
+    case X86_REG_RDI:
+    case X86_REG_EDI:
+    case X86_REG_DI:
+    case X86_REG_DIL:
+        *uc_reg_out = UC_X86_REG_RDI;
+        return 1;
+    case X86_REG_RBP:
+    case X86_REG_EBP:
+    case X86_REG_BP:
+    case X86_REG_BPL:
+        *uc_reg_out = UC_X86_REG_RBP;
+        return 1;
+    case X86_REG_RSP:
+    case X86_REG_ESP:
+    case X86_REG_SP:
+    case X86_REG_SPL:
+        *uc_reg_out = UC_X86_REG_RSP;
+        return 1;
+    case X86_REG_R8:
+    case X86_REG_R8D:
+    case X86_REG_R8W:
+    case X86_REG_R8B:
+        *uc_reg_out = UC_X86_REG_R8;
+        return 1;
+    case X86_REG_R9:
+    case X86_REG_R9D:
+    case X86_REG_R9W:
+    case X86_REG_R9B:
+        *uc_reg_out = UC_X86_REG_R9;
+        return 1;
+    case X86_REG_R10:
+    case X86_REG_R10D:
+    case X86_REG_R10W:
+    case X86_REG_R10B:
+        *uc_reg_out = UC_X86_REG_R10;
+        return 1;
+    case X86_REG_R11:
+    case X86_REG_R11D:
+    case X86_REG_R11W:
+    case X86_REG_R11B:
+        *uc_reg_out = UC_X86_REG_R11;
+        return 1;
+    case X86_REG_R12:
+    case X86_REG_R12D:
+    case X86_REG_R12W:
+    case X86_REG_R12B:
+        *uc_reg_out = UC_X86_REG_R12;
+        return 1;
+    case X86_REG_R13:
+    case X86_REG_R13D:
+    case X86_REG_R13W:
+    case X86_REG_R13B:
+        *uc_reg_out = UC_X86_REG_R13;
+        return 1;
+    case X86_REG_R14:
+    case X86_REG_R14D:
+    case X86_REG_R14W:
+    case X86_REG_R14B:
+        *uc_reg_out = UC_X86_REG_R14;
+        return 1;
+    case X86_REG_R15:
+    case X86_REG_R15D:
+    case X86_REG_R15W:
+    case X86_REG_R15B:
+        *uc_reg_out = UC_X86_REG_R15;
+        return 1;
+    case X86_REG_EFLAGS:
+        *uc_reg_out = UC_X86_REG_EFLAGS;
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 /* Resolve a memory operand's effective address from a register file: seg_base + base +
  * index*scale + disp, with fs_base/gs_base segment resolution and the RIP-relative
  * next-instruction fixup. Mirrors dataflow_ptrace.c resolve_ea so the core is drop-in. */
@@ -1295,8 +1419,9 @@ typedef struct {
      * found, by their offset in THIS scanned buffer — capture_blockstep arms one hardware DR
      * exec breakpoint per entry (absolute rbase + hwrec_off[i]). Capped at 4, the architectural
      * DR0-3 slot count: more than 4 DISTINCT sites sets hwrec_overflow and the region keeps the
-     * whole-region single-step fallback rather than lie about a 5th site it cannot watch. Not
-     * yet consulted by `injectable` — DFB_IMP_HWREC stays non-injectable until T6. */
+     * whole-region single-step fallback rather than lie about a 5th site it cannot watch.
+     * Consulted by `injectable` as of T6 (record-and-inject over the DR-breakpoint boundary),
+     * subject to that same overflow cap. */
     uint64_t hwrec_off[4];
     size_t nhwrec;
     int hwrec_overflow;
@@ -1482,17 +1607,15 @@ static void region_scan(const uint8_t *code, size_t len, dfb_scan_t *out) {
          * whose first impurity is a syscall and whose second is a cpuid is NOT injectable, and
          * settling at the first would be exactly the HIGH-3 early-break bug in a new costume. */
         dfb_imp_t k = imp != NULL ? dfb_impurity_kind(insn) : DFB_IMP_NONE;
-        if (imp != NULL && k != DFB_IMP_SYSCALL && k != DFB_IMP_INT80) {
-            /* Neither of the two kinds the replay can currently carry (SYSCALL/INT80) — this
-             * covers DFB_IMP_OTHER (sysenter/undecodable) AND, as of T5, DFB_IMP_HWREC too: a
-             * boundary now exists for rdtsc/rdtscp/rdrand/rdseed/cpuid (see hwrec_off below),
-             * but INJECTING it into the replay is T6's job, so scan_replay_ok must still decline
-             * these regions exactly as it did before this task — the forward pass changes what
-             * capture_blockstep OBSERVES, not what asmtest_dataflow_blockstep_run's gate admits. */
+        if (imp != NULL && k != DFB_IMP_SYSCALL && k != DFB_IMP_INT80 &&
+            k != DFB_IMP_HWREC) {
+            /* None of the three kinds the replay can carry (SYSCALL/INT80/HWREC, as of T6) —
+             * this leaves DFB_IMP_OTHER (sysenter/undecodable), which has no BTF boundary and
+             * no DR-breakpoint plan either. */
             out->injectable = 0;
             /* Name the impurity that actually DISQUALIFIES the region, not merely the first one
-             * seen: with `syscall; cpuid` the honest reason is "cpuid" — a caller told "syscall"
-             * would go looking for a gate that no longer exists. */
+             * seen: with `syscall; sysenter` the honest reason is "sysenter" — a caller told
+             * "syscall" would go looking for a gate that no longer exists. */
             out->impure_reason = imp;
         }
         if (k == DFB_IMP_HWREC) {
@@ -1508,6 +1631,15 @@ static void region_scan(const uint8_t *code, size_t len, dfb_scan_t *out) {
     }
     cs_free(insn, 1);
     cs_close(&h);
+    if (out->hwrec_overflow) {
+        /* T6: `injectable` admits HWREC sites only up to the DR0-3 slot count region_scan
+         * already caps hwrec_off at — a 5th+ site has no slot to watch, so the region keeps
+         * the whole-region single-step fallback rather than silently under-cover it. Checked
+         * once, after the full sweep (not inside the loop above), so a region whose first four
+         * HWREC sites are seen before the 5th disqualifies still gets the honest reason. */
+        out->injectable = 0;
+        out->impure_reason = "hwrec-overflow";
+    }
     if (remaining != 0) {
         /* Desync: the bytes past this point were never classified, so no optimistic verdict
          * over them is earned. Decline the replay and force the vector machinery on.
@@ -1979,16 +2111,38 @@ static int step_block(cap_ctx *c, uc_engine *uc, uint64_t pc_next,
             c->injected++;
             return 0; /* the syscall TERMINATES the block, exactly at the real boundary */
         }
-        if (c->cur_imp == DFB_IMP_HWREC)
-            /* T5 is forward-pass only: capture_blockstep now takes a REAL boundary at a scanned
-             * rdtsc/rdtscp/rdrand/rdseed/cpuid site (a DR exec breakpoint + one absorbing
-             * single-step — see dfb_arm_hw_bp and its call site below), so `next` genuinely
-             * carries the retired value here. But copying it INTO the replay (as the syscall
-             * branch above does for rax/rcx/r11) is T6's job — until it lands, refuse exactly
-             * as DFB_IMP_OTHER always has, so Unicorn never gets to execute the instruction
-             * itself and fabricate a value (measured: UC_ERR_OK with garbage, same lie as
-             * `syscall`/`rdtsc` above). */
-            return -1;
+        if (c->cur_imp == DFB_IMP_HWREC) {
+            /* T6: capture_blockstep takes a REAL boundary at a scanned rdtsc/rdtscp/rdrand/
+             * rdseed/cpuid site (T5's DR exec breakpoint + one absorbing single-step), so
+             * `next` genuinely carries the retired value here — inject it exactly as the
+             * syscall branch above does for rax/rcx/r11, then terminate the block at the
+             * boundary so no replayed instruction ever runs on stale post-site state (the
+             * next block reseeds from S_next). FAIL CLOSED on the premise, same as syscall:
+             * if the real next boundary is not exactly pc+len (BTF/DR behaving differently, a
+             * signal, no_hw_record having skipped arming so `next` describes a LATER
+             * boundary), there is no recorded effect to inject. */
+            if (next == NULL || pc + len != pc_next)
+                return -1;
+            /* UNLIKE syscall (a producer-local write set Capstone never reports), Capstone's
+             * write set for all five HWREC mnemonics is already complete (measured — see
+             * open_step's T5 comment): c->cur is THIS step's write records, opened by the
+             * capture_at call above. Every value injected here was READ FROM THE REAL TRACEE
+             * at the real boundary — nothing fabricated, no per-mnemonic table. */
+            for (size_t i = 0; i < c->cur.n; i++) {
+                at_val_rec_t *r = &c->cur.v[i];
+                int ucreg;
+                uint64_t v;
+                if (!r->is_write || r->kind != AT_LOC_REG ||
+                    !uc_gp_container(r->reg, &ucreg) ||
+                    !gp_value(&next->gp, r->reg, &v))
+                    continue;
+                uc_reg_write(uc, ucreg, &v);
+            }
+            uint64_t v = pc + len;
+            uc_reg_write(uc, UC_X86_REG_RIP, &v);
+            c->injected++;
+            return 0; /* the site TERMINATES the block, exactly at the real boundary */
+        }
         if (c->cur_imp == DFB_IMP_OTHER)
             return -1; /* sysenter / undecodable: no boundary exists to record from — truncate */
 
@@ -2073,9 +2227,13 @@ static int capture_blockstep(cap_ctx *c, pid_t pid, uint64_t base, size_t len,
      * dfb_impurity_kind). region_scan already capped nhwrec at 4, the DR0-3 slot count, so no
      * further bound is needed here. Best-effort per slot: a POKEUSER failure just means that
      * one site's boundary is missed, and the per-step decode in step_block truncates when the
-     * replay reaches it — same fail-closed outcome as an un-injected site has always had. */
-    for (size_t i = 0; i < nhwrec && i < 4; i++)
-        dfb_arm_hw_bp(pid, (int)i, rbase + hwrec_off[i], &dr7);
+     * replay reaches it — same fail-closed outcome as an un-injected site has always had.
+     * `no_hw_record` (T6 test hook) skips this loop entirely: no slot is armed, so the forward
+     * pass never gets a boundary at the site and step_block's `pc + len != pc_next` check
+     * truncates when the replay reaches it — the pre-T6 behaviour, on demand. */
+    if (!o->no_hw_record)
+        for (size_t i = 0; i < nhwrec && i < 4; i++)
+            dfb_arm_hw_bp(pid, (int)i, rbase + hwrec_off[i], &dr7);
 
     /* 2) Stand up Unicorn: code mapped at the REAL base, a stack window at the REAL rsp, both
      *    copied from the (stopped) tracee, and the GP file seeded from the entry boundary. Real

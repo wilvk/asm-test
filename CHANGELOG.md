@@ -8,6 +8,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Block-step replay record-and-inject for rdtsc/rdtscp/rdrand/rdseed/cpuid, gated per
+  block rather than per region.** `src/dataflow_blockstep.c`'s `step_block` now injects
+  each site's recorded post-state (read from the T5 DR exec-breakpoint boundary) into the
+  Unicorn replay and terminates the block there — the same record-and-inject shape as
+  `syscall`/`int 0x80`, minus the producer-local write-set synthesis (Capstone already
+  reports the complete architectural write set for all five mnemonics). `region_scan`'s
+  `injectable` verdict now admits regions whose only impurities are syscall/int80/HWREC
+  (subject to the existing 4-slot DR0-3 cap — a 5th+ distinct site still falls back to
+  single-step, reason `hwrec-overflow`), and a region no longer forfeits the replay's
+  perturbation win for a hwrec site its real run never reaches (`hw_hits`/`injected` stay 0
+  for an unexecuted site while the region still replays). New opts test hook
+  `no_hw_record` skips arming the DR breakpoints, reproducing the pre-injection
+  fail-closed truncation on demand. `make dataflow-blockstep-test` 191/191 (was 186/186,
+  +5), stable across 5 consecutive runs on this Zen 2 host.
+  See [dataflow-producer-correctness.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/dataflow-producer-correctness.md).
+
 - **Def-use graph and forward/backward slice surface in the Ruby, Lua, Zig,
   Rust, Go, Java and .NET data-flow bindings (previously producer-only), via a
   by-pointer slice-seed entry point** (`asmtest_slice_forward_seed`/

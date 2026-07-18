@@ -369,6 +369,12 @@ silently wrong.
 > **Carryover:** increment 2 — `rdtsc`/`cpuid`/`rdrand` via a hardware exec breakpoint at the
 > impure site (per-BLOCK rather than per-REGION gating), which would let a region with a `rdtsc`
 > on a cold path keep the replay for every other block. F5 inherits all of this tiering.
+>
+> **LANDED 2026-07-18** (`dataflow-producer-correctness.md` T5+T6): the DR exec-breakpoint
+> boundary (T5) and its record-and-inject into the replay (T6) are both in
+> `src/dataflow_blockstep.c`. The per-block claim is exact: `hwrec_coldpath` (a runtime branch
+> that skips the only `rdtsc` site) replays byte-identically with `hw_hits==0 injected==0` —
+> the region is no longer punished for a site its real run never reaches.
 
 > **F1 increment 2 does not change what F2 must do**, and is worth reading before starting it for
 > three reasons. (1) The **single-step fallback F2 exists to displace now has two callers**, not
@@ -407,6 +413,13 @@ value) is documented as the remaining limit and detected via the real endpoints.
 > mode. The concurrency residual is unchanged and documented above; the endpoints still detect it.
 > **`rdtsc`/`rdrand`/`cpuid` are NOT met and are deliberately deferred** — they need a hardware
 > exec breakpoint, not a decoder (BTF does not trap them; measured).
+>
+> **MET 2026-07-18** (`dataflow-producer-correctness.md` T5+T6): the hardware exec breakpoint
+> (T5) gives the forward pass the missing boundary, and T6 injects its recorded post-state into
+> the replay — `rdtsc`/`rdtscp`/`rdrand`/`rdseed`/`cpuid` are all injectable now, subject to the
+> same 4-slot DR0-3 cap syscall/int80 never needed. `hwrec_cpuid` replays byte-identically to
+> the single-step oracle; `hwrec_rdrand_jc` proves CF (not merely the destination register) was
+> injected; two-site monotonicity holds for `rdtsc`. `make dataflow-blockstep-test` 191/191.
 
 ---
 
