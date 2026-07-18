@@ -20,7 +20,7 @@ The tier needs **libunicorn** and is compiled with `-lunicorn`. Install it and
 run the emulator suites:
 
 ```sh
-make deps DEPS_ARGS=--emu     # install libunicorn (and only that)
+make deps DEPS_ARGS=--emu     # unicorn + pkg-config (Capstone is source-built: scripts/build-capstone.sh)
 make emu-test                 # build and run the emulator suites
 ```
 
