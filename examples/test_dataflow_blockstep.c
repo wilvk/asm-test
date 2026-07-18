@@ -60,6 +60,13 @@
 #include <time.h>
 #include <unistd.h>
 
+/* T8: this suite is only ever built where libunicorn is present (mk/dataflow.mk gates
+ * $(BUILD)/test_dataflow_blockstep.o's only caller, dataflow-blockstep-test, behind
+ * DF_HAVE_UNICORN — see SUITE_EXCLUDES in the root Makefile, which keeps this suite OUT of the
+ * unconditional `make test` sweep), so this include is unconditional, exactly like
+ * src/dataflow_blockstep.c's own Unicorn usage. */
+#include <unicorn/unicorn.h>
+
 /* The block-step producer ships NO header — a value-trace PRODUCER is a tier, not part of the
  * shared asmtest_valtrace.h sink API — so this suite re-declares its entry points, option/info
  * structs, and return codes here (exactly as test_dataflow_ptrace.c re-declares its producer).
@@ -1716,6 +1723,79 @@ static void run_hwrec_scan_case(void) {
           n5, overflow);
 }
 
+/* T8 — UNICORN AVX-TCG UPSTREAM SENTINEL. Every negative control in this suite that forces a
+ * VEX/EVEX region past the replayability gate (vex128_liar, avx_ymm, avx512_zmm, ...) has an
+ * IMPLICIT dependency on Unicorn's bundled QEMU still lacking AVX TCG — this makes that
+ * dependency EXPLICIT and self-testing, so the day it stops being true, a NAMED check turns
+ * red instead of the repo finding out from stale memory. See
+ * docs/internal/implementations/dataflow-producer-correctness.md T8 for the exact trigger
+ * condition (Unicorn's qemu/VERSION >= 7.2 AND qemu/target/i386/tcg/decode-new.c.inc present —
+ * NOT met as of the doc's writing) and the pin-bump playbook to follow once it fires.
+ *
+ * Two probes against a raw uc_engine, combined into the one named sentinel:
+ *   1. VEX-256 `vaddps ymm0,ymm1,ymm2` (C5 F4 58 C1) must return UC_ERR_INSN_INVALID — no
+ *      released Unicorn's bundled QEMU (5.0.1) has AVX TCG.
+ *   2. VEX-128 `vpaddd xmm0,xmm1,xmm2` (C5 F1 FE C2), seeded with DISTINCT xmm0/xmm1/xmm2,
+ *      must show VEX.vvvv DROPPED — every released Unicorn silently executes the legacy
+ *      2-operand `paddd xmm0,xmm2` instead, so xmm0 comes back old-xmm0+xmm2, never the
+ *      correct 3-operand xmm1+xmm2 (the measured lie the file header and vex128_liar
+ *      document). x0/x1/x2 use per-byte constants small enough that no 32-bit lane's addition
+ *      carries across a byte boundary, so per-byte comparison exactly reproduces PADDD's
+ *      per-dword-lane arithmetic. */
+static void run_avx_tcg_sentinel_case(void) {
+    static const uint8_t vaddps_ymm[] = {0xc5, 0xf4, 0x58, 0xc1};
+    uc_engine *uc1 = NULL;
+    uc_err open1 = uc_open(UC_ARCH_X86, UC_MODE_64, &uc1);
+    uc_err map1 = UC_ERR_OK, e1 = UC_ERR_OK;
+    if (open1 == UC_ERR_OK) {
+        map1 = uc_mem_map(uc1, 0x1000, 0x1000, UC_PROT_ALL);
+        if (map1 == UC_ERR_OK) {
+            uc_mem_write(uc1, 0x1000, vaddps_ymm, sizeof vaddps_ymm);
+            e1 = uc_emu_start(uc1, 0x1000, (uint64_t)-1, 0, 1);
+        }
+        uc_close(uc1);
+    }
+
+    static const uint8_t vpaddd_xmm[] = {0xc5, 0xf1, 0xfe, 0xc2};
+    uint8_t x0[16], x1[16], x2[16], got[16];
+    memset(x0, 0x11, sizeof x0);
+    memset(x1, 0x22, sizeof x1);
+    memset(x2, 0x03, sizeof x2);
+    memset(got, 0, sizeof got);
+    uc_engine *uc2 = NULL;
+    uc_err open2 = uc_open(UC_ARCH_X86, UC_MODE_64, &uc2);
+    uc_err map2 = UC_ERR_OK, e2 = UC_ERR_OK;
+    if (open2 == UC_ERR_OK) {
+        map2 = uc_mem_map(uc2, 0x1000, 0x1000, UC_PROT_ALL);
+        if (map2 == UC_ERR_OK) {
+            uc_reg_write(uc2, UC_X86_REG_XMM0, x0);
+            uc_reg_write(uc2, UC_X86_REG_XMM1, x1);
+            uc_reg_write(uc2, UC_X86_REG_XMM2, x2);
+            uc_mem_write(uc2, 0x1000, vpaddd_xmm, sizeof vpaddd_xmm);
+            e2 = uc_emu_start(uc2, 0x1000, (uint64_t)-1, 0, 1);
+            uc_reg_read(uc2, UC_X86_REG_XMM0, got);
+        }
+        uc_close(uc2);
+    }
+    uint8_t want_lied[16], want_correct[16];
+    for (int i = 0; i < 16; i++) {
+        want_lied[i] = (uint8_t)(x0[i] + x2[i]); /* the 2-operand lie */
+        want_correct[i] =
+            (uint8_t)(x1[i] + x2[i]); /* the correct 3-operand result */
+    }
+    int vvvv_dropped = e2 == UC_ERR_OK &&
+                       memcmp(got, want_lied, sizeof got) == 0 &&
+                       memcmp(got, want_correct, sizeof got) != 0;
+
+    CHECK(open1 == UC_ERR_OK && map1 == UC_ERR_OK &&
+              e1 == UC_ERR_INSN_INVALID && open2 == UC_ERR_OK &&
+              map2 == UC_ERR_OK && vvvv_dropped,
+          "upstream sentinel: Unicorn still cannot run AVX — on FAILURE see "
+          "docs/internal/implementations/dataflow-producer-correctness.md T8 "
+          "(vaddps ymm: e1=%d want=%d; vpaddd xmm vvvv_dropped=%d e2=%d)",
+          (int)e1, (int)UC_ERR_INSN_INVALID, vvvv_dropped, (int)e2);
+}
+
 /* Case 10 — Hi16_ZMM / zmm16-31 reassembly (LOW 7). Component 7 is the only source for these
  * registers; nothing else in the suite reaches that path, and silently zeroing a register file
  * is the failure mode this whole increment exists to kill. */
@@ -2505,6 +2585,10 @@ int main(void) {
               "(width=%d)",
               ucw);
     }
+
+    /* T8: the upstream AVX-TCG sentinel — needs Unicorn only (no ptrace/BTF), so it runs here
+     * alongside the uc_vec_width probes just above, on every lane this suite builds on. */
+    run_avx_tcg_sentinel_case();
 
     if (probe != 1) {
         printf(

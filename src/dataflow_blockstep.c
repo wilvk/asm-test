@@ -1323,6 +1323,13 @@ static const char *scan_reason(const dfb_scan_t *s) {
  * mode), and only segment / address-size overrides may legally precede them (a 66/F2/F3/REX
  * before VEX is #UD).
  *
+ * UPSTREAM GATE (T8): this whole encoding-level rule rests on no released Unicorn being able
+ * to execute VEX/EVEX correctly — see the sentinel check (run_avx_tcg_sentinel_case) in
+ * examples/test_dataflow_blockstep.c, which makes that dependency explicit and self-testing.
+ * On FAILURE of that sentinel (i.e. once Unicorn ships QEMU >= 7.2 TCG), see
+ * docs/internal/implementations/dataflow-producer-correctness.md T8 for the trigger condition
+ * and the pin-bump playbook before relaxing anything here.
+ *
  * This deliberately keys on the ENCODING rather than on Capstone's AVX metadata, which is
  * measurably incomplete: `vpbroadcastq zmm0,xmm0` decodes with correct mnemonic and operands
  * yet cs_regs_access reports it touching NO registers and it is in NO X86_GRP_AVX/AVX2/AVX512
