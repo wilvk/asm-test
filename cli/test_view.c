@@ -64,12 +64,20 @@ static at_val_rec_t mem(uint64_t addr, uint64_t val, bool write, bool valid) {
     return r;
 }
 
-/* Register ids — arbitrary distinct non-zero values (the pure layer only needs
- * them consistent so the last-writer map matches reads to writes). */
-#define RA    1
-#define RC    2
-#define RS    3
-#define RD    4
+/* Register ids — REAL, distinct 64-bit Capstone GP containers, NOT "any distinct
+ * integers". Since dataflow-producer-correctness T3 (48b3c92), asmtest_defuse_build
+ * canonicalizes register keys through src/dataflow.c's reg_slice, which folds a
+ * sub-register alias into its 64-bit container. The old arbitrary ids 1/2/3/4 are
+ * Capstone AH/AL/AX/BH — three of them alias inside RAX — so they stopped behaving
+ * as four independent registers (the AX write at step 2 clobbers the AH byte the
+ * read at step 3 wanted, moving edge 0->3 to 2->3 and growing both slices). Full
+ * 64-bit registers each own a distinct container. Literal mirrors of capstone/x86.h
+ * (pinned Capstone 5.0.1), the same tactic examples/test_dataflow.c uses to stay
+ * Capstone-free. */
+#define RA    35 /* X86_REG_RAX */
+#define RC    37 /* X86_REG_RBX */
+#define RS    38 /* X86_REG_RCX */
+#define RD    40 /* X86_REG_RDX */
 #define MEM_M 0x601000ULL
 
 /* Build a 5-step trace with a sink chain (0 -> 3 -> 4, the last two through a
