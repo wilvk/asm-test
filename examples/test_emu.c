@@ -8,6 +8,7 @@
 #include "asmtest.h"
 #include "asmtest_emu.h"
 
+#include <limits.h>
 #include <string.h>
 
 extern long add_signed(long a, long b);
@@ -616,6 +617,21 @@ TEST(emu, fuzz_coverage_beats_fixed_vector) {
     ASSERT_UEQ(st.blocks_reached, uni.blocks_len);
     ASSERT_TRUE(uni.blocks_len > fixed.blocks_len); /* guided > fixed */
     ASSERT_TRUE(st.corpus_len >= 2); /* several coverage-expanding inputs */
+}
+
+TEST(emu, fuzz_boundary_ranges_are_defined) {
+    uint64_t blocks[16];
+    emu_trace_t uni = {0};
+    uni.blocks = blocks;
+    uni.blocks_cap = 16;
+    emu_fuzz_stat_t st;
+    /* Ranges hugging LONG_MAX / LONG_MIN force nudges at the extremes; the
+     * assertion is completion — UBSan (make sanitize) is the real oracle. */
+    ASSERT_TRUE(emu_fuzz_cover1(E, CLASSIFY3, sizeof CLASSIFY3, LONG_MAX - 8,
+                                LONG_MAX, 500, 0xC0FFEEULL, &uni, &st));
+    uni.blocks_len = 0;
+    ASSERT_TRUE(emu_fuzz_cover1(E, CLASSIFY3, sizeof CLASSIFY3, LONG_MIN,
+                                LONG_MIN + 8, 500, 0xC0FFEEULL, &uni, &st));
 }
 
 TEST(emu, fuzz_corpus_is_retrievable_and_feeds_mutation) {

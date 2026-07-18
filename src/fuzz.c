@@ -52,11 +52,22 @@ bool emu_fuzz_cover1(emu_t *e, const void *code, size_t code_len, long lo,
             in = asmtest_rng_range(&rng, lo, hi); /* fresh draw */
         } else {
             long base = corpus[asmtest_rng_u64(&rng) % ncorpus];
-            if (asmtest_rng_u64(&rng) & 1)
+            if (asmtest_rng_u64(&rng) & 1) {
                 in = base ^
                      (1L << (asmtest_rng_u64(&rng) % 62)); /* flip a bit */
-            else
-                in = base + asmtest_rng_range(&rng, -4, 4); /* nudge */
+            } else {
+                /* base + a signed offset overflows (UB) when base sits
+                 * within 4 of LONG_MAX/LONG_MIN -- which a fresh draw over a
+                 * boundary range (hi == LONG_MAX or lo == LONG_MIN)
+                 * guarantees will eventually happen. Mirror the unsigned
+                 * idiom asmtest_rng_range itself uses (src/asmtest.c): the
+                 * wrap is defined in uint64_t, and the clamp just below
+                 * folds any wrapped value back into [lo, hi] -- bit-identical
+                 * result to the old signed form for every non-boundary
+                 * range. */
+                in = (long)((unsigned long)base +
+                            (unsigned long)asmtest_rng_range(&rng, -4, 4));
+            }
             if (in < lo)
                 in = lo;
             if (in > hi)

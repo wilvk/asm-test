@@ -1051,6 +1051,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - guard-page allocators return NULL instead of a guard-page pointer for
   sizes within a page of `SIZE_MAX`.
 
+- emulator fuzzing: corpus nudge no longer has signed-overflow UB at
+  `LONG_MIN`/`LONG_MAX` range extremes.
+
 - **Cross-alias register def-use edges resolved.** `asmtest_defuse_build` (the
   shared, tier-neutral last-writer builder in `src/dataflow.c`) keyed its
   register axis on the raw Capstone id, so a write to one GP sub-register
