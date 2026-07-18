@@ -51,6 +51,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `make docker-cli` cli-smoke PASS.
   See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/asmspy-cli-enhancements.md).
 
+- **`futex` operations are named** (asmspy `--log`). The op renders as
+  `FUTEX_WAIT`/`FUTEX_WAKE_PRIVATE`/… with `FUTEX_PRIVATE_FLAG` and
+  `FUTEX_CLOCK_REALTIME` masked off before naming and re-rendered as suffixes,
+  never silently dropped; an unknown op keeps its number plus those suffixes.
+  `make docker-cli` cli-smoke PASS.
+  See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/asmspy-cli-enhancements.md).
+
 - **Block-step replay record-and-inject for rdtsc/rdtscp/rdrand/rdseed/cpuid, gated per
   block rather than per region.** `src/dataflow_blockstep.c`'s `step_block` now injects
   each site's recorded post-state (read from the T5 DR exec-breakpoint boundary) into the

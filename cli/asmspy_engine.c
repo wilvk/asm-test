@@ -16,7 +16,8 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <netinet/in.h> /* sockaddr_in / sockaddr_in6 (Theme E) */
+#include <linux/futex.h> /* FUTEX_* op + flag constants (Theme E) */
+#include <netinet/in.h>  /* sockaddr_in / sockaddr_in6 (Theme E) */
 #include <pthread.h>
 #include <sched.h> /* CLONE_* — the clone flag table */
 #include <signal.h>
@@ -541,7 +542,8 @@ typedef enum {
     A_SOCKADDR,     /* struct sockaddr* IN — byte len is the NEXT arg (T1) */
     A_SOCKADDR_OUT, /* struct sockaddr* OUT — len behind next arg (socklen_t*) */
     A_IOCTLREQ,     /* ioctl request -> name or _IOC(dir,type,nr,size) (T2) */
-    A_FCNTLCMD      /* fcntl command -> F_xxx (T2) */
+    A_FCNTLCMD,     /* fcntl command -> F_xxx (T2) */
+    A_FUTEXOP       /* futex op -> FUTEX_xxx with flags folded in (T3) */
 } argcls_t;
 
 typedef struct {
@@ -717,7 +719,7 @@ static int arg_shape(long nr, argshape_t *sh) {
 #endif
 #ifdef __NR_futex
     case __NR_futex:
-        SHAPE(A_HEX, A_INT, A_INT, A_HEX, A_HEX, A_INT);
+        SHAPE(A_HEX, A_FUTEXOP, A_INT, A_HEX, A_HEX, A_INT);
 #endif
 #ifdef __NR_exit_group
     case __NR_exit_group:
@@ -1278,6 +1280,73 @@ static size_t ap_fcntlcmd(char *b, size_t cap, size_t o, long long v) {
     return apf(b, cap, o, "%d", (int)v);
 }
 
+/* A futex op word -> FUTEX_WAIT / FUTEX_WAKE_PRIVATE / ... . The two flag bits
+ * (FUTEX_PRIVATE_FLAG, FUTEX_CLOCK_REALTIME) are masked off before naming the op
+ * and re-rendered as suffixes (strace's shape), never silently dropped; an
+ * unknown op prints its raw number plus those suffixes. */
+static size_t ap_futexop(char *b, size_t cap, size_t o, long long v) {
+    long long fmask = (long long)(FUTEX_PRIVATE_FLAG | FUTEX_CLOCK_REALTIME);
+    long long cmd = v & ~fmask;
+    const char *nm = NULL;
+    switch (cmd) {
+    case FUTEX_WAIT:
+        nm = "FUTEX_WAIT";
+        break;
+    case FUTEX_WAKE:
+        nm = "FUTEX_WAKE";
+        break;
+    case FUTEX_FD:
+        nm = "FUTEX_FD";
+        break;
+    case FUTEX_REQUEUE:
+        nm = "FUTEX_REQUEUE";
+        break;
+    case FUTEX_CMP_REQUEUE:
+        nm = "FUTEX_CMP_REQUEUE";
+        break;
+    case FUTEX_WAKE_OP:
+        nm = "FUTEX_WAKE_OP";
+        break;
+    case FUTEX_LOCK_PI:
+        nm = "FUTEX_LOCK_PI";
+        break;
+    case FUTEX_UNLOCK_PI:
+        nm = "FUTEX_UNLOCK_PI";
+        break;
+    case FUTEX_TRYLOCK_PI:
+        nm = "FUTEX_TRYLOCK_PI";
+        break;
+    case FUTEX_WAIT_BITSET:
+        nm = "FUTEX_WAIT_BITSET";
+        break;
+    case FUTEX_WAKE_BITSET:
+        nm = "FUTEX_WAKE_BITSET";
+        break;
+    case FUTEX_WAIT_REQUEUE_PI:
+        nm = "FUTEX_WAIT_REQUEUE_PI";
+        break;
+    case FUTEX_CMP_REQUEUE_PI:
+        nm = "FUTEX_CMP_REQUEUE_PI";
+        break;
+#ifdef FUTEX_LOCK_PI2
+    case FUTEX_LOCK_PI2:
+        nm = "FUTEX_LOCK_PI2";
+        break;
+#endif
+    default:
+        break;
+    }
+    if (nm)
+        o = apf(b, cap, o, "%s", nm);
+    else
+        o = apf(b, cap, o, "%lld", cmd);
+    if (v & FUTEX_PRIVATE_FLAG)
+        o = apf(b, cap, o, "_PRIVATE");
+    if (v & FUTEX_CLOCK_REALTIME)
+        o = apf(b, cap, o, "|FUTEX_CLOCK_REALTIME");
+    return o;
+}
+
 /* Render one argument of class `cl` (`ret` is the syscall's return value — OUT
  * classes decode only on success; every other class ignores it). */
 static size_t ap_arg(char *b, size_t cap, size_t o, pid_t pid, int cl,
@@ -1359,6 +1428,8 @@ static size_t ap_arg(char *b, size_t cap, size_t o, pid_t pid, int cl,
         return ap_ioctlreq(b, cap, o, v);
     case A_FCNTLCMD:
         return ap_fcntlcmd(b, cap, o, (long long)v);
+    case A_FUTEXOP:
+        return ap_futexop(b, cap, o, (long long)v);
     default:
         return apf(b, cap, o, "0x%llx", v);
     }

@@ -1428,6 +1428,14 @@ ad_has 'TIOCGWINSZ' "a named ioctl request"
 ad_has "_IOC(_IOC_READ, 0xab, 0x1, 4)" "an unknown ioctl request decomposed, not named"
 echo "  ioctl/fcntl commands named; fcntl arity conditional; unknown ioctl decomposed"
 
+# ---- T3: futex operation names (private flag folded into the name) ----
+ad_has 'FUTEX_WAKE_PRIVATE, 1' "futex op name with the private flag folded in"
+# NEGATIVE CONTROL: the op must NOT still render as the bare int 129
+# (FUTEX_WAKE|FUTEX_PRIVATE_FLAG) — the pre-change rendering.
+printf '%s\n' "$adout" | grep -E '^futex\(' | grep -q ', 129, ' \
+    && fail "futex: op still renders as the bare int 129 (masking not applied)"
+echo "  futex op named with the private flag folded in (no bare 129)"
+
 echo "--- asmspy --log fd->endpoint (socket:[inode] -> real endpoint) ---"
 "$BUILD/sock_victim" 2>"$BUILD/sock_victim.log" &
 SKPID=$!

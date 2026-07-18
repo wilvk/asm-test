@@ -26,6 +26,7 @@
  */
 #define _GNU_SOURCE
 #include <fcntl.h>
+#include <linux/futex.h>
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
@@ -94,6 +95,12 @@ int main(void) {
 
         /* arity zero */
         getpid();
+
+        /* T3: a futex op with the private flag folded into the name. 0 waiters,
+         * so FUTEX_WAKE returns immediately and never blocks. */
+        static int futex_word = 0;
+        syscall(SYS_futex, &futex_word, FUTEX_WAKE | FUTEX_PRIVATE_FLAG, 1,
+                NULL, NULL, 0);
 
         /* a struct read out of the target */
         struct timespec ts = {0, 2000000};
