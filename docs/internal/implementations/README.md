@@ -97,7 +97,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 ### Intel PT & CoreSight hardware trace
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
-| [intel-pt-whole-window-substrate.md](intel-pt-whole-window-substrate.md) — PT whole-window capture substrate, STRONG ladder, inline ctor | 5 | ◐ 2/5 | — |
+| [intel-pt-whole-window-substrate.md](intel-pt-whole-window-substrate.md) — PT whole-window capture substrate, STRONG ladder, inline ctor | 5 | ◐ 2/5 (T3 wip) | — |
 | [intel-pt-attach-foreign-pid.md](intel-pt-attach-foreign-pid.md) — PT attach-to-foreign-PID capture, facade dispatch, HV/EPT frontier | 5 | ☐ 0/5 | **intel-pt-whole-window-substrate** |
 | [coresight-live-decode.md](coresight-live-decode.md) — CoreSight live OpenCSD decode tree (AArch64 board-gated) | 5 | ☐ 0/5 | — |
 
