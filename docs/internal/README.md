@@ -11,6 +11,7 @@ Layout:
 |---|---|
 | `plans/` | **Active** implementation plans — work not yet landed or still in flight |
 | `analysis/` | Design/analysis notes and investigations |
+| `implementations/` | **Implementation-ready** briefs — the open items from `plans/` + `analysis/`, verified against the tree and grouped into one self-contained, cold-startable document per task set (see [`implementations/README.md`](implementations/README.md)) |
 | `reviews/` | **Open** repo reviews — findings not yet fully actioned |
 | `archive/plans/`, `archive/reviews/` | Completed plans and fully-actioned reviews |
 
