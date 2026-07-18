@@ -89,7 +89,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 ### Data-flow tier
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
-| [dataflow-producer-correctness.md](dataflow-producer-correctness.md) — gap barrier, sub-register aliases, undefined flags, F2 record-and-inject | 8 | ◐ 3/8 (T1, T2, T4 done & live-verified; T2 on the Zen 5 box — `make docker-dataflow-attach` 415/415, `dataflow-blockstep-test` 119/119, `docker-gccanon-attach` 37/37, all 0 skips; adversarially reviewed, one confirmed pre-existing/shared risk-set-cap limitation documented at `dfp_risk_flag`, not a T2 regression; T3 wip) | — |
+| [dataflow-producer-correctness.md](dataflow-producer-correctness.md) — gap barrier, sub-register aliases, undefined flags, F2 record-and-inject | 8 | ◐ 4/8 (T1, T2, T3, T4 done & live-verified; T3 on the Zen 5 box — `make docker-dataflow-attach` 498/498, `dataflow-blockstep-test` 180/180, all 0 skips; adversarially reviewed — one confirmed MAJOR finding (32-bit GP writes weren't modeled as zero-extending the full 64-bit container, fabricating a stale-writer edge for the upper half) fixed with a teeth-checked regression test before landing) | — |
 | [dataflow-bindings-slice-codeimage.md](dataflow-bindings-slice-codeimage.md) — def-use/slice surface + code-image arg across bindings | 4 | ☐ 0/4 | — |
 | [dataflow-f4-object-identity.md](dataflow-f4-object-identity.md) — real object identity via GCBulkType/Node/Edge | 6 | ☐ 0/6 | — |
 | [dataflow-pt-replay-tier.md](dataflow-pt-replay-tier.md) — F5: PT + code-image + Unicorn-replay value tier | 5 | ☐ 0/5 | **intel-pt-attach-foreign-pid** |

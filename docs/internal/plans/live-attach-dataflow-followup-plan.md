@@ -719,7 +719,15 @@ method ranges of a live process; the hand-off boundary to the DR taint tier is d
 > container in both the scoped producer and the blockstep tier's own copy. (4) **No vector
 > clobber across a gap** is
 > exercised: the barrier diffs XMM/YMM (one batched snapshot per gap) but no fixture makes the
-> glue clobber a vector register the survey recorded. (5) The glue-tax **ratio** (314x) is a
+> glue clobber a vector register the survey recorded. **CLOSED** by
+> [dataflow-producer-correctness.md T3](../implementations/dataflow-producer-correctness.md#T3):
+> `test_window_vec_gap` (`examples/test_dataflow_ptrace.c`) makes the glue clobber a live `xmm0`
+> the survey recorded and asserts the GAP step carries the real post-glue value out of `wide[]`,
+> and the post-gap read resolves to it rather than the stale pre-gap write. (T3 also closed a
+> distinct, previously-undocumented gap in the SHARED BUILDER — `src/dataflow.c`'s def-use
+> resolution keyed registers by raw Capstone id with no sub-register canonicalization, so even
+> with the barrier above fully correct a cross-alias read like `write eax` / `read ax` produced
+> no edge at all; see T3 for the fix and its own fixtures.) (5) The glue-tax **ratio** (314x) is a
 > property of the fixture's chosen glue:method mix and means nothing on its own — the
 > transferable numbers are the per-stop cost and the exact 2-stops-per-glue-iteration identity.
 >

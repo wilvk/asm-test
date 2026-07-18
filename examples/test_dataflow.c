@@ -29,6 +29,21 @@ static int checks, failures;
 enum { RDI = 1, RSI = 2, RA = 10, RB = 11, RC = 12, RD = 13, RSP = 20 };
 #define ADDR_A 0x4000ULL
 
+/* Real Capstone x86 GP register ids (T3). Unlike the synthetic ids above —
+ * whose only load-bearing property is mutual distinctness — the sub-register
+ * alias fixtures below need the REAL ids, because reg_slice (src/dataflow.c)
+ * canonicalizes by raw Capstone id. Literal mirrors of capstone/x86.h (pinned
+ * Capstone 5.0.1, per CLAUDE.md's dependency rule), the same tactic
+ * examples/test_dataflow_ptrace.c already uses for its own REG_* literals and
+ * src/dataflow.c uses for reg_slice itself — this file stays Capstone-free. */
+#define X86_REG_AH  1
+#define X86_REG_AL  2
+#define X86_REG_AX  3
+#define X86_REG_EAX 19
+#define X86_REG_RAX 35
+#define X86_REG_R8  106
+#define X86_REG_R8D 226
+
 static at_val_rec_t reg(uint32_t id, bool w) {
     at_val_rec_t r;
     memset(&r, 0, sizeof r);
@@ -217,11 +232,139 @@ static void test_alias_limitation(void) {
     asmtest_valtrace_free(v);
 }
 
+/*
+ * T3 — sub-register-aware last-writer resolution (src/dataflow.c's reg_slice).
+ * Three synthetic traces, each built and torn down independently so a failure
+ * in one can't shadow the others:
+ *
+ * (a) write eax -> read ax: raw-id keying (pre-T3) would MISS this edge (EAX
+ *     and AX are distinct Capstone ids); reg_slice's container-byte folding
+ *     must produce it.
+ * (b) write ah -> read al: the DISCRIMINATOR. AH and AL are distinct
+ *     Capstone ids AND distinct bytes of the same rax container (AH is byte
+ *     offset 1, AL is byte offset 0). A container-collapsing implementation
+ *     — one that folds by container alone and ignores the byte offset/width
+ *     reg_slice computes — would wrongly link them; asserting NO edge here
+ *     catches exactly that bug (proven by mutation below, not just asserted).
+ *     A companion positive check (write ah -> read ah) confirms the AH write
+ *     really was recorded, so the negative check isn't vacuously true because
+ *     nothing was written at all.
+ * (c) write r8d -> read r8: the r8-r15 family's twin of (a) (T1 fixed the
+ *     PTRACE PRODUCER's value capture for this family; this is the SHARED
+ *     BUILDER's independent edge-resolution path).
+ * (d) write rax -> write eax -> read rax: the ZERO-EXTENSION discriminator.
+ *     x86-64 defines a 32-bit GP write as implicitly clearing bits 32-63 of
+ *     the 64-bit container — unlike a 16/8-bit write, which leaves the
+ *     untouched bytes exactly as they were. A byte-range-only implementation
+ *     that widens WRITES no further than reg_slice's 4-byte `len` for EAX
+ *     would leave the container's upper half attributed to the STALE step0
+ *     write, fabricating a phantom edge 0->2 alongside the real 1->2 one —
+ *     exactly the class of bug this task's whole point is to eliminate,
+ *     just relocated from "missing edge" to "extra fabricated edge".
+ */
+static void test_subreg_alias(void) {
+    /* (a) write eax -> read ax produces the edge. */
+    {
+        asmtest_valtrace_t *v = asmtest_valtrace_new(4, 4, 0);
+        if (!v) {
+            CHECK(0, "subreg: (a) valtrace_new");
+        } else {
+            at_val_rec_t s0[] = {reg(X86_REG_EAX, true)};
+            at_val_rec_t s1[] = {reg(X86_REG_AX, false)};
+            asmtest_valtrace_append(v, 0x00, s0, 1);
+            asmtest_valtrace_append(v, 0x03, s1, 1);
+            asmtest_defuse_t *g = asmtest_defuse_build(v);
+            CHECK(g && has_edge(g, 0, 1),
+                  "subreg(a): write eax -> read ax resolves the cross-alias "
+                  "edge (raw-id keying would miss it: EAX != AX)");
+            asmtest_defuse_free(g);
+            asmtest_valtrace_free(v);
+        }
+    }
+
+    /* (b) write ah -> read al produces NO edge (byte-slice precision). */
+    {
+        asmtest_valtrace_t *v = asmtest_valtrace_new(4, 4, 0);
+        if (!v) {
+            CHECK(0, "subreg: (b) valtrace_new");
+        } else {
+            at_val_rec_t s0[] = {reg(X86_REG_AH, true)};
+            at_val_rec_t s1[] = {reg(X86_REG_AH, false)};
+            at_val_rec_t s2[] = {reg(X86_REG_AL, false)};
+            asmtest_valtrace_append(v, 0x00, s0, 1);
+            asmtest_valtrace_append(v, 0x02, s1, 1);
+            asmtest_valtrace_append(v, 0x04, s2, 1);
+            asmtest_defuse_t *g = asmtest_defuse_build(v);
+            CHECK(g && has_edge(g, 0, 1),
+                  "subreg(b) positive control: write ah -> read ah DOES "
+                  "resolve (the write was really recorded)");
+            CHECK(g && !has_edge(g, 0, 2),
+                  "subreg(b) DISCRIMINATOR: write ah -> read al produces NO "
+                  "edge (al is byte offset 0 of rax, ah is byte offset 1 -- "
+                  "a container-collapsing implementation fails this)");
+            asmtest_defuse_free(g);
+            asmtest_valtrace_free(v);
+        }
+    }
+
+    /* (c) write r8d -> read r8 produces the edge (the r8-r15 family twin of
+     * (a); T1's fixture covers the ptrace producer's value capture for this
+     * family, this covers the shared builder's edge resolution). */
+    {
+        asmtest_valtrace_t *v = asmtest_valtrace_new(4, 4, 0);
+        if (!v) {
+            CHECK(0, "subreg: (c) valtrace_new");
+        } else {
+            at_val_rec_t s0[] = {reg(X86_REG_R8D, true)};
+            at_val_rec_t s1[] = {reg(X86_REG_R8, false)};
+            asmtest_valtrace_append(v, 0x00, s0, 1);
+            asmtest_valtrace_append(v, 0x03, s1, 1);
+            asmtest_defuse_t *g = asmtest_defuse_build(v);
+            CHECK(g && has_edge(g, 0, 1),
+                  "subreg(c): write r8d -> read r8 resolves the cross-alias "
+                  "edge (the r8-r15 family's twin of (a))");
+            asmtest_defuse_free(g);
+            asmtest_valtrace_free(v);
+        }
+    }
+
+    /* (d) write rax -> write eax -> read rax: only step1 (the eax write)
+     * produces an edge; step0's write is architecturally stale for EVERY
+     * byte of the container, including the upper half eax's own 4 bytes
+     * never explicitly touch. */
+    {
+        asmtest_valtrace_t *v = asmtest_valtrace_new(4, 4, 0);
+        if (!v) {
+            CHECK(0, "subreg: (d) valtrace_new");
+        } else {
+            at_val_rec_t s0[] = {reg(X86_REG_RAX, true)};
+            at_val_rec_t s1[] = {reg(X86_REG_EAX, true)};
+            at_val_rec_t s2[] = {reg(X86_REG_RAX, false)};
+            asmtest_valtrace_append(v, 0x00, s0, 1);
+            asmtest_valtrace_append(v, 0x03, s1, 1);
+            asmtest_valtrace_append(v, 0x06, s2, 1);
+            asmtest_defuse_t *g = asmtest_defuse_build(v);
+            CHECK(g && has_edge(g, 1, 2),
+                  "subreg(d): write eax -> read rax resolves (the "
+                  "zero-extended write is a real producer of the FULL "
+                  "container)");
+            CHECK(g && !has_edge(g, 0, 2),
+                  "subreg(d) DISCRIMINATOR: write rax -> write eax -> read "
+                  "rax produces NO edge from the stale rax write -- a "
+                  "4-byte-only write range for eax would fabricate this "
+                  "edge from the upper half's zero-extension side effect");
+            asmtest_defuse_free(g);
+            asmtest_valtrace_free(v);
+        }
+    }
+}
+
 int main(void) {
     test_sink();
     test_truncate();
     test_defuse_slice();
     test_alias_limitation();
+    test_subreg_alias();
     printf("1..%d\n", checks);
     if (failures)
         printf("# %d/%d checks FAILED\n", failures, checks);

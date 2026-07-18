@@ -661,21 +661,23 @@ jobs:
           fi
           # A floor, not an exact count: new assertions should not break the gate, but a
           # truncated or half-run suite must not pass. On bare metal (Zen 5 box, `make
-          # docker-dataflow-attach`) the 8 suites total 415, MEASURED 2026-07-18 (test_dataflow
-          # 23, method 29, gcmove 26, helpers 36, operands 20, emu 10, ptrace 152, blockstep
-          # 119). ptrace's 152 is +21 over its prior (pre-T2) running count of 131 for T2's
-          # gap-barrier: the updated test_callout, its fabricated-edge and negative-control
-          # fixtures, and two direct regression checks for the deferred overflow_pending cap
-          # promotion/discard (DFP-CALLOUT-1) — this comment previously cited 126/389, already
-          # stale by the time of this measurement. On a GitHub VM the live block-step/replay
-          # slice self-skips (BTF masked, see above); ptrace's checks all drive
-          # PTRACE_SINGLESTEP, which the hypervisor does not mask, so the VM total should rise
-          # by the same +21 over its last recorded run — previously ~293, now ~314. The floor
-          # sits a few below that ON PURPOSE, tight enough that even the smallest suite (emu's
-          # 10) vanishing trips it.
+          # docker-dataflow-attach`) the 8 suites total 498, MEASURED 2026-07-18 (test_dataflow
+          # 29, method 29, gcmove 26, helpers 36, operands 20, emu 10, ptrace 168, blockstep
+          # 180). Two changes landed since this comment's prior 415/306: (1) blockstep's
+          # 119 -> 180 (+61) is T4's undefined-EFLAGS masking work (dataflow-blockstep-test,
+          # unrelated to this suite's own diff) — the ENTIRE block-step/replay slice already
+          # self-skips as one named unit on a GitHub VM (BTF masked, see above), so this
+          # growth does NOT raise the VM-side total; (2) test_dataflow's 23 -> 29 (+6) and
+          # ptrace's 152 -> 168 (+16) are T3 (sub-register-aware last-writer resolution in
+          # the shared builder, plus the zero-extension write-range fix and two new windowed
+          # gap-barrier live fixtures): test_dataflow is pure (runs everywhere) and the new
+          # ptrace fixtures drive PTRACE_SINGLESTEP, which the hypervisor does not mask, so
+          # BOTH raise the VM total by the same +22 combined. VM total was last recorded
+          # ~314 pre-T3; add +22 for ~336. The floor sits a few below that ON PURPOSE, tight
+          # enough that even the smallest suite (emu's 10) vanishing trips it.
           n=$(grep -c '^ok ' "$log" || true)
-          if [ "$n" -lt 306 ]; then
-            echo "::error::the data-flow C suite ran only $n assertions, expected >= 306 — a suite is missing or the run was truncated."
+          if [ "$n" -lt 328 ]; then
+            echo "::error::the data-flow C suite ran only $n assertions, expected >= 328 — a suite is missing or the run was truncated."
             exit 1
           fi
           echo "data-flow C suite: $n assertions, no unexpected skips, block-step chain intact."

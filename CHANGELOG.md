@@ -1020,6 +1020,43 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Cross-alias register def-use edges resolved.** `asmtest_defuse_build` (the
+  shared, tier-neutral last-writer builder in `src/dataflow.c`) keyed its
+  register axis on the raw Capstone id, so a write to one GP sub-register
+  alias and a later read of another — `mov eax, ...` then a read of `ax`,
+  `mov r8d, ...` then a read of `r8` — produced no def-use edge at all, even
+  though the value trace correctly captured both. This is the shared
+  builder's counterpart to `dfp_alias_shape`
+  (`src/dataflow_ptrace.c`, added for the F6 gap barrier): a new `reg_slice`
+  helper canonicalizes a Capstone GP register id to its 64-bit container plus
+  a byte offset/length, and `apply_write`/`emit_read` now key a mappable
+  register per CONTAINER BYTE — exactly as memory is already keyed per
+  address byte — so a partial-overlap write/read resolves to the right last
+  writer instead of missing the edge. `AH`/`BH`/`CH`/`DH` stay pinned to byte
+  offset 1 of their container (not offset 0, which is `AL`/`BL`/`CL`/`DL`'s
+  own byte): a write to `ah` reaches a later `ah`/`ax`/`eax`/`rax` read but
+  never a later `al` read, which is the discriminator against a
+  container-collapsing implementation that folds by container alone and
+  ignores the byte offset (proven by temporarily mutating `reg_slice` that
+  way and observing the new synthetic fixture fail, then restoring it). A
+  32-bit GP write (`eax`, `r8d`, …) additionally marks the FULL 8-byte
+  container as written, not just its own 4 bytes — x86-64 defines a 32-bit
+  write as implicitly zero-extending bits 32-63, unlike a 16/8-bit write,
+  which leaves the untouched bytes exactly as they were — so a later
+  full-width read resolves its upper-half producer to that same write
+  instead of a stale one from before the zero-extension (also proven by
+  mutation: reverting the widened write range makes a dedicated fixture
+  fabricate exactly that phantom edge).
+  Vector registers, segment selectors, `EFLAGS`, and `RIP` fall through to
+  the pre-existing raw-id keying unchanged (none of them alias with anything
+  else, so raw-id keying was already exact for them). Two new live fixtures
+  in `examples/test_dataflow_ptrace.c` exercise the windowed gap barrier
+  end-to-end through this change: a glue excursion that clobbers a
+  sub-register alias of a register the survey recorded, and — closing F6
+  known-limit (4) — a glue excursion that clobbers a whole XMM register the
+  survey recorded, the first fixture anywhere to exercise the barrier's
+  vector path at all.
+
 - **The scoped `ptrace` dataflow producer's call-out step-over can no longer
   fabricate a def-use edge across a stepped-over helper.** `dfp_step_loop`
   (`src/dataflow_ptrace.c`) runs a call-out at native speed and records nothing

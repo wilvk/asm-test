@@ -68,6 +68,10 @@ int asmtest_dataflow_emu_run(const uint8_t *code, size_t code_len,
                        * pushes, the helper's ret pops)                       */
 #define REG_RCX 38 /* T2: the fabricated-edge / negative-control register */
 #define REG_RAX 35 /* T2: must NOT appear on a gap the helper never touched */
+#define REG_ECX                                                                \
+    22 /* T3: the survey's pre-gap write (a 32-bit sub-register alias) */
+#define REG_CX                                                                 \
+    12 /* T3: the post-gap read, a DIFFERENT alias of the same container */
 
 static int checks, failures;
 #define CHECK(c, m)                                                            \
@@ -698,6 +702,20 @@ typedef struct {
 #define F6_SENT2 0x2222222222222222ULL /* r10:      clobbered by the GLUE   */
 #define F6_MEM1  0x3333333333333333ULL /* [rbp-8]:  written by the FRAME    */
 #define F6_MEM2  0x4444444444444444ULL /* [rbp-8]:  clobbered by the GLUE   */
+/* T3(5a): ecx (32-bit) written by the FRAME, then only its LOW 16 BITS (cx)
+ * overwritten by the GLUE — a genuine sub-register alias clobber, not a
+ * whole-container one. The container's post-glue value is derived, not
+ * guessed: bits 31-16 keep the FRAME's original 0x1111, bits 15-0 become the
+ * GLUE's 0x2222, so both the GAP record's ecx value and the post-gap cx
+ * read's (unmasked, full-container) value are 0x11112222. */
+#define F6_SENT1_32    0x11111111u   /* ecx: written by the FRAME             */
+#define F6_SENT2_16    0x2222u       /* cx:  clobbered by the GLUE            */
+#define F6_SUBREG_POST 0x11112222ULL /* the derived post-glue ecx/cx value */
+/* T3(5b): xmm0 written by the FRAME, clobbered whole by the GLUE — the vector
+ * counterpart of (5a) (F6 known-limit item 4: no vector clobber across a gap
+ * was exercised anywhere before this). */
+#define F6_VSENT1 0x1111111111111111ULL /* xmm0: written by the FRAME   */
+#define F6_VSENT2 0x2222222222222222ULL /* xmm0: clobbered by the GLUE  */
 
 typedef struct {
     uint8_t *p;
@@ -710,6 +728,8 @@ static void f6_bytes(f6_emit *e, const void *b, size_t n) {
     e->n += n;
 }
 static void f6_u64(f6_emit *e, uint64_t v) { f6_bytes(e, &v, 8); }
+static void f6_u32(f6_emit *e, uint32_t v) { f6_bytes(e, &v, 4); }
+static void f6_u16(f6_emit *e, uint16_t v) { f6_bytes(e, &v, 2); }
 /* mov rax, imm64 (48 b8 io) — the JIT-address literal an absolute call needs. */
 static void f6_movabs_rax(f6_emit *e, uint64_t v) {
     f6_b(e, 0x48);
@@ -733,9 +753,15 @@ typedef struct {
     uint64_t keep_def; /* FRAME: mov [rbp-0x10], rax — M1's result, UNtouched
                         * by the glue: the barrier must NOT shadow it        */
     uint64_t keep_use; /* FRAME: mov rdi, [rbp-0x10]                         */
-    uint64_t m1_add; /* M1:    add rax, 1          — M1's value            */
-    uint64_t m2_mov; /* M2:    mov rax, rdi        — M2 consumes it        */
-    uint64_t m2_add; /* M2:    add rax, rax        — the survey's sink     */
+    uint64_t m1_add;  /* M1:    add rax, 1          — M1's value            */
+    uint64_t m2_mov;  /* M2:    mov rax, rdi        — M2 consumes it        */
+    uint64_t m2_add;  /* M2:    add rax, rax        — the survey's sink     */
+    uint64_t ecx_def; /* T3(5a): mov ecx, SENT1_32 — the sub-register-alias
+                       * write at risk                                    */
+    uint64_t cx_use;  /* T3(5a): mov dx, cx — post-gap read of a DIFFERENT
+                       * alias of the SAME container                      */
+    uint64_t xmm_def; /* T3(5b): movq xmm0, rdi — the vector write at risk */
+    uint64_t xmm_use; /* T3(5b): movq rax, xmm0 — post-gap vector read     */
 } f6_layout;
 
 /* Build the survey fixture into `m` (mapped at `base`). Shapes, in one window:
@@ -849,6 +875,100 @@ static void f6_build_survey(uint8_t *m, uint64_t base, f6_ctl *ctl,
     f6_b(&b, 0xc0); /* add  rax, rax       */
     f6_b(&b, 0xc3); /* ret                 */
     L->m2_len = b.n;
+}
+
+/* --- T3(5a): a sub-register-alias clobber across the gap --------------- *
+ * The at-risk register the barrier tracks and the register a post-gap read
+ * actually names are DIFFERENT Capstone ids of the SAME container: the FRAME
+ * writes ecx (32-bit), the GLUE excursion overwrites only cx (its low 16
+ * bits), and the FRAME reads cx back. Closing this needs BOTH halves of this
+ * doc working together: the barrier (T1/T2, dfp_alias_shape) already decides
+ * whether ecx's own 4 bytes changed and emits an alias-sliced GAP record
+ * keyed on ecx's raw id; the shared BUILDER (T3, reg_slice) must then
+ * resolve the cross-alias ecx-GAP-write -> cx-read edge, or the read
+ * silently attributes to the stale pre-gap ecx write instead. No M1/M2 is
+ * needed for this shape, so the region set is the FRAME alone. */
+static void f6_build_subreg_gap(uint8_t *m, uint64_t base, f6_ctl *ctl,
+                                f6_layout *L) {
+    (void)ctl; /* this fixture needs no rendezvous */
+    memset(L, 0, sizeof *L);
+    L->base = base;
+
+    f6_emit f = {m + F6_FRAME, 0};
+    L->ecx_def = base + F6_FRAME + f.n;
+    f6_b(&f, 0xb9); /* mov  ecx, imm32     */
+    f6_u32(&f, F6_SENT1_32);
+
+    f6_movabs_rax(&f, base + F6_GLUE); /* mov  rax, &GLUE     */
+    f6_call_rax(&f);                   /* call rax  -> a GAP  */
+
+    L->cx_use = base + F6_FRAME + f.n;
+    f6_b(&f, 0x66);
+    f6_b(&f, 0x89);
+    f6_b(&f, 0xca); /* mov  dx, cx         */
+
+    f6_b(&f, 0xc3); /* ret                 */
+    L->frame_len = f.n;
+
+    /* GLUE — unpublished: clobbers only cx (16 bits), NOT the whole ecx
+     * container, so a container-granular (not byte-precise) barrier or
+     * builder would still happen to see SOME change here — the discriminator
+     * against a container-collapsing bug is the SYNTHETIC builder fixture
+     * (b) in test_dataflow.c; this live fixture proves the two halves agree
+     * end to end on a real ptrace capture. */
+    f6_emit g = {m + F6_GLUE, 0};
+    f6_b(&g, 0x66);
+    f6_b(&g, 0xb9); /* mov  cx, imm16      */
+    f6_u16(&g, F6_SENT2_16);
+    f6_b(&g, 0xc3); /* ret                 */
+}
+
+/* --- T3(5b): a VECTOR clobber across the gap ---------------------------- *
+ * F6 known-limit (4): no fixture exercised a gap barrier over a vector (XMM/
+ * YMM) register at all. The FRAME writes xmm0 (from rdi, the arg), the GLUE
+ * excursion clobbers the whole register, and the FRAME reads xmm0 back. The
+ * barrier's vector path (dfp_emit_gap's `w != 0` branch, dfp_vecsnap) stashes
+ * the changed value into vt->wide[] exactly like a live wide read/write
+ * record; the builder's memory-shaped byte handling (AT_LOC_REG is
+ * unaffected by T3 for vector ids — reg_slice returns 0 for them, so they
+ * keep the pre-T3 raw-id single key, which is already exact: a whole XMM/YMM
+ * register has no sub-alias) must still resolve the GAP -> read edge. */
+static void f6_build_vec_gap(uint8_t *m, uint64_t base, f6_ctl *ctl,
+                             f6_layout *L) {
+    (void)ctl; /* this fixture needs no rendezvous */
+    memset(L, 0, sizeof *L);
+    L->base = base;
+
+    f6_emit f = {m + F6_FRAME, 0};
+    L->xmm_def = base + F6_FRAME + f.n;
+    f6_b(&f, 0x66);
+    f6_b(&f, 0x48);
+    f6_b(&f, 0x0f);
+    f6_b(&f, 0x6e);
+    f6_b(&f, 0xc7); /* movq xmm0, rdi      */
+
+    f6_movabs_rax(&f, base + F6_GLUE); /* mov  rax, &GLUE     */
+    f6_call_rax(&f);                   /* call rax  -> a GAP  */
+
+    L->xmm_use = base + F6_FRAME + f.n;
+    f6_b(&f, 0x66);
+    f6_b(&f, 0x48);
+    f6_b(&f, 0x0f);
+    f6_b(&f, 0x7e);
+    f6_b(&f, 0xc0); /* movq rax, xmm0      */
+
+    f6_b(&f, 0xc3); /* ret                 */
+    L->frame_len = f.n;
+
+    /* GLUE — unpublished: clobbers the whole xmm0 with a different sentinel. */
+    f6_emit g = {m + F6_GLUE, 0};
+    f6_movabs_rax(&g, F6_VSENT2); /* mov  rax, VSENT2    */
+    f6_b(&g, 0x66);
+    f6_b(&g, 0x48);
+    f6_b(&g, 0x0f);
+    f6_b(&g, 0x6e);
+    f6_b(&g, 0xc0); /* movq xmm0, rax      */
+    f6_b(&g, 0xc3); /* ret                 */
 }
 
 /* --- the MID-WINDOW publish fixture ------------------------------------ *
@@ -1316,6 +1436,195 @@ static void test_window_survey(void) {
            (unsigned long long)info.stops, (unsigned long long)info.recorded,
            (unsigned long long)info.gaps, (unsigned long long)info.gap_steps,
            (unsigned long long)info.gap_recs, info.risk_regs, info.risk_bytes);
+
+    asmtest_defuse_free(g);
+    asmtest_valtrace_free(v);
+
+    f6_reap(pid, map, ctl);
+}
+
+/* T3(5a) — a windowed survey whose glue clobbers a SUB-REGISTER ALIAS the survey
+ * recorded: the FRAME writes ecx, the elided GLUE overwrites only cx (its low 16
+ * bits), and the FRAME reads cx back. Asserts the barrier emits the alias-sliced
+ * GAP record (T1/T2) AND the shared builder's cross-alias resolution (T3, reg_slice)
+ * correctly attributes the post-gap read to it, not to the stale pre-gap ecx write. */
+static void test_window_subreg_alias_gap(void) {
+    uint8_t *map = NULL;
+    f6_ctl *ctl = NULL;
+    uint64_t base = 0;
+    f6_layout L;
+    pid_t pid = f6_spawn_victim(&map, &base, &ctl, f6_build_subreg_gap, &L, 0);
+    if (pid == 0) {
+        printf("# SKIP window_subreg_alias_gap: fixture setup failed\n");
+        return;
+    }
+    ctl->go = 1; /* no rendezvous needed: let it free-run */
+
+    asmtest_addr_channel_t chanbuf;
+    asmtest_addr_channel_t *chan = &chanbuf;
+    asmtest_addr_channel_init(chan);
+    /* nothing published: the region set is the window frame alone */
+
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    asmtest_dfwin_info_t info;
+    long result = 0;
+    int rc = asmtest_dataflow_ptrace_attach_window(
+        pid, base + F6_FRAME, L.frame_len, chan, 0, &result, &info, v);
+    if (rc == DF_PTRACE_ETRACE) {
+        printf("# SKIP window_subreg_alias_gap: PTRACE_SEIZE unavailable here "
+               "(yama/seccomp)\n");
+        asmtest_valtrace_free(v);
+        f6_reap(pid, map, ctl);
+        return;
+    }
+    CHECK(rc == DF_PTRACE_OK,
+          "window_subreg_alias_gap: surveyed a window whose glue clobbers a "
+          "SUB-REGISTER ALIAS (cx) of a register the survey recorded (ecx)");
+    CHECK(!v->truncated,
+          "window_subreg_alias_gap: the survey is complete (nothing "
+          "truncated)");
+
+    uint32_t s_ecx_def = 0, s_cx_use = 0, s_gap = 0;
+    int found = f6_step_at(v, L.ecx_def, &s_ecx_def) &&
+                f6_step_at(v, L.cx_use, &s_cx_use) &&
+                f6_step_at(v, base + F6_GLUE, &s_gap);
+    CHECK(found,
+          "window_subreg_alias_gap: ecx's write, cx's read, and the glue's "
+          "gap barrier are all present in the stream");
+    if (!found) {
+        asmtest_valtrace_free(v);
+        f6_reap(pid, map, ctl);
+        return;
+    }
+
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    CHECK(has_edge(g, s_gap, s_cx_use),
+          "window_subreg_alias_gap: the post-gap cx READ resolves to the "
+          "GAP's alias-sliced ecx WRITE record — the barrier (T1/T2) and the "
+          "shared builder (T3) agreeing on the SAME container bytes despite "
+          "naming DIFFERENT Capstone ids");
+    CHECK(!has_edge(g, s_ecx_def, s_cx_use),
+          "window_subreg_alias_gap: and NOT the stale pre-gap ecx write — "
+          "the elided glue's sub-register clobber is not silently dropped");
+    uint64_t gv = 0;
+    CHECK(f6_reg_write_value(v, s_gap, REG_ECX, &gv) && gv == F6_SUBREG_POST,
+          "window_subreg_alias_gap: the GAP's ecx record carries the "
+          "REAL post-glue container value (bits31-16 survive from the "
+          "FRAME's write, bits15-0 are the GLUE's), not a guess");
+    uint64_t uv = 0;
+    CHECK(reg_read_low8(v, s_cx_use, REG_CX, &uv) && uv == F6_SUBREG_POST,
+          "window_subreg_alias_gap: the cx read's own captured value was "
+          "always honest — it is the EDGE that elision without T3 would "
+          "have gotten wrong, which is why a value-only check could never "
+          "have caught this");
+
+    long c0 = ctl->counter;
+    struct timespec ts = {0, 40 * 1000 * 1000};
+    nanosleep(&ts, NULL);
+    CHECK(ctl->counter > c0,
+          "window_subreg_alias_gap: the victim SURVIVED the detach and kept "
+          "looping");
+
+    asmtest_defuse_free(g);
+    asmtest_valtrace_free(v);
+
+    f6_reap(pid, map, ctl);
+}
+
+/* T3(5b) — a windowed survey whose glue clobbers a VECTOR register the survey
+ * recorded (F6 known-limit (4): no fixture ever exercised a gap barrier over a
+ * vector location before this). The FRAME writes xmm0 from its argument, the
+ * elided GLUE overwrites the whole register with a different sentinel, and the
+ * FRAME reads xmm0 back. Asserts the GAP step carries the wide[] record with the
+ * REAL post-glue vector value, and the post-gap read resolves to it. */
+static void test_window_vec_gap(void) {
+    uint8_t *map = NULL;
+    f6_ctl *ctl = NULL;
+    uint64_t base = 0;
+    f6_layout L;
+    pid_t pid = f6_spawn_victim(&map, &base, &ctl, f6_build_vec_gap, &L,
+                                (long)F6_VSENT1);
+    if (pid == 0) {
+        printf("# SKIP window_vec_gap: fixture setup failed\n");
+        return;
+    }
+    ctl->go = 1; /* no rendezvous needed: let it free-run */
+
+    asmtest_addr_channel_t chanbuf;
+    asmtest_addr_channel_t *chan = &chanbuf;
+    asmtest_addr_channel_init(chan);
+    /* nothing published: the region set is the window frame alone */
+
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    asmtest_dfwin_info_t info;
+    long result = 0;
+    int rc = asmtest_dataflow_ptrace_attach_window(
+        pid, base + F6_FRAME, L.frame_len, chan, 0, &result, &info, v);
+    if (rc == DF_PTRACE_ETRACE) {
+        printf("# SKIP window_vec_gap: PTRACE_SEIZE unavailable here "
+               "(yama/seccomp)\n");
+        asmtest_valtrace_free(v);
+        f6_reap(pid, map, ctl);
+        return;
+    }
+    CHECK(rc == DF_PTRACE_OK,
+          "window_vec_gap: surveyed a window whose glue clobbers a VECTOR "
+          "register (xmm0) the survey recorded");
+    CHECK(!v->truncated,
+          "window_vec_gap: the survey is complete (nothing truncated)");
+
+    uint32_t s_xmm_def = 0, s_xmm_use = 0, s_gap = 0;
+    int found = f6_step_at(v, L.xmm_def, &s_xmm_def) &&
+                f6_step_at(v, L.xmm_use, &s_xmm_use) &&
+                f6_step_at(v, base + F6_GLUE, &s_gap);
+    CHECK(found,
+          "window_vec_gap: xmm0's write, xmm0's read, and the glue's gap "
+          "barrier are all present in the stream");
+    if (!found) {
+        asmtest_valtrace_free(v);
+        f6_reap(pid, map, ctl);
+        return;
+    }
+
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    CHECK(has_edge(g, s_gap, s_xmm_use),
+          "window_vec_gap: the post-gap xmm0 read resolves to the GAP's "
+          "vector record, not the stale pre-gap write");
+    CHECK(!has_edge(g, s_xmm_def, s_xmm_use),
+          "window_vec_gap: and NOT to the FRAME's stale pre-gap xmm0 write "
+          "— the elided glue's whole-register vector clobber is not "
+          "silently dropped");
+
+    /* The GAP step's xmm0 record carries the REAL post-glue value in wide[]
+     * (F6 known-limit (4): this is the first fixture anywhere that exercises
+     * the barrier's vector path at all). */
+    uint64_t gv = 0;
+    int gap_wide_ok = 0;
+    for (size_t i = 0; i < v->recs_len; i++) {
+        const at_val_rec_t *r = &v->recs[i];
+        if (r->step == s_gap && r->is_write && r->kind == AT_LOC_REG &&
+            r->reg == REG_XMM0 && r->value_valid && r->wide && r->size == 16 &&
+            (size_t)r->wide_off + 8 <= v->wide_len) {
+            memcpy(&gv, v->wide + r->wide_off, 8);
+            gap_wide_ok = 1;
+            break;
+        }
+    }
+    CHECK(gap_wide_ok && gv == F6_VSENT2,
+          "window_vec_gap: the GAP step's xmm0 record carries the REAL "
+          "post-glue 128-bit value out of wide[] (low 8 bytes = VSENT2), "
+          "not a guess and not a scalar-only record");
+    uint64_t uv = 0;
+    CHECK(reg_read_low8(v, s_xmm_use, REG_XMM0, &uv) && uv == F6_VSENT2,
+          "window_vec_gap: the post-gap read's own captured value was "
+          "always honest (VSENT2) — it is the EDGE that elision without "
+          "this fixture would never have exercised");
+
+    long c0 = ctl->counter;
+    struct timespec ts = {0, 40 * 1000 * 1000};
+    nanosleep(&ts, NULL);
+    CHECK(ctl->counter > c0,
+          "window_vec_gap: the victim SURVIVED the detach and kept looping");
 
     asmtest_defuse_free(g);
     asmtest_valtrace_free(v);
@@ -2815,6 +3124,8 @@ int main(void) {
     test_signal_split();
     test_attach_jit_worker();
     test_window_survey();
+    test_window_subreg_alias_gap();
+    test_window_vec_gap();
     test_window_midpublish();
     test_window_cost();
 
