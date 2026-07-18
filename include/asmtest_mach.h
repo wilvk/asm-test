@@ -55,15 +55,12 @@ extern "C" {
 /* Status codes (shared spirit with asmtest_ptrace.h / asmtest_hwtrace.h). */
 #define ASMTEST_MACH_OK     0
 #define ASMTEST_MACH_EINVAL (-1)
-#define ASMTEST_MACH_EUNAVAIL                                                 \
-    (-3) /* not an x86-64 Darwin host                */
-#define ASMTEST_MACH_ENOSYS                                                   \
-    (-5) /* backend not compiled in                  */
-#define ASMTEST_MACH_ENOENT                                                   \
-    (-7) /* region/target not found                  */
-#define ASMTEST_MACH_ETRACE                                                   \
-    (-8) /* fork / Mach / wait failure               */
-#define ASMTEST_MACH_EPERM                                                    \
+#define ASMTEST_MACH_EUNAVAIL                                                  \
+    (-3)                         /* not an x86-64 Darwin host                */
+#define ASMTEST_MACH_ENOSYS (-5) /* backend not compiled in                  */
+#define ASMTEST_MACH_ENOENT (-7) /* region/target not found                  */
+#define ASMTEST_MACH_ETRACE (-8) /* fork / Mach / wait failure               */
+#define ASMTEST_MACH_EPERM                                                     \
     (-9) /* task_for_pid denied: no entitlement, not root (soft gate) */
 
 /* 1 if the out-of-process Mach stepper can run on this host (x86-64 Darwin with the

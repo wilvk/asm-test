@@ -51,7 +51,7 @@ extern boolean_t mach_exc_server(mach_msg_header_t *InHeadP,
  * single active trace at a time, exactly like the in-process stepper's MVP). */
 typedef enum {
     MACH_MODE_IDLE = 0,
-    MACH_MODE_STEP,  /* T3: TF armed; record in-region RIPs from each #DB */
+    MACH_MODE_STEP, /* T3: TF armed; record in-region RIPs from each #DB */
     MACH_MODE_BREAK, /* T3/T5: an int3 planted at `target`; wait for that one hit */
 } mach_mode_t;
 
@@ -77,8 +77,9 @@ typedef struct {
     int hw; /* 1 if `target` is armed via DR0/DR7 (T5 W^X fallback), else software int3 */
 
     /* shared */
-    int done;         /* catch_* sets this to end mach_receive_loop */
-    kern_return_t err; /* KERN_SUCCESS unless catch_* hit an internal Mach failure */
+    int done; /* catch_* sets this to end mach_receive_loop */
+    kern_return_t
+        err; /* KERN_SUCCESS unless catch_* hit an internal Mach failure */
 } mach_trace_ctx_t;
 
 static mach_trace_ctx_t g_mach_ctx;
@@ -123,11 +124,12 @@ static kern_return_t mach_setup_exception_port(task_t task,
     if (task_get_exception_ports(task, EXC_MASK_BREAKPOINT, saved->masks,
                                  &saved->count, saved->ports, saved->behaviors,
                                  saved->flavors) != KERN_SUCCESS)
-        saved->count = 0; /* best-effort: proceed with nothing to restore later */
+        saved->count =
+            0; /* best-effort: proceed with nothing to restore later */
 
     mach_port_t exc_port = MACH_PORT_NULL;
-    kern_return_t kr =
-        mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &exc_port);
+    kern_return_t kr = mach_port_allocate(mach_task_self(),
+                                          MACH_PORT_RIGHT_RECEIVE, &exc_port);
     if (kr != KERN_SUCCESS)
         return kr;
     kr = mach_port_insert_right(mach_task_self(), exc_port, exc_port,
@@ -173,16 +175,17 @@ static kern_return_t mach_receive_one(mach_port_t exc_port) {
         char pad[sizeof(mach_msg_header_t) + 512];
     } req, rep;
 
-    kern_return_t kr = mach_msg(&req.head, MACH_RCV_MSG, 0, sizeof req, exc_port,
-                                MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+    kern_return_t kr =
+        mach_msg(&req.head, MACH_RCV_MSG, 0, sizeof req, exc_port,
+                 MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
     if (kr != KERN_SUCCESS)
         return kr;
 
     if (!mach_exc_server(&req.head, &rep.head))
         return KERN_FAILURE;
 
-    return mach_msg(&rep.head, MACH_SEND_MSG, rep.head.msgh_size, 0, MACH_PORT_NULL,
-                    MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
+    return mach_msg(&rep.head, MACH_SEND_MSG, rep.head.msgh_size, 0,
+                    MACH_PORT_NULL, MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
 }
 
 /* Drive mach_receive_one until the active catch_* callback sets g_mach_ctx.done (a
@@ -206,7 +209,8 @@ static kern_return_t mach_receive_loop(void) {
 /* the remote analog of ss_backend.c's SS_RIP/SS_SET_TF ucontext shims.        */
 /* ================================================================= */
 
-#define MACH_TF 0x100ULL /* EFL_TF, RFLAGS bit 8 — identical to ss_backend.c's SS_TF */
+#define MACH_TF                                                                \
+    0x100ULL /* EFL_TF, RFLAGS bit 8 — identical to ss_backend.c's SS_TF */
 
 static kern_return_t mach_get_regs(thread_act_t thread,
                                    x86_thread_state64_t *out) {
@@ -301,7 +305,8 @@ kern_return_t catch_mach_exception_raise(mach_port_t exception_port,
         mach_park_thread(thread);
         return KERN_SUCCESS;
     }
-    int64_t subcode = code[0]; /* EXC_I386_SGL=1 (single-step #DB), EXC_I386_BPT=2 (int3) */
+    int64_t subcode =
+        code[0]; /* EXC_I386_SGL=1 (single-step #DB), EXC_I386_BPT=2 (int3) */
 
     if (g_mach_ctx.mode == MACH_MODE_BREAK) {
         /* A software int3 (0xCC) is a #BP -> EXC_I386_BPT (2). A DR0/DR7 execute
@@ -310,7 +315,8 @@ kern_return_t catch_mach_exception_raise(mach_port_t exception_port,
          * trap flag OR a debug-register match", to EXC_I386_SGL either way); only
          * real int3 execution produces EXC_I386_BPT. Wait for whichever this arm
          * actually planted. */
-        int64_t want_subcode = g_mach_ctx.hw ? 1 /* EXC_I386_SGL */ : 2 /* EXC_I386_BPT */;
+        int64_t want_subcode =
+            g_mach_ctx.hw ? 1 /* EXC_I386_SGL */ : 2 /* EXC_I386_BPT */;
         if (subcode != want_subcode) {
             mach_park_thread(thread);
             return KERN_SUCCESS; /* not our breakpoint; ignore and keep the loop open */
@@ -353,10 +359,12 @@ kern_return_t catch_mach_exception_raise(mach_port_t exception_port,
     }
     uint64_t rip = s.__rip;
 
-    if (rip >= g_mach_ctx.base_ip && rip < g_mach_ctx.base_ip + g_mach_ctx.region_len) {
+    if (rip >= g_mach_ctx.base_ip &&
+        rip < g_mach_ctx.base_ip + g_mach_ctx.region_len) {
         g_mach_ctx.entered = 1;
         if (g_mach_ctx.stream_len < g_mach_ctx.stream_cap)
-            g_mach_ctx.stream[g_mach_ctx.stream_len++] = rip - g_mach_ctx.base_ip;
+            g_mach_ctx.stream[g_mach_ctx.stream_len++] =
+                rip - g_mach_ctx.base_ip;
         else
             g_mach_ctx.overflow = 1;
         /* Re-assert TF so the reply resumes stepping (in-region or a stepped-over
@@ -398,9 +406,10 @@ kern_return_t catch_mach_exception_raise(mach_port_t exception_port,
  * not a normal path, hence the unconditional failure. */
 kern_return_t catch_mach_exception_raise_state(
     mach_port_t exception_port, exception_type_t exception,
-    const mach_exception_data_t code, mach_msg_type_number_t codeCnt, int *flavor,
-    const thread_state_t old_state, mach_msg_type_number_t old_stateCnt,
-    thread_state_t new_state, mach_msg_type_number_t *new_stateCnt) {
+    const mach_exception_data_t code, mach_msg_type_number_t codeCnt,
+    int *flavor, const thread_state_t old_state,
+    mach_msg_type_number_t old_stateCnt, thread_state_t new_state,
+    mach_msg_type_number_t *new_stateCnt) {
     (void)exception_port;
     (void)exception;
     (void)code;
@@ -461,8 +470,8 @@ static kern_return_t mach_set_hw_bp(thread_act_t thread, uint64_t addr) {
 static void mach_clear_hw_bp(thread_act_t thread) {
     x86_debug_state64_t d;
     mach_msg_type_number_t count = x86_DEBUG_STATE64_COUNT;
-    if (thread_get_state(thread, x86_DEBUG_STATE64, (thread_state_t)&d, &count) !=
-        KERN_SUCCESS)
+    if (thread_get_state(thread, x86_DEBUG_STATE64, (thread_state_t)&d,
+                         &count) != KERN_SUCCESS)
         return;
     d.__dr7 &= ~0x1ULL;
     d.__dr0 = 0;
@@ -481,8 +490,8 @@ static void mach_clear_hw_bp(thread_act_t thread) {
  * ordinary memory), mirroring ptrace_backend.c's ASMTEST_PTRACE_HW_BP. Returns
  * ASMTEST_MACH_OK, ASMTEST_MACH_ENOENT (the task/thread is gone), or
  * ASMTEST_MACH_ETRACE. */
-static int mach_run_until(task_t task, thread_act_t thread, mach_port_t exc_port,
-                          uint64_t target) {
+static int mach_run_until(task_t task, thread_act_t thread,
+                          mach_port_t exc_port, uint64_t target) {
     const int force_hw = getenv("ASMTEST_MACH_HW_BP") != NULL;
     mach_vm_address_t page = (mach_vm_address_t)target;
     int hw = 0;
@@ -495,7 +504,8 @@ static int mach_run_until(task_t task, thread_act_t thread, mach_port_t exc_port
         if (kr != KERN_SUCCESS)
             return ASMTEST_MACH_ETRACE;
         orig_byte = *(uint8_t *)orig_data;
-        mach_vm_deallocate(mach_task_self(), (mach_vm_address_t)orig_data, orig_cnt);
+        mach_vm_deallocate(mach_task_self(), (mach_vm_address_t)orig_data,
+                           orig_cnt);
 
         kr = mach_vm_protect(task, page, 1, FALSE,
                              VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE |
@@ -523,13 +533,15 @@ static int mach_run_until(task_t task, thread_act_t thread, mach_port_t exc_port
     g_mach_ctx.hit = 0;
     g_mach_ctx.exc_port_active = exc_port;
 
-    mach_release_park(thread); /* counter mach_park_thread from whatever stopped it last */
+    mach_release_park(
+        thread); /* counter mach_park_thread from whatever stopped it last */
     kern_return_t kr = mach_receive_loop();
 
     if (hw)
         mach_clear_hw_bp(thread); /* best-effort */
     else
-        mach_vm_write(task, page, (vm_offset_t)&orig_byte, 1); /* best-effort restore */
+        mach_vm_write(task, page, (vm_offset_t)&orig_byte,
+                      1); /* best-effort restore */
 
     if (kr != KERN_SUCCESS)
         return ASMTEST_MACH_ETRACE;
@@ -547,21 +559,19 @@ typedef enum {
  * return address still lands back in the region (stepped over at native speed via
  * mach_run_until, recording resumes). Needs Capstone's is-call query; without it
  * every exit reads as a return (leaf-only). */
-static mach_exit_kind_t mach_classify_region_exit(task_t task, thread_act_t thread,
-                                                   mach_port_t exc_port,
-                                                   const uint8_t *code, size_t len,
-                                                   uint64_t base_ip,
-                                                   uint64_t last_off,
-                                                   uint64_t *resume_off) {
+static mach_exit_kind_t mach_classify_region_exit(
+    task_t task, thread_act_t thread, mach_port_t exc_port, const uint8_t *code,
+    size_t len, uint64_t base_ip, uint64_t last_off, uint64_t *resume_off) {
     if (!asmtest_disas_available() ||
         !asmtest_disas_is_call(ASMTEST_ARCH_X86_64, code, len, last_off))
         return MACH_EXIT_RETURNED;
-    size_t cl =
-        asmtest_disas(ASMTEST_ARCH_X86_64, code, len, base_ip, last_off, NULL, 0);
+    size_t cl = asmtest_disas(ASMTEST_ARCH_X86_64, code, len, base_ip, last_off,
+                              NULL, 0);
     uint64_t ret_off = last_off + cl;
     if (cl == 0 || ret_off >= len)
         return MACH_EXIT_RETURNED;
-    if (mach_run_until(task, thread, exc_port, base_ip + ret_off) != ASMTEST_MACH_OK)
+    if (mach_run_until(task, thread, exc_port, base_ip + ret_off) !=
+        ASMTEST_MACH_OK)
         return MACH_EXIT_CALLOUT_LOST;
     *resume_off = ret_off;
     return MACH_EXIT_CALLOUT_RESUMED;
@@ -582,7 +592,8 @@ static void mach_normalize(asmtest_trace_t *t, const uint8_t *base,
         if (!have_prev || off != expected_next)
             trace_append_block(t, off);
         trace_append_insn(t, off);
-        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, base, len, base_ip, off, NULL, 0);
+        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, base, len, base_ip, off,
+                                 NULL, 0);
         if (l == 0) {
             t->truncated = true;
             return;
@@ -615,7 +626,7 @@ int asmtest_mach_trace_attached(pid_t pid, const void *base, size_t len,
     for (mach_msg_type_number_t i = 1; i < nthreads; i++)
         mach_port_deallocate(mach_task_self(), threads[i]);
     mach_vm_deallocate(mach_task_self(), (mach_vm_address_t)(uintptr_t)threads,
-                      nthreads * sizeof(thread_act_t));
+                       nthreads * sizeof(thread_act_t));
 
     mach_port_t exc_port = MACH_PORT_NULL;
     mach_saved_ports_t saved_ports;
@@ -627,7 +638,8 @@ int asmtest_mach_trace_attached(pid_t pid, const void *base, size_t len,
     }
 
     uint8_t *owned = (uint8_t *)malloc(len);
-    uint64_t *stream = (uint64_t *)malloc((size_t)MACH_STREAM_CAP * sizeof(uint64_t));
+    uint64_t *stream =
+        (uint64_t *)malloc((size_t)MACH_STREAM_CAP * sizeof(uint64_t));
     int rc = ASMTEST_MACH_OK;
     uint32_t n = 0;
     int overflow = 0, entered = 0, returned = 0;
@@ -647,7 +659,7 @@ int asmtest_mach_trace_attached(pid_t pid, const void *base, size_t len,
         if (kr != KERN_SUCCESS || data_cnt < len) {
             if (kr == KERN_SUCCESS)
                 mach_vm_deallocate(mach_task_self(), (mach_vm_address_t)data,
-                                  data_cnt);
+                                   data_cnt);
             rc = ASMTEST_MACH_ETRACE;
             goto out;
         }
@@ -663,7 +675,8 @@ int asmtest_mach_trace_attached(pid_t pid, const void *base, size_t len,
      * documented resolve->run_to->trace flow), so this does not stack a second
      * suspend that mach_release_park below would then only half-cancel. */
     mach_ensure_parked(thread);
-    kill(pid, SIGCONT); /* lift a job-control SIGSTOP the caller used to park the
+    kill(pid,
+         SIGCONT); /* lift a job-control SIGSTOP the caller used to park the
                          * target (a raw kill(pid, SIGSTOP)); harmless if it was not
                          * stopped that way (including the run_to case above, which
                          * parks via thread_suspend, not SIGSTOP). */
@@ -723,9 +736,9 @@ int asmtest_mach_trace_attached(pid_t pid, const void *base, size_t len,
          * out above via the err-and-not-entered check.) */
         if (g_mach_ctx.err == KERN_SUCCESS && entered) {
             uint64_t resume_off = 0;
-            mach_exit_kind_t k = mach_classify_region_exit(
-                task, thread, exc_port, owned, len, base_ip, stream[n - 1],
-                &resume_off);
+            mach_exit_kind_t k =
+                mach_classify_region_exit(task, thread, exc_port, owned, len,
+                                          base_ip, stream[n - 1], &resume_off);
             if (k == MACH_EXIT_CALLOUT_RESUMED) {
                 if (n < MACH_STREAM_CAP)
                     stream[n++] = resume_off;
@@ -743,7 +756,8 @@ int asmtest_mach_trace_attached(pid_t pid, const void *base, size_t len,
                     rc = ASMTEST_MACH_ETRACE;
                     break;
                 }
-                mach_release_park(thread); /* counter mach_run_until's park-on-hit */
+                mach_release_park(
+                    thread); /* counter mach_run_until's park-on-hit */
                 continue;
             }
             if (k == MACH_EXIT_CALLOUT_LOST) {
@@ -873,7 +887,7 @@ int asmtest_mach_run_to(pid_t pid, const void *addr) {
     for (mach_msg_type_number_t i = 1; i < nthreads; i++)
         mach_port_deallocate(mach_task_self(), threads[i]);
     mach_vm_deallocate(mach_task_self(), (mach_vm_address_t)(uintptr_t)threads,
-                      nthreads * sizeof(thread_act_t));
+                       nthreads * sizeof(thread_act_t));
 
     mach_port_t exc_port = MACH_PORT_NULL;
     mach_saved_ports_t saved_ports;
