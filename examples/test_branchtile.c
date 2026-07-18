@@ -79,6 +79,19 @@ __attribute__((noinline)) static long cold_leaf(long x) {
     return (long)g_sink;
 }
 
+/* T7: a second cold leaf called immediately BEFORE cold_leaf. Its call/ret pair plants
+ * two known retired edges 2-3 slots deep in the window frozen at cold_leaf's entry
+ * breakpoint. Unlike island[0] (present BY HARDWARE CONSTRUCTION — the breakpoint sits
+ * on the entry, so the newest retired edge is necessarily the call that reached it), the
+ * preamble entry is present ONLY if those next-newest slots survived the #DB. That is the
+ * discriminating non-eviction evidence for the CALL-target checkpoint shape — the third
+ * boundary shape after the validated `ret` and tail-`jmp` exits — which the depth-equality
+ * (check 1) cannot provide (16 stale endpoints also satisfy ntiled == islands * depth). */
+__attribute__((noinline)) static long preamble_leaf(long x) {
+    g_sink += x + 0x1234;
+    return (long)g_sink;
+}
+
 /* Never called. Its entry is the NEGATIVE-CONTROL checkpoint: a real, armable,
  * breakpoint-able address that execution never reaches. */
 __attribute__((noinline)) static long never_called(long x) {
@@ -105,6 +118,8 @@ static void body(void *arg) {
     long a = 0;
     for (long i = 0; i < HOT_ITERS; i++)
         a += hot_work(i);
+    a += preamble_leaf(
+        a); /* T7: plant known edges 2-3 slots before the checkpoint */
     a += cold_leaf(a); /* exactly once, at the very end */
     g_sink += a;
 }
@@ -161,6 +176,8 @@ struct cap_result {
     int cold_in_tiles; /* cold_leaf entry present in the ISLAND prefix        */
     int cold_anywhere; /* cold_leaf entry present anywhere in ips[]           */
     int hot_anywhere; /* hot_work entry present anywhere (sanity: we sampled) */
+    int preamble_in_tiles; /* T7: preamble_leaf entry present in the ISLAND
+                            * prefix — the CALL-target non-eviction discriminator */
 };
 
 static void capture(const uint64_t *cps, int ncp, struct cap_result *out) {
@@ -174,9 +191,11 @@ static void capture(const uint64_t *cps, int ncp, struct cap_result *out) {
         return;
     uint64_t cold = (uint64_t)(uintptr_t)&cold_leaf;
     uint64_t hot = (uint64_t)(uintptr_t)&hot_work;
+    uint64_t preamble = (uint64_t)(uintptr_t)&preamble_leaf;
     out->cold_in_tiles = contains(ips, out->ntiled, cold);
     out->cold_anywhere = contains(ips, out->nips, cold);
     out->hot_anywhere = contains(ips, out->nips, hot);
+    out->preamble_in_tiles = contains(ips, out->ntiled, preamble);
 }
 
 #define TRIALS 5
@@ -292,6 +311,38 @@ int main(void) {
             "PC 0x%llx and the island merge lost nothing "
             "(tile_truncated=0)\n",
             (unsigned long long)cold_cp);
+        fails++;
+    }
+
+    /* --- 3b. CALL-target non-eviction: the island keeps the PRE-CALL preamble --- */
+    /* The third boundary shape (after `ret` and tail-`jmp`): a #DB execution breakpoint at
+     * a CALL target (cold_leaf's entry) must NOT evict the 2-3 next-newest slots — the
+     * call/ret edges of preamble_leaf, which ran immediately before — before
+     * bpf_get_branch_snapshot() reads the frozen stack. Unlike island[0] (present by
+     * hardware construction), preamble_leaf's entry is present ONLY if those slots
+     * survived, so this is the discriminating non-eviction evidence the depth-equality
+     * (check 1) cannot give. Disjoined with tile_truncated (the island merge lost
+     * endpoints), NEVER the survey-wide truncated (causally untied — see the file header).
+     * MUTATION EVIDENCE (documented one-off, never committed — Phase-9 style): in
+     * btile_on_event (src/branchsnap.c), temporarily `continue` on entries whose e.to
+     * equals the preamble entry PC; the check flips to `not ok` while the negative
+     * control (check 2) stays green — proving 3b can fail. The live PASS on the Zen 5
+     * dev box (make docker-hwtrace-codeimage) is a HARDWARE-GATED validation leg. */
+    if (probe.preamble_in_tiles || probe.tile_truncated)
+        printf(
+            "ok - branchtile: the island prefix contains preamble_leaf's entry "
+            "PC 0x%llx (preamble_in_tiles=%d tile_truncated=%d) — the "
+            "CALL-target "
+            "#DB did NOT evict the 2-3 next-newest slots\n",
+            (unsigned long long)(uintptr_t)&preamble_leaf,
+            probe.preamble_in_tiles, probe.tile_truncated);
+    else {
+        printf(
+            "not ok - branchtile: island prefix missing the pre-call "
+            "preamble entry PC 0x%llx and the island merge lost nothing "
+            "(tile_truncated=0) — the CALL-target #DB evicted branch history "
+            "before the snapshot read (a FINDING, not a test bug)\n",
+            (unsigned long long)(uintptr_t)&preamble_leaf);
         fails++;
     }
 

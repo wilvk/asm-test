@@ -427,7 +427,11 @@ int asmtest_amd_snapshot_end(asmtest_trace_t *trace) {
  * a `ret` boundary and a tail-`jmp` boundary. A managed method-entry checkpoint is
  * neither — it is a CALL target — so it is nearer the validated shape (the call retires,
  * then the breakpoint fires on the entry instruction) but is still not literally either
- * validated case. The test asserts the entry edge is present rather than assuming it. */
+ * validated case. test_branchtile.c's check 3b (a preamble_leaf called immediately before
+ * the checkpoint) directly measures CALL-target non-eviction — the 2-3 next-newest slots
+ * must survive the #DB — so this third shape is asserted, not assumed; its live green on
+ * the Zen 5 dev box (make docker-hwtrace-codeimage) is a hardware-gated validation leg.
+ * The test also asserts the entry edge is present rather than assuming it. */
 struct btile_state {
     int active;
     int nbp; /* armed checkpoints (bfd/link[0..nbp))    */
