@@ -1989,6 +1989,13 @@ $(BUILD)/amd_backend.o: src/amd_backend.c include/asmtest_trace.h | $(BUILD)
 # path (both deliver the #DB single-step trap as an in-process SIGTRAP).
 $(BUILD)/ss_backend.o: src/ss_backend.c include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
+# macOS out-of-process single-step (Mach exception ports): the Darwin twin of
+# ptrace_backend.o below. Compiles to a harmless no-op off x86-64 Darwin (its own
+# internal #if gate), so it is safe to build unconditionally into every host's
+# HWTRACE_OBJS, exactly like ptrace_backend.o's #if defined(__linux__) gate.
+$(BUILD)/mach_backend.o: src/mach_backend.c include/asmtest_mach.h \
+                        include/asmtest_trace.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 # AMD MSR-direct LBR snapshot (src/msr_lbr.c): reads the LbrExtV2 FROM/TO MSRs via
 # /dev/cpu/N/msr; no external library, decodes through amd_backend.o's asmtest_amd_decode.
 $(BUILD)/msr_lbr.o: src/msr_lbr.c include/asmtest_hwtrace.h | $(BUILD)
@@ -2047,6 +2054,7 @@ $(BUILD)/ibs_backend.o: src/ibs_backend.c include/asmtest_ibs.h | $(BUILD)
 HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
                 $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
                 $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o \
+                $(BUILD)/mach_backend.o \
                 $(BUILD)/descent.o $(BUILD)/stealth_helper.o \
                 $(BUILD)/codeimage.o $(BUILD)/branchsnap.o \
                 $(BUILD)/msr_lbr.o $(BUILD)/ibs_backend.o $(BUILD)/debug.o \
@@ -2735,6 +2743,9 @@ $(BUILD)/pic/amd_backend.o: src/amd_backend.c include/asmtest_trace.h | $(BUILD)
 	$(CC) $(CFLAGS) $(PERF_BR_SPEC_DEF) -fPIC -c $< -o $@
 $(BUILD)/pic/ss_backend.o: src/ss_backend.c include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/mach_backend.o: src/mach_backend.c include/asmtest_mach.h \
+                             include/asmtest_trace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
                            include/asmtest_hwtrace.h include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
@@ -2774,7 +2785,8 @@ $(BUILD)/pic/ibs_backend.o: src/ibs_backend.c include/asmtest_ibs.h | $(BUILD)/p
 # skeleton is regenerated separately, but the host object still tracks CFLAGS).
 NATIVE_TRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o \
     $(BUILD)/cs_backend.o $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
-    $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o $(BUILD)/descent.o \
+    $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o $(BUILD)/mach_backend.o \
+    $(BUILD)/descent.o \
     $(BUILD)/stealth_helper.o $(BUILD)/codeimage.o $(BUILD)/branchsnap.o \
     $(BUILD)/msr_lbr.o $(BUILD)/ibs_backend.o $(BUILD)/debug.o
 $(NATIVE_TRACE_OBJS) $(patsubst $(BUILD)/%,$(BUILD)/pic/%,$(NATIVE_TRACE_OBJS)): \
@@ -2788,6 +2800,7 @@ $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
                                        $(BUILD)/pic/ss_backend.o \
                                        $(BUILD)/pic/trace_auto.o \
                                        $(BUILD)/pic/ptrace_backend.o \
+                                       $(BUILD)/pic/mach_backend.o \
                                        $(BUILD)/pic/descent.o \
                                        $(BUILD)/pic/stealth_helper.o \
                                        $(BUILD)/pic/codeimage.o \
