@@ -710,27 +710,51 @@ static int gp_value(const struct user_regs_struct *r, uint32_t reg,
         *out = r->rsp;
         return 1;
     case X86_REG_R8:
+    case X86_REG_R8D:
+    case X86_REG_R8W:
+    case X86_REG_R8B:
         *out = r->r8;
         return 1;
     case X86_REG_R9:
+    case X86_REG_R9D:
+    case X86_REG_R9W:
+    case X86_REG_R9B:
         *out = r->r9;
         return 1;
     case X86_REG_R10:
+    case X86_REG_R10D:
+    case X86_REG_R10W:
+    case X86_REG_R10B:
         *out = r->r10;
         return 1;
     case X86_REG_R11:
+    case X86_REG_R11D:
+    case X86_REG_R11W:
+    case X86_REG_R11B:
         *out = r->r11;
         return 1;
     case X86_REG_R12:
+    case X86_REG_R12D:
+    case X86_REG_R12W:
+    case X86_REG_R12B:
         *out = r->r12;
         return 1;
     case X86_REG_R13:
+    case X86_REG_R13D:
+    case X86_REG_R13W:
+    case X86_REG_R13B:
         *out = r->r13;
         return 1;
     case X86_REG_R14:
+    case X86_REG_R14D:
+    case X86_REG_R14W:
+    case X86_REG_R14B:
         *out = r->r14;
         return 1;
     case X86_REG_R15:
+    case X86_REG_R15D:
+    case X86_REG_R15W:
+    case X86_REG_R15B:
         *out = r->r15;
         return 1;
     case X86_REG_RIP:

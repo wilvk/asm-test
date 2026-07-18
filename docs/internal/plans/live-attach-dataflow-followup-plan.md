@@ -711,9 +711,13 @@ method ranges of a live process; the hand-off boundary to the DR taint tier is d
 > **`decode_fail` is a fail-closed branch asserted ZERO but never fired**: the fixtures cannot
 > produce a window PC whose bytes will not read or decode (that needs a JIT to free a page
 > mid-window). (3) **Sub-register aliases `gp_value` cannot resolve** (`R8D`/`R8W`/`R8B`…) put
-> a location at risk the barrier must then decline to decide (→ `truncated`). That is a
+> a location at risk the barrier must then decline to decide (→ `truncated`). That was a
 > **pre-existing gap in this producer's register map**, surfaced by F6, not introduced by it —
-> and no fixture here writes those aliases. (4) **No vector clobber across a gap** is
+> **CLOSED** by
+> [dataflow-producer-correctness.md T1](../implementations/dataflow-producer-correctness.md#T1):
+> `gp_value` and `dfp_alias_shape` now fold R8D/R8W/R8B..R15D/R15W/R15B to their 64-bit
+> container in both the scoped producer and the blockstep tier's own copy. (4) **No vector
+> clobber across a gap** is
 > exercised: the barrier diffs XMM/YMM (one batched snapshot per gap) but no fixture makes the
 > glue clobber a vector register the survey recorded. (5) The glue-tax **ratio** (314x) is a
 > property of the fixture's chosen glue:method mix and means nothing on its own — the

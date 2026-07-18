@@ -1392,6 +1392,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   also joins the parity allow-list under the same dotnet-only posture as the
   window trio, restoring the gate the lazy-arm commit tripped.)
 
+- **The scoped/windowed data-flow producers resolve r8d–r15b sub-register
+  aliases.** `gp_value` (the register-file value reader in both
+  `src/dataflow_ptrace.c` and `src/dataflow_blockstep.c`) and `dfp_alias_shape`
+  (the F6 gap barrier's alias-slice classifier) had cases folding `eax/ax/al/ah`
+  etc. to their 64-bit container but none for `r8d/r8w/r8b` .. `r15d/r15w/r15b` —
+  a step that wrote one of those aliases produced a def-use record with no
+  captured value (`value_valid` stayed false), and the gap barrier could not
+  decide whether glue at risk had changed such a location (`truncated`). Both
+  now fold every GP sub-register alias Capstone can emit on x86-64 to its
+  container, exactly like the existing high-byte/32/16/8-bit cases.
+
 ## [1.1.0] — 2026-07-06
 
 ### Fixed

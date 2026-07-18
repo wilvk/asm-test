@@ -283,27 +283,51 @@ static bool gp_value(const struct user_regs_struct *r, uint32_t reg,
         *out = r->rsp;
         return true;
     case X86_REG_R8:
+    case X86_REG_R8D:
+    case X86_REG_R8W:
+    case X86_REG_R8B:
         *out = r->r8;
         return true;
     case X86_REG_R9:
+    case X86_REG_R9D:
+    case X86_REG_R9W:
+    case X86_REG_R9B:
         *out = r->r9;
         return true;
     case X86_REG_R10:
+    case X86_REG_R10D:
+    case X86_REG_R10W:
+    case X86_REG_R10B:
         *out = r->r10;
         return true;
     case X86_REG_R11:
+    case X86_REG_R11D:
+    case X86_REG_R11W:
+    case X86_REG_R11B:
         *out = r->r11;
         return true;
     case X86_REG_R12:
+    case X86_REG_R12D:
+    case X86_REG_R12W:
+    case X86_REG_R12B:
         *out = r->r12;
         return true;
     case X86_REG_R13:
+    case X86_REG_R13D:
+    case X86_REG_R13W:
+    case X86_REG_R13B:
         *out = r->r13;
         return true;
     case X86_REG_R14:
+    case X86_REG_R14D:
+    case X86_REG_R14W:
+    case X86_REG_R14B:
         *out = r->r14;
         return true;
     case X86_REG_R15:
+    case X86_REG_R15D:
+    case X86_REG_R15W:
+    case X86_REG_R15B:
         *out = r->r15;
         return true;
     case X86_REG_RIP:
@@ -1957,11 +1981,10 @@ int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
  * exactly that — silently deleting a TRUE edge. Returns 0 for an id whose shape this
  * file cannot resolve, on which the barrier fails closed.
  *
- * Deliberately covers EXACTLY the ids gp_value resolves. Note the gap it inherits:
- * gp_value has no case for R8D/R8W/R8B..R15D/R15W/R15B, so a survey whose recorded
- * steps write those aliases puts a location at risk that the barrier must then decline
- * to decide (truncated). That is a pre-existing property of this producer's register
- * map, surfaced — not introduced — by F6. */
+ * Deliberately covers EXACTLY the ids gp_value resolves — including R8D/R8W/R8B..
+ * R15D/R15W/R15B, which fold to their 64-bit container like EAX/AX/AL do for RAX
+ * (r8-r15 have no high-byte forms, so unlike AH/BH/CH/DH there is no shift-8 case
+ * for them). */
 static int dfp_alias_shape(uint32_t reg, unsigned *shift, unsigned *width) {
     switch (reg) {
     case X86_REG_RAX:
@@ -1993,6 +2016,14 @@ static int dfp_alias_shape(uint32_t reg, unsigned *shift, unsigned *width) {
     case X86_REG_EDI:
     case X86_REG_EBP:
     case X86_REG_ESP:
+    case X86_REG_R8D:
+    case X86_REG_R9D:
+    case X86_REG_R10D:
+    case X86_REG_R11D:
+    case X86_REG_R12D:
+    case X86_REG_R13D:
+    case X86_REG_R14D:
+    case X86_REG_R15D:
         *shift = 0;
         *width = 4;
         return 1;
@@ -2004,6 +2035,14 @@ static int dfp_alias_shape(uint32_t reg, unsigned *shift, unsigned *width) {
     case X86_REG_DI:
     case X86_REG_BP:
     case X86_REG_SP:
+    case X86_REG_R8W:
+    case X86_REG_R9W:
+    case X86_REG_R10W:
+    case X86_REG_R11W:
+    case X86_REG_R12W:
+    case X86_REG_R13W:
+    case X86_REG_R14W:
+    case X86_REG_R15W:
         *shift = 0;
         *width = 2;
         return 1;
@@ -2015,6 +2054,14 @@ static int dfp_alias_shape(uint32_t reg, unsigned *shift, unsigned *width) {
     case X86_REG_DIL:
     case X86_REG_BPL:
     case X86_REG_SPL:
+    case X86_REG_R8B:
+    case X86_REG_R9B:
+    case X86_REG_R10B:
+    case X86_REG_R11B:
+    case X86_REG_R12B:
+    case X86_REG_R13B:
+    case X86_REG_R14B:
+    case X86_REG_R15B:
         *shift = 0;
         *width = 1;
         return 1;

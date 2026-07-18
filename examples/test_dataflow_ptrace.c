@@ -62,6 +62,7 @@ int asmtest_dataflow_emu_run(const uint8_t *code, size_t code_len,
 #define REG_XMM0 122
 #define REG_YMM0 154
 #define REG_R10  108 /* F6: the register the survey's glue clobbers */
+#define REG_R8D  226 /* T1: the sub-register alias gp_value must resolve */
 
 static int checks, failures;
 #define CHECK(c, m)                                                            \
@@ -96,6 +97,17 @@ static const uint8_t df_chain_v2[] = {
     0x48, 0x8d, 0x14, 0x31, /* 0x0d lea rdx, [rcx+rsi]                        */
     0x48, 0x89, 0xd0,       /* 0x11 mov rax, rdx                              */
     0xc3,                   /* 0x14 ret                                       */
+};
+
+/* mov rax, rdi / mov r8d, esi / add rax, r8 / ret — T1: gp_value must resolve
+ * X86_REG_R8D (the WRITE operand of `mov r8d, esi`) to its r8 container, or the write
+ * record's value stays unfilled; `add rax, r8` then reads the FULL r8 (already resolved
+ * pre-T1), so this fixture isolates the write-side gap. Returns rdi + zx32(rsi). */
+static const uint8_t r8d_alias[] = {
+    0x48, 0x89, 0xf8, /* 0x00 mov rax, rdi */
+    0x41, 0x89, 0xf0, /* 0x03 mov r8d, esi */
+    0x4c, 0x01, 0xc0, /* 0x06 add rax, r8  */
+    0xc3,             /* 0x09 ret          */
 };
 
 /* mov rax, gs:[0x10] / ret — a gs:-segmented load. */
@@ -298,6 +310,53 @@ static void test_chain(void) {
     asmtest_slice_free(fwd);
     asmtest_slice_free(bwd);
     asmtest_defuse_free(g);
+    asmtest_valtrace_free(v);
+}
+
+/* dataflow-producer-correctness.md#T1 — the write-side twin of test_chain's read-side
+ * coverage: `gp_value` must resolve R8D..R15D/R8W..R15W/R8B..R15B, not just the bare
+ * 64-bit r8-r15 ids. Before the fix, `mov r8d, esi`'s WRITE record decoded fine
+ * (Capstone reports the operand) but its value stayed unfilled (gp_value's default
+ * case returned false), so the record existed with value_valid == false. */
+static void test_r8d_alias(void) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    if (v == NULL) {
+        CHECK(0, "r8d_alias: valtrace_new");
+        return;
+    }
+    long args[2] = {100, 7};
+    long result = 0;
+    int rc = asmtest_dataflow_ptrace_run(r8d_alias, sizeof r8d_alias, args, 2,
+                                         0, 0, &result, v);
+    CHECK(rc == DF_PTRACE_OK,
+          "r8d_alias: live tracee single-stepped to the region return");
+    CHECK(result == 107, "r8d_alias: routine returned 107 (rdi + zx32(rsi))");
+    CHECK(!v->truncated, "r8d_alias: value trace is complete (not truncated)");
+    CHECK(v->steps_len == 4, "r8d_alias: four in-region steps captured");
+    if (v->steps_len == 4) {
+        static const uint64_t want[4] = {0x00, 0x03, 0x06, 0x09};
+        int ok = 1;
+        for (int i = 0; i < 4; i++)
+            if (v->insn_off[i] != want[i])
+                ok = 0;
+        CHECK(ok, "r8d_alias: per-step offsets match the disassembly");
+    }
+
+    uint64_t wv = 0;
+    int found = 0;
+    for (size_t i = 0; i < v->recs_len; i++) {
+        const at_val_rec_t *r = &v->recs[i];
+        if (r->step == 1 && r->is_write && r->kind == AT_LOC_REG &&
+            r->reg == REG_R8D && r->value_valid) {
+            wv = r->value;
+            found = 1;
+            break;
+        }
+    }
+    CHECK(found && wv == 7,
+          "r8d_alias: step1's r8d WRITE record has value_valid set to the "
+          "correct value 7 (gp_value resolves R8D)");
+
     asmtest_valtrace_free(v);
 }
 
@@ -2467,6 +2526,7 @@ int main(void) {
     }
 
     test_chain();
+    test_r8d_alias();
     test_rip();
     test_gs();
     test_xmm();
