@@ -985,6 +985,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`make install` / `make install-shared-hwtrace` now ship `asmtest_ibs.h`** —
+  the hardware-tracing guide's documented `#include <asmtest_ibs.h>` could not
+  previously compile against an installed package (it was the only
+  guide-referenced header missing from all three install lists).
+  `scripts/clean-room-test.sh` gained a header-install compile check (a fresh
+  `make install` + `cc -fsyntax-only` against every guide-referenced header)
+  so this omission class cannot silently recur.
+
 - **`asmtest_ibs.h` no longer describes the shipped system-wide capture flag as
   a future phase** — the `survey_process` residual-race note now names the
   `ASMTEST_IBS_OPT_SYSTEM_WIDE` flag directly.

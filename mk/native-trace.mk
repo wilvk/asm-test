@@ -2880,7 +2880,7 @@ install-shared-hwtrace: shared-hwtrace
 	       $(libdir)/$(notdir $(call shlib_dev,libasmtest_hwtrace))
 	cp include/asmtest_hwtrace.h include/asmtest_ptrace.h \
 	   include/asmtest_codeimage.h include/asmtest_trace_auto.h \
-	   include/asmtest_trace.h $(incdir)/
+	   include/asmtest_trace.h include/asmtest_ibs.h $(incdir)/
 	@echo "installed shared libasmtest_hwtrace $(ASMTEST_VERSION) to $(libdir)"
 
 install-shared-drtrace: shared-drtrace

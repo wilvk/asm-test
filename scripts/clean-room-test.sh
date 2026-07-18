@@ -206,6 +206,30 @@ should_run lua    && lua_clean_test
 should_run java   && java_clean_test
 should_run dotnet && dotnet_clean_test
 
+# C header install check: every header the published guides tell users to
+# include must ship with `make install` and compile standalone. Its own fresh
+# prefix ($WORK, always set — do not reuse a per-binding $dest).
+if command -v cc >/dev/null 2>&1; then
+  hdr_prefix="$WORK/c-prefix"
+  make -C "$ASMTEST_REPO_ROOT" install PREFIX="$hdr_prefix" >/dev/null
+  cat > "$WORK/hdr_check.c" <<'EOF'
+#include <asmtest.h>
+#include <asmtest_emu.h>
+#include <asmtest_hwtrace.h>
+#include <asmtest_drtrace.h>
+#include <asmtest_codeimage.h>
+#include <asmtest_ptrace.h>
+#include <asmtest_trace_auto.h>
+#include <asmtest_ibs.h>
+int main(void) { return asmtest_ibs_available() * 0; }
+EOF
+  if cc -I"$hdr_prefix/include/asmtest" -fsyntax-only "$WORK/hdr_check.c"; then
+    pass_b hdr "guide-referenced headers compile from a fresh install"
+  else
+    fail_b hdr "guide-referenced headers do not compile from a fresh install"
+  fi
+fi
+
 echo
 echo "clean-room-test summary ($PLAT):"
 printf '%b' "$summary" | while IFS='	' read -r b s m; do printf "  %-8s %-5s %s\n" "$b" "$s" "$m"; done
