@@ -74,6 +74,7 @@ typedef struct {
     /* MACH_MODE_BREAK */
     uint64_t target;
     int hit;
+    int hw; /* 1 if `target` is armed via DR0/DR7 (T5 W^X fallback), else software int3 */
 
     /* shared */
     int done;         /* catch_* sets this to end mach_receive_loop */
@@ -245,11 +246,45 @@ static kern_return_t mach_clear_tf(thread_act_t thread) {
 /* since both share the one active-trace context and receive loop.            */
 /* ================================================================= */
 
+/* Query `thread`'s CURRENT Mach suspend count from the kernel — the authoritative
+ * source of truth mach_ensure_parked relies on. A same-process flag cannot
+ * distinguish "this exact thread is already parked by us" from "some OTHER,
+ * unrelated thread was left parked by an earlier call": T4 forks a brand new child
+ * (a brand new thread) on every asmtest_mach_trace_call, so a stale flag from a
+ * PRIOR call's park would wrongly skip suspending it. Defaults to 0 (not parked) on
+ * a query failure — the safer assumption, since it makes the caller suspend rather
+ * than risk leaving a live thread unparked. */
+static int mach_suspend_count(thread_act_t thread) {
+    struct thread_basic_info info;
+    mach_msg_type_number_t count = THREAD_BASIC_INFO_COUNT;
+    if (thread_info(thread, THREAD_BASIC_INFO, (thread_info_t)&info, &count) !=
+        KERN_SUCCESS)
+        return 0;
+    return info.suspend_count;
+}
+
 /* Leave the faulting thread genuinely parked (not merely "exception resolved"):
  * bump its Mach suspend count before we reply KERN_SUCCESS below, so it does not
- * actually run again until a later thread_resume (mirrors how a ptrace-stopped
+ * actually run again until a later mach_release_park (mirrors how a ptrace-stopped
  * tracee stays stopped between calls). */
 static void mach_park_thread(thread_act_t thread) { thread_suspend(thread); }
+
+/* Counterpart to mach_park_thread / mach_ensure_parked: let the thread run again.
+ * Every call site here calls this AT MOST once per suspend level it is responsible
+ * for, so an unconditional thread_resume nets correctly; harmless if the thread
+ * turns out not to be suspended (thread_resume then just fails and is ignored). */
+static void mach_release_park(thread_act_t thread) { thread_resume(thread); }
+
+/* Entry bridge for trace_attached/run_to: ensure `thread` cannot run before we arm
+ * anything, without stacking a redundant suspend on a target a prior
+ * asmtest_mach_run_to already parked (the documented resolve->run_to->trace flow) —
+ * by querying the kernel's actual suspend count rather than same-process state, this
+ * also correctly suspends a brand new, never-before-seen thread even when some
+ * OTHER thread is currently parked by an earlier, unrelated call. */
+static void mach_ensure_parked(thread_act_t thread) {
+    if (mach_suspend_count(thread) == 0)
+        thread_suspend(thread);
+}
 
 kern_return_t catch_mach_exception_raise(mach_port_t exception_port,
                                          mach_port_t thread, mach_port_t task,
@@ -269,7 +304,14 @@ kern_return_t catch_mach_exception_raise(mach_port_t exception_port,
     int64_t subcode = code[0]; /* EXC_I386_SGL=1 (single-step #DB), EXC_I386_BPT=2 (int3) */
 
     if (g_mach_ctx.mode == MACH_MODE_BREAK) {
-        if (subcode != 2 /* EXC_I386_BPT */) {
+        /* A software int3 (0xCC) is a #BP -> EXC_I386_BPT (2). A DR0/DR7 execute
+         * breakpoint (T5's W^X fallback) is a #DB -> EXC_I386_SGL (1) — the SAME
+         * subcode the trap flag uses (XNU's user_trap maps T_DEBUG, "raised by the
+         * trap flag OR a debug-register match", to EXC_I386_SGL either way); only
+         * real int3 execution produces EXC_I386_BPT. Wait for whichever this arm
+         * actually planted. */
+        int64_t want_subcode = g_mach_ctx.hw ? 1 /* EXC_I386_SGL */ : 2 /* EXC_I386_BPT */;
+        if (subcode != want_subcode) {
             mach_park_thread(thread);
             return KERN_SUCCESS; /* not our breakpoint; ignore and keep the loop open */
         }
@@ -280,9 +322,10 @@ kern_return_t catch_mach_exception_raise(mach_port_t exception_port,
             mach_park_thread(thread);
             return KERN_SUCCESS;
         }
-        /* int3 traps ONE byte past the hit (like x86 ptrace); rewind to the planted
-         * address, matching run_until's ptrace twin exactly. */
-        s.__rip = g_mach_ctx.target;
+        /* Software int3 traps ONE byte past the hit; a DR execute breakpoint is a
+         * FAULT (RIP already points AT the instruction) — no rewind needed there. */
+        if (!g_mach_ctx.hw)
+            s.__rip = g_mach_ctx.target;
         if (mach_set_regs(thread, &s) != KERN_SUCCESS)
             g_mach_ctx.err = KERN_FAILURE;
         g_mach_ctx.hit = 1;
@@ -392,47 +435,101 @@ kern_return_t catch_mach_exception_raise_state_identity(
 
 /* ================================================================= */
 /* T3 — trace_attached single-step engine.                           */
+/* T5 — run_to (adds the DR0/DR7 hardware-breakpoint W^X fallback     */
+/*      run_until below and asmtest_mach_run_to both use).            */
 /* ================================================================= */
 
-/* mach_run_until: the Darwin analog of ptrace_backend.c's run_until (software-int3
- * arm only; T5 adds the x86_DEBUG_STATE64 hardware-breakpoint W^X fallback this same
- * seam uses). Plants 0xCC at `target` in the task's memory, resumes the thread
- * through the exception-port loop until THAT breakpoint is hit, restores the
- * original byte, and rewinds RIP back to `target` — leaving the thread parked
- * exactly there (see mach_park_thread). Returns ASMTEST_MACH_OK, ASMTEST_MACH_ENOENT
- * (the task is gone), or ASMTEST_MACH_ETRACE. */
+/* Arm a DR0 execute breakpoint on `thread` at `addr`: DR7 bit 0 (L0, local enable)
+ * with R/W0=00 (break on execution) and LEN0=00 (required for an execute
+ * breakpoint) — both already zero, so DR7 |= 0x1 is the whole encoding. The Darwin
+ * analog of ptrace_backend.c's set_hw_bp (PTRACE_POKEUSER DR0/DR7), reached through
+ * thread_set_state(x86_DEBUG_STATE64) instead. */
+static kern_return_t mach_set_hw_bp(thread_act_t thread, uint64_t addr) {
+    x86_debug_state64_t d;
+    mach_msg_type_number_t count = x86_DEBUG_STATE64_COUNT;
+    kern_return_t kr =
+        thread_get_state(thread, x86_DEBUG_STATE64, (thread_state_t)&d, &count);
+    if (kr != KERN_SUCCESS)
+        return kr;
+    d.__dr0 = addr;
+    d.__dr7 |= 0x1ULL;
+    return thread_set_state(thread, x86_DEBUG_STATE64, (thread_state_t)&d,
+                            x86_DEBUG_STATE64_COUNT);
+}
+
+/* Disarm DR0 (clear the L0 enable bit, then the address). Best-effort. */
+static void mach_clear_hw_bp(thread_act_t thread) {
+    x86_debug_state64_t d;
+    mach_msg_type_number_t count = x86_DEBUG_STATE64_COUNT;
+    if (thread_get_state(thread, x86_DEBUG_STATE64, (thread_state_t)&d, &count) !=
+        KERN_SUCCESS)
+        return;
+    d.__dr7 &= ~0x1ULL;
+    d.__dr0 = 0;
+    thread_set_state(thread, x86_DEBUG_STATE64, (thread_state_t)&d,
+                     x86_DEBUG_STATE64_COUNT);
+}
+
+/* mach_run_until: the Darwin analog of ptrace_backend.c's run_until. Plants 0xCC at
+ * `target` in the task's memory (making the page temporarily writable if needed),
+ * resumes the thread through the exception-port loop until THAT breakpoint is hit,
+ * restores the original byte, and rewinds RIP back to `target` — leaving the thread
+ * parked exactly there (see mach_park_thread). When the code is W^X and cannot be
+ * made writable (mach_vm_protect refused — a hardened JIT heap), falls back to a
+ * DR0/DR7 hardware execute breakpoint, which writes no code. ASMTEST_MACH_HW_BP
+ * forces the hardware path unconditionally (to exercise it deterministically on
+ * ordinary memory), mirroring ptrace_backend.c's ASMTEST_PTRACE_HW_BP. Returns
+ * ASMTEST_MACH_OK, ASMTEST_MACH_ENOENT (the task/thread is gone), or
+ * ASMTEST_MACH_ETRACE. */
 static int mach_run_until(task_t task, thread_act_t thread, mach_port_t exc_port,
                           uint64_t target) {
+    const int force_hw = getenv("ASMTEST_MACH_HW_BP") != NULL;
     mach_vm_address_t page = (mach_vm_address_t)target;
-    vm_offset_t orig_data = 0;
-    mach_msg_type_number_t orig_cnt = 0;
-    kern_return_t kr =
-        mach_vm_read(task, page, 1, &orig_data, &orig_cnt);
-    if (kr != KERN_SUCCESS)
-        return ASMTEST_MACH_ETRACE;
-    uint8_t orig_byte = *(uint8_t *)orig_data;
-    mach_vm_deallocate(mach_task_self(), (mach_vm_address_t)orig_data, orig_cnt);
+    int hw = 0;
+    uint8_t orig_byte = 0;
 
-    kr = mach_vm_protect(task, page, 1, FALSE,
-                         VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE | VM_PROT_COPY);
-    if (kr != KERN_SUCCESS)
-        return ASMTEST_MACH_ETRACE; /* T5 adds the hardware-breakpoint fallback here */
-    uint8_t bp = 0xCC;
-    kr = mach_vm_write(task, page, (vm_offset_t)&bp, 1);
-    if (kr != KERN_SUCCESS)
-        return ASMTEST_MACH_ETRACE;
+    if (!force_hw) {
+        vm_offset_t orig_data = 0;
+        mach_msg_type_number_t orig_cnt = 0;
+        kern_return_t kr = mach_vm_read(task, page, 1, &orig_data, &orig_cnt);
+        if (kr != KERN_SUCCESS)
+            return ASMTEST_MACH_ETRACE;
+        orig_byte = *(uint8_t *)orig_data;
+        mach_vm_deallocate(mach_task_self(), (mach_vm_address_t)orig_data, orig_cnt);
+
+        kr = mach_vm_protect(task, page, 1, FALSE,
+                             VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE |
+                                 VM_PROT_COPY);
+        if (kr == KERN_SUCCESS) {
+            uint8_t bp = 0xCC;
+            kr = mach_vm_write(task, page, (vm_offset_t)&bp, 1);
+        }
+        if (kr != KERN_SUCCESS) {
+            if (mach_set_hw_bp(thread, target) != KERN_SUCCESS)
+                return ASMTEST_MACH_ETRACE;
+            hw = 1;
+        }
+    } else {
+        if (mach_set_hw_bp(thread, target) != KERN_SUCCESS)
+            return ASMTEST_MACH_ETRACE;
+        hw = 1;
+    }
 
     g_mach_ctx.mode = MACH_MODE_BREAK;
     g_mach_ctx.task = task;
     g_mach_ctx.thread = thread;
     g_mach_ctx.target = target;
+    g_mach_ctx.hw = hw;
     g_mach_ctx.hit = 0;
     g_mach_ctx.exc_port_active = exc_port;
 
-    thread_resume(thread); /* counter mach_park_thread from whatever stopped it last */
-    kr = mach_receive_loop();
+    mach_release_park(thread); /* counter mach_park_thread from whatever stopped it last */
+    kern_return_t kr = mach_receive_loop();
 
-    mach_vm_write(task, page, (vm_offset_t)&orig_byte, 1); /* best-effort restore */
+    if (hw)
+        mach_clear_hw_bp(thread); /* best-effort */
+    else
+        mach_vm_write(task, page, (vm_offset_t)&orig_byte, 1); /* best-effort restore */
 
     if (kr != KERN_SUCCESS)
         return ASMTEST_MACH_ETRACE;
@@ -561,13 +658,15 @@ int asmtest_mach_trace_attached(pid_t pid, const void *base, size_t len,
 
     /* Establish a KNOWN park under our own thread-suspend count before touching the
      * BSD stop state, so there is no window where the target could run uncontrolled
-     * between lifting a SIGSTOP and arming TF below. thread_resume (after TF is
-     * armed) cancels exactly this suspend — net zero — it exists only to bridge
-     * safely from "unknown incoming stop mechanism" to "known running". */
-    thread_suspend(thread);
+     * between lifting a SIGSTOP and arming TF below. mach_ensure_parked is
+     * idempotent: a prior asmtest_mach_run_to already left the target parked (the
+     * documented resolve->run_to->trace flow), so this does not stack a second
+     * suspend that mach_release_park below would then only half-cancel. */
+    mach_ensure_parked(thread);
     kill(pid, SIGCONT); /* lift a job-control SIGSTOP the caller used to park the
-                         * target (asmtest_mach_run_to / a raw kill(pid, SIGSTOP));
-                         * harmless if it was not stopped that way. */
+                         * target (a raw kill(pid, SIGSTOP)); harmless if it was not
+                         * stopped that way (including the run_to case above, which
+                         * parks via thread_suspend, not SIGSTOP). */
 
     g_mach_ctx.mode = MACH_MODE_STEP;
     g_mach_ctx.task = task;
@@ -600,7 +699,7 @@ int asmtest_mach_trace_attached(pid_t pid, const void *base, size_t len,
         rc = ASMTEST_MACH_ETRACE;
         goto out;
     }
-    thread_resume(thread); /* counter the caller's task_suspend/SIGSTOP park */
+    mach_release_park(thread); /* counter the mach_ensure_parked bridge above */
 
     for (;;) {
         kr = mach_receive_loop();
@@ -644,7 +743,7 @@ int asmtest_mach_trace_attached(pid_t pid, const void *base, size_t len,
                     rc = ASMTEST_MACH_ETRACE;
                     break;
                 }
-                thread_resume(thread); /* counter mach_run_until's park-on-hit */
+                mach_release_park(thread); /* counter mach_run_until's park-on-hit */
                 continue;
             }
             if (k == MACH_EXIT_CALLOUT_LOST) {
@@ -751,11 +850,57 @@ int asmtest_mach_trace_call(const void *code, size_t len, const long *args,
     return rc;
 }
 
-/* TODO(T5): expose mach_run_until publicly + add the x86_DEBUG_STATE64 W^X fallback. */
+/* Run an already-attached target to `addr` via mach_run_until (T3/T5's shared
+ * breakpoint seam), leaving it parked exactly there for a follow-up
+ * asmtest_mach_trace_attached — see asmtest_mach.h for the full contract. */
 int asmtest_mach_run_to(pid_t pid, const void *addr) {
-    (void)pid;
-    (void)addr;
-    return ASMTEST_MACH_ENOSYS;
+    if (addr == NULL)
+        return ASMTEST_MACH_EINVAL;
+
+    task_t task = MACH_PORT_NULL;
+    kern_return_t kr = mach_get_task(pid, &task);
+    if (kr != KERN_SUCCESS)
+        return mach_status_from_kr(kr);
+
+    thread_act_array_t threads = NULL;
+    mach_msg_type_number_t nthreads = 0;
+    kr = task_threads(task, &threads, &nthreads);
+    if (kr != KERN_SUCCESS || nthreads < 1) {
+        mach_port_deallocate(mach_task_self(), task);
+        return ASMTEST_MACH_ETRACE;
+    }
+    thread_act_t thread = threads[0];
+    for (mach_msg_type_number_t i = 1; i < nthreads; i++)
+        mach_port_deallocate(mach_task_self(), threads[i]);
+    mach_vm_deallocate(mach_task_self(), (mach_vm_address_t)(uintptr_t)threads,
+                      nthreads * sizeof(thread_act_t));
+
+    mach_port_t exc_port = MACH_PORT_NULL;
+    mach_saved_ports_t saved_ports;
+    kr = mach_setup_exception_port(task, &exc_port, &saved_ports);
+    if (kr != KERN_SUCCESS) {
+        mach_port_deallocate(mach_task_self(), thread);
+        mach_port_deallocate(mach_task_self(), task);
+        return mach_status_from_kr(kr);
+    }
+
+    /* Same known-park bridge as trace_attached's opening: establish our own
+     * thread-suspend before lifting any BSD stop, so there is no window where the
+     * target could run uncontrolled before the breakpoint is planted below.
+     * mach_ensure_parked is idempotent against a target a prior run_to already
+     * parked (chained resolve->run_to->trace calls). */
+    mach_ensure_parked(thread);
+    kill(pid, SIGCONT);
+
+    int rc = mach_run_until(task, thread, exc_port, (uint64_t)(uintptr_t)addr);
+
+    /* Leave the target parked exactly at addr for the caller's trace_attached
+     * (mach_run_until's own terminal park) — no thread_resume here, mirroring
+     * trace_attached's identical exit postcondition. */
+    mach_teardown_exception_port(task, exc_port, &saved_ports);
+    mach_port_deallocate(mach_task_self(), thread);
+    mach_port_deallocate(mach_task_self(), task);
+    return rc;
 }
 
 #else /* not x86-64 Darwin: harmless no-op everywhere else (Linux, Apple Silicon). */

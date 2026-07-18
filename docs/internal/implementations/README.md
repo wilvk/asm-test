@@ -119,7 +119,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
 | [inproc-btf-block-step.md](inproc-btf-block-step.md) — W3: in-process BTF branch-granular single-step | 6 | ◐ 0/6 (T1 wip) | — |
-| [macos-oop-mach-stepper.md](macos-oop-mach-stepper.md) — macOS out-of-process single-step via Mach exception ports | 7 | ◐ 4/7 (T2-T4 live-verified on this host: leaf + 20-trip loop fixtures traced byte-exact through both trace_attached and trace_call; EPERM gate verified unsigned) | — |
+| [macos-oop-mach-stepper.md](macos-oop-mach-stepper.md) — macOS out-of-process single-step via Mach exception ports | 7 | ◐ 5/7 (T2-T5 live-verified on this host, both software-int3 and hardware-DR0 W^X-fallback breakpoint paths) | — |
 | [aarch64-ptrace-single-step-validation.md](aarch64-ptrace-single-step-validation.md) — AArch64 ptrace stream validation + binding fixtures | 6 | ☐ 0/6 | — |
 
 ### Scoped / managed whole-window tracing
