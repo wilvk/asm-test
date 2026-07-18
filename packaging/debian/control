@@ -1,0 +1,25 @@
+Source: asm-test
+Section: libdevel
+Priority: optional
+Maintainer: asm-test contributors <willvk@gmail.com>
+Build-Depends: debhelper-compat (= 13), pkg-config
+Standards-Version: 4.7.0
+Homepage: https://github.com/wilvk/asm-test
+Rules-Requires-Root: no
+Vcs-Git: https://github.com/wilvk/asm-test.git
+Vcs-Browser: https://github.com/wilvk/asm-test
+
+Package: libasmtest-dev
+Architecture: any
+Depends: ${misc:Depends}
+Description: unit-testing framework for assembly language (development files)
+ asm-test is a C-hosted unit-testing framework for hand-written assembly
+ routines. It captures CPU register/flag state around a routine under test and
+ asserts on the SysV/Win64 ABI, flags, memory and vector results, with an
+ optional emulator and native-trace tiers layered on top.
+ .
+ This package ships the static library (libasmtest.a), the public headers under
+ /usr/include/asmtest, and the pkg-config file needed to compile and link test
+ programs against the core. The library is MIT-licensed and links nothing
+ third-party; the GPL emulator engines are conveyed only by the separate
+ language-binding packages, not by this one.

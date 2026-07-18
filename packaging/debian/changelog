@@ -1,0 +1,6 @@
+asm-test (1.1.0-1) unstable; urgency=medium
+
+  * Initial Debian packaging of the asm-test C core as libasmtest-dev:
+    the static library, public headers, and pkg-config file (MIT).
+
+ -- asm-test contributors <willvk@gmail.com>  Sat, 18 Jul 2026 00:00:00 +0000

@@ -735,3 +735,13 @@ docker-syspkg-brew: syspkg-stage
 	  -t asmtest-syspkg-brew .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-syspkg-brew
 
+# T9 — Debian libasmtest-dev: dpkg-buildpackage + lintian + install + consumer.
+# Native (3.0) build straight from the tree, so no staged tarball is needed.
+# Override DEB_BASE to bump the pinned Debian base image.
+DEB_BASE ?= debian:bookworm-slim
+.PHONY: docker-syspkg-deb
+docker-syspkg-deb:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.syspkg-deb \
+	  --build-arg DEB_BASE=$(DEB_BASE) -t asmtest-syspkg-deb .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-syspkg-deb
+

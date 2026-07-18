@@ -1,0 +1,6 @@
+# The WNPP/ITP bug a first Debian upload should close is filed as part of the
+# maintainer-gated archive submission (distribution-packaging.md T9 step 4:
+# ITP -> dput to mentors.debian.net -> RFS -> DD sponsor -> ftpmaster NEW), not in
+# this in-tree CI build. Overriding keeps `make docker-syspkg-deb` lintian-clean
+# without falsely claiming a bug number.
+libasmtest-dev: initial-upload-closes-no-bugs

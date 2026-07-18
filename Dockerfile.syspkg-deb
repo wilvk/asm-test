@@ -1,0 +1,40 @@
+# Dockerfile.syspkg-deb — Debian packaging verification lane
+# (distribution-packaging.md T9). Builds libasmtest-dev from this tree with
+# debhelper, lintian-checks it, installs it, then compiles the shared pkg-config
+# consumer against /usr/include/asmtest.
+#
+# Hermetic and self-contained: the CI lane uses `3.0 (native)` and builds a
+# binary package (`-b`) straight from the copied tree — no orig tarball, no
+# network fetch. An archive upload to mentors.debian.net instead uses
+# `3.0 (quilt)` over the T7 orig tarball; that submission path is maintainer-gated
+# (WNPP/ITP -> dput -> RFS -> DD sponsor -> NEW), recorded in releasing.md by T13.
+#
+# Build + run:  make docker-syspkg-deb
+ARG DEB_BASE=debian:bookworm-slim
+FROM ${DEB_BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+# Pinned by the base image tag (bookworm): the build toolchain + debhelper +
+# lintian + pkg-config. ca-certificates is only for apt over https.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential debhelper devscripts lintian pkg-config ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work/asm-test
+COPY . /work/asm-test
+
+# Do the build + lint + install + consumer smoke at run time so `docker run --rm`
+# streams it and any dpkg-buildpackage/lintian failure surfaces as a non-zero lane.
+CMD set -eux; \
+    rm -rf debian; cp -r packaging/debian debian; \
+    dpkg-buildpackage -us -uc -b; \
+    echo "== lintian (fail on error+warning; pedantic tags overridden in-tree) =="; \
+    lintian --fail-on error,warning --no-tag-display-limit /work/*.deb; \
+    echo "== install the built .deb =="; \
+    apt-get update; \
+    apt-get install -y /work/libasmtest-dev_*_*.deb; \
+    echo "== pkg-config consumer against /usr/include/asmtest =="; \
+    cc packaging/smoke/consumer.c $(pkg-config --cflags --libs asmtest) -o /tmp/consumer; \
+    /tmp/consumer; \
+    echo "docker-syspkg-deb: OK — built, lintian-clean, installed, consumer ran"

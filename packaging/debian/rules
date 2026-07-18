@@ -1,0 +1,42 @@
+#!/usr/bin/make -f
+# debian/rules for libasmtest-dev — dh(1) sequencer.
+#
+# The upstream Makefile's `install` target honours PREFIX/DESTDIR (and generates
+# the pkg-config file against PREFIX), and the packaged deliverable is just the
+# static lib + headers + .pc, so the auto sequencer's build/install steps are
+# pointed at the upstream `lib` / `install` targets. The default `make` target is
+# the full example suite (needs NASM/Unicorn/Keystone) — never what a package
+# build wants — hence the explicit override_dh_auto_build.
+#
+# Source format: the CI lane (Dockerfile.syspkg-deb) builds this tree as
+# `3.0 (native)`; an archive upload to mentors.debian.net instead uses
+# `3.0 (quilt)` over the T7 orig tarball (asm-test_<ver>.orig.tar.gz). See
+# debian/source/format.
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	$(MAKE) lib
+
+override_dh_auto_install:
+	$(MAKE) install PREFIX=/usr DESTDIR=$(CURDIR)/debian/libasmtest-dev
+	# The upstream install uses the non-multiarch /usr/lib layout; relocate the
+	# static lib and its pkg-config file into the Debian multiarch libdir so the
+	# package is cross-compilation-correct (silences lintian's
+	# pkg-config-unavailable-for-cross-compilation) and rewrite the .pc libdir.
+	set -eu; \
+	  root=$(CURDIR)/debian/libasmtest-dev; \
+	  triplet=$$(dpkg-architecture -qDEB_HOST_MULTIARCH); \
+	  mkdir -p $$root/usr/lib/$$triplet/pkgconfig; \
+	  mv $$root/usr/lib/libasmtest.a $$root/usr/lib/$$triplet/; \
+	  mv $$root/usr/lib/pkgconfig/asmtest.pc $$root/usr/lib/$$triplet/pkgconfig/; \
+	  rmdir $$root/usr/lib/pkgconfig; \
+	  sed -i "s|^libdir=.*|libdir=/usr/lib/$$triplet|" \
+	    $$root/usr/lib/$$triplet/pkgconfig/asmtest.pc
+
+# The framework self-tests assemble the example routines and exercise the optional
+# tiers; none of that is part of the shipped artifact. The install-time link is
+# proven by the pkg-config consumer the Docker lane compiles after `apt install`.
+override_dh_auto_test:
