@@ -1,0 +1,49 @@
+# Dockerfile.syspkg-vcpkg — vcpkg overlay-port verification lane
+# (distribution-packaging.md T11). Builds the asmtest overlay port and links a
+# consumer against the static lib from the vcpkg tree.
+#
+# Hermetic: the portfile pins the v1.1.0 release tarball asset by SHA512 (published
+# by T3, a maintainer action — absent here), so the lane pre-places the reproducible
+# make-package-source tarball in vcpkg's downloads cache under the exact name
+# vcpkg_from_github expects and matches its SHA512 — no network fetch of the source.
+# Upstreaming a one-port PR to microsoft/vcpkg waits on the >=6-month maturity bar;
+# the overlay port is the supported path meanwhile (T11 step 4, maintainer-gated).
+#
+# Build + run:  make docker-syspkg-vcpkg
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+ARG VER=1.1.0
+ARG VCPKG_REF=2026.06.24
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      git curl zip unzip tar build-essential cmake ninja-build pkg-config ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+
+# Pinned vcpkg, bootstrapped once (metrics off).
+RUN git clone --depth 1 --branch ${VCPKG_REF} https://github.com/microsoft/vcpkg /opt/vcpkg \
+ && /opt/vcpkg/bootstrap-vcpkg.sh -disableMetrics
+ENV VCPKG_ROOT=/opt/vcpkg
+ENV PATH=/opt/vcpkg:${PATH}
+
+WORKDIR /src
+COPY packaging/ /src/packaging/
+COPY packaging/.staging/asm-test-${VER}.tar.gz /src/asm-test-${VER}.tar.gz
+
+ENV VER=${VER}
+CMD set -eux; \
+    PORT=/src/packaging/vcpkg/ports/asmtest; \
+    echo "== pre-place staged tarball in vcpkg downloads + match SHA512 (asset is T3-gated) =="; \
+    mkdir -p "$VCPKG_ROOT/downloads"; \
+    cp /src/asm-test-${VER}.tar.gz "$VCPKG_ROOT/downloads/wilvk-asm-test-v${VER}.tar.gz"; \
+    SUM="$(sha512sum /src/asm-test-${VER}.tar.gz | cut -d' ' -f1)"; \
+    sed -i "s/SHA512 [0-9a-f]\\{128\\}/SHA512 $SUM/" "$PORT/portfile.cmake"; \
+    echo "== vcpkg install asmtest (overlay port, x64-linux) =="; \
+    vcpkg install asmtest --overlay-ports=/src/packaging/vcpkg/ports --triplet x64-linux; \
+    vcpkg list | grep asmtest; \
+    echo "== compile the consumer against the vcpkg installed tree =="; \
+    TREE="$VCPKG_ROOT/installed/x64-linux"; \
+    cc /src/packaging/smoke/consumer.c -I"$TREE/include/asmtest" -L"$TREE/lib" -lasmtest -o /tmp/consumer; \
+    /tmp/consumer; \
+    echo "docker-syspkg-vcpkg: OK — port built, listed, consumer linked + ran"

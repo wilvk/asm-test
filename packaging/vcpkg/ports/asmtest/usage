@@ -1,0 +1,16 @@
+asmtest provides a static library, headers and a pkg-config file.
+
+    With CMake, link the static library directly:
+
+        find_path(ASMTEST_INCLUDE_DIR NAMES asmtest.h PATH_SUFFIXES asmtest)
+        find_library(ASMTEST_LIBRARY NAMES asmtest)
+        target_include_directories(main PRIVATE ${ASMTEST_INCLUDE_DIR})
+        target_link_libraries(main PRIVATE ${ASMTEST_LIBRARY})
+
+    Or via pkg-config (installed to lib/pkgconfig/asmtest.pc):
+
+        pkg_check_modules(ASMTEST REQUIRED IMPORTED_TARGET asmtest)
+        target_link_libraries(main PRIVATE PkgConfig::ASMTEST)
+
+Note: libasmtest.a provides main() (the test runner); a consumer supplies
+TEST() cases via #include <asmtest.h>.

@@ -756,3 +756,13 @@ docker-syspkg-aur: syspkg-stage
 	  -t asmtest-syspkg-aur .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-syspkg-aur
 
+# T11 — vcpkg overlay port: vcpkg install asmtest + a CMake/pkg-config consumer.
+# Override VCPKG_REF to bump the pinned microsoft/vcpkg release tag.
+VCPKG_REF ?= 2026.06.24
+.PHONY: docker-syspkg-vcpkg
+docker-syspkg-vcpkg: syspkg-stage
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.syspkg-vcpkg \
+	  --build-arg BASE=$(DOCKER_BASE) --build-arg VCPKG_REF=$(VCPKG_REF) \
+	  --build-arg VER=$(ASMTEST_VERSION) -t asmtest-syspkg-vcpkg .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-syspkg-vcpkg
+

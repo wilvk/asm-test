@@ -1,0 +1,8 @@
+{
+  "name": "asmtest",
+  "version": "1.1.0",
+  "description": "C-hosted unit-testing framework for assembly language (static core: library, headers, pkg-config).",
+  "homepage": "https://github.com/wilvk/asm-test",
+  "license": "MIT",
+  "supports": "linux | osx"
+}
