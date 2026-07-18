@@ -65,6 +65,23 @@ jobs:
       - name: Benchmark demo (informational; cycles/call)
         run: make bench
 
+  # Native rv64 host tier (riscv-native-tier). No hosted riscv64 runner exists,
+  # so this leg runs the core suites in a linux/riscv64 container under QEMU
+  # binfmt (tonistiigi/binfmt, pinned in mk/docker.mk). Slower than native legs
+  # by ~10-20x — hence the fat timeout and core-only scope. Unlike the native
+  # ubuntu-24.04-arm row in the `test` matrix, this is Docker-under-QEMU (there
+  # is no hosted riscv64 runner), so it is a separate job, not a matrix row.
+  test-riscv64:
+    name: test (riscv64 container, qemu binfmt)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - name: Enable riscv64 binfmt (pinned QEMU)
+        run: make binfmt-riscv64
+      - name: Core suites + self-tests in the riscv64 container
+        run: make docker-riscv64
+
   # Cross-system benchmarking (docs/internal/plans/cross-arch-benchmarking-plan.md).
   # Runs the two-dimensional benchmark on each per-push OS x arch leg and uploads
   # the normalized per-system report; the `benchmarks-compare` job below merges

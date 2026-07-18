@@ -17,6 +17,10 @@ jobs cover the rest of the surface:
   `asm` (in-line Keystone assembler), `drtrace` (DynamoRIO), `hwtrace`
   (hardware-trace decode + self-skip gating), `hwtrace-bindings` (every language
   wrapper's single-step tracer), and `codeimage` (the eBPF emission detector).
+- **Architecture ports** — `test-riscv64` runs the core example suites + framework
+  self-tests in a `linux/riscv64` container under QEMU binfmt (there is no hosted
+  riscv64 runner, so it is a Docker-under-QEMU job rather than a matrix row),
+  covering the native RISC-V (rv64 / RV64GC / LP64D) host tier.
 - **Language bindings** — the 10-language `bindings` matrix, plus `clean-room`
   ([fresh-install resolution](../clean-room-testing.md)) and `bindings-parity`.
 - **Windows** — `win64` (mingw cross-compile + Wine) and `windows` (native).
@@ -53,6 +57,7 @@ make docker-sanitize    # ASan + UBSan
 make docker-analyze     # clang-tidy
 make docker-coverage    # gcov of the runner
 make docker-ci          # the whole x86-64 Linux matrix, end to end
+make docker-riscv64     # native rv64 host tier under QEMU (the `test-riscv64` job)
 make docker-shell       # interactive shell in the CI image
 ```
 
@@ -69,6 +74,23 @@ make docker-test DOCKER_PLATFORM=linux/arm64
 make docker-emu  DOCKER_PLATFORM=linux/arm64
 make docker-asm  DOCKER_PLATFORM=linux/arm64
 ```
+
+### Running the riscv64 tier
+
+`make docker-riscv64` builds a `linux/riscv64` image and runs the core example
+suites + framework self-tests in it under QEMU binfmt — the native RISC-V (rv64)
+host tier, mirroring the `test-riscv64` CI job. On a Linux host, enable the pinned
+QEMU emulator once first (Docker Desktop already ships it):
+
+```sh
+make binfmt-riscv64     # register qemu-user riscv64 (pinned tonistiigi/binfmt)
+make docker-riscv64     # build + run under qemu-user (first run is slow: TCG)
+```
+
+The lane deliberately builds with `DEPS_ARGS=--pkgconfig` (no Keystone/Unicorn —
+those would take hours to build under emulation); the core suites need no
+optional engine. The flag-only (`checked`, carry) and 128-bit-vector (`simd`,
+`qadd`, `fpover` vector) cases self-skip on rv64 with a printed ISA reason.
 
 ### Other distributions
 
