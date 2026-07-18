@@ -112,7 +112,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 ### asmspy CLI
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
-| [asmspy-cli-enhancements.md](asmspy-cli-enhancements.md) — TUI hot-edge drill-in, syscall-arg content decode, coverage gaps | 9 | ◐ 4/9 (T5 wip) | — |
+| [asmspy-cli-enhancements.md](asmspy-cli-enhancements.md) — TUI hot-edge drill-in, syscall-arg content decode, coverage gaps | 9 | ◐ 5/9 (T6 wip) | — |
 | [asmspy-aarch64-support.md](asmspy-aarch64-support.md) — single-step engine abstraction + NT_ARM_HW_WATCH watchpoints | 7 | ☐ 0/7 | — |
 
 ### Single-step & block-step tiers

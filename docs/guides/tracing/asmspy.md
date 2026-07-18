@@ -164,10 +164,14 @@ Run `asmspy` with no arguments. It walks four screens:
      count, both endpoints resolved to `function [module]` (ELF symbols *and*
      JIT perf-map methods), and `[misp N%]`/`[ret]` tags, with honest provenance
      in the header (`branch/total samples`, `THROTTLED`, window size). **`Tab`**
-     toggles the sort (sample count / mispredicts). The target is **never
-     ptraced and never single-stepped** — it runs at full speed — so this is
-     the safe view for a live JIT. Needs an AMD host with IBS (the menu says
-     why when unavailable).
+     toggles the sort (sample count / mispredicts). **`space`** freezes the
+     window; **arrows** select an edge; **`Enter`** drills into a *data-flow
+     capture* (mode 9) of the function containing the edge — scoped to its
+     `to_addr` (where control went), falling back to `from_addr`. The target is
+     **never ptraced and never single-stepped** by this view — it runs at full
+     speed — so this is the safe view for a live JIT; the drill-in's data-flow
+     capture single-steps only the one chosen region. Needs an AMD host with IBS
+     (the menu says why when unavailable).
    - *Process details* — a **no-attach fingerprint** of the target: a runtime
      badge (JVM / .NET / CPython / Node·V8 / Go / …), its thread makeup,
      notable modules, and ELF traits — read from `/proc` and the mapped ELF

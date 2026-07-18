@@ -106,6 +106,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The path decode these calls already had is preserved. `make docker-cli` cli-smoke PASS.
   See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/asmspy-cli-enhancements.md).
 
+- **Hot-edges → data-flow drill-in** (asmspy TUI, mode 7). In the frozen hot-edges view,
+  arrows select an edge and `Enter` opens a data-flow capture (mode 9) of the function
+  containing the edge's `to_addr` (falling back to `from_addr`), reusing the call-graph
+  drill-in idiom. The pure decision (`asmspy_edge_drill`) requires a sized function and
+  accepts a mid-function landing (drill ≠ rank); it is unit-tested in `test_autoregion`
+  (6 checks) so it is covered on every host, not just an AMD IBS box. The ncurses wiring
+  is pty-driven (manual-only); the decision logic runs in CI.
+  See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/asmspy-cli-enhancements.md).
+
 - **Block-step replay record-and-inject for rdtsc/rdtscp/rdrand/rdseed/cpuid, gated per
   block rather than per region.** `src/dataflow_blockstep.c`'s `step_block` now injects
   each site's recorded post-state (read from the T5 DR exec-breakpoint boundary) into the

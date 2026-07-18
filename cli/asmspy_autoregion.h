@@ -299,4 +299,39 @@ asmspy_autoregion_rank_ip(const asmspy_ip_hit_t *hits, size_t n,
     return nout;
 }
 
+/* Resolve ONE selected hot edge to a drillable region. Tries to_addr (where
+ * control went), then from_addr; an endpoint qualifies only if it resolves AND
+ * has size > 0 (the zero-size vacuity rule above). Returns 0 and fills
+ * base/size/name/module, or -1 when neither endpoint names a sized function.
+ * Pure — the same resolve callback as the rank.
+ *
+ * The size > 0 guard is load-bearing, not hygiene: asmspy_symtab_at's zero-size
+ * branch matches exact-start only, and the data-flow engine needs a real len
+ * (resolve_region refuses unsized symbols for the same reason). Unlike --auto's
+ * rank, the drill does NOT require to_addr == start — the operator picked a
+ * concrete edge; a mid-function to_addr (a loop back-edge) still names the
+ * function that contains it, which is the region they asked about. */
+static inline int asmspy_edge_drill(const asmspy_sample_edge_t *e,
+                                    asmspy_auto_resolve_fn resolve, void *ctx,
+                                    uint64_t *base, uint64_t *size,
+                                    const char **name, const char **module) {
+    if (!e || !resolve || !base || !size || !name || !module)
+        return -1;
+    uint64_t ends[2] = {e->to_addr, e->from_addr};
+    for (int i = 0; i < 2; i++) {
+        uint64_t start = 0, sz = 0;
+        const char *nm = NULL, *mod = NULL;
+        if (resolve(ctx, ends[i], &start, &sz, &nm, &mod) != 0)
+            continue;
+        if (sz == 0) /* the vacuity rule: no real extent to hand the engine */
+            continue;
+        *base = start;
+        *size = sz;
+        *name = nm;
+        *module = mod;
+        return 0;
+    }
+    return -1;
+}
+
 #endif /* ASMSPY_AUTOREGION_H */

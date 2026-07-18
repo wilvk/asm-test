@@ -3361,6 +3361,11 @@ static void *sample_tracer(void *arg) {
     return NULL;
 }
 
+/* forward decl: the hot-edges view (below) drills into this on Enter, but it is
+ * defined further down (own tracer thread + modal loop). */
+static int run_dataflow_view(pid_t pid, uint64_t base, size_t len,
+                             const char *title, const char *func);
+
 static int run_sample_view(pid_t pid, const char *title,
                            const asmspy_symtab_t *syms, asmspy_jitmap_t *jit) {
     sample_view_t V;
@@ -3382,6 +3387,8 @@ static int run_sample_view(pid_t pid, const char *title,
 
     int back = 1; /* 1 = to process list (q/ESC), 0 = to options (b) */
     int top = 0;  /* first visible row while scrolling a frozen window */
+    int sel = 0;  /* selected edge (the Enter drill-in target) when frozen */
+    const char *drill_msg = NULL; /* one-line status after a failed drill-in */
     ssort_t sort = SSORT_COUNT;
     for (;;) {
         int rows, cols;
@@ -3400,8 +3407,19 @@ static int run_sample_view(pid_t pid, const char *title,
         sample_sort_key = sort;
         qsort(V.snap.v, V.snap.n, sizeof *V.snap.v, sedge_cmp);
         int en = (int)V.snap.n;
-        if (!frozen)
+        if (!frozen) {
             top = 0; /* live view is top-anchored (hottest first) */
+            sel = 0;
+        }
+        if (sel > en - 1)
+            sel = en - 1;
+        if (sel < 0)
+            sel = 0;
+        /* keep the selected row within the viewport (top follows sel) */
+        if (frozen && sel < top)
+            top = sel;
+        if (frozen && sel >= top + vis)
+            top = sel - vis + 1;
         if (top > en - vis)
             top = en - vis;
         if (top < 0)
@@ -3426,33 +3444,42 @@ static int run_sample_view(pid_t pid, const char *title,
         for (int r = 0; r < vis && top + r < en; r++) {
             char row[256];
             sample_format_row(row, sizeof row, &V.snap.v[top + r]);
+            if (frozen && top + r == sel)
+                attron(A_REVERSE); /* the symbol picker's highlight style */
             mvprintw(3 + r, 0, "%-*.*s", cols, cols, row);
+            if (frozen && top + r == sel)
+                attroff(A_REVERSE);
         }
         pthread_mutex_unlock(&V.mu);
 
-        if (fin && erc == ASMSPY_SAMPLE_UNAVAIL)
+        if (drill_msg)
+            mvprintw(rows - 1, 0, "%-*.*s", cols, cols, drill_msg);
+        else if (fin && erc == ASMSPY_SAMPLE_UNAVAIL)
             mvprintw(rows - 1, 0,
                      "[IBS-Op unavailable: %.*s]   b: options   "
                      "q/ESC: processes",
                      cols - 40, asmtest_ibs_skip_reason());
         else if (fin)
-            mvprintw(rows - 1, 0,
-                     "[tracer stopped]   up/down PgUp/PgDn Home/End: scroll   "
-                     "b: options   q/ESC: processes");
-        else if (V.paused)
             mvprintw(
                 rows - 1, 0,
-                "[PAUSED]   up/down PgUp/PgDn Home/End: scroll   Tab: sort   "
-                "space: live   b: options   q: processes");
+                "[tracer stopped]   up/down PgUp/PgDn Home/End: select   "
+                "Enter: data-flow drill-in   b: options   q/ESC: processes");
+        else if (V.paused)
+            mvprintw(rows - 1, 0,
+                     "[PAUSED]   up/down PgUp/PgDn Home/End: select   "
+                     "Enter: data-flow drill-in   Tab: sort   space: live   "
+                     "b: options   q: processes");
         else
             mvprintw(rows - 1, 0,
-                     "Tab: sort (count/mispredicts)   space: pause+scroll   "
+                     "Tab: sort (count/mispredicts)   space: pause+select   "
                      "b: options   q/ESC: processes   (live)");
         clrtoeol();
         refresh();
 
         timeout(120);
         int ch = getch();
+        if (ch != ERR)
+            drill_msg = NULL; /* a keypress dismisses the drill status line */
         if (ch == 'q' || ch == 27) {
             back = 1;
             break;
@@ -3465,8 +3492,12 @@ static int run_sample_view(pid_t pid, const char *title,
             sort = sort == SSORT_COUNT ? SSORT_MISPRED : SSORT_COUNT;
         int page = vis > 1 ? vis - 1 : 1;
         int scroll = V.paused || fin; /* a finished window is already frozen */
-        if ((ch == KEY_UP || ch == KEY_PPAGE) && !scroll) {
-            V.paused = 1; /* scrolling into the list freezes the live re-sort */
+        /* any navigation (or Enter) into the list freezes the live re-sort */
+        if ((ch == KEY_UP || ch == KEY_DOWN || ch == KEY_PPAGE ||
+             ch == KEY_NPAGE || ch == KEY_HOME || ch == KEY_END || ch == '\n' ||
+             ch == KEY_ENTER) &&
+            !scroll) {
+            V.paused = 1;
             scroll = 1;
         }
         switch (ch) {
@@ -3474,37 +3505,87 @@ static int run_sample_view(pid_t pid, const char *title,
         case 'p':
             if (!fin) {
                 V.paused = !V.paused;
-                if (!V.paused)
+                if (!V.paused) {
                     top = 0; /* resume live -> back to the hottest rows */
+                    sel = 0;
+                }
             }
             break;
         case KEY_UP:
             if (scroll)
-                top -= 1;
+                sel -= 1;
             break;
         case KEY_DOWN:
             if (scroll)
-                top += 1;
+                sel += 1;
             break;
         case KEY_PPAGE:
             if (scroll)
-                top -= page;
+                sel -= page;
             break;
         case KEY_NPAGE:
             if (scroll)
-                top += page;
+                sel += page;
             break;
         case KEY_HOME:
             if (scroll)
-                top = 0;
+                sel = 0;
             break;
         case KEY_END:
             if (scroll)
-                top = INT_MAX; /* clamped to the last page in the renderer */
+                sel = INT_MAX; /* clamped to the last row in the renderer */
+            break;
+        case '\n':
+        case KEY_ENTER:
+            /* Drill the SELECTED hot edge into a data-flow capture of the
+             * function containing its to_addr (else from_addr). The sampler
+             * carries NO tid (asmspy_sample_edge_t has none — the IBS drain
+             * drops it), so this cannot and does not pick a THREAD; what it
+             * gives is the effect a thread picker was wanted for:
+             * asmspy_engine_dataflow races every thread to the chosen region,
+             * so drilling into hot worker-thread code captures whichever worker
+             * actually runs it. run_dataflow_view is self-contained (own tracer
+             * thread + modal loop); the sampler keeps running out of band
+             * underneath, safe because it never ptraces. */
+            if (scroll) {
+                pthread_mutex_lock(&V.mu);
+                int have = V.snap.n > 0;
+                int i = sel;
+                if (i > (int)V.snap.n - 1)
+                    i = (int)V.snap.n - 1;
+                if (i < 0)
+                    i = 0;
+                asmspy_sample_edge_t edge;
+                memset(&edge, 0, sizeof edge);
+                if (have)
+                    edge = V.snap.v[i];
+                pthread_mutex_unlock(&V.mu);
+                if (have) {
+                    auto_resolve_ctx rctx = {V.syms, V.jit};
+                    uint64_t dbase = 0, dsize = 0;
+                    const char *dname = NULL, *dmod = NULL;
+                    if (asmspy_edge_drill(&edge, auto_resolve_sym, &rctx,
+                                          &dbase, &dsize, &dname, &dmod) == 0) {
+                        char dt[176];
+                        snprintf(dt, sizeof dt,
+                                 "asmspy — data flow of %s @ 0x%llx (pid %d, "
+                                 "from hot edge)",
+                                 dname ? dname : "region",
+                                 (unsigned long long)dbase, (int)pid);
+                        run_dataflow_view(V.pid, dbase, (size_t)dsize, dt,
+                                          dname ? dname : "region");
+                    } else {
+                        drill_msg = "edge endpoints resolve to no sized "
+                                    "function — cannot drill in";
+                    }
+                }
+            }
             break;
         default:
             break;
         }
+        if (sel < 0)
+            sel = 0;
         if (top < 0)
             top = 0;
     }

@@ -335,6 +335,60 @@ int main(void) {
               "which is what makes the walk land it");
     }
 
+    /* ==== asmspy_edge_drill: resolve ONE selected hot edge to a region ====
+     * Mirrors the entry ranker's resolve callback + vacuity rule, but drill !=
+     * rank: it accepts a MID-function to_addr (the operator picked a concrete
+     * edge) and tries to_addr THEN from_addr. */
+    {
+        uint64_t base, size;
+        const char *name, *module;
+
+        /* 1. to_addr inside a sized symbol wins, even when from_addr ALSO
+         *    resolves to a different sized symbol — the try-order discriminator:
+         *    swap the drill to from-first and BOTH of these checks fail. */
+        asmspy_sample_edge_t e1 =
+            mk(0x2010, 0x1010, 5, 0); /* mid_warm->leaf_hot */
+        int rc = asmspy_edge_drill(&e1, t_resolve, NULL, &base, &size, &name,
+                                   &module);
+        CHECK(rc == 0 && base == 0x1000,
+              "edge_drill: to_addr's containing function wins (leaf_hot)");
+        CHECK(rc == 0 && size == 0x40 && strcmp(name, "leaf_hot") == 0,
+              "edge_drill: fills size + name from the to_addr symbol");
+
+        /* 2. to_addr unresolved -> the from_addr fallback fires. */
+        asmspy_sample_edge_t e2 = mk(0x2010, 0xdead0000, 5, 0);
+        rc = asmspy_edge_drill(&e2, t_resolve, NULL, &base, &size, &name,
+                               &module);
+        CHECK(rc == 0 && base == 0x2000 && strcmp(name, "mid_warm") == 0,
+              "edge_drill: unresolved to_addr falls back to from_addr");
+
+        /* 3. THE VACUITY CONTROL: to_addr at a zero-size symbol's start,
+         *    from_addr unresolved -> -1 (a zero-size symbol must not win on the
+         *    exact-start technicality). Delete the size>0 guard and this fails. */
+        asmspy_sample_edge_t e3 =
+            mk(0xdead0000, 0x4000, 5, 0); /* to unsized_stub */
+        rc = asmspy_edge_drill(&e3, t_resolve, NULL, &base, &size, &name,
+                               &module);
+        CHECK(
+            rc == -1,
+            "edge_drill: a zero-size symbol does not qualify (vacuity) -> -1");
+
+        /* 4. neither endpoint resolves -> -1. */
+        asmspy_sample_edge_t e4 = mk(0xdead0000, 0xbeef0000, 5, 0);
+        rc = asmspy_edge_drill(&e4, t_resolve, NULL, &base, &size, &name,
+                               &module);
+        CHECK(rc == -1, "edge_drill: neither endpoint resolves -> -1");
+
+        /* 5. drill != rank: a MID-function to_addr (start + 4) still names its
+         *    function. The rank rejects this (to != start); the drill takes it. */
+        asmspy_sample_edge_t e5 = mk(0x9999, 0x1004, 5, 0); /* leaf_hot + 4 */
+        rc = asmspy_edge_drill(&e5, t_resolve, NULL, &base, &size, &name,
+                               &module);
+        CHECK(rc == 0 && base == 0x1000 && strcmp(name, "leaf_hot") == 0,
+              "edge_drill: a mid-function to_addr still names its function "
+              "(drill != rank)");
+    }
+
     printf("1..%d\n", checks);
     if (failures) {
         printf("# %d/%d FAILED\n", failures, checks);

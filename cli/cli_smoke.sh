@@ -27,6 +27,12 @@ echo "--- test_treefilter (call-tree depth cap / symbol focus / module filter) -
 "$BUILD/test_treefilter" || fail "test_treefilter"
 echo "--- test_symtab (symbol reverse lookup: gaps, zero-size, boundaries) ---"
 "$BUILD/test_symtab" || fail "test_symtab"
+# The --dataflow --auto region picker AND the mode-7 hot-edge drill-in decision
+# (asmspy_edge_drill) are pure — the sampler feeding them is AMD-IBS hardware that
+# self-skips off an AMD host, so these checks carry the real burden on every host.
+# (Built by the cli-smoke prereqs; it was previously built but never RUN.)
+echo "--- test_autoregion (--auto region picker + hot-edge drill-in decision) ---"
+"$BUILD/test_autoregion" || fail "test_autoregion"
 
 echo "--- asmspy --list (head) ---"
 # capture first: a bare `... | head` pipeline masks asmspy's exit status (sh has
