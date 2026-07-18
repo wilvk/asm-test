@@ -490,6 +490,14 @@ typedef struct {
     uint8_t snapok[DFP_WIN_RISK_BYTES]; /* that snapshot read succeeded      */
     size_t naddrs;
     int overflow; /* a cap was hit: the barrier is INCOMPLETE          */
+    /* Scoped mode only (T2): a cap hit does not by itself mean the capture is
+     * incomplete — a scoped region that never calls out never consults the risk set at
+     * all, so truncating it eagerly would flag captures the barrier was never asked to
+     * cover. `overflow` above is set unconditionally (window mode still promotes it to
+     * vt->truncated immediately, in dfp_risk_flag); this pending flag defers that
+     * promotion to the first actual gap (the call-out branch), and is simply never
+     * consulted — i.e. discarded — if the region returns without ever calling out. */
+    int overflow_pending;
 } dfp_riskset;
 
 typedef struct {
@@ -501,14 +509,16 @@ typedef struct {
     int have_cur;
     uint64_t cur_off;
     recbuf cur;
-    /* F6 windowed survey (all three default 0/NULL, which keeps every SCOPED path —
-     * `_run`, `attach`, `attach_pid*`, `attach_jit` — byte-for-byte unchanged).
-     * `win_mode` = there is no bounded code snapshot: the region set spans the window
-     * frame plus every channel-published JIT body at ABSOLUTE addresses, so open_step
-     * reads each instruction's bytes LIVE out of the target at (base + off) instead of
-     * indexing c->code, and `off` IS the absolute pc. `risk` = the at-risk set above,
-     * fed by finalize_step so the gap barrier knows what the elided glue could lie
-     * about. */
+    /* F6 windowed survey / T2 scoped gap barrier. `win_mode` = there is no bounded code
+     * snapshot: the region set spans the window frame plus every channel-published JIT
+     * body at ABSOLUTE addresses, so open_step reads each instruction's bytes LIVE out
+     * of the target at (base + off) instead of indexing c->code, and `off` IS the
+     * absolute pc. Default 0 — every SCOPED path (`_run`, `attach`, `attach_pid*`,
+     * `attach_jit`) stays byte-for-byte unchanged on this field. `risk` = the at-risk
+     * set above, fed by finalize_step so the gap barrier knows what elided glue could
+     * lie about; EVERY entry point (windowed AND scoped, since T2) now allocates one,
+     * so this is non-NULL everywhere dfp_step_loop runs — the barrier covers both the
+     * windowed survey's steps-over AND the scoped producer's call-out step-over. */
     int win_mode;
     dfp_riskset *risk;
     int win_decode_fail; /* window PCs whose bytes would not read/decode      */
@@ -535,11 +545,29 @@ typedef struct {
 
 /* F6 — put a recorded WRITE's location into the at-risk set (see dfp_riskset above).
  * Reads are never at risk: a fabricated edge needs a stale WRITER to point at. Both
- * halves dedup, and both FAIL CLOSED at their cap — flagging `overflow` AND setting
- * vt->truncated, so an incomplete barrier can never pass as a complete survey. */
+ * halves dedup, and both FAIL CLOSED at their cap — flagging `overflow` always. In
+ * `win_mode` elision is guaranteed (the window steps over every instruction outside the
+ * region set), so `vt->truncated` is set immediately. In scoped mode (T2) a cap hit does
+ * not by itself mean anything was elided — the region may never call out — so it only
+ * records `overflow_pending`; the call-out branch in dfp_step_loop promotes that to
+ * `vt->truncated` at the first real gap, and a gap-free exit simply never consults it.
+ *
+ * KNOWN LIMIT (pre-existing, shared with window mode, not introduced or worsened by
+ * T2): the disclosure is one whole-trace boolean, not a per-edge marker. A location
+ * that overflows DFP_WIN_RISK_REGS/DFP_WIN_RISK_BYTES is silently absent from every
+ * future gap diff — if a call-out then clobbers exactly that (untracked) location, the
+ * barrier cannot detect it and a later read still resolves to the stale in-region
+ * writer, even though `vt->truncated` is honestly set. A caller that inspects
+ * individual def-use edges/slices without first checking `truncated` can observe that
+ * one fabricated edge; only a caller that discards the whole graph on `truncated` gets
+ * the barrier's full guarantee. Raising the disclosure granularity to per-edge would be
+ * a real redesign, not a wiring task — out of scope here. */
 static void dfp_risk_flag(dfp_ctx *c) {
     c->risk->overflow = 1;
-    c->vt->truncated = true;
+    if (c->win_mode)
+        c->vt->truncated = true;
+    else
+        c->risk->overflow_pending = 1;
 }
 
 static void dfp_risk_add(dfp_ctx *c, const at_val_rec_t *r) {
@@ -591,6 +619,16 @@ static void dfp_risk_add(dfp_ctx *c, const at_val_rec_t *r) {
         c->risk->snapok[lo] = 0;
         c->risk->naddrs++;
     }
+}
+
+/* T2 — allocate a risk set for a SCOPED capture (`_run`/`attach`/`attach_pid*`/
+ * `attach_jit`), mirroring the window path's own calloc so `finalize_step`'s existing
+ * `c->risk != NULL` feed starts populating it there too, and dfp_step_loop's call-out
+ * branch has an at-risk set to snapshot/diff around the stepped-over helper. NULL on
+ * allocation failure; every call site treats that identically to its other setup-
+ * failure paths (fail closed, same as the window path's own calloc check). */
+static dfp_riskset *dfp_riskset_alloc(void) {
+    return (dfp_riskset *)calloc(1, sizeof(dfp_riskset));
 }
 
 /* Fill a record's value from a register (GP inline, XMM/YMM spilled to wide[]) at the
@@ -691,9 +729,12 @@ static void finalize_step(dfp_ctx *c, const struct user_regs_struct *regs) {
         else
             fill_mem_value(c, r); /* addr resolved when the step opened */
     }
-    /* F6: every WRITE this step records is a location a later elided glue excursion
-     * could overwrite behind the survey's back, so it joins the at-risk set the gap
-     * barrier re-checks. NULL on every scoped path — this is a no-op there. */
+    /* F6/T2: every WRITE this step records is a location a later elided glue excursion
+     * (a windowed step-over OR a scoped call-out) could overwrite behind the survey's
+     * back, so it joins the at-risk set the gap barrier re-checks. c->risk is non-NULL
+     * on every path now (T2 wired it into the scoped entry points too), so this always
+     * runs; the NULL check stays as the one defensive fallback for a caller this file
+     * does not yet wire (none remain today). */
     if (c->risk != NULL)
         for (size_t i = 0; i < c->cur.n; i++)
             dfp_risk_add(c, &c->cur.v[i]);
@@ -835,6 +876,24 @@ static int dfp_sigtrap_is_app(pid_t tid) {
  * it to run OVER a helper to its return; forward-declared here so dfp_step_loop can call
  * it before its definition. */
 static int dfp_run_to(pid_t pid, uint64_t base);
+
+/* A whole-vector-file snapshot (full comment on dfp_vecsnap below, where the windowed
+ * survey also uses it). The typedef has to be visible here, not just forward-declared,
+ * because the call-out branch's gap barrier (T2) declares gap_vpre/gap_vpost of this
+ * type BY VALUE in dfp_step_loop, below. dfp_vecsnap/dfp_risk_snap/dfp_emit_gap
+ * themselves are only forward-declared here — same pattern as dfp_run_to above — their
+ * bodies stay defined further down, next to the windowed survey that also calls them. */
+typedef struct {
+    int have;
+    uint8_t ymm[16][32];
+} dfp_vecsnap_t;
+
+static void dfp_vecsnap(pid_t pid, dfp_vecsnap_t *s);
+static void dfp_risk_snap(dfp_ctx *c);
+static void dfp_emit_gap(dfp_ctx *c, const struct user_regs_struct *pre,
+                         const struct user_regs_struct *post,
+                         const dfp_vecsnap_t *vpre, const dfp_vecsnap_t *vpost,
+                         uint64_t gap_pc, asmtest_dfwin_info_t *info);
 
 /* Decide whether the region exit just observed is a CALL-OUT to a helper OUTSIDE the
  * region rather than the region's own return. `last_off` is the last in-region
@@ -1047,10 +1106,52 @@ static int dfp_step_loop(dfp_ctx *c, uint64_t base_ip, size_t code_len,
                     c->vt->truncated = true;
                     return dfp_dirty_exit(c, DF_PTRACE_OK, 0, left_stopped);
                 }
+
+                /* T2 gap barrier: the helper we are about to run at native speed is
+                 * elided from the record, but it can still legally clobber something
+                 * this capture already recorded a WRITE to (c->risk, fed by
+                 * finalize_step). Snapshot the at-risk set and the full register/vector
+                 * state BEFORE running it — `regs` is already the callee-entry state
+                 * (the post-call stop above), so it doubles as the gap's pre-state, and
+                 * its rip is the helper's own entry address, outside the region by
+                 * construction. c->risk is NULL only for a caller this task did not
+                 * wire (none remain among the scoped entries; defensive all the same). */
+                struct user_regs_struct gap_pre = regs;
+                uint64_t gap_pc = regs.rip;
+                dfp_vecsnap_t gap_vpre;
+                memset(&gap_vpre, 0, sizeof gap_vpre);
+                if (c->risk != NULL) {
+                    dfp_vecsnap(pid, &gap_vpre);
+                    dfp_risk_snap(c);
+                }
+
                 if (dfp_run_to(pid, base_ip + resume_off) != 0) {
                     c->vt->truncated = true;
                     return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0, left_stopped);
                 }
+
+                if (c->risk != NULL) {
+                    /* Deferred overflow (dfp_risk_flag, T2): a risk-set cap hit is not
+                     * itself proof anything was elided in scoped mode — it only becomes
+                     * one at a real gap, which this is. Promote it now. */
+                    if (c->risk->overflow_pending) {
+                        c->vt->truncated = true;
+                        c->risk->overflow_pending = 0;
+                    }
+                    struct user_regs_struct gap_post;
+                    if (ptrace(PTRACE_GETREGS, pid, NULL, &gap_post) != 0) {
+                        c->vt->truncated = true;
+                        return dfp_dirty_exit(c, DF_PTRACE_ETRACE, 0,
+                                              left_stopped);
+                    }
+                    dfp_vecsnap_t gap_vpost;
+                    dfp_vecsnap(pid, &gap_vpost);
+                    /* Scoped mode has no asmtest_dfwin_info_t telemetry (info == NULL);
+                     * dfp_emit_gap tolerates that. */
+                    dfp_emit_gap(c, &gap_pre, &gap_post, &gap_vpre, &gap_vpost,
+                                 gap_pc, NULL);
+                }
+
                 /* Stopped AT the return address (in region); examine THAT stop as the
                  * resume instruction's pre-state without single-stepping past it. */
                 skip_step = 1;
@@ -1167,8 +1268,15 @@ int asmtest_dataflow_ptrace_run(const uint8_t *code, size_t code_len,
         return DF_PTRACE_ETRACE;
     const uint64_t base_ip = (uint64_t)(uintptr_t)ex;
 
+    dfp_riskset *risk = dfp_riskset_alloc();
+    if (risk == NULL) {
+        munmap(ex, code_len);
+        return DF_PTRACE_ETRACE;
+    }
+
     pid_t pid = fork();
     if (pid < 0) {
+        free(risk);
         munmap(ex, code_len);
         return DF_PTRACE_ETRACE;
     }
@@ -1192,6 +1300,7 @@ int asmtest_dataflow_ptrace_run(const uint8_t *code, size_t code_len,
     c.code = code;
     c.code_len = code_len;
     c.base = base_ip;
+    c.risk = risk;
 
     int status = 0;
     /* Initial post-fork SIGSTOP handshake (retry across an unrelated EINTR). */
@@ -1203,6 +1312,7 @@ int asmtest_dataflow_ptrace_run(const uint8_t *code, size_t code_len,
     if (!WIFSTOPPED(status)) {
         kill(pid, SIGKILL);
         waitpid(pid, &status, 0);
+        free(risk);
         munmap(ex, code_len);
         return DF_PTRACE_ETRACE; /* seccomp / ptrace blocked → caller self-skips */
     }
@@ -1220,6 +1330,7 @@ int asmtest_dataflow_ptrace_run(const uint8_t *code, size_t code_len,
         }
     }
     free(c.cur.v);
+    free(risk);
     munmap(ex, code_len);
     return rc;
 }
@@ -1254,8 +1365,16 @@ int asmtest_dataflow_ptrace_attach(const uint8_t *code, size_t code_len,
     ctl->go = 0;
     ctl->survived = 0;
 
+    dfp_riskset *risk = dfp_riskset_alloc();
+    if (risk == NULL) {
+        munmap(ex, code_len);
+        munmap(ctl, sizeof *ctl);
+        return DF_PTRACE_ETRACE;
+    }
+
     pid_t pid = fork();
     if (pid < 0) {
+        free(risk);
         munmap(ex, code_len);
         munmap(ctl, sizeof *ctl);
         return DF_PTRACE_ETRACE;
@@ -1283,6 +1402,7 @@ int asmtest_dataflow_ptrace_attach(const uint8_t *code, size_t code_len,
     c.code = code;
     c.code_len = code_len;
     c.base = base_ip;
+    c.risk = risk;
 
     int status = 0, rc = DF_PTRACE_ETRACE, left_stopped = 0;
 
@@ -1318,6 +1438,7 @@ int asmtest_dataflow_ptrace_attach(const uint8_t *code, size_t code_len,
             *survived = ctl->survived;
     }
     free(c.cur.v);
+    free(risk);
     munmap(ex, code_len);
     munmap(ctl, sizeof *ctl);
     return rc;
@@ -1328,6 +1449,7 @@ kill_out:
     kill(pid, SIGKILL);
     waitpid(pid, &status, 0);
     free(c.cur.v);
+    free(risk);
     munmap(ex, code_len);
     munmap(ctl, sizeof *ctl);
     return DF_PTRACE_ETRACE;
@@ -1380,6 +1502,11 @@ int asmtest_dataflow_ptrace_attach_pid_versioned(pid_t pid, uint64_t base,
         free(code);
         goto detach;
     }
+    dfp_riskset *risk = dfp_riskset_alloc();
+    if (risk == NULL) {
+        free(code);
+        goto detach;
+    }
 
     dfp_ctx c;
     memset(&c, 0, sizeof c);
@@ -1392,9 +1519,11 @@ int asmtest_dataflow_ptrace_attach_pid_versioned(pid_t pid, uint64_t base,
     c.pre_positioned = 1; /* already trap-stopped AT base (dfp_run_to) */
     c.img = img; /* optional versioned decode source (NULL = live snapshot) */
     c.when = when;
+    c.risk = risk;
 
     rc = dfp_step_loop(&c, base, code_len, max_insns, result, &left_stopped);
     free(c.cur.v);
+    free(risk);
     free(code);
 
     /* Crash-safe detach: the target is trap-stopped (just past the region on a clean exit, or
@@ -1866,6 +1995,13 @@ static int dfp_attach_worker(pid_t pid, pid_t only_tid, uint64_t base,
         free(set.v);
         return DF_PTRACE_ETRACE;
     }
+    dfp_riskset *risk = dfp_riskset_alloc();
+    if (risk == NULL) {
+        free(code);
+        ptrace(PTRACE_DETACH, entering, NULL, NULL);
+        free(set.v);
+        return DF_PTRACE_ETRACE;
+    }
 
     dfp_ctx c;
     memset(&c, 0, sizeof c);
@@ -1879,11 +2015,13 @@ static int dfp_attach_worker(pid_t pid, pid_t only_tid, uint64_t base,
     c.pre_positioned = 1; /* already trap-stopped AT base (dfp_run_to_multi) */
     c.img = img;          /* optional versioned decode (NULL = live snapshot) */
     c.when = when;
+    c.risk = risk;
 
     int left_stopped = 0;
     int rc =
         dfp_step_loop(&c, base, code_len, max_insns, result, &left_stopped);
     free(c.cur.v);
+    free(risk);
     free(code);
 
     /* Crash-safe detach: the entering thread is trap-stopped past the region; DETACH (with
@@ -2088,12 +2226,9 @@ static uint64_t dfp_alias_slice(uint64_t container, unsigned shift,
 /* A whole-vector-file snapshot in ONE pair of ptrace calls (not read_ymm's per-register
  * GETREGSET), because the gap barrier diffs up to 16 registers at once and gaps are the
  * rare event, not the hot path. `have` = the snapshot is usable; a failure leaves it 0
- * and the barrier fails closed on every vector location at risk. */
-typedef struct {
-    int have;
-    uint8_t ymm[16][32];
-} dfp_vecsnap_t;
-
+ * and the barrier fails closed on every vector location at risk. (The `dfp_vecsnap_t`
+ * typedef itself lives earlier in the file, forward-declared alongside dfp_run_to, since
+ * dfp_step_loop's call-out branch needs it by value before this definition.) */
 static void dfp_vecsnap(pid_t pid, dfp_vecsnap_t *s) {
     struct user_fpregs_struct fp;
     s->have = 0;
@@ -2143,7 +2278,12 @@ static void dfp_risk_snap(dfp_ctx *c) {
  * consumer classifying steps by region sees the barrier for what it is.
  *
  * A gap that changed nothing at risk appends NOTHING — the absence of a barrier step is
- * itself the (correct) claim that no recorded location was disturbed. */
+ * itself the (correct) claim that no recorded location was disturbed.
+ *
+ * `info` is NULL-tolerant (T2): the windowed survey passes its telemetry struct, but the
+ * scoped call-out branch in dfp_step_loop has none — the gap_* increments below are
+ * simply skipped when `info` is NULL, exactly like any other optional-output param in
+ * this file. */
 static void dfp_emit_gap(dfp_ctx *c, const struct user_regs_struct *pre,
                          const struct user_regs_struct *post,
                          const dfp_vecsnap_t *vpre, const dfp_vecsnap_t *vpost,
@@ -2235,12 +2375,16 @@ static void dfp_emit_gap(dfp_ctx *c, const struct user_regs_struct *pre,
     if (n == 0 && mn == 0)
         return; /* the glue disturbed nothing the survey had recorded */
     asmtest_valtrace_append(c->vt, gap_pc, recs, n);
-    info->gap_steps++;
-    info->gap_recs += n;
+    if (info != NULL) {
+        info->gap_steps++;
+        info->gap_recs += n;
+    }
     if (mn > 0) {
         asmtest_valtrace_append(c->vt, gap_pc, mrecs, mn);
-        info->gap_steps++;
-        info->gap_recs += mn;
+        if (info != NULL) {
+            info->gap_steps++;
+            info->gap_recs += mn;
+        }
     }
 }
 

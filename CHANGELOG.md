@@ -1020,6 +1020,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The scoped `ptrace` dataflow producer's call-out step-over can no longer
+  fabricate a def-use edge across a stepped-over helper.** `dfp_step_loop`
+  (`src/dataflow_ptrace.c`) runs a call-out at native speed and records nothing
+  over it — correct for cost, but a helper that clobbers a location the region
+  already wrote (and a later in-region read relies on) previously left the
+  read's edge pointing at the stale in-region writer instead of the elided
+  helper, silently wrong at a passing `rc`. Every scoped entry point
+  (`_run`, `attach`, `attach_pid*`, `attach_jit`) now feeds a `dfp_riskset`
+  (mirroring the windowed survey's existing gap barrier), and the call-out
+  branch snapshots it immediately before the native run and diffs it after:
+  a synthetic GAP step is appended carrying exactly what changed (register
+  alias-sliced, memory per byte), so a post-call read correctly resolves to
+  the barrier instead of the stale writer. A risk-set cap hit is **deferred**
+  in scoped mode — it only promotes to `truncated` at the first real gap
+  (and is discarded on a gap-free exit), so a region that never calls out is
+  never falsely flagged. Precision, not a blanket invalidation, is
+  load-bearing here (F6 measured that a blanket shadow deletes true
+  cross-gap edges): a helper that touches nothing at risk appends no record
+  for that location, even though the gap step itself is still present (the
+  call/ret round trip through any helper unavoidably moves `rsp`, which was
+  already at risk from the call's own write).
+
 - **`make install` / `make install-shared-hwtrace` now ship `asmtest_ibs.h`** —
   the hardware-tracing guide's documented `#include <asmtest_ibs.h>` could not
   previously compile against an installed package (it was the only

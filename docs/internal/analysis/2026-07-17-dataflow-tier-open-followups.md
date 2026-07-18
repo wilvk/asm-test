@@ -1,6 +1,7 @@
 # Data-flow tier — open follow-ups after the 2026-07-17 batch (F1/F2/F6/F7 + W-1)
 
-**Status: items 2 and 3 landed 2026-07-17 (same day, separate diff). Items 1, 4, 5 remain OPEN.**
+**Status: items 2 and 3 landed 2026-07-17 (same day, separate diff); item 1 landed 2026-07-18
+(DFP-CALLOUT-1 / T2). Items 4 and 5 remain OPEN.**
 None was a regression; each was surfaced (not introduced) while landing the batch, and each was
 recorded here rather than fixed inline, because fixing them inside the diff that found them would
 have been scope creep — or, in one case, would have disturbed a neighbouring oracle.
@@ -9,7 +10,7 @@ Ordered by how much they can lie to a user.
 
 ---
 
-## 1. The scoped path's call-out step-over has the fabricated-edge shape F6 just fixed for windows
+## 1. The scoped path's call-out step-over has the fabricated-edge shape F6 just fixed for windows — LANDED 2026-07-18
 
 **Verified, not inferred.** [`src/dataflow_ptrace.c:65`](../../../src/dataflow_ptrace.c#L65) states the
 design outright: the call-out step-over runs the helper at native speed *"(recording NOTHING over the
@@ -35,6 +36,42 @@ already written) at gap entry, diff at exit, append one GAP step. Registers must
 alias's own bit slice (`dataflow.c:219` keys raw Capstone ids with no canonicalization); memory per
 byte. Note F6 measured that a *blanket* barrier deletes the exit-criterion slice — precision is
 load-bearing, so this is not a one-line change.
+
+**Fixed** (`docs/internal/implementations/dataflow-producer-correctness.md` T2 /
+DFP-CALLOUT-1): every scoped entry point (`_run`, `attach`, `attach_pid*`, `attach_jit`) now
+allocates a `dfp_riskset` and feeds it through the existing `finalize_step` hook, exactly as
+predicted above — one wiring site (`dfp_step_loop`) covers all of them. The call-out branch
+snapshots the risk set (register file + a `dfp_vecsnap` + `dfp_risk_snap`) immediately before
+`dfp_run_to` and diffs it after, via the SAME `dfp_emit_gap` the windowed survey already used
+(made `info`-NULL-tolerant, since scoped mode has no `asmtest_dfwin_info_t`) — no separate
+implementation, confirming the transfer this item predicted. A risk-set cap hit is **deferred**
+in scoped mode (`dfp_risk_flag` only promotes to `vt->truncated` at the first real gap, via a new
+`overflow_pending` flag) rather than eagerly truncating a region that never calls out.
+
+New fixtures in `examples/test_dataflow_ptrace.c` prove precision, not just presence: a region
+that writes `rcx`, calls out to a helper that clobbers it, then reads it back — the read's edge
+lands on the GAP step, not the stale in-region writer (`test_callout_gap_fabricated_edge`) — and
+its negative control, where the helper preserves `rcx` and the edge correctly stays with the
+original writer, with no spurious record on the (still-present, due to `rsp`) gap step
+(`test_callout_gap_negative_control`). Two more fixtures cover the deferred
+`overflow_pending` control flow directly: a loop writing past the risk set's memory cap
+(`DFP_WIN_RISK_BYTES`) then calling out is promoted to `truncated` at the gap
+(`test_callout_gap_overflow_promoted`); the same loop returning without ever calling out
+is silently NOT truncated — the cap hit the barrier was never asked to act on
+(`test_callout_gap_overflow_discarded`). Teeth verified by temporarily disabling the
+`dfp_emit_gap` call (the fabricated-edge fixture's discriminating assertion fails with
+the barrier off, passes restored) and by temporarily making the overflow promotion eager
+regardless of mode (the discarded-fixture's assertion fails, passes restored) — the same
+"would this have caught it" proof F6 used. Known, pre-existing limit (not introduced or
+worsened here, shared with window mode): the overflow disclosure is one whole-trace
+`truncated` boolean, not a per-edge marker, so a location that overflows the cap is
+invisible to the barrier and a caller that inspects individual edges without checking
+`truncated` first can still observe one fabricated edge for it — documented at
+`dfp_risk_flag`'s definition. `make docker-dataflow-attach` 415/415 (0 skips), `make
+docker-gccanon-attach`
+37/37 (its F4 lane's call-out window composition is unaffected — its assertions locate steps by
+searching the live trace, not by fixed index, so the new GAP step shifts indices without
+breaking anything), `make dataflow-blockstep-test` 119/119 on the Zen 5 box.
 
 ## 2. `covered(t, 0)` is vacuous — `amd_replay` appends block 0 unconditionally — LANDED 2026-07-17
 

@@ -63,6 +63,11 @@ int asmtest_dataflow_emu_run(const uint8_t *code, size_t code_len,
 #define REG_YMM0 154
 #define REG_R10  108 /* F6: the register the survey's glue clobbers */
 #define REG_R8D  226 /* T1: the sub-register alias gp_value must resolve */
+#define REG_RSP                                                                \
+    44             /* T2: every call-out gap carries an rsp write (call
+                       * pushes, the helper's ret pops)                       */
+#define REG_RCX 38 /* T2: the fabricated-edge / negative-control register */
+#define REG_RAX 35 /* T2: must NOT appear on a gap the helper never touched */
 
 static int checks, failures;
 #define CHECK(c, m)                                                            \
@@ -146,7 +151,8 @@ static const uint8_t rip_load[] = {
  * helper's address, rsi/rdx (arg1/arg2) are the data. The helper lives in a SEPARATE
  * inherited mapping, so `call rdi` leaves the recorded region [base,base+9): the producer
  * must STEP OVER it and resume, yielding a value trace whose rax chain (step0 write ->
- * step2 read) threads ACROSS the call. Returns rsi + rdx = 12. */
+ * step3 read) threads ACROSS the call AND the T2 gap-barrier step the call-out now
+ * inserts at index 2 (see test_callout). Returns rsi + rdx = 12. */
 static const uint8_t call_region[] = {
     0x48, 0x89, 0xf0, /* 0x00 mov rax, rsi   (rax = arg1)      */
     0xff, 0xd7,       /* 0x03 call rdi       (call the helper) */
@@ -169,6 +175,68 @@ static const uint8_t callout_helper_noreturn[] = {
     0x31, 0xff,                   /* xor edi, edi (status 0)  */
     0x0f, 0x05,                   /* syscall                  */
 };
+
+/* T2 — the fabricated-edge fixture this task exists for. rdi is the helper's address
+ * (arg0), like `call_region`. Writes rcx BEFORE the call, calls out, then READS rcx —
+ * without the gap barrier this read's last-writer would still be step0's `mov rcx,42`,
+ * even though the elided helper may have clobbered rcx in between: a FABRICATED edge
+ * (F6's M1/M2 mutant shape). Returns rcx (42 unless the helper clobbers it). */
+static const uint8_t call_region_rcx[] = {
+    0x48, 0xc7, 0xc1, 0x2a, 0x00, 0x00, 0x00, /* 0x00 mov rcx, 42 */
+    0xff, 0xd7,                               /* 0x07 call rdi    */
+    0x48, 0x89, 0xc8,                         /* 0x09 mov rax, rcx (read rcx) */
+    0xc3,                                     /* 0x0c ret         */
+};
+
+/* Clobbers rcx (the location `call_region_rcx` wrote before the call) and returns. Paired
+ * with `call_region_rcx`, the post-call read of rcx MUST resolve to the GAP barrier step,
+ * not to the stale in-region writer — the discriminating check a value-only assertion
+ * cannot make (the mutants substitute a wrong SOURCE step, not a wrong VALUE). */
+static const uint8_t callout_helper_clobber_rcx[] = {
+    0x48, 0xc7, 0xc1, 0xef, 0xbe, 0x00, 0x00, /* mov rcx, 0xbeef */
+    0xc3,                                     /* ret             */
+};
+
+/* The negative control paired with `call_region_rcx`: touches nothing the region wrote
+ * (not even rcx), so the post-call read must still resolve to the ORIGINAL in-region
+ * writer. A gap-barrier step is still appended (the call/ret round-trip through this
+ * helper unavoidably moves rsp — see test_callout), but it must carry NO rcx record: the
+ * barrier's precision, not a blanket "the gap wrote everything" shadow, is what is under
+ * test here (the plan's M3 mutant would otherwise delete this TRUE edge). */
+static const uint8_t callout_helper_preserve[] = {
+    0x90, /* nop */
+    0xc3, /* ret */
+};
+
+/* T2 — direct regression coverage for the deferred `overflow_pending` flag (the risk
+ * set's memory cap, DFP_WIN_RISK_BYTES = 4096): rdi=buf, rsi=trip count, rdx=helper
+ * address. Writes one byte at buf[rcx] per trip (rcx: 0..rsi-1, so `rsi` DISTINCT byte
+ * addresses — big enough to exceed the cap before ever reaching the call), then calls
+ * out. Paired with the no-call-out sibling below, which is identical up to the `ret`. */
+static const uint8_t risk_overflow_loop_callout[] = {
+    0x31, 0xc9,             /* 0x00 xor ecx, ecx */
+    0xc6, 0x04, 0x0f, 0x11, /* 0x02 L: mov byte [rdi+rcx], 0x11 */
+    0x48, 0xff, 0xc1,       /* 0x06 inc rcx */
+    0x48, 0x39, 0xf1,       /* 0x09 cmp rcx, rsi */
+    0x7c, 0xf4,             /* 0x0c jl L (-12) */
+    0xff, 0xd2,             /* 0x0e call rdx */
+    0xc3,                   /* 0x10 ret */
+};
+
+/* Byte-identical to the loop above but returns instead of calling out — the barrier is
+ * never asked to decide anything here, so the cap hit must NOT surface as truncated. */
+static const uint8_t risk_overflow_loop_no_callout[] = {
+    0x31, 0xc9,             /* 0x00 xor ecx, ecx */
+    0xc6, 0x04, 0x0f, 0x11, /* 0x02 L: mov byte [rdi+rcx], 0x11 */
+    0x48, 0xff, 0xc1,       /* 0x06 inc rcx */
+    0x48, 0x39, 0xf1,       /* 0x09 cmp rcx, rsi */
+    0x7c, 0xf4,             /* 0x0c jl L (-12) */
+    0xc3,                   /* 0x0e ret */
+};
+
+/* > DFP_WIN_RISK_BYTES (4096): forces the memory-side risk-set cap before either loop's
+ * own last iteration. */
+#define RISK_OVERFLOW_TRIPS 4200
 
 static int has_edge(const asmtest_defuse_t *g, uint32_t from, uint32_t to) {
     for (size_t i = 0; i < g->n; i++)
@@ -1601,17 +1669,22 @@ static void *map_rx(const uint8_t *code, size_t len) {
 }
 
 static void test_callout(void) {
-    /* Increment 2 exit criteria (a) + (b): a region that CALLS OUT to a helper
-     * mid-region. The helper is a separate inherited mapping, so `call rdi` leaves the
-     * recorded region; the producer must run the helper at native speed to its return,
-     * record NOTHING over it, and resume — a COMPLETE value trace across the call whose
-     * rax def-use threads step0 -> step2 (over the call), with NO helper instruction
-     * recorded. */
+    /* Increment 2 exit criteria (a) + (b), UPDATED for T2's gap barrier: a region that
+     * CALLS OUT to a helper mid-region. The helper is a separate inherited mapping, so
+     * `call rdi` leaves the recorded region; the producer must run the helper at native
+     * speed to its return, record NOTHING of the helper's OWN instructions, and resume —
+     * but it now appends ONE synthetic GAP-BARRIER step at the helper's entry address,
+     * because the call's own push decrements rsp and the helper's `ret` pops it back:
+     * rsp genuinely differs between gap entry and gap exit, and rsp is already at risk
+     * (the call's own write). The result is a COMPLETE 5-step trace whose rax def-use
+     * threads step0 -> step3 (over both the call AND the gap step at index 2), and whose
+     * gap step carries an rsp write but NO rax record (the helper never touches rax). */
     void *helper = map_rx(callout_helper, sizeof callout_helper);
     if (helper == NULL) {
         printf("# SKIP callout: helper mmap failed\n");
         return;
     }
+    uint64_t helper_addr = (uint64_t)(uintptr_t)helper;
     asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
     long args[3] = {(long)(uintptr_t)helper, 5, 7};
     long result = 0;
@@ -1622,38 +1695,230 @@ static void test_callout(void) {
     CHECK(result == 12,
           "callout: region returned 12 across the call (rsi + rdx)");
     CHECK(!v->truncated, "callout: value trace is COMPLETE (not truncated)");
-    CHECK(v->steps_len == 4,
-          "callout: four IN-REGION steps captured (helper not stepped)");
-    if (v->steps_len == 4) {
-        static const uint64_t want[4] = {0x00, 0x03, 0x05, 0x08};
+    CHECK(v->steps_len == 5,
+          "callout: five steps captured (four in-region + one gap barrier)");
+    if (v->steps_len == 5) {
+        uint64_t want[5] = {0x00, 0x03, helper_addr, 0x05, 0x08};
         int ok = 1;
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 5; i++)
             if (v->insn_off[i] != want[i])
                 ok = 0;
-        CHECK(ok,
-              "callout: per-step offsets are the region's {0,3,5,8}, not the "
-              "helper's");
+        CHECK(ok, "callout: per-step offsets are {0,3,<helper>,5,8} — the gap "
+                  "barrier sits between the call and its resume");
     }
-    /* (b) No recorded step is a helper-internal instruction (every offset is inside
-     * the recorded region [0, sizeof call_region)). */
-    int any_helper = 0;
+    /* (b) No recorded step is a helper-INTERNAL instruction: every offset is either
+     * inside the recorded region [0, sizeof call_region), or is EXACTLY the gap
+     * barrier's step at the helper's entry address (never anywhere else in the
+     * helper, e.g. its `ret`). */
+    int any_helper_internal = 0;
     for (size_t i = 0; i < v->steps_len; i++)
-        if (v->insn_off[i] >= sizeof call_region)
-            any_helper = 1;
-    CHECK(!any_helper, "callout: no helper-internal instruction recorded");
+        if (v->insn_off[i] >= sizeof call_region &&
+            v->insn_off[i] != helper_addr)
+            any_helper_internal = 1;
+    CHECK(!any_helper_internal,
+          "callout: no helper-INTERNAL instruction recorded (only the gap "
+          "barrier at its entry)");
+
+    uint32_t gap_step = 0;
+    int have_gap = f6_step_at(v, helper_addr, &gap_step);
+    CHECK(
+        have_gap && gap_step == 2,
+        "callout: the gap barrier is step 2, between the call and its resume");
+    uint64_t rsp_gap_val = 0;
+    CHECK(have_gap && f6_reg_write_value(v, gap_step, REG_RSP, &rsp_gap_val),
+          "callout: the gap step carries an rsp write (the call/ret round "
+          "trip through the elided helper)");
+    uint64_t unused = 0;
+    CHECK(have_gap && !f6_reg_write_value(v, gap_step, REG_RAX, &unused),
+          "callout: the gap step carries NO rax record — the helper never "
+          "touches rax");
 
     asmtest_defuse_t *g = asmtest_defuse_build(v);
-    CHECK(g != NULL && has_edge(g, 0, 2),
-          "callout: rax def-use edge step0 -> step2 threads ACROSS the call");
+    CHECK(g != NULL && has_edge(g, 0, 3),
+          "callout: rax def-use edge step0 -> step3 threads ACROSS the call "
+          "AND the gap barrier");
     at_val_rec_t seed = {0}; /* step 0 */
     asmtest_slice_t *fwd = asmtest_slice_forward(g, seed);
     CHECK(fwd && asmtest_slice_contains(fwd, 0) &&
-              asmtest_slice_contains(fwd, 2),
-          "callout: forward slice(step0) reaches the post-call add (step2)");
+              asmtest_slice_contains(fwd, 3),
+          "callout: forward slice(step0) reaches the post-call add (step3)");
     asmtest_slice_free(fwd);
     asmtest_defuse_free(g);
     asmtest_valtrace_free(v);
     munmap(helper, sizeof callout_helper);
+}
+
+static void test_callout_gap_fabricated_edge(void) {
+    /* T2's own exit criterion: a region that writes rcx BEFORE the call, a helper that
+     * CLOBBERS rcx, and a post-call read of rcx. Without the gap barrier, the read's
+     * last writer would still be the region's OWN `mov rcx,42` — a fabricated edge (the
+     * VALUE the barrier records, 0xbeef, would even happen to be right if the mutant
+     * merely deleted the edge and left the stale value in place, which is why F6's
+     * M1/M2 mutants required an edge-provenance check, not a value-only one). */
+    void *helper =
+        map_rx(callout_helper_clobber_rcx, sizeof callout_helper_clobber_rcx);
+    if (helper == NULL) {
+        printf("# SKIP callout-gap-fabricated-edge: helper mmap failed\n");
+        return;
+    }
+    uint64_t helper_addr = (uint64_t)(uintptr_t)helper;
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    long args[3] = {(long)(uintptr_t)helper, 0, 0};
+    long result = -1;
+    int rc = asmtest_dataflow_ptrace_run(
+        call_region_rcx, sizeof call_region_rcx, args, 3, 0, 0, &result, v);
+    CHECK(rc == DF_PTRACE_OK,
+          "callout-gap-fabricated-edge: stepped OVER the clobbering helper");
+    CHECK(result == 0xbeef,
+          "callout-gap-fabricated-edge: region returned the CLOBBERED rcx "
+          "(0xbeef), not the stale 42");
+    CHECK(!v->truncated,
+          "callout-gap-fabricated-edge: value trace is COMPLETE");
+
+    uint32_t gap_step = 0;
+    int have_gap = f6_step_at(v, helper_addr, &gap_step);
+    CHECK(have_gap,
+          "callout-gap-fabricated-edge: the gap barrier step is present");
+    uint64_t rcx_gap_val = 0;
+    CHECK(have_gap && f6_reg_write_value(v, gap_step, REG_RCX, &rcx_gap_val) &&
+              rcx_gap_val == 0xbeef,
+          "callout-gap-fabricated-edge: the gap step's rcx record carries "
+          "the REAL clobbered value (0xbeef), read back from the target");
+
+    /* Located by its OWN region offset (0x09, `mov rax,rcx`), NOT as gap_step+1 — this
+     * step's INDEX shifts by one whenever the barrier is disabled (no gap step is
+     * inserted), and the whole point of the checks below is to catch exactly that case,
+     * so they must not depend on a barrier-derived index to find their target. */
+    uint32_t read_step = 0;
+    int have_read = f6_step_at(v, 0x09, &read_step);
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    CHECK(g != NULL && have_gap && have_read &&
+              has_edge(g, gap_step, read_step),
+          "callout-gap-fabricated-edge: the post-call rcx read's edge comes "
+          "from the GAP BARRIER, not the stale in-region writer");
+    CHECK(g != NULL && have_read && !has_edge(g, 0, read_step),
+          "callout-gap-fabricated-edge: the fabricated edge step0 -> "
+          "post-call-read is ABSENT — the discriminating check a "
+          "value-only assertion could not make");
+    asmtest_defuse_free(g);
+    asmtest_valtrace_free(v);
+    munmap(helper, sizeof callout_helper_clobber_rcx);
+}
+
+static void test_callout_gap_negative_control(void) {
+    /* The negative control paired with the fabricated-edge fixture above: the SAME
+     * region, but a helper that touches nothing the region wrote — not even rcx. A gap
+     * barrier step is still appended (the call/ret round trip unavoidably moves rsp,
+     * exactly as in test_callout), but it must carry NO rcx record, and the post-call
+     * read of rcx must still resolve to the ORIGINAL in-region writer (step0) — proving
+     * the barrier is PRECISE, not a blanket "the gap wrote everything" shadow that
+     * would delete this TRUE edge (the plan's M3 mutant shape). */
+    void *helper =
+        map_rx(callout_helper_preserve, sizeof callout_helper_preserve);
+    if (helper == NULL) {
+        printf("# SKIP callout-gap-negative-control: helper mmap failed\n");
+        return;
+    }
+    uint64_t helper_addr = (uint64_t)(uintptr_t)helper;
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    long args[3] = {(long)(uintptr_t)helper, 0, 0};
+    long result = -1;
+    int rc = asmtest_dataflow_ptrace_run(
+        call_region_rcx, sizeof call_region_rcx, args, 3, 0, 0, &result, v);
+    CHECK(rc == DF_PTRACE_OK,
+          "callout-gap-negative-control: stepped OVER the preserving helper");
+    CHECK(result == 42,
+          "callout-gap-negative-control: region returned the ORIGINAL rcx "
+          "(42), untouched by the helper");
+    CHECK(!v->truncated,
+          "callout-gap-negative-control: value trace is COMPLETE");
+
+    uint32_t gap_step = 0;
+    int have_gap = f6_step_at(v, helper_addr, &gap_step);
+    uint64_t unused = 0;
+    CHECK(have_gap && !f6_reg_write_value(v, gap_step, REG_RCX, &unused),
+          "callout-gap-negative-control: the gap step carries NO rcx record "
+          "— the helper preserved it");
+
+    /* Located by its OWN region offset (0x09), not gap_step+1 — see the fabricated-edge
+     * test above for why that distinction matters. */
+    uint32_t read_step = 0;
+    int have_read = f6_step_at(v, 0x09, &read_step);
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    CHECK(g != NULL && have_read && has_edge(g, 0, read_step),
+          "callout-gap-negative-control: the post-call rcx read still "
+          "resolves to the ORIGINAL in-region writer (step0) — no "
+          "fabricated shadow from an unrelated gap");
+    CHECK(g != NULL && have_gap && have_read &&
+              !has_edge(g, gap_step, read_step),
+          "callout-gap-negative-control: the gap barrier does NOT claim an "
+          "rcx edge it never wrote");
+    asmtest_defuse_free(g);
+    asmtest_valtrace_free(v);
+    munmap(helper, sizeof callout_helper_preserve);
+}
+
+static void test_callout_gap_overflow_promoted(void) {
+    /* Writes past the risk set's memory cap, THEN calls out: dfp_risk_flag's deferred
+     * overflow_pending must be promoted to vt->truncated AT that first real gap — the
+     * "the barrier could not decide, so disclose it" half of the T2 contract. */
+    void *helper =
+        map_rx(callout_helper_preserve, sizeof callout_helper_preserve);
+    if (helper == NULL) {
+        printf("# SKIP callout-gap-overflow-promoted: helper mmap failed\n");
+        return;
+    }
+    uint8_t *buf = (uint8_t *)malloc(RISK_OVERFLOW_TRIPS);
+    if (buf == NULL) {
+        printf("# SKIP callout-gap-overflow-promoted: malloc failed\n");
+        munmap(helper, sizeof callout_helper_preserve);
+        return;
+    }
+    asmtest_valtrace_t *v = asmtest_valtrace_new(32768, 65536, 64);
+    long args[3] = {(long)(uintptr_t)buf, RISK_OVERFLOW_TRIPS,
+                    (long)(uintptr_t)helper};
+    long result = -1;
+    int rc = asmtest_dataflow_ptrace_run(risk_overflow_loop_callout,
+                                         sizeof risk_overflow_loop_callout,
+                                         args, 3, 0, 0, &result, v);
+    CHECK(rc == DF_PTRACE_OK,
+          "callout-gap-overflow-promoted: the over-cap loop + call-out ran to "
+          "completion");
+    CHECK(v->truncated,
+          "callout-gap-overflow-promoted: exceeding the risk set's memory cap "
+          "BEFORE a call-out is promoted to truncated AT the gap (deferred "
+          "overflow_pending, not silently dropped)");
+    asmtest_valtrace_free(v);
+    free(buf);
+    munmap(helper, sizeof callout_helper_preserve);
+}
+
+static void test_callout_gap_overflow_discarded(void) {
+    /* The SAME over-cap write loop, but the region returns WITHOUT ever calling out.
+     * Proves the OTHER half of the deferral: a cap hit the barrier is never asked to
+     * act on must NOT falsely truncate an otherwise-complete capture — the eager,
+     * window-mode behavior this task deliberately did NOT port to the scoped path. */
+    uint8_t *buf = (uint8_t *)malloc(RISK_OVERFLOW_TRIPS);
+    if (buf == NULL) {
+        printf("# SKIP callout-gap-overflow-discarded: malloc failed\n");
+        return;
+    }
+    asmtest_valtrace_t *v = asmtest_valtrace_new(32768, 65536, 64);
+    long args[2] = {(long)(uintptr_t)buf, RISK_OVERFLOW_TRIPS};
+    long result = -1;
+    int rc = asmtest_dataflow_ptrace_run(risk_overflow_loop_no_callout,
+                                         sizeof risk_overflow_loop_no_callout,
+                                         args, 2, 0, 0, &result, v);
+    CHECK(rc == DF_PTRACE_OK,
+          "callout-gap-overflow-discarded: the over-cap loop (no call-out) ran "
+          "to completion");
+    CHECK(!v->truncated,
+          "callout-gap-overflow-discarded: exceeding the risk set's memory "
+          "cap in a region that NEVER calls out is silently discarded, not "
+          "falsely truncated — the barrier was never asked to decide "
+          "anything");
+    asmtest_valtrace_free(v);
+    free(buf);
 }
 
 static void test_callout_noreturn(void) {
@@ -2495,6 +2760,10 @@ static void test_attach_jit_worker(void) {
 #else
 static void test_attach_pid(void) {}
 static void test_callout(void) {}
+static void test_callout_gap_fabricated_edge(void) {}
+static void test_callout_gap_negative_control(void) {}
+static void test_callout_gap_overflow_promoted(void) {}
+static void test_callout_gap_overflow_discarded(void) {}
 static void test_callout_noreturn(void) {}
 static void test_callout_step_backstop(void) {}
 static void test_versioned(void) {}
@@ -2534,6 +2803,10 @@ int main(void) {
     test_attach();
     test_attach_pid();
     test_callout();
+    test_callout_gap_fabricated_edge();
+    test_callout_gap_negative_control();
+    test_callout_gap_overflow_promoted();
+    test_callout_gap_overflow_discarded();
     test_callout_noreturn();
     test_callout_step_backstop();
     test_versioned();
