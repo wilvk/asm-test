@@ -1420,6 +1420,14 @@ printf '%s\n' "$adout" | grep -E '^(openat|mmap|getpid|writev|tgkill)\(' \
     && fail "arg decode: a KNOWN shape rendered '...' — the ellipsis is supposed to mark an unknown arity, not decorate every line"
 echo "  flags/mode/prot/iovec/sigset/signo/timespec/whence decoded; arity 0, 6 and conditional all correct; unknown shapes say so"
 
+# ---- T2: ioctl request names + fcntl command names (conditional arity) ----
+ad_has 'fcntl(fd=' "fcntl with a resolved fd"
+ad_has 'F_GETFL) = ' "an argument-less fcntl cmd with NO third slot"
+ad_has 'F_SETFD, ' "a cmd that takes an argument keeps its slot"
+ad_has 'TIOCGWINSZ' "a named ioctl request"
+ad_has "_IOC(_IOC_READ, 0xab, 0x1, 4)" "an unknown ioctl request decomposed, not named"
+echo "  ioctl/fcntl commands named; fcntl arity conditional; unknown ioctl decomposed"
+
 echo "--- asmspy --log fd->endpoint (socket:[inode] -> real endpoint) ---"
 "$BUILD/sock_victim" 2>"$BUILD/sock_victim.log" &
 SKPID=$!

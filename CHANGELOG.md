@@ -44,6 +44,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `{family=N, len=M}`, never a guessed name. `make docker-cli` cli-smoke PASS.
   See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/asmspy-cli-enhancements.md).
 
+- **`ioctl` requests and `fcntl` commands are named** (asmspy `--log`). `ioctl` renders
+  `TIOCGWINSZ`-style names, or an honest `_IOC(dir, type, nr, size)` decomposition for an
+  unknown request (never a guessed name); `fcntl` renders `F_GETFL`/`F_SETFD`/… with
+  correct conditional arity (an arg-less command such as `F_GETFL` shows no third slot).
+  `make docker-cli` cli-smoke PASS.
+  See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/asmspy-cli-enhancements.md).
+
 - **Block-step replay record-and-inject for rdtsc/rdtscp/rdrand/rdseed/cpuid, gated per
   block rather than per region.** `src/dataflow_blockstep.c`'s `step_block` now injects
   each site's recorded post-state (read from the T5 DR exec-breakpoint boundary) into the

@@ -29,6 +29,7 @@
 #include <signal.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
@@ -57,6 +58,14 @@ int main(void) {
             iov[1].iov_len = 9;
             writev(fd, iov, 2);
             lseek(fd, 0, SEEK_END);
+            /* T2: fcntl command names (conditional arity) + ioctl requests */
+            struct winsize ws;
+            int dummy;
+            fcntl(fd, F_GETFL);             /* arg-less: NO third slot */
+            fcntl(fd, F_SETFD, FD_CLOEXEC); /* takes an arg: keeps its slot */
+            ioctl(fd, TIOCGWINSZ, &ws); /* ENOTTY on a file: request decodes */
+            ioctl(fd, _IOC(_IOC_READ, 0xab, 1, 4),
+                  &dummy); /* unknown: decompose */
             close(fd);
         }
         /* openat WITHOUT one: mode must NOT be rendered */

@@ -25,7 +25,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/mman.h> /* PROT_* / MAP_* — the mmap flag tables */
+#include <sys/ioctl.h> /* _IOC + TIOC*/FIO* request macros (Theme E) */
+#include <sys/mman.h>  /* PROT_* / MAP_* — the mmap flag tables */
 #include <sys/ptrace.h>
 #include <sys/socket.h> /* AF_*, sockaddr_storage (Theme E) */
 #include <sys/syscall.h>
@@ -518,27 +519,29 @@ static size_t ap_fd(char *b, size_t cap, size_t o, pid_t pid, long long fd) {
 /* ================================================================== */
 
 typedef enum {
-    A_END = 0,     /* no argument here — this is what makes arity exact */
-    A_HEX,         /* raw word / opaque pointer */
-    A_INT,         /* signed decimal */
-    A_SIZE,        /* unsigned decimal (a length/count) */
-    A_FD,          /* fd + the endpoint behind it (ap_fd) */
-    A_DIRFD,       /* AT_FDCWD or an fd */
-    A_PATH,        /* char* — decoded as a C string */
-    A_OFLAGS,      /* open/openat flags word */
-    A_MODE,        /* octal creation mode */
-    A_PROT,        /* mmap/mprotect protection */
-    A_MAPFLAGS,    /* mmap flags */
-    A_CLONEFL,     /* clone flags (low byte is the exit signal) */
-    A_SIGNO,       /* signal number -> SIGxxx */
-    A_SIGSET,      /* sigset_t* -> [SIGxxx SIGyyy] */
-    A_SIGHOW,      /* rt_sigprocmask how */
-    A_IOVEC,       /* struct iovec* — count comes from the NEXT arg */
-    A_TIMESPEC,    /* struct timespec* -> {sec, nsec} */
-    A_WHENCE,      /* lseek whence */
-    A_SOCKFAM,     /* socket() domain -> AF_xxx (T1) */
-    A_SOCKADDR,    /* struct sockaddr* IN — byte len is the NEXT arg (T1) */
-    A_SOCKADDR_OUT /* struct sockaddr* OUT — len behind next arg (socklen_t*) */
+    A_END = 0,      /* no argument here — this is what makes arity exact */
+    A_HEX,          /* raw word / opaque pointer */
+    A_INT,          /* signed decimal */
+    A_SIZE,         /* unsigned decimal (a length/count) */
+    A_FD,           /* fd + the endpoint behind it (ap_fd) */
+    A_DIRFD,        /* AT_FDCWD or an fd */
+    A_PATH,         /* char* — decoded as a C string */
+    A_OFLAGS,       /* open/openat flags word */
+    A_MODE,         /* octal creation mode */
+    A_PROT,         /* mmap/mprotect protection */
+    A_MAPFLAGS,     /* mmap flags */
+    A_CLONEFL,      /* clone flags (low byte is the exit signal) */
+    A_SIGNO,        /* signal number -> SIGxxx */
+    A_SIGSET,       /* sigset_t* -> [SIGxxx SIGyyy] */
+    A_SIGHOW,       /* rt_sigprocmask how */
+    A_IOVEC,        /* struct iovec* — count comes from the NEXT arg */
+    A_TIMESPEC,     /* struct timespec* -> {sec, nsec} */
+    A_WHENCE,       /* lseek whence */
+    A_SOCKFAM,      /* socket() domain -> AF_xxx (T1) */
+    A_SOCKADDR,     /* struct sockaddr* IN — byte len is the NEXT arg (T1) */
+    A_SOCKADDR_OUT, /* struct sockaddr* OUT — len behind next arg (socklen_t*) */
+    A_IOCTLREQ,     /* ioctl request -> name or _IOC(dir,type,nr,size) (T2) */
+    A_FCNTLCMD      /* fcntl command -> F_xxx (T2) */
 } argcls_t;
 
 typedef struct {
@@ -654,11 +657,11 @@ static int arg_shape(long nr, argshape_t *sh) {
 #endif
 #ifdef __NR_ioctl
     case __NR_ioctl:
-        SHAPE(A_FD, A_HEX, A_HEX);
+        SHAPE(A_FD, A_IOCTLREQ, A_HEX);
 #endif
 #ifdef __NR_fcntl
     case __NR_fcntl:
-        SHAPE(A_FD, A_INT, A_HEX);
+        SHAPE(A_FD, A_FCNTLCMD, A_HEX);
 #endif
 #ifdef __NR_dup2
     case __NR_dup2:
@@ -1110,6 +1113,171 @@ static size_t ap_sockaddr(char *b, size_t cap, size_t o, pid_t pid,
     }
 }
 
+/* An ioctl request word: a curated name (TCGETS/TIOCGWINSZ/...) when known, else
+ * the honest _IOC(dir, type, nr, size) decomposition — never a guessed name. The
+ * name table is #ifdef-guarded off the host's <sys/ioctl.h> (the oflag_tab
+ * discipline); the decomposition follows uapi/asm-generic/ioctl.h's bit layout. */
+static size_t ap_ioctlreq(char *b, size_t cap, size_t o, unsigned long long v) {
+    const char *nm = NULL;
+    switch (v) {
+#ifdef TCGETS
+    case TCGETS:
+        nm = "TCGETS";
+        break;
+#endif
+#ifdef TCSETS
+    case TCSETS:
+        nm = "TCSETS";
+        break;
+#endif
+#ifdef TIOCGWINSZ
+    case TIOCGWINSZ:
+        nm = "TIOCGWINSZ";
+        break;
+#endif
+#ifdef TIOCSWINSZ
+    case TIOCSWINSZ:
+        nm = "TIOCSWINSZ";
+        break;
+#endif
+#ifdef TIOCGPGRP
+    case TIOCGPGRP:
+        nm = "TIOCGPGRP";
+        break;
+#endif
+#ifdef TIOCSPGRP
+    case TIOCSPGRP:
+        nm = "TIOCSPGRP";
+        break;
+#endif
+#ifdef FIONREAD
+    case FIONREAD:
+        nm = "FIONREAD";
+        break;
+#endif
+#ifdef FIONBIO
+    case FIONBIO:
+        nm = "FIONBIO";
+        break;
+#endif
+#ifdef FIOCLEX
+    case FIOCLEX:
+        nm = "FIOCLEX";
+        break;
+#endif
+#ifdef FIONCLEX
+    case FIONCLEX:
+        nm = "FIONCLEX";
+        break;
+#endif
+    default:
+        break;
+    }
+    if (nm)
+        return apf(b, cap, o, "%s", nm);
+    /* nr[0:8] type[8:16] size[16:30] dir[30:32]; _IOC_NONE 0/WRITE 1/READ 2 */
+    unsigned nr = (unsigned)(v & 0xff);
+    unsigned type = (unsigned)((v >> 8) & 0xff);
+    unsigned size = (unsigned)((v >> 16) & 0x3fff);
+    unsigned dir = (unsigned)((v >> 30) & 3);
+    const char *ds = dir == 0   ? "_IOC_NONE"
+                     : dir == 1 ? "_IOC_WRITE"
+                     : dir == 2 ? "_IOC_READ"
+                                : "_IOC_READ|_IOC_WRITE";
+    if (type >= 0x20 && type < 0x7f)
+        return apf(b, cap, o, "_IOC(%s, '%c', 0x%x, %u)", ds, (char)type, nr,
+                   size);
+    return apf(b, cap, o, "_IOC(%s, 0x%x, 0x%x, %u)", ds, type, nr, size);
+}
+
+/* An fcntl command -> its F_* name, else the number. The Linux-specific
+ * 1024-range commands are #ifdef-guarded so a leaner libc cannot break the
+ * build (the same protection the shape table's #ifdef __NR_x entries have). */
+static size_t ap_fcntlcmd(char *b, size_t cap, size_t o, long long v) {
+    const char *nm = NULL;
+    switch (v) {
+    case F_DUPFD:
+        nm = "F_DUPFD";
+        break;
+    case F_GETFD:
+        nm = "F_GETFD";
+        break;
+    case F_SETFD:
+        nm = "F_SETFD";
+        break;
+    case F_GETFL:
+        nm = "F_GETFL";
+        break;
+    case F_SETFL:
+        nm = "F_SETFL";
+        break;
+    case F_GETLK:
+        nm = "F_GETLK";
+        break;
+    case F_SETLK:
+        nm = "F_SETLK";
+        break;
+    case F_SETLKW:
+        nm = "F_SETLKW";
+        break;
+    case F_SETOWN:
+        nm = "F_SETOWN";
+        break;
+    case F_GETOWN:
+        nm = "F_GETOWN";
+        break;
+    case F_SETSIG:
+        nm = "F_SETSIG";
+        break;
+    case F_GETSIG:
+        nm = "F_GETSIG";
+        break;
+    case F_DUPFD_CLOEXEC:
+        nm = "F_DUPFD_CLOEXEC";
+        break;
+#ifdef F_SETLEASE
+    case F_SETLEASE:
+        nm = "F_SETLEASE";
+        break;
+#endif
+#ifdef F_GETLEASE
+    case F_GETLEASE:
+        nm = "F_GETLEASE";
+        break;
+#endif
+#ifdef F_NOTIFY
+    case F_NOTIFY:
+        nm = "F_NOTIFY";
+        break;
+#endif
+#ifdef F_SETPIPE_SZ
+    case F_SETPIPE_SZ:
+        nm = "F_SETPIPE_SZ";
+        break;
+#endif
+#ifdef F_GETPIPE_SZ
+    case F_GETPIPE_SZ:
+        nm = "F_GETPIPE_SZ";
+        break;
+#endif
+#ifdef F_ADD_SEALS
+    case F_ADD_SEALS:
+        nm = "F_ADD_SEALS";
+        break;
+#endif
+#ifdef F_GET_SEALS
+    case F_GET_SEALS:
+        nm = "F_GET_SEALS";
+        break;
+#endif
+    default:
+        break;
+    }
+    if (nm)
+        return apf(b, cap, o, "%s", nm);
+    return apf(b, cap, o, "%d", (int)v);
+}
+
 /* Render one argument of class `cl` (`ret` is the syscall's return value — OUT
  * classes decode only on success; every other class ignores it). */
 static size_t ap_arg(char *b, size_t cap, size_t o, pid_t pid, int cl,
@@ -1187,8 +1355,36 @@ static size_t ap_arg(char *b, size_t cap, size_t o, pid_t pid, int cl,
             return apf(b, cap, o, "0x%llx", v);
         return ap_sockaddr(b, cap, o, pid, v, (long long)sl);
     }
+    case A_IOCTLREQ:
+        return ap_ioctlreq(b, cap, o, v);
+    case A_FCNTLCMD:
+        return ap_fcntlcmd(b, cap, o, (long long)v);
     default:
         return apf(b, cap, o, "0x%llx", v);
+    }
+}
+
+/* fcntl commands that take NO third argument (F_GETFD/F_GETFL/...). The arity is
+ * conditional on the cmd, like open's mode — printing the register the kernel
+ * ignored is the exact defect the conditional-A_MODE fix removed. */
+static int fcntl_noarg(long long cmd) {
+    switch (cmd) {
+    case F_GETFD:
+    case F_GETFL:
+    case F_GETOWN:
+    case F_GETSIG:
+#ifdef F_GETLEASE
+    case F_GETLEASE:
+#endif
+#ifdef F_GETPIPE_SZ
+    case F_GETPIPE_SZ:
+#endif
+#ifdef F_GET_SEALS
+    case F_GET_SEALS:
+#endif
+        return 1;
+    default:
+        return 0;
     }
 }
 
@@ -1250,6 +1446,9 @@ static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
             /* the conditional-arity case: no mode without a creating flag */
             if (n && sh.c[n - 1] == A_MODE && !oflags_create(scarg(e, n - 2)))
                 n--;
+            /* fcntl's arg-less commands take no third slot — same defect. */
+            if (n >= 2 && sh.c[1] == A_FCNTLCMD && fcntl_noarg(scarg(e, 1)))
+                n = 2;
             for (int i = 0; i < n; i++) {
                 if (i)
                     o = apf(b, cap, o, ", ");
