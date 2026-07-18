@@ -8,6 +8,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Pure tests for the IBS sample-period rounding/clamp and the additive-ABI
+  `struct_size` guard (first coverage).** The `/16` rounding, the `<16 →
+  default` clamp, and the `period_jitter` tail-guard had never executed against
+  non-default values anywhere; internal `asmtest_ibs_effective_period` /
+  `asmtest_ibs_effective_jitter` seams (shared with the live attr fill, so
+  tested == shipped) now pin them.
+
 - **Intel Pin vs. DynamoRIO analysis + a four-track umbrella plan — what Pin
   makes possible that the shipped DynamoRIO tier cannot.**
   [2026-07-17-intel-pin-vs-dynamorio.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/2026-07-17-intel-pin-vs-dynamorio.md)
@@ -977,6 +984,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   43 → 49.
 
 ### Fixed
+
+- **`asmtest_ibs.h` no longer describes the shipped system-wide capture flag as
+  a future phase** — the `survey_process` residual-race note now names the
+  `ASMTEST_IBS_OPT_SYSTEM_WIDE` flag directly.
 
 - **The pure IBS-Op decoder now validates the record's own caps word (BrnTrgt)
   before trusting the branch-target register.** Two 68-byte record shapes are

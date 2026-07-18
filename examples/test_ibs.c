@@ -273,6 +273,64 @@ static void test_opts_abi(void) {
           "opts: additive tail kept the struct at 32 bytes");
 }
 
+/* Host-independent: the sample-period rounding/clamp and the additive-ABI
+ * period_jitter guard — the paths that had NEVER executed against non-default
+ * values anywhere (test_opts_abi only checked the INIT zero-fill). Pure: uses the
+ * effective_* seams, which the live attr fill shares, so tested == shipped. */
+static void test_period_resolution(void) {
+    /* period: NULL and sample_period==0 both default to 0x4000. */
+    CHECK(asmtest_ibs_effective_period(NULL) == 0x4000,
+          "period: NULL opts -> default 0x4000");
+
+    asmtest_ibs_opts_t o = ASMTEST_IBS_OPTS_INIT;
+    o.sample_period = 0;
+    CHECK(asmtest_ibs_effective_period(&o) == 0x4000,
+          "period: sample_period=0 -> default 0x4000");
+    o.sample_period = 1;
+    CHECK(asmtest_ibs_effective_period(&o) == 0x4000,
+          "period: 1 -> 0x4000 (masks to 0, clamps)");
+    o.sample_period = 15;
+    CHECK(asmtest_ibs_effective_period(&o) == 0x4000,
+          "period: 15 -> 0x4000 (masks to 0, clamps)");
+    o.sample_period = 16;
+    CHECK(asmtest_ibs_effective_period(&o) == 16, "period: 16 -> 16");
+    o.sample_period = 17;
+    CHECK(asmtest_ibs_effective_period(&o) == 16,
+          "period: 17 -> 16 (rounds down)");
+    o.sample_period = 24;
+    CHECK(asmtest_ibs_effective_period(&o) == 16,
+          "period: 24 -> 16 (rounds down)");
+    o.sample_period = 0x4001;
+    CHECK(asmtest_ibs_effective_period(&o) == 0x4000,
+          "period: 0x4001 -> 0x4000 (non-multiple rounds down)");
+    o.sample_period = 0x1234;
+    CHECK(asmtest_ibs_effective_period(&o) == 0x1230,
+          "period: 0x1234 -> 0x1230");
+
+    /* jitter: the additive-ABI struct_size guard doing its job. */
+    asmtest_ibs_opts_t legacy;
+    memset(&legacy, 0, sizeof legacy);
+    legacy.struct_size =
+        0; /* a caller that did NOT compile with period_jitter */
+    legacy.period_jitter =
+        4; /* set, but the guard must IGNORE the uncovered tail */
+    CHECK(
+        asmtest_ibs_effective_jitter(&legacy) == 8,
+        "jitter: legacy struct_size=0 keeps the default (additive-ABI guard)");
+
+    asmtest_ibs_opts_t full = ASMTEST_IBS_OPTS_INIT;
+    full.period_jitter = 4;
+    CHECK(asmtest_ibs_effective_jitter(&full) == 4,
+          "jitter: full struct_size honours period_jitter=4");
+    full.flags |= ASMTEST_IBS_OPT_NO_JITTER;
+    CHECK(asmtest_ibs_effective_jitter(&full) == 0,
+          "jitter: ASMTEST_IBS_OPT_NO_JITTER forces 0");
+
+    asmtest_ibs_opts_t deflt = ASMTEST_IBS_OPTS_INIT;
+    CHECK(asmtest_ibs_effective_jitter(&deflt) == 8,
+          "jitter: INIT with nothing set -> default 8");
+}
+
 /* The fetch availability probe must be definite and stable (cached), independent of
  * the Op probe. */
 static void test_fetch_available(void) {
@@ -777,6 +835,7 @@ int main(void) {
     test_normalize();
     test_decode_fetch();
     test_opts_abi();
+    test_period_resolution();
     test_available();
     test_fetch_available();
     test_record_bound();

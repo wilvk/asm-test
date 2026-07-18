@@ -173,7 +173,9 @@ int asmtest_ibs_survey_pid(pid_t tid, unsigned ms,
  *
  * RESIDUAL RACE: a thread both born AND dead entirely between the initial scan and
  * the single mid-window rescan can be missed; the clean fix is a privileged
- * system-wide per-CPU capture (a later opts.system_wide phase). Threads that vanish
+ * system-wide per-CPU capture (the `ASMTEST_IBS_OPT_SYSTEM_WIDE` flag on
+ * `asmtest_ibs_opts_t.flags` — needs CAP_PERFMON / `perf_event_paranoid<=0`).
+ * Threads that vanish
  * before their event opens are skipped, not fatal. Coverage is capped at a large
  * fixed number of threads (see ibs_backend.c); a target with more live threads than
  * that is surveyed partially.

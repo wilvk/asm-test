@@ -44,6 +44,12 @@ int asmtest_ibs_window_end(void *ctx, asmtest_ibs_survey_t *out);
  * has_callchain=1 and the test fails). */
 size_t asmtest_ibs_max_record(int has_callchain);
 
+/* INTERNAL test seams (pure, no ABI promise): the resolved sample period
+ * (/16 rounding + <16 clamp) and jitter fraction (additive struct_size guard)
+ * exactly as the live attr fill uses them — one implementation, tested = shipped. */
+uint64_t asmtest_ibs_effective_period(const asmtest_ibs_opts_t *opts);
+unsigned asmtest_ibs_effective_jitter(const asmtest_ibs_opts_t *opts);
+
 /* ===========================================================================
  * IBS-Fetch front-end coverage lane (zen2-ibs-tracing-plan Phase 7). INTERNAL.
  *

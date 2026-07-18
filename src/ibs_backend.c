@@ -39,7 +39,8 @@
 
 #include "ibs_backend.h" /* internal window primitives (asmtest_ibs_window_*) */
 
-#include <errno.h> /* asmtest_ibs_unavail_reason: the real perf_open failure */
+#include <errno.h>  /* asmtest_ibs_unavail_reason: the real perf_open failure */
+#include <stddef.h> /* offsetof — the additive-ABI struct_size guard (pure) */
 #include <stdlib.h>
 #include <string.h>
 
@@ -274,6 +275,54 @@ void asmtest_ibs_fetch_survey_free(asmtest_ibs_fetch_survey_t *s) {
     memset(s, 0, sizeof *s);
 }
 
+/* ---- Sample-period + jitter resolution (PURE: no perf, no hardware) ------------ */
+/* Kept ABOVE the platform #if so the INTERNAL test seams below and the live path's
+ * ibs_cfg_from_opts share ONE implementation — the tested code IS the shipped code. */
+
+/* Dispatched-op count between samples (a multiple of 16). */
+#define IBS_DEFAULT_PERIOD 0x4000u
+/* Default sample-period jitter magnitude: +/- period/IBS_JITTER_FRAC per sample,
+ * re-rolled each drain tick, to de-alias against a periodic loop's own period. */
+#define IBS_JITTER_FRAC 8u
+
+/* Resolve the effective sample period from opts (rounded to IBS's /16 granularity;
+ * a sub-16 result clamps to the default). */
+static uint64_t ibs_period(const asmtest_ibs_opts_t *opts) {
+    uint64_t period = (opts != NULL && opts->sample_period != 0)
+                          ? opts->sample_period
+                          : IBS_DEFAULT_PERIOD;
+    period &= ~(uint64_t)0xF; /* IBS max-count granularity is 16 */
+    if (period < 16)
+        period = IBS_DEFAULT_PERIOD;
+    return period;
+}
+
+/* Resolve the effective jitter fraction (0 => no jitter). Default IBS_JITTER_FRAC;
+ * ASMTEST_IBS_OPT_NO_JITTER forces 0; a caller-set period_jitter is honoured only
+ * when struct_size proves the caller compiled with that appended field (the
+ * additive-ABI guard) — a legacy caller whose struct_size does not cover the tail
+ * keeps the default. */
+static unsigned ibs_jitter_frac(const asmtest_ibs_opts_t *opts) {
+    unsigned flags = (opts != NULL) ? opts->flags : 0u;
+    if (flags & ASMTEST_IBS_OPT_NO_JITTER)
+        return 0;
+    if (opts != NULL &&
+        opts->struct_size >= offsetof(asmtest_ibs_opts_t, period_jitter) +
+                                 sizeof opts->period_jitter &&
+        opts->period_jitter != 0)
+        return opts->period_jitter;
+    return IBS_JITTER_FRAC;
+}
+
+/* INTERNAL test seams (pure, no ABI): the resolved period and jitter fraction
+ * EXACTLY as the live attr fill uses them. */
+uint64_t asmtest_ibs_effective_period(const asmtest_ibs_opts_t *opts) {
+    return ibs_period(opts);
+}
+unsigned asmtest_ibs_effective_jitter(const asmtest_ibs_opts_t *opts) {
+    return ibs_jitter_frac(opts);
+}
+
 /* ------------------------------ live capture ---------------------------------- */
 #if defined(__linux__) && defined(__x86_64__)
 
@@ -288,15 +337,12 @@ void asmtest_ibs_fetch_survey_free(asmtest_ibs_fetch_survey_t *s) {
 #include <time.h>
 #include <unistd.h>
 
-/* Dispatched-op count between samples (a multiple of 16). */
-#define IBS_DEFAULT_PERIOD 0x4000u
 /* IBS-Op attr.config bit 19 = cnt_ctl: 1 => count DISPATCHED OPS between samples
  * (the Phase-5 default: more uniform instruction coverage than cycle counting),
- * 0 => count clock cycles. Only set when the OpCnt capability (EAX bit 4) is present. */
+ * 0 => count clock cycles. Only set when the OpCnt capability (EAX bit 4) is present.
+ * (IBS_DEFAULT_PERIOD / IBS_JITTER_FRAC now live in the pure section above, shared
+ * with the effective_period / effective_jitter test seams.) */
 #define IBS_OP_CNT_CTL_BIT 19
-/* Default sample-period jitter magnitude: +/- period/IBS_JITTER_FRAC per sample,
- * re-rolled each drain tick, to de-alias against a periodic loop's own period. */
-#define IBS_JITTER_FRAC 8u
 /* 256 KiB data ring (64 * 4 KiB pages). */
 #define IBS_RING_DATA_PAGES 64u
 /* Largest single record we parse WITHOUT callchain: header + IP + TID + RAW(size +
@@ -709,17 +755,6 @@ static uint64_t elapsed_ms(const struct timespec *t0,
 #define IBS_MAX_CHANS                                                          \
     512 /* per-thread events; caps fd/mmap use on huge targets */
 
-/* Resolve the effective sample period from opts (rounded to IBS's /16 granularity). */
-static uint64_t ibs_period(const asmtest_ibs_opts_t *opts) {
-    uint64_t period = (opts != NULL && opts->sample_period != 0)
-                          ? opts->sample_period
-                          : IBS_DEFAULT_PERIOD;
-    period &= ~(uint64_t)0xF; /* IBS max-count granularity is 16 */
-    if (period < 16)
-        period = IBS_DEFAULT_PERIOD;
-    return period;
-}
-
 /* Does this IBS support dispatched-op count control (cnt_ctl / OpCnt, EAX bit 4)? */
 static int ibs_has_opcnt(void) { return (ibs_caps_eax() & (1u << 4)) != 0; }
 
@@ -740,11 +775,13 @@ typedef struct {
  * period_jitter is read only when struct_size covers it (additive-ABI guard). */
 static void ibs_cfg_from_opts(const asmtest_ibs_opts_t *opts, ibs_cfg *c) {
     memset(c, 0, sizeof *c);
-    c->period = ibs_period(opts);
-    /* Phase-5 defaults (apply even to NULL / legacy callers): dispatched-op count
-     * control where the silicon supports it + period jitter on. */
+    /* Period + jitter go through the EXACT same effective_* seams the pure test
+     * calls: the tested code IS the shipped code. */
+    c->period = asmtest_ibs_effective_period(opts);
+    c->jitter_frac = asmtest_ibs_effective_jitter(opts);
+    /* Phase-5 default (apply even to NULL / legacy callers): dispatched-op count
+     * control where the silicon supports it. */
     c->cnt_dispatched = ibs_has_opcnt();
-    c->jitter_frac = IBS_JITTER_FRAC;
     unsigned flags = (opts != NULL) ? opts->flags : 0u;
     if (flags & ASMTEST_IBS_OPT_COUNT_CYCLES)
         c->cnt_dispatched = 0;
@@ -752,15 +789,6 @@ static void ibs_cfg_from_opts(const asmtest_ibs_opts_t *opts, ibs_cfg *c) {
         c->callchain = 1;
     if (flags & ASMTEST_IBS_OPT_SYSTEM_WIDE)
         c->system_wide = 1;
-    if (flags & ASMTEST_IBS_OPT_NO_JITTER)
-        c->jitter_frac = 0;
-    /* period_jitter is an appended field: honour a caller-set magnitude only when
-     * struct_size proves the caller compiled with it (else keep the default). */
-    if (opts != NULL && !(flags & ASMTEST_IBS_OPT_NO_JITTER) &&
-        opts->struct_size >= offsetof(asmtest_ibs_opts_t, period_jitter) +
-                                 sizeof opts->period_jitter &&
-        opts->period_jitter != 0)
-        c->jitter_frac = opts->period_jitter;
 }
 
 /* A cheap self-contained xorshift64 for period jitter (seeded lazily from the
