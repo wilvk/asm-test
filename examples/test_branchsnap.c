@@ -130,6 +130,51 @@ static int snap_default_run(void *cp, size_t nbytes, long a, long b,
     return ok;
 }
 
+/* T2 (amd-branchsnap-lbr-docs) — a jmp-chain fixture is a valid leaf callable:
+ * each `jmp +0` (EB 00) transfers to the immediately-following instruction, so a
+ * chain of N falls straight through to the trailing `ret`. Run via the direct
+ * snapshot entry to freeze a NEAR-SATURATED 16-deep window. */
+static void run_jmpchain(void *arg) {
+    void (*fn)(void) = (void (*)(void))arg;
+    fn();
+}
+
+/* Capture a jmp-chain fixture through asmtest_amd_snapshot_trace and assert the
+ * reconstructed in-region insn count (when expect_ni >= 0) and the truncated flag.
+ * Returns 1 on pass. Called only under the outer rc==ASMTEST_HW_OK gate, so a
+ * non-OK snapshot rc here is a real failure, not a self-skip. */
+static int snap_jmpchain_check(const unsigned char *code, size_t nbytes,
+                               size_t exit_off, long long expect_ni,
+                               int expect_trunc, const char *what) {
+    void *cp = mmap(NULL, nbytes, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (cp == MAP_FAILED) {
+        printf("not ok - branchsnap %s: mmap failed\n", what);
+        return 0;
+    }
+    memcpy(cp, code, nbytes);
+    mprotect(cp, nbytes, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)cp, (char *)cp + nbytes);
+    asmtest_trace_t *t = asmtest_trace_new(64, 64);
+    int rc =
+        asmtest_amd_snapshot_trace(cp, nbytes, exit_off, run_jmpchain, cp, t);
+    unsigned long long ni = asmtest_emu_trace_insns_total(t);
+    int trunc = asmtest_emu_trace_truncated(t);
+    printf(
+        "branchsnap %s: decoded %llu in-region insns, truncated=%d (rc=%d)\n",
+        what, ni, trunc, rc);
+    int ok = (rc == ASMTEST_HW_OK) && (trunc == expect_trunc) &&
+             (expect_ni < 0 || ni == (unsigned long long)expect_ni);
+    if (ok)
+        printf("ok - branchsnap %s\n", what);
+    else
+        printf("not ok - branchsnap %s: expected ni=%lld trunc=%d\n", what,
+               expect_ni, expect_trunc);
+    asmtest_trace_free(t);
+    munmap(cp, nbytes);
+    return ok;
+}
+
 /* --- Phase 9: the tail-`jmp` boundary NON-EVICTION experiment -------------------
  *
  * The AMD plan validated the Zen-5 non-eviction property (a planted #DB does NOT evict
@@ -378,6 +423,43 @@ int main(void) {
         }
     } else {
         printf("# SKIP branchsnap multi-exit: snapshot capture not live\n");
+    }
+
+    /* T2 (amd-branchsnap-lbr-docs) — the T1 use==15/16 boundary, pinned live on
+     * real LbrExtV2. These are NEAR-SATURATED windows, not "tiny routines" (the
+     * review refuted that framing — shipped fixtures run use ~ 1-4 and the trim
+     * already rescues them). JMP14 fills 15 of the 16 hardware slots (14 taken
+     * `jmp +0` edges + the entry-call edge, to==base region-involved) leaving one
+     * pre-entry glue slot; trimming drops the glue -> use==15, n_dec==16 with the
+     * synthetic boundary edge — exactly the count that spuriously tripped the old
+     * ceiling. It must reconstruct !truncated with 15 in-region insns (14 jmp +
+     * ret). JMP15 saturates all 16 slots (use==16) and must truncate honestly (an
+     * older in-region edge may have been evicted). Pre-fix, JMP14 fails here with
+     * truncated=1 — run it once against the unfixed tree to watch it discriminate.
+     * Gated on the direct capture above having run live (rc==OK). */
+    if (rc == ASMTEST_HW_OK) {
+        /* 14 * `jmp +0` (EB 00) at 0x00..0x1A, then `ret` at 0x1C. */
+        static const unsigned char JMP14[] = {
+            0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00,
+            0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00,
+            0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xC3};
+        /* 15 * `jmp +0` at 0x00..0x1C, then `ret` at 0x1E. */
+        static const unsigned char JMP15[] = {
+            0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB,
+            0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00,
+            0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xC3};
+        int ok15 = snap_jmpchain_check(JMP14, sizeof JMP14, 0x1C, 15, 0,
+                                       "use15: 15 hw slots + boundary edge "
+                                       "reconstructs !truncated (T1 boundary)");
+        int ok16 = snap_jmpchain_check(JMP15, sizeof JMP15, 0x1E, -1, 1,
+                                       "use16: 16 saturated hw slots truncate "
+                                       "honestly");
+        if (!(ok15 && ok16)) {
+            munmap(p, sizeof ROUTINE);
+            return 1;
+        }
+    } else {
+        printf("# SKIP branchsnap use15/use16: snapshot capture not live\n");
     }
 
     /* #2B live reduced-filter follow (deterministic). A routine with a DIRECT
