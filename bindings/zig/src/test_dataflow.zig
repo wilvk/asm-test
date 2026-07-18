@@ -159,6 +159,16 @@ fn check(cond: bool, desc: []const u8) void {
     if (!cond) failed = true;
 }
 
+// Both sliceSteps() callers below build their slice in ascending step order
+// (sliceSteps walks 0..n_steps), so a plain ordered compare is exact equality.
+fn sliceEq(got: []const u32, want: []const u32) bool {
+    if (got.len != want.len) return false;
+    for (got, want) |g, w| {
+        if (g != w) return false;
+    }
+    return true;
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
@@ -211,10 +221,10 @@ pub fn main() !void {
     check(method_resolve_pc(null, 0, 0x1000) == -1, "method: empty map -> -1");
 
     // ------------------------------------------------------------------
-    // T2 — def-use/slice surface (by-pointer seed, src/dataflow.c). Pure C, no
-    // ptrace, so it runs unconditionally. Not a counted TAP assertion (T3 adds
-    // those, plus the live-captured memory-edge case) — this is a build-time
-    // proof that the wrapper actually slices correctly, not just that it links.
+    // T3 — def-use/slice round-trip over a hand-built register-move chain
+    // (by-pointer seed, src/dataflow.c). Pure C, no ptrace, so it runs
+    // unconditionally — exercises step()/append marshalling and both slicers
+    // even where the live-attach section below self-skips.
     // ------------------------------------------------------------------
     {
         const valtrace_new = lib.lookup(ValtraceNewFn, "asmtest_valtrace_new") orelse return error.SymNotFound;
@@ -249,7 +259,8 @@ pub fn main() !void {
         defer alloc.free(fwd);
         const bwd = try vt.backwardSlice(alloc, 2);
         defer alloc.free(bwd);
-        std.debug.assert(fwd.len == 3 and bwd.len == 3);
+        check(sliceEq(fwd, &[_]u32{ 0, 1, 2 }), "slice: forward_slice(0) over r10->r11->r12 == {0,1,2}");
+        check(sliceEq(bwd, &[_]u32{ 0, 1, 2 }), "slice: backward_slice(2) over r10->r11->r12 == {0,1,2}");
     }
 
     // ------------------------------------------------------------------
@@ -283,6 +294,15 @@ pub fn main() !void {
         const attach_pid = lib.lookup(AttachPidFn, "asmtest_dataflow_ptrace_attach_pid") orelse return error.SymNotFound;
         const attach_pid_tid = lib.lookup(AttachPidTidFn, "asmtest_dataflow_ptrace_attach_pid_tid") orelse return error.SymNotFound;
         const attach_jit = lib.lookup(AttachJitFn, "asmtest_dataflow_ptrace_attach_jit") orelse return error.SymNotFound;
+        // T3: the def-use/slice surface over the live capture below — the memory
+        // def-use edge the seven bindings could never test before T1's by-pointer seed.
+        const valtrace_append = lib.lookup(ValtraceAppendFn, "asmtest_valtrace_append") orelse return error.SymNotFound;
+        const defuse_build = lib.lookup(DefuseBuildFn, "asmtest_defuse_build") orelse return error.SymNotFound;
+        const defuse_free = lib.lookup(DefuseFreeFn, "asmtest_defuse_free") orelse return error.SymNotFound;
+        const slice_forward_seed = lib.lookup(SliceSeedFn, "asmtest_slice_forward_seed") orelse return error.SymNotFound;
+        const slice_backward_seed = lib.lookup(SliceSeedFn, "asmtest_slice_backward_seed") orelse return error.SymNotFound;
+        const slice_free = lib.lookup(SliceFreeFn, "asmtest_slice_free") orelse return error.SymNotFound;
+        const slice_contains = lib.lookup(SliceContainsFn, "asmtest_slice_contains") orelse return error.SymNotFound;
 
         // Probed, not a symbol-resolves check: EINVAL (real) vs ENOSYS (stub) — the
         // symbol above resolves either way, so only the return code tells them apart.
@@ -369,6 +389,29 @@ pub fn main() !void {
             const c0 = vic.counter();
             std.time.sleep(50 * std.time.ns_per_ms);
             check(vic.counter() > c0, "live: victim SURVIVED the detach (counter advanced)");
+            // T3: the memory def-use edge (step1 store -> step2 load) — only
+            // reachable via the by-pointer slice seed (T1); the seven bindings
+            // could never test this before.
+            var lvt = ValueTrace{
+                .v = v,
+                .append = valtrace_append,
+                .steps_fn = valtrace_steps,
+                .defuse_build = defuse_build,
+                .defuse_free = defuse_free,
+                .slice_forward_seed = slice_forward_seed,
+                .slice_backward_seed = slice_backward_seed,
+                .slice_free = slice_free,
+                .slice_contains = slice_contains,
+            };
+            lvt.postAttach();
+            const lfwd = try lvt.forwardSlice(alloc, 0);
+            defer alloc.free(lfwd);
+            const lbwd = try lvt.backwardSlice(alloc, 4);
+            defer alloc.free(lbwd);
+            check(sliceEq(lfwd, &[_]u32{ 0, 1, 2, 3, 4 }),
+                "live: forward_slice(0) == {0,1,2,3,4} over df_chain, excludes ret");
+            check(sliceEq(lbwd, &[_]u32{ 0, 1, 2, 3, 4 }),
+                "live: backward_slice(4) == {0,1,2,3,4} -- the memory edge step1(store)->step2(load), excludes ret");
             valtrace_free(v);
             vic.close(alloc);
         }

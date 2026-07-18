@@ -165,6 +165,20 @@ func check(cond bool, desc string) {
 	}
 }
 
+// Both callers build their slice in ascending step order (slice() walks
+// 0..nSteps), so a plain ordered compare is exact set equality.
+func sliceEqUint32(got, want []uint32) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i, w := range want {
+		if got[i] != w {
+			return false
+		}
+	}
+	return true
+}
+
 func gcmove(moves [][4]uint64, step uint32, phys uint64) uint64 {
 	if len(moves) == 0 {
 		return uint64(C.df_canon(nil, 0, C.uint32_t(step), C.uint64_t(phys)))
@@ -256,9 +270,8 @@ func (vt *valueTrace) step(off uint64, recs []C.df_valrec_t) {
 }
 
 // postAttach resyncs the step count and drops any stale def-use graph after a
-// live producer appends behind our back (unlike step, which counts as it goes).
-// Not yet called here — T3 wires this into the live-captured memory-edge
-// assertion.
+// live producer appends behind our back (unlike step, which counts as it
+// goes). T3 wires this into the live-captured memory-edge assertion below.
 func (vt *valueTrace) postAttach() {
 	vt.nSteps = uint32(C.df_vt_steps(vt.v))
 	vt.invalidateDefuse()
@@ -319,10 +332,10 @@ func (vt *valueTrace) free() {
 	}
 }
 
-// T2 — def-use/slice surface (by-pointer seed, src/dataflow.c). Pure C, no
-// ptrace, so it runs unconditionally. Not a counted TAP assertion (T3 adds
-// those, plus the live-captured memory-edge case) — this is a build-time proof
-// that the wrapper actually slices correctly, not just that it links.
+// T3 — def-use/slice round-trip over a hand-built register-move chain
+// (by-pointer seed, src/dataflow.c). Pure C, no ptrace, so it runs
+// unconditionally — exercises step()/append marshalling and both slicers even
+// where the live-attach section below self-skips.
 func defuseSliceSmoke() {
 	vt := newValueTrace(64, 512)
 	// A register chain r10 -> r11 -> r12 (mirrors the Python round-trip test).
@@ -331,9 +344,8 @@ func defuseSliceSmoke() {
 	vt.step(2, []C.df_valrec_t{mkRec(locReg, 11, false), mkRec(locReg, 12, true)})
 	fwd := vt.forwardSlice(0)
 	bwd := vt.backwardSlice(2)
-	if len(fwd) != 3 || len(bwd) != 3 {
-		panic(fmt.Sprintf("defuseSliceSmoke: forward=%v backward=%v, want len 3 each", fwd, bwd))
-	}
+	check(sliceEqUint32(fwd, []uint32{0, 1, 2}), "slice: forward_slice(0) over r10->r11->r12 == {0,1,2}")
+	check(sliceEqUint32(bwd, []uint32{0, 1, 2}), "slice: backward_slice(2) over r10->r11->r12 == {0,1,2}")
 	vt.free()
 }
 
@@ -510,6 +522,18 @@ func liveAttachTests() {
 		c0 := vic.counter()
 		time.Sleep(50 * time.Millisecond)
 		check(vic.counter() > c0, "live: victim SURVIVED the detach (counter advanced)")
+		// T3: the memory def-use edge (step1 store -> step2 load) — only
+		// reachable via the by-pointer slice seed (T1); the seven bindings
+		// could never test this before. Wrap the already-filled `v` (do not
+		// call .free() on this wrapper — the raw C.df_vt_free below owns that).
+		lvt := &valueTrace{v: v}
+		lvt.postAttach()
+		lfwd := lvt.forwardSlice(0)
+		lbwd := lvt.backwardSlice(4)
+		check(sliceEqUint32(lfwd, []uint32{0, 1, 2, 3, 4}),
+			"live: forward_slice(0) == {0,1,2,3,4} over df_chain, excludes ret")
+		check(sliceEqUint32(lbwd, []uint32{0, 1, 2, 3, 4}),
+			"live: backward_slice(4) == {0,1,2,3,4} -- the memory edge step1(store)->step2(load), excludes ret")
 		C.df_vt_free(v)
 		vic.close()
 	}

@@ -104,6 +104,13 @@ public class TestDataflow {
             if (v.address() == 0) throw new IllegalStateException("asmtest_valtrace_new failed");
         }
 
+        // Adopts an existing native handle (e.g. one a live attach already
+        // filled) instead of allocating a new one — the caller owns freeing
+        // `existing`; call postAttach() to sync nSteps before slicing.
+        ValueTrace(MemorySegment existing) {
+            v = existing;
+        }
+
         // Append one executed instruction at offset `off` reading `reads` and
         // writing `writes` (each an array of Loc). Read-set before write-set.
         void step(long off, Loc[] reads, Loc[] writes) throws Throwable {
@@ -365,10 +372,10 @@ public class TestDataflow {
         if (failed) System.exit(1);
     }
 
-    // T2 — def-use/slice surface (by-pointer seed, src/dataflow.c). Pure C, no
-    // ptrace, so it runs unconditionally. Not a counted TAP assertion (T3 adds
-    // those, plus the live-captured memory-edge case) — this is a build-time
-    // proof that the wrapper actually slices correctly, not just that it links.
+    // T3 — def-use/slice round-trip over a hand-built register-move chain
+    // (by-pointer seed, src/dataflow.c). Pure C, no ptrace, so it runs
+    // unconditionally — exercises step()/append marshalling and both slicers
+    // even where the live-attach section below self-skips.
     static void defuseSliceSmoke() throws Throwable {
         ValueTrace vt = new ValueTrace(64, 512);
         // A register chain r10 -> r11 -> r12 (mirrors the Python round-trip test).
@@ -377,10 +384,10 @@ public class TestDataflow {
         vt.step(2, new Loc[] { reg(11) }, new Loc[] { reg(12) });
         int[] fwd = vt.forwardSlice(0);
         int[] bwd = vt.backwardSlice(2);
-        if (fwd.length != 3 || bwd.length != 3) {
-            throw new IllegalStateException("defuseSliceSmoke: forward=" + java.util.Arrays.toString(fwd)
-                    + " backward=" + java.util.Arrays.toString(bwd) + ", want len 3 each");
-        }
+        check(java.util.Arrays.equals(fwd, new int[] { 0, 1, 2 }),
+                "slice: forward_slice(0) over r10->r11->r12 == {0,1,2}");
+        check(java.util.Arrays.equals(bwd, new int[] { 0, 1, 2 }),
+                "slice: backward_slice(2) over r10->r11->r12 == {0,1,2}");
         vt.free();
     }
 
@@ -435,6 +442,19 @@ public class TestDataflow {
             long c0 = vic.counter();
             Thread.sleep(50);
             check(vic.counter() > c0, "live: victim SURVIVED the detach (counter advanced)");
+            // T3: the memory def-use edge (step1 store -> step2 load) — only
+            // reachable via the by-pointer slice seed (T1); the seven bindings
+            // could never test this before. Wrap the already-filled `v` (do not
+            // call .free() on this wrapper — valtraceFree below owns that).
+            ValueTrace lvt = new ValueTrace(v);
+            lvt.postAttach();
+            int[] lfwd = lvt.forwardSlice(0);
+            int[] lbwd = lvt.backwardSlice(4);
+            check(java.util.Arrays.equals(lfwd, new int[] { 0, 1, 2, 3, 4 }),
+                    "live: forward_slice(0) == {0,1,2,3,4} over df_chain, excludes ret");
+            check(java.util.Arrays.equals(lbwd, new int[] { 0, 1, 2, 3, 4 }),
+                    "live: backward_slice(4) == {0,1,2,3,4} -- the memory edge step1(store)->step2(load), "
+                            + "excludes ret");
             valtraceFree.invoke(v);
             vic.close();
         }

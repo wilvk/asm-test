@@ -8,6 +8,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Def-use graph and forward/backward slice surface in the Ruby, Lua, Zig,
+  Rust, Go, Java and .NET data-flow bindings (previously producer-only), via a
+  by-pointer slice-seed entry point** (`asmtest_slice_forward_seed`/
+  `_backward_seed`, `include/asmtest_valtrace.h` — a 72-byte `at_val_rec_t` is
+  SysV MEMORY-class and several of these FFIs, Ruby Fiddle chief among them,
+  cannot pass it by value). Each binding's `ValueTrace` now exposes
+  `defuse()`/`forward_slice(step)`/`backward_slice(step)` alongside the
+  existing live-attach producer, so all ten language bindings (with the prior
+  Python/C++/Node) share one surface. Round-trip-tested with a hand-built
+  r10→r11→r12 register-move chain (`forward_slice(0)`/`backward_slice(2)` both
+  `{0,1,2}`) and, over the shared live-attach `df_chain` fixture, the
+  **memory** def-use edge these seven could never reach before — `backward_slice(4)`
+  and `forward_slice(0)` both equal `{0,1,2,3,4}` (the store at step 1 reached
+  through the load at step 2), excluding the trailing `ret`. All seven
+  `docker-dataflow-<lang>` lanes green at their new 40/40 (was 36/36), 0 skips.
+  See [dataflow-bindings-slice-codeimage.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/dataflow-bindings-slice-codeimage.md).
+
 - **Block-step pre-cover: an IBS covered-block table that memoizes the ptrace
   block-step reconstructors' decode.** `asmtest_bs_precover_build`/`_free`
   (`include/asmtest_blockstep_internal.h`, internal — no new public ABI symbol)

@@ -38,6 +38,20 @@ rj = [[0x1000, 0x40, "Foo", 1], [0x1000, 0x40, "Foo", 5]]
 check(DF.method_resolve_pc(rj, 0x1010) == 1, "method: tiered re-JIT newest version wins")
 check(DF.method_resolve_pc([], 0x1000) == -1, "method: empty map -> -1")
 
+# ---------------------------------------------------------------------------
+# T3 — def-use/slice round-trip over a hand-built register-move chain (the
+# by-pointer seed from T1, wrapped in T2). Pure `step`/`append` marshalling, no
+# ptrace, so it runs even where the live-attach section below self-skips.
+# ---------------------------------------------------------------------------
+vt = DF::ValueTrace.new(8, 8)
+vt.step(0x00, reads: [], writes: [[DF::LOC_REG, 10]])                    # def r10
+vt.step(0x03, reads: [[DF::LOC_REG, 10]], writes: [[DF::LOC_REG, 11]])   # r11 <- r10
+vt.step(0x06, reads: [[DF::LOC_REG, 11]], writes: [[DF::LOC_REG, 12]])   # r12 <- r11
+check(vt.forward_slice(0) == Set[0, 1, 2],
+      "slice: forward_slice(0) over r10->r11->r12 == {0,1,2}")
+check(vt.backward_slice(2) == Set[0, 1, 2],
+      "slice: backward_slice(2) over r10->r11->r12 == {0,1,2}")
+vt.free
 
 # ---------------------------------------------------------------------------
 # F7 — live-attach data flow: capture over a REAL attached pid.
@@ -120,6 +134,16 @@ else
   c0 = vic.counter
   sleep 0.05
   check(vic.counter > c0, "live: victim SURVIVED the detach (counter advanced)")
+  # T3 — the memory def-use edge (step1 store -> step2 load) reached from step4
+  # through the load at step2: the by-pointer seed (T1) is what makes this
+  # slice reachable at all in this binding.
+  fwd0 = vt.forward_slice(0)
+  bwd4 = vt.backward_slice(4)
+  check(fwd0 == Set[0, 1, 2, 3, 4],
+        "live: forward_slice(0) == {0,1,2,3,4} over df_chain, excludes ret (got #{fwd0.to_a.sort})")
+  check(bwd4 == Set[0, 1, 2, 3, 4],
+        "live: backward_slice(4) == {0,1,2,3,4} -- the memory edge step1(store)->step2(load), " \
+        "excludes ret (got #{bwd4.to_a.sort})")
   vt.free
   vic.close
 

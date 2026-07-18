@@ -137,9 +137,8 @@ impl ValueTrace {
     }
 
     // A live producer appends behind our back (unlike `step`, which counts as it
-    // goes), so resync the step count and drop any stale def-use graph. Not yet
-    // called here — T3 wires this into the live-captured memory-edge assertion.
-    #[allow(dead_code)]
+    // goes), so resync the step count and drop any stale def-use graph. T3 wires
+    // this into the live-captured memory-edge assertion below.
     fn post_attach(&mut self) {
         self.n_steps = unsafe { asmtest_valtrace_steps(self.v) as u32 };
         self.invalidate_defuse();
@@ -219,6 +218,12 @@ fn check(cond: bool, desc: &str) {
     }
 }
 
+// Both callers build their slice in ascending step order (`slice` walks
+// 0..n_steps), so a plain ordered compare is exact set equality.
+fn slice_eq(got: &[u32], want: &[u32]) -> bool {
+    got == want
+}
+
 fn gcmove(moves: &[(u64, u64, u64, u32)], step: u32, phys: u64) -> u64 {
     let arr: Vec<GcMove> = moves
         .iter()
@@ -275,10 +280,10 @@ fn main() {
     }
 }
 
-// T2 — def-use/slice surface (by-pointer seed, src/dataflow.c). Pure C, no
-// ptrace, so it runs unconditionally. Not a counted TAP assertion (T3 adds
-// those, plus the live-captured memory-edge case) — this is a build-time proof
-// that the wrapper actually slices correctly, not just that it links.
+// T3 — def-use/slice round-trip over a hand-built register-move chain
+// (by-pointer seed, src/dataflow.c). Pure C, no ptrace, so it runs
+// unconditionally — exercises step()/append marshalling and both slicers even
+// where the live-attach section below self-skips.
 fn defuse_slice_smoke() {
     let mut vt = ValueTrace::new(64, 512);
     // A register chain r10 -> r11 -> r12 (mirrors the Python round-trip test).
@@ -287,8 +292,8 @@ fn defuse_slice_smoke() {
     vt.step(2, &[mk_rec(LOC_REG, 11, false), mk_rec(LOC_REG, 12, true)]);
     let fwd = vt.forward_slice(0);
     let bwd = vt.backward_slice(2);
-    assert_eq!(fwd.len(), 3, "forward_slice(0) should reach all 3 steps");
-    assert_eq!(bwd.len(), 3, "backward_slice(2) should reach all 3 steps");
+    check(slice_eq(&fwd, &[0, 1, 2]), "slice: forward_slice(0) over r10->r11->r12 == {0,1,2}");
+    check(slice_eq(&bwd, &[0, 1, 2]), "slice: backward_slice(2) over r10->r11->r12 == {0,1,2}");
     vt.free();
 }
 
@@ -410,6 +415,18 @@ fn live_attach_tests() {
         let c0 = vic.counter();
         std::thread::sleep(std::time::Duration::from_millis(50));
         check(vic.counter() > c0, "live: victim SURVIVED the detach (counter advanced)");
+        // T3: the memory def-use edge (step1 store -> step2 load) — only
+        // reachable via the by-pointer slice seed (T1); the seven bindings
+        // could never test this before. Wrap the already-filled `v` (do not
+        // call .free() on this wrapper — the raw `v` below owns that).
+        let mut lvt = ValueTrace { v, g: std::ptr::null_mut(), n_steps: 0 };
+        lvt.post_attach();
+        let lfwd = lvt.forward_slice(0);
+        let lbwd = lvt.backward_slice(4);
+        check(slice_eq(&lfwd, &[0, 1, 2, 3, 4]),
+            "live: forward_slice(0) == {0,1,2,3,4} over df_chain, excludes ret");
+        check(slice_eq(&lbwd, &[0, 1, 2, 3, 4]),
+            "live: backward_slice(4) == {0,1,2,3,4} -- the memory edge step1(store)->step2(load), excludes ret");
         asmtest_valtrace_free(v);
         vic.close();
     }

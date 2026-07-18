@@ -35,6 +35,31 @@ check(df.method_resolve_pc(rj, 0x1010) == 1, "method: tiered re-JIT newest versi
 check(df.method_resolve_pc({}, 0x1000) == -1, "method: empty map -> -1")
 
 -- ---------------------------------------------------------------------------
+-- T3 — def-use/slice round-trip over a hand-built register-move chain (the
+-- by-pointer seed from T1, wrapped in T2). Pure step()/append marshalling, no
+-- ptrace, so it runs even where the live-attach section below self-skips.
+-- ---------------------------------------------------------------------------
+local function list_eq(got, want)
+  if #got ~= #want then return false end
+  for i, v in ipairs(want) do
+    if got[i] ~= v then return false end
+  end
+  return true
+end
+
+do
+  local vt = df.ValueTrace(8, 8)
+  vt:step(0x00, {}, { { df.LOC_REG, 10 } })                        -- def r10
+  vt:step(0x03, { { df.LOC_REG, 10 } }, { { df.LOC_REG, 11 } })     -- r11 <- r10
+  vt:step(0x06, { { df.LOC_REG, 11 } }, { { df.LOC_REG, 12 } })     -- r12 <- r11
+  check(list_eq(vt:forward_slice(0), { 0, 1, 2 }),
+        "slice: forward_slice(0) over r10->r11->r12 == {0,1,2}")
+  check(list_eq(vt:backward_slice(2), { 0, 1, 2 }),
+        "slice: backward_slice(2) over r10->r11->r12 == {0,1,2}")
+  vt:free()
+end
+
+-- ---------------------------------------------------------------------------
 -- F7 — live-attach data flow: capture over a REAL attached pid.
 --
 -- Every assertion is POSITIVE and keyed to something only a working capture can
@@ -122,6 +147,16 @@ else
   local c0 = vic.counter()
   sleep_ms(50)
   check(vic.counter() > c0, "live: victim SURVIVED the detach (counter advanced)")
+  -- T3 — the memory def-use edge (step1 store -> step2 load) reached from
+  -- step4 through the load at step2: the by-pointer seed (T1) is what makes
+  -- this slice reachable at all in this binding.
+  local fwd0 = vt:forward_slice(0)
+  local bwd4 = vt:backward_slice(4)
+  check(list_eq(fwd0, { 0, 1, 2, 3, 4 }),
+        "live: forward_slice(0) == {0,1,2,3,4} over df_chain, excludes ret")
+  check(list_eq(bwd4, { 0, 1, 2, 3, 4 }),
+        "live: backward_slice(4) == {0,1,2,3,4} -- the memory edge step1(store)->step2(load), " ..
+        "excludes ret")
   vt:free()
   vic:close()
 

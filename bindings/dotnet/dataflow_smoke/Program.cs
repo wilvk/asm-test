@@ -147,6 +147,14 @@ static class Program
             if (V == IntPtr.Zero) throw new InvalidOperationException("asmtest_valtrace_new failed");
         }
 
+        // Adopts an existing native handle (e.g. one a live attach already
+        // filled) instead of allocating a new one — the caller owns freeing
+        // `existing`; call PostAttach() to sync _nSteps before slicing.
+        public ValueTrace(IntPtr existing)
+        {
+            V = existing;
+        }
+
         // Append one executed instruction at offset `off` reading `reads` and
         // writing `writes` (each an array of Loc). Read-set before write-set.
         public void Step(ulong off, Loc[] reads, Loc[] writes)
@@ -250,6 +258,16 @@ static class Program
         if (!cond) _failed = true;
     }
 
+    // Both callers build their slice in ascending step order (SliceSteps walks
+    // 0.._nSteps), so a plain ordered compare is exact set equality.
+    static bool SliceEq(int[] got, int[] want)
+    {
+        if (got.Length != want.Length) return false;
+        for (int i = 0; i < want.Length; i++)
+            if (got[i] != want[i]) return false;
+        return true;
+    }
+
     static ulong Gcmove(ulong[][] moves, uint step, ulong phys)
     {
         if (moves.Length == 0) return asmtest_gcmove_canon(null, 0, step, phys);
@@ -323,10 +341,10 @@ static class Program
         return _failed ? 1 : 0;
     }
 
-    // T2 — def-use/slice surface (by-pointer seed, src/dataflow.c). Pure C, no
-    // ptrace, so it runs unconditionally. Not a counted TAP assertion (T3 adds
-    // those, plus the live-captured memory-edge case) — this is a build-time
-    // proof that the wrapper actually slices correctly, not just that it links.
+    // T3 — def-use/slice round-trip over a hand-built register-move chain
+    // (by-pointer seed, src/dataflow.c). Pure C, no ptrace, so it runs
+    // unconditionally — exercises Step()/append marshalling and both slicers
+    // even where the live-attach section below self-skips.
     static void DefuseSliceSmoke()
     {
         var vt = new ValueTrace(64, 512);
@@ -336,12 +354,8 @@ static class Program
         vt.Step(2, new[] { Reg(11) }, new[] { Reg(12) });
         int[] fwd = vt.ForwardSlice(0);
         int[] bwd = vt.BackwardSlice(2);
-        if (fwd.Length != 3 || bwd.Length != 3)
-        {
-            throw new InvalidOperationException(
-                $"DefuseSliceSmoke: forward=[{string.Join(",", fwd)}] "
-                + $"backward=[{string.Join(",", bwd)}], want len 3 each");
-        }
+        Check(SliceEq(fwd, new[] { 0, 1, 2 }), "slice: forward_slice(0) over r10->r11->r12 == {0,1,2}");
+        Check(SliceEq(bwd, new[] { 0, 1, 2 }), "slice: backward_slice(2) over r10->r11->r12 == {0,1,2}");
         vt.Free();
     }
 
@@ -471,6 +485,18 @@ static class Program
             ulong c0 = vic.Counter();
             Thread.Sleep(50);
             Check(vic.Counter() > c0, "live: victim SURVIVED the detach (counter advanced)");
+            // T3: the memory def-use edge (step1 store -> step2 load) — only
+            // reachable via the by-pointer slice seed (T1); the seven bindings
+            // could never test this before. Wrap the already-filled `v` (do not
+            // call .Free() on this wrapper — asmtest_valtrace_free below owns that).
+            var lvt = new ValueTrace(v);
+            lvt.PostAttach();
+            int[] lfwd = lvt.ForwardSlice(0);
+            int[] lbwd = lvt.BackwardSlice(4);
+            Check(SliceEq(lfwd, new[] { 0, 1, 2, 3, 4 }),
+                "live: forward_slice(0) == {0,1,2,3,4} over df_chain, excludes ret");
+            Check(SliceEq(lbwd, new[] { 0, 1, 2, 3, 4 }),
+                "live: backward_slice(4) == {0,1,2,3,4} -- the memory edge step1(store)->step2(load), excludes ret");
             asmtest_valtrace_free(v);
             vic.Close();
         }
