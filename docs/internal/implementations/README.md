@@ -131,7 +131,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 ### macOS
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
-| [macos-cleanroom-lanes.md](macos-cleanroom-lanes.md) — tart arm64 / Docker-OSX x86 shakedowns + sshpass containerization | 6 | ☐ 0/6 | — |
+| [macos-cleanroom-lanes.md](macos-cleanroom-lanes.md) — tart arm64 / Docker-OSX x86 shakedowns + sshpass containerization | 6 | ◐ 0/6 (T4+T5 wip) | — |
 | [macos-dynamorio-port.md](macos-dynamorio-port.md) — DynamoRIO native-trace port M0–M2 (gated on upstream DR macOS release) | 11 | ☐ 0/11 | — |
 
 ### Architecture ports
