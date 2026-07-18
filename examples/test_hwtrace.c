@@ -1412,8 +1412,9 @@ static void test_blockstep_ibs_precover_live(void) {
          * refusal here is exactly that capability gate — a real, legitimate self-skip,
          * not a code defect — so this is a SKIP with the actual perf failure reason,
          * never a CHECK. */
-        printf("# SKIP blockstep ibs precover (live): survey_process refused: %s\n",
-              asmtest_ibs_unavail_reason());
+        printf("# SKIP blockstep ibs precover (live): survey_process refused: "
+               "%s\n",
+               asmtest_ibs_unavail_reason());
         asmtest_ibs_survey_free(&sv);
         munmap(q, sizeof AMD_LOOP);
         return;
