@@ -76,3 +76,46 @@ Re-publishing the same version fails on most registries (NuGet uses
   GPG signing + a Sonatype account, done out of band.
 - **Go** — no publish step: `proxy.golang.org` serves the module from the tagged
   repo automatically.
+
+## System packages
+
+The C core (the MIT static lib + headers + `asmtest.pc`) has authored,
+CI-verified packaging specs for five managers under
+[`packaging/`](https://github.com/wilvk/asm-test/blob/main/packaging/). Each is
+built, linted, installed and consumed in a container — `make docker-syspkg-<mgr>`
+locally, the `syspkg` CI job on every push. All five are **MIT only**: the static
+core links nothing third-party (the GPL engines are conveyed solely by the dlopen
+binding packages, not here).
+
+**Version-bump rule.** These specs pin a *released tag's* source-tarball asset by
+digest — deliberately **not** `VERSION`. `scripts/sync-version.sh` (which rewrites
+the working-tree binding manifests) does **not** touch them, so bumping a package
+is a **post-tag** step: once `v<x.y.z>` is tagged and `make package-source` has
+attached `asm-test-<x.y.z>.tar.gz` to the release, update the pinned version, URL
+and digest in each spec, regenerate the AUR `.SRCINFO`, and re-run
+`make docker-syspkg` before submitting. The sha256 is the one in the release's
+`SHA256SUMS`; vcpkg needs the sha512 (`sha512sum` / `vcpkg hash`).
+
+**Per-manager submission runbook** — each is a maintainer/credential-gated step
+the CI lanes deliberately do not perform:
+
+- **Homebrew tap** — create the GitHub repo `wilvk/homebrew-asmtest` holding
+  `Formula/asmtest.rb` (from
+  [`packaging/homebrew/asmtest.rb`](https://github.com/wilvk/asm-test/blob/main/packaging/homebrew/asmtest.rb)).
+  Users then `brew tap wilvk/asmtest && brew install asmtest`. Homebrew *core* is
+  out of reach until the acceptable-formulae bar (≥90 forks OR ≥90 watchers OR
+  ≥225 stars, self-submitted) is met.
+- **Debian** — file a WNPP/ITP bug; build a `3.0 (quilt)` source package over the
+  T7 orig tarball (`asm-test_<ver>.orig.tar.gz`); GPG-sign and `dput` to
+  mentors.debian.net; file an RFS; a DD sponsors the upload; ftpmaster NEW review.
+  (The CI lane uses `3.0 (native)` + `-b`; only the archive upload uses quilt.)
+- **AUR** — add an SSH key to the AUR account; push the `PKGBUILD` + regenerated
+  `.SRCINFO` to `ssh://aur@aur.archlinux.org/asm-test.git` `master`. No review.
+- **vcpkg** — a one-port PR to microsoft/vcpkg with `vcpkg x-add-version`. The
+  ≥6-month project-maturity criterion is not yet met (`v1.0.0` is 2026-06-24), so
+  this waits until ~2026-12; the overlay port
+  (`--overlay-ports=packaging/vcpkg/ports`) is the supported path meanwhile.
+- **conan-center** — fork conan-io/conan-center-index and PR the recipe
+  ([`packaging/conan/recipes/asmtest/`](https://github.com/wilvk/asm-test/blob/main/packaging/conan/recipes/asmtest/)),
+  latest version only in `config.yml`; sign the first-time CLA; the PR's
+  ~30-configuration CI must pass.

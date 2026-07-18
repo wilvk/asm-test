@@ -1268,3 +1268,21 @@ jobs:
           name: native-all
           path: build/dist/native/
           if-no-files-found: error
+
+  # System-package build+install lanes (distribution-packaging.md T13). Each
+  # manager's spec under packaging/ is built, linted, installed and consumed in a
+  # container (make docker-syspkg-<mgr>). Hermetic: every lane stages the
+  # reproducible make-package-source tarball, so no registry/network fetch of the
+  # source. The MIT C core only — no GPL engines are conveyed.
+  syspkg:
+    name: syspkg (${{ matrix.mgr }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        mgr: [brew, deb, aur, vcpkg, conan]
+    steps:
+      - uses: actions/checkout@v7
+      - name: system-package build + install lane
+        run: make docker-syspkg-${{ matrix.mgr }}

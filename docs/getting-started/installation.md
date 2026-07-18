@@ -26,6 +26,31 @@ git clone https://github.com/wilvk/asm-test.git
 cd asm-test
 ```
 
+## Install from a system package manager
+
+The C core — the static `libasmtest.a`, the public headers, and the `asmtest.pc`
+pkg-config file (MIT; no third-party engines) — has authored packaging specs for
+five managers under
+[`packaging/`](https://github.com/wilvk/asm-test/blob/main/packaging/). Each is
+built and installed end to end in CI (`make docker-syspkg-<mgr>`), so the recipes
+are known-good. **Consumption is gated on two maintainer steps that have not yet
+run:** publishing the `v1.1.0` release (the specs pin its source tarball asset)
+and submitting each spec to its upstream index. Until both happen for a given
+manager, the supported install path is [from source](#get-the-source)
+(`make install`).
+
+| Manager | Command (after publication) | Spec |
+|---|---|---|
+| Homebrew | `brew tap wilvk/asmtest && brew install asmtest` | [`packaging/homebrew/asmtest.rb`](https://github.com/wilvk/asm-test/blob/main/packaging/homebrew/asmtest.rb) |
+| Debian / Ubuntu | `apt install libasmtest-dev` | [`packaging/debian/`](https://github.com/wilvk/asm-test/blob/main/packaging/debian/) |
+| Arch (AUR) | `makepkg -si` in the AUR checkout | [`packaging/aur/PKGBUILD`](https://github.com/wilvk/asm-test/blob/main/packaging/aur/PKGBUILD) |
+| vcpkg | `vcpkg install asmtest --overlay-ports=packaging/vcpkg/ports` | [`packaging/vcpkg/ports/asmtest/`](https://github.com/wilvk/asm-test/blob/main/packaging/vcpkg/ports/asmtest/) |
+| Conan | `conan create packaging/conan/recipes/asmtest/all --version=1.1.0` | [`packaging/conan/recipes/asmtest/`](https://github.com/wilvk/asm-test/blob/main/packaging/conan/recipes/asmtest/) |
+
+Each package installs the same layout `make install` does, so a consumer builds
+against it with `pkg-config --cflags --libs asmtest`. The submission runbook for
+maintainers is in [releasing.md](../reference/releasing.md#system-packages).
+
 ## Build and run the bundled suites
 
 ```sh

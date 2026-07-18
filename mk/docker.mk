@@ -776,3 +776,9 @@ docker-syspkg-conan: syspkg-stage
 	  -t asmtest-syspkg-conan .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-syspkg-conan
 
+# T13 — aggregate: prove all five system packagings in one command (serial). The
+# `syspkg` CI job in .github/workflows/ci.yml runs the five lanes as a matrix.
+.PHONY: docker-syspkg
+docker-syspkg: docker-syspkg-brew docker-syspkg-deb docker-syspkg-aur \
+               docker-syspkg-vcpkg docker-syspkg-conan
+

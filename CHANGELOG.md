@@ -8,6 +8,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **System-package specs for the C core — Homebrew, Debian, AUR, vcpkg and Conan —
+  each built, installed and consumed in a Docker CI lane.** `packaging/` now holds a
+  Homebrew formula, a Debian `libasmtest-dev` source package, an AUR `PKGBUILD` +
+  `.SRCINFO`, a vcpkg overlay port and a Conan 2 recipe for the MIT static core (lib
+  + headers + `asmtest.pc`; the GPL engines stay in the dlopen binding packages only,
+  never here). `make docker-syspkg` runs all five lanes and an additive `syspkg` CI
+  job runs them as a matrix — each builds the package, runs its native linter
+  (`brew audit`/`style`, `lintian`, `namcap`, vcpkg post-build validation), installs
+  it, and compiles a pkg-config/CMake consumer against it. The lanes are hermetic on
+  the reproducible `make package-source` tarball; per-manager index publication is a
+  maintainer step (runbook in
+  [releasing.md](https://github.com/wilvk/asm-test/blob/main/docs/reference/releasing.md#system-packages)).
+  See [distribution-packaging.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/distribution-packaging.md).
+
 - **Whole-window Intel PT STRONG tier wired behind the empty-ctor scope, with a runtime
   WEAK/STRONG decode-trust ladder.** `asmtest_hwtrace_begin_window`/`_end_window`
   (`src/hwtrace.c`) now arm and drain a real region-free Intel PT capture on an inited
