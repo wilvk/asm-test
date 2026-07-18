@@ -1680,10 +1680,12 @@ decided:
 }
 
 /* Record the straight-line run [from_off, term_off] into `stream`. Every instruction is
- * in-region by construction here (the region form's snapshot IS the region). */
+ * in-region by construction here (the region form's snapshot IS the region). Sets
+ * *rep_out (may be NULL) if any recorded instruction is a `rep`-prefixed string op — it
+ * retires N times but is recorded ONCE, so the caller must mark the capture truncated. */
 static int bs_record_run(const uint8_t *code, size_t len, uint64_t from_off,
                          uint64_t term_off, uint64_t *stream, uint32_t *pn,
-                         uint64_t *last_off) {
+                         uint64_t *last_off, int *rep_out) {
     uint64_t walk = from_off;
     for (size_t guard = 0; guard <= len; guard++) {
         if (walk >= len || walk > term_off)
@@ -1692,6 +1694,9 @@ static int bs_record_run(const uint8_t *code, size_t len, uint64_t from_off,
             return 0; /* stream full */
         stream[(*pn)++] = walk;
         *last_off = walk;
+        if (rep_out != NULL &&
+            asmtest_disas_is_rep_string(PTRACE_TRACE_ARCH, code, len, walk))
+            *rep_out = 1;
         size_t l =
             asmtest_disas(PTRACE_TRACE_ARCH, code, len, 0, walk, NULL, 0);
         if (l == 0)
@@ -1715,8 +1720,14 @@ static int blockstep_reconstruct(const uint8_t *code, size_t len,
     int r = bs_scan_terminator(code, len, base_ip, from_off, next_pc, &term);
     if (r == BS_FAIL)
         return BS_FAIL;
-    if (!bs_record_run(code, len, from_off, term, stream, pn, last_off))
+    int rep = 0;
+    if (!bs_record_run(code, len, from_off, term, stream, pn, last_off, &rep))
         return BS_FAIL;
+    /* A rep-prefixed string op retires N times but was recorded ONCE: the stream can
+     * no longer be byte-identical to per-instruction stepping, so downgrade an
+     * otherwise-clean block to AMBIGUOUS (the caller marks truncated, keeps tracing). */
+    if (rep && r == BS_OK)
+        r = BS_AMBIGUOUS;
     return r;
 }
 
@@ -2449,6 +2460,7 @@ static int window_block_walk(foreign_bytes_t *fb, int at_mode, uint64_t from_pc,
     }
     /* Record [from_pc, term] — every instruction of it definitely executed. */
     uint64_t walk = from_pc;
+    int rep = 0;
     for (uint32_t guard = 0; guard < PTRACE_BLOCK_WALK_CAP; guard++) {
         if (walk > term)
             return BS_FAIL; /* walked past the terminator: desynced */
@@ -2463,9 +2475,13 @@ static int window_block_walk(foreign_bytes_t *fb, int at_mode, uint64_t from_pc,
             if (*pn >= PTRACE_STREAM_CAP)
                 return BS_FAIL; /* stream full */
             stream[(*pn)++] = walk;
+            /* A recorded rep-prefixed string op retires N times but appears ONCE, so
+             * the reconstructed stream can no longer be byte-identical -> truncate. */
+            if (asmtest_disas_is_rep_string(PTRACE_TRACE_ARCH, p, avail, 0))
+                rep = 1;
         }
         if (walk == term)
-            return r; /* BS_OK, or BS_AMBIGUOUS with the definite prefix recorded */
+            return (rep && r == BS_OK) ? BS_AMBIGUOUS : r;
         walk += l;
     }
     return BS_FAIL; /* the walk ceiling */

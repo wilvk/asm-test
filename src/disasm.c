@@ -259,6 +259,52 @@ int asmtest_disas_is_branch(asmtest_arch_t arch, const uint8_t *code,
 #endif
 }
 
+/* 1 if the instruction at `code+off` carries a REP/REPE/REPNE prefix — a `rep`-prefixed
+ * string op (movs/stos/lods/cmps/scas) that retires N times under TF single-step (RIP
+ * parks on it per iteration) but a static block-step reconstructor records exactly ONCE.
+ * The block-step drivers use this to mark the capture truncated rather than silently
+ * diverge from the per-instruction stream. x86 only; 0 otherwise, off x86, or without
+ * Capstone. */
+int asmtest_disas_is_rep_string(asmtest_arch_t arch, const uint8_t *code,
+                                size_t code_len, uint64_t off) {
+#ifdef ASMTEST_HAVE_CAPSTONE
+    if (code == NULL || off >= code_len)
+        return 0;
+    cs_arch a;
+    cs_mode m;
+    if (!cs_target(arch, &a, &m))
+        return 0;
+    if (a != CS_ARCH_X86)
+        return 0; /* the REP prefix is an x86 concept */
+    csh h;
+    if (cs_open(a, m, &h) != CS_ERR_OK)
+        return 0;
+    cs_option(h, CS_OPT_DETAIL, CS_OPT_ON); /* prefix[] needs detail mode */
+    cs_insn *insn = NULL;
+    size_t count =
+        cs_disasm(h, code + off, code_len - (size_t)off, off, 1, &insn);
+    int is_rep = 0;
+    if (count > 0) {
+        if (insn[0].detail != NULL) {
+            uint8_t p = insn[0].detail->x86.prefix[0];
+            is_rep = (p == X86_PREFIX_REP || p == X86_PREFIX_REPE ||
+                      p == X86_PREFIX_REPNE)
+                         ? 1
+                         : 0;
+        }
+        cs_free(insn, count);
+    }
+    cs_close(&h);
+    return is_rep;
+#else
+    (void)arch;
+    (void)code;
+    (void)code_len;
+    (void)off;
+    return 0;
+#endif
+}
+
 /* 1 if the instruction at `code+off` is a RETURN (x86 `ret`/`retf`; AArch64 `ret`) — the
  * Capstone CS_GRP_RET group, the third term of the call-descent pop predicate. 0
  * otherwise, or always when built without Capstone. Mirrors asmtest_disas_is_call. */

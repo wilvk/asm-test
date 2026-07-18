@@ -993,6 +993,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `make install` + `cc -fsyntax-only` against every guide-referenced header)
   so this omission class cannot silently recur.
 
+- **The ptrace block-step reconstructors now mark the capture truncated when a
+  block contains a `rep`-prefixed string op.** A `rep movs/stos/…` retires once
+  per iteration under per-instruction stepping (RIP parks on it) but a static
+  block-step reconstructor records it exactly once, so the block-step stream
+  silently under-counted it. New `asmtest_disas_is_rep_string` lets
+  `bs_record_run` and `window_block_walk` downgrade such a block to
+  `BS_AMBIGUOUS` (honest truncation), bounding the "byte-identical to
+  per-instruction stepping" promise accordingly.
+
 - **The ptrace block-step reconstructors no longer record never-executed
   instructions when the traced code contains an application `int3`.** A JVM
   safepoint poll or .NET breakpoint inside a block-stepped region was misread as

@@ -2,6 +2,8 @@
 
 **Defect 1 (application `int3`): Status FIXED (T1, [ptrace-blockstep-tracer-correctness.md](../implementations/ptrace-blockstep-tracer-correctness.md))** in the region + attached block-step drivers — an app int3 is now recorded up to the trap byte, marked truncated, and the signal forwarded (region: PTRACE_CONT; attached: left in the delivery-stop). The windowed driver's leg co-lands with T2.**
 
+**Defect 2 (`rep`-prefixed string ops): Status FIXED (T3, same doc)** — `bs_record_run` and `window_block_walk` now detect a `rep`-prefixed string op (via `asmtest_disas_is_rep_string`) and downgrade the block to BS_AMBIGUOUS, so the capture is honestly truncated instead of silently recording the op once where per-instruction stepping records it N times.**
+
 **Status (below is the original filing): OPEN. Both are real, both reproduce against shipped `main` code, neither is fixed.**
 Filed so they are not lost: they were found while adversarially reviewing the W-1 windowed
 block-step driver, and were deliberately left out of that change because they are **not**

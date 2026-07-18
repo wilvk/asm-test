@@ -109,7 +109,9 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
  * .NET breakpoint) is recorded up to and including the trap byte, the capture is marked
  * truncated (BTF cannot bridge the kernel-injected transfer into the handler), and the
  * signal is forwarded to the tracee via PTRACE_CONT — so the app's own breakpoint
- * semantics proceed. */
+ * semantics proceed. REP STRING OPS: a `rep`-prefixed string op retires N times but
+ * appears ONCE in the reconstruction, so the capture is marked truncated (the
+ * per-instruction entry records it once per iteration). */
 int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
                                         const long *args, int nargs,
                                         long *result, asmtest_trace_t *trace);
@@ -131,6 +133,9 @@ int asmtest_ptrace_blockstep_available(void);
  * its SIGTRAP signal-delivery stop for the caller (never killed) — a caller that wants
  * the target's own breakpoint semantics to proceed detaches with
  * PTRACE_DETACH(pid, 0, SIGTRAP).
+ * REP STRING OPS: a `rep`-prefixed string op retires N times but appears ONCE in the
+ * reconstruction, so the capture is marked truncated (the per-instruction entry records
+ * it once per iteration).
  * Probe with asmtest_ptrace_blockstep_available; ENOSYS where block-step cannot run. */
 int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
                                             size_t len, long *result,
@@ -180,7 +185,10 @@ int asmtest_ptrace_trace_attached_window_stop(pid_t pid,
  * driver reconstructs the block that was interrupted (up to and including the stop PC)
  * and then hands the REST of the window to the per-instruction loop, which is exact
  * across signals. The capture therefore stays byte-identical to the per-instruction
- * entry; only the block-step cost saving stops at the window's first signal. */
+ * entry; only the block-step cost saving stops at the window's first signal.
+ * REP STRING OPS: a recorded `rep`-prefixed string op retires N times but appears ONCE,
+ * so the capture is marked truncated (the per-instruction entry records it per
+ * iteration). */
 int asmtest_ptrace_trace_attached_windowed_blockstep(
     pid_t pid, const void *win_base, size_t win_len,
     asmtest_addr_channel_t *chan, long *result, asmtest_trace_t *trace);

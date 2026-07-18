@@ -4154,6 +4154,63 @@ static void test_ptrace_blockstep(void) {
         asmtest_trace_free(ib);
         munmap(ip, sizeof INT3_X86);
     }
+
+    /* --- rep-prefix (T3): a rep string op retires N times but block-step records it
+     * ONCE, so the capture must be marked truncated (not silently diverge). Pure unit
+     * check first, then a differential. mov rcx,8; xor eax,eax; rep stosq; mov rax,rcx;
+     * ret. rdi (arg0) is a scratch buffer the stosq fills. --- */
+    static const unsigned char REP_X86[] = {0x48, 0xc7, 0xc1, 0x08, 0x00, 0x00,
+                                            0x00, 0x31, 0xc0, 0xf3, 0x48, 0xab,
+                                            0x48, 0x89, 0xc8, 0xc3};
+    CHECK(asmtest_disas_is_rep_string(ASMTEST_ARCH_X86_64, REP_X86,
+                                      sizeof REP_X86, 0x09),
+          "disas: rep stosq (F3 48 AB) is a rep string op");
+    CHECK(!asmtest_disas_is_rep_string(ASMTEST_ARCH_X86_64, REP_X86,
+                                       sizeof REP_X86, 0x00),
+          "disas: plain mov is not a rep string op");
+    CHECK(!asmtest_disas_is_rep_string(ASMTEST_ARCH_X86_64, REP_X86,
+                                       sizeof REP_X86, 0x0f),
+          "disas: ret is not a rep string op");
+    void *rp = mmap(NULL, sizeof REP_X86, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    void *scratch = mmap(NULL, 128, PROT_READ | PROT_WRITE,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (rp != MAP_FAILED && scratch != MAP_FAILED) {
+        memcpy(rp, REP_X86, sizeof REP_X86);
+        mprotect(rp, sizeof REP_X86, PROT_READ | PROT_EXEC);
+        __builtin___clear_cache((char *)rp, (char *)rp + sizeof REP_X86);
+        asmtest_trace_t *rss = asmtest_trace_new(64, 64);
+        long rargs[1] = {(long)(intptr_t)scratch}, rss_res = 0;
+        asmtest_ptrace_trace_call(rp, sizeof REP_X86, rargs, 1, &rss_res, rss);
+        asmtest_trace_t *rbs = asmtest_trace_new(64, 64);
+        long rbs_res = 0;
+        int rrc = asmtest_ptrace_trace_call_blockstep(rp, sizeof REP_X86, rargs,
+                                                      1, &rbs_res, rbs);
+        int ss_rep = 0, bs_rep = 0;
+        for (unsigned long long i = 0; i < asmtest_emu_trace_insns_len(rss);
+             i++)
+            if (rss->insns[i] == 0x09)
+                ss_rep++;
+        for (unsigned long long i = 0; i < asmtest_emu_trace_insns_len(rbs);
+             i++)
+            if (rbs->insns[i] == 0x09)
+                bs_rep++;
+        CHECK(ss_rep == 8, "block-step rep: single-step parks on rep stosq 8 "
+                           "times (rcx=8, the real asymmetry)");
+        CHECK(rrc == ASMTEST_PTRACE_OK && bs_rep == 1,
+              "block-step rep: block-step records the rep stosq exactly once");
+        CHECK(
+            asmtest_emu_trace_truncated(rbs),
+            "block-step rep: a rep string op truncates the block-step capture");
+        CHECK(rss_res == 0,
+              "block-step rep: single-step computes rcx=0 after the rep");
+        asmtest_trace_free(rss);
+        asmtest_trace_free(rbs);
+    }
+    if (rp != MAP_FAILED)
+        munmap(rp, sizeof REP_X86);
+    if (scratch != MAP_FAILED)
+        munmap(scratch, 128);
 #else
     printf("# SKIP ptrace block-step: Linux x86-64 only (no AArch64 "
            "PTRACE_SINGLEBLOCK)\n");

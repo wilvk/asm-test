@@ -589,8 +589,11 @@ only ever compiles *user* JS, which the `hwtrace-jit` lane already covers.
 Both BCL lanes disassemble what they trace. `Console.WriteLine(string)` is a thin wrapper — its
 body is just `Out.WriteLine(value)` — so the 16 recovered instructions are dominated by the two
 call-outs the tracer steps **over**: `get_Out` at `0xb` and the virtual `TextWriter.WriteLine`
-at `0x1e`. This is the literal output of `make docker-hwtrace-jit-dotnet-bcl` (addresses are
-from one run; they vary with ASLR):
+at `0x1e`. Block-step reconstruction is byte-identical to per-instruction stepping with one
+honest exception: a `rep`-prefixed string op retires once per iteration but is reconstructed
+**once**, so a block containing one is marked **truncated** rather than silently under-counted
+(the per-instruction path records it per iteration). This is the literal output of
+`make docker-hwtrace-jit-dotnet-bcl` (addresses are from one run; they vary with ASLR):
 
 ```
 # resolved real CoreCLR-BCL JIT method: 'void [System.Console] System.Console::WriteLine(string)[Optimized]' @ 0x7f8560b55a20 (41 bytes, tier 2)

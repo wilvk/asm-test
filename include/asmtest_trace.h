@@ -199,6 +199,13 @@ int asmtest_disas_is_call(asmtest_arch_t arch, const uint8_t *code,
 int asmtest_disas_is_branch(asmtest_arch_t arch, const uint8_t *code,
                             size_t code_len, uint64_t off);
 
+/* 1 if the instruction at code[off] carries a REP/REPE/REPNE prefix (a `rep`-prefixed
+ * string op that retires N times under TF single-step but block-step records once). The
+ * block-step reconstructors use it to mark the capture truncated instead of silently
+ * diverging. x86 only; 0 otherwise, off x86, and always 0 without Capstone. */
+int asmtest_disas_is_rep_string(asmtest_arch_t arch, const uint8_t *code,
+                                size_t code_len, uint64_t off);
+
 /* 1 if the instruction at code[off] is a RETURN (x86 `ret`/`retf`; AArch64 `ret`) — the
  * Capstone CS_GRP_RET group. The call-descent shadow stack uses it as the third term of
  * the exact pop predicate (PC == ret_addr AND SP == sp_at_call AND the just-stepped insn
