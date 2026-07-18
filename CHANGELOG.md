@@ -950,6 +950,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     require Zen 3 / Zen 2 silicon the dev box lacks, and the project does not ship
     hardware code it cannot self-validate.
 
+- **Docker-OSX clean-room lane (Track D): containerized `sshpass`, repointed at surviving
+  upstream tags.** New `Dockerfile.sshpass` + `make docker-sshpass` build a small
+  `asmtest-sshpass` image; `scripts/docker-osx-bindings.sh` now runs every ssh/scp-equivalent
+  call through it instead of requiring a host `sshpass` install (and the `sudo` that would
+  need), per CLAUDE.md's "add it where the work runs" rule. Separately, `sickcodes/docker-osx`
+  deleted every tag but `:latest`/`:master` from Docker Hub in 2024 (`:ventura` and friends now
+  404) — `DOCKER_OSX_IMAGE` defaults to `:latest`, and the script gained `DOCKER_OSX_DISK`
+  support (`-v <disk>:/image -e IMAGE_PATH=/image`) plus a one-time-install recipe in its
+  header, since a virgin `:latest` boots the macOS installer rather than a headless system.
+  See [macos-cleanroom-lanes.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/macos-cleanroom-lanes.md).
+
 ### Changed
 
 - **Internal plan docs reconciled against the code; four completed plans archived.** An audit

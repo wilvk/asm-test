@@ -672,6 +672,14 @@ docker-hwtrace-dotnet-stress: docker-dotnet
 # + Capstone, so each per-language image exercises the in-line-assembler AND
 # disassembler path under `make <lang>-test` — there is no separate asm image.
 
+# sshpass client image for the Docker-OSX lane — see Dockerfile.sshpass. Keeps
+# the lane's ssh/scp calls off a host sshpass install (which would need sudo).
+.PHONY: docker-sshpass
+docker-sshpass:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.sshpass \
+	  --build-arg BASE=$(DOCKER_BASE) -t asmtest-sshpass .
+	$(DOCKER) run --rm asmtest-sshpass sshpass -V | head -1
+
 # --- Track D: Docker-OSX x86 macOS clean room (macOS clean-room plan) --------
 # On-demand x86-64 macOS clean room on a bare-metal Linux host with KVM — the
 # vanilla-Intel-userland counterpart of the tart lane (Track C / osx-vm-test).
@@ -681,9 +689,13 @@ docker-hwtrace-dotnet-stress: docker-dotnet
 # hosted CI runners and most laptops don't have it, by design.
 # WRITTEN PER docs/internal/plans/macos-clean-test-plan.md, NOT YET VALIDATED — authored
 # without a KVM-capable bare-metal host; see docs/clean-room-testing.md.
-DOCKER_OSX_IMAGE ?= sickcodes/docker-osx:ventura
+# Upstream note (verified 2026-07-17): sickcodes/docker-osx tags other than
+# :latest/:master were deleted from Docker Hub in 2024 — :ventura et al. 404.
+# :latest's first boot is an interactive macOS installer, so headless runs need
+# a prebuilt disk via DOCKER_OSX_DISK (see scripts/docker-osx-bindings.sh).
+DOCKER_OSX_IMAGE ?= sickcodes/docker-osx:latest
 .PHONY: docker-osx-bindings
-docker-osx-bindings:
+docker-osx-bindings: docker-sshpass
 	@[ -e /dev/kvm ] || { \
 	  echo "docker-osx-bindings: /dev/kvm absent — needs a bare-metal Linux host with KVM (hosted CI/laptops: unsupported by design; see docs/clean-room-testing.md)"; \
 	  exit 1; }

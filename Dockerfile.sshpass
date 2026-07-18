@@ -1,0 +1,13 @@
+# Dockerfile.sshpass — tiny ssh client image for the Docker-OSX clean-room
+# lane (Track D of docs/internal/plans/macos-clean-test-plan.md). The lane's
+# guest uses password auth, and per CLAUDE.md a missing installable
+# dependency is containerized, not demanded of the host — so the lane's
+# ssh calls run through this image instead of a host sshpass (which would
+# need sudo to install). Version pinned to noble's package; re-check the
+# exact string on a distro point-rebuild (e.g. 1.09-1build1).
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends sshpass=1.09-1 openssh-client \
+ && rm -rf /var/lib/apt/lists/*

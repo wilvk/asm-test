@@ -27,30 +27,67 @@
 # and the guest runs clean-room-test.sh with ASMTEST_CLEANROOM_PREBUILT=1.
 #
 # Requirements (host side): bare-metal Linux with /dev/kvm (hosted CI runners
-# do not expose nested KVM — the make target hard-errors there by design),
-# docker, sshpass. First boot of a fresh image can take tens of minutes.
+# do not expose nested KVM — the make target hard-errors there by design) and
+# docker. sshpass runs containerized (`make docker-sshpass`, Dockerfile.sshpass)
+# — no host sshpass/sudo needed. First boot of a fresh image can take tens of
+# minutes.
+#
+# Image tags (verified 2026-07-17): sickcodes/docker-osx's Docker Hub repo was
+# emptied ~2024-08-28 and only `latest`/`master` were re-pushed since — every
+# other tag (:ventura, :auto, :sonoma, :sequoia, :naked, ...) 404s. `:latest`'s
+# CMD downloads the Sequoia recovery/installer on first boot — a fresh install
+# needing one interactive session — so a HEADLESS run needs a prebuilt disk via
+# DOCKER_OSX_DISK (below); without it this script prints a warning and the boot
+# will very likely time out waiting for sshd.
+#
+# One-time interactive install (produces the reusable disk DOCKER_OSX_DISK
+# points at — budget hours and tens of GB free; do this once per host):
+#   docker run -it --name asmtest-osx-install --device /dev/kvm -p 50922:10022 \
+#     -v /tmp/.X11-unix:/tmp/.X11-unix -e "DISPLAY=${DISPLAY:-:0.0}" \
+#     -e GENERATE_UNIQUE=true sickcodes/docker-osx:latest
+#   # In the QEMU window: boot the recovery, Disk Utility -> erase the largest
+#   # virtio disk (APFS), install macOS, create the account `user`/`alpine`
+#   # (matches this script's defaults — anything else needs ASMTEST_OSX_USER/
+#   # ASMTEST_OSX_PASS), then System Settings -> General -> Sharing -> Remote
+#   # Login ON. Shut the guest down cleanly, then:
+#   docker cp asmtest-osx-install:/home/arch/OSX-KVM/mac_hdd_ng.img ./mac_hdd_ng.img
+#   docker rm -f asmtest-osx-install
+#   # (if that path is absent: `docker exec asmtest-osx-install find / -name
+#   # 'mac_hdd_ng*.img'`). The mount convention below (`-v <disk>:/image -e
+#   # IMAGE_PATH=/image`) is the long-standing Docker-OSX reuse flow; whether
+#   # the current :latest Launch.sh honors an overridden IMAGE_PATH is
+#   # shakedown-verified on the first real headless run, not pre-verified here
+#   # — if it is not honored, build Dockerfile.naked from the upstream repo at
+#   # a recorded commit as a fallback and note that commit here.
 #
 # Usage: scripts/docker-osx-bindings.sh    (or `make docker-osx-bindings`)
-#   DOCKER_OSX_IMAGE   guest image     (default: sickcodes/docker-osx:ventura)
-#   ASMTEST_OSX_USER / ASMTEST_OSX_PASS  guest credentials (Docker-OSX default: user/alpine)
+#   DOCKER_OSX_IMAGE   guest image     (default: sickcodes/docker-osx:latest)
+#   DOCKER_OSX_DISK    prebuilt mac_hdd_ng.img from the one-time install above
+#                      (unset: virgin :latest boots the installer, not headless)
+#   ASMTEST_OSX_USER / ASMTEST_OSX_PASS  guest credentials — only meaningful if
+#                      that account was created during the one-time install
+#                      above (Docker-OSX's historical user/alpine defaults
+#                      belonged to a now-dead prebuilt image, not :latest)
 #   ASMTEST_OSX_BOOT_TRIES  sshd wait attempts, 10 s apart (default: 180)
 set -eu
 
 prog=$(basename "$0")
 REPO=${ASMTEST_REPO_ROOT:-$(pwd)}
 REPO=$(cd "$REPO" && pwd -P)
-IMG=${DOCKER_OSX_IMAGE:-sickcodes/docker-osx:ventura}
+IMG=${DOCKER_OSX_IMAGE:-sickcodes/docker-osx:latest}
+DISK=${DOCKER_OSX_DISK:-}
 GUSER=${ASMTEST_OSX_USER:-user}
 GPASS=${ASMTEST_OSX_PASS:-alpine}
 TRIES=${ASMTEST_OSX_BOOT_TRIES:-180}
 NAME=asmtest-docker-osx
+SSHPASS_IMG=${ASMTEST_SSHPASS_IMAGE:-asmtest-sshpass}
 
 # HAVE_KVM guard (also enforced by the make target, with a friendlier message).
 [ -e /dev/kvm ] || {
     echo "$prog: /dev/kvm absent — this lane needs bare-metal Linux with KVM" >&2; exit 1; }
 command -v docker >/dev/null 2>&1 || { echo "$prog: docker not found" >&2; exit 1; }
-command -v sshpass >/dev/null 2>&1 || {
-    echo "$prog: sshpass not found (the guest uses password auth) — apt-get install sshpass" >&2; exit 1; }
+docker image inspect "$SSHPASS_IMG" >/dev/null 2>&1 || {
+    echo "$prog: sshpass image '$SSHPASS_IMG' not built — run 'make docker-sshpass'" >&2; exit 1; }
 
 # The guest installs prebuilt packages only; it needs the darwin-x86_64 slot.
 [ -f "$REPO/build/dist/native/darwin-x86_64/libasmtest_emu.dylib" ] || {
@@ -61,16 +98,21 @@ command -v sshpass >/dev/null 2>&1 || {
 
 echo "$prog: booting $IMG headless (SSH forwarded to localhost:50922)"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
-docker run -d --name "$NAME" \
-    --device /dev/kvm \
-    -p 50922:10022 \
-    -e NOPICKER=true \
-    -e GENERATE_UNIQUE=true \
-    "$IMG" >/dev/null
+set -- -d --name "$NAME" --device /dev/kvm -p 50922:10022 \
+    -e NOPICKER=true -e GENERATE_UNIQUE=true
+if [ -n "$DISK" ]; then
+    [ -f "$DISK" ] || { echo "$prog: DOCKER_OSX_DISK '$DISK' not found" >&2; exit 1; }
+    set -- "$@" -v "$DISK:/image" -e IMAGE_PATH=/image
+else
+    echo "$prog: WARNING no DOCKER_OSX_DISK — a virgin $IMG boots the macOS *installer*," >&2
+    echo "$prog: which needs one interactive session first; headless sshd will likely time out." >&2
+fi
+docker run "$@" "$IMG" >/dev/null
 trap 'docker rm -f "$NAME" >/dev/null 2>&1 || true' EXIT INT TERM
 
 ssh_g() {
-    sshpass -p "$GPASS" ssh -p 50922 \
+    docker run --rm -i --network host -e SSHPASS="$GPASS" "$SSHPASS_IMG" \
+        sshpass -e ssh -p 50922 \
         -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
         -o LogLevel=ERROR "$GUSER@localhost" "$@"
 }

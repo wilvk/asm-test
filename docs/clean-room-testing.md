@@ -103,7 +103,7 @@ authored), so treat a first run as a shakedown:
 | Lane | Target | Host needed | Entry point |
 |---|---|---|---|
 | **Track C** — tart ephemeral VM | vanilla **arm64** macOS (no Xcode, no brew) | Apple Silicon + [tart](https://github.com/cirruslabs/tart) + sshpass | `make osx-vm-test` ([`scripts/osx-vm.sh`](https://github.com/wilvk/asm-test/blob/main/scripts/osx-vm.sh)) |
-| **Track D** — Docker-OSX | vanilla **x86-64** macOS userland | bare-metal Linux + `/dev/kvm` + sshpass | `make docker-osx-bindings` ([`scripts/docker-osx-bindings.sh`](https://github.com/wilvk/asm-test/blob/main/scripts/docker-osx-bindings.sh)) |
+| **Track D** — Docker-OSX | vanilla **x86-64** macOS userland | bare-metal Linux + `/dev/kvm` + docker | `make docker-osx-bindings` ([`scripts/docker-osx-bindings.sh`](https://github.com/wilvk/asm-test/blob/main/scripts/docker-osx-bindings.sh)) |
 
 Both lanes copy the working tree — with **host-staged** packages (`make
 packages package-libs`; the guests are toolchain-free on purpose) — into the
@@ -114,6 +114,18 @@ that is the expected shape of a green run.
 
 Notes the plan calls out:
 
+- **Track D's ssh client is containerized**: `make docker-osx-bindings` builds
+  a small `asmtest-sshpass` image (`Dockerfile.sshpass`, `make docker-sshpass`)
+  and runs every ssh/scp-equivalent call through it — no host `sshpass`
+  install (and the `sudo` that would need) is required.
+- **Track D's guest image**: `sickcodes/docker-osx`'s Docker Hub tags other
+  than `:latest`/`:master` were deleted upstream in 2024 (`:ventura` et al.
+  404); this lane now defaults to `:latest`. Its first boot is an interactive
+  macOS installer, so a headless `docker-osx-bindings` run needs a **prebuilt
+  disk** via `DOCKER_OSX_DISK` (see the one-time-install recipe in
+  [`scripts/docker-osx-bindings.sh`](https://github.com/wilvk/asm-test/blob/main/scripts/docker-osx-bindings.sh)'s
+  header) — without it the script prints a warning and the boot will very
+  likely time out waiting for sshd.
 - **EULA**: macOS's license permits up to 2 macOS VMs **on Apple hardware**, so
   tart-on-Mac (Track C) is above board; Docker-OSX on non-Apple hosts
   (Track D) is EULA-gray — it is an opt-in, self-hosted-only lane.
