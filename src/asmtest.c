@@ -505,7 +505,17 @@ int asmtest_cpu_has_avx512f(void) { return 0; }
 /* ------------------------------------------------------------------ */
 #if !defined(_WIN32)
 
+/* Returns 0 (never a valid usable size) if rounding n up to a page boundary
+ * would wrap: n > SIZE_MAX - 2*pg leaves no room for the two-page total a
+ * caller builds from the result (the usable region plus a guard page) --
+ * conservative, since no such allocation could ever succeed anyway. Without
+ * this, n within a page of SIZE_MAX wrapped `n + pg - 1`, usable collapsed to
+ * pg via the `== 0` fallback below, the (small) 2-page mmap succeeded, and
+ * `base + (usable - n)` in the callers wrapped to a pointer inside the
+ * PROT_NONE guard page instead of failing. */
 static size_t round_up_page(size_t n, long pg) {
+    if (n > SIZE_MAX - 2 * (size_t)pg)
+        return 0;
     size_t usable = ((n + (size_t)pg - 1) / (size_t)pg) * (size_t)pg;
     return usable == 0 ? (size_t)pg : usable;
 }
@@ -513,6 +523,8 @@ static size_t round_up_page(size_t n, long pg) {
 void *asmtest_guarded_alloc(size_t n) {
     long pg = sysconf(_SC_PAGESIZE);
     size_t usable = round_up_page(n, pg);
+    if (usable == 0)
+        return NULL;
     size_t total = usable + (size_t)pg;
     unsigned char *base = mmap(NULL, total, PROT_READ | PROT_WRITE,
                                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -531,6 +543,8 @@ void asmtest_guarded_free(void *p, size_t n) {
         return;
     long pg = sysconf(_SC_PAGESIZE);
     size_t usable = round_up_page(n, pg);
+    if (usable == 0) /* a wrapped size can never have been allocated */
+        return;
     unsigned char *base = (unsigned char *)p - (usable - n);
     munmap(base, usable + (size_t)pg);
 }
@@ -538,6 +552,8 @@ void asmtest_guarded_free(void *p, size_t n) {
 void *asmtest_guarded_alloc_under(size_t n) {
     long pg = sysconf(_SC_PAGESIZE);
     size_t usable = round_up_page(n, pg);
+    if (usable == 0)
+        return NULL;
     size_t total = (size_t)pg + usable;
     unsigned char *base = mmap(NULL, total, PROT_READ | PROT_WRITE,
                                MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -556,6 +572,8 @@ void asmtest_guarded_free_under(void *p, size_t n) {
         return;
     long pg = sysconf(_SC_PAGESIZE);
     size_t usable = round_up_page(n, pg);
+    if (usable == 0) /* a wrapped size can never have been allocated */
+        return;
     unsigned char *base = (unsigned char *)p - (size_t)pg;
     munmap(base, (size_t)pg + usable);
 }

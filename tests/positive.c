@@ -171,6 +171,18 @@ TEST(posit, rng_range_narrow_in_bounds) {
     ASSERT_TRUE(seen_lo && seen_hi);
 }
 
+/* ---- Guard-page allocator ---- */
+
+/* A size within a page of SIZE_MAX makes round_up_page's `n + pg - 1` wrap;
+ * pre-fix this collapsed to a small, successful 2-page mmap and handed back a
+ * pointer inside the PROT_NONE guard page instead of failing (any dereference
+ * faults). Post-fix the allocators reject it outright. */
+TEST(posit, guarded_alloc_rejects_size_overflow) {
+    ASSERT_TRUE(asmtest_guarded_alloc((size_t)-1) == NULL);
+    ASSERT_TRUE(asmtest_guarded_alloc((size_t)-4096) == NULL);
+    ASSERT_TRUE(asmtest_guarded_alloc_under((size_t)-1) == NULL);
+}
+
 /* ---- SKIP ---- */
 
 TEST(posit, skip_reports) {

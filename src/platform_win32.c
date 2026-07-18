@@ -18,6 +18,7 @@
 #if defined(_WIN32)
 
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <windows.h>
 
@@ -30,7 +31,12 @@ static size_t win32_page_size(void) {
     return (size_t)si.dwPageSize;
 }
 
+/* Returns 0 (never a valid usable size) if rounding n up to a page boundary
+ * would wrap -- see the POSIX twin in src/asmtest.c for the full rationale;
+ * same fix, same reasoning, ported 1:1. */
 static size_t round_up_page(size_t n, size_t pg) {
+    if (n > SIZE_MAX - 2 * pg)
+        return 0;
     size_t usable = ((n + pg - 1) / pg) * pg;
     return usable == 0 ? pg : usable;
 }
@@ -40,6 +46,8 @@ static size_t round_up_page(size_t n, size_t pg) {
 void *asmtest_guarded_alloc(size_t n) {
     size_t pg = win32_page_size();
     size_t usable = round_up_page(n, pg);
+    if (usable == 0)
+        return NULL;
     size_t total = usable + pg;
     unsigned char *base = (unsigned char *)VirtualAlloc(
         NULL, total, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
@@ -59,6 +67,8 @@ void asmtest_guarded_free(void *p, size_t n) {
         return;
     size_t pg = win32_page_size();
     size_t usable = round_up_page(n, pg);
+    if (usable == 0) /* a wrapped size can never have been allocated */
+        return;
     unsigned char *base = (unsigned char *)p - (usable - n);
     VirtualFree(base, 0, MEM_RELEASE); /* releases the whole reservation */
 }
@@ -68,6 +78,8 @@ void asmtest_guarded_free(void *p, size_t n) {
 void *asmtest_guarded_alloc_under(size_t n) {
     size_t pg = win32_page_size();
     size_t usable = round_up_page(n, pg);
+    if (usable == 0)
+        return NULL;
     size_t total = pg + usable;
     unsigned char *base = (unsigned char *)VirtualAlloc(
         NULL, total, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);

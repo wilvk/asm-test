@@ -68,6 +68,16 @@ int main(void) {
         asmtest_guarded_free_under(u, n);
     }
 
+    /* A size within a page of SIZE_MAX makes round_up_page's rounding wrap;
+     * the allocators must reject it instead of handing back a pointer inside
+     * the guard page (code-review-plausible-triage T3). */
+    CHECK(asmtest_guarded_alloc((size_t)-1) == NULL,
+          "guarded_alloc rejects a size that overflows page rounding");
+    CHECK(asmtest_guarded_alloc((size_t)-4096) == NULL,
+          "guarded_alloc rejects a size within a page of SIZE_MAX");
+    CHECK(asmtest_guarded_alloc_under((size_t)-1) == NULL,
+          "guarded_alloc_under rejects a size that overflows page rounding");
+
     printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "PASSED", fails,
            fails == 1 ? "" : "s");
     return fails ? 1 : 0;
