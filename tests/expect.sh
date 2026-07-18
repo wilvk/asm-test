@@ -206,6 +206,12 @@ expect_fail_re "-j4 contains a crash" "$CRASH_RE" "$NEG" -j4 --timeout=1
 # Invalid job counts are rejected with the bad-CLI exit code.
 expect_exit "--jobs=0 exits 2" 2 "$POS" --jobs=0
 
+# A poll() failure degrades to blocking reaps: same results, no false greens.
+par_pf=$(ASMTEST_DEBUG_FAIL_POLL=1 "$POS" -j4 2>/dev/null | grep '^ok')
+if [ "$par_pf" = "$serial" ]; then ok "-j4 survives poll failure (degraded reaps)"; else bad "-j4 survives poll failure (degraded reaps)"; fi
+expect_contains "poll-failure warning printed" "falling back to blocking reaps" env ASMTEST_DEBUG_FAIL_POLL=1 "$POS" -j4
+expect_fail_msg "-j4 still fails honestly under poll failure" "ASSERT_EQ" env ASMTEST_DEBUG_FAIL_POLL=1 "$NEG" --jobs=4 --timeout=1
+
 # --format=junit emits a testsuites root, and a <failure> for a failing case.
 expect_contains "junit root element"  "<testsuites" "$POS" --format=junit
 expect_contains "junit failure element" "<failure"   "$NEG" --filter=neg.eq --format=junit

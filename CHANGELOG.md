@@ -1020,6 +1020,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- parallel runner (`-jN`): a non-EINTR `poll()` failure no longer abandons the
+  run and reports never-run tests as passed; the scheduler degrades to
+  blocking reaps.
+
 - **Cross-alias register def-use edges resolved.** `asmtest_defuse_build` (the
   shared, tier-neutral last-writer builder in `src/dataflow.c`) keyed its
   register axis on the raw Capstone id, so a write to one GP sub-register

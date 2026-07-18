@@ -1459,6 +1459,15 @@ static void run_parallel(asmtest_case_t **sel, test_result_t *results, int n,
 
     int next = 0; /* next test to launch */
     int done = 0; /* tests finalized so far */
+    /* poll() is only an efficiency layer over reading each child's pipe in
+     * slot order; a non-EINTR failure (e.g. ENOMEM under memory pressure)
+     * degrades to blocking reaps instead of abandoning the run with tests
+     * still unspawned — which main's pre-zeroed results[] plus ST_PASS == 0
+     * would otherwise report as false-green passes with NULL suite/name. */
+    int poll_ok = 1;
+    /* Internal test hook (not documented in --help): forces one simulated
+     * poll() failure so tests/expect.sh can exercise the degrade path. */
+    int inject = getenv("ASMTEST_DEBUG_FAIL_POLL") != NULL;
 
     while (done < n) {
         /* Fill every free slot with a pending test. */
@@ -1482,22 +1491,41 @@ static void run_parallel(asmtest_case_t **sel, test_result_t *results, int n,
         if (nready == 0)
             continue;
 
-        if (poll(pfds, (nfds_t)nready, -1) < 0) {
-            if (errno == EINTR)
-                continue;
-            break; /* unexpected; avoid spinning */
+        if (poll_ok) {
+            int rc;
+            if (inject) {
+                rc = -1;
+                errno = ENOMEM;
+                inject = 0;
+            } else {
+                rc = poll(pfds, (nfds_t)nready, -1);
+            }
+            if (rc < 0) {
+                if (errno == EINTR)
+                    continue;
+                fprintf(stderr,
+                        "asmtest: poll failed (%s); falling back to blocking "
+                        "reaps\n",
+                        strerror(errno));
+                poll_ok = 0;
+            }
         }
 
-        /* Reap any slot whose child has data or hung up. */
+        /* Reap any slot whose child has data or hung up. When poll_ok == 0,
+         * poll() itself is unusable this run: treat every in-flight slot as
+         * ready and let read_full block per child until it writes or dies —
+         * still correct, just serialized instead of parallel-drained. */
         for (int j = 0; j < jobs; j++) {
             if (slots[j].fd < 0)
                 continue;
-            short re = 0;
-            for (int k = 0; k < nready; k++)
-                if (pfds[k].fd == slots[j].fd)
-                    re = pfds[k].revents;
-            if (!(re & (POLLIN | POLLHUP | POLLERR)))
-                continue;
+            if (poll_ok) {
+                short re = 0;
+                for (int k = 0; k < nready; k++)
+                    if (pfds[k].fd == slots[j].fd)
+                        re = pfds[k].revents;
+                if (!(re & (POLLIN | POLLHUP | POLLERR)))
+                    continue;
+            }
 
             wire_result_t w;
             size_t got = read_full(slots[j].fd, &w, sizeof w);
