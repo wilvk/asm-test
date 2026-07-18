@@ -2052,7 +2052,12 @@ $(BUILD)/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
 # same Capstone length-decoder (disasm.o) for block normalization.
 $(BUILD)/ptrace_backend.o: src/ptrace_backend.c include/asmtest_ptrace.h \
                           include/asmtest_trace.h include/asmtest_codeimage.h \
-                          include/asmtest_descent_internal.h | $(BUILD)
+                          include/asmtest_descent_internal.h src/bs_recon.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+# Block-step terminator scanner + branch classifier (W3): shared by the ptrace
+# region/windowed reconstructors above and the in-process BTF pairing post-pass
+# (ss_btf.o). Pure decode logic, no external library, no platform #if guard.
+$(BUILD)/bs_recon.o: src/bs_recon.c src/bs_recon.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 # Call-descent handle (asmtest_descent_t): edges + nested frames read through scalar
 # accessors. No external library (plain malloc pools); sibling of src/trace.c.
@@ -2096,7 +2101,8 @@ HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
                 $(BUILD)/mach_backend.o $(MACH_EXC_OBJS) \
                 $(BUILD)/descent.o $(BUILD)/stealth_helper.o \
                 $(BUILD)/codeimage.o $(BUILD)/branchsnap.o \
-                $(BUILD)/msr_lbr.o $(BUILD)/ss_btf.o $(BUILD)/ibs_backend.o $(BUILD)/debug.o \
+                $(BUILD)/msr_lbr.o $(BUILD)/ss_btf.o $(BUILD)/bs_recon.o \
+                $(BUILD)/ibs_backend.o $(BUILD)/debug.o \
                 $(BUILD)/disasm.o $(BUILD)/trace.o
 
 # The test builds a synthetic wrong-path perf_branch_entry (test_amd_spec_filter), so
@@ -2160,7 +2166,7 @@ ibs-test: $(BUILD)/test_ibs $(BUILD)/ibs_probe
 # runtime dependency. Found at run time via the dladdr-sibling lookup in
 # stealth_helper.c (or the ASMTEST_STEALTH_HELPER path override).
 STEALTH_HELPER_OBJS := $(BUILD)/stealth_helper_main.o $(BUILD)/stealth_helper.o \
-    $(BUILD)/ptrace_backend.o $(BUILD)/descent.o $(BUILD)/codeimage.o \
+    $(BUILD)/ptrace_backend.o $(BUILD)/bs_recon.o $(BUILD)/descent.o $(BUILD)/codeimage.o \
     $(BUILD)/disasm.o $(BUILD)/trace.o
 $(BUILD)/asmtest-stealth-helper: $(STEALTH_HELPER_OBJS)
 	$(CC) $(CFLAGS) $^ $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -lpthread -o $@
@@ -2823,7 +2829,9 @@ $(BUILD)/pic/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/ptrace_backend.o: src/ptrace_backend.c include/asmtest_ptrace.h \
                                include/asmtest_trace.h include/asmtest_codeimage.h \
-                               include/asmtest_descent_internal.h | $(BUILD)/pic
+                               include/asmtest_descent_internal.h src/bs_recon.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/bs_recon.o: src/bs_recon.c src/bs_recon.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/descent.o: src/descent.c include/asmtest_ptrace.h \
                         include/asmtest_descent_internal.h | $(BUILD)/pic
@@ -2863,7 +2871,8 @@ NATIVE_TRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o \
     $(MACH_EXC_OBJS) \
     $(BUILD)/descent.o \
     $(BUILD)/stealth_helper.o $(BUILD)/codeimage.o $(BUILD)/branchsnap.o \
-    $(BUILD)/msr_lbr.o $(BUILD)/ss_btf.o $(BUILD)/ibs_backend.o $(BUILD)/debug.o
+    $(BUILD)/msr_lbr.o $(BUILD)/ss_btf.o $(BUILD)/bs_recon.o \
+    $(BUILD)/ibs_backend.o $(BUILD)/debug.o
 $(NATIVE_TRACE_OBJS) $(patsubst $(BUILD)/%,$(BUILD)/pic/%,$(NATIVE_TRACE_OBJS)): \
     $(BUILD)/.build-flags
 
@@ -2883,6 +2892,7 @@ $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
                                        $(BUILD)/pic/branchsnap.o \
                                        $(BUILD)/pic/msr_lbr.o \
                                        $(BUILD)/pic/ss_btf.o \
+                                       $(BUILD)/pic/bs_recon.o \
                                        $(BUILD)/pic/ibs_backend.o \
                                        $(BUILD)/pic/debug.o \
                                        $(BUILD)/pic/disasm.o \

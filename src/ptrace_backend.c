@@ -33,6 +33,7 @@
 #include "asmtest_descent_internal.h"
 #include "asmtest_ptrace.h"
 #include "asmtest_trace.h"
+#include "bs_recon.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -1562,123 +1563,6 @@ int asmtest_ptrace_blockstep_available(void) {
     return cached;
 }
 
-/* Outcome of a block reconstruction. AMBIGUOUS is honest degradation, not an error:
- * what definitely ran is recorded and the caller flags the capture truncated. */
-#define BS_FAIL      0 /* undecodable / unreadable / desync / no terminator  */
-#define BS_OK        1 /* terminator proven unique; the run is exact         */
-#define BS_AMBIGUOUS 2 /* >1 candidate terminator: prefix recorded, truncate */
-
-/* How one instruction of a straight-line run relates to the observed next stop. */
-typedef enum {
-    BR_NONE = 0,    /* not a branch: the run continues through it            */
-    BR_COND_MISS,   /* conditional, static target != next-stop: NOT taken    */
-    BR_COND_HIT,    /* conditional, static target == next-stop: a CANDIDATE  */
-    BR_HARD_HIT,    /* always-taken direct branch, target == next-stop       */
-    BR_HARD_MISS,   /* always-taken direct branch, target != next-stop       */
-    BR_HARD_UNKNOWN /* ret / indirect: always taken, target not static       */
-} br_kind_t;
-
-/* Classify the instruction at `code[off]` (running at base_addr + off) against the
- * observed next stop. *len_out gets its byte length, 0 if undecodable. Shared by both
- * reconstructors: the region form passes its whole snapshot with base_addr = base_ip and
- * off = the region offset; the windowed form passes a foreign byte window with
- * base_addr = the absolute address and off = 0. Both then get ABSOLUTE branch targets. */
-static br_kind_t classify_branch(const uint8_t *code, size_t code_len,
-                                 uint64_t base_addr, uint64_t off,
-                                 uint64_t next_pc, size_t *len_out) {
-    int is_call = 0, is_ret = 0;
-    size_t l = asmtest_disas_probe(PTRACE_TRACE_ARCH, code, code_len, off,
-                                   &is_call, &is_ret);
-    *len_out = l;
-    if (l == 0)
-        return BR_NONE; /* caller checks *len_out */
-    if (!asmtest_disas_is_branch(PTRACE_TRACE_ARCH, code, code_len, off))
-        return BR_NONE;
-    if (is_ret)
-        return BR_HARD_UNKNOWN;
-    uint64_t target = 0;
-    if (!asmtest_disas_branch_target(PTRACE_TRACE_ARCH, code, code_len,
-                                     base_addr, off, &target))
-        return BR_HARD_UNKNOWN; /* indirect jmp/call: always taken, no static target */
-    /* A direct `call rel` and a direct `jmp rel` are unconditional — always taken. */
-    if (is_call ||
-        asmtest_disas_is_uncond_jump(PTRACE_TRACE_ARCH, code, code_len, off))
-        return target == next_pc ? BR_HARD_HIT : BR_HARD_MISS;
-    return target == next_pc ? BR_COND_HIT : BR_COND_MISS;
-}
-
-/* Find the instruction that terminated the straight-line run starting at `from_off`, as
- * the amd-tracing-plan's "Same-target-conditional ambiguity -> truncated" rule requires.
- *
- * A block-step #DB is TRAP-class: the stop RIP is the branch TARGET, so the run went from
- * `from_off` up to some taken branch reaching `next_pc`. The old greedy rule stopped at
- * the FIRST direct branch whose static target == next_pc — which silently drops
- * instructions on the `||` / dual-guard shape (`je T; …; je T`, first not taken, second
- * taken), because both statically target T and BTF gives no signal for which was taken.
- *
- * So: scan the run counting CANDIDATES (direct branches whose static target == next_pc),
- * hard-stopping at the first always-taken instruction, since nothing past it can run.
- *   - exactly 1 candidate  -> proven terminator (the old behaviour, now proven not guessed)
- *   - 0 candidates         -> the hard stop is it, iff its target is not static
- *                             (ret/indirect). An always-taken DIRECT branch going
- *                             somewhere other than next_pc contradicts the observation.
- *   - more than 1          -> AMBIGUOUS: *term_out = the first, so the caller can still
- *                             record the prefix that definitely ran, and truncate.
- * Note a `ret`/indirect only HARD-STOPS the scan; it is not itself counted as a candidate
- * (it targets nothing statically), so a taken conditional followed by the function's ret
- * stays unambiguous. The residual: a conditional that was NOT taken, followed by a
- * ret/indirect whose runtime target happens to equal that conditional's static target,
- * resolves to the conditional. That coincidence is not statically decidable at all, and is
- * far narrower than the dual-guard shape this closes.
- *
- * Anything that stops the scan from PROVING uniqueness once a candidate is in hand —
- * undecodable bytes (the fall-through may be jump-table data, not code), running off the
- * region, or the walk ceiling — is reported AMBIGUOUS, never OK: an honest truncated beats
- * a silently short stream. Returns BS_FAIL / BS_OK / BS_AMBIGUOUS. */
-static int bs_scan_terminator(const uint8_t *code, size_t len, uint64_t base_ip,
-                              uint64_t from_off, uint64_t next_pc,
-                              uint64_t *term_out) {
-    uint64_t walk = from_off;
-    uint64_t first_cand = 0;
-    unsigned ncand = 0;
-    for (size_t guard = 0; guard <= len; guard++) {
-        if (walk >= len)
-            break; /* ran off the region */
-        size_t l = 0;
-        br_kind_t k = classify_branch(code, len, base_ip, walk, next_pc, &l);
-        if (l == 0)
-            break; /* undecodable */
-        if (k == BR_COND_HIT || k == BR_HARD_HIT) {
-            if (ncand++ == 0)
-                first_cand = walk;
-            if (k == BR_HARD_HIT)
-                goto decided; /* always taken: nothing past it runs */
-            walk += l;
-            continue; /* conditional: keep scanning to prove uniqueness */
-        }
-        if (k == BR_HARD_UNKNOWN) {
-            if (ncand == 0) {
-                *term_out = walk; /* ret/indirect: always taken, must be it */
-                return BS_OK;
-            }
-            goto decided;
-        }
-        if (k == BR_HARD_MISS)
-            goto decided; /* always taken, but elsewhere: the run ended earlier */
-        walk += l;        /* BR_NONE / BR_COND_MISS: the run continues */
-    }
-    /* Fell out: off the region, undecodable, or the ceiling. */
-    if (ncand == 0)
-        return BS_FAIL; /* no terminator reaches next_pc: desynced */
-    *term_out = first_cand;
-    return BS_AMBIGUOUS; /* a candidate, but uniqueness unproven: do not guess */
-decided:
-    if (ncand == 0)
-        return BS_FAIL;
-    *term_out = first_cand;
-    return ncand == 1 ? BS_OK : BS_AMBIGUOUS;
-}
-
 /* Record the straight-line run [from_off, term_off] into `stream`. Every instruction is
  * in-region by construction here (the region form's snapshot IS the region). Sets
  * *rep_out (may be NULL) if any recorded instruction is a `rep`-prefixed string op — it
@@ -1708,26 +1592,27 @@ static int bs_record_run(const uint8_t *code, size_t len, uint64_t from_off,
     return 0;
 }
 
-/* Reconstruct the straight-line run of one basic block into `stream`. Returns BS_OK
- * (with *last_off = the terminator's offset), BS_AMBIGUOUS (the definite prefix is
+/* Reconstruct the straight-line run of one basic block into `stream`. Returns ASMTEST_BS_OK
+ * (with *last_off = the terminator's offset), ASMTEST_BS_AMBIGUOUS (the definite prefix is
  * recorded, *last_off = its last instruction, caller marks truncated and must not treat
- * *last_off as a real terminator), or BS_FAIL (caller marks truncated). */
+ * *last_off as a real terminator), or ASMTEST_BS_FAIL (caller marks truncated). */
 static int blockstep_reconstruct(const uint8_t *code, size_t len,
                                  uint64_t base_ip, uint64_t from_off,
                                  uint64_t next_pc, uint64_t *stream,
                                  uint32_t *pn, uint64_t *last_off) {
     uint64_t term = 0;
-    int r = bs_scan_terminator(code, len, base_ip, from_off, next_pc, &term);
-    if (r == BS_FAIL)
-        return BS_FAIL;
+    int r = asmtest_bs_scan_terminator(PTRACE_TRACE_ARCH, code, len, base_ip,
+                                       from_off, next_pc, &term);
+    if (r == ASMTEST_BS_FAIL)
+        return ASMTEST_BS_FAIL;
     int rep = 0;
     if (!bs_record_run(code, len, from_off, term, stream, pn, last_off, &rep))
-        return BS_FAIL;
+        return ASMTEST_BS_FAIL;
     /* A rep-prefixed string op retires N times but was recorded ONCE: the stream can
      * no longer be byte-identical to per-instruction stepping, so downgrade an
      * otherwise-clean block to AMBIGUOUS (the caller marks truncated, keeps tracing). */
-    if (rep && r == BS_OK)
-        r = BS_AMBIGUOUS;
+    if (rep && r == ASMTEST_BS_OK)
+        r = ASMTEST_BS_AMBIGUOUS;
     return r;
 }
 
@@ -1735,7 +1620,7 @@ static int blockstep_reconstruct(const uint8_t *code, size_t len,
  * to land EXACTLY on cut_off. Used when the tracee's OWN int3 traps mid-block: the
  * trap-stop's PC is one past the 0xCC byte, so the executed run — the int3 included —
  * ends exactly at cut_off. Any overshoot (cut_off fell inside an instruction) or an
- * undecodable byte returns BS_FAIL. The region-buffer analog of window_block_walk's
+ * undecodable byte returns ASMTEST_BS_FAIL. The region-buffer analog of window_block_walk's
  * at_mode cut; BTF cannot bridge the kernel-injected transfer into the handler, so the
  * caller marks the capture truncated. */
 static int blockstep_reconstruct_cut(const uint8_t *code, size_t len,
@@ -1745,20 +1630,20 @@ static int blockstep_reconstruct_cut(const uint8_t *code, size_t len,
     uint64_t walk = from_off;
     for (size_t guard = 0; guard <= len; guard++) {
         if (walk == cut_off)
-            return BS_OK; /* landed exactly on the trap PC */
+            return ASMTEST_BS_OK; /* landed exactly on the trap PC */
         if (walk > cut_off || walk >= len)
-            return BS_FAIL;
+            return ASMTEST_BS_FAIL;
         if (*pn >= PTRACE_STREAM_CAP)
-            return BS_FAIL;
+            return ASMTEST_BS_FAIL;
         stream[(*pn)++] = walk;
         *last_off = walk;
         size_t l =
             asmtest_disas(PTRACE_TRACE_ARCH, code, len, 0, walk, NULL, 0);
         if (l == 0)
-            return BS_FAIL;
+            return ASMTEST_BS_FAIL;
         walk += l;
     }
-    return BS_FAIL;
+    return ASMTEST_BS_FAIL;
 }
 
 int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
@@ -1893,7 +1778,7 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
         uint64_t last_off = 0;
         int br = blockstep_reconstruct((const uint8_t *)code, len, base_ip,
                                        prev_off, pc, stream, &n, &last_off);
-        if (br == BS_FAIL) {
+        if (br == ASMTEST_BS_FAIL) {
             /* Stream full / undecodable / no in-region terminator: the child is
              * still ptrace-stopped and owned here, and rc stays OK so the
              * post-loop cleanup will not reap it — kill+reap now, as the other
@@ -1903,7 +1788,7 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
             waitpid(pid, &status, 0);
             break;
         }
-        if (br == BS_AMBIGUOUS) {
+        if (br == ASMTEST_BS_AMBIGUOUS) {
             /* The definite prefix is recorded and the capture is truncated. We still
              * know exactly where the tracee IS (`pc`), so keep tracing from there —
              * an honest gap beats abandoning the rest. But `last_off` is only the
@@ -2076,11 +1961,11 @@ int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
         uint64_t last_off = 0;
         int br = blockstep_reconstruct(code, len, base_ip, prev_off, pc, stream,
                                        &n, &last_off);
-        if (br == BS_FAIL) {
+        if (br == ASMTEST_BS_FAIL) {
             overflow = 1;
             break;
         }
-        if (br == BS_AMBIGUOUS) {
+        if (br == ASMTEST_BS_AMBIGUOUS) {
             /* Honest gap: prefix recorded, capture truncated, keep tracing from the
              * stop we know. `last_off` is not a real terminator, so it must not reach
              * classify_region_exit — if the block also left the region, stop here.
@@ -2396,7 +2281,8 @@ static int window_scan_terminator(foreign_bytes_t *fb, uint64_t from_pc,
         if (p == NULL)
             break; /* unreadable */
         size_t l = 0;
-        br_kind_t k = classify_branch(p, avail, walk, 0, next_pc, &l);
+        br_kind_t k =
+            classify_branch(PTRACE_TRACE_ARCH, p, avail, walk, 0, next_pc, &l);
         if (l == 0)
             break; /* undecodable */
         if (k == BR_COND_HIT || k == BR_HARD_HIT) {
@@ -2410,7 +2296,7 @@ static int window_scan_terminator(foreign_bytes_t *fb, uint64_t from_pc,
         if (k == BR_HARD_UNKNOWN) {
             if (ncand == 0) {
                 *term_out = walk; /* ret/indirect: always taken, must be it */
-                return BS_OK;
+                return ASMTEST_BS_OK;
             }
             goto decided;
         }
@@ -2419,14 +2305,14 @@ static int window_scan_terminator(foreign_bytes_t *fb, uint64_t from_pc,
         walk += l;        /* BR_NONE / BR_COND_MISS: the run continues */
     }
     if (ncand == 0)
-        return BS_FAIL; /* no terminator reaches next_pc: desynced */
+        return ASMTEST_BS_FAIL; /* no terminator reaches next_pc: desynced */
     *term_out = first_cand;
-    return BS_AMBIGUOUS; /* a candidate, but uniqueness unproven: do not guess */
+    return ASMTEST_BS_AMBIGUOUS; /* a candidate, but uniqueness unproven: do not guess */
 decided:
     if (ncand == 0)
-        return BS_FAIL;
+        return ASMTEST_BS_FAIL;
     *term_out = first_cand;
-    return ncand == 1 ? BS_OK : BS_AMBIGUOUS;
+    return ncand == 1 ? ASMTEST_BS_OK : ASMTEST_BS_AMBIGUOUS;
 }
 
 /* Reconstruct the straight-line run of ONE block of a windowed capture, appending the
@@ -2443,37 +2329,37 @@ decided:
  *                 the terminator IS to_pc: walk by length to it INCLUSIVE — matching the
  *                 per-instruction path, which records to_pc at the TF stop preceding the
  *                 signal stop. Overshooting to_pc means the walk desynced: fail.
- * Returns BS_OK, BS_AMBIGUOUS (definite prefix recorded; caller truncates but may keep
- * tracing from the known stop) or BS_FAIL (caller truncates). */
+ * Returns ASMTEST_BS_OK, ASMTEST_BS_AMBIGUOUS (definite prefix recorded; caller truncates but may keep
+ * tracing from the known stop) or ASMTEST_BS_FAIL (caller truncates). */
 static int window_block_walk(foreign_bytes_t *fb, int at_mode, uint64_t from_pc,
                              uint64_t to_pc, uint64_t win_base,
                              uint64_t win_len, const asmtest_addr_rec_t *regs,
                              uint32_t nreg, uint64_t *stream, uint32_t *pn) {
     uint64_t term = to_pc;
-    int r = BS_OK;
+    int r = ASMTEST_BS_OK;
     if (!at_mode) {
         r = window_scan_terminator(fb, from_pc, to_pc, &term);
-        if (r == BS_FAIL)
-            return BS_FAIL;
+        if (r == ASMTEST_BS_FAIL)
+            return ASMTEST_BS_FAIL;
     } else if (to_pc < from_pc) {
-        return BS_FAIL; /* a straight-line run cannot end BEFORE it started */
+        return ASMTEST_BS_FAIL; /* a straight-line run cannot end BEFORE it started */
     }
     /* Record [from_pc, term] — every instruction of it definitely executed. */
     uint64_t walk = from_pc;
     int rep = 0;
     for (uint32_t guard = 0; guard < PTRACE_BLOCK_WALK_CAP; guard++) {
         if (walk > term)
-            return BS_FAIL; /* walked past the terminator: desynced */
+            return ASMTEST_BS_FAIL; /* walked past the terminator: desynced */
         size_t avail = 0;
         const uint8_t *p = foreign_bytes_at(fb, walk, &avail);
         if (p == NULL)
-            return BS_FAIL;
+            return ASMTEST_BS_FAIL;
         size_t l = asmtest_disas(PTRACE_TRACE_ARCH, p, avail, 0, 0, NULL, 0);
         if (l == 0)
-            return BS_FAIL; /* undecodable */
+            return ASMTEST_BS_FAIL; /* undecodable */
         if (in_region_set(walk, win_base, win_len, regs, nreg)) {
             if (*pn >= PTRACE_STREAM_CAP)
-                return BS_FAIL; /* stream full */
+                return ASMTEST_BS_FAIL; /* stream full */
             stream[(*pn)++] = walk;
             /* A recorded rep-prefixed string op retires N times but appears ONCE, so
              * the reconstructed stream can no longer be byte-identical -> truncate. */
@@ -2481,10 +2367,10 @@ static int window_block_walk(foreign_bytes_t *fb, int at_mode, uint64_t from_pc,
                 rep = 1;
         }
         if (walk == term)
-            return (rep && r == BS_OK) ? BS_AMBIGUOUS : r;
+            return (rep && r == ASMTEST_BS_OK) ? ASMTEST_BS_AMBIGUOUS : r;
         walk += l;
     }
-    return BS_FAIL; /* the walk ceiling */
+    return ASMTEST_BS_FAIL; /* the walk ceiling */
 }
 
 int asmtest_ptrace_trace_attached_windowed_blockstep(
@@ -2572,11 +2458,11 @@ int asmtest_ptrace_trace_attached_windowed_blockstep(
         if (in_region_set(prev_pc, win_base, win_len, regs, nreg)) {
             int wr = window_block_walk(&fb, at_mode, prev_pc, pc, win_base,
                                        win_len, regs, nreg, stream, &n);
-            if (wr == BS_FAIL) {
+            if (wr == ASMTEST_BS_FAIL) {
                 overflow = 1;
                 break;
             }
-            if (wr == BS_AMBIGUOUS)
+            if (wr == ASMTEST_BS_AMBIGUOUS)
                 overflow =
                     1; /* honest gap: the definite prefix is recorded, the
                                * capture is truncated, and we know where the tracee

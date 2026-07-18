@@ -30,7 +30,7 @@ $(BUILD)/conformance: $(BUILD)/conformance.o $(BUILD)/asmtest_nomain.o \
                       $(BUILD)/capture.o $(BUILD)/emu.o $(BUILD)/ffi.o \
                       $(BUILD)/trace.o $(BUILD)/add.o $(BUILD)/flags.o \
                       $(BUILD)/fp.o $(BUILD)/simd.o $(BUILD)/fault.o \
-                      $(BUILD)/ptrace_backend.o $(BUILD)/descent.o \
+                      $(BUILD)/ptrace_backend.o $(BUILD)/bs_recon.o $(BUILD)/descent.o \
                       $(BUILD)/disasm.o $(BUILD)/codeimage.o
 	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -ldl -o $@
 
