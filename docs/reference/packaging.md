@@ -215,7 +215,14 @@ The scaffolding stops short of a credentialed, multi-platform release:
    - **Python** is per-platform: a matrix builds the `py3-none-<plat>` wheel on
      each runner and **repairs** it into a self-contained manylinux / macOS wheel
      (`auditwheel` / `delocate`, vendoring libunicorn), so `pip install` needs no
-     system libs.
+     system libs. The recorded **manylinux floor is `manylinux_2_28`** (AlmaLinux 8,
+     GCC 14 — the most compatible currently-supported image whose toolchain still
+     builds the tiers; `manylinux2014`'s is too old, `manylinux_2_34` is alpha).
+     Building the two Linux legs inside `quay.io/pypa/manylinux_2_28_{x86_64,aarch64}`
+     (keeping the load-bearing `auditwheel --exclude` list intact) is
+     distribution-packaging.md T5 — **gated on a CI dispatch to confirm the wheel
+     tags + tier asserts**, since it changes the non-tag-gated wheel build and
+     cannot be verified without the native-payload matrix on the runners.
    - **link bindings** (Go, C++, Zig, Rust) ship source, so the check is that the
      published source is *consumable* — the cgo module vets+builds, a C++ consumer
      compiles+links+runs against the packaged header, the Zig package builds, and

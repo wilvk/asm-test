@@ -1038,6 +1038,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Registry-publish pipeline moved toward keyless publishing (scaffolding; gated on
+  registry setup + a real tag).** `release.yml` now publishes PyPI via a dedicated
+  OIDC Trusted Publishing job (`pypa/gh-action-pypi-publish`, collecting every matrix
+  leg's wheel — the action is Linux-only) and crates.io via `rust-lang/crates-io-auth-action`,
+  both with job-scoped `id-token: write` and no stored token; npm publishes with
+  `--provenance`. `bindings/java/pom.xml` gains the Maven Central metadata + dormant
+  source/javadoc/gpg/central-publishing plugins (activated only by a real `mvn deploy`;
+  `make java-package` still uses javac + jar). The manylinux wheel floor is recorded as
+  `manylinux_2_28`. All of these are **credential/registry-gated** — a trusted-publisher
+  registration (PyPI/crates.io), `MAVEN_*` secrets + a namespace/PGP key (Maven Central),
+  and a CI dispatch (manylinux) must land before they go live; see
+  [releasing.md](https://github.com/wilvk/asm-test/blob/main/docs/reference/releasing.md).
+
 - **`asmtest_pt_decode_window` gained a trailing `uint64_t *base_ip_out` parameter**
   (`src/pt_backend.c`) reporting the first decoded IP, so the whole-window PT drain can
   re-base its recorded offsets to ABSOLUTE addresses. Source-incompatible for a direct C

@@ -39,11 +39,18 @@ others still publish.
 
 | Registry | Secret | Binding |
 |---|---|---|
-| PyPI | `PYPI_TOKEN` | python |
-| npm | `NPM_TOKEN` | node |
+| PyPI | **OIDC — no secret** (Trusted Publishing) | python |
+| npm | `NPM_TOKEN` (publish with `--provenance`) | node |
 | RubyGems | `RUBYGEMS_API_KEY` | ruby |
-| crates.io | `CARGO_REGISTRY_TOKEN` | rust |
+| crates.io | **OIDC — no secret** (Trusted Publishing) | rust |
 | NuGet | `NUGET_API_KEY` | dotnet |
+
+PyPI and crates.io use **OIDC Trusted Publishing** (no stored token): the workflow
+mints a short-lived token per run via `id-token: write`. Each requires a one-time
+**trusted-publisher registration** on the registry (owner `wilvk`, repo `asm-test`,
+workflow `release.yml`; PyPI also wants a `pypi` environment) — without it the OIDC
+upload is refused. npm publishes with `--provenance` (verify with
+`npm audit signatures`); RubyGems/NuGet still use stored API keys.
 
 ## Cutting a release
 
