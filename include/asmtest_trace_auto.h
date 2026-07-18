@@ -139,6 +139,19 @@ ASMTEST_STATIC_ASSERT(sizeof(asmtest_trace_choice_t) == 4 * sizeof(int),
  * asmtest_trace_auto() returns ASMTEST_HW_EUNAVAIL instead of silently downgrading
  * execution fidelity to the isolated guest. */
 #define ASMTEST_TRACE_NATIVE_ONLY 0x2
+/* Opt-in: when the block-step rung runs (asmtest_ptrace_blockstep_available()) and
+ * IBS-Op is available (asmtest_ibs_available(), AMD Zen 2+ / Linux / swfilt kernel —
+ * see asmtest_ibs.h), survey the routine under IBS first and pre-cover the block-step
+ * reconstructor with the resulting statistically-hot leaders (asmtest_bs_precover_build,
+ * asmtest_blockstep_internal.h) so its per-#DB Capstone re-decode shrinks on cache hits.
+ * The survey runs the routine ADDITIONAL times in a fork-isolated warm-up child (bounded,
+ * ~30ms) purely to gather coverage — non-idempotent side effects repeat THERE, never in
+ * the parent (the same in-process-re-run honesty stance as the MSR rung, trace_auto.c).
+ * IBS is statistical and only ever memoizes the reconstructor's tracer-side decode; it
+ * can never change what gets recorded, so a trace produced with this bit set is
+ * byte-for-byte identical to one produced without it. Off AMD (or without the bit) the
+ * cascade is untouched: any survey/build failure degrades silently to the plain rung. */
+#define ASMTEST_TRACE_IBS_PRECOVER 0x4
 
 /* Resolve this host's full cross-tier fallback cascade, most-faithful first, into
  * out[0..cap), honoring `policy`; return how many entries were written.

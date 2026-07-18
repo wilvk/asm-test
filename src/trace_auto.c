@@ -19,11 +19,17 @@
  */
 #include "asmtest_trace_auto.h"
 
+#include "asmtest_blockstep_internal.h" /* T8: IBS covered-block pre-cover table */
+#include "asmtest_ibs.h" /* T8: statistical survey for pre-cover  */
 #include "asmtest_ptrace.h" /* block-step / per-insn call-owning escalation tiers */
 
+#include <signal.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
 
 #if defined(__linux__) && defined(__x86_64__)
 #include <dlfcn.h>
@@ -167,6 +173,91 @@ static void msr_call_trampoline(void *p) {
     c->result = call_auto_invoke(c->code, c->args, c->nargs);
 }
 
+/* T8 (ASMTEST_TRACE_IBS_PRECOVER): milliseconds the warm-up child re-runs code(args…)
+ * for while the parent surveys it with IBS-Op — bounded, so the bit can only ever add a
+ * small, fixed amount of latency ahead of the block-step rung it primes. */
+#define TRACE_AUTO_IBS_WARMUP_MS 30
+
+static long ibs_precover_elapsed_ms(const struct timespec *t0) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (now.tv_sec - t0->tv_sec) * 1000L +
+           (now.tv_nsec - t0->tv_nsec) / 1000000L;
+}
+
+/* Build an IBS pre-cover table for the upcoming block-step rung: fork an isolated
+ * warm-up child that re-runs code(args…) in a loop for ~TRACE_AUTO_IBS_WARMUP_MS while
+ * THIS process surveys it out-of-band via IBS-Op (asmtest_ibs_survey_process never
+ * perturbs the child — no ptrace, no single-step, the exact reason IBS is safe to point
+ * at a managed-runtime target), then normalizes the sampled edges into covered-block
+ * leaders and builds the memoization table from them.
+ *
+ * HONESTY: like the MSR rung beside it, the warm-up child re-executes code(args…) an
+ * unspecified number of times in a fork-isolated copy — non-idempotent side effects
+ * repeat THERE, never in the parent, which runs the routine again itself via the normal
+ * block-step call right after this returns.
+ *
+ * ANY failure along the way (fork, survey, empty coverage, OOM) returns NULL: the bit
+ * may never make the cascade fail, or even run slower in a way that matters, where the
+ * plain rung previously succeeded — the caller falls back to the uncached scan. */
+static asmtest_bs_precover_t *build_ibs_precover(const void *code, size_t len,
+                                                 const long *args, int nargs) {
+    pid_t child = fork();
+    if (child < 0)
+        return NULL;
+    if (child == 0) {
+        struct timespec t0;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        do {
+            call_auto_invoke(code, args, nargs);
+        } while (ibs_precover_elapsed_ms(&t0) < TRACE_AUTO_IBS_WARMUP_MS);
+        _exit(0);
+    }
+
+    asmtest_ibs_survey_t sv;
+    memset(&sv, 0, sizeof sv);
+    int src =
+        asmtest_ibs_survey_process(child, TRACE_AUTO_IBS_WARMUP_MS, NULL, &sv);
+
+    /* Reap the warm-up child: it should already be exiting (its own budget matches
+     * the survey window); give it a short grace period, then reclaim it unconditionally
+     * so this rung can never leak a zombie or hang past a bounded worst case. */
+    int reaped = 0;
+    for (int i = 0; i < 50; i++) {
+        pid_t r = waitpid(child, NULL, WNOHANG);
+        if (r == child || r < 0) {
+            reaped = 1;
+            break;
+        }
+        struct timespec req = {0, 1000000L}; /* 1ms */
+        nanosleep(&req, NULL);
+    }
+    if (!reaped) {
+        kill(child, SIGKILL);
+        waitpid(child, NULL, 0);
+    }
+
+    if (src != ASMTEST_IBS_OK) {
+        asmtest_ibs_survey_free(&sv);
+        return NULL;
+    }
+
+    asmtest_ibs_blocks_t blk;
+    memset(&blk, 0, sizeof blk);
+    int nrc =
+        asmtest_ibs_normalize_blocks(&sv, (uint64_t)(uintptr_t)code, len, &blk);
+    asmtest_ibs_survey_free(&sv);
+    if (nrc != ASMTEST_IBS_OK || blk.n == 0) {
+        asmtest_ibs_blocks_free(&blk);
+        return NULL;
+    }
+
+    asmtest_bs_precover_t *p = asmtest_bs_precover_build(
+        (const uint8_t *)code, len, (uint64_t)(uintptr_t)code, &blk);
+    asmtest_ibs_blocks_free(&blk);
+    return p;
+}
+
 int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
                             int nargs, unsigned policy, long *result,
                             asmtest_trace_t *trace,
@@ -278,13 +369,31 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
 
     /* (2) Complete rootless — BTF block-step (no window ceiling), fork-isolated re-run.
      * This is the key middle rung the static CASCADE[] lacks (block-step is a ptrace
-     * entry, not a resolve backend). */
+     * entry, not a resolve backend).
+     *
+     * T8: ASMTEST_TRACE_IBS_PRECOVER opts into priming this rung's reconstructor with an
+     * IBS covered-block survey (build_ibs_precover above) — memoization only, never a
+     * change to what gets recorded (asmtest_ibs.h's INVARIANT), so the trace below is
+     * byte-for-byte identical with or without the bit. Any survey/build failure leaves
+     * `precover` NULL and the call falls back to the plain scan exactly as before this
+     * bit existed. */
     if (asmtest_ptrace_blockstep_available()) {
         call_auto_reset(trace);
         ran =
             0; /* F24: reset wiped any prior partial — re-earn `ran` on success only */
-        if (asmtest_ptrace_trace_call_blockstep(code, len, args, nargs, result,
-                                                trace) == ASMTEST_PTRACE_OK) {
+        asmtest_bs_precover_t *precover = NULL;
+        if ((policy & ASMTEST_TRACE_IBS_PRECOVER) && asmtest_ibs_available()) {
+            precover = build_ibs_precover(code, len, args, nargs);
+            if (precover != NULL)
+                asmtest_bs_precover_set_current(precover);
+        }
+        int bstep_rc = asmtest_ptrace_trace_call_blockstep(
+            code, len, args, nargs, result, trace);
+        if (precover != NULL) {
+            asmtest_bs_precover_set_current(NULL);
+            asmtest_bs_precover_free(precover);
+        }
+        if (bstep_rc == ASMTEST_PTRACE_OK) {
             ran = 1;
             if (used != NULL) {
                 used->tier = ASMTEST_TIER_HWTRACE;

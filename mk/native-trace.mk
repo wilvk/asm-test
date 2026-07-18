@@ -2044,9 +2044,13 @@ $(BUILD)/ss_btf.o: src/ss_btf.c include/asmtest_hwtrace.h | $(BUILD)
 $(BUILD)/debug.o: src/debug.c src/debug.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 # Cross-tier orchestrator (asmtest_trace_auto.h): no external library; calls
-# asmtest_hwtrace_available() directly and dlopen-probes libasmtest_drapp (-ldl).
+# asmtest_hwtrace_available() directly and dlopen-probes libasmtest_drapp (-ldl). T8
+# pulls in the IBS survey (asmtest_ibs.h) and the block-step pre-cover internal header
+# to prime the block-step rung; both objects are already in HWTRACE_OBJS below.
 $(BUILD)/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
-                       include/asmtest_hwtrace.h include/asmtest_trace.h | $(BUILD)
+                       include/asmtest_hwtrace.h include/asmtest_trace.h \
+                       include/asmtest_ibs.h \
+                       include/asmtest_blockstep_internal.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 # Out-of-process ptrace single-step backend (W2): no external library, just the
 # same Capstone length-decoder (disasm.o) for block normalization.
@@ -2826,7 +2830,9 @@ $(BUILD)/pic/mach_backend.o: src/mach_backend.c include/asmtest_mach.h \
 $(BUILD)/pic/mach_excServer.o: $(BUILD)/mach_excServer.c $(BUILD)/mach_exc.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
-                           include/asmtest_hwtrace.h include/asmtest_trace.h | $(BUILD)/pic
+                           include/asmtest_hwtrace.h include/asmtest_trace.h \
+                           include/asmtest_ibs.h \
+                           include/asmtest_blockstep_internal.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/ptrace_backend.o: src/ptrace_backend.c include/asmtest_ptrace.h \
                                include/asmtest_trace.h include/asmtest_codeimage.h \

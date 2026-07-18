@@ -45,6 +45,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   cumulative probe calls and cache hits. See
   [ptrace-blockstep-tracer-correctness.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/ptrace-blockstep-tracer-correctness.md).
 
+- **`ASMTEST_TRACE_IBS_PRECOVER`: an opt-in policy bit that wires the block-step
+  pre-cover table above into the cross-tier auto cascade
+  (`asmtest_trace_call_auto`, `include/asmtest_trace_auto.h`).** When set and
+  IBS-Op is available, the block-step rung forks an isolated warm-up child that
+  re-runs the routine for a bounded ~30ms while the parent surveys it out of
+  band with `asmtest_ibs_survey_process` (no ptrace, no perturbation), builds a
+  pre-cover table from the resulting live histogram, and installs it around the
+  one `asmtest_ptrace_trace_call_blockstep` call the rung already made — so a
+  trace produced with the bit set is byte-for-byte identical to one produced
+  without it; any survey/build failure degrades silently to the plain rung. On
+  a live Zen 2 host a 25-iteration loop's block-step branch-probe decode calls
+  dropped from 101 to 0 (a real live warm-up survey covering both of the
+  routine's basic blocks). Off AMD, or wherever the auto-cascade's fast
+  in-process single-step backend already completes the capture before reaching
+  block-step, the bit is a proven no-op — never a behavior change. See
+  [ptrace-blockstep-tracer-correctness.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/ptrace-blockstep-tracer-correctness.md).
+
 - **In-process, branch-granular single-step (W3): `asmtest_ss_btf_available` /
   `asmtest_ss_btf_trace` (`src/ss_btf.c`), the missing third single-step form.**
   asm-test already had branch-granular stepping out of process

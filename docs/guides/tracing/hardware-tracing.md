@@ -505,13 +505,31 @@ one histogram sorted by count. Limits, stated rather than hidden: a thread born
 sampling, so a **longer window** — not a shorter period — is how you buy more
 cold-edge recall; and fidelity is always statistical.
 
-Two consumers ship today. The interactive one is **`asmspy --sample` / TUI
+Three consumers ship today. The interactive one is **`asmspy --sample` / TUI
 mode 7** ([asmspy](asmspy.md)) — the hot-edge view that is safe on a live JIT.
-And the AMD **whole-window statistical survey** (`asmtest_hwtrace_sample_window_amd`)
+The AMD **whole-window statistical survey** (`asmtest_hwtrace_sample_window_amd`)
 **falls back to an IBS-Op survey when the branch stack is absent** — so on a
 Zen 2 host it now returns a real hot-method histogram instead of `EUNAVAIL`
 (set `ASMTEST_FORCE_IBS_SURVEY=1` to force the IBS path on branch-stack hosts
 for cross-validation; the branch-stack path is byte-identical otherwise).
+
+And **`asmtest_trace_call_auto`'s `ASMTEST_TRACE_IBS_PRECOVER` bit**
+(`include/asmtest_trace_auto.h`) points an IBS-Op survey at the block-step
+tier's own decode cost rather than at picking a trace region: when the
+cross-tier auto cascade falls all the way to the rootless BTF block-step rung
+(no branch-record hardware completed the capture), the bit forks a bounded
+~30ms warm-up child, surveys it, and hands the resulting covered-block
+histogram to the block-step reconstructor as a pre-cover table — a pure
+decode-cost memoization (see the pre-cover entry above), never a change to
+what gets recorded. This is the one place a *statistical* producer feeds an
+*exact* one, and the boundary is exact: pre-cover can only skip re-decoding a
+block it has already reconstructed once from real bytes: it can never
+fabricate or drop an instruction. On a live Zen 2 host a hot loop's
+branch-probe decode calls dropped to zero once the warm-up survey covered its
+two basic blocks. The bit is opt-in and a proven no-op wherever it does not
+apply — most hosts reach a complete trace before the block-step rung, since
+the in-process single-step backend a few paragraphs up is itself a
+ceiling-free floor.
 
 The lane self-validates like everything else: `examples/ibs_probe.c` prints the
 capability table (and the precise skip reason elsewhere), `make ibs-test` runs

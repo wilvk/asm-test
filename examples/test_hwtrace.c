@@ -1224,6 +1224,271 @@ static void test_call_auto(void) {
 #endif
 }
 
+/* T8 (ASMTEST_TRACE_IBS_PRECOVER): with vs without the bit, the cross-tier cascade must
+ * produce a BIT-FOR-BIT IDENTICAL trace — the bit only memoizes the block-step
+ * reconstructor's decode (T7), it can never change what gets recorded (asmtest_ibs.h's
+ * INVARIANT). AMD_LOOP under ASMTEST_TRACE_CEILING_FREE reliably forces the cascade past
+ * the fixed-window AMD_LBR/MSR rungs onto the block-step floor (the same anti-vacuity
+ * argument test_call_auto's cases (b)/(c) already rely on), so this is the one rung the
+ * bit actually touches on any host that reaches it. Where IBS is unavailable, or the
+ * cascade lands somewhere other than block-step (e.g. a genuinely BTF-masked host falling
+ * to the per-instruction floor), the bit is a proven no-op — still a real, printed
+ * assertion, never a skip. */
+static void test_call_auto_ibs_precover(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    void *q = mmap(NULL, sizeof AMD_LOOP, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (q == MAP_FAILED) {
+        printf("# SKIP call_auto ibs precover: mmap failed\n");
+        return;
+    }
+    memcpy(q, AMD_LOOP, sizeof AMD_LOOP);
+    mprotect(q, sizeof AMD_LOOP, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)q, (char *)q + sizeof AMD_LOOP);
+    long largs[2] = {1, 25}; /* 25 trips > the 16-deep AMD_LBR/MSR window */
+
+    asmtest_bs_stats_reset();
+    asmtest_trace_t *plain = asmtest_trace_new(512, 64);
+    long plain_r = 0;
+    asmtest_trace_choice_t plain_used;
+    memset(&plain_used, 0, sizeof plain_used);
+    int prc = asmtest_trace_call_auto(q, sizeof AMD_LOOP, largs, 2,
+                                      ASMTEST_TRACE_CEILING_FREE, &plain_r,
+                                      plain, &plain_used);
+    uint64_t plain_probes = 0, plain_hits = 0;
+    asmtest_bs_stats(&plain_probes, &plain_hits);
+
+    asmtest_bs_stats_reset();
+    asmtest_trace_t *pre = asmtest_trace_new(512, 64);
+    long pre_r = 0;
+    asmtest_trace_choice_t pre_used;
+    memset(&pre_used, 0, sizeof pre_used);
+    int crc = asmtest_trace_call_auto(q, sizeof AMD_LOOP, largs, 2,
+                                      ASMTEST_TRACE_CEILING_FREE |
+                                          ASMTEST_TRACE_IBS_PRECOVER,
+                                      &pre_r, pre, &pre_used);
+    uint64_t pre_probes = 0, pre_hits = 0;
+    asmtest_bs_stats(&pre_probes, &pre_hits);
+
+    CHECK(
+        prc == ASMTEST_HW_OK || prc == ASMTEST_HW_EUNAVAIL,
+        "call_auto ibs precover: baseline (no bit) runs via some ceiling-free "
+        "tier, or none is available");
+    CHECK(
+        crc == prc,
+        "call_auto ibs precover: the bit changes neither availability nor rc");
+    if (prc == ASMTEST_HW_OK) {
+        CHECK(plain_r == 25 && pre_r == 25,
+              "call_auto ibs precover: both runs return the correct result "
+              "(25 trips)");
+        CHECK(plain_used.mechanism == pre_used.mechanism,
+              "call_auto ibs precover: the bit never changes the winning "
+              "escalation rung");
+        CHECK(asmtest_emu_trace_truncated(plain) ==
+                  asmtest_emu_trace_truncated(pre),
+              "call_auto ibs precover: identical truncation");
+        unsigned long long pn = asmtest_emu_trace_insns_total(plain);
+        unsigned long long cn = asmtest_emu_trace_insns_total(pre);
+        int same_stream = (pn == cn);
+        for (unsigned long long i = 0; same_stream && i < pn; i++)
+            same_stream = (plain->insns[i] == pre->insns[i]);
+        CHECK(same_stream,
+              "call_auto ibs precover: the bit produces a BYTE-IDENTICAL "
+              "instruction stream");
+        CHECK(asmtest_emu_trace_blocks_len(plain) ==
+                  asmtest_emu_trace_blocks_len(pre),
+              "call_auto ibs precover: identical block partition");
+
+        if (pre_used.mechanism == ASMTEST_TRACE_MECH_BLOCKSTEP &&
+            asmtest_ibs_available()) {
+            printf("# call_auto ibs precover: probe_calls %llu -> %llu "
+                   "(hits=%llu)\n",
+                   (unsigned long long)plain_probes,
+                   (unsigned long long)pre_probes,
+                   (unsigned long long)pre_hits);
+            CHECK(pre_hits > 0,
+                  "call_auto ibs precover: IBS is available and the live "
+                  "warm-up survey actually hit the pre-cover table");
+            CHECK(pre_probes < plain_probes,
+                  "call_auto ibs precover: a cache hit strictly reduced "
+                  "branch-probe decode calls versus the no-bit run");
+        } else {
+            printf("# call_auto ibs precover: bit is a no-op here "
+                   "(mechanism=%d, ibs_available=%d)%s%s\n",
+                   pre_used.mechanism, asmtest_ibs_available(),
+                   asmtest_ibs_available() ? "" : " — ",
+                   asmtest_ibs_available() ? "" : asmtest_ibs_skip_reason());
+        }
+    }
+    asmtest_trace_free(plain);
+    asmtest_trace_free(pre);
+    munmap(q, sizeof AMD_LOOP);
+#else
+    printf("# SKIP call_auto ibs precover: not Linux x86-64\n");
+#endif
+}
+
+/* T8, the live mechanism proof: on hosts where the fast in-process HWTRACE SINGLESTEP
+ * backend is available (any x86-64 Linux/macOS with Capstone — always, per
+ * asmtest_hwtrace_available()'s own "no PMU/perf/privilege" gate), it ALWAYS wins
+ * asmtest_trace_call_auto's rung 1 under both ASMTEST_TRACE_BEST and
+ * ASMTEST_TRACE_CEILING_FREE whenever AMD_LBR itself is unavailable (e.g. this Zen 2
+ * host predates LbrExtV2 — see docs/internal/implementations/_positions.md's Zen-4
+ * floor), so the block-step rung the pre-cover bit primes is unreachable through the
+ * public cascade here — test_call_auto_ibs_precover's own gate already gives that an
+ * honest no-op assertion rather than a false pass. To still LIVE-verify the actual
+ * mechanism build_ibs_precover (src/trace_auto.c) runs, this test performs the exact
+ * same recipe directly against asmtest_ptrace_trace_call_blockstep: fork a warm-up
+ * child that re-runs AMD_LOOP for ~30ms, survey it with a REAL IBS-Op capture (not
+ * T7's hand-built synthetic edge), normalize + build a precover table from that live
+ * histogram, and confirm it measurably shrinks the block-step reconstructor's
+ * branch-probe decode versus an uncached run — deterministic wherever IBS + block-step
+ * are both live, independent of which mechanism the auto-cascade's rung 1 resolves to. */
+static void test_blockstep_ibs_precover_live(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ptrace_blockstep_available()) {
+        printf(
+            "# SKIP blockstep ibs precover (live): PTRACE_SINGLEBLOCK/Capstone "
+            "unavailable here\n");
+        return;
+    }
+    if (!asmtest_ibs_available()) {
+        printf("# SKIP blockstep ibs precover (live): %s\n",
+               asmtest_ibs_skip_reason());
+        return;
+    }
+
+    void *q = mmap(NULL, sizeof AMD_LOOP, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (q == MAP_FAILED) {
+        printf("# SKIP blockstep ibs precover (live): mmap failed\n");
+        return;
+    }
+    memcpy(q, AMD_LOOP, sizeof AMD_LOOP);
+    mprotect(q, sizeof AMD_LOOP, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)q, (char *)q + sizeof AMD_LOOP);
+    long largs[2] = {1,
+                     25}; /* 25 trips: the same live loop as test_call_auto */
+
+    /* Fork an isolated warm-up child that re-runs the loop for ~30ms — the same
+     * recipe build_ibs_precover (src/trace_auto.c) runs internally, duplicated here
+     * (not called directly: it is file-static in trace_auto.c and T8 adds no new
+     * public/test symbol for it) so this test proves the COMPOSITION of already-public
+     * primitives, not a mock of it. */
+    pid_t child = fork();
+    if (child < 0) {
+        /* Environmental (resource exhaustion), not a code defect: SKIP like the
+         * mmap-failure guards above, never a CHECK — a CHECK here would run in
+         * whichever of parent/child observes it, and fork() gives only ONE of
+         * them a meaningful answer to report. */
+        printf("# SKIP blockstep ibs precover (live): fork failed\n");
+        munmap(q, sizeof AMD_LOOP);
+        return;
+    }
+    if (child == 0) {
+        long (*fn)(long, long) = (long (*)(long, long))(uintptr_t)q;
+        struct timespec t0, now;
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        do {
+            fn(1, 25);
+            clock_gettime(CLOCK_MONOTONIC, &now);
+        } while ((now.tv_sec - t0.tv_sec) * 1000L +
+                     (now.tv_nsec - t0.tv_nsec) / 1000000L <
+                 30);
+        _exit(0);
+    }
+
+    asmtest_ibs_survey_t sv;
+    memset(&sv, 0, sizeof sv);
+    int src = asmtest_ibs_survey_process(child, 30, NULL, &sv);
+    int status;
+    waitpid(child, &status,
+            0); /* the child's own budget matches the survey window */
+    if (src != ASMTEST_IBS_OK) {
+        /* asmtest_ibs_available() only probes the SUBSTRATE (CPUID/sysfs); it never
+         * calls perf_event_open, so it is 1 on real AMD IBS-Op silicon even inside a
+         * container whose default seccomp blocks the syscall (the plain docker-hwtrace
+         * lane, unlike docker-hwtrace-ibs/-privileged, grants neither). A live capture
+         * refusal here is exactly that capability gate — a real, legitimate self-skip,
+         * not a code defect — so this is a SKIP with the actual perf failure reason,
+         * never a CHECK. */
+        printf("# SKIP blockstep ibs precover (live): survey_process refused: %s\n",
+              asmtest_ibs_unavail_reason());
+        asmtest_ibs_survey_free(&sv);
+        munmap(q, sizeof AMD_LOOP);
+        return;
+    }
+
+    asmtest_ibs_blocks_t blk;
+    memset(&blk, 0, sizeof blk);
+    int nrc = asmtest_ibs_normalize_blocks(&sv, (uint64_t)(uintptr_t)q,
+                                           sizeof AMD_LOOP, &blk);
+    asmtest_ibs_survey_free(&sv);
+    CHECK(nrc == ASMTEST_IBS_OK && blk.n > 0,
+          "blockstep ibs precover (live): the live survey normalized to at "
+          "least one covered leader");
+
+    if (blk.n > 0) {
+        asmtest_bs_stats_reset();
+        asmtest_trace_t *plain = asmtest_trace_new(256, 64);
+        long plain_r = 0;
+        int prc = asmtest_ptrace_trace_call_blockstep(q, sizeof AMD_LOOP, largs,
+                                                      2, &plain_r, plain);
+        uint64_t plain_probes = 0, plain_hits = 0;
+        asmtest_bs_stats(&plain_probes, &plain_hits);
+
+        asmtest_bs_precover_t *tbl = asmtest_bs_precover_build(
+            (const uint8_t *)q, sizeof AMD_LOOP, (uint64_t)(uintptr_t)q, &blk);
+        CHECK(tbl != NULL,
+              "blockstep ibs precover (live): build succeeds from the live "
+              "survey");
+
+        asmtest_bs_precover_set_current(tbl);
+        asmtest_bs_stats_reset();
+        asmtest_trace_t *cached = asmtest_trace_new(256, 64);
+        long cached_r = 0;
+        int crc = asmtest_ptrace_trace_call_blockstep(q, sizeof AMD_LOOP, largs,
+                                                      2, &cached_r, cached);
+        uint64_t cached_probes = 0, cached_hits = 0;
+        asmtest_bs_stats(&cached_probes, &cached_hits);
+        asmtest_bs_precover_set_current(
+            NULL); /* clear before freeing the table */
+
+        CHECK(prc == ASMTEST_PTRACE_OK && crc == ASMTEST_PTRACE_OK &&
+                  plain_r == 25 && cached_r == 25,
+              "blockstep ibs precover (live): cached and uncached runs both "
+              "return the correct result");
+        unsigned long long pn = asmtest_emu_trace_insns_total(plain);
+        unsigned long long cn = asmtest_emu_trace_insns_total(cached);
+        int same_stream = (pn == cn);
+        for (unsigned long long i = 0; same_stream && i < pn; i++)
+            same_stream = (plain->insns[i] == cached->insns[i]);
+        CHECK(same_stream,
+              "blockstep ibs precover (live): the live-survey-primed run "
+              "reconstructs the IDENTICAL instruction stream");
+        printf("# blockstep ibs precover (live): probe_calls %llu -> %llu "
+               "(hits=%llu, leaders=%zu)\n",
+               (unsigned long long)plain_probes,
+               (unsigned long long)cached_probes,
+               (unsigned long long)cached_hits, blk.n);
+        CHECK(cached_hits > 0,
+              "blockstep ibs precover (live): the live-survey leader was "
+              "actually hit");
+        CHECK(cached_probes < plain_probes,
+              "blockstep ibs precover (live): a real IBS-Op survey measurably "
+              "reduced branch-probe decode calls");
+
+        asmtest_trace_free(plain);
+        asmtest_trace_free(cached);
+        asmtest_bs_precover_free(tbl);
+    }
+    asmtest_ibs_blocks_free(&blk);
+    munmap(q, sizeof AMD_LOOP);
+#else
+    printf("# SKIP blockstep ibs precover (live): not Linux x86-64\n");
+#endif
+}
+
 static void test_stealth_window_inline(void) {
 #if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
     if (!asmtest_ptrace_available()) {
@@ -9133,6 +9398,8 @@ int main(void) {
     test_amd_live_smallroutine();
     test_amd_reach_period();
     test_call_auto();
+    test_call_auto_ibs_precover();
+    test_blockstep_ibs_precover_live();
     test_stealth_window_inline();
     test_amd_msr();
     test_ss_btf_live();
