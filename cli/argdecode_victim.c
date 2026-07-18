@@ -33,6 +33,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <time.h>
@@ -67,8 +68,17 @@ int main(void) {
             ioctl(fd, TIOCGWINSZ, &ws); /* ENOTTY on a file: request decodes */
             ioctl(fd, _IOC(_IOC_READ, 0xab, 1, 4),
                   &dummy); /* unknown: decompose */
+            struct stat fst;
+            fstat(fd, &fst); /* T4: fstat's result buffer (st_size=18) */
             close(fd);
         }
+        /* T4: stat/statx result buffers over the 18-byte file just written */
+        struct stat st;
+        syscall(SYS_stat, TMP, &st);
+        struct statx sx;
+        syscall(SYS_statx, AT_FDCWD, TMP, 0, STATX_BASIC_STATS, &sx);
+        /* NEGATIVE control: a FAILED stat renders a raw pointer, not a struct */
+        syscall(SYS_stat, "/nonexistent-asmspy", &st);
         /* openat WITHOUT one: mode must NOT be rendered */
         int rf = open(TMP, O_RDONLY);
         if (rf >= 0)

@@ -86,6 +86,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `make docker-cli` cli-smoke PASS.
   See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/asmspy-cli-enhancements.md).
 
+- **`stat`/`statx` result buffers are decoded** (asmspy `--log`).
+  `fstat`/`stat`/`lstat`/`newfstatat` render `{st_mode=S_IFREG|0644, st_size=18}` on
+  success (a raw pointer on failure), and `statx` renders its mask-honoring
+  `{stx_mode=…, stx_size=…}` (a field the kernel did not fill is omitted, not invented).
+  The path decode these calls already had is preserved. `make docker-cli` cli-smoke PASS.
+  See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/asmspy-cli-enhancements.md).
+
 - **Block-step replay record-and-inject for rdtsc/rdtscp/rdrand/rdseed/cpuid, gated per
   block rather than per region.** `src/dataflow_blockstep.c`'s `step_block` now injects
   each site's recorded post-state (read from the T5 DR exec-breakpoint boundary) into the

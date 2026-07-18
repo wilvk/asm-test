@@ -30,6 +30,7 @@
 #include <sys/mman.h>  /* PROT_* / MAP_* — the mmap flag tables */
 #include <sys/ptrace.h>
 #include <sys/socket.h> /* AF_*, sockaddr_storage (Theme E) */
+#include <sys/stat.h> /* struct stat / struct statx + S_IF*/STATX_* (Theme E) */
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <sys/un.h> /* sockaddr_un (Theme E) */
@@ -543,7 +544,9 @@ typedef enum {
     A_SOCKADDR_OUT, /* struct sockaddr* OUT — len behind next arg (socklen_t*) */
     A_IOCTLREQ,     /* ioctl request -> name or _IOC(dir,type,nr,size) (T2) */
     A_FCNTLCMD,     /* fcntl command -> F_xxx (T2) */
-    A_FUTEXOP       /* futex op -> FUTEX_xxx with flags folded in (T3) */
+    A_FUTEXOP,      /* futex op -> FUTEX_xxx with flags folded in (T3) */
+    A_STATBUF,      /* struct stat* OUT -> {st_mode, st_size} on success (T4) */
+    A_STATXBUF /* struct statx* OUT -> mask-honoring {stx_mode, stx_size} */
 } argcls_t;
 
 typedef struct {
@@ -655,7 +658,23 @@ static int arg_shape(long nr, argshape_t *sh) {
 #endif
 #ifdef __NR_fstat
     case __NR_fstat:
-        SHAPE(A_FD, A_HEX);
+        SHAPE(A_FD, A_STATBUF);
+#endif
+#ifdef __NR_stat
+    case __NR_stat:
+        SHAPE(A_PATH, A_STATBUF);
+#endif
+#ifdef __NR_lstat
+    case __NR_lstat:
+        SHAPE(A_PATH, A_STATBUF);
+#endif
+#ifdef __NR_newfstatat
+    case __NR_newfstatat:
+        SHAPE(A_DIRFD, A_PATH, A_STATBUF, A_HEX);
+#endif
+#ifdef __NR_statx
+    case __NR_statx:
+        SHAPE(A_DIRFD, A_PATH, A_INT, A_HEX, A_STATXBUF);
 #endif
 #ifdef __NR_ioctl
     case __NR_ioctl:
@@ -1347,6 +1366,77 @@ static size_t ap_futexop(char *b, size_t cap, size_t o, long long v) {
     return o;
 }
 
+/* Render a stat/statx mode field: <TYPE>|<perms-octal>, TYPE from S_IFMT (an
+ * unknown type keeps its raw high bits in octal, never a guess). */
+static size_t ap_stmode(char *b, size_t cap, size_t o, unsigned mode) {
+    const char *ty = NULL;
+    switch (mode & S_IFMT) {
+    case S_IFREG:
+        ty = "S_IFREG";
+        break;
+    case S_IFDIR:
+        ty = "S_IFDIR";
+        break;
+    case S_IFCHR:
+        ty = "S_IFCHR";
+        break;
+    case S_IFBLK:
+        ty = "S_IFBLK";
+        break;
+    case S_IFIFO:
+        ty = "S_IFIFO";
+        break;
+    case S_IFSOCK:
+        ty = "S_IFSOCK";
+        break;
+    case S_IFLNK:
+        ty = "S_IFLNK";
+        break;
+    default:
+        break;
+    }
+    if (ty)
+        return apf(b, cap, o, "%s|%04o", ty, mode & 07777u);
+    return apf(b, cap, o, "0%o|%04o", mode & (unsigned)S_IFMT, mode & 07777u);
+}
+
+/* Decode a struct stat* OUT buffer as {st_mode=<type>|<perm>, st_size=N} — the
+ * two fields a trace reader greps for; a line is a line, not a record dump. Only
+ * called on success (ret==0); addr==0 -> NULL, an unreadable ptr -> the raw 0x. */
+static size_t ap_statbuf(char *b, size_t cap, size_t o, pid_t pid,
+                         uint64_t addr) {
+    if (!addr)
+        return apf(b, cap, o, "NULL");
+    struct stat st;
+    if (rd(pid, addr, &st, sizeof st) != 0)
+        return apf(b, cap, o, "0x%llx", (unsigned long long)addr);
+    o = apf(b, cap, o, "{st_mode=");
+    o = ap_stmode(b, cap, o, (unsigned)st.st_mode);
+    return apf(b, cap, o, ", st_size=%lld}", (long long)st.st_size);
+}
+
+/* Decode a struct statx* OUT buffer, HONORING stx_mask: a field the kernel did
+ * not fill is omitted, not invented. Only called on success (ret==0). */
+static size_t ap_statxbuf(char *b, size_t cap, size_t o, pid_t pid,
+                          uint64_t addr) {
+    if (!addr)
+        return apf(b, cap, o, "NULL");
+    struct statx sx;
+    if (rd(pid, addr, &sx, sizeof sx) != 0)
+        return apf(b, cap, o, "0x%llx", (unsigned long long)addr);
+    o = apf(b, cap, o, "{");
+    int first = 1;
+    if (sx.stx_mask & (STATX_TYPE | STATX_MODE)) {
+        o = apf(b, cap, o, "stx_mode=");
+        o = ap_stmode(b, cap, o, sx.stx_mode);
+        first = 0;
+    }
+    if (sx.stx_mask & STATX_SIZE)
+        o = apf(b, cap, o, "%sstx_size=%llu", first ? "" : ", ",
+                (unsigned long long)sx.stx_size);
+    return apf(b, cap, o, "}");
+}
+
 /* Render one argument of class `cl` (`ret` is the syscall's return value — OUT
  * classes decode only on success; every other class ignores it). */
 static size_t ap_arg(char *b, size_t cap, size_t o, pid_t pid, int cl,
@@ -1430,6 +1520,14 @@ static size_t ap_arg(char *b, size_t cap, size_t o, pid_t pid, int cl,
         return ap_fcntlcmd(b, cap, o, (long long)v);
     case A_FUTEXOP:
         return ap_futexop(b, cap, o, (long long)v);
+    case A_STATBUF:
+        if (ret != 0)
+            return apf(b, cap, o, "0x%llx", v);
+        return ap_statbuf(b, cap, o, pid, v);
+    case A_STATXBUF:
+        if (ret != 0)
+            return apf(b, cap, o, "0x%llx", v);
+        return ap_statxbuf(b, cap, o, pid, v);
     default:
         return apf(b, cap, o, "0x%llx", v);
     }

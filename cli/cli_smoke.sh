@@ -1436,6 +1436,18 @@ printf '%s\n' "$adout" | grep -E '^futex\(' | grep -q ', 129, ' \
     && fail "futex: op still renders as the bare int 129 (masking not applied)"
 echo "  futex op named with the private flag folded in (no bare 129)"
 
+# ---- T4: stat/statx result buffers on success (raw pointer on failure) ----
+# 18 is DERIVED from the fixture's own writev (9+9 bytes); 0644 from its open —
+# the assertion cannot pass against a stale decode.
+ad_has '{st_mode=S_IFREG|0644, st_size=18}' "a stat buffer's contents"
+ad_has 'statx(AT_FDCWD, ' "statx dirfd + path"
+ad_has 'stx_size=18' "a statx buffer honoring its mask"
+# NEGATIVE control: a FAILED stat must render a raw pointer + negative return,
+# not a struct from a buffer the kernel never filled (proves the ret==0 gate).
+printf '%s\n' "$adout" | grep -qE 'stat\("/nonexistent-asmspy", 0x[0-9a-f]+\) = -' \
+    || fail "stat: a failed stat did not render a raw pointer + negative return"
+echo "  stat/statx buffers decoded on success; a failed stat stays a raw pointer"
+
 echo "--- asmspy --log fd->endpoint (socket:[inode] -> real endpoint) ---"
 "$BUILD/sock_victim" 2>"$BUILD/sock_victim.log" &
 SKPID=$!
