@@ -45,7 +45,10 @@ Grouped by workstream. **Depends on** lists only *hard* build/code dependencies
 are noted inside each doc's *Task order & parallelism* section, not here.
 
 **Status** tracks task completion as `done/total`; update the cell as tasks
-land. Legend: ☐ not started (`0/N`) · ◐ in progress · ☑ complete (`N/N`).
+land. Legend: ☐ not started (`0/N`) · ◐ in progress · ☑ complete (`N/N`, code
+landed) · ✅ verified (`N/N`, exercised end-to-end on the target — not just unit
+tests; see the repo's verify-before-done rule). A doc reaches ✅ only once its
+hardware/credential-gated legs have actually run, or are recorded as gated.
 Everything is ☐ not started — these are freshly authored specs.
 
 ### AMD hardware tracing
