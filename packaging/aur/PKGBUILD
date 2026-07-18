@@ -1,0 +1,42 @@
+# Maintainer: asm-test contributors <willvk@gmail.com>
+#
+# AUR PKGBUILD for the asm-test C core: the MIT-licensed static library, headers
+# and pkg-config file (the GPL engines are conveyed only by the language-binding
+# packages, never by this one). Pins the v1.1.0 release tarball asset by sha256.
+#
+# Verified in CI by `make docker-syspkg-aur` (x86_64): makepkg build+check+package,
+# namcap on the PKGBUILD and the built package, pacman -U, then a pkg-config
+# consumer smoke. The aarch64 entry in arch=() is verified out of band on an Arch
+# Linux ARM host (the official archlinux image ships no aarch64 variant) — a
+# documented best-effort gap, not a self-skip: the x86_64 lane fully exercises the
+# PKGBUILD. The lane is hermetic — the v1.1.0 release asset is published by
+# distribution-packaging.md T3 (a maintainer action) and does not exist yet, so
+# the lane pre-places the reproducible `make package-source` tarball and matches
+# its digest. AUR publish (SSH push) is the only credential-gated step.
+pkgname=asm-test
+pkgver=1.1.0
+pkgrel=1
+pkgdesc="C-hosted unit-testing framework for assembly language (static core: lib + headers + pkg-config)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/wilvk/asm-test"
+license=('MIT')
+depends=('glibc')
+makedepends=('make')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/wilvk/asm-test/releases/download/v$pkgver/asm-test-$pkgver.tar.gz")
+sha256sums=('9d44fbcd88745348f0886c20baedeed1a9bc332ba5162dab5fe78fbc0c62197d')
+
+build() {
+  cd "asm-test-$pkgver"
+  make lib
+}
+
+check() {
+  cd "asm-test-$pkgver"
+  make check
+}
+
+package() {
+  cd "asm-test-$pkgver"
+  make install PREFIX=/usr DESTDIR="$pkgdir"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

@@ -1,0 +1,55 @@
+# Dockerfile.syspkg-aur — AUR PKGBUILD verification lane
+# (distribution-packaging.md T10). x86_64 only: the official archlinux image
+# publishes no aarch64 variant, so the arch=(... aarch64) entry is verified out of
+# band on an Arch Linux ARM host — a documented best-effort gap, not a self-skip
+# (this lane fully exercises the PKGBUILD on x86_64).
+#
+# Hermetic: the PKGBUILD pins the v1.1.0 release tarball asset (published by T3, a
+# maintainer action — absent here), so the lane pre-places the reproducible
+# make-package-source tarball under the source filename and matches its sha256, so
+# makepkg builds without any network fetch. AUR publish (SSH push of PKGBUILD +
+# .SRCINFO) is the only credential-gated step (T10 step 4).
+#
+# Build + run:  make docker-syspkg-aur
+ARG ARCH_TAG=base-devel-20260712.0.555161
+FROM archlinux:${ARCH_TAG}
+ARG VER=1.1.0
+
+# namcap (lint), sudo (makepkg refuses root; pacman -U needs privilege), pkgconf
+# (pkg-config for the consumer smoke). base-devel already carries make + gcc.
+RUN pacman -Sy --noconfirm --needed namcap sudo pkgconf \
+ && rm -rf /var/cache/pacman/pkg/* \
+ && useradd -m builder \
+ && printf 'builder ALL=(ALL) NOPASSWD: ALL\n' > /etc/sudoers.d/builder
+
+USER builder
+WORKDIR /home/builder/build
+
+COPY --chown=builder:builder packaging/aur/ /home/builder/build/
+COPY --chown=builder:builder packaging/.staging/asm-test-${VER}.tar.gz /home/builder/build/asm-test-${VER}.tar.gz
+COPY --chown=builder:builder packaging/smoke/consumer.c /home/builder/build/consumer.c
+
+ENV VER=${VER}
+CMD set -eux; \
+    echo "== .SRCINFO regenerates without diff (committed vs makepkg --printsrcinfo) =="; \
+    makepkg --printsrcinfo > .SRCINFO.gen; \
+    diff -u .SRCINFO .SRCINFO.gen; \
+    echo "== namcap PKGBUILD (informational) =="; \
+    namcap PKGBUILD || true; \
+    echo "== point sha256sums at the pre-placed local tarball (v1.1.0 asset is T3-gated) =="; \
+    SUM="$(sha256sum asm-test-${VER}.tar.gz | cut -d' ' -f1)"; \
+    sed -i "s/sha256sums=('.*')/sha256sums=('$SUM')/" PKGBUILD; \
+    echo "== makepkg (build + check + package; uses the pre-placed tarball) =="; \
+    makepkg --noconfirm; \
+    echo "== namcap the built package (fail on any E:/W: beyond the accepted list) =="; \
+    namcap *.pkg.tar.zst | tee namcap.out; \
+    # Accepted: namcap cannot see that a static .a's objects are glibc-linked, so
+    # it heuristically flags glibc as maybe-unneeded — but consumers linking the
+    # lib do need it. Fail on any OTHER E:/W: line.
+    if grep -E '(^| )(E|W): ' namcap.out | grep -vqE "may not be needed \\('glibc'\\)"; then \
+      echo "namcap flagged issues beyond the accepted list"; exit 1; fi; \
+    echo "== install + pkg-config consumer smoke =="; \
+    sudo pacman -U --noconfirm *.pkg.tar.zst; \
+    cc consumer.c $(pkg-config --cflags --libs asmtest) -o consumer; \
+    ./consumer; \
+    echo "docker-syspkg-aur: OK — makepkg built, namcap-clean, installed, consumer ran"

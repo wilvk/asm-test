@@ -745,3 +745,14 @@ docker-syspkg-deb:
 	  --build-arg DEB_BASE=$(DEB_BASE) -t asmtest-syspkg-deb .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-syspkg-deb
 
+# T10 — AUR PKGBUILD: makepkg build+check+package + namcap + .SRCINFO diff +
+# pacman -U + consumer, on x86_64 (the official archlinux image has no aarch64).
+# Override ARCH_TAG to bump the pinned dated archlinux base-devel image.
+ARCH_TAG ?= base-devel-20260712.0.555161
+.PHONY: docker-syspkg-aur
+docker-syspkg-aur: syspkg-stage
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.syspkg-aur \
+	  --build-arg ARCH_TAG=$(ARCH_TAG) --build-arg VER=$(ASMTEST_VERSION) \
+	  -t asmtest-syspkg-aur .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-syspkg-aur
+
