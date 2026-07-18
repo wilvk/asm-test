@@ -18,6 +18,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and Debian's orig-tarball flow consume.
   See [distribution-packaging.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/distribution-packaging.md).
 
+- **Socket-syscall `sockaddr` contents are decoded** (asmspy `--log`). `connect`/`bind`/
+  `sendto` render their `struct sockaddr *` as `{AF_INET, 127.0.0.1:8080}` /
+  `{AF_INET6, [::1]:80}` / `{AF_UNIX, "/path"}` (abstract sockets as `"@name"`), and
+  `accept`/`accept4`/`recvfrom` decode their OUT pointer on success (raw pointer on
+  failure); `socket()`'s domain renders as `AF_INET`/`AF_UNIX`/… An unknown family prints
+  `{family=N, len=M}`, never a guessed name. `make docker-cli` cli-smoke PASS.
+  See [asmspy-cli-enhancements.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/asmspy-cli-enhancements.md).
+
 - **Block-step replay record-and-inject for rdtsc/rdtscp/rdrand/rdseed/cpuid, gated per
   block rather than per region.** `src/dataflow_blockstep.c`'s `step_block` now injects
   each site's recorded post-state (read from the T5 DR exec-breakpoint boundary) into the

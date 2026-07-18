@@ -12,9 +12,11 @@
  * return EINTR, the engine sees *stop, detaches, and returns.
  */
 #define _GNU_SOURCE
+#include <arpa/inet.h> /* inet_ntop — sockaddr content decode (Theme E) */
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netinet/in.h> /* sockaddr_in / sockaddr_in6 (Theme E) */
 #include <pthread.h>
 #include <sched.h> /* CLONE_* — the clone flag table */
 #include <signal.h>
@@ -25,8 +27,10 @@
 #include <string.h>
 #include <sys/mman.h> /* PROT_* / MAP_* — the mmap flag tables */
 #include <sys/ptrace.h>
+#include <sys/socket.h> /* AF_*, sockaddr_storage (Theme E) */
 #include <sys/syscall.h>
 #include <sys/uio.h>
+#include <sys/un.h> /* sockaddr_un (Theme E) */
 #include <sys/user.h>
 #include <sys/wait.h>
 #include <time.h> /* CLOCK_MONOTONIC: the entry-wait wall bound */
@@ -514,24 +518,27 @@ static size_t ap_fd(char *b, size_t cap, size_t o, pid_t pid, long long fd) {
 /* ================================================================== */
 
 typedef enum {
-    A_END = 0,  /* no argument here — this is what makes arity exact */
-    A_HEX,      /* raw word / opaque pointer */
-    A_INT,      /* signed decimal */
-    A_SIZE,     /* unsigned decimal (a length/count) */
-    A_FD,       /* fd + the endpoint behind it (ap_fd) */
-    A_DIRFD,    /* AT_FDCWD or an fd */
-    A_PATH,     /* char* — decoded as a C string */
-    A_OFLAGS,   /* open/openat flags word */
-    A_MODE,     /* octal creation mode */
-    A_PROT,     /* mmap/mprotect protection */
-    A_MAPFLAGS, /* mmap flags */
-    A_CLONEFL,  /* clone flags (low byte is the exit signal) */
-    A_SIGNO,    /* signal number -> SIGxxx */
-    A_SIGSET,   /* sigset_t* -> [SIGxxx SIGyyy] */
-    A_SIGHOW,   /* rt_sigprocmask how */
-    A_IOVEC,    /* struct iovec* — count comes from the NEXT arg */
-    A_TIMESPEC, /* struct timespec* -> {sec, nsec} */
-    A_WHENCE    /* lseek whence */
+    A_END = 0,     /* no argument here — this is what makes arity exact */
+    A_HEX,         /* raw word / opaque pointer */
+    A_INT,         /* signed decimal */
+    A_SIZE,        /* unsigned decimal (a length/count) */
+    A_FD,          /* fd + the endpoint behind it (ap_fd) */
+    A_DIRFD,       /* AT_FDCWD or an fd */
+    A_PATH,        /* char* — decoded as a C string */
+    A_OFLAGS,      /* open/openat flags word */
+    A_MODE,        /* octal creation mode */
+    A_PROT,        /* mmap/mprotect protection */
+    A_MAPFLAGS,    /* mmap flags */
+    A_CLONEFL,     /* clone flags (low byte is the exit signal) */
+    A_SIGNO,       /* signal number -> SIGxxx */
+    A_SIGSET,      /* sigset_t* -> [SIGxxx SIGyyy] */
+    A_SIGHOW,      /* rt_sigprocmask how */
+    A_IOVEC,       /* struct iovec* — count comes from the NEXT arg */
+    A_TIMESPEC,    /* struct timespec* -> {sec, nsec} */
+    A_WHENCE,      /* lseek whence */
+    A_SOCKFAM,     /* socket() domain -> AF_xxx (T1) */
+    A_SOCKADDR,    /* struct sockaddr* IN — byte len is the NEXT arg (T1) */
+    A_SOCKADDR_OUT /* struct sockaddr* OUT — len behind next arg (socklen_t*) */
 } argcls_t;
 
 typedef struct {
@@ -671,15 +678,15 @@ static int arg_shape(long nr, argshape_t *sh) {
 #endif
 #ifdef __NR_socket
     case __NR_socket:
-        SHAPE(A_INT, A_INT, A_INT);
+        SHAPE(A_SOCKFAM, A_INT, A_INT);
 #endif
 #ifdef __NR_connect
     case __NR_connect:
-        SHAPE(A_FD, A_HEX, A_INT);
+        SHAPE(A_FD, A_SOCKADDR, A_INT);
 #endif
 #ifdef __NR_bind
     case __NR_bind:
-        SHAPE(A_FD, A_HEX, A_INT);
+        SHAPE(A_FD, A_SOCKADDR, A_INT);
 #endif
 #ifdef __NR_listen
     case __NR_listen:
@@ -687,15 +694,19 @@ static int arg_shape(long nr, argshape_t *sh) {
 #endif
 #ifdef __NR_accept
     case __NR_accept:
-        SHAPE(A_FD, A_HEX, A_HEX);
+        SHAPE(A_FD, A_SOCKADDR_OUT, A_HEX);
+#endif
+#ifdef __NR_accept4
+    case __NR_accept4:
+        SHAPE(A_FD, A_SOCKADDR_OUT, A_HEX, A_INT);
 #endif
 #ifdef __NR_sendto
-    case __NR_sendto: /* the case 4760d4f flagged: 3 raw hex, no fd */
-        SHAPE(A_FD, A_HEX, A_SIZE, A_HEX, A_HEX, A_INT);
+    case __NR_sendto:
+        SHAPE(A_FD, A_HEX, A_SIZE, A_HEX, A_SOCKADDR, A_INT);
 #endif
 #ifdef __NR_recvfrom
     case __NR_recvfrom:
-        SHAPE(A_FD, A_HEX, A_SIZE, A_HEX, A_HEX, A_HEX);
+        SHAPE(A_FD, A_HEX, A_SIZE, A_HEX, A_SOCKADDR_OUT, A_HEX);
 #endif
 #ifdef __NR_shutdown
     case __NR_shutdown:
@@ -1020,9 +1031,89 @@ static size_t ap_timespec(char *b, size_t cap, size_t o, pid_t pid,
                (long long)ts.nsec);
 }
 
-/* Render one argument of class `cl`. */
+/* AF_* domain name, shared by socket()'s domain arg and the sockaddr decoder.
+ * Only the families worth naming in a one-line trace; anything else keeps its
+ * number (an honest raw form, never a guessed name). */
+static const char *af_name(int fam) {
+    switch (fam) {
+    case AF_UNIX:
+        return "AF_UNIX";
+    case AF_INET:
+        return "AF_INET";
+    case AF_INET6:
+        return "AF_INET6";
+    case AF_NETLINK:
+        return "AF_NETLINK";
+    default:
+        return NULL;
+    }
+}
+
+/* Decode a struct sockaddr* of byte length `len` at target address `addr` into
+ * {AF_INET, 127.0.0.1:80} / {AF_INET6, [::1]:80} / {AF_UNIX, "/path"}.
+ * addr==0 -> NULL; an unreadable/too-short pointer -> the raw 0x form
+ * (ap_timespec's fallback idiom); an unknown family -> {family=N, len=M}, never
+ * a guessed name. The tracee is x86-64 like the tracer (i386 is refused at
+ * attach), so the host's <netinet/in.h>/<sys/un.h> layouts ARE the target's. */
+static size_t ap_sockaddr(char *b, size_t cap, size_t o, pid_t pid,
+                          uint64_t addr, long long len) {
+    if (!addr)
+        return apf(b, cap, o, "NULL");
+    struct sockaddr_storage ss;
+    memset(&ss, 0, sizeof ss);
+    size_t n = len < 0 ? 0 : (size_t)len;
+    if (n > sizeof ss)
+        n = sizeof ss;
+    if (n < sizeof(sa_family_t) || rd(pid, addr, &ss, n) != 0)
+        return apf(b, cap, o, "0x%llx", (unsigned long long)addr);
+    switch (ss.ss_family) {
+    case AF_INET: {
+        const struct sockaddr_in *si = (const struct sockaddr_in *)&ss;
+        char ip[INET_ADDRSTRLEN];
+        if (!inet_ntop(AF_INET, &si->sin_addr, ip, sizeof ip))
+            return apf(b, cap, o, "{AF_INET}");
+        return apf(b, cap, o, "{AF_INET, %s:%u}", ip,
+                   (unsigned)ntohs(si->sin_port));
+    }
+    case AF_INET6: {
+        const struct sockaddr_in6 *si6 = (const struct sockaddr_in6 *)&ss;
+        char ip[INET6_ADDRSTRLEN];
+        if (!inet_ntop(AF_INET6, &si6->sin6_addr, ip, sizeof ip))
+            return apf(b, cap, o, "{AF_INET6}");
+        o = apf(b, cap, o, "{AF_INET6, [%s]:%u", ip,
+                (unsigned)ntohs(si6->sin6_port));
+        if (si6->sin6_scope_id)
+            o = apf(b, cap, o, "%%%u", (unsigned)si6->sin6_scope_id);
+        return apf(b, cap, o, "}");
+    }
+    case AF_UNIX: {
+        const struct sockaddr_un *un = (const struct sockaddr_un *)&ss;
+        size_t hdr = offsetof(struct sockaddr_un, sun_path);
+        if (n <= hdr)
+            return apf(b, cap, o, "{AF_UNIX}"); /* unnamed: family bytes only */
+        size_t pathcap = n - hdr;
+        if (pathcap > sizeof un->sun_path)
+            pathcap = sizeof un->sun_path;
+        if (un->sun_path[0] ==
+            '\0') { /* abstract socket: name follows the NUL */
+            size_t nl = strnlen(un->sun_path + 1, pathcap - 1);
+            return apf(b, cap, o, "{AF_UNIX, \"@%.*s\"}", (int)nl,
+                       un->sun_path + 1);
+        }
+        /* a filesystem path — bounded by len, never trusting a NUL to be there */
+        size_t nl = strnlen(un->sun_path, pathcap);
+        return apf(b, cap, o, "{AF_UNIX, \"%.*s\"}", (int)nl, un->sun_path);
+    }
+    default:
+        return apf(b, cap, o, "{family=%u, len=%lld}", (unsigned)ss.ss_family,
+                   len);
+    }
+}
+
+/* Render one argument of class `cl` (`ret` is the syscall's return value — OUT
+ * classes decode only on success; every other class ignores it). */
 static size_t ap_arg(char *b, size_t cap, size_t o, pid_t pid, int cl,
-                     const struct user_regs_struct *e, int i) {
+                     const struct user_regs_struct *e, int i, long ret) {
     unsigned long long v = scarg(e, i);
     switch (cl) {
     case A_FD:
@@ -1078,6 +1169,24 @@ static size_t ap_arg(char *b, size_t cap, size_t o, pid_t pid, int cl,
         default:
             return apf(b, cap, o, "%d", (int)v);
         }
+    case A_SOCKFAM: {
+        const char *nm = af_name((int)v);
+        if (nm)
+            return apf(b, cap, o, "%s", nm);
+        return apf(b, cap, o, "%d", (int)v);
+    }
+    case A_SOCKADDR: /* IN: the byte length is the NEXT register (addrlen) */
+        return ap_sockaddr(b, cap, o, pid, v, (long long)scarg(e, i + 1));
+    case A_SOCKADDR_OUT: {
+        /* OUT: the addr is valid only on success, and its byte length lives
+         * BEHIND the next arg (a socklen_t*). A failed call, a NULL length
+         * pointer, or an unreadable one all fall back to the raw pointer. */
+        uint64_t plen = scarg(e, i + 1);
+        socklen_t sl = 0;
+        if (ret < 0 || plen == 0 || rd(pid, plen, &sl, sizeof sl) != 0)
+            return apf(b, cap, o, "0x%llx", v);
+        return ap_sockaddr(b, cap, o, pid, v, (long long)sl);
+    }
     default:
         return apf(b, cap, o, "0x%llx", v);
     }
@@ -1144,7 +1253,7 @@ static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
             for (int i = 0; i < n; i++) {
                 if (i)
                     o = apf(b, cap, o, ", ");
-                o = ap_arg(b, cap, o, pid, sh.c[i], e, i);
+                o = ap_arg(b, cap, o, pid, sh.c[i], e, i, ret);
                 /* the string pane shows this call's primary datum */
                 if (sh.c[i] == A_PATH && !sout[0])
                     decode_cstr(pid, scarg(e, i), sout, scap);

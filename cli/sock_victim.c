@@ -77,10 +77,10 @@ int main(void) {
         perror("unix bind");
         return 1;
     }
-    /* connect a DGRAM socket to its OWN address so plain write() works on it.
-     * sendto() would be the natural call, but asmspy only hand-decodes a small
-     * set of syscalls and sendto is not one of them — it would render as raw hex
-     * with no fd to enrich, testing nothing. write() is decoded. */
+    /* self-connect the DGRAM socket to its OWN address so the loop's sendto()
+     * has a destination and ufd stays a usable, resolvable endpoint. sendto is
+     * decoded now, so the loop uses it to exercise the {AF_UNIX, "/path"}
+     * sockaddr rendering (and it resolves ufd the way write() used to). */
     if (connect(ufd, (struct sockaddr *)&u, sizeof u) != 0) {
         perror("unix connect");
         return 1;
@@ -95,12 +95,38 @@ int main(void) {
         write(cfd, "c", 1); /* connected TCP, client end */
         if (sfd >= 0)
             write(sfd, "s", 1); /* connected TCP, server end */
-        write(ufd, "u", 1);     /* AF_UNIX bound to a path */
+        /* sendto the bound AF_UNIX path: renders {AF_UNIX, "/path"} AND resolves
+         * ufd to <unix:/path> (the fd->endpoint case write() used to carry). */
+        sendto(ufd, "u", 1, 0, (struct sockaddr *)&u, sizeof u);
         /* Deliberately write to the LISTENING socket. It fails with ENOTCONN,
          * which is fine and is the point: the syscall is still decoded, so the
          * smoke gets a line naming a LISTEN endpoint — otherwise no decoded
          * syscall ever mentions the listener's fd. */
         write(lfd, "l", 1);
+
+        /* A throwaway AF_INET/SOCK_DGRAM socket connected to the TCP port: a UDP
+         * connect() sends no packet and cannot fail on loopback, so it safely
+         * exercises socket(AF_INET, ...) and connect()'s {AF_INET, ...} IN
+         * sockaddr INSIDE the traced window (the setup calls ran before attach).
+         * `a` still holds 127.0.0.1:<port> from getsockname above. */
+        int dg = socket(AF_INET, SOCK_DGRAM, 0);
+        if (dg >= 0) {
+            connect(dg, (struct sockaddr *)&a, sizeof a);
+            close(dg);
+        }
+        /* A fresh TCP client + accept, so accept()'s OUT sockaddr is filled in on
+         * success in-window. accept() returns promptly: the client connect queued
+         * a pending connection on lfd's backlog. */
+        int c2 = socket(AF_INET, SOCK_STREAM, 0);
+        if (c2 >= 0 && connect(c2, (struct sockaddr *)&a, sizeof a) == 0) {
+            struct sockaddr_in pa;
+            socklen_t pl = sizeof pa;
+            int s2 = accept(lfd, (struct sockaddr *)&pa, &pl);
+            if (s2 >= 0)
+                close(s2);
+        }
+        if (c2 >= 0)
+            close(c2);
         usleep(5 * 1000);
     }
     return 0;

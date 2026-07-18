@@ -386,7 +386,9 @@ syscalls decode their arguments precisely, with **exact arity**: `open`/
 `openat` flags (+ octal mode only when a creating flag is set), `mmap`/
 `mprotect` prot+flags, `clone` flags, signal numbers and sigset **bitmasks**,
 `readv`/`writev` iovec **contents**, timespecs, `lseek` whence, socket
-families. `write`/`read` buffers are decoded up to 200 bytes, and path
+families, and `connect`/`bind`/`sendto`/`accept` **`sockaddr` contents**
+(`{AF_INET, 127.0.0.1:8080}` / `{AF_INET6, [::1]:80}` / `{AF_UNIX, "/path"}`).
+`write`/`read` buffers are decoded up to 200 bytes, and path
 arguments are decoded for both the `open`/`stat`/`access`-style calls and the
 `openat`/`newfstatat`-style `(dirfd, path)` family. A file descriptor is
 resolved to what it points at (like `strace -y`), read from `/proc/<pid>/fd` —
@@ -625,8 +627,8 @@ seccomp vs missing PMU), so trust what it says over guesswork.
   `sigreturn`, because the interrupted call's frame is genuinely still live).
 - **Argument decoding is a curated subset.** Every syscall is *named* with
   exact arity, and ~40 decode precisely (flags, sigsets, iovec contents,
-  timespecs, socket families, paths, buffers) — but struct *contents* (`stat`
-  buffers, `sockaddr`s), `ioctl`/`fcntl`/`futex` command decoding, and
+  timespecs, socket families, `sockaddr` contents, paths, buffers) — but struct
+  *contents* (`stat` buffers), `ioctl`/`fcntl`/`futex` command decoding, and
   `execve` vectors are not decoded, and the undescribed remainder prints three
   raw words + `...`. For exhaustive syscall tracing use `strace`; for
   kernel-side IPC/file payloads use `bpftrace`. asmspy is the *in-tree,

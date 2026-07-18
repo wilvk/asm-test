@@ -1428,7 +1428,9 @@ kill -0 "$SKPID" 2>/dev/null || { cat "$BUILD/sock_victim.log"; fail "sock_victi
 SKPORT=$(sed -n 's/.*tcp_port=\([0-9]*\).*/\1/p' "$BUILD/sock_victim.log")
 [ -n "$SKPORT" ] || { cat "$BUILD/sock_victim.log"; fail "sock_victim did not report its TCP port"; }
 set +e
-skout=$(timeout 60 "$ASM" --log "$SKPID" 80 2>/dev/null); rc=$?
+# 300, not 80: the loop now makes ~4x the socket calls per iteration (sendto +
+# a throwaway UDP connect + a TCP client/accept on top of the four writes).
+skout=$(timeout 60 "$ASM" --log "$SKPID" 300 2>/dev/null); rc=$?
 set -e
 [ "$rc" -eq 124 ] && fail "--log on sock_victim hung"
 [ "$rc" -eq 0 ] || fail "--log on sock_victim exited rc=$rc"
@@ -1452,6 +1454,32 @@ printf '%s\n' "$skout" | grep -qE "fd=[0-9]+<TCP LISTEN 127\.0\.0\.1:$SKPORT>" \
 printf '%s\n' "$skout" | grep -q 'fd=[0-9]*<unix:/tmp/asmspy_sock_victim.sock>' \
     || fail "fd->endpoint: the AF_UNIX socket does not render its bound path"
 echo "  sockets resolved: TCP both directions + LISTEN + unix path (port $SKPORT, derived from the run)"
+
+# ---------------------------------------------------------------------------
+# SOCKADDR CONTENTS (asmspy-plan Theme E — T1): the argument, not just the fd
+# ---------------------------------------------------------------------------
+# connect()'s IN sockaddr: the throwaway UDP socket and the TCP client both
+# connect to the listener's port, so {AF_INET, 127.0.0.1:$SKPORT} is DERIVED
+# from the run (the block already extracted $SKPORT from the victim's stderr).
+# `<[^,]*>` (not `<[^>]*>`): the connected socket's fd resolves to an endpoint
+# that itself contains a `->` (e.g. <TCP a->b>), so match up to the comma.
+printf '%s\n' "$skout" | grep -qE 'connect\(fd=[0-9]+<[^,]*>, \{AF_INET, 127\.0\.0\.1:'"$SKPORT"'\}' \
+    || fail "sockaddr: connect() does not render its IN {AF_INET, 127.0.0.1:$SKPORT}"
+# sendto()'s IN sockaddr: the bound AF_UNIX path (was a raw hex word before T1)
+printf '%s\n' "$skout" | grep -q '{AF_UNIX, "/tmp/asmspy_sock_victim.sock"}' \
+    || fail "sockaddr: sendto() does not render {AF_UNIX, \"/tmp/asmspy_sock_victim.sock\"}"
+# accept()'s OUT sockaddr, filled in on success (the peer's ephemeral port)
+printf '%s\n' "$skout" | grep -qE 'accept\(fd=[0-9]+<[^>]*>, \{AF_INET, 127\.0\.0\.1:[0-9]+\}' \
+    || fail "sockaddr: accept() does not render its OUT {AF_INET, 127.0.0.1:<port>} on success"
+# socket()'s domain renders as a NAME, not a bare number
+printf '%s\n' "$skout" | grep -qE 'socket\(AF_INET, ' \
+    || fail "sockaddr: socket() does not name its AF_INET domain"
+# NEGATIVE CONTROL: no socket-family call may still render its sockaddr as a raw
+# 0x7f... pointer (a decode failure prints the stack address; this is the whole
+# item). Mirrors the existing socket:[inode] negative control's `&& fail` idiom.
+printf '%s\n' "$skout" | grep -E '^(connect|bind|sendto)\(' | grep -q ', 0x7f' \
+    && fail "sockaddr: a socket-family call still renders its sockaddr as a raw pointer"
+echo "  sockaddr contents decoded: connect/sendto IN, accept OUT, socket domain (no raw 0x7f)"
 
 # The enrichment must be ADDITIVE — a regular file's fd must still resolve to
 # its path. That is already asserted downstream, on syscall_victim ("write()'s
