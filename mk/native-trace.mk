@@ -1993,9 +1993,44 @@ $(BUILD)/ss_backend.o: src/ss_backend.c include/asmtest_trace.h | $(BUILD)
 # ptrace_backend.o below. Compiles to a harmless no-op off x86-64 Darwin (its own
 # internal #if gate), so it is safe to build unconditionally into every host's
 # HWTRACE_OBJS, exactly like ptrace_backend.o's #if defined(__linux__) gate.
-$(BUILD)/mach_backend.o: src/mach_backend.c include/asmtest_mach.h \
-                        include/asmtest_trace.h | $(BUILD)
+#
+# The exception-port protocol's MIG-generated server (mach_excServer.c/mach_exc.h,
+# from the active SDK's mach_exc.defs) is Darwin-only: macOS cannot run in the
+# project's Linux containers (see macos-oop-mach-stepper.md's Constraints & gates),
+# so `mig` and the Mach frameworks come from the host Xcode Command Line Tools, not a
+# pinned Dockerfile. MACH_EXC_* stay empty on every other host, so mach_backend.o's
+# #else stub (which references none of this) is all that ships off Darwin.
+ifeq ($(UNAME_S),Darwin)
+MIG           ?= mig
+MIG_SDK       := $(shell xcrun --show-sdk-path 2>/dev/null)
+MACH_EXC_DEFS := $(MIG_SDK)/usr/include/mach/mach_exc.defs
+MACH_EXC_HDR  := $(BUILD)/mach_exc.h
+MACH_EXC_INC  := -I$(BUILD)
+MACH_EXC_OBJS := $(BUILD)/mach_excServer.o
+MACH_EXC_PIC_OBJS := $(BUILD)/pic/mach_excServer.o
+endif
+
+# mig opens the .defs path literally (not resolved on any include path), so it must
+# track whichever SDK is active via xcrun rather than a hardcoded /usr/include (modern
+# macOS ships no top-level /usr/include). -server also always emits a client-stub
+# companion (unused here — we are the server only); -user pins ITS path too, since mig
+# otherwise writes that one relative to Make's cwd (the repo root) regardless of where
+# -server/-header point, which leaves a stray mach_excUser.c outside $(BUILD).
+# mach_exc.h is a side effect of generating mach_excServer.c, not an independent
+# target: this Make (3.81, per the CFLAGS comment above) predates grouped targets
+# (`&:`, 4.3+), so a target listing BOTH real outputs can invoke mig twice in one
+# build; instead mach_exc.h just forwards to the one real recipe below.
+$(BUILD)/mach_excServer.c: $(MACH_EXC_DEFS) | $(BUILD)
+	$(MIG) -server $(BUILD)/mach_excServer.c -header $(BUILD)/mach_exc.h \
+	      -user $(BUILD)/mach_excUser.c $(MACH_EXC_DEFS)
+$(BUILD)/mach_exc.h: $(BUILD)/mach_excServer.c
+	@:
+$(BUILD)/mach_excServer.o: $(BUILD)/mach_excServer.c $(BUILD)/mach_exc.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/mach_backend.o: src/mach_backend.c include/asmtest_mach.h \
+                        include/asmtest_trace.h $(MACH_EXC_HDR) | $(BUILD)
+	$(CC) $(CFLAGS) $(MACH_EXC_INC) -c $< -o $@
 # AMD MSR-direct LBR snapshot (src/msr_lbr.c): reads the LbrExtV2 FROM/TO MSRs via
 # /dev/cpu/N/msr; no external library, decodes through amd_backend.o's asmtest_amd_decode.
 $(BUILD)/msr_lbr.o: src/msr_lbr.c include/asmtest_hwtrace.h | $(BUILD)
@@ -2054,7 +2089,7 @@ $(BUILD)/ibs_backend.o: src/ibs_backend.c include/asmtest_ibs.h | $(BUILD)
 HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
                 $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
                 $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o \
-                $(BUILD)/mach_backend.o \
+                $(BUILD)/mach_backend.o $(MACH_EXC_OBJS) \
                 $(BUILD)/descent.o $(BUILD)/stealth_helper.o \
                 $(BUILD)/codeimage.o $(BUILD)/branchsnap.o \
                 $(BUILD)/msr_lbr.o $(BUILD)/ibs_backend.o $(BUILD)/debug.o \
@@ -2744,7 +2779,9 @@ $(BUILD)/pic/amd_backend.o: src/amd_backend.c include/asmtest_trace.h | $(BUILD)
 $(BUILD)/pic/ss_backend.o: src/ss_backend.c include/asmtest_trace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/mach_backend.o: src/mach_backend.c include/asmtest_mach.h \
-                             include/asmtest_trace.h | $(BUILD)/pic
+                             include/asmtest_trace.h $(MACH_EXC_HDR) | $(BUILD)/pic
+	$(CC) $(CFLAGS) $(MACH_EXC_INC) -fPIC -c $< -o $@
+$(BUILD)/pic/mach_excServer.o: $(BUILD)/mach_excServer.c $(BUILD)/mach_exc.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
                            include/asmtest_hwtrace.h include/asmtest_trace.h | $(BUILD)/pic
@@ -2786,6 +2823,7 @@ $(BUILD)/pic/ibs_backend.o: src/ibs_backend.c include/asmtest_ibs.h | $(BUILD)/p
 NATIVE_TRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o \
     $(BUILD)/cs_backend.o $(BUILD)/amd_backend.o $(BUILD)/ss_backend.o \
     $(BUILD)/trace_auto.o $(BUILD)/ptrace_backend.o $(BUILD)/mach_backend.o \
+    $(MACH_EXC_OBJS) \
     $(BUILD)/descent.o \
     $(BUILD)/stealth_helper.o $(BUILD)/codeimage.o $(BUILD)/branchsnap.o \
     $(BUILD)/msr_lbr.o $(BUILD)/ibs_backend.o $(BUILD)/debug.o
@@ -2801,6 +2839,7 @@ $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
                                        $(BUILD)/pic/trace_auto.o \
                                        $(BUILD)/pic/ptrace_backend.o \
                                        $(BUILD)/pic/mach_backend.o \
+                                       $(MACH_EXC_PIC_OBJS) \
                                        $(BUILD)/pic/descent.o \
                                        $(BUILD)/pic/stealth_helper.o \
                                        $(BUILD)/pic/codeimage.o \
