@@ -274,7 +274,29 @@ typedef struct {
                             * replay carried the syscall NUMBER in rax instead of the kernel's
                             * result. Proves the injection is load-bearing and that the canary
                             * catches its absence. */
+    int no_undef_mask; /* test hook (T4): disable BOTH the per-record EFLAGS undefined-bit
+                        * mask and the canary's undefined-bit tolerance — the negative control
+                        * proving the mask, not luck, is what makes an undefined bit's
+                        * divergence non-fatal. */
+    uint64_t
+        inject_flag_bit; /* test hook (T4): XOR this EFLAGS bitmask into the replay's
+                               * computed end-of-block state right before the coherence canary
+                               * compares it — makes the mask's discrimination testable even
+                               * where Unicorn and silicon already happen to agree on every
+                               * bit. */
 } asmtest_blockstep_opts_t;
+
+/* T4 — the tier's FIRST opts layout guard. Until now every appended opts field was a test
+ * hook nobody outside this file and its suite touched, so the struct's silent-skew hazard
+ * (the same one the info guard below exists for — `size` alone does NOT catch a field
+ * landing in tail padding) went unguarded. Defined unconditionally, like the info guard,
+ * so both the real producer and its ENOSYS stub build report the same true layout. */
+void asmtest_dataflow_blockstep_opts_layout(size_t *size, size_t *last_off) {
+    if (size != NULL)
+        *size = sizeof(asmtest_blockstep_opts_t);
+    if (last_off != NULL)
+        *last_off = offsetof(asmtest_blockstep_opts_t, inject_flag_bit);
+}
 
 /* Capture telemetry, filled on every non-EINVAL return. */
 typedef struct {
@@ -623,15 +645,216 @@ typedef struct {
     dfb_imp_t
         cur_imp; /* the impurity class of the step open_step just opened */
     uint64_t injected; /* syscalls whose recorded effect the replay injected */
+    /* --- T4: undefined-EFLAGS classification --------------------------------------
+     * `cur_undef` / `cur_defined` are the open step's (undefined, defined_written) pair from
+     * dfb_undef_flags, set at open time and consumed by the NEXT finalize_step call (the step
+     * whose write values that finalize fills is the one open_step just classified — capture_at
+     * always finalizes-then-opens, so the ordering is exact). `undef_acc` is the running OR of
+     * every replayed instruction's undefined bits since the current block's seed (reset in
+     * capture_blockstep, accumulated in step_block), masking the coherence canary so it never
+     * fires on a bit the SDM/APM never promised either side would agree on. `no_undef_mask`
+     * (opts test hook) forces both to stay 0, the pre-T4 behaviour. */
+    uint64_t cur_undef;
+    uint64_t cur_defined;
+    uint64_t undef_acc;
+    int no_undef_mask;
 } cap_ctx;
 
-/* Classify the instruction at blob offset `off` — impurity class, and its byte length via
- * *len_out. Decodes ONE instruction at the real pc. Fails CLOSED: an undecodable byte is
+/* ------------------------------------------------------------------ */
+/* T4 — undefined-EFLAGS classification (BSVS-1)                       */
+/* ------------------------------------------------------------------ */
+
+/* EFLAGS bit positions the table below reasons about — the same six the coherence canary
+ * already masks via EFLAGS_ARITH_MASK, named individually so a row can pick its subset. */
+#define DFB_EFLAG_CF 0x0001ULL
+#define DFB_EFLAG_PF 0x0004ULL
+#define DFB_EFLAG_AF 0x0010ULL
+#define DFB_EFLAG_ZF 0x0040ULL
+#define DFB_EFLAG_SF 0x0080ULL
+#define DFB_EFLAG_OF 0x0800ULL
+#define DFB_UNDEF_ARITH_ALL                                                    \
+    (DFB_EFLAG_CF | DFB_EFLAG_PF | DFB_EFLAG_AF | DFB_EFLAG_ZF |               \
+     DFB_EFLAG_SF | DFB_EFLAG_OF)
+
+/* Resolve a shift/rotate instruction's applied count and its destination's bit width.
+ * Capstone always normalizes these to TWO operands (dest, count) — even the legacy
+ * `shl r/m,1` encoding surfaces an explicit immediate 1 — so the count operand is always
+ * the LAST one. An immediate count is used as-is (already masked by the encoding's imm8);
+ * a CL-sourced count is read from `gp` (the live pre-instruction register file — the same
+ * count the tracee's own execution will apply) and masked exactly as the hardware masks it
+ * (5 bits for <=32-bit destinations, 6 bits for 64-bit). Returns 0 (count UNKNOWN) only for
+ * the CL form with `gp == NULL`, so the caller can fall back to the conservative union. */
+static int dfb_shift_rotate_count(const cs_insn *in,
+                                  const struct user_regs_struct *gp,
+                                  unsigned *count, unsigned *width) {
+    const cs_x86 *x = &in->detail->x86;
+    if (x->op_count < 2)
+        return 0;
+    const cs_x86_op *dst = &x->operands[0];
+    const cs_x86_op *cnt = &x->operands[x->op_count - 1];
+    *width = dst->size ? (unsigned)dst->size * 8 : 32;
+    if (cnt->type == X86_OP_IMM) {
+        *count = (unsigned)(cnt->imm & 0xFF);
+        return 1;
+    }
+    if (cnt->type == X86_OP_REG && gp != NULL) {
+        unsigned raw = (unsigned)(gp->rcx & 0xFF);
+        *count = raw & (*width == 64 ? 0x3F : 0x1F);
+        return 1;
+    }
+    return 0;
+}
+
+/* Which EFLAGS bits does `in` leave architecturally UNDEFINED, and (via *defined_written)
+ * which bits does it write with a defined value? Neither set implies the other: a bit
+ * outside BOTH is simply not touched by this instruction (its prior undefined-ness, if
+ * any, survives). The table is the authority (see
+ * docs/internal/implementations/dataflow-producer-correctness.md T4 Research notes for the
+ * Intel SDM Vol 1 App A / AMD APM Tab F-1 sources); Capstone's own eflags metadata is used
+ * ONLY as a breadth signal for the "does this touch flags at all" default below — never to
+ * decide which bit is undefined, which is exactly where that metadata is known to lie (VEX
+ * forms report mask 0, but this file's replay never reaches a VEX/EVEX instruction — see
+ * insn_is_vex_evex — so that specific lie is unreachable here). `gp` may be NULL (e.g. a
+ * scan context with no live registers); count-dependent rows then take the conservative
+ * union over every possible count. */
+static uint64_t dfb_undef_flags(const cs_insn *in,
+                                const struct user_regs_struct *gp,
+                                uint64_t *defined_written) {
+    uint64_t undef = 0, def = 0;
+    switch (in->id) {
+    case X86_INS_AND:
+    case X86_INS_OR:
+    case X86_INS_XOR:
+    case X86_INS_TEST:
+        /* CF/OF cleared (a defined value of 0); SF/ZF/PF defined; AF undefined. */
+        undef = DFB_EFLAG_AF;
+        def = DFB_EFLAG_CF | DFB_EFLAG_OF | DFB_EFLAG_SF | DFB_EFLAG_ZF |
+              DFB_EFLAG_PF;
+        break;
+    case X86_INS_MUL:
+    case X86_INS_IMUL:
+        /* Both the 1-operand and 2/3-operand forms share the same SDM/APM undefined set. */
+        undef = DFB_EFLAG_SF | DFB_EFLAG_ZF | DFB_EFLAG_AF | DFB_EFLAG_PF;
+        def = DFB_EFLAG_CF | DFB_EFLAG_OF;
+        break;
+    case X86_INS_DIV:
+    case X86_INS_IDIV:
+        undef = DFB_UNDEF_ARITH_ALL;
+        def = 0;
+        break;
+    case X86_INS_BSF:
+    case X86_INS_BSR:
+        undef = DFB_EFLAG_CF | DFB_EFLAG_OF | DFB_EFLAG_SF | DFB_EFLAG_AF |
+                DFB_EFLAG_PF;
+        def = DFB_EFLAG_ZF;
+        break;
+    case X86_INS_SHL:
+    case X86_INS_SAL:
+    case X86_INS_SHR:
+    case X86_INS_SAR: {
+        unsigned count = 0, width = 0;
+        if (!dfb_shift_rotate_count(in, gp, &count, &width)) {
+            if (in->id == X86_INS_SAR) {
+                undef = DFB_EFLAG_AF | DFB_EFLAG_OF;
+                def = DFB_EFLAG_CF | DFB_EFLAG_SF | DFB_EFLAG_ZF | DFB_EFLAG_PF;
+            } else {
+                undef = DFB_EFLAG_AF | DFB_EFLAG_OF | DFB_EFLAG_CF;
+                def = DFB_EFLAG_SF | DFB_EFLAG_ZF | DFB_EFLAG_PF;
+            }
+            break;
+        }
+        if (count == 0) {
+            undef = 0;
+            def = 0; /* count 0: the instruction writes nothing */
+        } else if (count == 1) {
+            undef = DFB_EFLAG_AF;
+            def = DFB_EFLAG_CF | DFB_EFLAG_OF | DFB_EFLAG_SF | DFB_EFLAG_ZF |
+                  DFB_EFLAG_PF;
+        } else {
+            undef = DFB_EFLAG_AF | DFB_EFLAG_OF;
+            def = DFB_EFLAG_SF | DFB_EFLAG_ZF | DFB_EFLAG_PF | DFB_EFLAG_CF;
+            /* SHL/SHR/SAL (not SAR) additionally undefine CF once the count reaches the
+             * destination's width — the shifted-out bit no longer exists. */
+            if (in->id != X86_INS_SAR && count >= width) {
+                undef |= DFB_EFLAG_CF;
+                def &= ~DFB_EFLAG_CF;
+            }
+        }
+        break;
+    }
+    case X86_INS_ROL:
+    case X86_INS_ROR:
+    case X86_INS_RCL:
+    case X86_INS_RCR: {
+        unsigned count = 0, width = 0;
+        if (!dfb_shift_rotate_count(in, gp, &count, &width)) {
+            undef = DFB_EFLAG_OF;
+            def = DFB_EFLAG_CF;
+            break;
+        }
+        (void)
+            width; /* rotate's undefined-ness does not depend on operand width */
+        if (count == 0) {
+            undef = 0;
+            def = 0;
+        } else if (count == 1) {
+            undef = 0;
+            def = DFB_EFLAG_CF | DFB_EFLAG_OF;
+        } else {
+            undef = DFB_EFLAG_OF;
+            def = DFB_EFLAG_CF; /* CF is defined at every non-zero count */
+        }
+        break;
+    }
+    case X86_INS_BT:
+    case X86_INS_BTS:
+    case X86_INS_BTR:
+    case X86_INS_BTC:
+        undef = DFB_EFLAG_OF | DFB_EFLAG_SF | DFB_EFLAG_AF | DFB_EFLAG_PF;
+        def = DFB_EFLAG_CF;
+        break;
+    case X86_INS_LZCNT:
+    case X86_INS_TZCNT:
+    case X86_INS_POPCNT:
+        undef = 0;
+        def = DFB_UNDEF_ARITH_ALL;
+        break;
+    default:
+        /* Not in the explicit table. An instruction Capstone reports as touching NO flags at
+         * all leaves undef_acc exactly as it was (correct: an untouched flag's prior status,
+         * defined or not, survives). One that DOES touch flags but isn't one of the special
+         * cases above is, by construction, fully flag-defining on real x86 (ADD/SUB/CMP/
+         * ADC/SBB/NEG/INC/DEC and friends never leave a bit undefined per the SDM) — so it
+         * resets undef_acc for the whole arithmetic mask. Capstone's eflags field is used
+         * here ONLY as a touches-flags-at-all signal (a breadth question its own auto-sync
+         * gets right even where the PER-BIT detail is unreliable — see the file comment). */
+        if (in->detail != NULL && in->detail->x86.eflags != 0) {
+            undef = 0;
+            def = DFB_UNDEF_ARITH_ALL;
+        }
+        break;
+    }
+    if (defined_written != NULL)
+        *defined_written = def;
+    return undef;
+}
+
+/* Classify the instruction at blob offset `off` — impurity class, its byte length via
+ * *len_out, and (T4) its undefined/defined-written EFLAGS split via undef_out/defined_out.
+ * Decodes ONE instruction at the real pc. Fails CLOSED on impurity: an undecodable byte is
  * reported DFB_IMP_OTHER, i.e. "not something the replay may execute", because an instruction
- * we cannot decode is precisely one we cannot vouch for. */
-static dfb_imp_t dfb_classify_at(cap_ctx *c, uint64_t off, size_t *len_out) {
+ * we cannot decode is precisely one we cannot vouch for. `gp` is the pre-instruction register
+ * file (for CL-sourced shift/rotate counts); may be NULL. */
+static dfb_imp_t dfb_classify_at(cap_ctx *c, uint64_t off,
+                                 const struct user_regs_struct *gp,
+                                 size_t *len_out, uint64_t *undef_out,
+                                 uint64_t *defined_out) {
     if (len_out != NULL)
         *len_out = 0;
+    if (undef_out != NULL)
+        *undef_out = 0;
+    if (defined_out != NULL)
+        *defined_out = 0;
     if (!c->cs_ok || off >= c->code_len)
         return DFB_IMP_OTHER;
     cs_insn *insn = cs_malloc(c->cs);
@@ -645,6 +868,14 @@ static dfb_imp_t dfb_classify_at(cap_ctx *c, uint64_t off, size_t *len_out) {
         k = dfb_impurity_kind(insn);
         if (len_out != NULL)
             *len_out = insn->size;
+        if (!c->no_undef_mask && (undef_out != NULL || defined_out != NULL)) {
+            uint64_t def = 0;
+            uint64_t undef = dfb_undef_flags(insn, gp, &def);
+            if (undef_out != NULL)
+                *undef_out = undef;
+            if (defined_out != NULL)
+                *defined_out = def;
+        }
     }
     cs_free(insn, 1);
     return k;
@@ -860,6 +1091,12 @@ static void finalize_step(cap_ctx *c, const dfb_snap_t *s) {
         if (r->kind == AT_LOC_REG) {
             uint64_t v;
             if (gp_value(&s->gp, r->reg, &v)) {
+                /* T4: an EFLAGS write record must not present an architecturally undefined
+                 * bit as if silicon (or the replay) defined it. `cur_undef` still describes
+                 * THIS step — capture_at finalizes the pending step before open_step
+                 * reclassifies cur_undef/cur_defined for the next one. */
+                if (r->reg == X86_REG_EFLAGS)
+                    v &= ~c->cur_undef;
                 r->value = v;
                 r->value_valid = true;
             } else {
@@ -886,7 +1123,8 @@ static size_t open_step(cap_ctx *c, const dfb_snap_t *s) {
     /* Classify THIS step's instruction from its real pc. Both value sources call through here,
      * so the single-step oracle and the replay agree on the syscall write set below; step_block
      * additionally reads c->cur_imp to decide whether the replay may execute it at all. */
-    c->cur_imp = dfb_classify_at(c, off, NULL);
+    c->cur_imp =
+        dfb_classify_at(c, off, &s->gp, NULL, &c->cur_undef, &c->cur_defined);
 
     at_val_rec_t rd[64], wr[64];
     size_t nr = 64, nw = 64;
@@ -1536,10 +1774,14 @@ static int vec_coherent(const dfb_vecstate_t *uc, const dfb_vecstate_t *real) {
 
 /* The coherence CANARY: does Unicorn's computed end-of-block state agree with the real next
  * boundary? Compares the GP regs, rip, rsp and the arithmetic flags (ignoring IF / reserved /
- * debug bits). A mismatch means the replay's inputs diverged from reality (e.g. a sibling
- * rewrote a loaded byte) and the block drops to `truncated`. */
+ * debug bits, and — T4 — every EFLAGS bit `undef_mask` names as architecturally undefined by
+ * the block's replayed instructions, so a canary that agrees on program semantics only never
+ * fires on silicon's arbitrary undefined-bit choice). A mismatch means the replay's inputs
+ * diverged from reality (e.g. a sibling rewrote a loaded byte) and the block drops to
+ * `truncated`. */
 static int regs_coherent(const struct user_regs_struct *uc,
-                         const struct user_regs_struct *real) {
+                         const struct user_regs_struct *real,
+                         uint64_t undef_mask) {
     const uint64_t U[] = {uc->rax, uc->rbx, uc->rcx, uc->rdx, uc->rsi, uc->rdi,
                           uc->rbp, uc->rsp, uc->r8,  uc->r9,  uc->r10, uc->r11,
                           uc->r12, uc->r13, uc->r14, uc->r15, uc->rip};
@@ -1550,8 +1792,8 @@ static int regs_coherent(const struct user_regs_struct *uc,
     for (size_t i = 0; i < sizeof U / sizeof U[0]; i++)
         if (U[i] != R[i])
             return 0;
-    return ((uint64_t)uc->eflags & EFLAGS_ARITH_MASK) ==
-           ((uint64_t)real->eflags & EFLAGS_ARITH_MASK);
+    const uint64_t mask = EFLAGS_ARITH_MASK & ~undef_mask;
+    return ((uint64_t)uc->eflags & mask) == ((uint64_t)real->eflags & mask);
 }
 
 /* Replay one straight-line block through Unicorn, capturing each interior instruction, until a
@@ -1571,6 +1813,11 @@ static int step_block(cap_ctx *c, uc_engine *uc, uint64_t pc_next,
         size_t len = capture_at(c, &S); /* finalize prev + open current */
         if (len == 0)
             return -1;
+        /* T4: fold this instruction's undefined/defined-written EFLAGS bits into the
+         * block's running mask — capture_at's open_step half just classified it into
+         * cur_undef/cur_defined. A later instruction's DEFINED write clears a bit an
+         * earlier one left undefined (real re-definition), never the reverse. */
+        c->undef_acc = (c->undef_acc & ~c->cur_defined) | c->cur_undef;
 
         /* ---- F2: the replay must never EXECUTE an impure instruction ----------------
          *
@@ -1787,6 +2034,8 @@ static int capture_blockstep(cap_ctx *c, pid_t pid, uint64_t base, size_t len,
             uc_reg_write(uc, UC_X86_REG_RAX, &bad);
         }
 
+        c->undef_acc =
+            0; /* T4: a fresh block — no instruction has run yet to undefine a bit */
         int brc =
             step_block(c, uc, S_next.gp.rip, &S_next, o->no_syscall_inject);
         if (brc < 0) {
@@ -1805,7 +2054,10 @@ static int capture_blockstep(cap_ctx *c, pid_t pid, uint64_t base, size_t len,
         uc_get_regs(uc, &ucR.gp);
         if (c->want_vec)
             uc_get_vec(uc, &ucR.vec);
-        if (brc == 1 || !regs_coherent(&ucR.gp, &S_next.gp) ||
+        if (o->inject_flag_bit !=
+            0) /* T4 test hook: force a chosen bit to disagree */
+            ucR.gp.eflags ^= o->inject_flag_bit;
+        if (brc == 1 || !regs_coherent(&ucR.gp, &S_next.gp, c->undef_acc) ||
             (c->want_vec && !no_vec_canary &&
              !vec_coherent(&ucR.vec, &S_next.vec))) {
             c->vt->truncated =
@@ -2071,6 +2323,7 @@ int asmtest_dataflow_blockstep_run(const uint8_t *code, size_t code_len,
     c.code_len = code_len;
     c.base = base;
     c.want_vec = scan.touches_vec && dfb_xlayout()->ok;
+    c.no_undef_mask = o.no_undef_mask;
     /* The per-step decoder (F2). Independent of region_scan's handle by design, and shared by
      * BOTH value sources so the syscall write set is identical on the oracle and the replay.
      * cs_ok = 0 makes dfb_classify_at answer DFB_IMP_OTHER for every step, which fails closed:

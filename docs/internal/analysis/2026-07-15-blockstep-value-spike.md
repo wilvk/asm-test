@@ -172,6 +172,16 @@ Deterministic: 8/8 repeat runs identical (same pass set, same 6.06× / 6.00× ra
    replay to instructions with fully-defined flags, since a different silicon/emulator pairing
    could diverge where this one did not.
 
+   **LANDED 2026-07-18** ([dataflow-producer-correctness.md](../implementations/dataflow-producer-correctness.md)
+   T4): an explicit mnemonic(+count)-keyed table (`dfb_undef_flags`,
+   `src/dataflow_blockstep.c`) now masks every architecturally undefined EFLAGS bit out of
+   both the coherence canary and the captured EFLAGS write records, on both the oracle and
+   replay paths. The risk this gotcha flagged is closed structurally — mask-then-compare,
+   not "this pairing happens to agree" — rather than merely re-confirmed on one more host;
+   a `xor eax,eax` fixture (the case this gotcha's own experiment used) proves AF reads 0 in
+   every post-xor EFLAGS record while the trace stays byte-identical, and a dedicated
+   canary-discrimination test proves the mask, not luck, is what tolerates it.
+
 6. **The purity scan is a linear sweep.** The classifier linearly disassembles the region's
    bytes once (Capstone) and flags `syscall`/`sysenter`/`int 0x80`/`rdtsc`/`rdtscp`/
    `rdrand`/`rdseed`/`cpuid` — exact for the fixtures (straight byte streams). A production

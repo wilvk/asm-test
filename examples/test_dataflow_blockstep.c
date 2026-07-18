@@ -82,6 +82,8 @@ typedef struct {
     int force_replay;
     uint64_t stack_hi_pad;
     int no_syscall_inject;
+    int no_undef_mask;
+    uint64_t inject_flag_bit;
 } asmtest_blockstep_opts_t;
 
 typedef struct {
@@ -116,6 +118,18 @@ int asmtest_dataflow_blockstep_run(const uint8_t *code, size_t code_len,
                                    long *result, asmtest_valtrace_t *vt,
                                    asmtest_blockstep_info_t *info);
 void asmtest_dataflow_blockstep_info_layout(size_t *size, size_t *last_off);
+void asmtest_dataflow_blockstep_opts_layout(size_t *size, size_t *last_off);
+
+/* Capstone register id the T4 assertions name, and the standard x86 EFLAGS bit positions
+ * (architectural, not Capstone-versioned — safe to hardcode). Duplicated rather than
+ * #include'd, exactly like test_dataflow_ptrace.c's REG_* constants. */
+#define REG_EFLAGS 25
+#define EFLAG_CF   0x0001u
+#define EFLAG_PF   0x0004u
+#define EFLAG_AF   0x0010u
+#define EFLAG_ZF   0x0040u
+#define EFLAG_SF   0x0080u
+#define EFLAG_OF   0x0800u
 
 static int checks, failures;
 #define CHECK(c, ...)                                                          \
@@ -180,6 +194,54 @@ static const uint8_t imp_rdtsc[] = {0x0f, 0x31, 0xc3};
 static const uint8_t imp_rdrand[] = {0x0f, 0xc7, 0xf0, 0xc3};
 static const uint8_t imp_int80[] = {0xb8, 0x14, 0x00, 0x00,
                                     0x00, 0xcd, 0x80, 0xc3};
+
+/* ------------------------------------------------------------------ */
+/* Undefined-EFLAGS fixtures (T4, BSVS-1)                               */
+/*                                                                      */
+/* One tiny PURE, REPLAYABLE region per representative table row: set up operands with an   */
+/* immediate mov (no external inputs needed — nargs=0), execute the instruction under test,  */
+/* `ret`. Each is run BOTH masked (default opts) and unmasked (opts.no_undef_mask=1) and the  */
+/* EFLAGS write record compared, so the check is self-referential — it never needs to know    */
+/* what the real undefined bit's value happened to be on this cpu, only that masking cleared  */
+/* EXACTLY the row's undefined set and nothing else. loop_poly (above) deliberately avoids    */
+/* xor-to-zero because its AF is undefined; these fixtures are where that gap is closed.      */
+/* ------------------------------------------------------------------ */
+static const uint8_t undef_and[] = {0xb8, 0xff, 0x00, 0x00, 0x00, 0xbb, 0x0f,
+                                    0x00, 0x00, 0x00, 0x21, 0xd8, 0xc3};
+static const uint8_t undef_or[] = {0xb8, 0x0f, 0x00, 0x00, 0x00, 0xbb, 0xf0,
+                                   0x00, 0x00, 0x00, 0x09, 0xd8, 0xc3};
+static const uint8_t undef_xor[] = {0xb8, 0x0f, 0x00, 0x00, 0x00, 0xbb, 0xf0,
+                                    0x00, 0x00, 0x00, 0x31, 0xd8, 0xc3};
+/* xor eax,eax — the AF-undefined case loop_poly's own comment names. Used both as a table row
+ * and (identically) as the dedicated byte-identical + AF-masked identity case below. */
+static const uint8_t xor_to_zero[] = {0x31, 0xc0, 0xc3};
+static const uint8_t undef_test[] = {0xb8, 0x0f, 0x00, 0x00, 0x00, 0xbb, 0xf0,
+                                     0x00, 0x00, 0x00, 0x85, 0xd8, 0xc3};
+static const uint8_t undef_mul[] = {0xb8, 0x03, 0x00, 0x00, 0x00, 0xbb, 0x05,
+                                    0x00, 0x00, 0x00, 0xf7, 0xe3, 0xc3};
+static const uint8_t undef_imul[] = {0xb8, 0x03, 0x00, 0x00, 0x00, 0xbb, 0x05,
+                                     0x00, 0x00, 0x00, 0x0f, 0xaf, 0xc3, 0xc3};
+static const uint8_t undef_div[] = {0xb8, 0x0a, 0x00, 0x00, 0x00, 0xba,
+                                    0x00, 0x00, 0x00, 0x00, 0xbb, 0x03,
+                                    0x00, 0x00, 0x00, 0xf7, 0xf3, 0xc3};
+static const uint8_t undef_idiv[] = {0xb8, 0x0a, 0x00, 0x00, 0x00, 0x99, 0xbb,
+                                     0x03, 0x00, 0x00, 0x00, 0xf7, 0xfb, 0xc3};
+static const uint8_t undef_bsf[] = {0xb8, 0x00, 0x00, 0x00, 0x00, 0xbb, 0x10,
+                                    0x00, 0x00, 0x00, 0x0f, 0xbc, 0xc3, 0xc3};
+static const uint8_t undef_bsr[] = {0xb8, 0x00, 0x00, 0x00, 0x00, 0xbb, 0x10,
+                                    0x00, 0x00, 0x00, 0x0f, 0xbd, 0xc3, 0xc3};
+static const uint8_t undef_shl1[] = {0xb8, 0x01, 0x00, 0x00,
+                                     0x00, 0xd1, 0xe0, 0xc3};
+static const uint8_t undef_shl5[] = {0xb8, 0x01, 0x00, 0x00, 0x00,
+                                     0xc1, 0xe0, 0x05, 0xc3};
+static const uint8_t undef_shlcl[] = {0xb8, 0x01, 0x00, 0x00, 0x00, 0xb9, 0x05,
+                                      0x00, 0x00, 0x00, 0xd3, 0xe0, 0xc3};
+static const uint8_t undef_rol1[] = {0xb8, 0x01, 0x00, 0x00,
+                                     0x00, 0xd1, 0xc0, 0xc3};
+static const uint8_t undef_rol3[] = {0xb8, 0x01, 0x00, 0x00, 0x00,
+                                     0xc1, 0xc0, 0x03, 0xc3};
+static const uint8_t undef_bt[] = {0xb8, 0x08, 0x00, 0x00, 0x00, 0xbb, 0x03,
+                                   0x00, 0x00, 0x00, 0x0f, 0xa3, 0xd8, 0xc3};
 
 /* ------------------------------------------------------------------ */
 /* Vector fixtures (increment 2)                                        */
@@ -629,6 +691,243 @@ static int traces_identical(const asmtest_valtrace_t *A,
             (A->recs_len == B->recs_len) &&
             memcmp(A->recs, B->recs, A->recs_len * sizeof(at_val_rec_t)) == 0;
     return 1;
+}
+
+/* Find the LAST EFLAGS write record in `v`. Each fixture below has exactly one instruction
+ * that writes flags, so "last" and "only" coincide; returns NULL if none is present. */
+static const at_val_rec_t *find_eflags_write(const asmtest_valtrace_t *v) {
+    const at_val_rec_t *found = NULL;
+    for (size_t i = 0; i < v->recs_len; i++) {
+        const at_val_rec_t *r = &v->recs[i];
+        if (r->kind == AT_LOC_REG && r->reg == REG_EFLAGS && r->is_write)
+            found = r;
+    }
+    return found;
+}
+
+/* ------------------------------------------------------------------ */
+/* T4 — undefined-EFLAGS classification: table unit checks              */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    const char *name;
+    const uint8_t *code;
+    size_t len;
+    uint64_t undef_mask; /* this row's expected UNDEFINED EFLAGS bit set */
+} undef_row_t;
+
+static const undef_row_t undef_rows[] = {
+    {"and", undef_and, sizeof undef_and, EFLAG_AF},
+    {"or", undef_or, sizeof undef_or, EFLAG_AF},
+    {"xor", undef_xor, sizeof undef_xor, EFLAG_AF},
+    {"xor-to-zero", xor_to_zero, sizeof xor_to_zero, EFLAG_AF},
+    {"test", undef_test, sizeof undef_test, EFLAG_AF},
+    {"mul (1-op)", undef_mul, sizeof undef_mul,
+     EFLAG_SF | EFLAG_ZF | EFLAG_AF | EFLAG_PF},
+    {"imul (2-op)", undef_imul, sizeof undef_imul,
+     EFLAG_SF | EFLAG_ZF | EFLAG_AF | EFLAG_PF},
+    {"div", undef_div, sizeof undef_div,
+     EFLAG_CF | EFLAG_PF | EFLAG_AF | EFLAG_ZF | EFLAG_SF | EFLAG_OF},
+    {"idiv", undef_idiv, sizeof undef_idiv,
+     EFLAG_CF | EFLAG_PF | EFLAG_AF | EFLAG_ZF | EFLAG_SF | EFLAG_OF},
+    {"bsf", undef_bsf, sizeof undef_bsf,
+     EFLAG_CF | EFLAG_OF | EFLAG_SF | EFLAG_AF | EFLAG_PF},
+    {"bsr", undef_bsr, sizeof undef_bsr,
+     EFLAG_CF | EFLAG_OF | EFLAG_SF | EFLAG_AF | EFLAG_PF},
+    {"shl reg,1 (count=1)", undef_shl1, sizeof undef_shl1, EFLAG_AF},
+    {"shl reg,5 (count>1)", undef_shl5, sizeof undef_shl5, EFLAG_AF | EFLAG_OF},
+    {"shl reg,cl (cl=5)", undef_shlcl, sizeof undef_shlcl, EFLAG_AF | EFLAG_OF},
+    {"rol reg,1 (count=1)", undef_rol1, sizeof undef_rol1, 0},
+    {"rol reg,3 (count>1)", undef_rol3, sizeof undef_rol3, EFLAG_OF},
+    {"bt", undef_bt, sizeof undef_bt,
+     EFLAG_OF | EFLAG_SF | EFLAG_AF | EFLAG_PF},
+};
+
+/* Run one table row masked (default opts) and unmasked (opts.no_undef_mask=1), then assert
+ * the masked EFLAGS write record equals the unmasked one with EXACTLY the row's undefined
+ * bits cleared — a self-referential check that never has to know what value an undefined bit
+ * happened to take on this cpu, only that masking changed nothing else. `force_singlestep` is
+ * used (not the default block-step+replay opts) because it needs only PTRACE_SINGLESTEP, not
+ * PTRACE_SINGLEBLOCK/BTF, so this table runs on a BTF-masked VM same as bare metal — the
+ * doc's "run everywhere Capstone exists, VM included". Returns 0 (and prints a `# SKIP`,
+ * charging no failure) iff `allow_skip` and ptrace itself is unavailable — checked ONLY on
+ * the first row, so a genuinely ptrace-denied host self-skips cleanly instead of failing
+ * every row; returns 1 otherwise. */
+static int run_undef_row(const undef_row_t *row, int allow_skip) {
+    asmtest_valtrace_t *masked = asmtest_valtrace_new(64, 512, 512);
+    asmtest_valtrace_t *raw = asmtest_valtrace_new(64, 512, 512);
+    int cont = 1;
+    if (masked == NULL || raw == NULL) {
+        CHECK(0, "undef table: %s: valtrace_new", row->name);
+        goto done;
+    }
+    {
+        long rm = 0, rr = 0;
+        asmtest_blockstep_info_t im = {0}, ir = {0};
+        asmtest_blockstep_opts_t om, orw;
+        memset(&om, 0, sizeof om);
+        om.inject_block = -1;
+        om.force_singlestep = 1;
+        memset(&orw, 0, sizeof orw);
+        orw.inject_block = -1;
+        orw.force_singlestep = 1;
+        orw.no_undef_mask = 1;
+
+        int rcm = asmtest_dataflow_blockstep_run(row->code, row->len, NULL, 0,
+                                                 &om, &rm, masked, &im);
+        if (allow_skip && rcm == DF_BLOCKSTEP_ETRACE) {
+            printf("# SKIP undefined-EFLAGS table: ptrace unavailable "
+                   "(seccomp/yama)\n");
+            cont = 0;
+            goto done;
+        }
+        int rcr = asmtest_dataflow_blockstep_run(row->code, row->len, NULL, 0,
+                                                 &orw, &rr, raw, &ir);
+        if (rcm != DF_BLOCKSTEP_OK || rcr != DF_BLOCKSTEP_OK) {
+            CHECK(0, "undef table: %s: capture failed (masked rc=%d raw rc=%d)",
+                  row->name, rcm, rcr);
+            goto done;
+        }
+        const at_val_rec_t *mrec = find_eflags_write(masked);
+        const at_val_rec_t *rrec = find_eflags_write(raw);
+        CHECK(mrec != NULL && rrec != NULL,
+              "undef table: %s: an EFLAGS write record exists on both runs",
+              row->name);
+        if (mrec != NULL && rrec != NULL) {
+            CHECK((mrec->value & row->undef_mask) == 0,
+                  "undef table: %s: masked run clears every undefined bit "
+                  "(undef_mask=0x%llx masked_value=0x%llx)",
+                  row->name, (unsigned long long)row->undef_mask,
+                  (unsigned long long)mrec->value);
+            CHECK(mrec->value == (rrec->value & ~row->undef_mask),
+                  "undef table: %s: masked value == raw value with ONLY the "
+                  "undefined bits cleared (raw=0x%llx masked=0x%llx)",
+                  row->name, (unsigned long long)rrec->value,
+                  (unsigned long long)mrec->value);
+        }
+    }
+done:
+    asmtest_valtrace_free(masked);
+    asmtest_valtrace_free(raw);
+    return cont;
+}
+
+static void run_undef_flags_table(void) {
+    size_t n = sizeof undef_rows / sizeof undef_rows[0];
+    for (size_t i = 0; i < n; i++)
+        if (!run_undef_row(&undef_rows[i], i == 0))
+            return;
+}
+
+/* The xor-to-zero fixture item 1's own review names (loop_poly's comment dodges it
+ * deliberately): block-step+replay is used (info.pure==1), the trace is byte-identical to
+ * the single-step oracle, and AF — architecturally undefined for XOR — reads 0 in EVERY
+ * post-xor EFLAGS record on BOTH paths, regardless of what either engine's arithmetic unit
+ * actually computed for that bit. */
+static void run_xor_zero_identity_case(void) {
+    asmtest_valtrace_t *A = asmtest_valtrace_new(64, 512, 512);
+    asmtest_valtrace_t *B = asmtest_valtrace_new(64, 512, 512);
+    if (A == NULL || B == NULL) {
+        CHECK(0, "xor-to-zero: valtrace_new");
+        goto done;
+    }
+    {
+        long ra = 0, rb = 0;
+        asmtest_blockstep_info_t ia = {0}, ib = {0};
+        asmtest_blockstep_opts_t oracle, block;
+        memset(&oracle, 0, sizeof oracle);
+        oracle.inject_block = -1;
+        oracle.force_singlestep = 1;
+        memset(&block, 0, sizeof block);
+        block.inject_block = -1;
+
+        int rca = asmtest_dataflow_blockstep_run(
+            xor_to_zero, sizeof xor_to_zero, NULL, 0, &oracle, &ra, A, &ia);
+        int rcb = asmtest_dataflow_blockstep_run(
+            xor_to_zero, sizeof xor_to_zero, NULL, 0, &block, &rb, B, &ib);
+        CHECK(rca == DF_BLOCKSTEP_OK && rcb == DF_BLOCKSTEP_OK,
+              "xor-to-zero: capture succeeded on both paths (oracle rc=%d "
+              "replay rc=%d)",
+              rca, rcb);
+        CHECK(ib.pure == 1,
+              "xor-to-zero: block-step+replay path used (info.pure=%d)",
+              ib.pure);
+        CHECK(!A->truncated && !B->truncated,
+              "xor-to-zero: neither trace truncated");
+
+        normalize_rsp_relative(A, ia.entry_rsp);
+        normalize_rsp_relative(B, ib.entry_rsp);
+        int raw = 0;
+        CHECK(traces_identical(A, B, &raw),
+              "xor-to-zero: block-step+replay is BYTE-IDENTICAL to the "
+              "single-step oracle");
+
+        const at_val_rec_t *ra_rec = find_eflags_write(A);
+        const at_val_rec_t *rb_rec = find_eflags_write(B);
+        CHECK(ra_rec != NULL && rb_rec != NULL,
+              "xor-to-zero: an EFLAGS write record exists on both paths");
+        if (ra_rec != NULL && rb_rec != NULL)
+            CHECK((ra_rec->value & EFLAG_AF) == 0 &&
+                      (rb_rec->value & EFLAG_AF) == 0,
+                  "xor-to-zero: AF masked to 0 in the post-xor EFLAGS record "
+                  "on BOTH paths (oracle=0x%llx replay=0x%llx)",
+                  (unsigned long long)ra_rec->value,
+                  (unsigned long long)rb_rec->value);
+    }
+done:
+    asmtest_valtrace_free(A);
+    asmtest_valtrace_free(B);
+}
+
+/* Canary discrimination (bare metal — needs the block-step+replay path, gated behind the
+ * caller's `probe == 1` check same as run_canary_case). Proves the MASK, not luck, is what
+ * tolerates an undefined bit's divergence: AF (undefined for xor) is tolerated; ZF (defined)
+ * is still caught; and with the mask forced off, the SAME AF flip is caught too. */
+static void run_undef_canary_case(void) {
+    long r = 0;
+    asmtest_blockstep_opts_t o;
+    asmtest_blockstep_info_t info;
+
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.inject_flag_bit = EFLAG_AF;
+    memset(&info, 0, sizeof info);
+    int rc = asmtest_dataflow_blockstep_run(xor_to_zero, sizeof xor_to_zero,
+                                            NULL, 0, &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_OK && v != NULL && !v->truncated && info.pure == 1,
+          "undef canary: AF flip after xor TOLERATED (undefined) -> not "
+          "truncated (rc=%d truncated=%d pure=%d)",
+          rc, v ? (int)v->truncated : -1, info.pure);
+    asmtest_valtrace_free(v);
+
+    v = asmtest_valtrace_new(64, 512, 512);
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.inject_flag_bit = EFLAG_ZF;
+    memset(&info, 0, sizeof info);
+    rc = asmtest_dataflow_blockstep_run(xor_to_zero, sizeof xor_to_zero, NULL,
+                                        0, &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_FAULT && v != NULL && v->truncated,
+          "undef canary: ZF flip after xor DETECTED (defined) -> truncated "
+          "(rc=%d truncated=%d)",
+          rc, v ? (int)v->truncated : -1);
+    asmtest_valtrace_free(v);
+
+    v = asmtest_valtrace_new(64, 512, 512);
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.inject_flag_bit = EFLAG_AF;
+    o.no_undef_mask = 1;
+    memset(&info, 0, sizeof info);
+    rc = asmtest_dataflow_blockstep_run(xor_to_zero, sizeof xor_to_zero, NULL,
+                                        0, &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_FAULT && v != NULL && v->truncated,
+          "undef canary: no_undef_mask + AF flip DETECTED -> truncated "
+          "(rc=%d truncated=%d) — the mask, not luck, tolerated the first "
+          "case",
+          rc, v ? (int)v->truncated : -1);
+    asmtest_valtrace_free(v);
 }
 
 /* ------------------------------------------------------------------ */
@@ -1910,6 +2209,24 @@ int main(void) {
               "that tail padding absorbs)");
     }
 
+    /* T4: the tier's FIRST opts layout guard (no_undef_mask/inject_flag_bit are appended
+     * fields on a struct this suite re-declares field-for-field) — same skew hazard, same
+     * check, before any opts. field below is trusted. */
+    {
+        size_t osz = 0, ooff = 0;
+        asmtest_dataflow_blockstep_opts_layout(&osz, &ooff);
+        CHECK(osz == sizeof(asmtest_blockstep_opts_t) &&
+                  ooff == offsetof(asmtest_blockstep_opts_t, inject_flag_bit),
+              "opts: the suite's re-declared options struct matches the "
+              "producer's SIZE and final-field OFFSET");
+    }
+
+    /* T4: undefined-EFLAGS table checks need only PTRACE_SINGLESTEP (no BTF), so they run
+     * here — BEFORE the BTF-gated `probe != 1` skip below — on a GitHub Actions VM same as
+     * bare metal. run_undef_row's own preflight self-skips cleanly if ptrace itself is
+     * unavailable (seccomp/yama). */
+    run_undef_flags_table();
+
     /* Purity classification (Capstone only) — always runs in the real build. */
     run_purity_check("loop_poly", loop_poly, sizeof loop_poly, 1, NULL);
     run_purity_check("mem_chain", mem_chain, sizeof mem_chain, 1, NULL);
@@ -2050,6 +2367,12 @@ int main(void) {
     }
     run_impure_case();
     run_canary_case();
+
+    /* T4: the xor-to-zero identity case and the undefined-EFLAGS canary discrimination need
+     * the real block-step+replay path (BTF), so they live here — gated behind the same
+     * `probe == 1` check as run_canary_case() above. */
+    run_xor_zero_identity_case();
+    run_undef_canary_case();
 
     /* ---- F2: record-and-inject over OS-interacting regions ---- */
     {

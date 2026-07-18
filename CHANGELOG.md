@@ -1426,6 +1426,31 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now fold every GP sub-register alias Capstone can emit on x86-64 to its
   container, exactly like the existing high-byte/32/16/8-bit cases.
 
+- **The block-step tier no longer compares or records architecturally
+  undefined EFLAGS bits as if silicon defined them.** A new explicit
+  mnemonic(+count)-keyed table in `src/dataflow_blockstep.c`
+  (`dfb_undef_flags`) masks the undefined bits an instruction leaves out of
+  both the coherence canary (`regs_coherent`, accumulated per replayed
+  instruction and reset per block) and every captured EFLAGS write record
+  (`finalize_step`), on both the single-step oracle and the block-step+replay
+  paths — preserving their byte-identical property by construction, since
+  both flow through the same shared classification. Covers
+  `and/or/xor/test` (AF), `mul/imul` (SF/ZF/AF/PF), `div/idiv` (all six),
+  `bsf/bsr` (CF/OF/SF/AF/PF), count-dependent `shl/shr/sal/sar` and
+  `rol/ror/rcl/rcr`, and `bt/bts/btr/btc` (OF/SF/AF/PF); an instruction
+  outside the table that touches flags at all is treated as fully
+  flag-defining, matching every other x86 arithmetic instruction. New test
+  hooks `no_undef_mask` (disables both mask sites — the negative control) and
+  `inject_flag_bit` (forces a chosen bit to disagree right before the canary)
+  land with the tier's first opts-struct layout guard
+  (`asmtest_dataflow_blockstep_opts_layout`). A dedicated `xor eax,eax`
+  fixture — the AF-undefined case the tier's primary oracle fixture
+  deliberately avoided — proves AF reads 0 in every post-xor EFLAGS record on
+  both paths while the trace stays byte-identical, and the canary
+  discrimination checks prove the mask, not luck, is what tolerates it (an
+  injected AF divergence is tolerated; the same injection with
+  `no_undef_mask` set is caught).
+
 ## [1.1.0] — 2026-07-06
 
 ### Fixed
