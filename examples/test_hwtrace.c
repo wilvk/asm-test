@@ -12,6 +12,7 @@
  * signal leg's handler fixes up the tracee's registers through them. */
 #define _GNU_SOURCE
 
+#include "asmtest_blockstep_internal.h" /* T7: IBS pre-cover build/stats test hooks */
 #include "asmtest_codeimage.h"
 #include "asmtest_descent_internal.h" /* T5: maps-parse-count / watchdog-guard test hooks */
 #include "asmtest_hwtrace.h"
@@ -4514,6 +4515,188 @@ static void test_ptrace_blockstep(void) {
 #else
     printf("# SKIP ptrace block-step: Linux x86-64 only (no AArch64 "
            "PTRACE_SINGLEBLOCK)\n");
+#endif
+}
+
+/* T7 — IBS covered-block pre-cover: asmtest_bs_precover_build memoizes the block-step
+ * reconstructors' decode. Three legs: (1) a pure unit test of the build over a
+ * synthesized IBS survey (mirrors test_ibs.c's test_normalize, no AMD hardware); (2) a
+ * differential over the LOOP_X86 fixture proving precover-NULL and
+ * precover-covering-the-loop-head produce byte-identical output while cutting probe
+ * calls; (3) a hostile/out-of-range leader proving a build never corrupts output — it
+ * just never gets hit. */
+static void test_ptrace_blockstep_precover(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    static const unsigned char LOOP_X86[] = {0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00,
+                                             0x00, 0x48, 0x01, 0xf8, 0x48, 0xff,
+                                             0xce, 0x75, 0xf8, 0xc3};
+    const uint64_t LOOP_HEAD = 7; /* add rax,rdi — the back-edge target */
+
+    /* --- 1. Pure build unit test: no ptrace, no hardware. --- */
+    {
+        asmtest_ibs_edge_t edges[1] = {
+            {0x1000 + 13, 0x1000 + LOOP_HEAD, 42, 1, 0,
+             0}, /* jne -> loop head */
+        };
+        asmtest_ibs_survey_t survey;
+        memset(&survey, 0, sizeof survey);
+        survey.edges = edges;
+        survey.n = 1;
+        asmtest_ibs_blocks_t covered;
+        CHECK(
+            asmtest_ibs_normalize_blocks(&survey, 0x1000, sizeof LOOP_X86,
+                                         &covered) == ASMTEST_IBS_OK,
+            "precover: synthetic IBS survey normalizes to one covered leader");
+        CHECK(covered.n == 1 && covered.blocks[0].start == LOOP_HEAD,
+              "precover: covered leader lands at the loop head offset");
+
+        asmtest_bs_precover_t *tbl = asmtest_bs_precover_build(
+            LOOP_X86, sizeof LOOP_X86, 0x1000, &covered);
+        CHECK(tbl != NULL, "precover: build succeeds from a valid leader");
+        asmtest_bs_precover_free(tbl);
+        asmtest_ibs_blocks_free(&covered);
+
+        /* Out-of-range and undecodable leaders are silently skipped, never crash,
+         * never produce a usable table on their own (the hostile-leader case). */
+        asmtest_ibs_blocks_t bogus;
+        memset(&bogus, 0, sizeof bogus);
+        bogus.n = 1;
+        asmtest_ibs_block_t one_bogus = {sizeof LOOP_X86 + 100, 1};
+        bogus.blocks = &one_bogus;
+        asmtest_bs_precover_t *bogus_tbl = asmtest_bs_precover_build(
+            LOOP_X86, sizeof LOOP_X86, 0x1000, &bogus);
+        CHECK(bogus_tbl == NULL,
+              "precover: an out-of-range leader is rejected, not cached");
+
+        CHECK(asmtest_bs_precover_build(NULL, sizeof LOOP_X86, 0x1000,
+                                        &covered) == NULL,
+              "precover: NULL code is rejected");
+    }
+
+    if (!asmtest_ptrace_blockstep_available()) {
+        printf("# SKIP ptrace block-step precover: PTRACE_SINGLEBLOCK/Capstone "
+               "unavailable here\n");
+        return;
+    }
+
+    void *q = mmap(NULL, sizeof LOOP_X86, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (q == MAP_FAILED) {
+        printf("# SKIP ptrace block-step precover: mmap failed\n");
+        return;
+    }
+    memcpy(q, LOOP_X86, sizeof LOOP_X86);
+    mprotect(q, sizeof LOOP_X86, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)q, (char *)q + sizeof LOOP_X86);
+
+    asmtest_ibs_edge_t edges[1] = {
+        {(uint64_t)(uintptr_t)q + 13, (uint64_t)(uintptr_t)q + LOOP_HEAD, 42, 1,
+         0, 0},
+    };
+    asmtest_ibs_survey_t survey;
+    memset(&survey, 0, sizeof survey);
+    survey.edges = edges;
+    survey.n = 1;
+    asmtest_ibs_blocks_t covered;
+    int nrc = asmtest_ibs_normalize_blocks(&survey, (uint64_t)(uintptr_t)q,
+                                           sizeof LOOP_X86, &covered);
+    CHECK(nrc == ASMTEST_IBS_OK && covered.n == 1,
+          "precover: LOOP_X86 survey normalizes to the loop-head leader");
+
+    /* --- 2. Differential: precover NULL vs precover covering the loop head. --- */
+    long largs[2] = {1, 20};
+
+    asmtest_bs_precover_set_current(NULL);
+    asmtest_bs_stats_reset();
+    asmtest_trace_t *plain = asmtest_trace_new(256, 64);
+    long plain_res = 0;
+    int prc = asmtest_ptrace_trace_call_blockstep(q, sizeof LOOP_X86, largs, 2,
+                                                  &plain_res, plain);
+    uint64_t plain_probes = 0, plain_hits = 0;
+    asmtest_bs_stats(&plain_probes, &plain_hits);
+
+    asmtest_bs_precover_t *tbl = asmtest_bs_precover_build(
+        q, sizeof LOOP_X86, (uint64_t)(uintptr_t)q, &covered);
+    CHECK(tbl != NULL,
+          "precover: build succeeds from the live LOOP_X86 survey");
+
+    asmtest_bs_precover_set_current(tbl);
+    asmtest_bs_stats_reset();
+    asmtest_trace_t *cached = asmtest_trace_new(256, 64);
+    long cached_res = 0;
+    int crc = asmtest_ptrace_trace_call_blockstep(q, sizeof LOOP_X86, largs, 2,
+                                                  &cached_res, cached);
+    uint64_t cached_probes = 0, cached_hits = 0;
+    asmtest_bs_stats(&cached_probes, &cached_hits);
+    asmtest_bs_precover_set_current(NULL); /* clear before freeing the table */
+
+    CHECK(prc == ASMTEST_PTRACE_OK && crc == ASMTEST_PTRACE_OK &&
+              plain_res == cached_res,
+          "precover: cached and uncached runs return the same result");
+    unsigned long long pn = asmtest_emu_trace_insns_total(plain);
+    unsigned long long cn = asmtest_emu_trace_insns_total(cached);
+    int same_stream = (pn == cn);
+    for (unsigned long long i = 0; same_stream && i < pn; i++)
+        same_stream = (plain->insns[i] == cached->insns[i]);
+    CHECK(same_stream,
+          "precover: cached run reconstructs the IDENTICAL instruction stream");
+    CHECK(asmtest_emu_trace_blocks_len(plain) ==
+              asmtest_emu_trace_blocks_len(cached),
+          "precover: cached run yields the identical block partition");
+    CHECK(asmtest_emu_trace_truncated(plain) ==
+              asmtest_emu_trace_truncated(cached),
+          "precover: cached run's truncated flag matches the uncached run");
+    CHECK(cached_hits > 0, "precover: the loop-head leader was actually hit");
+    CHECK(cached_probes < plain_probes,
+          "precover: the cached run made strictly fewer branch-probe decode "
+          "calls than the uncached run");
+    printf("# precover LOOP_X86: probe_calls %llu -> %llu (hits %llu)\n",
+           (unsigned long long)plain_probes, (unsigned long long)cached_probes,
+           (unsigned long long)cached_hits);
+
+    /* --- 3. Hostile precover alongside real leaders: a bogus leader that never
+     * matches a real from_off must never corrupt output — the run stays byte-identical
+     * to the NULL-precover trace precisely because a bogus leader is simply never
+     * looked up. --- */
+    asmtest_ibs_block_t hostile_blocks[2];
+    hostile_blocks[0] = covered.blocks[0];
+    hostile_blocks[1].start =
+        3; /* mid-instruction: inside the mov rax,0 immediate */
+    hostile_blocks[1].entries = 1;
+    asmtest_ibs_blocks_t hostile;
+    memset(&hostile, 0, sizeof hostile);
+    hostile.blocks = hostile_blocks;
+    hostile.n = 2;
+    asmtest_bs_precover_t *htbl = asmtest_bs_precover_build(
+        q, sizeof LOOP_X86, (uint64_t)(uintptr_t)q, &hostile);
+    CHECK(htbl != NULL,
+          "precover: build tolerates a hostile leader alongside a real one");
+
+    asmtest_bs_precover_set_current(htbl);
+    asmtest_trace_t *hostile_trace = asmtest_trace_new(256, 64);
+    long hostile_res = 0;
+    int hrc = asmtest_ptrace_trace_call_blockstep(q, sizeof LOOP_X86, largs, 2,
+                                                  &hostile_res, hostile_trace);
+    asmtest_bs_precover_set_current(NULL);
+    CHECK(hrc == ASMTEST_PTRACE_OK && hostile_res == plain_res,
+          "precover: a hostile leader alongside a real one still returns the "
+          "correct result");
+    unsigned long long hn = asmtest_emu_trace_insns_total(hostile_trace);
+    int hostile_same = (hn == pn);
+    for (unsigned long long i = 0; hostile_same && i < hn; i++)
+        hostile_same = (hostile_trace->insns[i] == plain->insns[i]);
+    CHECK(hostile_same,
+          "precover: a hostile leader never corrupts the reconstructed stream");
+    asmtest_bs_precover_free(htbl);
+    asmtest_trace_free(hostile_trace);
+
+    asmtest_trace_free(plain);
+    asmtest_trace_free(cached);
+    asmtest_bs_precover_free(tbl);
+    asmtest_ibs_blocks_free(&covered);
+    munmap(q, sizeof LOOP_X86);
+#else
+    printf("# SKIP ptrace block-step precover: Linux x86-64 only\n");
 #endif
 }
 
@@ -9027,6 +9210,7 @@ int main(void) {
     /* Live: the out-of-process ptrace single-step backend (W2). */
     test_ptrace_oop();
     test_ptrace_blockstep();
+    test_ptrace_blockstep_precover();
     test_ptrace_windowed();
     test_ptrace_windowed_blockstep();
     test_ptrace_window_call();

@@ -11,9 +11,15 @@
 
 #include "asmtest_trace.h"
 
+static uint64_t g_bs_recon_probe_calls = 0;
+
+uint64_t asmtest_bs_recon_probe_calls(void) { return g_bs_recon_probe_calls; }
+void asmtest_bs_recon_probe_calls_reset(void) { g_bs_recon_probe_calls = 0; }
+
 br_kind_t classify_branch(asmtest_arch_t arch, const uint8_t *code,
                           size_t code_len, uint64_t base_addr, uint64_t off,
                           uint64_t next_pc, size_t *len_out) {
+    g_bs_recon_probe_calls++;
     int is_call = 0, is_ret = 0;
     size_t l =
         asmtest_disas_probe(arch, code, code_len, off, &is_call, &is_ret);

@@ -8,6 +8,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Block-step pre-cover: an IBS covered-block table that memoizes the ptrace
+  block-step reconstructors' decode.** `asmtest_bs_precover_build`/`_free`
+  (`include/asmtest_blockstep_internal.h`, internal — no new public ABI symbol)
+  pre-walks each `asmtest_ibs_normalize_blocks`-covered leader's straight-line
+  run ONCE and caches the per-instruction facts `classify_branch` would
+  otherwise recompute on every `#DB` stop; `blockstep_reconstruct` (shared by
+  the region and attached block-step drivers) resolves a cache hit by
+  replaying `asmtest_bs_scan_terminator`'s exact decision procedure over the
+  cached run — same bytes, same primitives, zero Capstone calls — so a hit is
+  provably identical to a fresh scan, and a miss (including a leader that is
+  not a real instruction boundary — the hostile case) falls back to the
+  shipped path unconditionally. IBS stays statistical: pre-cover only memoizes
+  tracer-side decode, never lets coverage skip *recording* anything (the exact
+  parity contract in `asmtest_ibs.h`'s INVARIANT stands). A differential over
+  the `LOOP_X86` fixture (precover NULL vs. covering the loop head) proves
+  byte-identical `insns[]`/`blocks[]`/`truncated`/result while cutting branch-
+  probe decode calls; `asmtest_bs_stats`/`_reset` are test hooks that count
+  cumulative probe calls and cache hits. See
+  [ptrace-blockstep-tracer-correctness.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/ptrace-blockstep-tracer-correctness.md).
+
 - **In-process, branch-granular single-step (W3): `asmtest_ss_btf_available` /
   `asmtest_ss_btf_trace` (`src/ss_btf.c`), the missing third single-step form.**
   asm-test already had branch-granular stepping out of process

@@ -48,6 +48,15 @@ br_kind_t classify_branch(asmtest_arch_t arch, const uint8_t *code,
                           size_t code_len, uint64_t base_addr, uint64_t off,
                           uint64_t next_pc, size_t *len_out);
 
+/* Cumulative asmtest_disas_probe calls classify_branch has made (one per
+ * invocation) since the last reset — the ptrace-blockstep-tracer-correctness T7
+ * pre-cover instrumentation, mirrored to asmtest_bs_stats (asmtest_blockstep_internal.h).
+ * Counts every classify_branch call in the process, cached or not, so the
+ * differential in test_ptrace_blockstep can prove a precover table actually avoids
+ * re-decoding a hot block. */
+uint64_t asmtest_bs_recon_probe_calls(void);
+void asmtest_bs_recon_probe_calls_reset(void);
+
 /* Find the instruction that terminated the straight-line run starting at `from_off`, as
  * the amd-tracing-plan's "Same-target-conditional ambiguity -> truncated" rule requires.
  *

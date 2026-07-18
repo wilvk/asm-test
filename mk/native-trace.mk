@@ -2052,7 +2052,8 @@ $(BUILD)/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
 # same Capstone length-decoder (disasm.o) for block normalization.
 $(BUILD)/ptrace_backend.o: src/ptrace_backend.c include/asmtest_ptrace.h \
                           include/asmtest_trace.h include/asmtest_codeimage.h \
-                          include/asmtest_descent_internal.h src/bs_recon.h | $(BUILD)
+                          include/asmtest_descent_internal.h \
+                          include/asmtest_blockstep_internal.h src/bs_recon.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 # Block-step terminator scanner + branch classifier (W3): shared by the ptrace
 # region/windowed reconstructors above and the in-process BTF pairing post-pass
@@ -2829,7 +2830,8 @@ $(BUILD)/pic/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/ptrace_backend.o: src/ptrace_backend.c include/asmtest_ptrace.h \
                                include/asmtest_trace.h include/asmtest_codeimage.h \
-                               include/asmtest_descent_internal.h src/bs_recon.h | $(BUILD)/pic
+                               include/asmtest_descent_internal.h \
+                               include/asmtest_blockstep_internal.h src/bs_recon.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/bs_recon.o: src/bs_recon.c src/bs_recon.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@

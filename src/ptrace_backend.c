@@ -29,6 +29,7 @@
 #define _GNU_SOURCE
 
 #include "asmtest_addr_channel.h"
+#include "asmtest_blockstep_internal.h"
 #include "asmtest_codeimage.h"
 #include "asmtest_descent_internal.h"
 #include "asmtest_ptrace.h"
@@ -1843,6 +1844,239 @@ static int bs_record_run(const uint8_t *code, size_t len, uint64_t from_off,
     return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* T7 — IBS covered-block pre-cover: memoize blockstep_reconstruct's decode.       */
+/* See include/asmtest_blockstep_internal.h. Region-relative leader offsets only, */
+/* so one table serves both the region and attached drivers (both index by the   */
+/* same region-relative from_off). Everything here is pure Capstone decode over  */
+/* the SAME primitives classify_branch uses — a cache hit is provably what a     */
+/* fresh scan would have decided, because it comes from the same bytes via the   */
+/* same calls, just done once instead of on every #DB stop.                      */
+/* ------------------------------------------------------------------ */
+
+/* Facts about one instruction of a cached run that a fresh classify_branch(...,
+ * next_pc,...) call would recompute — everything EXCEPT the next_pc-dependent
+ * hit/miss verdict, so one cached run answers for any observed next_pc. */
+typedef enum {
+    BS_PC_NONE = 0,     /* not a branch: the run continues through it        */
+    BS_PC_HARD_UNKNOWN, /* ret / indirect: always taken, no static target     */
+    BS_PC_UNCOND,       /* direct call/jmp: always taken, static target known */
+    BS_PC_COND,         /* conditional direct branch: static target known    */
+} bs_pc_kind_t;
+
+typedef struct {
+    uint64_t off;
+    size_t len;
+    bs_pc_kind_t kind;
+    uint64_t
+        target; /* meaningful iff kind == BS_PC_UNCOND || kind == BS_PC_COND */
+    int is_rep;
+} bs_precover_insn_t;
+
+typedef struct {
+    uint64_t
+        leader; /* region-relative block-start offset (matches a from_off) */
+    bs_precover_insn_t *insns;
+    size_t n;
+} bs_precover_run_t;
+
+struct asmtest_bs_precover {
+    bs_precover_run_t
+        *runs; /* ascending by leader (covered->blocks is ascending;
+                              * build only ever skips entries, never reorders) */
+    size_t n;
+};
+
+static const asmtest_bs_precover_t *g_bs_precover_current = NULL;
+static uint64_t g_bs_precover_hits = 0;
+
+void asmtest_bs_precover_set_current(const asmtest_bs_precover_t *p) {
+    g_bs_precover_current = p;
+}
+
+void asmtest_bs_stats(uint64_t *probe_calls, uint64_t *precover_hits) {
+    if (probe_calls != NULL)
+        *probe_calls = asmtest_bs_recon_probe_calls();
+    if (precover_hits != NULL)
+        *precover_hits = g_bs_precover_hits;
+}
+
+void asmtest_bs_stats_reset(void) {
+    asmtest_bs_recon_probe_calls_reset();
+    g_bs_precover_hits = 0;
+}
+
+asmtest_bs_precover_t *
+asmtest_bs_precover_build(const uint8_t *code, size_t len, uint64_t base_ip,
+                          const asmtest_ibs_blocks_t *covered) {
+    if (code == NULL || len == 0 || covered == NULL || covered->n == 0)
+        return NULL;
+    asmtest_bs_precover_t *p = (asmtest_bs_precover_t *)calloc(1, sizeof *p);
+    if (p == NULL)
+        return NULL;
+    p->runs = (bs_precover_run_t *)calloc(covered->n, sizeof *p->runs);
+    if (p->runs == NULL) {
+        free(p);
+        return NULL;
+    }
+
+    for (size_t i = 0; i < covered->n; i++) {
+        uint64_t leader = covered->blocks[i].start;
+        if (leader >= len)
+            continue; /* out of range: never a real from_off, dead weight if kept */
+
+        bs_precover_insn_t *tmp = NULL;
+        size_t tn = 0, tcap = 0;
+        uint64_t walk = leader;
+        for (size_t guard = 0; guard <= len; guard++) {
+            if (walk >= len)
+                break;
+            int is_call = 0, is_ret = 0;
+            size_t l = asmtest_disas_probe(PTRACE_TRACE_ARCH, code, len, walk,
+                                           &is_call, &is_ret);
+            if (l == 0)
+                break; /* undecodable: run ends here, incomplete but honest */
+            bs_pc_kind_t kind = BS_PC_NONE;
+            uint64_t target = 0;
+            if (asmtest_disas_is_branch(PTRACE_TRACE_ARCH, code, len, walk)) {
+                if (is_ret) {
+                    kind = BS_PC_HARD_UNKNOWN;
+                } else if (!asmtest_disas_branch_target(PTRACE_TRACE_ARCH, code,
+                                                        len, base_ip, walk,
+                                                        &target)) {
+                    kind = BS_PC_HARD_UNKNOWN; /* indirect jmp/call */
+                } else if (is_call || asmtest_disas_is_uncond_jump(
+                                          PTRACE_TRACE_ARCH, code, len, walk)) {
+                    kind = BS_PC_UNCOND;
+                } else {
+                    kind = BS_PC_COND;
+                }
+            }
+            if (tn == tcap) {
+                size_t ncap = tcap ? tcap * 2 : 8;
+                bs_precover_insn_t *grown =
+                    (bs_precover_insn_t *)realloc(tmp, ncap * sizeof *tmp);
+                if (grown == NULL)
+                    break;
+                tmp = grown;
+                tcap = ncap;
+            }
+            tmp[tn].off = walk;
+            tmp[tn].len = l;
+            tmp[tn].kind = kind;
+            tmp[tn].target = target;
+            tmp[tn].is_rep =
+                asmtest_disas_is_rep_string(PTRACE_TRACE_ARCH, code, len, walk);
+            tn++;
+            if (kind == BS_PC_HARD_UNKNOWN || kind == BS_PC_UNCOND)
+                break; /* always-taken: nothing past it can belong to this run */
+            walk += l;
+        }
+        if (tn == 0) {
+            free(tmp);
+            continue; /* leader itself undecodable: never cached (hostile leader) */
+        }
+        p->runs[p->n].leader = leader;
+        p->runs[p->n].insns = tmp;
+        p->runs[p->n].n = tn;
+        p->n++;
+    }
+    if (p->n == 0) {
+        free(p->runs);
+        free(p);
+        return NULL;
+    }
+    return p;
+}
+
+void asmtest_bs_precover_free(asmtest_bs_precover_t *p) {
+    if (p == NULL)
+        return;
+    for (size_t i = 0; i < p->n; i++)
+        free(p->runs[i].insns);
+    free(p->runs);
+    free(p);
+}
+
+static const bs_precover_run_t *bs_precover_find(const asmtest_bs_precover_t *p,
+                                                 uint64_t from_off) {
+    if (p == NULL)
+        return NULL;
+    size_t lo = 0, hi = p->n;
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (p->runs[mid].leader == from_off)
+            return &p->runs[mid];
+        if (p->runs[mid].leader < from_off)
+            lo = mid + 1;
+        else
+            hi = mid;
+    }
+    return NULL;
+}
+
+/* Replays asmtest_bs_scan_terminator's exact decision procedure (see bs_recon.c) over
+ * a cached run instead of re-decoding: the run's instructions were walked in the same
+ * order classify_branch would visit them, so this reproduces the same OK/AMBIGUOUS/FAIL
+ * verdict and terminator offset for any next_pc, with zero Capstone calls. */
+static int bs_precover_scan_terminator(const bs_precover_run_t *run,
+                                       uint64_t next_pc, uint64_t *term_out) {
+    uint64_t first_cand = 0;
+    unsigned ncand = 0;
+    for (size_t i = 0; i < run->n; i++) {
+        const bs_precover_insn_t *e = &run->insns[i];
+        if (e->kind == BS_PC_NONE)
+            continue;
+        if (e->kind == BS_PC_COND) {
+            if (e->target == next_pc && ncand++ == 0)
+                first_cand = e->off;
+            continue;
+        }
+        if (e->kind == BS_PC_HARD_UNKNOWN) {
+            if (ncand == 0) {
+                *term_out = e->off;
+                return ASMTEST_BS_OK;
+            }
+            break;
+        }
+        /* BS_PC_UNCOND: always taken. */
+        if (e->target == next_pc && ncand++ == 0)
+            first_cand = e->off;
+        break;
+    }
+    if (ncand == 0)
+        return ASMTEST_BS_FAIL;
+    *term_out = first_cand;
+    return ncand == 1 ? ASMTEST_BS_OK : ASMTEST_BS_AMBIGUOUS;
+}
+
+/* Emits the stream from a cache hit: identical shape to blockstep_reconstruct, but
+ * every offset/length/rep-flag comes from the cached run instead of asmtest_disas. */
+static int blockstep_reconstruct_precover(const bs_precover_run_t *run,
+                                          uint64_t next_pc, uint64_t *stream,
+                                          uint32_t *pn, uint64_t *last_off) {
+    uint64_t term = 0;
+    int r = bs_precover_scan_terminator(run, next_pc, &term);
+    if (r == ASMTEST_BS_FAIL)
+        return ASMTEST_BS_FAIL;
+    int rep = 0;
+    for (size_t i = 0; i < run->n; i++) {
+        const bs_precover_insn_t *e = &run->insns[i];
+        if (*pn >= PTRACE_STREAM_CAP)
+            return ASMTEST_BS_FAIL;
+        stream[(*pn)++] = e->off;
+        *last_off = e->off;
+        if (e->is_rep)
+            rep = 1;
+        if (e->off == term) {
+            if (rep && r == ASMTEST_BS_OK)
+                r = ASMTEST_BS_AMBIGUOUS;
+            return r;
+        }
+    }
+    return ASMTEST_BS_FAIL; /* unreachable: term is always one of run's offsets */
+}
+
 /* Reconstruct the straight-line run of one basic block into `stream`. Returns ASMTEST_BS_OK
  * (with *last_off = the terminator's offset), ASMTEST_BS_AMBIGUOUS (the definite prefix is
  * recorded, *last_off = its last instruction, caller marks truncated and must not treat
@@ -1851,6 +2085,13 @@ static int blockstep_reconstruct(const uint8_t *code, size_t len,
                                  uint64_t base_ip, uint64_t from_off,
                                  uint64_t next_pc, uint64_t *stream,
                                  uint32_t *pn, uint64_t *last_off) {
+    const bs_precover_run_t *cached =
+        bs_precover_find(g_bs_precover_current, from_off);
+    if (cached != NULL) {
+        g_bs_precover_hits++;
+        return blockstep_reconstruct_precover(cached, next_pc, stream, pn,
+                                              last_off);
+    }
     uint64_t term = 0;
     int r = asmtest_bs_scan_terminator(PTRACE_TRACE_ARCH, code, len, base_ip,
                                        from_off, next_pc, &term);
@@ -2281,6 +2522,29 @@ int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
     (void)trace;
     return ASMTEST_PTRACE_ENOSYS;
 }
+
+/* IBS is Linux+x86-64+AMD only (asmtest_ibs.h), so a covered-block set never exists
+ * here: the build always reports "nothing to cache" rather than fabricate one. */
+asmtest_bs_precover_t *
+asmtest_bs_precover_build(const uint8_t *code, size_t len, uint64_t base_ip,
+                          const asmtest_ibs_blocks_t *covered) {
+    (void)code;
+    (void)len;
+    (void)base_ip;
+    (void)covered;
+    return NULL;
+}
+void asmtest_bs_precover_free(asmtest_bs_precover_t *p) { (void)p; }
+void asmtest_bs_precover_set_current(const asmtest_bs_precover_t *p) {
+    (void)p;
+}
+void asmtest_bs_stats(uint64_t *probe_calls, uint64_t *precover_hits) {
+    if (probe_calls != NULL)
+        *probe_calls = 0;
+    if (precover_hits != NULL)
+        *precover_hits = 0;
+}
+void asmtest_bs_stats_reset(void) {}
 #endif /* __x86_64__ */
 
 /* ------------------------------------------------------------------ */
@@ -3659,5 +3923,28 @@ int asmtest_ptrace_trace_attached_versioned_ex(pid_t pid, const void *base,
     (void)descent;
     return ASMTEST_PTRACE_ENOSYS;
 }
+
+/* IBS is Linux+x86-64+AMD only, so this platform never has a covered-block set
+ * to build from. */
+asmtest_bs_precover_t *
+asmtest_bs_precover_build(const uint8_t *code, size_t len, uint64_t base_ip,
+                          const asmtest_ibs_blocks_t *covered) {
+    (void)code;
+    (void)len;
+    (void)base_ip;
+    (void)covered;
+    return NULL;
+}
+void asmtest_bs_precover_free(asmtest_bs_precover_t *p) { (void)p; }
+void asmtest_bs_precover_set_current(const asmtest_bs_precover_t *p) {
+    (void)p;
+}
+void asmtest_bs_stats(uint64_t *probe_calls, uint64_t *precover_hits) {
+    if (probe_calls != NULL)
+        *probe_calls = 0;
+    if (precover_hits != NULL)
+        *precover_hits = 0;
+}
+void asmtest_bs_stats_reset(void) {}
 
 #endif /* stepper */

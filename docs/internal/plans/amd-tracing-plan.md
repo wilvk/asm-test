@@ -1411,6 +1411,16 @@ forward-look Phase 6); self-skips without `IBS_CAPS_BRNTRGT`.
 > into the Phase-2 block-step / DynamoRIO fallback to shrink its residual. It remains
 > unscheduled and unowned; it is pure software (no silicon gate) if it is ever wanted.
 
+> **Update 2026-07-18.** The block-step half of the pre-cover integration is no longer
+> unowned: `asmtest_bs_precover_build`/`_free` (`include/asmtest_blockstep_internal.h`,
+> `src/ptrace_backend.c`) memoizes `blockstep_reconstruct`'s decode from an
+> `asmtest_ibs_normalize_blocks` covered-block set, proven byte-identical to the uncached
+> path on a differential fixture — see
+> [ptrace-blockstep-tracer-correctness.md](../implementations/ptrace-blockstep-tracer-correctness.md)
+> T7. The DynamoRIO half is explicitly out of scope there (DR's code cache already runs at
+> native speed and has no per-block tracer work a coverage hint could remove); T8 wires the
+> built table into `asmtest_trace_call_auto`'s block-step rung behind an opt-in policy bit.
+
 ## Improvement Phase 8 — Cascade composition: MSR-direct escalation rung before block-step (`src/trace_auto.c`) *(landed 2026-07-10)*
 
 > **Status (2026-07-10): LANDED and validated on the Zen 5 dev box.** The MSR-direct rung ships
