@@ -105,7 +105,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
 | [pin-sde-future-isa-lane.md](pin-sde-future-isa-lane.md) — SDE future/absent-ISA test lane | 8 | ☐ 0/8 | — |
-| [pin-xed-trace-tier.md](pin-xed-trace-tier.md) — XED-decoded Pin trace tier + shared pintool substrate | 9 | ☐ 0/9 | — |
+| [pin-xed-trace-tier.md](pin-xed-trace-tier.md) — XED-decoded Pin trace tier + shared pintool substrate | 9 | ◐ 0/9 (T1 wip) | — |
 | [pin-probe-mode-capture.md](pin-probe-mode-capture.md) — Pin probe-mode argument/return capture | 7 | ☐ 0/7 | **pin-xed-trace-tier** |
 | [pin-libdft-taint-oracle.md](pin-libdft-taint-oracle.md) — libdft64 differential oracle for the DR taint tier | 7 | ☐ 0/7 | **pin-xed-trace-tier** |
 
