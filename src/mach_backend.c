@@ -23,8 +23,10 @@
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #include <mach/thread_status.h>
-#include <signal.h> /* kill/SIGCONT: lift a job-control SIGSTOP the caller used to park the target */
+#include <signal.h> /* kill/SIGCONT/SIGSTOP/SIGKILL */
 #include <stdlib.h> /* malloc/free: the owned region-bytes + stream buffers (T3) */
+#include <sys/wait.h> /* waitpid/WIFSTOPPED/WUNTRACED (T4) */
+#include <unistd.h>   /* fork (T4) */
 
 #include "mach_exc.h" /* MIG-generated (T2): the mach_exception_raise* wire types */
 
@@ -695,16 +697,58 @@ void asmtest_mach_skip_reason(char *buf, size_t buflen) {
     buf[buflen - 1] = '\0';
 }
 
-/* TODO(T4): fork-and-trace a self-contained blob through the T3 engine. */
+typedef long (*mach_fn6_t)(long, long, long, long, long, long);
+
+/* Fork-and-trace a self-contained blob: the fork/wait/task_for_pid wrapper around
+ * asmtest_mach_trace_attached, reusing that engine wholesale (T3 does the actual
+ * single-stepping; this task only owns getting a stopped child in front of it). */
 int asmtest_mach_trace_call(const void *code, size_t len, const long *args,
                             int nargs, long *result, asmtest_trace_t *trace) {
-    (void)code;
-    (void)len;
-    (void)args;
-    (void)nargs;
-    (void)result;
-    (void)trace;
-    return ASMTEST_MACH_ENOSYS;
+    if (code == NULL || len == 0 || trace == NULL)
+        return ASMTEST_MACH_EINVAL;
+
+    long a[6] = {0, 0, 0, 0, 0, 0};
+    for (int i = 0; i < nargs && i < 6; i++)
+        a[i] = args[i];
+
+    pid_t pid = fork();
+    if (pid < 0)
+        return ASMTEST_MACH_ETRACE;
+    if (pid == 0) {
+        /* Child: hand control to the parent BEFORE running the blob (the parent's
+         * waitpid(WUNTRACED) below observes this stop), then run it with up to six
+         * SysV/Darwin x86-64 integer args on resume. The blob's own `ret` is what
+         * asmtest_mach_trace_attached's engine detects as the region exit and reads
+         * RAX from — this _exit is unreachable in the traced run (see the parent's
+         * SIGKILL below) and exists only so a DIRECTLY-run (untraced, debugging)
+         * child terminates cleanly instead of falling off the end of this frame. */
+        raise(SIGSTOP);
+        mach_fn6_t fn = (mach_fn6_t)(uintptr_t)code;
+        volatile long r = fn(a[0], a[1], a[2], a[3], a[4], a[5]);
+        (void)r;
+        _exit(0);
+    }
+
+    int status = 0;
+    if (waitpid(pid, &status, WUNTRACED) < 0 || !WIFSTOPPED(status)) {
+        if (!WIFEXITED(status) && !WIFSIGNALED(status)) {
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+        }
+        return ASMTEST_MACH_ETRACE;
+    }
+
+    int rc = asmtest_mach_trace_attached(pid, code, len, result, trace);
+
+    /* This is OUR OWN throwaway tracee (unlike trace_attached's foreign-target
+     * contract, which leaves the target parked for the caller): we already have
+     * the trace and *result from the engine above, so reap it now rather than
+     * resuming it to its unreachable _exit(0) (trace_attached's engine stopped it
+     * mid-region-return, past the blob's ret but still inside this function's
+     * child frame). */
+    kill(pid, SIGKILL);
+    waitpid(pid, &status, 0);
+    return rc;
 }
 
 /* TODO(T5): expose mach_run_until publicly + add the x86_DEBUG_STATE64 W^X fallback. */
