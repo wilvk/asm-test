@@ -24,18 +24,47 @@ DOCKER          ?= docker
 DOCKER_IMAGE    ?= asmtest-ci
 DOCKER_BASE     ?= ubuntu:24.04
 DOCKER_PLATFORM ?=
+# Which optional-toolchain set the image bakes in (Dockerfile's DEPS_ARGS). The
+# default (--all) is unchanged; the riscv64 lane overrides it to --pkgconfig so
+# the Keystone LLVM source build never runs under qemu-user emulation (hours).
+DOCKER_DEPS_ARGS ?= --all
 _docker_plat := $(if $(DOCKER_PLATFORM),--platform $(DOCKER_PLATFORM),)
 _docker_run  := $(DOCKER) run --rm $(_docker_plat) $(DOCKER_IMAGE)
+
+# riscv64 lane (riscv-native-tier). ubuntu:24.04 is multi-arch incl.
+# linux/riscv64; Docker Desktop ships emulators, a Linux host runs
+# `make binfmt-riscv64` once. DOCKER_DEPS_ARGS=--pkgconfig: the core suites need
+# no optional engine, and Keystone-under-qemu would take hours. BINFMT_IMAGE is
+# pinned by tag@sha256 (the qemu-v10.2.3 multi-arch index digest; audit anchor in
+# scripts/third-party-digests.txt), so Docker verifies it at pull time.
+BINFMT_IMAGE ?= tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
 
 .PHONY: docker-build docker-test docker-nasm docker-emu docker-asm \
         docker-valgrind docker-sanitize docker-analyze docker-fmt-check \
         docker-fmt docker-coverage docker-ci docker-shell docker-clean
 
 docker-build:
-	$(DOCKER) build $(_docker_plat) --build-arg BASE=$(DOCKER_BASE) -t $(DOCKER_IMAGE) .
+	$(DOCKER) build $(_docker_plat) --build-arg BASE=$(DOCKER_BASE) \
+	  --build-arg DEPS_ARGS=$(DOCKER_DEPS_ARGS) -t $(DOCKER_IMAGE) .
 
 docker-test: docker-build
 	$(_docker_run) sh -c 'make test && make check'
+
+# Enable the pinned qemu-user riscv64 emulator once per Linux host (Docker
+# Desktop ships it already, so this is a no-op there). Idempotent.
+.PHONY: binfmt-riscv64 docker-riscv64
+binfmt-riscv64:
+	$(DOCKER) run --privileged --rm $(BINFMT_IMAGE) --install riscv64
+
+# Build the linux/riscv64 image (env only — no optional engines) and run the
+# core example suites + framework self-tests in it under qemu-user binfmt on any
+# Docker host. The distinct asmtest-ci-riscv64 tag keeps the host-arch asmtest-ci
+# image intact. First run is slow (qemu TCG); expect green with the rv64 skip set.
+docker-riscv64:
+	$(MAKE) docker-build DOCKER_PLATFORM=linux/riscv64 \
+	  DOCKER_IMAGE=asmtest-ci-riscv64 DOCKER_DEPS_ARGS=--pkgconfig
+	$(DOCKER) run --rm --platform linux/riscv64 asmtest-ci-riscv64 \
+	  sh -c 'uname -m && make test && make check'
 
 docker-nasm: docker-build
 	$(_docker_run) sh -c 'make ASM_SYNTAX=nasm test && make ASM_SYNTAX=nasm check'

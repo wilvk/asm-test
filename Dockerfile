@@ -1,9 +1,11 @@
 # Dockerfile — run asm-test's Linux CI jobs locally in a container.
 #
-# Covers the Linux half of the CI matrix: x86-64 natively, and aarch64 via
-# emulation when built/run with `--platform linux/arm64` (Docker Desktop ships
-# qemu/Rosetta; on Linux run `docker run --privileged tonistiigi/binfmt` once).
-# The macOS jobs CANNOT run in a container — use a Mac or hosted CI for those.
+# Covers the Linux half of the CI matrix: x86-64 natively, and aarch64 or
+# riscv64 via emulation when built/run with `--platform linux/arm64` or
+# `--platform linux/riscv64` (Docker Desktop ships qemu/Rosetta; on Linux run
+# `docker run --privileged tonistiigi/binfmt` once — `make binfmt-riscv64` for
+# the rv64 lane). The macOS jobs CANNOT run in a container — use a Mac or hosted
+# CI for those.
 #
 # Build:  docker build -t asmtest-ci .
 # Run:    docker run --rm asmtest-ci                 # -> make test && make check
@@ -22,9 +24,14 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Base toolchain. The C compiler also assembles the GAS .s sources and ships
 # gcov; cmake + git are here for the Keystone source build (no distro package).
+# libxml2-utils supplies xmllint, which `make check` uses to validate the JUnit
+# XML it emits (CI runners install it too, ci.yml); without it every docker lane
+# — including docker-riscv64 — silently printed expect.sh's "SKIP junit XML
+# validation" line. Per the CLAUDE.md dependency rule that skip is an
+# installable, not a gate.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      build-essential ca-certificates cmake git \
+      build-essential ca-certificates cmake git libxml2-utils \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src

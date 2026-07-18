@@ -12,9 +12,16 @@
 # Format (whitespace-separated):  <kind>  <name>  <version>  <algo>:<value>
 #   tarball-sha256 — SHA-256 of the downloaded release archive (as GitHub records it)
 #   git-commit     — the immutable commit a version tag must still resolve to
+#   image-digest   — a container image's manifest digest, pinned as tag@sha256 in
+#                    a Makefile/mk include (RECORD ONLY: no fetch/build script
+#                    reads it — Docker verifies the digest at pull time)
 tarball-sha256  dynamorio  11.91.20630  sha256:1499acbee02788ff235a8b4a8016514538ec3bf479463bdc6037c6e33f0bff02
 tarball-sha256  pin        4.2-99776-g21d818fa2  sha256:194a2cec51678203452ece0d9e8cbb1819eb6e1221f0341091c49248f384d869
 git-commit      keystone   0.9.2        commit:dc7932ef2b2c4a793836caec6ecab485005139d6
 git-commit      capstone   5.0.1        commit:097c04d9413c59a58b00d4d1c8d5dc0ac158ffaa
 tarball-sha256  zig-linux-x86_64   0.13.0  sha256:d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea
 tarball-sha256  zig-linux-aarch64  0.13.0  sha256:041ac42323837eb5624068acd8b00cd5777dac4cf91179e8dad7a7e90dd0c556
+# riscv-native-tier: the qemu-user emulator bundle for the linux/riscv64 CI lane
+# (mk/docker.mk BINFMT_IMAGE). Pinned to the multi-arch index digest of the
+# tonistiigi/binfmt:qemu-v10.2.3 tag; no fetch script consumes this line.
+image-digest    tonistiigi-binfmt  qemu-v10.2.3  sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
