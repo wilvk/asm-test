@@ -89,7 +89,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 ### Data-flow tier
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
-| [dataflow-producer-correctness.md](dataflow-producer-correctness.md) — gap barrier, sub-register aliases, undefined flags, F2 record-and-inject | 8 | ◐ 1/8 (T1 done & live-verified on the bare-metal Zen 5 box — `make docker-dataflow-attach` 395/395, 0 skips) | — |
+| [dataflow-producer-correctness.md](dataflow-producer-correctness.md) — gap barrier, sub-register aliases, undefined flags, F2 record-and-inject | 8 | ◐ 1/8 (T1 done & live-verified; T2 wip) | — |
 | [dataflow-bindings-slice-codeimage.md](dataflow-bindings-slice-codeimage.md) — def-use/slice surface + code-image arg across bindings | 4 | ☐ 0/4 | — |
 | [dataflow-f4-object-identity.md](dataflow-f4-object-identity.md) — real object identity via GCBulkType/Node/Edge | 6 | ☐ 0/6 | — |
 | [dataflow-pt-replay-tier.md](dataflow-pt-replay-tier.md) — F5: PT + code-image + Unicorn-replay value tier | 5 | ☐ 0/5 | **intel-pt-attach-foreign-pid** |
