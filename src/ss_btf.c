@@ -28,19 +28,25 @@
  */
 #define _GNU_SOURCE
 
+#include "amd_backend.h" /* asmtest_amd_decode_stitched + ASMTEST_HW_* */
 #include "asmtest_hwtrace.h"
 #include "asmtest_trace.h"
+#include "bs_recon.h" /* asmtest_bs_scan_terminator, asmtest_ss_btf_pair_stops */
 
 #include <stddef.h>
 
 #if defined(__linux__) && defined(__x86_64__)
 #include <fcntl.h>
+#include <linux/perf_event.h> /* struct perf_branch_entry */
+#include <pthread.h>
 #include <sched.h>
 #include <signal.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/resource.h> /* getrusage/RUSAGE_THREAD: the context-switch honesty belt */
 #include <ucontext.h>
 #include <unistd.h>
 
@@ -211,8 +217,255 @@ int asmtest_ss_btf_available(void) {
     return cached;
 }
 
+/* ------------------------------------------------------------------------- *
+ * asmtest_ss_btf_trace(): the real capture + (from,to) waypoint synthesis.
+ * ------------------------------------------------------------------------- */
+
+#ifndef SS_BTF_STREAM_CAP
+#define SS_BTF_STREAM_CAP                                                      \
+    (1u << 16) /* same envelope as ss_backend.c's SS_STREAM_CAP */
+#endif
+
+/* Capture-handler state, distinct from the probe's above (never concurrent with it —
+ * asmtest_ss_btf_trace and asmtest_ss_btf_available never run on the same thread at the
+ * same time — but kept separate anyway so each handler's async-signal-safe footprint
+ * stays obviously self-contained). g_cap_armed is the single non-nested-capture guard:
+ * DEBUGCTL is physical per-CPU state, so nesting would mean two callers fighting over
+ * the same MSR — meaningless, not just unsupported. */
+static pthread_mutex_t g_cap_lock = PTHREAD_MUTEX_INITIALIZER;
+static int g_cap_armed;
+static uint64_t *g_cap_stream;
+static volatile uint32_t g_cap_stream_len;
+static volatile sig_atomic_t g_cap_overflow;
+static volatile sig_atomic_t g_cap_rearm_failed;
+static int g_cap_msr_fd;
+static uint64_t g_cap_rearm_value;
+
+/* Async-signal-safe only, same shape as probe_on_sigtrap: bounded-append the absolute
+ * RIP, re-arm BTF (the #DB just cleared it), re-assert TF. Unconditionally re-arms even
+ * past overflow (matching ss_backend.c's ss_on_sigtrap, which always re-asserts TF too)
+ * — simpler than branching the arm state, and the capture is already truncated once
+ * overflow is set, so continuing to step the (untracked) remainder costs nothing. */
+static void cap_on_sigtrap(int sig, siginfo_t *si, void *uctx) {
+    (void)sig;
+    (void)si;
+    ucontext_t *uc = (ucontext_t *)uctx;
+    uint64_t rip = (uint64_t)uc->uc_mcontext.gregs[REG_RIP];
+    if (g_cap_stream_len < SS_BTF_STREAM_CAP)
+        g_cap_stream[g_cap_stream_len++] = rip;
+    else
+        g_cap_overflow = 1;
+    if (pwrite(g_cap_msr_fd, &g_cap_rearm_value, 8,
+               (off_t)SS_BTF_MSR_DEBUGCTL) != 8)
+        g_cap_rearm_failed = 1; /* some hypervisors reject the write outright */
+    uc->uc_mcontext.gregs[REG_EFL] |= (greg_t)SS_BTF_TF;
+}
+
+__attribute__((always_inline)) static inline void cap_arm_tf(void) {
+    __asm__ __volatile__("pushfq\n\torq $0x100,(%%rsp)\n\tpopfq"
+                         :
+                         :
+                         : "cc", "memory");
+}
+__attribute__((always_inline)) static inline void cap_disarm_tf(void) {
+    __asm__ __volatile__("pushfq\n\tandq $-257,(%%rsp)\n\tpopfq"
+                         :
+                         :
+                         : "cc", "memory");
+}
+
+size_t asmtest_ss_btf_pair_stops(const uint8_t *code, size_t len,
+                                 uint64_t base_ip, const uint64_t *stops,
+                                 size_t nstops, struct perf_branch_entry *out,
+                                 size_t out_cap, int *gap) {
+    if (gap != NULL)
+        *gap = 0;
+    if (code == NULL || len == 0 || stops == NULL || out == NULL ||
+        out_cap == 0)
+        return 0;
+
+    uint64_t end_ip = base_ip + len;
+    size_t i = 0;
+    while (i < nstops && !(stops[i] >= base_ip && stops[i] < end_ip))
+        i++; /* skip leading glue: arming/call-into-region branches outside [base,len) */
+    if (i >= nstops)
+        return 0; /* no in-region stop at all: nothing provably ran */
+
+    size_t n = 0;
+    for (; i + 1 < nstops && n < out_cap; i++) {
+        uint64_t prev = stops[i];
+        uint64_t s = stops[i + 1];
+        uint64_t term = 0;
+        int r = asmtest_bs_scan_terminator(ASMTEST_ARCH_X86_64, code, len,
+                                           base_ip, prev - base_ip, s, &term);
+        if (r != ASMTEST_BS_OK) {
+            /* AMBIGUOUS or FAIL: a lost trap leaves the next stop unreachable — the
+             * context-switch signature. Record the honest prefix, stop pairing. */
+            if (gap != NULL)
+                *gap = 1;
+            break;
+        }
+        memset(&out[n], 0, sizeof out[n]);
+        out[n].from = base_ip + term;
+        out[n].to = s;
+        n++;
+        if (!(s >= base_ip && s < end_ip))
+            break; /* the first out-of-region stop is the exit edge: done */
+    }
+
+    /* Reverse to newest-first — the order asmtest_amd_stitch's own reversal produces
+     * and amd_replay consumes (src/amd_backend.c). */
+    if (n > 0) {
+        size_t a = 0, b = n - 1;
+        while (a < b) {
+            struct perf_branch_entry t = out[a];
+            out[a] = out[b];
+            out[b] = t;
+            a++;
+            b--;
+        }
+    }
+    return n;
+}
+
+int asmtest_ss_btf_trace(const void *base, size_t len, void (*run_fn)(void *),
+                         void *arg, asmtest_trace_t *trace) {
+    if (base == NULL || len == 0 || run_fn == NULL || trace == NULL)
+        return ASMTEST_HW_EINVAL;
+    if (!asmtest_ss_btf_available())
+        return ASMTEST_HW_EUNAVAIL;
+
+    pthread_mutex_lock(&g_cap_lock);
+    if (g_cap_armed) {
+        pthread_mutex_unlock(&g_cap_lock);
+        return ASMTEST_HW_EFULL; /* one non-nested capture per process */
+    }
+    g_cap_armed = 1;
+    pthread_mutex_unlock(&g_cap_lock);
+
+    int rc = ASMTEST_HW_EUNAVAIL;
+    int cpu = sched_getcpu();
+    if (cpu < 0)
+        cpu = 0;
+    cpu_set_t set, prev;
+    CPU_ZERO(&set);
+    CPU_SET((unsigned)cpu, &set);
+    CPU_ZERO(&prev);
+    int had_prev = sched_getaffinity(0, sizeof prev, &prev) == 0;
+    if (sched_setaffinity(0, sizeof set, &set) != 0)
+        goto unarm;
+
+    {
+        int fd = open_msr(cpu);
+        if (fd < 0)
+            goto restore_affinity;
+
+        uint64_t *stream =
+            (uint64_t *)malloc(SS_BTF_STREAM_CAP * sizeof(uint64_t));
+        if (stream == NULL) {
+            close(fd);
+            goto restore_affinity;
+        }
+
+        uint64_t saved_debugctl = 0;
+        if (msr_rd(fd, SS_BTF_MSR_DEBUGCTL, &saved_debugctl) != 0) {
+            free(stream);
+            close(fd);
+            goto restore_affinity;
+        }
+
+        g_cap_overflow = 0;
+        g_cap_rearm_failed = 0;
+        g_cap_stream = stream;
+        g_cap_stream_len = 0;
+        g_cap_msr_fd = fd;
+        g_cap_rearm_value = saved_debugctl | SS_BTF_DEBUGCTL_BTF;
+
+        struct rusage ru_before, ru_after;
+        memset(&ru_before, 0, sizeof ru_before);
+        memset(&ru_after, 0, sizeof ru_after);
+        getrusage(RUSAGE_THREAD, &ru_before);
+
+        struct sigaction sa, old_sa;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_sigaction = cap_on_sigtrap;
+        sa.sa_flags = SA_SIGINFO;
+        sigemptyset(&sa.sa_mask);
+        int captured = 0;
+        if (sigaction(SIGTRAP, &sa, &old_sa) == 0) {
+            if (msr_wr(fd, SS_BTF_MSR_DEBUGCTL, g_cap_rearm_value) == 0) {
+                cap_arm_tf();
+                run_fn(arg);
+                cap_disarm_tf();
+                captured = 1;
+            }
+            /* Clear BTF and restore the pre-capture DEBUGCTL unconditionally. */
+            msr_wr(fd, SS_BTF_MSR_DEBUGCTL, saved_debugctl);
+            sigaction(SIGTRAP, &old_sa, NULL);
+        }
+        getrusage(RUSAGE_THREAD, &ru_after);
+
+        if (captured) {
+            /* Belt 3: ANY context switch during the armed window makes completeness
+             * unprovable — a switched-out thread without TIF_BLOCKSTEP gets no BTF
+             * restore (Research notes), so the kernel may have silently dropped it. */
+            int switched = (ru_after.ru_nvcsw + ru_after.ru_nivcsw) >
+                           (ru_before.ru_nvcsw + ru_before.ru_nivcsw);
+            int gap = 0;
+            size_t n = 0;
+            uint32_t nstops = g_cap_stream_len;
+            struct perf_branch_entry *pairs = NULL;
+            if (nstops > 0)
+                pairs = (struct perf_branch_entry *)malloc(
+                    nstops * sizeof(struct perf_branch_entry));
+            if (pairs != NULL)
+                n = asmtest_ss_btf_pair_stops((const uint8_t *)base, len,
+                                              (uint64_t)(uintptr_t)base, stream,
+                                              nstops, pairs, nstops, &gap);
+            if (n == 0) {
+                /* Belt 4: zero provable waypoints is honest, never empty-complete
+                 * (the msr_lbr.c shape) — asmtest_amd_decode_stitched itself refuses
+                 * nbr==0 with EDECODE, which would misreport this as a hard failure. */
+                trace->truncated = true;
+                rc = ASMTEST_HW_OK;
+            } else {
+                rc = asmtest_amd_decode_stitched(pairs, n, base, len, trace,
+                                                 gap);
+            }
+            if (pairs != NULL)
+                free(pairs);
+            /* Belts 1 + 3: buffer overflow, a failed re-arm write, or an observed
+             * context switch all make completeness unprovable. */
+            if (g_cap_overflow || g_cap_rearm_failed || switched)
+                trace->truncated = true;
+        }
+
+        free(stream);
+        close(fd);
+    }
+
+restore_affinity:
+    if (had_prev)
+        sched_setaffinity(0, sizeof prev, &prev);
+unarm:
+    pthread_mutex_lock(&g_cap_lock);
+    g_cap_armed = 0;
+    pthread_mutex_unlock(&g_cap_lock);
+    return rc;
+}
+
 #else /* not Linux x86-64 */
 
 int asmtest_ss_btf_available(void) { return 0; }
+
+int asmtest_ss_btf_trace(const void *base, size_t len, void (*run_fn)(void *),
+                         void *arg, asmtest_trace_t *trace) {
+    (void)base;
+    (void)len;
+    (void)run_fn;
+    (void)arg;
+    (void)trace;
+    return ASMTEST_HW_ENOSYS;
+}
 
 #endif

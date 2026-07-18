@@ -118,7 +118,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 ### Single-step & block-step tiers
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
-| [inproc-btf-block-step.md](inproc-btf-block-step.md) — W3: in-process BTF branch-granular single-step | 6 | ◐ 2/6 (T1, T2 done; T1 live-verified — every block-step test, both consumers, passes unchanged) | — |
+| [inproc-btf-block-step.md](inproc-btf-block-step.md) — W3: in-process BTF branch-granular single-step | 6 | ◐ 3/6 (T1-T3 done; T3 live-verified — the ROUTINE and 20-trip LOOP fixtures reproduce the single-step baseline byte-for-byte, LOOP past any 16-entry LBR window, 5/5 stable runs) | — |
 | [macos-oop-mach-stepper.md](macos-oop-mach-stepper.md) — macOS out-of-process single-step via Mach exception ports | 7 | ☑ 7/7 (`make mach-stepper-test` 25/25 live-verified by the implementer on this host, both breakpoint paths + both self-skip legs; `make docker-docs` clean) | — |
 | [aarch64-ptrace-single-step-validation.md](aarch64-ptrace-single-step-validation.md) — AArch64 ptrace stream validation + binding fixtures | 6 | ☐ 0/6 | — |
 

@@ -80,6 +80,32 @@ int asmtest_bs_scan_terminator(asmtest_arch_t arch, const uint8_t *code,
                                size_t len, uint64_t base_ip, uint64_t from_off,
                                uint64_t next_pc, uint64_t *term_out);
 
+/* W3 (src/ss_btf.c): pair a raw stream of BTF stop addresses into (from,to) branch
+ * waypoints via asmtest_bs_scan_terminator, for asmtest_amd_decode_stitched. Guarded
+ * (not just declared unconditionally) because struct perf_branch_entry is Linux/x86-64
+ * only — the guard must match where the definition lives (ss_btf.c's own #if), not just
+ * where the type exists, or this would name a symbol with no body elsewhere. */
+#if defined(__linux__) && defined(__x86_64__)
+#include <linux/perf_event.h> /* struct perf_branch_entry */
+
+/* Pair adjacent stops into waypoints: skip leading stops outside [base_ip,base_ip+len)
+ * (glue between arming and the call into the region — the call itself is a taken
+ * branch, so the first in-region stop is normally offset 0), then for each adjacent
+ * pair (prev,s) resolve the terminator between them. ASMTEST_BS_OK appends
+ * {.from = base_ip+term, .to = s} and continues; ASMTEST_BS_AMBIGUOUS/_FAIL sets *gap
+ * and stops pairing (a lost trap leaves the next stop unreachable — the context-switch
+ * signature). The first out-of-region s ends pairing with that final (exit) pair
+ * included. Returns the pair count, newest-first (out[0] = the last pair formed) —
+ * the order asmtest_amd_stitch's own reversal produces and amd_replay consumes. Every
+ * entry is zero-initialized before from/to are set (only those two fields are
+ * meaningful; an uninitialized rest could be misread as spec/mispred metadata by the
+ * replay filters). Pure — no MSR I/O, no signals — host-testable with scripted streams. */
+size_t asmtest_ss_btf_pair_stops(const uint8_t *code, size_t len,
+                                 uint64_t base_ip, const uint64_t *stops,
+                                 size_t nstops, struct perf_branch_entry *out,
+                                 size_t out_cap, int *gap);
+#endif
+
 #ifdef __cplusplus
 }
 #endif
