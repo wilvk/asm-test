@@ -1,0 +1,8 @@
+sources:
+  "1.1.0":
+    url: "https://github.com/wilvk/asm-test/releases/download/v1.1.0/asm-test-1.1.0.tar.gz"
+    # sha256 of the make-package-source tarball at authoring; finalized against
+    # the real v1.1.0 release asset at the tag (distribution-packaging.md T3).
+    # docker-syspkg-conan repoints this url at a local build and recomputes the
+    # digest, so CI verification does not depend on this constant.
+    sha256: "9d44fbcd88745348f0886c20baedeed1a9bc332ba5162dab5fe78fbc0c62197d"

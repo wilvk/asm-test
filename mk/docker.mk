@@ -766,3 +766,13 @@ docker-syspkg-vcpkg: syspkg-stage
 	  --build-arg VER=$(ASMTEST_VERSION) -t asmtest-syspkg-vcpkg .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-syspkg-vcpkg
 
+# T12 — Conan 2 recipe: conan create builds the recipe + runs its test_package.
+# Override CONAN_VERSION to bump the pinned conan release.
+CONAN_VERSION ?= 2.30.0
+.PHONY: docker-syspkg-conan
+docker-syspkg-conan: syspkg-stage
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.syspkg-conan \
+	  --build-arg CONAN_VERSION=$(CONAN_VERSION) --build-arg VER=$(ASMTEST_VERSION) \
+	  -t asmtest-syspkg-conan .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-syspkg-conan
+

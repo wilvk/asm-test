@@ -1,0 +1,41 @@
+# Dockerfile.syspkg-conan — Conan 2 recipe verification lane
+# (distribution-packaging.md T12). `conan create` builds the recipe and runs its
+# test_package consumer.
+#
+# Hermetic: conandata.yml pins the v1.1.0 release tarball asset by sha256
+# (published by T3, a maintainer action — absent here), so the lane serves the
+# reproducible make-package-source tarball over localhost http and repoints
+# conandata at it with the matching digest — no external network fetch of the
+# source. Upstreaming to conan-center-index (recipe PR + first-time CLA) is the
+# maintainer-gated step (T12 step 4).
+#
+# Build + run:  make docker-syspkg-conan
+ARG CONAN_BASE=python:3.12-slim
+FROM ${CONAN_BASE}
+ARG VER=1.1.0
+ARG CONAN_VERSION=2.30.0
+
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && pip install --no-cache-dir "conan==${CONAN_VERSION}"
+
+WORKDIR /src
+COPY packaging/ /src/packaging/
+COPY packaging/.staging/asm-test-${VER}.tar.gz /src/asm-test-${VER}.tar.gz
+
+ENV VER=${VER}
+CMD set -eux; \
+    conan profile detect --force; \
+    RECIPE=/src/packaging/conan/recipes/asmtest/all; \
+    echo "== serve the staged tarball over localhost (v1.1.0 asset is T3-gated) =="; \
+    python3 -m http.server 8000 --directory /src >/tmp/http.log 2>&1 & \
+    sleep 2; \
+    SUM="$(sha256sum /src/asm-test-${VER}.tar.gz | cut -d' ' -f1)"; \
+    sed -i -e "s#url: .*#url: \"http://127.0.0.1:8000/asm-test-${VER}.tar.gz\"#" \
+           -e "s#sha256: .*#sha256: \"$SUM\"#" "$RECIPE/conandata.yml"; \
+    echo "== conan create (builds recipe + runs test_package) =="; \
+    conan create "$RECIPE" --version=${VER} --build=missing; \
+    echo "docker-syspkg-conan: OK — package created, test_package ran"
