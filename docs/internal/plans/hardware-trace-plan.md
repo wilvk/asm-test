@@ -34,7 +34,15 @@ Phase 1 is **implemented** for **Intel PT**: the `perf_event_open` AUX capture
 (`src/hwtrace.c`), the libipt instruction decode + branch-boundary block
 normalization (`src/pt_backend.c`), the full `asmtest_hwtrace_available()` gating
 chain, and the `hwtrace-test` / `shared-hwtrace` targets all ship behind
-`asmtest_hwtrace.h`. **ARM CoreSight** (`src/cs_backend.c`) is now **split like the
+`asmtest_hwtrace.h`. The **region-free whole-window** PT path is likewise wired
+(intel-pt-whole-window-substrate T1–T5): one shared perf-AUX arm (`pt_aux_open`)
+serving both the region path and the `asmtest_hwtrace_begin_window`/`_end_window`
++ native `pt_begin_window`/`_end_window` pair, a WEAK/STRONG runtime-trust ladder,
+the `asmtest_hwtrace_pt_set_filter` (`PERF_EVENT_IOC_SET_FILTER`) knob, and the
+`make hwtrace-pt-live` smoke — but the **live PT capture** those exercise stays
+hardware-gated (no `intel_pt` PMU on the reachable AMD/VM boxes): `hwtrace-pt-live`
+is landed and self-skipping and **has not yet run on silicon**; do not record the
+live smoke validated until it has. **ARM CoreSight** (`src/cs_backend.c`) is now **split like the
 AMD backend**: its decoder-independent **reconstruction core**
 (`asmtest_cs_reconstruct`) — ordered ETM/ETE instruction *ranges* → the same
 instruction/block partition the PT backend produces — is **implemented and

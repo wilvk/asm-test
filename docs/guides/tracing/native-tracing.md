@@ -303,7 +303,14 @@ Intel-x86-64-only — absent on AMD, ARM, Apple Silicon, and almost all cloud/VM
 guests; CoreSight self-hosted trace needs a specific AArch64 board (Juno, Kria,
 Jetson, Pixel, …) and is prohibited in KVM guests. Both need
 `perf_event_paranoid` lowered (effectively `-1` for a default-size PT buffer) or
-`CAP_PERFMON` — a host knob the process cannot grant itself.
+`CAP_PERFMON` — a host knob the process cannot grant itself. On AUX-ring sizing: the
+128 KiB figure often quoted is *not* a kernel cap — it is the `perf` tool's default
+auxtrace mmap size for **unprivileged** users (4 MiB privileged), bounded by
+`perf_event_mlock_kb` (512 KiB default) + `RLIMIT_MEMLOCK`; the whole-window tier's
+64 KiB default AUX ring sits safely under it, so it opens without extra privilege
+beyond the paranoid/`CAP_PERFMON` gate. The live smoke that exercises real capture on
+such a box is `make hwtrace-pt-live` (it FAILS rather than skips when it finds no
+`intel_pt` PMU, so a runner that is supposed to have PT cannot pass by hiding it).
 
 `asmtest_hwtrace_available(backend)` encodes the **full gating chain** — decoder
 library present, right CPU/vendor, the `intel_pt`/`cs_etm` PMU present, and

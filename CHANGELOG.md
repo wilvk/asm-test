@@ -8,6 +8,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Live Intel PT whole-window smoke + a `make hwtrace-pt-live` lane that FAILS rather
+  than skips where PT is claimed.** `test_pt_live_selfjit` (`examples/test_hwtrace.c`)
+  self-JITs the canonical routine, arms the region-free PT capture, decodes the REAL AUX
+  stream through `asmtest_pt_decode_window`, and exercises `PERF_EVENT_IOC_SET_FILTER`
+  (via the new `asmtest_hwtrace_pt_set_filter` knob), the anonymous-JIT decode-time
+  fallback, and AUX-ring truncation on a 4 KiB ring. Off the `intel_pt` PMU (AMD/VMs/
+  containers) it self-skips with the specific reason — one of the two legitimate hardware
+  gates — while `make hwtrace-pt-live` sets `ASMTEST_REQUIRE_PT=1` to convert that skip
+  into a build failure on a runner that is supposed to expose bare-metal Intel PT. The
+  live capture is silicon-gated (no `intel_pt` on the reachable dev boxes); in
+  `make docker-hwtrace` the test prints a clean `# SKIP pt live: …` everywhere.
+  See [intel-pt-whole-window-substrate.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/intel-pt-whole-window-substrate.md).
+
 - **System-package specs for the C core — Homebrew, Debian, AUR, vcpkg and Conan —
   each built, installed and consumed in a Docker CI lane.** `packaging/` now holds a
   Homebrew formula, a Debian `libasmtest-dev` source package, an AUR `PKGBUILD` +

@@ -2337,6 +2337,30 @@ int asmtest_hwtrace_pt_end_window(void *ctx, asmtest_codeimage_t *img,
 #endif
 }
 
+/* §Z1.2 live capture-side address filter for the PT window pair — a thin
+ * ioctl(PERF_EVENT_IOC_SET_FILTER) wrapper on the begin ctx, callable BETWEEN
+ * asmtest_hwtrace_pt_begin_window and the traced call. `filter` is a perf address-filter
+ * string ("filter <start>[/<size>]@<object>"; ACTION filter|start|stop). The @object must
+ * be a REGULAR file (S_ISREG) and file-based filters match only file-backed VMAs by inode
+ * — an anonymous/JIT exec region CANNOT be address-filtered (the decode-time fallback is
+ * then mandatory). Returns ASMTEST_HW_OK, ASMTEST_HW_EINVAL on a NULL/closed ctx, or
+ * ASMTEST_HW_EUNAVAIL when the kernel rejects the filter (e.g. an anonymous VMA). */
+int asmtest_hwtrace_pt_set_filter(void *ctx, const char *filter) {
+    if (ctx == NULL || filter == NULL)
+        return ASMTEST_HW_EINVAL;
+#if defined(__linux__)
+    pt_window_ctx_t *c = (pt_window_ctx_t *)ctx;
+    if (c->aux.fd < 0)
+        return ASMTEST_HW_EINVAL;
+    if (ioctl(c->aux.fd, PERF_EVENT_IOC_SET_FILTER, (void *)filter) != 0)
+        return ASMTEST_HW_EUNAVAIL; /* kernel rejected it (anon VMA / bad spec) */
+    return ASMTEST_HW_OK;
+#else
+    (void)filter;
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
 /* ------------------------------------------------------------------ */
 /* W^X executable-memory helper (self-contained; for language bindings) */
 /* ------------------------------------------------------------------ */

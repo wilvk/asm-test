@@ -3928,6 +3928,246 @@ static void test_window_ladder(void) {
     }
 }
 
+#if defined(__linux__) && defined(__x86_64__)
+/* T5 filter targets: two file-backed noinline functions in the test binary's own text, so
+ * a PERF_EVENT_IOC_SET_FILTER can name one and the decoded PT stream must then contain it
+ * and NOT its sibling. Trivial + noinline so each is a distinct, resolvable call target. */
+__attribute__((noinline)) static long pt_filter_target(long x) {
+    __asm__ __volatile__("" ::: "memory");
+    return x * 3 + 1;
+}
+__attribute__((noinline)) static long pt_filter_sibling(long x) {
+    __asm__ __volatile__("" ::: "memory");
+    return x * 5 + 2;
+}
+
+/* Object-relative file offset of a runtime address in the main executable, from
+ * /proc/self/maps: find the executable mapping containing `addr` and return
+ * file_offset + (addr - map_start). perf's @file address-filter spec is object-relative
+ * (a file offset), not a runtime vaddr — this converts one to the other. *ok=0 on a miss. */
+static uint64_t pt_file_offset_of(uintptr_t addr, const char *want_path,
+                                  int *ok) {
+    *ok = 0;
+    FILE *f = fopen("/proc/self/maps", "r");
+    if (f == NULL)
+        return 0;
+    char line[512];
+    uint64_t out = 0;
+    while (fgets(line, sizeof line, f) != NULL) {
+        uintptr_t lo = 0, hi = 0;
+        uint64_t foff = 0;
+        char perms[8] = {0};
+        char path[256] = {0};
+        if (sscanf(line, "%lx-%lx %7s %lx %*s %*s %255s", &lo, &hi, perms,
+                   &foff, path) >= 4 &&
+            addr >= lo && addr < hi && strchr(perms, 'x') != NULL &&
+            (want_path == NULL || strstr(path, want_path) != NULL)) {
+            out = foff + (uint64_t)(addr - lo);
+            *ok = 1;
+            break;
+        }
+    }
+    fclose(f);
+    return out;
+}
+#endif
+
+/* T5 — the LIVE self-JIT Intel PT smoke: on bare-metal Intel PT it arms the region-free
+ * capture, decodes the REAL AUX stream through asmtest_pt_decode_window, and exercises
+ * PERF_EVENT_IOC_SET_FILTER, the anonymous-JIT decode-time fallback, and AUX-ring
+ * truncation. Off the intel_pt PMU (this host / VMs / containers) it self-skips with the
+ * specific reason — one of the two legitimate hardware self-skip gates. ASMTEST_REQUIRE_PT=1
+ * (the hwtrace-pt-live lane) converts that skip into a CHECK failure, so a runner that is
+ * SUPPOSED to have PT goes red on a hidden PMU rather than silently passing. */
+static void test_pt_live_selfjit(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    int require = getenv("ASMTEST_REQUIRE_PT") != NULL;
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT)) {
+        char reason[160];
+        asmtest_hwtrace_skip_reason(ASMTEST_HWTRACE_INTEL_PT, reason,
+                                    sizeof reason);
+        if (require)
+            CHECK(0,
+                  "pt live: ASMTEST_REQUIRE_PT set but no intel_pt PMU on this "
+                  "runner (this lane REQUIRES bare-metal Intel PT)");
+        else
+            printf("# SKIP pt live: no intel_pt PMU (needs bare-metal Intel; "
+                   "absent "
+                   "on AMD/VM): %s\n",
+                   reason);
+        return;
+    }
+    /* ---- from here on this is a real Intel PT box (a self-hosted runner) ---- */
+    /* (a) Self-JIT the canonical ROUTINE into a W^X region and bring up the PT tier. */
+    void *base = NULL;
+    size_t blen = 0;
+    if (asmtest_hwtrace_exec_alloc(ROUTINE, sizeof ROUTINE, &base, &blen) !=
+        ASMTEST_HW_OK) {
+        CHECK(0, "pt live: exec_alloc the self-JIT routine");
+        return;
+    }
+    add2_fn fn = (add2_fn)base;
+    uint64_t b = (uint64_t)(uintptr_t)base;
+    asmtest_hwtrace_options_t opts;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_INTEL_PT);
+    CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK,
+          "pt live: the INTEL_PT tier inits on real silicon");
+
+    /* (b) Facade window over the TAKEN walk (20,22 -> 42 <= 100): the decoded ABSOLUTE
+     * stream covers the taken walk re-based at the exec address and is not truncated. */
+    asmtest_trace_t *tr = asmtest_trace_new(1 << 16, 1 << 16);
+    asmtest_hwtrace_scope_t sc;
+    if (asmtest_hwtrace_begin_window(tr, &sc) == ASMTEST_HW_OK) {
+        asmtest_codeimage_t *wimg = asmtest_hwtrace_window_image();
+        if (wimg != NULL)
+            asmtest_codeimage_track(wimg, base, blen);
+        long r = fn(20, 22);
+        asmtest_hwtrace_end_window(sc, tr);
+        CHECK(r == 42,
+              "pt live: the self-JIT'd routine returns 42 under PT capture");
+        CHECK(asmtest_trace_covered(tr, b + 0x0) &&
+                  asmtest_trace_covered(tr, b + 0x11) &&
+                  !asmtest_trace_covered(tr, b + 0xe),
+              "pt live: decoded stream covers the TAKEN walk (0x0..0x11, 0xe "
+              "skipped)");
+        CHECK(!asmtest_emu_trace_truncated(tr),
+              "pt live: the taken-walk window is complete (not truncated)");
+    } else {
+        CHECK(0, "pt live: begin_window arms the PT tier");
+    }
+    asmtest_trace_free(tr);
+
+    /* (b2) NOT-taken control (200,1 -> 201 > 100): the 0xe dec RUNS — the TNT discriminator
+     * the taken walk lacks, now over REAL silicon packets. */
+    asmtest_trace_t *nt = asmtest_trace_new(1 << 16, 1 << 16);
+    if (asmtest_hwtrace_begin_window(nt, &sc) == ASMTEST_HW_OK) {
+        asmtest_codeimage_t *wimg = asmtest_hwtrace_window_image();
+        if (wimg != NULL)
+            asmtest_codeimage_track(wimg, base, blen);
+        (void)fn(200, 1);
+        asmtest_hwtrace_end_window(sc, nt);
+        CHECK(asmtest_trace_covered(nt, b + 0xe),
+              "pt live: not-taken control covers the 0xe dec (real-silicon TNT "
+              "follow)");
+    }
+    asmtest_trace_free(nt);
+    asmtest_hwtrace_shutdown();
+
+    /* (c) Truncation: a tiny (4 KiB) AUX ring around a long hot loop must come back
+     * truncated — the PERF_AUX_FLAG_TRUNCATED / head-clamp path on a real wrapping ring. */
+    INIT_OPTS(opts, ASMTEST_HWTRACE_INTEL_PT);
+    opts.aux_size = 4096;
+    asmtest_hwtrace_init(&opts);
+    asmtest_trace_t *tt = asmtest_trace_new(1 << 16, 1 << 16);
+    if (asmtest_hwtrace_begin_window(tt, &sc) == ASMTEST_HW_OK) {
+        asmtest_codeimage_t *wimg = asmtest_hwtrace_window_image();
+        if (wimg != NULL)
+            asmtest_codeimage_track(wimg, base, blen);
+        volatile long acc = 0;
+        for (int i = 0; i < 2000000; i++)
+            acc += fn((long)i, 1);
+        asmtest_hwtrace_end_window(sc, tt);
+        (void)acc;
+        CHECK(asmtest_emu_trace_truncated(tt),
+              "pt live: a 4 KiB AUX ring around a long loop reports truncated");
+    }
+    asmtest_trace_free(tt);
+    asmtest_hwtrace_shutdown();
+
+    /* (d) Capture-side address filter (FILE-BACKED): filter to pt_filter_target in the test
+     * binary's own text; the decoded stream must then contain it and NOT its sibling. Try
+     * the object-relative file offset first (perf's @file spec) and, on rejection, retry
+     * with the runtime vaddr — recording which form the kernel accepted (a known caveat). */
+    {
+        void *ctx = NULL;
+        if (asmtest_hwtrace_pt_begin_window(&ctx) == ASMTEST_HW_OK) {
+            int okoff = 0;
+            uint64_t foff =
+                pt_file_offset_of((uintptr_t)&pt_filter_target, "/", &okoff);
+            char filt[192];
+            snprintf(filt, sizeof filt, "filter 0x%llx/0x80@/proc/self/exe",
+                     (unsigned long long)foff);
+            int frc = okoff ? asmtest_hwtrace_pt_set_filter(ctx, filt)
+                            : ASMTEST_HW_EUNAVAIL;
+            const char *form = "object-relative";
+            if (frc != ASMTEST_HW_OK) {
+                snprintf(filt, sizeof filt, "filter 0x%llx/0x80@/proc/self/exe",
+                         (unsigned long long)(uintptr_t)&pt_filter_target);
+                frc = asmtest_hwtrace_pt_set_filter(ctx, filt);
+                form = "runtime-vaddr";
+            }
+            CHECK(frc == ASMTEST_HW_OK,
+                  "pt live: SET_FILTER on a file-backed function is accepted");
+            printf("# pt live: address-filter form accepted = %s\n", form);
+            volatile long s = pt_filter_target(7) + pt_filter_sibling(7);
+            (void)s;
+            asmtest_trace_t *ft = asmtest_trace_new(1 << 16, 1 << 16);
+            asmtest_hwtrace_pt_end_window(ctx, NULL, 0, ft);
+            CHECK(
+                asmtest_trace_covered(ft,
+                                      (uint64_t)(uintptr_t)&pt_filter_target),
+                "pt live: the filtered function appears in the decoded stream");
+            CHECK(!asmtest_trace_covered(
+                      ft, (uint64_t)(uintptr_t)&pt_filter_sibling),
+                  "pt live: the UNfiltered sibling is absent (the filter "
+                  "bounded capture)");
+            asmtest_trace_free(ft);
+        }
+    }
+
+    /* (e) Anonymous-JIT constraint: the SAME filter against an ANONYMOUS exec_alloc region
+     * must FAIL (kernel address-filters match only file-backed VMAs by inode) — then the
+     * shipped decode-time fallback (no capture filter, full-stream decode against the
+     * code-image) must still recover the region's instructions. */
+    {
+        void *ctx = NULL;
+        if (asmtest_hwtrace_pt_begin_window(&ctx) == ASMTEST_HW_OK) {
+            char afilt[128];
+            snprintf(afilt, sizeof afilt, "filter 0x%llx/0x%zx@/proc/self/exe",
+                     (unsigned long long)b, blen);
+            /* an anon region's runtime address is not backed by the named file's inode,
+             * so the kernel's perf_addr_filter_match rejects it */
+            int arc = asmtest_hwtrace_pt_set_filter(ctx, afilt);
+            CHECK(arc != ASMTEST_HW_OK, "pt live: SET_FILTER against an "
+                                        "anonymous JIT region is REJECTED "
+                                        "(file-backed VMAs only)");
+            asmtest_codeimage_t *img = asmtest_codeimage_new(0);
+            if (img != NULL)
+                asmtest_codeimage_track(img, base, blen);
+            uint64_t when = img ? asmtest_codeimage_now(img) : 0;
+            (void)fn(20, 22);
+            asmtest_trace_t *at = asmtest_trace_new(1 << 16, 1 << 16);
+            asmtest_hwtrace_pt_end_window(ctx, img, when, at);
+            CHECK(
+                asmtest_trace_covered(at, b + 0x0),
+                "pt live: the decode-time fallback recovers the anon region's "
+                "instructions (no capture filter)");
+            asmtest_trace_free(at);
+            if (img != NULL)
+                asmtest_codeimage_free(img);
+        }
+    }
+
+    /* (f) Record the hardware's address-filter slot count (varies by silicon; not
+     * asserted — a datum for the runner's log). */
+    {
+        FILE *nf = fopen(
+            "/sys/bus/event_source/devices/intel_pt/nr_addr_filters", "r");
+        int naf = -1;
+        if (nf != NULL) {
+            if (fscanf(nf, "%d", &naf) != 1)
+                naf = -1;
+            fclose(nf);
+        }
+        printf("# pt nr_addr_filters: %d\n", naf);
+    }
+
+    asmtest_hwtrace_exec_free(base, blen);
+#else
+    printf("# SKIP pt live: needs Linux x86-64\n");
+#endif
+}
+
 /* §3.1(c) — whole-window noise attribution: the address→name reverse resolver +
  * IP bucketer. Feed a synthetic IP list spanning three distinct "regions" (the test
  * binary's own code, an anonymous mmap, and a synthetic perf-map JIT symbol) and
@@ -9446,6 +9686,7 @@ int main(void) {
     test_wholewindow_decode();
     test_pt_window_pair_selfskip();
     test_window_ladder();
+    test_pt_live_selfjit();
 
     /* §3.1(c): whole-window noise attribution — reverse resolver + IP bucketer. */
     test_symbolize_bucket();

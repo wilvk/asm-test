@@ -5,10 +5,16 @@
 > "done ⇒ archive" rule. It still belongs here, but less is outstanding than this note
 > originally recorded. The region-free **WEAK** single-step path (§Z0 + §Z1) ships and is
 > host-tested; since then §Z2's **synthetic** decode fixture, §Z3's **host-testable** half,
-> §Z5, and the AMD-LBR tier (as a *sampled survey*, §Z1.3) have all landed. **What remains
-> forward-look:** the STRONG whole-window PT tier and §Z2's live half (bare-metal Intel PT),
-> §Z3's live managed compose (a live .NET 8+ runtime), and §Z4's opt-in stitching
-> escalation. The per-phase status block below is the accurate accounting.
+> §Z5, the AMD-LBR tier (as a *sampled survey*, §Z1.3), and — from
+> intel-pt-whole-window-substrate T1–T5 — the **STRONG whole-window PT tier WIRING** (the
+> shared perf-AUX arm, `begin_window`/`_end_window` PT arm, the WEAK/STRONG runtime-trust
+> ladder, and the `new AsmTrace(HwBackend.IntelPt)` inline ctor) have all landed. **What
+> remains forward-look:** §Z2's live half — the *live PT capture itself* (bare-metal Intel
+> PT), whose smoke lane `make hwtrace-pt-live` is landed and self-skipping but **has not yet
+> run on silicon** (no reachable box exposes `intel_pt`); §Z3's live managed compose (a live
+> .NET 8+ runtime); and §Z4's opt-in stitching escalation. Do NOT mark §Z2-live validated
+> until `make hwtrace-pt-live` has actually run green on a PT host. The per-phase status
+> block below is the accurate accounting.
 
 The **capstone slice** of the scoped-tracing set. It sequences the remaining work to
 collapse the shipped `AsmTrace` constructor down to its aspirational **empty** form —

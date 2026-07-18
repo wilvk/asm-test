@@ -2191,6 +2191,16 @@ hwtrace-test: $(BUILD)/test_hwtrace $(BUILD)/asmtest-stealth-helper \
 	$(BUILD)/ibs_probe
 	$(BUILD)/test_ibs
 
+# Live Intel PT whole-window smoke — the ONE lane that must FAIL rather than skip when it
+# finds no intel_pt PMU (intel-pt-whole-window-substrate T5). ASMTEST_REQUIRE_PT=1 flips
+# test_pt_live_selfjit's availability self-skip into a CHECK failure, so a self-hosted
+# bare-metal Intel PT runner (with perf_event_paranoid<0 or CAP_PERFMON) goes red on a
+# hidden PMU, while plain `hwtrace-test` keeps its clean `# SKIP pt live: …` everywhere else.
+.PHONY: hwtrace-pt-live
+hwtrace-pt-live: $(BUILD)/test_hwtrace
+	@echo "== hwtrace-pt-live (REQUIRES bare-metal Intel PT + perf privilege) =="
+	ASMTEST_REQUIRE_PT=1 $(BUILD)/test_hwtrace
+
 # macOS out-of-process Mach stepper live test (macos-oop-mach-stepper T3-T5):
 # asmtest_mach_trace_call/_trace_attached/_run_to end to end against real forked
 # tracees. Links the full HWTRACE_OBJS (same as test_hwtrace) — on Darwin that
