@@ -143,7 +143,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 ### CI, distribution & infrastructure
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
-| [distribution-packaging.md](distribution-packaging.md) — language-registry go-live + system package-manager coverage | 13 | ☐ 0/13 | — |
+| [distribution-packaging.md](distribution-packaging.md) — language-registry go-live + system package-manager coverage | 13 | ◐ 0/13 (T7 wip) | — |
 | [benchmarks-ci-followups.md](benchmarks-ci-followups.md) — windows/macOS-Intel legs, nightly auto-commit, BM_MODEL_COST | 6 | ☐ 0/6 | — |
 | [self-hosted-ci-runners.md](self-hosted-ci-runners.md) — self-hosted runner lanes for hardware-gated tiers | 6 | ☐ 0/6 | **macos-cleanroom-lanes** (soft coordinate: amd-ibs, coresight, substrate) |
 | [libfuzzer-afl-shim.md](libfuzzer-afl-shim.md) — libFuzzer/AFL harness shim (demand-gated) | 5 | ☐ 0/5 | — |
