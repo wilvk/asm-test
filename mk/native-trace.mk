@@ -2176,6 +2176,37 @@ hwtrace-test: $(BUILD)/test_hwtrace $(BUILD)/asmtest-stealth-helper \
 	$(BUILD)/ibs_probe
 	$(BUILD)/test_ibs
 
+# macOS out-of-process Mach stepper live test (macos-oop-mach-stepper T3-T5):
+# asmtest_mach_trace_call/_trace_attached/_run_to end to end against real forked
+# tracees. Links the full HWTRACE_OBJS (same as test_hwtrace) — on Darwin that
+# already carries mach_backend.o + mach_excServer.o (MACH_EXC_OBJS); on any other
+# host mach_backend.o's #else stub needs neither, so the link is unaffected there.
+$(BUILD)/test_mach_stepper.o: tests/mach/test_mach_stepper.c include/asmtest_mach.h \
+                              include/asmtest_trace.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/test_mach_stepper: $(HWTRACE_OBJS) $(BUILD)/test_mach_stepper.o
+	$(CC) $(CFLAGS) $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) \
+	      -ldl -lpthread -o $@
+
+# task_for_pid/exception-port lane: needs a REAL macOS x86-64 host, like codesign,
+# `mig`, and the Mach frameworks (macos-oop-mach-stepper.md's Constraints & gates) —
+# not containerizable, so this is darwin-only and self-skips (exit 0) off Darwin,
+# mirroring mk/bindings.mk's macos-clean-test host-guard idiom (a single joined
+# shell command via the `\` continuations below, so its `exit 0` skips the build
+# and run that follow — NOT win64-msabi-test's `$(filter Darwin,…)`, which only
+# selects an object format and runs on every host). Needs
+# scripts/codesign-debugger.sh's ad-hoc self-sign (one-time admin dialog on first
+# task_for_pid) or `sudo make mach-stepper-test`; the test binary itself
+# self-skips (ASMTEST_MACH_EPERM, exit 0) when neither is satisfied, and self-skips
+# again (exit 0) on arm64 Darwin (Apple Silicon; this lane is x86-64 only).
+.PHONY: mach-stepper-test
+mach-stepper-test:
+	@case "$(UNAME_S)" in Darwin) ;; *) \
+	  echo "mach-stepper-test: darwin-only (host is $(UNAME_S)) — skipping"; exit 0 ;; esac; \
+	$(MAKE) --no-print-directory $(BUILD)/test_mach_stepper && \
+	sh scripts/codesign-debugger.sh $(BUILD)/test_mach_stepper && \
+	$(BUILD)/test_mach_stepper
+
 # Code-image recorder self-test (same-address-different-bytes temporal proof; runs live on
 # any Linux with soft-dirty — no privilege). When built with libbpf it additionally
 # exercises the eBPF emission detector, which self-skips without CAP_BPF.
