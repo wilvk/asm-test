@@ -717,6 +717,16 @@ asmtest_slice_t *asmtest_slice_backward(const asmtest_defuse_t *g,
     return slice_dir(g, sink.step, false);
 }
 
+asmtest_slice_t *asmtest_slice_forward_seed(const asmtest_defuse_t *g,
+                                            const at_val_rec_t *seed) {
+    return slice_dir(g, seed ? seed->step : 0, true);
+}
+
+asmtest_slice_t *asmtest_slice_backward_seed(const asmtest_defuse_t *g,
+                                             const at_val_rec_t *seed) {
+    return slice_dir(g, seed ? seed->step : 0, false);
+}
+
 void asmtest_slice_free(asmtest_slice_t *s) {
     if (s == NULL)
         return;

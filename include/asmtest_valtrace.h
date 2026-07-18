@@ -211,6 +211,15 @@ asmtest_slice_t *asmtest_slice_forward(const asmtest_defuse_t *g,
 asmtest_slice_t *asmtest_slice_backward(const asmtest_defuse_t *g,
                                         at_val_rec_t sink);
 
+/* By-pointer seed variants of asmtest_slice_forward / _backward. Only seed->step
+ * is read (as by-value today), but a pointer argument crosses every FFI — the
+ * by-value at_val_rec_t is SysV MEMORY-class, which Ruby Fiddle and other dynamic
+ * FFIs cannot express as a value argument. A NULL seed is treated as step 0. */
+asmtest_slice_t *asmtest_slice_forward_seed(const asmtest_defuse_t *g,
+                                            const at_val_rec_t *seed);
+asmtest_slice_t *asmtest_slice_backward_seed(const asmtest_defuse_t *g,
+                                             const at_val_rec_t *seed);
+
 void asmtest_slice_free(asmtest_slice_t *s);
 /* 1 if `step` is in the slice, else 0. */
 int asmtest_slice_contains(const asmtest_slice_t *s, uint32_t step);

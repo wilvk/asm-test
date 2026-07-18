@@ -207,6 +207,79 @@ static void test_defuse_slice(void) {
 }
 
 /*
+ * T1 (dataflow-bindings-slice-codeimage.md): asmtest_slice_forward_seed /
+ * _backward_seed (the by-pointer seed variants an FFI that cannot express a
+ * by-value 72-byte aggregate needs) must be byte-for-byte equivalent to the
+ * by-value slicers they wrap — both read only seed->step. A parity check
+ * across every step index of a known graph is a complete proof over that
+ * graph, not a sample.
+ */
+static void test_slice_seed_parity(void) {
+    asmtest_valtrace_t *v = build_chain();
+    if (!v) {
+        CHECK(0, "slice_seed: build_chain");
+        return;
+    }
+    asmtest_defuse_t *g = asmtest_defuse_build(v);
+    if (!g) {
+        CHECK(0, "slice_seed: defuse_build");
+        asmtest_valtrace_free(v);
+        return;
+    }
+
+    int fwd_ok = 1, bwd_ok = 1;
+    for (uint32_t k = 0; k < (uint32_t)g->nsteps; k++) {
+        at_val_rec_t seed = reg(0, false);
+        seed.step = k;
+
+        asmtest_slice_t *fwd_val = asmtest_slice_forward(g, seed);
+        asmtest_slice_t *fwd_ptr = asmtest_slice_forward_seed(g, &seed);
+        if (!fwd_val || !fwd_ptr || fwd_val->n != fwd_ptr->n) {
+            fwd_ok = 0;
+        } else {
+            for (uint32_t s = 0; s < (uint32_t)g->nsteps; s++)
+                if (asmtest_slice_contains(fwd_val, s) !=
+                    asmtest_slice_contains(fwd_ptr, s))
+                    fwd_ok = 0;
+        }
+        asmtest_slice_free(fwd_val);
+        asmtest_slice_free(fwd_ptr);
+
+        asmtest_slice_t *bwd_val = asmtest_slice_backward(g, seed);
+        asmtest_slice_t *bwd_ptr = asmtest_slice_backward_seed(g, &seed);
+        if (!bwd_val || !bwd_ptr || bwd_val->n != bwd_ptr->n) {
+            bwd_ok = 0;
+        } else {
+            for (uint32_t s = 0; s < (uint32_t)g->nsteps; s++)
+                if (asmtest_slice_contains(bwd_val, s) !=
+                    asmtest_slice_contains(bwd_ptr, s))
+                    bwd_ok = 0;
+        }
+        asmtest_slice_free(bwd_val);
+        asmtest_slice_free(bwd_ptr);
+    }
+    CHECK(fwd_ok,
+          "slice_seed: asmtest_slice_forward_seed matches "
+          "asmtest_slice_forward for every step index (element-for-element, "
+          "via slice_contains)");
+    CHECK(bwd_ok, "slice_seed: asmtest_slice_backward_seed matches "
+                  "asmtest_slice_backward for every step index");
+
+    /* Documented contract: a NULL seed is treated as step 0. */
+    asmtest_slice_t *null_fwd = asmtest_slice_forward_seed(g, NULL);
+    at_val_rec_t step0 = reg(0, false);
+    step0.step = 0;
+    asmtest_slice_t *step0_fwd = asmtest_slice_forward(g, step0);
+    CHECK(null_fwd && step0_fwd && null_fwd->n == step0_fwd->n,
+          "slice_seed: a NULL seed is treated as step 0");
+    asmtest_slice_free(null_fwd);
+    asmtest_slice_free(step0_fwd);
+
+    asmtest_defuse_free(g);
+    asmtest_valtrace_free(v);
+}
+
+/*
  * Documented KNOWN LIMITATION (plan Phase 1 exit criterion): two logically
  * distinct objects that occupy the SAME raw address (e.g. after a GC move, before
  * canonicalization) alias in the memory last-writer map, so a store to the first
@@ -363,6 +436,7 @@ int main(void) {
     test_sink();
     test_truncate();
     test_defuse_slice();
+    test_slice_seed_parity();
     test_alias_limitation();
     test_subreg_alias();
     printf("1..%d\n", checks);
