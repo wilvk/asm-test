@@ -110,6 +110,31 @@ win64-seh-test: | $(WIN64_BUILD)
 	  -o $(WIN64_BUILD)/test_seh_win64.exe
 	$(WINE) $(WIN64_BUILD)/test_seh_win64.exe
 
+# code-review-plausible-triage T6: the --no-fork VEH crash handler
+# (rt_veh_cb, src/platform_win32.c) is scoped to the armed test thread, not
+# process-global -- a fault on any OTHER thread must take the OS's normal
+# unhandled-exception path instead of being redirected onto the test
+# thread's recovery stack (which lives on that thread's own stack). PE/Wine
+# only, mirrors win64-seh-test's build.
+.PHONY: win64-veh-scope-test
+win64-veh-scope-test: | $(WIN64_BUILD)
+	$(WIN64_CC) -O2 -Wall -Iinclude -Isrc -DASMTEST_ABI_WIN64 \
+	  src/platform_win32.c tests/win64/test_veh_scope_win64.c \
+	  -o $(WIN64_BUILD)/test_veh_scope_win64.exe
+	@echo "# scenario 'main': same-thread fault still caught (regression guard)"
+	$(WINE) $(WIN64_BUILD)/test_veh_scope_win64.exe main
+	@echo "# scenario 'foreign': a non-test-thread fault must not hijack the test thread"
+	@rc=0; timeout 30 $(WINE) $(WIN64_BUILD)/test_veh_scope_win64.exe foreign \
+	  > $(WIN64_BUILD)/veh_scope.out 2>&1 || rc=$$?; \
+	cat $(WIN64_BUILD)/veh_scope.out; \
+	if [ "$$rc" = 0 ] || [ "$$rc" = 124 ] || \
+	   grep -q "MAIN-HIJACKED" $(WIN64_BUILD)/veh_scope.out || \
+	   grep -q "SURVIVED-FOREIGN-FAULT" $(WIN64_BUILD)/veh_scope.out; then \
+	  echo "FAIL: foreign-thread fault was not contained by the OS (rc=$$rc)"; \
+	  exit 1; \
+	fi; \
+	echo "win64-veh-scope-test: foreign-thread fault correctly took the OS's unhandled-exception path (rc=$$rc)"
+
 # Phase 5 slice (single-step plan): the VEH single-step front-end — EFLAGS.TF
 # armed around a library-owned call, EXCEPTION_SINGLE_STEP to a vectored
 # handler, the exact in-region instruction stream recorded (the Windows twin of
@@ -179,12 +204,12 @@ win64-runner-test: | $(WIN64_BUILD)
 	@echo "win64 runner: isolation + -jN pool + --no-fork + --bench all verified"
 
 # What the asmtest-win64 image runs: substrate smoke + capture + the Phase 4
-# runner-port slices (guard pages, isolation, pool, --filter, SEH) + the
-# integrated runner itself.
+# runner-port slices (guard pages, isolation, pool, --filter, SEH, VEH thread
+# scoping) + the integrated runner itself.
 .PHONY: win64-check
 win64-check: win64-smoke win64-test win64-guard-test win64-isolate-test \
-             win64-pool-test win64-filter-test win64-seh-test win64-ss-test \
-             win64-runner-test
+             win64-pool-test win64-filter-test win64-seh-test \
+             win64-veh-scope-test win64-ss-test win64-runner-test
 
 # Windows mirror of `make hwtrace-attach-demo`: attach to a SEPARATE process the
 # framework did NOT start (attach_victim_win) and single-step one call of its hot

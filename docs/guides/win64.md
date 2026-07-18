@@ -174,6 +174,10 @@ reaches **full parity** with the POSIX runner across every execution mode:
   runs up to `N` isolated children at once; output stays in registration order.
 - **In-process `--no-fork`.** Opts into the single-process facility (vectored
   handler + watchdog) — the same path the Phase 3 gate shipped, now selectable.
+  Containment covers the armed **test thread only**: a fault on any other
+  thread takes the OS's normal unhandled-exception path instead of being
+  redirected onto the test thread's recovery stack (the default forked mode
+  contains a fault on *any* thread, via the whole child process dying).
 - **`--bench`.** Benchmark mode (cycles/call via `rdtsc`) runs on Win64 too
   (a BENCH body is trusted, so it runs without per-bench process isolation).
 

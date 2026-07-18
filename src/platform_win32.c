@@ -382,6 +382,7 @@ volatile int asmtest_win32_test_reason;
 asmtest_win32_fault_t asmtest_win32_test_fault;
 
 static volatile LONG rt_armed;
+static volatile DWORD rt_test_tid; /* the armed test's own thread (T6) */
 static volatile LONG rt_finishing; /* main thread has entered test_end (#35) */
 static volatile LONG
     rt_landing_reached; /* landing pad executed (watchdog, #36) */
@@ -407,6 +408,18 @@ static void rt_landing(void) {
 static LONG CALLBACK rt_veh_cb(EXCEPTION_POINTERS *info) {
     DWORD code = info->ExceptionRecord->ExceptionCode;
     if (!is_fatal_exc(code))
+        return EXCEPTION_CONTINUE_SEARCH;
+    /* T6: a fault on any thread other than the armed test thread must not be
+     * redirected -- rt_landing's __builtin_longjmp targets a jmp_buf whose
+     * frame lives on the TEST thread's stack, so diverting a foreign thread
+     * there would hijack that thread onto someone else's stack (finding
+     * mirrors the sibling asmtest_win32_guard facility, which is already
+     * correctly scoped via __thread tls_armed/tls_recover). Decline without
+     * disarming, so the facility still catches the real test thread's own
+     * fault; a foreign-thread fault then takes the OS's normal
+     * unhandled-exception path (process exit) -- the same honest outcome the
+     * forked mode gets from child death. */
+    if (GetCurrentThreadId() != rt_test_tid)
         return EXCEPTION_CONTINUE_SEARCH;
     if (!InterlockedExchange(&rt_armed, 0))
         return EXCEPTION_CONTINUE_SEARCH; /* already retired (timeout/assert) */
@@ -484,6 +497,7 @@ void asmtest_win32_test_begin(unsigned timeout_ms) {
     rt_test_thread = NULL;
     rt_finishing = 0;
     rt_landing_reached = 0;
+    rt_test_tid = GetCurrentThreadId(); /* T6: scope rt_veh_cb to this thread */
     rt_armed = 1;
     rt_veh = AddVectoredExceptionHandler(1, rt_veh_cb);
     if (timeout_ms != 0) {

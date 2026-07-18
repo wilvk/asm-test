@@ -1057,6 +1057,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Zig conformance: vec256/vec512 capture tests no longer under-fill the
   8-slot vargs array.
 
+- Win64 `--no-fork`: a fault on a non-test thread no longer hijacks the test
+  thread's recovery stack; it takes the normal unhandled-exception path.
+
 - **Cross-alias register def-use edges resolved.** `asmtest_defuse_build` (the
   shared, tier-neutral last-writer builder in `src/dataflow.c`) keyed its
   register axis on the raw Capstone id, so a write to one GP sub-register
