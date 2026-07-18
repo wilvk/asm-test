@@ -637,6 +637,35 @@ int asmtest_amd_msr_trace(const void *base, size_t len, void (*run_fn)(void *),
 int asmtest_amd_msr_available(void);
 
 /* ------------------------------------------------------------------ */
+/* W3: in-process BTF branch-granular single-step (src/ss_btf.c)        */
+/* ------------------------------------------------------------------ */
+/* In-process, no-fork, branch-granular capture: arms BOTH EFLAGS.TF and DEBUGCTL.BTF
+ * (MSR 0x1d9 bit 1) over the same thread-pinned /dev/cpu/N/msr route asmtest_amd_msr_trace
+ * uses, records one SIGTRAP per TAKEN BRANCH (not per instruction), and feeds the
+ * synthesized (from,to) waypoints into the AMD replay loop (asmtest_amd_decode_stitched) —
+ * no 16-entry ceiling, no ptrace child. Deliberately scoped to a pinned, small, LEAF
+ * routine (no syscalls, no calls out of the region): Linux does not preserve a
+ * user-written BTF across a context switch, and BTF is a hardware one-shot the kernel
+ * clears on every #DB, so completeness is unprovable once either happens — every such
+ * case sets trace->truncated rather than presenting a partial capture as complete. See
+ * docs/internal/implementations/inproc-btf-block-step.md. Returns ASMTEST_HW_OK,
+ * ASMTEST_HW_EINVAL on bad args, ASMTEST_HW_EUNAVAIL when the substrate/privilege is
+ * absent (see asmtest_ss_btf_available), ASMTEST_HW_EFULL when a capture is already
+ * armed (one non-nested capture per process — DEBUGCTL is physical per-CPU state), or
+ * ASMTEST_HW_ENOSYS off x86-64 Linux. */
+int asmtest_ss_btf_trace(const void *base, size_t len, void (*run_fn)(void *),
+                         void *arg, asmtest_trace_t *trace);
+
+/* Whether in-process BTF branch-granular stepping actually works here: bare-metal
+ * x86-64 Linux with /dev/cpu/N/msr writable (CAP_SYS_ADMIN + the `msr` module), and a
+ * hang-proof FUNCTIONAL probe (not just a CPUID/build check) confirming the branch
+ * traps really are branch-granular — some hypervisors silently mask DEBUGCTL.BTF and
+ * degrade to per-instruction TF stepping, which this probe detects and reports as
+ * unavailable. Cached; safe to call repeatedly. Never modifies any MSR outside the
+ * probe's own bounded arm/run/disarm window, which it always restores. */
+int asmtest_ss_btf_available(void);
+
+/* ------------------------------------------------------------------ */
 /* §3.1(c) — whole-window noise attribution: address→name reverse       */
 /* resolver + IP bucketer.                                              */
 /*                                                                     */

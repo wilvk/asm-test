@@ -129,6 +129,8 @@ ALL asmtest_ptrace_trace_attached_windowed_blockstep  # §D3 W-1 BTF block-step 
 ALL asmtest_amd_snapshot_trace        # AMD deterministic boundary LBR snapshot: C-level callback capture, reached through the region begin/end markers (snapshot opt-in), not direct FFI
 ALL asmtest_amd_msr_trace             # AMD MSR-direct LBR snapshot (src/msr_lbr.c): C-level callback capture reading /dev/cpu/N/msr, self-hosted CAP_SYS_ADMIN lane only — same posture as asmtest_amd_snapshot_trace
 ALL asmtest_amd_msr_available         #   substrate probe for the above (amd_lbr_v2 + /dev/cpu/N/msr); C-level gate, not per-binding FFI
+ALL asmtest_ss_btf_trace              # W3 in-process BTF branch-granular single-step (src/ss_btf.c): C-level callback capture, self-hosted privileged lane only — same posture as asmtest_amd_msr_trace
+ALL asmtest_ss_btf_available          #   substrate probe for the above (bare-metal x86-64 Linux + /dev/cpu/N/msr); C-level gate, not per-binding FFI
 
 # Whole-window / statistical-survey C-surface — dotnet is the lead binding (its managed
 # AsmTrace tier drives these); the other nine gain them when they grow a whole-window scope

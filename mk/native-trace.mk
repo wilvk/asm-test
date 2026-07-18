@@ -2035,6 +2035,10 @@ $(BUILD)/mach_backend.o: src/mach_backend.c include/asmtest_mach.h \
 # /dev/cpu/N/msr; no external library, decodes through amd_backend.o's asmtest_amd_decode.
 $(BUILD)/msr_lbr.o: src/msr_lbr.c include/asmtest_hwtrace.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
+# W3: in-process branch-granular single-step via DEBUGCTL.BTF over the same
+# /dev/cpu/N/msr route as msr_lbr.o above; no external library.
+$(BUILD)/ss_btf.o: src/ss_btf.c include/asmtest_hwtrace.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
 # Env-gated AMD/hwtrace debug logging (src/debug.c, Phase 4): no external library, no
 # public header; ASMTEST_HWTRACE_DEBUG / ASMTEST_AMD_DEBUG gate stderr diagnostics.
 $(BUILD)/debug.o: src/debug.c src/debug.h | $(BUILD)
@@ -2092,7 +2096,7 @@ HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
                 $(BUILD)/mach_backend.o $(MACH_EXC_OBJS) \
                 $(BUILD)/descent.o $(BUILD)/stealth_helper.o \
                 $(BUILD)/codeimage.o $(BUILD)/branchsnap.o \
-                $(BUILD)/msr_lbr.o $(BUILD)/ibs_backend.o $(BUILD)/debug.o \
+                $(BUILD)/msr_lbr.o $(BUILD)/ss_btf.o $(BUILD)/ibs_backend.o $(BUILD)/debug.o \
                 $(BUILD)/disasm.o $(BUILD)/trace.o
 
 # The test builds a synthetic wrong-path perf_branch_entry (test_amd_spec_filter), so
@@ -2836,6 +2840,8 @@ $(BUILD)/pic/stealth_helper.o: src/stealth_helper.c src/stealth_helper.h \
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/msr_lbr.o: src/msr_lbr.c include/asmtest_hwtrace.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
+$(BUILD)/pic/ss_btf.o: src/ss_btf.c include/asmtest_hwtrace.h | $(BUILD)/pic
+	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/debug.o: src/debug.c src/debug.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 # ibs_backend.o must be in the shared lib too: since the Zen-2 F6 fallback,
@@ -2857,7 +2863,7 @@ NATIVE_TRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o \
     $(MACH_EXC_OBJS) \
     $(BUILD)/descent.o \
     $(BUILD)/stealth_helper.o $(BUILD)/codeimage.o $(BUILD)/branchsnap.o \
-    $(BUILD)/msr_lbr.o $(BUILD)/ibs_backend.o $(BUILD)/debug.o
+    $(BUILD)/msr_lbr.o $(BUILD)/ss_btf.o $(BUILD)/ibs_backend.o $(BUILD)/debug.o
 $(NATIVE_TRACE_OBJS) $(patsubst $(BUILD)/%,$(BUILD)/pic/%,$(NATIVE_TRACE_OBJS)): \
     $(BUILD)/.build-flags
 
@@ -2876,6 +2882,7 @@ $(call shlib_real,libasmtest_hwtrace): $(BUILD)/pic/hwtrace.o \
                                        $(BUILD)/pic/codeimage.o \
                                        $(BUILD)/pic/branchsnap.o \
                                        $(BUILD)/pic/msr_lbr.o \
+                                       $(BUILD)/pic/ss_btf.o \
                                        $(BUILD)/pic/ibs_backend.o \
                                        $(BUILD)/pic/debug.o \
                                        $(BUILD)/pic/disasm.o \
