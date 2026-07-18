@@ -15,6 +15,7 @@ import java.nio.file.Path;
 import java.util.List;
 
 import static java.lang.foreign.ValueLayout.ADDRESS;
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
 import static java.lang.foreign.ValueLayout.JAVA_INT;
 import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
@@ -46,6 +47,131 @@ public class TestDataflow {
     static MethodHandle valtraceFree;
     static MethodHandle valtraceSteps;
     static MethodHandle valtraceRecs;
+    static MethodHandle valtraceAppend;
+
+    // L1 def-use graph + L2 slice (analysis pipeline, src/dataflow.c). The seed
+    // crosses BY POINTER (asmtest_slice_forward_seed/_backward_seed): a by-value
+    // at_val_rec_t StructLayout would need explicit paddingLayout members at
+    // 20-23/45-47/52-55/68-71; the pointer form needs none of that — the seed is
+    // just a 72-byte MemorySegment with JAVA_INT written at offset 64.
+    static MethodHandle defuseBuild;
+    static MethodHandle defuseFree;
+    static MethodHandle sliceForwardSeed;
+    static MethodHandle sliceBackwardSeed;
+    static MethodHandle sliceFree;
+    static MethodHandle sliceContains;
+
+    // One operand read/write record (include/asmtest_valtrace.h at_val_rec_t),
+    // 72 bytes. Offsets verified via offsetof on this build.
+    static final long REC_SIZE = 72;
+    static final long OFF_KIND = 0;
+    static final long OFF_REG = 4;
+    static final long OFF_ADDR = 32;
+    static final long OFF_IS_WRITE = 42;
+    static final long OFF_STEP = 64;
+
+    // at_loc_kind_t: the location space of an operand.
+    static final int LOC_REG = 0;     // a register (key = Capstone reg id)
+    static final int LOC_MEM_ABS = 1; // memory at an absolute effective address (key = addr)
+    static final int LOC_MEM_OFF = 2; // memory at a routine offset
+
+    static final class Loc {
+        final int kind;
+        final long key;
+        Loc(int kind, long key) { this.kind = kind; this.key = key; }
+    }
+
+    static Loc reg(long r) { return new Loc(LOC_REG, r); }
+    static Loc mem(long addr) { return new Loc(LOC_MEM_ABS, addr); }
+
+    static void writeRec(MemorySegment seg, long base, Loc loc, boolean isWrite) {
+        seg.set(JAVA_INT, base + OFF_KIND, loc.kind);
+        if (loc.kind == LOC_REG) seg.set(JAVA_INT, base + OFF_REG, (int) loc.key);
+        else seg.set(JAVA_LONG, base + OFF_ADDR, loc.key);
+        seg.set(JAVA_BYTE, base + OFF_IS_WRITE, (byte) (isWrite ? 1 : 0));
+    }
+
+    // A hand-built (or live-attach-filled) L0 value trace plus its cached L1
+    // def-use graph and L2 slicer — mirrors the Python/Ruby/Lua/Zig/Rust/Go
+    // ValueTrace.
+    static final class ValueTrace {
+        MemorySegment v;
+        MemorySegment g;
+        int nSteps;
+
+        ValueTrace(long stepsCap, long recsCap) throws Throwable {
+            v = (MemorySegment) valtraceNew.invoke(stepsCap, recsCap, 0L);
+            if (v.address() == 0) throw new IllegalStateException("asmtest_valtrace_new failed");
+        }
+
+        // Append one executed instruction at offset `off` reading `reads` and
+        // writing `writes` (each an array of Loc). Read-set before write-set.
+        void step(long off, Loc[] reads, Loc[] writes) throws Throwable {
+            int n = reads.length + writes.length;
+            MemorySegment recs = n > 0 ? arena.allocate(REC_SIZE * n) : MemorySegment.NULL;
+            int i = 0;
+            for (Loc loc : reads) writeRec(recs, (i++) * REC_SIZE, loc, false);
+            for (Loc loc : writes) writeRec(recs, (i++) * REC_SIZE, loc, true);
+            valtraceAppend.invoke(v, off, recs, (long) n);
+            nSteps++;
+            invalidateDefuse();
+        }
+
+        // A live producer appends behind our back (unlike step(), which counts
+        // as it goes), so resync the step count and drop any stale def-use
+        // graph.
+        void postAttach() throws Throwable {
+            nSteps = (int) (long) valtraceSteps.invoke(v);
+            invalidateDefuse();
+        }
+
+        void invalidateDefuse() throws Throwable {
+            if (g != null) {
+                defuseFree.invoke(g);
+                g = null;
+            }
+        }
+
+        // The L1 last-writer def-use graph, built once and cached until the
+        // next step()/attach invalidates it.
+        MemorySegment defuse() throws Throwable {
+            if (g == null) {
+                g = (MemorySegment) defuseBuild.invoke(v);
+                if (g.address() == 0) throw new IllegalStateException("asmtest_defuse_build failed");
+            }
+            return g;
+        }
+
+        int[] slice(int origin, boolean forward) throws Throwable {
+            MemorySegment graph = defuse();
+            MemorySegment seed = arena.allocate(REC_SIZE);
+            seed.set(JAVA_INT, OFF_STEP, origin);
+            MemorySegment s = (MemorySegment) (forward
+                    ? sliceForwardSeed.invoke(graph, seed)
+                    : sliceBackwardSeed.invoke(graph, seed));
+            int[] buf = new int[nSteps];
+            int cnt = 0;
+            for (int i = 0; i < nSteps; i++) {
+                if ((int) sliceContains.invoke(s, i) != 0) buf[cnt++] = i;
+            }
+            sliceFree.invoke(s);
+            return java.util.Arrays.copyOf(buf, cnt);
+        }
+
+        // Steps influenced by the value defined at step `origin` (origin included).
+        int[] forwardSlice(int origin) throws Throwable { return slice(origin, true); }
+
+        // Steps that produced the value used at step `sink` (sink included).
+        int[] backwardSlice(int sink) throws Throwable { return slice(sink, false); }
+
+        void free() throws Throwable {
+            if (v != null) {
+                invalidateDefuse();
+                valtraceFree.invoke(v);
+                v = null;
+            }
+        }
+    }
 
     // The producer's return codes, re-declared for the same reason.
     static final int PTRACE_OK = 0;      // a complete scoped trace
@@ -193,6 +319,20 @@ public class TestDataflow {
                 lookup.find("asmtest_dataflow_ptrace_attach_jit").get(),
                 FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_LONG, JAVA_LONG,
                         ADDRESS, JAVA_LONG, JAVA_LONG, ADDRESS, ADDRESS, ADDRESS));
+        valtraceAppend = linker.downcallHandle(lookup.find("asmtest_valtrace_append").get(),
+                FunctionDescriptor.ofVoid(ADDRESS, JAVA_LONG, ADDRESS, JAVA_LONG));
+        defuseBuild = linker.downcallHandle(lookup.find("asmtest_defuse_build").get(),
+                FunctionDescriptor.of(ADDRESS, ADDRESS));
+        defuseFree = linker.downcallHandle(lookup.find("asmtest_defuse_free").get(),
+                FunctionDescriptor.ofVoid(ADDRESS));
+        sliceForwardSeed = linker.downcallHandle(lookup.find("asmtest_slice_forward_seed").get(),
+                FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS));
+        sliceBackwardSeed = linker.downcallHandle(lookup.find("asmtest_slice_backward_seed").get(),
+                FunctionDescriptor.of(ADDRESS, ADDRESS, ADDRESS));
+        sliceFree = linker.downcallHandle(lookup.find("asmtest_slice_free").get(),
+                FunctionDescriptor.ofVoid(ADDRESS));
+        sliceContains = linker.downcallHandle(lookup.find("asmtest_slice_contains").get(),
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_INT));
 
         // GC-move canonicalizer
         check(gcmove(new long[][] {}, 0, 0x1234L) == 0x1234L, "gcmove: empty move set is identity");
@@ -218,10 +358,30 @@ public class TestDataflow {
         check(method(rj, 0x1010L) == 1, "method: tiered re-JIT newest version wins");
         check(method(new Object[][] {}, 0x1000L) == -1, "method: empty map -> -1");
 
+        defuseSliceSmoke();
         liveAttachTests();
 
         System.out.println("1.." + n);
         if (failed) System.exit(1);
+    }
+
+    // T2 — def-use/slice surface (by-pointer seed, src/dataflow.c). Pure C, no
+    // ptrace, so it runs unconditionally. Not a counted TAP assertion (T3 adds
+    // those, plus the live-captured memory-edge case) — this is a build-time
+    // proof that the wrapper actually slices correctly, not just that it links.
+    static void defuseSliceSmoke() throws Throwable {
+        ValueTrace vt = new ValueTrace(64, 512);
+        // A register chain r10 -> r11 -> r12 (mirrors the Python round-trip test).
+        vt.step(0, new Loc[0], new Loc[] { reg(10) });
+        vt.step(1, new Loc[] { reg(10) }, new Loc[] { reg(11) });
+        vt.step(2, new Loc[] { reg(11) }, new Loc[] { reg(12) });
+        int[] fwd = vt.forwardSlice(0);
+        int[] bwd = vt.backwardSlice(2);
+        if (fwd.length != 3 || bwd.length != 3) {
+            throw new IllegalStateException("defuseSliceSmoke: forward=" + java.util.Arrays.toString(fwd)
+                    + " backward=" + java.util.Arrays.toString(bwd) + ", want len 3 each");
+        }
+        vt.free();
     }
 
     // ----------------------------------------------------------------------

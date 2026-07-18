@@ -41,6 +41,41 @@ static int (*p_attach_pid)(int, uint64_t, size_t, uint64_t, long*, void*);
 static int (*p_attach_pid_tid)(int, int, uint64_t, size_t, uint64_t, long*, void*);
 static int (*p_attach_jit)(int, int, uint64_t, size_t, void*, uint64_t, uint64_t, long*, int*, void*);
 
+// One operand read/write record (include/asmtest_valtrace.h at_val_rec_t). The
+// three bool fields are declared `unsigned char` (not `_Bool`) purely to keep
+// cgo's Go-side type mapping simple; the ABI only cares that a byte holding 0/1
+// lands at the verified offset. Layout verified via offsetof on this build: kind
+// 0, reg/base/index 4/8/12, scale 16, disp 24, addr 32, size 40, the three flags
+// 42/43/44, wide_off 48, value 56, step 64 — 72 bytes.
+typedef struct {
+    int32_t kind;
+    uint32_t reg;
+    uint32_t base;
+    uint32_t index;
+    int32_t scale;
+    int64_t disp;
+    uint64_t addr;
+    uint16_t size;
+    unsigned char is_write;
+    unsigned char value_valid;
+    unsigned char wide;
+    uint32_t wide_off;
+    uint64_t value;
+    uint32_t step;
+} df_valrec_t;
+
+// L1 def-use graph + L2 slice (analysis pipeline, src/dataflow.c). The seed
+// crosses BY POINTER (asmtest_slice_forward_seed/_backward_seed) — the binding is
+// cgo-only, which could pass df_valrec_t by value, but the pointer form keeps
+// this call's shape uniform with the sibling bindings that cannot.
+static void  (*p_vt_append)(void*, uint64_t, const df_valrec_t*, size_t);
+static void *(*p_defuse_build)(const void*);
+static void  (*p_defuse_free)(void*);
+static void *(*p_slice_forward_seed)(const void*, const df_valrec_t*);
+static void *(*p_slice_backward_seed)(const void*, const df_valrec_t*);
+static void  (*p_slice_free)(void*);
+static int   (*p_slice_contains)(const void*, uint32_t);
+
 static int df_load(const char *path) {
     void *h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (!h) return -1;
@@ -56,8 +91,20 @@ static int df_load(const char *path) {
         dlsym(h, "asmtest_dataflow_ptrace_attach_pid_tid");
     p_attach_jit = (int(*)(int, int, uint64_t, size_t, void*, uint64_t, uint64_t, long*, int*, void*))
         dlsym(h, "asmtest_dataflow_ptrace_attach_jit");
+    p_vt_append = (void(*)(void*, uint64_t, const df_valrec_t*, size_t))
+        dlsym(h, "asmtest_valtrace_append");
+    p_defuse_build = (void*(*)(const void*))dlsym(h, "asmtest_defuse_build");
+    p_defuse_free = (void(*)(void*))dlsym(h, "asmtest_defuse_free");
+    p_slice_forward_seed = (void*(*)(const void*, const df_valrec_t*))
+        dlsym(h, "asmtest_slice_forward_seed");
+    p_slice_backward_seed = (void*(*)(const void*, const df_valrec_t*))
+        dlsym(h, "asmtest_slice_backward_seed");
+    p_slice_free = (void(*)(void*))dlsym(h, "asmtest_slice_free");
+    p_slice_contains = (int(*)(const void*, uint32_t))dlsym(h, "asmtest_slice_contains");
     return (p_canon && p_resolve && p_vt_new && p_vt_free && p_vt_steps && p_vt_recs &&
-            p_attach_pid && p_attach_pid_tid && p_attach_jit) ? 0 : -1;
+            p_attach_pid && p_attach_pid_tid && p_attach_jit && p_vt_append &&
+            p_defuse_build && p_defuse_free && p_slice_forward_seed &&
+            p_slice_backward_seed && p_slice_free && p_slice_contains) ? 0 : -1;
 }
 static uint64_t df_canon(const df_gcmove_t *m, size_t n, uint32_t s, uint64_t phys) { return p_canon(m, n, s, phys); }
 static int df_resolve(const df_method_t *m, size_t n, uint64_t pc) { return p_resolve(m, n, pc); }
@@ -66,6 +113,19 @@ static void *df_vt_new(size_t sc, size_t rc, size_t wc) { return p_vt_new(sc, rc
 static void  df_vt_free(void *v) { p_vt_free(v); }
 static size_t df_vt_steps(const void *v) { return p_vt_steps(v); }
 static size_t df_vt_recs(const void *v) { return p_vt_recs(v); }
+static void df_vt_append(void *v, uint64_t off, const df_valrec_t *recs, size_t n) {
+    p_vt_append(v, off, recs, n);
+}
+static void *df_defuse_build(const void *v) { return p_defuse_build(v); }
+static void  df_defuse_free(void *g) { p_defuse_free(g); }
+static void *df_slice_forward_seed(const void *g, const df_valrec_t *seed) {
+    return p_slice_forward_seed(g, seed);
+}
+static void *df_slice_backward_seed(const void *g, const df_valrec_t *seed) {
+    return p_slice_backward_seed(g, seed);
+}
+static void df_slice_free(void *s) { p_slice_free(s); }
+static int df_slice_contains(const void *s, uint32_t step) { return p_slice_contains(s, step); }
 static int df_attach_pid(int pid, uint64_t base, size_t len, uint64_t mi, long *res, void *vt) {
     return p_attach_pid(pid, base, len, mi, res, vt);
 }
@@ -145,6 +205,138 @@ func method(methods []meth, pc uint64) int {
 	return r
 }
 
+// at_loc_kind_t: the location space of an operand.
+const (
+	locReg    = 0 // a register (key = Capstone reg id)
+	locMemAbs = 1 // memory at an absolute effective address (key = addr)
+	locMemOff = 2 // memory at a routine offset
+)
+
+// loc is (kind, key): key is a reg id for locReg, else an absolute address.
+func mkRec(kind int32, key uint64, isWrite bool) C.df_valrec_t {
+	var r C.df_valrec_t
+	r.kind = C.int32_t(kind)
+	if kind == locReg {
+		r.reg = C.uint32_t(key)
+	} else {
+		r.addr = C.uint64_t(key)
+	}
+	if isWrite {
+		r.is_write = 1
+	}
+	return r
+}
+
+// A hand-built (or live-attach-filled) L0 value trace plus its cached L1 def-use
+// graph and L2 slicer — mirrors the Python/Ruby/Lua/Zig/Rust ValueTrace.
+type valueTrace struct {
+	v      unsafe.Pointer
+	g      unsafe.Pointer
+	nSteps uint32
+}
+
+func newValueTrace(stepsCap, recsCap int) *valueTrace {
+	v := C.df_vt_new(C.size_t(stepsCap), C.size_t(recsCap), 0)
+	if v == nil {
+		panic("asmtest_valtrace_new failed")
+	}
+	return &valueTrace{v: v}
+}
+
+// step appends one executed instruction at offset `off` with its pre-built
+// operand records (read-set then write-set — see mkRec).
+func (vt *valueTrace) step(off uint64, recs []C.df_valrec_t) {
+	var p *C.df_valrec_t
+	if len(recs) > 0 {
+		p = &recs[0]
+	}
+	C.df_vt_append(vt.v, C.uint64_t(off), p, C.size_t(len(recs)))
+	vt.nSteps++
+	vt.invalidateDefuse()
+}
+
+// postAttach resyncs the step count and drops any stale def-use graph after a
+// live producer appends behind our back (unlike step, which counts as it goes).
+// Not yet called here — T3 wires this into the live-captured memory-edge
+// assertion.
+func (vt *valueTrace) postAttach() {
+	vt.nSteps = uint32(C.df_vt_steps(vt.v))
+	vt.invalidateDefuse()
+}
+
+func (vt *valueTrace) invalidateDefuse() {
+	if vt.g != nil {
+		C.df_defuse_free(vt.g)
+		vt.g = nil
+	}
+}
+
+// defuse builds the L1 last-writer def-use graph once, caching it until the
+// next step()/attach invalidates it.
+func (vt *valueTrace) defuse() unsafe.Pointer {
+	if vt.g == nil {
+		vt.g = C.df_defuse_build(vt.v)
+		if vt.g == nil {
+			panic("asmtest_defuse_build failed")
+		}
+	}
+	return vt.g
+}
+
+func (vt *valueTrace) slice(origin uint32, forward bool) []uint32 {
+	g := vt.defuse()
+	var seed C.df_valrec_t
+	seed.step = C.uint32_t(origin)
+	var s unsafe.Pointer
+	if forward {
+		s = C.df_slice_forward_seed(g, &seed)
+	} else {
+		s = C.df_slice_backward_seed(g, &seed)
+	}
+	out := make([]uint32, 0, vt.nSteps)
+	for i := uint32(0); i < vt.nSteps; i++ {
+		if C.df_slice_contains(s, C.uint32_t(i)) != 0 {
+			out = append(out, i)
+		}
+	}
+	C.df_slice_free(s)
+	return out
+}
+
+// forwardSlice returns the steps influenced by the value defined at step
+// `origin` (origin included).
+func (vt *valueTrace) forwardSlice(origin uint32) []uint32 { return vt.slice(origin, true) }
+
+// backwardSlice returns the steps that produced the value used at step `sink`
+// (sink included).
+func (vt *valueTrace) backwardSlice(sink uint32) []uint32 { return vt.slice(sink, false) }
+
+func (vt *valueTrace) free() {
+	if vt.v != nil {
+		vt.invalidateDefuse()
+		C.df_vt_free(vt.v)
+		vt.v = nil
+	}
+}
+
+// T2 — def-use/slice surface (by-pointer seed, src/dataflow.c). Pure C, no
+// ptrace, so it runs unconditionally. Not a counted TAP assertion (T3 adds
+// those, plus the live-captured memory-edge case) — this is a build-time proof
+// that the wrapper actually slices correctly, not just that it links.
+func defuseSliceSmoke() {
+	vt := newValueTrace(64, 512)
+	// A register chain r10 -> r11 -> r12 (mirrors the Python round-trip test).
+	vt.step(0, []C.df_valrec_t{mkRec(locReg, 10, true)})
+	vt.step(1, []C.df_valrec_t{mkRec(locReg, 10, false), mkRec(locReg, 11, true)})
+	vt.step(2, []C.df_valrec_t{mkRec(locReg, 11, false), mkRec(locReg, 12, true)})
+	fwd := vt.forwardSlice(0)
+	bwd := vt.backwardSlice(2)
+	if len(fwd) != 3 || len(bwd) != 3 {
+		panic(fmt.Sprintf("defuseSliceSmoke: forward=%v backward=%v, want len 3 each", fwd, bwd))
+	}
+	vt.free()
+}
+
 func main() {
 	path := os.Getenv("ASMTEST_DATAFLOW_LIB")
 	if path == "" {
@@ -182,6 +374,7 @@ func main() {
 	check(method(rj, 0x1010) == 1, "method: tiered re-JIT newest version wins")
 	check(method(nil, 0x1000) == -1, "method: empty map -> -1")
 
+	defuseSliceSmoke()
 	liveAttachTests()
 
 	fmt.Printf("1..%d\n", n)

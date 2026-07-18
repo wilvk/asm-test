@@ -68,6 +68,172 @@ static class Program
         int pid, int onlyTid, ulong baseAddr, nuint codeLen, IntPtr img, ulong when,
         ulong maxInsns, out long result, out int survived, IntPtr vt);
 
+    // L1 def-use graph + L2 slice (analysis pipeline, src/dataflow.c). The seed
+    // crosses BY POINTER (asmtest_slice_forward_seed/_backward_seed), which
+    // sidesteps C#'s non-blittable-`bool` problem entirely: the seed and record
+    // buffers are raw IntPtr into Marshal.AllocHGlobal, not a typed struct.
+    [DllImport(LIB)]
+    static extern void asmtest_valtrace_append(IntPtr v, ulong off, IntPtr recs, nuint n);
+
+    [DllImport(LIB)]
+    static extern IntPtr asmtest_defuse_build(IntPtr v);
+
+    [DllImport(LIB)]
+    static extern void asmtest_defuse_free(IntPtr g);
+
+    [DllImport(LIB)]
+    static extern IntPtr asmtest_slice_forward_seed(IntPtr g, IntPtr seed);
+
+    [DllImport(LIB)]
+    static extern IntPtr asmtest_slice_backward_seed(IntPtr g, IntPtr seed);
+
+    [DllImport(LIB)]
+    static extern void asmtest_slice_free(IntPtr s);
+
+    [DllImport(LIB)]
+    static extern int asmtest_slice_contains(IntPtr s, uint step);
+
+    // One operand read/write record (include/asmtest_valtrace.h at_val_rec_t),
+    // 72 bytes. Offsets verified via offsetof on this build.
+    const int RecSize = 72;
+    const int OffKind = 0;
+    const int OffReg = 4;
+    const int OffAddr = 32;
+    const int OffIsWrite = 42;
+    const int OffStep = 64;
+
+    // at_loc_kind_t: the location space of an operand.
+    const int LOC_REG = 0;     // a register (key = Capstone reg id)
+    const int LOC_MEM_ABS = 1; // memory at an absolute effective address (key = addr)
+    const int LOC_MEM_OFF = 2; // memory at a routine offset
+
+    readonly struct Loc
+    {
+        public readonly int Kind;
+        public readonly ulong Key;
+        public Loc(int kind, ulong key) { Kind = kind; Key = key; }
+    }
+
+    static Loc Reg(ulong r) => new Loc(LOC_REG, r);
+    static Loc Mem(ulong addr) => new Loc(LOC_MEM_ABS, addr);
+
+    static IntPtr AllocZeroed(int size)
+    {
+        IntPtr p = Marshal.AllocHGlobal(size);
+        for (int i = 0; i < size; i++) Marshal.WriteByte(p, i, 0);
+        return p;
+    }
+
+    static void WriteRec(IntPtr buf, int off, Loc loc, bool isWrite)
+    {
+        Marshal.WriteInt32(buf, off + OffKind, loc.Kind);
+        if (loc.Kind == LOC_REG) Marshal.WriteInt32(buf, off + OffReg, (int)loc.Key);
+        else Marshal.WriteInt64(buf, off + OffAddr, (long)loc.Key);
+        Marshal.WriteByte(buf, off + OffIsWrite, (byte)(isWrite ? 1 : 0));
+    }
+
+    // A hand-built (or live-attach-filled) L0 value trace plus its cached L1
+    // def-use graph and L2 slicer — mirrors the Python/Ruby/Lua/Zig/Rust/Go/Java
+    // ValueTrace.
+    sealed class ValueTrace
+    {
+        public IntPtr V;
+        IntPtr _g;
+        int _nSteps;
+
+        public ValueTrace(nuint stepsCap, nuint recsCap)
+        {
+            V = asmtest_valtrace_new(stepsCap, recsCap, 0);
+            if (V == IntPtr.Zero) throw new InvalidOperationException("asmtest_valtrace_new failed");
+        }
+
+        // Append one executed instruction at offset `off` reading `reads` and
+        // writing `writes` (each an array of Loc). Read-set before write-set.
+        public void Step(ulong off, Loc[] reads, Loc[] writes)
+        {
+            int n = reads.Length + writes.Length;
+            IntPtr recs = n > 0 ? AllocZeroed(RecSize * n) : IntPtr.Zero;
+            try
+            {
+                int i = 0;
+                foreach (var loc in reads) WriteRec(recs, (i++) * RecSize, loc, false);
+                foreach (var loc in writes) WriteRec(recs, (i++) * RecSize, loc, true);
+                asmtest_valtrace_append(V, off, recs, (nuint)n);
+            }
+            finally
+            {
+                if (recs != IntPtr.Zero) Marshal.FreeHGlobal(recs);
+            }
+            _nSteps++;
+            InvalidateDefuse();
+        }
+
+        // A live producer appends behind our back (unlike Step, which counts as
+        // it goes), so resync the step count and drop any stale def-use graph.
+        public void PostAttach()
+        {
+            _nSteps = (int)asmtest_valtrace_steps(V);
+            InvalidateDefuse();
+        }
+
+        void InvalidateDefuse()
+        {
+            if (_g != IntPtr.Zero)
+            {
+                asmtest_defuse_free(_g);
+                _g = IntPtr.Zero;
+            }
+        }
+
+        // The L1 last-writer def-use graph, built once and cached until the next
+        // Step()/attach invalidates it.
+        IntPtr Defuse()
+        {
+            if (_g == IntPtr.Zero)
+            {
+                _g = asmtest_defuse_build(V);
+                if (_g == IntPtr.Zero) throw new InvalidOperationException("asmtest_defuse_build failed");
+            }
+            return _g;
+        }
+
+        int[] SliceSteps(uint origin, bool forward)
+        {
+            IntPtr g = Defuse();
+            IntPtr seed = AllocZeroed(RecSize);
+            try
+            {
+                Marshal.WriteInt32(seed, OffStep, (int)origin);
+                IntPtr s = forward ? asmtest_slice_forward_seed(g, seed) : asmtest_slice_backward_seed(g, seed);
+                var list = new List<int>();
+                for (int i = 0; i < _nSteps; i++)
+                    if (asmtest_slice_contains(s, (uint)i) != 0) list.Add(i);
+                asmtest_slice_free(s);
+                return list.ToArray();
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(seed);
+            }
+        }
+
+        // Steps influenced by the value defined at step `origin` (origin included).
+        public int[] ForwardSlice(uint origin) => SliceSteps(origin, true);
+
+        // Steps that produced the value used at step `sink` (sink included).
+        public int[] BackwardSlice(uint sink) => SliceSteps(sink, false);
+
+        public void Free()
+        {
+            if (V != IntPtr.Zero)
+            {
+                InvalidateDefuse();
+                asmtest_valtrace_free(V);
+                V = IntPtr.Zero;
+            }
+        }
+    }
+
     // The producer's return codes, re-declared for the same reason.
     const int PTRACE_OK = 0;      // a complete scoped trace
     const int PTRACE_EINVAL = -1; // bad arguments
@@ -150,10 +316,33 @@ static class Program
         Check(MethodResolve(rj, 0x1010) == 1, "method: tiered re-JIT newest version wins");
         Check(MethodResolve(new (ulong, ulong, string, ulong)[] { }, 0x1000) == -1, "method: empty map -> -1");
 
+        DefuseSliceSmoke();
         LiveAttachTests();
 
         Console.WriteLine("1.." + _n);
         return _failed ? 1 : 0;
+    }
+
+    // T2 — def-use/slice surface (by-pointer seed, src/dataflow.c). Pure C, no
+    // ptrace, so it runs unconditionally. Not a counted TAP assertion (T3 adds
+    // those, plus the live-captured memory-edge case) — this is a build-time
+    // proof that the wrapper actually slices correctly, not just that it links.
+    static void DefuseSliceSmoke()
+    {
+        var vt = new ValueTrace(64, 512);
+        // A register chain r10 -> r11 -> r12 (mirrors the Python round-trip test).
+        vt.Step(0, Array.Empty<Loc>(), new[] { Reg(10) });
+        vt.Step(1, new[] { Reg(10) }, new[] { Reg(11) });
+        vt.Step(2, new[] { Reg(11) }, new[] { Reg(12) });
+        int[] fwd = vt.ForwardSlice(0);
+        int[] bwd = vt.BackwardSlice(2);
+        if (fwd.Length != 3 || bwd.Length != 3)
+        {
+            throw new InvalidOperationException(
+                $"DefuseSliceSmoke: forward=[{string.Join(",", fwd)}] "
+                + $"backward=[{string.Join(",", bwd)}], want len 3 each");
+        }
+        vt.Free();
     }
 
     // ----------------------------------------------------------------------

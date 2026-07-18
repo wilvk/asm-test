@@ -20,6 +20,47 @@ void asmtest_valtrace_free(asmtest_valtrace_t *v);
 size_t asmtest_valtrace_steps(const asmtest_valtrace_t *v);
 size_t asmtest_valtrace_recs(const asmtest_valtrace_t *v);
 
+/* One operand read/write record (include/asmtest_valtrace.h). LuaJIT ffi gives a
+ * typed struct matching the C ABI exactly (verified via offsetof on this build:
+ * kind 0, reg/base/index 4/8/12, scale 16, disp 24, addr 32, size 40,
+ * is_write/value_valid/wide 42/43/44, wide_off 48, value 56, step 64 — 72 bytes). */
+typedef struct at_val_rec {
+  int32_t kind; /* at_loc_kind_t */
+  uint32_t reg;
+  uint32_t base;
+  uint32_t index;
+  int32_t scale;
+  int64_t disp;
+  uint64_t addr;
+  uint16_t size;
+  bool is_write;
+  bool value_valid;
+  bool wide;
+  uint32_t wide_off;
+  uint64_t value;
+  uint32_t step;
+} at_val_rec_t;
+
+/* Append one executed step at instruction offset `off`, copying its `n` operand
+ * records and stamping each with the new step index. */
+void asmtest_valtrace_append(asmtest_valtrace_t *v, uint64_t off,
+                             const at_val_rec_t *recs, size_t n);
+
+/* L1 def-use graph + L2 slice (analysis pipeline, src/dataflow.c). The seed
+ * crosses BY POINTER (asmtest_slice_forward_seed/_backward_seed); a by-value
+ * at_val_rec_t call is NYI on LuaJIT's FFI (aggregates by value are never JIT-
+ * compiled), so the by-pointer seed keeps this call on the compiled path. */
+typedef struct asmtest_defuse asmtest_defuse_t;
+typedef struct asmtest_slice asmtest_slice_t;
+asmtest_defuse_t *asmtest_defuse_build(const asmtest_valtrace_t *v);
+void asmtest_defuse_free(asmtest_defuse_t *g);
+asmtest_slice_t *asmtest_slice_forward_seed(const asmtest_defuse_t *g,
+                                            const at_val_rec_t *seed);
+asmtest_slice_t *asmtest_slice_backward_seed(const asmtest_defuse_t *g,
+                                             const at_val_rec_t *seed);
+void asmtest_slice_free(asmtest_slice_t *s);
+int asmtest_slice_contains(const asmtest_slice_t *s, uint32_t step);
+
 /* F7 — the LIVE-ATTACH producer entry points (src/dataflow_ptrace.c). The producer
  * ships NO header on purpose (a value-trace PRODUCER is a tier, not part of the
  * shared sink API), so — exactly as its own C suite does — this binding re-declares
@@ -105,17 +146,49 @@ function M.live_attach_available()
   return rc ~= M.PTRACE_ENOSYS
 end
 
--- An L0 value trace handle (opaque) filled by the LIVE-ATTACH producer — the same
--- asmtest_valtrace_t the pure analysis layers consume. This binding exposes the
--- attach + the step/record counts; the def-use + slice surface is the
--- Python/C++/Node ValueTrace's and is not wrapped here yet.
+-- at_loc_kind_t (include/asmtest_valtrace.h): the location space of an operand.
+M.LOC_REG = 0     -- a register (key = Capstone reg id)
+M.LOC_MEM_ABS = 1 -- memory at an absolute effective address (key = addr)
+M.LOC_MEM_OFF = 2 -- memory at a routine offset
+
+-- An L0 value trace handle (opaque) filled by the LIVE-ATTACH producer, or built
+-- by hand via :step(). The same asmtest_valtrace_t the pure analysis layers
+-- consume, so either path feeds the same L1 def-use graph (:defuse()) and L2
+-- slicer (:forward_slice() / :backward_slice()).
 local ValueTrace = {}
 ValueTrace.__index = ValueTrace
 
 function M.ValueTrace(steps_cap, recs_cap)
   local v = C.asmtest_valtrace_new(steps_cap or 256, recs_cap or 2048, 0)
   assert(v ~= nil, "asmtest_valtrace_new failed")
-  return setmetatable({ _v = v }, ValueTrace)
+  return setmetatable({ _v = v, _g = nil, _n_steps = 0 }, ValueTrace)
+end
+
+-- Append one executed instruction at offset `off` reading `reads` and writing
+-- `writes` (each an array of {kind, key} locations — kind is LOC_REG (key = reg
+-- id) or LOC_MEM_ABS (key = address)). Read-set before write-set.
+function ValueTrace:step(off, reads, writes)
+  reads = reads or {}
+  writes = writes or {}
+  local n = #reads + #writes
+  local arr = n > 0 and ffi.new("at_val_rec_t[?]", n) or nil
+  local i = 0
+  for _, loc in ipairs(reads) do
+    arr[i].kind = loc[1]
+    if loc[1] == M.LOC_REG then arr[i].reg = loc[2] else arr[i].addr = loc[2] end
+    arr[i].is_write = false
+    i = i + 1
+  end
+  for _, loc in ipairs(writes) do
+    arr[i].kind = loc[1]
+    if loc[1] == M.LOC_REG then arr[i].reg = loc[2] else arr[i].addr = loc[2] end
+    arr[i].is_write = true
+    i = i + 1
+  end
+  C.asmtest_valtrace_append(self._v, off, arr, n)
+  self._n_steps = self._n_steps + 1
+  self:_invalidate_defuse()
+  return self
 end
 
 -- Attach to LIVE `pid`, single-step [base, base+code_len), then DETACH leaving the
@@ -124,6 +197,7 @@ function ValueTrace:attach_pid(pid, base, code_len, max_insns)
   local out = ffi.new("long[1]")
   local rc = C.asmtest_dataflow_ptrace_attach_pid(pid, base, code_len, max_insns or 0,
                                                   out, self._v)
+  self:_post_attach()
   return tonumber(rc), tonumber(out[0])
 end
 
@@ -134,6 +208,7 @@ function ValueTrace:attach_pid_tid(pid, only_tid, base, code_len, max_insns)
   local out = ffi.new("long[1]")
   local rc = C.asmtest_dataflow_ptrace_attach_pid_tid(pid, only_tid, base, code_len,
                                                       max_insns or 0, out, self._v)
+  self:_post_attach()
   return tonumber(rc), tonumber(out[0])
 end
 
@@ -146,14 +221,61 @@ function ValueTrace:attach_jit(pid, only_tid, base, code_len, max_insns, when)
   local rc = C.asmtest_dataflow_ptrace_attach_jit(pid, only_tid, base, code_len, nil,
                                                   when or 0, max_insns or 0, out,
                                                   survived, self._v)
+  self:_post_attach()
   return tonumber(rc), tonumber(out[0]), tonumber(survived[0])
 end
 
 function ValueTrace:steps() return tonumber(C.asmtest_valtrace_steps(self._v)) end
 function ValueTrace:recs() return tonumber(C.asmtest_valtrace_recs(self._v)) end
 
+-- The L1 last-writer def-use graph over this trace, built once and cached until
+-- the next :step() / attach invalidates it.
+function ValueTrace:defuse()
+  if self._g == nil then
+    local g = C.asmtest_defuse_build(self._v)
+    assert(g ~= nil, "asmtest_defuse_build failed")
+    self._g = g
+  end
+  return self._g
+end
+
+-- A live producer appends behind our back (unlike :step(), which counts as it
+-- goes), so resync the step count and drop any stale def-use graph.
+function ValueTrace:_post_attach()
+  self._n_steps = tonumber(C.asmtest_valtrace_steps(self._v))
+  self:_invalidate_defuse()
+end
+
+function ValueTrace:_invalidate_defuse()
+  if self._g ~= nil then
+    C.asmtest_defuse_free(self._g)
+    self._g = nil
+  end
+end
+
+function ValueTrace:_slice(origin, forward)
+  local g = self:defuse()
+  local seed = ffi.new("at_val_rec_t[1]")
+  seed[0].step = origin
+  local fn = forward and C.asmtest_slice_forward_seed or C.asmtest_slice_backward_seed
+  local s = fn(g, seed)
+  local out = {}
+  for i = 0, self._n_steps - 1 do
+    if C.asmtest_slice_contains(s, i) ~= 0 then out[#out + 1] = i end
+  end
+  C.asmtest_slice_free(s)
+  return out
+end
+
+-- Steps influenced by the value defined at step `origin` (origin included).
+function ValueTrace:forward_slice(origin) return self:_slice(origin, true) end
+
+-- Steps that produced the value used at step `sink` (sink included).
+function ValueTrace:backward_slice(sink) return self:_slice(sink, false) end
+
 function ValueTrace:free()
   if self._v ~= nil then
+    self:_invalidate_defuse()
     C.asmtest_valtrace_free(self._v)
     self._v = nil
   end

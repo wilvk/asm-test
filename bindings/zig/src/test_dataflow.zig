@@ -26,6 +26,124 @@ const AttachPidFn = *const fn (c_int, u64, usize, u64, *c_long, ?*anyopaque) cal
 const AttachPidTidFn = *const fn (c_int, c_int, u64, usize, u64, *c_long, ?*anyopaque) callconv(.C) c_int;
 const AttachJitFn = *const fn (c_int, c_int, u64, usize, ?*anyopaque, u64, u64, *c_long, *c_int, ?*anyopaque) callconv(.C) c_int;
 
+// L1 def-use graph + L2 slice (analysis pipeline, src/dataflow.c). One operand
+// record (include/asmtest_valtrace.h at_val_rec_t), an extern struct matching the
+// C ABI exactly (verified via offsetof on this build: kind 0, reg/base/index
+// 4/8/12, scale 16, disp 24, addr 32, size 40, is_write/value_valid/wide 42/43/44,
+// wide_off 48, value 56, step 64 — 72 bytes).
+const AtValRec = extern struct {
+    kind: i32 = 0, // at_loc_kind_t
+    reg: u32 = 0,
+    base: u32 = 0,
+    index: u32 = 0,
+    scale: i32 = 0,
+    disp: i64 = 0,
+    addr: u64 = 0,
+    size: u16 = 0,
+    is_write: bool = false,
+    value_valid: bool = false,
+    wide: bool = false,
+    wide_off: u32 = 0,
+    value: u64 = 0,
+    step: u32 = 0,
+};
+
+// at_loc_kind_t: the location space of an operand.
+const LOC_REG: i32 = 0; // a register (key = Capstone reg id)
+const LOC_MEM_ABS: i32 = 1; // memory at an absolute effective address (key = addr)
+const LOC_MEM_OFF: i32 = 2; // memory at a routine offset
+
+// loc is (kind, key): key is a reg id for LOC_REG, else an absolute address.
+fn mkRec(kind: i32, key: u64, is_write: bool) AtValRec {
+    var r = AtValRec{};
+    r.kind = kind;
+    if (kind == LOC_REG) r.reg = @truncate(key) else r.addr = key;
+    r.is_write = is_write;
+    return r;
+}
+
+const ValtraceAppendFn = *const fn (?*anyopaque, u64, ?[*]const AtValRec, usize) callconv(.C) void;
+const DefuseBuildFn = *const fn (?*anyopaque) callconv(.C) ?*anyopaque;
+const DefuseFreeFn = *const fn (?*anyopaque) callconv(.C) void;
+// By-pointer seed variants of asmtest_slice_forward/_backward: only seed.step is
+// read, but a pointer argument crosses every FFI uniformly — Zig's extern struct
+// CAN pass at_val_rec_t by value, but the by-pointer seed keeps this call's shape
+// identical to the six sibling bindings that cannot.
+const SliceSeedFn = *const fn (?*anyopaque, *const AtValRec) callconv(.C) ?*anyopaque;
+const SliceFreeFn = *const fn (?*anyopaque) callconv(.C) void;
+const SliceContainsFn = *const fn (?*anyopaque, u32) callconv(.C) c_int;
+
+// A hand-built (or live-attach-filled) L0 value trace plus its cached L1 def-use
+// graph and L2 slicer — mirrors the Python/Ruby/Lua ValueTrace. Holds the function
+// pointers the caller already resolved via std.DynLib; owns only `v`/`g`.
+const ValueTrace = struct {
+    v: ?*anyopaque,
+    g: ?*anyopaque = null,
+    n_steps: u32 = 0,
+    append: ValtraceAppendFn,
+    steps_fn: ValtraceStepsFn,
+    defuse_build: DefuseBuildFn,
+    defuse_free: DefuseFreeFn,
+    slice_forward_seed: SliceSeedFn,
+    slice_backward_seed: SliceSeedFn,
+    slice_free: SliceFreeFn,
+    slice_contains: SliceContainsFn,
+
+    // Append one executed instruction at offset `off` with its pre-built operand
+    // records (read-set then write-set — see `mkRec`).
+    fn step(self: *ValueTrace, off: u64, recs: []const AtValRec) void {
+        self.append(self.v, off, if (recs.len > 0) recs.ptr else null, recs.len);
+        self.n_steps += 1;
+        self.invalidateDefuse();
+    }
+
+    // A live producer appends behind our back (unlike `step`, which counts as it
+    // goes), so resync the step count and drop any stale def-use graph.
+    fn postAttach(self: *ValueTrace) void {
+        self.n_steps = @truncate(self.steps_fn(self.v));
+        self.invalidateDefuse();
+    }
+
+    fn invalidateDefuse(self: *ValueTrace) void {
+        if (self.g) |g| {
+            self.defuse_free(g);
+            self.g = null;
+        }
+    }
+
+    // The L1 last-writer def-use graph, built once and cached until the next
+    // step()/attach invalidates it.
+    fn defuse(self: *ValueTrace) !?*anyopaque {
+        if (self.g == null) self.g = self.defuse_build(self.v) orelse return error.DefuseBuildFailed;
+        return self.g;
+    }
+
+    fn sliceSteps(self: *ValueTrace, a: std.mem.Allocator, origin: u32, forward: bool) ![]u32 {
+        const g = try self.defuse();
+        var seed = AtValRec{};
+        seed.step = origin;
+        const fn_ = if (forward) self.slice_forward_seed else self.slice_backward_seed;
+        const s = fn_(g, &seed) orelse return error.SliceFailed;
+        defer self.slice_free(s);
+        var out = std.ArrayList(u32).init(a);
+        var i: u32 = 0;
+        while (i < self.n_steps) : (i += 1) {
+            if (self.slice_contains(s, i) != 0) try out.append(i);
+        }
+        return out.toOwnedSlice();
+    }
+
+    // Steps influenced by the value defined at step `origin` (origin included).
+    fn forwardSlice(self: *ValueTrace, a: std.mem.Allocator, origin: u32) ![]u32 {
+        return self.sliceSteps(a, origin, true);
+    }
+
+    // Steps that produced the value used at step `sink` (sink included).
+    fn backwardSlice(self: *ValueTrace, a: std.mem.Allocator, sink: u32) ![]u32 {
+        return self.sliceSteps(a, sink, false);
+    }
+};
+
 // The producer's return codes, re-declared for the same reason.
 const PTRACE_OK: c_int = 0; // a complete scoped trace
 const PTRACE_EINVAL: c_int = -1; // bad arguments
@@ -91,6 +209,48 @@ pub fn main() !void {
     };
     check(method_resolve_pc(&rj, rj.len, 0x1010) == 1, "method: tiered re-JIT newest version wins");
     check(method_resolve_pc(null, 0, 0x1000) == -1, "method: empty map -> -1");
+
+    // ------------------------------------------------------------------
+    // T2 — def-use/slice surface (by-pointer seed, src/dataflow.c). Pure C, no
+    // ptrace, so it runs unconditionally. Not a counted TAP assertion (T3 adds
+    // those, plus the live-captured memory-edge case) — this is a build-time
+    // proof that the wrapper actually slices correctly, not just that it links.
+    // ------------------------------------------------------------------
+    {
+        const valtrace_new = lib.lookup(ValtraceNewFn, "asmtest_valtrace_new") orelse return error.SymNotFound;
+        const valtrace_free = lib.lookup(ValtraceFreeFn, "asmtest_valtrace_free") orelse return error.SymNotFound;
+        const valtrace_steps = lib.lookup(ValtraceStepsFn, "asmtest_valtrace_steps") orelse return error.SymNotFound;
+        const valtrace_append = lib.lookup(ValtraceAppendFn, "asmtest_valtrace_append") orelse return error.SymNotFound;
+        const defuse_build = lib.lookup(DefuseBuildFn, "asmtest_defuse_build") orelse return error.SymNotFound;
+        const defuse_free = lib.lookup(DefuseFreeFn, "asmtest_defuse_free") orelse return error.SymNotFound;
+        const slice_forward_seed = lib.lookup(SliceSeedFn, "asmtest_slice_forward_seed") orelse return error.SymNotFound;
+        const slice_backward_seed = lib.lookup(SliceSeedFn, "asmtest_slice_backward_seed") orelse return error.SymNotFound;
+        const slice_free = lib.lookup(SliceFreeFn, "asmtest_slice_free") orelse return error.SymNotFound;
+        const slice_contains = lib.lookup(SliceContainsFn, "asmtest_slice_contains") orelse return error.SymNotFound;
+
+        const v = valtrace_new(64, 512, 0);
+        defer valtrace_free(v);
+        var vt = ValueTrace{
+            .v = v,
+            .append = valtrace_append,
+            .steps_fn = valtrace_steps,
+            .defuse_build = defuse_build,
+            .defuse_free = defuse_free,
+            .slice_forward_seed = slice_forward_seed,
+            .slice_backward_seed = slice_backward_seed,
+            .slice_free = slice_free,
+            .slice_contains = slice_contains,
+        };
+        // A register chain r10 -> r11 -> r12 (mirrors the Python round-trip test).
+        vt.step(0, &[_]AtValRec{mkRec(LOC_REG, 10, true)});
+        vt.step(1, &[_]AtValRec{ mkRec(LOC_REG, 10, false), mkRec(LOC_REG, 11, true) });
+        vt.step(2, &[_]AtValRec{ mkRec(LOC_REG, 11, false), mkRec(LOC_REG, 12, true) });
+        const fwd = try vt.forwardSlice(alloc, 0);
+        defer alloc.free(fwd);
+        const bwd = try vt.backwardSlice(alloc, 2);
+        defer alloc.free(bwd);
+        std.debug.assert(fwd.len == 3 and bwd.len == 3);
+    }
 
     // ------------------------------------------------------------------
     // F7 — live-attach data flow over a REAL attached pid.

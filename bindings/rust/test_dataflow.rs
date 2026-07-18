@@ -50,6 +50,156 @@ extern "C" {
         when: u64, max_insns: u64, result: *mut c_long, survived: *mut c_int,
         vt: *mut c_void,
     ) -> c_int;
+
+    // L1 def-use graph + L2 slice (analysis pipeline, src/dataflow.c). The seed
+    // crosses BY POINTER (asmtest_slice_forward_seed/_backward_seed) to keep this
+    // call's shape uniform with the sibling bindings that cannot pass a 72-byte
+    // aggregate by value; rustc *could* pass ValRec by value (repr(C) supports it)
+    // but the pointer form is what the rest of the seven use.
+    fn asmtest_valtrace_append(v: *mut c_void, off: u64, recs: *const ValRec, n: usize);
+    fn asmtest_defuse_build(v: *const c_void) -> *mut c_void;
+    fn asmtest_defuse_free(g: *mut c_void);
+    fn asmtest_slice_forward_seed(g: *const c_void, seed: *const ValRec) -> *mut c_void;
+    fn asmtest_slice_backward_seed(g: *const c_void, seed: *const ValRec) -> *mut c_void;
+    fn asmtest_slice_free(s: *mut c_void);
+    fn asmtest_slice_contains(s: *const c_void, step: u32) -> c_int;
+}
+
+// One operand read/write record (include/asmtest_valtrace.h at_val_rec_t).
+// #[repr(C)] lays it out exactly as the C struct (verified via offsetof on this
+// build: kind 0, reg/base/index 4/8/12, scale 16, disp 24, addr 32, size 40,
+// is_write/value_valid/wide 42/43/44, wide_off 48, value 56, step 64 — 72 bytes).
+#[repr(C)]
+struct ValRec {
+    kind: i32, // at_loc_kind_t
+    reg: u32,
+    base: u32,
+    index: u32,
+    scale: i32,
+    disp: i64,
+    addr: u64,
+    size: u16,
+    is_write: bool,
+    value_valid: bool,
+    wide: bool,
+    wide_off: u32,
+    value: u64,
+    step: u32,
+}
+
+impl Default for ValRec {
+    fn default() -> Self {
+        ValRec {
+            kind: 0, reg: 0, base: 0, index: 0, scale: 0, disp: 0, addr: 0, size: 0,
+            is_write: false, value_valid: false, wide: false, wide_off: 0, value: 0, step: 0,
+        }
+    }
+}
+
+// at_loc_kind_t: the location space of an operand.
+const LOC_REG: i32 = 0; // a register (key = Capstone reg id)
+#[allow(dead_code)]
+const LOC_MEM_ABS: i32 = 1; // memory at an absolute effective address (key = addr)
+#[allow(dead_code)]
+const LOC_MEM_OFF: i32 = 2; // memory at a routine offset
+
+// loc is (kind, key): key is a reg id for LOC_REG, else an absolute address.
+fn mk_rec(kind: i32, key: u64, is_write: bool) -> ValRec {
+    let mut r = ValRec::default();
+    r.kind = kind;
+    if kind == LOC_REG { r.reg = key as u32; } else { r.addr = key; }
+    r.is_write = is_write;
+    r
+}
+
+// A hand-built (or live-attach-filled) L0 value trace plus its cached L1 def-use
+// graph and L2 slicer — mirrors the Python/Ruby/Lua/Zig ValueTrace.
+struct ValueTrace {
+    v: *mut c_void,
+    g: *mut c_void,
+    n_steps: u32,
+}
+
+impl ValueTrace {
+    fn new(steps_cap: usize, recs_cap: usize) -> ValueTrace {
+        let v = unsafe { asmtest_valtrace_new(steps_cap, recs_cap, 0) };
+        assert!(!v.is_null(), "asmtest_valtrace_new failed");
+        ValueTrace { v, g: std::ptr::null_mut(), n_steps: 0 }
+    }
+
+    // Append one executed instruction at offset `off` with its pre-built operand
+    // records (read-set then write-set — see `mk_rec`).
+    fn step(&mut self, off: u64, recs: &[ValRec]) {
+        let ptr = if recs.is_empty() { std::ptr::null() } else { recs.as_ptr() };
+        unsafe { asmtest_valtrace_append(self.v, off, ptr, recs.len()) };
+        self.n_steps += 1;
+        self.invalidate_defuse();
+    }
+
+    // A live producer appends behind our back (unlike `step`, which counts as it
+    // goes), so resync the step count and drop any stale def-use graph. Not yet
+    // called here — T3 wires this into the live-captured memory-edge assertion.
+    #[allow(dead_code)]
+    fn post_attach(&mut self) {
+        self.n_steps = unsafe { asmtest_valtrace_steps(self.v) as u32 };
+        self.invalidate_defuse();
+    }
+
+    fn invalidate_defuse(&mut self) {
+        if !self.g.is_null() {
+            unsafe { asmtest_defuse_free(self.g) };
+            self.g = std::ptr::null_mut();
+        }
+    }
+
+    // The L1 last-writer def-use graph, built once and cached until the next
+    // step()/attach invalidates it.
+    fn defuse(&mut self) -> *mut c_void {
+        if self.g.is_null() {
+            self.g = unsafe { asmtest_defuse_build(self.v) };
+            assert!(!self.g.is_null(), "asmtest_defuse_build failed");
+        }
+        self.g
+    }
+
+    fn slice(&mut self, origin: u32, forward: bool) -> Vec<u32> {
+        let g = self.defuse();
+        let mut seed = ValRec::default();
+        seed.step = origin;
+        let s = unsafe {
+            if forward {
+                asmtest_slice_forward_seed(g, &seed)
+            } else {
+                asmtest_slice_backward_seed(g, &seed)
+            }
+        };
+        let mut out = Vec::new();
+        for i in 0..self.n_steps {
+            if unsafe { asmtest_slice_contains(s, i) } != 0 {
+                out.push(i);
+            }
+        }
+        unsafe { asmtest_slice_free(s) };
+        out
+    }
+
+    // Steps influenced by the value defined at step `origin` (origin included).
+    fn forward_slice(&mut self, origin: u32) -> Vec<u32> {
+        self.slice(origin, true)
+    }
+
+    // Steps that produced the value used at step `sink` (sink included).
+    fn backward_slice(&mut self, sink: u32) -> Vec<u32> {
+        self.slice(sink, false)
+    }
+
+    fn free(&mut self) {
+        if !self.v.is_null() {
+            self.invalidate_defuse();
+            unsafe { asmtest_valtrace_free(self.v) };
+            self.v = std::ptr::null_mut();
+        }
+    }
 }
 
 // The producer's return codes, re-declared for the same reason.
@@ -116,12 +266,30 @@ fn main() {
     check(method(&rj, 0x1010) == 1, "method: tiered re-JIT newest version wins");
     check(method(&[], 0x1000) == -1, "method: empty map -> -1");
 
+    defuse_slice_smoke();
     live_attach_tests();
 
     println!("1..{}", N.load(Ordering::SeqCst));
     if FAILED.load(Ordering::SeqCst) {
         std::process::exit(1);
     }
+}
+
+// T2 — def-use/slice surface (by-pointer seed, src/dataflow.c). Pure C, no
+// ptrace, so it runs unconditionally. Not a counted TAP assertion (T3 adds
+// those, plus the live-captured memory-edge case) — this is a build-time proof
+// that the wrapper actually slices correctly, not just that it links.
+fn defuse_slice_smoke() {
+    let mut vt = ValueTrace::new(64, 512);
+    // A register chain r10 -> r11 -> r12 (mirrors the Python round-trip test).
+    vt.step(0, &[mk_rec(LOC_REG, 10, true)]);
+    vt.step(1, &[mk_rec(LOC_REG, 10, false), mk_rec(LOC_REG, 11, true)]);
+    vt.step(2, &[mk_rec(LOC_REG, 11, false), mk_rec(LOC_REG, 12, true)]);
+    let fwd = vt.forward_slice(0);
+    let bwd = vt.backward_slice(2);
+    assert_eq!(fwd.len(), 3, "forward_slice(0) should reach all 3 steps");
+    assert_eq!(bwd.len(), 3, "backward_slice(2) should reach all 3 steps");
+    vt.free();
 }
 
 // ---------------------------------------------------------------------------
