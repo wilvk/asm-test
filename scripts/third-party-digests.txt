@@ -13,6 +13,7 @@
 #   tarball-sha256 — SHA-256 of the downloaded release archive (as GitHub records it)
 #   git-commit     — the immutable commit a version tag must still resolve to
 tarball-sha256  dynamorio  11.91.20630  sha256:1499acbee02788ff235a8b4a8016514538ec3bf479463bdc6037c6e33f0bff02
+tarball-sha256  pin        4.2-99776-g21d818fa2  sha256:194a2cec51678203452ece0d9e8cbb1819eb6e1221f0341091c49248f384d869
 git-commit      keystone   0.9.2        commit:dc7932ef2b2c4a793836caec6ecab485005139d6
 git-commit      capstone   5.0.1        commit:097c04d9413c59a58b00d4d1c8d5dc0ac158ffaa
 tarball-sha256  zig-linux-x86_64   0.13.0  sha256:d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea
