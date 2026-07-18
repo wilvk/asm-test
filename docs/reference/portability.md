@@ -12,10 +12,16 @@ how to choose a backend.
 | **AArch64** | ✓ | ✓ (Apple Silicon) |
 
 CI runs the suites on all four combinations (`ubuntu-latest`,
-`ubuntu-24.04-arm`, `macos-latest`, `macos-13`). The packaged bindings'
+`ubuntu-24.04-arm`, `macos-latest`, `macos-15-intel`). The packaged bindings'
 install-tests are additionally **clean-room** hardened — no leaked dev tree,
 Homebrew copy, or loader override can satisfy a load — see
 [Clean-room testing](../clean-room-testing.md).
+
+This page covers the core capture library; the out-of-process single-step
+*tracing* tier (a separate subsystem — [native tracing](../guides/tracing/native-tracing.md))
+follows the same Linux/macOS split: `ptrace`-based on Linux x86-64/AArch64, and
+on **macOS x86-64** via Mach exception ports (`asmtest_mach.h`) instead, since
+macOS `ptrace` cannot edit `RIP`/`RFLAGS` at all.
 
 One source set reaches every target two ways: a **native** build for the host
 architecture (through either assembler backend), and the **emulator** guests,

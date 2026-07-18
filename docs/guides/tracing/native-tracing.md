@@ -442,7 +442,10 @@ recommended managed-runtime path on **AMD** (no Intel PT). It is also the **only
 single-step form possible on **AArch64**, whose single-step bit (`MDSCR_EL1.SS`) is
 kernel-only with no in-process form. It runs on **Linux x86-64 and AArch64** off one
 body — the AArch64 arm reads the PC + return register via `PTRACE_GETREGSET`/`NT_PRSTATUS`
-(no `PTRACE_GETREGS` there) and decodes block lengths with `ASMTEST_ARCH_ARM64` Capstone.
+(no `PTRACE_GETREGS` there) and decodes block lengths with `ASMTEST_ARCH_ARM64` Capstone —
+and, through Mach exception ports rather than `ptrace` (macOS has no working `ptrace`
+register-edit path at all), on **macOS x86-64** too — see "macOS (Mach exception ports)"
+below.
 (The AArch64 single-step *stream* can **only** be validated on a real AArch64 host —
 not under qemu-user, which cannot emulate the ptrace tracer/tracee relationship — so it
 is code-implemented and build/self-skip-validated, with the live stream **pending real
@@ -514,6 +517,46 @@ it also parses a JIT perf-map entry by name and reads a jitdump image — skippi
 non-`LOAD` records, picking the latest re-JIT body, and recovering the recorded code
 bytes. The text perf-map remains the portable lowest common denominator for JITs that
 only emit symbols.
+
+#### macOS (Mach exception ports)
+
+Everything above is `ptrace`. macOS cannot follow that path at all: XNU deliberately
+cripples `PT_STEP`/`PT_CONTINUE` (they return `ENOTSUP` unless `addr` is the sentinel
+`(caddr_t)1`) specifically to force debuggers onto Mach SPIs instead — `RIP`/`RFLAGS`
+are simply not reachable through `ptrace` on this OS. The macOS twin (`asmtest_mach.h`,
+`src/mach_backend.c`) gets the *same* exact offsets a Mach-native way: `task_for_pid`
+obtains the target's task port, a dedicated Mach exception port is registered for
+`EXC_MASK_BREAKPOINT`, and `thread_set_state(x86_THREAD_STATE64)` arms `EFLAGS.TF`
+directly on the target thread. Each `#DB` arrives as an `EXC_BREAKPOINT` Mach message
+on that port — intercepted before it would ever become a BSD signal.
+
+```c
+#include "asmtest_mach.h"
+
+long args[2] = {20, 22}, result = 0;
+asmtest_trace_t *t = asmtest_trace_new(64, 64);
+asmtest_mach_trace_call(code, len, args, 2, &result, t);   /* result == 42, same as ptrace */
+```
+
+The three entry points mirror the Linux shape exactly: `asmtest_mach_trace_call` forks
+its own tracee; `asmtest_mach_trace_attached(pid, base, len, &result, trace)` traces a
+separate, already-stopped foreign process; `asmtest_mach_run_to(pid, addr)` closes the
+same uncontrolled-timing gap `asmtest_ptrace_run_to` does — a software `int3` planted via
+`mach_vm_write`, or, when the code is W^X and cannot be made writable, a `DR0`/`DR7`
+hardware execution breakpoint through `thread_set_state(x86_DEBUG_STATE64)`
+(`ASMTEST_MACH_HW_BP` forces it deterministically, mirroring the Linux
+`ASMTEST_PTRACE_HW_BP`). x86-64 only for now — Apple Silicon is a future extension.
+
+`task_for_pid` needs either the `com.apple.security.cs.debugger` entitlement (ad-hoc
+self-sign: `scripts/codesign-debugger.sh`, which triggers a one-time
+admin-authorization dialog on the first use) or root; without either, all three entry
+points return `ASMTEST_MACH_EPERM` and the caller self-skips — a soft permission gate,
+not a hard platform boundary. `make mach-stepper-test` runs the lane live on a macOS
+x86-64 host, signed or under `sudo`: `trace_call`/`trace_attached` reproduce the exact
+`[0x0, 0x3, 0x6, 0xc, 0x11]` stream (and the 62-instruction, no-depth-ceiling loop) the
+Linux tracer and the in-process stepper both produce, and `run_to` resolves a spinning
+target's in-flight call with no cooperative go-flag, in both the software and hardware
+breakpoint paths.
 
 **Against real runtimes.** One argv-driven harness (`examples/jit_trace.c`) points the
 whole pipeline at a live JIT — not a fixture — for **three** runtimes:

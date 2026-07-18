@@ -8,6 +8,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **macOS out-of-process single-step tracer (`asmtest_mach_*`), completing the
+  W2 foreign-process story on macOS.** `asmtest_mach_trace_call` /
+  `_trace_attached` / `_run_to` (`asmtest_mach.h`, `src/mach_backend.c`) mirror
+  the Linux `ptrace` out-of-process tracer's exact shape and offsets, but
+  through `task_for_pid` + a Mach `EXC_MASK_BREAKPOINT` exception port +
+  `thread_set_state` instead — macOS `ptrace` cannot edit `RIP`/`RFLAGS` at
+  all. `run_to`'s breakpoint arm falls back from a software `int3` to a
+  `DR0`/`DR7` hardware execution breakpoint on W^X code, same as the Linux
+  tracer. x86-64 only for now. `make mach-stepper-test` (needs
+  `scripts/codesign-debugger.sh`'s ad-hoc self-sign, or root) runs the lane
+  live; self-skips (`ASMTEST_MACH_EPERM`) without either.
+
 - **Pure tests for the IBS sample-period rounding/clamp and the additive-ABI
   `struct_size` guard (first coverage).** The `/16` rounding, the `<16 →
   default` clamp, and the `period_jitter` tail-guard had never executed against
