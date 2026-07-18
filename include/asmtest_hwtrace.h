@@ -66,7 +66,9 @@ typedef struct asmtest_codeimage asmtest_codeimage_t;
 typedef enum {
     ASMTEST_HWTRACE_INTEL_PT = 0,
     ASMTEST_HWTRACE_CORESIGHT = 1,
-    ASMTEST_HWTRACE_AMD_LBR = 2, /* AMD Zen 3 BRS / Zen 4 LbrExtV2 (16-deep) */
+    ASMTEST_HWTRACE_AMD_LBR = 2, /* AMD Zen 4+ LbrExtV2 branch stack (16-deep).
+                                    Zen 3 BRS: silicon facility, not yet openable
+                                    — see amd-tracing-plan Improvement Phase 6 */
     ASMTEST_HWTRACE_SINGLESTEP =
         3, /* EFLAGS.TF #DB single-step: any x86-64 Linux,
                                        no PMU/perf/privilege/decoder; exact + complete */
@@ -428,7 +430,7 @@ int asmtest_hwtrace_render_versioned(asmtest_codeimage_t *img, uint64_t when,
 /* CI-runnable on any x86-64 Linux for a NATIVE LEAF (pointing          */
 /* single-step at live managed code is forbidden — it fights the        */
 /* runtime's SIGTRAP/JIT). The STRONG whole-window PT / CEILING AMD LBR  */
-/* tiers are forward-look (bare-metal Intel PT / Zen 3+) and            */
+/* tiers are forward-look (bare-metal Intel PT / Zen 4+) and            */
 /* begin_window self-skips to ASMTEST_HW_EUNAVAIL on them here. The      */
 /* whole facility is Linux-only.                                        */
 /* ------------------------------------------------------------------ */
@@ -578,8 +580,8 @@ int asmtest_hwtrace_stealth_window_end(void *ctx, asmtest_trace_t *trace);
  * it survives managed code the in-process single-step tier is forbidden to step. *nips gets
  * the endpoint count; *truncated is set on a dropped/throttled/full-buffer sample (a coverage
  * signal, not an error). Returns ASMTEST_HW_OK, EINVAL on bad args, EUNAVAIL when the
- * branch-stack event cannot open (no Zen 3+/BRS or LbrExtV2, or no CAP_PERFMON / paranoid),
- * ENOSYS off x86-64 Linux. */
+ * branch-stack event cannot open (no Zen 4+ LbrExtV2 — Zen 3 BRS is not openable by this
+ * tree — or no CAP_PERFMON / paranoid), ENOSYS off x86-64 Linux. */
 int asmtest_hwtrace_sample_window_amd(void (*run_fn)(void *), void *arg,
                                       int period, uint64_t *ips, size_t cap,
                                       size_t *nips, int *truncated);

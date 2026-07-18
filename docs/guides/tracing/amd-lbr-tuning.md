@@ -134,7 +134,7 @@ The reach levers sit on top of a privilege gradient. What actually runs where:
 
 | Path | Needs | Containerized lane |
 |---|---|---|
-| Sampled LBR (+ `lbr_period` / `branch_filter`) | Zen 3+ silicon; `perf_event_paranoid` lowered or `CAP_PERFMON` | `make docker-hwtrace-amd` (PERFMON cap, seccomp unconfined) |
+| Sampled LBR (+ `lbr_period` / `branch_filter`) | Zen 4+ LbrExtV2 silicon (Zen 3 BRS not yet openable); `perf_event_paranoid` lowered or `CAP_PERFMON` | `make docker-hwtrace-amd` (PERFMON cap, seccomp unconfined) |
 | Deterministic snapshot | the above **plus** `CAP_BPF` + the BPF toolchain; Zen 4+ (LbrExtV2), Linux ≥ 6.10 | `make docker-hwtrace-codeimage` |
 | MSR-direct snapshot | root / `CAP_SYS_ADMIN` + the `msr` module (self-hosted runners only) — an exact zero-interrupt Tier-A read with the same 16-deep ceiling | `make docker-hwtrace-msr` (privileged) |
 | {term}`single-step` fallback | nothing — no PMU, no perf, no privilege | `make docker-hwtrace` (plain container) |

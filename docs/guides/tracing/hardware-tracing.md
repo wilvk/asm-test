@@ -35,7 +35,7 @@ caller can pick whichever the host can run without changing the rest of its code
 | Backend (`asmtest_trace_backend_t`) | Mechanism | Decoder | Runs where | Completeness ceiling |
 |---|---|---|---|---|
 | `ASMTEST_HWTRACE_INTEL_PT` | Intel PT TNT/TIP/PSB packets → kernel AUX ring (`perf_event_open`) | libipt | bare-metal **Intel** x86-64 + perf privilege | ring size |
-| `ASMTEST_HWTRACE_AMD_LBR` | AMD Zen 3 BRS / Zen 4–5 LbrExtV2 branch stack | built-in | bare-metal **AMD** (Zen 3+) + perf branch-stack | 16-deep stack per sample; **Tier-B stitching** decodes past it — ceiling is the data ring (`data_size`) |
+| `ASMTEST_HWTRACE_AMD_LBR` | AMD Zen 4–5 LbrExtV2 branch stack (Zen 3 BRS exists in silicon but this tree cannot open it yet) | built-in | bare-metal **AMD** (Zen 4+) + perf branch-stack | 16-deep stack per sample; **Tier-B stitching** decodes past it — ceiling is the data ring (`data_size`) |
 | `ASMTEST_HWTRACE_CORESIGHT` | ARM ETM/ETE waypoints → AUX ring | OpenCSD | specific **AArch64** boards (scaffold) | ring size |
 | `ASMTEST_HWTRACE_SINGLESTEP` | `EFLAGS.TF` → `#DB` → `SIGTRAP` after every instruction | Capstone length-decoder | **any x86-64 Linux or macOS** (no PMU/perf/privilege/decoder) | none — exact + complete |
 
@@ -287,7 +287,7 @@ if (b >= 0) {
 On **any x86-64 Linux host the cascade is non-empty** — the single-step backend is
 the floor — so `auto()` never fails there; it only returns a negative status off
 x86-64 Linux (and a non-CoreSight host). On a bare-metal Intel host `auto(BEST)`
-resolves to Intel PT; on a Zen 3+ host with perf permitted it resolves to AMD LBR
+resolves to Intel PT; on a Zen 4+ host with perf permitted it resolves to AMD LBR
 (`CEILING_FREE` falling to single-step); otherwise it resolves to single-step.
 
 This call orchestrates only the **hardware tier's own** backends — one library, one
@@ -470,7 +470,8 @@ hot-block histogram of a running process.
 Three properties make it worth having as its own lane:
 
 - **It works where the exact AMD backend cannot.** The branch stack the
-  `AMD_LBR` backend needs is Zen 3+ silicon; on a **Zen 2** host every exact
+  `AMD_LBR` backend needs is Zen 4+ LbrExtV2 silicon (Zen 3 BRS exists but this
+  tree cannot open it yet); on a **Zen 2** host every exact
   hardware backend self-skips. IBS ships on every Zen, so it is the one
   hardware branch source on that class of machine.
 - **It is out of band and unprivileged.** It attaches `perf_event_open` to any
@@ -530,7 +531,7 @@ works unprivileged in a container; the perf syscall must be allowed by seccomp).
   lazy-arms only the body (Option B, the footgun note above). The clean whole-window
   PT path is hardware-gated.
 - **Bare-metal capture needs perf privilege.** Intel PT needs a bare-metal Intel
-  host; AMD LBR needs a Zen 3+ host with the perf branch stack permitted. Neither
+  host; AMD LBR needs a Zen 4+ host with the perf branch stack permitted. Neither
   runs under standard CI's default sandbox (the tier self-skips). AMD LBR samples its
   branch stack at the PMU, so it `truncated`s a too-fast single-shot routine —
   single-step is the deterministic in-process backend for that case. (The

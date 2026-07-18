@@ -990,8 +990,9 @@ The full root-cause analysis and per-runtime fix matrix live in the
 - **DynamoRIO must be installed separately** (no pkg-config); set `DYNAMORIO_HOME`.
   It is a software DBI engine and runs on Intel and AMD alike.
 - **Hardware capture needs bare metal + perf privilege.** Intel PT needs a
-  bare-metal Intel host; AMD LBR needs a Zen 3+/4/5 host with the perf branch-stack
-  permitted. Neither runs under standard CI's default sandbox (the tier self-skips),
+  bare-metal Intel host; AMD LBR needs a Zen 4/5 host with the perf branch-stack
+  permitted (Zen 3 BRS exists in silicon but this tree cannot open it yet). Neither
+  runs under standard CI's default sandbox (the tier self-skips),
   but **AMD LBR is live-verified** on a Zen 5 host (Ryzen 9 9950X, `amd_lbr_v2`) via
   `make docker-hwtrace-amd` — the hwtrace image run with `--security-opt
   seccomp=unconfined --cap-add=PERFMON` so `perf_event_open` is allowed. Note AMD's

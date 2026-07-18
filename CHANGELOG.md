@@ -978,6 +978,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The guides and the public header no longer claim AMD LBR live capture works
+  on Zen 3.** The live-capture floor is **Zen 4+** (LbrExtV2) — Zen 3 BRS exists
+  in silicon but this tree cannot open it (the generic `sample_period=1` open is
+  rejected by the kernel's `amd_brs_hw_config`; the raw-`0xc4` arm is a
+  hardware-gated follow-up). Swept every "Zen 3+" floor claim in the tracing
+  guides, `asmtest_hwtrace.h`, and the AMD backend comments to "Zen 4+", each
+  with the one-line cannot-open explanation.
+
 - **The dead AMD freeze-on-PMI probe (`asmtest_amd_freeze_available`) and its
   false PRESENT/ABSENT diagnostic are removed.** The probe had zero live
   consumers after `5d8e0d2` replaced the freeze-conditional window-trust gate

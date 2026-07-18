@@ -56,8 +56,9 @@ data ring for `PERF_RECORD_AUX` records and sets `truncated` on
 A **third, AMD-specific** hardware backend was added as a sibling plan,
 [amd-tracing-plan.md](amd-tracing-plan.md) (`ASMTEST_HWTRACE_AMD_LBR`,
 `src/amd_backend.c`): AMD has no PT equivalent, so it reconstructs from the 16-deep
-branch-record stack (Zen 3 BRS / Zen 4 LbrExtV2). Its reconstruction is
-host-validated with synthetic branch records; live capture needs Zen 3+.
+branch-record stack (Zen 4 LbrExtV2; Zen 3 BRS exists in silicon but this tree
+cannot open it yet). Its reconstruction is host-validated with synthetic branch
+records; live capture needs Zen 4+.
 
 **Validation caveat.** The libipt API usage is verified against upstream
 `intel-pt.h`, and the gating/self-skip path is exercised on every host — but the

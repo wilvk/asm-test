@@ -103,7 +103,7 @@ helpers discard), a perf-map reverse search, and `asmtest_hwtrace_symbolize_buck
 §3.2's AMD `data_tail` drain **reconstruction** is covered by
 `test_amd_drain_reconstruction`. Tests: `test_symbolize_bucket`,
 `test_amd_drain_reconstruction`. Forward-look: emission-event slicing (§3.1b, eBPF /
-soft-dirty at live capture), the live AMD `data_tail` drain (Zen 3+), and the PT
+soft-dirty at live capture), the live AMD `data_tail` drain (Zen 4+), and the PT
 `aux_tail` circular walk (Intel PT).
 
 ### §D4 — async-hop stitching merge core (DONE, CI-runnable)
@@ -145,7 +145,7 @@ end-to-end on any x86-64 Linux via the single-step **WEAK** tier, per
   (201/0); the `.NET` `AsmTrace()` case in `make docker-hwtrace-dotnet` (33/0). Both validated
   on this AMD host.
 - **Forward-look:** the STRONG whole-window PT / CEILING AMD LBR capture tiers (bare-metal
-  Intel PT / Zen 3+), §Z2 live decode, §Z3 arbitrary-managed-method capture (needs a live
+  Intel PT / Zen 4+), §Z2 live decode, §Z3 arbitrary-managed-method capture (needs a live
   runtime + MethodLoadVerbose), the §Z4 stitching escalation, and the other nine binding
   shims (mechanical mirrors of the .NET reference). All ship self-skipping and gated.
 
@@ -238,7 +238,7 @@ needs.
 
 | Item | Lane | Needs |
 |---|---|---|
-| Core §1 per-thread **AMD LBR** capture (`test_concurrent_amd`) + the AMD honesty invariant | `make docker-hwtrace-amd` | AMD Zen 3+ + `--cap-add=PERFMON` (this box) |
+| Core §1 per-thread **AMD LBR** capture (`test_concurrent_amd`) + the AMD honesty invariant | `make docker-hwtrace-amd` | AMD Zen 4+ + `--cap-add=PERFMON` (this box) |
 | §D3 reverse-attach ptrace-stealth stepper **+ standalone `asmtest-stealth-helper` binary** (both paths, `test_ptrace_scoped_stealth` checks 158–166) | `make hwtrace-test` / any ptrace lane | any ptrace-capable Linux |
 | §D3 helper **package embedding** — full `package-libs` slot, complete-set `package-libs-verify`, in-slot Capstone resolution, dladdr-sibling discovery from the bundled `.so` | `make package-libs && make package-libs-verify` (bindings-base image) | x86-64 Linux + emu toolchain (Capstone/patchelf) |
 | Core §0/§1-single-step/§2-adapter/§3-symbolize/§D4-merge + all 10 binding scopes | `make docker-hwtrace` + per-binding lanes | any x86-64 Linux |
@@ -252,7 +252,7 @@ needs.
 | Core §2 live whole-window libipt decode + capture-side address filter | **bare-metal Intel PT** (no `intel_pt` on AMD; a synthetic PT-packet fixture is the only non-hardware route) |
 | Core §1 per-thread PT/CoreSight **AUX** live validation | **bare-metal Intel PT** / an **AArch64 CoreSight board** (the per-thread *code* is done) |
 | Core §3.1(b) emission **slicing** (trace-position ↔ emission-timestamp correlation) | **Intel PT** whole-window decode for per-IP positions (the eBPF detector itself is done) |
-| Core §3.2 **live** AMD `data_tail` mid-capture drain | **AMD Zen 3+** — deferred: live capture is PMU-variable (no deterministic assertion); reconstruction is tested |
+| Core §3.2 **live** AMD `data_tail` mid-capture drain | **AMD Zen 4+** — deferred: live capture is PMU-variable (no deterministic assertion); reconstruction is tested |
 | Core §3.2 PT `aux_tail` circular drain | **bare-metal Intel PT** |
 | Single-step **Windows** front-end (VEH) | a **Windows** host (the macOS-Intel front-end has since landed — see the note below) |
 | §D0 live managed-JIT capability (`MethodLoadVerbose`, `AsyncLocal` hook) + §D1/§D2 async-hop hooks | a **live .NET/Node/JVM** runtime (Docker-reachable, but large; the ptrace tracing path already works) + **Intel PT** for cross-thread async-hop stitching |

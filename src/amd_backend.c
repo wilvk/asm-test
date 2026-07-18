@@ -3,8 +3,9 @@
  * See docs/internal/plans/amd-tracing-plan.md, asmtest_hwtrace.h, docs/native-tracing.md.
  *
  * AMD has no Intel-PT-style continuous trace ring; the closest native trace is
- * reconstruction from the shallow (16-entry) branch-record stack — Zen 3 BRS or
- * Zen 4 LbrExtV2 — captured via perf PERF_SAMPLE_BRANCH_STACK as an ordered array
+ * reconstruction from the shallow (16-entry) branch-record stack — Zen 4/5 LbrExtV2
+ * (Zen 3 BRS is a silicon facility this tree cannot open yet — see amd-tracing-plan
+ * Improvement Phase 6) — captured via perf PERF_SAMPLE_BRANCH_STACK as an ordered array
  * of {from, to, flags} taken-branch records (hwtrace.c does the capture). This TU
  * turns that array into the same asmtest_trace_t offset stream the Intel PT
  * backend produces, by REPLAYING asm-test's own registered code bytes between the
@@ -16,9 +17,10 @@
  * when Capstone is linked (asmtest_disas_available()) on a Linux x86-64 build;
  * otherwise the tier self-skips, exactly like the libipt/OpenCSD gating.
  *
- * The capture needs an AMD Zen 3 (BRS) / Zen 4 / Zen 5 (LbrExtV2) host with perf
- * branch-stack permitted; it self-skips on Zen 2 (no branch facility), non-AMD, VMs,
- * and CI. Live capture + decode is verified on a Zen 5 host (Ryzen 9 9950X,
+ * The capture needs an AMD Zen 4 / Zen 5 (LbrExtV2) host with perf branch-stack
+ * permitted; it self-skips on Zen 2 (no branch facility), non-AMD, VMs, and CI. The
+ * Zen 3 BRS arm is unbuilt (the generic sample_period=1 open the tree performs is
+ * rejected by the kernel on Zen 3 — see amd-tracing-plan Improvement Phase 6). Live capture + decode is verified on a Zen 5 host (Ryzen 9 9950X,
  * amd_lbr_v2 — see examples/test_hwtrace.c test_amd_live and `make docker-hwtrace-amd`);
  * THIS reconstruction is additionally validated host-independently with synthetic
  * perf_branch_entry[] inputs (test_amd_reconstruction), cross-checked against the
