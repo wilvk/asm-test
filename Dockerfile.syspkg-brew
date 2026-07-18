@@ -1,0 +1,48 @@
+# Dockerfile.syspkg-brew — Homebrew formula verification lane
+# (distribution-packaging.md T8). Homebrew runs on Linux, so the formula is
+# built-from-source, tested, audited and style-checked here.
+#
+# Hermetic: the formula pins the v1.1.0 release ASSET (published by T3, a
+# maintainer action — it does not exist in this tree yet), so the lane repoints
+# `url` at the reproducible `make package-source` tarball staged into the build
+# context (packaging/.staging/, populated by `make syspkg-stage`) and its real
+# digest. Only the tap publish (T8 step 4) is credential-gated.
+#
+# Build + run:  make docker-syspkg-brew
+ARG BREW_VERSION=4.6.20
+FROM homebrew/brew:${BREW_VERSION}
+ARG VER=1.1.0
+
+# Homebrew refuses to run as root; the base image's default user is linuxbrew.
+COPY --chown=linuxbrew:linuxbrew packaging/homebrew/asmtest.rb /tmp/asmtest.rb
+# Keep the versioned filename so Homebrew scans the version from the file:// url
+# too (an unversioned name yields `version (nil)` at load).
+COPY --chown=linuxbrew:linuxbrew packaging/.staging/asm-test-${VER}.tar.gz /tmp/asm-test-${VER}.tar.gz
+
+ENV VER=${VER}
+# Keep the pinned brew (the image auto-updates to a rolling release otherwise,
+# defeating BREW_VERSION), and silence analytics/hints for a quiet, hermetic run.
+ENV HOMEBREW_NO_AUTO_UPDATE=1 \
+    HOMEBREW_NO_ANALYTICS=1 \
+    HOMEBREW_NO_ENV_HINTS=1
+# Do the whole verification at run time so `docker run --rm` streams it and a
+# failure (audit/style/install/test) surfaces as a non-zero lane.
+CMD set -eux; \
+    TAP="$(brew --repository)/Library/Taps/wilvk/homebrew-asmtest"; \
+    mkdir -p "$TAP/Formula"; \
+    cp /tmp/asmtest.rb "$TAP/Formula/asmtest.rb"; \
+    echo "== brew style (committed formula, real release URL — no fetch) =="; \
+    brew style wilvk/asmtest; \
+    echo "== brew audit --strict =="; \
+    brew audit --strict wilvk/asmtest/asmtest; \
+    echo "== repoint url -> local staged tarball (v1.1.0 asset is T3-gated) =="; \
+    SUM="$(sha256sum /tmp/asm-test-${VER}.tar.gz | cut -d' ' -f1)"; \
+    sed -i \
+      -e "s#url \".*\"#url \"file:///tmp/asm-test-${VER}.tar.gz\"#" \
+      -e "s#sha256 \".*\"#sha256 \"${SUM}\"#" \
+      "$TAP/Formula/asmtest.rb"; \
+    echo "== brew install --build-from-source =="; \
+    brew install --build-from-source wilvk/asmtest/asmtest; \
+    echo "== brew test =="; \
+    brew test wilvk/asmtest/asmtest; \
+    echo "docker-syspkg-brew: OK — formula built, tested, audited, style-clean"

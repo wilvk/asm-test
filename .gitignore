@@ -13,6 +13,10 @@ build-*/
 asmtest.pc
 asmtest_single.h
 
+# System-package Docker lanes stage the reproducible source tarball here
+# (build/ is out of the Docker build context via .dockerignore) — never committed.
+packaging/.staging/
+
 # Generated bindings-substrate artifacts (Track 0)
 asmtest-emu.pc
 asmtest_abi.json

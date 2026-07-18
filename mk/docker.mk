@@ -706,3 +706,32 @@ docker-bindings-clean:
 	-$(DOCKER) image rm $(addprefix asmtest-,$(BINDING_LANGS)) asmtest-win64 \
 	  $(DOCKER_BINDINGS_BASE)
 
+# --- System-package verification lanes (distribution-packaging.md T8-T13) ------
+# Each lane builds the C core's OS package (Homebrew/Debian/AUR/vcpkg/conan) and
+# runs its native lint + install + the shared pkg-config consumer smoke, mirroring
+# the docker-drtrace shape (a Dockerfile.syspkg-<mgr> built with pinned build-args,
+# then `docker run --rm`). The packages are MIT-only (the static core links nothing
+# third-party; the GPL engines live only in the dlopen binding payloads).
+#
+# Hermetic by design: the manifests pin the v1.1.0 release tarball ASSET, which is
+# published by T3 (a maintainer/credential action) and does not exist in this tree
+# yet — so the lanes consume the reproducible `make package-source` tarball staged
+# into the build context here (build/ is kept out of images by .dockerignore, so
+# `syspkg-stage` copies it into the git-ignored packaging/.staging/). Only each
+# spec's real registry/tag publish or upstream PR (step 4) is credential-gated.
+SYSPKG_STAGE := packaging/.staging
+.PHONY: syspkg-stage
+syspkg-stage: package-source
+	mkdir -p $(SYSPKG_STAGE)
+	cp $(DIST)/asm-test-$(ASMTEST_VERSION).tar.gz $(DIST)/SHA256SUMS $(SYSPKG_STAGE)/
+
+# T8 — Homebrew formula: build-from-source + brew test/audit/style on Linux.
+# Override BREW_VERSION to bump the pinned homebrew/brew image.
+BREW_VERSION ?= 4.6.20
+.PHONY: docker-syspkg-brew
+docker-syspkg-brew: syspkg-stage
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.syspkg-brew \
+	  --build-arg BREW_VERSION=$(BREW_VERSION) --build-arg VER=$(ASMTEST_VERSION) \
+	  -t asmtest-syspkg-brew .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-syspkg-brew
+
