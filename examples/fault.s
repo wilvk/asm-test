@@ -15,5 +15,8 @@ ASM_FUNC read_fault
 #elif defined(__aarch64__)
     ldr     x0, [x0]            /* load *p */
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    ld      a0, 0(a0)           /* load *p — faults if p is unmapped */
+    ret
 #endif
 ASM_ENDFUNC read_fault

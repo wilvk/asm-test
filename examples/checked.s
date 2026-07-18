@@ -20,5 +20,13 @@ ASM_FUNC checked_add
 #elif defined(__aarch64__)
     adds    x0, x0, x1          /* sets NZCV (V = signed overflow); sum in x0 */
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    /* rv64 has NO overflow flag (ASMTEST_NO_FLAGS), so this returns only the
+     * wrapping sum and the flag-asserting tests self-skip. The rv64 equivalent of
+     * the overflow *signal* is a value-returning check — compute the sum and
+     * compare sign relationships, i.e. the __builtin_add_overflow lowering — not
+     * a condition-code side effect. */
+    add     a0, a0, a1
+    ret
 #endif
 ASM_ENDFUNC checked_add

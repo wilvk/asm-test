@@ -16,5 +16,8 @@ ASM_FUNC add_signed
 #elif defined(__aarch64__)
     add     x0, x0, x1
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    add     a0, a0, a1
+    ret
 #endif
 ASM_ENDFUNC add_signed

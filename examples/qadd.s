@@ -18,5 +18,10 @@ ASM_FUNC qadd_u8x16
 #elif defined(__aarch64__)
     uqadd   v0.16b, v0.16b, v1.16b
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    /* rv64gc has no 128-bit vector registers; a stub so the symbol resolves.
+     * Never called: asmtest_cpu_has_vec128() is false on rv64, so test_qadd's
+     * ASM_VCALL2 self-skips. */
+    ret
 #endif
 ASM_ENDFUNC qadd_u8x16

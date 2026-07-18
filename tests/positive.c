@@ -40,6 +40,19 @@ static regs_t preserved_regs(void) {
     r.x27 = ASMTEST_SENTINEL_X27;
     r.x28 = ASMTEST_SENTINEL_X28;
     r.x29 = ASMTEST_SENTINEL_X29;
+#elif defined(__riscv) && __riscv_xlen == 64
+    r.s0 = ASMTEST_SENTINEL_S0;
+    r.s1 = ASMTEST_SENTINEL_S1;
+    r.s2 = ASMTEST_SENTINEL_S2;
+    r.s3 = ASMTEST_SENTINEL_S3;
+    r.s4 = ASMTEST_SENTINEL_S4;
+    r.s5 = ASMTEST_SENTINEL_S5;
+    r.s6 = ASMTEST_SENTINEL_S6;
+    r.s7 = ASMTEST_SENTINEL_S7;
+    r.s8 = ASMTEST_SENTINEL_S8;
+    r.s9 = ASMTEST_SENTINEL_S9;
+    r.s10 = ASMTEST_SENTINEL_S10;
+    r.s11 = ASMTEST_SENTINEL_S11;
 #endif
     return r;
 }
@@ -87,6 +100,7 @@ TEST(posit, abi_preserved) {
     regs_t r = preserved_regs();
     ASSERT_ABI_PRESERVED(&r);
 }
+#if !defined(ASMTEST_NO_FLAGS)
 TEST(posit, flag_set) {
     regs_t r = preserved_regs();
     r.flags = ASMTEST_CF | ASMTEST_ZF;
@@ -99,6 +113,7 @@ TEST(posit, flag_clear) {
     ASSERT_FLAG_CLEAR(&r, CF);
     ASSERT_FLAG_CLEAR(&r, ZF);
 }
+#endif /* rv64 has no condition-flags register (ASMTEST_NO_FLAGS) */
 TEST(posit, reg_eq) {
     regs_t r = preserved_regs();
     r.ret = 42;

@@ -43,6 +43,19 @@ static regs_t clobbered_regs(void) {
     r.x27 = ASMTEST_SENTINEL_X27;
     r.x28 = ASMTEST_SENTINEL_X28;
     r.x29 = 0xDEAD; /* clobbered */
+#elif defined(__riscv) && __riscv_xlen == 64
+    r.s0 = ASMTEST_SENTINEL_S0;
+    r.s1 = ASMTEST_SENTINEL_S1;
+    r.s2 = ASMTEST_SENTINEL_S2;
+    r.s3 = ASMTEST_SENTINEL_S3;
+    r.s4 = ASMTEST_SENTINEL_S4;
+    r.s5 = ASMTEST_SENTINEL_S5;
+    r.s6 = ASMTEST_SENTINEL_S6;
+    r.s7 = ASMTEST_SENTINEL_S7;
+    r.s8 = ASMTEST_SENTINEL_S8;
+    r.s9 = ASMTEST_SENTINEL_S9;
+    r.s10 = ASMTEST_SENTINEL_S10;
+    r.s11 = 0xDEAD; /* clobbered */
 #endif
     return r;
 }
@@ -74,6 +87,7 @@ TEST(neg, abi) {
     regs_t r = clobbered_regs();
     ASSERT_ABI_PRESERVED(&r);
 }
+#if !defined(ASMTEST_NO_FLAGS)
 TEST(neg, flag_set) {
     regs_t r = clobbered_regs();
     r.flags = 0; /* CF clear */
@@ -84,6 +98,7 @@ TEST(neg, flag_clear) {
     r.flags = ASMTEST_CF; /* CF set */
     ASSERT_FLAG_CLEAR(&r, CF);
 }
+#endif /* rv64 has no condition-flags register (ASMTEST_NO_FLAGS) */
 TEST(neg, vec_eq) {
     regs_t r = clobbered_regs();
     unsigned char expect[16];

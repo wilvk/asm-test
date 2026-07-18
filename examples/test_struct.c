@@ -43,9 +43,11 @@ TEST(structret, small_struct_in_registers) {
      * regs_t, no special call needed. */
     regs_t r;
     ASM_CALL2(&r, make_pair, 7, 9);
-    ASSERT_EQ(r.ret, 7); /* first eightbyte (rax / x0) */
+    ASSERT_EQ(r.ret, 7); /* first eightbyte (rax / x0 / a0) */
 #if defined(__x86_64__)
     ASSERT_EQ(r.rdx,
               9); /* second eightbyte (rdx); x1 not captured on AArch64 */
+#elif defined(__riscv) && __riscv_xlen == 64
+    ASSERT_EQ(r.a1, 9); /* rv64 captures the second return register (a1) */
 #endif
 }

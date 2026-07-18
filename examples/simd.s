@@ -14,6 +14,11 @@ ASM_FUNC vec_add4f
 #elif defined(__aarch64__)
     fadd    v0.4s, v0.4s, v1.4s
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    /* rv64gc has no 128-bit vector registers; a stub so the symbol resolves.
+     * Never called: asmtest_cpu_has_vec128() is false on rv64, so test_simd's
+     * ASM_VCALL macros self-skip. */
+    ret
 #endif
 ASM_ENDFUNC vec_add4f
 

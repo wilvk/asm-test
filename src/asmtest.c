@@ -514,6 +514,20 @@ int asmtest_cpu_has_avx2(void) { return 0; }
 int asmtest_cpu_has_avx512f(void) { return 0; }
 #endif
 
+/* Whether the native 128-bit vector capture path (asm_call_capture_vec and the
+ * ASM_VCALL* macros) exists on this target. x86-64 (SSE) and AArch64 (NEON) have
+ * a 128-bit vector register file and a real trampoline; rv64gc has NO vector
+ * registers (its _vec trampolines are ret-only stubs, and RVV would be a future
+ * arm), so it returns 0 there and the ASM_VCALL macros SELF-SKIP rather than
+ * call a stub. The designed hook for an eventual RVV capture arm. */
+int asmtest_cpu_has_vec128(void) {
+#if defined(__x86_64__) || defined(__aarch64__)
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 /* ------------------------------------------------------------------ */
 /* Guard-page buffers                                                  */
 /*                                                                     */

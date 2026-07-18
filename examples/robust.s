@@ -13,6 +13,8 @@ ASM_FUNC spin_forever
 0:  jmp     0b
 #elif defined(__aarch64__)
 0:  b       0b
+#elif defined(__riscv) && __riscv_xlen == 64
+0:  j       0b
 #endif
 ASM_ENDFUNC spin_forever
 
@@ -24,6 +26,10 @@ ASM_FUNC crash_null
 #elif defined(__aarch64__)
     mov     x0, #0
     str     x0, [x0]
+    ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    li      a0, 0
+    sd      a0, 0(a0)           /* store through null -> SIGSEGV */
     ret
 #endif
 ASM_ENDFUNC crash_null

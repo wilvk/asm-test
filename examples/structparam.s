@@ -22,6 +22,10 @@ ASM_FUNC pst2
 #elif defined(__aarch64__)
     add     x0, x0, x1
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    /* {long,long} = 2*XLEN INTEGER eightbytes -> a0,a1 (same as both arches). */
+    add     a0, a0, a1
+    ret
 #endif
 ASM_ENDFUNC pst2
 
@@ -38,6 +42,12 @@ ASM_FUNC pst_mixed
     fcvtzs  x1, d0
     add     x0, x0, x1
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    /* rv64/LP64D uses the HARDWARE FP convention for {long; double}: m.a in a0,
+     * m.b in fa0 (the x86-ish shape, NOT AArch64's two-GP-register shape). */
+    fcvt.l.d t0, fa0, rtz       /* (long)m.b, truncate toward zero */
+    add      a0, a0, t0         /* + m.a */
+    ret
 #endif
 ASM_ENDFUNC pst_mixed
 
@@ -53,6 +63,14 @@ ASM_FUNC bigsum
     ldr     x3, [x0, #16]
     add     x0, x1, x2
     add     x0, x0, x3
+    ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    /* >16-byte struct passed by reference (T1 dispatch): pointer arrives in a0. */
+    ld      a1, 0(a0)
+    ld      a2, 8(a0)
+    ld      a3, 16(a0)
+    add     a0, a1, a2
+    add     a0, a0, a3
     ret
 #endif
 ASM_ENDFUNC bigsum

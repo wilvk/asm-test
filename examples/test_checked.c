@@ -11,6 +11,7 @@
 
 extern long checked_add(long a, long b);
 
+#if !defined(ASMTEST_NO_FLAGS)
 TEST(runtime, ordinary_add_clears_overflow) {
     regs_t r;
     ASM_CALL2(&r, checked_add, 2, 3);
@@ -36,3 +37,14 @@ TEST(runtime, negative_overflow_sets_OF) {
     ASM_CALL2(&r, checked_add, LONG_MIN, -1); /* wraps to LONG_MAX */
     ASSERT_FLAG_SET(&r, OF);
 }
+#else
+/* The entire suite is the overflow *flag*; rv64 has no condition-flags register
+ * (ASMTEST_NO_FLAGS), so all four cases self-skip with the ISA reason. checked.s
+ * still returns the wrapping sum, and the rv64 way to surface overflow is a
+ * value-returning __builtin_add_overflow-style check. */
+TEST(runtime, overflow_flag_unavailable_rv64) {
+    SKIP(
+        "RISC-V has no overflow flag (ASMTEST_NO_FLAGS); use a value-returning "
+        "overflow check instead");
+}
+#endif

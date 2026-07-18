@@ -112,8 +112,14 @@ expect_fail_msg "ASSERT_ULT unsigned order"  "ASSERT_ULT" "$NEG" --filter=neg.ul
 expect_fail_msg "ASSERT_STREQ fails"         "ASSERT_STREQ" "$NEG" --filter=neg.streq
 expect_fail_msg "ASSERT_MEM_EQ fails"        "first diff at byte" "$NEG" --filter=neg.mem_eq
 expect_fail_msg "ASSERT_ABI_PRESERVED fails" "not restored" "$NEG" --filter=neg.abi
-expect_fail_msg "ASSERT_FLAG_SET fails"      "ASSERT_FLAG_SET" "$NEG" --filter=neg.flag_set
-expect_fail_msg "ASSERT_FLAG_CLEAR fails"    "ASSERT_FLAG_CLEAR" "$NEG" --filter=neg.flag_clear
+# The flag cases are gated out on rv64 (ASMTEST_NO_FLAGS: no condition-flags
+# register), so neg.flag_set/flag_clear do not exist there — skip these two.
+if [ "$(uname -m)" != "riscv64" ]; then
+    expect_fail_msg "ASSERT_FLAG_SET fails"      "ASSERT_FLAG_SET" "$NEG" --filter=neg.flag_set
+    expect_fail_msg "ASSERT_FLAG_CLEAR fails"    "ASSERT_FLAG_CLEAR" "$NEG" --filter=neg.flag_clear
+else
+    printf '# skip: no flags register on riscv64 (neg.flag_set/flag_clear gated)\n'
+fi
 expect_fail_msg "ASSERT_VEC_EQ fails"        "first diff at byte" "$NEG" --filter=neg.vec_eq
 expect_fail_msg "ASSERT_*EQ (double) fails"  "double" "$NEG" --filter=neg.fp_eq
 expect_fail_msg "ASSERT_*NEAR (double) fails" "ulps"  "$NEG" --filter=neg.fp_near

@@ -21,6 +21,10 @@ ASM_FUNC sum3
     add     x0, x0, x1
     add     x0, x0, x2
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    add     a0, a0, a1
+    add     a0, a0, a2
+    ret
 #endif
 ASM_ENDFUNC sum3
 
@@ -43,6 +47,15 @@ ASM_FUNC sum8
     add     x0, x0, x5
     add     x0, x0, x6
     add     x0, x0, x7
+    ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    add     a0, a0, a1
+    add     a0, a0, a2
+    add     a0, a0, a3
+    add     a0, a0, a4
+    add     a0, a0, a5
+    add     a0, a0, a6
+    add     a0, a0, a7          /* 8 register args, no stack spill */
     ret
 #endif
 ASM_ENDFUNC sum8
@@ -72,6 +85,19 @@ ASM_FUNC sum10
     add     x0, x0, x9
     ldr     x9, [sp, #8]        /* 10th arg */
     add     x0, x0, x9
+    ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    add     a0, a0, a1
+    add     a0, a0, a2
+    add     a0, a0, a3
+    add     a0, a0, a4
+    add     a0, a0, a5
+    add     a0, a0, a6
+    add     a0, a0, a7
+    ld      t0, 0(sp)           /* 9th arg  (first stack slot, offset 0) */
+    add     a0, a0, t0
+    ld      t0, 8(sp)           /* 10th arg */
+    add     a0, a0, t0
     ret
 #endif
 ASM_ENDFUNC sum10

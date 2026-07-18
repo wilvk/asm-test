@@ -23,5 +23,11 @@ ASM_FUNC qmul_q15
     add     x0, x0, #0x4000     /* 0x4000 == 4 << 12, an encodable add imm */
     asr     x0, x0, #15
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    mul     a0, a0, a1          /* a * b */
+    li      t0, 0x4000          /* 0x4000 exceeds addi's 12-bit imm range */
+    add     a0, a0, t0          /* + 0.5 ulp for round-to-nearest */
+    srai    a0, a0, 15          /* >> 15, arithmetic (signed) */
+    ret
 #endif
 ASM_ENDFUNC qmul_q15

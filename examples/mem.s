@@ -30,6 +30,16 @@ ASM_FUNC fill_bytes
     b.lo    1b
 2:
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    beqz    a2, 2f              /* n == 0 ? nothing to do  */
+    li      t0, 0              /* i = 0                   */
+1:
+    add     t1, a0, t0
+    sb      a1, 0(t1)           /* buf[i] = (byte)val      */
+    addi    t0, t0, 1
+    bltu    t0, a2, 1b
+2:
+    ret
 #endif
 ASM_ENDFUNC fill_bytes
 
@@ -44,6 +54,9 @@ ASM_FUNC load_long
     ret
 #elif defined(__aarch64__)
     ldr     x0, [x0]
+    ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    ld      a0, 0(a0)
     ret
 #endif
 ASM_ENDFUNC load_long

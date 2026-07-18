@@ -23,6 +23,13 @@ ASM_FUNC make_big
     str     x2, [x8, #16]
     mov     x0, x8             /* return the result pointer */
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    /* a0 = result ptr (the implicit first arg, x86-ish); a=a1, b=a2, c=a3. */
+    sd      a1, 0(a0)
+    sd      a2, 8(a0)
+    sd      a3, 16(a0)
+    /* a0 already holds the result pointer -> it is also the return value. */
+    ret
 #endif
 ASM_ENDFUNC make_big
 
@@ -34,6 +41,9 @@ ASM_FUNC make_pair
     ret
 #elif defined(__aarch64__)
     /* a=x0, b=x1 -> struct returned in x0:x1 (already in place) */
+    ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    /* a=a0, b=a1 -> struct returned in a0:a1 (already in place) */
     ret
 #endif
 ASM_ENDFUNC make_pair

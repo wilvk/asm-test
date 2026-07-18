@@ -68,6 +68,34 @@ ASM_FUNC sum_map
     ldp     x19, x20, [sp, #16]
     ldp     x29, x30, [sp], #48
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    addi    sp, sp, -48         /* 16-aligned frame */
+    sd      ra, 0(sp)
+    sd      s0, 8(sp)           /* arr cursor       */
+    sd      s1, 16(sp)          /* remaining count  */
+    sd      s2, 24(sp)          /* callback pointer */
+    sd      s3, 32(sp)          /* accumulator      */
+    mv      s0, a0
+    mv      s1, a1
+    mv      s2, a2
+    li      s3, 0
+1:
+    blez    s1, 2f              /* signed: n <= 0 ends the loop */
+    ld      a0, 0(s0)           /* marshal arr[i] into the 1st int arg */
+    addi    s0, s0, 8
+    jalr    ra, 0(s2)           /* clobbers caller-saved regs; ours are safe */
+    add     s3, s3, a0
+    addi    s1, s1, -1
+    j       1b
+2:
+    mv      a0, s3
+    ld      ra, 0(sp)
+    ld      s0, 8(sp)
+    ld      s1, 16(sp)
+    ld      s2, 24(sp)
+    ld      s3, 32(sp)
+    addi    sp, sp, 48
+    ret
 #endif
 ASM_ENDFUNC sum_map
 
@@ -126,6 +154,36 @@ ASM_FUNC count_if
     ldp     x21, x22, [sp, #32]
     ldp     x19, x20, [sp, #16]
     ldp     x29, x30, [sp], #48
+    ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    addi    sp, sp, -48
+    sd      ra, 0(sp)
+    sd      s0, 8(sp)
+    sd      s1, 16(sp)
+    sd      s2, 24(sp)
+    sd      s3, 32(sp)
+    mv      s0, a0
+    mv      s1, a1
+    mv      s2, a2
+    li      s3, 0
+1:
+    blez    s1, 2f
+    ld      a0, 0(s0)
+    addi    s0, s0, 8
+    jalr    ra, 0(s2)
+    beqz    a0, 3f              /* predicate zero -> skip */
+    addi    s3, s3, 1
+3:
+    addi    s1, s1, -1
+    j       1b
+2:
+    mv      a0, s3
+    ld      ra, 0(sp)
+    ld      s0, 8(sp)
+    ld      s1, 16(sp)
+    ld      s2, 24(sp)
+    ld      s3, 32(sp)
+    addi    sp, sp, 48
     ret
 #endif
 ASM_ENDFUNC count_if

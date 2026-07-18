@@ -11,6 +11,12 @@
  *           address (doubles at 8/16(%rsp); 16-byte vectors at 8/24(%rsp)).
  *   AArch64: a0..a7 -> d0..7 / v0..7; the stack args start at [sp, #0]
  *           (doubles at #0/#8; 16-byte vectors at #0/#16).
+ *   rv64/LP64D: a0..a7 -> fa0..fa7; doubles 9,10 arrive in the INTEGER
+ *           registers a6,a7 as raw bit patterns (the psABI "FP args after the FP
+ *           registers are exhausted use the integer convention" rule, since
+ *           asm_call_capture_fp_n has already filled a0..a5 with iargs). This
+ *           file's fp_sum10/fp_stack2 bodies are written against that placement,
+ *           so they are the proof of the framework's documented _fp_n convention.
  */
 #include "asm.h"
 
@@ -39,6 +45,19 @@ ASM_FUNC fp_sum10
     ldr     d16, [sp, #8]          /* a9 */
     fadd    d0, d0, d16
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    fadd.d  fa0, fa0, fa1
+    fadd.d  fa0, fa0, fa2
+    fadd.d  fa0, fa0, fa3
+    fadd.d  fa0, fa0, fa4
+    fadd.d  fa0, fa0, fa5
+    fadd.d  fa0, fa0, fa6
+    fadd.d  fa0, fa0, fa7
+    fmv.d.x ft0, a6                /* a8 (9th double): raw bits in a6 */
+    fadd.d  fa0, fa0, ft0
+    fmv.d.x ft0, a7                /* a9 (10th double): raw bits in a7 */
+    fadd.d  fa0, fa0, ft0
+    ret
 #endif
 ASM_ENDFUNC fp_sum10
 
@@ -51,6 +70,11 @@ ASM_FUNC fp_stack2
     ldr     d0, [sp, #0]           /* a8 */
     ldr     d1, [sp, #8]           /* a9 */
     fadd    d0, d0, d1
+    ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    fmv.d.x fa0, a6                /* a8: raw bits in a6 (see fp_sum10) */
+    fmv.d.x fa1, a7                /* a9: raw bits in a7 */
+    fadd.d  fa0, fa0, fa1
     ret
 #endif
 ASM_ENDFUNC fp_stack2
@@ -79,6 +103,10 @@ ASM_FUNC vec_sum10
     fadd    v0.4s, v0.4s, v16.4s
     ldr     q16, [sp, #16]         /* a9 */
     fadd    v0.4s, v0.4s, v16.4s
+    ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    /* rv64gc has no vector registers; a stub so the symbol resolves. Never
+     * called: asmtest_cpu_has_vec128() is false on rv64, so ASM_VCALLN self-skips. */
     ret
 #endif
 ASM_ENDFUNC vec_sum10

@@ -371,6 +371,12 @@ void asm_call_capture_vec(regs_t *out, void *fn, const long *iargs,
 int asmtest_cpu_has_avx2(void);
 int asmtest_cpu_has_avx512f(void);
 
+/* Whether the native 128-bit vector capture path exists on this target (x86-64
+ * SSE / AArch64 NEON: yes; rv64gc: no — no vector registers). The ASM_VCALL*
+ * macros gate on it and SELF-SKIP where absent, so a vector suite runs on any
+ * host. Returns 1 on x86-64/AArch64, 0 on rv64. */
+int asmtest_cpu_has_vec128(void);
+
 /* The AVX2 analog of asm_call_capture_vec: marshal 8 full 256-bit vector args
  * into ymm0-7 and capture the whole ymm file (ymm0..15) into vec[0..15] (a
  * caller-provided array of 16; vec[0] = the vector return). x86-64 + AVX2 only —
@@ -963,18 +969,24 @@ void asmtest_guarded_free_under(void *p, size_t n);
  * whole vector file; the vector return is out->vec[0]. */
 #define ASM_VCALL1(out, fn, v0)                                                \
     do {                                                                       \
+        if (!asmtest_cpu_has_vec128())                                         \
+            SKIP("128-bit vector capture not available on this target");       \
         long asmtest_ia_[6] = {0};                                             \
         vec128_t asmtest_va_[8] = {(v0)};                                      \
         asm_call_capture_vec((out), (void *)(fn), asmtest_ia_, asmtest_va_);   \
     } while (0)
 #define ASM_VCALL2(out, fn, v0, v1)                                            \
     do {                                                                       \
+        if (!asmtest_cpu_has_vec128())                                         \
+            SKIP("128-bit vector capture not available on this target");       \
         long asmtest_ia_[6] = {0};                                             \
         vec128_t asmtest_va_[8] = {(v0), (v1)};                                \
         asm_call_capture_vec((out), (void *)(fn), asmtest_ia_, asmtest_va_);   \
     } while (0)
 #define ASM_VCALL3(out, fn, v0, v1, v2)                                        \
     do {                                                                       \
+        if (!asmtest_cpu_has_vec128())                                         \
+            SKIP("128-bit vector capture not available on this target");       \
         long asmtest_ia_[6] = {0};                                             \
         vec128_t asmtest_va_[8] = {(v0), (v1), (v2)};                          \
         asm_call_capture_vec((out), (void *)(fn), asmtest_ia_, asmtest_va_);   \
@@ -994,6 +1006,8 @@ void asmtest_guarded_free_under(void *p, size_t n);
  * spilling onto the stack. Captures the whole vector file (return = vec[0]). */
 #define ASM_VCALLN(out, fn, ...)                                               \
     do {                                                                       \
+        if (!asmtest_cpu_has_vec128())                                         \
+            SKIP("128-bit vector capture not available on this target");       \
         long asmtest_ia_[6] = {0};                                             \
         vec128_t asmtest_va_[] = {__VA_ARGS__};                                \
         asm_call_capture_vec_n((out), (void *)(fn), asmtest_ia_, asmtest_va_,  \

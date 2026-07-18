@@ -4,8 +4,10 @@
  */
 #include "asmtest.h"
 
+#if !defined(ASMTEST_NO_FLAGS)
 extern long set_carry(void);
 extern long clear_carry(void);
+#endif
 extern long sum_via_rbx(long a, long b);
 
 TEST(capture, return_value_captured) {
@@ -21,6 +23,7 @@ TEST(capture, callee_saved_preserved) {
     ASSERT_ABI_PRESERVED(&r); /* sum_via_rbx saves/restores its scratch reg */
 }
 
+#if !defined(ASMTEST_NO_FLAGS)
 TEST(capture, carry_flag_set) {
     regs_t r;
     ASM_CALL0(&r, set_carry);
@@ -32,6 +35,15 @@ TEST(capture, carry_flag_clear) {
     ASM_CALL0(&r, clear_carry);
     ASSERT_FLAG_CLEAR(&r, CF);
 }
+#else
+/* rv64 has no condition-flags register, so ASSERT_FLAG_* is a compile error by
+ * design (no ASMTEST_CF macro) and set_carry/clear_carry have no analog. A named
+ * SKIP keeps the ISA fact visible in the TAP stream rather than silently
+ * dropping the cases. */
+TEST(capture, flags_unavailable_rv64) {
+    SKIP("RISC-V has no condition-flags register (ASMTEST_NO_FLAGS)");
+}
+#endif
 
 TEST(guard, in_bounds_write_ok) {
     unsigned char *p = asmtest_guarded_alloc(8);

@@ -5,6 +5,12 @@
  */
 #include "asm.h"
 
+/* The carry-flag routines have NO rv64 analog: RISC-V has no condition-flags
+ * register (the asmtest.h rv64 branch defines ASMTEST_NO_FLAGS). Omit them there
+ * — asm.h is not asmtest.h, so this .s cannot see ASMTEST_NO_FLAGS; the
+ * equivalent arch condition guards the same code, and test_capture.c gates the
+ * callers behind ASMTEST_NO_FLAGS itself. */
+#if !(defined(__riscv) && __riscv_xlen == 64)
 /* long set_carry(void); sets the carry flag, returns 0. */
 ASM_FUNC set_carry
 #if defined(__x86_64__)
@@ -30,6 +36,7 @@ ASM_FUNC clear_carry
     ret
 #endif
 ASM_ENDFUNC clear_carry
+#endif /* !rv64: no condition-flags register */
 
 /*
  * long sum_via_rbx(long a, long b);
@@ -49,6 +56,14 @@ ASM_FUNC sum_via_rbx
     mov     x0, x19
     ldr     x19, [sp], #16
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    addi    sp, sp, -16
+    sd      s1, 0(sp)           /* save the callee-saved scratch reg */
+    add     s1, a0, a1
+    mv      a0, s1
+    ld      s1, 0(sp)           /* restore it -> ABI-compliant */
+    addi    sp, sp, 16
+    ret
 #endif
 ASM_ENDFUNC sum_via_rbx
 
@@ -66,6 +81,10 @@ ASM_FUNC clobbers_rbx
 #elif defined(__aarch64__)
     add     x19, x0, x1
     mov     x0, x19
+    ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    add     s1, a0, a1          /* trash a callee-saved reg, never restore it */
+    mv      a0, s1
     ret
 #endif
 ASM_ENDFUNC clobbers_rbx

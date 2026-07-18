@@ -31,5 +31,15 @@ ASM_FUNC sum_to_n
     b.ne    1b
 2:
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    mv      a1, a0              /* counter = n             */
+    li      a0, 0              /* acc = 0                 */
+    blez    a1, 2f
+1:
+    add     a0, a0, a1          /* acc += counter          */
+    addi    a1, a1, -1
+    bnez    a1, 1b
+2:
+    ret
 #endif
 ASM_ENDFUNC sum_to_n

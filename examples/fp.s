@@ -23,6 +23,9 @@ ASM_FUNC fp_add
 #elif defined(__aarch64__)
     fadd    d0, d0, d1
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    fadd.d  fa0, fa0, fa1
+    ret
 #endif
 ASM_ENDFUNC fp_add
 
@@ -33,6 +36,9 @@ ASM_FUNC fp_mul
 #elif defined(__aarch64__)
     fmul    d0, d0, d1
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    fmul.d  fa0, fa0, fa1
+    ret
 #endif
 ASM_ENDFUNC fp_mul
 
@@ -42,6 +48,9 @@ ASM_FUNC int_to_double
     ret
 #elif defined(__aarch64__)
     scvtf   d0, x0
+    ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    fcvt.d.l fa0, a0            /* fa0 = (double)(signed long)a0 */
     ret
 #endif
 ASM_ENDFUNC int_to_double
@@ -54,6 +63,10 @@ ASM_FUNC mix_scale
 #elif defined(__aarch64__)
     scvtf   d1, x0              /* d1 = (double)n */
     fmul    d0, d0, d1          /* d0 = x * (double)n */
+    ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    fcvt.d.l fa1, a0            /* fa1 = (double)n */
+    fmul.d  fa0, fa0, fa1       /* fa0 = x * (double)n */
     ret
 #endif
 ASM_ENDFUNC mix_scale
