@@ -186,8 +186,11 @@ help:
 # thus the CI matrix) so they are opt-in via `make usecases` / `usecases-emu`.
 USECASE_SUITES := $(BUILD)/test_bittricks $(BUILD)/test_vm
 
-# Framework self-tests (Track A): the meta-suites driven by tests/expect.sh.
-SELFTESTS := $(BUILD)/tests_positive $(BUILD)/tests_negative
+# Framework self-tests (Track A): the meta-suites driven by tests/expect.sh,
+# plus the glob-matcher parity oracle (differential against the host's real
+# fnmatch; POSIX-only, code-review-plausible-triage T2).
+SELFTESTS := $(BUILD)/tests_positive $(BUILD)/tests_negative \
+             $(BUILD)/tests_glob_parity
 
 # --- Packaging & installation (Track B) ------------------------------------
 # `make lib`        build libasmtest.a (framework runtime + capture trampoline)
@@ -341,7 +344,17 @@ $(BUILD)/tests_positive: $(FRAMEWORK_OBJS) $(BUILD)/positive.o
 $(BUILD)/tests_negative: $(FRAMEWORK_OBJS) $(BUILD)/negative.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# Glob-matcher parity oracle: asmtest_glob_match vs. the host's real
+# fnmatch(pattern, str, 0) over a shared table (code-review-plausible-triage
+# T2). POSIX-only (needs <fnmatch.h>) -- fine, `check` never runs in the
+# mingw/Wine lane; tests/win64/test_glob.c carries the same divergent cases
+# with hard-coded expectations there.
+$(BUILD)/tests_glob_parity: tests/glob_parity.c src/glob_match.c \
+                            src/glob_match.h | $(BUILD)
+	$(CC) $(CFLAGS) -Isrc tests/glob_parity.c src/glob_match.c -o $@
+
 check: $(SELFTESTS) check-header-portability
+	@$(BUILD)/tests_glob_parity
 	@BUILD=$(BUILD) sh tests/expect.sh
 
 # Public first-contact surface gate — three paths no other target covers, all
