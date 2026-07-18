@@ -60,6 +60,10 @@ int asmtest_regs_flag_set(const regs_t *r, const char *name) {
         m = ASMTEST_ZF;
     else if (!strcmp(name, "NF"))
         m = ASMTEST_NF;
+#elif defined(__riscv) && __riscv_xlen == 64
+        /* rv64 has no condition-flags register (ASMTEST_NO_FLAGS): no name resolves,
+     * so m stays 0 and every query returns 0 — the honest answer for an ISA
+     * whose comparisons fold into branch instructions (r->flags is always 0). */
 #endif
     return (m && (r->flags & m)) ? 1 : 0;
 }

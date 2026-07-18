@@ -6,8 +6,9 @@
  * with main(), per-suite setup/teardown, assertions, register/flags capture,
  * ABI-preservation checks, guard-page buffers, and crash-to-failure handling.
  *
- * Supported targets: x86-64 (System V AMD64 ABI) and AArch64 (AAPCS64), on
- * Linux and macOS. See DESIGN.md for the full plan.
+ * Supported targets: x86-64 (System V AMD64 ABI), AArch64 (AAPCS64), and
+ * RISC-V rv64 (RV64GC / LP64D psABI), on Linux and macOS. See DESIGN.md for the
+ * full plan.
  */
 #ifndef ASMTEST_H
 #define ASMTEST_H
@@ -276,8 +277,76 @@ ASMTEST_STATIC_ASSERT(offsetof(regs_t, fret) == 104, "regs_t.fret @104");
 ASMTEST_STATIC_ASSERT(offsetof(regs_t, vec) == 112, "regs_t.vec @112");
 ASMTEST_STATIC_ASSERT(sizeof(regs_t) == 624, "regs_t size");
 
+#elif defined(__riscv) && __riscv_xlen == 64
+
+/* --- RISC-V rv64 (RV64GC / LP64D psABI) ------------------------------------
+ * Integer callee-saved set is s0-s11 (s0=x8/fp, s1=x9, s2-s11=x18-x27); the
+ * return value is a0 (x10) with a1 (x11) as the second return register, so —
+ * unlike AArch64, which captures only x0 — rv64 keeps `a1` and the sret/9-16
+ * byte-return high eightbyte is observable. `flags` stays in the struct (the
+ * shared runner and src/ffi.c read r->flags) but is ALWAYS written 0: RISC-V
+ * has no architectural condition-flags register — comparisons fold into the
+ * branch instructions (the same fact the emulator header records for the
+ * guest). Consequently NO flag-mask macros (ASMTEST_CF/ZF/SF/OF/…) are defined
+ * on rv64, and ASMTEST_NO_FLAGS is set so ASSERT_FLAG_SET(&r, CF) is a *compile
+ * error* here (the macro expands ASMTEST_##FLG) rather than a silent
+ * always-false check. Field offsets MUST match the stores in src/capture.s. */
+typedef struct {
+    unsigned long ret;   /* 0   = a0 (return value)             */
+    unsigned long a1;    /* 8   = a1 (second return register)   */
+    unsigned long s0;    /* 16  callee-saved (x8, frame ptr)    */
+    unsigned long s1;    /* 24  callee-saved (x9)               */
+    unsigned long s2;    /* 32  callee-saved (x18)              */
+    unsigned long s3;    /* 40  callee-saved (x19)              */
+    unsigned long s4;    /* 48  callee-saved (x20)              */
+    unsigned long s5;    /* 56  callee-saved (x21)              */
+    unsigned long s6;    /* 64  callee-saved (x22)              */
+    unsigned long s7;    /* 72  callee-saved (x23)              */
+    unsigned long s8;    /* 80  callee-saved (x24)              */
+    unsigned long s9;    /* 88  callee-saved (x25)              */
+    unsigned long s10;   /* 96  callee-saved (x26)              */
+    unsigned long s11;   /* 104 callee-saved (x27)              */
+    unsigned long flags; /* 112 = always 0: RISC-V has NO flags */
+    double fret;         /* 120 = fa0; valid after asm_call_capture_fp */
+    vec128_t vec[32];    /* 128 = fs-slots after _fp (see T3); no vector
+                            capture on rv64gc (no V registers) — the ASM_VCALL
+                            macros self-skip via asmtest_cpu_has_vec128() */
+} regs_t;
+
+/* No condition flags on rv64: define the marker instead of any flag mask, so a
+ * flag assertion fails to compile rather than silently reading a nonexistent
+ * bit. (An RVV arm would still add no flags register — this is a baseline ISA
+ * fact, not a qemu artifact.) */
+#define ASMTEST_NO_FLAGS     1
+
+/* Integer callee-saved sentinels s0-s11: the AArch64 1..B nibble series
+ * (x19..x29) extended one register further to C (12 registers, s0..s11). */
+#define ASMTEST_SENTINEL_S0  0x1111111111111111UL
+#define ASMTEST_SENTINEL_S1  0x2222222222222222UL
+#define ASMTEST_SENTINEL_S2  0x3333333333333333UL
+#define ASMTEST_SENTINEL_S3  0x4444444444444444UL
+#define ASMTEST_SENTINEL_S4  0x5555555555555555UL
+#define ASMTEST_SENTINEL_S5  0x6666666666666666UL
+#define ASMTEST_SENTINEL_S6  0x7777777777777777UL
+#define ASMTEST_SENTINEL_S7  0x8888888888888888UL
+#define ASMTEST_SENTINEL_S8  0x9999999999999999UL
+#define ASMTEST_SENTINEL_S9  0xAAAAAAAAAAAAAAAAUL
+#define ASMTEST_SENTINEL_S10 0xBBBBBBBBBBBBBBBBUL
+#define ASMTEST_SENTINEL_S11 0xCCCCCCCCCCCCCCCCUL
+
+/* Layout contract (Track 0); see the x86-64 branch above. Offsets match the
+ * stores in src/capture.s and the per-arch comments on the fields. */
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, ret) == 0, "regs_t.ret @0");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, a1) == 8, "regs_t.a1 @8");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, s0) == 16, "regs_t.s0 @16");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, s11) == 104, "regs_t.s11 @104");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, flags) == 112, "regs_t.flags @112");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, fret) == 120, "regs_t.fret @120");
+ASMTEST_STATIC_ASSERT(offsetof(regs_t, vec) == 128, "regs_t.vec @128");
+ASMTEST_STATIC_ASSERT(sizeof(regs_t) == 640, "regs_t size");
+
 #else
-#error "asm-test supports x86-64 and AArch64 only"
+#error "asm-test supports x86-64, AArch64 and RV64 only"
 #endif
 
 /* Call fn (in capture.s), capturing CPU state into *out. args has 6 slots. */
@@ -367,7 +436,12 @@ void asm_call_capture_sret(regs_t *out, void *fn, void *result,
  * struct{long;double} via asm_call_capture_fp -> rdi/xmm0). On AArch64 a non-HFA
  * composite is passed entirely in GP registers, so struct{long;double} is two
  * integer args — x0 plus the double's bit pattern in x1 — via ASM_CALL2, NOT
- * asm_call_capture_fp (which would place the double in d0 and leave x1 = 0). */
+ * asm_call_capture_fp (which would place the double in d0 and leave x1 = 0).
+ * On rv64/LP64D a >16-byte (>2*XLEN) struct is passed by reference, same as
+ * AAPCS64 (asm_call_capture_bigstruct routes it through the pointer path). A
+ * small struct{long;double}, however, uses the HARDWARE floating-point calling
+ * convention — long -> a0, double -> fa0 — the x86-ish ASM_MIXCALL /
+ * asm_call_capture_fp shape, NOT AArch64's two-GP-register shape. */
 void asm_call_capture_bigstruct(regs_t *out, void *fn, const long *iargs,
                                 int niargs, const void *sptr, size_t ssize);
 
@@ -505,8 +579,10 @@ void asmtest_register_bench(asmtest_bench_t *b);
 extern volatile long asmtest_bench_sink;
 
 /* Read the platform cycle/tick counter used for benchmarking: rdtsc on x86-64
- * (reference cycles) and cntvct_el0 on AArch64 (the virtual timer, whose tick
- * is coarser than a core cycle). Exposed for custom timing in a BENCH body. */
+ * (reference cycles), cntvct_el0 on AArch64 (the virtual timer, whose tick is
+ * coarser than a core cycle), and rdtime on rv64 (the constant-frequency time
+ * CSR, likewise coarser than a cycle). Exposed for custom timing in a BENCH
+ * body. */
 static inline uint64_t asmtest_cycle_counter(void) {
 #if defined(__x86_64__)
     uint32_t lo, hi;
@@ -515,6 +591,12 @@ static inline uint64_t asmtest_cycle_counter(void) {
 #elif defined(__aarch64__)
     uint64_t v;
     __asm__ __volatile__("mrs %0, cntvct_el0" : "=r"(v));
+    return v;
+#elif defined(__riscv) && __riscv_xlen == 64
+    uint64_t v;
+    /* rdtime = the constant-frequency time CSR, NOT rdcycle (recent kernels
+     * restrict the cycle CSR to privileged mode; rdtime stays user-readable). */
+    __asm__ __volatile__("rdtime %0" : "=r"(v));
     return v;
 #endif
 }

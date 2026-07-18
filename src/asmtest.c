@@ -231,6 +231,23 @@ int asmtest_check_abi(const regs_t *r, char *msg, size_t n) {
         {"x27", r->x27, ASMTEST_SENTINEL_X27},
         {"x28", r->x28, ASMTEST_SENTINEL_X28},
         {"x29", r->x29, ASMTEST_SENTINEL_X29},
+#elif defined(__riscv) && __riscv_xlen == 64
+        /* rv64 LP64D integer callee-saved set s0-s11 (x8-x9, x18-x27). The base
+         * trampolines seed and check s0 too; only the variable-arity paths use
+         * it as a frame pointer (mirroring rbp/x29), where it is reported
+         * preserved-but-not-checked. */
+        {"s0", r->s0, ASMTEST_SENTINEL_S0},
+        {"s1", r->s1, ASMTEST_SENTINEL_S1},
+        {"s2", r->s2, ASMTEST_SENTINEL_S2},
+        {"s3", r->s3, ASMTEST_SENTINEL_S3},
+        {"s4", r->s4, ASMTEST_SENTINEL_S4},
+        {"s5", r->s5, ASMTEST_SENTINEL_S5},
+        {"s6", r->s6, ASMTEST_SENTINEL_S6},
+        {"s7", r->s7, ASMTEST_SENTINEL_S7},
+        {"s8", r->s8, ASMTEST_SENTINEL_S8},
+        {"s9", r->s9, ASMTEST_SENTINEL_S9},
+        {"s10", r->s10, ASMTEST_SENTINEL_S10},
+        {"s11", r->s11, ASMTEST_SENTINEL_S11},
 #endif
     };
     for (size_t i = 0; i < sizeof chk / sizeof chk[0]; i++) {
@@ -597,9 +614,10 @@ extern void asm_bigstruct_x86(regs_t *out, void *fn, const long *iargs,
 
 void asm_call_capture_bigstruct(regs_t *out, void *fn, const long *iargs,
                                 int niargs, const void *sptr, size_t ssize) {
-#if defined(__aarch64__)
-    /* AAPCS64: a >16-byte struct is passed as a pointer to a copy; for a
-     * read-only callee, passing the struct's own address is equivalent. */
+#if defined(__aarch64__) || (defined(__riscv) && __riscv_xlen == 64)
+    /* AAPCS64 and the rv64 psABI both pass a >16-byte (>2*XLEN) struct as a
+     * pointer to a copy; for a read-only callee, passing the struct's own
+     * address is equivalent. */
     long args[16];
     int i;
     for (i = 0; i < niargs && i < 15; i++)
@@ -1872,7 +1890,9 @@ static double now_secs(void) {
 #if defined(__x86_64__)
 #define ASMTEST_BENCH_UNIT "cyc" /* rdtsc reference cycles */
 #else
-#define ASMTEST_BENCH_UNIT "ticks" /* cntvct_el0 virtual-timer ticks */
+/* cntvct_el0 virtual-timer ticks (AArch64) or rdtime CSR ticks (rv64) — both
+ * coarser than a core cycle, so the unit is "ticks", not "cyc". */
+#define ASMTEST_BENCH_UNIT "ticks"
 #endif
 
 /* Calibration/measurement constants. Reps are auto-grown until one round spans

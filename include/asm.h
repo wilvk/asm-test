@@ -1,5 +1,5 @@
 /*
- * asm.h — portable assembly helpers for x86-64 and AArch64.
+ * asm.h — portable assembly helpers for x86-64, AArch64, and RISC-V rv64.
  *
  * Included by the assembly sources (assembled with the C preprocessor, via
  * `-x assembler-with-cpp`). Hides the symbol-decoration differences between
@@ -43,7 +43,7 @@ _\name:
     .size \name, .-\name
     .endm
 
-#else /* ELF, x86-64 */
+#else /* ELF, x86-64 or RISC-V rv64 (both use @function / @progbits) */
 
     .macro ASM_FUNC name
     .text

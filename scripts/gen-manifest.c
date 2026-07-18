@@ -49,6 +49,8 @@ int main(void) {
     const char *arch = "x86_64";
 #elif defined(__aarch64__)
     const char *arch = "aarch64";
+#elif defined(__riscv) && __riscv_xlen == 64
+    const char *arch = "riscv64";
 #else
     const char *arch = "unknown";
 #endif
@@ -183,6 +185,15 @@ int main(void) {
         ASMTEST_SENTINEL_X22, ASMTEST_SENTINEL_X23, ASMTEST_SENTINEL_X24,
         ASMTEST_SENTINEL_X25, ASMTEST_SENTINEL_X26, ASMTEST_SENTINEL_X27,
         ASMTEST_SENTINEL_X28, ASMTEST_SENTINEL_X29);
+#elif defined(__riscv) && __riscv_xlen == 64
+    printf("\n      \"S0\": \"0x%lx\", \"S1\": \"0x%lx\", \"S2\": \"0x%lx\",\n"
+           "      \"S3\": \"0x%lx\", \"S4\": \"0x%lx\", \"S5\": \"0x%lx\",\n"
+           "      \"S6\": \"0x%lx\", \"S7\": \"0x%lx\", \"S8\": \"0x%lx\",\n"
+           "      \"S9\": \"0x%lx\", \"S10\": \"0x%lx\", \"S11\": \"0x%lx\"\n",
+           ASMTEST_SENTINEL_S0, ASMTEST_SENTINEL_S1, ASMTEST_SENTINEL_S2,
+           ASMTEST_SENTINEL_S3, ASMTEST_SENTINEL_S4, ASMTEST_SENTINEL_S5,
+           ASMTEST_SENTINEL_S6, ASMTEST_SENTINEL_S7, ASMTEST_SENTINEL_S8,
+           ASMTEST_SENTINEL_S9, ASMTEST_SENTINEL_S10, ASMTEST_SENTINEL_S11);
 #endif
     printf("    },\n");
 
@@ -195,6 +206,9 @@ int main(void) {
 #elif defined(__aarch64__)
     printf("\n      \"VF\": %lu, \"CF\": %lu, \"ZF\": %lu, \"NF\": %lu\n",
            ASMTEST_VF, ASMTEST_CF, ASMTEST_ZF, ASMTEST_NF);
+#elif defined(__riscv) && __riscv_xlen == 64
+    /* rv64 has no condition-flags register (ASMTEST_NO_FLAGS): emit an empty
+     * flags object rather than fabricate names. */
 #endif
     printf("    }\n");
 
