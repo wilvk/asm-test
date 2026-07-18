@@ -44,80 +44,84 @@ Grouped by workstream. **Depends on** lists only *hard* build/code dependencies
 (a doc that cannot start until another lands); soft "coordinate with" couplings
 are noted inside each doc's *Task order & parallelism* section, not here.
 
+**Status** tracks task completion as `done/total`; update the cell as tasks
+land. Legend: ☐ not started (`0/N`) · ◐ in progress · ☑ complete (`N/N`).
+Everything is ☐ not started — these are freshly authored specs.
+
 ### AMD hardware tracing
-| Document | Tasks | Depends on |
-|---|---|---|
-| [amd-ibs-backend-honesty.md](amd-ibs-backend-honesty.md) — IBS backend honesty, record sizing, ABI guards, validation gate | 7 | — |
-| [amd-branchsnap-lbr-docs.md](amd-branchsnap-lbr-docs.md) — branchsnap depth fix, LBR tiling validation, freeze-probe cleanup, Zen 3 BRS story | 8 | — (soft: shares the Zen 3 story with the sibling above) |
-| [ptrace-blockstep-tracer-correctness.md](ptrace-blockstep-tracer-correctness.md) — int3 si_code, rep-prefix, SP-aware step-over, IBS pre-cover | 8 | — |
+| Document | Tasks | Status | Depends on |
+|---|---|---|---|
+| [amd-ibs-backend-honesty.md](amd-ibs-backend-honesty.md) — IBS backend honesty, record sizing, ABI guards, validation gate | 7 | ☐ 0/7 | — |
+| [amd-branchsnap-lbr-docs.md](amd-branchsnap-lbr-docs.md) — branchsnap depth fix, LBR tiling validation, freeze-probe cleanup, Zen 3 BRS story | 8 | ☐ 0/8 | — (soft: shares the Zen 3 story with the sibling above) |
+| [ptrace-blockstep-tracer-correctness.md](ptrace-blockstep-tracer-correctness.md) — int3 si_code, rep-prefix, SP-aware step-over, IBS pre-cover | 8 | ☐ 0/8 | — |
 
 ### Data-flow tier
-| Document | Tasks | Depends on |
-|---|---|---|
-| [dataflow-producer-correctness.md](dataflow-producer-correctness.md) — gap barrier, sub-register aliases, undefined flags, F2 record-and-inject | 8 | — |
-| [dataflow-bindings-slice-codeimage.md](dataflow-bindings-slice-codeimage.md) — def-use/slice surface + code-image arg across bindings | 4 | — |
-| [dataflow-f4-object-identity.md](dataflow-f4-object-identity.md) — real object identity via GCBulkType/Node/Edge | 6 | — |
-| [dataflow-pt-replay-tier.md](dataflow-pt-replay-tier.md) — F5: PT + code-image + Unicorn-replay value tier | 5 | **intel-pt-attach-foreign-pid** |
+| Document | Tasks | Status | Depends on |
+|---|---|---|---|
+| [dataflow-producer-correctness.md](dataflow-producer-correctness.md) — gap barrier, sub-register aliases, undefined flags, F2 record-and-inject | 8 | ☐ 0/8 | — |
+| [dataflow-bindings-slice-codeimage.md](dataflow-bindings-slice-codeimage.md) — def-use/slice surface + code-image arg across bindings | 4 | ☐ 0/4 | — |
+| [dataflow-f4-object-identity.md](dataflow-f4-object-identity.md) — real object identity via GCBulkType/Node/Edge | 6 | ☐ 0/6 | — |
+| [dataflow-pt-replay-tier.md](dataflow-pt-replay-tier.md) — F5: PT + code-image + Unicorn-replay value tier | 5 | ☐ 0/5 | **intel-pt-attach-foreign-pid** |
 
 ### Intel PT & CoreSight hardware trace
-| Document | Tasks | Depends on |
-|---|---|---|
-| [intel-pt-whole-window-substrate.md](intel-pt-whole-window-substrate.md) — PT whole-window capture substrate, STRONG ladder, inline ctor | 5 | — |
-| [intel-pt-attach-foreign-pid.md](intel-pt-attach-foreign-pid.md) — PT attach-to-foreign-PID capture, facade dispatch, HV/EPT frontier | 5 | **intel-pt-whole-window-substrate** |
-| [coresight-live-decode.md](coresight-live-decode.md) — CoreSight live OpenCSD decode tree (AArch64 board-gated) | 5 | — |
+| Document | Tasks | Status | Depends on |
+|---|---|---|---|
+| [intel-pt-whole-window-substrate.md](intel-pt-whole-window-substrate.md) — PT whole-window capture substrate, STRONG ladder, inline ctor | 5 | ☐ 0/5 | — |
+| [intel-pt-attach-foreign-pid.md](intel-pt-attach-foreign-pid.md) — PT attach-to-foreign-PID capture, facade dispatch, HV/EPT frontier | 5 | ☐ 0/5 | **intel-pt-whole-window-substrate** |
+| [coresight-live-decode.md](coresight-live-decode.md) — CoreSight live OpenCSD decode tree (AArch64 board-gated) | 5 | ☐ 0/5 | — |
 
 ### Intel Pin / SDE oracle lanes
-| Document | Tasks | Depends on |
-|---|---|---|
-| [pin-sde-future-isa-lane.md](pin-sde-future-isa-lane.md) — SDE future/absent-ISA test lane | 8 | — |
-| [pin-xed-trace-tier.md](pin-xed-trace-tier.md) — XED-decoded Pin trace tier + shared pintool substrate | 9 | — |
-| [pin-probe-mode-capture.md](pin-probe-mode-capture.md) — Pin probe-mode argument/return capture | 7 | **pin-xed-trace-tier** |
-| [pin-libdft-taint-oracle.md](pin-libdft-taint-oracle.md) — libdft64 differential oracle for the DR taint tier | 7 | **pin-xed-trace-tier** |
+| Document | Tasks | Status | Depends on |
+|---|---|---|---|
+| [pin-sde-future-isa-lane.md](pin-sde-future-isa-lane.md) — SDE future/absent-ISA test lane | 8 | ☐ 0/8 | — |
+| [pin-xed-trace-tier.md](pin-xed-trace-tier.md) — XED-decoded Pin trace tier + shared pintool substrate | 9 | ☐ 0/9 | — |
+| [pin-probe-mode-capture.md](pin-probe-mode-capture.md) — Pin probe-mode argument/return capture | 7 | ☐ 0/7 | **pin-xed-trace-tier** |
+| [pin-libdft-taint-oracle.md](pin-libdft-taint-oracle.md) — libdft64 differential oracle for the DR taint tier | 7 | ☐ 0/7 | **pin-xed-trace-tier** |
 
 ### asmspy CLI
-| Document | Tasks | Depends on |
-|---|---|---|
-| [asmspy-cli-enhancements.md](asmspy-cli-enhancements.md) — TUI hot-edge drill-in, syscall-arg content decode, coverage gaps | 9 | — |
-| [asmspy-aarch64-support.md](asmspy-aarch64-support.md) — single-step engine abstraction + NT_ARM_HW_WATCH watchpoints | 7 | — |
+| Document | Tasks | Status | Depends on |
+|---|---|---|---|
+| [asmspy-cli-enhancements.md](asmspy-cli-enhancements.md) — TUI hot-edge drill-in, syscall-arg content decode, coverage gaps | 9 | ☐ 0/9 | — |
+| [asmspy-aarch64-support.md](asmspy-aarch64-support.md) — single-step engine abstraction + NT_ARM_HW_WATCH watchpoints | 7 | ☐ 0/7 | — |
 
 ### Single-step & block-step tiers
-| Document | Tasks | Depends on |
-|---|---|---|
-| [inproc-btf-block-step.md](inproc-btf-block-step.md) — W3: in-process BTF branch-granular single-step | 6 | — |
-| [macos-oop-mach-stepper.md](macos-oop-mach-stepper.md) — macOS out-of-process single-step via Mach exception ports | 7 | — |
-| [aarch64-ptrace-single-step-validation.md](aarch64-ptrace-single-step-validation.md) — AArch64 ptrace stream validation + binding fixtures | 6 | — |
+| Document | Tasks | Status | Depends on |
+|---|---|---|---|
+| [inproc-btf-block-step.md](inproc-btf-block-step.md) — W3: in-process BTF branch-granular single-step | 6 | ☐ 0/6 | — |
+| [macos-oop-mach-stepper.md](macos-oop-mach-stepper.md) — macOS out-of-process single-step via Mach exception ports | 7 | ☐ 0/7 | — |
+| [aarch64-ptrace-single-step-validation.md](aarch64-ptrace-single-step-validation.md) — AArch64 ptrace stream validation + binding fixtures | 6 | ☐ 0/6 | — |
 
 ### Scoped / managed whole-window tracing
-| Document | Tasks | Depends on |
-|---|---|---|
-| [zeroconfig-scoped-tracing-hardening.md](zeroconfig-scoped-tracing-hardening.md) — in-process guards, hygiene assertions, doc-tail | 9 | — |
-| [managed-wholewindow-compose.md](managed-wholewindow-compose.md) — live compose, safe managed-arm routing, ambient PT stitching | 12 | **intel-pt-whole-window-substrate** (PT prongs only; D3-stepper prongs are independent) |
+| Document | Tasks | Status | Depends on |
+|---|---|---|---|
+| [zeroconfig-scoped-tracing-hardening.md](zeroconfig-scoped-tracing-hardening.md) — in-process guards, hygiene assertions, doc-tail | 9 | ☐ 0/9 | — |
+| [managed-wholewindow-compose.md](managed-wholewindow-compose.md) — live compose, safe managed-arm routing, ambient PT stitching | 12 | ☐ 0/12 | **intel-pt-whole-window-substrate** (PT prongs only; D3-stepper prongs are independent) |
 
 ### macOS
-| Document | Tasks | Depends on |
-|---|---|---|
-| [macos-cleanroom-lanes.md](macos-cleanroom-lanes.md) — tart arm64 / Docker-OSX x86 shakedowns + sshpass containerization | 6 | — |
-| [macos-dynamorio-port.md](macos-dynamorio-port.md) — DynamoRIO native-trace port M0–M2 (gated on upstream DR macOS release) | 11 | — |
+| Document | Tasks | Status | Depends on |
+|---|---|---|---|
+| [macos-cleanroom-lanes.md](macos-cleanroom-lanes.md) — tart arm64 / Docker-OSX x86 shakedowns + sshpass containerization | 6 | ☐ 0/6 | — |
+| [macos-dynamorio-port.md](macos-dynamorio-port.md) — DynamoRIO native-trace port M0–M2 (gated on upstream DR macOS release) | 11 | ☐ 0/11 | — |
 
 ### Architecture ports
-| Document | Tasks | Depends on |
-|---|---|---|
-| [aarch64-sve-capture.md](aarch64-sve-capture.md) — AArch64 SVE wide-vector capture | 8 | — |
-| [riscv-native-tier.md](riscv-native-tier.md) — native RISC-V (rv64) host tier | 7 | — |
+| Document | Tasks | Status | Depends on |
+|---|---|---|---|
+| [aarch64-sve-capture.md](aarch64-sve-capture.md) — AArch64 SVE wide-vector capture | 8 | ☐ 0/8 | — |
+| [riscv-native-tier.md](riscv-native-tier.md) — native RISC-V (rv64) host tier | 7 | ☐ 0/7 | — |
 
 ### CI, distribution & infrastructure
-| Document | Tasks | Depends on |
-|---|---|---|
-| [distribution-packaging.md](distribution-packaging.md) — language-registry go-live + system package-manager coverage | 13 | — |
-| [benchmarks-ci-followups.md](benchmarks-ci-followups.md) — windows/macOS-Intel legs, nightly auto-commit, BM_MODEL_COST | 6 | — |
-| [self-hosted-ci-runners.md](self-hosted-ci-runners.md) — self-hosted runner lanes for hardware-gated tiers | 6 | **macos-cleanroom-lanes** (soft coordinate: amd-ibs, coresight, substrate) |
-| [libfuzzer-afl-shim.md](libfuzzer-afl-shim.md) — libFuzzer/AFL harness shim (demand-gated) | 5 | — |
+| Document | Tasks | Status | Depends on |
+|---|---|---|---|
+| [distribution-packaging.md](distribution-packaging.md) — language-registry go-live + system package-manager coverage | 13 | ☐ 0/13 | — |
+| [benchmarks-ci-followups.md](benchmarks-ci-followups.md) — windows/macOS-Intel legs, nightly auto-commit, BM_MODEL_COST | 6 | ☐ 0/6 | — |
+| [self-hosted-ci-runners.md](self-hosted-ci-runners.md) — self-hosted runner lanes for hardware-gated tiers | 6 | ☐ 0/6 | **macos-cleanroom-lanes** (soft coordinate: amd-ibs, coresight, substrate) |
+| [libfuzzer-afl-shim.md](libfuzzer-afl-shim.md) — libFuzzer/AFL harness shim (demand-gated) | 5 | ☐ 0/5 | — |
 
 ### Correctness & attribution
-| Document | Tasks | Depends on |
-|---|---|---|
-| [code-review-plausible-triage.md](code-review-plausible-triage.md) — triage & fix the 2026-07-02 review's still-present findings | 8 | — |
-| [native-il-bytecode-attribution.md](native-il-bytecode-attribution.md) — native trace-point → IL/bytecode/source-line attribution | 7 | — |
+| Document | Tasks | Status | Depends on |
+|---|---|---|---|
+| [code-review-plausible-triage.md](code-review-plausible-triage.md) — triage & fix the 2026-07-02 review's still-present findings | 8 | ☐ 0/8 | — |
+| [native-il-bytecode-attribution.md](native-il-bytecode-attribution.md) — native trace-point → IL/bytecode/source-line attribution | 7 | ☐ 0/7 | — |
 
 ## Parallelism & the critical path
 
