@@ -13,6 +13,7 @@
 #define _GNU_SOURCE
 
 #include "asmtest_codeimage.h"
+#include "asmtest_descent_internal.h" /* T5: maps-parse-count / watchdog-guard test hooks */
 #include "asmtest_hwtrace.h"
 #include "asmtest_ibs.h" /* Zen-2 F6: gate the IBS-Op survey-fallback test */
 #include "asmtest_ptrace.h"
@@ -7130,8 +7131,59 @@ static void test_descent_fork(void) {
                           "descent (flagged)");
             asmtest_descent_free(d);
             munmap(b2, sizeof R2);
+
+            /* T5 maps-snapshot cache: R2C (own page) calls M three times in a row —
+             * mov rax,rdi; movabs r11,M; call r11; call r11; call r11; add rax,rsi; ret.
+             * Before T5, descend_decide re-parsed /proc/maps on EVERY call-out (3 parses
+             * here); the cache must resolve all three from one build (plus at most one
+             * miss-retry), so a healthy 3-call-out descent parses at most twice total. */
+            unsigned char R2C[] = {
+                0x48, 0x89, 0xf8, /* mov rax,rdi          */
+                0x49, 0xbb, 0,    0, 0,
+                0,    0,    0,    0, 0, /* movabs r11, <M>      */
+                0x41, 0xff, 0xd3,       /* call r11 (0xd)       */
+                0x41, 0xff, 0xd3,       /* call r11 (0x10)      */
+                0x41, 0xff, 0xd3,       /* call r11 (0x13)      */
+                0x48, 0x01, 0xf0,       /* add rax,rsi          */
+                0xc3};                  /* ret                  */
+            memcpy(&R2C[5], &maddr, sizeof maddr);
+            void *b2c = map_exec(R2C, sizeof R2C);
+            if (b2c != NULL) {
+                asmtest_descend_maps_parse_count_reset();
+                d = asmtest_descent_new(ASMTEST_DESCENT_DESCEND_ALL);
+                r = 0;
+                rc = asmtest_ptrace_trace_call_ex(b2c, sizeof R2C, args, 2, &r,
+                                                  NULL, d);
+                uint64_t parses = asmtest_descend_maps_parse_count();
+                int mapcache_ok =
+                    (rc == ASMTEST_PTRACE_OK && r == 45 &&
+                     asmtest_descent_frames_len(d) == 4 &&
+                     !asmtest_descent_truncated(d) && parses <= 2);
+                CHECK(mapcache_ok,
+                      "descent L3 maps cache: a 3-call-out descent parses "
+                      "/proc/maps at most twice, not once per call-out");
+                asmtest_descent_free(d);
+                munmap(b2c, sizeof R2C);
+            }
         }
         munmap(m, sizeof M_BLOB);
+    }
+
+    /* --- T5 watchdog re-entrancy guard: arm; arm again while active (refused); disarm.
+     * Exercises descend_watchdog_arm/disarm directly via the internal test hooks — no
+     * second real tracee needed to prove the single-descent-at-a-time guard holds. */
+    {
+        struct sigaction sa1, sa2;
+        struct itimerval it1, it2;
+        int armed1 = asmtest_descend_watchdog_arm_test(&sa1, &it1, 50);
+        int armed2 = asmtest_descend_watchdog_arm_test(&sa2, &it2, 50);
+        CHECK(armed1 == 1 && armed2 == 0,
+              "descent watchdog guard: a second arm while active is refused");
+        asmtest_descend_watchdog_disarm_test(&sa1, &it1);
+        int armed3 = asmtest_descend_watchdog_arm_test(&sa1, &it1, 50);
+        CHECK(armed3 == 1,
+              "descent watchdog guard: arm succeeds again after disarm");
+        asmtest_descend_watchdog_disarm_test(&sa1, &it1);
     }
 
     /* --- Phase 5: the watchdog terminates a descent that never returns (no hang). --- */

@@ -629,21 +629,18 @@ static void normalize(asmtest_trace_t *t, const uint8_t *base, uint64_t base_ip,
                       int overflow) {
     if (t == NULL)
         return;
-    int have_prev = 0;
-    uint64_t expected_next = 0;
+    asmtest_blockseq_t seq = {0};
     for (uint32_t i = 0; i < n; i++) {
         uint64_t off = stream[i];
-        if (!have_prev || off != expected_next)
-            trace_append_block(t, off);
-        trace_append_insn(t, off);
         size_t l =
             asmtest_disas(PTRACE_TRACE_ARCH, base, len, base_ip, off, NULL, 0);
+        if (asmtest_blockseq_boundary(&seq, off, l))
+            trace_append_block(t, off);
+        trace_append_insn(t, off);
         if (l == 0) {
             t->truncated = true;
             return;
         }
-        expected_next = off + l;
-        have_prev = 1;
     }
     if (overflow)
         t->truncated = true;
@@ -847,6 +844,97 @@ typedef struct {
     uint64_t call_sp;   /* SP at that call (the caller pre-call SP)          */
 } dframe_t;
 
+/* L3 (DESCEND_ALL) call-out extent resolution: /proc/<pid>/maps parsed ONCE per descent
+ * into a flat array of executable [start,end) ranges, instead of once per call-out (a
+ * call-out-heavy L3 descent used to re-parse the whole maps file on every single
+ * descend_decide, dominating profile time). A lookup MISS re-parses once and retries — a
+ * JIT may map new code mid-descent — then reports miss (step over) exactly as before. */
+typedef struct {
+    uint64_t start, end;
+} descend_maps_range_t;
+
+typedef struct {
+    descend_maps_range_t *ranges;
+    size_t len, cap;
+    int built;
+} descend_maps_cache_t;
+
+static uint64_t
+    descend_maps_parse_count; /* T5 test hook: real maps-file parses */
+
+uint64_t asmtest_descend_maps_parse_count(void) {
+    return descend_maps_parse_count;
+}
+void asmtest_descend_maps_parse_count_reset(void) {
+    descend_maps_parse_count = 0;
+}
+
+static void descend_maps_cache_parse(descend_maps_cache_t *mc, pid_t pid) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/maps", (int)pid);
+    FILE *f = fopen(path, "r");
+    if (f == NULL)
+        return;
+    mc->len = 0;
+    char *line = NULL;
+    size_t cap = 0;
+    while (getline(&line, &cap, f) != -1) {
+        unsigned long start, end;
+        char perms[8];
+        if (sscanf(line, "%lx-%lx %7s", &start, &end, perms) != 3 ||
+            perms[2] != 'x')
+            continue;
+        if (mc->len == mc->cap) {
+            size_t ncap = mc->cap ? mc->cap * 2 : 16;
+            descend_maps_range_t *nr =
+                (descend_maps_range_t *)realloc(mc->ranges, ncap * sizeof *nr);
+            if (nr == NULL)
+                break;
+            mc->ranges = nr;
+            mc->cap = ncap;
+        }
+        mc->ranges[mc->len].start = (uint64_t)start;
+        mc->ranges[mc->len].end = (uint64_t)end;
+        mc->len++;
+    }
+    free(line);
+    fclose(f);
+    mc->built = 1;
+    descend_maps_parse_count++;
+}
+
+static int descend_maps_cache_find(const descend_maps_cache_t *mc,
+                                   uint64_t addr, uint64_t *base_out,
+                                   uint64_t *len_out) {
+    for (size_t i = 0; i < mc->len; i++)
+        if (addr >= mc->ranges[i].start && addr < mc->ranges[i].end) {
+            if (base_out)
+                *base_out = mc->ranges[i].start;
+            if (len_out)
+                *len_out = mc->ranges[i].end - mc->ranges[i].start;
+            return 1;
+        }
+    return 0;
+}
+
+static int descend_maps_cache_lookup(descend_maps_cache_t *mc, pid_t pid,
+                                     uint64_t addr, uint64_t *base_out,
+                                     uint64_t *len_out) {
+    if (!mc->built)
+        descend_maps_cache_parse(mc, pid);
+    if (descend_maps_cache_find(mc, addr, base_out, len_out))
+        return 1;
+    descend_maps_cache_parse(mc, pid); /* MISS: maybe a JIT mapped new code */
+    return descend_maps_cache_find(mc, addr, base_out, len_out);
+}
+
+static void descend_maps_cache_free(descend_maps_cache_t *mc) {
+    free(mc->ranges);
+    mc->ranges = NULL;
+    mc->len = mc->cap = 0;
+    mc->built = 0;
+}
+
 typedef struct {
     pid_t pid;
     asmtest_descent_t *d;
@@ -858,6 +946,8 @@ typedef struct {
     int have_deadline;
     struct timespec deadline;
     int reaped; /* set once descend_core's own waitpid reaped the tracee */
+    descend_maps_cache_t
+        maps_cache; /* L3 call-out extent resolution, see above */
 } dctx_t;
 
 #define DESCEND_MAX_STACK     256u
@@ -965,13 +1055,8 @@ static int descend_decide(dctx_t *c, uint32_t depth, uint64_t callee,
         return 0;
     if (d->denylist != NULL && d->denylist(callee, d->denylist_user))
         return 0;
-    void *mb = NULL;
-    size_t ml = 0;
-    if (asmtest_proc_region_by_addr(c->pid, (void *)(uintptr_t)callee, &mb,
-                                    &ml) != ASMTEST_PTRACE_OK)
+    if (!descend_maps_cache_lookup(&c->maps_cache, c->pid, callee, cbase, clen))
         return 0; /* unknown extent -> step over */
-    *cbase = (uint64_t)(uintptr_t)mb;
-    *clen = (uint64_t)ml;
     return 1;
 }
 
@@ -983,14 +1068,27 @@ static int descend_decide(dctx_t *c, uint32_t depth, uint64_t callee,
  * SIGALRM disposition + timer are saved and restored on disarm; the restore reinstalls the
  * caller's remaining timer value as-captured, so a caller's pending alarm() is DELAYED by up
  * to the descent's bounded duration (watchdog_ms), not cleared or clobbered. Armed only for
- * L3 (see the arm site), so L1/L2 leave the caller's signal state untouched. */
+ * L3 (see the arm site), so L1/L2 leave the caller's signal state untouched.
+ *
+ * The "single-descent-at-a-time" assumption above used to be just a comment: two L3
+ * descents overlapping in the same process would silently clobber each other's
+ * ITIMER_REAL/SIGALRM disposition on arm and, on disarm, restore the WRONG saved state.
+ * `descend_active` makes the assumption load-bearing: a second arm while one is already
+ * active is REFUSED (returns 0, timer/handler left exactly as the first descent set them)
+ * instead of silently clashing; the refused descent still terminates correctly — the
+ * per-step CLOCK_MONOTONIC deadline check bounds it even with no watchdog — it is just
+ * marked truncated + depth_capped up front (honest degradation, not a silent clash). */
 static volatile sig_atomic_t descend_alarm_fired;
+static volatile sig_atomic_t descend_active;
 static void descend_alarm_handler(int sig) {
     (void)sig;
     descend_alarm_fired = 1;
 }
-static void descend_watchdog_arm(uint32_t ms, struct sigaction *saved_sa,
-                                 struct itimerval *saved_it) {
+static int descend_watchdog_arm(uint32_t ms, struct sigaction *saved_sa,
+                                struct itimerval *saved_it) {
+    if (descend_active)
+        return 0; /* refused: another descent already owns the timer */
+    descend_active = 1;
     descend_alarm_fired = 0;
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
@@ -1007,11 +1105,24 @@ static void descend_watchdog_arm(uint32_t ms, struct sigaction *saved_sa,
     if (it.it_value.tv_sec == 0 && it.it_value.tv_usec == 0)
         it.it_value.tv_usec = 1000L;
     setitimer(ITIMER_REAL, &it, saved_it);
+    return 1;
 }
 static void descend_watchdog_disarm(const struct sigaction *saved_sa,
                                     const struct itimerval *saved_it) {
     setitimer(ITIMER_REAL, saved_it, NULL);
     sigaction(SIGALRM, saved_sa, NULL);
+    descend_active = 0;
+}
+
+/* T5 test hooks: thin wrappers so a test can drive "arm; arm again (refused); disarm"
+ * directly, without two genuinely concurrent tracees. */
+int asmtest_descend_watchdog_arm_test(struct sigaction *saved_sa,
+                                      struct itimerval *saved_it, uint32_t ms) {
+    return descend_watchdog_arm(ms, saved_sa, saved_it);
+}
+void asmtest_descend_watchdog_disarm_test(const struct sigaction *saved_sa,
+                                          const struct itimerval *saved_it) {
+    descend_watchdog_disarm(saved_sa, saved_it);
 }
 
 /* 1 if the descent's real-time deadline has passed (0 if no deadline is set). Checked both
@@ -1068,8 +1179,15 @@ static int descend_core(dctx_t *c) {
     struct sigaction saved_sa;
     struct itimerval saved_it;
     int watchdog = c->have_deadline && d->level >= ASMTEST_DESCENT_DESCEND_ALL;
-    if (watchdog)
-        descend_watchdog_arm(d->watchdog_ms, &saved_sa, &saved_it);
+    if (watchdog &&
+        !descend_watchdog_arm(d->watchdog_ms, &saved_sa, &saved_it)) {
+        /* A second L3 descent arrived while one is already active: run WITHOUT the
+         * ITIMER_REAL watchdog (the per-step deadline check below still bounds it) and
+         * mark the honest degradation up front rather than silently clashing timers. */
+        watchdog = 0;
+        asmtest_descent_mark_truncated(d);
+        asmtest_descent_mark_depth_capped(d);
+    }
 
     for (;;) {
         if (++steps > DESCEND_HARD_STEP_CAP) {
@@ -1307,6 +1425,7 @@ static int descend_core(dctx_t *c) {
 
     if (watchdog)
         descend_watchdog_disarm(&saved_sa, &saved_it);
+    descend_maps_cache_free(&c->maps_cache);
     return rc;
 }
 
@@ -2148,21 +2267,17 @@ static int trace_attached_window_loop(
 static void materialize_stream_to_trace(pid_t pid, const uint64_t *stream,
                                         uint32_t n, int overflow,
                                         asmtest_trace_t *trace) {
-    int have_prev = 0;
-    uint64_t expected_next = 0;
+    asmtest_blockseq_t seq = {0};
     for (uint32_t i = 0; i < n; i++) {
         uint64_t at = stream[i];
-        if (!have_prev || at != expected_next)
+        size_t l = foreign_insn_len(pid, at);
+        if (asmtest_blockseq_boundary(&seq, at, l))
             trace_append_block(trace, at);
         trace_append_insn(trace, at);
-        size_t l = foreign_insn_len(pid, at);
         if (l == 0) {
             trace->truncated = true; /* partition imprecise past here */
-            have_prev = 0;           /* next address opens a fresh block */
             continue; /* keep the address; do NOT drop the tail */
         }
-        expected_next = at + l;
-        have_prev = 1;
     }
     if (overflow)
         trace->truncated = true;
@@ -2704,22 +2819,19 @@ int asmtest_ptrace_trace_window_call(const void *code, size_t len,
      * same addresses HERE, so lengths decode from LOCAL memory (no foreign read of a
      * now-reaped child). */
     if (rc == ASMTEST_PTRACE_OK) {
-        int have_prev = 0;
-        uint64_t expected_next = 0;
+        asmtest_blockseq_t seq = {0};
         for (uint32_t i = 0; i < n; i++) {
             uint64_t at = stream[i];
-            if (!have_prev || at != expected_next)
-                trace_append_block(trace, at);
-            trace_append_insn(trace, at);
             size_t l =
                 asmtest_disas(PTRACE_TRACE_ARCH, (const uint8_t *)(uintptr_t)at,
                               16, 0, 0, NULL, 0);
+            if (asmtest_blockseq_boundary(&seq, at, l))
+                trace_append_block(trace, at);
+            trace_append_insn(trace, at);
             if (l == 0) {
                 trace->truncated = true;
                 break;
             }
-            expected_next = at + l;
-            have_prev = 1;
         }
         if (overflow)
             trace->truncated = true;

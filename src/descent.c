@@ -177,7 +177,7 @@ int asmtest_descent_frame_record(asmtest_descent_t *d, int32_t fi, uint64_t off,
     if (d == NULL || fi < 0 || (size_t)fi >= d->frames_len)
         return 0;
     asmtest_descent_frame_t *f = &d->frames[fi];
-    int new_block = (!f->have_prev || off != f->expected_next);
+    int new_block = asmtest_blockseq_boundary(&f->seq, off, insn_len);
     if (new_block) {
         /* Dedup against the frame's distinct block set (linear; block counts are small). */
         int seen = 0;
@@ -199,14 +199,9 @@ int asmtest_descent_frame_record(asmtest_descent_t *d, int32_t fi, uint64_t off,
         f->insns[f->insns_len++] = off;
     else
         d->truncated = 1;
-    if (insn_len == 0) {
+    if (insn_len == 0)
         d->truncated =
             1; /* undecodable byte: cannot derive the next boundary */
-        f->have_prev = 0;
-    } else {
-        f->expected_next = off + insn_len;
-        f->have_prev = 1;
-    }
     return new_block;
 }
 

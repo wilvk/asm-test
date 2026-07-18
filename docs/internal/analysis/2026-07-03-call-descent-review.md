@@ -82,13 +82,24 @@ The highest-risk mechanics all held up:
 ## Deferred (reported, not fixed — pre-existing or minor)
 
 - A region ending in a bare `call` (fall-through outside the region) reads as a return —
-  mirrors existing level-0 behavior, not descent-introduced.
-- `/proc/<pid>/maps` re-parsed per L3 call-out (`asmtest_proc_region_by_addr`); a parsed
-  snapshot would replace an O(maps) syscall+parse per call-out.
-- Block-boundary derivation duplicated across `normalize()` / `asmtest_descent_frame_record`
-  / `trace_append_block`'s dedup (three copies of the rule).
-- Concurrent L3 descents would clash on the process-global `ITIMER_REAL` + file-scope
-  `descend_alarm_fired` (the code assumes single-descent-at-a-time).
-- Minor harness nits: `jit_trace`'s L3 `CHECK` is vacuous (frame 0 always exists);
+  mirrors existing level-0 behavior, not descent-introduced. Still standing — no task in
+  [ptrace-blockstep-tracer-correctness.md](../implementations/ptrace-blockstep-tracer-correctness.md)
+  fixes it either.
+- ~~`/proc/<pid>/maps` re-parsed per L3 call-out (`asmtest_proc_region_by_addr`); a parsed
+  snapshot would replace an O(maps) syscall+parse per call-out.~~ **Fixed** —
+  `descend_maps_cache_*` in `src/ptrace_backend.c` builds the snapshot once per descent and
+  reuses it across call-outs, re-parsing only on a genuine miss
+  ([ptrace-blockstep-tracer-correctness.md](../implementations/ptrace-blockstep-tracer-correctness.md) T5).
+- ~~Block-boundary derivation duplicated across `normalize()` / `asmtest_descent_frame_record`
+  / `trace_append_block`'s dedup (three copies of the rule).~~ **Fixed** — extracted into
+  `asmtest_blockseq_t` / `asmtest_blockseq_boundary()` in
+  `include/asmtest_descent_internal.h`, used at all four call sites (T5).
+- ~~Concurrent L3 descents would clash on the process-global `ITIMER_REAL` + file-scope
+  `descend_alarm_fired` (the code assumes single-descent-at-a-time).~~ **Fixed** — a
+  `descend_active` guard now refuses a second `descend_watchdog_arm` while one is active;
+  the refused descent runs without the watchdog (bounded by the per-step deadline check) and
+  is marked truncated + depth_capped (T5).
+- ~~Minor harness nits: `jit_trace`'s L3 `CHECK` is vacuous (frame 0 always exists);
   `node`/`java-bcl` ignore the `-descend` suffix; `test_descent_attach` leaks two mmaps on a
-  skip path.
+  skip path.~~ **Fixed** — see
+  [ptrace-blockstep-tracer-correctness.md](../implementations/ptrace-blockstep-tracer-correctness.md) T6.
