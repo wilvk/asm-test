@@ -84,7 +84,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 |---|---|---|---|
 | [amd-ibs-backend-honesty.md](amd-ibs-backend-honesty.md) — IBS backend honesty, record sizing, ABI guards, validation gate | 7 | ☑ 7/7 (T1 verified live) | — |
 | [amd-branchsnap-lbr-docs.md](amd-branchsnap-lbr-docs.md) — branchsnap depth fix, LBR tiling validation, freeze-probe cleanup, Zen 3 BRS story | 8 | ◐ 7/8 (T1/T4/T5/T6 landed; T2/T3/T7 code landed, live Zen 5 BPF validation gated; **T8 BLOCKED**: needs Zen 3 Family 19h silicon — arm must not merge untested per CLAUDE.md) | — (soft: shares the Zen 3 story with the sibling above) |
-| [ptrace-blockstep-tracer-correctness.md](ptrace-blockstep-tracer-correctness.md) — int3 si_code, rep-prefix, SP-aware step-over, IBS pre-cover | 8 | ◐ 4/8 (T1 region+attached, T3, T5, T6 landed & verified locally; T1 windowed leg + T2 wip; **UNCLAIMED**: T4 SP-aware step-over [needs T2], T7 IBS pre-cover [needs T1], T8 precover policy bit [needs T7]) | — |
+| [ptrace-blockstep-tracer-correctness.md](ptrace-blockstep-tracer-correctness.md) — int3 si_code, rep-prefix, SP-aware step-over, IBS pre-cover | 8 | ◐ 5/8 (T1 [all 3 drivers], T2, T3, T5, T6 landed & verified: `make docker-hwtrace` 432/432, `docker-hwtrace-jit-dotnet`/`-jit-java` green on real CoreCLR/HotSpot methods; block-step legs self-skip on this BTF-masked host, consistent with prior legs; **UNCLAIMED**: T4 SP-aware step-over [unblocked, needs T2], T7 IBS pre-cover [unblocked, needs T1], T8 precover policy bit [needs T7]) | — |
 
 ### Data-flow tier
 | Document | Tasks | Status | Depends on |

@@ -91,7 +91,12 @@ void asmtest_ptrace_skip_reason(char *buf, size_t buflen);
  * routine's return value (the child's RAX at the ret) and the call returns
  * ASMTEST_PTRACE_OK. `result` may be NULL to ignore the return. Sets
  * trace->truncated on an undecodable instruction (self-modifying / relocated bytes)
- * or capture-buffer overflow, never emitting a partial trace as complete. */
+ * or capture-buffer overflow, never emitting a partial trace as complete.
+ * APP BREAKPOINTS: an application `int3` (a JVM safepoint poll, a .NET breakpoint) is
+ * never SINGLESTEPped across — it is forwarded to the (owned) tracee via PTRACE_CONT so
+ * the app's own breakpoint semantics proceed, and the capture is marked truncated from
+ * that point (with no handler, the default SIGTRAP disposition then terminates the
+ * child, exactly as running unsupervised would). */
 int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
                               int nargs, long *result, asmtest_trace_t *trace);
 
@@ -153,7 +158,11 @@ int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
  * `chan` may be NULL to record just the window frame. *result gets the frame's return
  * value; the caller owns attach/detach. trace->insns hold absolute addresses (classify
  * them by region), blocks partition on fall-through discontinuity like every backend.
- * ENOSYS off x86-64/AArch64 Linux. */
+ * ENOSYS off x86-64/AArch64 Linux.
+ * APP BREAKPOINTS: an application `int3` is never SINGLESTEPped across (measured fatal:
+ * it would re-arm the trap inside a masked handler) — it is forwarded via PTRACE_CONT,
+ * running the frame to its window end at native speed and recovering *result there; the
+ * capture is marked truncated from that point. */
 int asmtest_ptrace_trace_attached_windowed(pid_t pid, const void *win_base,
                                            size_t win_len,
                                            asmtest_addr_channel_t *chan,
@@ -186,6 +195,12 @@ int asmtest_ptrace_trace_attached_window_stop(pid_t pid,
  * and then hands the REST of the window to the per-instruction loop, which is exact
  * across signals. The capture therefore stays byte-identical to the per-instruction
  * entry; only the block-step cost saving stops at the window's first signal.
+ * APP BREAKPOINTS: an application `int3` is trap-class exactly like a BTF #DB, so the
+ * driver tells them apart by si_code (SI_KERNEL / TRAP_HWBKPT). It reconstructs the
+ * interrupted block up to and including the trap byte (exclusive of the not-yet-executed
+ * instruction past it), then hands off to the per-instruction loop, which forwards the
+ * signal via PTRACE_CONT — never re-arming it with a SINGLESTEP/SINGLEBLOCK — and runs
+ * the frame to its window end, recovering *result there.
  * REP STRING OPS: a recorded `rep`-prefixed string op retires N times but appears ONCE,
  * so the capture is marked truncated (the per-instruction entry records it per
  * iteration). */
@@ -206,7 +221,11 @@ int asmtest_ptrace_trace_attached_windowed_blockstep(
  * ptrace-stop is not gated by the tracee's signal mask, so it survives code the
  * in-process single-step tier is forbidden to step). *result gets the frame's return
  * value; trace->insns hold absolute addresses (classify by region); over-budget sets
- * trace->truncated. ENOSYS off x86-64/AArch64 Linux; EINVAL on bad args. */
+ * trace->truncated. ENOSYS off x86-64/AArch64 Linux; EINVAL on bad args.
+ * APP BREAKPOINTS: an application `int3` is forwarded via PTRACE_CONT, never
+ * SINGLESTEPped across; the capture is marked truncated from that point (this driver
+ * owns its tracee, so it is reaped either way — via the handler's eventual return and
+ * exit, or the default SIGTRAP disposition if none is installed). */
 int asmtest_ptrace_trace_window_call(const void *code, size_t len,
                                      const long *args, int nargs,
                                      asmtest_addr_channel_t *chan, long *result,
@@ -232,7 +251,10 @@ int asmtest_ptrace_trace_window_call(const void *code, size_t len,
  * re-entrancy aware — if the stepped-over helper calls BACK into the region (a callback
  * or a tiering/OSR stub re-invoking the method), the tracer resumes in that nested
  * invocation and reports its result/trace. Trace such re-entrant routines by their outer
- * entry only; the body must be deterministic and single-threaded. */
+ * entry only; the body must be deterministic and single-threaded.
+ * APP BREAKPOINTS: an application `int3` is never SINGLESTEPped across — the capture is
+ * marked truncated and the target is left in its SIGTRAP signal-delivery stop for the
+ * caller (never killed: it is foreign), same policy as the attached block-step driver. */
 int asmtest_ptrace_trace_attached(pid_t pid, const void *base, size_t len,
                                   long *result, asmtest_trace_t *trace);
 

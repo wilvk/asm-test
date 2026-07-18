@@ -4090,6 +4090,19 @@ static void test_mechanism_discriminator(void) {
 #endif
 }
 
+#if defined(__x86_64__)
+/* Shared-memory counter an application SIGTRAP handler increments — proves the T2
+ * per-instruction drivers actually DELIVER a forwarded app int3 rather than discard
+ * it. Set/cleared around each use; NULL between tests so a stray SIGTRAP elsewhere
+ * cannot write through a dangling pointer. */
+static volatile int *g_int3_ctr;
+static void int3_ctr_handler(int sig) {
+    (void)sig;
+    if (g_int3_ctr != NULL)
+        (*g_int3_ctr)++;
+}
+#endif
+
 /* Out-of-process single-step (W2): a tracer parent PTRACE_SINGLESTEPs a forked
  * tracee that runs the routine, collecting the same exact offsets out of band. Prove
  * it is byte-identical to the in-process stepper for the shared fixture, and that a
@@ -4175,6 +4188,86 @@ static void test_ptrace_oop(void) {
     CHECK(!asmtest_emu_trace_truncated(lt), "ptrace oop loop is complete");
     asmtest_trace_free(lt);
     munmap(q, LPN);
+
+#if defined(__x86_64__)
+    /* --- int3 (T2): the per-instruction region driver must never swallow an
+     * application int3 the way the pre-fix block-step driver did (see
+     * test_ptrace_blockstep's INT3_X86 leg for the block-step analog). push rbx;
+     * mov rbx,rdi; int3; mov rax,rbx; add rax,rax; pop rbx; ret. With no SIGTRAP
+     * handler installed, PTRACE_CONT delivering the forwarded signal runs the
+     * default disposition and the child dies of SIGTRAP before ever reaching
+     * `mov rax,rbx` — so `result` (seeded to a sentinel) is never written. */
+    static const unsigned char INT3_OOP[] = {0x53, 0x48, 0x89, 0xfb, 0xCC,
+                                             0x48, 0x89, 0xd8, 0x48, 0x01,
+                                             0xc0, 0x5b, 0xc3};
+    void *ip = mmap(NULL, sizeof INT3_OOP, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (ip != MAP_FAILED) {
+        memcpy(ip, INT3_OOP, sizeof INT3_OOP);
+        mprotect(ip, sizeof INT3_OOP, PROT_READ | PROT_EXEC);
+        __builtin___clear_cache((char *)ip, (char *)ip + sizeof INT3_OOP);
+
+        asmtest_trace_t *itr = asmtest_trace_new(64, 64);
+        long iargs[1] = {7};
+        long ires =
+            -1; /* sentinel: must stay unwritten if the child dies of SIGTRAP */
+        int irc = asmtest_ptrace_trace_call(ip, sizeof INT3_OOP, iargs, 1,
+                                            &ires, itr);
+        static const uint64_t IEXP[] = {0x0, 0x1, 0x4};
+        int iseq = (irc == ASMTEST_PTRACE_OK &&
+                    asmtest_emu_trace_insns_total(itr) == 3);
+        for (int i = 0; iseq && i < 3; i++)
+            iseq = (itr->insns[i] == IEXP[i]);
+        CHECK(iseq, "ptrace oop int3: records exactly +0 +1 +4 through the app "
+                    "int3, nothing after");
+        CHECK(asmtest_emu_trace_truncated(itr),
+              "ptrace oop int3: an unhandled application int3 truncates");
+        CHECK(ires == -1,
+              "ptrace oop int3: the routine never reached its normal return "
+              "(the forwarded SIGTRAP's default disposition killed it first)");
+        asmtest_trace_free(itr);
+
+        /* --- handler variant: install a SIGTRAP handler in THIS process before
+         * tracing — fork() (inside asmtest_ptrace_trace_call) inherits signal
+         * dispositions, so the traced child has it too. The forwarded SIGTRAP is
+         * now DELIVERED (not fatal): the handler increments a shared counter and
+         * returns, proving T2's "deliver via PTRACE_CONT, never discard" promise.
+         * The tracer stops OBSERVING once it forwards the signal (this entry has
+         * no known return address to chase, unlike the windowed driver's
+         * run_until_sig continuation) — the routine going on to run (however it
+         * runs) is between the app and its own handler, not this trace. */
+        int *ctr = (int *)mmap(NULL, sizeof *ctr, PROT_READ | PROT_WRITE,
+                               MAP_SHARED | MAP_ANONYMOUS, -1, 0);
+        if (ctr != MAP_FAILED) {
+            *ctr = 0;
+            g_int3_ctr = ctr;
+            struct sigaction sa, old;
+            memset(&sa, 0, sizeof sa);
+            sa.sa_handler = int3_ctr_handler;
+            sigemptyset(&sa.sa_mask);
+            sigaction(SIGTRAP, &sa, &old);
+
+            asmtest_trace_t *htr = asmtest_trace_new(64, 64);
+            long hargs[1] = {7};
+            long hres = -1;
+            int hrc = asmtest_ptrace_trace_call(ip, sizeof INT3_OOP, hargs, 1,
+                                                &hres, htr);
+            sigaction(SIGTRAP, &old, NULL);
+            g_int3_ctr = NULL;
+
+            CHECK(
+                *ctr == 1,
+                "ptrace oop int3 handler: the forwarded SIGTRAP was DELIVERED "
+                "exactly once (never SINGLESTEPped across, never discarded)");
+            CHECK(hrc == ASMTEST_PTRACE_OK,
+                  "ptrace oop int3 handler: the trace call itself still "
+                  "succeeds once the signal is forwarded");
+            asmtest_trace_free(htr);
+            munmap(ctr, sizeof *ctr);
+        }
+        munmap(ip, sizeof INT3_OOP);
+    }
+#endif
 }
 
 /* BTF block-step (PTRACE_SINGLEBLOCK) must reconstruct the IDENTICAL per-instruction
@@ -4766,6 +4859,60 @@ static int wsig_run(int blockstep, const void *frame, long arg, long *res_out,
     return rc;
 }
 
+/* WINT3 (T1 windowed leg / T2 step 3) — a window frame whose OWN int3 cuts a block, for
+ * the app-breakpoint leg. Unlike WSIG's SIGSEGV (a signal BTF cannot see but which the
+ * kernel injects, not the tracee), an int3 is trap-class exactly like a BTF #DB, so the
+ * driver must tell them apart by si_code (SI_KERNEL) rather than by trap vs fault:
+ *
+ *   push rbx; mov rbx,rdi; int3; add rbx,rbx; mov rax,rbx; pop rbx; ret
+ *                          ^ mid-block: BTF sees this as an ordinary #DB-shaped trap
+ *
+ * wint3_handler is a no-op: an int3's trap semantics already leave RIP one past the
+ * 0xCC byte, so simply returning resumes exactly where the block-step/per-instruction
+ * driver expects. Proves both T1 (block-step vs per-instruction identical stream, both
+ * truncated) and T2 step 3 (the window still recovers *result — run_until_sig actually
+ * ran the frame to its win_ret, it did not just discard the signal). */
+#define WINT3_LEN 13u
+static const unsigned char WINT3[WINT3_LEN] = {
+    0x53,             /*  0 push rbx     */
+    0x48, 0x89, 0xfb, /*  1 mov rbx,rdi  */
+    0xCC,             /*  4 int3        <- mid-block app trap */
+    0x48, 0x01, 0xdb, /*  5 add rbx,rbx  */
+    0x48, 0x89, 0xd8, /*  8 mov rax,rbx  */
+    0x5b,             /* 11 pop rbx      */
+    0xc3,             /* 12 ret          */
+};
+static void wint3_handler(int sig) { (void)sig; }
+
+/* Run WINT3 once under `blockstep` (1) or per-instruction (0). */
+static int wint3_run(int blockstep, const void *frame, long arg, long *res_out,
+                     asmtest_trace_t *tr) {
+    pid_t pid = fork();
+    if (pid < 0)
+        return ASMTEST_PTRACE_ETRACE;
+    if (pid == 0) {
+        struct sigaction sa;
+        memset(&sa, 0, sizeof sa);
+        sa.sa_handler = wint3_handler;
+        sigemptyset(&sa.sa_mask);
+        sigaction(SIGTRAP, &sa, NULL);
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        raise(SIGSTOP);
+        ((void (*)(long))frame)(arg);
+        _exit(0);
+    }
+    int st = 0, rc = ASMTEST_PTRACE_ETRACE;
+    if (waitpid(pid, &st, 0) >= 0 && WIFSTOPPED(st) &&
+        asmtest_ptrace_run_to(pid, frame) == ASMTEST_PTRACE_OK)
+        rc = blockstep ? asmtest_ptrace_trace_attached_windowed_blockstep(
+                             pid, frame, WINT3_LEN, NULL, res_out, tr)
+                       : asmtest_ptrace_trace_attached_windowed(
+                             pid, frame, WINT3_LEN, NULL, res_out, tr);
+    kill(pid, SIGKILL);
+    waitpid(pid, &st, 0);
+    return rc;
+}
+
 /* WCUT — a window frame that never returns: it calls out to wcut_die, which _exit()s.
  * The tracee therefore dies WHILE the driver is inside its own SINGLEBLOCK/waitpid, with
  * a partial stream already recorded — the only way to reach the driver's "the window
@@ -5174,6 +5321,58 @@ static void test_ptrace_windowed_blockstep(void) {
             asmtest_trace_free(ssg);
             asmtest_trace_free(bsg);
             munmap(sf, WSIG_LEN);
+        }
+    }
+
+    /* ---- leg 5b (T1 windowed leg / T2 step 3): the tracee's OWN int3 cuts a block
+     * mid-window. Unlike leg 5's SIGSEGV (a non-trap signal, the shipped case), this
+     * is trap-class exactly like a BTF #DB, so the driver must tell them apart by
+     * si_code, and the block-step handoff must forward the SIGTRAP via PTRACE_CONT
+     * (never re-SINGLESTEP it) to reach the window end and recover *result. ---- */
+    {
+        void *itf = mmap(NULL, WINT3_LEN, PROT_READ | PROT_WRITE,
+                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (itf == MAP_FAILED) {
+            printf("# SKIP windowed block-step int3 leg: mmap failed\n");
+        } else {
+            memcpy(itf, WINT3, WINT3_LEN);
+            mprotect(itf, WINT3_LEN, PROT_READ | PROT_EXEC);
+            __builtin___clear_cache((char *)itf, (char *)itf + WINT3_LEN);
+            asmtest_trace_t *ssi = asmtest_trace_new(64, 64);
+            asmtest_trace_t *bsi = asmtest_trace_new(64, 64);
+            long rsi = 0, rbi = 0;
+            int rcsi = wint3_run(0, itf, 7, &rsi, ssi);
+            int rcbi = wint3_run(1, itf, 7, &rbi, bsi);
+            uint64_t iv = (uint64_t)(uintptr_t)itf;
+            /* push, mov, and the int3 byte itself all executed (and are recorded);
+             * nothing past it did — the region-driver-analog +0 +1 +4 shape. */
+            static const uint64_t IOFF[3] = {0, 1, 4};
+            int iexact = (asmtest_emu_trace_insns_len(bsi) == 3);
+            for (int i = 0; iexact && i < 3; i++)
+                iexact = (bsi->insns[i] == iv + IOFF[i]);
+            CHECK(rcsi == ASMTEST_PTRACE_OK && rcbi == ASMTEST_PTRACE_OK,
+                  "windowed block-step: a window cut by the tracee's OWN int3 "
+                  "still captures and recovers the window end (run_until_sig, "
+                  "not a discard)");
+            CHECK(
+                rsi == 14 && rbi == 14,
+                "windowed block-step: the int3-cut frame returns 2x its "
+                "argument (the handler resumed it, execution ran to win_ret)");
+            CHECK(iexact,
+                  "windowed block-step: the block CUT by the app int3 is "
+                  "reconstructed through the int3 itself (0,1,4 — "
+                  "exclusive of the not-yet-executed instruction at +5)");
+            CHECK(wdrv_streams_identical(ssi, bsi),
+                  "windowed block-step: DIFFERENTIAL ORACLE across an app int3 "
+                  "— identical to per-instruction");
+            CHECK(
+                asmtest_emu_trace_truncated(bsi) &&
+                    asmtest_emu_trace_truncated(ssi),
+                "windowed block-step: an app int3 always truncates (BTF cannot "
+                "bridge the kernel-injected transfer into the handler)");
+            asmtest_trace_free(ssi);
+            asmtest_trace_free(bsi);
+            munmap(itf, WINT3_LEN);
         }
     }
 

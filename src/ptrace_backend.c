@@ -341,6 +341,23 @@ static ssize_t ptrace_read_mem(pid_t pid, void *dest, const void *src,
     return (ssize_t)len;
 }
 
+/* Mirrors dfp_sigtrap_is_app / asmspy's sigtrap_is_app: a SIGTRAP the tracee raised
+ * ITSELF (executed int3 -> SI_KERNEL; its own hw breakpoint -> TRAP_HWBKPT). TRAP_TRACE
+ * and TRAP_BRKPT are OUR step/#DB completing (TRAP_BRKPT = a step across a syscall,
+ * MEASURED — see cli/asmspy_engine.c), NOT an app breakpoint. A GETSIGINFO failure or
+ * any other si_code => ours (the pre-fix behaviour — a false negative is a regression to
+ * the prior discard-not-deliver default, not a new hazard). Shared by every ptrace loop
+ * in this file (single-step and block-step, both architectures): none of them plant an
+ * int3 of their own at a tracee-visible SIGTRAP stop (breakpoints are handled by their
+ * own hit/target match before this is consulted), so a positive here is unambiguously
+ * the target's own trap — a JVM safepoint poll, a .NET breakpoint. */
+static int bs_sigtrap_is_app(pid_t pid) {
+    siginfo_t si;
+    if (ptrace(PTRACE_GETSIGINFO, pid, NULL, &si) != 0)
+        return 0;
+    return si.si_code == SI_KERNEL || si.si_code == TRAP_HWBKPT;
+}
+
 /* Ordered in-region PC-offset capture buffer; overflow is flagged truncated, never
  * emitted as complete. Sized for the small-routine envelope, like ss_backend. */
 #ifndef PTRACE_STREAM_CAP
@@ -672,8 +689,10 @@ static pid_t waitpid_handshake(pid_t pid, int *status) {
  * target), ENOENT (the tracee exited before reaching it), or ETRACE. Shared by
  * asmtest_ptrace_run_to (run an attached target to a resolved method) and the trace
  * loops (run native-speed OVER a call-out to its return address). Unrelated signals are
- * forwarded so the tracee's own signal flow is undisturbed. */
-static int run_until(pid_t pid, uint64_t target) {
+ * forwarded so the tracee's own signal flow is undisturbed. `first_sig` (0 for the
+ * common case) is attached to the FIRST PTRACE_CONT — used to deliver a SIGTRAP the
+ * caller already reaped (an application int3/breakpoint) rather than swallow it. */
+static int run_until_sig(pid_t pid, uint64_t target, int first_sig) {
     /* Default to a software int3/brk, which works on ordinary executable memory and needs
      * no debug-register budget. Fall back to a HARDWARE execution breakpoint when the code
      * is W^X (the executable page is not writable, so PTRACE_POKETEXT is refused with
@@ -711,7 +730,7 @@ static int run_until(pid_t pid, uint64_t target) {
         hw = 1;
     }
 
-    int rc = ASMTEST_PTRACE_OK, status = 0, sig = 0;
+    int rc = ASMTEST_PTRACE_OK, status = 0, sig = first_sig;
     for (;;) {
         if (ptrace(PTRACE_CONT, pid, NULL, (void *)(uintptr_t)sig) != 0) {
             rc = ASMTEST_PTRACE_ETRACE;
@@ -751,8 +770,16 @@ static int run_until(pid_t pid, uint64_t target) {
 #else
             hit = pc;
 #endif
-        if (hit != target)
-            continue; /* a SIGTRAP that is not our breakpoint; keep going */
+        if (hit != target) {
+            /* Not our breakpoint. A planted software int3 ALSO reports SI_KERNEL, so
+             * the address match above must be tested first (the asmspy ordering) —
+             * only a miss here can be the tracee's own app breakpoint. Forward it via
+             * the next PTRACE_CONT rather than silently discard it; anything else
+             * (unrelated trap noise) keeps the prior silent-continue behaviour. */
+            if (bs_sigtrap_is_app(pid))
+                sig = SIGTRAP;
+            continue;
+        }
 
         if (hw) {
             clear_hw_bp(pid); /* PC is already at target; nothing to rewind */
@@ -778,6 +805,10 @@ static int run_until(pid_t pid, uint64_t target) {
         }
     }
     return rc;
+}
+
+static int run_until(pid_t pid, uint64_t target) {
+    return run_until_sig(pid, target, 0);
 }
 
 /* How a single-step that LEFT the registered region (after entering it) is classified. */
@@ -1262,6 +1293,37 @@ static int descend_core(dctx_t *c) {
             continue;
         }
 
+        if (bs_sigtrap_is_app(c->pid)) {
+            /* The tracee executed its OWN int3 (a JVM safepoint poll, a .NET
+             * breakpoint) — descent cannot safely SINGLESTEP across a signal
+             * delivery (measured fatal: the re-armed trap fires inside a masked
+             * handler), so the descent ends here, honestly, rather than mis-attribute
+             * a handler's instructions to the traced region. */
+            asmtest_descent_mark_truncated(d);
+            if (c->flat)
+                c->flat->truncated = true;
+            if (!c->forward_faults) {
+                /* Fork-owned: we hold the only reference to this SIGTRAP; forward it
+                 * via PTRACE_CONT (never SINGLESTEP with a signal attached), then
+                 * reap — same policy as the per-instruction region driver. */
+                if (ptrace(PTRACE_CONT, c->pid, NULL,
+                           (void *)(uintptr_t)SIGTRAP) == 0 &&
+                    waitpid(c->pid, &status, 0) >= 0) {
+                    if (WIFEXITED(status) || WIFSIGNALED(status))
+                        c->reaped = 1;
+                    else if (WIFSTOPPED(status)) {
+                        kill(c->pid, SIGKILL);
+                        waitpid(c->pid, &status, 0);
+                        c->reaped = 1;
+                    }
+                }
+            }
+            /* Foreign (c->forward_faults): leave the target in its SIGTRAP
+             * signal-delivery stop — the caller owns detach/signal policy. */
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+
         uint64_t pc, ret, sp;
         if (read_pc_ret(c->pid, &pc, &ret, &sp, NULL) != 0) {
             rc = ASMTEST_PTRACE_ETRACE;
@@ -1520,6 +1582,21 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
             continue;
         }
 
+        if (bs_sigtrap_is_app(pid)) {
+            /* The tracee executed its OWN int3 (a JVM safepoint poll, a .NET
+             * breakpoint). Nothing to back out — the stop PC was already recorded
+             * pre-execution at the previous stop. Never PTRACE_SINGLESTEP with the
+             * signal attached (measured fatal): forward it via PTRACE_CONT and reap,
+             * the same dance the EXIT_RETURNED path below already uses. */
+            overflow = 1;
+            ptrace(PTRACE_CONT, pid, NULL, (void *)(uintptr_t)SIGTRAP);
+            if (waitpid(pid, &status, 0) >= 0 && WIFSTOPPED(status)) {
+                kill(pid, SIGKILL);
+                waitpid(pid, &status, 0);
+            }
+            break;
+        }
+
         uint64_t pc, retval;
         if (read_pc_ret(pid, &pc, &retval, NULL, NULL) != 0) {
             rc = ASMTEST_PTRACE_ETRACE;
@@ -1624,21 +1701,6 @@ static int wait_stop_sigtrap(pid_t pid) {
         nanosleep(&ts, NULL);
     }
     return 0;
-}
-
-/* Mirrors dfp_sigtrap_is_app / asmspy's sigtrap_is_app: a SIGTRAP the tracee raised
- * ITSELF (executed int3 -> SI_KERNEL; its own hw breakpoint -> TRAP_HWBKPT). TRAP_TRACE
- * and TRAP_BRKPT are OUR step/#DB completing (TRAP_BRKPT = a step across a syscall,
- * MEASURED — see cli/asmspy_engine.c), NOT an app breakpoint. A GETSIGINFO failure or
- * any other si_code => ours (the pre-fix behaviour — a false negative is a regression to
- * the prior discard-not-deliver default, not a new hazard). The block-step drivers plant
- * no int3 of their own (BTF #DB is trap-class), so a positive here is unambiguously the
- * target's own trap — a JVM safepoint poll, a .NET breakpoint. */
-static int bs_sigtrap_is_app(pid_t pid) {
-    siginfo_t si;
-    if (ptrace(PTRACE_GETSIGINFO, pid, NULL, &si) != 0)
-        return 0;
-    return si.si_code == SI_KERNEL || si.si_code == TRAP_HWBKPT;
 }
 
 static int probe_singleblock(void) {
@@ -2179,6 +2241,31 @@ static size_t foreign_insn_len(pid_t pid, uint64_t at) {
     return asmtest_disas(PTRACE_TRACE_ARCH, buf, (size_t)got, 0, 0, NULL, 0);
 }
 
+/* Forward a SIGTRAP the target raised ITSELF (an app int3/breakpoint) rather than
+ * discard it or re-arm it inside a masked handler (measured fatal): the inline form
+ * (`stop == NULL`) has a known window-end address, so run to it at native speed via
+ * PTRACE_CONT and recover the result there; the stop-flag form has no such address,
+ * so it can only deliver the signal via PTRACE_CONT and let the target run — the
+ * window is truncated either way (the caller sets *overflow before calling this).
+ * ENOENT (target exited before the window end) is not a ptrace error. */
+static void window_loop_forward_app_trap(pid_t pid, uint64_t win_ret,
+                                         volatile int *stop, long *retval_final,
+                                         int *reached_end, int *rc) {
+    if (stop == NULL) {
+        int rc2 = run_until_sig(pid, win_ret, SIGTRAP);
+        if (rc2 == ASMTEST_PTRACE_OK) {
+            uint64_t rax = 0;
+            if (read_pc_ret(pid, NULL, &rax, NULL, NULL) == 0)
+                *retval_final = (long)rax;
+            *reached_end = 1;
+        } else if (rc2 != ASMTEST_PTRACE_ENOENT) {
+            *rc = ASMTEST_PTRACE_ETRACE;
+        }
+    } else {
+        ptrace(PTRACE_CONT, pid, NULL, (void *)(uintptr_t)SIGTRAP);
+    }
+}
+
 /* Shared inner loop for trace_attached_windowed and trace_attached_window_stop —
  * and the per-instruction remainder the block-step windowed driver hands off to when a
  * signal cuts a block (pass that signal as `pending_sig0`, so the first resume delivers
@@ -2198,8 +2285,21 @@ static int trace_attached_window_loop(
     int reached_end =
         0; /* set only at a CLEAN terminator (*stop / pc==win_ret) */
     uint32_t nreg = *nreg_io;
+    const int handed_off_trap = (pending_sig0 == SIGTRAP);
 
-    for (;;) {
+    if (handed_off_trap) {
+        /* A caller (e.g. the block-step driver's app-int3 handoff) is handing off a
+         * SIGTRAP it has not yet delivered. Never PTRACE_SINGLESTEP with it attached
+         * (measured fatal — the re-armed trap fires inside a masked handler): forward
+         * it via PTRACE_CONT instead, exactly as the mid-window app-trap case below
+         * does, and skip the step loop entirely. */
+        pending_sig = 0;
+        overflow = 1;
+        window_loop_forward_app_trap(pid, win_ret, stop, &retval_final,
+                                     &reached_end, &rc);
+    }
+
+    while (!handed_off_trap) {
         if (stop != NULL && *stop != 0) {
             reached_end = 1; /* caller ended the window normally */
             break;
@@ -2221,6 +2321,18 @@ static int trace_attached_window_loop(
         if (WSTOPSIG(status) != SIGTRAP) {
             pending_sig = WSTOPSIG(status);
             continue;
+        }
+        if (bs_sigtrap_is_app(pid)) {
+            /* The target executed its OWN int3/breakpoint. Never SINGLESTEP across a
+             * signal delivery (measured fatal: the re-armed trap fires inside a masked
+             * handler): forward it via PTRACE_CONT instead. The inline form (stop ==
+             * NULL) has a known window-end address, so run to it at native speed and
+             * recover the result there; the stop-flag form has no such address, so it
+             * can only truncate and let the target run. */
+            overflow = 1;
+            window_loop_forward_app_trap(pid, win_ret, stop, &retval_final,
+                                         &reached_end, &rc);
+            break;
         }
         if (++steps > PTRACE_WINDOW_STEP_CAP) {
             overflow = 1;
@@ -2435,18 +2547,28 @@ decided:
  * published region (the same in_region_set filter the per-instruction loop applies at
  * each stop) — so the reconstructed stream is identical to the stepped one.
  *
- * Two ways a run ends, both observed with the tracee stopped at `to_pc`:
- *   at_mode == 0  a TAKEN branch whose target is `to_pc` (a block-step #DB is
- *                 trap-class: the stop PC is the TARGET). window_scan_terminator finds
- *                 that branch — or reports the run ambiguous.
- *   at_mode == 1  the run reached `to_pc` and was cut there by a signal-delivery stop.
- *                 No taken branch can precede to_pc (BTF would have stopped first), so
- *                 the terminator IS to_pc: walk by length to it INCLUSIVE — matching the
- *                 per-instruction path, which records to_pc at the TF stop preceding the
- *                 signal stop. Overshooting to_pc means the walk desynced: fail.
+ * Three ways a run ends, all observed with the tracee stopped at `to_pc`:
+ *   at_mode == 0                    a TAKEN branch whose target is `to_pc` (a block-step
+ *                                   #DB is trap-class: the stop PC is the TARGET).
+ *                                   window_scan_terminator finds that branch — or
+ *                                   reports the run ambiguous.
+ *   at_mode == 1, exclusive_cut==0  the run reached `to_pc` and was cut there by a
+ *                                   signal-delivery stop (a fault/other-signal, or the
+ *                                   window's own return). No taken branch can precede
+ *                                   to_pc (BTF would have stopped first), so the
+ *                                   terminator IS to_pc: walk by length to it INCLUSIVE
+ *                                   — matching the per-instruction path, which records
+ *                                   to_pc at the TF stop preceding the signal stop.
+ *   at_mode == 1, exclusive_cut==1  the tracee's OWN int3 cut the block: to_pc is one
+ *                                   past the 0xCC byte (the trap-stop's PC), so the
+ *                                   executed run ends EXACTLY there and the instruction
+ *                                   AT to_pc has NOT executed — walk EXCLUSIVE of it
+ *                                   (the window analog of blockstep_reconstruct_cut).
+ * Overshooting to_pc (either mode) means the walk desynced: fail.
  * Returns ASMTEST_BS_OK, ASMTEST_BS_AMBIGUOUS (definite prefix recorded; caller truncates but may keep
  * tracing from the known stop) or ASMTEST_BS_FAIL (caller truncates). */
-static int window_block_walk(foreign_bytes_t *fb, int at_mode, uint64_t from_pc,
+static int window_block_walk(foreign_bytes_t *fb, int at_mode,
+                             int exclusive_cut, uint64_t from_pc,
                              uint64_t to_pc, uint64_t win_base,
                              uint64_t win_len, const asmtest_addr_rec_t *regs,
                              uint32_t nreg, uint64_t *stream, uint32_t *pn) {
@@ -2459,10 +2581,13 @@ static int window_block_walk(foreign_bytes_t *fb, int at_mode, uint64_t from_pc,
     } else if (to_pc < from_pc) {
         return ASMTEST_BS_FAIL; /* a straight-line run cannot end BEFORE it started */
     }
-    /* Record [from_pc, term] — every instruction of it definitely executed. */
+    /* Record [from_pc, term] (inclusive) or [from_pc, term) (exclusive_cut) — every
+     * instruction recorded definitely executed. */
     uint64_t walk = from_pc;
     int rep = 0;
     for (uint32_t guard = 0; guard < PTRACE_BLOCK_WALK_CAP; guard++) {
+        if (exclusive_cut && walk == term)
+            return (rep && r == ASMTEST_BS_OK) ? ASMTEST_BS_AMBIGUOUS : r;
         if (walk > term)
             return ASMTEST_BS_FAIL; /* walked past the terminator: desynced */
         size_t avail = 0;
@@ -2481,7 +2606,7 @@ static int window_block_walk(foreign_bytes_t *fb, int at_mode, uint64_t from_pc,
             if (asmtest_disas_is_rep_string(PTRACE_TRACE_ARCH, p, avail, 0))
                 rep = 1;
         }
-        if (walk == term)
+        if (!exclusive_cut && walk == term)
             return (rep && r == ASMTEST_BS_OK) ? ASMTEST_BS_AMBIGUOUS : r;
         walk += l;
     }
@@ -2560,10 +2685,15 @@ int asmtest_ptrace_trace_attached_windowed_blockstep(
                                                ASMTEST_ADDR_CHAN_CAP - nreg);
 
         /* A non-SIGTRAP stop is a signal delivery: the block was cut at `pc` by a
-         * transfer BTF cannot see. Reconstruct what ran, then finish the window on the
-         * per-instruction loop, which is exact across delivery and sigreturn. */
+         * transfer BTF cannot see. A SIGTRAP stop can ALSO be a cut: the tracee's own
+         * int3/breakpoint (a JVM safepoint poll, a .NET breakpoint) is trap-class too,
+         * indistinguishable from a BTF #DB except by si_code. Either way, reconstruct
+         * what ran, then finish the window on the per-instruction loop (exact across
+         * delivery and sigreturn — and, for an app trap, forwards the signal via
+         * PTRACE_CONT rather than re-arm it inside a masked handler). */
         int sig = WSTOPSIG(status);
-        int at_mode = (sig != SIGTRAP);
+        int app_trap = (sig == SIGTRAP) && bs_sigtrap_is_app(pid);
+        int at_mode = (sig != SIGTRAP) || app_trap;
 
         /* A block that STARTS outside every region contributes nothing: control enters
          * a region only through a taken branch, and that stops AT the region entry. So
@@ -2571,8 +2701,11 @@ int asmtest_ptrace_trace_attached_windowed_blockstep(
          * byte out there cannot truncate the capture (the per-instruction path never
          * decodes glue either). */
         if (in_region_set(prev_pc, win_base, win_len, regs, nreg)) {
-            int wr = window_block_walk(&fb, at_mode, prev_pc, pc, win_base,
-                                       win_len, regs, nreg, stream, &n);
+            /* An app trap's cut is EXCLUSIVE of `pc` (the instruction there has not
+             * executed — see window_block_walk); every other at_mode cut is inclusive. */
+            int wr =
+                window_block_walk(&fb, at_mode, app_trap, prev_pc, pc, win_base,
+                                  win_len, regs, nreg, stream, &n);
             if (wr == ASMTEST_BS_FAIL) {
                 overflow = 1;
                 break;
@@ -2782,6 +2915,17 @@ int asmtest_ptrace_trace_window_call(const void *code, size_t len,
             overflow = 1;
             break;
         }
+        if (bs_sigtrap_is_app(pid)) {
+            /* The tracee executed its OWN int3 (a JVM safepoint poll, a .NET
+             * breakpoint). Never PTRACE_SINGLESTEP with the signal attached
+             * (measured fatal): forward it via PTRACE_CONT instead. The unconditional
+             * kill+reap below (this function owns the fork regardless of how the loop
+             * ends) tolerates whatever stop/exit that CONT produces. */
+            overflow = 1;
+            ptrace(PTRACE_CONT, pid, NULL, (void *)(uintptr_t)SIGTRAP);
+            waitpid(pid, &status, 0);
+            break;
+        }
         uint64_t pc = 0, rax = 0;
         if (read_pc_ret(pid, &pc, &rax, NULL, NULL) != 0) {
             rc = ASMTEST_PTRACE_ETRACE;
@@ -2925,6 +3069,16 @@ static int trace_attached_impl(pid_t pid, const void *base, size_t len,
         if (!WIFSTOPPED(status))
             continue;
         if (WSTOPSIG(status) != SIGTRAP) {
+            if (entered)
+                overflow = 1;
+            break;
+        }
+
+        if (bs_sigtrap_is_app(pid)) {
+            /* The foreign target executed its OWN int3/breakpoint. Truncate
+             * honestly and leave it in its SIGTRAP signal-delivery stop — it is
+             * foreign and is NEVER killed; the caller owns signal/detach policy
+             * (mirrors the attached block-step driver's app-trap handling). */
             if (entered)
                 overflow = 1;
             break;

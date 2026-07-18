@@ -1040,13 +1040,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The ptrace block-step reconstructors no longer record never-executed
   instructions when the traced code contains an application `int3`.** A JVM
   safepoint poll or .NET breakpoint inside a block-stepped region was misread as
-  a BTF `#DB` block completion, so the region and attached drivers fabricated the
-  instructions after it with `truncated=false`. They now classify the trap via
-  `si_code` (SI_KERNEL / TRAP_HWBKPT), record the executed run up to and including
-  the trap byte, mark the capture truncated, and forward the signal — the region
-  (owned) driver via `PTRACE_CONT`, the attached (foreign) driver by leaving the
-  target in its SIGTRAP delivery-stop for the caller. (The windowed driver's leg
-  lands with the per-instruction SIGTRAP-forwarding change.)
+  a BTF `#DB` block completion, so the region, attached, and windowed drivers
+  fabricated the instructions after it with `truncated=false`. They now classify
+  the trap via `si_code` (SI_KERNEL / TRAP_HWBKPT), record the executed run up to
+  and including the trap byte, mark the capture truncated, and forward the
+  signal — the region (owned) driver via `PTRACE_CONT`, the attached (foreign)
+  driver by leaving the target in its SIGTRAP delivery-stop for the caller, and
+  the windowed driver by handing off to the per-instruction window loop, which
+  runs the frame to its window end at native speed (`run_until_sig`) and
+  recovers `*result` there instead of discarding the signal.
+
+- **No per-instruction ptrace loop in `src/ptrace_backend.c` swallows an
+  application SIGTRAP any more.** `run_until` (the call-out step-over primitive,
+  now `run_until_sig` plus a 2-arg wrapper), the per-instruction region driver
+  (`asmtest_ptrace_trace_call`), the foreign attached driver
+  (`asmtest_ptrace_trace_attached`), the windowed per-instruction loop shared by
+  `asmtest_ptrace_trace_attached_windowed[_window_stop]`, the fork-owned window
+  driver (`asmtest_ptrace_trace_window_call`), and call descent
+  (`asmtest_ptrace_trace_call_ex`/`_attached_ex`) each either deliver an
+  application `int3`/breakpoint via `PTRACE_CONT` (owned tracee) or end honestly
+  with the target left at its SIGTRAP delivery-stop (foreign) — never
+  `PTRACE_SINGLESTEP`/`PTRACE_SINGLEBLOCK` with the signal attached (measured
+  fatal: the re-armed trap fires inside a masked handler). `bs_sigtrap_is_app`
+  (the `si_code` classifier introduced for the block-step drivers) is now a
+  file-wide helper shared by every loop, on both x86-64 and AArch64.
 
 - **`asmtest_ibs.h` no longer describes the shipped system-wide capture flag as
   a future phase** — the `survey_process` residual-race note now names the
