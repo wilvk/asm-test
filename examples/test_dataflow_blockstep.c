@@ -78,6 +78,10 @@
 #define DF_BLOCKSTEP_ETRACE (-4)
 
 typedef struct {
+    uint64_t off, len;
+} asmtest_blockstep_extent_t;
+
+typedef struct {
     uint64_t max_insns;
     int force_singlestep;
     int inject_divergence;
@@ -92,6 +96,8 @@ typedef struct {
     int no_undef_mask;
     uint64_t inject_flag_bit;
     int no_hw_record;
+    const asmtest_blockstep_extent_t *extents;
+    size_t nextents;
 } asmtest_blockstep_opts_t;
 
 typedef struct {
@@ -479,6 +485,30 @@ static const uint8_t island[] = {
     0xeb, 0x02,                   /* 0x11 jmp 0x15  <- REGION: hop it  */
     0x48, 0xb8,                   /* 0x13 ISLAND (data, not code)      */
     0xc5, 0xf1, 0xd4, 0xc2,       /* 0x15 vpaddq xmm0, xmm1, xmm2      */
+    0x0f, 0x11, 0x44, 0x24, 0xf0, /* 0x19 movups [rsp-16], xmm0        */
+    0x48, 0x89, 0xf8,             /* 0x1e mov rax, rdi                 */
+    0xc3,                         /* 0x21 ret                          */
+};
+
+/* island_sse(a,b): T7 — the SAME constant-pool-island SHAPE as `island` above, byte-for-byte
+ * identical except its mid-region instruction is `paddq` (legacy SSE, 2-operand, 4 bytes —
+ * same length as `island`'s VEX-128 `vpaddq`) instead of VEX-128. `island` can never become
+ * replayable=1 via extents alone (a genuine VEX-128 stays gated by the ENCODING rule regardless
+ * of how it's reached); this fixture isolates T7's OWN claim — a caller-vouched extent list
+ * recovers a region the LINEAR sweep would desync on, when what's on the far side of the island
+ * is something Unicorn can actually replay. WITHOUT extents: desyncs exactly like `island`
+ * (fail-closed, reason="decode") — the negative control. WITH extents that hop the island's 2
+ * data bytes: correctly decodes the paddq, replayable=1, and the region takes the block-step+
+ * replay path byte-identically to the oracle. Returns arg0; the observable is xmm0 = a+b. */
+#define ISLAND_SSE_ROFF 0x11
+static const uint8_t island_sse[] = {
+    0x66, 0x48, 0x0f, 0x6e, 0xc7, /* 0x00 movq xmm0, rdi        (glue) */
+    0x66, 0x48, 0x0f, 0x6e, 0xce, /* 0x05 movq xmm1, rsi        (glue) */
+    0x66, 0x48, 0x0f, 0x6e, 0xd7, /* 0x0a movq xmm2, rdi        (glue) */
+    0xeb, 0x00,                   /* 0x0f jmp 0x11              (glue) */
+    0xeb, 0x02,                   /* 0x11 jmp 0x15  <- REGION: hop it  */
+    0x48, 0xb8,                   /* 0x13 ISLAND (data, not code)      */
+    0x66, 0x0f, 0xd4, 0xc1,       /* 0x15 paddq xmm0, xmm1  (legacy SSE)*/
     0x0f, 0x11, 0x44, 0x24, 0xf0, /* 0x19 movups [rsp-16], xmm0        */
     0x48, 0x89, 0xf8,             /* 0x1e mov rax, rdi                 */
     0xc3,                         /* 0x21 ret                          */
@@ -1435,6 +1465,137 @@ static void run_desync_case(void) {
           "the VEX-128 the sweep never saw gets mis-executed (differs=%d rc=%d "
           "truncated=%d)",
           same == 0, rc, trunc);
+}
+
+/* T7 — extents-driven region scan (BSVS-2): island_sse WITHOUT extents is the negative control
+ * (desyncs exactly like `island`); WITH extents hopping the island's 2 data bytes, region_scan
+ * correctly decodes the paddq on the far side and the region becomes genuinely replayable —
+ * gotcha 6 (the linear sweep) recovered over its own stated target shape (a JIT method's real
+ * instruction extents skipping an embedded constant-pool island). */
+static void run_extents_case(void) {
+    long args[2] = {7, 5};
+
+    const char *why = NULL;
+    CHECK(asmtest_dataflow_blockstep_is_replayable(
+              island_sse + ISLAND_SSE_ROFF, sizeof island_sse - ISLAND_SSE_ROFF,
+              &why) == 0 &&
+              why != NULL && strcmp(why, "decode") == 0,
+          "extents NEGATIVE CONTROL: WITHOUT extents, island_sse desyncs on "
+          "the embedded data exactly like `island` (reason=%s) — proves "
+          "extents, not luck, are what change the verdict below",
+          why ? why : "(null)");
+
+    /* Two extents: the `jmp` itself (0x11, len 2), then paddq..ret (0x15, to the region end) —
+     * the 2 data bytes at 0x13 sit in the gap between them and are never fetched. */
+    asmtest_blockstep_extent_t ext[2] = {
+        {ISLAND_SSE_ROFF, 2},
+        {ISLAND_SSE_ROFF + 4, sizeof island_sse - (ISLAND_SSE_ROFF + 4)},
+    };
+    asmtest_blockstep_opts_t o;
+    long r = 0;
+    int trunc = 0, rc = 0;
+    asmtest_blockstep_info_t info;
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.extents = ext;
+    o.nextents = 2;
+    int same = vec_compare(island_sse, sizeof island_sse, ISLAND_SSE_ROFF, args,
+                           2, &o, &r, &trunc, &rc, &info);
+    CHECK(same == 1 && rc == DF_BLOCKSTEP_OK && !trunc && info.pure == 1,
+          "extents: WITH extents hopping the island, block-step+replay is "
+          "byte-identical to the single-step oracle (same=%d rc=%d "
+          "truncated=%d pure=%d) — the exact replay forfeiture gotcha 6 "
+          "named, recovered",
+          same, rc, trunc, info.pure);
+
+    /* Stops reduced: a standalone oracle capture over the SAME code+region is deterministic in
+     * its stop count, so comparing it against the extents-gated block capture's own info.stops
+     * (above) is valid. */
+    asmtest_valtrace_t *ov = asmtest_valtrace_new(4096, 65536, 4096);
+    if (ov != NULL) {
+        long orv = 0;
+        asmtest_blockstep_info_t oinfo = {0};
+        asmtest_blockstep_opts_t oo;
+        memset(&oo, 0, sizeof oo);
+        oo.inject_block = -1;
+        oo.region_off = ISLAND_SSE_ROFF;
+        oo.force_singlestep = 1;
+        int orc = asmtest_dataflow_blockstep_run(
+            island_sse, sizeof island_sse, args, 2, &oo, &orv, ov, &oinfo);
+        CHECK(orc == DF_BLOCKSTEP_OK && oinfo.stops > info.stops,
+              "extents: block-step CUT the in-region stop count %llu -> %llu",
+              (unsigned long long)oinfo.stops, (unsigned long long)info.stops);
+        asmtest_valtrace_free(ov);
+    }
+}
+
+/* T7 — extents validation: sorted, non-overlapping, and fully inside [region_off, code_len),
+ * else DF_BLOCKSTEP_EINVAL. Runs everywhere (no ptrace/BTF needed — the check is up front,
+ * before any tracee is spawned). */
+static void run_extents_einval_case(void) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
+    if (v == NULL) {
+        CHECK(0, "extents-einval: valtrace_new");
+        return;
+    }
+    long r = 0;
+    asmtest_blockstep_info_t info = {0};
+    asmtest_blockstep_opts_t o;
+
+    asmtest_blockstep_extent_t unsorted[2] = {{4, 4}, {2, 4}};
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.extents = unsorted;
+    o.nextents = 2;
+    int rc = asmtest_dataflow_blockstep_run(loop_poly, sizeof loop_poly, NULL,
+                                            0, &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_EINVAL,
+          "extents-einval: unsorted extents rejected (rc=%d)", rc);
+
+    asmtest_blockstep_extent_t overlapping[2] = {{0, 6}, {4, 4}};
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.extents = overlapping;
+    o.nextents = 2;
+    rc = asmtest_dataflow_blockstep_run(loop_poly, sizeof loop_poly, NULL, 0,
+                                        &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_EINVAL,
+          "extents-einval: overlapping extents rejected (rc=%d)", rc);
+
+    asmtest_blockstep_extent_t oorange[1] = {
+        {0, (uint64_t)sizeof loop_poly + 100}};
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.extents = oorange;
+    o.nextents = 1;
+    rc = asmtest_dataflow_blockstep_run(loop_poly, sizeof loop_poly, NULL, 0,
+                                        &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_EINVAL,
+          "extents-einval: out-of-range extent rejected (rc=%d)", rc);
+
+    asmtest_blockstep_extent_t zerolen[1] = {{0, 0}};
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.extents = zerolen;
+    o.nextents = 1;
+    rc = asmtest_dataflow_blockstep_run(loop_poly, sizeof loop_poly, NULL, 0,
+                                        &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_EINVAL,
+          "extents-einval: zero-length extent rejected (rc=%d)", rc);
+
+    asmtest_blockstep_extent_t before_region[1] = {{0, 2}};
+    memset(&o, 0, sizeof o);
+    o.inject_block = -1;
+    o.region_off = 4;
+    o.extents = before_region;
+    o.nextents = 1;
+    rc = asmtest_dataflow_blockstep_run(loop_poly, sizeof loop_poly, NULL, 0,
+                                        &o, &r, v, &info);
+    CHECK(rc == DF_BLOCKSTEP_EINVAL,
+          "extents-einval: extent starting before region_off rejected (rc=%d)",
+          rc);
+
+    asmtest_valtrace_free(v);
 }
 
 /* Case 5e — the impurity verdict must NOT truncate the sweep (HIGH 3). An impure region that
@@ -2396,8 +2557,8 @@ static void run_hwrec_rdtsc_value_case(void) {
     asmtest_blockstep_opts_t o2;
     memset(&o2, 0, sizeof o2);
     o2.inject_block = -1;
-    int rc2 = asmtest_dataflow_blockstep_run(
-        hwrec_rdtsc2, sizeof hwrec_rdtsc2, NULL, 0, &o2, &r2, v2, &info2);
+    int rc2 = asmtest_dataflow_blockstep_run(hwrec_rdtsc2, sizeof hwrec_rdtsc2,
+                                             NULL, 0, &o2, &r2, v2, &info2);
     CHECK(rc2 == DF_BLOCKSTEP_OK && !v2->truncated && info2.injected == 2 &&
               info2.hw_hits == 2,
           "hwrec-rdtsc-value: two DISTINCT rdtsc sites both injected "
@@ -2504,8 +2665,8 @@ static void run_hwrec_overflow_fallback_case(void) {
     asmtest_blockstep_opts_t o;
     memset(&o, 0, sizeof o);
     o.inject_block = -1;
-    int rc = asmtest_dataflow_blockstep_run(
-        hwrec_5site, sizeof hwrec_5site, NULL, 0, &o, &r, v, &info);
+    int rc = asmtest_dataflow_blockstep_run(hwrec_5site, sizeof hwrec_5site,
+                                            NULL, 0, &o, &r, v, &info);
     CHECK(rc == DF_BLOCKSTEP_OK && !v->truncated && info.pure == 0 &&
               info.reason != NULL && strcmp(info.reason, "hwrec-overflow") == 0,
           "hwrec-overflow-fallback: 5 distinct sites -> single-step fallback "
@@ -2714,14 +2875,14 @@ int main(void) {
               "that tail padding absorbs)");
     }
 
-    /* T4: the tier's FIRST opts layout guard (no_undef_mask/inject_flag_bit/no_hw_record are
-     * appended fields on a struct this suite re-declares field-for-field) — same skew hazard,
-     * same check, before any opts. field below is trusted. */
+    /* T4: the tier's FIRST opts layout guard (no_undef_mask/inject_flag_bit/no_hw_record/
+     * nextents are appended fields on a struct this suite re-declares field-for-field) — same
+     * skew hazard, same check, before any opts. field below is trusted. */
     {
         size_t osz = 0, ooff = 0;
         asmtest_dataflow_blockstep_opts_layout(&osz, &ooff);
         CHECK(osz == sizeof(asmtest_blockstep_opts_t) &&
-                  ooff == offsetof(asmtest_blockstep_opts_t, no_hw_record),
+                  ooff == offsetof(asmtest_blockstep_opts_t, nextents),
               "opts: the suite's re-declared options struct matches the "
               "producer's SIZE and final-field OFFSET");
     }
@@ -2851,6 +3012,9 @@ int main(void) {
      * so it runs on every VM lane same as the checks just above. */
     run_hwrec_scan_case();
 
+    /* T7: extents validation is up front, before any tracee is spawned — no ptrace needed. */
+    run_extents_einval_case();
+
     /* What this box and this Unicorn can actually do — reported, never assumed. */
     {
         int nregs = 0;
@@ -2966,6 +3130,7 @@ int main(void) {
     run_mxcsr_case();
     run_stack_window_case();
     run_desync_case();
+    run_extents_case();
     run_impure_vector_case();
     run_encoding_gate_case();
     run_vex128_case();

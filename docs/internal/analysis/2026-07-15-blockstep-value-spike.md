@@ -191,6 +191,16 @@ Deterministic: 8/8 repeat runs identical (same pass set, same 6.06× / 6.00× ra
    (block-step advances the *real* process, so a syscall inside a block has already retired
    by the boundary — never emulate through it).
 
+   **LANDED 2026-07-18** ([dataflow-producer-correctness.md](../implementations/dataflow-producer-correctness.md)
+   T7): `region_scan` now accepts an optional caller-vouched list of real instruction extents
+   (`asmtest_blockstep_extent_t`, blob-absolute, sorted/non-overlapping/in-range — validated
+   before any tracee is spawned) and sweeps each independently; bytes outside every extent
+   are never fetched, so an embedded island between two extents cannot desync the decoder.
+   The tier stays agnostic about extent provenance (a JIT method map is the intended source,
+   but nothing here reads one). NULL/0 keeps the pre-T7 whole-region linear sweep exactly as
+   this gotcha described it — extents are additive, not a replacement for the fail-closed
+   desync behaviour the earlier fix already landed.
+
 7. **`PTRACE_SINGLEBLOCK` must be probed functionally.** Some hypervisors mask
    `DEBUGCTL.BTF`, silently degrading block-step to per-instruction stepping. The probe
    reuses the library's hang-proof functional probe (a `#DB` at the head of a nop run must

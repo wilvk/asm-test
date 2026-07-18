@@ -24,6 +24,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   +5), stable across 5 consecutive runs on this Zen 2 host.
   See [dataflow-producer-correctness.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/dataflow-producer-correctness.md).
 
+- **Extents-driven block-step region scan: a caller-vouched list of real instruction
+  extents lets `region_scan` skip an embedded constant-pool island instead of desyncing on
+  it (BSVS-2).** New `asmtest_blockstep_extent_t` (`{off, len}`, blob-absolute) plus opts
+  fields `extents`/`nextents` (`src/dataflow_blockstep.c`) — NULL/0 keeps today's
+  whole-region sweep. `region_scan` is split into a per-extent inner sweep
+  (`region_scan_extent`, reused for both the implicit whole-region case and each real
+  extent) whose verdicts aggregate across extents; bytes outside every extent are never
+  decoded, so a data island sitting between two extents costs nothing. `run()` validates
+  extents are sorted, non-overlapping, and fully inside `[region_off, code_len)` before any
+  tracee is spawned (`DF_BLOCKSTEP_EINVAL` otherwise); the public `is_pure`/`is_replayable`/
+  `is_injectable` classifiers stay whole-blob (extents are a `run()`-only capability). New
+  fixture `island_sse` (the same constant-pool-island shape as the existing `island`
+  fixture, with a legacy-SSE `paddq` in place of `island`'s VEX-128 `vpaddq` so extents can
+  actually recover it into the replay path) proves the positive case byte-identical to the
+  single-step oracle with stops cut, while desyncing exactly like `island` without extents —
+  the negative control. `make dataflow-blockstep-test` 199/199 (was 191/191, +8), stable
+  across 5 consecutive runs; `make docker-dataflow-attach` 520/520 across all 8 suites, 0
+  skips; `make docker-docs` clean.
+  See [dataflow-producer-correctness.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/dataflow-producer-correctness.md).
+
 - **Def-use graph and forward/backward slice surface in the Ruby, Lua, Zig,
   Rust, Go, Java and .NET data-flow bindings (previously producer-only), via a
   by-pointer slice-seed entry point** (`asmtest_slice_forward_seed`/

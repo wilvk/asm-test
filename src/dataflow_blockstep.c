@@ -245,6 +245,14 @@
 #define DF_BLOCKSTEP_ETRACE                                                    \
     (-4) /* ptrace / SINGLEBLOCK unavailable: self-skip    */
 
+/* T7: one real instruction extent within the blob, in the SAME (blob-absolute) coordinate
+ * space as opts.region_off — a JIT method map's own unit. region_scan sweeps each extent
+ * independently rather than one linear byte run, so a constant-pool island BETWEEN two extents
+ * never desyncs the decoder: those bytes are simply never fetched. */
+typedef struct {
+    uint64_t off, len;
+} asmtest_blockstep_extent_t;
+
 /* Capture options. A zero-initialized struct is the production tier: gated
  * block-step+replay over the whole blob, unbounded, no test injection. */
 typedef struct {
@@ -291,6 +299,13 @@ typedef struct {
                        * truncates. Reproduces the pre-T6 (T5) forward-pass-only behaviour and
                        * proves the DR-breakpoint boundary, not luck, is what makes injection
                        * possible — the `blind_rdtsc` discipline applied to this path. */
+    const asmtest_blockstep_extent_t
+        *extents; /* T7: the region's real instruction extents, blob-absolute,
+                   * sorted and non-overlapping — NULL/0 (the default) means "whole
+                   * region", today's behaviour. A caller vouches these ARE real
+                   * instruction boundaries; region_scan then never fetches the bytes
+                   * between them, so an embedded constant-pool island costs nothing. */
+    size_t nextents;
 } asmtest_blockstep_opts_t;
 
 /* T4 — the tier's FIRST opts layout guard. Until now every appended opts field was a test
@@ -302,7 +317,7 @@ void asmtest_dataflow_blockstep_opts_layout(size_t *size, size_t *last_off) {
     if (size != NULL)
         *size = sizeof(asmtest_blockstep_opts_t);
     if (last_off != NULL)
-        *last_off = offsetof(asmtest_blockstep_opts_t, no_hw_record);
+        *last_off = offsetof(asmtest_blockstep_opts_t, nextents);
 }
 
 /* Capture telemetry, filled on every non-EINVAL return. */
@@ -1539,53 +1554,41 @@ static const char *insn_impurity(const cs_insn *insn) {
     }
 }
 
-/* Linearly disassemble the region's bytes ONCE and decide all three questions. Classifying per
- * region UP FRONT is what sidesteps the ordering trap: block-step advances the REAL process, so
- * a syscall inside a block has already retired by the boundary — it must never be emulated
- * through.
+/* Linearly disassemble ONE extent [addr0, addr0+extlen) of `code` and fold its findings into
+ * `out`. Shared by region_scan's whole-region call (one implicit extent, [0, len)) and its
+ * per-extent calls (T7) — the per-instruction classification is identical either way; only the
+ * byte RANGE fed to cs_disasm_iter differs. `insn` is caller-owned (cs_malloc'd once, reused
+ * across extents) so a multi-extent region pays for exactly one allocation, not one per extent.
  *
- * THIS SCAN FAILS CLOSED, DELIBERATELY, AND THAT IS THE WHOLE POINT. It is a single point of
- * failure feeding BOTH the replayability gate AND (via touches_vec) the vector seed and the
- * vector canary — so a wrong verdict does not merely lose a check, it lets an instruction
- * through AND removes the check that would have caught it. Three ways it used to fail OPEN,
- * each now closed:
+ * THIS SWEEP FAILS CLOSED, DELIBERATELY, AND THAT IS THE WHOLE POINT — over EVERY extent it is
+ * given. It is a single point of failure feeding BOTH the replayability gate AND (via
+ * touches_vec) the vector seed and canary, so a wrong verdict does not merely lose a check, it
+ * lets an instruction through AND removes the check that would have caught it. Three ways it
+ * used to fail OPEN, each now closed:
  *
- *   1. DECODER DESYNC. `remaining != 0` after the loop means cs_disasm_iter stopped early —
- *      an embedded constant-pool island (routine in the JIT method-maps this tier targets) can
- *      make a `movabs` swallow a following VEX prefix as immediate data, so the sweep ends with
- *      the OPTIMISTIC initial verdicts still in place and a VEX-128 reaches the replay ungated
- *      AND unwitnessed. Measured: `jmp +2 / movabs-island / vpaddq xmm0,xmm1,xmm2 / movups` →
- *      replayable=1 touches_vec=0 with remaining=5 of 17.
+ *   1. DECODER DESYNC. `remaining != 0` after the loop means cs_disasm_iter stopped early WITHIN
+ *      this extent — an embedded constant-pool island can make a `movabs` swallow a following
+ *      VEX prefix as immediate data, so the sweep ends with the OPTIMISTIC initial verdicts
+ *      still in place and a VEX-128 reaches the replay ungated AND unwitnessed. Measured:
+ *      `jmp +2 / movabs-island / vpaddq xmm0,xmm1,xmm2 / movups` → replayable=1 touches_vec=0
+ *      with remaining=5 of 17. T7's whole point is that a CALLER-VOUCHED extent boundary makes
+ *      this rare rather than load-bearing: the island's bytes, sitting BETWEEN two extents,
+ *      are simply never fetched, so there is nothing here to desync on.
  *   2. THE IMPURITY EARLY BREAK. Aborting the sweep at the first impure instruction left every
  *      vector instruction AFTER it unseen, so touches_vec=0 → no XSTATE read on the single-step
  *      fallback → every vector record emitted value_valid=0 at rc=OK. Only the PURITY answer is
- *      settled early; the sweep must still classify the whole region.
- *   3. cs_open FAILING. Now sets replayable=0 rather than relying on a downstream accident.
+ *      settled early; the sweep must still classify the whole extent.
+ *   3. cs_open FAILING. Handled by region_scan before this is ever called.
  *
- * A linear sweep is still only exact for a straight instruction stream; failing closed is what
- * makes that honest. A production classifier would follow the JIT method-map's real instruction
- * extents, at which point the desync verdict becomes rare rather than load-bearing. */
-static void region_scan(const uint8_t *code, size_t len, dfb_scan_t *out) {
-    memset(out, 0, sizeof *out);
-    out->pure = 1;
-    out->injectable =
-        1; /* vacuously, until an impurity we cannot inject is seen */
-    out->replayable = 1;
-    csh h;
-    if (cs_open(CS_ARCH_X86, CS_MODE_64, &h) != CS_ERR_OK) {
-        /* No decoder: assume the worst — and MEAN it. Leave the region `pure` (impurity is
-         * unknowable without a decoder) but decline the replay, which routes to single-step:
-         * correct, just unoptimized. */
-        out->touches_vec = 1;
-        out->replayable = 0;
-        out->replay_reason = "decode";
-        return;
-    }
-    cs_option(h, CS_OPT_DETAIL, CS_OPT_ON);
-    cs_insn *insn = cs_malloc(h);
-    uint64_t addr = 0;
-    const uint8_t *p = code;
-    size_t remaining = len;
+ * A linear sweep is still only exact for a straight instruction stream; failing closed per
+ * extent is what makes that honest when a caller's extent list is itself wrong (e.g. the
+ * "extent" still contains an undecodable byte, or a real instruction longer than what the
+ * caller vouched for). */
+static void region_scan_extent(csh h, cs_insn *insn, const uint8_t *code,
+                               uint64_t addr0, size_t extlen, dfb_scan_t *out) {
+    const uint8_t *p = code + addr0;
+    uint64_t addr = addr0;
+    size_t remaining = extlen;
     while (remaining > 0 && cs_disasm_iter(h, &p, &remaining, &addr, insn)) {
         if (insn_touches_vec(h, insn))
             out->touches_vec = 1;
@@ -1603,9 +1606,10 @@ static void region_scan(const uint8_t *code, size_t len, dfb_scan_t *out) {
             out->impure_reason = imp;
         }
         /* F2: `injectable` is NOT settled early — it is an ALL-quantifier ("every impurity in
-         * this region is one the replay can carry"), so it must see the WHOLE region. A region
-         * whose first impurity is a syscall and whose second is a cpuid is NOT injectable, and
-         * settling at the first would be exactly the HIGH-3 early-break bug in a new costume. */
+         * this region is one the replay can carry"), so it must see the WHOLE region (every
+         * extent, not just this one). A region whose first impurity is a syscall and whose
+         * second is a sysenter is NOT injectable, and settling at the first would be exactly
+         * the HIGH-3 early-break bug in a new costume. */
         dfb_imp_t k = imp != NULL ? dfb_impurity_kind(insn) : DFB_IMP_NONE;
         if (imp != NULL && k != DFB_IMP_SYSCALL && k != DFB_IMP_INT80 &&
             k != DFB_IMP_HWREC) {
@@ -1619,9 +1623,10 @@ static void region_scan(const uint8_t *code, size_t len, dfb_scan_t *out) {
             out->impure_reason = imp;
         }
         if (k == DFB_IMP_HWREC) {
-            /* Distinct by construction: a single linear sweep visits each byte offset once, so
-             * consecutive hits can never repeat an address. Cap at 4 (DR0-3); a 5th+ site sets
-             * hwrec_overflow rather than silently dropping it or lying about coverage. */
+            /* Distinct by construction: a linear sweep over non-overlapping extents visits each
+             * byte offset at most once, so consecutive hits can never repeat an address. Cap at
+             * 4 (DR0-3); a 5th+ site (from this or any earlier extent) sets hwrec_overflow
+             * rather than silently dropping it or lying about coverage. */
             if (out->nhwrec < 4)
                 out->hwrec_off[out->nhwrec++] = insn->address;
             else
@@ -1629,26 +1634,72 @@ static void region_scan(const uint8_t *code, size_t len, dfb_scan_t *out) {
         }
         /* ...but the sweep RUNS ON: purity is decided, replayability and touches_vec are not. */
     }
+    if (remaining != 0) {
+        /* Desync WITHIN this extent: the bytes past this point were never classified, so no
+         * optimistic verdict over them is earned. Decline the replay and force the vector
+         * machinery on. `injectable` is deliberately NOT cleared here: `replayable = 0` already
+         * gates the region off the replay (scan_replay_ok ANDs them), and clearing it would
+         * make the reason "the impurity" rather than the truthful "decode". */
+        out->replayable = 0;
+        out->replay_reason = "decode";
+        out->touches_vec = 1;
+    }
+}
+
+/* Classify a region's static bytes over its (optional) real instruction EXTENTS — see
+ * asmtest_blockstep_extent_t. `extents`/`nextents` NULL/0 sweeps [0, len) as ONE implicit
+ * extent, exactly F1/F2's original whole-blob behaviour; otherwise each extent is swept
+ * independently and every verdict (pure/injectable/replayable/touches_vec, and T5's hwrec site
+ * list) aggregates across all of them — bytes outside every extent are never decoded, so a
+ * caller-vouched island between two extents costs nothing (see region_scan_extent). Classifying
+ * UP FRONT (rather than lazily) is what sidesteps the ordering trap: block-step advances the
+ * REAL process, so a syscall inside a block has already retired by the boundary — it must never
+ * be emulated through.
+ *
+ * PROVENANCE. This tier stays agnostic about where extents come from: the JIT method map (the
+ * addr-channel that publishes managed method bodies, e.g. src/dataflow_method.c) is where a
+ * managed integration would get them, but nothing here reads or validates that map — the
+ * caller vouches the bytes it hands over via extents ARE real instruction boundaries, and a
+ * caller that lies gets `region_scan_extent`'s per-extent desync fail-closed, never a silent
+ * wrong answer. */
+static void region_scan(const uint8_t *code, size_t len,
+                        const asmtest_blockstep_extent_t *extents,
+                        size_t nextents, dfb_scan_t *out) {
+    memset(out, 0, sizeof *out);
+    out->pure = 1;
+    out->injectable =
+        1; /* vacuously, until an impurity we cannot inject is seen */
+    out->replayable = 1;
+    csh h;
+    if (cs_open(CS_ARCH_X86, CS_MODE_64, &h) != CS_ERR_OK) {
+        /* No decoder: assume the worst — and MEAN it. Leave the region `pure` (impurity is
+         * unknowable without a decoder) but decline the replay, which routes to single-step:
+         * correct, just unoptimized. */
+        out->touches_vec = 1;
+        out->replayable = 0;
+        out->replay_reason = "decode";
+        return;
+    }
+    cs_option(h, CS_OPT_DETAIL, CS_OPT_ON);
+    cs_insn *insn = cs_malloc(h);
+    if (extents == NULL || nextents == 0) {
+        region_scan_extent(h, insn, code, 0, len, out);
+    } else {
+        for (size_t i = 0; i < nextents; i++)
+            region_scan_extent(h, insn, code, extents[i].off, extents[i].len,
+                               out);
+    }
     cs_free(insn, 1);
     cs_close(&h);
     if (out->hwrec_overflow) {
         /* T6: `injectable` admits HWREC sites only up to the DR0-3 slot count region_scan
          * already caps hwrec_off at — a 5th+ site has no slot to watch, so the region keeps
          * the whole-region single-step fallback rather than silently under-cover it. Checked
-         * once, after the full sweep (not inside the loop above), so a region whose first four
-         * HWREC sites are seen before the 5th disqualifies still gets the honest reason. */
+         * once, after every extent's sweep (not inside region_scan_extent), so a region whose
+         * first four HWREC sites are seen before the 5th disqualifies still gets the honest
+         * reason. */
         out->injectable = 0;
         out->impure_reason = "hwrec-overflow";
-    }
-    if (remaining != 0) {
-        /* Desync: the bytes past this point were never classified, so no optimistic verdict
-         * over them is earned. Decline the replay and force the vector machinery on.
-         * `injectable` is deliberately NOT cleared here: `replayable = 0` already gates the
-         * region off the replay (scan_replay_ok ANDs them), and clearing it would make the
-         * reason "the impurity" rather than the truthful "decode". */
-        out->replayable = 0;
-        out->replay_reason = "decode";
-        out->touches_vec = 1;
     }
 }
 
@@ -2518,6 +2569,11 @@ int asmtest_dataflow_blockstep_probe(void) {
     return 1;
 }
 
+/* T7: this and the sibling classifiers below (is_replayable/is_injectable/scan_hwrec) always
+ * sweep the WHOLE blob as one implicit extent — extents are a run() capability only, since only
+ * run() carries the region_off a caller-supplied extent list is anchored to. A caller wanting a
+ * classifier answer over its real instruction extents passes them to run() and reads
+ * info.reason from there. */
 int asmtest_dataflow_blockstep_is_pure(const uint8_t *code, size_t code_len,
                                        const char **reason) {
     if (reason != NULL)
@@ -2525,7 +2581,7 @@ int asmtest_dataflow_blockstep_is_pure(const uint8_t *code, size_t code_len,
     if (code == NULL || code_len == 0)
         return DF_BLOCKSTEP_EINVAL;
     dfb_scan_t s;
-    region_scan(code, code_len, &s);
+    region_scan(code, code_len, NULL, 0, &s);
     if (s.pure)
         return 1;
     if (reason != NULL)
@@ -2553,7 +2609,7 @@ int asmtest_dataflow_blockstep_is_replayable(const uint8_t *code,
     if (code == NULL || code_len == 0)
         return DF_BLOCKSTEP_EINVAL;
     dfb_scan_t s;
-    region_scan(code, code_len, &s);
+    region_scan(code, code_len, NULL, 0, &s);
     if (s.replayable)
         return 1;
     if (reason != NULL)
@@ -2580,7 +2636,7 @@ int asmtest_dataflow_blockstep_is_injectable(const uint8_t *code,
     if (code == NULL || code_len == 0)
         return DF_BLOCKSTEP_EINVAL;
     dfb_scan_t s;
-    region_scan(code, code_len, &s);
+    region_scan(code, code_len, NULL, 0, &s);
     if (s.injectable)
         return 1;
     if (reason != NULL)
@@ -2604,7 +2660,7 @@ int asmtest_dataflow_blockstep_scan_hwrec(const uint8_t *code, size_t code_len,
     if (code == NULL || code_len == 0)
         return DF_BLOCKSTEP_EINVAL;
     dfb_scan_t s;
-    region_scan(code, code_len, &s);
+    region_scan(code, code_len, NULL, 0, &s);
     if (overflow != NULL)
         *overflow = s.hwrec_overflow;
     for (size_t i = 0; off != NULL && i < s.nhwrec && i < off_cap; i++)
@@ -2645,6 +2701,23 @@ int asmtest_dataflow_blockstep_run(const uint8_t *code, size_t code_len,
         o = *opts;
     if (o.region_off >= code_len)
         return DF_BLOCKSTEP_EINVAL; /* an empty region is a caller bug */
+    /* T7: extents, when given, are blob-absolute (the same coordinate space as region_off) and
+     * must be sorted, non-overlapping, and fully inside [region_off, code_len) — the caller
+     * vouches these ARE real instruction boundaries. An empty entry (len==0) is a caller bug,
+     * not a "skip" convention. `prev_end` starting at region_off is what also enforces the
+     * first extent not starting before the region itself. */
+    if (o.nextents > 0) {
+        if (o.extents == NULL)
+            return DF_BLOCKSTEP_EINVAL;
+        uint64_t prev_end = o.region_off;
+        for (size_t i = 0; i < o.nextents; i++) {
+            uint64_t eoff = o.extents[i].off, elen = o.extents[i].len;
+            if (elen == 0 || eoff < prev_end ||
+                eoff + elen > (uint64_t)code_len)
+                return DF_BLOCKSTEP_EINVAL;
+            prev_end = eoff + elen;
+        }
+    }
     if (info != NULL)
         memset(info, 0, sizeof *info);
     vt->mem_space = AT_LOC_MEM_ABS;
@@ -2659,9 +2732,30 @@ int asmtest_dataflow_blockstep_run(const uint8_t *code, size_t code_len,
      * real process, so a syscall in a block has already retired by the boundary). REPLAYABLE:
      * no VEX/EVEX (no released Unicorn executes AVX, and VEX-128 mis-executes SILENTLY).
      * Either gate routes to the single-step fallback, which is correct — just unoptimized.
-     * force_singlestep still runs the scan so info.reason stays informative. */
+     * force_singlestep still runs the scan so info.reason stays informative.
+     *
+     * T7: opts.extents, when given, is region-scoped over the SAME bytes region_scan always
+     * swept — just as a set of real instruction extents instead of one linear run. Converted to
+     * region-relative (subtracting region_off) here, in a scratch array whose lifetime is this
+     * one call: region_scan itself stays extent-relative to whatever buffer it is handed,
+     * exactly as its addr/hwrec_off bookkeeping already was pre-T7. */
     dfb_scan_t scan;
-    region_scan(code + o.region_off, code_len - (size_t)o.region_off, &scan);
+    if (o.nextents > 0) {
+        asmtest_blockstep_extent_t *rel =
+            (asmtest_blockstep_extent_t *)malloc(o.nextents * sizeof *rel);
+        if (rel == NULL)
+            return DF_BLOCKSTEP_ETRACE;
+        for (size_t i = 0; i < o.nextents; i++) {
+            rel[i].off = o.extents[i].off - o.region_off;
+            rel[i].len = o.extents[i].len;
+        }
+        region_scan(code + o.region_off, code_len - (size_t)o.region_off, rel,
+                    o.nextents, &scan);
+        free(rel);
+    } else {
+        region_scan(code + o.region_off, code_len - (size_t)o.region_off, NULL,
+                    0, &scan);
+    }
     int gated_off = !scan_replay_ok(&scan) && !o.force_replay;
     int use_replay = !gated_off && !o.force_singlestep;
 
