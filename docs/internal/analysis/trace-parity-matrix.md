@@ -26,7 +26,8 @@ changing how it reads coverage.
 - **DynamoRIO** is the only vendor- and microarchitecture-independent *native*
   backend shipping today (Linux x86-64, every Intel + every Zen).
 - **Hardware trace splits strictly by vendor/uarch:** Intel → Intel PT; AMD
-  Zen 3 / Zen 4 / Zen 5 → AMD LBR (Tier-A 16-branch window + Tier-B stitching;
+  Zen 4 / Zen 5 → AMD LBR (Zen 3 BRS exists in silicon but this tree cannot open
+  it yet — see Matrix 3 / T8) (Tier-A 16-branch window + Tier-B stitching;
   live-verified on a Zen 5 Ryzen 9 9950X, plus the Part III software layer — spec/
   wrong-path filtering, stitch decodable-distance guard, CPUID `0x80000022` runtime
   depth, freeze probe, and the eBPF boundary LBR snapshot). AMD Zen 2 has **no
@@ -110,7 +111,7 @@ only backend whose observer lives in a different process from the code under tra
 | Emulator (Unicorn) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | DynamoRIO | ✓ | ✗ (follow-up) | ✗ | ✗ (follow-up) | ✗ |
 | Intel PT | ✓ bare-metal | ✗ | ✗ | — | — |
-| AMD LBR | ✓ (Zen 3+) | ✗ | ✗ | — | — |
+| AMD LBR | ✓ (Zen 4+) | ✗ | ✗ | — | — |
 | CoreSight | — | — | — | scaffold (board) | ✗ |
 | Single-step (in-proc TF) | ✓ **shipped** | ✓ **shipped** (Ph5, macOS-Intel) | ✓ Ph5 (VEH, ~6×) | ✗ (TF is x86-64 only) | ✗ |
 | ptrace (out-of-proc step) | ✓ **shipped** | ✗ (Linux ptrace only) | ✗ | ✓ code; stream HW-pending | ✗ |
@@ -130,18 +131,25 @@ The DynamoRIO native tier is Linux-x86-64-only.
 |---|---|---|---|---|---|
 | DynamoRIO | ✓ | ✓ | ✓ | ✓ | — (vendor-independent DBI) |
 | Intel PT | ✓ | ✗ | ✗ | ✗ | `no intel_pt PMU (needs bare-metal Intel; absent on AMD/VM)` |
-| AMD LBR | ✗ | ✗ **no facility** | ✓ BRS | ✓ LbrExtV2 **(live-verified, Zen 5)** | `no AMD branch records (needs Zen 3 BRS / Zen 4 LbrExtV2)` |
+| AMD LBR | ✗ | ✗ **no facility** | **BRS in silicon, NOT openable by this tree** | ✓ LbrExtV2 **(live-verified, Zen 5)** | `no AMD branch records (needs Zen 4+ LbrExtV2)` |
 | Single-step | ✓ | ✓ | ✓ | ✓ | (none — no PMU/perf/privilege needed) |
 
 Zen 2's branch-stack `perf_event_open` returns `EOPNOTSUPP` → `AMD_NOHW`
 ([hwtrace.c `amd_branch_probe`](../../../src/hwtrace.c)); its legacy LBR is depth-1 and
 not wired to perf branch-stack. So on Zen 2 the only exact native options are
-**DynamoRIO** and **single-step** (both shipping today). Zen 3 uses **BRS** (Family 19h,
-opt-in `branch-brs` event); Zen 4 and **Zen 5** use **LbrExtV2** (mainline Linux 6.1+);
-both are a fixed 16-entry stack: Tier A is exact within one window, and Tier-B
-stitching of the `sample_period=1` windows reconstructs past it (bounded by the data
-ring + PMI throttling); a run the stitched capture cannot hold sets `truncated` to
-route the routine to DynamoRIO.
+**DynamoRIO** and **single-step** (both shipping today). Zen 3 has **BRS** (Family 19h,
+opt-in `branch-brs` event) **in silicon, but this tree cannot open it**: the probe and
+capture open the generic `PERF_COUNT_HW_BRANCH_INSTRUCTIONS` (renders as raw `0x00c2`)
+with `sample_period = 1`, whereas the kernel's `amd_brs_hw_config` demands exactly raw
+`0xc4` with a fixed period ≥ 17, so every open fails `-EINVAL` and is reported as
+`AMD_NOHW` ([hwtrace.c:275-278](../../../src/hwtrace.c)). The arm that would open BRS is
+specified in [amd-branchsnap-lbr-docs.md](../implementations/amd-branchsnap-lbr-docs.md)
+T8 (raw-`0xc4` probe retry + a distinct fixed-period Tier-A mode), hardware-gated on
+Family 19h silicon. Zen 4 and **Zen 5** use **LbrExtV2** (mainline Linux 6.1+): a fixed
+16-entry stack where Tier A is exact within one window and Tier-B stitching of the
+`sample_period=1` windows reconstructs past it (bounded by the data ring + PMI
+throttling); a run the stitched capture cannot hold sets `truncated` to route the
+routine to DynamoRIO. **The AMD LBR live-capture floor is therefore Zen 4.**
 
 **Live-verified on Zen 5.** The AMD LBR capture+decode path was run on a **Ryzen 9
 9950X (Family 0x1A, Zen 5, `amd_lbr_v2`)** — the project's actual dev host
@@ -559,7 +567,8 @@ take precedence, for an advanced user pointing at a hand-built lib.
 
 DynamoRIO is the only vendor- and uarch-independent native backend shipping today
 (Linux x86-64, every Intel + Zen); hardware trace splits strictly
-**Intel → PT / Zen 3-5 → LBR (16-cap, live-verified on Zen 5) / Zen 2 → nothing-yet**;
+**Intel → PT / Zen 4-5 → LBR (16-cap, live-verified on Zen 5; Zen 3 BRS in silicon
+but not yet openable by this tree) / Zen 2 → nothing-yet**;
 the emulator is the
 universal floor for every OS, architecture, and language the native tiers do not
 reach. Fallback between them is cheap and transparent **as data** (one trace shape,

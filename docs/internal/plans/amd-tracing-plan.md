@@ -170,10 +170,13 @@ returns 1 only on an AMD host that actually exposes usable branch records.
 - Replace the PMU-node probe: AMD branch records are **not** a `pmu_type()` AUX PMU like
   `intel_pt`. The real capability probe is *attempt-and-close* — open a sampling
   `perf_event` with `branch_sample_type = PERF_SAMPLE_BRANCH_USER |
-  PERF_SAMPLE_BRANCH_ANY` and `sample_period = 1`; success means LBR/BRS is usable,
-  `EINVAL`/`EACCES` means skip. Distinguish Zen 3 BRS (needs the opt-in `branch-brs`
-  event) from Zen 4 LbrExtV2 (works with a generic sampling event) by trying LbrExtV2
-  first and falling back to the BRS event.
+  PERF_SAMPLE_BRANCH_ANY` and `sample_period = 1`; success means LBR is usable,
+  `EINVAL`/`EACCES` means skip. *(NOT landed — see Improvement Phase 6:* the intended
+  Zen 3 BRS fallback — trying LbrExtV2 first and falling back to the opt-in `branch-brs`
+  event — was **never built**; the generic `sample_period = 1` open the tree performs is
+  rejected outright by the kernel's `amd_brs_hw_config` on Zen 3, so the live-capture
+  floor is Zen 4. The raw-`0xc4` BRS arm is specified in
+  [amd-branchsnap-lbr-docs.md](../implementations/amd-branchsnap-lbr-docs.md) T8.)*
 - `asmtest_amd_decoder_present()` returns 1 only when the backend TU is compiled in (it
   depends on Capstone for the instruction-length walk — see Phase 2).
 - Extend `asmtest_hwtrace_skip_reason()` with AMD-specific strings ("not an
@@ -181,8 +184,9 @@ returns 1 only on an AMD host that actually exposes usable branch records.
   LbrExtV2)", "perf branch-stack not permitted").
 
 **Acceptance.** `make hwtrace-test` self-skips on Intel, on AMD without privilege, and
-on non-AMD hosts, each with the specific reason; returns available only on a Zen 3+/Zen
-4 host with perf branch sampling permitted.
+on non-AMD hosts, each with the specific reason; returns available only on a **Zen 4+**
+host with perf branch sampling permitted (Zen 3 BRS is not openable by this tree —
+Improvement Phase 6 / [amd-branchsnap-lbr-docs.md](../implementations/amd-branchsnap-lbr-docs.md) T8).
 
 ---
 
@@ -212,8 +216,9 @@ coverage and hands its branch array to the decoder.
   [`asmtest_hwtrace_begin`/`end`](../../../src/hwtrace.c) is reused unchanged.
 
 **Acceptance.** For a registered routine with a known handful of taken branches, the
-captured branch array on a Zen 3+/Zen 4 host contains exactly those `from→to` pairs, in
-order, ending at the region exit.
+captured branch array on a **Zen 4+** host contains exactly those `from→to` pairs, in
+order, ending at the region exit. (Zen 3 BRS is not openable by this tree — Phase 0 /
+Improvement Phase 6.)
 
 ---
 
@@ -709,7 +714,7 @@ AMD hardware ceiling** — but remove its sharpest edges.
 
 | Lever | Mechanism | Why it helps | Caveat |
 |---|---|---|---|
-| **BRS period-adjust** (Zen 3) | Fixed `sample_period ≈ N−16` (min 17); the kernel already programs `period − lbr_nr` (`amd_brs_adjust_period`) and BRS freezes/holds the NMI until the 16-branch buffer saturates | **One** PMI delivers the complete ≤16 window at region exit, versus `sample_period=1`'s one-PMI-per-branch flood that trips `perf_event_max_sample_rate` throttling and the non-overwrite ring | Zen 3 BRS **only** (forward-capture, fixed mode, period > 16). On Zen 4/5 the better lever is the software-event snapshot (P0 #2), not this |
+| **BRS period-adjust** (Zen 3) | Fixed `sample_period ≥ 17` on the raw `0xc4` event (the ONLY config `amd_brs_hw_config` accepts — a generic `period=1` open is rejected `-EINVAL`); the kernel then subtracts `x86_pmu.lbr_nr` via `amd_pmu_limit_period` and BRS freezes/holds the NMI until the 16-branch buffer saturates | **One** PMI delivers the complete ≤16 window at region exit — and is the ONLY way BRS opens at all on Zen 3, since the generic `sample_period=1` baseline the tree uses on Zen 4+ is rejected outright | Zen 3 BRS **only** (forward-capture, fixed mode, period ≥ 17). On Zen 4/5 the better lever is the software-event snapshot (P0 #2), not this |
 | **`spec`/`valid` filtering** (Zen 4/5) | `perf_branch_entry.spec` carries `PERF_BR_SPEC_WRONG_PATH`; the LbrExtV2 driver passes wrong-path entries through to userspace | Drops speculative/wrong-path phantom edges before `amd_replay`, which today filters only `abort` and *explicitly notes* (amd_backend.c comment) that it ignores every other flag | Wrong-path entries are relatively uncommon, so this is a precision refinement, not a step-change. LbrExtV2/Linux ≥6.1 only — a no-op on Zen 3 BRS (retired-only, no spec bits) |
 | **Throttle/ring hardening** | Larger `data_size` ring; `sysctl kernel.perf_event_max_sample_rate` up, `kernel.perf_cpu_time_max_percent=0` on the self-hosted runner | The Tier-B live path is bounded by ring size + throttling (a 20 000-trip loop already truncates); more headroom = longer gapless stitch before honest truncation | Operational, self-hosted-runner only; extends reach, does not remove the ceiling |
 | **Decodable-distance stitch check** | For each stitched boundary, assert reconstructed instruction count between consecutive branch targets == statically-decoded byte distance; reject a wrong minimal-shift match, else emit an honest gap | AMD sets `hw_idx ≡ 0` (register renaming keeps From[0]=TOS), so Intel's exact index-based overlap count **cannot** be ported — the current smallest-overlap heuristic can silently mis-stitch a self-overlapping loop (an open question in amd_backend.c). This is the AMD-available substitute check | Improves correctness for the common looping case; does not extend depth |
@@ -1323,15 +1328,22 @@ enlarged ring.
 > 4900HS (Family 17h, Zen 2, no branch stack at all)**. Zen 4/5 do not use BRS (they use
 > LbrExtV2, where the Phase-3 software-event snapshot is the better lever anyway), and Zen 2
 > has no branch hardware to period-adjust. Per the house "no untested hardware code" rule it
-> is **not implemented** — verified absent: no `amd_brs` / `branch-brs` / `brs_adjust` /
-> `brs_period` symbol exists anywhere in `src/` or `include/`. It stays fully specified below
+> is **not implemented** — verified absent: no `amd_brs` / `branch-brs` / `PERF_TYPE_RAW` /
+> `0xc4` token exists anywhere in `src/` or `include/`. It stays fully specified below
 > for whenever a Zen 3 host is available, and is the sole reason this plan remains in
 > `plans/` rather than `archive/plans/`.
 
-**Goal.** On **Zen 3 BRS**, for a routine known to take ≤ ~16 taken branches, replace the
-`sample_period=1` PMI-per-branch flood with a single fixed-period frozen overflow (the
-kernel already programs `period − lbr_nr` via `amd_brs_adjust_period`), cutting Tier-A
-capture from O(branches) interrupts to one and removing the throttle/ring exposure.
+**Goal.** On **Zen 3 BRS**, open branch capture **at all** — this is not a throughput win
+over a working `sample_period=1` baseline, because the kernel **disallows that baseline on
+Zen 3 entirely**: `amd_brs_hw_config` rejects any sampling event whose masked config is not
+raw `0xc4` or whose `sample_period ≤ x86_pmu.lbr_nr` (= 16), so the tree's generic
+`0x00c2` + `period = 1` open fails `-EINVAL` twice over. BRS opens only with a **fixed
+period ≥ 17** on the raw `0xc4` event, which delivers a single frozen overflow of ≤16
+taken branches at region exit. (The kernel's own period adjustment for a branch-stack
+event is `amd_pmu_limit_period` — `*left -= x86_pmu.lbr_nr`, a subtraction — **not** the
+period-adjust helper an earlier draft of this plan cited, which does **not** exist at
+v6.10 or v6.14; the hard gate is `amd_brs_hw_config`. See the Research notes in
+[amd-branchsnap-lbr-docs.md](../implementations/amd-branchsnap-lbr-docs.md) T8.)
 
 **Work / caveat.** `sample_period=1` is **load-bearing** for the current design: the Tier-B
 stitch and the richest-in-region heuristic ([hwtrace.c:477-486, 584-614](../../../src/hwtrace.c);
@@ -1342,7 +1354,10 @@ this is **not** a blanket change to `hwtrace_begin_amd` ([hwtrace.c:426](../../.
 and the Tier-B path is not needed, and kept off Zen 4/5 (where the Phase-3 software-event
 snapshot is the better lever). The `period=1` appears in two places (probe
 [hwtrace.c:186](../../../src/hwtrace.c), capture [hwtrace.c:420](../../../src/hwtrace.c)); a mode
-switch must keep them coherent or justify the divergence.
+switch must keep them coherent or justify the divergence. The in-tree architectural
+discriminator between Zen 3 (no LbrExtV2 leaf) and Zen 4+ is already read: CPUID
+`0x80000022` at [amd_backend.c:139-147](../../../src/amd_backend.c) (`asmtest_amd_lbr_depth`,
+which falls back to 16 when the leaf is absent — exactly the Zen 3 case).
 
 **Acceptance.** *(forward-look — deferred until a Zen 3 host is available; the dev box is
 Zen 5.)* On a Zen 3 BRS host, a ≤16-branch routine reconstructs identically to the
