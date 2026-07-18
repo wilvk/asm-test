@@ -53,6 +53,9 @@ int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
 int asmtest_amd_decode_reach(const struct perf_branch_entry *br, size_t nbr,
                              const void *base, size_t len,
                              asmtest_trace_t *trace, int *reached_exit);
+int asmtest_amd_decode_reach_hw(const struct perf_branch_entry *br, size_t nbr,
+                                size_t hw_nbr, const void *base, size_t len,
+                                asmtest_trace_t *trace, int *reached_exit);
 int asmtest_amd_decoder_present(void);
 int asmtest_amd_freeze_available(void);
 int asmtest_amd_snapshot_available(void);
@@ -471,6 +474,70 @@ static void test_amd_spec_filter(void) {
 #else
     printf("# SKIP AMD spec filter: needs x86-64 Linux with the perf spec "
            "bitfield\n");
+#endif
+}
+
+/* T1 (amd-branchsnap-lbr-docs) — the depth ceiling counts HARDWARE branch-stack
+ * slots (hw_nbr), not the total array length (nbr). branchsnap prepends a synthetic
+ * boundary edge, so a provably complete 15-slot window (15 hw slots + 1 synthetic =
+ * nbr 16) must NOT be flagged truncated; only a genuinely saturated 16-hw-slot window
+ * does. Host-independent (synthetic perf_branch_entry array, no Zen hardware). */
+static void test_amd_decode_hw_ceiling(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_amd_decoder_present()) {
+        printf("# SKIP AMD hw-ceiling: built without Capstone\n");
+        return;
+    }
+    /* 14 * `jmp +0` (EB 00) at 0x00..0x1A, then `ret` (C3) at 0x1C. */
+    static const uint8_t REGION[] = {
+        0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00,
+        0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00,
+        0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xEB, 0x00, 0xC3};
+    uint64_t b = (uint64_t)(uintptr_t)REGION;
+
+    /* newest-first: [synthetic boundary edge, 14 jmp edges (0x1A newest), entry call]. */
+    struct perf_branch_entry arr[16];
+    memset(arr, 0, sizeof arr);
+    arr[0].from =
+        b + 0x1C;  /* the boundary edge (ret) — a completion, NOT a hw slot */
+    arr[0].to = 0; /* exits leave the region                               */
+    for (int i = 0; i < 14; i++) {
+        uint64_t off = (uint64_t)(13 - i) * 2; /* 0x1A at arr[1] down to 0x00 */
+        arr[1 + i].from = b + off;
+        arr[1 + i].to = b + off + 2;
+    }
+    arr[15].from = b - 5; /* entry call edge (a hardware slot) */
+    arr[15].to = b;
+
+    /* hw_nbr = 15: 15 real slots fit a 16-deep window -> complete, NOT truncated. */
+    asmtest_trace_t *okt = asmtest_trace_new(64, 64);
+    int rc = asmtest_amd_decode_reach_hw(arr, 16, 15, REGION, sizeof REGION,
+                                         okt, NULL);
+    CHECK(rc == 0, "AMD hw-ceiling: decode_reach_hw succeeds (hw_nbr=15)");
+    CHECK(!asmtest_emu_trace_truncated(okt),
+          "AMD hw-ceiling: 15 hw slots + 1 synthetic boundary edge is NOT "
+          "truncated");
+    CHECK(asmtest_emu_trace_insns_total(okt) == 15,
+          "AMD hw-ceiling: reconstructs 15 insns (14 jmp + ret)");
+    asmtest_trace_free(okt);
+
+    /* hw_nbr = 16: a genuinely saturated window still truncates (boundary pinned). */
+    asmtest_trace_t *fullt = asmtest_trace_new(64, 64);
+    asmtest_amd_decode_reach_hw(arr, 16, 16, REGION, sizeof REGION, fullt,
+                                NULL);
+    CHECK(asmtest_emu_trace_truncated(fullt),
+          "AMD hw-ceiling: 16 hw slots sets truncated (window overflow)");
+    asmtest_trace_free(fullt);
+
+    /* the asmtest_amd_decode wrapper is unchanged: hw_nbr == nbr == 16 -> truncated. */
+    asmtest_trace_t *wrapt = asmtest_trace_new(64, 64);
+    asmtest_amd_decode(arr, 16, REGION, sizeof REGION, wrapt);
+    CHECK(asmtest_emu_trace_truncated(wrapt),
+          "AMD hw-ceiling: asmtest_amd_decode wrapper semantics unchanged "
+          "(truncated)");
+    asmtest_trace_free(wrapt);
+#else
+    printf("# SKIP AMD hw-ceiling: not Linux x86-64\n");
 #endif
 }
 
@@ -8140,6 +8207,7 @@ int main(void) {
     test_amd_freeze_probe();
     test_amd_reconstruction();
     test_amd_spec_filter();
+    test_amd_decode_hw_ceiling();
     test_amd_msr_spec_filter();
     test_amd_tailcall_exit();
     test_amd_reduced_filter();

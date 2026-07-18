@@ -127,6 +127,15 @@ int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,
 int asmtest_amd_decode_reach(const struct perf_branch_entry *br, size_t nbr,
                              const void *base, size_t len,
                              asmtest_trace_t *trace, int *reached_exit);
+/* Like asmtest_amd_decode_reach, but gates the depth-ceiling truncation flag on
+ * `hw_nbr` (the count of real hardware branch-stack slots) rather than `nbr` (the
+ * total array length). branchsnap.c prepends a synthetic boundary edge that is not
+ * a captured slot, so its `nbr` is `hw_nbr + 1`; passing the true hardware count
+ * keeps a complete 15-slot window from being flagged truncated. asmtest_amd_decode_reach
+ * is the thin wrapper passing hw_nbr == nbr for every hardware-only caller. */
+int asmtest_amd_decode_reach_hw(const struct perf_branch_entry *br, size_t nbr,
+                                size_t hw_nbr, const void *base, size_t len,
+                                asmtest_trace_t *trace, int *reached_exit);
 /* Tier-B: stitch the overlapping sample_period=1 branch-stack windows into one gapless
  * sequence (asmtest_amd_stitch), then decode it without the 16-entry ceiling
  * (asmtest_amd_decode_stitched) — lifts the single-window limit past 16 branches. */

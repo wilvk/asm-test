@@ -503,9 +503,9 @@ static void amd_replay(const struct perf_branch_entry *br, size_t nbr,
     }
 }
 
-int asmtest_amd_decode_reach(const struct perf_branch_entry *br, size_t nbr,
-                             const void *base, size_t len,
-                             asmtest_trace_t *trace, int *reached_exit) {
+int asmtest_amd_decode_reach_hw(const struct perf_branch_entry *br, size_t nbr,
+                                size_t hw_nbr, const void *base, size_t len,
+                                asmtest_trace_t *trace, int *reached_exit) {
     if (reached_exit != NULL)
         *reached_exit = 0;
     if (br == NULL || nbr == 0 || base == NULL || len == 0 || trace == NULL)
@@ -521,10 +521,27 @@ int asmtest_amd_decode_reach(const struct perf_branch_entry *br, size_t nbr,
      * DynamoRIO tier, or to Tier-B stitching, which have no depth ceiling). Never
      * emit partial as complete. `reached_exit` is orthogonal: it reports only that
      * the trailing straight-line run reached a region exit; the caller still gates
-     * completeness on the overflow flag + the lost/gap signals. */
-    if ((int)nbr >= asmtest_amd_lbr_depth())
+     * completeness on the overflow flag + the lost/gap signals.
+     *
+     * The ceiling counts HARDWARE branch-stack slots only (`hw_nbr`), NOT `nbr`:
+     * branchsnap.c prepends a synthetic boundary edge (a deterministic completion,
+     * not a captured slot) to the array, so `nbr` may be one greater than the true
+     * hardware depth. Comparing `nbr` would flag a provably complete 15-slot window
+     * (15 hw entries + 1 synthetic = nbr 16) as truncated and force a needless
+     * re-execution. Every hardware-only caller passes hw_nbr == nbr via the
+     * asmtest_amd_decode_reach wrapper, so their behaviour is unchanged. */
+    if ((int)hw_nbr >= asmtest_amd_lbr_depth())
         trace->truncated = true;
     return ASMTEST_HW_OK;
+}
+
+int asmtest_amd_decode_reach(const struct perf_branch_entry *br, size_t nbr,
+                             const void *base, size_t len,
+                             asmtest_trace_t *trace, int *reached_exit) {
+    /* Thin wrapper: hardware-only callers have no synthetic edge, so hw_nbr == nbr
+     * makes the depth ceiling byte-identical to the pre-hw_nbr behaviour. */
+    return asmtest_amd_decode_reach_hw(br, nbr, nbr, base, len, trace,
+                                       reached_exit);
 }
 
 int asmtest_amd_decode(const struct perf_branch_entry *br, size_t nbr,

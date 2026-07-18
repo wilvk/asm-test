@@ -313,7 +313,11 @@ int asmtest_amd_snapshot_end(asmtest_trace_t *trace) {
          *     still full after trimming is all-region-involved, so in-region edges
          *     (the entry edge included) may have been evicted -> honest truncation
          *     stands. A glue-padded window of a tiny routine no longer misreports
-         *     its complete reconstruction as truncated.
+         *     its complete reconstruction as truncated. The decoder's depth ceiling
+         *     therefore counts HARDWARE slots only (`use`), passed as hw_nbr to
+         *     asmtest_amd_decode_reach_hw — `n_dec` may hold one extra synthetic
+         *     boundary edge (b), which is a deterministic completion, not a captured
+         *     slot, and must not inflate the ceiling.
          *
          * (b) APPEND the boundary edge. The execution breakpoint fires BEFORE the
          *     exit instruction executes, so the frozen stack can never contain the
@@ -356,8 +360,8 @@ int asmtest_amd_snapshot_end(asmtest_trace_t *trace) {
                       "trimmed=%zu boundary=%d",
                       g_bsnap.drain.best_nr, g_bsnap.drain.best_inregion, use,
                       exit_ip >= base_ip && exit_ip < end_ip);
-        rc = asmtest_amd_decode(arr, n_dec, g_bsnap.drain.base,
-                                g_bsnap.drain.len, trace);
+        rc = asmtest_amd_decode_reach_hw(arr, n_dec, use, g_bsnap.drain.base,
+                                         g_bsnap.drain.len, trace, NULL);
     } else {
         ASMTEST_HWDBG("snapshot_end: truncated — boundary never hit / no "
                       "in-region branch");

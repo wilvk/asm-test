@@ -978,6 +978,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The AMD deterministic boundary snapshot no longer flags a provably complete
+  15-branch window as `truncated`.** The depth-ceiling check in
+  `asmtest_amd_decode_reach` counted the total decode-array length, but
+  `branchsnap.c` prepends a synthetic boundary edge (a deterministic completion,
+  not a captured hardware slot), so a full 15-hardware-slot window (15 + 1
+  synthetic = 16) tripped the 16-deep ceiling and escalated to a needless real
+  re-execution of the routine under test (`src/trace_auto.c`). The new
+  `asmtest_amd_decode_reach_hw` gates truncation on the hardware slot count; the
+  `asmtest_amd_decode` / `asmtest_amd_decode_reach` wrappers pass `hw_nbr == nbr`
+  so every other caller is byte-identical.
+
 - **`make cli` / `make cli-smoke` on arm64 now self-skip like the other tiers
   instead of dumping raw compile errors.** asmspy's single-step engines are
   x86-64-hardcoded (`rip`/`eflags`-TF/`orig_rax`), so on aarch64 the build died
