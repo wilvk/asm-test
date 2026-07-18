@@ -76,6 +76,26 @@ int asmtest_dataflow_ptrace_attach_jit(int pid, int only_tid, uint64_t base,
                                        size_t code_len, asmtest_codeimage_t *img,
                                        uint64_t when, uint64_t max_insns, long *result,
                                        int *survived, asmtest_valtrace_t *vt);
+int asmtest_dataflow_ptrace_attach_pid_versioned(int pid, uint64_t base,
+                                                 size_t code_len, uint64_t max_insns,
+                                                 asmtest_codeimage_t *img,
+                                                 uint64_t when, long *result,
+                                                 asmtest_valtrace_t *vt);
+
+/* T4 — the versioned-decode code-image recorder (asmtest_codeimage.h): a userspace
+ * PERF_RECORD_TEXT_POKE. Records a TIMESTAMPED timeline of a process's code bytes so
+ * a live JIT that patches/frees/reuses an address mid-capture still decodes from the
+ * bytes that were LIVE at trace time, not a late live snapshot. pid 0 records THIS
+ * process. Its object (pic/codeimage.o) is already linked into libasmtest_dataflow. */
+int asmtest_codeimage_available(void);
+void asmtest_codeimage_skip_reason(char *buf, size_t buflen);
+asmtest_codeimage_t *asmtest_codeimage_new(int pid);
+void asmtest_codeimage_free(asmtest_codeimage_t *img);
+int asmtest_codeimage_track(asmtest_codeimage_t *img, const void *base, size_t len);
+int asmtest_codeimage_refresh(asmtest_codeimage_t *img);
+uint64_t asmtest_codeimage_now(const asmtest_codeimage_t *img);
+int asmtest_codeimage_bytes_at(const asmtest_codeimage_t *img, const void *addr,
+                               uint64_t when, const uint8_t **out, size_t *out_len);
 ]])
 
 local function lib_path()
@@ -146,6 +166,75 @@ function M.live_attach_available()
   return rc ~= M.PTRACE_ENOSYS
 end
 
+-- --- T4: the versioned-decode code-image recorder (asmtest_codeimage.h) ------
+-- A userspace PERF_RECORD_TEXT_POKE: records a TIMESTAMPED timeline of a
+-- process's code bytes so a live JIT that patches/frees/reuses an address
+-- mid-capture still decodes from the bytes that were LIVE at trace time, not
+-- a late live snapshot. pid 0 records THIS process. Status codes re-declared
+-- for the same reason the PTRACE_* ones are.
+M.CI_OK = 0      -- ok
+M.CI_ENOENT = -7 -- address never tracked / no version at-or-before `when`
+
+-- True iff the soft-dirty page-tracking recorder works on this host.
+function M.codeimage_available()
+  return C.asmtest_codeimage_available() ~= 0
+end
+
+function M.codeimage_skip_reason()
+  local buf = ffi.new("char[200]")
+  C.asmtest_codeimage_skip_reason(buf, 200)
+  return ffi.string(buf)
+end
+
+-- A timestamped code-image timeline for one target process. :track begins
+-- recording [base, base+length); :refresh re-snapshots any pages written
+-- since the last arm as a new version; :bytes_at answers "what bytes were
+-- live at addr as of sequence `when`" — the decode a mid-capture re-JIT
+-- needs. pid 0 (the default) records THIS process.
+local CodeImage = {}
+CodeImage.__index = CodeImage
+
+function M.CodeImage(pid)
+  local h = C.asmtest_codeimage_new(pid or 0)
+  assert(h ~= nil, "asmtest_codeimage_new failed")
+  return setmetatable({ _h = h }, CodeImage)
+end
+
+-- Begin tracking [base, base+length): snapshot version 0 and arm change
+-- detection. Returns CI_OK (0) or a negative status.
+function CodeImage:track(base, length)
+  return tonumber(C.asmtest_codeimage_track(self._h, ffi.cast("const void *", base), length))
+end
+
+-- Re-snapshot any changed tracked pages as new versions. Returns the number
+-- of new versions recorded (>= 0) or a negative status.
+function CodeImage:refresh()
+  return tonumber(C.asmtest_codeimage_refresh(self._h))
+end
+
+-- The current capture sequence (a monotonic logical timestamp).
+function CodeImage:now()
+  return tonumber(C.asmtest_codeimage_now(self._h))
+end
+
+-- The bytes live at `addr` as of sequence `when` (nil/0 = latest), or nil if
+-- the address was never tracked / had no version at-or-before `when`.
+function CodeImage:bytes_at(addr, when)
+  local out = ffi.new("const uint8_t*[1]")
+  local outlen = ffi.new("size_t[1]")
+  local rc = C.asmtest_codeimage_bytes_at(self._h, ffi.cast("const void *", addr),
+                                          when or 0, out, outlen)
+  if rc ~= M.CI_OK then return nil end
+  return ffi.string(out[0], tonumber(outlen[0]))
+end
+
+function CodeImage:free()
+  if self._h ~= nil then
+    C.asmtest_codeimage_free(self._h)
+    self._h = nil
+  end
+end
+
 -- at_loc_kind_t (include/asmtest_valtrace.h): the location space of an operand.
 M.LOC_REG = 0     -- a register (key = Capstone reg id)
 M.LOC_MEM_ABS = 1 -- memory at an absolute effective address (key = addr)
@@ -213,16 +302,34 @@ function ValueTrace:attach_pid_tid(pid, only_tid, base, code_len, max_insns)
 end
 
 -- The JIT-aware live attach: worker-targeting plus an explicit survival report.
--- Returns rc, result, survived (1 = the detach left the target alive). The
--- versioned-decode code-image (img/when) is NULL — operands decode from a live snapshot.
-function ValueTrace:attach_jit(pid, only_tid, base, code_len, max_insns, when)
+-- Returns rc, result, survived (1 = the detach left the target alive). `img`
+-- (a CodeImage, or nil) is the versioned-decode code-image: pass one to decode
+-- each step from the bytes live AT `when` instead of a live snapshot; nil (the
+-- default) keeps today's behaviour.
+function ValueTrace:attach_jit(pid, only_tid, base, code_len, max_insns, when, img)
   local out = ffi.new("long[1]")
   local survived = ffi.new("int[1]")
-  local rc = C.asmtest_dataflow_ptrace_attach_jit(pid, only_tid, base, code_len, nil,
+  local img_h = img and img._h or nil
+  local rc = C.asmtest_dataflow_ptrace_attach_jit(pid, only_tid, base, code_len, img_h,
                                                   when or 0, max_insns or 0, out,
                                                   survived, self._v)
   self:_post_attach()
   return tonumber(rc), tonumber(out[0]), tonumber(survived[0])
+end
+
+-- The versioned-decode live attach: steps the thread-group LEADER (like
+-- :attach_pid) but decodes each step's operands from `img`'s bytes as of
+-- sequence `when` instead of a live snapshot — the right answer when a live
+-- JIT patches/frees/reuses the region mid-capture. `img` may be nil (degrades
+-- to exactly :attach_pid). Returns rc, result.
+function ValueTrace:attach_pid_versioned(pid, base, code_len, img, when, max_insns)
+  local out = ffi.new("long[1]")
+  local img_h = img and img._h or nil
+  local rc = C.asmtest_dataflow_ptrace_attach_pid_versioned(pid, base, code_len,
+                                                            max_insns or 0, img_h,
+                                                            when or 0, out, self._v)
+  self:_post_attach()
+  return tonumber(rc), tonumber(out[0])
 end
 
 function ValueTrace:steps() return tonumber(C.asmtest_valtrace_steps(self._v)) end

@@ -68,6 +68,42 @@ static class Program
         int pid, int onlyTid, ulong baseAddr, nuint codeLen, IntPtr img, ulong when,
         ulong maxInsns, out long result, out int survived, IntPtr vt);
 
+    [DllImport(LIB)]
+    static extern int asmtest_dataflow_ptrace_attach_pid_versioned(
+        int pid, ulong baseAddr, nuint codeLen, ulong maxInsns, IntPtr img, ulong when,
+        out long result, IntPtr vt);
+
+    // T4 — the versioned-decode code-image recorder (asmtest_codeimage.h): a userspace
+    // PERF_RECORD_TEXT_POKE. Records a TIMESTAMPED timeline of a process's code bytes so
+    // a live JIT that patches/frees/reuses an address mid-capture still decodes from the
+    // bytes that were LIVE at trace time, not a late live snapshot. pid 0 records THIS
+    // process. Its object (pic/codeimage.o) is already linked into libasmtest_dataflow.
+    // base/addr cross as ulong (not IntPtr): the target may be a FOREIGN process, so
+    // there is no local pointer to hand the marshaller for it.
+    [DllImport(LIB)]
+    static extern int asmtest_codeimage_available();
+
+    [DllImport(LIB)]
+    static extern void asmtest_codeimage_skip_reason(IntPtr buf, nuint buflen);
+
+    [DllImport(LIB)]
+    static extern IntPtr asmtest_codeimage_new(int pid);
+
+    [DllImport(LIB)]
+    static extern void asmtest_codeimage_free(IntPtr img);
+
+    [DllImport(LIB)]
+    static extern int asmtest_codeimage_track(IntPtr img, ulong baseAddr, nuint len);
+
+    [DllImport(LIB)]
+    static extern ulong asmtest_codeimage_now(IntPtr img);
+
+    [DllImport(LIB)]
+    static extern int asmtest_codeimage_bytes_at(
+        IntPtr img, ulong addr, ulong when, out IntPtr out_, out nuint outLen);
+
+    const int CI_OK = 0; // ok
+
     // L1 def-use graph + L2 slice (analysis pipeline, src/dataflow.c). The seed
     // crosses BY POINTER (asmtest_slice_forward_seed/_backward_seed), which
     // sidesteps C#'s non-blittable-`bool` problem entirely: the seed and record
@@ -335,6 +371,7 @@ static class Program
         Check(MethodResolve(new (ulong, ulong, string, ulong)[] { }, 0x1000) == -1, "method: empty map -> -1");
 
         DefuseSliceSmoke();
+        CodeimageSmoke();
         LiveAttachTests();
 
         Console.WriteLine("1.." + _n);
@@ -357,6 +394,60 @@ static class Program
         Check(SliceEq(fwd, new[] { 0, 1, 2 }), "slice: forward_slice(0) over r10->r11->r12 == {0,1,2}");
         Check(SliceEq(bwd, new[] { 0, 1, 2 }), "slice: backward_slice(2) over r10->r11->r12 == {0,1,2}");
         vt.Free();
+    }
+
+    static bool BytesEq(byte[] got, byte[] want)
+    {
+        if (got.Length != want.Length) return false;
+        for (int i = 0; i < want.Length; i++)
+            if (got[i] != want[i]) return false;
+        return true;
+    }
+
+    // T4 — the code-image recorder (asmtest_codeimage.h): track a buffer in THIS
+    // process and read back the exact bytes it snapshotted. Runs wherever
+    // soft-dirty page tracking is available — no ptrace, so it runs even where
+    // LiveAttachTests() below self-skips.
+    static void CodeimageSmoke()
+    {
+        if (asmtest_codeimage_available() == 0)
+        {
+            IntPtr reason = Marshal.AllocHGlobal(200);
+            try
+            {
+                asmtest_codeimage_skip_reason(reason, 200);
+                Console.WriteLine("# SKIP codeimage: " + Marshal.PtrToStringAnsi(reason));
+            }
+            finally { Marshal.FreeHGlobal(reason); }
+            return;
+        }
+        const int n = 16;
+        IntPtr buf = Marshal.AllocHGlobal(n);
+        try
+        {
+            byte[] want = new byte[n];
+            for (int i = 0; i < n; i++)
+            {
+                want[i] = (byte)(0xA0 + i);
+                Marshal.WriteByte(buf, i, want[i]);
+            }
+            ulong base_ = (ulong)buf.ToInt64();
+            IntPtr img = asmtest_codeimage_new(0);
+            int trc = asmtest_codeimage_track(img, base_, (nuint)n);
+            Check(trc == CI_OK, "codeimage: track() snapshots v0");
+            ulong t0 = asmtest_codeimage_now(img);
+            Check(t0 > 0, "codeimage: now() advanced past 0 after track");
+            int rc = asmtest_codeimage_bytes_at(img, base_, t0, out IntPtr outPtr, out nuint outLen);
+            byte[] got = Array.Empty<byte>();
+            if (rc == CI_OK && outPtr != IntPtr.Zero)
+            {
+                got = new byte[(int)outLen];
+                Marshal.Copy(outPtr, got, 0, (int)outLen);
+            }
+            Check(rc == CI_OK && BytesEq(got, want), "codeimage: bytes_at() returns the exact tracked bytes");
+            asmtest_codeimage_free(img);
+        }
+        finally { Marshal.FreeHGlobal(buf); }
     }
 
     // ----------------------------------------------------------------------
@@ -538,6 +629,39 @@ static class Program
             Check(vic.Counter() > c0, "live: attach_jit victim kept running after detach");
             asmtest_valtrace_free(v);
             vic.Close();
+        }
+        if (asmtest_codeimage_available() != 0)
+        {
+            // T4 — a real code-image threaded through attach_pid_versioned: build the
+            // recorder over the victim's OWN published region, then decode the capture
+            // against it. A non-NULL img must not break the capture or land in the
+            // wrong argument slot (a dropped/misplaced pointer would corrupt base/pid
+            // and the result assert below would catch it).
+            var vic = new Victim(exe, "5", 11, 6);
+            IntPtr img = asmtest_codeimage_new(vic.Pid);
+            int trc = asmtest_codeimage_track(img, vic.Base, vic.Len);
+            Check(trc == CI_OK, "codeimage: track() over the victim's published region");
+            IntPtr v = asmtest_valtrace_new(64, 512, 0);
+            ulong when0 = asmtest_codeimage_now(img);
+            CheckRc(asmtest_dataflow_ptrace_attach_pid_versioned(vic.Pid, vic.Base, vic.Len, 0,
+                    img, when0, out long result, v),
+                "live: attach_pid_versioned with a real img");
+            Check(result == 17, "live: attach_pid_versioned result TRACKS the victim's args (11+6=17)");
+            Check(asmtest_valtrace_steps(v) == 6,
+                "live: attach_pid_versioned captured six steps with a real img");
+            asmtest_codeimage_free(img);
+            asmtest_valtrace_free(v);
+            vic.Close();
+        }
+        else
+        {
+            IntPtr reason = Marshal.AllocHGlobal(200);
+            try
+            {
+                asmtest_codeimage_skip_reason(reason, 200);
+                Console.WriteLine("# SKIP codeimage live: " + Marshal.PtrToStringAnsi(reason));
+            }
+            finally { Marshal.FreeHGlobal(reason); }
         }
         {
             // Negative control: the wrapper must surface the producer's rejections

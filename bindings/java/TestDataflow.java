@@ -43,11 +43,26 @@ public class TestDataflow {
     static MethodHandle attachPid;
     static MethodHandle attachPidTid;
     static MethodHandle attachJit;
+    static MethodHandle attachPidVersioned;
     static MethodHandle valtraceNew;
     static MethodHandle valtraceFree;
     static MethodHandle valtraceSteps;
     static MethodHandle valtraceRecs;
     static MethodHandle valtraceAppend;
+
+    // T4 — the versioned-decode code-image recorder (asmtest_codeimage.h): a userspace
+    // PERF_RECORD_TEXT_POKE. Records a TIMESTAMPED timeline of a process's code bytes so
+    // a live JIT that patches/frees/reuses an address mid-capture still decodes from the
+    // bytes that were LIVE at trace time, not a late live snapshot. pid 0 records THIS
+    // process. Its object (pic/codeimage.o) is already linked into libasmtest_dataflow.
+    static MethodHandle ciAvailable;
+    static MethodHandle ciSkipReason;
+    static MethodHandle ciNew;
+    static MethodHandle ciFree;
+    static MethodHandle ciTrack;
+    static MethodHandle ciNow;
+    static MethodHandle ciBytesAt;
+    static final int CI_OK = 0; // ok
 
     // L1 def-use graph + L2 slice (analysis pipeline, src/dataflow.c). The seed
     // crosses BY POINTER (asmtest_slice_forward_seed/_backward_seed): a by-value
@@ -89,6 +104,49 @@ public class TestDataflow {
         if (loc.kind == LOC_REG) seg.set(JAVA_INT, base + OFF_REG, (int) loc.key);
         else seg.set(JAVA_LONG, base + OFF_ADDR, loc.key);
         seg.set(JAVA_BYTE, base + OFF_IS_WRITE, (byte) (isWrite ? 1 : 0));
+    }
+
+    // A timestamped code-image timeline for one target process (asmtest_codeimage.h).
+    // #track begins recording [base, base+length); #bytesAt answers "what bytes
+    // were live at addr as of sequence `when`" — the decode a mid-capture re-JIT
+    // needs. pid 0 records THIS process. base/addr cross as JAVA_LONG (raw
+    // numeric address), not ADDRESS: the target may be a FOREIGN process, so
+    // there is no Java-reachable MemorySegment to hand the linker for it.
+    static final class CodeImage {
+        MemorySegment h;
+
+        CodeImage(int pid) throws Throwable {
+            h = (MemorySegment) ciNew.invoke(pid);
+            if (h.address() == 0) throw new IllegalStateException("asmtest_codeimage_new failed");
+        }
+
+        int track(long base, long length) throws Throwable {
+            return (int) ciTrack.invoke(h, base, length);
+        }
+
+        long now() throws Throwable {
+            return (long) ciNow.invoke(h);
+        }
+
+        // The bytes live at `addr` as of sequence `when` (0 = latest), or null if
+        // the address was never tracked / had no version at-or-before `when`.
+        byte[] bytesAt(long addr, long when) throws Throwable {
+            MemorySegment outPtr = arena.allocate(JAVA_LONG);
+            MemorySegment outLen = arena.allocate(JAVA_LONG);
+            int rc = (int) ciBytesAt.invoke(h, addr, when, outPtr, outLen);
+            if (rc != CI_OK) return null;
+            long p = outPtr.get(JAVA_LONG, 0);
+            long len = outLen.get(JAVA_LONG, 0);
+            if (p == 0) return null;
+            return MemorySegment.ofAddress(p).reinterpret(len).toArray(JAVA_BYTE);
+        }
+
+        void free() throws Throwable {
+            if (h != null) {
+                ciFree.invoke(h);
+                h = null;
+            }
+        }
     }
 
     // A hand-built (or live-attach-filled) L0 value trace plus its cached L1
@@ -326,6 +384,27 @@ public class TestDataflow {
                 lookup.find("asmtest_dataflow_ptrace_attach_jit").get(),
                 FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_INT, JAVA_LONG, JAVA_LONG,
                         ADDRESS, JAVA_LONG, JAVA_LONG, ADDRESS, ADDRESS, ADDRESS));
+        // (pid, base, code_len, max_insns, img, when, long *result, valtrace *vt) -> int
+        attachPidVersioned = linker.downcallHandle(
+                lookup.find("asmtest_dataflow_ptrace_attach_pid_versioned").get(),
+                FunctionDescriptor.of(JAVA_INT, JAVA_INT, JAVA_LONG, JAVA_LONG, JAVA_LONG,
+                        ADDRESS, JAVA_LONG, ADDRESS, ADDRESS));
+        // T4 — the code-image recorder. base/addr are JAVA_LONG (see the CodeImage
+        // class comment); img/out-pointers are ADDRESS (real Java-managed memory).
+        ciAvailable = linker.downcallHandle(lookup.find("asmtest_codeimage_available").get(),
+                FunctionDescriptor.of(JAVA_INT));
+        ciSkipReason = linker.downcallHandle(lookup.find("asmtest_codeimage_skip_reason").get(),
+                FunctionDescriptor.ofVoid(ADDRESS, JAVA_LONG));
+        ciNew = linker.downcallHandle(lookup.find("asmtest_codeimage_new").get(),
+                FunctionDescriptor.of(ADDRESS, JAVA_INT));
+        ciFree = linker.downcallHandle(lookup.find("asmtest_codeimage_free").get(),
+                FunctionDescriptor.ofVoid(ADDRESS));
+        ciTrack = linker.downcallHandle(lookup.find("asmtest_codeimage_track").get(),
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_LONG));
+        ciNow = linker.downcallHandle(lookup.find("asmtest_codeimage_now").get(),
+                FunctionDescriptor.of(JAVA_LONG, ADDRESS));
+        ciBytesAt = linker.downcallHandle(lookup.find("asmtest_codeimage_bytes_at").get(),
+                FunctionDescriptor.of(JAVA_INT, ADDRESS, JAVA_LONG, JAVA_LONG, ADDRESS, ADDRESS));
         valtraceAppend = linker.downcallHandle(lookup.find("asmtest_valtrace_append").get(),
                 FunctionDescriptor.ofVoid(ADDRESS, JAVA_LONG, ADDRESS, JAVA_LONG));
         defuseBuild = linker.downcallHandle(lookup.find("asmtest_defuse_build").get(),
@@ -366,6 +445,7 @@ public class TestDataflow {
         check(method(new Object[][] {}, 0x1000L) == -1, "method: empty map -> -1");
 
         defuseSliceSmoke();
+        codeimageSmoke();
         liveAttachTests();
 
         System.out.println("1.." + n);
@@ -389,6 +469,35 @@ public class TestDataflow {
         check(java.util.Arrays.equals(bwd, new int[] { 0, 1, 2 }),
                 "slice: backward_slice(2) over r10->r11->r12 == {0,1,2}");
         vt.free();
+    }
+
+    // T4 — the code-image recorder (asmtest_codeimage.h): track a buffer in THIS
+    // process and read back the exact bytes it snapshotted. Runs wherever
+    // soft-dirty page tracking is available — no ptrace, so it runs even where
+    // liveAttachTests() below self-skips.
+    static void codeimageSmoke() throws Throwable {
+        if ((int) ciAvailable.invoke() == 0) {
+            MemorySegment why = arena.allocate(200);
+            ciSkipReason.invoke(why, 200L);
+            System.out.println("# SKIP codeimage: " + why.getString(0));
+            return;
+        }
+        int n = 16;
+        MemorySegment buf = arena.allocate(n);
+        byte[] want = new byte[n];
+        for (int i = 0; i < n; i++) {
+            want[i] = (byte) (0xA0 + i);
+            buf.set(JAVA_BYTE, i, want[i]);
+        }
+        CodeImage img = new CodeImage(0);
+        int trc = img.track(buf.address(), n);
+        check(trc == CI_OK, "codeimage: track() snapshots v0");
+        long t0 = img.now();
+        check(t0 > 0, "codeimage: now() advanced past 0 after track");
+        byte[] got = img.bytesAt(buf.address(), t0);
+        check(got != null && java.util.Arrays.equals(got, want),
+                "codeimage: bytes_at() returns the exact tracked bytes");
+        img.free();
     }
 
     // ----------------------------------------------------------------------
@@ -499,6 +608,33 @@ public class TestDataflow {
             check(vic.counter() > c0, "live: attach_jit victim kept running after detach");
             valtraceFree.invoke(v);
             vic.close();
+        }
+        if ((int) ciAvailable.invoke() != 0) {
+            // T4 — a real code-image threaded through attach_pid_versioned: build the
+            // recorder over the victim's OWN published region, then decode the
+            // capture against it. A non-NULL img must not break the capture or land
+            // in the wrong argument slot (a dropped/misplaced pointer would corrupt
+            // base/pid and the result assert below would catch it).
+            Victim vic = new Victim(exe, "5", 11, 6);
+            CodeImage img = new CodeImage(vic.pid);
+            int trc = img.track(vic.base, vic.len);
+            check(trc == CI_OK, "codeimage: track() over the victim's published region");
+            MemorySegment v = (MemorySegment) valtraceNew.invoke(64L, 512L, 0L);
+            MemorySegment out = arena.allocate(JAVA_LONG);
+            long when0 = img.now();
+            checkRc((int) attachPidVersioned.invoke(vic.pid, vic.base, vic.len, 0L,
+                    img.h, when0, out, v), "live: attach_pid_versioned with a real img");
+            check(out.get(JAVA_LONG, 0) == 17,
+                    "live: attach_pid_versioned result TRACKS the victim's args (11+6=17)");
+            check((long) valtraceSteps.invoke(v) == 6,
+                    "live: attach_pid_versioned captured six steps with a real img");
+            img.free();
+            valtraceFree.invoke(v);
+            vic.close();
+        } else {
+            MemorySegment why = arena.allocate(200);
+            ciSkipReason.invoke(why, 200L);
+            System.out.println("# SKIP codeimage live: " + why.getString(0));
         }
         {
             // Negative control: the wrapper must surface the producer's rejections

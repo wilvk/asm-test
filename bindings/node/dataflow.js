@@ -111,8 +111,93 @@ let _fn = null;
         'size_t code_len, void *img, uint64 when, uint64 max_insns, ' +
         '_Out_ long *result, _Out_ int *survived, void *vt)'
     ),
+    attachPidVersioned: _lib.func(
+      'int asmtest_dataflow_ptrace_attach_pid_versioned(int pid, uint64 base, ' +
+        'size_t code_len, uint64 max_insns, void *img, uint64 when, ' +
+        '_Out_ long *result, void *vt)'
+    ),
+    // T4 — the versioned-decode code-image recorder (asmtest_codeimage.h): a
+    // userspace PERF_RECORD_TEXT_POKE. Records a TIMESTAMPED timeline of a
+    // process's code bytes so a live JIT that patches/frees/reuses an address
+    // mid-capture still decodes from the bytes that were LIVE at trace time, not
+    // a late live snapshot. pid 0 records THIS process. Its object
+    // (pic/codeimage.o) is already linked into libasmtest_dataflow. Mirrors the
+    // CodeImage wrapper already shipped for the hwtrace binding (hwtrace.js).
+    codeimageAvailable: _lib.func('int asmtest_codeimage_available()'),
+    codeimageSkipReason: _lib.func('void asmtest_codeimage_skip_reason(_Out_ char*, size_t)'),
+    codeimageNew: _lib.func('void* asmtest_codeimage_new(int)'),
+    codeimageFree: _lib.func('void asmtest_codeimage_free(void*)'),
+    codeimageTrack: _lib.func('int asmtest_codeimage_track(void*, const void*, size_t)'),
+    codeimageNow: _lib.func('uint64_t asmtest_codeimage_now(void*)'),
+    codeimageBytesAt: _lib.func(
+      'int asmtest_codeimage_bytes_at(void*, const void*, uint64_t, _Out_ void**, _Out_ size_t*)'
+    ),
   };
 })();
+
+// asmtest_codeimage.h status codes, re-declared for the same reason the PTRACE_*
+// ones are.
+const ASMTEST_CI_OK = 0; // ok
+const ASMTEST_CI_ENOENT = -7; // address never tracked / no version at-or-before `when`
+
+// koffi wants a full 64-bit BigInt for a `uint64`/pointer-shaped slot; a plain JS
+// number would silently truncate an address above 2^53. Mirrors hwtrace.js's _addr.
+function _addr(v) {
+  return typeof v === 'number' ? BigInt(v) : v;
+}
+
+// A timestamped code-image timeline for one target process (mirrors the CodeImage
+// class already shipped for the hwtrace binding, hwtrace.js). #track begins
+// recording [base, base+len); #bytesAt answers "what bytes were live at addr as
+// of sequence `when`" — the decode a mid-capture re-JIT needs.
+class CodeImage {
+  constructor(pid = 0) {
+    this._handle = _fn.codeimageNew(pid);
+    if (!this._handle) throw new Error('asmtest_codeimage_new failed');
+  }
+
+  static available() {
+    return _fn !== null && _fn.codeimageAvailable() !== 0;
+  }
+
+  static skipReason() {
+    if (!_fn) return 'libasmtest_dataflow not loaded (make shared-dataflow)';
+    const buf = Buffer.alloc(200);
+    _fn.codeimageSkipReason(buf, buf.length);
+    const nul = buf.indexOf(0);
+    return buf.toString('utf8', 0, nul < 0 ? buf.length : nul);
+  }
+
+  // Begin tracking [base, base+len): snapshot version 0 and arm change detection.
+  // Returns ASMTEST_CI_OK (0) or a negative status.
+  track(base, len) {
+    return _fn.codeimageTrack(this._handle, _addr(base), len);
+  }
+
+  // The current capture sequence (a monotonic logical timestamp).
+  now() {
+    return Number(_fn.codeimageNow(this._handle));
+  }
+
+  // The bytes live at `addr` as of sequence `when` (0 => latest) as a Buffer, or
+  // null on a non-OK status.
+  bytesAt(addr, when = 0) {
+    const outPtr = [null];
+    const outLen = [0];
+    const rc = _fn.codeimageBytesAt(this._handle, _addr(addr), BigInt(when), outPtr, outLen);
+    if (rc !== ASMTEST_CI_OK) return null;
+    const n = Number(outLen[0]);
+    if (!outPtr[0] || n === 0) return Buffer.alloc(0);
+    return Buffer.from(koffi.decode(outPtr[0], 'uint8_t', n));
+  }
+
+  free() {
+    if (this._handle) {
+      _fn.codeimageFree(this._handle);
+      this._handle = null;
+    }
+  }
+}
 
 // True when libasmtest_dataflow loaded (i.e. `make shared-dataflow` has run).
 function available() {
@@ -288,17 +373,33 @@ class ValueTrace {
   // The JIT-aware live attach: worker-targeting plus an explicit survival report.
   // Returns { rc, result, survived } — survived === 1 means the detach left the
   // target alive. This is the entry F4's live GC-move canonicalization lane drives.
-  // The versioned-decode code-image (img/when) is passed NULL: operands decode from
-  // a live snapshot. `when` is accepted so the order matches the C entry point.
-  attachJit(pid, onlyTid, base, codeLen, maxInsns = 0, when = 0) {
+  // `img` (a CodeImage, or null) is the versioned-decode code-image: pass one to
+  // decode each step from the bytes live AT `when` instead of a live snapshot;
+  // null (the default) keeps today's behaviour.
+  attachJit(pid, onlyTid, base, codeLen, maxInsns = 0, when = 0, img = null) {
     const out = [0];
     const survived = [0];
     const rc = _fn.attachJit(
-      pid, onlyTid, BigInt(base), codeLen, null, BigInt(when), BigInt(maxInsns),
-      out, survived, this._v
+      pid, onlyTid, BigInt(base), codeLen, img ? img._handle : null, BigInt(when),
+      BigInt(maxInsns), out, survived, this._v
     );
     this._postAttach();
     return { rc, result: Number(out[0]), survived: survived[0] };
+  }
+
+  // The versioned-decode live attach: steps the thread-group LEADER (like
+  // attachPid) but decodes each step's operands from `img`'s bytes as of
+  // sequence `when` instead of a live snapshot — the right answer when a live
+  // JIT patches/frees/reuses the region mid-capture. `img` may be null (degrades
+  // to exactly attachPid). Returns { rc, result }.
+  attachPidVersioned(pid, base, codeLen, img, when, maxInsns = 0) {
+    const out = [0];
+    const rc = _fn.attachPidVersioned(
+      pid, BigInt(base), codeLen, BigInt(maxInsns), img ? img._handle : null,
+      BigInt(when), out, this._v
+    );
+    this._postAttach();
+    return { rc, result: Number(out[0]) };
   }
 
   // Steps / records stored in the trace (a live producer's, or hand-built ones).
@@ -328,6 +429,7 @@ module.exports = {
   gcmoveCanon,
   methodResolvePc,
   ValueTrace,
+  CodeImage,
   LOC_REG,
   LOC_MEM_ABS,
   LOC_MEM_OFF,
@@ -336,4 +438,6 @@ module.exports = {
   PTRACE_EINVAL,
   PTRACE_ENOSYS,
   PTRACE_ETRACE,
+  ASMTEST_CI_OK,
+  ASMTEST_CI_ENOENT,
 };

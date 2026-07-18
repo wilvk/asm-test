@@ -21,10 +21,28 @@ const ValtraceRecsFn = *const fn (?*anyopaque) callconv(.C) usize;
 // ships NO header on purpose (a value-trace PRODUCER is a tier, not part of the
 // shared sink API), so — exactly as its own C suite does — this binding re-declares
 // them. Keep in step with that file. No struct crosses by value; `img` (the
-// versioned-decode code image) is opaque and always null here.
+// versioned-decode code image, asmtest_codeimage.h) is opaque and null in the
+// attach_jit call below, but T4 threads a real one through attach_pid_versioned.
 const AttachPidFn = *const fn (c_int, u64, usize, u64, *c_long, ?*anyopaque) callconv(.C) c_int;
 const AttachPidTidFn = *const fn (c_int, c_int, u64, usize, u64, *c_long, ?*anyopaque) callconv(.C) c_int;
 const AttachJitFn = *const fn (c_int, c_int, u64, usize, ?*anyopaque, u64, u64, *c_long, *c_int, ?*anyopaque) callconv(.C) c_int;
+const AttachPidVersionedFn = *const fn (c_int, u64, usize, u64, ?*anyopaque, u64, *c_long, ?*anyopaque) callconv(.C) c_int;
+
+// T4 — the versioned-decode code-image recorder (asmtest_codeimage.h): a userspace
+// PERF_RECORD_TEXT_POKE. Records a TIMESTAMPED timeline of a process's code bytes so
+// a live JIT that patches/frees/reuses an address mid-capture still decodes from the
+// bytes that were LIVE at trace time, not a late live snapshot. pid 0 records THIS
+// process. Its object (pic/codeimage.o) is already linked into libasmtest_dataflow.
+const CiAvailableFn = *const fn () callconv(.C) c_int;
+const CiSkipReasonFn = *const fn (?[*]u8, usize) callconv(.C) void;
+const CiNewFn = *const fn (c_int) callconv(.C) ?*anyopaque;
+const CiFreeFn = *const fn (?*anyopaque) callconv(.C) void;
+const CiTrackFn = *const fn (?*anyopaque, ?*const anyopaque, usize) callconv(.C) c_int;
+const CiRefreshFn = *const fn (?*anyopaque) callconv(.C) c_int;
+const CiNowFn = *const fn (?*const anyopaque) callconv(.C) u64;
+const CiBytesAtFn = *const fn (?*const anyopaque, ?*const anyopaque, u64, *?[*]const u8, *usize) callconv(.C) c_int;
+
+const CI_OK: c_int = 0; // ok
 
 // L1 def-use graph + L2 slice (analysis pipeline, src/dataflow.c). One operand
 // record (include/asmtest_valtrace.h at_val_rec_t), an extern struct matching the
@@ -185,6 +203,16 @@ pub fn main() !void {
 
     const gcmove_canon = lib.lookup(GcmoveCanonFn, "asmtest_gcmove_canon") orelse return error.SymNotFound;
     const method_resolve_pc = lib.lookup(MethodResolveFn, "asmtest_method_resolve_pc") orelse return error.SymNotFound;
+    // T4 — the code-image recorder (asmtest_codeimage.h), looked up unconditionally
+    // like the pair above: its object is always linked into libasmtest_dataflow.
+    const ci_available = lib.lookup(CiAvailableFn, "asmtest_codeimage_available") orelse return error.SymNotFound;
+    const ci_skip_reason = lib.lookup(CiSkipReasonFn, "asmtest_codeimage_skip_reason") orelse return error.SymNotFound;
+    const ci_new = lib.lookup(CiNewFn, "asmtest_codeimage_new") orelse return error.SymNotFound;
+    const ci_free = lib.lookup(CiFreeFn, "asmtest_codeimage_free") orelse return error.SymNotFound;
+    const ci_track = lib.lookup(CiTrackFn, "asmtest_codeimage_track") orelse return error.SymNotFound;
+    const ci_now = lib.lookup(CiNowFn, "asmtest_codeimage_now") orelse return error.SymNotFound;
+    const ci_bytes_at = lib.lookup(CiBytesAtFn, "asmtest_codeimage_bytes_at") orelse return error.SymNotFound;
+    const attach_pid_versioned = lib.lookup(AttachPidVersionedFn, "asmtest_dataflow_ptrace_attach_pid_versioned") orelse return error.SymNotFound;
 
     // --- GC-move canonicalizer --- //
     check(gcmove_canon(null, 0, 0, 0x1234) == 0x1234, "gcmove: empty move set is identity");
@@ -261,6 +289,33 @@ pub fn main() !void {
         defer alloc.free(bwd);
         check(sliceEq(fwd, &[_]u32{ 0, 1, 2 }), "slice: forward_slice(0) over r10->r11->r12 == {0,1,2}");
         check(sliceEq(bwd, &[_]u32{ 0, 1, 2 }), "slice: backward_slice(2) over r10->r11->r12 == {0,1,2}");
+    }
+
+    // ------------------------------------------------------------------
+    // T4 — the code-image recorder (asmtest_codeimage.h): track a buffer in
+    // THIS process and read back the exact bytes it snapshotted. Runs
+    // wherever soft-dirty page tracking is available — no ptrace, so it runs
+    // even where the live-attach section below self-skips.
+    // ------------------------------------------------------------------
+    if (ci_available() == 0) {
+        var why: [200]u8 = undefined;
+        ci_skip_reason(&why, why.len);
+        std.debug.print("# SKIP codeimage: {s}\n", .{std.mem.sliceTo(&why, 0)});
+    } else {
+        var cbuf: [16]u8 = undefined;
+        for (&cbuf, 0..) |*b, i| b.* = @intCast(0xA0 + i);
+        const img = ci_new(0) orelse return error.CodeimageNewFailed;
+        const trc = ci_track(img, @ptrCast(&cbuf), cbuf.len);
+        check(trc == CI_OK, "codeimage: track() snapshots v0");
+        const t0 = ci_now(img);
+        check(t0 > 0, "codeimage: now() advanced past 0 after track");
+        var out: ?[*]const u8 = null;
+        var outlen: usize = 0;
+        const rc = ci_bytes_at(img, @ptrCast(&cbuf), t0, &out, &outlen);
+        check(rc == CI_OK and outlen == cbuf.len and out != null and
+            std.mem.eql(u8, out.?[0..outlen], &cbuf),
+            "codeimage: bytes_at() returns the exact tracked bytes");
+        ci_free(img);
     }
 
     // ------------------------------------------------------------------
@@ -456,6 +511,31 @@ pub fn main() !void {
             check(vic.counter() > c0, "live: attach_jit victim kept running after detach");
             valtrace_free(v);
             vic.close(alloc);
+        }
+        if (ci_available() != 0) {
+            // T4 — a real code-image threaded through attach_pid_versioned: build
+            // the recorder over the victim's OWN published region, then decode the
+            // capture against it. A non-NULL img must not break the capture or
+            // land in the wrong argument slot (a dropped/misplaced pointer would
+            // corrupt base/pid and the result assert below would catch it).
+            var vic = try Victim.spawn(alloc, victim, "5", 11, 6);
+            const img = ci_new(vic.pid) orelse return error.CodeimageNewFailed;
+            const trc = ci_track(img, @ptrFromInt(@as(usize, @intCast(vic.base))), vic.len);
+            check(trc == CI_OK, "codeimage: track() over the victim's published region");
+            const v = valtrace_new(64, 512, 0);
+            var out: c_long = 0;
+            const when0 = ci_now(img);
+            H.checkRc(attach_pid_versioned(vic.pid, vic.base, vic.len, 0, img, when0, &out, v),
+                "live: attach_pid_versioned with a real img");
+            check(out == 17, "live: attach_pid_versioned result TRACKS the victim's args (11+6=17)");
+            check(valtrace_steps(v) == 6, "live: attach_pid_versioned captured six steps with a real img");
+            ci_free(img);
+            valtrace_free(v);
+            vic.close(alloc);
+        } else {
+            var why: [200]u8 = undefined;
+            ci_skip_reason(&why, why.len);
+            std.debug.print("# SKIP codeimage live: {s}\n", .{std.mem.sliceTo(&why, 0)});
         }
         {
             // Negative control: the wrapper must surface the producer's rejections

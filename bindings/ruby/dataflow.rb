@@ -152,6 +152,42 @@ module Asmtest
       LIB["asmtest_dataflow_ptrace_attach_jit"],
       [INT, INT, LL, SZ, VOIDP, LL, LL, VOIDP, VOIDP, VOIDP], INT
     )
+    ATTACH_PID_VERSIONED = Fiddle::Function.new(
+      LIB["asmtest_dataflow_ptrace_attach_pid_versioned"],
+      [INT, LL, SZ, LL, VOIDP, LL, VOIDP, VOIDP], INT
+    )
+
+    # --- T4: the versioned-decode code-image recorder (asmtest_codeimage.h) ---
+    # A userspace PERF_RECORD_TEXT_POKE: records a TIMESTAMPED timeline of a
+    # process's code bytes so a live JIT that patches/frees/reuses an address
+    # mid-capture still decodes from the bytes that were LIVE at trace time,
+    # not a late live snapshot. pid 0 records THIS process. Status codes
+    # (asmtest_codeimage.h) re-declared for the same reason the PTRACE_* ones are.
+    CI_OK = 0
+    CI_ENOENT = -7 # address never tracked / no version at-or-before `when`
+
+    CI_AVAILABLE = Fiddle::Function.new(LIB["asmtest_codeimage_available"], [], INT)
+    CI_SKIP_REASON = Fiddle::Function.new(LIB["asmtest_codeimage_skip_reason"], [VOIDP, SZ], VOID)
+    CI_NEW = Fiddle::Function.new(LIB["asmtest_codeimage_new"], [INT], VOIDP)
+    CI_FREE = Fiddle::Function.new(LIB["asmtest_codeimage_free"], [VOIDP], VOID)
+    CI_TRACK = Fiddle::Function.new(LIB["asmtest_codeimage_track"], [VOIDP, VOIDP, SZ], INT)
+    CI_REFRESH = Fiddle::Function.new(LIB["asmtest_codeimage_refresh"], [VOIDP], INT)
+    CI_NOW = Fiddle::Function.new(LIB["asmtest_codeimage_now"], [VOIDP], LL)
+    CI_BYTES_AT = Fiddle::Function.new(
+      LIB["asmtest_codeimage_bytes_at"], [VOIDP, VOIDP, LL, VOIDP, VOIDP], INT
+    )
+
+    # True iff the soft-dirty page-tracking recorder works on this host (else
+    # #track/#refresh self-skip via a negative status). Cached natively.
+    def codeimage_available?
+      CI_AVAILABLE.call != 0
+    end
+
+    def codeimage_skip_reason
+      buf = Fiddle::Pointer.malloc(200)
+      CI_SKIP_REASON.call(buf, 200)
+      buf.to_s
+    end
 
     # True iff this build's live-attach tier is real (Linux x86-64 + Capstone)
     # rather than the off-platform ENOSYS stub. PROBED, not guessed: an argument-
@@ -165,6 +201,60 @@ module Asmtest
         ATTACH_PID.call(0, 0, 0, 0, out, v) != PTRACE_ENOSYS
       ensure
         VALTRACE_FREE.call(v)
+      end
+    end
+
+    # A timestamped code-image timeline for one target process (asmtest_codeimage.h).
+    # #track begins recording [base, base+length); #refresh re-snapshots any pages
+    # written since the last arm as a new version; #bytes_at answers "what bytes
+    # were live at addr as of sequence `when`" — the decode a mid-capture re-JIT
+    # needs. pid 0 (the default) records THIS process.
+    class CodeImage
+      def initialize(pid = 0)
+        @h = CI_NEW.call(pid)
+        raise "asmtest_codeimage_new failed" if @h.null?
+      end
+
+      # The raw handle, for passing to ValueTrace#attach_jit / #attach_pid_versioned.
+      def handle
+        @h
+      end
+
+      # Begin tracking [base, base+length): snapshot version 0 and arm change
+      # detection. Returns CI_OK (0) or a negative status.
+      def track(base, length)
+        CI_TRACK.call(@h, base, length)
+      end
+
+      # Re-snapshot any changed tracked pages as new versions. Returns the number
+      # of new versions recorded (>= 0) or a negative status.
+      def refresh
+        CI_REFRESH.call(@h)
+      end
+
+      # The current capture sequence (a monotonic logical timestamp).
+      def now
+        CI_NOW.call(@h) & DataFlow::U64
+      end
+
+      # The bytes live at `addr` as of sequence `when_seq` (0 = latest), or nil if
+      # the address was never tracked / had no version at-or-before `when_seq`.
+      def bytes_at(addr, when_seq = 0)
+        out = Fiddle::Pointer.malloc(8)
+        outlen = Fiddle::Pointer.malloc(8)
+        rc = CI_BYTES_AT.call(@h, addr, when_seq, out, outlen)
+        return nil unless rc == DataFlow::CI_OK
+
+        ptr = out[0, 8].unpack1("Q<")
+        len = outlen[0, 8].unpack1("Q<")
+        Fiddle::Pointer.new(ptr)[0, len]
+      end
+
+      def free
+        return if @h.nil? || @h.null?
+
+        CI_FREE.call(@h)
+        @h = nil
       end
     end
 
@@ -221,15 +311,31 @@ module Asmtest
 
       # The JIT-aware live attach: worker-targeting plus an explicit survival
       # report. Returns [rc, result, survived]; survived == 1 means the detach left
-      # the target alive. The versioned-decode code-image (img/when) is NULL here —
-      # operands decode from a live snapshot.
-      def attach_jit(pid, only_tid, base, code_len, max_insns = 0, when_seq = 0)
+      # the target alive. `img` (a CodeImage, or nil) is the versioned-decode
+      # code-image: pass one to decode each step from the bytes live AT `when_seq`
+      # instead of a live snapshot — nil (the default) keeps today's behaviour.
+      def attach_jit(pid, only_tid, base, code_len, max_insns = 0, when_seq = 0, img: nil)
         out = Fiddle::Pointer.malloc(8)
         survived = Fiddle::Pointer.malloc(4)
-        rc = ATTACH_JIT.call(pid, only_tid, base, code_len, Fiddle::NULL, when_seq,
+        img_ptr = img ? img.handle : Fiddle::NULL
+        rc = ATTACH_JIT.call(pid, only_tid, base, code_len, img_ptr, when_seq,
                              max_insns, out, survived, @v)
         post_attach
         [rc, out[0, 8].unpack1("q<"), survived[0, 4].unpack1("l<")]
+      end
+
+      # The versioned-decode live attach: steps the thread-group LEADER (like
+      # #attach_pid) but decodes each step's operands from `img`'s bytes as of
+      # sequence `when_seq` instead of a live snapshot — the right answer when a
+      # live JIT patches/frees/reuses the region mid-capture. `img` may be nil
+      # (degrades to exactly #attach_pid). Returns [rc, result].
+      def attach_pid_versioned(pid, base, code_len, img, when_seq, max_insns = 0)
+        out = Fiddle::Pointer.malloc(8)
+        img_ptr = img ? img.handle : Fiddle::NULL
+        rc = ATTACH_PID_VERSIONED.call(pid, base, code_len, max_insns, img_ptr,
+                                       when_seq, out, @v)
+        post_attach
+        [rc, out[0, 8].unpack1("q<")]
       end
 
       def steps = VALTRACE_STEPS.call(@v)

@@ -8,6 +8,7 @@ so it validates on a host without pytest installed. The live tests need the lane
 env (`make dataflow-python-test`), which builds the lib and the victim.
 """
 
+import ctypes
 import os
 import platform
 import struct
@@ -334,6 +335,59 @@ def test_attach_rejects_bad_arguments():
         # A pid that does not exist cannot be seized: never OK.
         rc, _ = vt.attach_pid(0x7FFFFFF0, 0x1000, 21)
         assert rc != dataflow.PTRACE_OK, "attaching to a nonexistent pid returned OK"
+
+
+# ---------------------------------------------------------------------------
+# T4 — the code-image recorder (asmtest_codeimage.h): track a buffer in THIS
+# process and read back the exact bytes it snapshotted, then thread a real
+# recorder through attach_pid_versioned over a live victim.
+# ---------------------------------------------------------------------------
+
+
+def test_codeimage_recorder_round_trip():
+    # Runs wherever soft-dirty page tracking is available -- no ptrace, so it
+    # runs even where the live-attach tests above self-skip.
+    if not dataflow.CodeImage.available():
+        return  # host lacks soft-dirty page tracking (a real host gate)
+    buf = ctypes.create_string_buffer(16)
+    want = bytes((0xA0 + i) & 0xFF for i in range(16))
+    ctypes.memmove(buf, want, 16)
+    base = ctypes.addressof(buf)
+    img = dataflow.CodeImage(0)
+    try:
+        trc = img.track(base, 16)
+        assert trc == dataflow.CI_OK, f"track: rc={trc}"
+        t0 = img.now()
+        assert t0 > 0, f"now(): t0={t0}"
+        got = img.bytes_at(base, t0)
+        assert got == want, f"bytes_at: got={got!r}, want={want!r}"
+    finally:
+        img.free()
+
+
+def test_attach_pid_versioned_with_real_img():
+    # A real code-image threaded through attach_pid_versioned: build the recorder
+    # over the victim's OWN published region, then decode the capture against it.
+    # A non-None img must not break the capture or land in the wrong argument slot
+    # (a dropped/misplaced pointer would corrupt base/pid and the result assert
+    # below would catch it).
+    if not _LIVE_EXPECTED or not _VICTIM:
+        return  # pytest without the lane's env; _main() bails instead of skipping
+    if not dataflow.CodeImage.available():
+        return  # host lacks soft-dirty page tracking (a real host gate)
+    tmp = _tmpdir()
+    with _Victim(tmp, 11, 6) as vic, dataflow.ValueTrace(64, 512) as vt:
+        img = dataflow.CodeImage(vic.pid)
+        try:
+            trc = img.track(vic.base, vic.len)
+            assert trc == dataflow.CI_OK, f"track: rc={trc}"
+            when0 = img.now()
+            rc, result = vt.attach_pid_versioned(vic.pid, vic.base, vic.len, img, when0)
+            _check_rc(rc, "attach_pid_versioned")
+            assert result == 17, f"attach_pid_versioned: result={result}, want 17"
+            assert vt.steps == 6
+        finally:
+            img.free()
 
 
 def _main():

@@ -8,25 +8,22 @@
 // or just libasmtest_dataflow (which carries all of them).
 #pragma once
 
+#include "asmtest_codeimage.h"
 #include "asmtest_valtrace.h"
 
 #include <cstdint>
 #include <set>
 #include <sys/types.h>
+#include <utility>
 #include <vector>
 
 // F7 — the scoped ptrace L0 producer's live-attach entry points. Declared HERE, not
 // #included: a value-trace PRODUCER is a tier, not part of the shared sink API, so
 // src/dataflow_ptrace.c ships no header and every caller re-declares what it uses —
 // exactly as that tier's own C suite (examples/test_dataflow_ptrace.c) does. Keep in
-// step with src/dataflow_ptrace.c.
+// step with src/dataflow_ptrace.c. asmtest_codeimage_t itself comes from the real
+// shipped header (#included above) rather than a hand forward-declaration.
 extern "C" {
-// The versioned-decode byte source, opaque here — attachJit takes it as a pointer
-// and this binding only ever passes null (live-snapshot decode). Same spelling as
-// include/asmtest_codeimage.h's own forward declaration, so including that header
-// alongside this one is harmless.
-typedef struct asmtest_codeimage asmtest_codeimage_t;
-
 // Attach to LIVE `pid`, single-step [base, base+code_len), then DETACH leaving the
 // target running. Steps the thread-group LEADER. `result` takes the region's return
 // value; `vt` is filled with the captured trace. max_insns 0 = the tier's backstop.
@@ -47,6 +44,15 @@ int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, std::uint64_t 
                                        std::uint64_t when, std::uint64_t max_insns,
                                        long* result, int* survived,
                                        asmtest_valtrace_t* vt);
+// The versioned-decode entry: like attach_pid, but decodes each step's operands
+// from `img`'s bytes as of sequence `when` instead of a live snapshot. `img` may
+// be NULL (degrades to exactly attach_pid).
+int asmtest_dataflow_ptrace_attach_pid_versioned(pid_t pid, std::uint64_t base,
+                                                 std::size_t code_len,
+                                                 std::uint64_t max_insns,
+                                                 asmtest_codeimage_t* img,
+                                                 std::uint64_t when, long* result,
+                                                 asmtest_valtrace_t* vt);
 }
 
 namespace asmtest {
@@ -132,6 +138,49 @@ struct Loc {
 inline Loc Reg(std::uint32_t id) { return {AT_LOC_REG, id}; }
 inline Loc MemAbs(std::uint64_t addr) { return {AT_LOC_MEM_ABS, addr}; }
 
+// A timestamped code-image timeline for one target process (asmtest_codeimage.h),
+// RAII-owned. track() begins recording [base, base+len); bytesAt() answers "what
+// bytes were live at addr as of sequence `when`" — the decode a mid-capture re-JIT
+// needs. pid 0 (the default) records THIS process.
+class CodeImage {
+public:
+    explicit CodeImage(pid_t pid = 0) : h_(asmtest_codeimage_new(pid)) {}
+    ~CodeImage() { if (h_) asmtest_codeimage_free(h_); }
+    CodeImage(const CodeImage&) = delete;
+    CodeImage& operator=(const CodeImage&) = delete;
+
+    static bool available() { return asmtest_codeimage_available() != 0; }
+
+    // The raw handle, for passing to ValueTrace::attachJit / attachPidVersioned.
+    asmtest_codeimage_t* handle() const { return h_; }
+
+    // Begin tracking [base, base+len): snapshot version 0 and arm change detection.
+    // Returns ASMTEST_CI_OK (0) or a negative status.
+    int track(std::uint64_t base, std::size_t len) {
+        return asmtest_codeimage_track(h_, reinterpret_cast<const void*>(base), len);
+    }
+
+    // The current capture sequence (a monotonic logical timestamp).
+    std::uint64_t now() const { return asmtest_codeimage_now(h_); }
+
+    // The bytes live at `addr` as of sequence `when` (0 = latest), or an empty
+    // optional-like pair {false, {}} if the address was never tracked / had no
+    // version at-or-before `when`.
+    std::pair<bool, std::vector<std::uint8_t>> bytesAt(std::uint64_t addr,
+                                                        std::uint64_t when = 0) const {
+        const std::uint8_t* out = nullptr;
+        std::size_t outLen = 0;
+        int rc = asmtest_codeimage_bytes_at(h_, reinterpret_cast<const void*>(addr),
+                                            when, &out, &outLen);
+        if (rc != ASMTEST_CI_OK || out == nullptr)
+            return {false, {}};
+        return {true, std::vector<std::uint8_t>(out, out + outLen)};
+    }
+
+private:
+    asmtest_codeimage_t* h_;
+};
+
 // A hand-built L0 value trace fed to the L1 def-use builder + L2 slicer — the RAII
 // analog of the Python ValueTrace. step() records an instruction's read/write operand
 // locations; forwardSlice/backwardSlice return the reached step-index set. Normally a
@@ -187,13 +236,28 @@ public:
         return r;
     }
     // The JIT-aware attach: worker-targeting plus a `survived` report. `img`/`when`
-    // are the versioned code-image byte source; null means live-snapshot decode.
+    // are the versioned code-image byte source (a CodeImage's raw handle, or
+    // nullptr for live-snapshot decode — the default).
     AttachResult attachJit(pid_t pid, pid_t onlyTid, std::uint64_t base,
                            std::size_t codeLen, std::uint64_t maxInsns = 0,
                            asmtest_codeimage_t* img = nullptr, std::uint64_t when = 0) {
         AttachResult r{};
         r.rc = asmtest_dataflow_ptrace_attach_jit(pid, onlyTid, base, codeLen, img, when,
                                                   maxInsns, &r.result, &r.survived, v_);
+        postAttach();
+        return r;
+    }
+    // The versioned-decode attach: steps the thread-group LEADER (like attachPid)
+    // but decodes each step's operands from `img`'s bytes as of sequence `when`
+    // instead of a live snapshot — the right answer when a live JIT
+    // patches/frees/reuses the region mid-capture. `img` may be nullptr (degrades
+    // to exactly attachPid).
+    AttachResult attachPidVersioned(pid_t pid, std::uint64_t base, std::size_t codeLen,
+                                    asmtest_codeimage_t* img, std::uint64_t when,
+                                    std::uint64_t maxInsns = 0) {
+        AttachResult r{};
+        r.rc = asmtest_dataflow_ptrace_attach_pid_versioned(
+            pid, base, codeLen, maxInsns, img, when, &r.result, v_);
         postAttach();
         return r;
     }

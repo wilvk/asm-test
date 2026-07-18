@@ -5,6 +5,7 @@
 'use strict';
 
 const df = require('./dataflow');
+const koffi = require('koffi');
 
 let n = 0;
 let failed = false;
@@ -77,6 +78,28 @@ const MEM = df.LOC_MEM_ABS;
   vt.step(0x06, [[REG, 3]], [[REG, 4]]);
   check(setEq(vt.forwardSlice(0), new Set([0, 1])), 'pipeline: no spurious cross-link');
   vt.free();
+}
+
+// ---------------------------------------------------------------------------
+// T4 — the code-image recorder (asmtest_codeimage.h): track a buffer in THIS
+// process and read back the exact bytes it snapshotted. Runs wherever
+// soft-dirty page tracking is available -- no ptrace, so it runs even where
+// the live-attach section below self-skips.
+// ---------------------------------------------------------------------------
+if (!df.CodeImage.available()) {
+  console.log(`# SKIP codeimage: ${df.CodeImage.skipReason()}`);
+} else {
+  const cbuf = Buffer.alloc(16); // off-heap ArrayBuffer backing: address-stable
+  for (let i = 0; i < 16; i++) cbuf[i] = 0xA0 + i;
+  const addr = koffi.address(cbuf);
+  const img = new df.CodeImage(0);
+  const trc = img.track(addr, 16);
+  check(trc === df.ASMTEST_CI_OK, 'codeimage: track() snapshots v0');
+  const t0 = img.now();
+  check(t0 > 0, 'codeimage: now() advanced past 0 after track');
+  const got = img.bytesAt(addr, t0);
+  check(got !== null && got.equals(cbuf), 'codeimage: bytes_at() returns the exact tracked bytes');
+  img.free();
 }
 
 // ---------------------------------------------------------------------------
@@ -232,6 +255,29 @@ if (!liveExpected) {
     check(vic.counter() > c0, 'live: attach_jit victim kept running after detach');
     vt.free();
     vic.kill();
+  }
+  if (df.CodeImage.available()) {
+    // T4 — a real code-image threaded through attachPidVersioned: build the
+    // recorder over the victim's OWN published region, then decode the capture
+    // against it. A non-null img must not break the capture or land in the
+    // wrong argument slot (a dropped/misplaced pointer would corrupt base/pid
+    // and the result assert below would catch it).
+    const vic = spawnVictim('5', 11, 6);
+    const img = new df.CodeImage(vic.pid);
+    const trc = img.track(vic.base, vic.len);
+    check(trc === df.ASMTEST_CI_OK, "codeimage: track() over the victim's published region");
+    const vt = new df.ValueTrace(64, 512);
+    const when0 = img.now();
+    const r = vt.attachPidVersioned(vic.pid, vic.base, vic.len, img, when0);
+    checkRc(r.rc, 'live: attach_pid_versioned with a real img');
+    check(r.result === 17,
+      `live: attach_pid_versioned result TRACKS the victim's args (11+6=17, got ${r.result})`);
+    check(vt.steps === 6, 'live: attach_pid_versioned captured six steps with a real img');
+    img.free();
+    vt.free();
+    vic.kill();
+  } else {
+    console.log(`# SKIP codeimage live: ${df.CodeImage.skipReason()}`);
   }
   {
     // Negative control: the wrapper must surface the producer's rejections rather

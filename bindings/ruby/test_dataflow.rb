@@ -54,6 +54,28 @@ check(vt.backward_slice(2) == Set[0, 1, 2],
 vt.free
 
 # ---------------------------------------------------------------------------
+# T4 — the code-image recorder (asmtest_codeimage.h): track a buffer in THIS
+# process and read back the exact bytes it snapshotted. Runs wherever
+# soft-dirty page tracking is available -- no ptrace, so it runs even where
+# the live-attach section below self-skips.
+# ---------------------------------------------------------------------------
+if !DF.codeimage_available?
+  puts "# SKIP codeimage: #{DF.codeimage_skip_reason}"
+else
+  cbuf = Fiddle::Pointer.malloc(16)
+  pattern = (0...16).map { |i| 0xA0 + i }.pack("C*")
+  cbuf[0, 16] = pattern
+  img = DF::CodeImage.new(0)
+  trc = img.track(cbuf.to_i, 16)
+  check(trc == DF::CI_OK, "codeimage: track() snapshots v0")
+  t0 = img.now
+  check(t0 > 0, "codeimage: now() advanced past 0 after track")
+  got = img.bytes_at(cbuf.to_i, t0)
+  check(got == pattern, "codeimage: bytes_at() returns the exact tracked bytes")
+  img.free
+end
+
+# ---------------------------------------------------------------------------
 # F7 — live-attach data flow: capture over a REAL attached pid.
 #
 # Every assertion is POSITIVE and keyed to something only a working capture can
@@ -181,6 +203,29 @@ else
   check(vic.counter > c0, "live: attach_jit victim kept running after detach")
   vt.free
   vic.close
+
+  # T4 — a real code-image threaded through attach_pid_versioned: build the
+  # recorder over the victim's OWN published region, then decode the capture
+  # against it. A non-NULL img must not break the capture or land in the
+  # wrong argument slot (a dropped/misplaced pointer would corrupt base/pid
+  # and the result assert below would catch it).
+  if DF.codeimage_available?
+    vic = Victim.new("5", 11, 6)
+    img = DF::CodeImage.new(vic.pid)
+    trc = img.track(vic.base, vic.len)
+    check(trc == DF::CI_OK, "codeimage: track() over the victim's published region")
+    vt = DF::ValueTrace.new(64, 512)
+    rc, result = vt.attach_pid_versioned(vic.pid, vic.base, vic.len, img, img.now)
+    check_rc(rc, "live: attach_pid_versioned with a real img")
+    check(result == 17,
+          "live: attach_pid_versioned result TRACKS the victim's args (11+6=17, got #{result})")
+    check(vt.steps == 6, "live: attach_pid_versioned captured six steps with a real img")
+    img.free
+    vt.free
+    vic.close
+  else
+    puts "# SKIP codeimage live: #{DF.codeimage_skip_reason}"
+  end
 
   # Negative control: the wrapper must surface the producer's rejections rather
   # than manufacture success.

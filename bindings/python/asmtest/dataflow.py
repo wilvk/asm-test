@@ -107,6 +107,29 @@ def _load():
             _C.c_uint64, _C.c_uint64, _C.POINTER(_C.c_long),
             _C.POINTER(_C.c_int), _C.c_void_p,
         ]
+        lib.asmtest_dataflow_ptrace_attach_pid_versioned.restype = _C.c_int
+        lib.asmtest_dataflow_ptrace_attach_pid_versioned.argtypes = [
+            _C.c_int, _C.c_uint64, _C.c_size_t, _C.c_uint64, _C.c_void_p,
+            _C.c_uint64, _C.POINTER(_C.c_long), _C.c_void_p,
+        ]
+        # T4 — the versioned-decode code-image recorder (asmtest_codeimage.h). Its
+        # object (pic/codeimage.o) is already linked into libasmtest_dataflow (like
+        # the F7 entry points above), so these symbols are always present too.
+        lib.asmtest_codeimage_available.restype = _C.c_int
+        lib.asmtest_codeimage_available.argtypes = []
+        lib.asmtest_codeimage_skip_reason.argtypes = [_C.c_char_p, _C.c_size_t]
+        lib.asmtest_codeimage_new.restype = _C.c_void_p
+        lib.asmtest_codeimage_new.argtypes = [_C.c_int]
+        lib.asmtest_codeimage_free.argtypes = [_C.c_void_p]
+        lib.asmtest_codeimage_track.restype = _C.c_int
+        lib.asmtest_codeimage_track.argtypes = [_C.c_void_p, _C.c_void_p, _C.c_size_t]
+        lib.asmtest_codeimage_now.restype = _C.c_uint64
+        lib.asmtest_codeimage_now.argtypes = [_C.c_void_p]
+        lib.asmtest_codeimage_bytes_at.restype = _C.c_int
+        lib.asmtest_codeimage_bytes_at.argtypes = [
+            _C.c_void_p, _C.c_void_p, _C.c_uint64,
+            _C.POINTER(_C.POINTER(_C.c_ubyte)), _C.POINTER(_C.c_size_t),
+        ]
         _lib = lib
         return _lib
     raise OSError(
@@ -206,6 +229,65 @@ def live_attach_available():
     finally:
         lib.asmtest_valtrace_free(v)
     return rc != PTRACE_ENOSYS
+
+
+# T4 — the versioned-decode code-image recorder's status codes, re-declared for
+# the same reason the PTRACE_* ones are.
+CI_OK = 0  # ok
+CI_ENOENT = -7  # address never tracked / no version at-or-before `when`
+
+
+class CodeImage:
+    """Time-aware code-image recorder (asmtest_codeimage.h): a userspace
+    PERF_RECORD_TEXT_POKE. Records a timestamped timeline of a process's code
+    regions so :meth:`bytes_at` returns the bytes that were live at trace-position
+    `when` — the right answer for a JIT whose code is patched/freed/reused, where a
+    single late snapshot returns the wrong bytes. ``pid == 0`` records this process.
+    Mirrors the CodeImage class already shipped for the hwtrace binding
+    (hwtrace.py), against this lib's own handle."""
+
+    def __init__(self, pid: int = 0):
+        self._lib = _load()
+        self._handle = self._lib.asmtest_codeimage_new(pid)
+        if not self._handle:
+            raise RuntimeError("asmtest_codeimage_new failed")
+
+    @staticmethod
+    def available() -> bool:
+        lib = _load()
+        return bool(lib.asmtest_codeimage_available())
+
+    @staticmethod
+    def skip_reason() -> str:
+        lib = _load()
+        buf = _C.create_string_buffer(200)
+        lib.asmtest_codeimage_skip_reason(buf, len(buf))
+        return buf.value.decode()
+
+    def track(self, base: int, length: int) -> int:
+        """Begin tracking [base, base+length): snapshot version 0 and arm change
+        detection. Returns CI_OK (0) or a negative status."""
+        return int(self._lib.asmtest_codeimage_track(self._handle, _C.c_void_p(base), length))
+
+    def now(self) -> int:
+        """The current capture sequence (a monotonic logical timestamp)."""
+        return int(self._lib.asmtest_codeimage_now(self._handle))
+
+    def bytes_at(self, addr: int, when: int = 0):
+        """The bytes live at `addr` as of sequence `when` (0 = latest), or None if
+        the address was never tracked / had no version at-or-before `when`."""
+        out = _C.POINTER(_C.c_ubyte)()
+        outlen = _C.c_size_t()
+        rc = self._lib.asmtest_codeimage_bytes_at(
+            self._handle, _C.c_void_p(addr), when, _C.byref(out), _C.byref(outlen))
+        if rc != CI_OK:
+            return None
+        return bytes(out[i] for i in range(outlen.value))
+
+    def free(self):
+        if self._handle:
+            self._lib.asmtest_codeimage_free(self._handle)
+            self._handle = None
 
 
 # at_loc_kind_t (include/asmtest_valtrace.h): the location space of an operand.
@@ -326,27 +408,43 @@ class ValueTrace:
         self._post_attach()
         return int(rc), int(out.value)
 
-    def attach_jit(self, pid, only_tid, base, code_len, max_insns=0, when=0):
+    def attach_jit(self, pid, only_tid, base, code_len, max_insns=0, when=0, img=None):
         """The JIT-aware live attach: worker-targeting + an explicit survival report.
 
         Returns ``(rc, result, survived)`` — ``survived`` is 1 when the detach left
         the target alive and running. This is the entry point F4's live GC-move
         canonicalization lane drives.
 
-        The versioned-decode code-image (the ``img``/``when`` byte source that makes
-        a mid-capture re-JIT decode at the bytes that were live *then*) is passed as
-        NULL here, i.e. operands decode from a live snapshot of the target. Wrapping
-        the code-image recorder is a separate binding surface (asmtest_codeimage.h);
-        ``when`` is accepted so the argument order matches the C entry point.
+        ``img`` (a :class:`CodeImage`, or None) is the versioned-decode code-image:
+        pass one to decode each step from the bytes live *at* ``when`` instead of a
+        live snapshot of the target; None (the default) keeps today's behaviour.
         """
         out = _C.c_long(0)
         survived = _C.c_int(0)
+        img_h = img._handle if img is not None else None
         rc = self._lib.asmtest_dataflow_ptrace_attach_jit(
-            int(pid), int(only_tid), int(base), int(code_len), None, int(when),
+            int(pid), int(only_tid), int(base), int(code_len), img_h, int(when),
             int(max_insns), _C.byref(out), _C.byref(survived), self._v,
         )
         self._post_attach()
         return int(rc), int(out.value), int(survived.value)
+
+    def attach_pid_versioned(self, pid, base, code_len, img, when, max_insns=0):
+        """The versioned-decode live attach: steps the thread-group LEADER (like
+        :meth:`attach_pid`) but decodes each step's operands from ``img``'s bytes
+        as of sequence ``when`` instead of a live snapshot — the right answer when
+        a live JIT patches/frees/reuses the region mid-capture. ``img`` (a
+        :class:`CodeImage`) may be None (degrades to exactly :meth:`attach_pid`).
+        Returns ``(rc, result)``.
+        """
+        out = _C.c_long(0)
+        img_h = img._handle if img is not None else None
+        rc = self._lib.asmtest_dataflow_ptrace_attach_pid_versioned(
+            int(pid), int(base), int(code_len), int(max_insns), img_h, int(when),
+            _C.byref(out), self._v,
+        )
+        self._post_attach()
+        return int(rc), int(out.value)
 
     @property
     def steps(self):

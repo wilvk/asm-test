@@ -36,7 +36,9 @@ extern "C" {
     // producer ships NO header on purpose (a value-trace PRODUCER is a tier, not
     // part of the shared sink API), so — exactly as its own C suite does — this
     // binding re-declares them. Keep in step with that file. No struct crosses by
-    // value; `img` (the versioned-decode code image) is opaque and always null here.
+    // value; `img` (the versioned-decode code image, asmtest_codeimage.h) is opaque
+    // and null in the attach_jit call below, but T4 threads a real one through
+    // attach_pid_versioned.
     fn asmtest_dataflow_ptrace_attach_pid(
         pid: c_int, base: u64, code_len: usize, max_insns: u64, result: *mut c_long,
         vt: *mut c_void,
@@ -49,6 +51,27 @@ extern "C" {
         pid: c_int, only_tid: c_int, base: u64, code_len: usize, img: *mut c_void,
         when: u64, max_insns: u64, result: *mut c_long, survived: *mut c_int,
         vt: *mut c_void,
+    ) -> c_int;
+    fn asmtest_dataflow_ptrace_attach_pid_versioned(
+        pid: c_int, base: u64, code_len: usize, max_insns: u64, img: *mut c_void,
+        when: u64, result: *mut c_long, vt: *mut c_void,
+    ) -> c_int;
+
+    // T4 — the versioned-decode code-image recorder (asmtest_codeimage.h): a
+    // userspace PERF_RECORD_TEXT_POKE. Records a TIMESTAMPED timeline of a
+    // process's code bytes so a live JIT that patches/frees/reuses an address
+    // mid-capture still decodes from the bytes that were LIVE at trace time, not
+    // a late live snapshot. pid 0 records THIS process. Its object
+    // (pic/codeimage.o) is already linked into libasmtest_dataflow.
+    fn asmtest_codeimage_available() -> c_int;
+    fn asmtest_codeimage_skip_reason(buf: *mut c_char, buflen: usize);
+    fn asmtest_codeimage_new(pid: c_int) -> *mut c_void;
+    fn asmtest_codeimage_free(img: *mut c_void);
+    fn asmtest_codeimage_track(img: *mut c_void, base: *const c_void, len: usize) -> c_int;
+    fn asmtest_codeimage_now(img: *const c_void) -> u64;
+    fn asmtest_codeimage_bytes_at(
+        img: *const c_void, addr: *const c_void, when: u64,
+        out: *mut *const u8, out_len: *mut usize,
     ) -> c_int;
 
     // L1 def-use graph + L2 slice (analysis pipeline, src/dataflow.c). The seed
@@ -207,6 +230,9 @@ const PTRACE_EINVAL: c_int = -1; // bad arguments
 const PTRACE_ENOSYS: c_int = -3; // off Linux x86-64 / no Capstone: tier absent
 const PTRACE_ETRACE: c_int = -4; // ptrace/wait failure (seccomp/yama)
 
+// The code-image recorder's status codes, re-declared for the same reason.
+const CI_OK: c_int = 0; // ok
+
 static N: AtomicU32 = AtomicU32::new(0);
 static FAILED: AtomicBool = AtomicBool::new(false);
 
@@ -272,6 +298,7 @@ fn main() {
     check(method(&[], 0x1000) == -1, "method: empty map -> -1");
 
     defuse_slice_smoke();
+    codeimage_smoke();
     live_attach_tests();
 
     println!("1..{}", N.load(Ordering::SeqCst));
@@ -295,6 +322,41 @@ fn defuse_slice_smoke() {
     check(slice_eq(&fwd, &[0, 1, 2]), "slice: forward_slice(0) over r10->r11->r12 == {0,1,2}");
     check(slice_eq(&bwd, &[0, 1, 2]), "slice: backward_slice(2) over r10->r11->r12 == {0,1,2}");
     vt.free();
+}
+
+// T4 — the code-image recorder (asmtest_codeimage.h): track a buffer in THIS
+// process and read back the exact bytes it snapshotted. Runs wherever
+// soft-dirty page tracking is available — no ptrace, so it runs even where
+// live_attach_tests() below self-skips.
+fn codeimage_smoke() {
+    let available = unsafe { asmtest_codeimage_available() } != 0;
+    if !available {
+        let mut why = vec![0u8; 200];
+        unsafe { asmtest_codeimage_skip_reason(why.as_mut_ptr() as *mut c_char, why.len()) };
+        let why = unsafe { std::ffi::CStr::from_ptr(why.as_ptr() as *const c_char) };
+        println!("# SKIP codeimage: {}", why.to_string_lossy());
+        return;
+    }
+    let buf: [u8; 16] = std::array::from_fn(|i| 0xA0u8.wrapping_add(i as u8));
+    unsafe {
+        let img = asmtest_codeimage_new(0);
+        let trc = asmtest_codeimage_track(img, buf.as_ptr() as *const c_void, buf.len());
+        check(trc == CI_OK, "codeimage: track() snapshots v0");
+        let t0 = asmtest_codeimage_now(img);
+        check(t0 > 0, "codeimage: now() advanced past 0 after track");
+        let mut out: *const u8 = std::ptr::null();
+        let mut out_len: usize = 0;
+        let rc = asmtest_codeimage_bytes_at(
+            img, buf.as_ptr() as *const c_void, t0, &mut out, &mut out_len,
+        );
+        let got = if rc == CI_OK && !out.is_null() {
+            std::slice::from_raw_parts(out, out_len)
+        } else {
+            &[]
+        };
+        check(rc == CI_OK && got == buf, "codeimage: bytes_at() returns the exact tracked bytes");
+        asmtest_codeimage_free(img);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -480,6 +542,36 @@ fn live_attach_tests() {
         check(vic.counter() > c0, "live: attach_jit victim kept running after detach");
         asmtest_valtrace_free(v);
         vic.close();
+    }
+    if unsafe { asmtest_codeimage_available() } != 0 {
+        // T4 — a real code-image threaded through attach_pid_versioned: build the
+        // recorder over the victim's OWN published region, then decode the
+        // capture against it. A non-NULL img must not break the capture or land
+        // in the wrong argument slot (a dropped/misplaced pointer would corrupt
+        // base/pid and the result assert below would catch it).
+        let mut vic = Victim::spawn(&exe, "5", 11, 6);
+        unsafe {
+            let img = asmtest_codeimage_new(vic.pid);
+            let trc = asmtest_codeimage_track(img, vic.base as *const c_void, vic.len);
+            check(trc == CI_OK, "codeimage: track() over the victim's published region");
+            let v = asmtest_valtrace_new(64, 512, 0);
+            let mut out: c_long = 0;
+            let when0 = asmtest_codeimage_now(img);
+            check_rc(
+                asmtest_dataflow_ptrace_attach_pid_versioned(
+                    vic.pid, vic.base, vic.len, 0, img, when0, &mut out, v,
+                ),
+                "live: attach_pid_versioned with a real img",
+            );
+            check(out == 17, "live: attach_pid_versioned result TRACKS the victim's args (11+6=17)");
+            check(asmtest_valtrace_steps(v) == 6,
+                "live: attach_pid_versioned captured six steps with a real img");
+            asmtest_codeimage_free(img);
+            asmtest_valtrace_free(v);
+        }
+        vic.close();
+    } else {
+        println!("# SKIP codeimage live: recorder unavailable");
     }
     unsafe {
         // Negative control: the wrapper must surface the producer's rejections

@@ -159,6 +159,29 @@ int main() {
     }
 
     // ------------------------------------------------------------------
+    // T4 — the code-image recorder (asmtest_codeimage.h): track a buffer in THIS
+    // process and read back the exact bytes it snapshotted. Runs wherever
+    // soft-dirty page tracking is available — no ptrace, so it runs even where
+    // the live-attach section below self-skips.
+    // ------------------------------------------------------------------
+    if (!CodeImage::available()) {
+        std::printf("# SKIP codeimage: soft-dirty page tracking unavailable\n");
+    } else {
+        std::uint8_t cbuf[16];
+        for (int i = 0; i < 16; ++i) cbuf[i] = static_cast<std::uint8_t>(0xA0 + i);
+        auto base = reinterpret_cast<std::uint64_t>(cbuf);
+        CodeImage img;
+        int trc = img.track(base, sizeof cbuf);
+        check(trc == ASMTEST_CI_OK, "codeimage: track() snapshots v0");
+        std::uint64_t t0 = img.now();
+        check(t0 > 0, "codeimage: now() advanced past 0 after track");
+        auto got = img.bytesAt(base, t0);
+        check(got.first && got.second.size() == sizeof cbuf &&
+                  std::memcmp(got.second.data(), cbuf, sizeof cbuf) == 0,
+              "codeimage: bytes_at() returns the exact tracked bytes");
+    }
+
+    // ------------------------------------------------------------------
     // F7 — live-attach data flow over a REAL attached pid.
     //
     // Every assertion is POSITIVE and keyed to something only a working capture
@@ -247,6 +270,30 @@ int main() {
             std::uint64_t c0 = vic.counter();
             msleep(50);
             check(vic.counter() > c0, "live: attach_jit victim kept running after detach");
+        }
+        if (CodeImage::available()) {
+            // T4 — a real code-image threaded through attachPidVersioned: build the
+            // recorder over the victim's OWN published region, then decode the
+            // capture against it. A non-null img must not break the capture or land
+            // in the wrong argument slot (a dropped/misplaced pointer would corrupt
+            // base/pid and the result assert below would catch it).
+            Victim vic;
+            check(vic.spawn(exe, "/tmp/asmtest-df-cpp-5.counter", 11, 6),
+                  "live: spawned a victim for the versioned-decode entry");
+            CodeImage img(vic.pid);
+            int trc = img.track(vic.base, vic.len);
+            check(trc == ASMTEST_CI_OK, "codeimage: track() over the victim's published region");
+            ValueTrace vt(64, 512);
+            std::uint64_t when0 = img.now();
+            AttachResult r = vt.attachPidVersioned(vic.pid, vic.base, vic.len,
+                                                    img.handle(), when0);
+            checkRc(r.rc, "live: attach_pid_versioned with a real img");
+            check(r.result == 17,
+                  "live: attach_pid_versioned result TRACKS the victim's args (11+6=17)");
+            check(vt.steps() == 6,
+                  "live: attach_pid_versioned captured six steps with a real img");
+        } else {
+            std::printf("# SKIP codeimage live: soft-dirty page tracking unavailable\n");
         }
         {
             // Negative control: the wrapper must surface the producer's rejections

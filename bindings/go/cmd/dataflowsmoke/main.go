@@ -31,7 +31,8 @@ static size_t (*p_vt_recs)(const void*);
 // shared sink API), so — exactly as its own C suite does — this binding re-declares
 // them. Nothing cross-checks these signatures but the assertions in main(), so keep
 // them in step with that file. No struct crosses by value; `img` (the versioned-
-// decode code image) is opaque and always NULL here.
+// decode code image, asmtest_codeimage.h) is opaque and NULL in the attach_jit
+// call below, but T4 threads a real one through attach_pid_versioned.
 //
 // NB: line comments ONLY inside this preamble. The preamble is itself delimited by
 // a C-style block comment, and those do not nest — the first close-comment token
@@ -40,6 +41,23 @@ static size_t (*p_vt_recs)(const void*);
 static int (*p_attach_pid)(int, uint64_t, size_t, uint64_t, long*, void*);
 static int (*p_attach_pid_tid)(int, int, uint64_t, size_t, uint64_t, long*, void*);
 static int (*p_attach_jit)(int, int, uint64_t, size_t, void*, uint64_t, uint64_t, long*, int*, void*);
+static int (*p_attach_pid_versioned)(int, uint64_t, size_t, uint64_t, void*, uint64_t, long*, void*);
+
+// T4 — the versioned-decode code-image recorder (asmtest_codeimage.h): a userspace
+// PERF_RECORD_TEXT_POKE. Records a TIMESTAMPED timeline of a process's code bytes so
+// a live JIT that patches/frees/reuses an address mid-capture still decodes from the
+// bytes that were LIVE at trace time, not a late live snapshot. pid 0 records THIS
+// process. Its object (pic/codeimage.o) is already linked into libasmtest_dataflow.
+// The base/addr pointer arguments are wrapped below (df_ci_track/df_ci_bytes_at) to
+// take a uint64_t instead, so the Go side never has to build a cgo pointer out of a
+// foreign process's numeric address.
+static int (*p_ci_available)(void);
+static void (*p_ci_skip_reason)(char*, size_t);
+static void *(*p_ci_new)(int);
+static void (*p_ci_free)(void*);
+static int (*p_ci_track)(void*, const void*, size_t);
+static uint64_t (*p_ci_now)(const void*);
+static int (*p_ci_bytes_at)(const void*, const void*, uint64_t, const uint8_t**, size_t*);
 
 // One operand read/write record (include/asmtest_valtrace.h at_val_rec_t). The
 // three bool fields are declared `unsigned char` (not `_Bool`) purely to keep
@@ -91,6 +109,16 @@ static int df_load(const char *path) {
         dlsym(h, "asmtest_dataflow_ptrace_attach_pid_tid");
     p_attach_jit = (int(*)(int, int, uint64_t, size_t, void*, uint64_t, uint64_t, long*, int*, void*))
         dlsym(h, "asmtest_dataflow_ptrace_attach_jit");
+    p_attach_pid_versioned = (int(*)(int, uint64_t, size_t, uint64_t, void*, uint64_t, long*, void*))
+        dlsym(h, "asmtest_dataflow_ptrace_attach_pid_versioned");
+    p_ci_available = (int(*)(void))dlsym(h, "asmtest_codeimage_available");
+    p_ci_skip_reason = (void(*)(char*, size_t))dlsym(h, "asmtest_codeimage_skip_reason");
+    p_ci_new = (void*(*)(int))dlsym(h, "asmtest_codeimage_new");
+    p_ci_free = (void(*)(void*))dlsym(h, "asmtest_codeimage_free");
+    p_ci_track = (int(*)(void*, const void*, size_t))dlsym(h, "asmtest_codeimage_track");
+    p_ci_now = (uint64_t(*)(const void*))dlsym(h, "asmtest_codeimage_now");
+    p_ci_bytes_at = (int(*)(const void*, const void*, uint64_t, const uint8_t**, size_t*))
+        dlsym(h, "asmtest_codeimage_bytes_at");
     p_vt_append = (void(*)(void*, uint64_t, const df_valrec_t*, size_t))
         dlsym(h, "asmtest_valtrace_append");
     p_defuse_build = (void*(*)(const void*))dlsym(h, "asmtest_defuse_build");
@@ -102,9 +130,11 @@ static int df_load(const char *path) {
     p_slice_free = (void(*)(void*))dlsym(h, "asmtest_slice_free");
     p_slice_contains = (int(*)(const void*, uint32_t))dlsym(h, "asmtest_slice_contains");
     return (p_canon && p_resolve && p_vt_new && p_vt_free && p_vt_steps && p_vt_recs &&
-            p_attach_pid && p_attach_pid_tid && p_attach_jit && p_vt_append &&
-            p_defuse_build && p_defuse_free && p_slice_forward_seed &&
-            p_slice_backward_seed && p_slice_free && p_slice_contains) ? 0 : -1;
+            p_attach_pid && p_attach_pid_tid && p_attach_jit && p_attach_pid_versioned &&
+            p_vt_append && p_defuse_build && p_defuse_free && p_slice_forward_seed &&
+            p_slice_backward_seed && p_slice_free && p_slice_contains &&
+            p_ci_available && p_ci_skip_reason && p_ci_new && p_ci_free &&
+            p_ci_track && p_ci_now && p_ci_bytes_at) ? 0 : -1;
 }
 static uint64_t df_canon(const df_gcmove_t *m, size_t n, uint32_t s, uint64_t phys) { return p_canon(m, n, s, phys); }
 static int df_resolve(const df_method_t *m, size_t n, uint64_t pc) { return p_resolve(m, n, pc); }
@@ -132,15 +162,32 @@ static int df_attach_pid(int pid, uint64_t base, size_t len, uint64_t mi, long *
 static int df_attach_pid_tid(int pid, int tid, uint64_t base, size_t len, uint64_t mi, long *res, void *vt) {
     return p_attach_pid_tid(pid, tid, base, len, mi, res, vt);
 }
-static int df_attach_jit(int pid, int tid, uint64_t base, size_t len, uint64_t when,
-                         uint64_t mi, long *res, int *surv, void *vt) {
-    return p_attach_jit(pid, tid, base, len, NULL, when, mi, res, surv, vt);
+static int df_attach_jit(int pid, int tid, uint64_t base, size_t len, void *img,
+                         uint64_t when, uint64_t mi, long *res, int *surv, void *vt) {
+    return p_attach_jit(pid, tid, base, len, img, when, mi, res, surv, vt);
+}
+static int df_attach_pid_versioned(int pid, uint64_t base, size_t len, uint64_t mi,
+                                   void *img, uint64_t when, long *res, void *vt) {
+    return p_attach_pid_versioned(pid, base, len, mi, img, when, res, vt);
+}
+static int df_ci_available(void) { return p_ci_available(); }
+static void df_ci_skip_reason(char *buf, size_t buflen) { p_ci_skip_reason(buf, buflen); }
+static void *df_ci_new(int pid) { return p_ci_new(pid); }
+static void df_ci_free(void *img) { p_ci_free(img); }
+static int df_ci_track(void *img, uint64_t base, size_t len) {
+    return p_ci_track(img, (const void*)(uintptr_t)base, len);
+}
+static uint64_t df_ci_now(const void *img) { return p_ci_now(img); }
+static int df_ci_bytes_at(const void *img, uint64_t addr, uint64_t when,
+                          const uint8_t **out, size_t *out_len) {
+    return p_ci_bytes_at(img, (const void*)(uintptr_t)addr, when, out, out_len);
 }
 */
 import "C"
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"os"
@@ -349,6 +396,50 @@ func defuseSliceSmoke() {
 	vt.free()
 }
 
+// codeimageOk mirrors the C ASMTEST_CI_OK status (asmtest_codeimage.h).
+const codeimageOk = 0
+
+// T4 — the code-image recorder (asmtest_codeimage.h): track a buffer in THIS
+// process and read back the exact bytes it snapshotted. Runs wherever
+// soft-dirty page tracking is available — no ptrace, so it runs even where
+// liveAttachTests below self-skips.
+func codeimageSmoke() {
+	if C.df_ci_available() == 0 {
+		var why [200]C.char
+		C.df_ci_skip_reason(&why[0], C.size_t(len(why)))
+		fmt.Printf("# SKIP codeimage: %s\n", C.GoString(&why[0]))
+		return
+	}
+	// A C-heap buffer (not a Go slice): stable across the call, like the CI_
+	// track/bytes_at pattern the other six bindings use (Fiddle::Pointer.malloc,
+	// Marshal.AllocHGlobal, ...).
+	const n = 16
+	cbuf := C.malloc(C.size_t(n))
+	defer C.free(cbuf)
+	want := make([]byte, n)
+	view := unsafe.Slice((*byte)(cbuf), n)
+	for i := 0; i < n; i++ {
+		want[i] = byte(0xA0 + i)
+		view[i] = want[i]
+	}
+	base := C.uint64_t(uintptr(cbuf))
+	img := C.df_ci_new(0)
+	trc := C.df_ci_track(img, base, C.size_t(n))
+	check(int(trc) == codeimageOk, "codeimage: track() snapshots v0")
+	t0 := C.df_ci_now(img)
+	check(uint64(t0) > 0, "codeimage: now() advanced past 0 after track")
+	var out *C.uint8_t
+	var outLen C.size_t
+	rc := C.df_ci_bytes_at(img, base, t0, &out, &outLen)
+	got := []byte{}
+	if rc == codeimageOk && out != nil {
+		got = C.GoBytes(unsafe.Pointer(out), C.int(outLen))
+	}
+	check(int(rc) == codeimageOk && bytes.Equal(got, want),
+		"codeimage: bytes_at() returns the exact tracked bytes")
+	C.df_ci_free(img)
+}
+
 func main() {
 	path := os.Getenv("ASMTEST_DATAFLOW_LIB")
 	if path == "" {
@@ -387,6 +478,7 @@ func main() {
 	check(method(nil, 0x1000) == -1, "method: empty map -> -1")
 
 	defuseSliceSmoke()
+	codeimageSmoke()
 	liveAttachTests()
 
 	fmt.Printf("1..%d\n", n)
@@ -567,7 +659,7 @@ func liveAttachTests() {
 		var out C.long
 		var survived C.int
 		checkRc(C.df_attach_jit(C.int(vic.pid), 0, C.uint64_t(vic.base), C.size_t(vic.length),
-			0, 0, &out, &survived, v), "live: attach_jit stepped the region")
+			nil, 0, 0, &out, &survived, v), "live: attach_jit stepped the region")
 		check(int(out) == 23, "live: attach_jit region returned 23 (20+3)")
 		check(uint64(C.df_vt_steps(v)) == 6, "live: attach_jit captured six steps")
 		// The producer's OWN survival report — the house rule that a foreign target
@@ -578,6 +670,31 @@ func liveAttachTests() {
 		check(vic.counter() > c0, "live: attach_jit victim kept running after detach")
 		C.df_vt_free(v)
 		vic.close()
+	}
+	if C.df_ci_available() != 0 {
+		// T4 — a real code-image threaded through attach_pid_versioned: build the
+		// recorder over the victim's OWN published region, then decode the
+		// capture against it. A non-NULL img must not break the capture or land
+		// in the wrong argument slot (a dropped/misplaced pointer would corrupt
+		// base/pid and the result assert below would catch it).
+		vic := spawnVictim(exe, "5", 11, 6)
+		img := C.df_ci_new(C.int(vic.pid))
+		trc := C.df_ci_track(img, C.uint64_t(vic.base), C.size_t(vic.length))
+		check(int(trc) == codeimageOk, "codeimage: track() over the victim's published region")
+		v := C.df_vt_new(64, 512, 0)
+		var out C.long
+		when0 := C.df_ci_now(img)
+		checkRc(C.df_attach_pid_versioned(C.int(vic.pid), C.uint64_t(vic.base), C.size_t(vic.length),
+			0, img, when0, &out, v), "live: attach_pid_versioned with a real img")
+		check(int(out) == 17, "live: attach_pid_versioned result TRACKS the victim's args (11+6=17)")
+		check(uint64(C.df_vt_steps(v)) == 6, "live: attach_pid_versioned captured six steps with a real img")
+		C.df_ci_free(img)
+		C.df_vt_free(v)
+		vic.close()
+	} else {
+		var why [200]C.char
+		C.df_ci_skip_reason(&why[0], C.size_t(len(why)))
+		fmt.Printf("# SKIP codeimage live: %s\n", C.GoString(&why[0]))
 	}
 	{
 		// Negative control: the wrapper must surface the producer's rejections

@@ -41,6 +41,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `docker-dataflow-<lang>` lanes green at their new 40/40 (was 36/36), 0 skips.
   See [dataflow-bindings-slice-codeimage.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/dataflow-bindings-slice-codeimage.md).
 
+- **Code-image recorder wrapper and versioned (time-correct) operand decode in
+  all ten data-flow language bindings** (`asmtest_codeimage.h`'s `new`/`track`/
+  `now`/`bytes_at`/`free`, plus the new `asmtest_dataflow_ptrace_attach_pid_versioned`
+  entry point). Each binding gains a `CodeImage` wrapper (Python/Ruby/Lua's
+  `available()`/`skip_reason()`/`track()`/`now()`/`bytes_at()`, C++'s RAII
+  `CodeImage`, Node's mirroring the existing hwtrace-binding class, Zig/Rust/Go/
+  Java/.NET's thin function wrappers) and a `ValueTrace.attach_pid_versioned`
+  method; `attach_jit` no longer unconditionally passes `NULL`/`null`/`nil` for
+  the versioned-decode `img` argument — a caller with a recorder now gets
+  time-correct operand decode across a mid-capture JIT patch/free/reuse
+  instead of NULL/live-snapshot bytes. Verified live: each binding tracks a
+  recorder over a real victim's published region and decodes an
+  `attach_pid_versioned` capture through it (result and step-count assertions
+  tied to that run's own arguments, so a stubbed capture cannot pass). All ten
+  `docker-dataflow-<lang>` lanes green with the new assertions, 0 skips.
+  See [dataflow-bindings-slice-codeimage.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/dataflow-bindings-slice-codeimage.md).
+
 - **Block-step pre-cover: an IBS covered-block table that memoizes the ptrace
   block-step reconstructors' decode.** `asmtest_bs_precover_build`/`_free`
   (`include/asmtest_blockstep_internal.h`, internal — no new public ABI symbol)
