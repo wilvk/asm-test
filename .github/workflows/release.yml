@@ -110,6 +110,14 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+      # Reproducible source tarball (distribution-packaging.md T7): a stable,
+      # digest-pinned source asset for the system-package specs (packaging/) and
+      # Debian's orig-tarball flow. `make package-source` is `git archive` +
+      # `gzip -n`, so a dispatch and the eventual tag produce byte-identical
+      # bytes for a given commit; both the tarball and its SHA256SUMS are
+      # attached to the release below and uploaded as a dry-run artifact.
+      - name: Build the reproducible source tarball (make package-source)
+        run: make package-source
       - uses: actions/download-artifact@v8
         with: { name: native-all, path: build/dist/native }
       - name: Assemble the corresponding-source archive
@@ -125,6 +133,13 @@ jobs:
           name: corresponding-source
           path: corresponding-source/
           if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: source-tarball
+          path: |
+            build/dist/asm-test-*.tar.gz
+            build/dist/SHA256SUMS
+          if-no-files-found: error
       - name: Attach to the GitHub release (on a tag)
         if: ${{ startsWith(github.ref, 'refs/tags/') }}
         env:
@@ -136,7 +151,8 @@ jobs:
             || gh release create "${GITHUB_REF_NAME}" --verify-tag \
                  --title "${GITHUB_REF_NAME}" --notes "Release ${GITHUB_REF_NAME}"
           gh release upload "${GITHUB_REF_NAME}" \
-            corresponding-source/*.tar.gz corresponding-source/SOURCES.txt --clobber
+            corresponding-source/*.tar.gz corresponding-source/SOURCES.txt \
+            build/dist/asm-test-*.tar.gz build/dist/SHA256SUMS --clobber
 
   # ---- Per-binding: package -> install fresh -> smoke -> dry-run publish ----- #
   # Each job downloads native-all into build/dist/native/, builds the package

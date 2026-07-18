@@ -57,9 +57,12 @@ others still publish.
    git tag v1.1.0 && git push origin v1.1.0
    ```
 4. The workflow builds the cross-platform payload, runs the fresh-install smokes,
-   attaches the corresponding-source archive to the release, and publishes to each
-   registry whose secret is set. Each publish is gated on
-   `startsWith(github.ref, 'refs/tags/')` so a `workflow_dispatch` never publishes.
+   attaches the corresponding-source archive **and the reproducible source
+   tarball** (`asm-test-<version>.tar.gz` + `SHA256SUMS`, from `make
+   package-source`) to the release, and publishes to each registry whose secret
+   is set. Each publish is gated on `startsWith(github.ref, 'refs/tags/')` so a
+   `workflow_dispatch` never publishes. The source tarball is the digest-pinned
+   asset the system-package specs (Homebrew/Debian/AUR/vcpkg/conan) consume.
 
 Re-publishing the same version fails on most registries (NuGet uses
 `--skip-duplicate`) — bump the version to re-release.

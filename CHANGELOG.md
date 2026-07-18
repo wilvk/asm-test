@@ -8,6 +8,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Reproducible source tarball (`make package-source`) attached to every
+  release.** `git archive` of HEAD piped through `gzip -n` emits
+  `build/dist/asm-test-<version>.tar.gz` + `SHA256SUMS`, byte-identical for a
+  given commit across machines, so its digest is known ahead of the tag. The
+  `release.yml` corresponding-source job builds it, uploads it as a dry-run
+  artifact, and attaches both files to the tagged GitHub release — the
+  digest-pinned source the system-package specs (Homebrew/Debian/AUR/vcpkg/conan)
+  and Debian's orig-tarball flow consume.
+  See [distribution-packaging.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/distribution-packaging.md).
+
 - **Block-step replay record-and-inject for rdtsc/rdtscp/rdrand/rdseed/cpuid, gated per
   block rather than per region.** `src/dataflow_blockstep.c`'s `step_block` now injects
   each site's recorded post-state (read from the T5 DR exec-breakpoint boundary) into the

@@ -71,7 +71,7 @@ SUITES         := $(filter-out $(addprefix $(BUILD)/,$(SUITE_EXCLUDES)), \
                   $(sort $(wildcard examples/test_*.c))))
 
 .PHONY: all help test check check-header-portability demo-fail clean
-.PHONY: lib install uninstall amalgamate pc
+.PHONY: lib install uninstall amalgamate pc package-source
 .PHONY: shared shared-emu manifest manifest-win64 install-shared install-shared-emu conformance conformance-asm
 .PHONY: python-test cpp-test rust-test zig-test
 .PHONY: ruby-test lua-test node-test java-test dotnet-test go-test
@@ -130,6 +130,7 @@ help:
 	@echo '  manifest        emit asmtest_abi.json (ABI layout)'
 	@echo '  amalgamate      generate the single-header asmtest_single.h'
 	@echo '  install         install headers + static lib + pkg-config'
+	@echo '  package-source  reproducible source tarball + SHA256SUMS (release asset; syspkg specs)'
 	@echo '  deps            bootstrap the optional toolchain (DEPS_ARGS=...)'
 	@echo '  packages        build every language package (needs all toolchains)'
 	@echo '  package-libs    stage the host shared libs into build/dist/native/<plat>'
@@ -575,6 +576,28 @@ uninstall:
 	      $(libdir)/$(notdir $(call shlib_dev,libasmtest_emu)) \
 	      $(pcdir)/asmtest-emu.pc $(incdir)/asmtest_abi.json
 
+# Reproducible source tarball for the GitHub release + the system-package specs
+# (packaging/, distribution-packaging.md T7-T13). `git archive` of HEAD gives a
+# prefix-normalised export of exactly the tracked tree; piping through `gzip -n`
+# (rather than `git archive`'s implicit gzip, which stamps the current mtime into
+# the wrapper) makes the byte stream reproducible, so build/dist/SHA256SUMS is
+# stable for a given commit across machines. The digest the release asset will
+# carry is thus computable ahead of the tag. shasum (macOS) / sha256sum (Linux),
+# whichever is present. Run from a checkout (needs .git); the syspkg Docker lanes
+# stage the produced tarball rather than re-running this in-image.
+#   make package-source   -> build/dist/asm-test-$(VERSION).tar.gz + SHA256SUMS
+DIST := $(BUILD)/dist
+package-source: | $(BUILD)
+	@git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+	  || { echo "package-source: needs a git work tree (.git absent)" >&2; exit 1; }
+	mkdir -p $(DIST)
+	git archive --format=tar --prefix=asm-test-$(ASMTEST_VERSION)/ HEAD \
+	  | gzip -n -9 > $(DIST)/asm-test-$(ASMTEST_VERSION).tar.gz
+	cd $(DIST) && { command -v shasum >/dev/null 2>&1 \
+	  && shasum -a 256 asm-test-$(ASMTEST_VERSION).tar.gz \
+	  || sha256sum asm-test-$(ASMTEST_VERSION).tar.gz; } > SHA256SUMS
+	@echo "package-source: wrote $(DIST)/asm-test-$(ASMTEST_VERSION).tar.gz + $(DIST)/SHA256SUMS"
+
 # Install the shared libs alongside libasmtest.a (Track 0). Kept separate from
 # `make install` so the static-only install stays toolchain-light; run after it.
 # Copies the real versioned file, recreates the soname + dev symlinks in
@@ -730,6 +753,7 @@ FMT_SOURCES  := $(filter-out include/asm.h, \
                  bindings/*.c bindings/conformance/*.c \
                  examples/*.c scripts/gen-manifest.c \
                  cli/*.c cli/*.h \
+                 packaging/smoke/*.c \
                  tools/*.c tools/*.h))
 fmt:
 	$(CLANG_FORMAT) -i $(FMT_SOURCES)
