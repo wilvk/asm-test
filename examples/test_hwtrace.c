@@ -88,6 +88,13 @@ int asmtest_hwtrace_sample_window_amd_weighted(void (*run_fn)(void *),
                                                void *arg, int period,
                                                uint64_t *ips, size_t cap,
                                                size_t *nips, int *truncated);
+/* W3 in-process BTF pairing post-pass (internal, src/ss_btf.c via src/bs_recon.h;
+ * hand-declared here like the AMD decode entries above — same combined guard the
+ * definition lives behind). */
+size_t asmtest_ss_btf_pair_stops(const uint8_t *code, size_t len,
+                                 uint64_t base_ip, const uint64_t *stops,
+                                 size_t nstops, struct perf_branch_entry *out,
+                                 size_t out_cap, int *gap);
 #endif
 
 /* CoreSight reconstruction-core interface (decoder-independent half of
@@ -1363,6 +1370,99 @@ static void test_amd_msr_spec_filter(void) {
           "MSR spec filter: a retired correct-path-speculative entry is kept");
 #else
     printf("# SKIP AMD MSR spec filter: not Linux x86-64\n");
+#endif
+}
+
+/* W3 in-process BTF pairing post-pass (host-independent, no MSR, no privilege, no
+ * specific silicon): asmtest_ss_btf_pair_stops on SCRIPTED stop streams. The 16-byte
+ * LOOP bytes from test_singlestep_loop: mov rax,0 [0x0,7 bytes]; add rax,rdi [0x7,3];
+ * dec rsi [0xa,3]; jnz -8 [0xd,2 -> target 0x7]; ret [0xf,1]. */
+static void test_ss_btf_pairing(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    static const unsigned char LOOP[] = {0x48, 0xc7, 0xc0, 0x00, 0x00, 0x00,
+                                         0x00, 0x48, 0x01, 0xf8, 0x48, 0xff,
+                                         0xce, 0x75, 0xf8, 0xc3};
+    /* LOOP's own address, not a fictional 0x400000: asmtest_amd_decode_stitched
+     * takes a single base/code pointer used BOTH for offset arithmetic and for
+     * actually reading instruction bytes, so the pairing step below must anchor
+     * its stops to the same address the end-to-end decode reads from — verified
+     * by hand (a fictional base fed the real LOOP bytes to the disassembler at
+     * the wrong offsets and silently decoded zero instructions). */
+    const uint64_t BASE = (uint64_t)(uintptr_t)LOOP;
+
+    /* --- Three-trip loop stream --- */
+    {
+        const uint64_t stops[] = {BASE + 0, BASE + 7, BASE + 7,
+                                  BASE +
+                                      0x100000 /* far outside; never read */};
+        struct perf_branch_entry out[8];
+        int gap = -1;
+        size_t n = asmtest_ss_btf_pair_stops(LOOP, sizeof LOOP, BASE, stops, 4,
+                                             out, 8, &gap);
+        CHECK(n == 3, "BTF pairing: three-trip loop stream yields 3 pairs");
+        CHECK(gap == 0, "BTF pairing: three-trip loop stream is gap-free");
+        CHECK(out[0].from == BASE + 0xf && out[0].to == BASE + 0x100000,
+              "BTF pairing: newest-first[0] is the ret exit edge "
+              "{+0xf,+0x100000}");
+        CHECK(out[1].from == BASE + 0xd && out[1].to == BASE + 7 &&
+                  out[2].from == BASE + 0xd && out[2].to == BASE + 7,
+              "BTF pairing: the back-edge {+0xd,+7} appears twice, oldest "
+              "last");
+
+        /* End-to-end pure decode: feed the pairs (already newest-first) to the
+         * same asmtest_amd_decode_stitched the live capture calls, mirroring how
+         * test_amd_reconstruction validates amd_replay host-independently. */
+        asmtest_trace_t *t = asmtest_trace_new(64, 64);
+        int rc = asmtest_amd_decode_stitched(out, n, LOOP, sizeof LOOP, t, gap);
+        CHECK(rc == ASMTEST_HW_OK,
+              "BTF pairing: decode_stitched accepts the synthesized pairs");
+        /* 1 (mov) + 3*(add,dec,jnz) + 1 (ret) = 11, three trips. */
+        CHECK(asmtest_emu_trace_insns_total(t) == 11,
+              "BTF pairing: decoded trace reconstructs all 11 insns of 3 "
+              "trips");
+        CHECK(!asmtest_emu_trace_truncated(t),
+              "BTF pairing: decoded 3-trip trace is complete");
+        asmtest_trace_free(t);
+    }
+
+    /* --- Ambiguity: je +4; nop; nop; je +0; ret — both je's target offset 6,
+     * where the stop lands. The dual-guard rule T1's scanner inherits: nothing
+     * distinguishes which je actually fired, so this must never guess. --- */
+    {
+        static const unsigned char GUARD[] = {0x74, 0x04, 0x90, 0x90,
+                                              0x74, 0x00, 0xc3};
+        static const uint64_t stops[] = {0x500000, 0x500006};
+        struct perf_branch_entry out[4];
+        int gap = -1;
+        size_t n = asmtest_ss_btf_pair_stops(GUARD, sizeof GUARD, 0x500000,
+                                             stops, 2, out, 4, &gap);
+        CHECK(gap == 1,
+              "BTF pairing: two same-target je's sharing the observed stop "
+              "sets gap");
+        CHECK(n == 0,
+              "BTF pairing: the dual-guard ambiguity records no pair (never "
+              "guesses which je fired)");
+    }
+
+    /* --- Desync: jmp +0 (hard, unconditional, offset0->2) succeeds; the next
+     * stop (0xdeadbeef) is unreachable from offset 2's bare nops (no ret, no
+     * branch before the region ends) — the lost-trap / context-switch
+     * signature. Prefix retained: the jmp pair from before the desync. --- */
+    {
+        static const unsigned char DESYNC[] = {0xEB, 0x00, 0x90, 0x90};
+        static const uint64_t stops[] = {0x800000, 0x800002, 0xdeadbeef};
+        struct perf_branch_entry out[4];
+        int gap = -1;
+        size_t n = asmtest_ss_btf_pair_stops(DESYNC, sizeof DESYNC, 0x800000,
+                                             stops, 3, out, 4, &gap);
+        CHECK(gap == 1,
+              "BTF pairing: a stop no terminator can reach sets gap (desync)");
+        CHECK(n == 1 && out[0].from == 0x800000 && out[0].to == 0x800002,
+              "BTF pairing: the desync keeps its provable prefix (the jmp "
+              "edge), not zero");
+    }
+#else
+    printf("# SKIP BTF pairing: not Linux x86-64\n");
 #endif
 }
 
@@ -8351,6 +8451,7 @@ int main(void) {
     test_amd_spec_filter();
     test_amd_decode_hw_ceiling();
     test_amd_msr_spec_filter();
+    test_ss_btf_pairing();
     test_amd_tailcall_exit();
     test_amd_reduced_filter();
     test_amd_block_weight(); /* §E5 AutoFDO block-frequency reweighting (deterministic) */
