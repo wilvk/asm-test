@@ -978,6 +978,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The pure IBS-Op decoder now validates the record's own caps word (BrnTrgt)
+  before trusting the branch-target register.** Two 68-byte record shapes are
+  length-identical (`BRNTRGT=0/OPDATA4=1` vs `BRNTRGT=1/OPDATA4=0`) and only the
+  caps word disambiguates reg[7]; the decoder previously trusted length alone and
+  could misread an `IbsOpData4` value as a branch destination. The RipInvalid
+  read is now gated on caps bit 7, and `asmtest_ibs_available()` requires CPUID
+  IBSFFV (EAX[0]) so it cannot disagree with the caps the kernel samples with.
+
 - **IBS ring-loss heuristic now bounds the callchain worst-case record** (was
   112 bytes, ~10× short — silent sample loss with `lost==0 && throttled==0`);
   `ibs_fill_attr` pins `sample_max_stack` so the bound is sound, and the

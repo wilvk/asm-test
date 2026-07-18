@@ -82,17 +82,11 @@ static uint64_t ld_u64(const uint8_t *p) {
     memcpy(&v, p, sizeof v);
     return v;
 }
-/* Guarded, unlike its ld_u64/bit siblings above: every ld_u32 caller lives in the
- * Linux/x86-64 block below (the perf-record readers), so off that platform it is an
- * unused static and -Werror=unused-function fails the build. That is not theoretical —
- * this file compiles on macOS/arm64 whenever HWTRACE_OBJS is pulled in there. */
-#if defined(__linux__) && defined(__x86_64__)
 static uint32_t ld_u32(const uint8_t *p) {
     uint32_t v;
     memcpy(&v, p, sizeof v);
     return v;
 }
-#endif
 static int bit(uint64_t v, unsigned b) { return (int)((v >> b) & 1u); }
 
 /* ---- Pure decoder + free: defined for ALL platforms (no perf, no hardware) ---- */
@@ -103,18 +97,45 @@ int asmtest_ibs_decode_op(const void *raw, size_t raw_len,
         return ASMTEST_IBS_EINVAL;
     memset(out, 0, sizeof *out);
     /* Need the caps word through the branch-target register (reg[7]). A record
-     * shorter than that lacks BrnTrgt (or is truncated) — no edge is derivable. */
+     * shorter than that cannot hold reg[7] — no edge is derivable. Length ALONE
+     * cannot say WHICH register reg[7] is; the caps word (below) does that. */
     if (raw_len < IBS_RAW_MIN_BYTES)
         return ASMTEST_IBS_EDECODE;
 
     const uint8_t *p = (const uint8_t *)raw;
+    /* The record's OWN caps word (a copy of the kernel's ibs_caps). Length alone
+     * CANNOT identify reg[7]: the kernel appends IbsBrTarget (cap bit 5) then
+     * IbsOpData4 (cap bit 10) positionally and cap-conditionally, so
+     * BRNTRGT=0/OPDATA4=1 is byte-identical in length (68) to
+     * BRNTRGT=1/OPDATA4=0 with a different reg[7]. Because BrTarget is appended
+     * strictly FIRST, bit 5 set forces reg[7] = IbsBrTarget — verified against
+     * Linux v6.12 arch/x86/events/amd/ibs.c:1084-1099 and v6.14 :1165-1181.
+     * The live path is additionally protected by ibs_probe()'s CPUID bit-5
+     * gate, but this exported decoder is documented host-independent and can be
+     * fed foreign/synthetic records, so it must not rely on that. A shipping
+     * part with OpData4 set and BrnTrgt clear is LIKELY nonexistent (reasoned
+     * from family docs, not proven — AMD primary source for bits 8-10 was
+     * unobtainable); do not claim "cannot happen". Calibration: perf's own
+     * amd-sample-raw.c:192-216 reads *(rip+6) with NO caps check and no length
+     * floor — this decoder is deliberately stricter than upstream convention. */
+    uint32_t caps = ld_u32(p);
+    if (!(caps & (1u << 5))) /* BrnTrgt: reg[7] is not a branch target */
+        return ASMTEST_IBS_EDECODE;
+
     uint64_t rip = ld_u64(p + IBS_RAW_REG_OFF(IBS_REG_RIP));
     uint64_t data = ld_u64(p + IBS_RAW_REG_OFF(IBS_REG_DATA));
     uint64_t tgt = ld_u64(p + IBS_RAW_REG_OFF(IBS_REG_BRTGT));
 
     int brn_ret = bit(data, IBS_OPDATA_BRN_RET);
     int brn_taken = bit(data, IBS_OPDATA_BRN_TAKEN);
-    int rip_invalid = bit(data, IBS_OPDATA_RIP_INVALID);
+    /* IbsOpData bit 38 (RipInvalid) is architecturally defined only when CPUID
+     * Fn8000_001B_EAX[7] (RipInvalidChk) is set; the kernel consults it only
+     * behind that cap (v6.12 ibs.c:1068). Every family that sets BrnTrgt=1 also
+     * documents RipInvalidChk=1 (review §4 row 3, BKDG citations) — LIKELY
+     * redundant here, but the caps word is already in hand and a reserved bit
+     * must not drop samples. */
+    int rip_invalid =
+        (caps & (1u << 7)) ? bit(data, IBS_OPDATA_RIP_INVALID) : 0;
 
     /* A control-flow edge exists only for a retired, TAKEN branch with a valid RIP.
      * A not-taken conditional falls through (no target); a non-branch op has none. */
@@ -367,6 +388,16 @@ static void ibs_probe(void) {
     if (caps == 0) {
         g_avail = 0;
         g_reason = "no IBS (CPUID 8000_001B absent)";
+        return;
+    }
+    /* IBSFFV (bit 0): feature flags valid. When clear the kernel substitutes
+     * IBS_CAPS_DEFAULT (AVAIL|FETCHSAM|OPSAM, BrnTrgt CLEAR), so our CPUID bit-5
+     * read would disagree with the caps the kernel actually samples with (plausible
+     * under VM CPUID synthesis) — records would be 60 bytes and every decode
+     * EDECODE. Refuse rather than advertise a lane that produces no edges. */
+    if (!(caps & (1u << 0))) {
+        g_avail = 0;
+        g_reason = "IBS feature flags not valid (CPUID 8000_001B EAX[0] clear)";
         return;
     }
     if (!(caps & (1u << 2))) { /* OpSam */

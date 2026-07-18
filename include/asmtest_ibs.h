@@ -144,7 +144,9 @@ const char *asmtest_ibs_unavail_reason(void);
  *   ASMTEST_IBS_NOEDGE  — well-formed op, but not a retired taken branch, or the
  *                         RIP was flagged invalid: nothing to record (*out zeroed).
  *   ASMTEST_IBS_EINVAL  — NULL argument.
- *   ASMTEST_IBS_EDECODE — raw_len too short to hold the branch-target register. */
+ *   ASMTEST_IBS_EDECODE — raw_len too short to hold the branch-target register,
+ *                         or the record's own caps word records no branch target
+ *                         (BrnTrgt clear), so reg[7] is not IbsBrTarget. */
 int asmtest_ibs_decode_op(const void *raw, size_t raw_len,
                           asmtest_ibs_edge_t *out);
 

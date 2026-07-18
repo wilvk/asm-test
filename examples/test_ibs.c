@@ -40,14 +40,21 @@ static int checks, failures;
 /* Build a synthetic IBS-Op PERF_SAMPLE_RAW payload: [u32 caps][u64 reg0..reg7].
  * reg[1]=IbsOpRip (from), reg[2]=IbsOpData (bits), reg[7]=IbsBrTarget (to). */
 #define RAW_LEN (4u + 8u * 8u) /* 68 */
-static void build_raw(uint8_t *buf, uint64_t rip, uint64_t data2,
-                      uint64_t tgt) {
-    memset(buf, 0, RAW_LEN);
-    uint32_t caps = 0x3ff;
+/* Generalized builder: the record's own `caps` word plus reg[1]/reg[2]/reg[7].
+ * `len` allows the 76-byte (9-register) append-order fixture. */
+static void build_raw_caps(uint8_t *buf, size_t len, uint32_t caps,
+                           uint64_t rip, uint64_t data2, uint64_t tgt) {
+    memset(buf, 0, len);
     memcpy(buf + 0, &caps, 4);
     memcpy(buf + 4 + 8 * 1, &rip, 8);
     memcpy(buf + 4 + 8 * 2, &data2, 8);
     memcpy(buf + 4 + 8 * 7, &tgt, 8);
+}
+/* The self-consistent caps (0x3ff: BrnTrgt + RipInvalidChk + OpData4 all set)
+ * the existing eight checks carry — they must pass byte-for-byte unchanged. */
+static void build_raw(uint8_t *buf, uint64_t rip, uint64_t data2,
+                      uint64_t tgt) {
+    build_raw_caps(buf, RAW_LEN, 0x3ff, rip, data2, tgt);
 }
 
 /* Host-independent: the pure decoder over synthetic records. */
@@ -94,6 +101,39 @@ static void test_decode(void) {
           "decode: NULL raw -> EINVAL");
     CHECK(asmtest_ibs_decode_op(raw, RAW_LEN, NULL) == ASMTEST_IBS_EINVAL,
           "decode: NULL out -> EINVAL");
+
+    /* 8. 68-byte COLLISION, wrong side: caps 0x7df (bit 5 CLEAR, bit 10 set) is the
+     * BRNTRGT=0/OPDATA4=1 shape — byte-identical in length to the branch-target
+     * shape, but reg[7] is IbsOpData4, not a target. Length alone would misread
+     * 0xdeadbeef as a destination; only the caps word disambiguates. A pre-fix
+     * decoder returns OK with e.to == 0xdeadbeef; this must be EDECODE. */
+    build_raw_caps(raw, RAW_LEN, 0x7df, 0x401000, D_RET | D_TAKEN, 0xdeadbeef);
+    CHECK(asmtest_ibs_decode_op(raw, RAW_LEN, &e) == ASMTEST_IBS_EDECODE,
+          "decode: caps BrnTrgt clear (68-byte OpData4 collision) -> EDECODE");
+    CHECK(e.to != 0xdeadbeef,
+          "decode: the OpData4 value was NOT misread as a branch target");
+
+    /* 9. Append order, RIGHT side: a 76-byte record with caps 0x7ff (bits 5 AND 10).
+     * BrTarget is appended FIRST, so reg[7] is the target and reg[8] the OpData4. */
+    uint8_t raw76[RAW_LEN + 8];
+    build_raw_caps(raw76, sizeof raw76, 0x7ff, 0x401000, D_RET | D_TAKEN,
+                   0x401040);
+    uint64_t opdata4 = 0xcafef00d;
+    memcpy(raw76 + 4 + 8 * 8, &opdata4, 8); /* reg[8] = IbsOpData4 (dummy) */
+    CHECK(asmtest_ibs_decode_op(raw76, sizeof raw76, &e) == ASMTEST_IBS_OK &&
+              e.to == 0x401040,
+          "decode: caps BrnTrgt set (76-byte) -> OK, reg[7] is the target");
+
+    /* 10. RipInvalidChk (cap bit 7) gate: with the cap CLEAR the reserved bit 38
+     * must be IGNORED (no spurious drop); with it SET the RIP-invalid drop stands. */
+    build_raw_caps(raw, RAW_LEN, 0x37f, 0x401000, D_RET | D_TAKEN | D_RIPINV,
+                   0x401040);
+    CHECK(asmtest_ibs_decode_op(raw, RAW_LEN, &e) == ASMTEST_IBS_OK,
+          "decode: RipInvalidChk cap clear -> bit 38 ignored, edge stands");
+    build_raw_caps(raw, RAW_LEN, 0x3ff, 0x401000, D_RET | D_TAKEN | D_RIPINV,
+                   0x401040);
+    CHECK(asmtest_ibs_decode_op(raw, RAW_LEN, &e) == ASMTEST_IBS_NOEDGE,
+          "decode: RipInvalidChk cap set -> RIP-invalid drop preserved");
 }
 
 /* Host-independent: Phase-6 edge -> basic-block normalization. Every branch TARGET
