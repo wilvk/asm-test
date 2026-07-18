@@ -91,7 +91,8 @@ IVPID=""
 SKPID=""
 LJPID=""
 SGPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} ${SGPID:+"$SGPID"} ${AJPID:+"$AJPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${AJPID:+"/tmp/perf-$AJPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
+GSPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} ${SGPID:+"$SGPID"} ${GSPID:+"$GSPID"} ${AJPID:+"$AJPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${AJPID:+"/tmp/perf-$AJPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" "$BUILD/gstop.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -1352,6 +1353,69 @@ echo "  untabled tasks released on sight; the tabled leader keeps tracing"
 kill -9 "$CLPID" 2>/dev/null || true
 wait "$CLPID" 2>/dev/null || true
 CLPID=""
+
+# ---------------------------------------------------------------------------
+# JOB-CONTROL GROUP-STOP branch (asmspy-plan Theme D): PTRACE_EVENT_STOP +
+# PTRACE_LISTEN
+# ---------------------------------------------------------------------------
+# A SEIZE'd tracee that receives SIGSTOP enters a group-stop the tracer must
+# HONOR via PTRACE_LISTEN (not resume it with PTRACE_SYSCALL). Every engine has
+# this branch and none had a smoke. threads_victim is multi-threaded, so a
+# group-stop stops EVERY thread and the branch fires once per tid. GSPID is a
+# FRESH variable, NOT $TVPID (still the empty placeholder here — the existing
+# threads_victim instance is not started until much later).
+#
+# -1 (run until the target exits), NOT a fixed line budget: threads_victim's
+# workers emit >400 lines/s, so a small budget would be exhausted during the
+# settle — before kill -STOP ever lands — leaving the tracer already exited and
+# steps 3-6 vacuous. -1 keeps the tracer alive across the whole STOP/CONT cycle;
+# the victim is killed explicitly, and the tracer must then exit 0 (never 124).
+# Both sinks fflush per line (log_print_sink / stream_print_sink), so a live
+# `wc -l` on the redirected file reflects the feed in real time.
+gstop_cycle() { # $1 = engine flag (--log or --stream)
+    "$BUILD/threads_victim" 2>/dev/null &
+    GSPID=$!
+    sleep 1
+    kill -0 "$GSPID" 2>/dev/null \
+        || fail "group-stop ($1): threads_victim did not start"
+    timeout 60 "$ASM" "$1" "$GSPID" -1 >"$BUILD/gstop.log" 2>/dev/null &
+    gsasm=$!
+    sleep 1
+    kill -STOP "$GSPID" || fail "group-stop ($1): kill -STOP failed"
+    sleep 1
+    # (3) genuinely stopped under LISTEN (t/T), not run through (S/R): the
+    # mutation this guards (resume with PTRACE_SYSCALL) leaves it running.
+    grep -qE '^State:.[tT]' "/proc/$GSPID/status" \
+        || fail "group-stop ($1): victim State is not t/T — LISTEN branch not honoring the stop"
+    # (4) the tracer survived the group-stop event
+    kill -0 "$gsasm" 2>/dev/null \
+        || fail "group-stop ($1): the tracer died on the group-stop event"
+    # (5) the feed is PAUSED while the whole group is stopped
+    n0=$(wc -l <"$BUILD/gstop.log")
+    sleep 1
+    n1=$(wc -l <"$BUILD/gstop.log")
+    [ "$n1" -eq "$n0" ] \
+        || fail "group-stop ($1): the feed grew ($n0->$n1) while the group was stopped"
+    # (6) SIGCONT wakes the LISTEN'd threads: the feed grows again
+    kill -CONT "$GSPID" || fail "group-stop ($1): kill -CONT failed"
+    sleep 1
+    n2=$(wc -l <"$BUILD/gstop.log")
+    [ "$n2" -gt "$n1" ] \
+        || fail "group-stop ($1): the feed did not grow ($n1->$n2) after SIGCONT — LISTEN did not wake"
+    # with all tracees gone the tracer must exit 0 (the until-exit contract), not 124
+    kill "$GSPID" 2>/dev/null || true
+    set +e
+    wait "$gsasm"; grc=$?
+    set -e
+    [ "$grc" -eq 0 ] \
+        || fail "group-stop ($1): tracer exited $grc (expected 0 when the target exits, not rc 124)"
+    GSPID=""
+    echo "  group-stop ($1): stopped t/T, feed paused ($n0==$n1), resumed on CONT (->$n2), tracer exited 0"
+}
+echo "--- asmspy group-stop: SIGSTOP/SIGCONT honored via PTRACE_LISTEN (--log) ---"
+gstop_cycle --log
+echo "--- asmspy group-stop: the single-step engine's LISTEN branch (--stream) ---"
+gstop_cycle --stream
 
 # ---------------------------------------------------------------------------
 # fd -> ENDPOINT enrichment for sockets (asmspy-plan Theme E)
