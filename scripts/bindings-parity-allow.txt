@@ -155,3 +155,16 @@ ALL asmtest_dr_skip_reason
 # asmtest_hwtrace_arm_tid (§0.2 thread-scope assert accessor — the OS tid that armed the
 # active capture) is now wrapped in all ten bindings, so its per-binding exemptions were
 # removed 2026-07-11.
+
+# Intel PT whole-window C-arm (intel-pt-whole-window-substrate, 2026-07-19) — the native
+# STRONG-tier PT capture primitives. dotnet is the lead binding: new AsmTrace(HwBackend.IntelPt)
+# wraps the pair (PtWindowCtx ctor calls _pt_begin_window, Dispose calls _pt_end_window) and
+# consults window_auto/pt_window_trusted internally; the other nine gain them when they grow an
+# inline PT-window scope, the same posture as stealth_window_begin/end above. Hardware-gated
+# (bare-metal Intel PT), C-level capture, not per-binding FFI.
+ALL asmtest_hwtrace_pt_begin_window
+ALL asmtest_hwtrace_pt_end_window         #   (paired with pt_begin_window above)
+ALL asmtest_hwtrace_window_auto           # WEAK/STRONG/CEILING window backend auto-select; dotnet AutoInitWindowBackend consults it, the other nine gain it with the inline PT-window scope
+ALL asmtest_hwtrace_pt_window_trusted     # runtime decode-trust probe feeding the window ladder; C-level gate, not per-binding FFI
+ALL asmtest_hwtrace_window_image          # self code-image accessor for the armed window (decode-on-close); C-level, not direct FFI
+ALL asmtest_hwtrace_pt_set_filter         # thin PERF_EVENT_IOC_SET_FILTER ioctl knob on the PT arm; C-level, not per-binding FFI
