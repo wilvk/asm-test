@@ -364,6 +364,104 @@ size_t asmtest_gcmove_canonicalize(asmtest_valtrace_t *v,
                                    size_t nmoves);
 
 /* ------------------------------------------------------------------ */
+/* Phase 4 (increment 4) — real OBJECT identity                        */
+/*                                                                     */
+/* Increment 2 above keys managed memory def-use on ADDRESSES: it forwards
+ * every pre-compaction access to the object's FINAL resting place, which
+ * reconnects an object's own def-use across a GC and separates an unrelated
+ * object that reuses a vacated slot. That correctly shipped and nothing here
+ * changes it. What address identity CANNOT express is its one documented
+ * residual: a pre-window record touching memory that a GC then slides a LIVE
+ * object into ALIASES that object, forging a def-use edge between two things
+ * that were never the same object — addresses alone cannot tell them apart.
+ *
+ * This increment adds real OBJECT identity. A heap SNAPSHOT taken AFTER the
+ * capture — live {addr, size, type_id} nodes from the runtime's GCBulkNode /
+ * GCBulkEdge / GCBulkType events, in the SNAPSHOT address space (after every
+ * compaction has been applied) — is joined with the increment-2 move set, kept
+ * recording until the snapshot. asmtest_objid_locate INVERTS asmtest_gcmove_-
+ * canon (walk the batches DESCENDING by step, inverting the at-most-one range
+ * whose NEW span covers the running address), so for any record (step s, raw
+ * address x) we can ask WHICH node occupied x at step s. A record with an owner
+ * keys on (node.addr + offset) — object identity, byte-equal to the increment-2
+ * forward canon for genuinely-owned bytes. A no-owner record whose forwarded
+ * address nonetheless lands inside a live node's snapshot range is the
+ * false-alias case; it is re-keyed into a RESERVED space (bit 63 set — never a
+ * canonical Linux x86-64 user address) so it can no longer collide with the
+ * object. Everywhere the snapshot is silent the result is BYTE-IDENTICAL to
+ * increment 2: object identity REFINES address identity, never replaces it
+ * (nnodes == 0 degrades to asmtest_gcmove_canonicalize exactly).
+ *
+ * PURE C — no Capstone, no Unicorn, no runtime — the same dependency tier as
+ * dataflow.c / dataflow_gcmove.c, so it unit-tests on every host; it links
+ * AGAINST dataflow_gcmove.c for the forward canon it refines. The LIVE feed
+ * (the gccanon-attach lane's EventPipe heap dumper + the post-capture
+ * MovedReferences2 stamps) drives this pure transform; see
+ * docs/internal/implementations/dataflow-f4-object-identity.md.
+ * ------------------------------------------------------------------ */
+
+/* One heap-snapshot node — the shape of a GCBulkNode entry (Address / Size /
+ * TypeID; the event's EdgeCount is a stream-consistency check for the reader,
+ * not an identity input, so it is not carried here). `addr` is in the SNAPSHOT
+ * space: the address space AFTER every batch in the accompanying move set has
+ * been applied (the object's final resting place). */
+typedef struct asmtest_gcnode {
+    uint64_t addr;
+    uint64_t size;
+    uint64_t type_id; /* GCBulkType join key; 0 = unknown */
+} asmtest_gcnode_t;
+
+/* Inverse of asmtest_gcmove_canon: map a SNAPSHOT-space address back to where it
+ * sat at `step`. Walk the batches DESCENDING by step; for each batch whose
+ * boundary POSTDATES `step` (batch.step > step), invert the at-most-one range
+ * whose NEW span covers the running address. Pure and allocation-free; `moves`
+ * MUST be sorted ascending by `step` (as asmtest_gcmove_canon requires) AND have
+ * DISJOINT new spans within each batch — the precondition asmtest_objid_owner /
+ * asmtest_objid_canonicalize enforce for it by dropping overlapping-new ranges
+ * before calling in. A NULL / empty move set returns `snap_addr` unchanged. */
+uint64_t asmtest_objid_locate(const asmtest_gcmove_t *moves, size_t nmoves,
+                              uint32_t step, uint64_t snap_addr);
+
+/* The heap node that CONTAINED `raw_addr` at value-trace `step`: the node i whose
+ * step-time span [asmtest_objid_locate(nodes[i].addr, step), + nodes[i].size)
+ * covers raw_addr. Returns 0 and fills *owner (node index) and *offset (raw_addr
+ * minus the node's step-time base) on a hit, or -1 when no node owned the byte (a
+ * conservative miss — the caller keeps the address-identity floor). `moves` need
+ * not be pre-sorted or disjoint: a private sorted copy is made and overlapping
+ * NEW spans within a batch are dropped for the inverse walk (an undecidable owner
+ * becomes "no owner", never a guessed identity). Either out-pointer may be NULL. */
+int asmtest_objid_owner(const asmtest_gcnode_t *nodes, size_t nnodes,
+                        const asmtest_gcmove_t *moves, size_t nmoves,
+                        uint32_t step, uint64_t raw_addr, size_t *owner,
+                        uint64_t *offset);
+
+/* Re-key tag OR'd into the canonical address of a no-owner record whose forwarded
+ * address collides with a live node's snapshot range. Bit 63 is never set in a
+ * canonical Linux x86-64 user-space effective address, so a tagged key can never
+ * equal an untagged one (asmtest_defuse_build compares keys for equality only),
+ * and two no-owner records sharing one canon address share one tagged key (their
+ * mutual edges survive) while neither can alias the object. */
+#define ASMTEST_OBJID_NOOBJ (1ull << 63)
+
+/* Rewrite every AT_LOC_MEM_ABS record in `v` in place, keying each on (object,
+ * offset) where the snapshot has evidence and degrading to increment-2 address
+ * identity where it does not:
+ *   owner found            -> addr = nodes[owner].addr + offset
+ *   no owner, no collision -> addr = asmtest_gcmove_canon(moves, ..., addr)
+ *   no owner, canon(addr)
+ *     inside a node's range -> addr = asmtest_gcmove_canon(...) | ASMTEST_OBJID_NOOBJ
+ * The owner branch is byte-equal to the forward canon for genuinely-owned bytes
+ * (an object forwards affinely, so a true edge that survives asmtest_gcmove_-
+ * canonicalize survives here unchanged); the no-owner/no-collision branch is
+ * exactly increment-2 behavior, so nnodes == 0 degrades to asmtest_gcmove_-
+ * canonicalize byte-for-byte. Register and routine-offset records are untouched.
+ * Returns the count of records whose addr changed, or (size_t)-1 on a NULL trace.
+ * Call it ONCE on a freshly captured trace (it mutates addresses in place). */
+size_t asmtest_objid_canonicalize(asmtest_valtrace_t *v,
+                                  const asmtest_gcnode_t *nodes, size_t nnodes,
+                                  const asmtest_gcmove_t *moves, size_t nmoves);
+
+/* ------------------------------------------------------------------ */
 /* Phase 4 (increment 3) — runtime-helper SUMMARY EDGES                */
 /*                                                                     */
 /* A managed value trace steps THROUGH the CoreCLR runtime helpers the  */

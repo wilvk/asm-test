@@ -35,6 +35,16 @@ $(BUILD)/dataflow_gcmove.o: src/dataflow_gcmove.c include/asmtest_valtrace.h \
                             include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# Phase 4 (increment 4): the pure OBJECT-identity transform over an L0 value
+# trace. Same PURE-C tier as dataflow.o (no Capstone, no Unicorn) — runs
+# everywhere; REFINES increment 2 by inverting its forward canon against a heap
+# snapshot ({addr,size,type_id} nodes), so a record keys on (object, offset)
+# where the snapshot has evidence and degrades to address identity where it does
+# not. Links against dataflow_gcmove.o for that forward canon.
+$(BUILD)/dataflow_objid.o: src/dataflow_objid.c include/asmtest_valtrace.h \
+                           include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 # Phase 4 (increment 3): the pure runtime-helper SUMMARY-EDGE modeler over an L0
 # value trace. Same PURE-C tier as dataflow.o (no Capstone, no Unicorn) — runs
 # everywhere; rewrites a recognized CoreCLR helper call (alloc / write-barrier /
@@ -307,6 +317,19 @@ $(BUILD)/test_dataflow_gcmove: $(BUILD)/dataflow.o $(BUILD)/dataflow_gcmove.o \
                                $(BUILD)/test_dataflow_gcmove.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# Phase 4 (increment 4) object-identity suite. PURE — links the value-trace sink
+# + the increment-2 canonicalizer (objid REFINES its forward canon, so it links
+# dataflow_gcmove.o) + the objid transform, no framework/Capstone/Unicorn. Like
+# the increment-1/2/3 rules above, this EXPLICIT rule beats the root Makefile's
+# generic test_% pattern (which would link the framework runtime + a same-named
+# routine object it does not have), so the suite builds wherever it is requested
+# — including before the root SUITE_EXCLUDES is updated to keep it out of `make
+# test`.
+$(BUILD)/test_dataflow_objid: $(BUILD)/dataflow.o $(BUILD)/dataflow_gcmove.o \
+                              $(BUILD)/dataflow_objid.o \
+                              $(BUILD)/test_dataflow_objid.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 # Phase 4 (increment 3) runtime-helper summary-edge suite. PURE — links the
 # value-trace sink + the increment-1 resolver (name identification) + the helper
 # modeler, no framework/Capstone/Unicorn. Like the increment-1/2 rules above, this
@@ -366,7 +389,8 @@ $(BUILD)/test_dataflow_ptrace: CFLAGS += -pthread
 
 .PHONY: dataflow-test dataflow-grep-gate
 dataflow-test: $(BUILD)/test_dataflow $(BUILD)/test_dataflow_method \
-               $(BUILD)/test_dataflow_gcmove $(BUILD)/test_dataflow_helpers \
+               $(BUILD)/test_dataflow_gcmove $(BUILD)/test_dataflow_objid \
+               $(BUILD)/test_dataflow_helpers \
                $(BUILD)/test_operands $(DF_EMU_SUITE) \
                $(BUILD)/test_dataflow_ptrace
 	@echo "== dataflow-test =="
@@ -374,6 +398,7 @@ dataflow-test: $(BUILD)/test_dataflow $(BUILD)/test_dataflow_method \
 	$(BUILD)/test_dataflow
 	$(BUILD)/test_dataflow_method
 	$(BUILD)/test_dataflow_gcmove
+	$(BUILD)/test_dataflow_objid
 	$(BUILD)/test_dataflow_helpers
 	$(BUILD)/test_operands
 ifeq ($(DF_HAVE_UNICORN),1)
