@@ -62,6 +62,22 @@ value) and `flags`; the callee-saved registers back `ASSERT_ABI_PRESERVED`.
 | `fret` | `d0` | FP return (after an FP call) |
 | `vec[32]` | `v0`–`v31` | vector file (after a vector call) |
 
+**RISC-V rv64 (LP64D):**
+
+| Field | Register | Meaning |
+|---|---|---|
+| `ret` | `a0` | return value |
+| `a1` | `a1` | second return register |
+| `s0`–`s11` | callee-saved | checked by `ASSERT_ABI_PRESERVED` |
+| `flags` | — | always `0` (no flags register; `ASMTEST_NO_FLAGS`) |
+| `fret` | `fa0` | FP return (after an FP call) |
+| `vec[32]` | `fs0`–`fs11` slots | FP callee-saved snapshot (after an `_fp`/`_fp_n` call) |
+
+rv64 keeps the **second return register** `a1` (as x86-64 keeps `rdx`), which
+AArch64 does not capture — so a 9–16-byte integer-pair return is fully
+observable there. RV64GC has no 128-bit vector file, so `vec[]` instead holds the
+FP callee-saved snapshot the `_fp`/`_fp_n` trampolines write (see below).
+
 `regs_t` keeps the same shape across ABIs where it can: `ret` and `flags` are
 present everywhere so tests stay portable, while the named callee-saved fields
 (and a few others) differ by calling convention. The field offsets are fixed and
@@ -86,12 +102,14 @@ without restoring it is caught even if it happened to leave a plausible-looking
 value. It does **not** check the stack pointer (no `sp`/`rsp` is captured); a
 stack-pointer imbalance instead surfaces as a crash from the forked runner.
 
-Callee-saved *vector* registers are checked separately by
-`ASSERT_ABI_PRESERVED_VEC(&r)` after a `_vec`/`_vec_n` capture: Win64 `xmm6`–`xmm15`,
-or AArch64 `d8`–`d15` (only the low 64 bits are callee-saved per AAPCS64 6.1.2).
-System V x86-64 has no callee-saved vector registers, so the macro is not
-defined there. The `_vec` trampolines seed these registers too, so a NEON/SSE
-routine that clobbers `d8`/`xmm6` without restoring it is caught.
+Callee-saved *vector/FP* registers are checked separately by
+`ASSERT_ABI_PRESERVED_VEC(&r)`: Win64 `xmm6`–`xmm15`, or AArch64 `d8`–`d15` (only
+the low 64 bits are callee-saved per AAPCS64 6.1.2), after a `_vec`/`_vec_n`
+capture. System V x86-64 has no callee-saved vector registers, so the macro is
+not defined there. On **rv64** there is no vector file, so the check covers the
+FP callee-saved set `fs0`–`fs11` and is valid after an **`_fp` or `_fp_n`**
+capture (the `_vec` path self-skips); a routine that clobbers `d8`/`xmm6`/`fs2`
+without restoring it is caught.
 
 ## Flags
 
@@ -104,6 +122,26 @@ ASSERT_FLAG_CLEAR(&r, ZF);   // zero clear
 
 On x86-64 the masks are `CF`, `PF`, `ZF`, `SF`, `OF`. On AArch64 the condition
 flags (`NZCV`) map onto the same assertions.
+
+**RISC-V rv64 has no condition-flags register** (comparisons fold into the branch
+instructions), so `r.flags` is always `0`, no flag-mask macros are defined
+(`ASMTEST_NO_FLAGS` is set), and `ASSERT_FLAG_SET(&r, CF)` is a **compile error**
+there by design — surfacing the ISA fact rather than silently reading a
+nonexistent bit. Route an overflow signal through a value-returning
+`__builtin_add_overflow`-style check instead.
+
+:::{note}
+**rv64 FP-argument overflow (`ASM_FCALLN` / `asm_call_capture_fp_n`).** When more
+than eight `double`s are passed, rv64 places doubles 9 and 10 in the **integer**
+registers `a6`/`a7` as raw bit patterns — the psABI "FP args after the FP
+registers are exhausted use the integer convention" rule, since this path fills
+`a0`–`a5` with the integer-arg slots first — and doubles 11+ on the stack. That
+placement is psABI-exact for a callee whose prototype has ≥6 leading integer
+parameters, and is the framework's documented convention for the hand-written
+`.s` routines it tests (`examples/fpover.s`); a **C-compiled** callee with >8 FP
+args and <6 integer parameters would expect those doubles in different registers
+— a recorded limitation of this capture path on rv64.
+:::
 
 ## Exact register values
 
@@ -119,8 +157,9 @@ ASSERT_REG_EQ(&r, rdx, 0);
 ## Struct returns
 
 When a routine returns a struct, large ones come back through the hidden result
-pointer (`rdi` on x86-64, `x8` on AArch64) and small ones in the return
-registers. `ASM_SRET` handles both:
+pointer (`rdi` on x86-64, `x8` on AArch64, `a0` on rv64 — the implicit first
+argument, the x86-ish shape) and small ones in the return registers. `ASM_SRET`
+handles both:
 
 ```c
 struct point { long x, y, z, w; };   // large: returned via hidden pointer
@@ -135,15 +174,17 @@ TEST(structs, returns_large_struct) {
 }
 ```
 
-A small struct (≤16 bytes) lands in the captured `r.ret`/`r.rdx`
-(or `vec[0]`/`vec[1]` for an all-FP small struct).
+A small struct (≤16 bytes) lands in the captured `r.ret`/`r.rdx` (`r.ret`/`r.a1`
+on rv64; `vec[0]`/`vec[1]` for an all-FP small struct).
 
 ## Struct-by-value parameters
 
 Small structs pass as their "eightbytes" through the integer/FP register paths —
 pass them with the ordinary `ASM_CALL2` / `ASM_FCALL*` macros. Large structs go
 through `asm_call_capture_bigstruct` (an inline stack copy on x86-64, by-pointer
-on AArch64). See the [API reference](../reference/api-reference.md#capture-functions) for the
+on AArch64 and rv64). A small `struct{long; double}` uses the hardware-FP
+convention on rv64/LP64D — `a0` + `fa0` (the x86-ish `ASM_MIXCALL` shape), not
+AArch64's two-GP-register shape. See the [API reference](../reference/api-reference.md#capture-functions) for the
 underlying function signatures.
 
 ## Underlying functions

@@ -1,8 +1,8 @@
 # Portability & assemblers
 
-asm-test runs the **same sources** on x86-64 and AArch64, on Linux and macOS,
-through either of two assembler backends. This page explains how that works and
-how to choose a backend.
+asm-test runs the **same sources** on x86-64, AArch64, and RISC-V (rv64), on
+Linux and macOS, through either of two assembler backends. This page explains how
+that works and how to choose a backend.
 
 ## Supported targets
 
@@ -10,9 +10,13 @@ how to choose a backend.
 |---|---|---|
 | **x86-64** | ✓ | ✓ |
 | **AArch64** | ✓ | ✓ (Apple Silicon) |
+| **RISC-V (rv64)** | ✓ | — (no RISC-V macOS) |
 
-CI runs the suites on all four combinations (`ubuntu-latest`,
-`ubuntu-24.04-arm`, `macos-latest`, `macos-15-intel`). The packaged bindings'
+CI runs the suites on the four x86-64/AArch64 OS combinations (`ubuntu-latest`,
+`ubuntu-24.04-arm`, `macos-latest`, `macos-15-intel`); the RISC-V (rv64) host
+tier runs in a `linux/riscv64` container under QEMU binfmt (the `test-riscv64`
+job — there is no hosted riscv64 runner). See the **RISC-V (rv64) host tier**
+notes below for its two documented divergences. The packaged bindings'
 install-tests are additionally **clean-room** hardened — no leaked dev tree,
 Homebrew copy, or loader override can satisfy a load — see
 [Clean-room testing](../clean-room-testing.md).
@@ -50,9 +54,17 @@ ASM_FUNC add_signed
 #elif defined(__aarch64__)
     add     x0, x0, x1
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    add     a0, a0, a1
+    ret
 #endif
 ASM_ENDFUNC add_signed
 ```
+
+On RISC-V the ELF `@function` / `@progbits` directives that `include/asm.h`
+already emits for x86-64 apply unchanged, so `ASM_FUNC` / `ASM_ENDFUNC` need no
+new branch — only an `#elif defined(__riscv) && __riscv_xlen == 64` instruction
+body per routine.
 
 The C compiler (`cc` — gcc or clang) assembles the GAS-syntax `.s` sources
 directly, so **no separate assembler is required** for the default backend.
@@ -83,6 +95,34 @@ exercised by their own CI job, so both backends stay in sync.
 not supported — write the AArch64 body in the `.s` source under
 `#if defined(__aarch64__)` and assemble it with the default backend.
 :::
+
+## RISC-V (rv64) host tier
+
+The native capture tier supports RISC-V rv64 on the **RV64GC / LP64D** baseline
+(the Linux-distro standard — hard-float doubles, no vector extension). Its
+`regs_t` captures the return pair `a0`/`a1` (unlike AArch64, which captures only
+`x0`), the integer callee-saved set `s0`–`s11`, and the FP callee-saved set
+`fs0`–`fs11`; the trampolines seed and check all of them. Two divergences are
+worth knowing, both by design:
+
+- **No condition flags.** RISC-V has no architectural flags register —
+  comparisons fold into the branch instructions. So `regs_t.flags` is always `0`,
+  no `ASMTEST_CF`/`ZF`/`SF`/`OF` macros are defined (`ASMTEST_NO_FLAGS` is set
+  instead), and `ASSERT_FLAG_SET(&r, CF)` is a **compile error** on rv64 rather
+  than a silent always-false check. A routine whose signal is an overflow —
+  `examples/checked.s`'s `checked_add` — returns the wrapping sum on rv64 and its
+  flag assertions self-skip; the rv64 way to surface overflow is a
+  value-returning `__builtin_add_overflow`-style check, not a condition code.
+- **No 128-bit vector capture.** RV64GC has no vector registers (RVV would be a
+  future arm — `asmtest_cpu_has_vec128()` is the designed hook, returning `0`
+  today), so the `ASM_VCALL*` macros **self-skip** with a printed reason. The FP
+  callee-saved check `ASSERT_ABI_PRESERVED_VEC` therefore rides the `_fp` /
+  `_fp_n` capture on rv64 (which seed/capture `fs0`–`fs11`), not `_vec`.
+
+The out-of-process tracing tiers (single-step/`ptrace`, DynamoRIO, hardware
+trace) are **not** ported to rv64 — they stay x86-64/AArch64. RISC-V also remains
+a first-class **emulator guest** (Unicorn/Keystone) on any host, independent of
+this native tier.
 
 ## Register-snapshot fidelity
 

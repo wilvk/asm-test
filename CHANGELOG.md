@@ -8,6 +8,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Native RISC-V (rv64) host tier — the capture framework now runs *on* a RISC-V
+  machine, not just as an emulator guest.** A `regs_t` branch and trampolines
+  (`src/capture.s`) for the RV64GC / LP64D psABI: `a0`/`a1` return pair, integer
+  callee-saved `s0`–`s11`, and FP callee-saved `fs0`–`fs11` (checked by
+  `ASSERT_ABI_PRESERVED` / `ASSERT_ABI_PRESERVED_VEC` after an `_fp`/`_fp_n`
+  capture, since rv64gc has no vector file), plus rv64 bodies for every example
+  suite and the framework self-tests. Two ISA facts are surfaced honestly rather
+  than faked: RISC-V has **no condition-flags register**, so `ASMTEST_NO_FLAGS` is
+  set and `ASSERT_FLAG_*` is a compile error on rv64 (flag-only suites self-skip
+  with a printed reason); and there is **no 128-bit vector capture** (`ASM_VCALL*`
+  self-skips via `asmtest_cpu_has_vec128()` — RVV is a possible future arm). A
+  `make docker-riscv64` lane builds a `linux/riscv64` image and runs the core
+  suites + self-tests under QEMU binfmt (`make binfmt-riscv64`, pinned
+  `tonistiigi/binfmt`), wired into CI as the `test-riscv64` job. The tracing tiers
+  stay x86-64/AArch64. See [riscv-native-tier.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/riscv-native-tier.md).
+
 - **Live Intel PT whole-window smoke + a `make hwtrace-pt-live` lane that FAILS rather
   than skips where PT is claimed.** `test_pt_live_selfjit` (`examples/test_hwtrace.c`)
   self-JITs the canonical routine, arms the region-free PT capture, decodes the REAL AUX

@@ -66,8 +66,8 @@ comparison and roadmap.
   CPU — x86-64, AArch64, RISC-V, ARM32, and the Windows x64 ABI — to read the
   *full* register file, catch precise faults, and record
   [execution traces and coverage](guides/tracing/traces.md).
-- **Portability** across x86-64 and AArch64, Linux and macOS, with GAS and NASM
-  assembler backends.
+- **Portability** across x86-64, AArch64, and RISC-V (rv64), Linux and macOS,
+  with GAS and NASM assembler backends.
 
 ## Where to start
 

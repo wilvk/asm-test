@@ -138,7 +138,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
 | [aarch64-sve-capture.md](aarch64-sve-capture.md) — AArch64 SVE wide-vector capture | 8 | ☐ 0/8 | — |
-| [riscv-native-tier.md](riscv-native-tier.md) — native RISC-V (rv64) host tier | 7 | ◐ 6/7 (T7 wip; T6 CI leg landed, locally validated via make docker-riscv64) | — |
+| [riscv-native-tier.md](riscv-native-tier.md) — native RISC-V (rv64) host tier | 7 | ☑ 7/7 (all landed; rv64 lane green: `make docker-riscv64` under qemu + the `test-riscv64` CI Actions leg, ~3m29s; `make docker-docs`/`make test`/`make check` clean) | — |
 
 ### CI, distribution & infrastructure
 | Document | Tasks | Status | Depends on |

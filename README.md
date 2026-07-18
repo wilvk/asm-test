@@ -48,8 +48,8 @@ permissions, or (for CoreSight) a live trace decoder are unavailable. See
 - A **native Win64 tier** (cross-compile + Wine, or the `ms_abi` lane) and
   **ten language bindings** (Python, .NET, Go, Rust, C++, Zig, Node, Java, Ruby,
   Lua).
-- **Portable** across x86-64 and AArch64, Linux and macOS, with GAS and NASM
-  assembler backends.
+- **Portable** across x86-64, AArch64, and RISC-V (rv64), Linux and macOS, with
+  GAS and NASM assembler backends.
 
 The complete capability list, per-platform, lives in
 [Features & support matrix](docs/reference/features.md).
@@ -168,9 +168,9 @@ distributed**; asm-test's own source stays MIT (see [LICENSE](LICENSE) and
 
 ## Requirements
 
-x86-64 or AArch64, Linux or macOS, with `make` and a C compiler (`cc` — gcc or
-clang), which also assembles the GAS-syntax `.s` sources. The core build needs
-nothing else. The **optional** tools (`nasm`, `pkg-config`, `libunicorn`,
+x86-64, AArch64, or RISC-V (rv64 / RV64GC / LP64D), Linux or macOS, with `make`
+and a C compiler (`cc` — gcc or clang), which also assembles the GAS-syntax `.s`
+sources. The core build needs nothing else. The **optional** tools (`nasm`, `pkg-config`, `libunicorn`,
 `libkeystone`, `libcapstone`, `clang-tidy`, `valgrind`) install cross-platform
 with:
 
