@@ -64,6 +64,7 @@ static uint32_t g_gc_seq;          // 1-based GC index
 static uint32_t g_cur_s0;          // S0 of the GC currently open
 static uint32_t g_cur_s0_recs;     // the trace's recs_len when it opened — see gccanon_gcinfo_t
 static uint32_t g_cur_traced;      // was the tracer live when it opened?
+static uint32_t g_cur_done;        // was the tracer DONE (post-capture) when it opened? (T2)
 static uint32_t g_cur_reloc;       // relocating ranges in the GC currently open
 
 // Map (creating if needed) the shm channel. Called ONCE from the attach entry — a normal runtime
@@ -153,9 +154,11 @@ static HRESULT STDMETHODCALLTYPE Prof_GCStarted(ICorProfilerCallback4 *This, int
     g_cur_s0 = 0;
     g_cur_s0_recs = 0;
     g_cur_traced = 0;
+    g_cur_done = 0;
     if (g_ch) {
         g_cur_traced = (g_ch->magic == GCCANON_MAGIC) ? 1u : 0u;
-        g_cur_s0 = g_ch->step_counter;   // <-- S0
+        g_cur_done = g_ch->tracer_done;  // <-- post-capture? (T2)
+        g_cur_s0 = g_ch->step_counter;   // <-- S0 (frozen final steps_len once tracer_done)
         g_cur_s0_recs = g_ch->recs_counter;
         g_ch->fence_active = 1;
         g_ch->gcs_seen++;
@@ -173,11 +176,19 @@ static HRESULT STDMETHODCALLTYPE Prof_MovedReferences2(ICorProfilerCallback4 *Th
         if (oldS[i] == newS[i]) { g_ch->nonreloc_total++; continue; }  // non-relocating: vacuous
         g_ch->moves_total++;
         g_cur_reloc++;
-        // Only a GC whose S0 was sampled against a LIVE tracer can be stamped. A GC that ran before
-        // the region was entered has a counter of 0, and a step-0 stamp is inert anyway (canon
-        // forwards a record only when the move's step is strictly GREATER than the record's) — so
-        // recording them would just crowd out the ones that matter.
-        if (!g_cur_traced || g_cur_s0 == 0) continue;
+        // Two kinds of GC are recorded, distinguished by `flags` (increment 4 / T2):
+        //   flags = 0            IN-CAPTURE: the tracer was LIVE (magic set) with a non-zero S0.
+        //                        The increment-2 lane consumes exactly these, unchanged.
+        //   GCCANON_MOVE_POST    POST-CAPTURE: the tracer is DONE (tracer_done) but its final
+        //                        steps_len is frozen in step_counter — a non-zero S0 strictly
+        //                        greater than every captured record's step, so these carry the
+        //                        capture FORWARD to the heap snapshot for the objid join.
+        // A GC that ran before the region was entered has S0 == 0 and is dropped: a step-0 stamp is
+        // inert anyway (canon forwards a record only when a move's step is strictly GREATER).
+        uint32_t flags;
+        if (g_cur_traced && g_cur_s0 != 0)              flags = 0;
+        else if (!g_cur_traced && g_cur_done && g_cur_s0 != 0) flags = GCCANON_MOVE_POST;
+        else continue;
         uint32_t n = g_ch->nmoves;
         if (n >= GCCANON_MAX_MOVES) continue;  // overflow stays visible via moves_total
         g_ch->moves[n].old_base = (uint64_t)oldS[i];
@@ -185,7 +196,9 @@ static HRESULT STDMETHODCALLTYPE Prof_MovedReferences2(ICorProfilerCallback4 *Th
         g_ch->moves[n].len      = (uint64_t)len[i];
         g_ch->moves[n].step     = g_cur_s0;
         g_ch->moves[n].gc_seq   = g_gc_seq;
+        g_ch->moves[n].flags    = flags;
         g_ch->nmoves = n + 1;
+        if (flags == GCCANON_MOVE_POST) g_ch->post_moves_total++;
     }
     return S_OK;
 }

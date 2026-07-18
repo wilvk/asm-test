@@ -666,6 +666,7 @@ static uint32_t st_gen(gccanon_move_t *mv, uint32_t cap, uint32_t ngcs) {
                 mv[n].len = len;
                 mv[n].step = ST_S0;
                 mv[n].gc_seq = g;
+                mv[n].flags = 0; /* synthetic feed is all in-capture */
                 n++;
             }
             p += len + st_rnd(16);
@@ -683,9 +684,9 @@ static int gccanon_selftest(void) {
      * A=0x1000 -> B=0x2000 -> C=0x3000, plus a bystander that only the second GC moves. */
     {
         gccanon_move_t mv[3] = {
-            {0x1000, 0x2000, 0x40, ST_S0, 1},
-            {0x2000, 0x3000, 0x40, ST_S0, 2},
-            {0x8000, 0x9000, 0x40, ST_S0, 2},
+            {0x1000, 0x2000, 0x40, ST_S0, 1, 0},
+            {0x2000, 0x3000, 0x40, ST_S0, 2, 0},
+            {0x8000, 0x9000, 0x40, ST_S0, 2, 0},
         };
         uint32_t cn = 0;
         compose_stats_t st;
@@ -714,8 +715,8 @@ static int gccanon_selftest(void) {
      * split, and G's own [0x600,0x650) part must survive as a mover in its own right. */
     {
         gccanon_move_t mv[2] = {
-            {0x100, 0x500, 0x100, ST_S0, 1},
-            {0x550, 0x900, 0x100, ST_S0, 2},
+            {0x100, 0x500, 0x100, ST_S0, 1, 0},
+            {0x550, 0x900, 0x100, ST_S0, 2, 0},
         };
         uint32_t cn = 0;
         compose_stats_t st;
@@ -749,9 +750,9 @@ static int gccanon_selftest(void) {
      * and by [0x50,0x60); if either survives, 0x55 is forwarded — a false edge. All three must go. */
     {
         gccanon_move_t mv[3] = {
-            {0x0, 0x5000, 0x100, ST_S0, 1},
-            {0x10, 0x7000, 0x2, ST_S0, 1},
-            {0x50, 0x9000, 0x10, ST_S0, 1},
+            {0x0, 0x5000, 0x100, ST_S0, 1, 0},
+            {0x10, 0x7000, 0x2, ST_S0, 1, 0},
+            {0x50, 0x9000, 0x10, ST_S0, 1, 0},
         };
         uint32_t cn = 0;
         compose_stats_t st;
@@ -1029,10 +1030,15 @@ int main(int argc, char **argv) {
     int prc = asmtest_dataflow_ptrace_attach_jit(pid, tid, base, (size_t)len, NULL, 0, 0, &result,
                                                  &survived, g_vt);
 
+    /* Publish tracer_done BEFORE clearing magic (increment 4 / T2): a GC that starts between the two
+     * stores must be visible to the profiler's POST rule (tracer_done=1), not fall between "traced"
+     * and "done" and be dropped. The publisher keeps mirroring the now-final, stable steps_len until
+     * it is stopped just below, so a post-capture GC samples that frozen final count as its S0 —
+     * strictly greater than every captured record's step, i.e. a trace-to-snapshot translation. */
+    g_ch->tracer_done = 1;
     g_ch->magic = 0;
     g_pub_stop = 1;
     pthread_join(pt, NULL);
-    g_ch->tracer_done = 1;
 
     size_t steps = asmtest_valtrace_steps(g_vt), nrecs = asmtest_valtrace_recs(g_vt);
     printf("GCCANON_CAPTURE rc=%d survived=%d steps=%zu recs=%zu truncated=%d result=0x%lx\n", prc,
@@ -1056,10 +1062,32 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    /* Give the victim a bounded moment to stamp at least one POST-capture move (increment 4 / T2):
+     * its driver keeps dropping compacting gen2 GCs after the capture, but the drain runs within
+     * milliseconds of detach, so without this the post-move observable would race. Bounded + honest:
+     * it waits for the first post move or ~3 s, whichever comes first, and never stalls the lane. */
+    for (int w = 0; w < 600 && g_ch->post_moves_total == 0; w++) {
+        struct timespec pw = {0, 5 * 1000 * 1000}; /* 5 ms */
+        nanosleep(&pw, NULL);
+    }
+
     /* ---- drain the stamped feed ------------------------------------------------------------ */
-    uint32_t nm = g_ch->nmoves;
-    if (nm > GCCANON_MAX_MOVES)
-        nm = GCCANON_MAX_MOVES;
+    uint32_t nm_all = g_ch->nmoves;
+    if (nm_all > GCCANON_MAX_MOVES)
+        nm_all = GCCANON_MAX_MOVES;
+    /* Partition on flags (increment 4 / T2): all in-capture (flags==0) moves PRECEDE all
+     * post-capture ones — the profiler appends the former only while `magic` is set, the latter only
+     * after tracer_done, and `magic` transitions exactly once — so the flags==0 prefix is exactly
+     * what the landed increment-2 lane consumed. `nm` stays that prefix count, so moves[],
+     * gccanon_compose, the window search, the differential oracle, and assertions 1-11 are all
+     * byte-identical to before. The post moves stay in g_ch->moves[nm..] for the objid join (T5). */
+    uint32_t nm = 0, npost = 0;
+    for (uint32_t i = 0; i < nm_all; i++) {
+        if (g_ch->moves[i].flags == GCCANON_MOVE_POST)
+            npost++;
+        else
+            nm++;
+    }
     asmtest_gcmove_t *moves = nm ? calloc(nm, sizeof *moves) : NULL;
     uint32_t distinct_gcs = 0, seqs[64];
     for (uint32_t i = 0; i < nm; i++) {
@@ -1080,9 +1108,9 @@ int main(int argc, char **argv) {
     if (moves)
         qsort(moves, nm, sizeof *moves, move_cmp_step);
 
-    printf("GCCANON_FEED gcs_seen=%u gcs_traced=%u recorded_moves=%u reloc_seen=%u nonreloc_seen=%u "
-           "last_s0=%u distinct_gcs_in_feed=%u\n",
-           g_ch->gcs_seen, g_ch->gcs_traced, nm, g_ch->moves_total, g_ch->nonreloc_total,
+    printf("GCCANON_FEED gcs_seen=%u gcs_traced=%u recorded_moves=%u post_moves=%u reloc_seen=%u "
+           "nonreloc_seen=%u last_s0=%u distinct_gcs_in_feed=%u\n",
+           g_ch->gcs_seen, g_ch->gcs_traced, nm, npost, g_ch->moves_total, g_ch->nonreloc_total,
            g_ch->last_s0, distinct_gcs);
 
     /* ---- find the store and the load ------------------------------------------------------- */

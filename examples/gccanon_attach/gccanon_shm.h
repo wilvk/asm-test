@@ -40,6 +40,14 @@
  * precisely a missed relocation. ~2 MB of shm. */
 #define GCCANON_MAX_MOVES 65536
 
+/* `flags` (increment 4 / T2): GCCANON_MOVE_POST marks a range the profiler recorded AFTER the
+ * tracer published tracer_done — a compaction between the capture's LAST step and the heap snapshot
+ * (increment-4 object identity), not one WITHIN the traced window. Its `step` is the tracer's FROZEN
+ * final steps_len, strictly greater than every captured record's step, so it reads as a
+ * trace-to-snapshot translation move. The increment-2 lane consumes flags==0 records ONLY, so its
+ * behaviour is unchanged; the objid join consumes the post moves to reach the snapshot space. */
+#define GCCANON_MOVE_POST 1u
+
 /* One relocating range, already stamped. Mirrors asmtest_gcmove_t {old_base,new_base,len,step} plus
  * the provenance the tier needs to police its own model. */
 typedef struct gccanon_move {
@@ -48,6 +56,7 @@ typedef struct gccanon_move {
     uint64_t len;
     uint32_t step;   /* the profiler-sampled S0 of the GC that delivered it   */
     uint32_t gc_seq; /* WHICH GC — load-bearing, see below                    */
+    uint32_t flags;  /* 0 = in-capture; GCCANON_MOVE_POST = post-capture (T2) */
 } gccanon_move_t;
 
 /*
@@ -103,6 +112,7 @@ typedef struct gccanon_channel {
     volatile uint32_t nmoves;        /* profiler: valid entries in moves[]                   */
     volatile uint32_t moves_total;   /* profiler: relocating ranges SEEN (may exceed nmoves) */
     volatile uint32_t nonreloc_total;/* profiler: old == new ranges — see below              */
+    volatile uint32_t post_moves_total;/* profiler: GCCANON_MOVE_POST ranges recorded (T2)   */
     volatile uint32_t last_s0;       /* profiler: S0 of the most recent traced GC            */
     volatile uint32_t ngcinfo;       /* profiler: valid entries in gcs[]                     */
     gccanon_gcinfo_t gcs[GCCANON_MAX_GCINFO];
