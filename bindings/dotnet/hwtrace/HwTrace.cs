@@ -569,6 +569,14 @@ namespace Asmtest
             int period, out IntPtr ctx);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_sample_end_amd(
             IntPtr ctx, ulong[] ips, UIntPtr cap, out UIntPtr nips, out int truncated);
+        // §Z1.2 native STRONG-tier PT whole-window pair driving the inline
+        // `using (new AsmTrace(HwBackend.IntelPt))` ctor. begin opens a per-thread perf AUX
+        // intel_pt event (self-skips EUNAVAIL off bare-metal Intel PT); end DISABLEs, drains,
+        // decodes against `img` as of `when` (img==Zero: the ctx's own self image) into
+        // `trace`, and frees the ctx. A Zero trace is a drain-less release (leaked-scope reclaim).
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_pt_begin_window(out IntPtr ctx);
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_pt_end_window(
+            IntPtr ctx, IntPtr img, ulong when, IntPtr trace);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_stealth_window_begin(
             IntPtr chan, out IntPtr ctx);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_stealth_window_end(
@@ -1854,6 +1862,38 @@ namespace Asmtest
         }
     }
 
+    /// <summary>§Z1.2: a finalizable holder for the native STRONG-tier Intel PT window ctx, so
+    /// ONLY the inline PT scopes carry finalization overhead (not every AsmTrace). Dispose
+    /// drains + decodes via <see cref="End"/>; a leaked (undisposed) scope has its perf event +
+    /// AUX mappings released by the finalizer (drain-less, trace==Zero), so the fd is never
+    /// leaked.</summary>
+    internal sealed class PtWindowCtx
+    {
+        IntPtr _ctx;
+        public PtWindowCtx(IntPtr ctx) { _ctx = ctx; }
+
+        /// <summary>Drain + decode into <paramref name="trace"/> against <paramref name="img"/>
+        /// as of <paramref name="when"/> (img==Zero: the ctx's own self image) + free the ctx.
+        /// Idempotent (a second call is a no-op).</summary>
+        public int End(IntPtr img, ulong when, IntPtr trace)
+        {
+            IntPtr c = _ctx;
+            if (c == IntPtr.Zero) return 0;
+            _ctx = IntPtr.Zero;
+            GC.SuppressFinalize(this);
+            return HwNative.asmtest_hwtrace_pt_end_window(c, img, when, trace);
+        }
+
+        ~PtWindowCtx()
+        {
+            IntPtr c = _ctx;
+            if (c == IntPtr.Zero || !HwNative.LibAvailable) return;
+            _ctx = IntPtr.Zero;
+            // Drain-less release of a leaked scope's fd + AUX mappings (trace==Zero: no decode).
+            try { HwNative.asmtest_hwtrace_pt_end_window(c, IntPtr.Zero, 0, IntPtr.Zero); } catch { }
+        }
+    }
+
     /// <summary>§D3: a finalizable holder for the native out-of-process inline stepper context,
     /// so only the inline OOP window scopes carry finalization overhead. Dispose drains via
     /// <see cref="End"/>; a leaked (undisposed) scope has its helper process joined + freed by
@@ -1897,9 +1937,11 @@ namespace Asmtest
             OopWindow,       // §D3: out-of-process whole-window (AsmTrace.Window factory)
             AmdWindow,       // §D3: AMD-LBR statistical inline whole-window (new AsmTrace(HwBackend.AmdLbr))
             OopInlineWindow, // §D3: out-of-process inline whole-window (new AsmTrace(outOfProcess: true))
+            PtWindow,        // §Z1.2: Intel PT STRONG inline whole-window (new AsmTrace(HwBackend.IntelPt))
         }
         readonly Kind _kind;    // defaults to Kind.Region (the region / named-method form)
         AmdSampler _amdSampler; // the armed AMD sampler (finalizable; null until armed)
+        PtWindowCtx _ptWinCtx;  // the armed Intel PT window ctx (finalizable; null until armed)
         OopWindowCtx _oopWinCtx;    // the armed async OOP stepper context (finalizable; null until armed)
         IntPtr _oopWinChan;         // the shared address channel for JIT regions
         ulong[] _amdIps;            // the endpoint buffer drained in Dispose
@@ -2559,7 +2601,9 @@ namespace Asmtest
         /// <c>CAP_PERFMON</c>. R3: <see cref="HwBackend.SingleStep"/> is ALSO accepted here —
         /// it forwards to the same in-process single-step whole-window arming as the empty-ctor
         /// <c>new AsmTrace()</c> form (exact, not statistical); <see cref="HwBackend.IntelPt"/>
-        /// and <see cref="HwBackend.CoreSight"/> stay forward-look and self-skip. NOTE: the AMD
+        /// ARMS the STRONG whole-window Intel PT capture (exact, <see cref="IsStatistical"/>
+        /// false; silicon-gated — self-skips off bare-metal Intel PT); only
+        /// <see cref="HwBackend.CoreSight"/> stays forward-look and self-skips. NOTE: the AMD
         /// sampled perf event is per-OS-thread, so the block
         /// must run SYNCHRONOUSLY on the calling thread (an <c>await</c>/thread hop would sample
         /// the wrong thread). MUST be disposed (a leaked scope's event is released by a
@@ -2575,8 +2619,11 @@ namespace Asmtest
             _emit = false;
             // R3: single-step forwards to the shared whole-window arming below, so this
             // backend-keyed ctor now covers SingleStep too — set the Dispose kind accordingly
-            // (WholeWindow for the single-step forward, AmdWindow for the AMD-LBR survey).
-            _kind = backend == HwBackend.SingleStep ? Kind.WholeWindow : Kind.AmdWindow;
+            // (WholeWindow for the single-step forward, PtWindow for the Intel PT STRONG arm,
+            // AmdWindow for the AMD-LBR survey).
+            _kind = backend == HwBackend.SingleStep ? Kind.WholeWindow
+                : backend == HwBackend.IntelPt ? Kind.PtWindow
+                : Kind.AmdWindow;
             _rundownSettleMs = rundownSettleMs;
             _armTid = Environment.CurrentManagedThreadId;
             if (!HwNative.LibAvailable)
@@ -2591,6 +2638,42 @@ namespace Asmtest
                 // ctor). Behavior matches `new AsmTrace(byMethod:, withRundown:)`, and
                 // _kind == Kind.WholeWindow routes Dispose to the whole-window teardown.
                 ArmWholeWindow(byMethod, withRundown);
+                return;
+            }
+            if (backend == HwBackend.IntelPt)
+            {
+                // §Z1.2: the STRONG whole-window Intel PT inline capture. Exact (not
+                // statistical). Gate on availability (self-skip NAMING the PT gate off
+                // bare-metal Intel PT); set up the JIT map + rundown BEFORE arming (the map must
+                // see methods JIT'd inside the window, and the rundown's socket I/O must not run
+                // under capture); pre-allocate the retained whole-window trace; arm the native
+                // pair; on OK wrap the ctx in the finalizable PtWindowCtx and pin the OS thread
+                // (the perf event is per-thread — same caveat as AMD).
+                if (!HwTrace.Available(HwBackend.IntelPt))
+                {
+                    SkipReason = "Intel PT unavailable: " + HwTrace.SkipReason(HwBackend.IntelPt);
+                    return; // Dispose's PtWindow branch tears down _map + DisablePerfMap
+                }
+                if (byMethod || withRundown) _map = new JitMethodMap(trackBytes: true);
+                _rundownRequested = withRundown;
+                if (withRundown) RundownEnabled = DiagnosticsIpc.EnablePerfMap();
+                // Whole-window captures the runtime too — size the retained trace to the
+                // single-step window ring (same as ArmWholeWindow); committed only as it fills.
+                _handle = HwNative.asmtest_trace_new((UIntPtr)(1 << 20), (UIntPtr)0);
+                if (_handle == IntPtr.Zero)
+                {
+                    SkipReason = "Intel PT window: trace allocation failed";
+                    return;
+                }
+                int prc = HwNative.asmtest_hwtrace_pt_begin_window(out IntPtr pctx);
+                if (prc != HwNative.ASMTEST_HW_OK || pctx == IntPtr.Zero)
+                {
+                    SkipReason = $"Intel PT window did not arm (rc={prc})";
+                    return; // Dispose tears down _map + DisablePerfMap + frees _handle
+                }
+                _ptWinCtx = new PtWindowCtx(pctx);
+                Thread.BeginThreadAffinity();
+                Armed = true;
                 return;
             }
             if (backend != HwBackend.AmdLbr)
@@ -3551,6 +3634,47 @@ namespace Asmtest
                     }
                     else if (_map != null) { _map.Stop(); _map.Dispose(); }
                     if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+                    return;
+                }
+                case Kind.PtWindow:
+                {
+                    // §Z1.2: the INLINE Intel PT STRONG window (new AsmTrace(HwBackend.IntelPt)).
+                    // The block just ran inline, captured out of band via the perf AUX intel_pt
+                    // ring — DRAIN + decode the native pair against the JIT map's code-image
+                    // (falls back to the ctx's own self image when there is no map), read the
+                    // ABSOLUTE addresses + honest truncation, attribute, release. IsStatistical
+                    // stays false (exact). A self-skipped (unarmed) scope has no ctx — just tear
+                    // down the map + rundown + any allocated trace.
+                    if (_ptWinCtx != null)
+                    {
+                        // Freeze the map BEFORE reading its image, so the decode sees exactly the
+                        // methods JIT'd while the window was open; img stays valid across End
+                        // because AttributeAddresses (which disposes _map) runs only afterward.
+                        if (_map != null) _map.Stop();
+                        IntPtr img = _map != null ? _map.ImageHandle : IntPtr.Zero;
+                        ulong when = _map != null ? _map.ImageNow : 0;
+                        int rc = _ptWinCtx.End(img, when, _handle);
+                        _ptWinCtx = null;
+                        Thread.EndThreadAffinity();       // paired with the ctor's pin (armed path)
+                        if (rc == HwNative.ASMTEST_HW_OK && _handle != IntPtr.Zero)
+                        {
+                            if (_map != null) MethodsObserved = _map.Count;
+                            ulong n = HwNative.asmtest_emu_trace_insns_len(_handle);
+                            var addrs = new ulong[n];
+                            for (ulong i = 0; i < n; i++)
+                                addrs[i] = HwNative.asmtest_emu_trace_insn_at(_handle, (UIntPtr)i);
+                            Addresses = addrs;
+                            Truncated = HwNative.asmtest_emu_trace_truncated(_handle) != 0;
+                        }
+                        AttributeAddresses(img, when); // endpoint PCs -> methods; disposes _map
+                    }
+                    else if (_map != null) { _map.Stop(); _map.Dispose(); }
+                    if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+                    if (_handle != IntPtr.Zero)
+                    {
+                        HwNative.asmtest_trace_free(_handle);
+                        _handle = IntPtr.Zero;
+                    }
                     return;
                 }
                 case Kind.OopInlineWindow:

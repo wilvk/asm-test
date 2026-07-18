@@ -12,9 +12,13 @@ work for EVERY trace form, IN ADDITION to the delegate factories (`AsmTrace.Wind
 
 > Status: **AMD-LBR inline LANDED** and **R4 (out-of-process inline) LANDED** (`578caed`,
 > ahead of R1–R3); **R1 (`_kind` refactor) + R3 (SingleStep via the unified ctor) now LANDED**.
-> **R2 (Intel PT inline) is the SOLE remainder**, and it is **hardware-gated**: wiring it needs
-> bare-metal Intel PT to validate against, which the AMD Zen 5 / Zen 2 dev boxes cannot
-> provide. Its ctor path is reserved and self-skips today.
+> **R2 (Intel PT inline) is now WIRED** (intel-pt-whole-window-substrate T4): the
+> `new AsmTrace(HwBackend.IntelPt)` ctor arms the native `asmtest_hwtrace_pt_begin_window`/
+> `_end_window` pair (a finalizable `PtWindowCtx`, a `Kind.PtWindow` Dispose that decodes on
+> close), exact and not statistical. Only the **live capture** stays hardware-gated (bare-metal
+> Intel PT, which the AMD Zen 5 / Zen 2 dev boxes cannot provide): off PT the ctor self-skips
+> with a `SkipReason` that names the PT availability gate — no longer the `"forward-look (not
+> wired)"` text. Validate live with `make hwtrace-pt-live` + `make hwtrace-dotnet-test` on a PT box.
 
 ## The general requirement + the two backend classes
 
@@ -40,7 +44,7 @@ can meet it is decided by **how its backend is armed**:
 | Whole-window single-step `new AsmTrace()` / `(byMethod:,withRundown:)` | START/STOP (TF) | **YES (was already)** | best-effort on managed code (exit-133 hazard) |
 | Region `new AsmTrace(code)` | START/STOP | **YES (was already)** | traces a native routine; works on any inited backend (single-step / AMD LBR) |
 | **AMD-LBR statistical** `new AsmTrace(HwBackend.AmdLbr)` | START/STOP (perf) | **YES — LANDED** | one-cut native begin/end split + a backend-keyed ctor; *sheds* the delegate marshaling |
-| **Intel PT** `new AsmTrace(HwBackend.IntelPt)` | START/STOP (perf AUX) | forward-look (hardware-gated) | same ctor; path reserved, self-skips with a `"forward-look (not wired)"` `SkipReason` ([HwTrace.cs:2328](../../../bindings/dotnet/hwtrace/HwTrace.cs#L2328)) until a bare-metal PT begin/end pair + libipt decode-on-close is wired |
+| **Intel PT** `new AsmTrace(HwBackend.IntelPt)` | START/STOP (perf AUX) | **YES — WIRED (live capture silicon-gated)** | same ctor; arms the native `asmtest_hwtrace_pt_begin_window`/`_end_window` pair (finalizable `PtWindowCtx`, `Kind.PtWindow` decode-on-close), exact not statistical; off bare-metal Intel PT it self-skips with a `SkipReason` that names the PT gate (no longer `"forward-look (not wired)"`) — validate live with `make hwtrace-pt-live` |
 | **Out-of-process** `new AsmTrace(outOfProcess: true)` | COORDINATION | **YES — LANDED (R4)** | built via the async stop-flag split, but *strictly worse* than the `AsmTrace.Window` factory — keep the factory; see R4 |
 | Named-method `AsmTrace.Method` | — | **N/A** | category mismatch — see below |
 

@@ -55,7 +55,10 @@ Three properties hold across every binding:
   tier, the universal floor. The **CEILING** AMD LBR tier is never auto-selected for the
   exact whole-window contract — a sampled branch survey cannot meet it — so on AMD the
   ladder uses WEAK, and the quiet sampled complement is reached explicitly with
-  `new AsmTrace(HwBackend.AmdLbr)` (live floor Zen 4+).
+  `new AsmTrace(HwBackend.AmdLbr)` (live floor Zen 4+). The explicit
+  `using (new AsmTrace(HwBackend.IntelPt))` inline form arms the same STRONG PT window
+  directly (exact, not statistical; silicon-gated — self-skips off bare-metal Intel PT
+  with a reason that names the PT gate).
 
 ## Per-language shape
 

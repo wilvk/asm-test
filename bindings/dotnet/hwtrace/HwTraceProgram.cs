@@ -222,6 +222,40 @@ static class HwTraceProgram
             }
             code4.Free();
 
+            // --- T4 §Z1.2: the inline STRONG Intel PT ctor: using (new AsmTrace(HwBackend.IntelPt)) --- //
+            // Invariant envelope on ANY host. Off bare-metal Intel PT (this host / VMs / containers)
+            // it self-skips: Armed==false, SkipReason NAMES the PT gate (never the old
+            // "forward-look (not wired)" text), Dispose() does not throw. On real Intel PT silicon
+            // (the T5 runner) the same case flips to Armed==true + Addresses populated. Always EXACT.
+            var codePt = NativeCode.FromBytes(ROUTINE);
+            long rpt = 0;
+            AsmTrace pt;
+            using (pt = new AsmTrace(HwBackend.IntelPt))
+            {
+                rpt = codePt.Call(20, 22);
+            }
+            Check(rpt == 42, $"AsmTrace(IntelPt): the inline block still runs (got {rpt})");
+            Check(!pt.IsStatistical, "AsmTrace(IntelPt): the PT window is EXACT, not statistical");
+            if (pt.Armed)
+            {
+                Check(pt.Addresses.Length > 0,
+                      $"AsmTrace(IntelPt): armed on Intel PT silicon — captured {pt.Addresses.Length} instructions");
+            }
+            else
+            {
+                Check(pt.SkipReason.Length > 0 && !pt.SkipReason.Contains("forward-look"),
+                      $"AsmTrace(IntelPt): self-skip names the PT gate, not the old forward-look text ({pt.SkipReason})");
+                Check(pt.SkipReason.Contains("Intel PT") || pt.SkipReason.Contains("intel_pt"),
+                      $"AsmTrace(IntelPt): self-skip reason names the PT availability gate ({pt.SkipReason})");
+            }
+            // A LEAKED (undisposed) PT scope: its native ctx (when it armed) must be released by
+            // the PtWindowCtx finalizer without crashing the finalizer thread.
+            MakeLeakedPtScope();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            Check(true, "AsmTrace(IntelPt): a leaked PT scope's finalizer runs without crashing");
+            codePt.Free();
+
             // --- §Z1 byMethod: annotated disassembly (Disassembly) --- //
             // A byMethod whole-window scope over a COLD, pure-compute managed method: the
             // labelled instructions are disassembled from live memory and paired with their
@@ -832,6 +866,16 @@ static class HwTraceProgram
         Check(AsmTrace.HotPrefix(new List<AsmMethod>(), 0.9).Count == 0, "HotPrefix([]) is empty (degrade signal)");
         // Fraction is clamped, not thrown on: >1 behaves as 1.0.
         Check(AsmTrace.HotPrefix(byW, 5.0).Count == 4, $"HotPrefix(>1 clamps to 1.0) -> 4 (got {AsmTrace.HotPrefix(byW, 5.0).Count})");
+    }
+
+    // T4 §Z1.2: construct an inline Intel PT scope and INTENTIONALLY leak it (never Dispose).
+    // On PT silicon this arms a native PtWindowCtx whose finalizer must reclaim the perf fd +
+    // AUX mappings (drain-less) without crashing the finalizer thread; off PT it self-skips with
+    // nothing to finalize. NoInlining + a separate frame so the reference is genuinely collectable.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static void MakeLeakedPtScope()
+    {
+        _ = new AsmTrace(HwBackend.IntelPt);
     }
 
     // §E1 fixtures for WindowHybridChecks — two distinct NoInlining managed methods so the

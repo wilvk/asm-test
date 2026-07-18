@@ -22,6 +22,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   [releasing.md](https://github.com/wilvk/asm-test/blob/main/docs/reference/releasing.md#system-packages)).
   See [distribution-packaging.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/distribution-packaging.md).
 
+- **`.NET` inline `using (new AsmTrace(HwBackend.IntelPt))` now arms the STRONG whole-window
+  Intel PT capture** (`bindings/dotnet/hwtrace/HwTrace.cs`), replacing the reserved
+  `"forward-look (not wired)"` self-skip. The backend-keyed ctor gates on
+  `HwTrace.Available(IntelPt)` (self-skip names the PT gate off bare-metal Intel PT), sets up
+  the `JitMethodMap` + perf-map rundown before arming, and drives the native
+  `asmtest_hwtrace_pt_begin_window`/`_end_window` pair via a finalizable `PtWindowCtx` (a
+  leaked scope's fd + AUX mappings are reclaimed drain-less by the finalizer) and a new
+  `Kind.PtWindow` Dispose that decodes on close against the map's code-image, filling
+  `Addresses` with ABSOLUTE addresses and `IsStatistical == false`. `hwtrace-dotnet-test`
+  carries the invariant-envelope case on any host; live capture is silicon-gated
+  (`make hwtrace-pt-live` + `make hwtrace-dotnet-test` on a bare-metal Intel PT box). Only
+  `HwBackend.CoreSight` keeps the forward-look self-skip.
+  See [intel-pt-whole-window-substrate.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/intel-pt-whole-window-substrate.md).
+
 - **Whole-window Intel PT STRONG tier wired behind the empty-ctor scope, with a runtime
   WEAK/STRONG decode-trust ladder.** `asmtest_hwtrace_begin_window`/`_end_window`
   (`src/hwtrace.c`) now arm and drain a real region-free Intel PT capture on an inited

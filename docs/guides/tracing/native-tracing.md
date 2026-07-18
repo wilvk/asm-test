@@ -336,10 +336,17 @@ scope close.
 
 The Intel PT capture and libipt decode are implemented; the CoreSight backend is a
 documented scaffold pending AArch64 board access (it always self-skips until
-completed). The Intel-PT/CoreSight hardware capture **cannot run on standard CI** —
-it needs a self-hosted bare-metal runner. The **single-step backend below removes
-that limitation** for x86-64: it records the same offsets on any Linux x86-64 host,
-including CI and containers, with full automated regression protection.
+completed). Beyond the region-keyed capture, the **whole-window** Intel PT path is
+wired end to end: `asmtest_hwtrace_begin_window`/`_end_window` arm and drain a
+region-free PT capture on an inited `INTEL_PT` tier (one shared perf-AUX arm), a
+runtime WEAK/STRONG ladder (`asmtest_hwtrace_window_auto`) auto-selects PT only when
+the decode proves itself, and the .NET `using (new AsmTrace(HwBackend.IntelPt))`
+inline ctor arms it (exact, not statistical). The Intel-PT/CoreSight hardware capture
+**cannot run on standard CI** — it needs a self-hosted bare-metal runner
+(`make hwtrace-pt-live` exercises the live PT smoke; the synthetic-fixture decode +
+the WEAK/STRONG ladder run in `make docker-hwtrace` everywhere). The **single-step
+backend below removes that limitation** for x86-64: it records the same offsets on any
+Linux x86-64 host, including CI and containers, with full automated regression protection.
 
 ---
 
