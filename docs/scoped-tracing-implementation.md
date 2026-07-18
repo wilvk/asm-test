@@ -136,18 +136,29 @@ end-to-end on any x86-64 Linux via the single-step **WEAK** tier, per
 - **§Z1 WEAK tier (DONE).** `asmtest_hwtrace_render_window` disassembles the recorded
   absolute addresses from **live self memory** (valid for non-moving native code); moving
   managed bytes route to the shipped `asmtest_hwtrace_render_versioned` (§Z3, forward-look).
+- **§Z1.2/§Z1.3 STRONG tier + WEAK/STRONG ladder (WIRED; live capture silicon-gated).**
+  `begin_window` now ARMS a real whole-window Intel PT capture on an inited `INTEL_PT`
+  tier — the one shared perf-AUX arm (`pt_aux_open`) also drives the region path and the
+  native `asmtest_hwtrace_pt_begin_window`/`_end_window` pair the .NET inline ctor uses —
+  and `asmtest_hwtrace_window_auto` auto-selects STRONG only when the `intel_pt` PMU is
+  present **and** `asmtest_hwtrace_pt_window_trusted()` proves the whole-window decode on
+  the §Z2 fixture at runtime; else WEAK. The CEILING AMD LBR tier is deliberately never
+  auto-selected here (exact whole-window ≠ a sampled survey; live floor Zen 4+). The
+  **capture** half is silicon-gated (no `intel_pt` PMU on AMD/VMs/containers) — the
+  synthetic-fixture decode runs in CI, the live arm is `make hwtrace-pt-live`.
 - **§Z4 default + §Z5 scaffold (DONE).** `end_window` flags `truncated` when the handle
   does not resolve on the closing thread (the cross-thread-hop honesty default); the empty
   ctor self-skips with an actionable `SkipReason` (never throws) where no faithful backend
   exists.
-- **Tests:** `test_wholewindow_singlestep` (checks 119–127: region-free arm, absolute-address
-  capture, live-memory render finding `ret`, cross-thread `truncated`) in `make docker-hwtrace`
-  (201/0); the `.NET` `AsmTrace()` case in `make docker-hwtrace-dotnet` (33/0). Both validated
-  on this AMD host.
-- **Forward-look:** the STRONG whole-window PT / CEILING AMD LBR capture tiers (bare-metal
-  Intel PT / Zen 4+), §Z2 live decode, §Z3 arbitrary-managed-method capture (needs a live
-  runtime + MethodLoadVerbose), the §Z4 stitching escalation, and the other nine binding
-  shims (mechanical mirrors of the .NET reference). All ship self-skipping and gated.
+- **Tests:** `test_wholewindow_singlestep` (region-free arm, absolute-address capture,
+  live-memory render finding `ret`, cross-thread `truncated`), `test_pt_window_pair_selfskip`,
+  and `test_window_ladder` (the ladder never returns an unavailable backend; `pt_window_trusted`
+  == `codeimage_available` in the libipt image) in `make docker-hwtrace`; the `.NET` `AsmTrace()`
+  auto-init case in `make docker-hwtrace-dotnet`. All validated on this AMD host (the STRONG
+  live capture self-skips).
+- **Forward-look:** the STRONG PT / CEILING AMD LBR **live capture** (bare-metal Intel PT /
+  Zen 4+), §Z3 arbitrary-managed-method capture (needs a live runtime + MethodLoadVerbose),
+  and the §Z4 stitching escalation. All ship self-skipping and gated.
 
 ## Bindings slice — the scope construct across all ten tiers (DONE)
 
@@ -242,6 +253,7 @@ needs.
 | §D3 reverse-attach ptrace-stealth stepper **+ standalone `asmtest-stealth-helper` binary** (both paths, `test_ptrace_scoped_stealth` checks 158–166) | `make hwtrace-test` / any ptrace lane | any ptrace-capable Linux |
 | §D3 helper **package embedding** — full `package-libs` slot, complete-set `package-libs-verify`, in-slot Capstone resolution, dladdr-sibling discovery from the bundled `.so` | `make package-libs && make package-libs-verify` (bindings-base image) | x86-64 Linux + emu toolchain (Capstone/patchelf) |
 | Core §0/§1-single-step/§2-adapter/§3-symbolize/§D4-merge + all 10 binding scopes | `make docker-hwtrace` + per-binding lanes | any x86-64 Linux |
+| §Z1.2/§Z1.3 whole-window PT **decode + WEAK/STRONG ladder + runtime trust probe** (`test_wholewindow_decode`, `test_pt_window_pair_selfskip`, `test_window_ladder`; the ladder resolves to WEAK and the native PT pair self-skips here) | `make docker-hwtrace` | any x86-64 Linux (synthetic libipt PT fixture — no `intel_pt` PMU needed) |
 | eBPF code-emission detector | `make docker-hwtrace-codeimage` | `CAP_BPF` + kernel BTF (present) |
 | Managed-JIT tracing via the ptrace/W2 path (.NET/Node/Java) | `make docker-hwtrace-jit-{dotnet,node,java}` | a live runtime (in the image) |
 
@@ -249,6 +261,7 @@ needs.
 
 | Item | Requires |
 |---|---|
+| §Z1.2 STRONG whole-window PT **live capture** — the `begin_window` PT arm, the native `asmtest_hwtrace_pt_begin_window`/`_end_window` pair, and the `new AsmTrace(HwBackend.IntelPt)` inline ctor arming (the wiring + ladder + decode are Docker-validated above; only the live arm is gated) | **bare-metal Intel PT** with `perf_event_paranoid < 0` / `CAP_PERFMON` — `make hwtrace-pt-live` (fails rather than skips where PT is claimed) |
 | Core §2 live whole-window libipt decode + capture-side address filter | **bare-metal Intel PT** (no `intel_pt` on AMD; a synthetic PT-packet fixture is the only non-hardware route) |
 | Core §1 per-thread PT/CoreSight **AUX** live validation | **bare-metal Intel PT** / an **AArch64 CoreSight board** (the per-thread *code* is done) |
 | Core §3.1(b) emission **slicing** (trace-position ↔ emission-timestamp correlation) | **Intel PT** whole-window decode for per-IP positions (the eBPF detector itself is done) |

@@ -8,6 +8,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Whole-window Intel PT STRONG tier wired behind the empty-ctor scope, with a runtime
+  WEAK/STRONG decode-trust ladder.** `asmtest_hwtrace_begin_window`/`_end_window`
+  (`src/hwtrace.c`) now arm and drain a real region-free Intel PT capture on an inited
+  `INTEL_PT` tier — the ONE shared perf-AUX arm (`pt_aux_open`) that also serves the region
+  path, exposed as the native `asmtest_hwtrace_pt_begin_window`/`_end_window` pair the .NET
+  inline ctor uses. `asmtest_hwtrace_window_auto` auto-selects STRONG only when the
+  `intel_pt` PMU is present **and** `asmtest_hwtrace_pt_window_trusted()` proves the
+  whole-window decode on the §Z2 synthetic fixture at runtime; else the WEAK single-step
+  tier. The CEILING AMD LBR tier is deliberately never auto-selected for the exact
+  whole-window contract (a sampled branch survey cannot meet it; live floor Zen 4+) — the
+  quiet sampled complement stays explicit (`new AsmTrace(HwBackend.AmdLbr)`). The .NET
+  empty-ctor `using (new AsmTrace())` consults the ladder (`AutoInitWindowBackend`), and
+  `DegradationNote()` names the PT probe outcome (present-but-untrusted vs no PMU). Live PT
+  capture is silicon-gated; the ladder, the runtime trust probe, and the synthetic-fixture
+  decode all run in `make docker-hwtrace` (green on this AMD host — no `intel_pt` PMU, so the
+  ladder resolves to WEAK and the native PT pair self-skips).
+  See [intel-pt-whole-window-substrate.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/intel-pt-whole-window-substrate.md).
+
 - **Reproducible source tarball (`make package-source`) attached to every
   release.** `git archive` of HEAD piped through `gzip -n` emits
   `build/dist/asm-test-<version>.tar.gz` + `SHA256SUMS`, byte-identical for a

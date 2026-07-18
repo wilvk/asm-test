@@ -3885,6 +3885,49 @@ static void test_pt_window_pair_selfskip(void) {
            "hwtrace-pt-live (T5)\n");
 }
 
+/* T3 — the WEAK/STRONG window ladder + runtime decode-trust probe. Host-neutral: the
+ * ladder must never return an unavailable backend, must not pick INTEL_PT off Intel PT,
+ * and (where libipt is built) the trust probe must equal codeimage_available() exactly
+ * — a probe failure in the equipped image is a real decode regression, the same signal
+ * as test_wholewindow_decode. */
+static void test_window_ladder(void) {
+    int wa = asmtest_hwtrace_window_auto();
+
+    /* (1) The ladder never returns a backend whose availability gate is 0. */
+    int sound =
+        (wa == ASMTEST_HW_EUNAVAIL) ||
+        (wa >= 0 && asmtest_hwtrace_available((asmtest_trace_backend_t)wa));
+    CHECK(sound,
+          "window ladder: window_auto() never returns an unavailable backend");
+
+    /* (2) Off the intel_pt PMU the ladder must not pick the STRONG tier. */
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT)) {
+        CHECK(wa != ASMTEST_HWTRACE_INTEL_PT,
+              "window ladder: window_auto() does not pick INTEL_PT off the "
+              "intel_pt PMU");
+        printf("# NOTE window ladder: resolved tier = %d (0=PT 3=SINGLESTEP "
+               "-3=none)\n",
+               wa);
+    }
+
+    /* (3) Where libipt is built the trust probe is EXACTLY codeimage_available(): the
+     * §Z2 fixture round-trip must succeed in the equipped image. Without libipt it is
+     * a constant 0. */
+    if (asmtest_pt_decoder_present()) {
+        int trusted = asmtest_hwtrace_pt_window_trusted();
+        int ci = asmtest_codeimage_available() ? 1 : 0;
+        CHECK(
+            trusted == ci,
+            "window ladder: pt_window_trusted() == 1 iff codeimage_available() "
+            "(the §Z2 fixture round-trips in the libipt image)");
+    } else {
+        CHECK(
+            asmtest_hwtrace_pt_window_trusted() == 0,
+            "window ladder: no libipt -> pt_window_trusted() is a constant 0");
+        printf("# SKIP window ladder: built without libipt\n");
+    }
+}
+
 /* §3.1(c) — whole-window noise attribution: the address→name reverse resolver +
  * IP bucketer. Feed a synthetic IP list spanning three distinct "regions" (the test
  * binary's own code, an anonymous mmap, and a synthetic perf-map JIT symbol) and
@@ -9402,6 +9445,7 @@ int main(void) {
      * hardware). Self-skips where libipt is absent. */
     test_wholewindow_decode();
     test_pt_window_pair_selfskip();
+    test_window_ladder();
 
     /* §3.1(c): whole-window noise attribution — reverse resolver + IP bucketer. */
     test_symbolize_bucket();

@@ -281,6 +281,11 @@ namespace Asmtest
         // backend enum (>= 0) or ASMTEST_HW_EUNAVAIL (-3) when none.
         [DllImport(HWTRACE)] public static extern UIntPtr asmtest_hwtrace_resolve(int policy, int[] @out, UIntPtr cap);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_auto(int policy);
+        // §Z1.3 whole-window WEAK/STRONG ladder: IntelPt only when the substrate is
+        // present AND the decode is trusted at runtime; else SingleStep; else EUNAVAIL.
+        // Plus the runtime decode-trust probe it (and DegradationNote) consult.
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_window_auto();
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_pt_window_trusted();
         // Cross-tier orchestrator (asmtest_trace_auto.h), over hwtrace + DynamoRIO +
         // emulator. resolve writes up to cap Choice triples into out[], most-faithful
         // first, returning the count; auto fills one Choice and returns ASMTEST_HW_OK
@@ -1000,7 +1005,24 @@ namespace Asmtest
             foreach (var b in new[] { HwBackend.IntelPt, HwBackend.AmdLbr,
                                       HwBackend.SingleStep, HwBackend.CoreSight })
             {
-                if (Available(b)) { parts.Add($"using {b}"); break; }
+                if (Available(b))
+                {
+                    // §Z1.3: intel_pt hardware present is necessary but NOT sufficient for
+                    // the STRONG whole-window tier — the decode must also be trusted at
+                    // runtime (the §Z2 fixture round-trip). If it is not, the window ladder
+                    // falls through to the next tier, so name that outcome ("present but
+                    // untrusted") rather than claim STRONG. (Off intel_pt the else-branch
+                    // below already says "no intel_pt PMU" via SkipReason, and the trust
+                    // probe is never reached — Available short-circuits.)
+                    if (b == HwBackend.IntelPt
+                        && HwNative.asmtest_hwtrace_pt_window_trusted() == 0)
+                    {
+                        parts.Add("IntelPt present but whole-window decode untrusted");
+                        continue;
+                    }
+                    parts.Add($"using {b}");
+                    break;
+                }
                 parts.Add($"{b} unavailable ({SkipReason(b)})");
             }
             if (!parts[parts.Count - 1].StartsWith("using", StringComparison.Ordinal))
@@ -2162,13 +2184,19 @@ namespace Asmtest
                 : HwNative.ASMTEST_HW_ENOSYS;
             if (rc == HwNative.ASMTEST_HW_ESTATE)
             {
-                // §Z0: the tier was never inited — auto-init the portable single-step backend
-                // and retry once, so `using (new AsmTrace())` needs no explicit HwTrace.Init.
-                // This fires ONLY when nothing is inited (begin_window returns ESTATE); an
-                // explicit Init of any backend is preserved (begin_window then returns OK or
-                // EUNAVAIL, never ESTATE). begin_window on ESTATE is a side-effect-free no-op,
-                // so the retry is safe.
-                int initRc = AutoInitSingleStep();
+                // §Z1.3: the tier was never inited — consult the WEAK/STRONG window ladder
+                // to pick which backend to auto-init. window_auto() returns IntelPt only
+                // when the substrate is present AND the whole-window decode is trusted at
+                // runtime (else SingleStep, else EUNAVAIL); begin_window (T2) then arms the
+                // PT window natively on the sentinel handle, or the portable single-step
+                // window. Fires ONLY when nothing is inited (begin_window returns ESTATE);
+                // an explicit Init of any backend is preserved (OK/EUNAVAIL, never ESTATE),
+                // and begin_window on ESTATE is a side-effect-free no-op, so the retry is safe.
+                int tier = HwNative.asmtest_hwtrace_window_auto();
+                HwBackend b = tier == (int)HwBackend.IntelPt
+                    ? HwBackend.IntelPt
+                    : HwBackend.SingleStep;
+                int initRc = AutoInitWindowBackend(b);
                 rc = initRc == HwNative.ASMTEST_HW_OK
                     ? HwNative.asmtest_hwtrace_begin_window(_handle, ref _scope)
                     : initRc;
@@ -2177,11 +2205,12 @@ namespace Asmtest
             if (!Armed) SkipReason = WholeWindowSkipReason(rc);
         }
 
-        // §Z0: lazily bring up the portable single-step tier for the empty-ctor whole-window
-        // scope, so callers need no explicit HwTrace.Init. Serialized via the shared TierLock;
-        // skips the native init if the tier is already up (explicit Init or a prior scope) so
-        // it can never re-init over a live capture. Returns the native init status.
-        internal static int AutoInitSingleStep()
+        // §Z0/§Z1.3: lazily bring up the whole-window tier `b` (the ladder's pick) for the
+        // empty-ctor scope, so callers need no explicit HwTrace.Init. Serialized via the
+        // shared TierLock; skips the native init if the tier is already up (explicit Init or
+        // a prior scope) so it can never re-init over a live capture. Returns the native
+        // init status.
+        internal static int AutoInitWindowBackend(HwBackend b)
         {
             lock (HwTrace.TierLock)
             {
@@ -2189,13 +2218,18 @@ namespace Asmtest
                 var opts = new HwNative.Options
                 {
                     StructSize = (UIntPtr)Marshal.SizeOf<HwNative.Options>(), // F27
-                    Backend = (int)HwBackend.SingleStep,
+                    Backend = (int)b,
                 };
                 int rc = HwNative.asmtest_hwtrace_init(ref opts);
                 if (rc == HwNative.ASMTEST_HW_OK) HwTrace.TierInited = true;
                 return rc;
             }
         }
+
+        // Back-compat alias: the historical empty-ctor / lazy-arm auto-init was
+        // single-step-only. Callers that specifically need the WEAK tier keep this name.
+        internal static int AutoInitSingleStep() =>
+            AutoInitWindowBackend(HwBackend.SingleStep);
 
         // §Z5: map a begin_window / auto-init failure to an actionable, honest message. The
         // ctor auto-inits the single-step tier, so a failure means the host cannot run it.

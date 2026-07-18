@@ -47,6 +47,15 @@ Three properties hold across every binding:
   no-op that records why. On any x86-64 Linux the single-step backend (`EFLAGS.TF`)
   makes it work with no PMU, no `perf_event`, no privilege, and no decoder beyond
   Capstone — including CI and plain containers.
+- **The empty-scope whole-window ladder picks WEAK vs STRONG at arm time.** For the
+  region-free `using (new AsmTrace())` form, the tier is auto-selected: the **STRONG**
+  Intel PT tier (a quiet, near-zero-overhead whole-window capture) is chosen only on a
+  bare-metal Intel host that exposes the `intel_pt` PMU **and** whose whole-window decode
+  proves itself at runtime; everywhere else the ladder lands on the **WEAK** single-step
+  tier, the universal floor. The **CEILING** AMD LBR tier is never auto-selected for the
+  exact whole-window contract — a sampled branch survey cannot meet it — so on AMD the
+  ladder uses WEAK, and the quiet sampled complement is reached explicitly with
+  `new AsmTrace(HwBackend.AmdLbr)` (live floor Zen 4+).
 
 ## Per-language shape
 

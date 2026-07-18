@@ -64,6 +64,8 @@ int asmtest_pt_read_codeimage(const asmtest_codeimage_t *img, uint64_t when,
 
 #ifdef ASMTEST_HAVE_LIBIPT
 #include <intel-pt.h>
+#include <sys/mman.h> /* §Z1.3 trust-probe scratch page (libipt is Linux-only here) */
+#include <unistd.h>
 
 int asmtest_pt_decoder_present(void) { return 1; }
 
@@ -362,9 +364,84 @@ int asmtest_pt_encode_fixture(uint8_t *buf, size_t cap, uint64_t base_ip,
     return ASMTEST_HW_OK;
 }
 
+/* §Z1.3 runtime decode-trust probe: returns 1 only if the whole-window PT decode path
+ * proves itself RIGHT NOW — the decoder is present, the code-image substrate is
+ * available, and BOTH canonical ROUTINE walks (taken AND not-taken) round-trip through
+ * asmtest_pt_encode_fixture -> asmtest_pt_decode_window against a scratch self image,
+ * offsets AND block partition matching. This makes "§Z2's fixture is green" a runtime
+ * predicate the WEAK/STRONG ladder consults, not CI folk memory. Cached (the fixture is
+ * constant), allocation-light, run-once. */
+int asmtest_hwtrace_pt_window_trusted(void) {
+    static int cached = -1;
+    if (cached >= 0)
+        return cached;
+    cached = 0;
+    if (!asmtest_pt_decoder_present() || !asmtest_codeimage_available())
+        return cached;
+    /* The 18 canonical ROUTINE bytes (identical to examples/test_hwtrace.c:ROUTINE):
+     * mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret. */
+    static const uint8_t ROUTINE[] = {0x48, 0x89, 0xf8, 0x48, 0x01, 0xf0,
+                                      0x48, 0x3d, 0x64, 0x00, 0x00, 0x00,
+                                      0x7e, 0x03, 0x48, 0xff, 0xc8, 0xc3};
+    long ps = sysconf(_SC_PAGESIZE);
+    if (ps <= 0)
+        ps = 4096;
+    uint8_t *p = (uint8_t *)mmap(NULL, (size_t)ps, PROT_READ | PROT_WRITE,
+                                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED)
+        return cached;
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    asmtest_codeimage_t *img = asmtest_codeimage_new(0);
+    int trk =
+        (img != NULL) ? asmtest_codeimage_track(img, p, sizeof ROUTINE) : -1;
+    uint64_t when = (img != NULL) ? asmtest_codeimage_now(img) : 0;
+    int ok = (trk == ASMTEST_CI_OK);
+    /* taken walk {0,3,6,c,11} / blocks {0,0x11}; not-taken {0,3,6,c,e,11} / {0,0xe}. */
+    static const uint64_t TAKEN[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+    static const uint64_t NTAKEN[] = {0x0, 0x3, 0x6, 0xc, 0xe, 0x11};
+    for (int side = 0; ok && side < 2; side++) {
+        uint8_t aux[256];
+        size_t aux_len = 0;
+        if (asmtest_pt_encode_fixture(aux, sizeof aux, (uint64_t)(uintptr_t)p,
+                                      side == 0 ? 1 : 0,
+                                      &aux_len) != ASMTEST_HW_OK) {
+            ok = 0;
+            break;
+        }
+        asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+        if (tr == NULL) {
+            ok = 0;
+            break;
+        }
+        uint64_t base_ip = 0;
+        int rc =
+            asmtest_pt_decode_window(aux, aux_len, img, when, tr, &base_ip);
+        const uint64_t *exp = (side == 0) ? TAKEN : NTAKEN;
+        size_t nexp = (side == 0) ? 5 : 6;
+        int match =
+            (rc == ASMTEST_HW_OK && base_ip == (uint64_t)(uintptr_t)p &&
+             tr->insns_len == nexp && tr->blocks_len == 2 &&
+             tr->blocks[0] == 0 && tr->blocks[1] == (side == 0 ? 0x11u : 0xeu));
+        for (size_t i = 0; match && i < nexp; i++)
+            if (tr->insns[i] != exp[i])
+                match = 0;
+        if (!match)
+            ok = 0;
+        asmtest_trace_free(tr);
+    }
+    if (img != NULL)
+        asmtest_codeimage_free(img);
+    munmap(p, (size_t)ps);
+    cached = ok ? 1 : 0;
+    return cached;
+}
+
 #else /* !ASMTEST_HAVE_LIBIPT */
 
 int asmtest_pt_decoder_present(void) { return 0; }
+
+/* No libipt: the whole-window decode cannot run, so it is never trusted. */
+int asmtest_hwtrace_pt_window_trusted(void) { return 0; }
 
 int asmtest_pt_decode(const uint8_t *aux, size_t aux_len, const void *base,
                       size_t len, asmtest_trace_t *trace) {

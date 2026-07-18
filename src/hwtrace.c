@@ -497,6 +497,23 @@ int asmtest_hwtrace_auto(asmtest_hwtrace_policy_t policy) {
     return (int)b;
 }
 
+/* §Z1.3 — the WEAK/STRONG whole-window ladder for the empty-ctor scope. STRONG
+ * (INTEL_PT) requires BOTH the substrate present AND the decode trusted at runtime
+ * (asmtest_hwtrace_pt_window_trusted, the §Z2 fixture round-trip); else WEAK
+ * (SINGLESTEP) when available; else EUNAVAIL. The CEILING tier (AMD LBR) is
+ * deliberately NOT returned — the exact whole-window contract cannot be met by a
+ * sampled survey, so on AMD begin_window lands on WEAK and the quiet sampled complement
+ * is reached explicitly via sample_begin_amd / new AsmTrace(HwBackend.AmdLbr); the live
+ * AMD LBR floor is Zen 4+. */
+int asmtest_hwtrace_window_auto(void) {
+    if (asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT) &&
+        asmtest_hwtrace_pt_window_trusted())
+        return ASMTEST_HWTRACE_INTEL_PT;
+    if (asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP))
+        return ASMTEST_HWTRACE_SINGLESTEP;
+    return ASMTEST_HW_EUNAVAIL;
+}
+
 /* ------------------------------------------------------------------ */
 /* Region registry + per-thread capture                                */
 /* ------------------------------------------------------------------ */

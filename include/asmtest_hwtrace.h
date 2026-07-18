@@ -244,6 +244,27 @@ size_t asmtest_hwtrace_resolve(asmtest_hwtrace_policy_t policy,
  * asmtest_hwtrace_auto(ASMTEST_HWTRACE_CEILING_FREE) and, when it differs, re-run. */
 int asmtest_hwtrace_auto(asmtest_hwtrace_policy_t policy);
 
+/* §Z1.3 — the WEAK/STRONG whole-window ladder resolver for the empty-ctor scope
+ * (`using (new AsmTrace())` / begin_window). Returns:
+ *   ASMTEST_HWTRACE_INTEL_PT  — the STRONG tier — only when intel_pt is available AND
+ *                               asmtest_hwtrace_pt_window_trusted() (the decode proves
+ *                               itself at runtime on the §Z2 fixture);
+ *   ASMTEST_HWTRACE_SINGLESTEP — the WEAK tier — otherwise, when single-step is
+ *                                available;
+ *   ASMTEST_HW_EUNAVAIL — neither.
+ * The CEILING tier (AMD LBR) is deliberately NOT returned: the exact whole-window
+ * contract cannot be met by a sampled branch survey, so on AMD the ladder lands on
+ * WEAK for begin_window, and callers wanting the quiet sampled complement use the
+ * explicit asmtest_hwtrace_sample_begin_amd / new AsmTrace(HwBackend.AmdLbr) (the live
+ * AMD LBR floor is Zen 4+). */
+int asmtest_hwtrace_window_auto(void);
+
+/* §Z1.3 runtime decode-trust probe (src/pt_backend.c): 1 iff the decoder is present,
+ * the code-image substrate is available, and both canonical ROUTINE walks round-trip
+ * through the §Z2 encode/decode fixture right now; 0 otherwise (and always 0 without
+ * libipt). Cached after the first call. */
+int asmtest_hwtrace_pt_window_trusted(void);
+
 int asmtest_hwtrace_init(const asmtest_hwtrace_options_t *opts);
 int asmtest_hwtrace_register_region(const char *name, void *base, size_t len,
                                     asmtest_trace_t *trace);
