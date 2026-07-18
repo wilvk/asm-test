@@ -380,12 +380,15 @@ static int trace_runtime(const char *engine, const char *method_substr,
                    descend_level, nf, ne,
                    asmtest_descent_truncated(dh) ? " (truncated)" : "",
                    asmtest_descent_depth_capped(dh) ? " (guard tripped)" : "");
-            /* The guarded L3 lane asserts the GUARDS fire (self-skip), not transparency. */
-            CHECK(descend_level < ASMTEST_DESCENT_DESCEND_ALL ||
-                      asmtest_descent_truncated(dh) ||
-                      asmtest_descent_depth_capped(dh) || nf >= 1,
-                  "descent: guarded L3 lane made progress or self-skipped "
-                  "honestly");
+            /* The guarded L3 lane asserts the GUARDS fire (self-skip), not
+             * transparency. `nf >= 1` was VACUOUS (frame 0 always exists) — require a
+             * real descent (a second frame or an edge) OR an honest guard trip. */
+            CHECK(
+                descend_level < ASMTEST_DESCENT_DESCEND_ALL ||
+                    asmtest_descent_truncated(dh) ||
+                    asmtest_descent_depth_capped(dh) || nf >= 2 || ne >= 1,
+                "descent: guarded L3 lane made real progress (>=2 frames or an "
+                "edge) or self-skipped honestly");
         }
         if (asmtest_disas_available()) {
             uint8_t *bytes = (uint8_t *)malloc(len);
@@ -806,7 +809,8 @@ int main(int argc, char **argv) {
                        (char *)"-e",
                        (char *)HOT_JS,
                        NULL};
-        return trace_runtime("V8", "asmtjit", cmd, 2, NULL, NULL, 0);
+        return trace_runtime("V8", "asmtjit", cmd, 2, NULL, NULL,
+                             descend_level);
     }
     if (strcmp(mode, "dotnet") == 0) {
         if (argc < 3) {
@@ -899,7 +903,8 @@ int main(int argc, char **argv) {
             (char *)"bcl",
             NULL};
         return trace_runtime("HotSpot-BCL", "floorDiv", cmd, 0,
-                             java_perfmap_refresh, pick_busy_thread, 0);
+                             java_perfmap_refresh, pick_busy_thread,
+                             descend_level);
     }
     if (strcmp(mode, "java-jitdump") == 0) {
         if (argc < 4) {

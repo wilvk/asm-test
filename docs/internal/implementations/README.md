@@ -84,7 +84,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 |---|---|---|---|
 | [amd-ibs-backend-honesty.md](amd-ibs-backend-honesty.md) — IBS backend honesty, record sizing, ABI guards, validation gate | 7 | ☑ 7/7 (T1 verified live) | — |
 | [amd-branchsnap-lbr-docs.md](amd-branchsnap-lbr-docs.md) — branchsnap depth fix, LBR tiling validation, freeze-probe cleanup, Zen 3 BRS story | 8 | ◐ 7/8 (T1/T4/T5/T6 landed; T2/T3/T7 code landed, live Zen 5 BPF validation gated; **T8 BLOCKED**: needs Zen 3 Family 19h silicon — arm must not merge untested per CLAUDE.md) | — (soft: shares the Zen 3 story with the sibling above) |
-| [ptrace-blockstep-tracer-correctness.md](ptrace-blockstep-tracer-correctness.md) — int3 si_code, rep-prefix, SP-aware step-over, IBS pre-cover | 8 | ◐ 1/8 (T1 region+attached landed; T6 wip) | — |
+| [ptrace-blockstep-tracer-correctness.md](ptrace-blockstep-tracer-correctness.md) — int3 si_code, rep-prefix, SP-aware step-over, IBS pre-cover | 8 | ◐ 2/8 (T1 region+attached + T6 landed; T1 windowed leg pending T2; jit-descend suffix a runtime-docker validation leg) | — |
 
 ### Data-flow tier
 | Document | Tasks | Status | Depends on |

@@ -7112,6 +7112,10 @@ static void test_descent_attach(void) {
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (go == MAP_FAILED || p == MAP_FAILED) {
         printf("# SKIP descent attach: mmap failed\n");
+        if (go != MAP_FAILED)
+            munmap((void *)go, sizeof(int));
+        if (p != MAP_FAILED)
+            munmap(p, sizeof BLOB1);
         return;
     }
     *go = 0;
@@ -7136,6 +7140,8 @@ static void test_descent_attach(void) {
         printf("# SKIP descent attach: PTRACE_ATTACH not permitted (yama)\n");
         kill(pid, SIGKILL);
         waitpid(pid, &status, 0);
+        munmap(p, sizeof BLOB1);
+        munmap((void *)go, sizeof(int));
         return;
     }
     *go = 1;
