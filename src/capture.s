@@ -377,8 +377,12 @@ ASM_FUNC asm_call_capture_fp
 #elif defined(__riscv) && __riscv_xlen == 64
 /* out -> a0, fn -> a1, iargs -> a2, fargs -> a3
  * Marshals 8 doubles into fa0..fa7 and captures the FP return fa0 into
- * out->fret (offset 120). (T3 adds fs0-fs11 seeding/capture here.) */
-    addi    sp, sp, -128
+ * out->fret (offset 120). T3: rv64 has no _vec path, so the FP callee-saved
+ * check (ASSERT_ABI_PRESERVED_VEC) rides HERE — this seeds fs0-fs11 (f8/f9,
+ * f18-f27) with their f-register numbers and captures each into
+ * out->vec[reg#].u64[0], so asmtest_check_abi_vec verifies vec[i].u64[0] == i
+ * for i in {8,9,18..27}. 224-byte frame: 128 as before + 96 for fs0-fs11. */
+    addi    sp, sp, -224
     sd      ra, 0(sp)
     sd      s0, 8(sp)
     sd      s1, 16(sp)
@@ -394,6 +398,19 @@ ASM_FUNC asm_call_capture_fp
     sd      s11, 96(sp)
     sd      a0, 104(sp)            /* stash out */
     sd      a1, 112(sp)            /* stash fn  */
+    /* Save the caller's fs0-fs11 (callee-saved FP), which we clobber to seed. */
+    fsd     fs0, 120(sp)
+    fsd     fs1, 128(sp)
+    fsd     fs2, 136(sp)
+    fsd     fs3, 144(sp)
+    fsd     fs4, 152(sp)
+    fsd     fs5, 160(sp)
+    fsd     fs6, 168(sp)
+    fsd     fs7, 176(sp)
+    fsd     fs8, 184(sp)
+    fsd     fs9, 192(sp)
+    fsd     fs10, 200(sp)
+    fsd     fs11, 208(sp)
 
     /* Float args: fargs (a3) -> fa0..fa7 (before a3 is reused for marshalling). */
     fld     fa0, 0(a3)
@@ -427,6 +444,33 @@ ASM_FUNC asm_call_capture_fp
     li      s10, 0xBBBBBBBBBBBBBBBB
     li      s11, 0xCCCCCCCCCCCCCCCC
 
+    /* Seed fs0-fs11 with their f-register numbers (fs0=f8, fs1=f9, fs2-fs11 =
+     * f18-f27) as integer bit patterns, so a restored register reads back == i. */
+    li      t0, 8
+    fmv.d.x fs0, t0
+    li      t0, 9
+    fmv.d.x fs1, t0
+    li      t0, 18
+    fmv.d.x fs2, t0
+    li      t0, 19
+    fmv.d.x fs3, t0
+    li      t0, 20
+    fmv.d.x fs4, t0
+    li      t0, 21
+    fmv.d.x fs5, t0
+    li      t0, 22
+    fmv.d.x fs6, t0
+    li      t0, 23
+    fmv.d.x fs7, t0
+    li      t0, 24
+    fmv.d.x fs8, t0
+    li      t0, 25
+    fmv.d.x fs9, t0
+    li      t0, 26
+    fmv.d.x fs10, t0
+    li      t0, 27
+    fmv.d.x fs11, t0
+
     ld      t0, 112(sp)            /* fn */
     jalr    ra, 0(t0)
 
@@ -447,6 +491,46 @@ ASM_FUNC asm_call_capture_fp
     sd      s11, 104(t1)
     sd      zero, 112(t1)          /* flags == 0 */
     fsd     fa0, 120(t1)           /* fret = fa0 */
+    /* Capture fs0-fs11 into out->vec[reg#].u64[0] (vec@128, 16B stride); zero the
+     * high lane. fs0->vec[8], fs1->vec[9], fs2..fs11->vec[18..27]. */
+    fsd     fs0, 256(t1)           /* vec[8].u64[0]  */
+    sd      zero, 264(t1)
+    fsd     fs1, 272(t1)           /* vec[9].u64[0]  */
+    sd      zero, 280(t1)
+    fsd     fs2, 416(t1)           /* vec[18].u64[0] */
+    sd      zero, 424(t1)
+    fsd     fs3, 432(t1)           /* vec[19] */
+    sd      zero, 440(t1)
+    fsd     fs4, 448(t1)           /* vec[20] */
+    sd      zero, 456(t1)
+    fsd     fs5, 464(t1)           /* vec[21] */
+    sd      zero, 472(t1)
+    fsd     fs6, 480(t1)           /* vec[22] */
+    sd      zero, 488(t1)
+    fsd     fs7, 496(t1)           /* vec[23] */
+    sd      zero, 504(t1)
+    fsd     fs8, 512(t1)           /* vec[24] */
+    sd      zero, 520(t1)
+    fsd     fs9, 528(t1)           /* vec[25] */
+    sd      zero, 536(t1)
+    fsd     fs10, 544(t1)          /* vec[26] */
+    sd      zero, 552(t1)
+    fsd     fs11, 560(t1)          /* vec[27] */
+    sd      zero, 568(t1)
+
+    /* Restore the caller's fs0-fs11. */
+    fld     fs0, 120(sp)
+    fld     fs1, 128(sp)
+    fld     fs2, 136(sp)
+    fld     fs3, 144(sp)
+    fld     fs4, 152(sp)
+    fld     fs5, 160(sp)
+    fld     fs6, 168(sp)
+    fld     fs7, 176(sp)
+    fld     fs8, 184(sp)
+    fld     fs9, 192(sp)
+    fld     fs10, 200(sp)
+    fld     fs11, 208(sp)
 
     ld      ra, 0(sp)
     ld      s0, 8(sp)
@@ -461,7 +545,7 @@ ASM_FUNC asm_call_capture_fp
     ld      s9, 80(sp)
     ld      s10, 88(sp)
     ld      s11, 96(sp)
-    addi    sp, sp, 128
+    addi    sp, sp, 224
     ret
 
 #else
@@ -954,8 +1038,11 @@ ASM_FUNC asm_call_capture_fp_n
  * psABI "FP args after the FP registers are exhausted use the integer
  * convention" rule — a0..a5 already hold iargs, so a6,a7 are the next free
  * integer registers); doubles 11+ spill onto the stack at 0(sp),8(sp),...
- * s0 is the frame pointer (reported preserved, not independently checked). */
-    addi    sp, sp, -160
+ * s0 is the frame pointer (reported preserved, not independently checked).
+ * T3: also seeds/captures fs0-fs11 (like _fp), so ASSERT_ABI_PRESERVED_VEC is
+ * valid after an _fp_n capture too. 256-byte frame: 160 as before + 96 for the
+ * fs save area at 144(s0)..232(s0). */
+    addi    sp, sp, -256
     sd      ra, 0(sp)
     sd      s0, 8(sp)              /* save caller's s0 (frame pointer) */
     mv      s0, sp                 /* s0 = frame pointer */
@@ -975,6 +1062,19 @@ ASM_FUNC asm_call_capture_fp_n
     sd      a2, 120(sp)            /* iargs  */
     sd      a3, 128(sp)            /* fargs  */
     sd      a4, 136(sp)            /* nfargs */
+    /* Save caller's fs0-fs11 (relative to the frame pointer). */
+    fsd     fs0, 144(sp)
+    fsd     fs1, 152(sp)
+    fsd     fs2, 160(sp)
+    fsd     fs3, 168(sp)
+    fsd     fs4, 176(sp)
+    fsd     fs5, 184(sp)
+    fsd     fs6, 192(sp)
+    fsd     fs7, 200(sp)
+    fsd     fs8, 208(sp)
+    fsd     fs9, 216(sp)
+    fsd     fs10, 224(sp)
+    fsd     fs11, 232(sp)
 
     /* n_stack = max(0, nfargs - 10) -> t1 */
     ld      t0, 136(s0)
@@ -1062,6 +1162,33 @@ ASM_FUNC asm_call_capture_fp_n
     li      s10, 0xBBBBBBBBBBBBBBBB
     li      s11, 0xCCCCCCCCCCCCCCCC
 
+    /* Seed fs0-fs11 with their f-register numbers (fs0=f8, fs1=f9, fs2-fs11 =
+     * f18-f27), so a restored register reads back == i (see _fp). */
+    li      t0, 8
+    fmv.d.x fs0, t0
+    li      t0, 9
+    fmv.d.x fs1, t0
+    li      t0, 18
+    fmv.d.x fs2, t0
+    li      t0, 19
+    fmv.d.x fs3, t0
+    li      t0, 20
+    fmv.d.x fs4, t0
+    li      t0, 21
+    fmv.d.x fs5, t0
+    li      t0, 22
+    fmv.d.x fs6, t0
+    li      t0, 23
+    fmv.d.x fs7, t0
+    li      t0, 24
+    fmv.d.x fs8, t0
+    li      t0, 25
+    fmv.d.x fs9, t0
+    li      t0, 26
+    fmv.d.x fs10, t0
+    li      t0, 27
+    fmv.d.x fs11, t0
+
     ld      t0, 112(s0)            /* fn */
     jalr    ra, 0(t0)
 
@@ -1083,6 +1210,44 @@ ASM_FUNC asm_call_capture_fp_n
     sd      s11, 104(t1)
     sd      zero, 112(t1)          /* flags == 0 */
     fsd     fa0, 120(t1)           /* fret = fa0 */
+    /* Capture fs0-fs11 into out->vec[8],[9],[18..27]; zero the high lane. */
+    fsd     fs0, 256(t1)
+    sd      zero, 264(t1)
+    fsd     fs1, 272(t1)
+    sd      zero, 280(t1)
+    fsd     fs2, 416(t1)
+    sd      zero, 424(t1)
+    fsd     fs3, 432(t1)
+    sd      zero, 440(t1)
+    fsd     fs4, 448(t1)
+    sd      zero, 456(t1)
+    fsd     fs5, 464(t1)
+    sd      zero, 472(t1)
+    fsd     fs6, 480(t1)
+    sd      zero, 488(t1)
+    fsd     fs7, 496(t1)
+    sd      zero, 504(t1)
+    fsd     fs8, 512(t1)
+    sd      zero, 520(t1)
+    fsd     fs9, 528(t1)
+    sd      zero, 536(t1)
+    fsd     fs10, 544(t1)
+    sd      zero, 552(t1)
+    fsd     fs11, 560(t1)
+    sd      zero, 568(t1)
+    /* Restore caller's fs0-fs11 (from the frame pointer). */
+    fld     fs0, 144(s0)
+    fld     fs1, 152(s0)
+    fld     fs2, 160(s0)
+    fld     fs3, 168(s0)
+    fld     fs4, 176(s0)
+    fld     fs5, 184(s0)
+    fld     fs6, 192(s0)
+    fld     fs7, 200(s0)
+    fld     fs8, 208(s0)
+    fld     fs9, 216(s0)
+    fld     fs10, 224(s0)
+    fld     fs11, 232(s0)
 
     mv      sp, s0                 /* drop the variable area */
     ld      ra, 0(sp)
@@ -1098,7 +1263,7 @@ ASM_FUNC asm_call_capture_fp_n
     ld      s10, 88(sp)
     ld      s11, 96(sp)
     ld      s0, 8(sp)              /* restore caller's s0 last */
-    addi    sp, sp, 160
+    addi    sp, sp, 256
     ret
 
 #else

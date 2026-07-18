@@ -321,9 +321,35 @@ int asmtest_check_abi_vec(const regs_t *r, char *msg, size_t n) {
         msg[0] = '\0';
     return 0;
 }
+#elif defined(__riscv) && __riscv_xlen == 64
+/* rv64 has no _vec path; the FP callee-saved set fs0-fs11 (f8/f9, then f18-f27)
+ * is seeded/captured by the _fp and _fp_n trampolines instead (not _vec). Each
+ * fs is preserved to FLEN=64 bits under LP64D, and the trampoline stores its
+ * f-register number into vec[reg#].u64[0], so a restored register reads back ==
+ * reg#. Register numbers in order: {8, 9, 18, 19, ..., 27}; index k maps to the
+ * name fs(k) — i.e. f8->fs0, f9->fs1, f18->fs2, ..., f27->fs11. */
+int asmtest_check_abi_vec(const regs_t *r, char *msg, size_t n) {
+    static const unsigned regs[12] = {8,  9,  18, 19, 20, 21,
+                                      22, 23, 24, 25, 26, 27};
+    for (unsigned k = 0; k < 12; k++) {
+        unsigned i = regs[k];
+        if (r->vec[i].u64[0] != (uint64_t)i) {
+            unsigned fsname = (i < 18) ? (i - 8) : (i - 16);
+            if (msg && n)
+                snprintf(msg, n,
+                         "fs%u not restored (got 0x%llx, expected 0x%x)",
+                         fsname, (unsigned long long)r->vec[i].u64[0], i);
+            return 1;
+        }
+    }
+    if (msg && n)
+        msg[0] = '\0';
+    return 0;
+}
 #endif
 
-#if defined(ASMTEST_ABI_WIN64) || defined(__aarch64__)
+#if defined(ASMTEST_ABI_WIN64) || defined(__aarch64__) ||                      \
+    (defined(__riscv) && __riscv_xlen == 64)
 void asmtest_assert_abi_vec(const char *file, int line, const regs_t *r) {
     char msg[128];
     if (asmtest_check_abi_vec(r, msg, sizeof msg))

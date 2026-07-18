@@ -56,6 +56,13 @@ static regs_t clobbered_regs(void) {
     r.s9 = ASMTEST_SENTINEL_S9;
     r.s10 = ASMTEST_SENTINEL_S10;
     r.s11 = 0xDEAD; /* clobbered */
+    /* fs0-fs11 sentinels correct EXCEPT fs2 (vec[18]) -> a routine that clobbered
+     * one callee-saved FP register, for the ASSERT_ABI_PRESERVED_VEC failure. */
+    r.vec[8].u64[0] = 8;
+    r.vec[9].u64[0] = 9;
+    for (unsigned i = 18; i <= 27; i++)
+        r.vec[i].u64[0] = i;
+    r.vec[18].u64[0] = 0xDEAD; /* fs2 clobbered */
 #endif
     return r;
 }
@@ -87,6 +94,14 @@ TEST(neg, abi) {
     regs_t r = clobbered_regs();
     ASSERT_ABI_PRESERVED(&r);
 }
+#if defined(__riscv) && __riscv_xlen == 64
+/* rv64 FP callee-saved check: fs2 (vec[18]) was clobbered, so
+ * ASSERT_ABI_PRESERVED_VEC must fail naming "fs2 not restored". */
+TEST(neg, abi_vec) {
+    regs_t r = clobbered_regs();
+    ASSERT_ABI_PRESERVED_VEC(&r);
+}
+#endif
 #if !defined(ASMTEST_NO_FLAGS)
 TEST(neg, flag_set) {
     regs_t r = clobbered_regs();

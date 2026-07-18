@@ -630,16 +630,23 @@ int asmtest_check_abi(const regs_t *r, char *msg, size_t n);
 int asmtest_check_flag(const regs_t *r, unsigned long mask, int want_set,
                        const char *name, char *msg, size_t n);
 
-#if defined(ASMTEST_ABI_WIN64) || defined(__aarch64__)
-/* Verify the callee-saved vector registers were restored across the call, the
- * FP/SIMD complement of asmtest_check_abi's integer check. Valid after a
- * _vec/_vec_n capture, which fills vec[].
+#if defined(ASMTEST_ABI_WIN64) || defined(__aarch64__) ||                      \
+    (defined(__riscv) && __riscv_xlen == 64)
+/* Verify the callee-saved vector/FP registers were restored across the call, the
+ * FP/SIMD complement of asmtest_check_abi's integer check.
  *   - Win64: xmm6-15 are callee-saved (System V x86-64 has none). The trampoline
  *     seeds xmm(6+k) with both lanes == 6+k, so this verifies vec[i] == {i, i}
- *     for i in 6..15.
+ *     for i in 6..15. Valid after a _vec/_vec_n capture.
  *   - AArch64: only the low 64 bits of d8-d15 are callee-saved (AAPCS64 6.1.2).
  *     The trampoline seeds d(8+k) low == 8+k, so this verifies vec[i].u64[0] == i
- *     for i in 8..15 (the upper lane is caller-saved and not checked).
+ *     for i in 8..15 (the upper lane is caller-saved and not checked). Valid
+ *     after a _vec/_vec_n capture.
+ *   - rv64: fs0-fs11 (f8/f9, then f18-f27) are callee-saved to FLEN=64 bits under
+ *     LP64D. rv64gc has NO 128-bit vector path, so the FP-preservation seed lives
+ *     in the _fp and _fp_n trampolines: they store each fs's f-register number
+ *     into vec[reg#].u64[0], so this verifies vec[i].u64[0] == i for i in
+ *     {8,9,18..27}. Valid after an _fp or _fp_n capture (NOT _vec, which
+ *     self-skips on rv64).
  * Verdict shim + jumping wrapper, matching asmtest_check_abi / _assert_abi. */
 int asmtest_check_abi_vec(const regs_t *r, char *msg, size_t n);
 void asmtest_assert_abi_vec(const char *file, int line, const regs_t *r);
@@ -1124,9 +1131,11 @@ void asmtest_guarded_free_under(void *p, size_t n);
 /* Verify the routine restored all callee-saved registers (ABI compliance). */
 #define ASSERT_ABI_PRESERVED(r) asmtest_assert_abi(__FILE__, __LINE__, (r))
 
-#if defined(ASMTEST_ABI_WIN64) || defined(__aarch64__)
-/* Verify the callee-saved vector registers were restored (after a _vec/_vec_n
- * capture): Win64 xmm6-15, or AArch64 d8-d15 (low 64 bits). Complements
+#if defined(ASMTEST_ABI_WIN64) || defined(__aarch64__) ||                      \
+    (defined(__riscv) && __riscv_xlen == 64)
+/* Verify the callee-saved vector/FP registers were restored: Win64 xmm6-15, or
+ * AArch64 d8-d15 (low 64 bits), after a _vec/_vec_n capture; or rv64 fs0-fs11,
+ * after an _fp/_fp_n capture (rv64 has no _vec path). Complements
  * ASSERT_ABI_PRESERVED's integer check. */
 #define ASSERT_ABI_PRESERVED_VEC(r)                                            \
     asmtest_assert_abi_vec(__FILE__, __LINE__, (r))

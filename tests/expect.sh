@@ -119,6 +119,9 @@ if [ "$(uname -m)" != "riscv64" ]; then
     expect_fail_msg "ASSERT_FLAG_CLEAR fails"    "ASSERT_FLAG_CLEAR" "$NEG" --filter=neg.flag_clear
 else
     printf '# skip: no flags register on riscv64 (neg.flag_set/flag_clear gated)\n'
+    # rv64-only: the FP callee-saved (fs) check has no vec path; neg.abi_vec
+    # clobbers fs2, so ASSERT_ABI_PRESERVED_VEC must fail naming it.
+    expect_fail_msg "ASSERT_ABI_PRESERVED_VEC (fs) fails" "fs2 not restored" "$NEG" --filter=neg.abi_vec
 fi
 expect_fail_msg "ASSERT_VEC_EQ fails"        "first diff at byte" "$NEG" --filter=neg.vec_eq
 expect_fail_msg "ASSERT_*EQ (double) fails"  "double" "$NEG" --filter=neg.fp_eq

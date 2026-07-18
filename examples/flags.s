@@ -88,3 +88,31 @@ ASM_FUNC clobbers_rbx
     ret
 #endif
 ASM_ENDFUNC clobbers_rbx
+
+#if defined(__riscv) && __riscv_xlen == 64
+/*
+ * T3: FP callee-saved (fs0-fs11) preservation demo — rv64 only (RISC-V has no
+ * 128-bit vector path, so ASSERT_ABI_PRESERVED_VEC rides the _fp trampoline's
+ * fs seed/capture). Both take/return a double.
+ *   double preserves_fs(double x);  uses fs2 as scratch but saves/restores it
+ *                                   (ABI-compliant) — passes the check.
+ *   double clobbers_fs2(double x);  trashes fs2 and never restores it
+ *                                   (violation) — the check reports "fs2 not
+ *                                   restored" (mirrors clobbers_rbx).
+ */
+ASM_FUNC preserves_fs
+    addi    sp, sp, -16
+    fsd     fs2, 0(sp)          /* save the callee-saved FP scratch reg */
+    fadd.d  fs2, fa0, fa0       /* fs2 = 2*x */
+    fmv.d   fa0, fs2
+    fld     fs2, 0(sp)          /* restore it -> ABI-compliant */
+    addi    sp, sp, 16
+    ret
+ASM_ENDFUNC preserves_fs
+
+ASM_FUNC clobbers_fs2
+    fadd.d  fs2, fa0, fa0       /* trash fs2 (callee-saved), never restore it */
+    fmv.d   fa0, fs2
+    ret
+ASM_ENDFUNC clobbers_fs2
+#endif

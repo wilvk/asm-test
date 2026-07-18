@@ -4,6 +4,8 @@
  */
 #include "asmtest.h"
 
+#include <string.h>
+
 #if !defined(ASMTEST_NO_FLAGS)
 extern long set_carry(void);
 extern long clear_carry(void);
@@ -42,6 +44,30 @@ TEST(capture, carry_flag_clear) {
  * dropping the cases. */
 TEST(capture, flags_unavailable_rv64) {
     SKIP("RISC-V has no condition-flags register (ASMTEST_NO_FLAGS)");
+}
+#endif
+
+#if defined(__riscv) && __riscv_xlen == 64
+/* T3: fs0-fs11 (FP callee-saved) preservation, proven through a REAL _fp capture
+ * (rv64 has no _vec path, so ASSERT_ABI_PRESERVED_VEC rides asm_call_capture_fp,
+ * which seeds/captures fs0-fs11). preserves_fs saves/restores fs2 (compliant);
+ * clobbers_fs2 trashes it. */
+extern double preserves_fs(double x);
+extern double clobbers_fs2(double x);
+TEST(capture, fp_callee_saved_preserved_rv64) {
+    regs_t r;
+    ASM_FCALL1(&r, preserves_fs, 3.0);
+    ASSERT_FP_EQ(&r, 6.0);        /* returns 2*x */
+    ASSERT_ABI_PRESERVED_VEC(&r); /* fs0-fs11 all restored -> passes */
+}
+TEST(capture, fp_callee_saved_violation_detected_rv64) {
+    regs_t r;
+    char msg[128];
+    ASM_FCALL1(&r, clobbers_fs2, 3.0);
+    ASSERT_FP_EQ(&r, 6.0);
+    /* The non-jumping verdict shim flags the clobber and names fs2. */
+    ASSERT_TRUE(asmtest_check_abi_vec(&r, msg, sizeof msg) != 0);
+    ASSERT_TRUE(strstr(msg, "fs2 not restored") != NULL);
 }
 #endif
 

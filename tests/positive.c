@@ -53,6 +53,12 @@ static regs_t preserved_regs(void) {
     r.s9 = ASMTEST_SENTINEL_S9;
     r.s10 = ASMTEST_SENTINEL_S10;
     r.s11 = ASMTEST_SENTINEL_S11;
+    /* fs0-fs11 (f8/f9, f18-f27) sentinels for ASSERT_ABI_PRESERVED_VEC: the _fp
+     * trampoline stores each fs's f-register number into vec[reg#].u64[0]. */
+    r.vec[8].u64[0] = 8;
+    r.vec[9].u64[0] = 9;
+    for (unsigned i = 18; i <= 27; i++)
+        r.vec[i].u64[0] = i;
 #endif
     return r;
 }
@@ -100,6 +106,14 @@ TEST(posit, abi_preserved) {
     regs_t r = preserved_regs();
     ASSERT_ABI_PRESERVED(&r);
 }
+#if defined(__riscv) && __riscv_xlen == 64
+/* rv64 FP callee-saved (fs0-fs11) check over a hand-built regs_t: all sentinels
+ * correct -> ASSERT_ABI_PRESERVED_VEC passes. */
+TEST(posit, abi_preserved_vec) {
+    regs_t r = preserved_regs();
+    ASSERT_ABI_PRESERVED_VEC(&r);
+}
+#endif
 #if !defined(ASMTEST_NO_FLAGS)
 TEST(posit, flag_set) {
     regs_t r = preserved_regs();
