@@ -416,7 +416,13 @@ test "vec256.add4d (AVX2)" {
         var b: c.vec256_t = std.mem.zeroes(c.vec256_t);
         a.f64[0] = 1; a.f64[1] = 2; a.f64[2] = 3; a.f64[3] = 4;
         b.f64[0] = 10; b.f64[1] = 20; b.f64[2] = 30; b.f64[3] = 40;
-        var varr = [_]c.vec256_t{ a, b };
+        // The trampoline unconditionally loads all 8 vector-arg slots
+        // (src/capture.s), mirroring the C ASM_VCALL256_2 macro's
+        // vec256_t asmtest_va_[8] = {(v0), (v1)}; a 2-element array here
+        // over-reads 192 bytes past the end of this stack array.
+        var varr: [8]c.vec256_t = std.mem.zeroes([8]c.vec256_t);
+        varr[0] = a;
+        varr[1] = b;
         var out: [16]c.vec256_t = std.mem.zeroes([16]c.vec256_t);
         var ia = [_]c_long{ 0, 0, 0, 0, 0, 0 };
         c.asm_call_capture_vec256(&out, fnPtr(&vec_add4d), &ia, &varr);
@@ -436,7 +442,10 @@ test "vec512.add8d (AVX-512)" {
         a.f64[4] = 5; a.f64[5] = 6; a.f64[6] = 7; a.f64[7] = 8;
         b.f64[0] = 10; b.f64[1] = 20; b.f64[2] = 30; b.f64[3] = 40;
         b.f64[4] = 50; b.f64[5] = 60; b.f64[6] = 70; b.f64[7] = 80;
-        var varr = [_]c.vec512_t{ a, b };
+        // Same 8-slot fix as vec256 above, for the zmm-wide trampoline.
+        var varr: [8]c.vec512_t = std.mem.zeroes([8]c.vec512_t);
+        varr[0] = a;
+        varr[1] = b;
         var out: [32]c.vec512_t = std.mem.zeroes([32]c.vec512_t);
         var ia = [_]c_long{ 0, 0, 0, 0, 0, 0 };
         c.asm_call_capture_vec512(&out, fnPtr(&vec_add8d), &ia, &varr);

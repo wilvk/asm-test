@@ -1054,6 +1054,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - emulator fuzzing: corpus nudge no longer has signed-overflow UB at
   `LONG_MIN`/`LONG_MAX` range extremes.
 
+- Zig conformance: vec256/vec512 capture tests no longer under-fill the
+  8-slot vargs array.
+
 - **Cross-alias register def-use edges resolved.** `asmtest_defuse_build` (the
   shared, tier-neutral last-writer builder in `src/dataflow.c`) keyed its
   register axis on the raw Capstone id, so a write to one GP sub-register
