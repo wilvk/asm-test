@@ -88,41 +88,41 @@ regressions):
   the container, so the unprivileged-EPERM path is unreachable here).
 - **Intel PT** — wrong vendor; PT is bare-metal-Intel only.
 
-## OPEN finding to watch — `call_auto` AMD-LBR rung
+## RESOLVED (5d8e0d2) — `call_auto` AMD-LBR rung
 
 The [Zen 5 findings §2](analysis/2026-07-12-zen5-privileged-lbr-findings.md)
-`trace_call_auto` AMD-LBR completeness bug is **not yet fixed** and is
-**intermittent** — this lane is where it surfaces. In `test_hwtrace` the
-`call_auto` case (b) drives 25 taken back-edges, which a 16-deep window cannot
-hold, so the rung *should* mark the result truncated and escalate to block-step.
-Watch the `# call_auto escalate:` line:
+`trace_call_auto` AMD-LBR completeness bug is **FIXED** (commit `5d8e0d2`); the
+findings doc marks it `~~OPEN~~ RESOLVED`, deterministic across 16 privileged
+runs (every one escalates `backend=3 insns=77`).
 
-- **Vacuous pass (bug present):** `truncated=0 (LBR window sufficed)` with a low
-  `insns` count (seen `insns=2`/`insns=3`). The test still reports `ok` because
-  it only asserts `!truncated && covered` — a short freeze-on-PMI read passes
-  vacuously. The 2026-07-12 validation run hit exactly this
-  (`result=25 used.backend=2 insns=2 truncated=0`).
-- **Correct escalation:** `truncated` set / `backend=3` with a full `insns`
-  count (~77) matching the single-step baseline.
-
-Because it is intermittent, a single green run does **not** prove the rung is
-honest. Until the rung derives truncation from the same signal the direct
-`sample_window`/Tier-B path uses (and case (b) is hardened so a short read is a
-hard failure), treat a `truncated=0` on this line as a **known false-green**,
-not a pass. Do not gate a release on this line alone.
+In `test_hwtrace` the `call_auto` case (b) drives 25 taken back-edges; a 16-deep
+window cannot hold them, so escalation **MUST** fire — the `# call_auto
+escalate:` line must read `backend=3` with the full `insns` count (~77) matching
+the single-step baseline. Post-fix, a `truncated=0 (LBR window sufficed)` on this
+line can no longer legitimately occur: it is a **REGRESSION**, not a known
+finding (see the checklist below).
 
 ## Pre-release checklist
+
+This checklist's own staleness is the failure mode it guards against: every item
+states the **observation to record**, never the expected verdict. If an
+observation contradicts an item, the item is stale — fix the doc in the same
+change that records the run.
 
 - [ ] On an AMD Zen 3+/4/5 host: `grep amd_lbr_v2 /proc/cpuinfo` hits.
 - [ ] `make docker-hwtrace-privileged` exits **0**.
 - [ ] `test_hwtrace` `1..410` (or current plan) with **0** `not ok`; the AMD LBR
       live tests (`ok` on "AMD LBR live …", Tier-B "stitched BEYOND a single
       16-deep window", `#2A`) actually **ran**, not skipped.
-- [ ] `test_ibs` `1..23` **twice**, 0 failures; `ibs_probe` prints IBS-Op
-      **AVAILABLE**; `survey_process` covers **3/3** workers.
+- [ ] `test_ibs` reports its full plan (current count) with **0** `not ok`
+      **and the live IBS tests actually ran** (no `# SKIP IBS live capture` /
+      `# SKIP IBS whole-process capture` lines); `ibs_probe` reports IBS-Op
+      **AVAILABLE** via its real-open path (T1 — a substrate-only probe now prints
+      `BLOCKED` instead); the `# whole-process:` line reads `3/3 worker functions
+      covered` — record the observed count.
 - [ ] Only the three expected skips above (MSR-direct, status live-EPERM, PT).
-- [ ] Inspect the `# call_auto escalate:` line and record whether it escalated
-      or passed vacuously (`truncated=0`) — the latter is the known open finding,
-      not a clean pass.
+- [ ] Inspect the `# call_auto escalate:` line: escalation **MUST** fire
+      (`backend=3 insns=77`). A `truncated=0` here is a **REGRESSION** — file it
+      and do not tag; it is not a known issue.
 - [ ] For MSR-direct coverage additionally run `make docker-hwtrace-msr` (needs
       the host `msr` module loaded).

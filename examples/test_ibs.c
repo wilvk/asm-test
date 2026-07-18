@@ -353,8 +353,7 @@ static void test_live(void) {
      * (paranoid=3, a restrictive seccomp), the substrate is present but the open
      * returns EUNAVAIL — a skip, not a failure. */
     if (rc == ASMTEST_IBS_EUNAVAIL) {
-        printf("# SKIP IBS live capture: perf_event_open blocked "
-               "(paranoid/seccomp), substrate present\n");
+        printf("# SKIP IBS live capture: %s\n", asmtest_ibs_unavail_reason());
         asmtest_ibs_survey_free(&survey);
         return;
     }
@@ -480,8 +479,8 @@ static void test_live_process(void) {
         pthread_join(th[i], NULL);
 
     if (rc == ASMTEST_IBS_EUNAVAIL) {
-        printf("# SKIP IBS whole-process capture: perf_event_open blocked "
-               "(paranoid/seccomp), substrate present\n");
+        printf("# SKIP IBS whole-process capture: %s\n",
+               asmtest_ibs_unavail_reason());
         asmtest_ibs_survey_free(&s);
         return;
     }
@@ -537,8 +536,7 @@ static void test_live_fetch(void) {
     /* fetch_available() is a SUBSTRATE probe; perf_event_open can still be blocked
      * (paranoid=4 without CAP_PERFMON, seccomp) — a skip, not a failure. */
     if (rc == ASMTEST_IBS_EUNAVAIL) {
-        printf("# SKIP IBS-Fetch survey: perf_event_open blocked "
-               "(paranoid/seccomp), substrate present\n");
+        printf("# SKIP IBS-Fetch survey: %s\n", asmtest_ibs_unavail_reason());
         asmtest_ibs_fetch_survey_free(&fs);
         return;
     }
@@ -617,8 +615,7 @@ static void test_live_phase5(void) {
     pthread_join(th, NULL);
 
     if (rc == ASMTEST_IBS_EUNAVAIL) {
-        printf("# SKIP IBS Phase-5 opts: perf_event_open blocked "
-               "(paranoid/seccomp), substrate present\n");
+        printf("# SKIP IBS Phase-5 opts: %s\n", asmtest_ibs_unavail_reason());
         asmtest_ibs_survey_free(&s1);
         asmtest_ibs_survey_free(&s2);
         return;
@@ -676,7 +673,8 @@ static void test_live_system_wide(void) {
 
     if (rc == ASMTEST_IBS_EUNAVAIL) {
         printf("# SKIP IBS system-wide capture: needs CAP_PERFMON / "
-               "paranoid<=0 (substrate present)\n");
+               "paranoid<=0 (substrate present) — %s\n",
+               asmtest_ibs_unavail_reason());
         asmtest_ibs_survey_free(&s);
         return;
     }

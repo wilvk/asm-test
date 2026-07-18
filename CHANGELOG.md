@@ -978,6 +978,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`ibs_probe` and the `ibs-test` live skips now attempt a real perf open and
+  report the real refusal reason instead of claiming AVAILABLE from the
+  CPUID/sysfs substrate probe alone.** On a locked-down AMD host (perf blocked by
+  `perf_event_paranoid`/seccomp) the substrate is present but no sampling can
+  open — `ibs_probe` prints `substrate present but sampling is BLOCKED — <reason>`
+  (Op and Fetch lanes) and the five `test_ibs` EUNAVAIL skips print the real
+  `asmtest_ibs_unavail_reason()` instead of a hardcoded guess. The AMD
+  manual-validation checklist no longer inverts the `call_auto` regression
+  signal: post-`5d8e0d2` a `truncated=0` where escalation must fire is a
+  **regression**, not a known finding.
+
 - **The guides and the public header no longer claim AMD LBR live capture works
   on Zen 3.** The live-capture floor is **Zen 4+** (LbrExtV2) — Zen 3 BRS exists
   in silicon but this tree cannot open it (the generic `sample_period=1` open is
