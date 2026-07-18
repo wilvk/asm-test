@@ -92,7 +92,8 @@ SKPID=""
 LJPID=""
 SGPID=""
 GSPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} ${SGPID:+"$SGPID"} ${GSPID:+"$GSPID"} ${AJPID:+"$AJPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${AJPID:+"/tmp/perf-$AJPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" "$BUILD/gstop.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
+EVPID=""
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} ${SGPID:+"$SGPID"} ${GSPID:+"$GSPID"} ${EVPID:+"$EVPID"} ${AJPID:+"$AJPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${AJPID:+"/tmp/perf-$AJPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" "$BUILD/gstop.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -1416,6 +1417,49 @@ echo "--- asmspy group-stop: SIGSTOP/SIGCONT honored via PTRACE_LISTEN (--log) -
 gstop_cycle --log
 echo "--- asmspy group-stop: the single-step engine's LISTEN branch (--stream) ---"
 gstop_cycle --stream
+
+# ---------------------------------------------------------------------------
+# NEGATIVE-n "run until exit" (asmspy-plan Theme D): --log/--stream <pid> -1
+# ---------------------------------------------------------------------------
+# The documented until-exit contract: a negative n runs until every tracee is
+# gone, then returns rc 0. Every OTHER victim loops forever, so this row was
+# never testable — exit_victim runs ~2s of decodable syscalls then returns 0 (the
+# 2s vs the 1s settle guarantees the attach lands while it is alive). The
+# load-bearing assertion is rc != 124: a `max < 0` regression that spins on
+# ECHILD forever is caught ONLY by the timeout. The victims exit under trace, so
+# they are NOT waited on afterwards (EVPID is cleared once each leg returns).
+echo "--- asmspy --log EVPID -1 (negative-n: rc 0 when the target exits) ---"
+"$BUILD/exit_victim" 2>/dev/null &
+EVPID=$!
+sleep 1
+kill -0 "$EVPID" 2>/dev/null || fail "exit_victim did not start (--log leg)"
+set +e
+evout=$(timeout 60 "$ASM" --log "$EVPID" -1 2>&1); rc=$?
+set -e
+[ "$rc" -ne 124 ] \
+    || fail "negative-n --log did not return when the target exited (rc 124 — spun forever)"
+[ "$rc" -eq 0 ] \
+    || fail "negative-n --log exited rc=$rc (exit mishandled as an attach failure)"
+printf '%s\n' "$evout" | grep -qE '(nanosleep|clock_nanosleep)\(' \
+    || fail "negative-n --log: no traced syscalls (attached-and-returned without tracing?)"
+EVPID="" # exited under trace — do NOT wait on it
+echo "  --log -1 returned rc 0 with real syscalls after the target exited"
+
+echo "--- asmspy --stream EVPID -1 (negative-n: single-step until exit) ---"
+"$BUILD/exit_victim" 2>/dev/null &
+EVPID=$!
+sleep 1
+kill -0 "$EVPID" 2>/dev/null || fail "exit_victim did not start (--stream leg)"
+set +e
+esout=$(timeout 60 "$ASM" --stream "$EVPID" -1 2>&1); rc=$?
+set -e
+[ "$rc" -ne 124 ] \
+    || fail "negative-n --stream did not return when the target exited (rc 124)"
+[ "$rc" -eq 0 ] || fail "negative-n --stream exited rc=$rc"
+printf '%s\n' "$esout" | grep -qE 'mov|jmp|cmp|add|push|call|lea|test|sub|nop' \
+    || fail "negative-n --stream: no disassembly (attached-and-returned without stepping?)"
+EVPID="" # exited under trace — do NOT wait on it
+echo "  --stream -1 returned rc 0 with real disassembly after the target exited"
 
 # ---------------------------------------------------------------------------
 # fd -> ENDPOINT enrichment for sockets (asmspy-plan Theme E)
