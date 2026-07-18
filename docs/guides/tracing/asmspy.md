@@ -612,9 +612,10 @@ seccomp vs missing PMU), so trust what it says over guesswork.
   callee it invokes instead. The target is briefly stopped between samples.
 - **Leaf/helper model.** The traced region should be a deterministic,
   single-threaded routine; call-outs to helpers are stepped over at native speed
-  and surfaced as call-graph edges (see the
+  (depth-aware, so a callback into the region does not hijack the resume) and
+  surfaced as call-graph edges (see the
   [trace_attached contract](native-tracing.md#out-of-process-variant-w2--ptrace)
-  for the re-entrancy caveat).
+  for the residual non-local-exit caveat).
 - **The single-step views crawl.** `--graph`/`--tree`/`--stream` single-step
   every thread, so the target crawls while they run (and resumes full speed on
   detach). Direct calls are exact, PLT stubs resolve to `name@plt`, and

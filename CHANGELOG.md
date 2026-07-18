@@ -1087,6 +1087,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (the `si_code` classifier introduced for the block-step drivers) is now a
   file-wide helper shared by every loop, on both x86-64 and AArch64.
 
+- **The call-out step-over is now depth-aware (code review finding #19's real
+  fix).** `run_until` (now `run_until_sp`, with `run_until_sig`/`run_until` kept
+  as thin wrappers) previously resumed the trace at the FIRST arrival at a
+  call-out's return-address breakpoint, so a stepped-over helper that called
+  BACK into the traced region (a callback, or a tiering/OSR stub re-invoking the
+  method) hit its own return-address breakpoint from a deeper stack frame first
+  and hijacked the resume into that nested invocation. `classify_region_exit`
+  (shared by all four region drivers — per-instruction, block-step, attached
+  per-instruction, attached block-step) now also passes the callee-entry stack
+  pointer, and `run_until_sp` rejects a same-address hit at the wrong depth: it
+  steps past the premature hit at native cost (a single-step over a software
+  breakpoint, or a bare `PTRACE_CONT` for a hardware one — `EFLAGS.RF` keeps the
+  CPU from re-trapping on it) and keeps waiting for the matching depth. A new
+  differential fixture — a region that calls a helper which calls back into the
+  region's own entry exactly once before returning — proves the trace now
+  resumes at the true, outer completion instead of the inner one.
+
 - **`asmtest_ibs.h` no longer describes the shipped system-wide capture flag as
   a future phase** — the `survey_process` residual-race note now names the
   `ASMTEST_IBS_OPT_SYSTEM_WIDE` flag directly.

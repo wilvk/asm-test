@@ -52,7 +52,7 @@ and mapped in roadmap-assessment.
 | #16 AMD replay not-taken block | ✅ Fixed | batch-c |
 | #17 init during active capture | ✅ Fixed | batch-c |
 | #18 trace_call non-SIGTRAP kill | ✅ Fixed | batch-d |
-| #19 call-out not call-depth aware | ✅ Fixed (doc) | batch-d — header corrected; SP-aware step-over a documented follow-up |
+| #19 call-out not call-depth aware | ✅ Fixed | batch-d header correction, then the depth-aware `run_until_sp` step-over — [ptrace-blockstep-tracer-correctness.md](../implementations/ptrace-blockstep-tracer-correctness.md) T4 |
 | #20 jitdump truncation OK+garbage | ✅ Fixed | batch-d |
 | #21 unreaped tracee on return path | ✅ Fixed | batch-d |
 | #26 Rust call_traced heap overflow | ✅ Fixed | batch-f |

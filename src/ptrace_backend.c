@@ -681,18 +681,27 @@ static pid_t waitpid_handshake(pid_t pid, int *status) {
     }
 }
 
-/* Plant a software breakpoint at `target`, PTRACE_CONT the tracee until it reaches it,
- * remove the breakpoint, and (x86) rewind the PC so the tracee is left stopped exactly
- * at `target`. PTRACE_POKETEXT patches even an r-x text page the way a debugger does
- * (process_vm_writev would be refused on it). Splices the breakpoint into the low
- * PTRACE_BP_LEN bytes of the peeked word, preserving the rest. Returns OK (stopped at
- * target), ENOENT (the tracee exited before reaching it), or ETRACE. Shared by
- * asmtest_ptrace_run_to (run an attached target to a resolved method) and the trace
- * loops (run native-speed OVER a call-out to its return address). Unrelated signals are
- * forwarded so the tracee's own signal flow is undisturbed. `first_sig` (0 for the
- * common case) is attached to the FIRST PTRACE_CONT — used to deliver a SIGTRAP the
- * caller already reaped (an application int3/breakpoint) rather than swallow it. */
-static int run_until_sig(pid_t pid, uint64_t target, int first_sig) {
+/* Plant a software breakpoint at `target`, PTRACE_CONT the tracee until it reaches it
+ * AT THE MATCHING STACK DEPTH, remove the breakpoint, and (x86) rewind the PC so the
+ * tracee is left stopped exactly at `target`. PTRACE_POKETEXT patches even an r-x text
+ * page the way a debugger does (process_vm_writev would be refused on it). Splices the
+ * breakpoint into the low PTRACE_BP_LEN bytes of the peeked word, preserving the rest.
+ * Returns OK (stopped at target), ENOENT (the tracee exited before reaching it), or
+ * ETRACE. Shared by asmtest_ptrace_run_to (run an attached target to a resolved method)
+ * and the trace loops (run native-speed OVER a call-out to its return address).
+ * Unrelated signals are forwarded so the tracee's own signal flow is undisturbed.
+ * `first_sig` (0 for the common case) is attached to the FIRST PTRACE_CONT — used to
+ * deliver a SIGTRAP the caller already reaped (an application int3/breakpoint) rather
+ * than swallow it. `expected_sp` (0 = today's first-arrival behaviour, for
+ * asmtest_ptrace_run_to and descent's own already-SP-guarded pop predicate) rejects a
+ * hit at the right address but the WRONG depth — a call-out helper that recurses into
+ * or calls back through the return-address breakpoint hits it first from a deeper
+ * frame; accepting that hit resumes the trace inside the wrong invocation. On a
+ * depth mismatch the breakpoint's own instruction is stepped over natively (never
+ * re-armed with a signal attached — this is our own step, not signal delivery) and
+ * the wait resumes. */
+static int run_until_sp(pid_t pid, uint64_t target, uint64_t expected_sp,
+                        int first_sig) {
     /* Default to a software int3/brk, which works on ordinary executable memory and needs
      * no debug-register budget. Fall back to a HARDWARE execution breakpoint when the code
      * is W^X (the executable page is not writable, so PTRACE_POKETEXT is refused with
@@ -705,6 +714,7 @@ static int run_until_sig(pid_t pid, uint64_t target, int first_sig) {
      * ETRACE and the descent caller self-skips to edges-only. */
     int hw = 0;
     long orig = 0;
+    long planted = 0;
     const int force_hw = getenv("ASMTEST_PTRACE_HW_BP") != NULL;
 
     if (!force_hw) {
@@ -715,7 +725,7 @@ static int run_until_sig(pid_t pid, uint64_t target, int first_sig) {
         const unsigned long mask = PTRACE_BP_LEN >= (int)sizeof(long)
                                        ? ~0UL
                                        : ((1UL << (PTRACE_BP_LEN * 8)) - 1);
-        long planted =
+        planted =
             (long)(((unsigned long)orig & ~mask) | (PTRACE_BP_INSN & mask));
         if (ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target,
                    (void *)planted) != 0) {
@@ -753,8 +763,8 @@ static int run_until_sig(pid_t pid, uint64_t target, int first_sig) {
                 status); /* forward an unrelated signal and keep running */
             continue;
         }
-        uint64_t pc;
-        if (read_pc_ret(pid, &pc, NULL, NULL, NULL) != 0) {
+        uint64_t pc, sp;
+        if (read_pc_ret(pid, &pc, NULL, &sp, NULL) != 0) {
             rc = ASMTEST_PTRACE_ETRACE;
             break;
         }
@@ -778,6 +788,49 @@ static int run_until_sig(pid_t pid, uint64_t target, int first_sig) {
              * (unrelated trap noise) keeps the prior silent-continue behaviour. */
             if (bs_sigtrap_is_app(pid))
                 sig = SIGTRAP;
+            continue;
+        }
+
+        if (expected_sp != 0 && sp != expected_sp) {
+            /* Right address, wrong depth: a re-entrant call-out (recursion, or a
+             * callback into the traced region) hit this same return-address
+             * breakpoint from a deeper frame first. Do not accept the hit — step
+             * past it at native cost and keep waiting for the matching depth. */
+            if (hw) {
+                /* The CPU sets EFLAGS.RF on debug-exception entry, so a plain CONT
+                 * does not immediately re-trap on this same instruction. */
+                continue;
+            }
+            if (ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target,
+                       (void *)orig) != 0) {
+                rc = ASMTEST_PTRACE_ETRACE;
+                break;
+            }
+#if defined(__x86_64__)
+            if (set_pc(pid, target) != 0) {
+                rc = ASMTEST_PTRACE_ETRACE;
+                break;
+            }
+#endif
+            if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0) {
+                rc = ASMTEST_PTRACE_ETRACE;
+                break;
+            }
+            if (waitpid(pid, &status, 0) < 0) {
+                rc = ASMTEST_PTRACE_ETRACE;
+                break;
+            }
+            if (WIFEXITED(status) || WIFSIGNALED(status)) {
+                rc = ASMTEST_PTRACE_ENOENT;
+                break;
+            }
+            if (WIFSTOPPED(status) && WSTOPSIG(status) != SIGTRAP)
+                sig = WSTOPSIG(status); /* forward on the next CONT */
+            if (ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target,
+                       (void *)planted) != 0) {
+                rc = ASMTEST_PTRACE_ETRACE;
+                break;
+            }
             continue;
         }
 
@@ -807,6 +860,10 @@ static int run_until_sig(pid_t pid, uint64_t target, int first_sig) {
     return rc;
 }
 
+static int run_until_sig(pid_t pid, uint64_t target, int first_sig) {
+    return run_until_sp(pid, target, 0, first_sig);
+}
+
 static int run_until(pid_t pid, uint64_t target) {
     return run_until_sig(pid, target, 0);
 }
@@ -825,10 +882,15 @@ typedef enum {
  * its return lands back in the region, run `pid` at NATIVE SPEED to that return address
  * (no per-instruction step through the callee) and report the in-region resume offset.
  * Needs the Capstone is-call query; without it, every exit reads as a return (leaf-only,
- * the previous behaviour). */
+ * the previous behaviour). `entry_sp` is the stack pointer at the callee's entry — the
+ * current stop, already read by the caller — from which the expected post-return depth
+ * is computed and enforced by run_until_sp, so a helper that recurses into or calls back
+ * through the region's own return-address breakpoint does not hijack the resume (the
+ * same call_sp/sp_ret arithmetic the descent shadow stack relies on, see dframe_t
+ * below). */
 static exit_kind_t classify_region_exit(pid_t pid, const uint8_t *code,
                                         size_t len, uint64_t base_ip,
-                                        uint64_t last_off,
+                                        uint64_t last_off, uint64_t entry_sp,
                                         uint64_t *resume_off) {
     if (!asmtest_disas_available() ||
         !asmtest_disas_is_call(PTRACE_TRACE_ARCH, code, len, last_off))
@@ -838,7 +900,15 @@ static exit_kind_t classify_region_exit(pid_t pid, const uint8_t *code,
     uint64_t ret_off = last_off + cl;
     if (cl == 0 || ret_off >= len)
         return EXIT_RETURNED; /* the call's fall-through is outside the region */
-    if (run_until(pid, base_ip + ret_off) != ASMTEST_PTRACE_OK)
+#if defined(__x86_64__)
+    uint64_t expected_sp =
+        entry_sp + 8; /* `call` pushed the return address; `ret` pops it */
+#else
+    uint64_t expected_sp =
+        entry_sp; /* aarch64 `bl` writes the link register, no push */
+#endif
+    if (run_until_sp(pid, base_ip + ret_off, expected_sp, 0) !=
+        ASMTEST_PTRACE_OK)
         return EXIT_CALLOUT_LOST;
     *resume_off = ret_off;
     return EXIT_CALLOUT_RESUMED;
@@ -1597,8 +1667,8 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
             break;
         }
 
-        uint64_t pc, retval;
-        if (read_pc_ret(pid, &pc, &retval, NULL, NULL) != 0) {
+        uint64_t pc, retval, sp;
+        if (read_pc_ret(pid, &pc, &retval, &sp, NULL) != 0) {
             rc = ASMTEST_PTRACE_ETRACE;
             break;
         }
@@ -1617,7 +1687,7 @@ int asmtest_ptrace_trace_call(const void *code, size_t len, const long *args,
             uint64_t resume_off = 0;
             exit_kind_t k =
                 classify_region_exit(pid, (const uint8_t *)code, len, base_ip,
-                                     stream[n - 1], &resume_off);
+                                     stream[n - 1], sp, &resume_off);
             if (k == EXIT_CALLOUT_RESUMED) {
                 if (n < PTRACE_STREAM_CAP)
                     stream[n++] = resume_off;
@@ -1907,8 +1977,8 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
             continue;
         }
 
-        uint64_t pc, retval;
-        if (read_pc_ret(pid, &pc, &retval, NULL, NULL) != 0) {
+        uint64_t pc, retval, sp;
+        if (read_pc_ret(pid, &pc, &retval, &sp, NULL) != 0) {
             rc = ASMTEST_PTRACE_ETRACE;
             break;
         }
@@ -1994,8 +2064,9 @@ int asmtest_ptrace_trace_call_blockstep(const void *code, size_t len,
          * runs the callee at native speed), so a method calling runtime helpers still
          * traces, not just a pure leaf. */
         uint64_t resume_off = 0;
-        exit_kind_t k = classify_region_exit(pid, (const uint8_t *)code, len,
-                                             base_ip, last_off, &resume_off);
+        exit_kind_t k =
+            classify_region_exit(pid, (const uint8_t *)code, len, base_ip,
+                                 last_off, sp, &resume_off);
         if (k == EXIT_CALLOUT_RESUMED) {
             prev_off =
                 resume_off; /* resume block-stepping from the call's return */
@@ -2106,8 +2177,8 @@ int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
             break;
         }
 
-        uint64_t pc, retval;
-        if (read_pc_ret(pid, &pc, &retval, NULL, NULL) != 0) {
+        uint64_t pc, retval, sp;
+        if (read_pc_ret(pid, &pc, &retval, &sp, NULL) != 0) {
             rc = ASMTEST_PTRACE_ETRACE;
             break;
         }
@@ -2166,7 +2237,7 @@ int asmtest_ptrace_trace_attached_blockstep(pid_t pid, const void *base,
          * resume), or the routine's return (leave the target stopped there). */
         uint64_t resume_off = 0;
         exit_kind_t k = classify_region_exit(pid, code, len, base_ip, last_off,
-                                             &resume_off);
+                                             sp, &resume_off);
         if (k == EXIT_CALLOUT_RESUMED) {
             prev_off = resume_off;
             continue;
@@ -3084,8 +3155,8 @@ static int trace_attached_impl(pid_t pid, const void *base, size_t len,
             break;
         }
 
-        uint64_t pc, retval;
-        if (read_pc_ret(pid, &pc, &retval, NULL, NULL) != 0) {
+        uint64_t pc, retval, sp;
+        if (read_pc_ret(pid, &pc, &retval, &sp, NULL) != 0) {
             rc = ASMTEST_PTRACE_ETRACE;
             break;
         }
@@ -3101,8 +3172,8 @@ static int trace_attached_impl(pid_t pid, const void *base, size_t len,
              * step over (native-speed) and resume after — so a real managed-runtime
              * method that calls runtime helpers traces correctly, not just a leaf. */
             uint64_t resume_off = 0;
-            exit_kind_t k = classify_region_exit(pid, code, len, base_ip,
-                                                 stream[n - 1], &resume_off);
+            exit_kind_t k = classify_region_exit(
+                pid, code, len, base_ip, stream[n - 1], sp, &resume_off);
             if (k == EXIT_CALLOUT_RESUMED) {
                 if (n < PTRACE_STREAM_CAP)
                     stream[n++] = resume_off;

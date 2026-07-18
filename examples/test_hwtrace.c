@@ -6681,6 +6681,92 @@ static void test_ptrace_callout(const char *label, int force_hw) {
 #endif
 }
 
+/* T4 (SP-aware step-over): a call-out helper that calls BACK into the region before
+ * returning — review finding #19's exact failure shape. R calls H; H tests-and-sets a
+ * flag in a caller-owned scratch byte (rdx): the FIRST (outer) invocation sets the flag
+ * and calls back into R's own entry, so R's return-address breakpoint (planted at the
+ * call's fall-through) is reached TWICE — first by the re-entrant (inner) invocation, at
+ * a deeper stack depth, then by the outer invocation's true completion. The inner and
+ * outer invocations of H leave a DIFFERENT deterministic marker in eax (2000 vs 1000) so
+ * the two completions are distinguishable in the result. Pre-T4, run_until accepted the
+ * first (wrong-depth) arrival and the trace resumed inside the inner invocation,
+ * reporting ITS value (2000+22=2022); the depth-aware step-over must reject that hit,
+ * step past it, and keep waiting for the OUTER depth, reporting 1000+22=1022 with R's
+ * own stream unchanged (its post-call offset recorded exactly once; H is never
+ * recorded, being outside the region). */
+static void test_ptrace_callout_reentrant(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ptrace_available()) {
+        char why[160];
+        asmtest_ptrace_skip_reason(why, sizeof why);
+        printf("# SKIP ptrace re-entrant callout: %s\n", why);
+        return;
+    }
+    if (!asmtest_disas_available()) {
+        printf("# SKIP ptrace re-entrant callout: needs Capstone (call "
+               "detection)\n");
+        return;
+    }
+    /* R: mov rax,rdi ; call H ; add rax,rsi ; ret          (region [0x0, 0xc))
+     * H@0xc: cmp byte[rdx],0 ; jne inner ; mov byte[rdx],1 ; call R (re-entrant!) ;
+     *        mov eax,1000 ; ret                             (outer: took the callback)
+     *   inner@0x1f: mov eax,2000 ; ret                       (flag already set: skip) */
+    static const unsigned char BLOB[] = {
+        0x48, 0x89, 0xf8,             /* 0x00 mov rax, rdi */
+        0xe8, 0x04, 0x00, 0x00, 0x00, /* 0x03 call H (+0xc) */
+        0x48, 0x01, 0xf0,             /* 0x08 add rax, rsi */
+        0xc3,                         /* 0x0b ret */
+        0x80, 0x3a, 0x00,             /* 0x0c cmp byte [rdx], 0 */
+        0x75, 0x0e,                   /* 0x0f jne +0xe -> 0x1f */
+        0xc6, 0x02, 0x01,             /* 0x11 mov byte [rdx], 1 */
+        0xe8, 0xe7, 0xff, 0xff, 0xff, /* 0x14 call R (-0x19 -> 0x0) */
+        0xb8, 0xe8, 0x03, 0x00, 0x00, /* 0x19 mov eax, 1000 (outer marker) */
+        0xc3,                         /* 0x1e ret */
+        0xb8, 0xd0, 0x07, 0x00, 0x00, /* 0x1f mov eax, 2000 (inner marker) */
+        0xc3,                         /* 0x24 ret */
+    };
+    static const uint64_t EXPECT[] = {0x0, 0x3, 0x8, 0xb};
+    const size_t REGION = 0xc;
+    const size_t NEXP = sizeof EXPECT / sizeof EXPECT[0];
+
+    void *p = mmap(NULL, sizeof BLOB, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP ptrace re-entrant callout: mmap failed\n");
+        return;
+    }
+    memcpy(p, BLOB, sizeof BLOB);
+    mprotect(p, sizeof BLOB, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof BLOB);
+
+    unsigned char flag = 0; /* the forked tracee gets its own COW copy */
+    asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+    const long args[3] = {20, 22, (long)(uintptr_t)&flag};
+    long result = 0;
+    int rc = asmtest_ptrace_trace_call(p, REGION, args, 3, &result, tr);
+
+    CHECK(rc == ASMTEST_PTRACE_OK,
+          "ptrace re-entrant callout: trace_call over a region whose call-out "
+          "calls back in");
+    CHECK(result == 1022,
+          "ptrace re-entrant callout: result is the OUTER invocation's value "
+          "(1000+22), not the inner's (2000+22)");
+    int seq = (asmtest_emu_trace_insns_total(tr) == NEXP);
+    for (size_t i = 0; seq && i < NEXP; i++)
+        seq = (tr->insns[i] == EXPECT[i]);
+    CHECK(seq,
+          "ptrace re-entrant callout: R's post-call offset recorded exactly "
+          "once, at the outer depth");
+    CHECK(!asmtest_emu_trace_truncated(tr),
+          "ptrace re-entrant callout: complete (depth-aware step-over, not a "
+          "truncated gap)");
+    asmtest_trace_free(tr);
+    munmap(p, sizeof BLOB);
+#else
+    printf("# SKIP ptrace re-entrant callout: not Linux x86-64\n");
+#endif
+}
+
 /* §D3: the concealed out-of-process ptrace-stealth stepper. A helper CHILD
  * reverse-attaches to THIS process (PR_SET_PTRACER + PTRACE_SEIZE) and single-steps
  * the region while we run it — the hardware-free scope path for Zen 2 / Docker-on-Mac.
@@ -8973,6 +9059,10 @@ int main(void) {
      * (the path that traces W^X JIT code as-shipped), asserting identical results. */
     test_ptrace_callout("software int3", 0);
     test_ptrace_callout("hardware bp", 1);
+
+    /* Live: SP-aware step-over (review finding #19) — a call-out helper that calls
+     * BACK into the region must not hijack the resume into that nested invocation. */
+    test_ptrace_callout_reentrant();
 
     /* §D3: the concealed reverse-attach ptrace-stealth stepper scope (CI-runnable). */
     test_ptrace_scoped_stealth();

@@ -246,12 +246,15 @@ int asmtest_ptrace_trace_window_call(const void *code, size_t len,
  * may be NULL. The target is left ptrace-stopped just past the region exit for the
  * caller to PTRACE_DETACH. The region MAY call out to helpers outside [base, base+len)
  * — a call-out is stepped over at native speed (a breakpoint at its return address) and
- * not recorded, so a real JIT method that calls runtime helpers traces correctly. NOTE:
- * the step-over resumes at the FIRST arrival at that return address and is NOT
- * re-entrancy aware — if the stepped-over helper calls BACK into the region (a callback
- * or a tiering/OSR stub re-invoking the method), the tracer resumes in that nested
- * invocation and reports its result/trace. Trace such re-entrant routines by their outer
- * entry only; the body must be deterministic and single-threaded.
+ * not recorded, so a real JIT method that calls runtime helpers traces correctly. The
+ * step-over is DEPTH-AWARE: the return-address breakpoint only resumes the trace once
+ * the stack pointer also matches the depth the call-out was taken at, so a
+ * stepped-over helper that calls BACK into the region (a callback, or a tiering/OSR
+ * stub re-invoking the method) no longer hijacks the trace into that nested invocation
+ * — the premature hit is stepped past (native cost) and the tracer keeps waiting for
+ * the matching depth. One residual gap: a callee that unwinds PAST the return address
+ * without executing it (a longjmp/exception escaping the call-out) is swept only by
+ * the region's own exit/truncation handling, not by this step-over.
  * APP BREAKPOINTS: an application `int3` is never SINGLESTEPped across — the capture is
  * marked truncated and the target is left in its SIGTRAP signal-delivery stop for the
  * caller (never killed: it is foreign), same policy as the attached block-step driver. */

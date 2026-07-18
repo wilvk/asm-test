@@ -456,6 +456,13 @@ outside the registered region — call-outs (runtime helpers, GC barriers, PLT s
 **stepped over at native speed** and not recorded, so a real method that calls helpers
 traces correctly, not just a pure-compute leaf (the stepper decodes the region-exit
 instruction via Capstone's is-call query; without Capstone it falls back to leaf-only).
+The return-address breakpoint is **depth-aware** — matched against the stack pointer at
+the call, not just the address — so a stepped-over helper that calls *back* into the
+region (a callback, or a tiering/OSR stub re-invoking the method) does not hijack the
+resume into that nested invocation; the tracer steps past the premature hit and waits
+for the matching depth. The one residual gap is a callee that unwinds *past* the return
+address without executing it (a `longjmp`/exception escaping the call-out), which the
+region's own exit/truncation handling still covers, not this step-over.
 `make hwtrace-test` exercises it live, including a region that calls an out-of-region
 helper (it all works in a **plain unprivileged container** — ptrace of one's own child
 needs no extra capability).
