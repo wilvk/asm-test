@@ -139,8 +139,94 @@ ASM_FUNC asm_call_capture
     add     sp, sp, #112
     ret
 
+#elif defined(__riscv) && __riscv_xlen == 64
+/* --- RISC-V rv64 (LP64D psABI) --------------------------------------------
+ * out -> a0, fn -> a1, args -> a2
+ * args[0..5] -> a0..a5 (6 slots, the portable API width; mirrors AArch64's
+ * x0..x5). regs_t offsets: ret 0, a1 8, s0 16, s1 24, ... s11 104, flags 112.
+ * t-registers and a-registers are caller-saved — never live across the jalr;
+ * out/fn are reloaded from the frame. No flags to preserve, so the captures are
+ * plain stores.
+ */
+    addi    sp, sp, -128           /* 16-aligned frame */
+    sd      ra, 0(sp)
+    sd      s0, 8(sp)
+    sd      s1, 16(sp)
+    sd      s2, 24(sp)
+    sd      s3, 32(sp)
+    sd      s4, 40(sp)
+    sd      s5, 48(sp)
+    sd      s6, 56(sp)
+    sd      s7, 64(sp)
+    sd      s8, 72(sp)
+    sd      s9, 80(sp)
+    sd      s10, 88(sp)
+    sd      s11, 96(sp)
+    sd      a0, 104(sp)            /* stash out across the call */
+    sd      a1, 112(sp)            /* stash fn  across the call */
+
+    /* Marshal args[0..5] into a0..a5. */
+    mv      t1, a2
+    ld      a0, 0(t1)
+    ld      a1, 8(t1)
+    ld      a2, 16(t1)
+    ld      a3, 24(t1)
+    ld      a4, 32(t1)
+    ld      a5, 40(t1)
+
+    /* Seed callee-saved registers (s0-s11) with sentinels. */
+    li      s0, 0x1111111111111111
+    li      s1, 0x2222222222222222
+    li      s2, 0x3333333333333333
+    li      s3, 0x4444444444444444
+    li      s4, 0x5555555555555555
+    li      s5, 0x6666666666666666
+    li      s6, 0x7777777777777777
+    li      s7, 0x8888888888888888
+    li      s8, 0x9999999999999999
+    li      s9, 0xAAAAAAAAAAAAAAAA
+    li      s10, 0xBBBBBBBBBBBBBBBB
+    li      s11, 0xCCCCCCCCCCCCCCCC
+
+    ld      t0, 112(sp)            /* fn */
+    jalr    ra, 0(t0)
+
+    /* Capture results (plain stores; rv64 has no flags to disturb). */
+    ld      t1, 104(sp)            /* reload out */
+    sd      a0, 0(t1)              /* ret = a0 */
+    sd      a1, 8(t1)              /* a1 = second return register */
+    sd      s0, 16(t1)
+    sd      s1, 24(t1)
+    sd      s2, 32(t1)
+    sd      s3, 40(t1)
+    sd      s4, 48(t1)
+    sd      s5, 56(t1)
+    sd      s6, 64(t1)
+    sd      s7, 72(t1)
+    sd      s8, 80(t1)
+    sd      s9, 88(t1)
+    sd      s10, 96(t1)
+    sd      s11, 104(t1)
+    sd      zero, 112(t1)          /* flags == 0: RISC-V has none */
+
+    ld      ra, 0(sp)
+    ld      s0, 8(sp)
+    ld      s1, 16(sp)
+    ld      s2, 24(sp)
+    ld      s3, 32(sp)
+    ld      s4, 40(sp)
+    ld      s5, 48(sp)
+    ld      s6, 56(sp)
+    ld      s7, 64(sp)
+    ld      s8, 72(sp)
+    ld      s9, 80(sp)
+    ld      s10, 88(sp)
+    ld      s11, 96(sp)
+    addi    sp, sp, 128
+    ret
+
 #else
-#  error "capture.s supports x86-64 and AArch64 only"
+#  error "capture.s supports x86-64, AArch64 and RV64 only"
 #endif
 
 ASM_ENDFUNC asm_call_capture
@@ -288,8 +374,98 @@ ASM_FUNC asm_call_capture_fp
     add     sp, sp, #112
     ret
 
+#elif defined(__riscv) && __riscv_xlen == 64
+/* out -> a0, fn -> a1, iargs -> a2, fargs -> a3
+ * Marshals 8 doubles into fa0..fa7 and captures the FP return fa0 into
+ * out->fret (offset 120). (T3 adds fs0-fs11 seeding/capture here.) */
+    addi    sp, sp, -128
+    sd      ra, 0(sp)
+    sd      s0, 8(sp)
+    sd      s1, 16(sp)
+    sd      s2, 24(sp)
+    sd      s3, 32(sp)
+    sd      s4, 40(sp)
+    sd      s5, 48(sp)
+    sd      s6, 56(sp)
+    sd      s7, 64(sp)
+    sd      s8, 72(sp)
+    sd      s9, 80(sp)
+    sd      s10, 88(sp)
+    sd      s11, 96(sp)
+    sd      a0, 104(sp)            /* stash out */
+    sd      a1, 112(sp)            /* stash fn  */
+
+    /* Float args: fargs (a3) -> fa0..fa7 (before a3 is reused for marshalling). */
+    fld     fa0, 0(a3)
+    fld     fa1, 8(a3)
+    fld     fa2, 16(a3)
+    fld     fa3, 24(a3)
+    fld     fa4, 32(a3)
+    fld     fa5, 40(a3)
+    fld     fa6, 48(a3)
+    fld     fa7, 56(a3)
+
+    /* Integer args: iargs (a2) -> a0..a5. */
+    mv      t1, a2
+    ld      a0, 0(t1)
+    ld      a1, 8(t1)
+    ld      a2, 16(t1)
+    ld      a3, 24(t1)
+    ld      a4, 32(t1)
+    ld      a5, 40(t1)
+
+    li      s0, 0x1111111111111111
+    li      s1, 0x2222222222222222
+    li      s2, 0x3333333333333333
+    li      s3, 0x4444444444444444
+    li      s4, 0x5555555555555555
+    li      s5, 0x6666666666666666
+    li      s6, 0x7777777777777777
+    li      s7, 0x8888888888888888
+    li      s8, 0x9999999999999999
+    li      s9, 0xAAAAAAAAAAAAAAAA
+    li      s10, 0xBBBBBBBBBBBBBBBB
+    li      s11, 0xCCCCCCCCCCCCCCCC
+
+    ld      t0, 112(sp)            /* fn */
+    jalr    ra, 0(t0)
+
+    ld      t1, 104(sp)            /* out */
+    sd      a0, 0(t1)
+    sd      a1, 8(t1)
+    sd      s0, 16(t1)
+    sd      s1, 24(t1)
+    sd      s2, 32(t1)
+    sd      s3, 40(t1)
+    sd      s4, 48(t1)
+    sd      s5, 56(t1)
+    sd      s6, 64(t1)
+    sd      s7, 72(t1)
+    sd      s8, 80(t1)
+    sd      s9, 88(t1)
+    sd      s10, 96(t1)
+    sd      s11, 104(t1)
+    sd      zero, 112(t1)          /* flags == 0 */
+    fsd     fa0, 120(t1)           /* fret = fa0 */
+
+    ld      ra, 0(sp)
+    ld      s0, 8(sp)
+    ld      s1, 16(sp)
+    ld      s2, 24(sp)
+    ld      s3, 32(sp)
+    ld      s4, 40(sp)
+    ld      s5, 48(sp)
+    ld      s6, 56(sp)
+    ld      s7, 64(sp)
+    ld      s8, 72(sp)
+    ld      s9, 80(sp)
+    ld      s10, 88(sp)
+    ld      s11, 96(sp)
+    addi    sp, sp, 128
+    ret
+
 #else
-#  error "capture.s supports x86-64 and AArch64 only"
+#  error "capture.s supports x86-64, AArch64 and RV64 only"
 #endif
 
 ASM_ENDFUNC asm_call_capture_fp
@@ -523,8 +699,12 @@ ASM_FUNC asm_call_capture_vec
     add     sp, sp, #176
     ret
 
+#elif defined(__riscv) && __riscv_xlen == 64
+/* rv64gc has no vector registers; a stub so the symbol resolves. Never called:
+ * asmtest_cpu_has_vec128() is false on rv64, so the ASM_VCALL macros self-skip. */
+    ret
 #else
-#  error "capture.s supports x86-64 and AArch64 only"
+#  error "capture.s supports x86-64, AArch64 and RV64 only"
 #endif
 
 ASM_ENDFUNC asm_call_capture_vec
@@ -768,8 +948,161 @@ ASM_FUNC asm_call_capture_fp_n
     ldp     x29, x30, [sp], #160
     ret
 
+#elif defined(__riscv) && __riscv_xlen == 64
+/* out -> a0, fn -> a1, iargs -> a2, fargs -> a3, nfargs -> a4
+ * First 8 doubles -> fa0..fa7; doubles 9,10 -> a6,a7 as raw bit patterns (the
+ * psABI "FP args after the FP registers are exhausted use the integer
+ * convention" rule — a0..a5 already hold iargs, so a6,a7 are the next free
+ * integer registers); doubles 11+ spill onto the stack at 0(sp),8(sp),...
+ * s0 is the frame pointer (reported preserved, not independently checked). */
+    addi    sp, sp, -160
+    sd      ra, 0(sp)
+    sd      s0, 8(sp)              /* save caller's s0 (frame pointer) */
+    mv      s0, sp                 /* s0 = frame pointer */
+    sd      s1, 16(sp)
+    sd      s2, 24(sp)
+    sd      s3, 32(sp)
+    sd      s4, 40(sp)
+    sd      s5, 48(sp)
+    sd      s6, 56(sp)
+    sd      s7, 64(sp)
+    sd      s8, 72(sp)
+    sd      s9, 80(sp)
+    sd      s10, 88(sp)
+    sd      s11, 96(sp)
+    sd      a0, 104(sp)            /* out    */
+    sd      a1, 112(sp)            /* fn     */
+    sd      a2, 120(sp)            /* iargs  */
+    sd      a3, 128(sp)            /* fargs  */
+    sd      a4, 136(sp)            /* nfargs */
+
+    /* n_stack = max(0, nfargs - 10) -> t1 */
+    ld      t0, 136(s0)
+    li      t1, 0
+    li      t2, 10
+    ble     t0, t2, 1f
+    sub     t1, t0, t2
+1:
+    /* reserve round_up(n_stack*8, 16) bytes (sp stays 16-aligned). */
+    slli    t2, t1, 3
+    addi    t2, t2, 15
+    andi    t2, t2, -16
+    sub     sp, sp, t2
+
+    /* Copy overflow doubles: [sp + i*8] = fargs[10 + i] (raw bit patterns). */
+    ld      t2, 128(s0)
+    li      t3, 0
+2:
+    bge     t3, t1, 3f
+    addi    t4, t3, 10
+    slli    t5, t4, 3
+    add     t5, t2, t5
+    ld      t6, 0(t5)
+    slli    t4, t3, 3
+    add     t4, sp, t4
+    sd      t6, 0(t4)
+    addi    t3, t3, 1
+    j       2b
+3:
+    /* Load FP register args fa0..fa7 (only as many as nfargs). */
+    ld      t2, 128(s0)            /* fargs  */
+    ld      t0, 136(s0)            /* nfargs */
+    li      t3, 1
+    blt     t0, t3, 4f
+    fld     fa0, 0(t2)
+    li      t3, 2
+    blt     t0, t3, 4f
+    fld     fa1, 8(t2)
+    li      t3, 3
+    blt     t0, t3, 4f
+    fld     fa2, 16(t2)
+    li      t3, 4
+    blt     t0, t3, 4f
+    fld     fa3, 24(t2)
+    li      t3, 5
+    blt     t0, t3, 4f
+    fld     fa4, 32(t2)
+    li      t3, 6
+    blt     t0, t3, 4f
+    fld     fa5, 40(t2)
+    li      t3, 7
+    blt     t0, t3, 4f
+    fld     fa6, 48(t2)
+    li      t3, 8
+    blt     t0, t3, 4f
+    fld     fa7, 56(t2)
+4:
+    /* Doubles 9,10 -> a6,a7 as raw bit patterns (integer convention). */
+    li      t3, 9
+    blt     t0, t3, 5f
+    ld      a6, 64(t2)             /* fargs[8] */
+    li      t3, 10
+    blt     t0, t3, 5f
+    ld      a7, 72(t2)             /* fargs[9] */
+5:
+    /* Integer args: iargs -> a0..a5. */
+    ld      t2, 120(s0)
+    ld      a0, 0(t2)
+    ld      a1, 8(t2)
+    ld      a2, 16(t2)
+    ld      a3, 24(t2)
+    ld      a4, 32(t2)
+    ld      a5, 40(t2)
+
+    /* Seed callee-saved sentinels (s0 is the frame pointer, seeded via out). */
+    li      s1, 0x2222222222222222
+    li      s2, 0x3333333333333333
+    li      s3, 0x4444444444444444
+    li      s4, 0x5555555555555555
+    li      s5, 0x6666666666666666
+    li      s6, 0x7777777777777777
+    li      s7, 0x8888888888888888
+    li      s8, 0x9999999999999999
+    li      s9, 0xAAAAAAAAAAAAAAAA
+    li      s10, 0xBBBBBBBBBBBBBBBB
+    li      s11, 0xCCCCCCCCCCCCCCCC
+
+    ld      t0, 112(s0)            /* fn */
+    jalr    ra, 0(t0)
+
+    ld      t1, 104(s0)            /* out */
+    sd      a0, 0(t1)
+    sd      a1, 8(t1)
+    li      t2, 0x1111111111111111 /* s0: reported preserved, not checked */
+    sd      t2, 16(t1)
+    sd      s1, 24(t1)
+    sd      s2, 32(t1)
+    sd      s3, 40(t1)
+    sd      s4, 48(t1)
+    sd      s5, 56(t1)
+    sd      s6, 64(t1)
+    sd      s7, 72(t1)
+    sd      s8, 80(t1)
+    sd      s9, 88(t1)
+    sd      s10, 96(t1)
+    sd      s11, 104(t1)
+    sd      zero, 112(t1)          /* flags == 0 */
+    fsd     fa0, 120(t1)           /* fret = fa0 */
+
+    mv      sp, s0                 /* drop the variable area */
+    ld      ra, 0(sp)
+    ld      s1, 16(sp)
+    ld      s2, 24(sp)
+    ld      s3, 32(sp)
+    ld      s4, 40(sp)
+    ld      s5, 48(sp)
+    ld      s6, 56(sp)
+    ld      s7, 64(sp)
+    ld      s8, 72(sp)
+    ld      s9, 80(sp)
+    ld      s10, 88(sp)
+    ld      s11, 96(sp)
+    ld      s0, 8(sp)              /* restore caller's s0 last */
+    addi    sp, sp, 160
+    ret
+
 #else
-#  error "capture.s supports x86-64 and AArch64 only"
+#  error "capture.s supports x86-64, AArch64 and RV64 only"
 #endif
 
 ASM_ENDFUNC asm_call_capture_fp_n
@@ -1096,8 +1429,12 @@ ASM_FUNC asm_call_capture_vec_n
     ldp     x29, x30, [sp], #224
     ret
 
+#elif defined(__riscv) && __riscv_xlen == 64
+/* rv64gc has no vector registers; a stub so the symbol resolves. Never called:
+ * asmtest_cpu_has_vec128() is false on rv64, so the ASM_VCALL macros self-skip. */
+    ret
 #else
-#  error "capture.s supports x86-64 and AArch64 only"
+#  error "capture.s supports x86-64, AArch64 and RV64 only"
 #endif
 
 ASM_ENDFUNC asm_call_capture_vec_n
@@ -1499,8 +1836,138 @@ ASM_FUNC asm_call_capture_args
     ldp     x29, x30, [sp], #160
     ret
 
+#elif defined(__riscv) && __riscv_xlen == 64
+/* out -> a0, fn -> a1, args -> a2, nargs -> a3
+ * 8 register args a0..a7; overflow args[8+] spill to 0(sp),8(sp),... s0 is the
+ * frame pointer (reported preserved, not independently checked). */
+    addi    sp, sp, -160
+    sd      ra, 0(sp)
+    sd      s0, 8(sp)
+    mv      s0, sp
+    sd      s1, 16(sp)
+    sd      s2, 24(sp)
+    sd      s3, 32(sp)
+    sd      s4, 40(sp)
+    sd      s5, 48(sp)
+    sd      s6, 56(sp)
+    sd      s7, 64(sp)
+    sd      s8, 72(sp)
+    sd      s9, 80(sp)
+    sd      s10, 88(sp)
+    sd      s11, 96(sp)
+    sd      a0, 104(sp)            /* out   */
+    sd      a1, 112(sp)            /* fn    */
+    sd      a2, 120(sp)            /* args  */
+    sd      a3, 128(sp)            /* nargs */
+
+    /* n_stack = max(0, nargs - 8) -> t1 */
+    ld      t0, 128(s0)
+    li      t1, 0
+    li      t2, 8
+    ble     t0, t2, 1f
+    sub     t1, t0, t2
+1:
+    slli    t2, t1, 3
+    addi    t2, t2, 15
+    andi    t2, t2, -16
+    sub     sp, sp, t2
+
+    /* Copy overflow args: [sp + i*8] = args[8 + i]. */
+    ld      t2, 120(s0)
+    li      t3, 0
+2:
+    bge     t3, t1, 3f
+    addi    t4, t3, 8
+    slli    t5, t4, 3
+    add     t5, t2, t5
+    ld      t6, 0(t5)
+    slli    t4, t3, 3
+    add     t4, sp, t4
+    sd      t6, 0(t4)
+    addi    t3, t3, 1
+    j       2b
+3:
+    /* Load the register args a0..a7 (only as many as nargs). */
+    ld      t2, 120(s0)
+    ld      t0, 128(s0)
+    li      t3, 1
+    blt     t0, t3, 4f
+    ld      a0, 0(t2)
+    li      t3, 2
+    blt     t0, t3, 4f
+    ld      a1, 8(t2)
+    li      t3, 3
+    blt     t0, t3, 4f
+    ld      a2, 16(t2)
+    li      t3, 4
+    blt     t0, t3, 4f
+    ld      a3, 24(t2)
+    li      t3, 5
+    blt     t0, t3, 4f
+    ld      a4, 32(t2)
+    li      t3, 6
+    blt     t0, t3, 4f
+    ld      a5, 40(t2)
+    li      t3, 7
+    blt     t0, t3, 4f
+    ld      a6, 48(t2)
+    li      t3, 8
+    blt     t0, t3, 4f
+    ld      a7, 56(t2)
+4:
+    /* Seed callee-saved sentinels (s0 is the frame pointer, seeded via out). */
+    li      s1, 0x2222222222222222
+    li      s2, 0x3333333333333333
+    li      s3, 0x4444444444444444
+    li      s4, 0x5555555555555555
+    li      s5, 0x6666666666666666
+    li      s6, 0x7777777777777777
+    li      s7, 0x8888888888888888
+    li      s8, 0x9999999999999999
+    li      s9, 0xAAAAAAAAAAAAAAAA
+    li      s10, 0xBBBBBBBBBBBBBBBB
+    li      s11, 0xCCCCCCCCCCCCCCCC
+
+    ld      t0, 112(s0)            /* fn */
+    jalr    ra, 0(t0)
+
+    ld      t1, 104(s0)            /* out */
+    sd      a0, 0(t1)
+    sd      a1, 8(t1)
+    li      t2, 0x1111111111111111 /* s0: reported preserved, not checked */
+    sd      t2, 16(t1)
+    sd      s1, 24(t1)
+    sd      s2, 32(t1)
+    sd      s3, 40(t1)
+    sd      s4, 48(t1)
+    sd      s5, 56(t1)
+    sd      s6, 64(t1)
+    sd      s7, 72(t1)
+    sd      s8, 80(t1)
+    sd      s9, 88(t1)
+    sd      s10, 96(t1)
+    sd      s11, 104(t1)
+    sd      zero, 112(t1)          /* flags == 0 */
+
+    mv      sp, s0
+    ld      ra, 0(sp)
+    ld      s1, 16(sp)
+    ld      s2, 24(sp)
+    ld      s3, 32(sp)
+    ld      s4, 40(sp)
+    ld      s5, 48(sp)
+    ld      s6, 56(sp)
+    ld      s7, 64(sp)
+    ld      s8, 72(sp)
+    ld      s9, 80(sp)
+    ld      s10, 88(sp)
+    ld      s11, 96(sp)
+    ld      s0, 8(sp)
+    addi    sp, sp, 160
+    ret
+
 #else
-#  error "capture.s supports x86-64 and AArch64 only"
+#  error "capture.s supports x86-64, AArch64 and RV64 only"
 #endif
 
 ASM_ENDFUNC asm_call_capture_args
@@ -1711,8 +2178,140 @@ ASM_FUNC asm_call_capture_sret
     ldp     x29, x30, [sp], #176
     ret
 
+#elif defined(__riscv) && __riscv_xlen == 64
+/* out -> a0, fn -> a1, result -> a2, args -> a3, nargs -> a4
+ * The hidden struct-return pointer is the implicit FIRST argument in a0 (the
+ * x86-64/rdi shape, NOT AArch64's dedicated x8); the visible args follow in
+ * a1..a7 (7 register slots), overflow args[7+] spilling to the stack. s0 is the
+ * frame pointer (reported preserved, not independently checked). */
+    addi    sp, sp, -176
+    sd      ra, 0(sp)
+    sd      s0, 8(sp)
+    mv      s0, sp
+    sd      s1, 16(sp)
+    sd      s2, 24(sp)
+    sd      s3, 32(sp)
+    sd      s4, 40(sp)
+    sd      s5, 48(sp)
+    sd      s6, 56(sp)
+    sd      s7, 64(sp)
+    sd      s8, 72(sp)
+    sd      s9, 80(sp)
+    sd      s10, 88(sp)
+    sd      s11, 96(sp)
+    sd      a0, 104(sp)            /* out    */
+    sd      a1, 112(sp)            /* fn     */
+    sd      a2, 120(sp)            /* result */
+    sd      a3, 128(sp)            /* args   */
+    sd      a4, 136(sp)            /* nargs  */
+
+    /* n_stack = max(0, nargs - 7)  (7 visible register args: a1..a7) */
+    ld      t0, 136(s0)
+    li      t1, 0
+    li      t2, 7
+    ble     t0, t2, 1f
+    sub     t1, t0, t2
+1:
+    slli    t2, t1, 3
+    addi    t2, t2, 15
+    andi    t2, t2, -16
+    sub     sp, sp, t2
+
+    /* Copy overflow args: [sp + i*8] = args[7 + i]. */
+    ld      t2, 128(s0)
+    li      t3, 0
+2:
+    bge     t3, t1, 3f
+    addi    t4, t3, 7
+    slli    t5, t4, 3
+    add     t5, t2, t5
+    ld      t6, 0(t5)
+    slli    t4, t3, 3
+    add     t4, sp, t4
+    sd      t6, 0(t4)
+    addi    t3, t3, 1
+    j       2b
+3:
+    /* Load visible register args into a1..a7 (only as many as nargs). */
+    ld      t2, 128(s0)
+    ld      t0, 136(s0)
+    li      t3, 1
+    blt     t0, t3, 4f
+    ld      a1, 0(t2)
+    li      t3, 2
+    blt     t0, t3, 4f
+    ld      a2, 8(t2)
+    li      t3, 3
+    blt     t0, t3, 4f
+    ld      a3, 16(t2)
+    li      t3, 4
+    blt     t0, t3, 4f
+    ld      a4, 24(t2)
+    li      t3, 5
+    blt     t0, t3, 4f
+    ld      a5, 32(t2)
+    li      t3, 6
+    blt     t0, t3, 4f
+    ld      a6, 40(t2)
+    li      t3, 7
+    blt     t0, t3, 4f
+    ld      a7, 48(t2)
+4:
+    ld      a0, 120(s0)            /* hidden result pointer -> a0 */
+
+    /* Seed callee-saved sentinels (s0 is the frame pointer, seeded via out). */
+    li      s1, 0x2222222222222222
+    li      s2, 0x3333333333333333
+    li      s3, 0x4444444444444444
+    li      s4, 0x5555555555555555
+    li      s5, 0x6666666666666666
+    li      s6, 0x7777777777777777
+    li      s7, 0x8888888888888888
+    li      s8, 0x9999999999999999
+    li      s9, 0xAAAAAAAAAAAAAAAA
+    li      s10, 0xBBBBBBBBBBBBBBBB
+    li      s11, 0xCCCCCCCCCCCCCCCC
+
+    ld      t0, 112(s0)            /* fn */
+    jalr    ra, 0(t0)
+
+    ld      t1, 104(s0)            /* out */
+    sd      a0, 0(t1)
+    sd      a1, 8(t1)
+    li      t2, 0x1111111111111111 /* s0: reported preserved, not checked */
+    sd      t2, 16(t1)
+    sd      s1, 24(t1)
+    sd      s2, 32(t1)
+    sd      s3, 40(t1)
+    sd      s4, 48(t1)
+    sd      s5, 56(t1)
+    sd      s6, 64(t1)
+    sd      s7, 72(t1)
+    sd      s8, 80(t1)
+    sd      s9, 88(t1)
+    sd      s10, 96(t1)
+    sd      s11, 104(t1)
+    sd      zero, 112(t1)          /* flags == 0 */
+
+    mv      sp, s0
+    ld      ra, 0(sp)
+    ld      s1, 16(sp)
+    ld      s2, 24(sp)
+    ld      s3, 32(sp)
+    ld      s4, 40(sp)
+    ld      s5, 48(sp)
+    ld      s6, 56(sp)
+    ld      s7, 64(sp)
+    ld      s8, 72(sp)
+    ld      s9, 80(sp)
+    ld      s10, 88(sp)
+    ld      s11, 96(sp)
+    ld      s0, 8(sp)
+    addi    sp, sp, 176
+    ret
+
 #else
-#  error "capture.s supports x86-64 and AArch64 only"
+#  error "capture.s supports x86-64, AArch64 and RV64 only"
 #endif
 
 ASM_ENDFUNC asm_call_capture_sret

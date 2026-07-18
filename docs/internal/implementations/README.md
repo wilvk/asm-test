@@ -138,7 +138,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
 | [aarch64-sve-capture.md](aarch64-sve-capture.md) — AArch64 SVE wide-vector capture | 8 | ☐ 0/8 | — |
-| [riscv-native-tier.md](riscv-native-tier.md) — native RISC-V (rv64) host tier | 7 | ◐ 1/7 (T2/T4/T5 wip) | — |
+| [riscv-native-tier.md](riscv-native-tier.md) — native RISC-V (rv64) host tier | 7 | ◐ 2/7 (T4/T5 wip) | — |
 
 ### CI, distribution & infrastructure
 | Document | Tasks | Status | Depends on |
