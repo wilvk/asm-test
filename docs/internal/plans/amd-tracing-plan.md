@@ -1068,7 +1068,12 @@ tracer's behalf only via `PTRACE_SINGLEBLOCK` → `user_enable_block_step()` →
 enum member (the fixed 4-member set at
 [asmtest_hwtrace.h:54-60](../../../include/asmtest_hwtrace.h) — INTEL_PT / CORESIGHT /
 AMD_LBR / SINGLESTEP — is the *in-process/decoder* tier; the W2 stepper is not one of
-them).
+them). The EFLAGS-only claim above stands for `ss_backend.c` itself, but an in-process
+form via `/dev/cpu/N/msr` has since landed for the pinned leaf-routine envelope
+(`asmtest_ss_btf_trace`, [src/ss_btf.c](../../../src/ss_btf.c)) — a standalone entry
+point outside the `asmtest_trace_backend_t` enum, exactly like `asmtest_amd_msr_trace`,
+not a fifth member; see
+[inproc-btf-block-step.md](../implementations/inproc-btf-block-step.md).
 
 **Work.**
 - Thread a `step_mode` (single-step vs block-step) through the shared bodies

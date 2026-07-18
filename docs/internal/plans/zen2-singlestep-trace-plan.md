@@ -151,8 +151,9 @@ Linux-ARM64 / Windows-on-ARM — no dev box here provides it). `asmtest_ptrace_a
 is a cached, hang-proof self-probe that returns 0 under emulation, so the stepper
 self-skips there exactly as the PT/CoreSight tiers self-skip off their hardware. The ten
 binding wrappers gate on the same `available()`, so their live AArch64 fixtures are a
-small follow-on alongside that hardware. The **in-process BTF** variant (W3) also stays
-forward-look — but on a *kernel*, not a silicon, blocker: see W3 below.
+small follow-on alongside that hardware. The **in-process BTF** variant (W3) has since
+landed as a raw-MSR pinned-envelope tier — the kernel-helper blocker this paragraph
+once cited was not load-bearing after all; see W3 below.
 
 ---
 
@@ -295,21 +296,24 @@ the in-process variant does not exist on ARM. Each is an additive front-end behi
 swappable "stepper" seam designed in Phase 1; none is required for the shippable
 Linux/x86-64 backend.
 
-> **Status (2026-07-16).** This phase was originally filed *(forward-look)* in full; most
-> of it has since shipped and the marker is corrected here. **Landed:** the Windows x86-64
-> VEH front-end, the macOS-Intel front-end, and the whole **W2** out-of-process ptrace
-> programme — `trace_call` / `trace_attached` / `_versioned` / `run_to`, call-depth
-> awareness, the hardware-breakpoint `run_to` on **both** x86-64 and AArch64, the binary
-> jitdump reader, the region resolvers, the code-image recorder, the AArch64 tracer, the
-> out-of-process **BTF block-step** trio, the per-binding surface across all ten bindings,
-> and six live real-JIT lanes (V8 / CoreCLR / HotSpot × perf-map and jitdump). **Two
-> fronts remain**, and they are blocked on different things:
+> **Status (2026-07-16; W3 corrected 2026-07-18).** This phase was originally filed
+> *(forward-look)* in full; most of it has since shipped and the marker is corrected
+> here. **Landed:** the Windows x86-64 VEH front-end, the macOS-Intel front-end, the
+> whole **W2** out-of-process ptrace programme — `trace_call` / `trace_attached` /
+> `_versioned` / `run_to`, call-depth awareness, the hardware-breakpoint `run_to` on
+> **both** x86-64 and AArch64, the binary jitdump reader, the region resolvers, the
+> code-image recorder, the AArch64 tracer, the out-of-process **BTF block-step** trio,
+> the per-binding surface across all ten bindings, six live real-JIT lanes (V8 /
+> CoreCLR / HotSpot × perf-map and jitdump), and — as of 2026-07-18 — the **in-process
+> BTF** variant (W3, see below): a raw-MSR pinned-envelope tier with per-trap re-arm and
+> honest truncation
+> ([inproc-btf-block-step.md](../implementations/inproc-btf-block-step.md)); the
+> "kernel helper / uapi patch" blocker this status note previously cited was not
+> load-bearing. **One front remains:**
 > - **AArch64 live single-step *stream*** — blocked on **real AArch64 hardware** (Apple
 >   Silicon / Linux-ARM64 / Windows-on-ARM). The tracer is written; qemu-user cannot
 >   validate it (it does not emulate the ptrace tracer/tracee relationship), so it
 >   self-skips there.
-> - **In-process BTF (W3)** — blocked on a **kernel helper / uapi patch**, not silicon:
->   `DEBUGCTL` is a ring-0 MSR. The out-of-process form already shipped.
 
 - **Windows (x86-64)** *(shipped — see the status note above)*. Same `TF`, delivered
   as `EXCEPTION_SINGLE_STEP` to a Vectored Exception Handler (the classic technique);
@@ -515,9 +519,18 @@ Linux/x86-64 backend.
   `asmtest_ptrace_trace_call_blockstep` / `_attached_blockstep`), behind a hang-proof
   functional probe because some hypervisors (GitHub-hosted runners included) mask
   `DEBUGCTL.BTF` and silently degrade SINGLEBLOCK to per-instruction stepping —
-  `blockstep_available()` self-skips there. Still forward-look: only the *in-process*
-  BTF variant (no ptrace child), which needs the ring-0 `DEBUGCTL` MSR directly — a
-  kernel helper / uapi patch, same bucket as the AMD plan's "MSR-direct snapshot."
+  `blockstep_available()` self-skips there. **The in-process form (no ptrace child)
+  has since LANDED** as the raw-MSR pinned-envelope tier
+  ([inproc-btf-block-step.md](../implementations/inproc-btf-block-step.md),
+  `asmtest_ss_btf_available()` / `asmtest_ss_btf_trace()` in
+  [src/ss_btf.c](../../../src/ss_btf.c)): the same thread-pinned `/dev/cpu/N/msr`
+  route [src/msr_lbr.c](../../../src/msr_lbr.c) uses, with per-trap re-arm (BTF is a
+  hardware one-shot the CPU clears on every `#DB`) and honest truncation on any
+  observed context switch (Linux does not preserve a user-written BTF across one). The
+  robust, context-switch-proof general form remains kernel-coupled and already ships
+  as `PTRACE_SINGLEBLOCK` above — no non-ptrace block-step uapi exists upstream, so the
+  raw-MSR tier is deliberately scoped to the pinned small-leaf-routine envelope, not a
+  replacement for it.
 
 ---
 

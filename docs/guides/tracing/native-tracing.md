@@ -885,6 +885,59 @@ the live foreign attach is covered by the C suite) — and `asmtest_ptrace.h` is
 the `check-bindings-parity` gate (51 tier symbols × 10 bindings). All ten are validated
 live in plain unprivileged containers.
 
+### In-process BTF block-step (branch-granular, privileged)
+
+A third single-step form, between the two above: **in-process, but branch-granular**
+instead of per-instruction. `DEBUGCTL.BTF=1` (bit 1 of the debug-control MSR, same bit
+on Intel and AMD) combined with `EFLAGS.TF=1` traps the CPU **only after a taken
+branch** retires — one `#DB` per branch, not per instruction — feeding the resulting
+`(from,to)` waypoints into the same AMD-LBR replay loop
+([src/amd_backend.c](../../../src/amd_backend.c)) with **no 16-entry ceiling**: a
+loop of any length reconstructs in one pass, at a fraction of the per-instruction
+stepper's fault count.
+
+```c
+#include "asmtest_hwtrace.h"
+
+if (asmtest_ss_btf_available()) {          /* hang-proof functional probe, not just a
+                                             * build check — some hypervisors silently
+                                             * mask DEBUGCTL.BTF */
+    asmtest_trace_t *t = asmtest_trace_new(64, 64);
+    asmtest_ss_btf_trace(base, len, run_fn, arg, t);  /* one trap per taken branch */
+    /* t->truncated is set whenever completeness cannot be proven — see below */
+}
+```
+
+**Gates.** Bare-metal x86-64 Linux with `/dev/cpu/N/msr` writable
+(`CAP_SYS_ADMIN` + the host `msr` module) — the same `make docker-hwtrace-msr`
+`--privileged` lane the MSR-direct AMD LBR snapshot (see the
+[AMD LBR tuning guide](amd-lbr-tuning.md)) already rides.
+`asmtest_ss_btf_available()` is a hang-proof functional probe (arms a
+bounded 9-byte blob and counts where the traps land), not a CPUID/build check: a
+hypervisor that silently degrades BTF to per-instruction stepping is caught and
+self-skipped, exactly like the out-of-process block-step trio's own probe above.
+
+**The leaf-routine contract.** Pure-compute leaf routines only: no syscalls, no
+`POPF`/`IRET`, no in-routine signal handlers, no calls out of the registered region
+(the first region exit ends the trace). Linux does **not** preserve a user-written
+`DEBUGCTL.BTF` across a context switch — only a `PTRACE_SINGLEBLOCK`-armed
+(`TIF_BLOCKSTEP`) task gets it restored — so this tier is deliberately narrower than
+the out-of-process block-step trio above, which owns the general, context-switch-proof
+case. Where that broader contract matters (a routine that may block, call out, or run
+long), use `asmtest_ptrace_trace_call_blockstep` / `_attached_blockstep` instead.
+
+**Honest-truncation belts.** `t->truncated` is set whenever completeness cannot be
+proven: the capture buffer filled, a pairing/decode gap (a lost trap made the next
+observed stop unreachable — the signature of exactly the context-switch case above),
+a failed BTF re-arm write, or — the belt unique to this tier — **any** context switch
+observed during the armed window (`getrusage(RUSAGE_THREAD)` before/after). A
+truncated run never reports the full parity stream as complete.
+
+```sh
+make docker-hwtrace-msr    # --privileged: /dev/cpu/N/msr, exercises BOTH the MSR-
+                            # direct AMD LBR snapshot AND this tier in one lane
+```
+
 ## Auto-selecting a backend (the hardware-tier cascade)
 
 All four hardware backends fill the same `asmtest_trace_t`, self-skip cleanly via

@@ -8,6 +8,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **In-process, branch-granular single-step (W3): `asmtest_ss_btf_available` /
+  `asmtest_ss_btf_trace` (`src/ss_btf.c`), the missing third single-step form.**
+  asm-test already had branch-granular stepping out of process
+  (`PTRACE_SINGLEBLOCK`) and per-instruction stepping in-process (`EFLAGS.TF`,
+  `ss_backend.c`); this arms `DEBUGCTL.BTF` alongside `EFLAGS.TF` over the same
+  thread-pinned `/dev/cpu/N/msr` route `asmtest_amd_msr_trace` uses, so a
+  taken-branch retiring — not every instruction — is what traps, with **no
+  16-entry ceiling** on the reconstructed stream (unlike AMD LBR). Gated by a
+  hang-proof functional probe (some hypervisors silently mask `DEBUGCTL.BTF`
+  and degrade to per-instruction stepping — the probe catches this, a build
+  check cannot); deliberately scoped to a pinned leaf-routine envelope with
+  per-trap re-arm (BTF is a hardware one-shot the CPU clears on every `#DB`)
+  and honest truncation on any observed context switch (Linux does not
+  preserve a user-written BTF across one) — the general, context-switch-proof
+  case stays owned by the shipped `PTRACE_SINGLEBLOCK` trio. Rides the
+  existing `docker-hwtrace-msr` `--privileged` lane, no new capability. Live-
+  verified on a Zen 2 host: the shared `ROUTINE` fixture reproduces the
+  single-step baseline's exact `[0,3,6,c,11]` stream and `{0,0x11}` block
+  partition byte-for-byte, and a 20-trip loop (19 taken back-edges, past any
+  16-entry LBR window) reconstructs all 62 instructions, complete, 10/10
+  stable runs. See
+  [inproc-btf-block-step.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/inproc-btf-block-step.md).
+
 - **macOS out-of-process single-step tracer (`asmtest_mach_*`), completing the
   W2 foreign-process story on macOS.** `asmtest_mach_trace_call` /
   `_trace_attached` / `_run_to` (`asmtest_mach.h`, `src/mach_backend.c`) mirror
