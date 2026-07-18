@@ -635,6 +635,17 @@ printf '%s\n' "$out" | grep -q 'functions called:' || fail "no functions section
 printf '%s\n' "$out" | grep -q 'helper' || fail "callee 'helper' not resolved"
 # the callee line is ranked by call count — a leading "<n>x" (work calls helper 5x)
 printf '%s\n' "$out" | grep -qE '^ *[0-9]+.*->.*helper' || fail "no call-count on callee"
+# T8: the count must AGGREGATE — work(5) makes 5 helper calls that merge into ONE
+# 5x line, not five 1x lines (which the presence grep above would accept). The x
+# below is the UTF-8 multiplication sign region_render emits in "%4u×" — a literal
+# byte match, no special handling needed.
+printf '%s\n' "$out" | grep -qE '^ *5×.*-> *helper' \
+    || fail "region edges: work(5)'s five helper calls did not aggregate to a single 5× line"
+# merge: helper must appear at most once per sample (the run captures 2 samples,
+# one 'functions called' section each). An append-per-edge mutant emits 5x this.
+[ "$(printf '%s\n' "$out" | grep -c -- '-> *helper')" -le 2 ] \
+    || fail "region edges: helper appears more than once per sample — edges not aggregated by callee"
+echo "  region edges: work(5)'s 5 helper calls aggregate to one 5× line per sample"
 
 # whole-process call graph: same victim (main -> work -> helper). Build the graph
 # from a bounded number of CALLS, then assert the caller/callee counts and the
