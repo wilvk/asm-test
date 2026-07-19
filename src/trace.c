@@ -353,3 +353,85 @@ void emu_trace_lcov_source(const asmtest_trace_t *covered,
     fprintf(out, "end_of_record\n");
     free(lc);
 }
+
+/* ------------------------------------------------------------------ */
+/* Widened attribution schema (asmtest_srcmap_*)                       */
+/* ------------------------------------------------------------------ */
+
+const asmtest_srcmap_entry_t *asmtest_srcmap_lookup(const asmtest_srcmap_t *m,
+                                                    uint64_t off) {
+    if (m == NULL || m->entries == NULL || m->count == 0)
+        return NULL;
+    const asmtest_srcmap_entry_t *hit = NULL;
+    /* Rows are ascending by offset: the last row with offset <= off owns it
+     * (identical loop shape to emu_line_lookup — the enclosing debug point). */
+    for (size_t i = 0; i < m->count; i++) {
+        if (m->entries[i].offset <= off)
+            hit = &m->entries[i];
+        else
+            break;
+    }
+    return hit;
+}
+
+/* Render one row's kind-labelled value: `line 21`, `IL_0x1a`, `PROLOG`,
+ * `bci 7`. The .NET pseudo-IL offsets keep their ICorDebugInfo names. */
+static void srcmap_label(const asmtest_srcmap_entry_t *en, char *buf,
+                         size_t cap) {
+    switch (en->kind) {
+    case ASMTEST_SRC_LINE:
+        snprintf(buf, cap, "line %d", en->value);
+        break;
+    case ASMTEST_SRC_IL:
+        if (en->value == ASMTEST_SRC_IL_NO_MAPPING)
+            snprintf(buf, cap, "NO_MAPPING");
+        else if (en->value == ASMTEST_SRC_IL_PROLOG)
+            snprintf(buf, cap, "PROLOG");
+        else if (en->value == ASMTEST_SRC_IL_EPILOG)
+            snprintf(buf, cap, "EPILOG");
+        else
+            snprintf(buf, cap, "IL_0x%x", (unsigned)en->value);
+        break;
+    case ASMTEST_SRC_BCI:
+        snprintf(buf, cap, "bci %d", en->value);
+        break;
+    default:
+        snprintf(buf, cap, "value %d", en->value);
+        break;
+    }
+}
+
+size_t asmtest_srcmap_report(const asmtest_trace_t *covered,
+                             const asmtest_srcmap_t *m, FILE *out) {
+    if (covered == NULL || covered->blocks == NULL)
+        return 0;
+    size_t unattributed = 0;
+    for (size_t b = 0; b < covered->blocks_len; b++) {
+        uint64_t off = covered->blocks[b];
+        const asmtest_srcmap_entry_t *en = asmtest_srcmap_lookup(m, off);
+        if (en == NULL) {
+            unattributed++;
+            if (out != NULL)
+                fprintf(out, "  +0x%llx  <unattributed>\n",
+                        (unsigned long long)off);
+            continue;
+        }
+        if (out != NULL) {
+            char label[64];
+            srcmap_label(en, label, sizeof label);
+            const char *file = NULL;
+            if (en->file_id != UINT32_MAX && m != NULL && m->files != NULL &&
+                en->file_id < m->files_count)
+                file = m->files[en->file_id];
+            if (file != NULL && file[0] != '\0')
+                fprintf(out, "  +0x%llx  %s:%s\n", (unsigned long long)off,
+                        file, label);
+            else
+                fprintf(out, "  +0x%llx  %s\n", (unsigned long long)off, label);
+        }
+    }
+    if (out != NULL)
+        fprintf(out, "srcmap: %zu/%zu covered blocks attributed\n",
+                covered->blocks_len - unattributed, covered->blocks_len);
+    return unattributed;
+}

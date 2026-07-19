@@ -533,6 +533,18 @@ size_t asmtest_jitdump_debug_line_map(const asmtest_jitdump_debug_t *dbg,
                                       size_t n, emu_line_entry_t *rows,
                                       size_t cap);
 
+/* Widen jitdump debug entries into the backend-neutral asmtest_srcmap schema
+ * (asmtest_trace.h): kind ASMTEST_SRC_LINE, col = discrim. The common single-
+ * file case is surfaced via *file_out (the first entry's file); rows whose file
+ * differs get file_id == UINT32_MAX so asmtest_srcmap_report prints them
+ * unattributed (the flattened-inline caveat). Rows matching *file_out get
+ * file_id 0, so a caller builds asmtest_srcmap_t{files = &file_out, files_count
+ * = 1}. Fills at most `cap` rows and returns the count. Declared here (not in
+ * asmtest_trace.h) so the trace header need not pull in the ptrace header. */
+size_t asmtest_srcmap_from_jitdump(const asmtest_jitdump_debug_t *dbg, size_t n,
+                                   asmtest_srcmap_entry_t *rows, size_t cap,
+                                   const char **file_out);
+
 #ifdef __cplusplus
 }
 #endif

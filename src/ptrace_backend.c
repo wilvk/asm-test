@@ -646,6 +646,33 @@ size_t asmtest_jitdump_debug_line_map(const asmtest_jitdump_debug_t *dbg,
 
 #endif /* __linux__ readers */
 
+/* Widen jitdump debug entries into the backend-neutral asmtest_srcmap schema.
+ * Pure logic (no OS dependency) — available on every host so a caller that
+ * obtained debug entries by any means can produce srcmap rows. */
+size_t asmtest_srcmap_from_jitdump(const asmtest_jitdump_debug_t *dbg, size_t n,
+                                   asmtest_srcmap_entry_t *rows, size_t cap,
+                                   const char **file_out) {
+    if (file_out != NULL)
+        *file_out = NULL;
+    if (dbg == NULL || rows == NULL || cap == 0 || n == 0)
+        return 0;
+    const char *file0 = dbg[0].file; /* single-file common case */
+    if (file_out != NULL)
+        *file_out = file0;
+    size_t w = 0;
+    for (size_t i = 0; i < n && w < cap; i++) {
+        rows[w].offset = dbg[i].off;
+        rows[w].value = (int32_t)dbg[i].line;
+        rows[w].kind = ASMTEST_SRC_LINE;
+        rows[w].col = dbg[i].discrim;
+        /* Rows in the first entry's file get file_id 0; a differing file (a
+         * flattened inline) gets UINT32_MAX so the report prints it unattributed. */
+        rows[w].file_id = strcmp(dbg[i].file, file0) == 0 ? 0u : UINT32_MAX;
+        w++;
+    }
+    return w;
+}
+
 /* ================================================================= */
 /* Out-of-process single-step stepper — Linux x86-64 / AArch64.      */
 /* ================================================================= */

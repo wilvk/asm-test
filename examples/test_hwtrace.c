@@ -8005,6 +8005,125 @@ static void test_jitdump_debug_reader(void) {
 #endif
 }
 
+/* The widened attribution schema (asmtest_srcmap_*): backend-neutral rows carrying a
+ * KIND (source line / .NET IL offset / JVM bci) + file + column. Pure C, no OS gate —
+ * assert the enclosing-point lookup boundaries (mirror the emu_line_lookup shape), that
+ * pseudo-IL rows report their ICorDebugInfo names, kind-labelled values, the covered-
+ * but-unattributed count, and the jitdump widener (single-file id 0 / differing-file
+ * UINT32_MAX). */
+static void test_srcmap(void) {
+    /* Rows ascending by offset; first row at 0x4 so "before first" -> NULL. */
+    static const asmtest_srcmap_entry_t LINE_ROWS[] = {
+        {0x4, 10, ASMTEST_SRC_LINE, 0, 0},
+        {0x8, 11, ASMTEST_SRC_LINE, 0, 3},
+        {0x10, 12, ASMTEST_SRC_LINE, 0, 0},
+    };
+    static const char *const FILES[] = {"Hot.java"};
+    asmtest_srcmap_t lm = {LINE_ROWS, 3, FILES, 1};
+
+    /* Enclosing-point lookup boundaries. */
+    CHECK(asmtest_srcmap_lookup(&lm, 0x2) == NULL,
+          "srcmap lookup: before the first row -> NULL");
+    CHECK(asmtest_srcmap_lookup(&lm, 0x4) == &LINE_ROWS[0] &&
+              asmtest_srcmap_lookup(&lm, 0x6) == &LINE_ROWS[0],
+          "srcmap lookup: an offset inside a row's range -> that row "
+          "(preceding)");
+    CHECK(asmtest_srcmap_lookup(&lm, 0x8) == &LINE_ROWS[1],
+          "srcmap lookup: exact row-start offset -> that row");
+    CHECK(asmtest_srcmap_lookup(&lm, 0x40) == &LINE_ROWS[2],
+          "srcmap lookup: past the last row -> the last row (extends to end)");
+    CHECK(asmtest_srcmap_lookup(NULL, 0) == NULL,
+          "srcmap lookup: NULL map -> NULL");
+
+    /* Pseudo-IL rows must print their ICorDebugInfo names; a real IL offset as IL_0xNN. */
+    static const asmtest_srcmap_entry_t IL_ROWS[] = {
+        {0x0, ASMTEST_SRC_IL_PROLOG, ASMTEST_SRC_IL, UINT32_MAX, 0},
+        {0x4, 0x1a, ASMTEST_SRC_IL, 0, 0},
+        {0x12, ASMTEST_SRC_IL_EPILOG, ASMTEST_SRC_IL, UINT32_MAX, 0},
+    };
+    asmtest_srcmap_t ilm = {IL_ROWS, 3, FILES, 1};
+    uint64_t ilblocks[] = {0x0, 0x4, 0x12};
+    asmtest_trace_t ilcov;
+    memset(&ilcov, 0, sizeof ilcov);
+    ilcov.blocks = ilblocks;
+    ilcov.blocks_cap = 3;
+    ilcov.blocks_len = 3;
+    FILE *cf = tmpfile();
+    if (cf != NULL) {
+        size_t un = asmtest_srcmap_report(&ilcov, &ilm, cf);
+        char buf[512] = {0};
+        rewind(cf);
+        (void)!fread(buf, 1, sizeof buf - 1, cf);
+        fclose(cf);
+        CHECK(
+            un == 0,
+            "srcmap report: every covered block attributed -> 0 unattributed");
+        CHECK(strstr(buf, "PROLOG") != NULL && strstr(buf, "EPILOG") != NULL &&
+                  strstr(buf, "IL_0x1a") != NULL,
+              "srcmap report: pseudo-IL rows + real IL offset print by name");
+    } else {
+        printf("# SKIP srcmap report capture: tmpfile() failed\n");
+    }
+
+    /* N covered blocks below the first row -> N unattributed. */
+    asmtest_srcmap_t partial = {&LINE_ROWS[1], 2, FILES,
+                                1}; /* rows at 0x8,0x10 */
+    uint64_t pblocks[] = {0x0, 0x4, 0x12};
+    asmtest_trace_t pcov;
+    memset(&pcov, 0, sizeof pcov);
+    pcov.blocks = pblocks;
+    pcov.blocks_cap = 3;
+    pcov.blocks_len = 3;
+    CHECK(asmtest_srcmap_report(&pcov, &partial, NULL) == 2,
+          "srcmap report: 2 covered blocks below the first row -> 2 "
+          "unattributed");
+
+    /* bci labelling. */
+    static const asmtest_srcmap_entry_t BCI_ROWS[] = {
+        {0x0, 0, ASMTEST_SRC_BCI, UINT32_MAX, 0},
+        {0x6, 7, ASMTEST_SRC_BCI, UINT32_MAX, 0},
+    };
+    asmtest_srcmap_t bm = {BCI_ROWS, 2, NULL, 0};
+    uint64_t bblocks[] = {0x6};
+    asmtest_trace_t bcov;
+    memset(&bcov, 0, sizeof bcov);
+    bcov.blocks = bblocks;
+    bcov.blocks_cap = 1;
+    bcov.blocks_len = 1;
+    FILE *bf = tmpfile();
+    if (bf != NULL) {
+        (void)asmtest_srcmap_report(&bcov, &bm, bf);
+        char buf[256] = {0};
+        rewind(bf);
+        (void)!fread(buf, 1, sizeof buf - 1, bf);
+        fclose(bf);
+        CHECK(strstr(buf, "bci 7") != NULL,
+              "srcmap report: a JVM bytecode-index row prints `bci 7`");
+    } else {
+        printf("# SKIP srcmap bci capture: tmpfile() failed\n");
+    }
+
+    /* The jitdump widener: LINE kind, col=discrim, single-file id 0 via file_out. */
+    asmtest_jitdump_debug_t jd[2] = {{0, 20, 0, "Hot.java"},
+                                     {8, 21, 5, "Hot.java"}};
+    asmtest_srcmap_entry_t sr[8];
+    const char *f0 = NULL;
+    size_t nr = asmtest_srcmap_from_jitdump(jd, 2, sr, 8, &f0);
+    CHECK(nr == 2 && sr[0].kind == ASMTEST_SRC_LINE && sr[0].value == 20 &&
+              sr[1].value == 21 && sr[1].col == 5 && sr[0].file_id == 0 &&
+              f0 != NULL && strcmp(f0, "Hot.java") == 0,
+          "srcmap from_jitdump: LINE rows, col=discrim, single-file id 0 + "
+          "file_out");
+    /* A differing file (flattened inline) -> file_id UINT32_MAX. */
+    asmtest_jitdump_debug_t jm[2] = {{0, 20, 0, "A.java"},
+                                     {8, 21, 0, "B.java"}};
+    size_t nm = asmtest_srcmap_from_jitdump(jm, 2, sr, 8, &f0);
+    CHECK(nm == 2 && sr[0].file_id == 0 && sr[1].file_id == UINT32_MAX &&
+              f0 != NULL && strcmp(f0, "A.java") == 0,
+          "srcmap from_jitdump: a differing file -> file_id UINT32_MAX (inline "
+          "caveat)");
+}
+
 /* Phase 1 (call-descent): the two new Capstone queries the descent loop needs —
  * asmtest_disas_is_ret (the pop-predicate's third term) and asmtest_disas_call_target
  * (the direct-call-target query — a public helper; the descent loop itself reads the callee
@@ -10344,6 +10463,7 @@ int main(void) {
     test_perfmap_resolve();
     test_jitdump_reader();
     test_jitdump_debug_reader();
+    test_srcmap();
 
     /* The auto-select orchestrator: pick + use the best available backend. */
     test_auto_resolve();

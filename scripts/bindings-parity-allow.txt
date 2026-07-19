@@ -180,3 +180,6 @@ ALL asmtest_hwtrace_window_guard
 # until a binding grows an attribution surface; remove per-binding when wrapped.
 ALL asmtest_jitdump_debug_find
 ALL asmtest_jitdump_debug_line_map
+# The srcmap widener declared in asmtest_ptrace.h (T3) — same C-tier posture. The
+# asmtest_srcmap_lookup/report schema lives in asmtest_trace.h (not parity-gated).
+ALL asmtest_srcmap_from_jitdump

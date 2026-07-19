@@ -151,6 +151,58 @@ void emu_trace_lcov_source(const asmtest_trace_t *covered,
                            FILE *out);
 
 /* ------------------------------------------------------------------ */
+/* Widened attribution schema — offset -> {kind, value, file, column}  */
+/*                                                                     */
+/* emu_line_map_t (above) carries only a source LINE. This backend-     */
+/* neutral row also carries a KIND (source line / .NET IL offset / JVM  */
+/* bytecode index), a file id, and a column/discriminator, so a traced  */
+/* native offset resolves to a line, an IL offset, or a bci without     */
+/* touching the shipped emu_line_map_t ABI. The rows are caller-        */
+/* constructed (out-of-band: a jitdump debug map, a MethodILToNativeMap, */
+/* a JVMTI address->bci table), so this adds no trampoline-filled struct */
+/* and no ABI-manifest change. Lookup is enclosing-point: the answer is  */
+/* the nearest debug point at or before `off`, never a per-instruction   */
+/* claim (the documented granularity ceiling).                          */
+/* ------------------------------------------------------------------ */
+
+/* Attribution kinds: what `value` means for a row. */
+#define ASMTEST_SRC_LINE 1 /* value = 1-based source line                  */
+#define ASMTEST_SRC_IL   2 /* value = .NET IL offset (pseudo-offsets pass) */
+#define ASMTEST_SRC_BCI  3 /* value = JVM bytecode index                   */
+/* .NET pseudo-IL-offsets (ICorDebugInfo), passed through unmodified: */
+#define ASMTEST_SRC_IL_NO_MAPPING (-1)
+#define ASMTEST_SRC_IL_PROLOG     (-2)
+#define ASMTEST_SRC_IL_EPILOG     (-3)
+
+typedef struct {
+    uint64_t offset;  /* native byte-offset from the method/routine base   */
+    int32_t value;    /* line / IL offset / bci per kind (pseudo allowed)  */
+    uint32_t kind;    /* ASMTEST_SRC_*                                     */
+    uint32_t file_id; /* index into files[]; UINT32_MAX = no file          */
+    uint32_t col;     /* column / discriminator; 0 = none                  */
+} asmtest_srcmap_entry_t;
+
+typedef struct {
+    const asmtest_srcmap_entry_t *entries; /* ascending by .offset */
+    size_t count;
+    const char *const *files; /* file_id -> path; may be NULL   */
+    size_t files_count;
+} asmtest_srcmap_t;
+
+/* The enclosing attribution row for `off`: the last row with offset <= off
+ * (identical loop shape to emu_line_lookup), or NULL before the first row / on
+ * an empty map. */
+const asmtest_srcmap_entry_t *asmtest_srcmap_lookup(const asmtest_srcmap_t *m,
+                                                    uint64_t off);
+
+/* Report each covered basic block's attribution (kind-labelled: `line 21`,
+ * `IL_0x1a`, `PROLOG`, `bci 7`), grouping by file when `files` is set. Returns
+ * the number of covered blocks that resolved to NO attribution row, so a caller
+ * can assert full attribution coverage (0) or measure the gap. */
+size_t asmtest_srcmap_report(const asmtest_trace_t *covered,
+                             const asmtest_srcmap_t *m, FILE *out);
+
+/* ------------------------------------------------------------------ */
 /* Disassembly annotation layer (optional, Capstone)                   */
 /*                                                                     */
 /* Offsets recorded by any backend are rendered back to instruction     */
