@@ -469,6 +469,26 @@ jobs:
       - name: dotnet launch coexistence — .NET tiered-JIT vs DR code cache
         run: make docker-taint-dotnet
 
+  # libdft64 DIFFERENTIAL taint oracle (data-flow taint, track PIN-4). A self-contained
+  # containerized lane that cross-validates the shipped DR in-band taint client against a
+  # SECOND, independently-implemented byte-level taint engine — libdft64 on Intel Pin — by
+  # running the same seed/sink fixtures through both and asserting byte-for-byte sink
+  # agreement on the GP/integer-memory subset, with libdft's documented blind spots as named
+  # skips. A pure Docker lane (no hardware, no credentials): the pinned Pin 3.20 kit +
+  # libdft64 are fetched + digest-gated at build time and are test/oracle-only, never bundled.
+  # Pin's kit is x86-64 gcc-linux, so the lane self-skips on non-x86 — no macOS leg (the
+  # retired macos-13 is never used; if an Intel-mac leg were ever wanted the id is
+  # macos-15-intel). See docs/internal/implementations/pin-libdft-taint-oracle.md.
+  taint-oracle:
+    name: taint (libdft64 differential oracle)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: DR ≡ libdft64 — differential taint oracle (Pin 3.20 + libdft64)
+        run: make docker-taint-oracle
+
   # GC-move taint SURVIVAL (data-flow taint, Increment 7 Slice 2 + the Increment-9 GC-survival
   # gate). A self-contained image (DynamoRIO + .NET SDK + git for the pinned CoreCLR profiler
   # headers) that runs, under `drrun -c <taint client>`: the in-process MovedReferences2 profiler

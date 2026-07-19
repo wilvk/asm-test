@@ -178,6 +178,7 @@ help:
 	@echo '  docker-drtrace-bindings    DynamoRIO native-trace wrapper tests for every language'
 	@echo '  docker-sde                 Intel SDE future/absent-ISA lane (APX/AVX-512-on-AVX2 under sde64 -future; x86-64)'
 	@echo '  docker-drext-probe         DynamoRIO extension-load probe (taint tier, Increment 2)'
+	@echo '  docker-taint-oracle        libdft64 differential taint oracle (Pin 3.20; x86-64 Linux)'
 	@echo '  docker-fuzz                libFuzzer + AFL++ external-engine coverage shim (both find the planted crash)'
 	@echo '  docker-sve-sweep           SVE suite at VQ 1/3/8/16 under qemu binfmt (arm64)'
 	@echo '  docker-syspkg[-brew|-deb|-aur|-vcpkg|-conan]  system-package build+install lanes'

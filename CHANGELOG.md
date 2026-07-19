@@ -21,10 +21,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   binding. libdft64's documented blind spots (SIMD is `basic SSE/AVX`, rules unverified;
   no eflags; no ZMM; no implicit flow; no x87/ternary) are enumerated as **named skips**,
   never a blanket pass — see [data-flow-capture.md][dfc] (even libdft punts on SIMD). The
-  lane self-skips only on non-x86 hosts (Pin is x86-64 gcc-linux).
+  lane is CI-gated (the `taint-oracle` job) and self-skips only on non-x86 hosts (Pin is
+  x86-64 gcc-linux).
 
 [libdft64]: https://github.com/AngoraFuzzer/libdft64
-[dfc]: docs/internal/analysis/data-flow-capture.md
+[dfc]: https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/data-flow-capture.md
 
 - **Intel SDE future/absent-ISA test lane** (`make docker-sde` / `make sde-test
   SDE_HOME=$(scripts/fetch-sde.sh)`). Assembly that uses an ISA extension the host
