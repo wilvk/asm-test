@@ -393,6 +393,69 @@ TEST(emu, disas_decodes_known_instructions) {
     }
 }
 
+/* asmtest_disas_class buckets an instruction for the weighted model-cost metric.
+ * Hand-assembled bytes so both build configs run: with Capstone each class is
+ * asserted; without it the classifier degrades to ASMTEST_INSN_OTHER for all. */
+TEST(disas, class_x86) {
+    /* sum_to_n body: xor eax,eax; add rax,rdi; dec rdi; jnz L; ret (FIX_X86_SUMTON) */
+    static const uint8_t sumton[] = {0x31, 0xc0, 0x48, 0x01, 0xf8, 0x48,
+                                     0xff, 0xcf, 0x75, 0xf8, 0xc3};
+    static const uint8_t mul[] = {0xf7, 0xe1};        /* mul ecx       */
+    static const uint8_t load[] = {0x48, 0x8b, 0x07}; /* mov rax,[rdi] */
+    if (asmtest_disas_available()) {
+        ASSERT_EQ(
+            asmtest_disas_class(ASMTEST_ARCH_X86_64, sumton, sizeof sumton, 0),
+            ASMTEST_INSN_OTHER); /* xor */
+        ASSERT_EQ(
+            asmtest_disas_class(ASMTEST_ARCH_X86_64, sumton, sizeof sumton, 2),
+            ASMTEST_INSN_OTHER); /* add */
+        ASSERT_EQ(
+            asmtest_disas_class(ASMTEST_ARCH_X86_64, sumton, sizeof sumton, 5),
+            ASMTEST_INSN_OTHER); /* dec */
+        ASSERT_EQ(
+            asmtest_disas_class(ASMTEST_ARCH_X86_64, sumton, sizeof sumton, 8),
+            ASMTEST_INSN_BRANCH); /* jnz */
+        ASSERT_EQ(
+            asmtest_disas_class(ASMTEST_ARCH_X86_64, sumton, sizeof sumton, 10),
+            ASMTEST_INSN_BRANCH); /* ret */
+        ASSERT_EQ(asmtest_disas_class(ASMTEST_ARCH_X86_64, mul, sizeof mul, 0),
+                  ASMTEST_INSN_MULDIV);
+        ASSERT_EQ(
+            asmtest_disas_class(ASMTEST_ARCH_X86_64, load, sizeof load, 0),
+            ASMTEST_INSN_MEM);
+    } else {
+        ASSERT_EQ(
+            asmtest_disas_class(ASMTEST_ARCH_X86_64, sumton, sizeof sumton, 8),
+            ASMTEST_INSN_OTHER);
+        ASSERT_EQ(asmtest_disas_class(ASMTEST_ARCH_X86_64, mul, sizeof mul, 0),
+                  ASMTEST_INSN_OTHER);
+        ASSERT_EQ(
+            asmtest_disas_class(ASMTEST_ARCH_X86_64, load, sizeof load, 0),
+            ASMTEST_INSN_OTHER);
+    }
+}
+
+TEST(disas, class_arm64) {
+    /* add3: add x0,x0,x1; add x0,x0,x2; ret (FIX_A64_ADD3) */
+    static const uint8_t add3[] = {0x00, 0x00, 0x01, 0x8b, 0x00, 0x00,
+                                   0x02, 0x8b, 0xc0, 0x03, 0x5f, 0xd6};
+    static const uint8_t ldr[] = {0x20, 0x00, 0x40, 0xf9}; /* ldr x0,[x1]  */
+    static const uint8_t mul[] = {0x20, 0x7c, 0x02, 0x9b}; /* mul x0,x1,x2 */
+    if (asmtest_disas_available()) {
+        ASSERT_EQ(asmtest_disas_class(ASMTEST_ARCH_ARM64, add3, sizeof add3, 0),
+                  ASMTEST_INSN_OTHER); /* add */
+        ASSERT_EQ(asmtest_disas_class(ASMTEST_ARCH_ARM64, add3, sizeof add3, 8),
+                  ASMTEST_INSN_BRANCH); /* ret */
+        ASSERT_EQ(asmtest_disas_class(ASMTEST_ARCH_ARM64, ldr, sizeof ldr, 0),
+                  ASMTEST_INSN_MEM);
+        ASSERT_EQ(asmtest_disas_class(ASMTEST_ARCH_ARM64, mul, sizeof mul, 0),
+                  ASMTEST_INSN_MULDIV);
+    } else {
+        ASSERT_EQ(asmtest_disas_class(ASMTEST_ARCH_ARM64, add3, sizeof add3, 8),
+                  ASMTEST_INSN_OTHER);
+    }
+}
+
 TEST(emu, fault_describe_names_offending_instruction) {
     static const uint8_t code[] = {0x48, 0x8b, 0x07,
                                    0xc3}; /* mov rax,[rdi];ret */

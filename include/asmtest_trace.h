@@ -256,6 +256,36 @@ int asmtest_disas_branch_target(asmtest_arch_t arch, const uint8_t *code,
 int asmtest_disas_is_uncond_jump(asmtest_arch_t arch, const uint8_t *code,
                                  size_t code_len, uint64_t off);
 
+/* Coarse instruction class for the weighted model-cost metric (BM_MODEL_COST):
+ * one Capstone-backed classifier maps any executed instruction of any guest ISA
+ * to a small bucket the reporter can weight. An instruction can match several
+ * buckets; the classifier applies a fixed PRECEDENCE (highest first) so every
+ * instruction lands in exactly one:
+ *   1. BRANCH  — any control transfer: the Capstone JUMP/CALL/RET/IRET groups
+ *                (note the same caveat as insn_is_call: on older Capstones some
+ *                opcodes file under JUMP — grouping only, no id-splitting here);
+ *   2. MULDIV  — else the mnemonic contains "mul" or "div". Deliberately a
+ *                MODEL-GRADE substring match: it covers mul/imul/umull/smull/
+ *                mulx and div/sdiv/udiv/divss/... across all four ISAs without
+ *                four per-arch id tables. Good enough for a cost proxy, not an
+ *                exact opcode taxonomy;
+ *   3. MEM     — else any explicit memory operand (per-arch detail walk, exactly
+ *                like src/dataflow_operands.c);
+ *   4. OTHER   — else the 1-weight default (ALU/move/etc.).
+ * Returns ASMTEST_INSN_OTHER for undecodable bytes, an unsupported guest, or a
+ * build without Capstone (so absence degrades to the neutral weight, never a
+ * crash). Not part of the bindings-parity tier surface. */
+typedef enum {
+    ASMTEST_INSN_OTHER = 0,  /* default: 1-weight ALU/move/etc.        */
+    ASMTEST_INSN_MEM = 1,    /* any explicit memory operand            */
+    ASMTEST_INSN_BRANCH = 2, /* JUMP/CALL/RET/IRET groups              */
+    ASMTEST_INSN_MULDIV = 3, /* multiply/divide (mnemonic-matched)     */
+} asmtest_insn_class_t;
+
+asmtest_insn_class_t asmtest_disas_class(asmtest_arch_t arch,
+                                         const uint8_t *code, size_t code_len,
+                                         uint64_t off);
+
 /* Ordered instruction trace, each entry disassembled (a readable listing). */
 void asmtest_trace_disasm(const asmtest_trace_t *t, asmtest_arch_t arch,
                           const uint8_t *code, size_t code_len,

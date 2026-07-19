@@ -75,6 +75,38 @@ static int insn_is_call(csh h, cs_insn *insn, cs_arch a) {
         return 1;
     return 0;
 }
+
+/* True if `insn` (decoded for Capstone arch `a`, with CS_OPT_DETAIL on) has any
+ * explicit MEMORY operand — the per-arch detail walk src/dataflow_operands.c uses.
+ * RISC-V is guarded by the API-version macro: RISCV_OP_MEM / the riscv detail arm
+ * do not exist before Capstone 5 (cs_target already refuses RISC-V there, so this
+ * arm is unreachable at run time on 4.x — the guard is purely so it compiles). */
+static int insn_has_mem(cs_insn *insn, cs_arch a) {
+    const cs_detail *d = insn->detail;
+    if (d == NULL)
+        return 0;
+    if (a == CS_ARCH_X86) {
+        for (int i = 0; i < d->x86.op_count; i++)
+            if (d->x86.operands[i].type == X86_OP_MEM)
+                return 1;
+    } else if (a == CS_ARCH_ARM64) {
+        for (int i = 0; i < d->arm64.op_count; i++)
+            if (d->arm64.operands[i].type == ARM64_OP_MEM)
+                return 1;
+    } else if (a == CS_ARCH_ARM) {
+        for (int i = 0; i < d->arm.op_count; i++)
+            if (d->arm.operands[i].type == ARM_OP_MEM)
+                return 1;
+    }
+#if defined(CS_API_MAJOR) && (CS_API_MAJOR >= 5)
+    else if (a == CS_ARCH_RISCV) {
+        for (int i = 0; i < d->riscv.op_count; i++)
+            if (d->riscv.operands[i].type == RISCV_OP_MEM)
+                return 1;
+    }
+#endif
+    return 0;
+}
 #endif /* ASMTEST_HAVE_CAPSTONE */
 
 bool asmtest_disas_available(void) {
@@ -519,6 +551,55 @@ int asmtest_disas_branch_target(asmtest_arch_t arch, const uint8_t *code,
     (void)off;
     (void)target;
     return 0;
+#endif
+}
+
+/* Classify the instruction at `code+off` into {OTHER, MEM, BRANCH, MULDIV} for the
+ * weighted model-cost metric (BM_MODEL_COST). Single Capstone decode, then the fixed
+ * precedence documented on the header declaration: BRANCH > MULDIV > MEM > OTHER. The
+ * MULDIV test is a deliberately model-grade `strstr` on the mnemonic — one string
+ * match instead of four per-arch id tables. Returns ASMTEST_INSN_OTHER for
+ * undecodable bytes, an unsupported guest, or a no-Capstone build. */
+asmtest_insn_class_t asmtest_disas_class(asmtest_arch_t arch,
+                                         const uint8_t *code, size_t code_len,
+                                         uint64_t off) {
+#ifdef ASMTEST_HAVE_CAPSTONE
+    if (code == NULL || off >= code_len)
+        return ASMTEST_INSN_OTHER;
+    cs_arch a;
+    cs_mode m;
+    if (!cs_target(arch, &a, &m))
+        return ASMTEST_INSN_OTHER;
+    csh h;
+    if (cs_open(a, m, &h) != CS_ERR_OK)
+        return ASMTEST_INSN_OTHER;
+    cs_option(h, CS_OPT_DETAIL,
+              CS_OPT_ON); /* groups[] + operands[] need detail */
+    cs_insn *insn = NULL;
+    size_t count =
+        cs_disasm(h, code + off, code_len - (size_t)off, off, 1, &insn);
+    asmtest_insn_class_t cls = ASMTEST_INSN_OTHER;
+    if (count > 0) {
+        if (cs_insn_group(h, &insn[0], CS_GRP_JUMP) ||
+            cs_insn_group(h, &insn[0], CS_GRP_CALL) ||
+            cs_insn_group(h, &insn[0], CS_GRP_RET) ||
+            cs_insn_group(h, &insn[0], CS_GRP_IRET))
+            cls = ASMTEST_INSN_BRANCH;
+        else if (strstr(insn[0].mnemonic, "mul") != NULL ||
+                 strstr(insn[0].mnemonic, "div") != NULL)
+            cls = ASMTEST_INSN_MULDIV;
+        else if (insn_has_mem(&insn[0], a))
+            cls = ASMTEST_INSN_MEM;
+        cs_free(insn, count);
+    }
+    cs_close(&h);
+    return cls;
+#else
+    (void)arch;
+    (void)code;
+    (void)code_len;
+    (void)off;
+    return ASMTEST_INSN_OTHER;
 #endif
 }
 
