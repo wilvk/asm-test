@@ -35,6 +35,41 @@ The analysis is producer-agnostic. Three producers fill the same value trace:
 - **DynamoRIO (in-band)** — instrument a target under real DR and capture
   per-instruction operand values in-band; the whole-process analog of the
   scoped producer. (Software DBI: Intel or AMD, no privilege.)
+- **Intel Pin probe-mode** — splice a *probe* (a jump) at a named routine's entry
+  and exit and read its SysV argument / return registers plus a pointed-to buffer
+  at **native speed** (no code cache), into the same `at_val_rec_t` records. A
+  test/oracle-only lane, cross-checked against the ptrace producer — see below.
+
+## Pin probe-mode argument/return capture (test/oracle only)
+
+`make pin-probe-test` (part of `make docker-pintool`, x86-64 Linux) runs an Intel
+Pin **probe-mode** tool that captures the **values** a function is called with and
+returns, at native speed: Pin splices a jump at the routine's first bytes into a
+small trampoline, and the application runs natively between probes with no software
+code cache. It records the SysV integer/FP **argument** registers at entry and the
+**return** register(s) + flags at exit as `at_val_rec_t` records, and — for a
+pointer argument — up to a **4 KiB** default cap (the `-ptrcap` knob) of the buffer
+it points at. The capture is proven by diffing it against the out-of-process ptrace
+single-step stepper on the same routine: two independent producers must agree on
+the argument and return registers.
+
+- **Never trust a pointer.** A captured pointer is validated against the target's
+  mapped ranges before any read, and the read is clamped to both the 4 KiB cap and
+  the end of the containing mapping, so an invalid or short pointer is **refused**
+  (a zero-length record) rather than faulting the target. (`PIN_SafeCopy` is
+  JIT-mode-only, so probe mode validates against `/proc/self/maps` — which, running
+  in the application's own address space, *is* the target's map.)
+- **Captured buffers are sensitive.** A pointed-to buffer may contain secrets
+  (keys, tokens, PII); treat a probe capture as a sensitive artifact.
+- **Honest refusals.** A routine Pin cannot probe — too short to hold the
+  up-to-14-byte probe, or non-relocatable — is reported as an explicit per-target
+  **skip with a reason** (`too short` / `not relocatable` / `not found`), never a
+  silent miss. Pin publishes no machine-readable refusal reason, so the tool
+  synthesizes one from `RTN_Size` and the probed-insertion pre-checks.
+- **Scope.** x86-only and **test/oracle-only**: Intel Pin is proprietary freeware
+  (digest-verified at test time, never linked into `libasmtest`, `libasmtest_emu`,
+  or any shipped package), exactly as DynamoRIO is handled. Design note:
+  [capture-args-returns.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/capture-args-returns.md).
 
 ## Managed-runtime identity
 

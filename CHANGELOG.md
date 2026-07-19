@@ -53,6 +53,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   execution halves are gated on APX silicon). Test-lane only: Pin is
   digest-verified at build/test time and never bundled into a shipped package.
 
+- **Intel Pin probe-mode argument/return capture lane (`make pin-probe-test`, in
+  `make docker-pintool`).** A Pin **probe-mode** tool (`pintool/probe_capture.cpp`)
+  splices a jump at a named routine's entry/exit and records the SysV integer/FP
+  **argument** registers, the **return** register(s) + flags, and up to a **4 KiB**
+  cap of a pointed-to buffer — at **native speed** (no code cache) — into
+  `at_val_rec_t` records over a POSIX shm channel
+  (`include/asmtest_valtrace_shm.h`). A pointer is validated against the target's
+  mapped ranges and the read clamped to the cap and the mapping end, so an invalid
+  pointer is **refused**, never faulted; a routine too short or non-relocatable to
+  probe is reported as an explicit per-target **skip with a reason**. The capture
+  is proven by diffing it against the independent out-of-process ptrace stepper on
+  the same routine (two producers agree on the arg + return registers). Captured
+  buffers may contain secrets — a sensitive artifact. x86-64 Linux, test/oracle
+  only (Pin is proprietary freeware, digest-verified at test time and never
+  bundled), the same handling DynamoRIO gets; documented in
+  [the data-flow tracing guide](https://github.com/wilvk/asm-test/blob/main/docs/guides/tracing/data-flow.md).
+
 - **Real object identity for managed memory def-use on the live-attach tier.** A
   heap snapshot of `{Address, Size, TypeID}` nodes from the runtime's
   GCBulkNode / GCBulkEdge / GCBulkType events, joined with the `MovedReferences2`
