@@ -153,3 +153,27 @@ else
 	@$(SDE64) $(SDE_CHIP) -- $(BUILD)/test_sde_crosscheck
 	@echo "sde-crosscheck-test: native/SDE agree with the Unicorn oracle (both runs all-ok)"
 endif
+
+# --- Optional -mix instruction-mix report -----------------------------------
+# A REPORT, not a gate: NOT chained into sde-test. Histograms a future-ISA suite's
+# dynamic instructions via SDE's emulator-aware mix tool and folds the total into
+# the repo's canonical asmtest_trace_t report shape (tools/sde_mix_report.c), then
+# echoes the per-ISA-set breakdown nothing else in the tree can produce. Always
+# pass -omix explicitly: the kit doc and the driver's short help disagree on the
+# default filename. Requires SDE (reuses sde-test's dependency gate).
+$(BUILD)/sde_mix_report.o: tools/sde_mix_report.c include/asmtest_trace.h | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/sde_mix_report: $(BUILD)/sde_mix_report.o $(BUILD)/trace.o
+	$(CC) $(CFLAGS) $^ -o $@
+
+.PHONY: sde-mix
+ifndef SDE_AVAILABLE
+sde-mix:
+	@echo "== sde-mix =="
+	@echo "# SKIP: Intel SDE not found. Set SDE_HOME=\$$(scripts/fetch-sde.sh)"
+else
+sde-mix: $(BUILD)/test_apx_basic $(BUILD)/sde_mix_report
+	@echo "== sde-mix =="
+	$(SDE64) $(SDE_CHIP) -mix -omix $(BUILD)/sde-mix.txt -- $(BUILD)/test_apx_basic
+	$(BUILD)/sde_mix_report $(BUILD)/sde-mix.txt
+endif
