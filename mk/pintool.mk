@@ -22,18 +22,19 @@
 
 PINTOOL_ARCH := $(shell uname -m)
 PINTOOL_SO   := pintool/obj-intel64/asmtest_pintool.so
+PROBE_SO     := pintool/obj-intel64/probe_capture.so
 
-.PHONY: pintool-tool pintool-test pintool-apx-test
+.PHONY: pintool-tool pintool-test pintool-apx-test pin-probe-tool pin-probe-test
 
 ifneq ($(PINTOOL_ARCH),x86_64)
 
-pintool-tool pintool-test pintool-apx-test:
+pintool-tool pintool-test pintool-apx-test pin-probe-tool pin-probe-test:
 	@echo "# SKIP pintool: Intel Pin is x86-only and this host is $(PINTOOL_ARCH)."
 	@echo "1..0 # skipped"
 
 else ifneq ($(UNAME_S),Linux)
 
-pintool-tool pintool-test pintool-apx-test:
+pintool-tool pintool-test pintool-apx-test pin-probe-tool pin-probe-test:
 	@echo "# SKIP pintool: the pinned Pin kit is gcc-linux; this host is $(UNAME_S)."
 	@echo "1..0 # skipped"
 
@@ -158,5 +159,61 @@ pintool-apx-test:
 	  echo "# SKIP pintool-apx: host CPU lacks APX (hardware gate)"; \
 	  echo "1..0 # skipped"; \
 	fi
+
+# --- PIN-3: probe-mode argument/return capture (pin-probe-mode-capture.md) -----
+# probe_capture.so splices probes at a named routine's entry/exit and records its
+# SysV arg/return registers + a pointed-to buffer into the value-trace shm channel
+# (include/asmtest_valtrace_shm.h); an out-of-process validator diffs the capture
+# against the INDEPENDENT ptrace single-step stepper on the same routine — two
+# unrelated producers must agree. Builds on the shared Pin substrate above.
+
+# The probe tool, built via the kit's out-of-kit protocol (pintool/makefile).
+pin-probe-tool:
+	@home=$${PIN_HOME:-$$(sh scripts/fetch-pin.sh)}; \
+	echo "== pin-probe-tool (PIN_ROOT=$$home) =="; \
+	cd pintool && $(MAKE) PIN_ROOT=$$home obj-intel64/probe_capture.so
+	@echo "built $(PROBE_SO)"
+
+# The native capture fixture (plain standalone binary; -Iinclude is in CFLAGS so it
+# reaches asmtest_valtrace_shm.h). One-step compile+link.
+$(BUILD)/pin_probe_victim: examples/pin_probe_victim.c \
+                           include/asmtest_valtrace_shm.h \
+                           $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) examples/pin_probe_victim.c -o $@
+
+# The out-of-process validator: drains the shm channel and, in capture mode, runs
+# the ptrace reference producer. Links the hwtrace tier (ptrace_backend.o etc, the
+# same union attach_trace links), plus -lrt for shm_open. It includes
+# asmtest_valtrace_shm.h/asmtest_ptrace.h, not asmtest.h, so it does NOT use the
+# generic examples/%.o rule.
+$(BUILD)/pin_probe_validator: examples/pin_probe_validator.c \
+                              include/asmtest_valtrace_shm.h \
+                              include/asmtest_ptrace.h $(HWTRACE_OBJS) \
+                              $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) examples/pin_probe_validator.c \
+	      $(HWTRACE_OBJS) $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) \
+	      $(LINK_LIBBPF) -ldl -lrt -o $@
+
+# pin-probe-test — build tool + victim + validator, then run three scenarios under
+# `pin -probe`: capture (full arg/return capture + ptrace cross-check), badptr (the
+# invalid-pointer buffer is refused, not faulted), and skip (an un-probeable routine
+# reports an explicit reason). The ptrace reference producer needs SYS_PTRACE, which
+# the docker-pintool lane grants (--cap-add=SYS_PTRACE); the victim also opts in via
+# PR_SET_PTRACER_ANY. Self-skips off x86-64/Linux via the arch gate above.
+PIN_PROBE_SHM ?= /asmtest_valtrace_pin_ci
+pin-probe-test:
+	@home=$${PIN_HOME:-$$(sh scripts/fetch-pin.sh)}; \
+	echo "== pin-probe-test (PIN_ROOT=$$home) =="; \
+	$(MAKE) --no-print-directory pin-probe-tool PIN_HOME=$$home; \
+	$(MAKE) --no-print-directory $(BUILD)/pin_probe_victim $(BUILD)/pin_probe_validator; \
+	set -e; \
+	for sc in capture badptr skip; do \
+	  func=capref; [ $$sc = skip ] && func=tiny; \
+	  shm=$(PIN_PROBE_SHM)_$$sc; \
+	  rm -f /dev/shm$$shm 2>/dev/null || true; \
+	  "$$home/pin" -probe -t $(PROBE_SO) -func $$func -shm $$shm -- \
+	    $(BUILD)/pin_probe_victim $$sc; \
+	  $(BUILD)/pin_probe_validator $$shm $$sc $(abspath $(BUILD)/pin_probe_victim); \
+	done
 
 endif

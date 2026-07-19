@@ -120,6 +120,7 @@ help:
 	@echo '  drtrace-bindings-test  per-language DynamoRIO wrapper tests (all bindings)'
 	@echo '  hwtrace-test    hardware trace: single-step (x86-64 Linux/macOS) / PT / AMD LBR / IBS'
 	@echo '  hwtrace-pt-live  live Intel PT whole-window smoke (bare-metal Intel + CAP_PERFMON/paranoid<0; fails rather than skips)'
+	@echo '  pin-probe-test  Intel Pin probe-mode arg/return capture vs the ptrace stepper (x86-64 Linux; needs PIN_ROOT; make docker-pintool)'
 	@echo '  mach-stepper-test  macOS out-of-process Mach stepper (needs a macOS x86-64 host + codesign or sudo)'
 	@echo '  ibs-test        statistical AMD IBS-Op edge lane (pure decoder + live out-of-band)'
 	@echo '  dataflow-test   data-flow tracing: L0 value trace / L1 def-use / L2 slice (emulator L0; pure spine runs everywhere)'

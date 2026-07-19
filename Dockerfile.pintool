@@ -58,8 +58,13 @@ COPY . .
 # the T6 single-step offset-parity arm runs live in-container instead of self-skipping.
 RUN sh scripts/build-capstone.sh && ldconfig
 
-# Run the Pin trace parity lane: workload under `pin -t asmtest_pintool.so`, then
-# an out-of-process validator asserting the exact offsets AND byte-for-byte parity
-# with the in-process single-step and DynamoRIO backends. Self-skips cleanly on a
-# non-x86-64 image, but here the arch gate passes so it executes.
-CMD make pintool-test PIN_HOME=$PIN_HOME DYNAMORIO_HOME=$DYNAMORIO_HOME
+# Run the Pin lanes. First the XED-decoded trace parity lane (PIN-2): workload under
+# `pin -t asmtest_pintool.so`, then an out-of-process validator asserting the exact
+# offsets AND byte-for-byte parity with the in-process single-step and DynamoRIO
+# backends. Then the probe-mode argument/return capture lane (PIN-3, pin-probe-test):
+# probe_capture.so records a routine's args/return + a pointed-to buffer, and a
+# validator diffs the capture against the independent ptrace stepper (needs
+# --cap-add=SYS_PTRACE, granted by the docker-pintool run). Both self-skip cleanly on
+# a non-x86-64 image, but here the arch gate passes so they execute.
+CMD make pintool-test PIN_HOME=$PIN_HOME DYNAMORIO_HOME=$DYNAMORIO_HOME \
+ && make pin-probe-test PIN_HOME=$PIN_HOME
