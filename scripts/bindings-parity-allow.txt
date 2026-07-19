@@ -169,3 +169,9 @@ ALL asmtest_hwtrace_window_auto           # WEAK/STRONG/CEILING window backend a
 ALL asmtest_hwtrace_pt_window_trusted     # runtime decode-trust probe feeding the window ladder; C-level gate, not per-binding FFI
 ALL asmtest_hwtrace_window_image          # self code-image accessor for the armed window (decode-on-close); C-level, not direct FFI
 ALL asmtest_hwtrace_pt_set_filter         # thin PERF_EVENT_IOC_SET_FILTER ioctl knob on the PT arm; C-level, not per-binding FFI
+
+# Whole-window guard knobs (zeroconfig-scoped-tracing-hardening, 2026-07-19). The zero-config
+# path gets the defaults through plain begin_window, which every binding already
+# wraps; the _ex/guard-query knobs are C-level until a binding needs them.
+ALL asmtest_hwtrace_begin_window_ex
+ALL asmtest_hwtrace_window_guard

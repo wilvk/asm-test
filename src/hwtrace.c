@@ -107,9 +107,17 @@ int asmtest_ss_begin(const void *base, size_t len, asmtest_trace_t *trace);
 /* §1: handle-producing push (per-thread range stack) + calling-thread frame lookup. */
 int asmtest_ss_begin_ex(const void *base, size_t len, asmtest_trace_t *trace,
                         uint32_t *out_idx, uint32_t *out_gen);
-/* §Z1: region-free whole-window push (records absolute RIPs; no [base,len)). */
-int asmtest_ss_begin_window(asmtest_trace_t *trace, uint32_t *out_idx,
-                            uint32_t *out_gen);
+/* §Z1: region-free whole-window push (records absolute RIPs; no [base,len)). The guard
+ * config (zeroconfig-scoped-tracing-hardening T1/T2) rides the widened signature:
+ * insn_budget (0=>default, UINT64_MAX=>off), watchdog_ms (0=>default, UINT32_MAX=>off),
+ * use_default_denylist, and deny/deny_len (copied at begin). */
+int asmtest_ss_begin_window(asmtest_trace_t *trace, uint64_t insn_budget,
+                            uint32_t watchdog_ms, int use_default_denylist,
+                            const asmtest_hwtrace_deny_t *deny, size_t deny_len,
+                            uint32_t *out_idx, uint32_t *out_gen);
+/* T3: resolve a whole-window handle to the SS_GUARD_* code that stopped it (render-on-
+ * close on the arming thread), or -1 on a stale/foreign/unknown handle. */
+int asmtest_ss_frame_guard(uint32_t idx, uint32_t gen, int arm_tid);
 /* B (lazy-arm): arm [base,len), dispatch fn(args…) natively, disarm — nothing the
  * caller runs between arm and disarm is stepped (see managed-singlestep-lazy-arm). */
 int asmtest_ss_call_scoped(const void *base, size_t len, asmtest_trace_t *trace,
@@ -2814,8 +2822,16 @@ static uint32_t g_pt_window_gen; /* bumped each arm; carried in the handle    */
 static int g_pt_window_tid; /* arming OS tid (the perf event is per-thread) */
 #endif
 
+/* Plain zero-config whole-window begin: the SAFE-defaults forwarder (budget on,
+ * watchdog on, denylist off) that every binding already wraps. */
 int asmtest_hwtrace_begin_window(asmtest_trace_t *trace,
                                  asmtest_hwtrace_scope_t *out) {
+    return asmtest_hwtrace_begin_window_ex(trace, NULL, out);
+}
+
+int asmtest_hwtrace_begin_window_ex(asmtest_trace_t *trace,
+                                    const asmtest_hwtrace_window_guards_t *g,
+                                    asmtest_hwtrace_scope_t *out) {
     if (out != NULL) {
         out->idx = 0xffffffffu;
         out->gen = 0;
@@ -2823,6 +2839,34 @@ int asmtest_hwtrace_begin_window(asmtest_trace_t *trace,
     }
     if (trace == NULL)
         return ASMTEST_HW_EINVAL;
+    /* Resolve the guard config. NULL g => all safe defaults (the ss layer maps 0 to its
+     * defaults: budget = 4x ring, watchdog = 10 s, denylist off). When g is given, use
+     * the F27/F36 struct_size min-and-zero-fill idiom (mirrors asmtest_hwtrace_init):
+     * copy min(struct_size, our sizeof) bytes into a zero-filled local so an OLDER
+     * caller's short struct is never read out of bounds and its unset tail defaults to
+     * 0, and a NEWER caller's unknown tail is ignored. struct_size == 0 is rejected: a
+     * caller that does not self-describe could have a set trailing field silently
+     * dropped. */
+    uint64_t insn_budget = 0;
+    uint32_t watchdog_ms = 0;
+    int use_default_denylist = 0;
+    const asmtest_hwtrace_deny_t *deny = NULL;
+    size_t deny_len = 0;
+    if (g != NULL) {
+        if (g->struct_size == 0)
+            return ASMTEST_HW_EINVAL;
+        asmtest_hwtrace_window_guards_t gc;
+        memset(&gc, 0, sizeof gc);
+        size_t copy = g->struct_size < sizeof gc ? g->struct_size : sizeof gc;
+        memcpy(&gc, g, copy);
+        insn_budget = gc.insn_budget;
+        watchdog_ms = gc.watchdog_ms;
+        use_default_denylist = gc.use_default_denylist;
+        deny = gc.deny;
+        deny_len = gc.deny_len;
+        if (deny_len > 32) /* the SS-layer deny cap (SS_MAX_DENY) */
+            return ASMTEST_HW_EINVAL;
+    }
 #if defined(__linux__)
     if (!g_inited)
         return ASMTEST_HW_ESTATE;
@@ -2831,7 +2875,9 @@ int asmtest_hwtrace_begin_window(asmtest_trace_t *trace,
         uint32_t idx = 0, gen = 0;
         g_arm_tid =
             (int)syscall(SYS_gettid); /* §Z4: best-effort arming-tid accessor */
-        int rc = asmtest_ss_begin_window(trace, &idx, &gen);
+        int rc = asmtest_ss_begin_window(trace, insn_budget, watchdog_ms,
+                                         use_default_denylist, deny, deny_len,
+                                         &idx, &gen);
         if (rc != ASMTEST_HW_OK) {
             g_arm_tid = -1;
             return rc;
@@ -2844,6 +2890,8 @@ int asmtest_hwtrace_begin_window(asmtest_trace_t *trace,
         }
         return ASMTEST_HW_OK;
     }
+    /* The PT/AMD out-of-band tiers observe out of process and ignore the guard config
+     * (their capture is bounded by the AUX ring / sample budget, not TF stepping). */
     if (g_opts.backend == ASMTEST_HWTRACE_INTEL_PT) {
         /* STRONG tier: arm the ONE whole-window PT pair and hand back a reserved
          * sentinel handle end_window routes to the PT drain. One active PT window at
@@ -2871,10 +2919,36 @@ int asmtest_hwtrace_begin_window(asmtest_trace_t *trace,
      * self-skips: the AMD LBR live floor is Zen 4+, and the exact whole-window
      * contract cannot be met by a sampled branch survey — callers wanting the quiet
      * sampled complement use the explicit asmtest_hwtrace_sample_begin_amd path /
-     * new AsmTrace(HwBackend.AmdLbr). */
+     * new AsmTrace(HwBackend.AmdLbr). The guard config is single-step-only; cast it
+     * here so aarch64-Linux (no __x86_64__ singlestep branch) has no unused locals. */
+    (void)insn_budget;
+    (void)watchdog_ms;
+    (void)use_default_denylist;
+    (void)deny;
+    (void)deny_len;
     return ASMTEST_HW_EUNAVAIL;
 #else
     (void)trace;
+    (void)insn_budget;
+    (void)watchdog_ms;
+    (void)use_default_denylist;
+    (void)deny;
+    (void)deny_len;
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+/* T3: which guard stopped the whole-window capture (render-on-close on the arming
+ * thread). Resolves through the SS frame lookup exactly as render_window does — a PT
+ * sentinel or a stale/foreign handle does not resolve and returns ASMTEST_HW_EINVAL. */
+int asmtest_hwtrace_window_guard(asmtest_hwtrace_scope_t handle) {
+#if defined(__linux__) && defined(__x86_64__)
+    int gv = asmtest_ss_frame_guard(handle.idx, handle.gen, handle.arm_tid);
+    if (gv < 0)
+        return ASMTEST_HW_EINVAL;
+    return gv; /* 0..4 == ASMTEST_HW_GUARD_NONE..WATCHDOG */
+#else
+    (void)handle;
     return ASMTEST_HW_ENOSYS;
 #endif
 }

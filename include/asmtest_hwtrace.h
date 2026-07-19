@@ -487,6 +487,87 @@ int asmtest_hwtrace_end_window(asmtest_hwtrace_scope_t handle,
 int asmtest_hwtrace_render_window(asmtest_hwtrace_scope_t handle, char *buf,
                                   size_t buflen);
 
+/* ------------------------------------------------------------------ */
+/* Whole-window in-process guards (zeroconfig-scoped-tracing-hardening) */
+/*                                                                     */
+/* The WEAK single-step tier steps INTO everything (the lifted §Z1.1    */
+/* DESCEND_ALL policy), so a window over code that reaches a blocking    */
+/* libc call (a read() on an empty pipe, a poll()) would step the        */
+/* runtime forever, bounded only by the capture ring's memory, never by  */
+/* time. These three guards — ported from the out-of-process descent     */
+/* tier — bound it: a per-frame instruction BUDGET, a process-global     */
+/* DENY-region table (a stepped RIP inside a denied region ends the      */
+/* capture and the denied call then runs at native speed), and a         */
+/* wall-clock WATCHDOG (a repeating ITIMER_REAL/SIGALRM breaks a blocked  */
+/* syscall). When any guard fires the window stops stepping and the       */
+/* trace is flagged `truncated`; asmtest_hwtrace_window_guard reports     */
+/* which one, render-on-close style, on the arming thread after          */
+/* end_window. The in-process semantics is "STOP the capture", stronger   */
+/* than the descent tier's "step over": the denylist is therefore OPT-IN */
+/* (default off), while the budget + watchdog are ON by default so a      */
+/* hung zero-config window is always bounded. Single-step tier only       */
+/* (the PT/AMD out-of-band tiers observe out of process). Linux x86-64.  */
+/* ------------------------------------------------------------------ */
+
+/* Which guard stopped a whole-window capture — asmtest_hwtrace_window_guard's
+ * non-negative return. Values match the ss-layer SS_GUARD_* codes 1:1. */
+enum {
+    ASMTEST_HW_GUARD_NONE = 0, /* no guard fired (a clean, complete window) */
+    ASMTEST_HW_GUARD_RING = 1, /* the bounded capture ring overflowed        */
+    ASMTEST_HW_GUARD_BUDGET =
+        2,                     /* the per-frame instruction budget was hit   */
+    ASMTEST_HW_GUARD_DENY = 3, /* a stepped RIP fell in a denied region      */
+    ASMTEST_HW_GUARD_WATCHDOG =
+        4, /* the wall-clock watchdog expired            */
+};
+
+/* One extra deny region for asmtest_hwtrace_window_guards_t.deny: any stepped RIP in
+ * [base, base+len) ends the capture (guard SS_GUARD_DENY). Copied at begin, so the
+ * array need not outlive the begin_window_ex call. */
+typedef struct {
+    const void *base;
+    size_t len;
+} asmtest_hwtrace_deny_t;
+
+/* Per-window guard configuration for asmtest_hwtrace_begin_window_ex. struct_size is
+ * the F27/F36 ABI size negotiator (mirrors asmtest_hwtrace_options_t): set it to
+ * sizeof(asmtest_hwtrace_window_guards_t) as compiled into the CALLER. begin_window_ex
+ * copies min(struct_size, its own sizeof) bytes and zero-fills the tail, so an OLDER
+ * caller is never read out of bounds and a NEWER caller's unknown tail is ignored;
+ * future fields are APPENDED and default to 0 = the safe default. struct_size == 0 is
+ * rejected with ASMTEST_HW_EINVAL (a caller that does not self-describe could have a
+ * set trailing field silently dropped, so begin_window_ex refuses rather than guess). */
+typedef struct {
+    size_t
+        struct_size; /* sizeof as compiled into the caller (set it always)    */
+    uint64_t insn_budget; /* per-frame step ceiling: 0 = default (4x ring cap),
+                             UINT64_MAX = disabled                                  */
+    uint32_t watchdog_ms; /* wall-clock bound: 0 = default (10000 ms),
+                             UINT32_MAX = disabled                                  */
+    int use_default_denylist; /* nonzero: arm the blocking-libc default deny set    */
+    const asmtest_hwtrace_deny_t
+        *deny; /* extra deny regions, copied at begin       */
+    size_t
+        deny_len; /* count in `deny`; > the SS-layer cap (32) => ASMTEST_HW_EINVAL */
+} asmtest_hwtrace_window_guards_t;
+
+/* Configurable-guard sibling of asmtest_hwtrace_begin_window: arm a region-free
+ * whole-window capture with the guard config in `g` (NULL => the safe defaults, i.e.
+ * exactly what plain begin_window gets: budget on, watchdog on, denylist off). Same
+ * scope handle in *out and the same self-skip return codes as begin_window, plus
+ * ASMTEST_HW_EINVAL on a NULL trace, a struct_size == 0, or a deny_len over the
+ * SS-layer cap (32). Single-step tier only (the PT/AMD tiers ignore `g`). */
+int asmtest_hwtrace_begin_window_ex(asmtest_trace_t *trace,
+                                    const asmtest_hwtrace_window_guards_t *g,
+                                    asmtest_hwtrace_scope_t *out);
+
+/* Which guard stopped the whole-window capture named by `handle`: one of the
+ * ASMTEST_HW_GUARD_* codes (0 = none fired, a clean window), or ASMTEST_HW_EINVAL on a
+ * stale / foreign / non-single-step handle. Resolves through the same per-thread frame
+ * lookup asmtest_hwtrace_render_window uses, so it works render-on-close style on the
+ * ARMING thread after end_window (the guard scalar survives the frame's pop). */
+int asmtest_hwtrace_window_guard(asmtest_hwtrace_scope_t handle);
+
 /* The active STRONG-tier PT window's byte source — the ctx's own self code-image, so
  * a C caller can asmtest_codeimage_track its exec region after begin_window and feed
  * it to the decode/render. Returns NULL when no Intel PT window is armed (the WEAK

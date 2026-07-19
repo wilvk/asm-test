@@ -67,12 +67,14 @@
 
 #if defined(__x86_64__) && (defined(__linux__) || defined(__APPLE__))
 
+#include <dlfcn.h> /* dlsym(RTLD_DEFAULT, …) — resolve the default blocking-libc denylist */
 #include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h> /* mmap/munmap (§Z1 sparse whole-window buffer) */
-#include <unistd.h>   /* syscall (§Z4 arm-tid) */
+#include <sys/time.h> /* setitimer/ITIMER_REAL — the whole-window watchdog (T2) */
+#include <unistd.h> /* syscall (§Z4 arm-tid) */
 #if defined(__APPLE__)
 #include <sys/ucontext.h>
 #else
@@ -159,7 +161,49 @@ typedef struct {
     uint32_t gen;
     int whole_window; /* §Z1: 1 => record absolute RIPs, no [base,len) filter; mmap'd */
     int arm_tid; /* §Z4: OS tid that armed this frame (region-free close assert) */
+    /* Whole-window guards (zeroconfig-scoped-tracing-hardening T1/T2). All scalars, so
+     * they survive the frame's pop (only `stream` is freed) — T3's window_guard accessor
+     * reads `guard` render-on-close style. steps/insn_budget bound instruction count;
+     * watchdog_ms records whether this frame armed the wall-clock watchdog (so its pop
+     * can drop the refcount); guard is the sig_atomic_t stop reason the handler writes. */
+    uint64_t steps; /* whole-window instructions stepped so far          */
+    uint64_t
+        insn_budget; /* step ceiling (UINT64_MAX => disabled)             */
+    uint32_t
+        watchdog_ms; /* armed watchdog ms (UINT32_MAX => none armed)      */
+    volatile sig_atomic_t
+        guard; /* SS_GUARD_* stop reason (0 => still stepping)      */
 } ss_frame_t;
+
+/* Which guard stopped a whole-window frame (mirrored 1:1 by the public
+ * ASMTEST_HW_GUARD_* enum in asmtest_hwtrace.h; T3's accessor returns this scalar). */
+enum {
+    SS_GUARD_NONE = 0,
+    SS_GUARD_RING,     /* bounded capture ring overflowed (keeps stepping)  */
+    SS_GUARD_BUDGET,   /* per-frame instruction budget reached              */
+    SS_GUARD_DENY,     /* stepped RIP fell in a process-global deny region  */
+    SS_GUARD_WATCHDOG, /* the ITIMER_REAL/SIGALRM watchdog expired          */
+};
+
+/* Whole-window guard defaults (resolved in ss_push_frame when the caller passes 0).
+ * The budget is 4x the ring cap (4,194,304 steps): chosen so the shipped runaway-loop
+ * test — which runs ~1.8 M instructions — still hits the RING first and stays
+ * byte-identical. The watchdog is 10 s, not the descent tier's 2 s: this is a CI-hang
+ * bound, not a perf knob, and must sit far above the runaway test's few seconds of
+ * legitimate stepping so existing assertions stay deterministic. */
+#define SS_WINDOW_BUDGET_DEFAULT      (4ull * (uint64_t)SS_WINDOW_CAP)
+#define SS_WINDOW_WATCHDOG_MS_DEFAULT 10000u
+
+/* Process-global deny table (NOT per-frame: it must not bloat the initial-exec static
+ * TLS surplus). A stepped whole-window RIP inside any live entry ends that frame's
+ * capture. Writes happen only in NORMAL context under g_ss_lock, entry first then the
+ * length (append-only publish), so the lock-free handler read is safe. Cleared when the
+ * arm-refcount drops to 0 (asmtest_ss_end). */
+#define SS_MAX_DENY 32
+static struct {
+    uint64_t base, len;
+} g_deny[SS_MAX_DENY];
+static volatile uint32_t g_deny_len;
 
 /* Per-thread range stack + depth + generation counter. INITIAL-EXEC: the handler
  * dereferences these in signal context (see file header). */
@@ -179,6 +223,129 @@ static struct sigaction g_old_sa;
 static int g_installed;
 static int g_arm_refcount;
 static pthread_mutex_t g_ss_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* ---- Whole-window deny table (T1) --------------------------------------------- */
+
+/* Append one deny region. Caller holds g_ss_lock; publish is entry-first then length
+ * so the lock-free handler read (ss_rip_denied) never sees a half-written entry. */
+static void ss_deny_append(uint64_t base, uint64_t len) {
+    uint32_t n = g_deny_len;
+    if (n >= SS_MAX_DENY || len == 0)
+        return; /* full or empty extent — silently skipped (best-effort bound) */
+    g_deny[n].base = base;
+    g_deny[n].len = len;
+    g_deny_len = n + 1; /* publish AFTER the entry is fully written */
+}
+
+/* The lazily-resolved default deny set: blocking-libc entry points that would step the
+ * runtime forever if a window reached them. Resolved ONCE per process in normal context
+ * via dlsym(RTLD_DEFAULT, …) (async-signal-UNSAFE — never in the handler), 64-byte
+ * extent per entry (enough to catch the entry stub). This mirrors the fork-path half of
+ * the descent tier's asmtest_descent_use_default_denylist (src/ptrace_backend.c
+ * descend_deny_syms). DELIBERATELY EXCLUDES `write`: Console/log output inside a managed
+ * window would otherwise end nearly every capture at the first print — the divergence
+ * from the descent set, which CAN deny write because there it means "step over", not
+ * "stop the capture". */
+static const char *const ss_deny_default_syms[] = {
+    "read",  "poll",    "select", "epoll_wait", "nanosleep", "usleep",  "sleep",
+    "wait4", "waitpid", "accept", "connect",    "recvmsg",   "sem_wait"};
+static struct {
+    uint64_t base, len;
+} g_deny_default[sizeof ss_deny_default_syms / sizeof *ss_deny_default_syms];
+static uint32_t g_deny_default_len;
+static int g_deny_default_resolved;
+
+/* Resolve the default deny symbols once (caller holds g_ss_lock). */
+static void ss_deny_resolve_default(void) {
+    if (g_deny_default_resolved)
+        return;
+    g_deny_default_resolved = 1;
+    for (size_t i = 0;
+         i < sizeof ss_deny_default_syms / sizeof *ss_deny_default_syms; i++) {
+        void *sym = dlsym(RTLD_DEFAULT, ss_deny_default_syms[i]);
+        if (sym != NULL) {
+            g_deny_default[g_deny_default_len].base = (uint64_t)(uintptr_t)sym;
+            g_deny_default[g_deny_default_len].len = 64;
+            g_deny_default_len++;
+        }
+    }
+}
+
+/* Append the (cached) default deny set into the active table. Caller holds g_ss_lock. */
+static void ss_deny_append_default(void) {
+    ss_deny_resolve_default();
+    for (uint32_t i = 0; i < g_deny_default_len; i++)
+        ss_deny_append(g_deny_default[i].base, g_deny_default[i].len);
+}
+
+/* Handler-side (lock-free) deny check: is `rip` in any published deny region? Worst
+ * case is SS_MAX_DENY (32) integer compares per trap — noise against the ~1000x cost of
+ * a single-step #DB. Reads the length first, then entries[0..length): the append-only
+ * publish order makes that safe without a lock. */
+static inline int ss_rip_denied(uint64_t rip) {
+    uint32_t n = g_deny_len;
+    for (uint32_t i = 0; i < n; i++)
+        if (rip >= g_deny[i].base && rip < g_deny[i].base + g_deny[i].len)
+            return 1;
+    return 0;
+}
+
+/* ---- Whole-window wall-clock watchdog (T2) ------------------------------------ */
+
+/* A whole-window frame armed with a watchdog is bounded in wall-clock time even when
+ * the stepped code blocks in a syscall: a repeating ITIMER_REAL fires SIGALRM, whose
+ * handler only sets a flag; the SA_RESTART-cleared disposition makes the blocked syscall
+ * return EINTR (breaking the block), and the next trap observes the flag, stops the
+ * frame, and flags it truncated. Mirrors descend_watchdog_arm/_disarm
+ * (src/ptrace_backend.c) exactly — the difference is only in the semantics of the stop
+ * (in-process "stop the capture" vs out-of-process "the loop terminates the tracee").
+ *
+ * Two honest limitations (same as the descent tier): (a) ITIMER_REAL's SIGALRM is
+ * delivered PROCESS-WIDE — in a multi-threaded process the kernel may deliver it to a
+ * thread other than the blocked stepping one; the flag + the repeating interval make
+ * expiry eventually observed at the next trap, but breaking a *blocked* syscall is only
+ * guaranteed when the stepping thread can receive SIGALRM (single-threaded windows do;
+ * a timer_create+SIGEV_THREAD_ID upgrade is the recorded hardening if a real
+ * multi-thread consumer needs it). (b) The EINTR is visible to the traced code — the
+ * same intrusiveness class as single-stepping itself; the trace is flagged, never
+ * silently wrong. */
+static volatile sig_atomic_t g_ww_alarm_fired;
+static struct sigaction g_ww_old_sa;
+static struct itimerval g_ww_old_it;
+static int
+    g_ww_refcount; /* whole-window frames that armed a watchdog (arm on 0->1) */
+
+static void ss_window_alarm(int sig) {
+    (void)sig;
+    g_ww_alarm_fired = 1; /* only sets the flag — async-signal-safe */
+}
+
+/* Arm the repeating watchdog. Caller holds g_ss_lock; clears the fired flag, saves the
+ * previous SIGALRM disposition AND the previous itimer for exact restore on disarm. */
+static void ss_window_watchdog_arm(uint32_t ms) {
+    g_ww_alarm_fired = 0;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = ss_window_alarm;
+    sa.sa_flags =
+        0; /* NO SA_RESTART: SIGALRM must interrupt a blocked syscall (EINTR) */
+    sigaction(SIGALRM, &sa, &g_ww_old_sa);
+    struct itimerval it;
+    it.it_value.tv_sec = ms / 1000u;
+    it.it_value.tv_usec = (long)(ms % 1000u) * 1000L;
+    /* Re-fire periodically so a single missed signal still breaks a persistent block. */
+    it.it_interval.tv_sec = 0;
+    it.it_interval.tv_usec = 100 * 1000L;
+    if (it.it_value.tv_sec == 0 && it.it_value.tv_usec == 0)
+        it.it_value.tv_usec = 1000L;
+    setitimer(ITIMER_REAL, &it, &g_ww_old_it);
+}
+
+/* Restore the caller's SIGALRM disposition + itimer exactly (caller holds g_ss_lock). */
+static void ss_window_watchdog_disarm(void) {
+    setitimer(ITIMER_REAL, &g_ww_old_it, NULL);
+    sigaction(SIGALRM, &g_ww_old_sa, NULL);
+}
 
 /* Set / clear EFLAGS.TF for the current thread. `or`/`and` on the flags image
  * pushed by pushfq; the instruction *after* popfq is the first to trap when
@@ -215,11 +382,42 @@ static void ss_on_sigtrap(int sig, siginfo_t *si, void *uctx) {
         if (f->whole_window) {
             /* §Z1: region-free — record the ABSOLUTE rip of every executed
              * instruction (no [base,len) filter). Bounded by the sparse-mmap cap;
-             * writing an uncommitted page here takes a transparent minor fault. */
-            if (f->stream_len < f->cap)
+             * writing an uncommitted page here takes a transparent minor fault.
+             *
+             * The four guards (T1/T2) are integer compares/writes only — no
+             * allocation, no locks, no syscalls, so the handler stays
+             * async-signal-safe. Once a stop reason latches (guard != NONE) the frame
+             * is done; stepping ceases for it (see the TF re-assert gate below). */
+            if (f->guard != SS_GUARD_NONE)
+                continue; /* already stopped — nothing more to record */
+            /* Watchdog (T2): expiry is observed here, at the next trap after SIGALRM
+             * broke a blocked syscall (or between two stepped instructions). */
+            if (g_ww_alarm_fired) {
+                f->guard = SS_GUARD_WATCHDOG;
+                continue; /* do not record; the denied/expired RIP is not ours */
+            }
+            /* Deny (T1): a stepped RIP inside a denied region ends the capture — the
+             * denied call then runs at native speed (in-process "stop", vs the descent
+             * tier's "step over"). Do NOT record this RIP. */
+            if (ss_rip_denied(rip)) {
+                f->guard = SS_GUARD_DENY;
+                continue;
+            }
+            /* Budget (T1): bound the instruction count. The step that trips the budget
+             * is still recorded, so a budget of N yields ~N instructions. */
+            f->steps++;
+            if (f->steps >= f->insn_budget)
+                f->guard = SS_GUARD_BUDGET;
+            /* Ring: record + overflow. On the FIRST overflow latch SS_GUARD_RING but
+             * KEEP stepping — ring overflow bounds memory, not perturbation (the
+             * shipped behaviour, unchanged). */
+            if (f->stream_len < f->cap) {
                 f->stream[f->stream_len++] = rip;
-            else
+            } else {
                 f->overflow = 1;
+                if (f->guard == SS_GUARD_NONE)
+                    f->guard = SS_GUARD_RING;
+            }
         } else if (rip >= f->base_ip && rip < f->base_ip + f->len) {
             if (f->stream_len < f->cap)
                 f->stream[f->stream_len++] = rip - f->base_ip;
@@ -228,8 +426,25 @@ static void ss_on_sigtrap(int sig, siginfo_t *si, void *uctx) {
         }
     }
 
-    /* Re-assert TF so sigreturn resumes stepping (in-region OR in a callee). */
-    SS_SET_TF(uc);
+    /* Re-assert TF so sigreturn resumes stepping — but ONLY if at least one frame on
+     * this thread still wants stepping: any region frame (always steps), or any
+     * whole-window frame not yet stopped (guard NONE, or RING which keeps stepping).
+     * When no frame wants it, do NOT re-assert: stepping ceases and the window's
+     * remainder runs at full speed until end_window (the guard-fired path). */
+    int want_step = 0;
+    for (int i = 0; i < d; i++) {
+        ss_frame_t *f = &tls_frames[i];
+        if (!f->whole_window) {
+            want_step = 1;
+            break;
+        }
+        if (f->guard == SS_GUARD_NONE || f->guard == SS_GUARD_RING) {
+            want_step = 1;
+            break;
+        }
+    }
+    if (want_step)
+        SS_SET_TF(uc);
 }
 
 /* Release a frame's ordered-RIP buffer with the matching deallocator: whole-window
@@ -251,11 +466,20 @@ static void ss_free_stream(ss_frame_t *f) {
  * / allocation / sigaction failure. `whole_window` selects the region-free §Z1 mode
  * (base/len must be NULL/0); the region mode requires a non-NULL base + nonzero len. */
 static int ss_push_frame(const void *base, size_t len, asmtest_trace_t *trace,
-                         int whole_window, uint32_t *out_idx,
-                         uint32_t *out_gen) {
+                         int whole_window, uint64_t insn_budget,
+                         uint32_t watchdog_ms, int use_default_denylist,
+                         const asmtest_hwtrace_deny_t *deny, size_t deny_len,
+                         uint32_t *out_idx, uint32_t *out_gen) {
     if (whole_window) {
         if (base != NULL || len != 0)
             return ASMTEST_HW_EINVAL; /* region-free frame carries no [base,len) */
+        /* Resolve whole-window guard defaults (T1/T2). 0 => default; the sentinel
+         * (UINT64_MAX / UINT32_MAX) stays disabled. Region frames pass the disabled
+         * sentinels and never consult these (their handler branch has no guards). */
+        if (insn_budget == 0)
+            insn_budget = SS_WINDOW_BUDGET_DEFAULT;
+        if (watchdog_ms == 0)
+            watchdog_ms = SS_WINDOW_WATCHDOG_MS_DEFAULT;
     } else if (base == NULL || len == 0) {
         return ASMTEST_HW_EINVAL;
     }
@@ -291,6 +515,13 @@ static int ss_push_frame(const void *base, size_t len, asmtest_trace_t *trace,
     f->gen = ++tls_gen_ctr;
     f->whole_window = whole_window;
     f->arm_tid = SS_ARM_TID();
+    /* Whole-window guard state (T1/T2). Region frames carry disabled values (their
+     * handler branch never consults them). watchdog_ms records whether THIS frame
+     * armed the shared watchdog, so its pop can drop the refcount. */
+    f->steps = 0;
+    f->guard = SS_GUARD_NONE;
+    f->insn_budget = whole_window ? insn_budget : UINT64_MAX;
+    f->watchdog_ms = whole_window ? watchdog_ms : UINT32_MAX;
     if (out_idx != NULL)
         *out_idx = (uint32_t)idx;
     if (out_gen != NULL)
@@ -298,7 +529,9 @@ static int ss_push_frame(const void *base, size_t len, asmtest_trace_t *trace,
 
     /* Process-wide SIGTRAP install on the 0->1 arm-refcount transition. Save the
      * caller's original disposition into g_old_sa ONLY then, so a second concurrent
-     * begin cannot overwrite it with asm-test's own just-installed handler. */
+     * begin cannot overwrite it with asm-test's own just-installed handler. The deny
+     * table + watchdog (T1/T2) are published under the SAME lock, BEFORE depth/TF are
+     * armed below, so the handler never reads a half-built guard set. */
     pthread_mutex_lock(&g_ss_lock);
     if (g_arm_refcount == 0) {
         struct sigaction sa;
@@ -314,6 +547,21 @@ static int ss_push_frame(const void *base, size_t len, asmtest_trace_t *trace,
         g_installed = 1;
     }
     g_arm_refcount++;
+    if (whole_window) {
+        /* T1: publish this window's deny regions (default set + caller extras). */
+        if (use_default_denylist)
+            ss_deny_append_default();
+        if (deny != NULL)
+            for (size_t i = 0; i < deny_len; i++)
+                ss_deny_append((uint64_t)(uintptr_t)deny[i].base,
+                               (uint64_t)deny[i].len);
+        /* T2: arm the shared wall-clock watchdog on the first frame that wants it. */
+        if (watchdog_ms != UINT32_MAX) {
+            if (g_ww_refcount == 0)
+                ss_window_watchdog_arm(watchdog_ms);
+            g_ww_refcount++;
+        }
+    }
     pthread_mutex_unlock(&g_ss_lock);
 
     /* Publish the frame (bump depth) BEFORE arming TF: the handler reads tls_depth. */
@@ -323,10 +571,13 @@ static int ss_push_frame(const void *base, size_t len, asmtest_trace_t *trace,
     return ASMTEST_HW_OK;
 }
 
-/* Region-keyed / handle-keyed begin: a bounded [base,len) frame (register form). */
+/* Region-keyed / handle-keyed begin: a bounded [base,len) frame (register form).
+ * Region frames pass the guards DISABLED (the whole-window guards apply only to the
+ * region-free path). */
 int asmtest_ss_begin_ex(const void *base, size_t len, asmtest_trace_t *trace,
                         uint32_t *out_idx, uint32_t *out_gen) {
-    return ss_push_frame(base, len, trace, 0, out_idx, out_gen);
+    return ss_push_frame(base, len, trace, 0, UINT64_MAX, UINT32_MAX, 0, NULL,
+                         0, out_idx, out_gen);
 }
 
 /* Compat wrapper for the name-keyed single-region path. */
@@ -337,10 +588,20 @@ int asmtest_ss_begin(const void *base, size_t len, asmtest_trace_t *trace) {
 /* §Z1: region-free whole-window begin. Pushes a frame with no [base,len); the
  * handler records absolute RIPs for every instruction this thread runs in the window
  * (native-leaf only — pointing single-step at live managed code is forbidden, see
- * the scoped-tracing plans). Same handle + EFULL/EINVAL convention as _begin_ex. */
-int asmtest_ss_begin_window(asmtest_trace_t *trace, uint32_t *out_idx,
-                            uint32_t *out_gen) {
-    return ss_push_frame(NULL, 0, trace, 1, out_idx, out_gen);
+ * the scoped-tracing plans). Same handle + EFULL/EINVAL convention as _begin_ex.
+ *
+ * The guard config (zeroconfig-scoped-tracing-hardening T1/T2) rides along: insn_budget
+ * (0 => 4x-ring default, UINT64_MAX => off), watchdog_ms (0 => 10 s default,
+ * UINT32_MAX => off), use_default_denylist (opt-in blocking-libc set), and deny/deny_len
+ * (extra regions, copied here). The hwtrace-layer begin_window_ex owns validation and
+ * the NULL-config defaults; this layer owns the defaults resolution and arming. */
+int asmtest_ss_begin_window(asmtest_trace_t *trace, uint64_t insn_budget,
+                            uint32_t watchdog_ms, int use_default_denylist,
+                            const asmtest_hwtrace_deny_t *deny, size_t deny_len,
+                            uint32_t *out_idx, uint32_t *out_gen) {
+    return ss_push_frame(NULL, 0, trace, 1, insn_budget, watchdog_ms,
+                         use_default_denylist, deny, deny_len, out_idx,
+                         out_gen);
 }
 
 /* Post-pass: replay a frame's captured ordered offsets into its trace, deriving the
@@ -368,9 +629,9 @@ static void ss_normalize(ss_frame_t *fr) {
             prev = addr;
             have_prev = 1;
         }
-        if (fr->overflow)
+        if (fr->overflow || fr->guard != SS_GUARD_NONE)
             t->truncated =
-                true; /* whole-window run exceeded the capture buffer */
+                true; /* ring overflow OR any guard fired (deny/budget/watchdog) */
         return;
     }
 
@@ -445,6 +706,15 @@ void asmtest_ss_end(void) {
         fr); /* munmap (whole-window) or free (region); keeps base/len/gen */
 
     pthread_mutex_lock(&g_ss_lock);
+    /* T2: if this frame armed the watchdog, drop the refcount; disarm on the last one
+     * (restores the caller's SIGALRM disposition + itimer exactly). Done before the
+     * SIGTRAP refcount so the guard state unwinds in reverse-arm order. */
+    if (fr->whole_window && fr->watchdog_ms != UINT32_MAX) {
+        if (g_ww_refcount > 0)
+            g_ww_refcount--;
+        if (g_ww_refcount == 0)
+            ss_window_watchdog_disarm();
+    }
     if (g_arm_refcount > 0)
         g_arm_refcount--;
     if (g_arm_refcount == 0) {
@@ -453,6 +723,7 @@ void asmtest_ss_end(void) {
             g_installed = 0;
         }
         g_armed = 0;
+        g_deny_len = 0; /* T1: clear the active deny table on the last close */
     }
     pthread_mutex_unlock(&g_ss_lock);
 }
@@ -499,7 +770,8 @@ int asmtest_ss_call_scoped(const void *base, size_t len, asmtest_trace_t *trace,
                            uint32_t *out_gen) {
     if (fn == NULL || nargs < 0 || nargs > 6 || (nargs > 0 && args == NULL))
         return ASMTEST_HW_EINVAL;
-    int rc = ss_push_frame(base, len, trace, 0, out_idx, out_gen);
+    int rc = ss_push_frame(base, len, trace, 0, UINT64_MAX, UINT32_MAX, 0, NULL,
+                           0, out_idx, out_gen);
     if (rc != ASMTEST_HW_OK)
         return rc;
     long r = ss_dispatch_call(fn, args, nargs);
@@ -554,7 +826,8 @@ int asmtest_ss_call_scoped_fp(const void *base, size_t len,
                               uint32_t *out_idx, uint32_t *out_gen) {
     if (fn == NULL || nargs < 0 || nargs > 8 || (nargs > 0 && args == NULL))
         return ASMTEST_HW_EINVAL;
-    int rc = ss_push_frame(base, len, trace, 0, out_idx, out_gen);
+    int rc = ss_push_frame(base, len, trace, 0, UINT64_MAX, UINT32_MAX, 0, NULL,
+                           0, out_idx, out_gen);
     if (rc != ASMTEST_HW_OK)
         return rc;
     double r = ss_dispatch_call_fp(fn, args, nargs);
@@ -613,6 +886,21 @@ int asmtest_ss_frame_lookup(uint32_t idx, uint32_t gen, int arm_tid,
     return 1;
 }
 
+/* T3: resolve a whole-window handle to the guard code that stopped it (SS_GUARD_*).
+ * Same {idx,gen,arm_tid} discipline as asmtest_ss_frame_lookup (so it is render-on-close
+ * safe on the ARMING thread after end_window — the `guard` scalar survives the pop),
+ * returning the guard on a live match or -1 on a stale/foreign/unknown handle. */
+int asmtest_ss_frame_guard(uint32_t idx, uint32_t gen, int arm_tid) {
+    if (idx >= (uint32_t)SS_MAX_FRAMES)
+        return -1;
+    ss_frame_t *f = &tls_frames[idx];
+    if (f->gen != gen || f->gen == 0)
+        return -1;
+    if (f->arm_tid != arm_tid)
+        return -1;
+    return (int)f->guard;
+}
+
 #else /* not x86-64 Linux/macOS — link-compatible stubs */
 
 int asmtest_ss_begin_ex(const void *base, size_t len, asmtest_trace_t *trace,
@@ -630,9 +918,16 @@ int asmtest_ss_begin(const void *base, size_t len, asmtest_trace_t *trace) {
     (void)trace;
     return ASMTEST_HW_ENOSYS;
 }
-int asmtest_ss_begin_window(asmtest_trace_t *trace, uint32_t *out_idx,
-                            uint32_t *out_gen) {
+int asmtest_ss_begin_window(asmtest_trace_t *trace, uint64_t insn_budget,
+                            uint32_t watchdog_ms, int use_default_denylist,
+                            const asmtest_hwtrace_deny_t *deny, size_t deny_len,
+                            uint32_t *out_idx, uint32_t *out_gen) {
     (void)trace;
+    (void)insn_budget;
+    (void)watchdog_ms;
+    (void)use_default_denylist;
+    (void)deny;
+    (void)deny_len;
     (void)out_idx;
     (void)out_gen;
     return ASMTEST_HW_ENOSYS;
@@ -681,6 +976,12 @@ int asmtest_ss_frame_lookup(uint32_t idx, uint32_t gen, int arm_tid,
     (void)len;
     (void)trace;
     return 0;
+}
+int asmtest_ss_frame_guard(uint32_t idx, uint32_t gen, int arm_tid) {
+    (void)idx;
+    (void)gen;
+    (void)arm_tid;
+    return -1;
 }
 
 #endif

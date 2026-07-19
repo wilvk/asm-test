@@ -29,6 +29,42 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   [the native-tracing guide](https://github.com/wilvk/asm-test/blob/main/docs/guides/tracing/native-tracing.md)
   and
   [the F5 implementation doc](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/dataflow-pt-replay-tier.md).
+- **Whole-window in-process guards for the zero-config scope (deny regions /
+  instruction budget / wall-clock watchdog).** The `using (new AsmTrace())`
+  region-free whole-window scope, powered by the in-process `EFLAGS.TF`
+  single-step tier, took the descent tier's "step into everything" semantics
+  without any of its safety guards: a window over code that reached a blocking
+  libc call (a `read` on an empty pipe, a `poll`) stepped the runtime forever,
+  bounded only by the capture ring's memory, never by time. The three
+  out-of-process descent guards are now ported onto that in-process path — a
+  per-frame **instruction budget** (default 4x the ring cap), a process-global
+  **deny-region table** with an opt-in blocking-libc default set (a stepped RIP
+  inside a denied region ends the capture and the denied call then runs at native
+  speed), and a repeating **`ITIMER_REAL`/`SIGALRM` watchdog** (default 10 s;
+  breaks a blocked syscall via `EINTR`) — all malloc/lock-free inside the SIGTRAP
+  handler. Plain `asmtest_hwtrace_begin_window` gets safe defaults (budget +
+  watchdog on, denylist off), so a hung zero-config window is always bounded; the
+  new additive `asmtest_hwtrace_begin_window_ex` (with the F27/F36 `struct_size`
+  idiom and an `asmtest_hwtrace_window_guards_t` config) configures them per
+  window, and `asmtest_hwtrace_window_guard` reports which guard fired
+  (`ASMTEST_HW_GUARD_*`) render-on-close style. C-level knobs (parity-exempted);
+  the zero-config defaults flow through the `begin_window` every binding already
+  wraps.
+
+- **Zero-config whole-window scope docs.** The
+  [hardware-tracing guide](https://github.com/wilvk/asm-test/blob/main/docs/guides/tracing/hardware-tracing.md)
+  gains a "zero-config whole-window scope (region-free)" section — the C `begin_window` /
+  `end_window` / `render_window` surface, the .NET `using (new AsmTrace())` form, the
+  WEAK / STRONG / CEILING tier ladder (single-step / Intel PT / AMD LBR Zen 4+), and how
+  the STRONG-tier PT decode is validated on a synthetic PT-packet fixture with no
+  silicon. The
+  [troubleshooting reference](https://github.com/wilvk/asm-test/blob/main/docs/reference/troubleshooting.md)
+  gains a `SkipReason` table and a one-time-provisioning table (`perf_event_paranoid` /
+  `setcap cap_perfmon` / `--cap-add`, ptrace `CAP_SYS_PTRACE`, eBPF `CAP_BPF`), and both
+  it and
+  [portability](https://github.com/wilvk/asm-test/blob/main/docs/reference/portability.md)
+  record the whole-window facility's Linux-only floor.
+
 - **libFuzzer / AFL++ external-engine fuzzing shim (`make docker-fuzz`).** Drive
   an x86-64 guest routine under the emulator with an industrial fuzzer, feeding
   the emulator's basic-block coverage into the engine's feedback channel without
