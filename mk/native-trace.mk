@@ -409,6 +409,71 @@ else
 	    $(BUILD)/dr_taint_simd ymm-sink-negative
 endif
 
+# --- libdft64 differential ORACLE (pin-libdft-taint-oracle.md, T3-T5) --------
+# A SECOND, independently-implemented byte-level taint engine — libdft64 on Intel Pin —
+# runs the SAME GP/integer fixtures (examples/taint_fixtures.h) and its sink set is diffed
+# byte-for-byte against the shipped DR client. examples/pin_taint.c drives the fixtures
+# natively under `pin -t oracle.so` (the libdft64 tool, built out-of-kit from
+# pintools/libdft_oracle); examples/taint_oracle_diff.c runs the DR side in-process (one DR
+# lifecycle per mode) + forks pin over pin_taint + asserts DR≡libdft. Both drivers link the
+# SAME marker TU + producer objects as dr_taint, so the marker PCs + DR producer are
+# identical; -lrt for POSIX shm. libdft64 + Pin are TEST/ORACLE-ONLY, never shipped.
+LIBDFT_ROOT ?= /opt/libdft64
+ORACLE_TOOL_SO := pintools/libdft_oracle/obj-intel64/oracle.so
+
+$(BUILD)/pin_taint.o: examples/pin_taint.c examples/taint_fixtures.h \
+                      examples/taint_oracle_modes.h include/asmtest_taint.h \
+                      include/asmtest_taint_oracle_shm.h include/asmtest_drtrace.h \
+                      $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/pin_taint: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                    $(BUILD)/dataflow_dr_taint.o \
+                    $(BUILD)/drtrace_app.o $(BUILD)/trace.o $(DRAPP_KS_OBJ) \
+                    $(BUILD)/pin_taint.o
+	$(CC) $(CFLAGS) -rdynamic $^ $(CAPSTONE_LIBS) $(DRAPP_KS_LIBS) \
+	      -ldl -lpthread -lrt -o $@
+
+# Build the libdft64 oracle Pintool via the kit's out-of-kit PIN_ROOT protocol. A missing
+# Pin kit / libdft checkout is fetched + pinned by Dockerfile.taint-oracle (the lane's home);
+# a bare host without PIN_ROOT set self-skips this build.
+.PHONY: dr-taint-oracle-tool pin-taint-test
+dr-taint-oracle-tool:
+	@home=$${PIN_ROOT:-$${PIN_HOME}}; \
+	if [ -z "$$home" ] || [ ! -x "$$home/pin" ]; then \
+	  echo "# SKIP dr-taint-oracle-tool: PIN_ROOT unset / pin not found"; \
+	else \
+	  echo "== dr-taint-oracle-tool (PIN_ROOT=$$home LIBDFT_ROOT=$(LIBDFT_ROOT)) =="; \
+	  $(MAKE) -C pintools/libdft_oracle PIN_ROOT=$$home LIBDFT_ROOT=$(LIBDFT_ROOT) \
+	    ASMTEST_INC=$(abspath include) obj-intel64/oracle.so; \
+	  echo "built $(ORACLE_TOOL_SO)"; \
+	fi
+
+# pin-taint-test (T4 self-check) — run each shared fixture natively under
+# `pin -t oracle.so -- pin_taint <mode>` and assert the libdft channel completes (done=1,
+# the fixture's known return) with the expected libdft sink hits. Proves the Pintool + the
+# driver end-to-end before the full DR≡libdft diff (dr-taint-oracle-test). Self-skips when
+# the pinned Pin kit is absent (the docker-taint-oracle image supplies it).
+pin-taint-test:
+	@home=$${PIN_ROOT:-$${PIN_HOME}}; \
+	if [ -z "$$home" ] || [ ! -x "$$home/pin" ]; then \
+	  echo "== pin-taint-test =="; \
+	  echo "# SKIP pin-taint-test: Intel Pin not found (set PIN_ROOT to the pinned 3.20 kit)"; \
+	  echo "1..0 # skipped"; \
+	  exit 0; \
+	fi; \
+	$(MAKE) --no-print-directory $(BUILD)/pin_taint; \
+	$(MAKE) --no-print-directory dr-taint-oracle-tool; \
+	echo "=== pin-taint-test (shared fixtures under pin -t oracle.so) ==="; \
+	rc=0; \
+	for mode in seeded sink sink-negative callarg memlen; do \
+	  shm="/asmtest_taint_oracle_pt_$$mode"; \
+	  rm -f /dev/shm$$shm 2>/dev/null || true; \
+	  echo "-- pin_taint $$mode --"; \
+	  env ASMTEST_ORACLE_SHM=$$shm \
+	    "$$home/pin" -t $(ORACLE_TOOL_SO) -shm $$shm -- $(BUILD)/pin_taint $$mode || rc=1; \
+	done; \
+	exit $$rc
+
 # Inscount/inline sanity (an exit criterion): the taint client emits propagation INLINE —
 # the ONLY dr_insert_clean_call sites are rare + off the per-instruction path: on_marker
 # (region), on_seed (seed paint), on_sink_register (report), on_sink (per watched
