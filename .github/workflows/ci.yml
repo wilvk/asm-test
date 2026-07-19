@@ -619,6 +619,75 @@ jobs:
       - name: Python wrapper (single-step + scoped tracing)
         run: make WERROR=1 hwtrace-python-test
 
+  # The out-of-process ptrace single-step tracer, run LIVE on a REAL AArch64 VM.
+  # ubuntu-24.04-arm is Azure Cobalt 100 (Neoverse-N2), NOT qemu — the `test`/`cli`/
+  # `emu` jobs already use it — so the ptrace tracer/tracee single-step stream executes
+  # natively for the first time here. The x86 `hwtrace` job only builds+gates on
+  # ubuntu-latest; this is the aarch64 half. No libipt (x86-only PT decode); Capstone
+  # from the pinned 5.0.1 source build (apt's Capstone 4 degrades disassembly). The
+  # assert step makes a silent qemu-style self-skip a RED build — the whole point is
+  # that the stream ran, not that it was skipped. (aarch64-ptrace-single-step-validation T1.)
+  hwtrace-arm64:
+    name: hwtrace (AArch64 ptrace stream, live)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install OpenCSD + pkg-config + python (no libipt — x86-only PT decode)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libopencsd-dev pkg-config python3 python3-pytest
+
+      - name: Cache the pinned Capstone source build
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/asmtest-thirdparty/capstone
+          key: tp-capstone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-capstone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
+
+      - name: Build and install Capstone from source (disassembler tier)
+        run: sh scripts/thirdparty-cache.sh cached-build capstone   # pinned source build; restores from the cache when warm
+
+      - name: Build + run the hardware-trace suite LIVE (ptrace tier must NOT self-skip)
+        run: |
+          set -o pipefail
+          make WERROR=1 hwtrace-test 2>&1 | tee /tmp/hwtrace-arm64.log
+
+      - name: Assert the ptrace stream ran LIVE (no qemu self-skip, no failures, floor)
+        run: |
+          log=/tmp/hwtrace-arm64.log
+          # (1) The qemu/emulation self-skip string must NEVER appear on real silicon —
+          #     if it does, PTRACE_SINGLESTEP was non-functional and the stream proved nothing.
+          if grep -q 'AArch64 PTRACE_SINGLESTEP is non-functional' "$log"; then
+            echo "::error::hwtrace-arm64: the ptrace tier SELF-SKIPPED with the qemu-emulation reason on a REAL AArch64 runner — the live single-step stream tested NOTHING. Investigate PTRACE_SINGLESTEP on this runner (probe_singlestep in src/ptrace_backend.c)."
+            exit 1
+          fi
+          # (2) Any failing assertion is a hard failure.
+          if grep -q '^not ok' "$log"; then
+            echo "::error::hwtrace-arm64 reported FAILING assertions:"
+            grep '^not ok' "$log"
+            exit 1
+          fi
+          # (3) Only these SKIPs are expected on a real AArch64 VM (by name, never blanket):
+          #   Intel PT capture/decode (not GenuineIntel; libipt not installed) · AMD LBR / IBS
+          #   (not AMD) · ARM CoreSight (no cs_etm PMU on the Azure hypervisor) · in-process
+          #   single-step / BTF block-step (x86-only MSR/DEBUGCTL; PTRACE_SINGLEBLOCK has no
+          #   AArch64 form) · codeimage eBPF (built without libbpf) · the 'hardware bp' call-out
+          #   (x86-64 only until T2's NT_ARM_HW_BREAK arm-and-fire probe lands).
+          allow='Intel PT|intel_pt|GenuineIntel|libipt|wholewindow|AMD|IBS|CoreSight|cs_etm|in-process|BTF|SINGLEBLOCK|block-step|MSR|libbpf|codeimage bpf|hardware bp|hardware breakpoints are x86-64 only|msr'
+          unexpected=$(grep '# SKIP' "$log" | grep -vE "$allow" || true)
+          if [ -n "$unexpected" ]; then
+            echo "::error::hwtrace-arm64: UNEXPECTED # SKIP lines (not on the by-name allowlist) — a tier that should run live self-skipped. Triage, then either fix the tier or add the reason to the allowlist:"
+            echo "$unexpected"
+            exit 1
+          fi
+          # (4) Pass-count floor (backstop against 'the suite did not run').
+          n=$(grep -c '^ok ' "$log" || true)
+          floor=50   # first-green TODO: raise to (observed - a few) once the live count is recorded here with a date
+          if [ "$n" -lt "$floor" ]; then
+            echo "::error::hwtrace-arm64 ran $n ok assertions (< floor $floor) — the suite did not execute the ptrace stream."
+            exit 1
+          fi
+          echo "::notice::hwtrace-arm64: $n ok assertions, ptrace tier ran LIVE on AArch64, no unexpected skips."
+
   # asmspy, the ncurses front-end over the out-of-process tracer (cli/). The
   # headless smoke drives every non-interactive subcommand (--list/--syms/
   # --trace/--stream/--log) against the example victims; the TUI shares the
