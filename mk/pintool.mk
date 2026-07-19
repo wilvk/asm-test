@@ -48,4 +48,55 @@ pintool-tool:
 	cd pintool && $(MAKE) PIN_ROOT=$$home obj-intel64/asmtest_pintool.so
 	@echo "built $(PINTOOL_SO)"
 
+# Launch-under-pin fixture: exports the asmtest_trace_begin/_end markers the tool
+# resolves by symbol (-rdynamic puts them in the dynamic symbol table, as the DR
+# workload rule does), maps the shm channel (-lrt), materializes the shared parity
+# ROUTINE, runs it twice. -Ipintool reaches pintool_shm.h. A one-step compile+link
+# rule (like $(BUILD)/taint_workload) — it includes pintool_shm.h, not asmtest.h,
+# so it does NOT use the generic examples/%.o rule.
+$(BUILD)/pin_trace_workload: examples/pin_trace_workload.c pintool/pintool_shm.h \
+                             $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -Ipintool -rdynamic examples/pin_trace_workload.c -lrt -o $@
+
+# Out-of-process validator: expected-offset assertions + byte-for-byte parity with
+# the in-process single-step backend (always on, in-container) and the DynamoRIO
+# backend (T7, env-gated via ASMTEST_DRCLIENT). Links the union of the test_hwtrace
+# (single-step) and test_drtrace (DR app-side + assembler) link lines; drtrace_app.o
+# compiles everywhere (its DR calls are dlopen-based), so this builds without a DR
+# install and the DR arm self-skips at runtime. -rdynamic exports the drtrace_app.o
+# markers for the in-process DR replay. One-step compile+link (like taint_validator);
+# it includes pintool_shm.h, not asmtest.h, so it does NOT use the generic rule.
+$(BUILD)/pin_trace_validator: examples/pin_trace_validator.c pintool/pintool_shm.h \
+                              include/asmtest_hwtrace.h include/asmtest_trace.h \
+                              include/asmtest_drtrace.h \
+                              $(HWTRACE_OBJS) $(BUILD)/drtrace_app.o $(DRAPP_KS_OBJ) \
+                              $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -Ipintool -DPIN_VALIDATOR_DR -rdynamic \
+	      examples/pin_trace_validator.c \
+	      $(HWTRACE_OBJS) $(BUILD)/drtrace_app.o $(DRAPP_KS_OBJ) \
+	      $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) \
+	      $(DRAPP_KS_LIBS) -ldl -lpthread -lrt -o $@
+
+# pintool-test — the full parity lane. Builds tool + workload + validator, runs the
+# workload under `pin -t asmtest_pintool.so`, then the out-of-process validator.
+# Mirrors dr-taint-attach-coop-test (launcher-then-validator). The DR offset-parity
+# arm (T7) runs when DynamoRIO is configured (DR_AVAILABLE, set when DYNAMORIO_HOME
+# resolves libdynamorio); the docker-pintool image always sets it, a bare host
+# without DR self-skips that arm. The single-step parity + expected-offset arms run
+# unconditionally on any x86-64 Linux.
+PIN_SHM ?= /asmtest_pin_trace_ci
+pintool-test:
+	@home=$${PIN_HOME:-$$(sh scripts/fetch-pin.sh)}; \
+	echo "== pintool-test (PIN_ROOT=$$home) =="; \
+	$(MAKE) --no-print-directory pintool-tool PIN_HOME=$$home; \
+	$(MAKE) --no-print-directory $(BUILD)/pin_trace_workload $(BUILD)/pin_trace_validator; \
+	dr_env=""; \
+	if [ -n "$(DR_AVAILABLE)" ]; then \
+	  $(MAKE) --no-print-directory drtrace-client; \
+	  dr_env="ASMTEST_DRCLIENT=$(abspath $(BUILD)/libasmtest_drclient.so) ASMTEST_DR_LIB=$(abspath $(DR_DLLIB))"; \
+	fi; \
+	rm -f /dev/shm$(PIN_SHM) 2>/dev/null || true; \
+	"$$home/pin" -t $(PINTOOL_SO) -shm $(PIN_SHM) -- $(BUILD)/pin_trace_workload $(PIN_SHM); \
+	env $$dr_env $(BUILD)/pin_trace_validator $(PIN_SHM)
+
 endif
