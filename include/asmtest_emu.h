@@ -687,6 +687,19 @@ size_t emu_mutation_test1(emu_t *e, const void *code, size_t code_len,
                           uint64_t max_mutants, uint64_t seed,
                           emu_mutation_stat_t *stat);
 
+/* Run `code` once on `args` inside the emulator and report the DISTINCT basic-
+ * block byte-offsets it executed into caller-owned block_offs[0..cap) (deduped,
+ * like the trace). Returns the count written (<= cap). Every offset is < code_len
+ * (offsets are measured from routine entry), so a libFuzzer/AFL shim can size an
+ * external counter array to code_len and index it directly by offset — no hash.
+ * The tested seam every external-engine harness (examples/fuzz_libfuzzer.c,
+ * examples/fuzz_afl.c) bumps its coverage map through, rather than re-deriving
+ * trace handling. max_insns==0 uses the standalone TU's runaway-input cap.
+ * x86-64 guest, like the rest of Track E. Defined in src/fuzz.c (no extra dep). */
+size_t emu_cover_hits(emu_t *e, const void *code, size_t code_len,
+                      const long *args, int nargs, uint64_t max_insns,
+                      uint64_t *block_offs, size_t cap);
+
 /* Opaque-handle FFI for the fuzz/mutation stat structs (a binding allocates the
  * handle, passes it to emu_fuzz_cover1 / emu_mutation_test1, then reads the
  * totals). The drivers themselves take plain pointers/scalars, so a binding

@@ -682,6 +682,37 @@ TEST(emu, fuzz_coverage_beats_fixed_vector) {
     ASSERT_TRUE(st.corpus_len >= 2); /* several coverage-expanding inputs */
 }
 
+/* emu_cover_hits is the tested seam an external-engine (libFuzzer/AFL) shim
+ * bumps its coverage map through. Drive CLASSIFY3's three branch paths and check
+ * each returns its path-specific block among the DISTINCT offsets, every offset
+ * strictly below the routine length (the invariant the external map indexing
+ * relies on). Raw x86-64 bytes under Unicorn — no REQUIRE_X86_HOST, runs on
+ * every host including the arm64 lane. */
+TEST(emu, cover_hits_reports_executed_blocks) {
+    struct {
+        long in;
+        uint64_t path_block; /* the block only this path enters */
+    } cases[] = {
+        {-7, 0x12}, /* negative path: mov eax,-1 */
+        {0, 0x11},  /* zero path: the jz target (ret) */
+        {5, 0x0c},  /* positive path: mov eax,1 */
+    };
+    for (size_t c = 0; c < sizeof cases / sizeof cases[0]; c++) {
+        uint64_t offs[16];
+        long args[1] = {cases[c].in};
+        size_t n = emu_cover_hits(E, CLASSIFY3, sizeof CLASSIFY3, args, 1,
+                                  /*max_insns default*/ 0, offs, 16);
+        ASSERT_TRUE(n >= 1); /* a covered path reports at least one block */
+        bool found = false;
+        for (size_t i = 0; i < n; i++) {
+            ASSERT_TRUE(offs[i] < sizeof CLASSIFY3); /* offset < code_len */
+            if (offs[i] == cases[c].path_block)
+                found = true;
+        }
+        ASSERT_TRUE(found); /* the path-specific block was executed */
+    }
+}
+
 TEST(emu, fuzz_boundary_ranges_are_defined) {
     uint64_t blocks[16];
     emu_trace_t uni = {0};

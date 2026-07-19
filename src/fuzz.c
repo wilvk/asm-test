@@ -173,3 +173,29 @@ size_t emu_mutation_test1(emu_t *e, const void *code, size_t code_len,
     free(mut);
     return survived;
 }
+
+/* ------------------------------------------------------------------ */
+/* Coverage-extraction seam (external-engine harnesses)               */
+/* ------------------------------------------------------------------ */
+
+/* One tested seam so every external-engine harness (libFuzzer / AFL shim) runs
+ * an input and bumps its own coverage map through ONE place, rather than each
+ * re-deriving emu_trace_t handling. The deduped block set is written straight
+ * into the caller's buffer (trace.blocks), so there is nothing to copy back; the
+ * return is just trace.blocks_len. Every recorded offset is < code_len (offsets
+ * are measured from routine entry), so the caller can size an external counter
+ * array to code_len and index it directly — no hash. */
+size_t emu_cover_hits(emu_t *e, const void *code, size_t code_len,
+                      const long *args, int nargs, uint64_t max_insns,
+                      uint64_t *block_offs, size_t cap) {
+    if (e == NULL || code == NULL || block_offs == NULL)
+        return 0;
+    emu_trace_t trace;
+    memset(&trace, 0, sizeof trace);
+    trace.blocks = block_offs;
+    trace.blocks_cap = cap;
+    emu_result_t r;
+    emu_call_traced(e, code, code_len, args, nargs,
+                    max_insns ? max_insns : FUZZ_INSN_CAP, &r, &trace);
+    return trace.blocks_len;
+}
