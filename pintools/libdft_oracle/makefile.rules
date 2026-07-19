@@ -1,0 +1,20 @@
+# pintools/libdft_oracle/makefile.rules — declares the oracle tool the kit's default
+# rules build, and wires in libdft64 + the repo's shared headers.
+#
+# The kit's makefile.default.rules turns each name in TEST_TOOL_ROOTS into a
+# obj-intel64/<name>.so target compiled from <name>.cpp under PinCRT. We ship one tool:
+#   - oracle  (PIN-4) — the libdft64 differential taint oracle. Seeds libdft's tagmap
+#     from the app markers and appends at_taint_hit_t sink records into a POSIX shm
+#     channel (include/asmtest_taint_oracle_shm.h) in the DR client's exact shape.
+TEST_TOOL_ROOTS := oracle
+
+# libdft64 lives outside the kit at $(LIBDFT_ROOT) (default /opt/libdft64, set by
+# Dockerfile.taint-oracle / fetch-libdft.sh). Its headers are under src/ and the engine
+# archive libdft.a under src/obj-intel64/. The tool also needs the repo's shared headers
+# (asmtest_taint.h, asmtest_taint_oracle_shm.h), reached via -I$(ASMTEST_INC) — the kit
+# compiles from THIS directory, so the default is ../../include (two levels up).
+LIBDFT_ROOT ?= /opt/libdft64
+ASMTEST_INC ?= ../../include
+
+TOOL_CXXFLAGS += -I$(LIBDFT_ROOT)/src -I$(ASMTEST_INC)
+TOOL_LIBS += -L$(LIBDFT_ROOT)/src/obj-intel64 -ldft
