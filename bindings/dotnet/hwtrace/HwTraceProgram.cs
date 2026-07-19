@@ -806,6 +806,9 @@ static class HwTraceProgram
         // --- Data-flow Phase 4: live GC-move feed (GCBulkMovedObjectRanges -> gcmove) --- //
         GcMoveChecks();
 
+        // --- native-IL attribution: IlToNativeMap (MethodILToNativeMap, keyword 0x20000) --- //
+        IlToNativeMapChecks();
+
         // --- conformance replay: the ptrace_descent corpus tier (replay-or-skip) --- //
         // Mirrors bindings/python/tests/test_conformance._run_ptrace_descent: replay the
         // corpus's L1 (edges) and L2 (frames) cases live when ptrace is available AND the
@@ -1162,6 +1165,103 @@ static class HwTraceProgram
                 Console.WriteLine($"# GC-move: {map.EventCount} events, {map.RangeCount} ranges counted; "
                     + "the in-proc listener did not surface the Values struct array (concrete triple decode deferred to the raw-payload path)");
         }
+    }
+
+    // T5 fixture — JIT'd for the FIRST time inside IlToNativeMapChecks (nothing else may
+    // call or PrepareMethod it), so BOTH its MethodLoadVerbose and MethodILToNativeMap
+    // events flow through the in-proc listener under test. A few basic blocks so the IL
+    // map has several (native_off -> il_off) points to resolve against.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long IlTinyProbe(long n)
+    {
+        long acc = 0;
+        for (long i = 0; i < n; i++)
+        {
+            if ((i & 1) == 0) acc += i;
+            else acc -= 1;
+        }
+        return acc;
+    }
+
+    // T5: IlToNativeMap subscribes MethodILToNativeMap (keyword 0x20000) so a captured
+    // ABSOLUTE address resolves to (method, native_off, il_offset). Construct BEFORE the
+    // probe JITs, force its JIT, Freeze, then resolve the method's start + a mid-body
+    // address; an address in no method must fail. This harness runs with tiering ON, but
+    // the emission-order join (each load paired to its own map) keeps the resolution correct
+    // even if the loop OSR-tiers into a second body sharing ReJITID 0. CoreCLR only.
+    static void IlToNativeMapChecks()
+    {
+        var map = new IlToNativeMap();
+        // First-time JIT of the probe: MethodLoadVerbose + MethodILToNativeMap fire.
+        RuntimeHelpers.PrepareMethod(typeof(HwTraceProgram)
+            .GetMethod(nameof(IlTinyProbe), BindingFlags.NonPublic | BindingFlags.Static)
+            .MethodHandle);
+        // A real call so any lazy JIT of a Tier0 body also lands (TC=0 => one body).
+        long probe = IlTinyProbe(1000);
+        Check(probe == 249000, $"IlToNativeMap: IlTinyProbe(1000) == 249000 (got {probe})");
+
+        // EventPipe dispatch is asynchronous — poll for the load + its IL map.
+        long deadline = Environment.TickCount64 + 10000;
+        while ((map.Count == 0 || map.MapCount == 0) && Environment.TickCount64 < deadline)
+            Thread.Sleep(10);
+        map.Stop();
+        map.Freeze();
+
+        if (map.Count == 0 || !map.TryFindByName("IlTinyProbe", out ulong start, out ulong size))
+        {
+            // No MethodLoadVerbose for the probe at all: the in-proc JIT-keyword feed is off
+            // (DOTNET_EnableDiagnostics=0). Honest self-skip — no hardware/credential gate.
+            Console.WriteLine("# SKIP IlToNativeMap: no MethodLoadVerbose observed for IlTinyProbe (JIT keyword feed off)");
+            map.Dispose();
+            return;
+        }
+        Console.WriteLine($"# IlToNativeMap: {map.Count} methods, {map.MapCount} IL maps "
+            + $"({map.TotalMapEntries} entries, {map.PointsDecoded} decoded); "
+            + $"IlTinyProbe @ 0x{start:x} ({size} bytes)");
+
+        // The core deliverable: subscribing keyword 0x20000 (Verbose) DELIVERS the
+        // MethodILToNativeMap_V1 events to the in-proc listener, and the runtime reports a
+        // non-empty IL->native map. (The offset arrays themselves are truncated in-proc on
+        // .NET 8 — see the class caveat — so the concrete points are proven separately when a
+        // build surfaces them.)
+        Check(map.MapCount > 0,
+              $"IlToNativeMap: the 0x20000 keyword delivers MethodILToNativeMap events ({map.MapCount})");
+        Check(map.TotalMapEntries > 0,
+              $"IlToNativeMap: the runtime reports a non-empty IL-to-native map ({map.TotalMapEntries} entries)");
+
+        bool r0 = map.TryResolve(start, out string m0, out uint no0, out int il0);
+        Check(r0 && m0 != null && m0.Contains("IlTinyProbe"),
+              $"IlToNativeMap: the method start address resolves to IlTinyProbe (got {m0})");
+        Check(no0 == 0, $"IlToNativeMap: nativeOff at the start address is 0 (got {no0})");
+        Check(il0 >= -3, $"IlToNativeMap: start IL offset is a real offset or pseudo ({IlToNativeMap.IlName(il0)})");
+
+        ulong midAddr = start + size / 2;
+        bool r1 = map.TryResolve(midAddr, out string m1, out uint no1, out int il1);
+        Check(r1 && no1 > 0,
+              $"IlToNativeMap: a mid-body address resolves with nativeOff > 0 (got {no1})");
+        Check(il1 >= -3, $"IlToNativeMap: mid-body IL offset is valid ({IlToNativeMap.IlName(il1)})");
+
+        Check(!map.TryResolve(1UL, out _, out _, out _),
+              "IlToNativeMap: an address in no JIT'd method resolves to nothing");
+
+        // Where the runtime DID surface the offset arrays, at least one entry must decode to a
+        // real IL offset (>= 0). On .NET 8 the arrays are truncated in-proc (PointsDecoded 0),
+        // so this is exercised only where a build delivers them — reported honestly either way.
+        if (map.PointsDecoded > 0)
+        {
+            bool anyReal = false;
+            for (ulong off = 0; off < size && !anyReal; off += 1)
+                if (map.TryResolve(start + off, out _, out _, out int ilo) && ilo >= 0)
+                    anyReal = true;
+            Check(anyReal,
+                  $"IlToNativeMap: the decoded IL map resolves >=1 real IL offset ({map.PointsDecoded} points)");
+        }
+        else
+            Console.WriteLine("# NOTE IlToNativeMap: .NET 8 truncates the ILOffsets/NativeOffsets "
+                + "arrays for an in-proc listener; keyword+event+entry-count wiring asserted, "
+                + "concrete IL-offset decode is out-of-proc follow-on work");
+
+        map.Dispose();
     }
 
     // A pure-compute COLD method for the byMethod annotated-disassembly test — arithmetic

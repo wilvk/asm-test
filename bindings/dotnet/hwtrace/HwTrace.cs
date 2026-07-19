@@ -4402,6 +4402,297 @@ namespace Asmtest
     }
 
     /// <summary>
+    /// Native-IL attribution: subscribe CoreCLR's own <c>MethodILToNativeMap</c> JIT events
+    /// (keyword <c>JittedMethodILToNativeMapKeyword</c> = 0x20000, Verbose) so a captured
+    /// ABSOLUTE address resolves to <c>(method, nativeOffset, ilOffset)</c> — the IL-offset
+    /// counterpart of <see cref="JitMethodMap"/> (which names the method only). No launch knob,
+    /// no Intel PT; CoreCLR only, a no-op elsewhere.
+    ///
+    /// Construct it BEFORE the code under trace is JIT'd: an in-proc listener sees only methods
+    /// JIT'd AFTER it enables the keyword (there is no in-proc rundown of already-jitted
+    /// methods). Call <see cref="Freeze"/> after the scope closes, then <see cref="TryResolve"/>.
+    ///
+    /// CAVEAT (verified): <b>ReJITID does not distinguish tiers</b> — Tier0/Tier1/OSR bodies of
+    /// one method share ReJITID 0 at DIFFERENT addresses. Identity is therefore the code RANGE,
+    /// which is exactly what the join produces: each <c>MethodLoadVerbose</c> record gets its own
+    /// address range, and its IL map is the <c>MethodILToNativeMap</c> with equal
+    /// <c>(MethodID, ReJITID)</c> paired in emission order.
+    ///
+    /// CAVEAT (verified on .NET 8): an in-proc <see cref="EventListener"/> receives the
+    /// <c>MethodILToNativeMap_V1</c> event and its <c>CountOfMapEntries</c>, but the runtime
+    /// TRUNCATES the trailing <c>ILOffsets</c>/<c>NativeOffsets</c> arrays — they surface as
+    /// neither typed arrays nor a byte[] blob (only an out-of-proc EventPipe trace parser sees
+    /// them). So <see cref="MapCount"/>/<see cref="TotalMapEntries"/> prove the 0x20000 keyword
+    /// is wired and a real IL map exists, while <see cref="TryResolve"/> returns the method +
+    /// native offset with <c>ilOffset = NO_MAPPING</c> until a build surfaces the arrays (the
+    /// <see cref="PointsDecoded"/> path). Feeding an <c>asmtest_srcreg</c> from a decoded map is
+    /// follow-on work once a build/route delivers the offsets.
+    /// </summary>
+    public sealed class IlToNativeMap : EventListener
+    {
+        const string RuntimeProvider = "Microsoft-Windows-DotNETRuntime";
+        // JitKeyword 0x10 (MethodLoadVerbose, Informational) | JittedMethodILToNativeMapKeyword
+        // 0x20000 (MethodILToNativeMap, Verbose). One Verbose subscription carries both.
+        const EventKeywords Keywords = (EventKeywords)(0x10 | 0x20000);
+
+        // ICorDebugInfo pseudo-IL-offsets, mirrored from ASMTEST_SRC_IL_* (asmtest_trace.h).
+        public const int IlNoMapping = -1;
+        public const int IlProlog = -2;
+        public const int IlEpilog = -3;
+
+        readonly object _lock = new object();
+        readonly List<Load> _loads = new List<Load>();
+        readonly List<IlMap> _maps = new List<IlMap>();
+        volatile bool _stopped;
+        Method[] _frozen; // sorted by Start for binary search
+
+        struct Load { public ulong MethodId, ReJITID, Start, Size; public string Name; }
+        struct IlMap { public ulong MethodId, ReJITID; public int Entries; public IlPoint[] Points; }
+        struct IlPoint { public uint NativeOffset; public int IlOffset; }
+        struct Method { public ulong Start, End; public string Name; public int MapEntries; public IlPoint[] Points; }
+
+        /// <summary>MethodLoadVerbose records observed.</summary>
+        public int Count { get { lock (_lock) return _loads.Count; } }
+        /// <summary>MethodILToNativeMap records observed (the 0x20000 keyword fired).</summary>
+        public int MapCount { get { lock (_lock) return _maps.Count; } }
+        /// <summary>Total IL->native map entries the runtime reported (the sum of each event's
+        /// <c>CountOfMapEntries</c>) — non-zero proves a real IL map was delivered, even on a
+        /// runtime that does not surface the offset ARRAYS to an in-proc listener.</summary>
+        public int TotalMapEntries { get { lock (_lock) { int t = 0; foreach (var m in _maps) t += m.Entries; return t; } } }
+        /// <summary>Concrete (native_off, il_off) points decoded from the offset arrays (0 when
+        /// the in-proc listener truncated them at CountOfMapEntries — the common .NET 8 case).</summary>
+        public int PointsDecoded { get { lock (_lock) { int t = 0; foreach (var m in _maps) t += m.Points.Length; return t; } } }
+
+        /// <summary>The latest observed method whose name contains
+        /// <paramref name="nameSubstring"/> — its native (start,size). False if none.</summary>
+        public bool TryFindByName(string nameSubstring, out ulong start, out ulong size)
+        {
+            start = 0; size = 0;
+            if (string.IsNullOrEmpty(nameSubstring)) return false;
+            lock (_lock)
+                for (int i = _loads.Count - 1; i >= 0; i--)
+                    if (_loads[i].Name.Contains(nameSubstring))
+                    { start = _loads[i].Start; size = _loads[i].Size; return true; }
+            return false;
+        }
+
+        protected override void OnEventSourceCreated(EventSource src)
+        {
+            if (src != null && src.Name == RuntimeProvider)
+                EnableEvents(src, EventLevel.Verbose, Keywords);
+        }
+
+        protected override void OnEventWritten(EventWrittenEventArgs e)
+        {
+            // The base ctor can dispatch before this instance's fields init; a listener
+            // callback must never throw. Guard + wrap. `_stopped` freezes ingestion.
+            if (_stopped || _lock == null || _loads == null || _maps == null) return;
+            try
+            {
+                string name = e.EventName;
+                if (name == null) return;
+                // Runtime spells these MethodLoadVerbose_V1/_V2 and MethodILToNativeMap_V1.
+                if (name.StartsWith("MethodILToNativeMap")) ParseIlMap(e);
+                else if (name.StartsWith("MethodLoadVerbose")) ParseLoad(e);
+            }
+            catch { /* a malformed payload must not tear down the listener */ }
+        }
+
+        void ParseLoad(EventWrittenEventArgs e)
+        {
+            ulong mid = 0, rejit = 0, start = 0, size = 0;
+            string ns = null, mn = null;
+            var names = e.PayloadNames;
+            if (names == null) return;
+            for (int i = 0; i < names.Count; i++)
+            {
+                object v = e.Payload[i];
+                switch (names[i])
+                {
+                    case "MethodID": mid = Convert.ToUInt64(v); break;
+                    case "ReJITID": rejit = Convert.ToUInt64(v); break;
+                    case "MethodStartAddress": start = Convert.ToUInt64(v); break;
+                    case "MethodSize": size = Convert.ToUInt64(v); break;
+                    case "MethodNamespace": ns = v as string; break;
+                    case "MethodName": mn = v as string; break;
+                }
+            }
+            if (start == 0 || size == 0) return;
+            string full = string.IsNullOrEmpty(ns) ? (mn ?? "?") : ns + "." + mn;
+            lock (_lock)
+            {
+                _loads.Add(new Load { MethodId = mid, ReJITID = rejit, Start = start, Size = size, Name = full });
+                _frozen = null;
+            }
+        }
+
+        void ParseIlMap(EventWrittenEventArgs e)
+        {
+            // Payload: MethodID u64, ReJITID u64, MethodExtent u8, CountOfMapEntries u16,
+            // ILOffsets u32[], NativeOffsets u32[], ClrInstanceID u16. In-proc array payloads
+            // are runtime-inconsistent (int[]/uint[]/IEnumerable, or a byte[] blob), so decode
+            // both — following the GcMoveMap byte[]-blob precedent.
+            ulong mid = 0, rejit = 0;
+            int count = -1;
+            object ilObj = null, natObj = null;
+            var names = e.PayloadNames;
+            if (names == null) return;
+            for (int i = 0; i < names.Count; i++)
+            {
+                object v = e.Payload[i];
+                switch (names[i])
+                {
+                    case "MethodID": mid = Convert.ToUInt64(v); break;
+                    case "ReJITID": rejit = Convert.ToUInt64(v); break;
+                    case "CountOfMapEntries": count = Convert.ToInt32(v); break;
+                    case "ILOffsets": ilObj = v; break;
+                    case "NativeOffsets": natObj = v; break;
+                }
+            }
+            int[] il = DecodeI32Array(ilObj);
+            int[] nat = DecodeI32Array(natObj);
+            IlPoint[] pts;
+            if (il != null && nat != null)
+            {
+                int n = Math.Min(il.Length, nat.Length);
+                pts = new IlPoint[n];
+                for (int i = 0; i < n; i++)
+                    pts[i] = new IlPoint { NativeOffset = unchecked((uint)nat[i]), IlOffset = il[i] };
+                Array.Sort(pts, (x, y) => x.NativeOffset.CompareTo(y.NativeOffset)); // enclosing-point
+            }
+            else
+            {
+                // The in-proc EventListener truncated the ILOffsets/NativeOffsets arrays after
+                // CountOfMapEntries (the common .NET 8 case — they surface neither as typed
+                // arrays nor as a byte[] blob). Record the entry COUNT so the map's presence is
+                // still provable; the concrete points stay empty (ilOffset resolves to
+                // NO_MAPPING). A future runtime/build that surfaces the arrays decodes above.
+                pts = Array.Empty<IlPoint>();
+            }
+            if (count < 0) count = pts.Length;
+            lock (_lock)
+            {
+                _maps.Add(new IlMap { MethodId = mid, ReJITID = rejit, Entries = count, Points = pts });
+                _frozen = null;
+            }
+        }
+
+        // Decode a u32-array event field to int[], handling every shape an in-proc
+        // EventListener may hand us: int[]/uint[] (typed), IEnumerable, or a raw byte[] blob
+        // (each u32 little-endian). Returns null if the field is absent/unhandled.
+        static int[] DecodeI32Array(object v)
+        {
+            switch (v)
+            {
+                case null: return null;
+                case int[] ia: return ia;
+                case uint[] ua:
+                {
+                    var r = new int[ua.Length];
+                    for (int i = 0; i < ua.Length; i++) r[i] = unchecked((int)ua[i]);
+                    return r;
+                }
+                case byte[] blob:
+                {
+                    var r = new int[blob.Length / 4];
+                    for (int i = 0; i < r.Length; i++) r[i] = BitConverter.ToInt32(blob, i * 4);
+                    return r;
+                }
+                case System.Collections.IEnumerable en:
+                {
+                    var list = new List<int>();
+                    foreach (var o in en) list.Add(Convert.ToInt32(o));
+                    return list.ToArray();
+                }
+                default: return null;
+            }
+        }
+
+        /// <summary>Stop ingesting events — call right after the traced scope closes.</summary>
+        public void Stop() { _stopped = true; }
+
+        public override void Dispose() { _stopped = true; base.Dispose(); }
+
+        /// <summary>Join loads to their IL maps by equal <c>(MethodID, ReJITID)</c> and snapshot
+        /// the method ranges sorted by start for O(log n) <see cref="TryResolve"/>. Callback
+        /// ordering across threads is not guaranteed, so join HERE (not per-event). Call once
+        /// after <see cref="Stop"/>.</summary>
+        public void Freeze()
+        {
+            lock (_lock)
+            {
+                // ReJITID does not distinguish tiers, so a method may have several loads
+                // (Tier0, OSR, Tier1) sharing (MethodID, ReJITID) at DIFFERENT addresses,
+                // each with its OWN MethodILToNativeMap (which carries no address). Pair the
+                // i-th load with the i-th UNUSED matching map (emission order: each
+                // compilation emits load-then-map), so each address range gets its own map.
+                var mapUsed = new bool[_maps.Count];
+                var a = new Method[_loads.Count];
+                for (int i = 0; i < _loads.Count; i++)
+                {
+                    var ld = _loads[i];
+                    IlPoint[] pts = null; int entries = 0; bool found = false;
+                    for (int j = 0; j < _maps.Count; j++)
+                        if (!mapUsed[j] && _maps[j].MethodId == ld.MethodId && _maps[j].ReJITID == ld.ReJITID)
+                        { pts = _maps[j].Points; entries = _maps[j].Entries; mapUsed[j] = true; found = true; break; }
+                    if (!found) // fewer maps than loads: reuse the newest matching
+                        for (int j = _maps.Count - 1; j >= 0; j--)
+                            if (_maps[j].MethodId == ld.MethodId && _maps[j].ReJITID == ld.ReJITID)
+                            { pts = _maps[j].Points; entries = _maps[j].Entries; break; }
+                    a[i] = new Method { Start = ld.Start, End = ld.Start + ld.Size, Name = ld.Name, MapEntries = entries, Points = pts };
+                }
+                Array.Sort(a, (x, y) => x.Start.CompareTo(y.Start));
+                _frozen = a;
+            }
+        }
+
+        /// <summary>Resolve absolute <paramref name="addr"/> to its managed
+        /// <paramref name="method"/>, <paramref name="nativeOff"/> from the method start, and
+        /// enclosing <paramref name="ilOffset"/> (the map entry with the largest
+        /// <c>NativeOffset &lt;= nativeOff</c> — the same enclosing-point semantics as the T3
+        /// srcmap; pseudo-offsets -1/-2/-3 pass through). Returns false for an address outside
+        /// every observed method. Call after <see cref="Freeze"/>.</summary>
+        public bool TryResolve(ulong addr, out string method, out uint nativeOff, out int ilOffset)
+        {
+            method = null; nativeOff = 0; ilOffset = IlNoMapping;
+            Method[] s = _frozen;
+            if (s == null) { Freeze(); s = _frozen; }
+            if (s == null || s.Length == 0) return false;
+            int lo = 0, hi = s.Length - 1, hit = -1;
+            while (lo <= hi)
+            {
+                int mid = (int)(((uint)lo + (uint)hi) >> 1);
+                if (addr < s[mid].Start) hi = mid - 1;
+                else if (addr >= s[mid].End) lo = mid + 1;
+                else { hit = mid; break; }
+            }
+            if (hit < 0) return false;
+            method = s[hit].Name;
+            nativeOff = (uint)(addr - s[hit].Start);
+            var pts = s[hit].Points;
+            if (pts != null)
+                for (int i = 0; i < pts.Length; i++)
+                    if (pts[i].NativeOffset <= nativeOff) ilOffset = pts[i].IlOffset;
+                    else break;
+            return true;
+        }
+
+        /// <summary>Kind-labelled name of an IL offset: the ICorDebugInfo pseudo-offsets
+        /// (<c>NO_MAPPING</c>/<c>PROLOG</c>/<c>EPILOG</c>) or <c>IL_0xNN</c> — matching the T3
+        /// srcmap report spelling.</summary>
+        public static string IlName(int ilOffset)
+        {
+            switch (ilOffset)
+            {
+                case IlNoMapping: return "NO_MAPPING";
+                case IlProlog: return "PROLOG";
+                case IlEpilog: return "EPILOG";
+                default: return ilOffset >= 0 ? $"IL_0x{ilOffset:x}" : $"IL({ilOffset})";
+            }
+        }
+    }
+
+    /// <summary>
     /// Data-flow Phase 4 — the LIVE feed for the GC-move canonicalizer (the pure C side
     /// <c>asmtest_gcmove_canonicalize</c> in <c>src/dataflow_gcmove.c</c>). An in-proc
     /// <see cref="EventListener"/> on the CoreCLR runtime provider that captures
