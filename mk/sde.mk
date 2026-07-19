@@ -47,6 +47,7 @@ else
 # (the APX suite, the AVX-512 un-skip, the Unicorn cross-check) each add one line.
 sde-test:
 	@$(MAKE) --no-print-directory sde-null-test
+	@$(MAKE) --no-print-directory sde-avx512-test
 	@$(MAKE) --no-print-directory sde-apx-test
 	@echo "== sde-test: all SDE sub-lanes passed =="
 endif
@@ -65,6 +66,31 @@ sde-null-test: $(BUILD)/test_arith $(BUILD)/test_capture $(BUILD)/test_mem
 	  $(SDE64) $(SDE_CHIP) -- $(BUILD)/$$t > $(BUILD)/sde-null-$$t.sde.tap; \
 	  diff -u $(BUILD)/sde-null-$$t.native.tap $(BUILD)/sde-null-$$t.sde.tap; \
 	done; echo "sde-null-test: native and sde64 $(SDE_CHIP) TAP identical"
+
+# --- AVX-512-on-AVX2 un-skip assertion --------------------------------------
+# The EXISTING test_simd suite carries capability self-skips: on an AVX2-only host
+# (e.g. a CI runner) simd.avx512_adds_eight_doubles_512bit reports `# SKIP AVX-512F
+# not available`. Under `sde64 -future` the emulated CPUID + XGETBV satisfy
+# asmtest_cpu_has_avx512f()'s XCR0 0xe6 check, so the case must run as a BARE `ok`
+# — the anchored regex rejects the `... # SKIP` form. The AVX2 case guards the
+# AVX2-on-SSE-host analog. This converts a documented capability skip into a real
+# execution regardless of the host's true AVX support (its value in one command:
+# bare test_simd may skip avx512, under -future it runs).
+.PHONY: sde-avx512-test
+sde-avx512-test: $(BUILD)/test_simd
+	@echo "== sde-avx512-test =="
+	@$(SDE64) $(SDE_CHIP) -- $(BUILD)/test_simd > $(BUILD)/sde-simd.tap; rc=$$?; \
+	 [ $$rc -eq 0 ] || { echo "FAIL: test_simd exited $$rc under sde64 $(SDE_CHIP)"; \
+	   cat $(BUILD)/sde-simd.tap; exit 1; }; \
+	 for c in simd.avx512_adds_eight_doubles_512bit simd.avx2_adds_four_doubles_256bit; do \
+	   if grep -E "^ok [0-9]+ - $$c\$$" $(BUILD)/sde-simd.tap >/dev/null; then \
+	     echo "ok - $$c ran (not skipped) under $(SDE_CHIP)"; \
+	   else \
+	     echo "FAIL: $$c skipped or failed under $(SDE_CHIP)"; \
+	     grep -E "$$c" $(BUILD)/sde-simd.tap; exit 1; \
+	   fi; \
+	 done; \
+	 echo "sde-avx512-test: avx2 + avx512 cases ran under sde64 $(SDE_CHIP) regardless of host AVX support"
 
 # --- APX (r16-r31 / REX2 / NDD) fixture suite -------------------------------
 # The APX routines in examples/apx_basic.s #UD on all shipping silicon, so they
