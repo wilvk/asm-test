@@ -49,3 +49,47 @@ $(BUILD)/fuzz_libfuzzer_crash: examples/fuzz_libfuzzer.c $(FUZZ_ENGINE_OBJS) | $
 .PHONY: fuzz-libfuzzer
 fuzz-libfuzzer: $(BUILD)/fuzz_libfuzzer $(BUILD)/fuzz_libfuzzer_crash
 	@echo "built $(BUILD)/fuzz_libfuzzer (+_crash) via clang -fsanitize=fuzzer"
+
+# --- AFL++ harnesses (T3) ---------------------------------------------------
+# afl-clang-fast instruments only the harness's OWN code (a small constant
+# background in the map); the guest runs under Unicorn, invisible to it, so each
+# executed guest block is written into AFL's shared-memory bitmap by hand via
+# asmtest_afl_map_bump. That helper lives in examples/fuzz_afl_map.c, built by
+# $(CC) (NOT afl-clang-fast) — the afl instrumentation pass rewrites a harness's
+# own __afl_area_ptr reference to an undefined module-local __afl_area_ptr.2, so
+# the map write must sit in a plain-compiled TU. Both engines share it. AFL++
+# ships no SanitizerCoverage runtime, so this is the ONLY way to feed AFL the
+# guest coverage (a verbatim reuse of the libFuzzer sancov harness would not
+# link under AFL).
+$(BUILD)/fuzz_afl_map.o: examples/fuzz_afl_map.c $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+# Path B — native persistent-mode forkserver (examples/fuzz_afl.c), no libFuzzer.
+$(BUILD)/fuzz_afl: examples/fuzz_afl.c $(FUZZ_ENGINE_OBJS) $(BUILD)/fuzz_afl_map.o | $(BUILD)
+	$(AFL_CLANG_FAST) $(FUZZ_ENGINE_CFLAGS) $< $(FUZZ_ENGINE_OBJS) \
+	  $(BUILD)/fuzz_afl_map.o $(FUZZ_ENGINE_LIBS) -o $@
+
+$(BUILD)/fuzz_afl_crash: examples/fuzz_afl.c $(FUZZ_ENGINE_OBJS) $(BUILD)/fuzz_afl_map.o | $(BUILD)
+	$(AFL_CLANG_FAST) -DFUZZ_CRASH_GUEST $(FUZZ_ENGINE_CFLAGS) $< \
+	  $(FUZZ_ENGINE_OBJS) $(BUILD)/fuzz_afl_map.o $(FUZZ_ENGINE_LIBS) -o $@
+
+.PHONY: fuzz-afl
+fuzz-afl: $(BUILD)/fuzz_afl $(BUILD)/fuzz_afl_crash
+	@echo "built $(BUILD)/fuzz_afl (+_crash) via afl-clang-fast (native forkserver)"
+
+# Path A — reuse the libFuzzer harness under aflpp_driver: afl-clang-fast
+# -fsanitize=fuzzer links libAFLDriver.a (its own main + forkserver loop) in
+# place of libFuzzer. -DFUZZ_AFL_DRIVER swaps the harness's coverage sink from
+# sancov counters to AFL's map (the same fuzz_afl_map.o helper).
+$(BUILD)/fuzz_afl_driver: examples/fuzz_libfuzzer.c $(FUZZ_ENGINE_OBJS) $(BUILD)/fuzz_afl_map.o | $(BUILD)
+	$(AFL_CLANG_FAST) -fsanitize=fuzzer -DFUZZ_AFL_DRIVER $(FUZZ_ENGINE_CFLAGS) \
+	  $< $(FUZZ_ENGINE_OBJS) $(BUILD)/fuzz_afl_map.o $(FUZZ_ENGINE_LIBS) -o $@
+
+$(BUILD)/fuzz_afl_driver_crash: examples/fuzz_libfuzzer.c $(FUZZ_ENGINE_OBJS) $(BUILD)/fuzz_afl_map.o | $(BUILD)
+	$(AFL_CLANG_FAST) -fsanitize=fuzzer -DFUZZ_AFL_DRIVER -DFUZZ_CRASH_GUEST \
+	  $(FUZZ_ENGINE_CFLAGS) $< $(FUZZ_ENGINE_OBJS) $(BUILD)/fuzz_afl_map.o \
+	  $(FUZZ_ENGINE_LIBS) -o $@
+
+.PHONY: fuzz-afl-driver
+fuzz-afl-driver: $(BUILD)/fuzz_afl_driver $(BUILD)/fuzz_afl_driver_crash
+	@echo "built $(BUILD)/fuzz_afl_driver (+_crash) via afl-clang-fast -fsanitize=fuzzer (aflpp_driver)"
