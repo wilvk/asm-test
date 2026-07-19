@@ -14,6 +14,7 @@ below).
 | `DynamoRIO-<ver>.txt` | DynamoRIO (native-trace tier runtime) | 11.91.20630 ([fetch-dynamorio.sh](../scripts/fetch-dynamorio.sh)) | BSD-3-Clause |
 | `LGPL-2.1.txt` | drwrap (DynamoRIO ext/) and umbra (Dr. Memory Framework) — verbatim GNU LGPL v2.1 | 11.91.20630 | LGPL-2.1-only |
 | `Pin-<ver>.txt` / `Pin-<ver>-third-party.txt` | Intel Pin (DBI pintool test lane) — **test-lane only, never bundled**: fetched and digest-verified at build/test time for `docker-pintool`/`pintool-test`, never linked into a shipped package | 4.2-99776-g21d818fa2 ([fetch-pin.sh](../scripts/fetch-pin.sh)) | LicenseRef-Intel-Simplified-Software-License |
+| `intel-sde-10.8.0/` | Intel SDE (test-lane oracle) — **test-lane only, never bundled**: the future/absent-ISA emulator, fetched and digest-verified at build/test time for `docker-sde`/`sde-test`, never linked into a shipped package | 10.8.0 ([fetch-sde.sh](../scripts/fetch-sde.sh)) | LicenseRef-Intel-Simplified-Software-License |
 
 The DynamoRIO text is captured on first fetch by
 [fetch-dynamorio.sh](../scripts/fetch-dynamorio.sh) (the pinned tarball's own
@@ -43,6 +44,24 @@ decoder is Apache-2.0). Unlike every other row here, the Pin kit is fetched for
 **not** collected by `collect-licenses.sh` — the capture exists purely so the
 fetched kit's proprietary license terms are recorded in the tree. See
 [pin-xed-trace-tier.md](../docs/internal/implementations/pin-xed-trace-tier.md#constraints--gates)
+for the full rationale.
+
+`intel-sde-10.8.0/` is a **directory** (not a single `.txt`) captured verbatim on
+first fetch by [fetch-sde.sh](../scripts/fetch-sde.sh) from the pinned kit's
+`Licenses/` — the Intel Simplified Software License PDF (`LICENSE.pdf`), the
+`third-party-programs.txt` notice, and the bundled Pin/XED `pin licensing/`
+subdirectory. The Intel Simplified Software License permits redistribution
+**without modification** with the notice reproduced, so the copy must stay
+verbatim; the license is **not on the SPDX license list**, hence the
+`LicenseRef-Intel-Simplified-Software-License` id above rather than a standard
+SPDX identifier. Like Pin, SDE is a **test/oracle-only** dependency
+(`docker-sde` / `sde-test`): it emulates future/absent ISA extensions (APX,
+AVX10.2, AMX, AVX-512-on-AVX2) for the whole process so an unmodified suite runs
+under `sde64 -future`, but it is never linked into `libasmtest`/`libasmtest_emu`,
+ships in no package, gets no public header, and — unlike DynamoRIO, which *can*
+be a native-trace-tier payload — never reaches a package slot, so
+`collect-licenses.sh` carries **no** entry for it at all. See
+[pin-sde-future-isa-lane.md](../docs/internal/implementations/pin-sde-future-isa-lane.md#constraints--gates)
 for the full rationale.
 
 [scripts/collect-licenses.sh](../scripts/collect-licenses.sh) copies the shipped-package
