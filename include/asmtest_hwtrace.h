@@ -671,8 +671,9 @@ int asmtest_hwtrace_pt_set_filter(void *ctx, const char *filter);
 /* ------------------------------------------------------------------ */
 /* The foreign (pid>0) sibling of the begin/end window pair above: open an
  * intel_pt perf-AUX event against a RUNNING process, drain its AUX honestly, and
- * dispatch the blob into the SAME asmtest_pt_decode_window (there is one decode,
- * not two). Built entirely on the substrate's pt_aux_open/stop/close helpers — no
+ * dispatch the blob through the SAME asmtest_pt_decode_window decode as the
+ * self-trace window pair — one decode, not two. Built entirely on the
+ * substrate's pt_aux_open/stop/close helpers — no
  * parallel PT arm. The capture ctx is opaque (its struct is internal to
  * src/hwtrace.c, embedding one pt_aux_t + the foreign code-image recorder).
  * intel-pt-attach-foreign-pid.md owns this surface. Linux x86-64 only; every path

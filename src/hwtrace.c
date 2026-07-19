@@ -2529,6 +2529,14 @@ int asmtest_hwtrace_pt_attach_begin(int pid, const char *obj_hint,
         free(a);
         return rc;
     }
+    /* T2: pair the capture with a live FOREIGN code-image recorder so the decode in end()
+     * has the exact bytes live at each trace position. The recorder only READS the target
+     * (process_vm_readv + soft-dirty/PAGEMAP_SCAN), so it needs no ptrace-STOP — but the
+     * foreign attach does need CAP_SYS_PTRACE (or the target's PR_SET_PTRACER_ANY) for that
+     * read, in ADDITION to CAP_PERFMON for the PT event. NULL when the substrate is absent:
+     * end() then requires a caller-supplied image. */
+    if (asmtest_codeimage_available())
+        a->img = asmtest_codeimage_new((pid_t)pid);
     /* Optional hardware address filter: ONLY when obj_hint names a REGULAR backing file
      * (file-backed VMAs by inode). Anonymous/JIT code cannot be address-filtered — it is
      * captured whole and scoped by the software IP post-filter in end(). A rejected filter
@@ -2601,18 +2609,58 @@ int asmtest_hwtrace_pt_attach_end(asmtest_pt_attach_t *a, uint64_t when,
     if (a == NULL)
         return ASMTEST_HW_EINVAL;
 #if defined(__linux__)
-    /* Stop the event and drain anything left in the ring, then decode (T4). */
+    /* Stop the event and drain anything left in the ring. */
     ioctl(a->aux.fd, PERF_EVENT_IOC_DISABLE, 0);
     pt_attach_drain(a);
-    (void)when;
-    (void)trace;
-    /* The decode dispatch lands in T4; T1 proves the capture lifecycle + teardown. */
+    /* trace == NULL: legal drain-less release — teardown only (a finalizer freeing a
+     * leaked scope), mirroring the window pair's null-drain contract. */
+    if (trace == NULL) {
+        pt_aux_close(&a->aux);
+        if (a->img != NULL)
+            asmtest_codeimage_free(a->img);
+        free(a->acc);
+        free(a);
+        return ASMTEST_HW_OK;
+    }
+    /* Decode the ACCUMULATED linearized AUX against the ctx's own foreign code-image as of
+     * `when` (0 -> the latest snapshot), through the SAME asmtest_pt_decode_window the
+     * self-trace window pair calls — one decode, not two (HWT-PT-WIRE). No recorder ->
+     * EDECODE, but always after a full teardown (never leak the fd/mmaps/buffer). */
+    int rc;
+    if (a->img == NULL) {
+        rc = ASMTEST_HW_EDECODE;
+    } else {
+        asmtest_codeimage_refresh(a->img);
+        uint64_t dwhen = when ? when : asmtest_codeimage_now(a->img);
+        /* Re-base the appended entries to ABSOLUTE addresses (the window ABI): snapshot the
+         * append cursors, decode (records offsets from the first decoded IP, returns it in
+         * base_ip), then add base_ip to ONLY the newly appended insns[]/blocks[]. */
+        size_t insn0 = trace->insns_len;
+        size_t blk0 = trace->blocks_len;
+        uint64_t base_ip = 0;
+        rc = asmtest_pt_decode_window(a->acc, a->acc_len, a->img, dwhen, trace,
+                                      &base_ip);
+        for (size_t i = insn0; i < trace->insns_len; i++)
+            trace->insns[i] += base_ip;
+        for (size_t i = blk0; i < trace->blocks_len; i++)
+            trace->blocks[i] += base_ip;
+        /* Software IP post-filter (T4): with no hardware address filter a whole-thread
+         * capture records the loader/runtime too — drop decoded IPs outside the tracked
+         * region of interest (the mandatory fallback for anonymous/JIT memory). No-op when
+         * a region was hardware-filtered or none was tracked. */
+        if (!a->have_filter && a->roi_len > 0)
+            asmtest_pt_ip_postfilter(trace, insn0, blk0, base_ip, a->roi_base,
+                                     a->roi_len);
+    }
+    /* Truncation policy: overflow (across any drain) OR a decode failure flags it. */
+    if (a->truncated || rc != ASMTEST_HW_OK)
+        trace->truncated = true;
     pt_aux_close(&a->aux);
     if (a->img != NULL)
         asmtest_codeimage_free(a->img);
     free(a->acc);
     free(a);
-    return ASMTEST_HW_OK;
+    return rc;
 #else
     (void)when;
     (void)trace;

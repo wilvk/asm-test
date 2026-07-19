@@ -4016,6 +4016,12 @@ static void test_pt_attach_selfskip(void) {
         CHECK(rc == ASMTEST_HW_EUNAVAIL && a == NULL,
               "pt attach: begin self-skips EUNAVAIL with *out==NULL off the "
               "intel_pt PMU");
+        /* T2: the perf (PT) gate short-circuits BEFORE the foreign code-image
+         * recorder is created, so no half-open stack leaks even where the
+         * recorder substrate IS available — the pairing runs only on real PT. */
+        printf("# NOTE pt attach: foreign code-image recorder available=%d "
+               "(paired only once the PT capture opens — hardware-gated)\n",
+               asmtest_codeimage_available());
         printf("# SKIP pt attach: no Intel PT on this host (live foreign-pid "
                "capture is hardware-gated)\n");
         return;
@@ -4024,6 +4030,75 @@ static void test_pt_attach_selfskip(void) {
      * hardware-gated attach lane (a separate agent). */
     printf("# NOTE pt attach: intel_pt present — live foreign-pid capture "
            "validated by the hardware-gated attach lane\n");
+}
+
+/* intel-pt-attach-foreign-pid T4 — the PORTABLE software half of the foreign attach:
+ * the AUX-ring de-wrap and the IP post-filter are pure logic (no PMU), so they run and
+ * are asserted on ANY host, including this AMD box where the live PT capture self-skips. */
+static void test_pt_attach_helpers(void) {
+    /* (A) asmtest_pt_aux_dewrap — linearize [tail, head) of a circular AUX ring. */
+    uint8_t ring[16];
+    for (int i = 0; i < 16; i++)
+        ring[i] = (uint8_t)(0x10 + i);
+    uint8_t dst[16];
+
+    memset(dst, 0, sizeof dst);
+    asmtest_pt_aux_dewrap(ring, 16, 2, 6, dst); /* non-wrapping */
+    CHECK(dst[0] == 0x12 && dst[1] == 0x13 && dst[2] == 0x14 && dst[3] == 0x15,
+          "pt attach dewrap: non-wrapping [2,6) linearizes to ring[2..5]");
+
+    memset(dst, 0, sizeof dst);
+    asmtest_pt_aux_dewrap(ring, 16, 14, 18, dst); /* wraps the ring boundary */
+    CHECK(dst[0] == 0x1E && dst[1] == 0x1F && dst[2] == 0x10 && dst[3] == 0x11,
+          "pt attach dewrap: wrapping [14,18) crosses the boundary (two "
+          "memcpys)");
+
+    memset(dst, 0, sizeof dst);
+    asmtest_pt_aux_dewrap(ring, 16, 16, 32,
+                          dst); /* a full ring, tail aligned */
+    int full_ok = 1;
+    for (int i = 0; i < 16; i++)
+        if (dst[i] != (uint8_t)(0x10 + i))
+            full_ok = 0;
+    CHECK(full_ok,
+          "pt attach dewrap: a full ring [16,32) linearizes to the whole ring");
+
+    memset(dst, 0xAA, sizeof dst);
+    asmtest_pt_aux_dewrap(ring, 16, 8, 8, dst); /* empty window */
+    CHECK(dst[0] == 0xAA, "pt attach dewrap: empty window [8,8) is a no-op");
+
+    /* (B) asmtest_pt_ip_postfilter — drop entries whose ABSOLUTE ip is out of region. The
+     * kept set is the SAME {0,3,6,c,11} / blocks {0,0x11} ground truth the ROUTINE walk and
+     * the hardware-gated live attach assert against. */
+    uint64_t ib[8] = {0x0, 0x3, 0x6, 0xc, 0x11, 0x100, 0x200, 0x0};
+    uint64_t bb[4] = {0x0, 0x11, 0x100, 0x0};
+    asmtest_trace_t t;
+    memset(&t, 0, sizeof t);
+    t.insns = ib;
+    t.insns_cap = 8;
+    t.insns_len = 7;
+    t.blocks = bb;
+    t.blocks_cap = 4;
+    t.blocks_len = 3;
+    /* base_ip 0x1000; region [0x1000, 0x1012) keeps offsets 0..0x11, drops 0x100/0x200. */
+    asmtest_pt_ip_postfilter(&t, 0, 0, 0x1000, 0x1000, 0x12);
+    CHECK(t.insns_len == 5 && t.insns[0] == 0x0 && t.insns[4] == 0x11,
+          "pt attach ip_postfilter: drops out-of-region insn IPs, keeps "
+          "{0,3,6,c,11}");
+    CHECK(t.blocks_len == 2 && t.blocks[0] == 0x0 && t.blocks[1] == 0x11,
+          "pt attach ip_postfilter: drops out-of-region block IPs, keeps "
+          "{0,0x11}");
+
+    /* region_len==0 keeps everything (no region of interest tracked). */
+    uint64_t ib2[3] = {0x0, 0x1000, 0x2000};
+    asmtest_trace_t t2;
+    memset(&t2, 0, sizeof t2);
+    t2.insns = ib2;
+    t2.insns_cap = 3;
+    t2.insns_len = 3;
+    asmtest_pt_ip_postfilter(&t2, 0, 0, 0, 0, 0);
+    CHECK(t2.insns_len == 3,
+          "pt attach ip_postfilter: region_len==0 keeps everything (no ROI)");
 }
 
 /* T3 — the WEAK/STRONG window ladder + runtime decode-trust probe. Host-neutral: the
@@ -10434,6 +10509,7 @@ int main(void) {
     test_wholewindow_decode();
     test_pt_window_pair_selfskip();
     test_pt_attach_selfskip();
+    test_pt_attach_helpers();
     test_window_ladder();
     test_pt_live_selfjit();
 

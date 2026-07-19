@@ -170,6 +170,19 @@ ALL asmtest_hwtrace_pt_window_trusted     # runtime decode-trust probe feeding t
 ALL asmtest_hwtrace_window_image          # self code-image accessor for the armed window (decode-on-close); C-level, not direct FFI
 ALL asmtest_hwtrace_pt_set_filter         # thin PERF_EVENT_IOC_SET_FILTER ioctl knob on the PT arm; C-level, not per-binding FFI
 
+# Intel PT attach-to-foreign-PID capture (intel-pt-attach-foreign-pid, 2026-07-19) — the
+# foreign (pid>0) sibling of the PT window pair above, built on the SAME one pt_aux_open arm.
+# C-level capture lifecycle driven by C examples + the hardware-gated live attach lane; a
+# binding grows the attach-by-pid shape (dotnet an AsmTrace(pid) ctor over begin/poll/end) when
+# it needs foreign-PID PT, the same posture as pt_begin_window/end_window above. Hardware-gated
+# (bare-metal Intel PT + CAP_PERFMON + same-uid ptrace); self-skips everywhere else.
+ALL asmtest_hwtrace_pt_attach_begin
+ALL asmtest_hwtrace_pt_attach_track       #   (paired with pt_attach_begin: region-of-interest for the code-image recorder + software IP post-filter)
+ALL asmtest_hwtrace_pt_attach_poll        #   (paired with pt_attach_begin: bounded live AUX drain)
+ALL asmtest_hwtrace_pt_attach_end         #   (paired with pt_attach_begin: decode dispatch into asmtest_pt_decode_window + teardown)
+ALL asmtest_pt_aux_dewrap                 # pure AUX-ring de-wrap helper: PMU-free logic, host-tested (test_pt_attach_helpers), not per-binding FFI — same posture as asmtest_hwtrace_stitch
+ALL asmtest_pt_ip_postfilter              # pure software IP post-filter helper: PMU-free logic, host-tested (test_pt_attach_helpers), not per-binding FFI
+
 # Whole-window guard knobs (zeroconfig-scoped-tracing-hardening, 2026-07-19). The zero-config
 # path gets the defaults through plain begin_window, which every binding already
 # wraps; the _ex/guard-query knobs are C-level until a binding needs them.
