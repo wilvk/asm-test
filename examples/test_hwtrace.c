@@ -3400,6 +3400,15 @@ static void test_register_idempotent(void) {
             "# SKIP register-idempotent: needs Capstone (single-step floor)\n");
         return;
     }
+    /* Uses the in-process SINGLESTEP backend (x86-64/macOS only) AND executes the x86
+     * ROUTINE — on AArch64 init would refuse the backend and the fixture would #UD. Gate
+     * on the backend, like the sibling call_scoped/stitch tests (skips "single-step
+     * unavailable" there); the ptrace out-of-process tier is the AArch64 stepper. */
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP register-idempotent: no in-process single-step backend "
+               "(x86-64/macOS only)\n");
+        return;
+    }
     void *p = ss_map_exec(ROUTINE, sizeof ROUTINE);
     if (p == NULL) {
         printf("# SKIP register-idempotent: mmap failed\n");

@@ -672,7 +672,7 @@ jobs:
           #   single-step / BTF block-step (x86-only MSR/DEBUGCTL; PTRACE_SINGLEBLOCK has no
           #   AArch64 form) · codeimage eBPF (built without libbpf) · the 'hardware bp' call-out
           #   (x86-64 only until T2's NT_ARM_HW_BREAK arm-and-fire probe lands).
-          allow='not Linux x86-64|x86-64 Linux only|x86-64 only|Linux x86-64|Intel PT|intel_pt|GenuineIntel|libipt|wholewindow|window ladder|AMD|IBS|ibs precover|CoreSight|cs_etm|in-process|BTF|SINGLEBLOCK|block-step|blockstep|libbpf|soft-dirty|codeimage|descent|call_auto|pt attach|pt live|pt window|pt image|hardware bp|hardware breakpoints are x86-64|MSR|msr'
+          allow='not Linux x86-64|x86-64 Linux only|x86-64 only|Linux x86-64|Intel PT|intel_pt|GenuineIntel|libipt|wholewindow|window ladder|AMD|IBS|ibs precover|CoreSight|cs_etm|in-process|BTF|SINGLEBLOCK|block-step|blockstep|libbpf|soft-dirty|codeimage|descent|call_auto|pt attach|pt live|pt window|pt image|single-step unavailable|no in-process single-step|register-idempotent|debug logging|hardware bp|hardware breakpoints are x86-64|MSR|msr'
           unexpected=$(grep '# SKIP' "$log" | grep -vE "$allow" || true)
           if [ -n "$unexpected" ]; then
             echo "::error::hwtrace-arm64: UNEXPECTED # SKIP lines (not on the by-name allowlist) — a tier that should run live self-skipped. Triage, then either fix the tier or add the reason to the allowlist:"
