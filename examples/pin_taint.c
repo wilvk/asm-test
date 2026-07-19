@@ -86,15 +86,23 @@ int main(int argc, char **argv) {
     if (owned)
         memset(shm, 0, sizeof(*shm));
 
-    /* Real host buffers the fixture reads/writes (as dr_taint.c allocates). */
-    uint64_t *buf = (uint64_t *)malloc(sizeof(uint64_t));
-    uint64_t *buf2 = (uint64_t *)malloc(sizeof(uint64_t));
+    /* Real host buffers the fixture reads/writes (as dr_taint.c / dr_taint_simd.c
+     * allocate): buf_size bytes (8 GP, 16 XMM), seeded from seed_bytes (SIMD pattern) or
+     * buf_val (GP scalar). */
+    size_t bsz = (m->buf_size > 0) ? (size_t)m->buf_size : sizeof(uint64_t);
+    uint8_t *buf = (uint8_t *)malloc(bsz);
+    uint8_t *buf2 = (uint8_t *)malloc(bsz);
     if (buf == NULL || buf2 == NULL) {
         fprintf(stderr, "pin_taint: buffer alloc failed\n");
         return 1;
     }
-    *buf = (uint64_t)m->buf_val;
-    *buf2 = 0;
+    if (m->seed_bytes != NULL) {
+        memcpy(buf, m->seed_bytes, bsz);
+    } else {
+        uint64_t v = (uint64_t)m->buf_val;
+        memcpy(buf, &v, (sizeof v < bsz) ? sizeof v : bsz);
+    }
+    memset(buf2, 0, bsz);
 
     long arg0 = (long)(uintptr_t)buf;
     long arg1 = 5;

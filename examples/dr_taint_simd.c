@@ -36,6 +36,8 @@
 
 #include "asmtest_taint.h" /* at_tag_t, AT_TAG_TAINTED */
 
+#include "taint_simd_fixtures.h" /* simd_copy, simd_sink, SEED16, SEED_LO64 (shared) */
+
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -81,33 +83,11 @@ static int checks, failures;
             failures++;                                                        \
     } while (0)
 
-/* simd_copy: taint through an XMM register AND an SSE 16-byte vectorized copy. */
-static const uint8_t simd_copy[] = {
-    0xf3, 0x0f, 0x6f, 0x07, /* 0x00 movdqu xmm0, [rdi]  (SEED load, 16B) */
-    0x66, 0x0f, 0x6f, 0xc8, /* 0x04 movdqa xmm1, xmm0   (XMM reg copy)   */
-    0xf3, 0x0f, 0x7f, 0x0e, /* 0x08 movdqu [rsi], xmm1  (16B store->buf2)*/
-    0x48, 0x8b, 0x06,       /* 0x0c mov    rax, [rsi]   (reload copy)    */
-    0xc3,                   /* 0x0f ret                                  */
-};
-
-/* simd_sink: the seeded XMM lane reaches a GP register then a branch flag (SINK). */
-static const uint8_t simd_sink[] = {
-    0xf3, 0x0f, 0x6f, 0x07,       /* 0x00 movdqu xmm0, [rdi]  (SEED load) */
-    0x66, 0x0f, 0x6f, 0xc8,       /* 0x04 movdqa xmm1, xmm0               */
-    0x66, 0x48, 0x0f, 0x7e, 0xc9, /* 0x08 movq   rcx, xmm1   (XMM->GP)    */
-    0x48, 0x85, 0xc9,             /* 0x0d test   rcx, rcx    (taint ZF)   */
-    0x74, 0x03,                   /* 0x10 jz 0x15            (SINK)       */
-    0x48, 0x89, 0xc8,             /* 0x12 mov    rax, rcx                 */
-    0xc3,                         /* 0x15 ret                            */
-};
+/* simd_copy / simd_sink / SEED16 / SEED_LO64 moved VERBATIM to
+ * examples/taint_simd_fixtures.h (included above) so the libdft64 oracle's named-skip arm
+ * runs the byte-identical XMM inputs. This lane is the proof no fixture byte changed. */
 #define SINK_OFF   0x10 /* the jz instruction's region offset */
 #define SINK_DEPTH 4    /* def-use edges seed(step0) -> jz(step4) */
-
-/* The 16 seed bytes; the low 8 (little-endian) reload into rax. */
-static const uint8_t SEED16[16] = {0x88, 0x77, 0x66, 0x55, 0x44, 0x33,
-                                   0x22, 0x11, 0x00, 0xff, 0xee, 0xdd,
-                                   0xcc, 0xbb, 0xaa, 0x99};
-#define SEED_LO64 0x1122334455667788ULL
 
 static int slices_equal(const asmtest_slice_t *a, const asmtest_slice_t *b) {
     if (a == NULL || b == NULL || a->n != b->n)

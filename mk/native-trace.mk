@@ -511,9 +511,17 @@ else
 	$(MAKE) --no-print-directory $(BUILD)/pin_taint $(BUILD)/taint_oracle_diff; \
 	$(MAKE) --no-print-directory dr-taint-oracle-tool; \
 	echo "=== dr-taint-oracle-test (DR ≡ libdft64 on the GP/integer-memory subset) ==="; \
+	echo "# libdft64 coverage-gap tokens (honest-boundary record, PIN-4 exit criterion):"; \
+	echo "#   libdft-partial-sse-avx    XMM/YMM: basic SSE/AVX, rules unverified upstream -> INFORMATIONAL skip"; \
+	echo "#   libdft-gap-avx512-zmm     ZMM has no tag slot; AVX-512 taint silently dropped"; \
+	echo "#   libdft-gap-eflags         EFLAGS ignored; kind-1 routed through the flag-defining reg"; \
+	echo "#   libdft-gap-implicit-flow  control-dependence taint out of scope for both engines"; \
+	echo "#   libdft-gap-x87-fpu        x87/FPU on libdft64's TODO (no fixture exercises it today)"; \
+	echo "#   libdft-gap-ternary-insn   ternary insns on libdft64's TODO (no fixture exercises it today)"; \
 	rc=0; \
 	for mode in seeded negative sink sink-negative heapstore highbyte \
-	            callarg callarg-negative memlen memlen-negative; do \
+	            callarg callarg-negative memlen memlen-negative \
+	            simd-copy simd-sink; do \
 	  env ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
 	      ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
 	      ASMTEST_PIN=$$home/pin \

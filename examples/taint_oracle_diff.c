@@ -74,16 +74,22 @@ static int run_dr(const struct at_fixmode *m, at_taint_report_t *report,
                   at_taint_hit_t *hits, size_t cap, long *result) {
     asmtest_valtrace_t *v = asmtest_valtrace_new(64, 512, 512);
     at_tag_t step_taint[64];
-    uint64_t *buf = (uint64_t *)malloc(sizeof(uint64_t));
-    uint64_t *buf2 = (uint64_t *)malloc(sizeof(uint64_t));
+    size_t bsz = (m->buf_size > 0) ? (size_t)m->buf_size : sizeof(uint64_t);
+    uint8_t *buf = (uint8_t *)malloc(bsz);
+    uint8_t *buf2 = (uint8_t *)malloc(bsz);
     if (v == NULL || buf == NULL || buf2 == NULL) {
         free(buf);
         free(buf2);
         asmtest_valtrace_free(v);
         return DF_DR_ENODR;
     }
-    *buf = (uint64_t)m->buf_val;
-    *buf2 = 0;
+    if (m->seed_bytes != NULL) {
+        memcpy(buf, m->seed_bytes, bsz);
+    } else {
+        uint64_t bv = (uint64_t)m->buf_val;
+        memcpy(buf, &bv, (sizeof bv < bsz) ? sizeof bv : bsz);
+    }
+    memset(buf2, 0, bsz);
     long args[2] = {(long)(uintptr_t)buf,
                     resolve_arg1(m, (uint64_t)(uintptr_t)buf2)};
     memset(report, 0, sizeof *report);
@@ -212,13 +218,32 @@ int main(int argc, char **argv) {
     long dr_result = 0;
     int dr_rc = run_dr(m, &dr_report, dr_hits, AT_ORACLE_HITS_CAP, &dr_result);
 
-    /* --- assertions --- */
+    size_t dn = dr_report.hits_len;
+    size_t ln = (size_t)shm->report.hits_len;
+
+    /* INFORMATIONAL (SIMD): report the DR/libdft delta as a NAMED skip and NEVER fail — the
+     * XMM/SSE subset is a coverage boundary (libdft's SSE rules are "basic" + unverified
+     * upstream), distinct from both a clean pass and a real failure (T6). */
+    if (m->informational) {
+        int agree = hits_multiset_equal(dr_report.hits, dn, shm->hits, ln);
+        checks++;
+        printf("ok %d - %s # SKIP %s: DR rc=%d libdft rc=%d done=%u; DR=%zu "
+               "libdft=%zu hits (%s) — informational, libdft SSE/AVX rules "
+               "unverified upstream\n",
+               checks, m->name, m->gap_token, dr_rc, libdft_rc,
+               (unsigned)shm->done, dn, ln, agree ? "agree" : "diverge");
+        dump_hits("DR    ", dr_report.hits, dn);
+        dump_hits("libdft", shm->hits, ln);
+        printf("1..%d\n", checks);
+        munmap(shm, sizeof(*shm));
+        shm_unlink(shm_name);
+        return 0;
+    }
+
+    /* --- assertions (GP/integer subset) --- */
     CHECK(dr_rc == DF_DR_OK, "DR taint run captured in-band");
     CHECK(libdft_rc == 0, "libdft run under pin exited cleanly");
     CHECK(shm->done == 1u, "libdft channel completed (done=1)");
-
-    size_t dn = dr_report.hits_len;
-    size_t ln = (size_t)shm->report.hits_len;
 
     if (m->expect_hits) {
         int dr_ok = (dn == 1 && dr_report.hits[0].off == m->hit_off &&
