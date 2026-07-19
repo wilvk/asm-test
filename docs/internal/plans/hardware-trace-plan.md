@@ -415,7 +415,12 @@ position.
   DRAKVUF (Xen VMI) supports *both* host-side Intel PT guest-execution tracing
   (via Xen `vmtrace`) *and*, separately, stealthy altp2m execute-only EPT views
   for hidden breakpoints — two distinct out-of-VM mechanisms, not a single fused
-  PT+altp2m technique.
+  PT+altp2m technique. The verified API surface (`XEN_DOMCTL_vmtrace_op` /
+  `xc_vmtrace_*` / `XENMEM_resource_vmtrace_buf`, DRAKVUF `ipt`/`xc_altp2m_*`),
+  the Xen 4.15 + Intel-VT-x-HVM + Xen-host gate, and the libipt-over-libxdc
+  decision are recorded in
+  [the HV/EPT frontier design record](../analysis/2026-07-19-pt-hypervisor-ept-frontier.md)
+  (forward-look; ships no code until the gate is met).
 
 **Acceptance.** Attach to a running CPython/.NET/JVM process, capture and decode at
 least one JIT-generated routine into a deterministic disassembled instruction
