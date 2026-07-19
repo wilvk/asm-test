@@ -474,6 +474,56 @@ pin-taint-test:
 	done; \
 	exit $$rc
 
+# taint_oracle_diff runs the DR side in-process (one DR lifecycle per mode) + forks pin over
+# pin_taint + asserts DR≡libdft. Same link set as pin_taint (marker TU + producer objects).
+$(BUILD)/taint_oracle_diff.o: examples/taint_oracle_diff.c examples/taint_fixtures.h \
+                              examples/taint_oracle_modes.h include/asmtest_valtrace.h \
+                              include/asmtest_taint.h \
+                              include/asmtest_taint_oracle_shm.h \
+                              $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+$(BUILD)/taint_oracle_diff: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                            $(BUILD)/dataflow_dr_taint.o \
+                            $(BUILD)/drtrace_app.o $(BUILD)/trace.o $(DRAPP_KS_OBJ) \
+                            $(BUILD)/taint_oracle_diff.o
+	$(CC) $(CFLAGS) -rdynamic $^ $(CAPSTONE_LIBS) $(DRAPP_KS_LIBS) \
+	      -ldl -lpthread -lrt -o $@
+
+# dr-taint-oracle-test — the differential lane. Builds the DR taint client + the two drivers
+# + the libdft64 tool, then runs each shared fixture mode through BOTH engines, asserting
+# byte-for-byte DR≡libdft sink agreement, with libdft's blind spots as NAMED skips (T6).
+# Self-skips when DynamoRIO or the pinned Pin kit is absent (docker-taint-oracle supplies both).
+.PHONY: dr-taint-oracle-test
+dr-taint-oracle-test:
+ifndef DR_AVAILABLE
+	@echo "== dr-taint-oracle-test =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "1..0 # skipped"
+else
+	@home=$${PIN_ROOT:-$${PIN_HOME}}; \
+	if [ -z "$$home" ] || [ ! -x "$$home/pin" ]; then \
+	  echo "== dr-taint-oracle-test =="; \
+	  echo "# SKIP dr-taint-oracle: Intel Pin not found (set PIN_ROOT to the pinned 3.20 kit)"; \
+	  echo "1..0 # skipped"; \
+	  exit 0; \
+	fi; \
+	$(MAKE) --no-print-directory drtrace-client; \
+	$(MAKE) --no-print-directory $(BUILD)/pin_taint $(BUILD)/taint_oracle_diff; \
+	$(MAKE) --no-print-directory dr-taint-oracle-tool; \
+	echo "=== dr-taint-oracle-test (DR ≡ libdft64 on the GP/integer-memory subset) ==="; \
+	rc=0; \
+	for mode in seeded negative sink sink-negative heapstore highbyte \
+	            callarg callarg-negative memlen memlen-negative; do \
+	  env ASMTEST_DRVAL_CLIENT=$(abspath $(BUILD)/libasmtest_drtaint_client.so) \
+	      ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	      ASMTEST_PIN=$$home/pin \
+	      ASMTEST_ORACLE_SO=$(abspath $(ORACLE_TOOL_SO)) \
+	      ASMTEST_PIN_TAINT=$(abspath $(BUILD)/pin_taint) \
+	      $(BUILD)/taint_oracle_diff $$mode || rc=1; \
+	done; \
+	exit $$rc
+endif
+
 # Inscount/inline sanity (an exit criterion): the taint client emits propagation INLINE —
 # the ONLY dr_insert_clean_call sites are rare + off the per-instruction path: on_marker
 # (region), on_seed (seed paint), on_sink_register (report), on_sink (per watched

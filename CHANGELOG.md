@@ -8,6 +8,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **libdft64 differential taint oracle** (`make docker-taint-oracle`). The shipped
+  DynamoRIO in-band taint client had only an offline emulator/Capstone forward-slice
+  as an independent check. This lane cross-validates it against a **second, live,
+  independently-implemented byte-level taint engine** — [libdft64][libdft64] on Intel
+  Pin — by running the *same* seed/sink fixtures (`examples/taint_fixtures.h`) through
+  both and asserting **byte-for-byte sink agreement** on the general-purpose /
+  integer-memory subset both cover (branch-condition, call-argument, and mem-copy-length
+  sinks), with passing negative controls. A pinned, digest-gated **Pin 3.20** kit
+  (libdft64's only tested pin) + git-commit-pinned **libdft64** are fetched at build
+  time and are **test/oracle-only** — never linked into `libasmtest` or any shipped
+  binding. libdft64's documented blind spots (SIMD is `basic SSE/AVX`, rules unverified;
+  no eflags; no ZMM; no implicit flow; no x87/ternary) are enumerated as **named skips**,
+  never a blanket pass — see [data-flow-capture.md][dfc] (even libdft punts on SIMD). The
+  lane self-skips only on non-x86 hosts (Pin is x86-64 gcc-linux).
+
+[libdft64]: https://github.com/AngoraFuzzer/libdft64
+[dfc]: docs/internal/analysis/data-flow-capture.md
+
 - **Intel SDE future/absent-ISA test lane** (`make docker-sde` / `make sde-test
   SDE_HOME=$(scripts/fetch-sde.sh)`). Assembly that uses an ISA extension the host
   CPU lacks — APX's `r16`-`r31`, AVX10.2, AMX, or AVX-512 on an AVX2-only box — was

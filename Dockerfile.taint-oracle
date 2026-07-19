@@ -71,6 +71,7 @@ ENV DYNAMORIO_HOME=/opt/dynamorio
 # it. Kept BEFORE `COPY . .` so a repo source edit does not rebuild libdft.
 RUN cd /src && LIBDFT_CACHE=/opt sh scripts/fetch-libdft.sh
 RUN cd /opt/libdft64/src && PIN_ROOT=$PIN_ROOT make
+ENV LIBDFT_ROOT=/opt/libdft64
 
 WORKDIR /src
 COPY . .
@@ -79,11 +80,9 @@ COPY . .
 # Dockerfile.taint-native).
 RUN sh scripts/build-capstone.sh && ldconfig
 
-# T2 placeholder CMD: prove the foundation — the pinned Pin 3.20 launcher, libdft's
-# libdft.a, and DynamoRIO are all in place. A later task swaps this for the differential
-# lane `make dr-taint-oracle-test`.
-CMD set -eux; \
-    test -x "$PIN_ROOT/pin"; \
-    ls -l /opt/libdft64/src/obj-intel64/libdft.a; \
-    test -e "$DYNAMORIO_HOME/lib64/release/libdynamorio.so"; \
-    echo "taint-oracle foundation OK: Pin 3.20 + libdft.a + DynamoRIO built"
+# The differential lane: build the DR taint client + the pin_taint driver + the
+# taint_oracle_diff harness + the libdft64 Pintool, then run each shared seed/sink fixture
+# through BOTH the DR client and libdft64 and assert byte-for-byte sink agreement on the
+# GP/integer-memory subset, with libdft's blind spots as named skips. PIN_ROOT + LIBDFT_ROOT
+# are ENV (make imports them); DYNAMORIO_HOME is passed so DR_AVAILABLE resolves.
+CMD make dr-taint-oracle-test DYNAMORIO_HOME=$DYNAMORIO_HOME
