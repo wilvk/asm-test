@@ -56,19 +56,20 @@ __attribute__((noinline)) long capref(long a, long b, double d,
     return r;
 }
 
-/* A deliberately UN-probeable leaf (T5): its whole body is a single `ret`, so its
- * first instruction is control flow AND only one byte — Pin's
- * RTN_IsSafeForProbedInsertion refuses it and it is far too short to hold a 14-byte
- * probe or to relocate, so the tool reports AV_SKIP_TOO_SHORT. Defined in global asm
- * so it is exactly `ret` with no compiler-inserted frame, and its ELF symbol size is
- * 1 (RTN_Size sees a 1-byte routine). */
+/* A deliberately un-probeable leaf (T5): its whole body is a single one-byte `ret`,
+ * far below the 14-byte Pin-probe floor. The tool reads its true RTN_Size (measured:
+ * 1) and reports a concrete AV_SKIP_TOO_SHORT rather than probing a sub-floor routine
+ * (which relies on Pin relocating the whole routine and "may destabilize the
+ * application"). Defined in global asm so it is exactly `ret` — no compiler frame —
+ * with ELF symbol size 1; it is safe to execute (returns immediately). `.globl` keeps
+ * the symbol for RTN_FindByName. */
 __asm__(".text\n"
         ".globl tiny\n"
         ".type tiny, @function\n"
         "tiny:\n"
         "    ret\n"
         ".size tiny, .-tiny\n");
-long tiny(void);
+void tiny(void);
 
 static volatile long g_sink;
 
@@ -93,7 +94,8 @@ int main(int argc, char **argv) {
     }
 
     if (strcmp(mode, "skip") == 0) {
-        tiny(); /* the un-probeable target */
+        tiny(); /* the un-probeable (sub-floor) target; the skip is decided at
+                 * image-load time regardless, but calling it is harmless */
         g_sink += 1;
     } else if (strcmp(mode, "badptr") == 0) {
         /* Deliberately invalid pointer: capref guards its deref (survives), and the

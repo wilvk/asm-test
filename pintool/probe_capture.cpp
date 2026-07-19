@@ -61,6 +61,13 @@ static void say(const char *msg) {
     (void)w;
 }
 
+/* Record a terminal per-target skip with its reason and release the validator: no
+ * probe fired, so the exit handshake happens here instead (T5). */
+static void report_skip(av_skip_reason_t why) {
+    g_chan->skip = (uint32_t)why;
+    __atomic_store_n(&g_chan->done, 1u, __ATOMIC_RELEASE);
+}
+
 /* ------------------------------------------------------------------ */
 /* Record helpers — the channel is zeroed at creation, so each writer  */
 /* sets only its non-zero fields (append-only into a zeroed array).    */
@@ -242,21 +249,57 @@ static VOID on_img(IMG img, VOID *) {
     const char *fname = KnobFunc.Value().c_str();
     RTN rtn = RTN_FindByName(img, fname);
     if (!RTN_Valid(rtn)) {
-        say("asmtest_probe: target routine not found\n");
-        g_chan->skip = AV_SKIP_NOT_FOUND;
-        __atomic_store_n(&g_chan->done, 1u, __ATOMIC_RELEASE);
+        LOG("asmtest_probe: routine '" + KnobFunc.Value() +
+            "' not found in image\n");
+        report_skip(AV_SKIP_NOT_FOUND);
         return;
     }
 
     /* Probe mode does NOT use RTN_Open/RTN_Close (the kit's Probes examples and
-     * Tests/ifunc_tst.cpp guard those with !RunInProbeMode). Pre-check is advisory;
-     * the AUTHORITATIVE gate is RTN_InsertCallProbed's BOOL return (Pin 4.2 returns
-     * BOOL — FALSE is a definitive refusal). T5 refines the reason synthesis. */
-    if (!RTN_IsSafeForProbedInsertion(rtn)) {
-        say("asmtest_probe: routine not safe for probed insertion\n");
-        g_chan->skip = AV_SKIP_TOO_SHORT;
-        __atomic_store_n(&g_chan->done, 1u, __ATOMIC_RELEASE);
+     * Tests/ifunc_tst.cpp guard those with !RunInProbeMode).
+     *
+     * Refusal detection (T5). Pin has no refusal reason-code API, so synthesize one.
+     *
+     * Probe-FLOOR gate first. A probe may be up to 14 bytes, and probing a routine
+     * shorter than that relies on Pin relocating the WHOLE routine — which the Pin
+     * docs warn "may destabilize the application". Empirically Pin 4.2's
+     * RTN_IsSafeForProbedInsertion is PERMISSIVE (it reports even a 1-byte routine
+     * safe and then relocates), so it is not a reliable "too short" signal; RTN_Size
+     * IS reliable (measured: a 2-byte routine reports size 2). So gate on RTN_Size
+     * and refuse a sub-floor routine with an explicit TOO_SHORT reason rather than a
+     * silent, possibly-destabilizing probe — exactly the doc's "synthesize from
+     * RTN_Size (too short: below the 14-byte probe floor)". */
+    if (RTN_Size(rtn) < AV_PROBE_FLOOR) {
+        LOG("asmtest_probe: '" + KnobFunc.Value() +
+            "' below probe floor (RTN_Size=" + decstr((INT64)RTN_Size(rtn)) +
+            " < " + decstr((INT64)AV_PROBE_FLOOR) + ") -> skip=TOO_SHORT\n");
+        report_skip(AV_SKIP_TOO_SHORT);
         return;
+    }
+
+    /* Two pre-checks pick the insertion MODE: request in-place (PROBE_MODE_DEFAULT
+     * forbids relocation) first; if refused, retry with PROBE_MODE_ALLOW_RELOCATION
+     * (Pin keeps the probe in place if the first basic block is long enough, else
+     * relocates the whole routine). If BOTH refuse, that is a terminal per-target
+     * skip; distinguish TOO_SHORT from NOT_RELOCATABLE via RTN_Size. The AUTHORITATIVE
+     * gate is still the BOOL return of RTN_InsertCallProbedEx (Pin 4.2 returns BOOL —
+     * a FALSE post-check is definitive), kept because a pre-check "does not
+     * guarantee" safety. */
+    PROBE_MODE mode = PROBE_MODE_DEFAULT;
+    if (!RTN_IsSafeForProbedInsertion(rtn)) {
+        if (RTN_IsSafeForProbedInsertionEx(rtn, PROBE_MODE_ALLOW_RELOCATION)) {
+            mode = PROBE_MODE_ALLOW_RELOCATION;
+        } else {
+            av_skip_reason_t why = (RTN_Size(rtn) < 14)
+                                       ? AV_SKIP_TOO_SHORT
+                                       : AV_SKIP_NOT_RELOCATABLE;
+            LOG("asmtest_probe: '" + KnobFunc.Value() +
+                "' unprobeable (RTN_Size=" + decstr((INT64)RTN_Size(rtn)) +
+                ", neither in-place nor relocatable) -> skip=" +
+                decstr((INT64)why) + "\n");
+            report_skip(why);
+            return;
+        }
     }
 
     /* IPOINT_AFTER needs the routine PROTOTYPE so Pin can place the return probe;
@@ -266,12 +309,12 @@ static VOID on_img(IMG img, VOID *) {
                        PIN_PARG(long), PIN_PARG(long), PIN_PARG(double),
                        PIN_PARG(const char *), PIN_PARG_END());
 
-    BOOL ok_exit = RTN_InsertCallProbed(
-        rtn, IPOINT_AFTER, (AFUNPTR)OnExit, IARG_PROTOTYPE, proto,
+    BOOL ok_exit = RTN_InsertCallProbedEx(
+        rtn, IPOINT_AFTER, mode, (AFUNPTR)OnExit, IARG_PROTOTYPE, proto,
         IARG_REG_VALUE, LEVEL_BASE::REG_GAX, IARG_REG_VALUE,
         LEVEL_BASE::REG_GDX, IARG_CONTEXT, IARG_END);
-    BOOL ok_entry = RTN_InsertCallProbed(
-        rtn, IPOINT_BEFORE, (AFUNPTR)OnEntry, IARG_REG_VALUE,
+    BOOL ok_entry = RTN_InsertCallProbedEx(
+        rtn, IPOINT_BEFORE, mode, (AFUNPTR)OnEntry, IARG_REG_VALUE,
         LEVEL_BASE::REG_RDI, IARG_REG_VALUE, LEVEL_BASE::REG_RSI,
         IARG_REG_VALUE, LEVEL_BASE::REG_RDX, IARG_REG_VALUE,
         LEVEL_BASE::REG_RCX, IARG_REG_VALUE, LEVEL_BASE::REG_R8, IARG_REG_VALUE,
@@ -281,9 +324,12 @@ static VOID on_img(IMG img, VOID *) {
     PROTO_Free(proto);
 
     if (!ok_entry || !ok_exit) {
-        say("asmtest_probe: probe insertion refused\n");
-        g_chan->skip = AV_SKIP_NOT_RELOCATABLE;
-        __atomic_store_n(&g_chan->done, 1u, __ATOMIC_RELEASE);
+        av_skip_reason_t why =
+            (RTN_Size(rtn) < 14) ? AV_SKIP_TOO_SHORT : AV_SKIP_NOT_RELOCATABLE;
+        LOG("asmtest_probe: '" + KnobFunc.Value() +
+            "' insertion refused despite pre-check -> skip=" +
+            decstr((INT64)why) + "\n");
+        report_skip(why);
         return;
     }
     say("asmtest_probe: probes installed\n");

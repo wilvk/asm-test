@@ -39,6 +39,9 @@
 #define AV_SHM_WIDE_CAP   8192 /* two 4 KiB pointer buffers (T4)              */
 #define AV_SHM_MAGIC      0x50564C54u /* "PVLT": the tool checks the layout   */
 #define AV_PTRCAP_DEFAULT 4096u /* default pointed-to-buffer read cap (T4) */
+#define AV_PROBE_FLOOR                                                         \
+    14u /* a Pin probe is up to 14 bytes; below this a
+                                 * routine is reported TOO_SHORT (T5)        */
 
 /* Why a captured target was NOT recorded — an EXPLICIT per-target skip with a reason,
  * never a silent miss (T5). AV_SKIP_NONE means the capture succeeded. */
