@@ -435,3 +435,109 @@ size_t asmtest_srcmap_report(const asmtest_trace_t *covered,
                 covered->blocks_len - unattributed, covered->blocks_len);
     return unattributed;
 }
+
+/* ------------------------------------------------------------------ */
+/* Version-keyed attribution registry (asmtest_srcreg_*)               */
+/* ------------------------------------------------------------------ */
+
+typedef struct {
+    uint64_t code_addr;
+    uint64_t code_size;
+    uint64_t when;
+    asmtest_srcmap_entry_t *rows; /* owned copy */
+    size_t n;
+    char *file; /* owned copy, or NULL */
+} srcreg_ent_t;
+
+struct asmtest_srcreg {
+    srcreg_ent_t *ents;
+    size_t n, cap;
+};
+
+asmtest_srcreg_t *asmtest_srcreg_new(void) {
+    return (asmtest_srcreg_t *)calloc(1, sizeof(asmtest_srcreg_t));
+}
+
+void asmtest_srcreg_free(asmtest_srcreg_t *reg) {
+    if (reg == NULL)
+        return;
+    for (size_t i = 0; i < reg->n; i++) {
+        free(reg->ents[i].rows);
+        free(reg->ents[i].file);
+    }
+    free(reg->ents);
+    free(reg);
+}
+
+int asmtest_srcreg_add(asmtest_srcreg_t *reg, uint64_t code_addr,
+                       uint64_t code_size, uint64_t when,
+                       const asmtest_srcmap_entry_t *rows, size_t n,
+                       const char *file) {
+    if (reg == NULL || code_size == 0)
+        return -1;
+    if (reg->n == reg->cap) {
+        size_t nc = reg->cap ? reg->cap * 2 : 4;
+        srcreg_ent_t *ne = (srcreg_ent_t *)realloc(reg->ents, nc * sizeof *ne);
+        if (ne == NULL)
+            return -1;
+        reg->ents = ne;
+        reg->cap = nc;
+    }
+    srcreg_ent_t *e = &reg->ents[reg->n];
+    e->code_addr = code_addr;
+    e->code_size = code_size;
+    e->when = when;
+    e->rows = NULL;
+    e->n = 0;
+    e->file = NULL;
+    if (rows != NULL && n > 0) {
+        e->rows = (asmtest_srcmap_entry_t *)malloc(n * sizeof *e->rows);
+        if (e->rows == NULL)
+            return -1;
+        memcpy(e->rows, rows, n * sizeof *e->rows);
+        e->n = n;
+    }
+    if (file != NULL) {
+        size_t fl = strlen(file) + 1;
+        e->file = (char *)malloc(fl);
+        if (e->file == NULL) {
+            free(e->rows);
+            return -1;
+        }
+        memcpy(e->file, file, fl);
+    }
+    reg->n++;
+    return 0;
+}
+
+int asmtest_srcreg_resolve(const asmtest_srcreg_t *reg, uint64_t addr,
+                           uint64_t when, asmtest_srcmap_entry_t *row_out,
+                           uint64_t *method_base_out, const char **file_out) {
+    if (reg == NULL)
+        return 0;
+    const srcreg_ent_t *best = NULL;
+    for (size_t i = 0; i < reg->n; i++) {
+        const srcreg_ent_t *e = &reg->ents[i];
+        if (addr < e->code_addr || addr >= e->code_addr + e->code_size)
+            continue;
+        /* Largest when <= requested (when == 0 => latest). */
+        if (when != 0 && e->when > when)
+            continue;
+        if (best == NULL || e->when > best->when)
+            best = e;
+    }
+    if (best == NULL)
+        return 0;
+    asmtest_srcmap_t m = {best->rows, best->n, NULL, 0};
+    const asmtest_srcmap_entry_t *row =
+        asmtest_srcmap_lookup(&m, addr - best->code_addr);
+    if (row == NULL)
+        return 0;
+    if (row_out != NULL)
+        *row_out = *row;
+    if (method_base_out != NULL)
+        *method_base_out = best->code_addr;
+    if (file_out != NULL)
+        *file_out = best->file;
+    return 1;
+}

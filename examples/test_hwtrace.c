@@ -8124,6 +8124,108 @@ static void test_srcmap(void) {
           "caveat)");
 }
 
+/* The version-keyed attribution registry (asmtest_srcreg_*): per-method srcmaps stamped
+ * with a capture SEQUENCE, resolving (addr, when) to the row live at that time — the same
+ * temporal contract as asmtest_codeimage_bytes_at. (a) The pure resolution unit test
+ * (same-address re-JIT as two registrations differing only in `when`). (b) A composition
+ * check proving the srcreg sequence and the codeimage sequence are the SAME space
+ * (Linux + soft-dirty gated, self-skipping via the recorder's own reason). */
+static void test_srcreg(void) {
+    /* (a) Two registrations for the SAME range differing only in `when`: when 3 with
+     * line rows, when 7 with bci rows. */
+    static const asmtest_srcmap_entry_t LN[] = {
+        {0x0, 100, ASMTEST_SRC_LINE, 0, 0},
+        {0x8, 101, ASMTEST_SRC_LINE, 0, 0},
+    };
+    static const asmtest_srcmap_entry_t BC[] = {
+        {0x0, 0, ASMTEST_SRC_BCI, UINT32_MAX, 0},
+        {0x8, 7, ASMTEST_SRC_BCI, UINT32_MAX, 0},
+    };
+    asmtest_srcreg_t *reg = asmtest_srcreg_new();
+    CHECK(reg != NULL, "srcreg: new() allocates");
+    CHECK(asmtest_srcreg_add(reg, 0x1000, 0x40, 3, LN, 2, "old.cs") == 0 &&
+              asmtest_srcreg_add(reg, 0x1000, 0x40, 7, BC, 2, "new.cs") == 0,
+          "srcreg: add() copies two registrations for the same range");
+
+    asmtest_srcmap_entry_t row;
+    uint64_t base = 0;
+    const char *file = NULL;
+    CHECK(asmtest_srcreg_resolve(reg, 0x1008, 5, &row, &base, &file) == 1 &&
+              row.kind == ASMTEST_SRC_LINE && row.value == 101 &&
+              base == 0x1000 && file != NULL && strcmp(file, "old.cs") == 0,
+          "srcreg: resolve(when=5) sees the when-3 registration (line 101)");
+    CHECK(
+        asmtest_srcreg_resolve(reg, 0x1008, 0, &row, &base, &file) == 1 &&
+            row.kind == ASMTEST_SRC_BCI && row.value == 7 && file != NULL &&
+            strcmp(file, "new.cs") == 0,
+        "srcreg: resolve(when=0=latest) sees the when-7 registration (bci 7)");
+    CHECK(asmtest_srcreg_resolve(reg, 0x1008, 9, &row, &base, &file) == 1 &&
+              row.kind == ASMTEST_SRC_BCI && row.value == 7,
+          "srcreg: resolve(when=9) picks the largest when<=9 (when-7)");
+    CHECK(asmtest_srcreg_resolve(reg, 0x1008, 2, &row, &base, &file) == 0,
+          "srcreg: resolve(when=2) below every registration -> miss");
+    CHECK(asmtest_srcreg_resolve(reg, 0x2000, 0, &row, &base, &file) == 0,
+          "srcreg: an address outside any registered range -> miss");
+    asmtest_srcreg_free(reg);
+    asmtest_srcreg_free(NULL); /* NULL-safe */
+
+    /* (b) Composition: a codeimage sequence and a srcreg sequence are one space. */
+#if defined(__linux__)
+    if (!asmtest_codeimage_available()) {
+        char why[200];
+        asmtest_codeimage_skip_reason(why, sizeof why);
+        printf("# SKIP srcreg composition: %s\n", why);
+        return;
+    }
+    static const unsigned char CIA[] = {0x48, 0x89, 0xf8, 0x48,
+                                        0x01, 0xf0, 0xc3};
+    static const unsigned char CIB[] = {0x48, 0x89, 0xf8, 0x48,
+                                        0x29, 0xf0, 0xc3};
+    long ps = sysconf(_SC_PAGESIZE);
+    unsigned char *p =
+        (unsigned char *)mmap(NULL, (size_t)ps, PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP srcreg composition: mmap failed\n");
+        return;
+    }
+    memcpy(p, CIA, sizeof CIA);
+    asmtest_codeimage_t *img = asmtest_codeimage_new(0);
+    asmtest_codeimage_track(img, p, sizeof CIA);
+    uint64_t s0 = asmtest_codeimage_now(img);
+    uint64_t cbase = (uint64_t)(uintptr_t)p;
+
+    asmtest_srcreg_t *creg = asmtest_srcreg_new();
+    static const asmtest_srcmap_entry_t CLN[] = {
+        {0x0, 100, ASMTEST_SRC_LINE, 0, 0}, {0x3, 101, ASMTEST_SRC_LINE, 0, 0}};
+    static const asmtest_srcmap_entry_t CBC[] = {
+        {0x0, 0, ASMTEST_SRC_BCI, UINT32_MAX, 0},
+        {0x3, 7, ASMTEST_SRC_BCI, UINT32_MAX, 0}};
+    asmtest_srcreg_add(creg, cbase, sizeof CIA, s0, CLN, 2, "v0.cs");
+
+    memcpy(p, CIB, sizeof CIB); /* re-JIT in place: same address, new bytes */
+    asmtest_codeimage_refresh(img);
+    uint64_t s1 = asmtest_codeimage_now(img);
+    asmtest_srcreg_add(creg, cbase, sizeof CIB, s1, CBC, 2, "v1.cs");
+
+    asmtest_srcmap_entry_t crow;
+    const char *cfile = NULL;
+    int r_s0 = asmtest_srcreg_resolve(creg, cbase + 4, s0, &crow, NULL, &cfile);
+    CHECK(s1 > s0 && r_s0 == 1 && crow.kind == ASMTEST_SRC_LINE &&
+              cfile != NULL && strcmp(cfile, "v0.cs") == 0,
+          "srcreg composition: resolving at the codeimage seq s0 returns the "
+          "map live THEN (line, v0.cs)");
+    int r_now = asmtest_srcreg_resolve(creg, cbase + 4, 0, &crow, NULL, &cfile);
+    CHECK(r_now == 1 && crow.kind == ASMTEST_SRC_BCI && cfile != NULL &&
+              strcmp(cfile, "v1.cs") == 0,
+          "srcreg composition: resolving at latest returns the current "
+          "codeimage version's map (bci, v1.cs)");
+    asmtest_srcreg_free(creg);
+    asmtest_codeimage_free(img);
+    munmap(p, (size_t)ps);
+#endif
+}
+
 /* Phase 1 (call-descent): the two new Capstone queries the descent loop needs —
  * asmtest_disas_is_ret (the pop-predicate's third term) and asmtest_disas_call_target
  * (the direct-call-target query — a public helper; the descent loop itself reads the callee
@@ -10464,6 +10566,7 @@ int main(void) {
     test_jitdump_reader();
     test_jitdump_debug_reader();
     test_srcmap();
+    test_srcreg();
 
     /* The auto-select orchestrator: pick + use the best available backend. */
     test_auto_resolve();

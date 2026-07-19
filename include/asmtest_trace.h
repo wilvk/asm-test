@@ -203,6 +203,46 @@ size_t asmtest_srcmap_report(const asmtest_trace_t *covered,
                              const asmtest_srcmap_t *m, FILE *out);
 
 /* ------------------------------------------------------------------ */
+/* Version-keyed attribution registry (asmtest_srcreg_*)               */
+/*                                                                     */
+/* Stores per-method srcmaps stamped with a capture SEQUENCE and        */
+/* resolves (addr, when) to the row live at that time — the same        */
+/* temporal contract as asmtest_codeimage_bytes_at (asmtest_codeimage.h):*/
+/* the candidate is the registration whose [code_addr, code_addr+size)  */
+/* contains addr with the LARGEST `when` <= the requested `when`         */
+/* (when == 0 => latest). A method re-JIT'd at a reused address is two   */
+/* registrations differing only in `when`, made queryable at any point   */
+/* in time. `when` is a plain monotonic u64: stamp it from               */
+/* asmtest_codeimage_now(img) when a codeimage is live, or from a private */
+/* event sequence otherwise (the two spaces compose — see the self-test).*/
+/* ------------------------------------------------------------------ */
+typedef struct asmtest_srcreg asmtest_srcreg_t;
+
+/* Allocate an empty registry (NULL on OOM). */
+asmtest_srcreg_t *asmtest_srcreg_new(void);
+/* Free a registry and every copied map/file. NULL-safe. */
+void asmtest_srcreg_free(asmtest_srcreg_t *reg);
+
+/* Register method [code_addr, code_addr+code_size) with `n` srcmap rows and an
+ * optional `file`, stamped `when`. `rows` and `file` are COPIED (the caller may
+ * free them after). Returns 0 on success, -1 on bad args / OOM. */
+int asmtest_srcreg_add(asmtest_srcreg_t *reg, uint64_t code_addr,
+                       uint64_t code_size, uint64_t when,
+                       const asmtest_srcmap_entry_t *rows, size_t n,
+                       const char *file);
+
+/* Resolve `addr` as of sequence `when` (0 => latest): find the registration
+ * containing `addr` with the largest `when` <= the requested one, then apply
+ * asmtest_srcmap_lookup(map, addr - code_addr). On a hit returns 1 and fills any
+ * non-NULL out — *row_out (the enclosing row), *method_base_out (code_addr),
+ * *file_out (borrowed, valid until asmtest_srcreg_free). Returns 0 when no
+ * registration matches (addr out of range, or no version at/before `when`) or
+ * the matched method has no enclosing row for `addr`. */
+int asmtest_srcreg_resolve(const asmtest_srcreg_t *reg, uint64_t addr,
+                           uint64_t when, asmtest_srcmap_entry_t *row_out,
+                           uint64_t *method_base_out, const char **file_out);
+
+/* ------------------------------------------------------------------ */
 /* Disassembly annotation layer (optional, Capstone)                   */
 /*                                                                     */
 /* Offsets recorded by any backend are rendered back to instruction     */
