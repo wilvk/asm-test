@@ -39,6 +39,9 @@ static class Dumper
 {
     // dotnet-gcdump's Keywords.GCHeapSnapshot. The 0x800000 ManagedHeapCollect bit forces the GC.
     const long GCHeapSnapshot = 0x1980001;
+    // GCHeapSurvivalAndMovement — enables GCBulkMovedObjectRanges. Added ONLY in --measure mode (the
+    // T4 snapshot-space spike), never in the normal dump path.
+    const long GCHeapSurvivalAndMovement = 0x400000;
 
     sealed class Snapshot
     {
@@ -52,23 +55,32 @@ static class Dumper
         public int Depth;
         public GCType Type;
         public bool RuleOk;            // Depth>=2 && NonConcurrentGC && Induced on the node-emitting GC
+        public int DumpGcNumber = -1;  // the GC number of the dump we kept
+        // --measure only: every relocating range seen, tagged with the GC that emitted it (collected
+        // UNGATED by the node state so a range firing before the first node is never missed; the
+        // report filters to DumpGcNumber). {gc, old, new, len}.
+        public List<(int Gc, ulong Old, ulong New, ulong Len)> Moved =
+            new List<(int, ulong, ulong, ulong)>();
     }
 
     static int Main(string[] args)
     {
         if (args.Length < 2)
         {
-            Console.Error.WriteLine("DUMPER: usage: gccanon_dumper <pid> <out-file> [timeout-s]");
+            Console.Error.WriteLine("DUMPER: usage: gccanon_dumper <pid> <out-file> [timeout-s] [--measure]");
             return 2;
         }
         int pid = int.Parse(args[0]);
         string outFile = args[1];
-        int timeoutS = args.Length > 2 && int.TryParse(args[2], out int t) ? t : 60;
+        bool measure = Array.IndexOf(args, "--measure") >= 0;
+        int timeoutS = 60;
+        for (int a = 2; a < args.Length; a++)
+            if (int.TryParse(args[a], out int t)) { timeoutS = t; break; }
 
         for (int attempt = 1; attempt <= 3; attempt++)
         {
             string why;
-            Snapshot snap = DumpOnce(pid, timeoutS, out why);
+            Snapshot snap = DumpOnce(pid, timeoutS, measure, out why);
             if (snap != null)
             {
                 WriteTable(outFile, pid, snap);
@@ -76,6 +88,8 @@ static class Dumper
                     $"GCCANON_DUMP nodes={snap.Addr.Count} edges={snap.EdgeEntries} index_gaps=0 " +
                     $"reason={snap.Reason} depth={snap.Depth} type={snap.Type} rule_ok={(snap.RuleOk ? 1 : 0)} " +
                     $"attempt={attempt}");
+                if (measure)
+                    ReportSnapshotSpace(snap);
                 Console.Out.Flush();
                 return 0;
             }
@@ -89,7 +103,7 @@ static class Dumper
 
     // One dump attempt. Returns a complete, gap-free Snapshot, or null (with a reason) on any failure
     // — no node-emitting GC within the timeout, an Index gap, or a node/edge-count mismatch.
-    static Snapshot DumpOnce(int pid, int timeoutS, out string why)
+    static Snapshot DumpOnce(int pid, int timeoutS, bool measure, out string why)
     {
         why = "";
         var snap = new Snapshot();
@@ -113,10 +127,11 @@ static class Dumper
         var done = new ManualResetEventSlim(false);
 
         var client = new DiagnosticsClient(pid);
+        long keywords = GCHeapSnapshot | (measure ? GCHeapSurvivalAndMovement : 0);
         var providers = new[]
         {
             new EventPipeProvider("Microsoft-Windows-DotNETRuntime", EventLevel.Informational,
-                                  GCHeapSnapshot)
+                                  keywords)
         };
 
         EventPipeSession session;
@@ -171,6 +186,7 @@ static class Dumper
                     // The first heap-walk GC identifies the dump we keep.
                     state = 1;
                     dumpGcNumber = curGcNumber;
+                    snap.DumpGcNumber = curGcNumber;
                     snap.Reason = curReason;
                     snap.Depth = curDepth;
                     snap.Type = curType;
@@ -219,6 +235,24 @@ static class Dumper
                 snap.EdgeEntries += d.Count; // ReferencingFieldID ignored (hardcoded 0 in the runtime)
             };
 
+            source.Clr.GCBulkMovedObjectRanges += (GCBulkMovedObjectRangesTraceData d) =>
+            {
+                // --measure spike only. Collect EVERY relocating range with its GC number, UNGATED by
+                // the node state machine (a range can fire before the first node of its GC), so the
+                // report can ask, for the kept dump GC's own ranges, whether a node.Address sits at
+                // the OLD (pre-move walk) or NEW (post-move walk) base.
+                if (!measure)
+                    return;
+                for (int i = 0; i < d.Count; i++)
+                {
+                    var v = d.Values(i);
+                    if ((ulong)v.OldRangeBase == (ulong)v.NewRangeBase)
+                        continue; // non-relocating
+                    snap.Moved.Add((curGcNumber, (ulong)v.OldRangeBase, (ulong)v.NewRangeBase,
+                                    (ulong)v.RangeLength));
+                }
+            };
+
             source.Clr.GCStop += (GCEndTraceData d) =>
             {
                 if (state == 1 && d.Count == dumpGcNumber)
@@ -263,6 +297,68 @@ static class Dumper
             }
             return snap;
         }
+    }
+
+    // T4 snapshot-space spike: are GCBulkNode addresses PRE- or POST- the dump GC's OWN compaction?
+    // For every relocating range {old -> new} the SAME dump GC reported, a POST-move heap walk leaves
+    // a node at `new` and none at `old` (vacated); a PRE-move walk leaves a node at `old` and none at
+    // `new`. Count the exclusive witnesses and print the verdict + a few concrete ranges.
+    static void ReportSnapshotSpace(Snapshot snap)
+    {
+        var addrs = new List<ulong>(snap.Addr);
+        addrs.Sort();
+        int dumpRanges = 0, otherRanges = 0;
+        int postW = 0, preW = 0;
+        var witnesses = new List<string>();
+        foreach (var m in snap.Moved)
+        {
+            if (m.Gc != snap.DumpGcNumber)
+            {
+                otherRanges++; // a different (victim) GC's relocation — informational only
+                continue;
+            }
+            dumpRanges++;
+            bool nw = SpanHasNode(addrs, m.New, m.Len);
+            bool ol = SpanHasNode(addrs, m.Old, m.Len);
+            if (nw && !ol)
+            {
+                postW++;
+                if (witnesses.Count < 4)
+                    witnesses.Add($"old=0x{m.Old:x} new=0x{m.New:x} len=0x{m.Len:x} node@new=1 node@old=0");
+            }
+            else if (ol && !nw)
+            {
+                preW++;
+                if (witnesses.Count < 4)
+                    witnesses.Add($"old=0x{m.Old:x} new=0x{m.New:x} len=0x{m.Len:x} node@new=0 node@old=1");
+            }
+        }
+        // dump_ranges==0 is itself decisive: the heap-dump GC is NON-COMPACTING, so GCBulkNode
+        // addresses carry no dump-GC relocation — they are the live (post-any-prior-move) addresses,
+        // and the dump GC contributes no ranges to the trace-to-snapshot translation set.
+        string verdict = dumpRanges == 0 ? "NONCOMPACTING (dump GC moved nothing; nodes are live addresses)"
+                       : postW > preW ? "POST (node.Address == NewRangeBase)"
+                       : preW > postW ? "PRE (node.Address == OldRangeBase)"
+                       : "AMBIGUOUS";
+        Console.WriteLine($"GCCANON_SNAPSPACE dump_gc={snap.DumpGcNumber} dump_ranges={dumpRanges} " +
+                          $"other_gc_ranges={otherRanges} post_witness={postW} pre_witness={preW} verdict={verdict}");
+        foreach (var w in witnesses)
+            Console.WriteLine("GCCANON_SNAPSPACE_WITNESS " + w);
+    }
+
+    // First index i in the sorted list with sortedAddrs[i] >= baseAddr; true iff that node is in span.
+    static bool SpanHasNode(List<ulong> sortedAddrs, ulong baseAddr, ulong len)
+    {
+        int lo = 0, hi = sortedAddrs.Count;
+        while (lo < hi)
+        {
+            int mid = (lo + hi) >> 1;
+            if (sortedAddrs[mid] < baseAddr)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+        return lo < sortedAddrs.Count && sortedAddrs[lo] < baseAddr + len;
     }
 
     static void WriteTable(string outFile, int pid, Snapshot snap)
