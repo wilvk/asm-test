@@ -120,7 +120,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 |---|---|---|---|
 | [inproc-btf-block-step.md](inproc-btf-block-step.md) — W3: in-process BTF branch-granular single-step | 6 | ☑ 6/6 (`make docker-hwtrace-msr` live-verified by the implementer on this Zen 2 host — both fixtures byte-identical to the single-step baseline, 10/10 stable runs, zero truncation; `make docker-docs` clean) | — |
 | [macos-oop-mach-stepper.md](macos-oop-mach-stepper.md) — macOS out-of-process single-step via Mach exception ports | 7 | ☑ 7/7 (`make mach-stepper-test` 25/25 live-verified by the implementer on this host, both breakpoint paths + both self-skip legs; `make docker-docs` clean) | — |
-| [aarch64-ptrace-single-step-validation.md](aarch64-ptrace-single-step-validation.md) — AArch64 ptrace stream validation + binding fixtures | 6 | ☐ 0/6 | — |
+| [aarch64-ptrace-single-step-validation.md](aarch64-ptrace-single-step-validation.md) — AArch64 ptrace stream validation + binding fixtures | 6 | ◐ 0/6 (T1-T4 wip) | — |
 
 ### Scoped / managed whole-window tracing
 | Document | Tasks | Status | Depends on |
