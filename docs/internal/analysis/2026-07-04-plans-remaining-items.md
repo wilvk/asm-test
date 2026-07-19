@@ -91,8 +91,12 @@ batches landed in `59adb74`/`817cc72`). Highest-leverage:
 - **AArch64:** live single-step trace stream + HW-breakpoint `run_to` validation
   (qemu-user can't emulate the ptrace tracer/tracee relationship — self-skips).
 - **W3 BTF branch-step:** needs a kernel helper / uapi patch.
-- **Wide-vector SVE** (post-v1 Track D): needs an SVE host; emu wide-vector blocked
-  upstream (bundled Unicorn rejects AVX).
+- **Wide-vector SVE — execution sign-off only** (post-v1 Track D /
+  aarch64-sve-capture T8): capture is **landed and qemu-TCG validated** as of
+  2026-07-19 (`asm_call_capture_sve` / `svec_t`/`spred_t` / `ASM_SVCALL_*`;
+  `make docker-sve-sweep` executes the `ptrue`/`fadd` at VL 16/48/128/256 B). Only
+  *executing* the trampoline on real AArch64+SVE silicon (Graviton3/Grace/A64FX-class)
+  stays gated; emu wide-vector remains blocked upstream (bundled Unicorn rejects AVX).
 - **macOS DynamoRIO port (entire `macos-drtrace-plan`):** BLOCKED-upstream — no
   macOS DynamoRIO release has ever existed; correctly parked at its Step-0 gate.
 - **P3 RISC-V native host tier** (review): large, needs the binfmt lane.

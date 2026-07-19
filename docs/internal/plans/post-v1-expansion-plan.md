@@ -262,7 +262,7 @@ a small surface and an already-familiar optional-dependency pattern.
 
 ---
 
-## Track D — Wide-vector capture (AVX/AVX-512, SVE) — **AVX2 + AVX-512 done (SysV + Win64, all ten bindings); SVE staged (needs an SVE runner)**
+## Track D — Wide-vector capture (AVX/AVX-512, SVE) — **AVX2 + AVX-512 done (SysV + Win64, all ten bindings); SVE capture landed + qemu-TCG validated, real-silicon execution sign-off gated**
 
 **Goal.** Capture vector state wider than 128 bits, so AVX2 / AVX-512 (`ymm`/`zmm`)
 and AArch64 SVE routines are testable to their full register width.
@@ -300,10 +300,26 @@ binding wrappers self-skipping where AVX-512 is absent. Rolled out across **all 
 bindings** with parity tests. The `vaddpd zmm` corpus routine `vec_add8d` exercises the
 8th double lane (the bits neither the 128- nor 256-bit path can see).
 
-**Still staged:** AArch64 **SVE** — hardware-gated and unverifiable on the current host
-(needs an AArch64+SVE target). The type/probe groundwork pattern is established by the
-AVX-512 work above; the SVE trampoline waits on an SVE runner to be *executed*, not just
-assembled. The **emulator** wide path is the *documented self-skip* case
+**Done since (SVE), 2026-07-19:** AArch64 **SVE** scalable-vector capture shipped.
+`svec_t` (256-byte VLmax container) / `spred_t` (32-byte PLmax) with `_Static_assert`
++ manifest pins; `asm_call_capture_sve` marshals `z0..z7` / `p0..p3` per AAPCS64 and
+captures the whole `z0..z31` / `p0..p15` file (GAS body in `capture.s`, `ret` stubs in
+the NASM twin and on every non-SVE target); a `HWCAP_SVE` runtime probe
+(`asmtest_cpu_has_sve` / `asmtest_sve_vl`, 0 where SVE is absent — incl. macOS arm64,
+which has no non-streaming SVE); self-skipping `ASM_SVCALL_*`; VL-aware
+`ASSERT_SVEC_EQ` / `ASSERT_SPRED_EQ` (compare only the live VL/PL bytes); and the
+`sve_addd` corpus routine. **Validated under qemu-user TCG** — the SVE `ptrue`/`fadd`
+*actually execute*: `make docker-test DOCKER_PLATFORM=linux/arm64` passes
+`simd.sve_adds_doubles_at_any_vl` at the default VL=64 B, and the new
+`make docker-sve-sweep` passes it at VL 16/48/128/256 B (VQ 1/3/8/16, including the
+non-power-of-two 48 B) by steering `QEMU_CPU=…,sve-max-vq=N,sve-default-vector-length=-1`.
+**Still gated:** *execution sign-off on real SVE silicon* (Graviton3/3E/4, NVIDIA
+Grace, or an A64FX-class host) — a genuine hardware gate per CLAUDE.md, like Intel PT;
+qemu TCG is the best-available validation until then, **not** the silicon sign-off. The
+implementation brief and its T1–T8 breakdown live in
+[aarch64-sve-capture.md](../implementations/aarch64-sve-capture.md).
+
+The **emulator** wide path is the *documented self-skip* case
 (deliverable #3): its bundled Unicorn exposes YMM/ZMM but does **not execute** AVX
 (`UC_ERR_INSN_INVALID`, even with an AVX-capable CPU model set), so wide-vector capture
 is native-only until Unicorn ships AVX execution.
@@ -460,8 +476,11 @@ instruction text, no host crash.
    **fresh** dispatch, since a dispatch-only workflow decays silently.
 3. **Track D** (wide vectors) — **AVX2 + AVX-512 done** (256- **and** 512-bit
    capture on SysV **and** Win64, plus binding parity across all ten), validated
-   on a real AVX-512 host. Only **SVE** is staged, hardware-gated on an
-   AArch64+SVE runner to execute (not just assemble) the trampoline.
+   on a real AVX-512 host. **SVE capture is now landed and qemu-TCG validated**
+   (`asm_call_capture_sve` / `svec_t`/`spred_t` / `ASM_SVCALL_*`; the
+   `make docker-sve-sweep` VL sweep runs the `ptrue`/`fadd` under qemu at VL
+   16–256 B); only the **execution sign-off on real AArch64+SVE silicon** stays
+   hardware-gated.
 4. **Track F** (invariants) — **done.** Small, compounded with Track C (the
    offending store is disassembled).
 5. **Track E** (fuzzing/mutation) — **done.** Built on C and F; coverage now
