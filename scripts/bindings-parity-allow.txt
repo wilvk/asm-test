@@ -34,6 +34,21 @@ ruby asmtest_dr_under_dynamorio
 lua asmtest_dr_under_dynamorio
 go asmtest_dr_under_dynamorio
 
+# Safe-managed routing probe (managed-wholewindow-compose T6): does a managed
+# runtime live in this process? Only .NET consults it — its empty-ctor whole-window
+# routes a managed window to the OOP stepper / PT tier under the opt-in
+# ASMTEST_WHOLEWINDOW_SAFE_MANAGED policy (T7). The other nine bindings have no
+# managed-runtime whole-window path to route, so none wrap it yet.
+python asmtest_hwtrace_managed_runtime_present
+cpp asmtest_hwtrace_managed_runtime_present
+rust asmtest_hwtrace_managed_runtime_present
+zig asmtest_hwtrace_managed_runtime_present
+node asmtest_hwtrace_managed_runtime_present
+java asmtest_hwtrace_managed_runtime_present
+ruby asmtest_hwtrace_managed_runtime_present
+lua asmtest_hwtrace_managed_runtime_present
+go asmtest_hwtrace_managed_runtime_present
+
 # Call descent (asmtest_descent_t) upcall setters. The Rust binding is allow-set
 # only: descent targets are selected via allow_region/deny_region, never a
 # capturing-closure resolver, because a Rust extern "C" fn pointer cannot host a
@@ -144,6 +159,7 @@ ALL asmtest_hwtrace_sample_end_amd          #   (paired with sample_begin_amd ab
 ALL asmtest_hwtrace_stealth_window_begin    # begin/end split of the windowed stealth stepper for the inline `using (new AsmTrace(outOfProcess:true))` shape: dotnet wraps the pair (ctor calls _begin, Dispose calls _end); other nine gain it if they grow an inline OOP scope
 ALL asmtest_hwtrace_stealth_window_end      #   (paired with stealth_window_begin above)
 ALL asmtest_ptrace_trace_attached_window_stop # ptrace-stop stepper used internally by the stealth helper
+ALL asmtest_ptrace_trace_attached_window_stop_blockstep # T8 BTF block-step DRIVER for the stealth stepper above: same capture at ~4-10x fewer stops, selected C-side in the helper (a cost knob), no binding wraps it
 
 # (asmtest_trace_call_auto — the auto-escalating CALL-owning cross-tier trace — is now
 # wrapped in all ten bindings, so its former ALL exemption was removed 2026-07-10.)

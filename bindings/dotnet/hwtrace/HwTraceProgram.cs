@@ -512,6 +512,10 @@ static class HwTraceProgram
             // C suite covers the truncated-flag path with a phantom handle instead
             // (examples/test_hwtrace.c), and the safe managed cross-thread route is §D3.
 
+            // managed-wholewindow-compose T7 — safe-managed routing: the very hazard above is
+            // what the opt-in policy removes by routing a managed window out of band (never TF).
+            SafeManagedRoutingChecks();
+
             // --- tier-up observation (best-effort; background tiering is async) --- //
             var tmap = new JitMethodMap();
             long tacc = 0;
@@ -1356,6 +1360,72 @@ static class HwTraceProgram
               + $"(got {inHot} insns, truncated={ww.Truncated}, methods={ww.Methods.Count})");
         Console.WriteLine($"# unwarmed/PT compose: {ww.MethodsObserved} methods, "
                           + $"{inHot} insns in UnwarmedPtPath, truncated={ww.Truncated}");
+    }
+
+    // managed-wholewindow-compose T7 — the §Z1.1 safe-managed routing gate: "PT/LBR where the
+    // silicon exists, else the §D3 [out-of-process] stepper" — never in-process EFLAGS.TF against
+    // a managed runtime's threads. This process IS a managed runtime (libcoreclr.so is mapped, so
+    // asmtest_hwtrace_managed_runtime_present() is true), so under the opt-in policy the empty-ctor
+    // whole-window MUST route out of band; with the policy OFF (the shipping default) it still arms
+    // in-process TF (Route "inproc"), byte-identical to today. The C-core twin is
+    // test_wholewindow_ss_managed_routes (T9).
+    //
+    // We assert the ROUTING DECISION (the route the ctor takes), read via the unit-testable
+    // AsmTrace.ResolveWholeWindowRoute — NOT a live managed-body OOP capture. Arming the
+    // region-free OOP window in THIS live, GC-active process aborts CoreCLR: its ptrace stepper
+    // single-steps the arming thread and collides with the runtime's thread-suspension for a
+    // background GC (the T3 finding — reproduced here, exit 134, even for an EMPTY OOP window
+    // deep in the busy suite; the crashproof-showdown OOP leg survives only because its process
+    // is momentarily quiet). The safe default in-process-TF route IS arm-tested live (it has no
+    // ptrace stepper to collide), and the live managed-body OOP compose is proven separately on
+    // the RANGE-based AsmTrace.Window factory (WindowLiveJitChecks). The C-core twin of the
+    // native refusal is test_wholewindow_ss_managed_routes (T9).
+    static void SafeManagedRoutingChecks()
+    {
+        Check(HwNative.asmtest_hwtrace_managed_runtime_present() != 0,
+              "safe-managed: this CoreCLR process is detected as a managed runtime");
+
+        // (a) LIVE default (policy OFF): the empty ctor arms in-process TF (Route "inproc"). This
+        // both proves the default is byte-identical to today AND ties the ctor's actual Route to
+        // the routing-decision method the policy paths use.
+        AsmTrace def;
+        using (def = new AsmTrace()) { }
+        Check(def.Route == "inproc",
+              $"safe-managed: default (policy off) LIVE scope routes in-process TF (Route '{def.Route}')");
+        Check(def.Armed,
+              $"safe-managed: default in-process whole-window still arms ({def.SkipReason})");
+        Check(def.Route == AsmTrace.ResolveWholeWindowRoute(false),
+              "safe-managed: the LIVE ctor Route matches the routing-decision method (policy off)");
+
+        // (b) DECISION under the safe-managed policy — read WITHOUT arming (see the method comment).
+        // A managed window must route out of band, NEVER to in-process TF.
+        string routeParam = AsmTrace.ResolveWholeWindowRoute(true);
+        Console.WriteLine($"# safe-managed routing (param safeManaged:true): route={routeParam}");
+        Check(routeParam != "inproc",
+              $"safe-managed: a managed window is NEVER routed to in-process TF (route '{routeParam}')");
+        Check(routeParam == "pt" || routeParam == "oop" || routeParam == "none",
+              $"safe-managed: routes to PT / the §D3 OOP stepper / an honest skip (route '{routeParam}')");
+        // On this host (no Intel PT, ptrace permitted under Docker) the route is the §D3 OOP stepper.
+        if (Ptrace.Available() && !HwTrace.Available(HwBackend.IntelPt))
+            Check(routeParam == "oop",
+                  $"safe-managed: with ptrace and no PT, routes to the §D3 out-of-process stepper "
+                  + $"(route '{routeParam}')");
+
+        // (c) the ASMTEST_WHOLEWINDOW_SAFE_MANAGED env var triggers the SAME routing as the ctor
+        // parameter — set process-local, restored in a finally so no later check sees it.
+        string prev = Environment.GetEnvironmentVariable("ASMTEST_WHOLEWINDOW_SAFE_MANAGED");
+        try
+        {
+            Environment.SetEnvironmentVariable("ASMTEST_WHOLEWINDOW_SAFE_MANAGED", "1");
+            string routeEnv = AsmTrace.ResolveWholeWindowRoute(null);
+            Check(routeEnv == routeParam,
+                  $"safe-managed: the env var triggers the same route as safeManaged:true "
+                  + $"(env '{routeEnv}' == param '{routeParam}')");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ASMTEST_WHOLEWINDOW_SAFE_MANAGED", prev);
+        }
     }
 
     // Data-flow Phase 4 — the LIVE GC-move feed. GcMoveMap (an in-proc EventListener) must

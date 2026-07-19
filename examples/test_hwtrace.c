@@ -1655,6 +1655,107 @@ static void test_stealth_window_inline(void) {
 #endif
 }
 
+/* managed-wholewindow-compose T8: the stealth whole-window stepper block-steps (one #DB per
+ * taken branch) where PTRACE_SINGLEBLOCK is functional, degrading to per-instruction otherwise.
+ * The output must be BYTE-IDENTICAL either way (a COST upgrade, not a fidelity one). Capture the
+ * SAME deterministic native window (a fixed ROUTINE call inside a stealth window) twice — with
+ * ASMTEST_STEALTH_NO_BLOCKSTEP=1 (the per-instruction window_stop) and without it (the block-step
+ * window_stop_blockstep) — and assert identical insns[], blocks[], and truncated. Self-skips
+ * where ptrace / PTRACE_SINGLEBLOCK is unavailable (a DEBUGCTL.BTF-masking hypervisor). */
+static void test_window_stop_blockstep_parity(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_ptrace_available()) {
+        printf("# SKIP window_stop_blockstep_parity: ptrace unavailable\n");
+        return;
+    }
+    if (!asmtest_ptrace_blockstep_available()) {
+        printf("# SKIP window_stop_blockstep_parity: PTRACE_SINGLEBLOCK "
+               "unavailable "
+               "(DEBUGCTL.BTF masked)\n");
+        return;
+    }
+
+    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP window_stop_blockstep_parity: mmap failed\n");
+        return;
+    }
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+
+    asmtest_trace_t *si =
+        asmtest_trace_new(512, 64); /* pass 0: per-instruction */
+    asmtest_trace_t *bs =
+        asmtest_trace_new(512, 64); /* pass 1: block-step     */
+    int have_si = 0, have_bs = 0;
+
+    for (int pass = 0; pass < 2; pass++) {
+        int no_bs = (pass == 0);
+        if (no_bs)
+            setenv("ASMTEST_STEALTH_NO_BLOCKSTEP", "1", 1);
+        else
+            unsetenv("ASMTEST_STEALTH_NO_BLOCKSTEP");
+
+        asmtest_addr_channel_t *chan = asmtest_addr_channel_new_shared();
+        if (chan == NULL)
+            break;
+        asmtest_addr_channel_publish(chan, (uint64_t)(uintptr_t)p,
+                                     sizeof ROUTINE, 0);
+        void *ctx = NULL;
+        int rc = asmtest_hwtrace_stealth_window_begin(chan, &ctx);
+        if (rc == ASMTEST_HW_OK) {
+            long (*fn)(long, long) = (long (*)(long, long))p;
+            long res = fn(10, 32);
+            CHECK(res == 42,
+                  "window_stop_blockstep_parity: window body result (10+32)");
+            int end_rc =
+                asmtest_hwtrace_stealth_window_end(ctx, no_bs ? si : bs);
+            if (end_rc == ASMTEST_HW_OK) {
+                if (no_bs)
+                    have_si = 1;
+                else
+                    have_bs = 1;
+            }
+        }
+        asmtest_addr_channel_free_shared(chan);
+    }
+    unsetenv("ASMTEST_STEALTH_NO_BLOCKSTEP");
+
+    if (have_si && have_bs) {
+        unsigned long long ni = asmtest_emu_trace_insns_total(si);
+        unsigned long long nb = asmtest_emu_trace_insns_total(bs);
+        unsigned long long bi = asmtest_emu_trace_blocks_total(si);
+        unsigned long long bb = asmtest_emu_trace_blocks_total(bs);
+        printf(
+            "# window_stop_blockstep_parity: per-insn insns=%llu blocks=%llu | "
+            "block-step insns=%llu blocks=%llu\n",
+            ni, bi, nb, bb);
+        CHECK(ni > 0,
+              "window_stop_blockstep_parity: the window captured instructions");
+        int same = (ni == nb) && (bi == bb) &&
+                   (asmtest_emu_trace_truncated(si) ==
+                    asmtest_emu_trace_truncated(bs));
+        for (unsigned long long i = 0; same && i < ni; i++)
+            same = (si->insns[i] == bs->insns[i]);
+        for (unsigned long long i = 0; same && i < bi; i++)
+            same = (si->blocks[i] == bs->blocks[i]);
+        CHECK(same, "window_stop_blockstep_parity: block-step stream == "
+                    "per-instruction "
+                    "stream (insns, blocks, truncated all identical)");
+    } else {
+        printf("# SKIP window_stop_blockstep_parity: stealth begin split "
+               "(Yama/seccomp) — no A/B capture\n");
+    }
+    asmtest_trace_free(si);
+    asmtest_trace_free(bs);
+    munmap(p, sizeof ROUTINE);
+#else
+    printf("# SKIP window_stop_blockstep_parity: not Linux x86-64\n");
+#endif
+}
+
 #if defined(__linux__) && defined(__x86_64__)
 static long g_msr_result;
 static void msr_run_loop(void *arg) {
@@ -9214,6 +9315,103 @@ static void test_wholewindow_singlestep(void) {
 #endif
 }
 
+/* managed-wholewindow-compose T9 — the safe-managed routing seam, C core. With the opt-in policy
+ * armed in a process the probe reports as MANAGED (faked here via ASMTEST_ASSUME_MANAGED, since a
+ * C binary hosts no runtime — the LIVE managed routing is the .NET suite's SafeManagedRoutingChecks,
+ * T7), a region-free arm REFUSES the in-process EFLAGS.TF window with the DISTINCT
+ * ASMTEST_HW_EMANAGED sentinel and installs NO SIGTRAP disposition; with the policy unset the arm
+ * is byte-identical to today; and the managed probe ALONE (policy off) never changes behavior. */
+static void test_wholewindow_ss_managed_routes(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP ss managed routes: single-step unavailable\n");
+        return;
+    }
+    void *p = ss_map_exec(ROUTINE, sizeof ROUTINE);
+    if (p == NULL) {
+        printf("# SKIP ss managed routes: mmap failed\n");
+        return;
+    }
+    asmtest_hwtrace_options_t opts;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
+    CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK,
+          "ss managed routes: init");
+    add2_fn fn = (add2_fn)p;
+
+    /* (a) policy ARMED + managed present (faked): the arm is REFUSED with EMANAGED, and NO
+     * SIGTRAP disposition is installed (the refusal returns before the single-step arm). */
+    struct sigaction before, after;
+    sigaction(SIGTRAP, NULL, &before);
+    setenv("ASMTEST_ASSUME_MANAGED", "1", 1);
+    setenv("ASMTEST_WHOLEWINDOW_SAFE_MANAGED", "1", 1);
+    asmtest_trace_t *tr_a = asmtest_trace_new(4096, 0);
+    asmtest_hwtrace_scope_t sc_a = {0xffffffffu, 0, -1};
+    int rc_a = asmtest_hwtrace_begin_window(tr_a, &sc_a);
+    sigaction(SIGTRAP, NULL, &after);
+    CHECK(
+        rc_a == ASMTEST_HW_EMANAGED,
+        "ss managed routes: safe-managed policy REFUSES the in-process TF arm "
+        "(EMANAGED)");
+    CHECK(
+        rc_a != ASMTEST_HW_EUNAVAIL,
+        "ss managed routes: the refusal is the DISTINCT EMANAGED sentinel, not "
+        "absent-tier EUNAVAIL");
+    CHECK(
+        before.sa_handler == after.sa_handler &&
+            before.sa_flags == after.sa_flags,
+        "ss managed routes: the refused arm installed NO SIGTRAP disposition");
+    asmtest_hwtrace_end_window(sc_a,
+                               tr_a); /* no-op on the never-armed sentinel */
+    asmtest_trace_free(tr_a);
+
+    /* (b) BOTH envs unset: the same arm SUCCEEDS and captures the native leaf (default
+     * byte-identical to today). */
+    unsetenv("ASMTEST_ASSUME_MANAGED");
+    unsetenv("ASMTEST_WHOLEWINDOW_SAFE_MANAGED");
+    asmtest_trace_t *tr_b = asmtest_trace_new(4096, 0);
+    asmtest_hwtrace_scope_t sc_b = {0xffffffffu, 0, -1};
+    int rc_b = asmtest_hwtrace_begin_window(tr_b, &sc_b);
+    long r_b = 0;
+    if (rc_b == ASMTEST_HW_OK) {
+        r_b = fn(20, 22);
+        asmtest_hwtrace_end_window(sc_b, tr_b);
+    }
+    CHECK(rc_b == ASMTEST_HW_OK,
+          "ss managed routes: with the policy unset the arm is unchanged (OK)");
+    CHECK(r_b == 42, "ss managed routes: the traced leaf still returns 20+22");
+    uint64_t bbase = (uint64_t)(uintptr_t)p;
+    int found = 0;
+    for (size_t i = 0; i < tr_b->insns_len; i++)
+        if (tr_b->insns[i] == bbase) {
+            found = 1;
+            break;
+        }
+    CHECK(found,
+          "ss managed routes: the default arm captured the leaf's address");
+    asmtest_trace_free(tr_b);
+
+    /* (c) probe ALONE (ASSUME_MANAGED set, policy OFF): the arm still SUCCEEDS — the managed
+     * probe must NEVER change behavior on its own; only the policy env gates the refusal. */
+    setenv("ASMTEST_ASSUME_MANAGED", "1", 1);
+    asmtest_trace_t *tr_c = asmtest_trace_new(4096, 0);
+    asmtest_hwtrace_scope_t sc_c = {0xffffffffu, 0, -1};
+    int rc_c = asmtest_hwtrace_begin_window(tr_c, &sc_c);
+    if (rc_c == ASMTEST_HW_OK) {
+        (void)fn(20, 22);
+        asmtest_hwtrace_end_window(sc_c, tr_c);
+    }
+    CHECK(rc_c == ASMTEST_HW_OK, "ss managed routes: the managed probe ALONE "
+                                 "(policy off) never refuses");
+    unsetenv("ASMTEST_ASSUME_MANAGED");
+    asmtest_trace_free(tr_c);
+
+    asmtest_hwtrace_shutdown();
+    munmap(p, sizeof ROUTINE);
+#else
+    printf("# SKIP ss managed routes: x86-64 Linux only\n");
+#endif
+}
+
 /* §Z1 attribution: MULTIPLE native leaves in one region-free whole-window scope come
  * back as SEPARATE, named buckets. Two distinct exec_alloc'd routines would both
  * resolve to "[anon]" via /proc/self/maps, so asmtest_hwtrace_attribute_window keys
@@ -10548,6 +10746,7 @@ int main(void) {
     test_call_auto_ibs_precover();
     test_blockstep_ibs_precover_live();
     test_stealth_window_inline();
+    test_window_stop_blockstep_parity();
     test_amd_msr();
     test_ss_btf_live();
     test_ss_btf_loop();
@@ -10591,6 +10790,7 @@ int main(void) {
     /* §Z0/§Z1: the region-free (empty-ctor) whole-window scope — WEAK single-step
      * tier + the §Z4 cross-thread honesty flag (any x86-64 Linux, no hardware). */
     test_wholewindow_singlestep();
+    test_wholewindow_ss_managed_routes();
     test_wholewindow_buckets();
 
     /* §Z1.1: the WEAK tier's lifted record policy — DESCEND_ALL (the callee's IPs

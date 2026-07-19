@@ -25,6 +25,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`--perf-prof` is wired once at isolate init), so there is deliberately no Node attach lane.
   Both lanes run on any host with the runtime — **no Intel PT / hardware gate**.
 
+- **Opt-in safe-managed whole-window policy.** `ASMTEST_WHOLEWINDOW_SAFE_MANAGED=1`
+  makes `asmtest_hwtrace_begin_window` **refuse** an in-process `EFLAGS.TF`
+  whole-window arm when a managed runtime (CoreCLR / JVM / Mono) lives in the process,
+  returning the new distinct `ASMTEST_HW_EMANAGED` status instead of single-stepping
+  code whose `SIGTRAP` disposition the runtime's signal layer owns. The .NET empty-ctor
+  `new AsmTrace()` builds on it to route a managed window to Intel PT where the silicon
+  exists, else the §D3 out-of-process stepper, else an honest self-skip — **never**
+  in-process TF (`ww.Route` reports the chosen route). Default (env unset / no
+  `safeManaged`) is byte-identical to today; `asmtest_hwtrace_managed_runtime_present()`
+  exposes the probe.
+
 - **Native trace-point → IL / bytecode / source-line attribution.** A captured native
   offset of a managed method now resolves to a **source line**, a **.NET IL offset**, or a
   **JVM bytecode index** — not just a method name — from feeds the runtimes already emit.
@@ -1343,6 +1354,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   See [macos-cleanroom-lanes.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/macos-cleanroom-lanes.md).
 
 ### Changed
+
+- **The out-of-process whole-window stepper block-steps where `PTRACE_SINGLEBLOCK` is
+  functional (~4–10× fewer stops).** The §D3 stealth whole-window helper now drives
+  `asmtest_ptrace_trace_attached_window_stop_blockstep` (one `#DB` per taken branch)
+  instead of one stop per instruction, degrading to the exact per-instruction stepper on a
+  `DEBUGCTL.BTF`-masking hypervisor (`asmtest_ptrace_blockstep_available()` false). The
+  output is **byte-identical** either way — a cost upgrade, not a fidelity one — which is
+  what makes a managed whole-window affordable out of process. `ASMTEST_STEALTH_NO_BLOCKSTEP=1`
+  forces the per-instruction stepper.
 
 - **Registry-publish pipeline moved toward keyless publishing (scaffolding; gated on
   registry setup + a real tag).** `release.yml` now publishes PyPI via a dedicated

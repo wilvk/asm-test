@@ -196,8 +196,17 @@ int asmtest_stealth_helper_run_window_async(asmtest_stealth_scratch_t *sc,
     }
     sc->ready = 1;
 
-    int tr = asmtest_ptrace_trace_attached_window_stop(parent, chan, &sc->stop,
-                                                       &sc->shadow);
+    /* managed-wholewindow-compose T8: prefer the block-step form (one #DB per taken branch,
+     * ~4-10x fewer stops) where PTRACE_SINGLEBLOCK is functional, degrading to the exact
+     * per-instruction form on a DEBUGCTL.BTF-masking hypervisor (blockstep_available()==0) or
+     * when ASMTEST_STEALTH_NO_BLOCKSTEP=1 forces it. The output is byte-identical either way. */
+    const char *no_bs = getenv("ASMTEST_STEALTH_NO_BLOCKSTEP");
+    int use_bs = asmtest_ptrace_blockstep_available() &&
+                 !(no_bs != NULL && strcmp(no_bs, "1") == 0);
+    int tr = use_bs ? asmtest_ptrace_trace_attached_window_stop_blockstep(
+                          parent, chan, &sc->stop, &sc->shadow)
+                    : asmtest_ptrace_trace_attached_window_stop(
+                          parent, chan, &sc->stop, &sc->shadow);
 
     ptrace(PTRACE_DETACH, parent, (void *)0, (void *)0);
     sc->rc = (tr == ASMTEST_PTRACE_OK) ? ASMTEST_HW_OK : ASMTEST_HW_EDECODE;

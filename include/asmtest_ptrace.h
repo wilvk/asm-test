@@ -173,6 +173,22 @@ int asmtest_ptrace_trace_attached_window_stop(pid_t pid,
                                               volatile int *stop,
                                               asmtest_trace_t *trace);
 
+/* BTF block-step variant of asmtest_ptrace_trace_attached_window_stop (managed-wholewindow-
+ * compose T8): the STOP-FLAG whole-thread form driven by PTRACE_SINGLEBLOCK (one #DB per
+ * TAKEN branch, ~4-10x fewer stops) instead of one #DB per instruction — what makes a managed
+ * whole-window affordable out-of-process. Same contract as the per-instruction window_stop
+ * (records absolute addresses in the channel-published regions until the parent sets *stop;
+ * `chan` may be NULL), and BYTE-IDENTICAL output to it: a kernel-injected transfer or an app
+ * int3 (a JVM safepoint / .NET breakpoint, trap-class like a BTF #DB, told apart by si_code)
+ * reconstructs the interrupted block then hands the remainder to the exact per-instruction
+ * loop. This is a COST upgrade, not a fidelity one. Probe with
+ * asmtest_ptrace_blockstep_available(); returns ASMTEST_PTRACE_ENOSYS where PTRACE_SINGLEBLOCK
+ * / Capstone are unavailable (a DEBUGCTL.BTF-masking hypervisor — callers use window_stop,
+ * which is exact everywhere). */
+int asmtest_ptrace_trace_attached_window_stop_blockstep(
+    pid_t pid, asmtest_addr_channel_t *chan, volatile int *stop,
+    asmtest_trace_t *trace);
+
 /* BTF block-step variant of asmtest_ptrace_trace_attached_windowed — the §D3 plan's W-1
  * driver upgrade. Drives PTRACE_SINGLEBLOCK (one #DB per TAKEN branch) instead of one
  * #DB per instruction and reconstructs the IDENTICAL absolute-address stream by

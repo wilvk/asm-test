@@ -451,6 +451,40 @@ int asmtest_hwtrace_perf_event_paranoid(void) {
     return v;
 }
 
+/* T6 (managed-wholewindow-compose): does a managed runtime live in THIS process? A
+ * one-shot cached scan of /proc/self/maps for the CoreCLR / JVM / Mono images. The
+ * ASMTEST_ASSUME_MANAGED=1 override is honored on EVERY call (uncached) so a test can
+ * toggle it; only the /proc scan is memoized (g_managed). Consulted at arm time, never
+ * from a signal handler. Non-Linux: always 0. */
+int asmtest_hwtrace_managed_runtime_present(void) {
+#if defined(__linux__)
+    const char *force = getenv("ASMTEST_ASSUME_MANAGED");
+    if (force != NULL && strcmp(force, "1") == 0)
+        return 1;
+    static int g_managed = -1;
+    if (g_managed < 0) {
+        int found = 0;
+        FILE *f = fopen("/proc/self/maps", "re");
+        if (f != NULL) {
+            char line[4096];
+            while (fgets(line, sizeof line, f) != NULL) {
+                if (strstr(line, "libcoreclr.so") != NULL ||
+                    strstr(line, "libjvm.so") != NULL ||
+                    strstr(line, "libmono") != NULL) {
+                    found = 1;
+                    break;
+                }
+            }
+            fclose(f);
+        }
+        g_managed = found;
+    }
+    return g_managed;
+#else
+    return 0;
+#endif
+}
+
 int asmtest_hwtrace_status(asmtest_trace_backend_t backend,
                            asmtest_hwtrace_status_t *out) {
     if (out == NULL)
@@ -3174,6 +3208,19 @@ int asmtest_hwtrace_begin_window_ex(asmtest_trace_t *trace,
         return ASMTEST_HW_ESTATE;
 #if defined(__x86_64__)
     if (g_opts.backend == ASMTEST_HWTRACE_SINGLESTEP) {
+        /* T6 (managed-wholewindow-compose): opt-in safe-managed refusal. When
+         * ASMTEST_WHOLEWINDOW_SAFE_MANAGED=1 and a managed runtime lives in this
+         * process, refuse the in-process EFLAGS.TF arm with the DISTINCT
+         * ASMTEST_HW_EMANAGED sentinel (not the absent-tier EUNAVAIL) so the caller
+         * routes to the out-of-process stepper / PT tier instead of single-stepping
+         * code whose SIGTRAP disposition CoreCLR's PAL owns. Default (env unset) is
+         * byte-identical to today — this is the roadmap's safe arm, opt-in only. */
+        {
+            const char *sm = getenv("ASMTEST_WHOLEWINDOW_SAFE_MANAGED");
+            if (sm != NULL && strcmp(sm, "1") == 0 &&
+                asmtest_hwtrace_managed_runtime_present())
+                return ASMTEST_HW_EMANAGED;
+        }
         uint32_t idx = 0, gen = 0;
         g_arm_tid =
             (int)syscall(SYS_gettid); /* §Z4: best-effort arming-tid accessor */

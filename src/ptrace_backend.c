@@ -3474,6 +3474,130 @@ int asmtest_ptrace_trace_attached_windowed_blockstep(
     return rc;
 }
 
+/* managed-wholewindow-compose T8: the STOP-FLAG form of asmtest_ptrace_trace_attached_
+ * windowed_blockstep — the §D3 out-of-process whole-window block-steps one #DB per TAKEN
+ * BRANCH instead of one per instruction (~4-10x fewer stops), making a managed whole-window
+ * affordable. It shares windowed_blockstep's block-reconstruction + signal-fallback inner
+ * loop the way asmtest_ptrace_trace_attached_window_stop shares the per-instruction windowed
+ * loop: no window frame boundary (whole-thread; the region set is the channel-published
+ * regions only, win_base/win_len == 0), terminated by the parent setting *stop rather than
+ * pc == win_ret. A kernel-injected transfer (a non-SIGTRAP signal, or the tracee's own
+ * int3 — a JVM safepoint / .NET breakpoint, trap-class and indistinguishable from a BTF #DB
+ * except by si_code) falls back to the per-instruction loop for the remainder, byte-identical
+ * to the per-instruction window_stop stream. */
+int asmtest_ptrace_trace_attached_window_stop_blockstep(
+    pid_t pid, asmtest_addr_channel_t *chan, volatile int *stop,
+    asmtest_trace_t *trace) {
+    if (trace == NULL || stop == NULL)
+        return ASMTEST_PTRACE_EINVAL;
+    if (!asmtest_ptrace_blockstep_available())
+        return ASMTEST_PTRACE_ENOSYS;
+
+    uint64_t pc0 = 0;
+    if (read_pc_ret(pid, &pc0, NULL, NULL, NULL) != 0)
+        return ASMTEST_PTRACE_ETRACE;
+
+    uint64_t *stream =
+        (uint64_t *)malloc((size_t)PTRACE_STREAM_CAP * sizeof(uint64_t));
+    if (stream == NULL)
+        return ASMTEST_PTRACE_ETRACE;
+    uint32_t n = 0;
+
+    asmtest_addr_rec_t regs[ASMTEST_ADDR_CHAN_CAP];
+    uint32_t nreg = 0;
+    if (chan != NULL)
+        nreg = asmtest_addr_channel_drain(chan, regs, ASMTEST_ADDR_CHAN_CAP);
+
+    foreign_bytes_t fb;
+    fb.pid = pid;
+    fb.base = 0;
+    fb.len = 0;
+
+    /* The current stop opens the first block; reconstructing it records pc0 itself
+     * (window_block_walk seeds it) — no explicit seed, exactly like windowed_blockstep. */
+    uint64_t prev_pc = pc0;
+    int overflow = 0, reached_end = 0, rc = ASMTEST_PTRACE_OK, status = 0;
+    uint64_t steps = 0;
+    int handoff_sig = -1;
+
+    for (;;) {
+        if (*stop != 0) {
+            reached_end = 1; /* the parent ended the window normally */
+            break;
+        }
+        if (ptrace(PTRACE_SINGLEBLOCK, pid, NULL, NULL) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (waitpid(pid, &status, 0) < 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (WIFEXITED(status) || WIFSIGNALED(status))
+            break;
+        if (!WIFSTOPPED(status))
+            continue;
+        if (++steps > PTRACE_WINDOW_STEP_CAP) {
+            overflow = 1;
+            break;
+        }
+        uint64_t pc = 0;
+        if (read_pc_ret(pid, &pc, NULL, NULL, NULL) != 0) {
+            rc = ASMTEST_PTRACE_ETRACE;
+            break;
+        }
+        if (chan != NULL && nreg < ASMTEST_ADDR_CHAN_CAP)
+            nreg += asmtest_addr_channel_drain(chan, regs + nreg,
+                                               ASMTEST_ADDR_CHAN_CAP - nreg);
+
+        /* Same signal/app-trap classification as windowed_blockstep. */
+        int sig = WSTOPSIG(status);
+        int app_trap = (sig == SIGTRAP) && bs_sigtrap_is_app(pid);
+        int at_mode = (sig != SIGTRAP) || app_trap;
+
+        /* A block starting outside every region contributes nothing (control enters a
+         * region only through a taken branch, which stops AT the region entry), so glue
+         * costs no walk and an undecodable byte out there cannot truncate the capture. */
+        if (in_region_set(prev_pc, 0, 0, regs, nreg)) {
+            int wr = window_block_walk(&fb, at_mode, app_trap, prev_pc, pc, 0,
+                                       0, regs, nreg, stream, &n);
+            if (wr == ASMTEST_BS_FAIL) {
+                overflow = 1;
+                break;
+            }
+            if (wr == ASMTEST_BS_AMBIGUOUS)
+                overflow = 1; /* honest gap: definite prefix recorded, capture
+                               * truncated, tracee position known — keep going */
+        }
+        if (at_mode) {
+            handoff_sig = sig;
+            break;
+        }
+        prev_pc = pc; /* the block's target opens the next block */
+    }
+
+    if (handoff_sig >= 0) {
+        /* Finish on the per-instruction loop (exact across delivery/sigreturn and app
+         * traps): whole-thread (win_base/len/ret == 0), *stop-terminated. */
+        int ov2 = 0;
+        int rc2 =
+            trace_attached_window_loop(pid, 0, 0, 0, chan, regs, &nreg, stop,
+                                       NULL, stream, &n, &ov2, handoff_sig);
+        if (rc2 != ASMTEST_PTRACE_OK)
+            rc = rc2;
+        else if (ov2)
+            overflow = 1;
+    } else if (rc == ASMTEST_PTRACE_OK && !overflow && !reached_end) {
+        /* *stop is the only clean end; a tracee that exited/died first cut it short. */
+        overflow = 1;
+    }
+
+    if (rc == ASMTEST_PTRACE_OK)
+        materialize_stream_to_trace(pid, stream, n, overflow, trace);
+    free(stream);
+    return rc;
+}
+
 #else  /* !__x86_64__ : no PTRACE_SINGLEBLOCK equivalent on AArch64 */
 int asmtest_ptrace_trace_attached_windowed_blockstep(
     pid_t pid, const void *win_base_p, size_t win_len,
@@ -3483,6 +3607,15 @@ int asmtest_ptrace_trace_attached_windowed_blockstep(
     (void)win_len;
     (void)chan;
     (void)result;
+    (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+int asmtest_ptrace_trace_attached_window_stop_blockstep(
+    pid_t pid, asmtest_addr_channel_t *chan, volatile int *stop,
+    asmtest_trace_t *trace) {
+    (void)pid;
+    (void)chan;
+    (void)stop;
     (void)trace;
     return ASMTEST_PTRACE_ENOSYS;
 }
@@ -4204,6 +4337,16 @@ int asmtest_ptrace_trace_attached_window_stop(pid_t pid,
                                               asmtest_addr_channel_t *chan,
                                               volatile int *stop,
                                               asmtest_trace_t *trace) {
+    (void)pid;
+    (void)chan;
+    (void)stop;
+    (void)trace;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+
+int asmtest_ptrace_trace_attached_window_stop_blockstep(
+    pid_t pid, asmtest_addr_channel_t *chan, volatile int *stop,
+    asmtest_trace_t *trace) {
     (void)pid;
     (void)chan;
     (void)stop;

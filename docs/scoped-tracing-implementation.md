@@ -164,7 +164,7 @@ end-to-end on any x86-64 Linux via the single-step **WEAK** tier, per
   stepper single-steps everything, so a first-call JIT inside it aborts CoreCLR (exit 134) — the
   unwarmed mid-window-JIT compose is thus proven on the range-based `AsmTrace.Window` factory
   (native-speed JIT), while the inline OOP ctor serves resident (warm) code.
-  [managed-wholewindow-compose.md](internal/implementations/managed-wholewindow-compose.md).
+  [managed-wholewindow-compose.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/managed-wholewindow-compose.md).
 - **Tests:** `test_wholewindow_singlestep` (region-free arm, absolute-address capture,
   live-memory render finding `ret`, cross-thread `truncated`), `test_pt_window_pair_selfskip`,
   and `test_window_ladder` (the ladder never returns an unavailable backend; `pt_window_trusted`

@@ -534,6 +534,40 @@ version **live in the window** (the recorder the `byMethod` map feeds), not what
 bytes are mapped at render time — so a body that moves *after* the scope still
 renders what actually ran.
 
+### Opt-in safe-managed routing
+
+The shipping default for `new AsmTrace()` on a managed thread is the
+convention-mitigated in-process single-step above (worker pinned resident,
+`Truncated` exposed) — chosen because it runs on any x86-64 Linux with no privilege.
+When you would rather **refuse** the in-process `EFLAGS.TF` arm outright on a managed
+process and route to a crash-proof tier, set `ASMTEST_WHOLEWINDOW_SAFE_MANAGED=1` (or
+pass `safeManaged: true` to the .NET empty ctor — the parameter wins over the env).
+`asmtest_hwtrace_managed_runtime_present()` scans `/proc/self/maps` for the CoreCLR /
+JVM / Mono images to decide "is this a managed process".
+
+With the policy active on a managed process, the native
+`asmtest_hwtrace_begin_window` returns the distinct `ASMTEST_HW_EMANAGED` status (not
+`ASMTEST_HW_EUNAVAIL` — so a caller tells a *policy refusal* from a *genuinely absent
+tier*), and the .NET empty ctor routes the window instead of arming TF:
+
+| Order | Route | When | `ww.Route` |
+|---|---|---|---|
+| 1 | **Intel PT** whole-window | bare-metal Intel PT + `perf_event_paranoid < 0` / `CAP_PERFMON` | `pt` |
+| 2 | **§D3 out-of-process stepper** (`outOfProcess: true`) | otherwise, where ptrace is permitted | `oop` |
+| 3 | **Honest self-skip** | neither available — `SkipReason` names both misses | *(unarmed)* |
+
+In-process TF is **never** selected on this path (`ww.Route` is `pt` / `oop`, never
+`inproc`). With the policy inactive (the default), the ctor behaves exactly as
+today — `ww.Route == "inproc"` and every pre-existing scope is byte-identical.
+
+The `oop` route inherits the inline out-of-process window's contract: its region-free
+stepper single-steps the arming thread, so it is best-effort for a **resident/offloaded**
+managed body (the [crashproof-showdown](https://github.com/wilvk/asm-test/blob/main/examples/dotnet/crashproof-showdown/Program.cs)
+shape) and can abort if held open across a background GC. The **fully robust** managed
+whole-window remains the range-based `AsmTrace.Window(Action)` factory (its stepper runs
+the runtime at native speed and steps only the published range); reach for it when the
+body does substantial managed work on the arming thread.
+
 The .NET binding is the reference: see
 [docs/bindings/dotnet.md](../../bindings/dotnet.md) for the `AsmTrace` /
 `AsmTrace.Method` surface and the §D0.1/§D0.2 method-naming path. The async-hop

@@ -47,15 +47,21 @@ extern "C" {
  * takes a code-image timeline. Identical typedef, so both headers may be included. */
 typedef struct asmtest_codeimage asmtest_codeimage_t;
 
-/* Status codes (shared spirit with asmtest_drtrace.h; -4/-7 intentionally
- * skipped, mirroring asmtest_drtrace.h). */
+/* Status codes (shared spirit with asmtest_drtrace.h; -7 intentionally
+ * skipped, mirroring asmtest_drtrace.h's ENOENT hole). */
 #define ASMTEST_HW_OK       0
 #define ASMTEST_HW_EINVAL   (-1)
 #define ASMTEST_HW_ESTATE   (-2)
 #define ASMTEST_HW_EUNAVAIL (-3) /* backend/PMU/hardware unavailable   */
-#define ASMTEST_HW_ENOSYS   (-5) /* decoder library not compiled in    */
-#define ASMTEST_HW_EFULL    (-6)
-#define ASMTEST_HW_EDECODE  (-8) /* capture/decode failure             */
+#define ASMTEST_HW_EMANAGED                                                    \
+    (-4) /* opt-in safe-managed refusal: a managed runtime lives in this
+            process and ASMTEST_WHOLEWINDOW_SAFE_MANAGED=1, so the in-process
+            EFLAGS.TF whole-window arm was refused (route to the out-of-process
+            stepper / PT tier). DISTINCT from EUNAVAIL (a genuinely absent tier)
+            so the skip-reason surface tells a policy refusal from no-tier. */
+#define ASMTEST_HW_ENOSYS  (-5) /* decoder library not compiled in    */
+#define ASMTEST_HW_EFULL   (-6)
+#define ASMTEST_HW_EDECODE (-8) /* capture/decode failure             */
 #define ASMTEST_HW_EPERM                                                       \
     (-9) /* perf capture PERMISSION denied — the substrate is present but
             perf_event_paranoid / missing CAP_PERFMON blocks it. Only
@@ -467,9 +473,19 @@ int asmtest_hwtrace_render_versioned(asmtest_codeimage_t *img, uint64_t when,
  * clean self-skip: ASMTEST_HW_EUNAVAIL on AMD LBR / CoreSight (still forward-look
  * here) or off bare-metal Intel PT, ASMTEST_HW_ESTATE if the tier is not up or a PT
  * window is already active, ASMTEST_HW_EFULL if this thread's range stack is full,
- * ASMTEST_HW_EINVAL on a NULL trace. */
+ * ASMTEST_HW_EINVAL on a NULL trace, and ASMTEST_HW_EMANAGED when the opt-in
+ * safe-managed policy (ASMTEST_WHOLEWINDOW_SAFE_MANAGED=1) refuses an in-process TF
+ * arm because a managed runtime is present (default off; byte-identical to today). */
 int asmtest_hwtrace_begin_window(asmtest_trace_t *trace,
                                  asmtest_hwtrace_scope_t *out);
+
+/* T6 (managed-wholewindow-compose): does a managed runtime (CoreCLR / JVM / Mono)
+ * live in THIS process? A one-shot cached scan of /proc/self/maps, consulted only at
+ * arm time (never in a signal handler). ASMTEST_ASSUME_MANAGED=1 forces a positive
+ * (the C self-suite has no real runtime). Non-Linux always returns 0. Drives the
+ * opt-in ASMTEST_WHOLEWINDOW_SAFE_MANAGED policy in begin_window and the .NET
+ * safe-managed routing. Returns 1 when present, 0 otherwise. */
+int asmtest_hwtrace_managed_runtime_present(void);
 
 /* Close a region-free scope opened by begin_window. On the ARMING thread the frame
  * resolves and is closed + normalized; on any OTHER thread (the traced work hopped

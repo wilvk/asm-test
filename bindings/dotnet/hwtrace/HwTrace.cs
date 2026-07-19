@@ -102,6 +102,8 @@ namespace Asmtest
         public const int ASMTEST_HW_EINVAL = -1;   // bad argument
         public const int ASMTEST_HW_ESTATE = -2;   // tier not up / wrong state
         public const int ASMTEST_HW_EUNAVAIL = -3; // no hardware-trace backend available
+        public const int ASMTEST_HW_EMANAGED = -4; // safe-managed refusal: managed runtime present
+                                                   // + ASMTEST_WHOLEWINDOW_SAFE_MANAGED=1 (opt-in)
         public const int ASMTEST_HW_ENOSYS = -5;   // not built / not this platform
         public const int ASMTEST_HW_EFULL = -6;    // this thread's range stack is full
         public const int ASMTEST_HW_EDECODE = -8;  // capture/decode failure
@@ -349,6 +351,7 @@ namespace Asmtest
             out long result, ref HwScope @out);
 
         // §Z0/§Z1 — the region-free (empty-ctor) whole-window scope surface.
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_managed_runtime_present();
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_begin_window(IntPtr trace, ref HwScope @out);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_end_window(HwScope handle, IntPtr trace);
         [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_render_window(HwScope handle, byte[] buf, UIntPtr buflen);
@@ -1969,6 +1972,13 @@ namespace Asmtest
         /// <summary>§Z5: when the scope did NOT arm, the honest human-readable reason
         /// (no faithful backend, tier not up, not Linux). Empty when armed.</summary>
         public string SkipReason { get; private set; } = "";
+        /// <summary>managed-wholewindow-compose T7 (§Z1.1 safe-managed routing): which arm the
+        /// empty-ctor whole-window chose — <c>"inproc"</c> (the convention-mitigated in-process
+        /// single-step default), <c>"pt"</c> (Intel PT where the silicon exists), <c>"oop"</c>
+        /// (the §D3 out-of-process stepper), or <c>"none"</c> (safe-managed policy active but
+        /// neither PT nor ptrace available — an honest skip). Under the safe-managed policy this
+        /// is NEVER <c>"inproc"</c>. Empty for non-whole-window scopes.</summary>
+        public string Route { get; private set; } = "";
         /// <summary>§Z1: the raw ABSOLUTE addresses captured by a whole-window scope, in
         /// execution order (empty for the region-scoped form). Range-classify these
         /// against known native regions to tell multiple leaves apart.</summary>
@@ -2168,13 +2178,12 @@ namespace Asmtest
         /// empty.</param>
         public AsmTrace(bool emit = true, bool byMethod = false, bool withRundown = false,
                         bool renderPath = false, int rundownSettleMs = 0,
-                        AsmNamedRegion[] regions = null,
+                        AsmNamedRegion[] regions = null, bool? safeManaged = null,
                         [CallerMemberName] string member = null,
                         [CallerLineNumber] int line = 0)
         {
             _name = ScopeName(member, line);
             _emit = emit;
-            _kind = Kind.WholeWindow;
             _renderPath = renderPath;
             _regions = regions;
             _rundownSettleMs = rundownSettleMs;
@@ -2185,12 +2194,69 @@ namespace Asmtest
             // the same LibAvailable guard HwTrace.Available/Resolve/Auto already use.
             if (!HwNative.LibAvailable)
             {
+                _kind = Kind.WholeWindow;
                 SkipReason = "libasmtest_hwtrace not loaded — set ASMTEST_HWTRACE_LIB or build build/libasmtest_hwtrace.so";
                 return;
             }
-            // R3: single-step whole-window arming, shared with the backend-keyed
-            // `new AsmTrace(HwBackend.SingleStep)` ctor (see ArmWholeWindow).
-            ArmWholeWindow(byMethod, withRundown);
+            // managed-wholewindow-compose T7 — §Z1.1 safe-managed routing: "PT/LBR where the
+            // silicon exists, else the §D3 [out-of-process] stepper" — never in-process TF
+            // against a managed runtime's threads (whose SIGTRAP disposition CoreCLR's PAL owns).
+            // The DECISION lives in ResolveWholeWindowRoute (unit-testable without arming); this
+            // switch only ACTS on it. Inactive (the default) is byte-identical to today.
+            Route = ResolveWholeWindowRoute(safeManaged);
+            switch (Route)
+            {
+                case "pt":
+                    // PT where the silicon exists — the ONE PT arm owned by the substrate
+                    // (asmtest_hwtrace_pt_begin_window); this ctor only calls it.
+                    _kind = Kind.PtWindow;
+                    ArmPtWindow(byMethod, withRundown);
+                    return;
+                case "oop":
+                    // else the §D3 out-of-process stepper — the arming thread is never TF-armed.
+                    _kind = Kind.OopInlineWindow;
+                    ArmOopWindow(byMethod, withRundown);
+                    return;
+                case "none":
+                    // else an honest self-skip naming both misses. Nothing armed → no teardown;
+                    // _kind is a Dispose no-op discriminator (WholeWindow with Armed=false,
+                    // _handle Zero, _scope the invalid sentinel so end_window can't resolve it).
+                    _kind = Kind.WholeWindow;
+                    _scope = new HwNative.HwScope { Idx = 0xffffffffu, Gen = 0, ArmTid = -1 };
+                    SkipReason =
+                        "PT unavailable (" + HwTrace.SkipReason(HwBackend.IntelPt) + "); "
+                        + "ptrace unavailable (" + Ptrace.SkipReason() + ") — in-process TF "
+                        + "refused under safe-managed routing";
+                    return;
+                default: // "inproc": R3 single-step whole-window arming, shared with the
+                         // backend-keyed `new AsmTrace(HwBackend.SingleStep)` ctor (ArmWholeWindow).
+                    _kind = Kind.WholeWindow;
+                    ArmWholeWindow(byMethod, withRundown);
+                    break;
+            }
+        }
+
+        // T7 (managed-wholewindow-compose): the §Z1.1 safe-managed routing DECISION, factored out
+        // of the empty ctor so it is unit-testable WITHOUT arming (arming the region-free OOP
+        // window in a live managed process with active GC can abort CoreCLR — the ptrace stepper
+        // collides with the runtime's thread-suspension, the T3 finding — so a suite check reads
+        // the route here instead of live-arming it). Returns the route the empty ctor will take:
+        //   "inproc" — policy off, or not a managed process: the in-process EFLAGS.TF whole-window
+        //              (the shipping default, byte-identical to pre-T7 behavior).
+        //   "pt"     — safe-managed active + managed present + the Intel PT window tier arms.
+        //   "oop"    — else the §D3 out-of-process stepper is available (ptrace permitted).
+        //   "none"   — safe-managed active + managed present but NEITHER PT nor ptrace: an honest
+        //              skip. In-process TF is NEVER selected once the policy is active on a managed
+        //              process. Opt-in: the `safeManaged` parameter wins, else the env var.
+        internal static string ResolveWholeWindowRoute(bool? safeManaged)
+        {
+            bool policy = safeManaged ??
+                (Environment.GetEnvironmentVariable("ASMTEST_WHOLEWINDOW_SAFE_MANAGED") == "1");
+            if (!policy || HwNative.asmtest_hwtrace_managed_runtime_present() == 0)
+                return "inproc";
+            if (HwTrace.Available(HwBackend.IntelPt)) return "pt";
+            if (Ptrace.Available()) return "oop";
+            return "none";
         }
 
         // R3: the single-step whole-window arming shared by the empty `new AsmTrace()` ctor
@@ -2279,6 +2345,12 @@ namespace Asmtest
         // why each self-skipped), so the message names the missing capability, not just "no".
         static string WholeWindowSkipReason(int rc) => rc switch
         {
+            // T6 (managed-wholewindow-compose): the opt-in safe-managed refusal. Keyed on the
+            // DISTINCT EMANAGED sentinel (not EUNAVAIL) so a policy refusal reads differently
+            // from a genuinely absent tier — the whole reason begin_window returns its own code.
+            HwNative.ASMTEST_HW_EMANAGED =>
+                "managed runtime present; in-process TF window refused (safe-managed) — use "
+                + "the out-of-process window or the PT tier",
             HwNative.ASMTEST_HW_EUNAVAIL =>
                 "single-step whole-window tier unavailable on this host (needs x86-64 Linux; "
                 + "whole-window is single-step only, so a non-single-step backend inited via "
@@ -2287,6 +2359,88 @@ namespace Asmtest
             HwNative.ASMTEST_HW_ENOSYS => "whole-window scope is Linux/x86-64 only",
             _ => "whole-window scope did not arm",
         };
+
+        // T7 (managed-wholewindow-compose): the Intel PT STRONG whole-window inline arm, factored
+        // out of the `AsmTrace(HwBackend.IntelPt)` ctor so the empty-ctor safe-managed PT route
+        // reuses the ONE PT arm (asmtest_hwtrace_pt_begin_window) — never reimplements it. Sets up
+        // the JIT map + rundown BEFORE arming (the map must see methods JIT'd inside the window;
+        // the rundown's socket I/O must not run under capture), pre-allocates the retained
+        // whole-window trace, arms the native pair, and on OK wraps the ctx in the finalizable
+        // PtWindowCtx and pins the OS thread (the perf event is per-thread). Assumes
+        // _kind == Kind.PtWindow and the caller already passed HwTrace.Available(IntelPt).
+        void ArmPtWindow(bool byMethod, bool withRundown)
+        {
+            if (byMethod || withRundown) _map = new JitMethodMap(trackBytes: true);
+            _rundownRequested = withRundown;
+            if (withRundown) RundownEnabled = DiagnosticsIpc.EnablePerfMap();
+            // Whole-window captures the runtime too — size the retained trace to the
+            // single-step window ring (same as ArmWholeWindow); committed only as it fills.
+            _handle = HwNative.asmtest_trace_new((UIntPtr)(1 << 20), (UIntPtr)0);
+            if (_handle == IntPtr.Zero)
+            {
+                SkipReason = "Intel PT window: trace allocation failed";
+                return;
+            }
+            int prc = HwNative.asmtest_hwtrace_pt_begin_window(out IntPtr pctx);
+            if (prc != HwNative.ASMTEST_HW_OK || pctx == IntPtr.Zero)
+            {
+                SkipReason = $"Intel PT window did not arm (rc={prc})";
+                return; // Dispose tears down _map + DisablePerfMap + frees _handle
+            }
+            _ptWinCtx = new PtWindowCtx(pctx);
+            Thread.BeginThreadAffinity();
+            Armed = true;
+        }
+
+        // T7 (managed-wholewindow-compose): the §D3 out-of-process inline-window arm, factored
+        // out of the `AsmTrace(bool outOfProcess)` ctor VERBATIM so the empty-ctor safe-managed
+        // OOP route reuses it (channel alloc, EnumerateManagedCodeRanges seeding,
+        // stealth_window_begin, thread affinity, teardown on failure). Assumes
+        // _kind == Kind.OopInlineWindow and the caller already passed the LibAvailable +
+        // Ptrace.Available guards. Sets Armed + _oopWinCtx on success, or SkipReason + teardown.
+        void ArmOopWindow(bool byMethod, bool withRundown)
+        {
+            if (byMethod || withRundown) _map = new JitMethodMap(trackBytes: true);
+            if (withRundown) RundownEnabled = DiagnosticsIpc.EnablePerfMap();
+            _rundownRequested = withRundown;
+
+            _oopWinChan = HwNative.asmtest_addr_channel_new_shared();
+            if (_oopWinChan == IntPtr.Zero)
+            {
+                SkipReason = "out-of-process window: shared channel alloc failed";
+                if (_map != null) { _map.Stop(); _map.Dispose(); }
+                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+                return;
+            }
+            foreach (AddrRec r in EnumerateManagedCodeRanges())
+                HwNative.asmtest_addr_channel_publish_rec(_oopWinChan, r.Base, r.Len, r.Version);
+            // NOTE (managed-wholewindow-compose T3 finding): the §E3 live mid-window JIT publish
+            // that AsmTrace.Window wires is intentionally NOT armed here. This inline ctor's
+            // region-free window_stop stepper single-steps EVERY instruction the arming thread
+            // runs, so a first-call JIT INSIDE the window is stepped through the whole compiler —
+            // which aborts CoreCLR (measured exit 134). The live-publish path only pays off on the
+            // RANGE-based AsmTrace.Window stepper (where the JIT runs at native speed and only the
+            // published region is stepped), so the unwarmed mid-window-JIT compose is proven there
+            // (HwTraceProgram.WindowLiveJitChecks), not through this inline ctor — which is for a
+            // body whose code is already RESIDENT (warm), matching the crashproof-showdown example.
+
+            Thread.BeginThreadAffinity();
+            int rc = HwNative.asmtest_hwtrace_stealth_window_begin(_oopWinChan, out IntPtr ctx);
+            if (rc == HwNative.ASMTEST_HW_OK)
+            {
+                _oopWinCtx = new OopWindowCtx(ctx);
+                Armed = true;
+            }
+            else
+            {
+                Thread.EndThreadAffinity();
+                SkipReason = $"stealth_window_begin failed: rc={rc}";
+                HwNative.asmtest_addr_channel_free_shared(_oopWinChan);
+                _oopWinChan = IntPtr.Zero;
+                if (_map != null) { _map.Stop(); _map.Dispose(); }
+                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
+            }
+        }
 
         public AsmTrace(NativeCode code, bool emit = true,
                         [CallerMemberName] string member = null,
@@ -2644,36 +2798,14 @@ namespace Asmtest
             {
                 // §Z1.2: the STRONG whole-window Intel PT inline capture. Exact (not
                 // statistical). Gate on availability (self-skip NAMING the PT gate off
-                // bare-metal Intel PT); set up the JIT map + rundown BEFORE arming (the map must
-                // see methods JIT'd inside the window, and the rundown's socket I/O must not run
-                // under capture); pre-allocate the retained whole-window trace; arm the native
-                // pair; on OK wrap the ctx in the finalizable PtWindowCtx and pin the OS thread
-                // (the perf event is per-thread — same caveat as AMD).
+                // bare-metal Intel PT), then arm via the shared ArmPtWindow helper (T7:
+                // reused by the empty-ctor safe-managed PT route so there is ONE PT arm).
                 if (!HwTrace.Available(HwBackend.IntelPt))
                 {
                     SkipReason = "Intel PT unavailable: " + HwTrace.SkipReason(HwBackend.IntelPt);
                     return; // Dispose's PtWindow branch tears down _map + DisablePerfMap
                 }
-                if (byMethod || withRundown) _map = new JitMethodMap(trackBytes: true);
-                _rundownRequested = withRundown;
-                if (withRundown) RundownEnabled = DiagnosticsIpc.EnablePerfMap();
-                // Whole-window captures the runtime too — size the retained trace to the
-                // single-step window ring (same as ArmWholeWindow); committed only as it fills.
-                _handle = HwNative.asmtest_trace_new((UIntPtr)(1 << 20), (UIntPtr)0);
-                if (_handle == IntPtr.Zero)
-                {
-                    SkipReason = "Intel PT window: trace allocation failed";
-                    return;
-                }
-                int prc = HwNative.asmtest_hwtrace_pt_begin_window(out IntPtr pctx);
-                if (prc != HwNative.ASMTEST_HW_OK || pctx == IntPtr.Zero)
-                {
-                    SkipReason = $"Intel PT window did not arm (rc={prc})";
-                    return; // Dispose tears down _map + DisablePerfMap + frees _handle
-                }
-                _ptWinCtx = new PtWindowCtx(pctx);
-                Thread.BeginThreadAffinity();
-                Armed = true;
+                ArmPtWindow(byMethod, withRundown);
                 return;
             }
             if (backend != HwBackend.AmdLbr)
@@ -2744,46 +2876,9 @@ namespace Asmtest
                 SkipReason = "out-of-process stepper unavailable: " + Ptrace.SkipReason();
                 return;
             }
-            if (byMethod || withRundown) _map = new JitMethodMap(trackBytes: true);
-            if (withRundown) RundownEnabled = DiagnosticsIpc.EnablePerfMap();
-            _rundownRequested = withRundown;
-
-            _oopWinChan = HwNative.asmtest_addr_channel_new_shared();
-            if (_oopWinChan == IntPtr.Zero)
-            {
-                SkipReason = "out-of-process window: shared channel alloc failed";
-                if (_map != null) { _map.Stop(); _map.Dispose(); }
-                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
-                return;
-            }
-            foreach (AddrRec r in EnumerateManagedCodeRanges())
-                HwNative.asmtest_addr_channel_publish_rec(_oopWinChan, r.Base, r.Len, r.Version);
-            // NOTE (managed-wholewindow-compose T3 finding): the §E3 live mid-window JIT publish
-            // that AsmTrace.Window wires is intentionally NOT armed here. This inline ctor's
-            // region-free window_stop stepper single-steps EVERY instruction the arming thread
-            // runs, so a first-call JIT INSIDE the window is stepped through the whole compiler —
-            // which aborts CoreCLR (measured exit 134). The live-publish path only pays off on the
-            // RANGE-based AsmTrace.Window stepper (where the JIT runs at native speed and only the
-            // published region is stepped), so the unwarmed mid-window-JIT compose is proven there
-            // (HwTraceProgram.WindowLiveJitChecks), not through this inline ctor — which is for a
-            // body whose code is already RESIDENT (warm), matching the crashproof-showdown example.
-
-            Thread.BeginThreadAffinity();
-            int rc = HwNative.asmtest_hwtrace_stealth_window_begin(_oopWinChan, out IntPtr ctx);
-            if (rc == HwNative.ASMTEST_HW_OK)
-            {
-                _oopWinCtx = new OopWindowCtx(ctx);
-                Armed = true;
-            }
-            else
-            {
-                Thread.EndThreadAffinity();
-                SkipReason = $"stealth_window_begin failed: rc={rc}";
-                HwNative.asmtest_addr_channel_free_shared(_oopWinChan);
-                _oopWinChan = IntPtr.Zero;
-                if (_map != null) { _map.Stop(); _map.Dispose(); }
-                if (_rundownRequested) DiagnosticsIpc.DisablePerfMap();
-            }
+            // T7: the arm body is now the shared ArmOopWindow helper (reused by the empty-ctor
+            // safe-managed OOP route). _kind == Kind.OopInlineWindow is already set above.
+            ArmOopWindow(byMethod, withRundown);
         }
 
         /// <summary>
@@ -3728,12 +3823,18 @@ namespace Asmtest
                     // sink write, not producing Path. The whole-window (§Z1) path is handle-keyed
                     // and renders the recorded ABSOLUTE addresses from live self memory; the
                     // region path is name-keyed and renders base-relative offsets.
-                    HwNative.asmtest_hwtrace_end_window(_scope, _handle);
+                    // (T7 safe-managed "none" route arms nothing: _handle == Zero and no live
+                    // frame — guard so an unarmed WholeWindow scope closes as a clean no-op.)
+                    if (_handle != IntPtr.Zero)
+                        HwNative.asmtest_hwtrace_end_window(_scope, _handle);
                     // §D0.1: freeze the JIT map to exactly the methods seen while the scope
                     // was open (before the readback/classification below JITs anything more).
                     // §Z3: also pin the code-image version AT CLOSE — the labelled
                     // disassembly below decodes against it, so a method that re-tiers/moves
                     // AFTER the window still renders the bytes that actually ran.
+                    // (T7 safe-managed "none" route: an unarmed scope has _handle == Zero and
+                    // no live frame — end_window above no-op'd, and the readbacks below are all
+                    // _handle-guarded, so this branch is a clean no-op for it.)
                     IntPtr img = IntPtr.Zero;
                     ulong when = 0;
                     if (_map != null)
