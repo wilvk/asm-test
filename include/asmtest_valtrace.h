@@ -319,10 +319,10 @@ int asmtest_method_attribute(const asmtest_method_t *methods, size_t nmethods,
 /*                                                                        */
 /* PURE address math — no Capstone, no Unicorn, no runtime — so it unit-    */
 /* tests on every host, exactly like the L1 / L2 passes above. The LIVE     */
-/* EventPipe feed that turns GCBulkMovedObjectRanges events into            */
-/* asmtest_gcmove_t records at the right step boundaries is a LATER          */
-/* increment; this is the pure transform it will drive. Full object          */
-/* identity via GCBulkType / Node / Edge is likewise deferred.               */
+/* GCBulkMovedObjectRanges feed that stamps these records at the right      */
+/* step boundaries LANDED as the gccanon-attach lane; and full OBJECT       */
+/* identity via GCBulkType / Node / Edge LANDED as increment 4 below        */
+/* (asmtest_objid_canonicalize), joined to an EventPipe heap snapshot.      */
 /* ------------------------------------------------------------------ */
 
 /* One GC move-range record — the shape of an EventPipe GCBulkMovedObjectRanges

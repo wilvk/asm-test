@@ -619,6 +619,21 @@ control, re-validated for the live data path).
 > method+version clause rides the already-landed Increment-3 attribution and is not re-proven by
 > this lane.
 
+> **UPDATE 2026-07-19 — the "further step" (full object identity) LANDED (increment 4).** The one
+> residual address identity could not express — a pre-window record touching memory that a GC then
+> slides a live object into *aliases* that object — is now retired. A heap snapshot of
+> `{Address, Size, TypeID}` nodes from the runtime's `GCBulkNode`/`GCBulkEdge`/`GCBulkType` events
+> (a new EventPipe `gccanon_dumper`) is joined with the `MovedReferences2` feed, so each memory
+> record keys on *(object, offset)* where the snapshot has evidence and degrades to address identity
+> where it does not (`asmtest_objid_canonicalize`, `src/dataflow_objid.c`; pure unit suite
+> `test_dataflow_objid`, 27/27). `docker-gccanon-attach` gains an `alias` phase: the false store→load
+> edge address identity forges (a doomed object stored at X, a live object slid onto X and loaded
+> there) is reproduced as the NEGATIVE CONTROL and then SEVERED by object identity — green over two
+> consecutive runs. The snapshot-space convention (GCBulkNode addresses are POST-relocation, so the
+> dump GC's own ranges belong in the translation set) was **measured, not assumed** — see
+> [f4-objid-snapshot-space-findings.md](../analysis/f4-objid-snapshot-space-findings.md). Increments
+> 1+2 correctly shipped ADDRESS identity; this is the next increment atop them, not a fix to them.
+
 ---
 
 ## F5 — PT + code-image + replay: the least-perturbing ceiling *(planned — Intel-PT-gated)*

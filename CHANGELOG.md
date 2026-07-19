@@ -8,6 +8,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Real object identity for managed memory def-use on the live-attach tier.** A
+  heap snapshot of `{Address, Size, TypeID}` nodes from the runtime's
+  GCBulkNode / GCBulkEdge / GCBulkType events, joined with the `MovedReferences2`
+  move feed, keys each captured memory record on *(object, offset)* where the
+  snapshot has evidence and degrades to the landed address identity where it does
+  not (`asmtest_objid_canonicalize`, `src/dataflow_objid.c`; unit suite
+  `test_dataflow_objid`). On a live attach (`make docker-gccanon-attach`, new
+  `alias` phase) the false def-use edge that address identity forges when a GC
+  slides a live object onto a dead object's vacated slot is reproduced under
+  address identity and then eliminated by object identity.
+
 - **Native RISC-V (rv64) host tier — the capture framework now runs *on* a RISC-V
   machine, not just as an emulator guest.** A `regs_t` branch and trampolines
   (`src/capture.s`) for the RV64GC / LP64D psABI: `a0`/`a1` return pair, integer
