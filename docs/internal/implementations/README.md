@@ -125,7 +125,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 ### Scoped / managed whole-window tracing
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
-| [zeroconfig-scoped-tracing-hardening.md](zeroconfig-scoped-tracing-hardening.md) — in-process guards, hygiene assertions, doc-tail | 9 | ☐ 0/9 | — |
+| [zeroconfig-scoped-tracing-hardening.md](zeroconfig-scoped-tracing-hardening.md) — in-process guards, hygiene assertions, doc-tail | 9 | ◐ 0/9 (batch wip: T1-T9) | — |
 | [managed-wholewindow-compose.md](managed-wholewindow-compose.md) — live compose, safe managed-arm routing, ambient PT stitching | 12 | ☐ 0/12 | **intel-pt-whole-window-substrate** (PT prongs only; D3-stepper prongs are independent) |
 
 ### macOS
