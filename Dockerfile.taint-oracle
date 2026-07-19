@@ -1,0 +1,89 @@
+# Dockerfile.taint-oracle — containerized differential-oracle lane for the DynamoRIO
+# in-band TAINT tier (pin-libdft-taint-oracle.md, track PIN-4). It cross-validates the
+# shipped DR taint client (src/dataflow_dr_client_inlined.c -DASMTEST_TAINT) against a
+# SECOND, independently-implemented byte-level taint engine — libdft64 on Intel Pin —
+# by running the SAME seed/sink fixtures (examples/taint_fixtures.h) through both and
+# asserting byte-for-byte sink agreement on the GP/integer-memory subset both cover.
+#
+# It installs a pinned, digest-gated Intel Pin 3.20 kit (libdft64's ONLY tested pin —
+# fetched by scripts/fetch-pin.sh, whose SHA-256 gate runs INSIDE this build), builds
+# libdft64 (git-commit-pinned by scripts/fetch-libdft.sh) against it, installs
+# DynamoRIO (for the DR taint client + the DR-side producer) and Capstone (the operand
+# enumerator), then runs `make dr-taint-oracle-test`.
+#
+# BASE: the tree-wide ubuntu:24.04. libdft64's README names Ubuntu 20.04 as its *tested*
+# platform, but 20.04 is EOL and — decisively — does not package libunicorn, whereas
+# libdft64's src/ + tools build cleanly under 24.04's gcc-13 against the Pin 3.20 kit
+# (verified: obj-intel64/libdft.a links; the oracle tool links -ldft). Staying on 24.04
+# keeps Unicorn available via apt (the emulator L0 oracle, for dr_taint.c's optional
+# forward-slice cross-check) and matches every other docker-* lane's base. DR is a
+# software DBI engine and Pin runs on Intel and AMD alike, so this lane runs on any
+# x86-64 Linux host; it self-skips at the `docker-taint-oracle` rule on non-x86 (Pin's
+# kit is gcc-linux x86-64 — a real hardware-shaped gate).
+#
+# Pin (proprietary freeware) and libdft64 are TEST/ORACLE-ONLY: never linked into
+# libasmtest / libasmtest_emu / any shipped binding — they live only in this lane
+# (see licenses/README.md).
+#
+# Build + run:  make docker-taint-oracle
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# C/C++ toolchain + CMake (the DR taint client is CMake-built), git/curl to fetch the
+# DBI kit + libdft64, xz-utils for the DR tarball. g++-multilib matches libdft64's own
+# Dockerfile. libunicorn-dev supplies the emulator L0 oracle used by dr_taint.c's
+# optional forward-slice cross-check (self-skips if absent); the DR-vs-libdft diff needs
+# no emulator. Capstone is built from pinned source below (no apt package — mirrors
+# Dockerfile.taint-native): the operand enumerator + the DR client's block normalization
+# gate on it.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config curl ca-certificates xz-utils git clang \
+      g++-multilib libunicorn-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# Fetch + digest-verify the pinned Pin 3.20 kit at build time (the manifest SHA-256 gate
+# runs in-image, exactly like Dockerfile.pintool). The 3.20 tarball has NO `external`
+# segment, so BOTH PIN_VERSION and PIN_URL must be overridden (fetch-pin.sh normalizes
+# the pin-3.20-… dir + captures the kit's EULA — see pin-libdft-taint-oracle.md#T1).
+ARG PIN_VERSION=3.20-98437-gf02b61307
+ARG PIN_URL=https://software.intel.com/sites/landingpage/pintool/downloads/pin-3.20-98437-gf02b61307-gcc-linux.tar.gz
+COPY scripts/fetch-pin.sh scripts/fetch-libdft.sh scripts/lib-thirdparty.sh scripts/third-party-digests.txt /src/scripts/
+RUN cd /src && mkdir -p licenses \
+ && PIN_CACHE=/opt/pin PIN_VERSION=$PIN_VERSION PIN_URL=$PIN_URL sh scripts/fetch-pin.sh
+ENV PIN_ROOT=/opt/pin/pin-external-3.20-98437-gf02b61307-gcc-linux
+
+# Pin a DynamoRIO release for the DR taint client + the DR-side producer (kept verbatim
+# from Dockerfile.taint-native). Override DR_VERSION to bump.
+ARG DR_VERSION=11.91.20630
+ARG DR_URL=https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz
+RUN curl -fsSL "$DR_URL" -o /tmp/dr.tar.gz \
+ && mkdir -p /opt/dynamorio \
+ && tar -xzf /tmp/dr.tar.gz -C /opt/dynamorio --strip-components=1 \
+ && rm /tmp/dr.tar.gz
+ENV DYNAMORIO_HOME=/opt/dynamorio
+
+# Fetch + git-commit-verify libdft64 (into /opt/libdft64) and build the engine archive
+# libdft.a against the pinned kit. src/ builds obj-intel64/libdft.a via Pin's own build
+# infra (TARGET=intel64); the oracle Pintool (added by a later task) links -ldft against
+# it. Kept BEFORE `COPY . .` so a repo source edit does not rebuild libdft.
+RUN cd /src && LIBDFT_CACHE=/opt sh scripts/fetch-libdft.sh
+RUN cd /opt/libdft64/src && PIN_ROOT=$PIN_ROOT make
+
+WORKDIR /src
+COPY . .
+
+# Build Capstone from the pinned source release (no apt package — mirrors
+# Dockerfile.taint-native).
+RUN sh scripts/build-capstone.sh && ldconfig
+
+# T2 placeholder CMD: prove the foundation — the pinned Pin 3.20 launcher, libdft's
+# libdft.a, and DynamoRIO are all in place. A later task swaps this for the differential
+# lane `make dr-taint-oracle-test`.
+CMD set -eux; \
+    test -x "$PIN_ROOT/pin"; \
+    ls -l /opt/libdft64/src/obj-intel64/libdft.a; \
+    test -e "$DYNAMORIO_HOME/lib64/release/libdynamorio.so"; \
+    echo "taint-oracle foundation OK: Pin 3.20 + libdft.a + DynamoRIO built"

@@ -381,6 +381,30 @@ docker-taint-native:
 	  -t asmtest-taint-native .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-taint-native
 
+# libdft64 DIFFERENTIAL-ORACLE lane (pin-libdft-taint-oracle.md, track PIN-4). Builds a
+# pinned, digest-gated Intel Pin 3.20 kit + libdft64 + DynamoRIO + Capstone (+ Unicorn),
+# then runs `make dr-taint-oracle-test`: each shared seed/sink fixture through BOTH the DR
+# taint client and libdft64, asserting byte-for-byte DR≡libdft sink agreement on the
+# GP/integer subset both cover, with libdft's documented blind spots as NAMED skips.
+# Builds libdft64 against the pinned Pin 3.20 kit (libdft64's tested pin) on the tree-wide
+# ubuntu:24.04 base. Pin + libdft64 are test/oracle-only, never shipped. Intel Pin's kit
+# is x86-64 gcc-linux, so the lane self-skips on a non-x86 target (a real hardware-shaped
+# gate — the only one here; a missing Pin/libdft checkout is fetched + pinned, never
+# skipped). See docs/internal/implementations/pin-libdft-taint-oracle.md.
+TAINT_ORACLE_UARCH := $(if $(DOCKER_PLATFORM),$(lastword $(subst /, ,$(DOCKER_PLATFORM))),$(shell uname -m))
+.PHONY: docker-taint-oracle
+docker-taint-oracle:
+ifeq ($(filter x86_64 amd64,$(TAINT_ORACLE_UARCH)),)
+	@echo "== docker-taint-oracle =="
+	@echo "# SKIP docker-taint-oracle: Intel Pin is x86-64 only; target arch is $(TAINT_ORACLE_UARCH)."
+	@echo "1..0 # skipped"
+else
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.taint-oracle \
+	  --build-arg BASE=$(DOCKER_BASE) --build-arg DR_VERSION=$(DR_VERSION) \
+	  -t asmtest-taint-oracle .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-taint-oracle
+endif
+
 # DR ATTACH tier lane (dynamorio-attach-tier-plan.md, Increment 1, first slice): COOPERATIVE
 # attach + detach on an already-running NATIVE process via the proven dr_app_* API. Like
 # docker-taint-native it installs DynamoRIO + Capstone + libunicorn, then runs `make
