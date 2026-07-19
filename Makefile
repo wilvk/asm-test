@@ -65,7 +65,8 @@ SUITE_EXCLUDES := test_robust test_failure_demo test_bench \
                   test_dataflow test_operands test_dataflow_emu \
                   test_dataflow_ptrace test_dataflow_method \
                   test_dataflow_gcmove test_dataflow_objid \
-                  test_dataflow_helpers test_dataflow_blockstep
+                  test_dataflow_helpers test_dataflow_blockstep \
+                  test_dataflow_pt
 SUITES         := $(filter-out $(addprefix $(BUILD)/,$(SUITE_EXCLUDES)), \
                   $(patsubst examples/%.c,$(BUILD)/%, \
                   $(sort $(wildcard examples/test_*.c))))
@@ -124,6 +125,8 @@ help:
 	@echo '  mach-stepper-test  macOS out-of-process Mach stepper (needs a macOS x86-64 host + codesign or sudo)'
 	@echo '  ibs-test        statistical AMD IBS-Op edge lane (pure decoder + live out-of-band)'
 	@echo '  dataflow-test   data-flow tracing: L0 value trace / L1 def-use / L2 slice (emulator L0; pure spine runs everywhere)'
+	@echo '  dataflow-pt-test  F5 PT + code-image + Unicorn-replay value tier: synthetic-AUX decode->replay + emu-oracle equivalence (make docker-dataflow-pt)'
+	@echo '  dataflow-pt-live  F5 live foreign-pid PT replay vs single-step oracle (bare-metal Intel PT + intel-pt-attach-foreign-pid; ASMTEST_REQUIRE_PT=1 fails rather than skips)'
 	@echo '  hwtrace-bindings-test  per-language hardware-trace wrapper tests (all bindings)'
 	@echo '  hwtrace-dotnet-example  the .NET scoped-tracing demos (examples/dotnet; also docker-)'
 	@echo '  dev-dotnet      interactive container shell for the .NET examples'

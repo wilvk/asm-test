@@ -291,6 +291,11 @@ docker-dataflow-bindings: $(addprefix docker-dataflow-,$(DATAFLOW_DOCKER_LANGS))
 $(BUILD)/test_operands.o: CFLAGS += $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF)
 $(BUILD)/test_dataflow_emu.o: CFLAGS += $(UNICORN_CFLAGS) $(CAPSTONE_CFLAGS) \
                                         $(CAPSTONE_DEF)
+# F5 (PT + code-image + Unicorn replay): the suite drives everything through the producer's
+# re-declared C entry points (no unicorn/capstone HEADERS, exactly like test_dataflow_emu), so it
+# needs only the LIBIPT_DEF — so its `#ifdef ASMTEST_HAVE_LIBIPT` synthetic-fixture case compiles
+# IN where libipt is present (the docker-dataflow-pt image) and self-skips where it is absent.
+$(BUILD)/test_dataflow_pt.o: CFLAGS += $(LIBIPT_DEF) $(LIBIPT_CFLAGS)
 
 # --- test binaries (standalone TAP, like test_ibs; no framework runtime) ----
 $(BUILD)/test_dataflow: $(BUILD)/dataflow.o $(BUILD)/test_dataflow.o
@@ -413,6 +418,13 @@ endif
 # dataflow-blockstep-test target ALREADY carries the DF_HAVE_UNICORN gate and its own clean
 # SKIP, so calling it keeps that gate in ONE place instead of a copy here that can drift.
 	$(MAKE) --no-print-directory dataflow-blockstep-test
+# F5 (dataflow-pt-replay-tier): the PT + code-image + Unicorn-replay value tier. Chained as a
+# sub-make (like dataflow-blockstep-test above) so its DF_HAVE_UNICORN gate + clean SKIP live in
+# ONE place. Its synthetic-AUX decode->replay bridge exercises fully in the libipt+Unicorn image
+# (docker-dataflow-pt / docker-dataflow-attach, which now carry libipt-dev); where libipt is
+# absent the T1/T3/T5 replay-core + equivalence cases still run (Unicorn only) and only the T2
+# fixture-bridge case self-skips.
+	$(MAKE) --no-print-directory dataflow-pt-test
 
 # Phase 0 exit-criterion grep gate: the operand enumerator must hold ONE persistent
 # csh, never a per-op cs_open in the hot path — so exactly one cs_open call site.
@@ -463,4 +475,73 @@ dataflow-blockstep-test: $(BUILD)/test_dataflow_blockstep
 else
 dataflow-blockstep-test:
 	@echo "# SKIP dataflow-blockstep-test: no libunicorn (make deps DEPS_ARGS=--emu)"
+endif
+
+# --- F5: PT + code-image + Unicorn-replay value tier -----------------------
+# src/dataflow_pt.c (dataflow-pt-replay-tier) — the LEAST-perturbing L0 value producer: fully
+# OUT OF BAND (no PTRACE_SINGLESTEP, no PTRACE_SINGLEBLOCK — zero stops of the target). Decode an
+# Intel PT trace to the executed offset path, materialize the region bytes live at trace time from
+# the code-image, and REPLAY that exact path through Unicorn to fill the SAME asmtest_valtrace_t
+# the emulator L0 fills — matching it byte-for-byte on a deterministic region. Reuses the blockstep
+# purity/replayability verdicts (T3, no second scanner). Needs Linux x86-64 + Capstone + Unicorn
+# (the replay); the decode BRIDGE additionally needs libipt (its call site is ASMTEST_HAVE_LIBIPT-
+# gated, so a Unicorn-only build still links). Off-platform it compiles to a DF_PT_ENOSYS stub, so
+# the object + explicit link rule are UNCONDITIONAL (the explicit rule beats the root Makefile's
+# generic test_% pattern, which would link the framework runtime against this standalone-main
+# suite). Ships no header — a value-trace PRODUCER is a tier; its suite re-declares the entries.
+#
+# This tier opens NO perf event and adds NO PT capture code (doc-set position 9): the synthetic
+# AUX comes from asmtest_pt_encode_fixture (pt_backend.o, libipt's own encoder — no PT PMU), and
+# real foreign-pid capture is owned by intel-pt-attach-foreign-pid (the T4 live half, gated).
+$(BUILD)/dataflow_pt.o: src/dataflow_pt.c include/asmtest_valtrace.h \
+                        include/asmtest_trace.h include/asmtest_codeimage.h \
+                        $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) $(DFB_UNICORN_FLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) \
+	  $(LIBIPT_DEF) $(LIBIPT_CFLAGS) -c $< -o $@
+
+# The equivalence suite links: the F5 producer + the pure sink/L1/L2 (dataflow.o) + the operand
+# enumerator (dataflow_operands.o) + the emulator L0 ORACLE it cross-checks against (dataflow_emu.o)
+# + the blockstep verdicts it reuses (dataflow_blockstep.o) + the PT decode (pt_backend.o) + the
+# temporal byte source (codeimage.o). Libs: Unicorn + Capstone + libipt (empty where absent) +
+# the optional libbpf codeimage.o may reference.
+# trace.o supplies asmtest_trace_new/free + trace_append_insn/block (the asmtest_trace_t sink
+# pt_backend.o fills and the T2 bridge allocates) — self-contained (no Capstone/Unicorn), pulled
+# in only when libipt makes those decode symbols live.
+$(BUILD)/test_dataflow_pt: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                           $(BUILD)/dataflow_emu.o $(BUILD)/dataflow_blockstep.o \
+                           $(BUILD)/dataflow_pt.o $(BUILD)/pt_backend.o \
+                           $(BUILD)/codeimage.o $(BUILD)/trace.o \
+                           $(BUILD)/test_dataflow_pt.o
+	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) $(LIBIPT_LIBS) \
+	  $(LINK_LIBBPF) -o $@
+
+# Dedicated lane: build + run where libunicorn is present (the replay engine), else a clean SKIP —
+# the "optional tiers need libunicorn" convention. At runtime the synthetic decode->replay bridge
+# runs wherever libipt is present (the docker lane); the LIVE foreign-pid half self-skips off
+# bare-metal Intel PT silicon (and is additionally gated on the sibling intel-pt-attach-foreign-pid
+# capture symbol, absent today).
+.PHONY: dataflow-pt-test
+ifeq ($(DF_HAVE_UNICORN),1)
+dataflow-pt-test: $(BUILD)/test_dataflow_pt
+	@echo "== dataflow-pt-test =="
+	$(BUILD)/test_dataflow_pt
+else
+dataflow-pt-test:
+	@echo "# SKIP dataflow-pt-test: no libunicorn (make deps DEPS_ARGS=--emu)"
+endif
+
+# T4 fail-not-skip: the target a bare-metal Intel PT runner invokes. ASMTEST_REQUIRE_PT=1 turns the
+# live-replay availability SKIP into a CHECK FAILURE, so a supposed-PT box whose intel_pt PMU is
+# silently hidden (or whose intel-pt-attach-foreign-pid capture symbol has not landed) goes RED
+# instead of quietly green — exactly as intel-pt-whole-window-substrate#T5's hwtrace-pt-live does.
+# Deliberately NOT chained into dataflow-test/aggregate: on every host here it FAILS by design (no
+# PT silicon + the sibling capture dep is 0/5), which is the whole point of a fail-not-skip target.
+.PHONY: dataflow-pt-live
+ifeq ($(DF_HAVE_UNICORN),1)
+dataflow-pt-live: $(BUILD)/test_dataflow_pt
+	@echo "== dataflow-pt-live (ASMTEST_REQUIRE_PT=1: fail-not-skip) =="
+	ASMTEST_REQUIRE_PT=1 $(BUILD)/test_dataflow_pt
+else
+dataflow-pt-live:
+	@echo "# SKIP dataflow-pt-live: no libunicorn (make deps DEPS_ARGS=--emu)"
 endif

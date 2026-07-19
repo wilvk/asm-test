@@ -136,6 +136,22 @@ docker-dataflow-attach:
 	$(DOCKER) run --rm $(_docker_plat) --security-opt seccomp=unconfined \
 	  asmtest-dataflow-attach
 
+# F5 data-flow PT-replay lane (dataflow-pt-replay-tier). Reuses the SAME libipt+Unicorn image as
+# docker-dataflow-attach (Dockerfile.dataflow-attach now carries libipt-dev), and runs
+# `make dataflow-pt-test`: the SYNTHETIC decode->rebase->materialize->replay bridge (T2), the
+# purity/replayability gates (T3), the replay-core byte-identity (T1) and the def-use/slice
+# EQUIVALENCE against the emulator oracle (T5) — all exercised in-container with NO PT hardware
+# (asmtest_pt_encode_fixture is libipt's own userspace encoder). The LIVE foreign-pid half (T4)
+# self-skips cleanly here: no intel_pt PMU in a container on an AMD host, AND the sibling
+# intel-pt-attach-foreign-pid capture symbol is not in the tree yet. seccomp=unconfined lets the
+# code-image recorder's soft-dirty scan run, exactly as the attach lane needs it for ptrace.
+.PHONY: docker-dataflow-pt
+docker-dataflow-pt:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.dataflow-attach \
+	  --build-arg BASE=$(DOCKER_BASE) -t asmtest-dataflow-attach .
+	$(DOCKER) run --rm $(_docker_plat) --security-opt seccomp=unconfined \
+	  asmtest-dataflow-attach make WERROR=1 dataflow-pt-test
+
 docker-valgrind: docker-build
 	$(_docker_run) make valgrind
 
