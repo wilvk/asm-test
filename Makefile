@@ -899,6 +899,7 @@ usecases-emu: $(BUILD)/test_emu_usecases
 	$(BUILD)/test_emu_usecases
 
 include mk/native-trace.mk  # DynamoRIO + hardware native-trace tiers
+include mk/pintool.mk       # XED-decoded Intel Pin trace tier (PIN-2, x86-64 Linux)
 include mk/dataflow.mk      # data-flow tracing: L0 value trace / L1 def-use / L2 slice
 include mk/bench.mk          # cross-system performance + feature benchmarking
 include mk/cli.mk            # asmspy: ncurses front-end over the tracer

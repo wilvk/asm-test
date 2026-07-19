@@ -1,0 +1,13 @@
+# pintool/makefile.rules — declares the tool the kit's default rules build.
+#
+# The kit's makefile.default.rules turns each name in TEST_TOOL_ROOTS into a
+# obj-intel64/<name>.so target compiled from <name>.cpp under PinCRT. We ship one
+# tool: asmtest_pintool (asmtest_pintool.cpp), which fills the repo's shared
+# asmtest_trace_t offset model over POSIX shm (pintool_shm.h, -Ipintool via the
+# TOOL_CXXFLAGS append below). No extra apps/objects/libs.
+TEST_TOOL_ROOTS := asmtest_pintool
+
+# pintool_shm.h lives beside the tool source (deliberately NOT under include/ —
+# PIN-2 ships no public header). The kit compiles from this directory, so a plain
+# -I. reaches it.
+TOOL_CXXFLAGS += -I.

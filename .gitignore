@@ -3,6 +3,8 @@
 
 # Build artifacts
 build/
+# Intel Pin out-of-kit tool build output (pintool-tool; mk/pintool.mk)
+pintool/obj-intel64/
 # ...and an alternate BUILD dir. Verifying asmspy from a MOUNTED host `make cli` is a
 # known trap (it reuses a Capstone-less disasm.o and yields silent `(?)` symbols), so the
 # documented workarounds are `make docker-cli` or a fresh dir — `make cli BUILD=build-x`.

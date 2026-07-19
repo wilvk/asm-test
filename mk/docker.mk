@@ -258,6 +258,21 @@ docker-drtrace:
 	  -t asmtest-drtrace .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-drtrace
 
+# Pin trace lane (pin-xed-trace-tier, PIN-2): a container with a pinned,
+# digest-gated Intel Pin kit (and DynamoRIO, for the three-way offset-parity arm)
+# that builds the pintool + fixtures and runs `make pintool-test`. Pin decodes
+# with XED, so this tier can DBI-trace Intel APX today where the DynamoRIO decoder
+# aborts. Linux x86-64 only (Pin's pinned kit is gcc-linux; the pintool-* targets
+# self-skip on arm64/macOS). Pin is proprietary freeware, fetched + digest-verified
+# at build time and never bundled — test-lane only. Override PIN_VERSION to bump.
+PIN_VERSION ?= 4.2-99776-g21d818fa2
+.PHONY: docker-pintool
+docker-pintool:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.pintool \
+	  --build-arg BASE=$(DOCKER_BASE) --build-arg PIN_VERSION=$(PIN_VERSION) \
+	  --build-arg DR_VERSION=$(DR_VERSION) -t asmtest-pintool .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-pintool
+
 # Throwaway extension-load probe lane (taint tier, Increment 2). A light image
 # (DynamoRIO only, no Capstone/Unicorn) that builds drclient/probe_extensions.c
 # and runs it under drrun, asserting the BSD-clean extension stack

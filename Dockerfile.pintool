@@ -1,0 +1,55 @@
+# Dockerfile.pintool — containerized test lane for the XED-decoded Intel Pin
+# trace tier (PIN-2) and its shared pintool substrate.
+#
+# Installs a pinned, digest-gated Intel Pin kit (fetched by scripts/fetch-pin.sh,
+# whose SHA-256 gate runs INSIDE this build) plus DynamoRIO — the latter for the
+# three-way offset-parity arm (Pin ≡ DynamoRIO ≡ single-step) the parity lane
+# asserts. It builds the pintool + fixtures and runs `make pintool-test`.
+#
+# Linux x86-64 only. Pin is a software DBI engine (like DynamoRIO), so it runs on
+# Intel and AMD alike; the pinned kit is gcc-linux, hence the arch/OS gate in
+# mk/pintool.mk (targets self-skip on arm64/macOS). Pin is proprietary freeware,
+# fetched + digest-verified at TEST time and NEVER bundled into a shipped package
+# (see licenses/README.md) — test-lane only.
+#
+# Build + run:  make docker-pintool
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# C/C++ toolchain + CMake (the DynamoRIO parity client is CMake-built), curl to
+# fetch both DBI kits. No Capstone/Unicorn: this lane produces no value trace,
+# only offset traces, so the disassembler tiers are unnecessary (keeps it light).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential cmake pkg-config curl ca-certificates xz-utils git \
+ && rm -rf /var/lib/apt/lists/*
+
+# Fetch + digest-verify the pinned Pin kit at build time. The manifest gate runs
+# in-image: fetch-pin.sh refuses any tarball whose SHA-256 does not match
+# scripts/third-party-digests.txt (unlike Dockerfile.drtrace, which predates the
+# manifest and curls raw). Override PIN_VERSION via --build-arg to bump.
+ARG PIN_VERSION=4.2-99776-g21d818fa2
+COPY scripts/fetch-pin.sh scripts/lib-thirdparty.sh scripts/third-party-digests.txt /src/scripts/
+RUN cd /src && PIN_CACHE=/opt/pin PIN_VERSION=$PIN_VERSION sh scripts/fetch-pin.sh
+ENV PIN_HOME=/opt/pin/pin-external-4.2-99776-g21d818fa2-gcc-linux
+
+# Pin a DynamoRIO release for the T7 offset-parity arm (kept verbatim from
+# Dockerfile.drtrace). Override DR_VERSION to bump.
+ARG DR_VERSION=11.91.20630
+ARG DR_URL=https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz
+RUN curl -fsSL "$DR_URL" -o /tmp/dr.tar.gz \
+ && mkdir -p /opt/dynamorio \
+ && tar -xzf /tmp/dr.tar.gz -C /opt/dynamorio --strip-components=1 \
+ && rm /tmp/dr.tar.gz
+ENV DYNAMORIO_HOME=/opt/dynamorio
+
+WORKDIR /src
+COPY . .
+
+# Run the Pin trace parity lane: workload under `pin -t asmtest_pintool.so`, then
+# an out-of-process validator asserting the exact offsets AND byte-for-byte parity
+# with the in-process single-step and DynamoRIO backends. Self-skips cleanly on a
+# non-x86-64 image, but here the arch gate passes so it executes.
+CMD make pintool-test PIN_HOME=$PIN_HOME DYNAMORIO_HOME=$DYNAMORIO_HOME
