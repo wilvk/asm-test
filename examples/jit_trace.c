@@ -877,6 +877,200 @@ static int trace_jitdump_java(const char *cp, const char *agent) {
     return failures ? 1 : 0;
 }
 
+/* T6: TRUE per-address JVM bytecode-index attribution. Load the in-tree JVMTI agent
+ * (examples/jvmti_bci_agent.c -> libasmtest_bci_agent.so) into a HotSpot that keeps
+ * Hot.asmtbci hot (a counted-loop method — a trivial leaf like asmtjit compiles to a
+ * single bci=-1 safepoint, useless for attribution); the agent captures
+ * CompiledMethodLoad's address->bci map to a text sidecar /tmp/asmtest-bci-<pid>.map,
+ * written LIVE (no clean-shutdown flush). Resolve asmtbci's (addr,size) from HotSpot's
+ * jcmd perf-map (as the java-jitdump lane does), ingest the sidecar points inside
+ * [addr,addr+size) as ASMTEST_SRC_BCI rows into an asmtest_srcreg, and prove a native
+ * address resolves to a real bytecode index. */
+static int trace_java_bci(const char *cp, const char *agent) {
+    if (agent == NULL || agent[0] == '\0' || access(agent, R_OK) != 0) {
+        printf("# SKIP java-bci: needs the JVMTI bci agent "
+               "(build/libasmtest_bci_agent.so)\n1..0 # skipped\n");
+        return 0;
+    }
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        char ap[256];
+        snprintf(ap, sizeof ap, "-agentpath:%s", agent);
+        char *cmd[] = {(char *)"java",
+                       ap,
+                       (char *)"-XX:-TieredCompilation",
+                       (char *)"-XX:CompileThreshold=1000",
+                       (char *)"-XX:CompileCommand=dontinline,Hot.asmtbci",
+                       (char *)"-cp",
+                       (char *)cp,
+                       (char *)"Hot",
+                       NULL};
+        execvp(cmd[0], cmd);
+        _exit(127);
+    }
+    if (pid < 0) {
+        perror("fork");
+        printf("1..0 # skipped\n");
+        return 0;
+    }
+
+    char mappath[64], bcipath[64];
+    snprintf(mappath, sizeof mappath, "/tmp/perf-%d.map", (int)pid);
+    snprintf(bcipath, sizeof bcipath, "/tmp/asmtest-bci-%d.map", (int)pid);
+
+    /* Resolve asmtjit's (addr,size) from HotSpot's jcmd perf-map (live process). */
+    unsigned long paddr = 0, psize = 0;
+    for (int i = 0; i < 200 && paddr == 0; i++) {
+        struct timespec ts = {0, 100 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+        int st;
+        if (waitpid(pid, &st, WNOHANG) == pid) {
+            pid = -1;
+            break;
+        }
+        java_perfmap_refresh(pid, i);
+        FILE *f = fopen(mappath, "r");
+        if (f == NULL)
+            continue;
+        char line[512];
+        while (fgets(line, sizeof line, f)) {
+            unsigned long aa, ss;
+            int soff = 0;
+            if (sscanf(line, "%lx %lx %n", &aa, &ss, &soff) < 2 || soff == 0)
+                continue;
+            char *t = line + soff;
+            t[strcspn(t, "\r\n")] = '\0';
+            if (strstr(t, "asmtbci") != NULL) {
+                paddr = aa;
+                psize = ss;
+            }
+        }
+        fclose(f);
+    }
+
+    if (pid < 0) {
+        printf("# SKIP java-bci: java exited early (JDK not installed?)\n"
+               "1..0 # skipped\n");
+        return 0;
+    }
+    if (paddr == 0) {
+        printf(
+            "# SKIP java-bci: asmtbci not resolvable in HotSpot's perf-map in "
+            "time\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        printf("1..0 # skipped\n");
+        return 0;
+    }
+
+    /* Poll the live sidecar for points inside asmtbci's body. */
+    asmtest_srcmap_entry_t rows[512];
+    int lines[512];
+    size_t nrows = 0;
+    for (int i = 0; i < 100 && nrows == 0; i++) {
+        struct timespec ts = {0, 100 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+        FILE *bf = fopen(bcipath, "r");
+        if (bf == NULL)
+            continue;
+        size_t got = 0;
+        char line[512];
+        while (fgets(line, sizeof line, bf) && got < 512) {
+            unsigned long long addr;
+            long bci;
+            int ln;
+            if (sscanf(line, "%llx %ld %d", &addr, &bci, &ln) < 3)
+                continue;
+            if (addr < paddr || addr >= paddr + psize)
+                continue;
+            rows[got].offset = addr - paddr;
+            rows[got].value = (int32_t)bci;
+            rows[got].kind = ASMTEST_SRC_BCI;
+            rows[got].file_id = UINT32_MAX;
+            rows[got].col = 0;
+            lines[got] = ln;
+            got++;
+        }
+        fclose(bf);
+        nrows = got;
+    }
+
+    if (nrows == 0) {
+        printf("# SKIP java-bci: no asmtbci address->bci points in the sidecar "
+               "(agent/JIT did not cooperate)\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        printf("1..0 # skipped\n");
+        return 0;
+    }
+
+    /* Sort ascending by offset (srcmap_lookup requires it); track line for printing. */
+    for (size_t a = 0; a + 1 < nrows; a++)
+        for (size_t b = a + 1; b < nrows; b++)
+            if (rows[b].offset < rows[a].offset) {
+                asmtest_srcmap_entry_t tr = rows[a];
+                rows[a] = rows[b];
+                rows[b] = tr;
+                int tl = lines[a];
+                lines[a] = lines[b];
+                lines[b] = tl;
+            }
+
+    printf(
+        "# recovered %zu address->bci points inside HotSpot's asmtbci @ 0x%lx "
+        "(%lu bytes) via CompiledMethodLoad:\n",
+        nrows, paddr, psize);
+    for (size_t i = 0; i < nrows; i++)
+        printf("    +0x%llx  bci %d%s%d\n", (unsigned long long)rows[i].offset,
+               rows[i].value, lines[i] >= 0 ? ":line " : " (no line)",
+               lines[i] >= 0 ? lines[i] : 0);
+
+    /* HotSpot maps some PCs (the method prologue / non-bytecode glue) to bci -1; a
+     * counted-loop method like asmtbci also yields many REAL bytecode indices (>=0) at
+     * its safepoints. Assert at least one real bci was recovered (the address->bytecode
+     * feature) and that the map is ordered. */
+    int ascending = 1, real_bci = -1;
+    for (size_t i = 0; i < nrows; i++) {
+        if (rows[i].value >= 0 && real_bci < 0)
+            real_bci = (int)i;
+        if (i > 0 && rows[i].offset <= rows[i - 1].offset)
+            ascending = 0;
+    }
+    CHECK(nrows >= 1 && real_bci >= 0,
+          "java-bci: >=1 address->bci point with a REAL bytecode index (>=0) "
+          "recovered from CompiledMethodLoad");
+    CHECK(
+        ascending,
+        "java-bci: the reconstructed bci map is strictly ascending by offset");
+
+    /* Ingest into a version-keyed srcreg (single version, when = 1) and resolve a
+     * real-bci address back to its bytecode index. */
+    asmtest_srcreg_t *reg = asmtest_srcreg_new();
+    int added =
+        reg ? asmtest_srcreg_add(reg, paddr, psize, 1, rows, nrows, "Hot.java")
+            : -1;
+    size_t k = real_bci >= 0 ? (size_t)real_bci : 0;
+    asmtest_srcmap_entry_t row;
+    uint64_t base = 0;
+    const char *file = NULL;
+    uint64_t addr_k = paddr + rows[k].offset;
+    int r =
+        reg ? asmtest_srcreg_resolve(reg, addr_k, 0, &row, &base, &file) : 0;
+    CHECK(added == 0 && r == 1 && row.kind == ASMTEST_SRC_BCI &&
+              row.value == rows[k].value && row.value >= 0 && base == paddr &&
+              file != NULL && strcmp(file, "Hot.java") == 0,
+          "java-bci: asmtest_srcreg resolves a native address to its bytecode "
+          "index (bci >= 0)");
+    asmtest_srcreg_free(reg);
+
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+    printf("1..%d\n# %d passed, %d failed\n", checks, checks - failures,
+           failures);
+    return failures ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     const char *mode = argc > 1 ? argv[1] : "node";
 
@@ -1014,6 +1208,16 @@ int main(int argc, char **argv) {
             return 2;
         }
         return trace_jitdump_java(argv[2], argv[3]);
+    }
+    if (strcmp(mode, "java-bci") == 0) {
+        if (argc < 4) {
+            fprintf(
+                stderr,
+                "usage: %s java-bci <classpath> <libasmtest_bci_agent.so>\n",
+                argv[0]);
+            return 2;
+        }
+        return trace_java_bci(argv[2], argv[3]);
     }
     if (strcmp(mode, "jitdump") == 0) {
         /* V8: `--perf-prof` writes the binary jitdump, `--perf-basic-prof` the text perf-map

@@ -2428,7 +2428,7 @@ hwtrace-syscall-log: $(BUILD)/syscall_log $(BUILD)/syscall_victim
 
 .PHONY: hwtrace-jit hwtrace-jit-node hwtrace-jit-dotnet hwtrace-jit-java \
         hwtrace-jit-java-jitdump hwtrace-jit-jitdump hwtrace-jit-dotnet-jitdump \
-        hwtrace-jit-dotnet-bcl hwtrace-jit-java-bcl
+        hwtrace-jit-dotnet-bcl hwtrace-jit-java-bcl hwtrace-jit-java-bci
 hwtrace-jit: hwtrace-jit-node # back-compat alias for the default (Node.js) lane
 
 # The perf JVMTI agent (libperf-jvmti.so, from linux-tools) — HotSpot's de-facto jitdump
@@ -2436,6 +2436,19 @@ hwtrace-jit: hwtrace-jit-node # back-compat alias for the default (Node.js) lane
 PERF_JVMTI := $(firstword $(wildcard /usr/lib/linux-tools*/*/libperf-jvmti.so \
                                      /usr/lib/linux-tools/*/libperf-jvmti.so \
                                      /usr/lib/*/libperf-jvmti.so))
+
+# The JDK for the in-tree JVMTI bci agent (T6, native-il-bytecode-attribution): jvmti.h +
+# jvmticmlr.h live in $JAVA_HOME/include (JDK packages carry them; JRE packages do not).
+# Resolve JAVA_HOME from the toolchain, empty on a host without javac (the agent rule is
+# only reached from the java-bci lane, which needs javac anyway).
+JAVA_HOME_BCI := $(shell d=$$(command -v javac 2>/dev/null) && dirname $$(dirname $$(readlink -f $$d)))
+
+# The bci agent is a test-support shared object — never shipped, never linked into
+# libasmtest, so it adds no bindings-parity or packaging obligation. Compiled with the
+# JDK's JVMTI headers.
+$(BUILD)/libasmtest_bci_agent.so: examples/jvmti_bci_agent.c | $(BUILD)
+	$(CC) $(CFLAGS) -shared -fPIC -I$(JAVA_HOME_BCI)/include \
+	  -I$(JAVA_HOME_BCI)/include/linux $< -o $@
 
 # Node.js (V8): trace the optimized `asmtjit` body (needs node + Capstone).
 hwtrace-jit-node: $(BUILD)/jit_trace
@@ -2540,6 +2553,17 @@ hwtrace-jit-java-jitdump: $(BUILD)/jit_trace
 	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
 	@rm -rf /tmp/.debug/jit 2>/dev/null || true
 	$(BUILD)/jit_trace java-jitdump $(BUILD)/jit_java "$(PERF_JVMTI)"
+
+# TRUE per-address bytecode-index attribution (T6): load the in-tree JVMTI bci agent into
+# HotSpot, capture CompiledMethodLoad's address->bci map to a live sidecar, ingest asmtjit's
+# points into an asmtest_srcreg, and prove a native address resolves to a bci. Unlike the
+# jitdump lane the sidecar is written per-event (no clean-shutdown flush). Needs the JDK
+# (javac + jcmd) + the JDK's JVMTI headers (openjdk-*-jdk-headless carries them).
+hwtrace-jit-java-bci: $(BUILD)/jit_trace $(BUILD)/libasmtest_bci_agent.so
+	@echo "== hwtrace-jit-java-bci (true HotSpot address->bci via JVMTI CompiledMethodLoad) =="
+	@mkdir -p $(BUILD)/jit_java
+	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
+	$(BUILD)/jit_trace java-bci $(BUILD)/jit_java $(abspath $(BUILD)/libasmtest_bci_agent.so)
 
 # Python language-wrapper test for the native-trace tier (asmtest.drtrace). Builds
 # the app lib + DR client, then runs the pytest suite with the lib paths wired up.
