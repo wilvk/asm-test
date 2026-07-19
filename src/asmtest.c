@@ -501,6 +501,78 @@ void asmtest_assert_vec512_eq(const char *file, int line, const char *idxexpr,
                  idxexpr, i, expected[i], actual[i], expect_hex, actual_hex);
 }
 
+/* SVE z-slot compare: walk exactly the LIVE bytes (asmtest_sve_vl()); the
+ * container tail past VL is never written, so comparing it would be a bug. A
+ * 256-byte VL overflows the fixed dump buffers, so the hexdump is a 64-byte
+ * window aligned (& ~63) to contain the first differing byte. vl==0 means no
+ * SVE — a distinct message, since asserting SVE state there is a test bug. */
+void asmtest_assert_svec_eq(const char *file, int line, const char *idxexpr,
+                            const unsigned char *actual,
+                            const unsigned char *expected) {
+    unsigned long vl = asmtest_sve_vl();
+    if (vl == 0) {
+        asmtest_fail(file, line,
+                     "ASSERT_SVEC_EQ(z[%s]): SVE not available (vl=0) — "
+                     "asserting SVE state without SVE is a test bug",
+                     idxexpr);
+        return;
+    }
+    size_t i = 0;
+    while (i < vl && actual[i] == expected[i])
+        i++;
+    if (i == vl)
+        return;
+    size_t start = i & ~(size_t)63;
+    size_t end = start + 64;
+    if (end > vl)
+        end = vl;
+    char expect_hex[256], actual_hex[256];
+    hexdump_window(expect_hex, sizeof expect_hex, expected, start, end);
+    hexdump_window(actual_hex, sizeof actual_hex, actual, start, end);
+    asmtest_fail(file, line,
+                 "ASSERT_SVEC_EQ(z[%s], vl=%lu): first diff at byte %zu "
+                 "(0x%02x != 0x%02x)\n"
+                 "       expect[%zu..]: %s\n"
+                 "       actual[%zu..]: %s",
+                 idxexpr, vl, i, expected[i], actual[i], start, expect_hex,
+                 start, actual_hex);
+}
+
+/* SVE p-slot compare: identical to the z variant but the live bound is the
+ * predicate length PL = VL/8 (one predicate bit per vector byte). */
+void asmtest_assert_spred_eq(const char *file, int line, const char *idxexpr,
+                             const unsigned char *actual,
+                             const unsigned char *expected) {
+    unsigned long vl = asmtest_sve_vl();
+    if (vl == 0) {
+        asmtest_fail(file, line,
+                     "ASSERT_SPRED_EQ(p[%s]): SVE not available (vl=0) — "
+                     "asserting SVE state without SVE is a test bug",
+                     idxexpr);
+        return;
+    }
+    size_t pl = (size_t)(vl / 8);
+    size_t i = 0;
+    while (i < pl && actual[i] == expected[i])
+        i++;
+    if (i == pl)
+        return;
+    size_t start = i & ~(size_t)63;
+    size_t end = start + 64;
+    if (end > pl)
+        end = pl;
+    char expect_hex[256], actual_hex[256];
+    hexdump_window(expect_hex, sizeof expect_hex, expected, start, end);
+    hexdump_window(actual_hex, sizeof actual_hex, actual, start, end);
+    asmtest_fail(file, line,
+                 "ASSERT_SPRED_EQ(p[%s], pl=%zu): first diff at byte %zu "
+                 "(0x%02x != 0x%02x)\n"
+                 "       expect[%zu..]: %s\n"
+                 "       actual[%zu..]: %s",
+                 idxexpr, pl, i, expected[i], actual[i], start, expect_hex,
+                 start, actual_hex);
+}
+
 /* CPU feature probes (x86-64). AVX/AVX2/AVX-512 each need both the CPUID
  * feature bit AND OS enablement of the wider register state (OSXSAVE + the
  * matching XCR0 bits), so a kernel that doesn't save the state can't be used. */

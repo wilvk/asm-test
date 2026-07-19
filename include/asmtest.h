@@ -749,6 +749,17 @@ void asmtest_assert_vec512_eq(const char *file, int line, const char *idxexpr,
                               const unsigned char *actual,
                               const unsigned char *expected);
 
+/* SVE variants: compare the LIVE bytes only — asmtest_sve_vl() bytes of a
+ * z-slot, asmtest_sve_vl()/8 bytes of a p-slot — since the container tails past
+ * VL are never written by the trampoline. Fail with a distinct message if the
+ * bound is 0 (asserting SVE state without SVE is a test bug, not a mismatch). */
+void asmtest_assert_svec_eq(const char *file, int line, const char *idxexpr,
+                            const unsigned char *actual,
+                            const unsigned char *expected);
+void asmtest_assert_spred_eq(const char *file, int line, const char *idxexpr,
+                             const unsigned char *actual,
+                             const unsigned char *expected);
+
 /* Allocate n writable bytes followed by an inaccessible guard page, so a
  * one-past-the-end access faults (and is reported as a test failure). Free
  * with the same n that was passed to alloc. */
@@ -1105,6 +1116,33 @@ void asmtest_guarded_free_under(void *p, size_t n);
                                 asmtest_va_);                                  \
     } while (0)
 
+/* ASM_SVCALL_n: like ASM_VCALL512n but with SVE scalable-vector args; `z` is a
+ * svec_t[32] receiving the z file (z[0] = return) and `p` a spred_t[16]
+ * receiving the predicate file. The predicate ARGUMENTS are all-false (a zeroed
+ * spred_t[4]); a routine that needs predicate arguments calls
+ * asm_call_capture_sve directly. SELF-SKIPS the test (SKIP) when SVE is
+ * unavailable, so the same suite runs on any host. */
+#define ASM_SVCALL_1(z, p, fn, v0)                                             \
+    do {                                                                       \
+        if (!asmtest_cpu_has_sve())                                            \
+            SKIP("SVE not available on this host");                            \
+        long asmtest_ia_[6] = {0};                                             \
+        svec_t asmtest_za_[8] = {(v0)};                                        \
+        spred_t asmtest_pa_[4] = {{{0}}};                                      \
+        asm_call_capture_sve((z), (p), (void *)(fn), asmtest_ia_, asmtest_za_, \
+                             asmtest_pa_);                                     \
+    } while (0)
+#define ASM_SVCALL_2(z, p, fn, v0, v1)                                         \
+    do {                                                                       \
+        if (!asmtest_cpu_has_sve())                                            \
+            SKIP("SVE not available on this host");                            \
+        long asmtest_ia_[6] = {0};                                             \
+        svec_t asmtest_za_[8] = {(v0), (v1)};                                  \
+        spred_t asmtest_pa_[4] = {{{0}}};                                      \
+        asm_call_capture_sve((z), (p), (void *)(fn), asmtest_ia_, asmtest_za_, \
+                             asmtest_pa_);                                     \
+    } while (0)
+
 /* ------------------------------------------------------------------ */
 /* Assertions                                                          */
 /* ------------------------------------------------------------------ */
@@ -1231,6 +1269,18 @@ void asmtest_guarded_free_under(void *p, size_t n);
 #define ASSERT_VEC512_EQ(vec, idx, expect_ptr)                                 \
     asmtest_assert_vec512_eq(__FILE__, __LINE__, #idx, (vec)[idx].u8,          \
                              (const unsigned char *)(expect_ptr))
+
+/* SVE variants: `z`/`p` are the svec_t[32]/spred_t[16] arrays filled by
+ * asm_call_capture_sve. VL-aware — compares only the low asmtest_sve_vl() bytes
+ * of z-slot idx (resp. asmtest_sve_vl()/8 bytes of p-slot idx); the container
+ * tails past VL are untouched by the trampoline and never compared. Lane scalars
+ * still use ASSERT_DEQ/UEQ, e.g. ASSERT_DEQ(z[0].f64[i], ...) up to vl/8. */
+#define ASSERT_SVEC_EQ(z, idx, expect_ptr)                                     \
+    asmtest_assert_svec_eq(__FILE__, __LINE__, #idx, (z)[idx].u8,              \
+                           (const unsigned char *)(expect_ptr))
+#define ASSERT_SPRED_EQ(p, idx, expect_ptr)                                    \
+    asmtest_assert_spred_eq(__FILE__, __LINE__, #idx, (p)[idx].u8,             \
+                            (const unsigned char *)(expect_ptr))
 
 /* Differential / property assertions: assert the asm routine `fn` matches the
  * C reference `ref` over `n` random input tuples drawn from generator `gen`.
