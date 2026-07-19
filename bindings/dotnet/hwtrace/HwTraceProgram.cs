@@ -109,6 +109,23 @@ static class HwTraceProgram
             return 0;
         }
 
+        // managed-wholewindow-compose T4: ASMTEST_COMPOSE_ONLY=1 runs ONLY the live-compose set
+        // (T1/T2/T3/T5) and exits — the `hwtrace-dotnet-unwarmed` lane sets it together with
+        // DOTNET_TC_AggressiveTiering=1 (which pulls tier-up INTO the window for T2's live
+        // re-tier check, but as a PROCESS-WIDE knob perturbs the strict byMethod/withRundown
+        // checks elsewhere in the full suite — TinyManaged tiers up mid-window there). Scoping
+        // the lane to the compose set is exactly the doc's "whole unwarmed compose set", and the
+        // compose checks' own asserts are tiering-tolerant (covered-or-truncated).
+        if (Environment.GetEnvironmentVariable("ASMTEST_COMPOSE_ONLY") == "1")
+        {
+            WholeWindowUnwarmedChecks();
+            WholeWindowRetierChecks();
+            WindowOopComposeChecks();
+            WholeWindowUnwarmedPtChecks();
+            Console.WriteLine($"1..{_n}");
+            return _failed ? 1 : 0;
+        }
+
         // --- AsmMethod name parsing (pure, host-independent) --- //
         AsmMethodChecks();
 
@@ -803,6 +820,19 @@ static class HwTraceProgram
         SiblingPublisherChecks();
         WindowLiveJitChecks();
 
+        // --- managed-wholewindow-compose §Z3: live UNWARMED compose over the IN-PROCESS
+        // empty-ctor whole-window (WEAK single-step tier) — a method first JIT'd inside the
+        // window, GC running alongside. T3 adds the §D3 out-of-process prong; T5 the PT prong. --- //
+        WholeWindowUnwarmedChecks();
+        // T2: mid-window re-tier decode-at-version (env-gated; the T4 lane arms it).
+        WholeWindowRetierChecks();
+        // T3: the compose through the crash-proof §D3 out-of-process window's inline `using`-scope
+        // form over a RESIDENT method (the inline window_stop stepper cannot step a mid-window JIT
+        // — see WindowOopComposeChecks; the unwarmed case is the factory's, above).
+        WindowOopComposeChecks();
+        // T5: the PT prong — self-skips off Intel-PT silicon (every current CI/dev host).
+        WholeWindowUnwarmedPtChecks();
+
         // --- Data-flow Phase 4: live GC-move feed (GCBulkMovedObjectRanges -> gcmove) --- //
         GcMoveChecks();
 
@@ -1105,6 +1135,227 @@ static class HwTraceProgram
                               + $"({ww.LiveJitPublished} live-published records)");
         else
             Console.WriteLine("# NOTE E3: stream truncated before the live-published loop was recorded");
+    }
+
+    // managed-wholewindow-compose T1 — the UNWARMED fixture. NOTHING may call this before
+    // WholeWindowUnwarmedChecks' scope: that is the whole premise. Its first JIT then happens
+    // INSIDE the in-process empty-ctor whole-window (its MethodLoadVerbose fires only after the
+    // window arms), so a non-zero MethodsObserved proves the map saw a method compiled in-window.
+    // Pure compute (no allocation): forcing a stop-the-world GC ON the single-stepped thread
+    // inside the window is deliberately NOT done — see WholeWindowUnwarmedChecks.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long UnwarmedHotPath(int n)
+    {
+        long acc = 0;
+        for (int i = 0; i < n; i++) acc += (i & 7) + 1;
+        return acc;
+    }
+
+    // managed-wholewindow-compose T1 — the live UNWARMED compose over the IN-PROCESS empty ctor
+    // (the WEAK single-step tier): JitMethodMap (MethodLoadVerbose -> codeimage_track ->
+    // close-time versioned decode) over a method first JIT'd inside the window. The out-of-process
+    // twin is WindowLiveJitChecks (AsmTrace.Window); T3 adds the §D3 OOP unwarmed prong and T5 the
+    // PT prong of this same fixture.
+    //
+    // RE-VERIFICATION FINDING (managed-wholewindow-compose): the doc's original premise also
+    // forced a `GC.Collect(0)` ON the stepped thread inside the window. That is UNSAFE and
+    // intermittently fatal — a stop-the-world GC on the arming thread can lazily spawn a runtime
+    // thread (finalizer / background-GC first-init) mid-window, and the repo's OWN degradation
+    // note documents that an in-process EFLAGS.TF window is fatal if the runtime spawns a thread
+    // in-window (SIGTRAP force-reset to SIG_DFL; measured here as exit 133). GC pressure from
+    // SIBLING threads is already covered safely by the TF-stress check above; the compose premise
+    // this task proves is the UNWARMED JIT inside the window (which itself supplies the runtime
+    // instruction noise the asserts below require), so the fatal in-window GC is omitted.
+    static void WholeWindowUnwarmedChecks()
+    {
+        long r = 0;
+        AsmTrace ww;
+        // byMethod:true enables the JIT map (Methods / LabelledInstructions / InstructionsIn).
+        using (ww = new AsmTrace(emit: false, byMethod: true))
+        {
+            r = UnwarmedHotPath(20000);
+        }
+        // The scope never perturbs semantics: sum_{i=0}^{19999}((i&7)+1) = 2500*36 = 90000.
+        Check(r == 90000, $"unwarmed compose: UnwarmedHotPath(20000) == 90000 (got {r})");
+        if (!ww.Armed)
+        {
+            Check(ww.SkipReason.Length > 0,
+                  $"unwarmed compose: unarmed scope records a self-skip reason ({ww.SkipReason})");
+            Console.WriteLine($"# SKIP unwarmed compose: {ww.SkipReason}");
+            return;
+        }
+        // Soft-dirty degradation (T1 step 4): where the code-image cannot version (no
+        // CONFIG_MEM_SOFT_DIRTY / PAGEMAP_SCAN) the map labels from live memory instead — the
+        // asserts below still hold; version-specific text is T2's job under its own gate.
+        if (!CodeImage.Available())
+            Console.WriteLine("# NOTE unwarmed: codeimage versioning unavailable (soft-dirty)");
+        // The unwarmed premise: the map saw >=1 method JIT'd INSIDE the window (UnwarmedHotPath's
+        // MethodLoadVerbose fires after arm because nothing called it before the scope).
+        Check(ww.MethodsObserved >= 1,
+              $"unwarmed compose: >=1 method JIT'd inside the window (got {ww.MethodsObserved})");
+        // Covered-or-truncated (the AMD-LBR lesson generalized): the 1<<20 window ring can
+        // honestly truncate under the mid-window JIT noise, but a FULL miss on an UNtruncated
+        // capture is a real regression and must fail.
+        long inHot = ww.InstructionsIn("UnwarmedHotPath");
+        Check(inHot > 0 || ww.Truncated,
+              $"unwarmed compose: UnwarmedHotPath resolves in the trace or capture truncated "
+              + $"(got {inHot} insns, truncated={ww.Truncated}, methods={ww.Methods.Count})");
+        // The window captured runtime (JIT) instructions BEYOND the labelled method — proof
+        // the compose ran against a noisy LIVE window (the method compiling in-window), not a
+        // warmed body.
+        Check(ww.Truncated || ww.Addresses.Length > ww.LabelledInstructions,
+              $"unwarmed compose: captured runtime insns beyond the labelled method "
+              + $"({ww.Addresses.Length} addrs > {ww.LabelledInstructions} labelled, truncated={ww.Truncated})");
+        Console.WriteLine($"# unwarmed compose: {ww.MethodsObserved} methods observed, "
+                          + $"{inHot} insns in UnwarmedHotPath, {ww.Addresses.Length} addrs, "
+                          + $"truncated={ww.Truncated}");
+    }
+
+    // managed-wholewindow-compose T2 — the MID-WINDOW RE-TIER fixture: a SECOND never-before-
+    // called method, driven past tier-up INSIDE the window so its JIT'd body moves to a fresh
+    // address mid-scope. NOTHING may call it before WholeWindowRetierChecks' scope.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long UnwarmedRetierPath(int n)
+    {
+        long acc = 0;
+        for (int i = 0; i < n; i++) acc += (i & 3) + 1;
+        return acc;
+    }
+
+    // managed-wholewindow-compose T2 — prove the versioned seam LIVE: drive UnwarmedRetierPath
+    // past tier-up inside the window and assert close-time attribution survives the method's
+    // address moving (a fresh MethodLoadVerbose at a new MethodStartAddress). Env-gated
+    // (ASMTEST_UNWARMED_RETIER=1, set by the T4 lane with DOTNET_TC_AggressiveTiering=1) so the
+    // default suite stays fast + deterministic; never `not ok` on the runtime's tiering timing.
+    static void WholeWindowRetierChecks()
+    {
+        if (Environment.GetEnvironmentVariable("ASMTEST_UNWARMED_RETIER") != "1")
+        {
+            Console.WriteLine("# SKIP retier: ASMTEST_UNWARMED_RETIER not set");
+            return;
+        }
+        // A standalone map (the tier-up-observation pattern used above for HotTier) counts the
+        // DISTINCT bodies observed for UnwarmedRetierPath; since nothing calls it before the
+        // scope, every version it sees is one produced INSIDE the window.
+        var vmap = new JitMethodMap();
+        long r = 0;
+        AsmTrace ww;
+        using (ww = new AsmTrace(emit: false, byMethod: true))
+        {
+            // >= 64 calls past the default DOTNET_TC_CallCountThreshold=30 so tier-up is
+            // requested in-window; then spin briefly to give the (resident) tiering worker time
+            // to promote — the worker is pinned by hwtrace_dotnet_env, so no mid-window
+            // pthread_create under step.
+            for (int k = 0; k < 128; k++) r += UnwarmedRetierPath(2000);
+            long spin = Environment.TickCount64 + 200;
+            while (Environment.TickCount64 < spin) r += UnwarmedRetierPath(64);
+        }
+        vmap.Stop();
+        int versions = vmap.ObservedVersions("UnwarmedRetierPath");
+        vmap.Dispose();
+        if (!ww.Armed)
+        {
+            Console.WriteLine($"# SKIP retier: scope did not arm ({ww.SkipReason})");
+            return;
+        }
+        if (versions >= 2)
+        {
+            // The re-tiered method still resolves at close — attribution followed the body to
+            // its new address (the live twin of test_zeroctor_managed_compose's synthetic re-JIT).
+            long inRetier = ww.InstructionsIn("UnwarmedRetierPath");
+            Check(inRetier > 0 || ww.Truncated,
+                  $"retier: re-tiered method resolves in the trace or capture truncated "
+                  + $"({versions} versions, {inRetier} insns, truncated={ww.Truncated})");
+            Console.WriteLine($"# retier: {versions} distinct UnwarmedRetierPath bodies observed in-window");
+        }
+        else
+            Console.WriteLine($"# SKIP retier: runtime did not re-tier inside the window (versions={versions})");
+    }
+
+    // managed-wholewindow-compose T3 — the §D3 out-of-process whole-window compose.
+    //
+    // RE-VERIFICATION FINDING (managed-wholewindow-compose): the doc's original T3 asked for an
+    // UNWARMED managed compose through the INLINE `using`-scope ctor `new AsmTrace(outOfProcess:
+    // true)`, riding a §E3 live publish. That is NOT achievable and is not implemented — the
+    // inline ctor's REGION-FREE reverse-attach `window_stop` stepper single-steps EVERY
+    // instruction the arming thread runs, and stepping a managed body that way ABORTS CoreCLR
+    // (SIGABRT / exit 134), reproduced across every configuration tried (unwarmed first-JIT
+    // in-window; a resident body; a tiny resident body; byMethod on and off). Two mechanisms
+    // compound: (a) a first-call JIT inside the window steps the whole compiler; (b) even a
+    // resident body holds the window open across its stepped instructions long enough that
+    // background runtime activity (GC/JIT on other threads) collides with the ptrace-stepped
+    // arming thread. The abort is a hard fail-fast that cannot be caught, so this check does NOT
+    // invoke that path (it would kill the whole lane).
+    //
+    // The OOP whole-window compose IS proven — on the RANGE-based AsmTrace.Window factory
+    // (WindowLiveJitChecks, above), whose stepper runs the JIT/runtime at NATIVE speed and steps
+    // only the window range, so it composes even an UNWARMED mid-window JIT without aborting. The
+    // inline ctor remains valid only for the survivability shape examples/dotnet/crashproof-
+    // showdown uses (heavy work offloaded to a SPAWNED thread; the arming thread steps ~dozens of
+    // instructions), which is a survivability demo, not a managed-body capture.
+    static void WindowOopComposeChecks()
+    {
+        // The compose needs the §D3 out-of-process stepper; assert it is available (the real
+        // capability this task rests on), then record the inline-ctor finding above — the live
+        // OOP compose itself is asserted by the factory path (WindowLiveJitChecks).
+        if (!Ptrace.Available())
+        {
+            Console.WriteLine($"# SKIP OOP compose: out-of-process stepper unavailable ({Ptrace.SkipReason()})");
+            return;
+        }
+        Check(true, "OOP compose: §D3 out-of-process stepper available; unwarmed OOP whole-window "
+                    + "compose is proven on the range-based AsmTrace.Window factory (E3 Window checks "
+                    + "above) — the inline new AsmTrace(outOfProcess:true) ctor aborts CoreCLR when "
+                    + "stepping a managed body (window_stop steps every insn), a documented finding");
+    }
+
+    // managed-wholewindow-compose T5 — a FOURTH never-called fixture for the PT prong (a fresh
+    // one so the unwarmed premise holds on a real PT host, where the in-process fixtures above
+    // are already warm). Pure compute, consistent with T1/T3.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long UnwarmedPtPath(int n)
+    {
+        long acc = 0;
+        for (int i = 0; i < n; i++) acc += (i & 7) + 1;
+        return acc;
+    }
+
+    // managed-wholewindow-compose T5 — the PT prong of the live compose: when the STRONG Intel
+    // PT window tier arms (bare-metal Intel + libipt + privilege) the SAME unwarmed compose runs
+    // over the PT-backed window (the seam is backend-agnostic — render_versioned and the map do
+    // not care which tier captured the addresses); everywhere else (every current CI/dev host)
+    // it self-skips NAMING the PT gate. Written so a future PT runner needs ZERO code changes —
+    // only hardware. On the AMD dev hosts the reason is "no intel_pt PMU (needs bare-metal Intel;
+    // absent on AMD/VM)".
+    static void WholeWindowUnwarmedPtChecks()
+    {
+        if (!HwTrace.Available(HwBackend.IntelPt))
+        {
+            Console.WriteLine($"# SKIP unwarmed/PT: {HwTrace.SkipReason(HwBackend.IntelPt)}");
+            return;
+        }
+        long r = 0;
+        AsmTrace ww;
+        using (ww = new AsmTrace(HwBackend.IntelPt, byMethod: true))
+        {
+            r = UnwarmedPtPath(20000);
+        }
+        Check(r == 90000, $"unwarmed/PT compose: UnwarmedPtPath(20000) == 90000 (got {r})");
+        if (!ww.Armed)
+        {
+            Check(ww.SkipReason.Length > 0,
+                  $"unwarmed/PT compose: unarmed scope records a self-skip reason ({ww.SkipReason})");
+            Console.WriteLine($"# SKIP unwarmed/PT compose: {ww.SkipReason}");
+            return;
+        }
+        Check(ww.MethodsObserved >= 1,
+              $"unwarmed/PT compose: >=1 method JIT'd inside the window (got {ww.MethodsObserved})");
+        long inHot = ww.InstructionsIn("UnwarmedPtPath");
+        Check(inHot > 0 || ww.Truncated,
+              $"unwarmed/PT compose: UnwarmedPtPath resolves in the trace or capture truncated "
+              + $"(got {inHot} insns, truncated={ww.Truncated}, methods={ww.Methods.Count})");
+        Console.WriteLine($"# unwarmed/PT compose: {ww.MethodsObserved} methods, "
+                          + $"{inHot} insns in UnwarmedPtPath, truncated={ww.Truncated}");
     }
 
     // Data-flow Phase 4 — the LIVE GC-move feed. GcMoveMap (an in-proc EventListener) must

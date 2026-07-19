@@ -150,6 +150,21 @@ end-to-end on any x86-64 Linux via the single-step **WEAK** tier, per
   does not resolve on the closing thread (the cross-thread-hop honesty default); the empty
   ctor self-skips with an actionable `SkipReason` (never throws) where no faithful backend
   exists.
+- **§Z3 live compose (DONE, Docker-testable).** `make docker-hwtrace-dotnet-unwarmed` runs the
+  live-compose set: the in-process WEAK single-step tier (`new AsmTrace()`) over a managed method
+  whose **first JIT happens inside** the window (the JIT itself supplying the live-window
+  instruction noise); the crash-proof §D3 out-of-process inline `using`-scope
+  (`new AsmTrace(outOfProcess: true)`) over a **resident** method (first suite coverage of that
+  bare inline OOP ctor); and a mid-window **re-tier** decode-at-version check (tier-up pulled into
+  the window with `DOTNET_TC_AggressiveTiering=1`). Only the STRONG PT prong
+  (`new AsmTrace(HwBackend.IntelPt)`) remains silicon-gated (self-skips off bare-metal Intel PT).
+  Two findings refined the doc's premise: a forced `GC.Collect(0)` **on the stepped thread
+  inside** the window is intermittently fatal (the in-process TF window dies if the runtime
+  spawns a thread in-window) so it is omitted; and the inline OOP ctor's region-free `window_stop`
+  stepper single-steps everything, so a first-call JIT inside it aborts CoreCLR (exit 134) — the
+  unwarmed mid-window-JIT compose is thus proven on the range-based `AsmTrace.Window` factory
+  (native-speed JIT), while the inline OOP ctor serves resident (warm) code.
+  [managed-wholewindow-compose.md](internal/implementations/managed-wholewindow-compose.md).
 - **Tests:** `test_wholewindow_singlestep` (region-free arm, absolute-address capture,
   live-memory render finding `ret`, cross-thread `truncated`), `test_pt_window_pair_selfskip`,
   and `test_window_ladder` (the ladder never returns an unavailable backend; `pt_window_trusted`

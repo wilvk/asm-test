@@ -2822,6 +2822,23 @@ hwtrace-dotnet-test: shared-hwtrace
 	@echo "== hwtrace-dotnet-test =="
 	$(hwtrace_env) $(hwtrace_dotnet_env) $(DOTNET) run --project bindings/dotnet/hwtrace/hwtrace.csproj
 
+# managed-wholewindow-compose T4: the live UNWARMED whole-window compose set (T1/T2/T3/T5) with
+# the mid-window re-tier check ARMED (ASMTEST_UNWARMED_RETIER=1) and tiering pulled INTO the
+# window (DOTNET_TC_AggressiveTiering=1 promotes fast so the tier-up happens mid-scope, not after
+# it — a quieting/forcing knob, never a correctness precondition; TieredCompilation stays ON, the
+# lane's whole point being to have the JIT run mid-window). ASMTEST_COMPOSE_ONLY=1 scopes the run
+# to the compose set: DOTNET_TC_AggressiveTiering is a PROCESS-WIDE knob that perturbs the strict
+# byMethod/withRundown checks elsewhere in the full suite (TinyManaged tiers up mid-window there),
+# so the lane runs exactly "the whole unwarmed compose set" the doc names, whose own asserts are
+# tiering-tolerant. Inherits hwtrace_dotnet_env (worker pinned resident). See
+# docs/scoped-tracing-implementation.md (§Z3 live half).
+.PHONY: hwtrace-dotnet-unwarmed
+hwtrace-dotnet-unwarmed: shared-hwtrace
+	@echo "== hwtrace-dotnet-unwarmed (live whole-window compose set) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) ASMTEST_COMPOSE_ONLY=1 ASMTEST_UNWARMED_RETIER=1 \
+	  DOTNET_TC_AggressiveTiering=1 \
+	  $(DOTNET) run --project bindings/dotnet/hwtrace/hwtrace.csproj
+
 # Slow-host crash-avoidance stress (managed-singlestep-lazy-arm-plan "Sharpening 1"):
 # the ONE lane that must run with the tiering worker UNPINNED — no $(hwtrace_dotnet_env)
 # — so CoreCLR's worker idle-exits and is respawned via pthread_create adjacent to the

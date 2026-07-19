@@ -816,6 +816,14 @@ docker-hwtrace-dotnet9: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) $(DOCKER_RUNENV_dotnet) asmtest-dotnet \
 	  make hwtrace-dotnet9-test
 
+# managed-wholewindow-compose T4: the live UNWARMED whole-window compose lane in a container —
+# the §Z3 live half a release checklist can name (in-process WEAK tier + §D3 OOP stepper; the
+# PT prong self-skips off Intel-PT silicon).
+.PHONY: docker-hwtrace-dotnet-unwarmed
+docker-hwtrace-dotnet-unwarmed: docker-dotnet
+	$(DOCKER) run --rm $(_docker_plat) $(DOCKER_RUNENV_dotnet) asmtest-dotnet \
+	  make hwtrace-dotnet-unwarmed
+
 # Slow-host crash-avoidance stress: the tiering worker UNPINNED (no
 # hwtrace_dotnet_env), lazy-arm Invokes adjacent to worker respawns. The container
 # shares the host's (CI runner's) scheduling noise — the environment that killed the

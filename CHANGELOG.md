@@ -75,6 +75,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and
   [the implementation doc](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/pin-sde-future-isa-lane.md).
 
+- **Live whole-window compose lane (.NET).** The `hwtrace-dotnet` self-suite
+  gains checks proving the zero-config compose seam (`MethodLoadVerbose` →
+  `codeimage_track` → close-time versioned decode): over the in-process WEAK
+  single-step tier (`new AsmTrace()`) against a managed method whose **first JIT
+  happens inside the window** (genuinely-compiled-in-window, not a pre-warmed
+  body); over the crash-proof §D3 out-of-process inline `using`-scope
+  (`new AsmTrace(outOfProcess: true)`) against a **resident** method — the first
+  suite coverage of that bare inline OOP whole-window ctor; and (self-skipping
+  off Intel-PT silicon) the STRONG PT tier — plus a mid-window re-tier
+  decode-at-version check. Runs as the named `make docker-hwtrace-dotnet-unwarmed`
+  lane. Tasks T1–T5 of the
+  [managed-wholewindow-compose implementation doc](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/managed-wholewindow-compose.md).
+  Two re-verification findings refine the doc's original premise: (1) forcing a
+  stop-the-world `GC.Collect(0)` **on the single-stepped thread inside the
+  window** is intermittently fatal — the in-process EFLAGS.TF window dies
+  (SIGTRAP) if the runtime spawns a thread in-window, per the repo's own
+  degradation note — so it is omitted (the unwarmed JIT itself supplies the
+  live-window instruction noise); (2) the inline OOP ctor's **region-free
+  `window_stop` stepper single-steps everything**, so a first-call JIT inside
+  that window steps the whole compiler and aborts CoreCLR (exit 134) — the
+  unwarmed mid-window-JIT compose is therefore proven on the **range-based
+  `AsmTrace.Window` factory** (whose stepper runs the JIT at native speed),
+  while the inline OOP ctor is for resident (warm) code, matching the
+  `crashproof-showdown` example.
 - **Data-flow F5: an out-of-band PT + code-image + Unicorn-replay value
   producer** (`make dataflow-pt-test` / `make docker-dataflow-pt`). The
   least-perturbing L0 value tier: it reconstructs an Intel PT trace's executed

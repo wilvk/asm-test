@@ -2758,6 +2758,15 @@ namespace Asmtest
             }
             foreach (AddrRec r in EnumerateManagedCodeRanges())
                 HwNative.asmtest_addr_channel_publish_rec(_oopWinChan, r.Base, r.Len, r.Version);
+            // NOTE (managed-wholewindow-compose T3 finding): the §E3 live mid-window JIT publish
+            // that AsmTrace.Window wires is intentionally NOT armed here. This inline ctor's
+            // region-free window_stop stepper single-steps EVERY instruction the arming thread
+            // runs, so a first-call JIT INSIDE the window is stepped through the whole compiler —
+            // which aborts CoreCLR (measured exit 134). The live-publish path only pays off on the
+            // RANGE-based AsmTrace.Window stepper (where the JIT runs at native speed and only the
+            // published region is stepped), so the unwarmed mid-window-JIT compose is proven there
+            // (HwTraceProgram.WindowLiveJitChecks), not through this inline ctor — which is for a
+            // body whose code is already RESIDENT (warm), matching the crashproof-showdown example.
 
             Thread.BeginThreadAffinity();
             int rc = HwNative.asmtest_hwtrace_stealth_window_begin(_oopWinChan, out IntPtr ctx);
@@ -4165,6 +4174,22 @@ namespace Asmtest
                 foreach (var m in _methods)
                     if (m.Name.Contains(nameSubstring)) n++;
             return n;
+        }
+
+        /// <summary>§ managed-wholewindow-compose T2: how many DISTINCT JIT'd bodies (unique
+        /// start addresses) were observed for methods whose name contains
+        /// <paramref name="nameSubstring"/> — ≥ 2 means a tier-up / OSR re-JIT moved the method
+        /// to a fresh address. Unlike <see cref="CountFor"/> (which counts events), this counts
+        /// unique start PCs, so a repeated <c>MethodLoadVerbose</c> for the same body is not
+        /// double-counted — the honest "how many versions did the runtime produce" signal.</summary>
+        public int ObservedVersions(string nameSubstring)
+        {
+            if (string.IsNullOrEmpty(nameSubstring)) return 0;
+            var starts = new HashSet<ulong>();
+            lock (_lock)
+                foreach (var m in _methods)
+                    if (m.Name.Contains(nameSubstring)) starts.Add(m.Start);
+            return starts.Count;
         }
 
         /// <summary>§D0.3: the LATEST observed entry whose name contains

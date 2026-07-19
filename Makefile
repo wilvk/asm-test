@@ -130,6 +130,7 @@ help:
 	@echo '  dataflow-pt-test  F5 PT + code-image + Unicorn-replay value tier: synthetic-AUX decode->replay + emu-oracle equivalence (make docker-dataflow-pt)'
 	@echo '  dataflow-pt-live  F5 live foreign-pid PT replay vs single-step oracle (bare-metal Intel PT + intel-pt-attach-foreign-pid; ASMTEST_REQUIRE_PT=1 fails rather than skips)'
 	@echo '  hwtrace-bindings-test  per-language hardware-trace wrapper tests (all bindings)'
+	@echo '  hwtrace-dotnet-unwarmed  live whole-window compose set (method JIT in-window, mid-window re-tier; also docker-)'
 	@echo '  hwtrace-dotnet-example  the .NET scoped-tracing demos (examples/dotnet; also docker-)'
 	@echo '  dev-dotnet      interactive container shell for the .NET examples'
 	@echo ''
