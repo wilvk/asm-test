@@ -68,6 +68,12 @@
  * examples/gccanon_attach/victim/Program.cs (GcCanonVictim.Sentinel). */
 #define GCCANON_SENTINEL 0x5EEDCAFE12345678ull
 
+/* Increment 4 (T5) alias fixture: SENTINEL2 is STORED into the object about to die (doomed) at X,
+ * SENTINEL3 is pre-seeded into the object reallocated onto X (live) and LOADED. Kept in step with
+ * the victim's Sentinel2/Sentinel3. */
+#define GCCANON_SENTINEL2 0x2EED000212340002ull
+#define GCCANON_SENTINEL3 0x3EED000312340003ull
+
 /* The scoped ptrace producer's return codes and entry point. It ships NO public header — a value-
  * trace producer is a tier, not part of the shared asmtest_valtrace.h sink API — so, exactly as its
  * own suite (examples/test_dataflow_ptrace.c) and asmspy (cli/asmspy_engine.c) both do, they are
@@ -956,6 +962,66 @@ static uint32_t feed_chain(const gccanon_move_t *in, uint32_t n, uint32_t step, 
     return moves;
 }
 
+/* Load the T3 dumper's node table (increment 4 / T5): poll `path` until its GCCANON_NODES_END
+ * sentinel appears (the dumper writes it via a temp+rename, so a present file is complete), then
+ * parse `node 0x<addr> 0x<size> 0x<typeid> <typename>` lines into asmtest_gcnode_t[]. Also reports
+ * *int64_typeid = the type_id of any node whose typename contains "Int64" (the victim's long[]), for
+ * the known-object calibration. Returns the array (caller frees) + *nnodes, or NULL on timeout. */
+static asmtest_gcnode_t *load_node_table(const char *path, size_t *nnodes,
+                                         uint64_t *int64_typeid, int timeout_s) {
+    *nnodes = 0;
+    *int64_typeid = 0;
+    FILE *f = NULL;
+    int ready = 0;
+    for (int waited = 0; waited <= timeout_s * 10 && !ready; waited++) {
+        f = fopen(path, "r");
+        if (f != NULL) {
+            char line[512];
+            while (fgets(line, sizeof line, f))
+                if (strncmp(line, "GCCANON_NODES_END", 17) == 0) {
+                    ready = 1;
+                    break;
+                }
+            if (ready) {
+                rewind(f);
+                break;
+            }
+            fclose(f);
+            f = NULL;
+        }
+        sleep_ms(100);
+    }
+    if (!ready) {
+        if (f != NULL)
+            fclose(f);
+        return NULL;
+    }
+
+    size_t cap = 0;
+    char line[512];
+    while (fgets(line, sizeof line, f))
+        if (strncmp(line, "node ", 5) == 0)
+            cap++;
+    rewind(f);
+    asmtest_gcnode_t *nodes = cap ? calloc(cap, sizeof *nodes) : NULL;
+    size_t n = 0;
+    while (nodes != NULL && fgets(line, sizeof line, f) && n < cap) {
+        unsigned long long a, s, ti;
+        char tn[256] = {0};
+        if (sscanf(line, "node 0x%llx 0x%llx 0x%llx %255s", &a, &s, &ti, tn) >= 3) {
+            nodes[n].addr = (uint64_t)a;
+            nodes[n].size = (uint64_t)s;
+            nodes[n].type_id = (uint64_t)ti;
+            if (*int64_typeid == 0 && strstr(tn, "Int64[") != NULL)
+                *int64_typeid = (uint64_t)ti;
+            n++;
+        }
+    }
+    fclose(f);
+    *nnodes = n;
+    return nodes;
+}
+
 /* Is there a def-use edge from `from` to `to` carried by an absolute memory location at `addr`? */
 static int has_mem_edge(const asmtest_defuse_t *g, uint32_t from, uint32_t to, uint64_t addr) {
     if (!g)
@@ -983,11 +1049,16 @@ int main(int argc, char **argv) {
     int tid = atoi(argv[2]);
     const char *want = argv[3];
     int timeout_s = argc > 4 ? atoi(argv[4]) : 60;
-    /* What the victim's fixture claims to be doing, i.e. what THIS run proves. Never fed to the
-     * transform — only checked against the live feed. */
-    int expect_gcs = argc > 5 ? atoi(argv[5]) : 1;
+    /* argv[5] is either the expected GC-per-window count (numeric phases 1/2/3) or the literal
+     * "alias" (increment 4 / T5 alias fixture). What the victim's fixture claims to be doing, i.e.
+     * what THIS run proves — never fed to the transform, only checked against the live feed. */
+    int is_alias = (argc > 5 && strcmp(argv[5], "alias") == 0);
+    int expect_gcs = (argc > 5 && !is_alias) ? atoi(argv[5]) : 1;
     if (expect_gcs < 1)
         expect_gcs = 1;
+    /* argv[6], when present, is the T3 dumper's node-table file (the heap SNAPSHOT the objid join
+     * consumes). Absent => the objid assertions self-report as missing rather than run. */
+    const char *nodes_file = (argc > 6) ? argv[6] : NULL;
 
     uint64_t base = 0, len = 0;
     char mname[512] = {0};
@@ -1113,20 +1184,39 @@ int main(int argc, char **argv) {
            g_ch->gcs_seen, g_ch->gcs_traced, nm, npost, g_ch->moves_total, g_ch->nonreloc_total,
            g_ch->last_s0, distinct_gcs);
 
+    /* ---- increment 4 (T5): the heap SNAPSHOT ---------------------------------------------------- */
+    /* The capture is done (tracer_done is published). Signal the lane to run the dumper against the
+     * still-live victim, then block on its node-table file. The dumper is installable, so its absence
+     * is a FAILURE (a not-ok below), never a skip. */
+    asmtest_gcnode_t *nodes = NULL;
+    size_t nnodes = 0;
+    uint64_t int64_typeid = 0;
+    if (nodes_file != NULL) {
+        printf("GCCANON_TRACER_WAIT_NODES file=%s\n", nodes_file);
+        fflush(stdout);
+        nodes = load_node_table(nodes_file, &nnodes, &int64_typeid, 60);
+        printf("GCCANON_TRACER_NODES loaded=%zu int64_typeid=0x%llx\n", nnodes,
+               (unsigned long long)int64_typeid);
+    }
+
     /* ---- find the store and the load ------------------------------------------------------- */
     /* The region is Volatile.Write(ref obj[0], Sentinel) -> call Park() -> Volatile.Read(ref obj[0]):
      * an 8-byte MEM_ABS write of the sentinel, then an 8-byte MEM_ABS read of the same value at a
      * LATER step. The producer fills a write's value from the post-instruction state and a read's
      * from the pre-instruction state, so both carry the sentinel. */
+    /* The numeric fixture stores AND loads the SAME sentinel (one object across a move); the alias
+     * fixture stores SENTINEL2 (into doomed, at X) and loads SENTINEL3 (from live, at X) — different
+     * values, so the two records are still found unambiguously. */
+    uint64_t sv_store = is_alias ? GCCANON_SENTINEL2 : GCCANON_SENTINEL;
+    uint64_t sv_load = is_alias ? GCCANON_SENTINEL3 : GCCANON_SENTINEL;
     const at_val_rec_t *store = NULL, *load = NULL;
     for (size_t i = 0; i < g_vt->recs_len; i++) {
         const at_val_rec_t *r = &g_vt->recs[i];
-        if (r->kind != AT_LOC_MEM_ABS || r->size != 8 || !r->value_valid ||
-            r->value != GCCANON_SENTINEL)
+        if (r->kind != AT_LOC_MEM_ABS || r->size != 8 || !r->value_valid)
             continue;
-        if (r->is_write && !store)
+        if (r->is_write && r->value == sv_store && !store)
             store = r;
-        else if (!r->is_write && store && r->step > store->step && !load)
+        else if (!r->is_write && r->value == sv_load && store && r->step > store->step && !load)
             load = r;
     }
 
@@ -1168,11 +1258,173 @@ int main(int argc, char **argv) {
            nm, cn, cst.groups, cst.collapsed_groups, cst.max_gcs_in_group, cst.in_overlaps,
            cst.identity_dropped, cst.oom);
 
+    /* increment 4 (T5): the trace->snapshot translation set = composed in-capture (flags==0) moves
+     * ++ composed post-capture (GCCANON_MOVE_POST) moves, RE-READ now, after the snapshot was taken
+     * (load_node_table blocked until the dumper's GCCANON_NODES_END), so the post feed reaches the
+     * snapshot. T4 measured POST-move — GCBulkNode addresses are the objects' final resting places —
+     * so the dump GC's own ranges BELONG and no gc_seq is filtered
+     * (docs/internal/analysis/f4-objid-snapshot-space-findings.md). Post moves that repeatedly reused
+     * one slot share a step and overlap in `new`, so asmtest_objid_*'s own new-span disjointify drops
+     * them for the inverse walk — the in-capture move is what keys the traced records. */
+    uint32_t nm_now = g_ch->nmoves;
+    if (nm_now > GCCANON_MAX_MOVES)
+        nm_now = GCCANON_MAX_MOVES;
+    uint32_t npost_now = nm_now > nm ? nm_now - nm : 0;
+    compose_stats_t cpst;
+    uint32_t cpn = 0;
+    asmtest_gcmove_t *comp_post =
+        npost_now ? gccanon_compose(&g_ch->moves[nm], npost_now, &cpn, &cpst) : NULL;
+    size_t ntrans = (size_t)cn + cpn;
+    asmtest_gcmove_t *trans = ntrans ? calloc(ntrans, sizeof *trans) : NULL;
+    if (trans != NULL) {
+        if (cn)
+            memcpy(trans, comp, (size_t)cn * sizeof *trans);
+        if (cpn)
+            memcpy(trans + cn, comp_post, (size_t)cpn * sizeof *trans);
+    }
+
     int t = 0, fail = 0;
     printf("== gccanon-attach (F4 inc %d: live GC-move canonicalization on the ptrace attach tier"
            "%s) ==\n",
-           expect_gcs > 1 ? 2 : 1,
-           expect_gcs > 1 ? " — TWO-OR-MORE GCs IN ONE CALL-OUT WINDOW, chained" : "");
+           is_alias ? 4 : (expect_gcs > 1 ? 2 : 1),
+           is_alias ? " — OBJECT identity, the false store/load alias reproduced and eliminated"
+                    : (expect_gcs > 1 ? " — TWO-OR-MORE GCs IN ONE CALL-OUT WINDOW, chained" : ""));
+
+    /* ---- increment 4 (T5): the ALIAS PHASE ---------------------------------------------------- */
+    /* A separate fixture and assertion battery: RegionAlias stores SENTINEL2 into a doomed LOH object
+     * at X and, after the object dies and live is LOH-slid onto X, loads SENTINEL3 from live at X.
+     * Address identity keys both on X and forges a FALSE def-use edge; object identity re-keys the
+     * store out of the object space (its object is dead — no node) while the load keys the live
+     * object's node, and the edge is gone. */
+    if (is_alias) {
+        uint64_t X = store_addr_old; /* store.addr == load.addr for the alias fixture */
+        size_t live_owner = 0;
+        uint64_t live_off = 0;
+        int have_live =
+            (nodes != NULL &&
+             asmtest_objid_owner(nodes, nnodes, trans, ntrans, load_step, X, &live_owner,
+                                 &live_off) == 0);
+
+        /* A1 — the capture happened and the live feed is non-vacuous. */
+        if ((prc == DF_PTRACE_OK || prc == DF_PTRACE_FAULT) && steps > 0 && nm > 0) {
+            printf("ok %d - live-attach scoped capture of RegionAlias: %zu steps / %zu records, %u "
+                   "in-capture relocating range(s) across %u traced GC(s)\n",
+                   ++t, steps, nrecs, nm, g_ch->gcs_traced);
+        } else {
+            printf("not ok %d - the alias capture produced nothing (rc=%d steps=%zu moves=%u)\n",
+                   ++t, prc, steps, nm);
+            fail = 1;
+        }
+
+        /* A2 — the heap snapshot loaded, with the victim's long[] type present. */
+        if (nnodes > 0 && int64_typeid != 0) {
+            printf("ok %d - heap snapshot loaded: %zu node(s), Int64[] type present "
+                   "(typeid=0x%llx)\n",
+                   ++t, nnodes, (unsigned long long)int64_typeid);
+        } else {
+            printf("not ok %d - the node table is missing / has no Int64[] type (nodes=%zu) — the T3 "
+                   "dumper did not deliver; it is installable, so a FAILURE, never a skip\n",
+                   ++t, nnodes);
+            fail = 1;
+        }
+
+        /* A3 — fixture provocation: the aliasing signature. */
+        if (store != NULL && load != NULL && store_step < load_step &&
+            store_addr_old == load_addr_new && X != 0 && have_live) {
+            printf("ok %d - the alias is PROVOKED: an 8-byte STORE of SENTINEL2 (step %u) and an "
+                   "8-byte LOAD of SENTINEL3 (step %u) hit the SAME address X=0x%llx, and a live "
+                   "snapshot node owns X (node.addr=0x%llx off=0x%llx typeid=0x%llx, int64=%d)\n",
+                   ++t, store_step, load_step, (unsigned long long)X,
+                   (unsigned long long)nodes[live_owner].addr, (unsigned long long)live_off,
+                   (unsigned long long)nodes[live_owner].type_id,
+                   nodes[live_owner].type_id == int64_typeid);
+        } else {
+            printf("not ok %d - the alias was NOT provoked: store=%s load=%s store_step=%u "
+                   "load_step=%u store_addr=0x%llx load_addr=0x%llx live_node=%d\n",
+                   ++t, store ? "found" : "MISSING", load ? "found" : "MISSING", store_step,
+                   load_step, (unsigned long long)store_addr_old, (unsigned long long)load_addr_new,
+                   have_live);
+            fail = 1;
+        }
+
+        /* A4 — NEGATIVE CONTROL: address identity forges the false edge. */
+        asmtest_gcmove_canonicalize(g_vt, comp, cn);
+        asmtest_defuse_t *ag = asmtest_defuse_build(g_vt);
+        uint64_t gc_key = asmtest_gcmove_canon(comp, cn, load_step, X);
+        int gc_edge = (store && load && ag) ? has_mem_edge(ag, store_step, load_step, gc_key) : 0;
+        size_t ag_n = ag ? ag->n : 0, ag_reg = 0;
+        for (size_t i = 0; ag && i < ag->n; i++)
+            if (ag->edges[i].loc.kind == AT_LOC_REG)
+                ag_reg++;
+        for (size_t i = 0; i < g_vt->recs_len; i++) /* restore the RAW capture for the objid run */
+            g_vt->recs[i].addr = addr_snap[i];
+        if (gc_edge) {
+            printf("ok %d - NEGATIVE CONTROL: under ADDRESS identity "
+                   "(asmtest_gcmove_canonicalize) the store->load edge is FORGED at key 0x%llx — the "
+                   "false alias is real and live\n",
+                   ++t, (unsigned long long)gc_key);
+        } else {
+            printf("not ok %d - NEGATIVE CONTROL FAILED: address identity did NOT forge the edge "
+                   "(key 0x%llx), so the positive below would prove nothing\n",
+                   ++t, (unsigned long long)gc_key);
+            fail = 1;
+        }
+
+        /* A5 — THE POSITIVE: object identity severs it. */
+        size_t objch = asmtest_objid_canonicalize(g_vt, nodes, nnodes, trans, ntrans);
+        uint64_t store_key = store ? store->addr : 0; /* recs[].addr rewritten in place */
+        uint64_t load_key = load ? load->addr : 0;
+        asmtest_defuse_t *og = asmtest_defuse_build(g_vt);
+        int obj_edge = (store && load && og) ? has_mem_edge(og, store_step, load_step, load_key) : 1;
+        int store_rekeyed = store && (store_key & ASMTEST_OBJID_NOOBJ) != 0;
+        int load_owned = load && have_live && load_key == nodes[live_owner].addr + live_off;
+        size_t og_n = og ? og->n : 0, og_reg = 0;
+        for (size_t i = 0; og && i < og->n; i++)
+            if (og->edges[i].loc.kind == AT_LOC_REG)
+                og_reg++;
+        if (!obj_edge && store_rekeyed && load_owned) {
+            printf("ok %d - THE POSITIVE: OBJECT identity SEVERS the false edge — the store re-keys "
+                   "0x%llx|NOOBJ (its object is dead, no node) while the load keys the live node's "
+                   "0x%llx, so no def-use edge exists (%zu record(s) re-keyed)\n",
+                   ++t, (unsigned long long)(store_key & ~ASMTEST_OBJID_NOOBJ),
+                   (unsigned long long)load_key, objch);
+        } else {
+            printf("not ok %d - object identity did NOT sever the edge: obj_edge=%d "
+                   "store_key=0x%llx (rekeyed=%d) load_key=0x%llx (owned=%d)\n",
+                   ++t, obj_edge, (unsigned long long)store_key, store_rekeyed,
+                   (unsigned long long)load_key, load_owned);
+            fail = 1;
+        }
+
+        /* A6 — no collateral damage: objid removed EXACTLY the false edge. Register edges (which no
+         * canon touches) are identical, and the object build has exactly one fewer edge. */
+        if (ag_reg == og_reg && gc_edge && !obj_edge && og_n + 1 == ag_n) {
+            printf("ok %d - no collateral damage: register edges identical (%zu) and objid removed "
+                   "EXACTLY one edge, the false alias (gcmove=%zu -> objid=%zu)\n",
+                   ++t, og_reg, ag_n, og_n);
+        } else {
+            printf("not ok %d - objid changed more than the false edge: reg %zu vs %zu, edges "
+                   "%zu vs %zu (gc_edge=%d obj_edge=%d)\n",
+                   ++t, ag_reg, og_reg, ag_n, og_n, gc_edge, obj_edge);
+            fail = 1;
+        }
+
+        printf("1..%d\n", t);
+        printf("GCCANON_SUMMARY rc=%d survived=%d steps=%zu moves=%u post_moves=%u composed=%u "
+               "post_composed=%u nodes=%zu gc_edge=%d obj_edge=%d fail=%d\n",
+               prc, survived, steps, nm, npost_now, cn, cpn, nnodes, gc_edge, obj_edge, fail);
+
+        asmtest_defuse_free(ag);
+        asmtest_defuse_free(og);
+        asmtest_valtrace_free(g_vt);
+        free(moves);
+        free(comp);
+        free(comp_post);
+        free(trans);
+        free(nodes);
+        free(addr_snap);
+        return fail ? 1 : 0;
+    }
 
     /* 1 — the feed is live and NOT vacuous. */
     if (nm > 0 && g_ch->gcs_traced > 0) {
@@ -1533,6 +1785,64 @@ int main(int argc, char **argv) {
     }
     free(sep);
 
+    /* 12 — increment 4 (T5) KNOWN-OBJECT CALIBRATION. The sentinel object survived to the snapshot
+     * (the victim keeps a ring of recent objects alive), so both the pre-move store and the post-move
+     * load resolve, via the objid inverse walk over the translation set, to the SAME snapshot node —
+     * the object's Int64[] node — at the same offset. This is object identity, measured, and also
+     * T4's permanent snapshot-space guard: flip the convention and this lookup fails loudly. */
+    if (nodes_file != NULL) {
+        for (size_t i = 0; i < g_vt->recs_len; i++) /* restore: check 6 mutated recs in place */
+            g_vt->recs[i].addr = addr_snap[i];
+        size_t os = 0, ol = 0;
+        uint64_t offs = 0, offl = 0;
+        int rs = store ? asmtest_objid_owner(nodes, nnodes, trans, ntrans, store_step,
+                                             store_addr_old, &os, &offs)
+                       : -1;
+        int rl = load ? asmtest_objid_owner(nodes, nnodes, trans, ntrans, load_step, load_addr_new,
+                                            &ol, &offl)
+                      : -1;
+        if (rs == 0 && rl == 0 && os == ol && offs == offl && nodes[os].type_id == int64_typeid) {
+            printf("ok %d - KNOWN-OBJECT CALIBRATION: the pre-move store (0x%llx@step%u) and the "
+                   "post-move load (0x%llx@step%u) both resolve, via the objid inverse walk over the "
+                   "translation set, to the SAME Int64[] snapshot node (idx=%zu addr=0x%llx "
+                   "off=0x%llx) — real object identity, and T4's permanent snapshot-space guard\n",
+                   ++t, (unsigned long long)store_addr_old, store_step,
+                   (unsigned long long)load_addr_new, load_step, os,
+                   (unsigned long long)nodes[os].addr, (unsigned long long)offs);
+        } else {
+            printf("not ok %d - known-object calibration failed: rs=%d rl=%d owner_s=%zu owner_l=%zu "
+                   "off_s=0x%llx off_l=0x%llx int64_match=%d (nodes=%zu) — the traced object was not "
+                   "found in the snapshot at the objid-located address\n",
+                   ++t, rs, rl, os, ol, (unsigned long long)offs, (unsigned long long)offl,
+                   (rs == 0 && nnodes ? (nodes[os].type_id == int64_typeid) : 0), nnodes);
+            fail = 1;
+        }
+    }
+
+    /* 13 — increment 4 (T5) PRESERVATION. objid canonicalization over a fresh restore keeps the TRUE
+     * store->load edge the address-identity positive (check 6) proved, now at the object-based key.
+     * Object identity REFINES address identity — it must not break a real edge. */
+    if (nodes_file != NULL) {
+        for (size_t i = 0; i < g_vt->recs_len; i++)
+            g_vt->recs[i].addr = addr_snap[i];
+        asmtest_objid_canonicalize(g_vt, nodes, nnodes, trans, ntrans);
+        uint64_t okey = load ? load->addr : 0; /* after objid: store & load share the object key */
+        asmtest_defuse_t *og = asmtest_defuse_build(g_vt);
+        int obj_edge = (store && load && og) ? has_mem_edge(og, store_step, load_step, okey) : 0;
+        if (obj_edge) {
+            printf("ok %d - PRESERVATION: the TRUE store->load def-use edge SURVIVES object-identity "
+                   "canonicalization, now keyed on the object (0x%llx) — objid REFINES address "
+                   "identity, it does not break the real edge the positive proved\n",
+                   ++t, (unsigned long long)okey);
+        } else {
+            printf("not ok %d - preservation failed: the true store->load edge did NOT survive objid "
+                   "(key 0x%llx)\n",
+                   ++t, (unsigned long long)okey);
+            fail = 1;
+        }
+        asmtest_defuse_free(og);
+    }
+
     printf("1..%d\n", t);
     printf("GCCANON_SUMMARY rc=%d survived=%d steps=%zu moves=%u composed=%u gcs_traced=%u "
            "gcs_in_window=%u collapsed_boundaries=%u remapped=%zu raw_edge=%d collapse_edge=%d "
@@ -1546,6 +1856,9 @@ int main(int argc, char **argv) {
     asmtest_valtrace_free(g_vt);
     free(moves);
     free(comp);
+    free(comp_post);
+    free(trans);
+    free(nodes);
     free(addr_snap);
     (void)sleep_ms;
     return fail ? 1 : 0;

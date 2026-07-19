@@ -3191,7 +3191,7 @@ GCCANON_SHM_FILE       := /dev/shm/asmtest_gccanon_attach
 # `2` and `3` are increment 2's, provoking the collapse with an object that really is moved that many
 # times inside one window. Increment 2's PURE proof (the composition against the shipping transform,
 # on randomized N-GC feeds) runs first as `--selftest`, needing no dotnet at all.
-GCCANON_PHASES         ?= 1 2 3
+GCCANON_PHASES         ?= 1 2 3 alias
 # PARSE-time tool gate, like `attachprof-probe` / `gcfence-probe` and NOT like the DR lanes:
 # `command -v X || { echo SKIP; exit 0; }` written as a recipe LINE only exits that one line's shell,
 # so make cheerfully runs the next line; that idiom is only sound behind an `ifndef DR_AVAILABLE`
@@ -3240,15 +3240,22 @@ else
 	 $(DOTNET) build -c Release examples/gccanon_attach/attacher/attacher.csproj -o $(BUILD)/gccanon_attacher_out \
 	    >$(BUILD)/gccanon_attacher_build.log 2>&1 || { echo "== gccanon-attach =="; echo "# SKIP: could not build the attacher (Microsoft.Diagnostics.NETCore.Client restore failed — no network?):"; tail -8 $(BUILD)/gccanon_attacher_build.log | sed 's/^/#   /'; echo "1..0 # skipped"; touch $(BUILD)/.gccanon_skip; }
 	@[ -f $(BUILD)/.gccanon_skip ] && exit 0; \
+	 rm -rf $(BUILD)/gccanon_dumper_out; \
+	 $(DOTNET) build -c Release examples/gccanon_attach/dumper/dumper.csproj -o $(BUILD)/gccanon_dumper_out \
+	    >$(BUILD)/gccanon_dumper_build.log 2>&1 || { echo "== gccanon-attach =="; echo "# SKIP: could not build the dumper (Microsoft.Diagnostics.Tracing.TraceEvent / NETCore.Client restore failed — no network?):"; tail -8 $(BUILD)/gccanon_dumper_build.log | sed 's/^/#   /'; echo "1..0 # skipped"; touch $(BUILD)/.gccanon_skip; }
+	@[ -f $(BUILD)/.gccanon_skip ] && exit 0; \
 	 run_phase() { \
-	   gcs=$$1; \
-	   vlog=$(BUILD)/gccanon_victim_$$gcs.log; alog=$(BUILD)/gccanon_attacher_$$gcs.log; tlog=$(BUILD)/gccanon_tracer_$$gcs.log; \
-	   rm -f $$vlog $$alog $$tlog $(GCCANON_SHM_FILE); \
+	   ph=$$1; \
+	   if [ "$$ph" = alias ]; then method=RegionAlias; gcs=1; aenv=GCCANON_ALIAS_FIXTURE=1; targ=alias; \
+	   else method='$(GCCANON_METHOD)'; gcs=$$ph; aenv=GCCANON_ALIAS_FIXTURE=0; targ=$$ph; fi; \
+	   vlog=$(BUILD)/gccanon_victim_$$ph.log; alog=$(BUILD)/gccanon_attacher_$$ph.log; tlog=$(BUILD)/gccanon_tracer_$$ph.log; \
+	   nodesfile=$(abspath $(BUILD))/gccanon_nodes_$$ph.txt; \
+	   rm -f $$vlog $$alog $$tlog $$nodesfile $(GCCANON_SHM_FILE); \
 	   echo ""; \
-	   echo "# ======== PHASE: $$gcs compacting GC(s) per call-out window ========"; \
+	   echo "# ======== PHASE: $$ph ($$method, $$gcs GC(s) per window) ========"; \
 	   env -u CORECLR_ENABLE_PROFILING -u CORECLR_PROFILER -u CORECLR_PROFILER_PATH \
 	       DOTNET_PerfMapEnabled=1 DOTNET_TieredCompilation=0 DOTNET_EnableWriteXorExecute=0 \
-	       GCCANON_VICTIM_SECONDS=$(GCCANON_VICTIM_SECONDS) GCCANON_GCS_PER_WINDOW=$$gcs \
+	       GCCANON_VICTIM_SECONDS=$(GCCANON_VICTIM_SECONDS) GCCANON_GCS_PER_WINDOW=$$gcs $$aenv \
 	       $(DOTNET) $(abspath $(BUILD)/gccanon_victim_out/gccanon_victim.dll) >$$vlog 2>&1 & lpid=$$!; \
 	   vpid=""; wtid=""; \
 	   for t in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do \
@@ -3271,12 +3278,25 @@ else
 	     ready=$$(grep -c 'GCCANON_VICTIM_READY' $$vlog 2>/dev/null || true); [ -z "$$ready" ] && ready=0; \
 	     [ "$$ready" -ge 1 ] && break; sleep 1; \
 	   done; \
-	   $(BUILD)/gccanon_tracer $$vpid $$wtid '$(GCCANON_METHOD)' 60 $$gcs >$$tlog 2>&1; trc=$$?; \
+	   if [ "$$ph" = alias ]; then \
+	     $(BUILD)/gccanon_tracer $$vpid $$wtid "$$method" 60 $$targ $$nodesfile >$$tlog 2>&1 & tpid=$$!; \
+	     for t in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do \
+	       grep -q GCCANON_TRACER_WAIT_NODES $$tlog 2>/dev/null && break; \
+	       kill -0 $$tpid 2>/dev/null || break; sleep 1; \
+	     done; \
+	     echo "# --- the heap-snapshot dumper (T3), forced against the still-live victim (objid join) ---"; \
+	     $(DOTNET) $(abspath $(BUILD)/gccanon_dumper_out/gccanon_dumper.dll) $$vpid $$nodesfile 60 >$(BUILD)/gccanon_dumper_$$ph.log 2>&1 || true; \
+	     grep -E 'GCCANON_DUMP' $(BUILD)/gccanon_dumper_$$ph.log | head -2 | sed 's/^/#   /'; \
+	     wait $$tpid; trc=$$?; \
+	   else \
+	     $(BUILD)/gccanon_tracer $$vpid $$wtid "$$method" 60 $$targ >$$tlog 2>&1; trc=$$?; \
+	   fi; \
 	   kill $$lpid 2>/dev/null; wait $$lpid 2>/dev/null; vrc=$$?; \
 	   echo "# --- the victim's OWN ground truth (pin/unpin either side of the traced invocation, and"; \
 	   echo "#     the object's address after EACH of the window's GCs — the chain, from the victim) ---"; \
 	   grep -E 'GCCANON_VICTIM_ROUND' $$vlog | head -4 | sed 's/^/#   /'; \
 	   grep -E 'GCCANON_VICTIM_WINDOW' $$vlog | head -4 | sed 's/^/#   /'; \
+	   grep -E 'GCCANON_VICTIM_ALIAS' $$vlog | head -3 | sed 's/^/#   /'; \
 	   grep -E '^GCCANONPROF: (InitializeForAttach|ProfilerAttachComplete|GC seq)' $$vlog | head -8 | sed 's/^/#   /'; \
 	   echo "# --- the tracer ---"; \
 	   cat $$tlog; \
@@ -3285,7 +3305,7 @@ else
 	   moved=$$(grep -c 'GCCANON_VICTIM_ROUND.*moved=1' $$vlog 2>/dev/null || true); [ -z "$$moved" ] && moved=0; \
 	   allmoved=$$(grep -c "GCCANON_VICTIM_WINDOW.*real_moves=$$gcs/$$gcs" $$vlog 2>/dev/null || true); [ -z "$$allmoved" ] && allmoved=0; \
 	   echo "# VICTIM: rounds=$$rounds (of which the object RELOCATED on $$moved; $$allmoved window(s) moved it on ALL $$gcs GCs) crash=$$crash attacher_rc=$$arc tracer_rc=$$trc"; \
-	   rm -f $(GCCANON_SHM_FILE); \
+	   rm -f $(GCCANON_SHM_FILE) $$nodesfile; \
 	   [ "$$trc" -eq 0 ] && [ "$$crash" -eq 0 ]; \
 	 }; \
 	 rc=0; \
@@ -3296,15 +3316,17 @@ endif
 
 # The tracer links the SHIPPING tier, not a copy of it: the scoped ptrace L0 producer
 # (dataflow_ptrace.o) + its operand enumerator (dataflow_operands.o, Capstone) + the pure L0/L1/L2
-# analysis (dataflow.o) + the pure GC-move transform under test (dataflow_gcmove.o) + the versioned
-# decode byte source the producer calls (codeimage.o).
+# analysis (dataflow.o) + the pure GC-move transform under test (dataflow_gcmove.o) + the pure
+# object-identity transform (dataflow_objid.o, increment 4 / T5) + the versioned decode byte source
+# the producer calls (codeimage.o).
 $(BUILD)/gccanon_tracer.o: examples/gccanon_attach/gccanon_tracer.c \
                            examples/gccanon_attach/gccanon_shm.h \
                            include/asmtest_valtrace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -Iexamples/gccanon_attach -c $< -o $@
 
 $(BUILD)/gccanon_tracer: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
-                         $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o \
+                         $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_objid.o \
+                         $(BUILD)/dataflow_method.o \
                          $(BUILD)/codeimage.o $(BUILD)/dataflow_ptrace.o \
                          $(BUILD)/gccanon_tracer.o
 	$(CC) $(CFLAGS) $^ $(CAPSTONE_LIBS) $(LINK_LIBBPF) -lpthread -lrt -o $@

@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Runtime;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -64,6 +66,20 @@ static class GcCanonVictim
     // a DIFFERENT address. It is passed in as a parameter (never a JIT constant).
     public const long Sentinel = 0x5EEDCAFE12345678L;
 
+    // Increment 4 (T5) ALIAS FIXTURE (GCCANON_ALIAS_FIXTURE=1). Sentinel2 is STORED into the object
+    // about to die (doomed); Sentinel3 is pre-seeded into the object slid onto its slot (live) and
+    // LOADED back. Distinct 8-byte values so the tracer finds the two records unambiguously — kept in
+    // step with gccanon_tracer.c GCCANON_SENTINEL2/3.
+    public const long Sentinel2 = 0x2EED000212340002L;
+    public const long Sentinel3 = 0x3EED000312340003L;
+    // doomed/live are LARGE arrays (> 85000 bytes) so they live on the Large Object Heap. .NET 8's
+    // region GC relocates ordinary survivors into destination regions — it will NOT slide `live` onto
+    // `doomed`'s vacated slot (measured) — but the LOH never moves objects and frees to a FREE LIST,
+    // so a same-size LOH allocation after doomed dies reuses doomed's EXACT block and lands back at X.
+    const int AliasLen = 16384; // 128 KiB
+
+
+
     // The seeded, GC-movable object. A static root, so a gen2 collection never reclaims it — it must
     // SURVIVE and MOVE. long[] deliberately: a primitive element store needs no write barrier, so
     // the region stays a clean store/call/load with no helper call before the one we want.
@@ -71,6 +87,24 @@ static class GcCanonVictim
     static long[] s_warm;
     static object[] s_fill;        // fragmentation: survivors interleaved with dropped garbage
     static object[] s_keep;
+    // Keep the most recent traced objects alive so the one the tracer captured is still in the heap
+    // when the T3 dumper snapshots it (post-detach). Power-of-two ring; ~128 rounds >> the dump time.
+    static readonly object[] s_alive = new object[128];
+    static int s_aliveIdx;
+
+    // Increment 4 (T5) alias fixture. `doomed` receives the store then dies; `live` is slid onto its
+    // vacated slot and holds the load value. See RegionAlias / AliasSetup.
+    static long[] s_doomed;
+    static long[] s_live;
+    static int s_alias;            // 1 => GCCANON_ALIAS_FIXTURE mode
+    static long s_aliasX;          // &doomed[0] BEFORE the window == &live[0] AFTER it (the alias X)
+    static long s_aliasLiveNew;    // &live[0] AFTER the window (must equal s_aliasX)
+    // Every round's `live` is KEPT (never reused): the traced round's live must still be at its own,
+    // never-reused slot X when the post-detach dumper snapshots the heap, so the objid join can
+    // resolve the load to it and there is no later slide onto X to confuse the inverse walk. Capped,
+    // then the driver idles — the tracer captures an early round, long before the cap.
+    static readonly List<long[]> s_aliasLives = new List<long[]>();
+    const int AliasCap = 300;
 
     static volatile int s_armed;   // 1 once the driver/worker handshake is live
     static volatile int s_ready;   // driver: fragmentation prepared, worker may enter the region
@@ -101,6 +135,28 @@ static class GcCanonVictim
         Volatile.Write(ref obj[0], v);          // STORE — at the object's OLD address
         long p = Park();                        // call-out — the compacting GC relocates obj HERE
         return Volatile.Read(ref obj[0]) + p;   // LOAD — at the object's NEW address
+    }
+
+    // Increment 4 (T5) THE ALIAS REGION. The store and the load hit the SAME address X but belong to
+    // DIFFERENT objects: `doomed` receives the store at X and then dies inside the call-out; a fresh
+    // object is allocated onto X (s_live) and the load reads it there. Address identity keys both on X
+    // and forges a false def-use edge; OBJECT identity re-keys the store out of the object space (its
+    // object is dead, no node) while the load keys the live object's node, and the edge is gone.
+    //
+    // .NET 8 is REGION-based: a compacting gen2 GC relocates a survivor into a destination region, it
+    // does NOT slide it onto a specific vacated slot — so "live slides onto doomed's slot" (segment
+    // thinking) does not happen. What IS reliable is gen0 slot reuse: after doomed (the first gen0
+    // object, at X) dies and a gen0 GC resets the region's bump pointer, the very next gen0 allocation
+    // lands back at X. The driver does exactly that DURING Park() and publishes it as s_live.
+    //
+    // `doomed`'s LAST use is the store, so with precise (non-tiered) GC info its argument reference is
+    // dead across Park(), and the driver also nulls the doomed static — so the gen0 GC frees it.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static long RegionAlias(long[] doomed, long v)
+    {
+        Volatile.Write(ref doomed[0], v);        // STORE at X — into the object about to die
+        long p = Park();                         // doomed dies; the driver allocates s_live back at X
+        return Volatile.Read(ref s_live[0]) + p; // LOAD at X — a DIFFERENT object (reused slot)
     }
 
     // The call-out. Runs at native speed under the tracer's step-over, and blocks in Thread.Sleep —
@@ -238,6 +294,7 @@ static class GcCanonVictim
             // and only ever while s_ready == 0, but the traced invocation must provably be about
             // the same object the addresses either side of it describe.
             long[] obj = s_obj;
+            s_alive[s_aliveIdx++ & (s_alive.Length - 1)] = obj; // survive to the post-detach snapshot
             IntPtr before = DataAddr(obj);
             s_sink = Region(obj, Sentinel);         // <-- the traced invocation
             IntPtr after = DataAddr(obj);
@@ -255,6 +312,92 @@ static class GcCanonVictim
         Console.Out.Flush();
     }
 
+    // ---- THE ALIAS FIXTURE (increment 4 / T5) --------------------------------------------------
+    // Set up one round: empty the ephemeral generations so `doomed` is the FIRST gen0 object, at the
+    // gen0 region start — a slot X the driver's window GC will hand straight back to `live`.
+    static void AliasSetup()
+    {
+        // doomed and live are BOTH on the LOH, allocated FRESH on TOP of the accumulated (packed,
+        // hole-free) survivors — so this round's only LOH hole, after doomed dies, is doomed's, and
+        // the one-shot LOH COMPACTION in the window slides `live` straight down onto it (X). An LOH
+        // slide IS reported by MovedReferences2 (live: old -> X), the move the objid join needs to
+        // tell doomed@X (store) from live@X (load) apart. Crucially `live` is KEPT (never reused): the
+        // older lives packed below cannot slide, so each round's live stays at its own X forever, and
+        // the traced round's live is still there — at a never-reused X — when the dumper snapshots.
+        var doomed = new long[AliasLen];     // LOH, on top
+        var live = new long[AliasLen];       // LOH, above doomed
+        live[0] = Sentinel3;
+        s_aliasLives.Add(live);              // KEEP it — the traced live must reach the snapshot
+        s_aliasX = (long)DataAddr(doomed);   // X — doomed's LOH data address
+        s_live = live;
+        s_doomed = doomed;                   // published LAST, so the worker never sees a stale pair
+    }
+
+    static void AliasDriver()
+    {
+        Console.WriteLine("GCCANON_VICTIM_DRIVER tid=" + gettid() + " alias=1");
+        Console.Out.Flush();
+        while (!s_stop)
+        {
+            if (s_armed == 0) { Thread.Sleep(2); continue; }
+            if (s_aliasLives.Count >= AliasCap) { s_ready = 0; Thread.Sleep(50); continue; } // cap; then idle, keeping all lives alive
+            AliasSetup();
+            s_aliasLiveNew = 0;
+            s_gcDone = 0;
+            s_ready = 1;
+            for (int i = 0; i < 20000 && s_inPark == 0 && !s_stop; i++) Thread.Sleep(1);
+            if (s_stop) break;
+            if (s_inPark == 0) { s_ready = 0; continue; }
+            // THE WINDOW. The worker is parked past the store, with `doomed` dead (precise liveness).
+            // Null the doomed static so its only other reference is that dead param, then a one-shot
+            // LOH-COMPACTING gen2 GC: doomed's LOH block becomes the single hole and `live` slides down
+            // onto it -> &live[0] == X. The slide is a real relocation, so MovedReferences2 stamps it
+            // into the feed (live: old -> X) for the objid join.
+            s_doomed = null;
+            GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+            GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+            s_aliasLiveNew = (long)DataAddr(s_live);   // live's new address — must equal X
+            s_gcDone = 1;
+            s_ready = 0;
+            for (int i = 0; i < 5000 && s_inPark == 1 && !s_stop; i++) Thread.Sleep(1);
+            int ok = (s_aliasX != 0 && s_aliasLiveNew == s_aliasX) ? 1 : 0;
+            Console.WriteLine("GCCANON_VICTIM_ALIAS ok=" + ok + " x=0x" + s_aliasX.ToString("x") +
+                              " live_new=0x" + s_aliasLiveNew.ToString("x"));
+            Console.Out.Flush();
+        }
+    }
+
+    static void AliasWorker()
+    {
+        int tid = gettid();
+        if (s_live == null) s_live = new long[8];   // null-safety for the warm-up / pre-window load
+        // Warm up RegionAlias at its stable (non-tiered) address so it is in the perf map before the
+        // tracer attaches. s_armed is 0, so Park returns immediately and no choreography runs.
+        s_sink = RegionAlias(new long[8], 1);
+        Console.WriteLine("GCCANON_VICTIM_WORKER tid=" + tid + " warm=" + s_sink);
+        Console.Out.Flush();
+
+        while (!s_stop)
+        {
+            if (s_armed == 0 || s_ready == 0) { Thread.Sleep(1); continue; }
+            // Pass s_doomed DIRECTLY into the call: no worker-frame local keeps `doomed` alive across
+            // Park(), so its only references during the window are RegionAlias's own param (dead after
+            // the store) and the static the driver nulls once we are parked.
+            s_sink = RegionAlias(s_doomed, Sentinel2);   // <-- the traced invocation
+            long n = Interlocked.Increment(ref s_rounds);
+            if (s_aliasLiveNew == s_aliasX) Interlocked.Increment(ref s_moved);
+            // Mirror the numeric fixture's per-round line so the lane's rounds/moved counting works;
+            // the definitive alias report is GCCANON_VICTIM_ALIAS from the driver.
+            Console.WriteLine("GCCANON_VICTIM_ROUND n=" + n + " moved=" +
+                              (s_aliasLiveNew == s_aliasX ? 1 : 0) + " old=0x" + s_aliasX.ToString("x") +
+                              " new=0x" + s_aliasLiveNew.ToString("x") + " val=0x" + s_sink.ToString("x"));
+            Console.Out.Flush();
+            Thread.Sleep(20);
+        }
+        Console.WriteLine("GCCANON_VICTIM_WORKER_END rounds=" + s_rounds + " moved=" + s_moved);
+        Console.Out.Flush();
+    }
+
     static void Main()
     {
         int seconds = Env("GCCANON_VICTIM_SECONDS", 90);
@@ -263,8 +406,9 @@ static class GcCanonVictim
         s_gcsPerWindow = Env("GCCANON_GCS_PER_WINDOW", 1);
         if (s_gcsPerWindow > 3) s_gcsPerWindow = 3;   // DropWave's bucket scheme: 1 survivor + 3 waves
         s_chain = new long[s_gcsPerWindow + 1];
+        s_alias = Env("GCCANON_ALIAS_FIXTURE", 0);    // increment 4 / T5: the store/load-alias fixture
         Console.WriteLine("GCCANON_VICTIM_START pid=" + Environment.ProcessId + " seconds=" + seconds +
-                          " gcs_per_window=" + s_gcsPerWindow);
+                          " gcs_per_window=" + s_gcsPerWindow + " alias=" + s_alias);
         Console.Out.Flush();
 
         s_fill = new object[60000];
@@ -276,8 +420,10 @@ static class GcCanonVictim
         s_obj = new long[8];
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
 
-        var w = new Thread(Worker, 1 << 20) { Name = "gccanon_region", IsBackground = false };
-        var d = new Thread(Driver, 1 << 20) { Name = "gccanon_gcdriver", IsBackground = true };
+        ThreadStart workerBody = s_alias != 0 ? AliasWorker : Worker;
+        ThreadStart driverBody = s_alias != 0 ? AliasDriver : Driver;
+        var w = new Thread(workerBody, 1 << 20) { Name = "gccanon_region", IsBackground = false };
+        var d = new Thread(driverBody, 1 << 20) { Name = "gccanon_gcdriver", IsBackground = true };
         w.Start();
         d.Start();
 

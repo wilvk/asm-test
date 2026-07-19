@@ -17,6 +17,12 @@
 # choreographing that many compacting GCs into ONE call-out window: the collapse is REPRODUCED as a
 # failing case (the edge is still missing) and then fixed by CHAINING the window's moves.
 #
+# Increment 4 (T5) adds real OBJECT identity: an `alias` phase whose victim reproduces a store into a
+# doomed LOH object at X and a load from a DIFFERENT object slid onto X, and a heap-snapshot dumper
+# (EventPipe GCBulkNode/Edge/BulkType, dotnet-sdk covers it) whose node table the tracer joins with
+# the MovedReferences2 feed. Address identity forges the false store->load edge; object identity
+# (asmtest_objid_canonicalize) re-keys the dead store out of the object space and severs it.
+#
 # Deliberately NO DynamoRIO: this is the out-of-band ptrace tier. The image is the .NET SDK + a
 # C/C++ toolchain + git (the pinned CoreCLR profiler headers cor.h/corprof.h + the PAL from
 # dotnet/runtime, shared with the gcprofiler/attachprof/gcfence probes) + Capstone (the scoped
