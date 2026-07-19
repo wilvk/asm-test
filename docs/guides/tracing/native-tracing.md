@@ -1070,6 +1070,73 @@ cross-tier invariants.
 
 ---
 
+## Data-flow value tier (out of band): PT + code-image + Unicorn replay
+
+Everything above records **which instructions ran** (ordered offsets + basic blocks).
+The **data-flow** layer records **how data moved**: a per-step *value trace* (L0), a
+last-writer *def-use graph* (L1), and forward/backward *slices* (L2). Every producer
+fills the same `asmtest_valtrace_t`, so the L1/L2 analysis is written once and shared —
+the emulator (Unicorn L0), the scoped single-step/block-step producers, and this tier
+are interchangeable *value backends* the same way the trace backends above are.
+
+**F5 is the least-perturbing value producer — the out-of-band ceiling.** Where the
+block-step tier still stops the target once per taken branch, F5 takes **zero** stops:
+it reconstructs the executed instruction stream from an **Intel PT** trace (captured
+with no single-step), supplies the bytes that were live at trace time from the
+[time-aware code-image recorder](#time-aware-code-image-recorder-the-foreign-jit-byte-source),
+and **replays that exact path through Unicorn** to derive per-instruction values. The
+result fills the same `asmtest_valtrace_t`, so def-use and slice run over it unchanged.
+
+The honest boundary, stated up front: **PT gives control flow and bytes, never values.**
+All values come from the replay, so a region that consumes an **unrecorded input** — a
+syscall result, a concurrent sibling write, any nondeterminism — cannot be reconstructed
+from PT alone and is **truncated honestly**, never guessed. Unlike block-step, F5 has
+**no single-step fallback** (it is fully out of band): a region it cannot faithfully
+replay is truncated, not stepped. Two gates fire *before* any replay, reusing the
+block-step tier's own mutation-proven verdicts (no second scanner):
+
+- **impure** (a `syscall`/`rdtsc`/`cpuid`/… whose retired value PT never carries) — the
+  emulator would fabricate one, so the region is declined with that mnemonic as the reason;
+- **non-replayable** (any VEX/EVEX encoding) — no released Unicorn executes AVX, and
+  VEX-128 mis-executes *silently* (`UC_ERR_OK`, wrong answer), so this is a **correctness**
+  gate. The region is truncated with reason `vex/evex`.
+
+A `truncated == false` where a real divergence occurred would be a correctness
+regression, not an acceptable degradation: the per-step **path cross-check** compares each
+replayed offset against the decoded PT path and truncates on the first mismatch (which is
+also how a nondeterministic branch is detected).
+
+### What is validated, and what is silicon-gated
+
+The **decode → rebase → materialize → replay bridge is validated in CI with no PT
+hardware.** A synthetic PT AUX stream is built by libipt's own userspace packet encoder
+(`asmtest_pt_encode_fixture`) for the canonical routine, and the tier decodes, rebases,
+materializes the region bytes from a self code-image, and replays it — asserting the value
+trace is **byte-identical to the emulator oracle** and that def-use/slice **equal** the
+oracle's (F5 is a drop-in L0). Run it:
+
+```sh
+make dataflow-pt-test        # native lane (needs libunicorn; libipt where present)
+make docker-dataflow-pt      # the libipt + Unicorn image — the full synthetic bridge
+```
+
+**Live foreign-pid capture is hardware-gated and wiring-complete but hardware-unvalidated.**
+It needs bare-metal Intel PT silicon (the `intel_pt` PMU with `perf_event_paranoid < 0` or
+`CAP_PERFMON`) — absent on AMD hosts, in VMs, in Docker, and on hosted CI runners — **and**
+the sibling foreign-pid PT capture arm (this tier opens no perf event of its own; it
+consumes a captured AUX blob plus a code-image). Where PT is absent the live case self-skips
+with a specific reason; a runner that *claims* PT converts that skip into a failure with
+
+```sh
+make dataflow-pt-live        # ASMTEST_REQUIRE_PT=1: fail-not-skip on a silently-hidden PMU
+```
+
+so a supposed-PT box cannot pass vacuously. Full design, gates, and the exact bare-metal
+proving command are in
+[the F5 implementation doc](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/dataflow-pt-replay-tier.md).
+
+---
+
 ## Language runtimes
 
 In-process DynamoRIO attach is robust for a plain native process; the difficulty

@@ -8,6 +8,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Data-flow F5: an out-of-band PT + code-image + Unicorn-replay value
+  producer** (`make dataflow-pt-test` / `make docker-dataflow-pt`). The
+  least-perturbing L0 value tier: it reconstructs an Intel PT trace's executed
+  instruction stream (captured with **zero** single-steps), supplies the bytes
+  live at trace time from the code-image recorder, and **replays that exact path
+  through Unicorn** to derive per-instruction values into the same
+  `asmtest_valtrace_t` the shared def-use (L1) and slice (L2) analysis consume —
+  byte-identical to the emulator L0 oracle on a deterministic region.
+  `src/dataflow_pt.c` opens **no** perf event (it consumes a captured AUX blob +
+  code-image); it reuses the block-step tier's purity/replayability verdicts and
+  **truncates honestly** on an impure, VEX/EVEX, or nondeterministic region (no
+  single-step fallback), a per-step path cross-check catching a divergence. The
+  synthetic-AUX **decode→rebase→materialize→replay bridge is validated in CI with
+  no PT hardware** (libipt's own encoder, `libipt-dev` added to
+  `Dockerfile.dataflow-attach`); **live foreign-pid capture is silicon-gated**
+  (bare-metal Intel PT + the `intel-pt-attach-foreign-pid` capture arm) —
+  wiring-complete, hardware-unvalidated, with a `make dataflow-pt-live`
+  fail-not-skip target for a runner that claims PT. Documented in
+  [the native-tracing guide](https://github.com/wilvk/asm-test/blob/main/docs/guides/tracing/native-tracing.md)
+  and
+  [the F5 implementation doc](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/dataflow-pt-replay-tier.md).
 - **libFuzzer / AFL++ external-engine fuzzing shim (`make docker-fuzz`).** Drive
   an x86-64 guest routine under the emulator with an industrial fuzzer, feeding
   the emulator's basic-block coverage into the engine's feedback channel without

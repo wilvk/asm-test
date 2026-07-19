@@ -636,7 +636,7 @@ control, re-validated for the live data path).
 
 ---
 
-## F5 — PT + code-image + replay: the least-perturbing ceiling *(planned — Intel-PT-gated)*
+## F5 — PT + code-image + replay: the least-perturbing ceiling *(**decode→replay bridge LANDED + CI-validated 2026-07-19**; live capture **wiring-complete, hardware-unvalidated** — Intel-PT-gated)*
 
 The conceptual minimum-perturbation path from the design doc ("stop instrumenting and start
 observing"): reconstruct the **exact executed instruction stream** out of band via Intel PT /
@@ -652,6 +652,31 @@ oracle on a deterministic region; off PT hardware (most cloud/CI) it self-skips 
 the boundary the analysis doc is explicit about: PT gives control flow + bytes, **never
 values** — the values come entirely from the replay, so F5 inherits F1/F2's OS-interaction
 tiering.
+
+> **STATUS 2026-07-19 (actioned as
+> [dataflow-pt-replay-tier.md](../implementations/dataflow-pt-replay-tier.md)).** The
+> decode→rebase→materialize→replay **bridge is LANDED and CI-validated with no PT
+> hardware**: `src/dataflow_pt.c` (`asmtest_dataflow_pt_replay_path` +
+> `asmtest_dataflow_pt_replay`) fills the shared `asmtest_valtrace_t` **byte-identically to
+> the emulator L0 oracle** on the canonical ROUTINE, and its def-use (L1) + backward slice
+> (L2) **equal** the oracle's — F5 is a drop-in L0 producer. It opens **no** perf event
+> (position 9): it consumes a captured AUX blob + a code-image, driven in CI by the
+> **synthetic** `asmtest_pt_encode_fixture` (libipt's own encoder). It inherits F1/F2's
+> purity/replayability verdicts and **truncates honestly** on an impure / VEX-EVEX /
+> nondeterministic region (no single-step fallback), a per-step path cross-check catching
+> a divergence. Lanes: `make dataflow-pt-test` (native, Unicorn) + `make docker-dataflow-pt`
+> (the libipt+Unicorn image; `libipt-dev` added to `Dockerfile.dataflow-attach`).
+>
+> **The LIVE foreign-pid half (T4) is wiring-complete but hardware-unvalidated**, gated on
+> **two** un-installable prerequisites: (1) bare-metal Intel PT silicon (the `intel_pt` PMU
+> with `perf_event_paranoid < 0` / `CAP_PERFMON`), and (2) the sibling
+> [intel-pt-attach-foreign-pid.md](../implementations/intel-pt-attach-foreign-pid.md) capture
+> arm (its foreign-pid AUX capture + paired live code-image, whose entry symbol is not in the
+> tree yet). Until a bare-metal Intel box runs the oracle match, this status stays
+> **wiring-complete, not validated** (verify-before-declaring-done); the fail-not-skip target
+> is `make dataflow-pt-live` (`ASMTEST_REQUIRE_PT=1`), which reddens a supposed-PT box whose
+> PMU is silently hidden. Proving command on silicon:
+> `make dataflow-pt-live` (or `ASMTEST_REQUIRE_PT=1 make dataflow-pt-test`) on the Intel-PT runner.
 
 ---
 
