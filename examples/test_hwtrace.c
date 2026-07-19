@@ -7698,6 +7698,110 @@ static void test_ptrace_versioned(void) {
 #endif
 }
 
+#if defined(__linux__) && defined(__aarch64__)
+/* T2 (SS-A64-STREAM): does GitHub's arm64 runner's hypervisor actually DELIVER an
+ * NT_ARM_HW_BREAK debug exception? The seam ships (src/ptrace_backend.c set_hw_bp), but
+ * whether the breakpoint FIRES under Azure's Cobalt-100 hypervisor was publicly
+ * undetermined — adjacent facts cut both ways (the PMU is withheld, yet the debug
+ * registers are separate silicon). This arm-and-fire probe settles it decisively at
+ * runtime instead of hard-coding a guess: it forks a throwaway tracee, arms slot 0 at a
+ * known target with the exact control word the backend ships, PTRACE_CONTs, and
+ * classifies FIRES / NO_SLOTS / ARMED_SILENT. Every wait is WNOHANG + deadline
+ * (hang-proof, mirroring probe_singlestep). The control word and slot-count read are
+ * re-derived here rather than exported, the way examples/watchpoint_spike.c re-derives
+ * x86 DR7 — a new public asmtest_ptrace_* symbol would ripple through the 51-symbol ×
+ * 10-binding parity gate for a test-only need. */
+#include <asm/ptrace.h> /* struct user_hwdebug_state */
+#include <elf.h>        /* NT_PRSTATUS, NT_ARM_HW_BREAK */
+#include <sys/uio.h>    /* struct iovec */
+#include <sys/user.h>   /* struct user_regs_struct */
+
+enum { A64_HWBP_FIRES, A64_HWBP_NO_SLOTS, A64_HWBP_ARMED_SILENT };
+
+/* The breakpoint target: a tiny leaf the probe child calls once. noinline + a volatile
+ * use at the call site keep it un-elided so its address is real; the child traps at its
+ * entry and never lets it complete. */
+__attribute__((noinline)) static long a64_hwbp_target(long x) { return x + 1; }
+
+static int probe_arm64_hwbp(void) {
+    pid_t pid = fork();
+    if (pid < 0)
+        return A64_HWBP_NO_SLOTS; /* can't prove firing -> conservative skip */
+    if (pid == 0) {
+        ptrace(PTRACE_TRACEME, 0, NULL, NULL);
+        raise(SIGSTOP);
+        volatile long r = a64_hwbp_target(41);
+        (void)r;
+        _exit(0);
+    }
+    int st, got = 0, result = A64_HWBP_ARMED_SILENT;
+    for (int i = 0; i < 200;
+         i++) { /* await the initial SIGSTOP stop, hang-proof */
+        pid_t w = waitpid(pid, &st, WNOHANG);
+        if (w == pid && WIFSTOPPED(st)) {
+            got = 1;
+            break;
+        }
+        if (w < 0)
+            break;
+        struct timespec ts = {0, 1000000};
+        nanosleep(&ts, NULL);
+    }
+    if (!got) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &st, 0);
+        return A64_HWBP_NO_SLOTS;
+    }
+    struct user_hwdebug_state dbg;
+    memset(&dbg, 0, sizeof dbg);
+    struct iovec iov = {&dbg, sizeof dbg};
+    if (ptrace(PTRACE_GETREGSET, pid, (void *)(uintptr_t)NT_ARM_HW_BREAK,
+               &iov) != 0 ||
+        (dbg.dbg_info & 0xffu) == 0) {
+        kill(
+            pid,
+            SIGKILL); /* qemu-user's case, and one of the two hypervisor outcomes */
+        waitpid(pid, &st, 0);
+        return A64_HWBP_NO_SLOTS;
+    }
+    /* Arm slot 0 with the exact control word src/ptrace_backend.c ships: E=1,
+     * PMC=0b10 (match at EL0/user), BAS=0b1111 (all four instruction bytes) = 0x1e5. */
+    dbg.dbg_regs[0].addr = (uint64_t)(uintptr_t)&a64_hwbp_target;
+    dbg.dbg_regs[0].ctrl = 0x1e5u;
+    iov.iov_len = sizeof dbg;
+    if (ptrace(PTRACE_SETREGSET, pid, (void *)(uintptr_t)NT_ARM_HW_BREAK,
+               &iov) != 0 ||
+        ptrace(PTRACE_CONT, pid, NULL, NULL) != 0) {
+        kill(pid, SIGKILL);
+        waitpid(pid, &st, 0);
+        return A64_HWBP_ARMED_SILENT;
+    }
+    for (int i = 0; i < 500;
+         i++) { /* await a debug SIGTRAP at the target, hang-proof */
+        pid_t w = waitpid(pid, &st, WNOHANG);
+        if (w == pid) {
+            if (WIFSTOPPED(st) && WSTOPSIG(st) == SIGTRAP) {
+                struct user_regs_struct regs;
+                memset(&regs, 0, sizeof regs);
+                struct iovec riov = {&regs, sizeof regs};
+                if (ptrace(PTRACE_GETREGSET, pid,
+                           (void *)(uintptr_t)NT_PRSTATUS, &riov) == 0 &&
+                    (uint64_t)regs.pc == (uint64_t)(uintptr_t)&a64_hwbp_target)
+                    result = A64_HWBP_FIRES;
+            }
+            break; /* any other stop, or a clean exit: the breakpoint never fired */
+        }
+        if (w < 0)
+            break;
+        struct timespec ts = {0, 1000000};
+        nanosleep(&ts, NULL);
+    }
+    kill(pid, SIGKILL);
+    waitpid(pid, &st, 0);
+    return result;
+}
+#endif /* __linux__ && __aarch64__ — T2 NT_ARM_HW_BREAK arm-and-fire probe */
+
 /* CALL-DEPTH AWARENESS: a registered region that CALLS OUT to a helper OUTSIDE it (a
  * runtime helper / GC barrier / PLT stub — what a real managed-runtime method does). The
  * old "first region exit == return" model truncated at that call; the stepper now decodes
@@ -7724,11 +7828,29 @@ static void test_ptrace_callout(const char *label, int force_hw) {
         return;
     }
 #if defined(__aarch64__)
-    if (force_hw) { /* the hardware-breakpoint path is x86-64 only for now */
-        printf("# SKIP ptrace callout (%s): hardware breakpoints are x86-64 "
-               "only\n",
-               label);
-        return;
+    if (force_hw) {
+        /* The forced-hardware call-out drives the real library path (ASMTEST_PTRACE_HW_BP
+         * -> run_until -> set_hw_bp over NT_ARM_HW_BREAK). The seam ships, but delivery of
+         * the debug exception is host/hypervisor-dependent — so measure it and run live
+         * only where it fires; self-skip with a MEASURED, distinguishable reason (never a
+         * blanket "x86-64 only") otherwise. The two skip strings keep the two causes
+         * distinguishable forever (T2 / SS-A64-STREAM). */
+        switch (probe_arm64_hwbp()) {
+        case A64_HWBP_NO_SLOTS:
+            printf(
+                "# SKIP ptrace callout (%s): no NT_ARM_HW_BREAK slots on this "
+                "host\n",
+                label);
+            return;
+        case A64_HWBP_ARMED_SILENT:
+            printf(
+                "# SKIP ptrace callout (%s): NT_ARM_HW_BREAK armed but never "
+                "fired (hypervisor withholds debug exceptions)\n",
+                label);
+            return;
+        default: /* A64_HWBP_FIRES: fall through and drive the real hw-bp path */
+            break;
+        }
     }
     /* R: bl H ; add x0,x0,x1 ; ret    H@0xc: add x0,x0,#1 ; ret */
     static const unsigned char BLOB[] = {

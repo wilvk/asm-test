@@ -134,6 +134,27 @@ jobs:
           path: build/bench-report-*.json
           if-no-files-found: error
 
+      # T3 (SS-A64-STREAM): record the FIRST arm64 benchmarks/boxes entry, whose
+      # features.json carries the LIVE native-oop ptrace row (available:true, the ptrace
+      # tier actually captured the add3 fixture on real silicon). This benchmarks job runs
+      # natively on ubuntu-24.04-arm (Azure Cobalt 100), NOT under qemu, so the tier is
+      # live here. ASMTEST_VIRTUALIZED=1: the runner is a VM, so its perf history is flagged
+      # not-comparable (scripts/bench-report.sh). Explicit ASMTEST_BOX_ID: arm64
+      # /proc/cpuinfo has no vendor_id/model name, so the auto id would degrade to
+      # unknown-linux-arm64-<hash>. Commit benchmarks/boxes/arm-linux-arm64-gha/ to main
+      # from a green run's artifact (aarch64-ptrace-single-step-validation T3).
+      - name: Record the arm64 box entry (native-oop ptrace tier, live)
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: ASMTEST_VIRTUALIZED=1 ASMTEST_BOX_ID=arm-linux-arm64-gha make bench-record
+
+      - name: Upload the arm64 box record
+        if: matrix.os == 'ubuntu-24.04-arm'
+        uses: actions/upload-artifact@v7
+        with:
+          name: arm64-box-record
+          path: benchmarks/boxes/arm-linux-arm64-gha/
+          if-no-files-found: error
+
   # Merge every leg's report into one cross-system comparison (performance
   # matrices + the feature & trace-completeness grid) and publish it.
   benchmarks-compare:
@@ -676,9 +697,11 @@ jobs:
           #   Intel PT capture/decode (not GenuineIntel; libipt not installed) · AMD LBR / IBS
           #   (not AMD) · ARM CoreSight (no cs_etm PMU on the Azure hypervisor) · in-process
           #   single-step / BTF block-step (x86-only MSR/DEBUGCTL; PTRACE_SINGLEBLOCK has no
-          #   AArch64 form) · codeimage eBPF (built without libbpf) · the 'hardware bp' call-out
-          #   (x86-64 only until T2's NT_ARM_HW_BREAK arm-and-fire probe lands).
-          allow='not Linux x86-64|x86-64 Linux only|x86-64 only|Linux x86-64|Intel PT|intel_pt|GenuineIntel|libipt|wholewindow|window ladder|AMD|IBS|ibs precover|CoreSight|cs_etm|in-process|BTF|SINGLEBLOCK|block-step|blockstep|libbpf|soft-dirty|codeimage|descent|call_auto|pt attach|pt live|pt window|pt image|single-step unavailable|no in-process single-step|register-idempotent|debug logging|hardware bp|hardware breakpoints are x86-64|MSR|msr'
+          #   AArch64 form) · codeimage eBPF (built without libbpf) · the forced-hardware
+          #   'hardware bp' call-out — with T2's NT_ARM_HW_BREAK arm-and-fire probe it self-skips
+          #   only when it MEASURES no debug slots or an armed-but-silent hypervisor (both carry
+          #   'NT_ARM_HW_BREAK' in the reason); where the breakpoint fires it runs live (ok, no skip).
+          allow='not Linux x86-64|x86-64 Linux only|x86-64 only|Linux x86-64|Intel PT|intel_pt|GenuineIntel|libipt|wholewindow|window ladder|AMD|IBS|ibs precover|CoreSight|cs_etm|in-process|BTF|SINGLEBLOCK|block-step|blockstep|libbpf|soft-dirty|codeimage|descent|call_auto|pt attach|pt live|pt window|pt image|single-step unavailable|no in-process single-step|register-idempotent|debug logging|hardware bp|hardware breakpoints are x86-64|NT_ARM_HW_BREAK|MSR|msr'
           unexpected=$(grep '# SKIP' "$log" | grep -vE "$allow" || true)
           if [ -n "$unexpected" ]; then
             echo "::error::hwtrace-arm64: UNEXPECTED # SKIP lines (not on the by-name allowlist) — a tier that should run live self-skipped. Triage, then either fix the tier or add the reason to the allowlist:"
@@ -693,6 +716,17 @@ jobs:
             exit 1
           fi
           echo "::notice::hwtrace-arm64: $n ok assertions, ptrace tier ran LIVE on AArch64, no unexpected skips."
+          # (5) T2 (SS-A64-STREAM): surface the MEASURED NT_ARM_HW_BREAK outcome — the
+          #     decisive, previously-undetermined answer to "does Azure's arm64 hypervisor
+          #     deliver a hardware-breakpoint debug exception?". All three are green; the
+          #     notice records which, to carry verbatim into the T6 docs/plan flip.
+          if grep -qE '^ok .*ptrace callout \(hardware bp\): trace_call over a region' "$log"; then
+            echo "::notice::hwtrace-arm64 NT_ARM_HW_BREAK: FIRES — the forced-hardware call-out ran LIVE on this runner (real debug-register breakpoint delivered)."
+          elif grep -q 'ptrace callout (hardware bp): no NT_ARM_HW_BREAK slots' "$log"; then
+            echo "::notice::hwtrace-arm64 NT_ARM_HW_BREAK: NO SLOTS — this runner reports zero debug breakpoint registers (dbg_info & 0xff == 0)."
+          elif grep -q 'ptrace callout (hardware bp): NT_ARM_HW_BREAK armed but never fired' "$log"; then
+            echo "::notice::hwtrace-arm64 NT_ARM_HW_BREAK: ARMED-BUT-SILENT — slots present but the hypervisor withholds the debug exception; bare-metal validation moves to self-hosted-ci-runners."
+          fi
 
   # asmspy, the ncurses front-end over the out-of-process tracer (cli/). The
   # headless smoke drives every non-interactive subcommand (--list/--syms/

@@ -6,6 +6,7 @@ ANY x86-64 Linux — so this asserts a real, live trace here and in CI/container
 self-skipping only off x86-64 Linux or without Capstone.
 """
 import os
+import platform
 import struct
 
 import pytest
@@ -28,6 +29,23 @@ ROUTINE = bytes(
     [0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00,
      0x00, 0x00, 0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3]
 )
+
+# AArch64 twin for the out-of-process ptrace stepper (which runs on arm64 too, unlike the
+# x86-only EFLAGS.TF / PT / AMD backends). add2(20,22)=42 takes the b.le, skipping the sub
+# at 0xc -> executed stream [0x0, 0x4, 0x8, 0x10], two blocks. On x86-64 hosts this fixture
+# is never executed (the arch-select below picks ROUTINE); on arm64 it replaces the x86
+# bytes, which would SIGILL there.
+#   add x0,x0,x1; cmp x0,#100; b.le 0x10; sub x0,x0,#1; ret
+ROUTINE_A64 = bytes(
+    [0x00, 0x00, 0x01, 0x8b, 0x1f, 0x90, 0x01, 0xf1, 0x4d, 0x00,
+     0x00, 0x54, 0x00, 0x04, 0x00, 0xd1, 0xc0, 0x03, 0x5f, 0xd6]
+)
+
+IS_ARM64 = platform.machine() in ("aarch64", "arm64")
+# The (bytes, offsets) pair every out-of-process ptrace assertion parameterizes on, so the
+# stream is the host arch's real single-step trace rather than an x86-only literal.
+PTRACE_ROUTINE = ROUTINE_A64 if IS_ARM64 else ROUTINE
+PTRACE_OFFSETS = [0x0, 0x4, 0x8, 0x10] if IS_ARM64 else [0x0, 0x3, 0x6, 0xC, 0x11]
 
 
 @pytest.fixture
@@ -397,13 +415,15 @@ def _skip_if_no_ptrace():
 
 
 def test_ptrace_trace_call():
-    """Fork a tracee, single-step it out of process, get the same offsets."""
+    """Fork a tracee, single-step it out of process, get the same offsets. Runs LIVE on
+    x86-64 (ROUTINE) and AArch64 (ROUTINE_A64) — the ptrace tier is the one native backend
+    that spans both arches."""
     _skip_if_no_ptrace()
-    code = NativeCode.from_bytes(ROUTINE)
+    code = NativeCode.from_bytes(PTRACE_ROUTINE)
     trace = HwTrace.new(blocks=64, instructions=64)
     result = Ptrace.trace_call(code, [20, 22], trace)
     assert result == 42
-    assert trace.insn_offsets() == [0x0, 0x3, 0x6, 0xC, 0x11]
+    assert trace.insn_offsets() == PTRACE_OFFSETS
     assert not trace.truncated()
     trace.free()
     code.free()
@@ -440,6 +460,9 @@ def test_stealth_trace_out_of_process():
     FAILURE here (armed is asserted), because `armed` False with an empty stream is
     exactly what a silently-broken wrapper also returns."""
     _skip_if_no_ptrace()
+    if IS_ARM64:
+        pytest.skip("stealth §D3 stepper: C oracle is x86-64-only (test_hwtrace.c); the "
+                    "arm64 stepper compiles but its oracle test is a follow-on")
     code = NativeCode.from_bytes(ROUTINE)
     try:
         r = HwTrace.stealth_trace(code, 20, 22)
@@ -484,6 +507,9 @@ def test_descent_edges_and_frames():
     """Call descent (asmtest.hwtrace.Descent): a region that calls an in-blob leaf S
     records the call as an edge at level 1 and descends S as a nested frame at level 2."""
     _skip_if_no_ptrace()
+    if IS_ARM64:
+        pytest.skip("descent fixture is x86-64 machine code (call-blob); an arm64 `bl` "
+                    "twin is a follow-on")
     from asmtest.hwtrace import Descent, DESCENT_RECORD_EDGES, DESCENT_DESCEND_KNOWN
     # R@0: mov rax,rdi; call S(+4); add rax,rsi; ret   S@0xc: inc rax; ret
     blob = bytes([0x48, 0x89, 0xf8, 0xe8, 0x04, 0x00, 0x00, 0x00,

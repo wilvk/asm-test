@@ -36,6 +36,17 @@ static const std::vector<std::uint8_t> ROUTINE = {
     0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00,
     0x00, 0x00, 0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3};
 
+#if defined(__aarch64__)
+// AArch64 twin for the out-of-process ptrace stepper (the one native backend that spans
+// both arches). add2(20,22)=42 takes the b.le, skipping the sub at 0xc -> executed stream
+// {0x0, 0x4, 0x8, 0x10}, two blocks, not truncated. Only compiled on arm64 (on x86-64 the
+// stepper traces ROUTINE; these x86 bytes would SIGILL there and vice-versa).
+//   add x0,x0,x1; cmp x0,#100; b.le 0x10; sub x0,x0,#1; ret
+static const std::vector<std::uint8_t> ROUTINE_A64 = {
+    0x00, 0x00, 0x01, 0x8b, 0x1f, 0x90, 0x01, 0xf1, 0x4d, 0x00,
+    0x00, 0x54, 0x00, 0x04, 0x00, 0xd1, 0xc0, 0x03, 0x5f, 0xd6};
+#endif
+
 // mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret  (19 back-edges > LBR's 16)
 static const std::vector<std::uint8_t> LOOP = {
     0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x48,
@@ -358,14 +369,20 @@ int main() {
                     Ptrace::skipReason().c_str());
     } else {
         // trace_call: fork a tracee, single-step it out of process, same offsets.
+        // Runs LIVE on both arches: x86-64 (ROUTINE) and AArch64 (ROUTINE_A64).
         {
+#if defined(__aarch64__)
+            NativeCode code = NativeCode::from_bytes(ROUTINE_A64);
+            const std::vector<std::uint64_t> expect{0x0, 0x4, 0x8, 0x10};
+#else
             NativeCode code = NativeCode::from_bytes(ROUTINE);
+            const std::vector<std::uint64_t> expect{0x0, 0x3, 0x6, 0xC, 0x11};
+#endif
             HwTrace tr = HwTrace::create(/*blocks=*/64, /*instructions=*/64);
             long result = Ptrace::traceCall(code, {20, 22}, tr);
             ok(result == 42, "ptrace: trace_call(20, 22) == 42");
-            const std::vector<std::uint64_t> expect{0x0, 0x3, 0x6, 0xC, 0x11};
             ok(tr.insn_offsets() == expect,
-               "ptrace: trace_call insn_offsets() == {0, 3, 6, 0xC, 0x11}");
+               "ptrace: trace_call insn_offsets() == the host-arch stream");
             ok(!tr.truncated(), "ptrace: trace_call !truncated()");
             tr.free();
             code.free();
@@ -496,6 +513,12 @@ int main() {
         // The traced region is R only (0xc bytes): S is a sibling BEYOND it in the
         // same allocation, so it is recorded as a call-out, not mis-attributed as
         // recursion. Passing the whole allocation would fold S into the region.
+        // The descent fixture is x86-64 machine code (call-blob); an arm64 `bl` twin is
+        // a follow-on, so this skips (not faults) on AArch64.
+#if defined(__aarch64__)
+        std::printf("# SKIP call descent: fixture is x86-64 machine code; the arm64 "
+                    "`bl` twin is a follow-on\n");
+#else
         {
             const std::vector<std::uint8_t> BLOB = {
                 0x48, 0x89, 0xF8,              // R@0:   mov rax, rdi
@@ -557,6 +580,7 @@ int main() {
                 code.free();
             }
         }
+#endif /* !__aarch64__ — call descent uses an x86-64 fixture */
     }
 
     // ---- Time-aware code-image recorder (asmtest::CodeImage) ----

@@ -16,7 +16,12 @@
 //! error.Failed` checks rather than `std.debug.assert` (assert is compiled out in
 //! ReleaseFast) so the assertions keep their teeth in any optimize mode.
 const std = @import("std");
+const builtin = @import("builtin");
 const hwtrace = @import("hwtrace.zig");
+
+// The out-of-process ptrace stepper is the one native backend that spans both arches (the
+// in-process EFLAGS.TF / PT / AMD backends are x86-only and self-skip on arm64).
+const is_arm64 = builtin.cpu.arch == .aarch64;
 
 const SINGLESTEP = hwtrace.SINGLESTEP;
 const BEST = hwtrace.BEST;
@@ -38,6 +43,15 @@ const FIDELITY_VIRTUAL = @intFromEnum(hwtrace.Fidelity.virtual);
 const ROUTINE = [_]u8{
     0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00,
     0x00, 0x00, 0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3,
+};
+
+// AArch64 twin for the out-of-process ptrace stepper. add2(20,22)=42 takes the b.le,
+// skipping the sub at 0xc -> executed stream {0x0, 0x4, 0x8, 0x10}. On x86-64 the arch
+// select never picks it (the x86 ROUTINE bytes would SIGILL on arm64 and vice-versa).
+//   add x0,x0,x1; cmp x0,#100; b.le 0x10; sub x0,x0,#1; ret
+const ROUTINE_A64 = [_]u8{
+    0x00, 0x00, 0x01, 0x8b, 0x1f, 0x90, 0x01, 0xf1, 0x4d, 0x00,
+    0x00, 0x54, 0x00, 0x04, 0x00, 0xd1, 0xc0, 0x03, 0x5f, 0xd6,
 };
 
 // mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret  (19 back-edges > LBR's 16)
@@ -191,7 +205,10 @@ fn writeU64(writer: anytype, v: u64) !void {
 // Fork a tracee, single-step it out of process, get the same offsets as the
 // in-process stepper. Mirrors Python's `test_ptrace_trace_call`.
 fn checkPtraceTraceCall(alloc: std.mem.Allocator) !void {
-    var code = try hwtrace.NativeCode.fromBytes(&ROUTINE);
+    // Runs LIVE on both arches: x86-64 (ROUTINE) and AArch64 (ROUTINE_A64).
+    const routine: []const u8 = if (is_arm64) &ROUTINE_A64 else &ROUTINE;
+    const want: []const u64 = if (is_arm64) &[_]u64{ 0x0, 0x4, 0x8, 0x10 } else &[_]u64{ 0x0, 0x3, 0x6, 0xC, 0x11 };
+    var code = try hwtrace.NativeCode.fromBytes(routine);
     defer code.free();
     var tr = try hwtrace.HwTrace.create(64, 64); // blocks=64, instructions=64
     defer tr.free();
@@ -202,7 +219,7 @@ fn checkPtraceTraceCall(alloc: std.mem.Allocator) !void {
 
     const insns = try tr.insnOffsets(alloc);
     defer alloc.free(insns);
-    try check(std.mem.eql(u64, insns, &[_]u64{ 0x0, 0x3, 0x6, 0xC, 0x11 }), "ptrace trace_call yields the exact shared offset stream");
+    try check(std.mem.eql(u64, insns, want), "ptrace trace_call yields the host-arch offset stream");
     try check(!tr.truncated(), "ptrace trace_call not truncated");
 }
 
@@ -718,7 +735,11 @@ pub fn main() !void {
         try checkProcRegionByAddr();
         try checkProcPerfmapSymbol();
         try checkJitdumpFind(alloc);
-        try checkPtraceDescent(alloc);
+        if (is_arm64) {
+            std.debug.print("# SKIP: call descent: fixture is x86-64 machine code (call-blob); the arm64 `bl` twin is a follow-on\n", .{});
+        } else {
+            try checkPtraceDescent(alloc);
+        }
     }
 
     // ---- Time-aware code-image recorder (hwtrace.CodeImage) ---- //

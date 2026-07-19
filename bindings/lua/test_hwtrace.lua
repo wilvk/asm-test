@@ -49,6 +49,26 @@ local ROUTINE = { 0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D,
                   0x64, 0x00, 0x00, 0x00, 0x7E, 0x03, 0x48, 0xFF,
                   0xC8, 0xC3 }
 
+-- AArch64 twin for the out-of-process ptrace stepper (the one native backend spanning both
+-- arches). add2(20,22)=42 takes the b.le, skipping the sub at 0xc -> executed stream
+-- {0x0, 0x4, 0x8, 0x10}. On x86-64 the arch-select never picks it (the x86 bytes would
+-- SIGILL on arm64 and vice-versa).
+--   add x0,x0,x1; cmp x0,#100; b.le 0x10; sub x0,x0,#1; ret
+local ROUTINE_A64 = { 0x00, 0x00, 0x01, 0x8b, 0x1f, 0x90, 0x01, 0xf1, 0x4d, 0x00,
+                      0x00, 0x54, 0x00, 0x04, 0x00, 0xd1, 0xc0, 0x03, 0x5f, 0xd6 }
+-- Host arch probe (no ffi/uname header needed): read `uname -m`.
+local function host_is_arm64()
+  local p = io.popen and io.popen("uname -m")
+  if not p then return false end
+  local m = p:read("*l") or ""
+  p:close()
+  return m == "aarch64" or m == "arm64"
+end
+local IS_ARM64 = host_is_arm64()
+-- (bytes, offsets) the out-of-process ptrace trace_call assertion parameterizes on.
+local PTRACE_ROUTINE = IS_ARM64 and ROUTINE_A64 or ROUTINE
+local PTRACE_OFFSETS = IS_ARM64 and { 0x0, 0x4, 0x8, 0x10 } or { 0x0, 0x3, 0x6, 0xC, 0x11 }
+
 -- mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret  (19 back-edges > LBR's 16 deep)
 local LOOP = { 0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00,
                0x48, 0x01, 0xF8, 0x48, 0xFF, 0xCE, 0x75, 0xF8, 0xC3 }
@@ -441,12 +461,12 @@ else
   -- test_ptrace_trace_call — fork a tracee, single-step it out of process, get the
   -- same offsets/return value as the in-process single-step backend.
   do
-    local code = NativeCode.from_bytes(ROUTINE)
+    local code = NativeCode.from_bytes(PTRACE_ROUTINE)
     local tr = HwTrace.create(64, 64)
     local result = HwTrace.ptrace_trace_call(code.base, code.len, { 20, 22 }, tr)
     eq(result, 42, "ptrace_trace_call: call(20,22) == 42")
-    list_eq(tr:insn_offsets(), { 0x0, 0x3, 0x6, 0xC, 0x11 },
-            "ptrace_trace_call: insn_offsets == {0,3,6,12,17}")
+    list_eq(tr:insn_offsets(), PTRACE_OFFSETS,
+            "ptrace_trace_call: insn_offsets == host-arch stream")
     ok(not tr:truncated(), "ptrace_trace_call: not truncated")
     tr:free()
     code:free()
@@ -556,6 +576,9 @@ else
   -- traced region. Address getters return boxed uint64_t cdata — compared via cdata
   -- equality (ffi.cast("uint64_t", code.base) + off), never tonumber().
 
+  if IS_ARM64 then
+    print("# SKIP call descent: fixture is x86-64 machine code (call-blob); the arm64 `bl` twin is a follow-on")
+  else
   -- L1 RECORD_EDGES: one edge (site 0x3 -> code_base+0xc, depth 0), frame 0 only.
   do
     local code = NativeCode.from_bytes(DESCENT_FIXTURE)
@@ -634,6 +657,7 @@ else
     tr:free()
     code:free()
   end
+  end -- IS_ARM64 descent guard
 end
 
 -- ---- Time-aware code-image recorder (CodeImage / asmtest_codeimage.h) ----

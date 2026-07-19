@@ -55,6 +55,19 @@ ROUTINE = [0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00,
 LOOP = [0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00,
         0x48, 0x01, 0xF8, 0x48, 0xFF, 0xCE, 0x75, 0xF8, 0xC3].pack("C*")
 
+# AArch64 twin for the out-of-process ptrace stepper (the one native backend that spans
+# both arches). add2(20,22)=42 takes the b.le, skipping the sub at 0xc -> executed stream
+# [0x0, 0x4, 0x8, 0x10]. On x86-64 the arch-select below never picks it (the x86 bytes
+# would SIGILL on arm64 and vice-versa).
+#   add x0,x0,x1; cmp x0,#100; b.le 0x10; sub x0,x0,#1; ret
+ROUTINE_A64 = [0x00, 0x00, 0x01, 0x8b, 0x1f, 0x90, 0x01, 0xf1, 0x4d, 0x00,
+               0x00, 0x54, 0x00, 0x04, 0x00, 0xd1, 0xc0, 0x03, 0x5f, 0xd6].pack("C*")
+IS_ARM64 = !(RUBY_PLATFORM =~ /aarch64|arm64/).nil?
+# (bytes, offsets) every out-of-process ptrace assertion parameterizes on, so the stream is
+# the host arch's real single-step trace rather than an x86-only literal.
+PTRACE_ROUTINE = IS_ARM64 ? ROUTINE_A64 : ROUTINE
+PTRACE_OFFSETS = IS_ARM64 ? [0x0, 0x4, 0x8, 0x10] : [0x0, 0x3, 0x6, 0xC, 0x11]
+
 $n = 0
 $failed = false
 
@@ -286,12 +299,12 @@ require "tmpdir"
 if HwTrace.ptrace_available?
   # Fork a tracee, single-step it out of process, get the same offsets as the
   # in-process stepper for the shared ROUTINE fixture.
-  pt_code = NativeCode.from_bytes(ROUTINE)
+  pt_code = NativeCode.from_bytes(PTRACE_ROUTINE)
   pt_trace = HwTrace.create(blocks: 64, instructions: 64)
   pt_result = HwTrace.ptrace_trace_call(pt_code.base, pt_code.length, [20, 22], pt_trace)
   ok(pt_result == 42, "ptrace trace_call(20,22) == 42 (got #{pt_result})")
-  ok(pt_trace.insn_offsets == [0x0, 0x3, 0x6, 0xC, 0x11],
-     "ptrace trace_call insn_offsets == [0,3,6,12,17] (got #{pt_trace.insn_offsets.inspect})")
+  ok(pt_trace.insn_offsets == PTRACE_OFFSETS,
+     "ptrace trace_call insn_offsets == host-arch stream (got #{pt_trace.insn_offsets.inspect})")
   ok(!pt_trace.truncated?, "ptrace trace_call not truncated")
   pt_trace.free
 
@@ -386,7 +399,9 @@ end
 # S lives beyond it in the SAME allocation, so ptrace_trace_call_ex takes region=0xc
 # to keep S OUTSIDE R — tracing the whole allocation would fold S into R and
 # mis-record the call as recursion. Shares the ptrace_available? guard.
-if HwTrace.ptrace_available?
+if HwTrace.ptrace_available? && IS_ARM64
+  puts "# SKIP call descent: fixture is x86-64 machine code (call-blob); the arm64 `bl` twin is a follow-on"
+elsif HwTrace.ptrace_available?
   # R@0: mov rax,rdi; call S(+4); add rax,rsi; ret    S@0xc: inc rax; ret
   descent_blob = [0x48, 0x89, 0xF8, 0xE8, 0x04, 0x00, 0x00, 0x00,
                   0x48, 0x01, 0xF0, 0xC3, 0x48, 0xFF, 0xC0, 0xC3].pack("C*")

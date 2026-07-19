@@ -35,6 +35,18 @@ const {
 const ROUTINE = Buffer.from([0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D,
   0x64, 0x00, 0x00, 0x00, 0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3]);
 
+// AArch64 twin for the out-of-process ptrace stepper (the one native backend spanning both
+// arches). add2(20,22)=42 takes the b.le, skipping the sub at 0xc -> executed stream
+// [0x0, 0x4, 0x8, 0x10]. On x86-64 the arch-select never picks it (the x86 ROUTINE bytes
+// would SIGILL on arm64 and vice-versa).
+//   add x0,x0,x1; cmp x0,#100; b.le 0x10; sub x0,x0,#1; ret
+const ROUTINE_A64 = Buffer.from([0x00, 0x00, 0x01, 0x8b, 0x1f, 0x90, 0x01, 0xf1,
+  0x4d, 0x00, 0x00, 0x54, 0x00, 0x04, 0x00, 0xd1, 0xc0, 0x03, 0x5f, 0xd6]);
+const IS_ARM64 = process.arch === 'arm64';
+// The (bytes, offsets) pair the out-of-process ptrace trace_call assertion parameterizes on.
+const PTRACE_ROUTINE = IS_ARM64 ? ROUTINE_A64 : ROUTINE;
+const PTRACE_OFFSETS = IS_ARM64 ? [0x0, 0x4, 0x8, 0x10] : [0x0, 0x3, 0x6, 0xC, 0x11];
+
 // mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret  (19 back-edges > LBR's 16)
 const LOOP = Buffer.from([0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00,
   0x48, 0x01, 0xF8, 0x48, 0xFF, 0xCE, 0x75, 0xF8, 0xC3]);
@@ -623,14 +635,15 @@ async function main() {
   if (!Ptrace.available()) {
     console.log(`# SKIP ptrace backend unavailable: ${Ptrace.skipReason()}`);
   } else {
-    // Fork a tracee, single-step it out of process, get the same offsets.
+    // Fork a tracee, single-step it out of process, get the same offsets. Runs LIVE on
+    // x86-64 (ROUTINE) and AArch64 (ROUTINE_A64) — the ptrace tier spans both arches.
     {
-      const code = NativeCode.fromBytes(ROUTINE);
+      const code = NativeCode.fromBytes(PTRACE_ROUTINE);
       const tr = HwTrace.create({ blocks: 64, instructions: 64 });
       const r = Ptrace.traceCall(code, code.length, [20, 22], tr);
       ok(Number(r) === 42, 'ptrace traceCall returns 42');
-      assert.deepStrictEqual(tr.insnOffsets(), [0x0, 0x3, 0x6, 0xC, 0x11]);
-      ok(true, 'ptrace traceCall insnOffsets() == [0, 3, 6, 12, 17]');
+      assert.deepStrictEqual(tr.insnOffsets(), PTRACE_OFFSETS);
+      ok(true, 'ptrace traceCall insnOffsets() == host-arch stream');
       ok(!tr.truncated(), 'ptrace traceCall !truncated()');
       code.free();
       tr.free();
@@ -638,7 +651,11 @@ async function main() {
 
     // Exact-result guarantee: a routine returning a full 64-bit value ABOVE 2^53 must come back
     // as an exact BigInt, not a Number rounded through the double mantissa (the _safeInt path).
-    {
+    // (x86-64 movabs leaf — the arch-select above covers the base trace_call; on arm64 this
+    // x86 fixture would SIGILL, so skip it — an arm64 twin is a follow-on.)
+    if (IS_ARM64) {
+      console.log('# SKIP ptrace movabs BigInt leaf: x86-64 machine code; arm64 twin is a follow-on');
+    } else {
       const BIG = 0x0102030405060708n; // 72623859790382856 > Number.MAX_SAFE_INTEGER
       // movabs rax, 0x0102030405060708 ; ret
       const bigLeaf = NativeCode.fromBytes(
@@ -676,7 +693,11 @@ async function main() {
     // AsmTrace.Method(..., outOfProcess: true). Needs no HwTrace.init. Self-skips when the
     // reverse-attach is refused (Yama ptrace_scope); otherwise reconstructs the identical
     // [0,3,6,c,11] ground-truth stream as the fork/single-step paths above.
-    {
+    // The stealth §D3 stepper compiles on arm64, but its C oracle is x86-64-only and this
+    // fixture is x86 machine code, so skip on arm64 (a follow-on validates the arm64 path).
+    if (IS_ARM64) {
+      console.log('# SKIP ptrace stealth §D3: C oracle is x86-64-only; arm64 follow-on');
+    } else {
       const code = NativeCode.fromBytes(ROUTINE);
       const res = HwTrace.stealthTrace(code, 20, 22); // 42 <= 100 -> jle taken, dec skipped
       console.log(`# stealth: armed=${res.armed} truncated=${res.truncated} offsets=${res.offsets.length}`);
@@ -707,7 +728,10 @@ async function main() {
     // driver frame; record the driver AND both channel-published leaves as ABSOLUTE addresses,
     // in call order. Fork-internal (steps a child, not this thread), so it asserts
     // unconditionally on any ptrace lane. Mirrors the C oracle test_ptrace_window_call.
-    {
+    // The window driver + leaves are x86-64 machine code (movabs/call), so skip on arm64.
+    if (IS_ARM64) {
+      console.log('# SKIP ptrace windowCall: driver/leaves are x86-64 machine code; arm64 follow-on');
+    } else {
       const m1 = NativeCode.fromBytes(M1);
       const m2 = NativeCode.fromBytes(M2);
       const a1 = BigInt(koffi.address(m1.base)), a2 = BigInt(koffi.address(m2.base));
@@ -729,7 +753,10 @@ async function main() {
     // the in-process window() footgun, mirroring dotnet's AsmTrace.Window. Self-skips on a
     // refused reverse-attach; else records driver + both leaves in order (best-effort stream
     // over a live runtime, exact result). Mirrors the C oracle test_stealth_windowed.
-    {
+    // The window driver + leaves are x86-64 machine code (movabs/call), so skip on arm64.
+    if (IS_ARM64) {
+      console.log('# SKIP stealth windowed: driver/leaves are x86-64 machine code; arm64 follow-on');
+    } else {
       const m1 = NativeCode.fromBytes(M1);
       const m2 = NativeCode.fromBytes(M2);
       const a1 = BigInt(koffi.address(m1.base)), a2 = BigInt(koffi.address(m2.base));
@@ -849,7 +876,11 @@ async function main() {
     //     call S(+4); add rax,rsi; ret.  S@0xc inc rax; ret. region=0xc keeps the
     //     in-blob sibling S OUTSIDE the traced region (passing the whole allocation
     //     would fold S into R and mis-record the call as recursion). ---
-    {
+    // The descent fixtures are x86-64 machine code (call-blob + movabs), so skip on arm64;
+    // an arm64 `bl` descent twin is a follow-on.
+    if (IS_ARM64) {
+      console.log('# SKIP call descent: x86-64 machine code (call-blob); arm64 `bl` twin is a follow-on');
+    } else {
       const FIX = Buffer.from([0x48, 0x89, 0xF8, 0xE8, 0x04, 0x00, 0x00, 0x00,
         0x48, 0x01, 0xF0, 0xC3, 0x48, 0xFF, 0xC0, 0xC3]);
 

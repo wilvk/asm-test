@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,20 @@ import (
 var hwtraceRoutine = []byte{
 	0x48, 0x89, 0xF8, 0x48, 0x01, 0xF0, 0x48, 0x3D, 0x64, 0x00,
 	0x00, 0x00, 0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3,
+}
+
+// isArm64 selects the AArch64 fixtures for the out-of-process ptrace stepper — the one
+// native backend that spans both arches (the in-process EFLAGS.TF / PT / AMD backends are
+// x86-only and self-skip on arm64).
+var isArm64 = runtime.GOARCH == "arm64"
+
+// AArch64 twin of hwtraceRoutine: add2(20,22)=42 takes the b.le, skipping the sub at 0xc ->
+// executed stream {0x0, 0x4, 0x8, 0x10}. On x86-64 the arch-select never picks it.
+//
+//	add x0,x0,x1; cmp x0,#100; b.le 0x10; sub x0,x0,#1; ret
+var hwtraceRoutineA64 = []byte{
+	0x00, 0x00, 0x01, 0x8b, 0x1f, 0x90, 0x01, 0xf1, 0x4d, 0x00,
+	0x00, 0x54, 0x00, 0x04, 0x00, 0xd1, 0xc0, 0x03, 0x5f, 0xd6,
 }
 
 // mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret  (a tight back-edge loop)
@@ -561,7 +576,14 @@ func skipIfNoPtrace(t *testing.T) {
 // the same offsets as the in-process stepper (Unicorn/DynamoRIO/PT/AMD parity).
 func TestPtraceTraceCall(t *testing.T) {
 	skipIfNoPtrace(t)
-	code, err := HwNativeCodeFromBytes(hwtraceRoutine)
+	// Runs LIVE on both arches: x86-64 (hwtraceRoutine) and AArch64 (hwtraceRoutineA64).
+	routine := hwtraceRoutine
+	wantInsns := []uint64{0x0, 0x3, 0x6, 0xC, 0x11}
+	if isArm64 {
+		routine = hwtraceRoutineA64
+		wantInsns = []uint64{0x0, 0x4, 0x8, 0x10}
+	}
+	code, err := HwNativeCodeFromBytes(routine)
 	if err != nil {
 		t.Fatalf("HwNativeCodeFromBytes: %v", err)
 	}
@@ -576,7 +598,6 @@ func TestPtraceTraceCall(t *testing.T) {
 	if result != 42 {
 		t.Fatalf("PtraceTraceCall(20,22): got %d, want 42", result)
 	}
-	wantInsns := []uint64{0x0, 0x3, 0x6, 0xC, 0x11}
 	gotInsns := tr.InsnOffsets()
 	if len(gotInsns) != len(wantInsns) {
 		t.Fatalf("InsnOffsets: got %v, want %v", gotInsns, wantInsns)
@@ -787,6 +808,9 @@ func descentEqualU64(a, b []uint64) bool {
 // level 2, with S in the allow-set, S descends as nested frame 1.
 func TestHwtraceDescent(t *testing.T) {
 	skipIfNoPtrace(t)
+	if isArm64 {
+		t.Skip("call descent: fixture is x86-64 machine code (call-blob); the arm64 `bl` twin is a follow-on")
+	}
 	code, err := HwNativeCodeFromBytes(descentBlob)
 	if err != nil {
 		t.Fatalf("HwNativeCodeFromBytes: %v", err)
@@ -866,6 +890,9 @@ func TestHwtraceDescent(t *testing.T) {
 // the C engine round-tripped through Go and back.
 func TestHwtraceDescentResolver(t *testing.T) {
 	skipIfNoPtrace(t)
+	if isArm64 {
+		t.Skip("call descent resolver: fixture is x86-64 machine code (call-blob); the arm64 `bl` twin is a follow-on")
+	}
 	code, err := HwNativeCodeFromBytes(descentBlob)
 	if err != nil {
 		t.Fatalf("HwNativeCodeFromBytes: %v", err)

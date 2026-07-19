@@ -24,6 +24,21 @@ static class HwTraceProgram
         0x00, 0x00, 0x7E, 0x03, 0x48, 0xFF, 0xC8, 0xC3,
     };
 
+    // AArch64 twin for the out-of-process ptrace stepper (the one native backend that spans
+    // both arches). add2(20,22)=42 takes the b.le, skipping the sub at 0xc -> executed
+    // stream [0x0, 0x4, 0x8, 0x10]. On x86-64 the arch-select never picks it. NOTE: this
+    // whole program self-skips on arm64 via the top-level single-step gate in Main (the
+    // in-process managed tier is x86-only), so the arch-select is correctness-if-reached.
+    //   add x0,x0,x1; cmp x0,#100; b.le 0x10; sub x0,x0,#1; ret
+    static readonly byte[] ROUTINE_A64 =
+    {
+        0x00, 0x00, 0x01, 0x8b, 0x1f, 0x90, 0x01, 0xf1, 0x4d, 0x00,
+        0x00, 0x54, 0x00, 0x04, 0x00, 0xd1, 0xc0, 0x03, 0x5f, 0xd6,
+    };
+
+    static bool IsArm64 =>
+        RuntimeInformation.ProcessArchitecture == Architecture.Arm64;
+
     // mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret  (a real loop, no depth ceiling)
     static readonly byte[] LOOP =
     {
@@ -1910,14 +1925,16 @@ static class HwTraceProgram
         int pid = System.Diagnostics.Process.GetCurrentProcess().Id;
 
         // (1) trace_call: fork a tracee, single-step it out of process, same offsets.
+        // Runs LIVE on both arches: x86-64 (ROUTINE) and AArch64 (ROUTINE_A64).
         {
-            var code = NativeCode.FromBytes(ROUTINE);
+            var code = NativeCode.FromBytes(IsArm64 ? ROUTINE_A64 : ROUTINE);
             var tr = HwTrace.Create(blocks: 64, instructions: 64);
             long result = Ptrace.TraceCall(code.Base, (nuint)code.Length,
                                            new long[] { 20, 22 }, tr.Handle);
             Check(result == 42, $"ptrace: trace_call(20,22) == 42 (got {result})");
             var insns = tr.InsnOffsets();
-            var wantInsns = new ulong[] { 0x0, 0x3, 0x6, 0xC, 0x11 };
+            var wantInsns = IsArm64 ? new ulong[] { 0x0, 0x4, 0x8, 0x10 }
+                                    : new ulong[] { 0x0, 0x3, 0x6, 0xC, 0x11 };
             Check(Eq(insns, wantInsns), $"ptrace: trace_call offsets {Hex(insns)} == {Hex(wantInsns)}");
             Check(!tr.Truncated(), "ptrace: trace_call not truncated");
             tr.Free();
@@ -2065,6 +2082,11 @@ static class HwTraceProgram
     // loop. The traced region is R only (0xc); S is the in-blob leaf beyond it.
     static void DescentChecks()
     {
+        if (IsArm64)
+        {
+            Console.WriteLine("# SKIP call descent: fixture is x86-64 machine code (call-blob); the arm64 `bl` twin is a follow-on");
+            return;
+        }
         var code = NativeCode.FromBytes(DESCENT_BLOB);
         ulong codeBase = (ulong)code.Base.ToInt64();
         try

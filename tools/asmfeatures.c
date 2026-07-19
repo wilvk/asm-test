@@ -31,6 +31,7 @@
 #include "asmtest_drtrace.h"
 #include "asmtest_emu.h"
 #include "asmtest_hwtrace.h"
+#include "asmtest_ptrace.h" /* native-oop row: the out-of-process single-step tier */
 #include "asmtest_trace.h"
 #include "asmtest_trace_auto.h"
 
@@ -259,6 +260,100 @@ static long long native_hw_capture(int backend, const unsigned char *bytes,
 }
 #endif /* ASMFEATURES_HOST_CAPTURE */
 
+/* The out-of-process ptrace single-step tier (native-oop) is a SEPARATE axis from the
+ * in-process host-capture ladder above: it runs on x86-64 AND AArch64 Linux (the ladder
+ * is x86-64-host-only), so it carries the SS-A64-STREAM deliverable — an arm64 box record
+ * whose features.json actually shows the ptrace tier captured a fixture live. */
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+#if defined(__x86_64__)
+#define PTRACE_OOP_FIX     FIX_X86_ADD3
+#define PTRACE_OOP_FIX_LEN sizeof FIX_X86_ADD3
+#define PTRACE_OOP_ARCH    "x86_64"
+#else
+#define PTRACE_OOP_FIX     FIX_A64_ADD3
+#define PTRACE_OOP_FIX_LEN sizeof FIX_A64_ADD3
+#define PTRACE_OOP_ARCH    "arm64"
+#endif
+
+/* Emulator ground truth (deterministic insn count) for the host-arch add3 fixture the
+ * native-oop row traces natively — the reference its trace_insns is measured against. */
+static long long ptrace_oop_truth(void) {
+    asmtest_trace_t *t = asmtest_trace_new(0, 64);
+    if (!t)
+        return -1;
+    long a[3] = {2, 3, 4};
+    long long insns = -1;
+#if defined(__x86_64__)
+    emu_t *e = emu_open();
+    emu_result_t r;
+    if (e &&
+        emu_call_traced(e, FIX_X86_ADD3, sizeof FIX_X86_ADD3, a, 3, 0, &r, t))
+        insns = (long long)asmtest_emu_trace_insns_total(t);
+    if (e)
+        emu_close(e);
+#else /* __aarch64__ */
+    emu_arm64_t *e = emu_arm64_open();
+    emu_arm64_result_t r;
+    if (e && emu_arm64_call_traced(e, FIX_A64_ADD3, sizeof FIX_A64_ADD3, a, 3,
+                                   0, &r, t))
+        insns = (long long)asmtest_emu_trace_insns_total(t);
+    if (e)
+        emu_arm64_close(e);
+#endif
+    asmtest_trace_free(t);
+    return insns;
+}
+#endif /* native-oop ptrace tier: Linux x86-64/AArch64 */
+
+/* native-oop: run the host-arch add3 fixture under the out-of-process ptrace single-step
+ * stepper and report available + completeness + insns (mirrors the native-hw rows). When
+ * the tier is unavailable (qemu-user emulation; non-x86/arm64 host) it records
+ * available:false + the skip reason — absent = data, not an invisible gap. */
+static void ptrace_oop_row(int first) {
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
+    if (!asmtest_ptrace_available()) {
+        char why[192];
+        asmtest_ptrace_skip_reason(why, sizeof why);
+        row(first, "native-oop", "ptrace_singlestep", PTRACE_OOP_ARCH, "host",
+            0, why, "native", -1, -1, -1, "math.add3");
+        return;
+    }
+    long long truth = ptrace_oop_truth();
+    long a[3] = {2, 3, 4};
+    long result = 0;
+    long long insns = -1;
+    int complete = 0;
+    /* The fixture is .rodata (non-executable); materialize it into W^X memory (with the
+     * AArch64 icache flush exec_alloc performs) so the forked tracee can actually run it —
+     * exactly how the native-hw ladder above stages every rung. */
+    void *exec = NULL;
+    size_t exec_len = 0;
+    if (asmtest_hwtrace_exec_alloc(PTRACE_OOP_FIX, PTRACE_OOP_FIX_LEN, &exec,
+                                   &exec_len) == ASMTEST_HW_OK) {
+        asmtest_trace_t *t = asmtest_trace_new(64, 64);
+        if (t && asmtest_ptrace_trace_call(exec, PTRACE_OOP_FIX_LEN, a, 3,
+                                           &result, t) == ASMTEST_PTRACE_OK) {
+            insns = (long long)asmtest_emu_trace_insns_total(t);
+            complete = !asmtest_emu_trace_truncated(t);
+        }
+        if (t)
+            asmtest_trace_free(t);
+        asmtest_hwtrace_exec_free(exec, exec_len);
+    }
+    if (insns >= 0)
+        row(first, "native-oop", "ptrace_singlestep", PTRACE_OOP_ARCH, "host",
+            1, "", "native", complete, insns, truth, "math.add3");
+    else
+        row(first, "native-oop", "ptrace_singlestep", PTRACE_OOP_ARCH, "host",
+            0, "ptrace trace_call could not capture the add3 fixture", "native",
+            -1, -1, truth, "math.add3");
+#else
+    row(first, "native-oop", "ptrace_singlestep", "host", "host", 0,
+        "out-of-process ptrace stepper: Linux x86-64/AArch64 only", "native",
+        -1, -1, -1, NULL);
+#endif
+}
+
 int main(int argc, char **argv) {
     int json = 1;
     for (int i = 1; i < argc; i++)
@@ -391,6 +486,12 @@ int main(int argc, char **argv) {
         -1, NULL);
     first = 0;
 #endif
+
+    /* 2b) Out-of-process ptrace single-step capture — a separate tier from the in-process
+     * ladder above, and the ONE native-capture row that runs on AArch64 too (SS-A64-STREAM:
+     * an arm64 box record whose features.json shows the ptrace tier captured a fixture live). */
+    ptrace_oop_row(first);
+    first = 0;
 
     /* 3) Static hardware-backend availability (no run — the static capability). */
     asmtest_trace_backend_t hw[] = {

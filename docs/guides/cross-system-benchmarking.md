@@ -145,6 +145,15 @@ Each rung is measured through **two** tiers, emitted as two feature rows:
   ceiling is **restored**: it reports what the box *ultimately* captures (complete
   wherever a floor exists) and which backend won.
 
+A third row, **`native-oop`** (backend `ptrace_singlestep`), sits apart from the
+ladder: it runs the `math.add3` baseline under the **out-of-process** ptrace
+single-step stepper. Unlike the in-process ladder (x86-64-host-only), this row runs
+on **AArch64 Linux too**, so it is the capture row a real arm64 box carries — its
+`available: true` with `trace_insns == insns_truth` is the proof the ptrace tier
+captured the fixture live on that silicon (e.g. the `arm-linux-arm64-gha` box
+recorded by the arm64 CI lane). Under qemu-user it self-skips (`available: false`,
+`PTRACE_SINGLESTEP is non-functional`) — absence is data.
+
 `scripts/bench-compare` renders the `native-hw` rows as the **capture-depth matrix**
 (workload × box). The expected shape across microarchitecture classes:
 

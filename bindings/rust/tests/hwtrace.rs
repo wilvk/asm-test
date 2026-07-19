@@ -22,6 +22,16 @@ const ROUTINE: [u8; 18] = [
     0xFF, 0xC8, 0xC3,
 ];
 
+// AArch64 twin for the out-of-process ptrace stepper (the one native backend that spans
+// both arches). add2(20,22)=42 takes the b.le, skipping the sub at 0xc -> executed stream
+// {0x0, 0x4, 0x8, 0x10}. cfg-gated to arm64 so it is never a dead const on x86-64.
+//   add x0,x0,x1; cmp x0,#100; b.le 0x10; sub x0,x0,#1; ret
+#[cfg(target_arch = "aarch64")]
+const ROUTINE_A64: [u8; 20] = [
+    0x00, 0x00, 0x01, 0x8b, 0x1f, 0x90, 0x01, 0xf1, 0x4d, 0x00, 0x00, 0x54, 0x00, 0x04, 0x00,
+    0xd1, 0xc0, 0x03, 0x5f, 0xd6,
+];
+
 // mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret  (19 back-edges > LBR's 16)
 const LOOP: [u8; 16] = [
     0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00, 0x48, 0x01, 0xF8, 0x48, 0xFF, 0xCE, 0x75, 0xF8, 0xC3,
@@ -476,7 +486,12 @@ fn ptrace_trace_call() {
     if skip_if_no_ptrace() {
         return;
     }
-    let code = NativeCode::from_bytes(&ROUTINE);
+    // Runs LIVE on both arches: x86-64 (ROUTINE) and AArch64 (ROUTINE_A64).
+    #[cfg(target_arch = "aarch64")]
+    let (routine, want): (&[u8], Vec<u64>) = (&ROUTINE_A64, vec![0x0, 0x4, 0x8, 0x10]);
+    #[cfg(not(target_arch = "aarch64"))]
+    let (routine, want): (&[u8], Vec<u64>) = (&ROUTINE, vec![0x0, 0x3, 0x6, 0xC, 0x11]);
+    let code = NativeCode::from_bytes(routine);
     let tr = HwTrace::new_trace(64, 64);
 
     let result = Ptrace::trace_call(&code, &[20, 22], &tr);
@@ -484,7 +499,7 @@ fn ptrace_trace_call() {
     assert_eq!(result, 42, "out-of-process traced call returns 20+22");
     assert_eq!(
         tr.insn_offsets(),
-        vec![0x0, 0x3, 0x6, 0xC, 0x11],
+        want,
         "out-of-process offsets match the in-process / Python stream"
     );
     assert!(!tr.truncated(), "stream not truncated");

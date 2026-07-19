@@ -34,6 +34,16 @@ public final class HwTraceTest {
         0x64, 0x00, 0x00, 0x00, 0x7E, 0x03, 0x48, (byte) 0xFF, (byte) 0xC8, (byte) 0xC3
     };
 
+    // AArch64 twin for the out-of-process ptrace stepper (the one native backend spanning
+    // both arches). add2(20,22)=42 takes the b.le, skipping the sub at 0xc -> executed
+    // stream [0x0, 0x4, 0x8, 0x10]. On x86-64 the arch-select never picks it.
+    //   add x0,x0,x1; cmp x0,#100; b.le 0x10; sub x0,x0,#1; ret
+    private static final byte[] ROUTINE_A64 = {
+        0x00, 0x00, 0x01, (byte) 0x8b, 0x1f, (byte) 0x90, 0x01, (byte) 0xf1,
+        0x4d, 0x00, 0x00, 0x54, 0x00, 0x04, 0x00, (byte) 0xd1,
+        (byte) 0xc0, 0x03, 0x5f, (byte) 0xd6
+    };
+
     // mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret  (19 back-edges > LBR's 16)
     private static final byte[] LOOP = {
         0x48, (byte) 0xC7, (byte) 0xC0, 0x00, 0x00, 0x00, 0x00,
@@ -811,7 +821,9 @@ public final class HwTraceTest {
     // get the same offsets.
     private static void ptraceTraceCall() {
         if (ptraceUnavailable()) return;
-        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
+        // Runs LIVE on both arches: x86-64 (ROUTINE) and AArch64 (ROUTINE_A64).
+        boolean x86 = hostIsX86_64();
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(x86 ? ROUTINE : ROUTINE_A64);
         HwTrace.NativeTrace trace = HwTrace.create(64, 64);
 
         long result = HwTrace.ptraceTraceCall(MemorySegment.ofAddress(code.base()),
@@ -819,9 +831,9 @@ public final class HwTraceTest {
         ok(result == 42, "ptraceTraceCall(20,22): result == 42 (got " + result + ")");
 
         long[] insns = trace.insnOffsets();
-        long[] wantInsns = {0x0, 0x3, 0x6, 0xC, 0x11};
+        long[] wantInsns = x86 ? new long[] {0x0, 0x3, 0x6, 0xC, 0x11} : new long[] {0x0, 0x4, 0x8, 0x10};
         ok(Arrays.equals(insns, wantInsns),
-            "ptrace insnOffsets == [0,3,6,12,17] (got " + Arrays.toString(insns) + ")");
+            "ptrace insnOffsets == host-arch stream (got " + Arrays.toString(insns) + ")");
         ok(!trace.truncated(), "ptrace !truncated");
 
         trace.free();
@@ -864,6 +876,11 @@ public final class HwTraceTest {
     // reconstructs the identical [0,3,6,c,11] ground-truth stream as the fork/single-step paths.
     private static void ptraceStealthTrace() {
         if (ptraceUnavailable()) return;
+        if (!hostIsX86_64()) {
+            System.out.println("# SKIP ptrace stealth: x86-64 fixture / C oracle, host arch "
+                + System.getProperty("os.arch"));
+            return;
+        }
         HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
         HwTrace.StealthResult res = HwTrace.stealthTrace(code, 20, 22); // 42 <= 100 -> jle taken
         System.out.println("# stealth: armed=" + res.armed() + " truncated=" + res.truncated()
@@ -896,6 +913,11 @@ public final class HwTraceTest {
     // unconditionally on any ptrace lane. Mirrors the C oracle test_ptrace_window_call.
     private static void ptraceWindowCall() {
         if (ptraceUnavailable()) return;
+        if (!hostIsX86_64()) {
+            System.out.println("# SKIP ptrace windowCall: x86-64 driver/leaf fixtures, host arch "
+                + System.getProperty("os.arch"));
+            return;
+        }
         HwTrace.NativeCode m1 = HwTrace.NativeCode.fromBytes(M1);
         HwTrace.NativeCode m2 = HwTrace.NativeCode.fromBytes(M2);
         long a1 = m1.base(), a2 = m2.base();
@@ -920,6 +942,11 @@ public final class HwTraceTest {
     // runtime, exact result). Mirrors the C oracle test_stealth_windowed.
     private static void stealthWindow() {
         if (ptraceUnavailable()) return;
+        if (!hostIsX86_64()) {
+            System.out.println("# SKIP stealth windowed: x86-64 driver/leaf fixtures, host arch "
+                + System.getProperty("os.arch"));
+            return;
+        }
         HwTrace.NativeCode m1 = HwTrace.NativeCode.fromBytes(M1);
         HwTrace.NativeCode m2 = HwTrace.NativeCode.fromBytes(M2);
         long a1 = m1.base(), a2 = m2.base();
