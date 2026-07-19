@@ -67,7 +67,7 @@ SUITE_EXCLUDES := test_robust test_failure_demo test_bench \
                   test_dataflow_gcmove test_dataflow_objid \
                   test_dataflow_helpers test_dataflow_blockstep \
                   test_dataflow_pt \
-                  test_apx_basic
+                  test_apx_basic test_sde_crosscheck
 SUITES         := $(filter-out $(addprefix $(BUILD)/,$(SUITE_EXCLUDES)), \
                   $(patsubst examples/%.c,$(BUILD)/%, \
                   $(sort $(wildcard examples/test_*.c))))

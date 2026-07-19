@@ -49,6 +49,7 @@ sde-test:
 	@$(MAKE) --no-print-directory sde-null-test
 	@$(MAKE) --no-print-directory sde-avx512-test
 	@$(MAKE) --no-print-directory sde-apx-test
+	@$(MAKE) --no-print-directory sde-crosscheck-test
 	@echo "== sde-test: all SDE sub-lanes passed =="
 endif
 
@@ -118,4 +119,37 @@ else
 	   exit 1; \
 	 fi; \
 	 echo "sde-apx-test: all apx.* cases ran green under sde64 $(SDE_CHIP) (no CPUID skip)"
+endif
+
+# --- Unicorn cross-check on overlapping baseline ISA ------------------------
+# Anchors SDE against the existing Unicorn emulator tier: for scalar GP + SSE ISA
+# both engines model, the same routine executed natively-under-SDE and through
+# Unicorn must agree (result, CF/ZF, every SSE lane). Link mirrors the test_emu
+# rule's object list, with add.o/flags.o/simd.o as the routine objects (no
+# disasm.o/fuzz.o — this suite needs neither). test_sde_crosscheck is in
+# SUITE_EXCLUDES so it never enters `make test`.
+$(BUILD)/test_sde_crosscheck: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/flags.o \
+                              $(BUILD)/simd.o $(BUILD)/emu.o $(BUILD)/trace.o \
+                              $(BUILD)/test_sde_crosscheck.o
+	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) -o $@
+
+# Gated on libunicorn (the docker-sde image installs libunicorn-dev). Runs the one
+# binary TWICE: bare (native vs Unicorn on real silicon — a valid check on any x86
+# box) and under SDE (SDE vs Unicorn-inside-SDE — the anchor). Both must be all-ok;
+# the test binary exits nonzero on any assertion failure, failing the recipe.
+SDE_HAVE_UNICORN := $(shell pkg-config --exists unicorn 2>/dev/null && echo 1)
+
+.PHONY: sde-crosscheck-test
+sde-crosscheck-test:
+	@echo "== sde-crosscheck-test =="
+ifneq ($(SDE_HAVE_UNICORN),1)
+	@echo "# SKIP: libunicorn not found (the docker-sde image installs it)"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) --no-print-directory $(BUILD)/test_sde_crosscheck
+	@echo "-- bare: native vs Unicorn on real silicon --"
+	@$(BUILD)/test_sde_crosscheck
+	@echo "-- under SDE: SDE vs Unicorn-inside-SDE --"
+	@$(SDE64) $(SDE_CHIP) -- $(BUILD)/test_sde_crosscheck
+	@echo "sde-crosscheck-test: native/SDE agree with the Unicorn oracle (both runs all-ok)"
 endif
