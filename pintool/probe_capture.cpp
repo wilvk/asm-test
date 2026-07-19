@@ -46,9 +46,12 @@ static KNOB<std::string> KnobFunc(KNOB_MODE_WRITEONCE, "pintool", "func",
                                   "capref", "target routine to probe");
 static KNOB<std::string> KnobShm(KNOB_MODE_WRITEONCE, "pintool", "shm",
                                  AV_SHM_NAME, "POSIX shm channel name");
+static KNOB<UINT32> KnobPtrCap(KNOB_MODE_WRITEONCE, "pintool", "ptrcap", "4096",
+                               "pointed-to buffer read cap (bytes)");
 
 static av_shm_channel_t *g_chan =
     0; /* created + mapped in main()             */
+static uint32_t g_ptrcap = AV_PTRCAP_DEFAULT; /* -ptrcap, set in main()   */
 
 static void say(const char *msg) {
     size_t n = 0;
@@ -74,6 +77,109 @@ static void put_reg(uint32_t reg, uint64_t val, bool is_write) {
     r->is_write = is_write;
     r->value_valid = true;
     r->value = val;
+}
+
+static int is_hex(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') ||
+           (c >= 'A' && c <= 'F');
+}
+static uint64_t hex_val(char c) {
+    if (c >= '0' && c <= '9')
+        return (uint64_t)(c - '0');
+    if (c >= 'a' && c <= 'f')
+        return (uint64_t)(c - 'a' + 10);
+    return (uint64_t)(c - 'A' + 10);
+}
+
+/* Is `ptr` inside a READABLE mapping of this address space? In probe mode Pin runs
+ * the tool IN the application's address space and PIN_SafeCopy is JIT-mode-only (the
+ * kit marks it "Mode: JIT"), so the design note's "validate against the target's
+ * mapped ranges" is done directly against /proc/self/maps — which here IS the
+ * target's own map. On a hit returns 1 and sets *end to the mapping's end (so the
+ * read clamps to it and can never over-read). Fail-closed: any parse/read hiccup
+ * returns 0 (refuse), never a guess. */
+static int readable_extent(uint64_t ptr, uint64_t *end) {
+    int fd = open("/proc/self/maps", O_RDONLY);
+    if (fd < 0)
+        return 0;
+    static char buf[1 << 18]; /* 256 KiB: ample for a fixture's map table */
+    size_t total = 0;
+    ssize_t n;
+    while (total < sizeof(buf) &&
+           (n = read(fd, buf + total, sizeof(buf) - total)) > 0)
+        total += (size_t)n;
+    close(fd);
+    size_t i = 0;
+    while (i < total) {
+        uint64_t start = 0, e = 0;
+        int any = 0;
+        while (i < total && is_hex(buf[i])) {
+            start = start * 16 + hex_val(buf[i]);
+            i++;
+            any = 1;
+        }
+        if (any && i < total && buf[i] == '-') {
+            i++;
+            while (i < total && is_hex(buf[i])) {
+                e = e * 16 + hex_val(buf[i]);
+                i++;
+            }
+            while (i < total && buf[i] == ' ')
+                i++;
+            char perm_r = (i < total) ? buf[i] : '-';
+            if (perm_r == 'r' && ptr >= start && ptr < e) {
+                *end = e;
+                return 1;
+            }
+        }
+        while (i < total && buf[i] != '\n')
+            i++;
+        if (i < total)
+            i++;
+    }
+    return 0;
+}
+
+/* Capture the buffer a pointer argument points at (T4): up to g_ptrcap bytes, clamped
+ * to BOTH the end of the containing page AND the end of the validated readable
+ * mapping, so neither a valid-but-short mapping nor a bad pointer can over-read or
+ * fault. A pointer in no readable mapping is REFUSED — a zero-length MEM record, not a
+ * dereference. AT_LOC_MEM_ABS, addr = the pointer value; bytes spill to wide[]. */
+static void put_buffer(uint64_t ptr) {
+    if (g_chan->recs_len >= AV_SHM_RECS_CAP) {
+        g_chan->truncated = 1;
+        return;
+    }
+    uint32_t off = g_chan->wide_len;
+    uint32_t got = 0;
+    uint64_t map_end = 0;
+    if (readable_extent(ptr, &map_end)) {
+        const uint64_t page = 4096;
+        uint64_t page_end = (ptr / page + 1) * page;
+        uint64_t avail = page_end - ptr;
+        if (map_end - ptr < avail)
+            avail = map_end - ptr;
+        uint32_t want = g_ptrcap;
+        if ((uint64_t)want > avail)
+            want = (uint32_t)avail;
+        if ((uint64_t)off + want <= AV_SHM_WIDE_CAP) {
+            const uint8_t *src = (const uint8_t *)ptr;
+            for (uint32_t k = 0; k < want; k++)
+                g_chan->wide[off + k] = src[k];
+            got = want;
+            g_chan->wide_len = off + got;
+        } else {
+            g_chan->truncated = 1;
+        }
+    }
+    at_val_rec_t *r = &g_chan->recs[g_chan->recs_len++];
+    r->kind = AT_LOC_MEM_ABS;
+    r->addr = ptr;
+    r->size = (uint16_t)got;
+    r->is_write = false;
+    r->value_valid = (got > 0);
+    r->wide = (got > 0);
+    r->wide_off = off;
 }
 
 /* ------------------------------------------------------------------ */
@@ -105,6 +211,9 @@ static VOID OnEntry(ADDRINT rdi, ADDRINT rsi, ADDRINT rdx, ADDRINT rcx,
     fp.d = d;
     put_reg(CS_XMM0, fp.u,
             false); /* the FP arg's bit pattern, inline (8 bytes) */
+    /* The fixture designates RDX (the 3rd int arg, `buf`) as a pointer: capture the
+     * buffer it points at, validated + never faulting (T4). */
+    put_buffer((uint64_t)rdx);
 }
 
 /* Exit: RAX (+ RDX for a 128-bit return) and RFLAGS — the integer return set,
@@ -235,6 +344,7 @@ int main(int argc, char *argv[]) {
     if (PIN_Init(argc, argv))
         return 1;
     say("asmtest_probe: loaded\n");
+    g_ptrcap = KnobPtrCap.Value();
     if (!map_channel())
         return 2;
     IMG_AddInstrumentFunction(on_img, 0);
