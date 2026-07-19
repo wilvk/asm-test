@@ -118,6 +118,7 @@ help:
 	@echo ''
 	@echo 'Native runtime trace tiers (optional, Linux x86-64; self-skip if absent):'
 	@echo '  drtrace-test    in-process DynamoRIO native trace (set DYNAMORIO_HOME)'
+	@echo '  sde-test        run suites under Intel SDE -future (future/absent ISA; set SDE_HOME; make docker-sde)'
 	@echo '  drtrace-bindings-test  per-language DynamoRIO wrapper tests (all bindings)'
 	@echo '  hwtrace-test    hardware trace: single-step (x86-64 Linux/macOS) / PT / AMD LBR / IBS'
 	@echo '  hwtrace-pt-live  live Intel PT whole-window smoke (bare-metal Intel + CAP_PERFMON/paranoid<0; fails rather than skips)'
@@ -174,6 +175,7 @@ help:
 	@echo '  docker-<lang>              one language image (e.g. docker-rust)'
 	@echo '  docker-drtrace             DynamoRIO native-trace tier (C + Python) in a container'
 	@echo '  docker-drtrace-bindings    DynamoRIO native-trace wrapper tests for every language'
+	@echo '  docker-sde                 Intel SDE future/absent-ISA lane (APX/AVX-512-on-AVX2 under sde64 -future; x86-64)'
 	@echo '  docker-drext-probe         DynamoRIO extension-load probe (taint tier, Increment 2)'
 	@echo '  docker-fuzz                libFuzzer + AFL++ external-engine coverage shim (both find the planted crash)'
 	@echo '  docker-sve-sweep           SVE suite at VQ 1/3/8/16 under qemu binfmt (arm64)'
@@ -915,6 +917,7 @@ include mk/bench.mk          # cross-system performance + feature benchmarking
 include mk/cli.mk            # asmspy: ncurses front-end over the tracer
 include mk/bindings.mk       # conformance corpus + language bindings + packaging
 include mk/docs.mk           # Sphinx / Read the Docs
+include mk/sde.mk            # Intel SDE future/absent-ISA lane (APX/AVX-512-on-AVX2)
 
 clean: docs-clean
 	rm -rf $(BUILD)

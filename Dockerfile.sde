@@ -1,0 +1,110 @@
+# Dockerfile.sde — containerized test lane for the Intel SDE future/absent-ISA
+# oracle. Runs an UNMODIFIED suite binary under `sde64 -future` so future-ISA
+# routines (APX r16-r31 / REX2, AVX10.2, AMX, AVX-512-on-AVX2) get the full
+# register/flag/memory/ABI assertion battery on any x86-64 host — the whole point
+# of the lane, and untestable any other way in this tree (the DynamoRIO tier runs
+# on real silicon; the Unicorn tier's QEMU 5.0.1 predates AVX TCG).
+#
+# Carries THREE digest-gated pinned tools, none installable from apt at a usable
+# version:
+#   - Intel SDE 10.8.0        the emulator (fetch-sde.sh, gate runs in-image)
+#   - GNU binutils 2.46.1     GAS that can encode APX (Ubuntu 24.04 ships 2.42 =>
+#                             EGPR-only; 2.43 completes APX_F — hence the source
+#                             build). Provides the new `as`.
+#   - NASM 3.02               Intel-syntax APX/AVX10 assembler (Ubuntu's 2.16.01
+#                             is pre-APX). Covers the ASM_SYNTAX=nasm backend.
+# libunicorn (apt) backs the T6 SDE-vs-emulator cross-check.
+#
+# Linux x86-64 only. SDE is an x86-only DBI emulator; the pinned kit is the Linux
+# build, and the sde-* targets self-skip off x86-64 (mk/sde.mk arch gate). SDE is
+# proprietary freeware, fetched + digest-verified at build time and NEVER bundled
+# into a shipped artifact (see licenses/README.md) — test-lane only.
+#
+# Build + run:  make docker-sde
+ARG BASE=ubuntu:24.04
+FROM ${BASE}
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# C toolchain + curl to fetch the three kits, xz-utils to unpack them, and
+# libunicorn-dev for the T6 SDE-vs-emulator cross-check. Deliberately NO nasm from
+# apt (Ubuntu 24.04's nasm 2.16.01 cannot encode APX — the pinned 3.02 is built
+# below); the GAS from build-essential (2.42) is likewise superseded by the pinned
+# binutils 2.46.1 below.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential curl ca-certificates xz-utils pkg-config \
+      libunicorn-dev \
+ && rm -rf /var/lib/apt/lists/*
+
+# Copy the trust anchors first so the in-image digest gates reuse the SAME tested
+# helpers the fetch scripts use (tp_digest/tp_sha256 over the manifest). The lib
+# resolves the manifest from $0's dir, which is wrong under `sh -c`, so every gate
+# below overrides TP_MANIFEST explicitly (a documented knob of that lib).
+COPY scripts/lib-thirdparty.sh scripts/third-party-digests.txt /tmp/tp/
+
+# --- Intel SDE 10.8.0 -------------------------------------------------------
+# Verify the digest INSIDE the build (an improvement on Dockerfile.drtrace, which
+# predates the manifest and curls raw): a wrong/moved asset FAILS the build.
+ARG SDE_VERSION=10.8.0
+ARG SDE_URL=https://downloadmirror.intel.com/915934/sde-external-10.8.0-2026-03-15-lin.tar.xz
+RUN curl -fsSL "$SDE_URL" -o /tmp/sde.tar.xz \
+ && sh -c 'TP_MANIFEST=/tmp/tp/third-party-digests.txt; . /tmp/tp/lib-thirdparty.sh; \
+           want=$(tp_digest tarball-sha256 intel-sde '"$SDE_VERSION"') || exit 1; \
+           got="sha256:$(tp_sha256 /tmp/sde.tar.xz)"; \
+           [ "$got" = "$want" ] || { echo "SDE digest mismatch: $got != $want" >&2; exit 1; }' \
+ && mkdir -p /opt/sde \
+ && tar -xJf /tmp/sde.tar.xz -C /opt/sde --strip-components=1 \
+ && rm /tmp/sde.tar.xz
+ENV SDE_HOME=/opt/sde
+
+# --- GNU binutils 2.46.1 (APX-capable GAS) ----------------------------------
+# Digest-gated exactly like SDE. --disable-gdb/--disable-gprofng/--disable-nls
+# trim the build to the assembler/linker path we need (a working `as`); the doc's
+# minimum was --disable-werror --disable-gdb, the extra --disable-* only speed the
+# build and dodge optional-subdir deps (gprofng needs bison). COMPILER_PATH makes
+# gcc's assembler driver find the new `as` ahead of /usr/bin/as; PATH covers
+# direct invocation. Verify the version AND assemble an APX probe (an EGPR move =
+# binutils >= 2.42, an NDD add = >= 2.43; both pass on 2.46.1) so an
+# APX-incapable assembler fails THIS build, not a later test.
+ARG BINUTILS_VERSION=2.46.1
+ARG BINUTILS_URL=https://ftp.gnu.org/gnu/binutils/binutils-2.46.1.tar.xz
+RUN curl -fsSL "$BINUTILS_URL" -o /tmp/binutils.tar.xz \
+ && sh -c 'TP_MANIFEST=/tmp/tp/third-party-digests.txt; . /tmp/tp/lib-thirdparty.sh; \
+           want=$(tp_digest tarball-sha256 binutils '"$BINUTILS_VERSION"') || exit 1; \
+           got="sha256:$(tp_sha256 /tmp/binutils.tar.xz)"; \
+           [ "$got" = "$want" ] || { echo "binutils digest mismatch: $got != $want" >&2; exit 1; }' \
+ && mkdir -p /tmp/binutils && tar -xJf /tmp/binutils.tar.xz -C /tmp/binutils --strip-components=1 \
+ && cd /tmp/binutils \
+ && ./configure --prefix=/opt/binutils --disable-werror --disable-gdb \
+      --disable-gprofng --disable-nls >/dev/null \
+ && make -j"$(nproc)" MAKEINFO=true >/dev/null \
+ && make install MAKEINFO=true >/dev/null \
+ && cd / && rm -rf /tmp/binutils /tmp/binutils.tar.xz
+ENV PATH=/opt/binutils/bin:$PATH COMPILER_PATH=/opt/binutils/bin
+RUN as --version | grep -F 2.46.1 \
+ && printf 'movq %%r16, %%rax\n\taddq %%rsi, %%rdi, %%rax\n' | as -o /dev/null -
+
+# --- NASM 3.02 (Intel-syntax APX/AVX10) -------------------------------------
+ARG NASM_VERSION=3.02
+ARG NASM_URL=https://www.nasm.us/pub/nasm/releasebuilds/3.02/nasm-3.02.tar.xz
+RUN curl -fsSL "$NASM_URL" -o /tmp/nasm.tar.xz \
+ && sh -c 'TP_MANIFEST=/tmp/tp/third-party-digests.txt; . /tmp/tp/lib-thirdparty.sh; \
+           want=$(tp_digest tarball-sha256 nasm '"$NASM_VERSION"') || exit 1; \
+           got="sha256:$(tp_sha256 /tmp/nasm.tar.xz)"; \
+           [ "$got" = "$want" ] || { echo "nasm digest mismatch: $got != $want" >&2; exit 1; }' \
+ && mkdir -p /tmp/nasm && tar -xJf /tmp/nasm.tar.xz -C /tmp/nasm --strip-components=1 \
+ && cd /tmp/nasm && ./configure --prefix=/opt/nasm >/dev/null \
+ && make -j"$(nproc)" >/dev/null && make install >/dev/null \
+ && cd / && rm -rf /tmp/nasm /tmp/nasm.tar.xz
+ENV PATH=/opt/nasm/bin:$PATH
+RUN nasm -v | grep -F 3.02
+
+WORKDIR /src
+COPY . .
+
+# Run the suite under Intel SDE -future: the transparency null test on baseline
+# suites (byte-identical native-vs-SDE TAP), the APX/future-ISA fixtures that
+# cannot run any other way, the AVX-512-on-AVX2 un-skip, and the Unicorn
+# cross-check. All self-skip cleanly off x86-64, but here the arch gate passes.
+CMD make sde-test SDE_HOME=$SDE_HOME

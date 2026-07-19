@@ -25,6 +25,10 @@ tarball-sha256  pin        3.20-98437-gf02b61307  sha256:ca2f542eee2013471961bb6
 # libdft64 differential-oracle engine (AngoraFuzzer fork), master HEAD 2025-02-21,
 # git-commit-pinned like keystone/capstone (pin-libdft-taint-oracle.md).
 git-commit      libdft64   20804d5      commit:20804d5bae5d8aed31a71761b1a1149e35a0da95
+# binutils + nasm: APX-capable assemblers for the SDE future-ISA lane
+# (Dockerfile.sde builds them from these pinned sources; pin-sde-future-isa-lane).
+tarball-sha256  binutils   2.46.1  sha256:e127a709cba24c76de8936cb7083dd768f28cd37eb010492e2f19b71eb1294e4
+tarball-sha256  nasm       3.02  sha256:87336eba53b4acfe917424ab5d500d2b0054d9f5148d35c2273ccf2cfb712f0d
 git-commit      keystone   0.9.2        commit:dc7932ef2b2c4a793836caec6ecab485005139d6
 git-commit      capstone   5.0.1        commit:097c04d9413c59a58b00d4d1c8d5dc0ac158ffaa
 tarball-sha256  zig-linux-x86_64   0.13.0  sha256:d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea

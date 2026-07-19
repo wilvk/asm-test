@@ -23,10 +23,14 @@ read_ver() { sed -n -E "s/.*$2.*/\1/p" "$root/$1" | head -n1; }
 dr_ver=$(read_ver scripts/fetch-dynamorio.sh 'DR_VERSION="\$\{DR_VERSION:-([0-9][0-9.]*)\}"')
 pin_ver=$(read_ver scripts/fetch-pin.sh      'PIN_VERSION="\$\{PIN_VERSION:-([0-9][0-9A-Za-z.-]*)\}"')
 sde_ver=$(read_ver scripts/fetch-sde.sh      'SDE_VERSION="\$\{SDE_VERSION:-([0-9][0-9.]*)\}"')
+# binutils + NASM pins live as ARGs in Dockerfile.sde (the SDE lane's APX-capable
+# assemblers), not a fetch-*.sh — read them there.
+binutils_ver=$(read_ver Dockerfile.sde       'ARG BINUTILS_VERSION=([0-9][0-9.]*)')
+nasm_ver=$(read_ver Dockerfile.sde           'ARG NASM_VERSION=([0-9][0-9.]*)')
 ks_ver=$(read_ver scripts/build-keystone.sh  'VERSION="\$\{1:-([0-9][0-9.]*)\}"')
 cs_ver=$(read_ver scripts/build-capstone.sh  'VERSION="\$\{1:-([0-9][0-9.]*)\}"')
 zig_ver=$(read_ver mk/docker.mk              'ZIG_VERSION \?= ([0-9][0-9.]*)')
-[ -n "$dr_ver" ] && [ -n "$pin_ver" ] && [ -n "$sde_ver" ] && [ -n "$ks_ver" ] && [ -n "$cs_ver" ] && [ -n "$zig_ver" ] || {
+[ -n "$dr_ver" ] && [ -n "$pin_ver" ] && [ -n "$sde_ver" ] && [ -n "$binutils_ver" ] && [ -n "$nasm_ver" ] && [ -n "$ks_ver" ] && [ -n "$cs_ver" ] && [ -n "$zig_ver" ] || {
     echo "refresh: could not read one of the pinned versions (patterns changed?)" >&2; exit 1; }
 
 # Immutable commit a tag resolves to (peeled ^{} for annotated tags).
@@ -72,6 +76,26 @@ sde_digest() { # <version>
     echo "$d"
 }
 
+# GNU binutils release tarball SHA-256 (ftp.gnu.org hosts directly, no API).
+binutils_digest() { # <version>
+    url="https://ftp.gnu.org/gnu/binutils/binutils-$1.tar.xz"
+    tmp=$(mktemp)
+    curl -fsSL "$url" -o "$tmp" || { rm -f "$tmp"; echo "refresh: cannot download binutils $1 tarball" >&2; exit 1; }
+    d="sha256:$(tp_sha256 "$tmp")"
+    rm -f "$tmp"
+    echo "$d"
+}
+
+# NASM release tarball SHA-256 (nasm.us hosts directly, no API).
+nasm_digest() { # <version>
+    url="https://www.nasm.us/pub/nasm/releasebuilds/$1/nasm-$1.tar.xz"
+    tmp=$(mktemp)
+    curl -fsSL "$url" -o "$tmp" || { rm -f "$tmp"; echo "refresh: cannot download nasm $1 tarball" >&2; exit 1; }
+    d="sha256:$(tp_sha256 "$tmp")"
+    rm -f "$tmp"
+    echo "$d"
+}
+
 # zig release tarball SHA-256, per architecture (ziglang.org hosts directly, no API).
 zig_digest() { # <version> <arch>
     url="https://ziglang.org/download/$1/zig-linux-$2-$1.tar.xz"
@@ -87,6 +111,8 @@ cs_commit=$(tag_commit capstone-engine/capstone "$cs_ver")
 dr_sha=$(dr_digest "$dr_ver")
 pin_sha=$(pin_digest "$pin_ver")
 sde_sha=$(sde_digest "$sde_ver")
+binutils_sha=$(binutils_digest "$binutils_ver")
+nasm_sha=$(nasm_digest "$nasm_ver")
 zig_x86_64_sha=$(zig_digest "$zig_ver" x86_64)
 zig_aarch64_sha=$(zig_digest "$zig_ver" aarch64)
 
@@ -97,6 +123,8 @@ zig_aarch64_sha=$(zig_digest "$zig_ver" aarch64)
     printf 'tarball-sha256  dynamorio  %s  %s\n' "$dr_ver" "$dr_sha"
     printf 'tarball-sha256  pin        %s  %s\n' "$pin_ver" "$pin_sha"
     printf 'tarball-sha256  intel-sde  %s  %s\n' "$sde_ver" "$sde_sha"
+    printf 'tarball-sha256  binutils   %s  %s\n' "$binutils_ver" "$binutils_sha"
+    printf 'tarball-sha256  nasm       %s  %s\n' "$nasm_ver" "$nasm_sha"
     printf 'git-commit      keystone   %s        commit:%s\n' "$ks_ver" "$ks_commit"
     printf 'git-commit      capstone   %s        commit:%s\n' "$cs_ver" "$cs_commit"
     printf 'tarball-sha256  zig-linux-x86_64   %s  %s\n' "$zig_ver" "$zig_x86_64_sha"

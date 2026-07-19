@@ -321,6 +321,22 @@ docker-drtrace:
 	  -t asmtest-drtrace .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-drtrace
 
+# SDE future/absent-ISA lane (pin-sde-future-isa-lane): an x86-64 image with a
+# pinned, digest-gated Intel SDE 10.8.0 + APX-capable GAS (binutils 2.46.1) + NASM
+# 3.02 + libunicorn that runs the suite under `sde64 -future`. SDE emulates ISA the
+# host CPU lacks (APX/AVX10.2/AMX/AVX-512-on-AVX2) for the WHOLE process, so this
+# lane needs NO future-ISA silicon — its entire reason to exist. Override
+# SDE_VERSION to bump (a bump also needs the SDE/binutils/NASM URLs + digests in
+# Dockerfile.sde / scripts/third-party-digests.txt). Linux x86-64 only; the sde-*
+# targets self-skip off x86-64.
+SDE_VERSION ?= 10.8.0
+.PHONY: docker-sde
+docker-sde:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.sde \
+	  --build-arg BASE=$(DOCKER_BASE) --build-arg SDE_VERSION=$(SDE_VERSION) \
+	  -t asmtest-sde .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-sde
+
 # Pin trace lane (pin-xed-trace-tier PIN-2 + pin-probe-mode-capture PIN-3): a container
 # with a pinned, digest-gated Intel Pin kit (and DynamoRIO, for the three-way
 # offset-parity arm) that builds the pintools + fixtures and runs `make pintool-test`
