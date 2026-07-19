@@ -68,6 +68,26 @@ DynamoRIO-based tier is addressed here.
 > the same and is now established over a broader sample: **macOS is not among
 > them.** M0 stays NO-GO; M1/M2 stay held.
 
+> **Re-confirmed 2026-07-20 — unchanged. Still NO-GO.**
+> Re-ran the releases-API query across **all 455 releases** (was 454 on
+> 2026-07-16; latest cronbuild is now `cronbuild-11.91.20651`, was
+> `11.91.20644`). Result: **still zero macOS/Mac/Darwin/dylib assets, in any
+> release, ever** — `gh api --paginate '/repos/DynamoRIO/dynamorio/releases'
+> --jq '.[].assets[].name' | grep -icE 'mac|darwin|osx|dylib'` → **0**. The
+> published platform set is unchanged but for one negligible legacy addition:
+> `DynamoRIO-Windows` (442), `DynamoRIO-Linux` (352),
+> `DynamoRIO-ARM-Linux-EABIHF` (347), `DynamoRIO-AArch64-Linux` (345),
+> `DynamoRIO-ARM-Android-EABI` (283), `DynamoRIO-i386-Linux` (98),
+> `DynamoRIO-x86_64-Linux` (95), and a single `DynamoRIO-ARM-Linux-EABI` (1) —
+> all Windows / Linux / Android, **no macOS**. M0 stays NO-GO; M1/M2 stay held,
+> and buying Apple hardware still does not unblock the plan.
+>
+> **Recheck cadence (kept manual):** re-run the one-command gate above **before
+> any M0/M1/M2 work is ever scheduled**, and whenever this plan or the
+> `macos-dynamorio-port` implementation doc is next touched. A scheduled CI job
+> that "fails successfully" for years is noise, not signal — a one-command check
+> does not warrant automation.
+
 ---
 
 ## The dominant risk, stated first
