@@ -15,6 +15,8 @@ below).
 | `LGPL-2.1.txt` | drwrap (DynamoRIO ext/) and umbra (Dr. Memory Framework) — verbatim GNU LGPL v2.1 | 11.91.20630 | LGPL-2.1-only |
 | `Pin-<ver>.txt` / `Pin-<ver>-third-party.txt` | Intel Pin (DBI pintool test lane) — **test-lane only, never bundled**: fetched and digest-verified at build/test time for `docker-pintool`/`pintool-test`, never linked into a shipped package | 4.2-99776-g21d818fa2 ([fetch-pin.sh](../scripts/fetch-pin.sh)) | LicenseRef-Intel-Simplified-Software-License |
 | `intel-sde-10.8.0/` | Intel SDE (test-lane oracle) — **test-lane only, never bundled**: the future/absent-ISA emulator, fetched and digest-verified at build/test time for `docker-sde`/`sde-test`, never linked into a shipped package | 10.8.0 ([fetch-sde.sh](../scripts/fetch-sde.sh)) | LicenseRef-Intel-Simplified-Software-License |
+| `Pin-3.20-98437-gf02b61307.txt` / `-third-party.txt` | Intel Pin (libdft64 differential-oracle test lane) — **test/oracle-only, never bundled**: fetched + digest-verified at build/test time for `docker-taint-oracle`, never linked into a shipped package. The 3.20 kit is libdft64's only tested pin | 3.20-98437-gf02b61307 ([fetch-pin.sh](../scripts/fetch-pin.sh)) | LicenseRef-Intel-EULA-SDP-2018 |
+| `libdft64.txt` | libdft64 (AngoraFuzzer fork) — the independently-implemented byte-level taint engine the DR taint client is cross-validated against — **test/oracle-only, never bundled**: fetched + git-commit-pinned for `docker-taint-oracle`, never linked into `libasmtest`/any binding | 20804d5 ([fetch-libdft.sh](../scripts/fetch-libdft.sh)) | BSD-3-Clause (Columbia libdft) |
 
 The DynamoRIO text is captured on first fetch by
 [fetch-dynamorio.sh](../scripts/fetch-dynamorio.sh) (the pinned tarball's own
@@ -63,6 +65,21 @@ be a native-trace-tier payload — never reaches a package slot, so
 `collect-licenses.sh` carries **no** entry for it at all. See
 [pin-sde-future-isa-lane.md](../docs/internal/implementations/pin-sde-future-isa-lane.md#constraints--gates)
 for the full rationale.
+
+The **Pin 3.20** kit (`docker-taint-oracle`, libdft64's only tested pin) is the same
+`fetch-pin.sh` invoked with a 3.20 `PIN_VERSION`/`PIN_URL` override. Two kit-shape
+differences the script now handles (and the older 4.2 path is unaffected by): the 3.20
+tarball's top dir is `pin-3.20-…-gcc-linux` (no `external` segment), and its license
+text is `licensing/EULA.txt` (the Intel EULA for Software Development Products, October
+2018 version) rather than the 4.2 kit's `intel-simplified-software-license.txt` — so the
+captured `Pin-3.20-98437-gf02b61307.txt` is that EULA. Like the 4.2 kit it is
+**test/oracle-only**, never bundled. `libdft64.txt` is captured on first fetch by
+[fetch-libdft.sh](../scripts/fetch-libdft.sh) from the pinned checkout's `LICENSE` (the
+permissive Columbia libdft BSD-3-Clause text libdft64 inherits); the engine is likewise
+oracle-only — linked only into the `docker-taint-oracle` Pintool, never into a shipped
+package — so it too is recorded here for provenance and not collected by
+`collect-licenses.sh`. See
+[pin-libdft-taint-oracle.md](../docs/internal/implementations/pin-libdft-taint-oracle.md#constraints--gates).
 
 [scripts/collect-licenses.sh](../scripts/collect-licenses.sh) copies the shipped-package
 rows above (all but Pin) into each package's `THIRD-PARTY-LICENSES/` — emitting the

@@ -49,8 +49,12 @@ if [ ! -x "$home/pin" ]; then
     log "verified Pin $PIN_VERSION ($got)"
     rm -rf "$home"
     ( cd "$PIN_CACHE" && tar -xzf "$tmp" )
-    # The tarball's top dir is pin-external-<ver>-gcc-linux; normalize if it differs.
-    [ -d "$home" ] || { d=$(cd "$PIN_CACHE" && ls -d pin-external-*/ 2>/dev/null | head -1); [ -n "$d" ] && mv "$PIN_CACHE/$d" "$home"; }
+    # The tarball's top dir is pin-external-<ver>-gcc-linux for the newer kits, but the
+    # 3.20 kit (libdft64's tested pin) ships as plain pin-<ver>-gcc-linux with NO
+    # `external` segment — so normalize both spellings to $home. The `pin-*/` fallback is
+    # only reached for a non-external kit (the external kit's $home already exists after
+    # extraction and short-circuits this line), so the 4.2 path is unaffected.
+    [ -d "$home" ] || { d=$(cd "$PIN_CACHE" && ls -d pin-external-*/ pin-*/ 2>/dev/null | head -1); [ -n "$d" ] && mv "$PIN_CACHE/$d" "$home"; }
     rm -f "$tmp"
     log "extracted to $home"
 else
@@ -61,7 +65,15 @@ fi
 # Test-lane only (see licenses/README.md): Pin is never bundled into a shipped
 # package, so this capture exists for provenance, not for collect-licenses.sh.
 lic="$root/licenses/Pin-$PIN_VERSION.txt"
-[ -f "$lic" ] || { [ -f "$home/licensing/intel-simplified-software-license.txt" ] && cp "$home/licensing/intel-simplified-software-license.txt" "$lic" && log "captured license -> $(basename "$lic")"; }
+# The 4.2 kit names its license licensing/intel-simplified-software-license.txt; the
+# 3.20 kit names the same terms licensing/EULA.txt. Try both (first hit wins, so 4.2
+# is unaffected) so either kit captures its proprietary license text.
+if [ ! -f "$lic" ]; then
+    for c in "$home/licensing/intel-simplified-software-license.txt" \
+             "$home/licensing/EULA.txt"; do
+        [ -f "$c" ] && cp "$c" "$lic" && log "captured license -> $(basename "$lic")" && break
+    done
+fi
 lic3p="$root/licenses/Pin-$PIN_VERSION-third-party.txt"
 [ -f "$lic3p" ] || { [ -f "$home/licensing/third-party-programs.txt" ] && cp "$home/licensing/third-party-programs.txt" "$lic3p" && log "captured license -> $(basename "$lic3p")"; }
 
