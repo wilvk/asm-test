@@ -131,6 +131,7 @@ ALL asmtest_amd_msr_trace             # AMD MSR-direct LBR snapshot (src/msr_lbr
 ALL asmtest_amd_msr_available         #   substrate probe for the above (amd_lbr_v2 + /dev/cpu/N/msr); C-level gate, not per-binding FFI
 ALL asmtest_ss_btf_trace              # W3 in-process BTF branch-granular single-step (src/ss_btf.c): C-level callback capture, self-hosted privileged lane only — same posture as asmtest_amd_msr_trace
 ALL asmtest_ss_btf_available          #   substrate probe for the above (bare-metal x86-64 Linux + /dev/cpu/N/msr); C-level gate, not per-binding FFI
+ALL asmtest_ibs_available             # AMD IBS backend availability probe (amd-ibs-backend-honesty): C-level gate consumed by the IBS survey/precover paths, not per-binding FFI — same posture as asmtest_amd_msr_available / asmtest_ss_btf_available above
 
 # Whole-window / statistical-survey C-surface — dotnet is the lead binding (its managed
 # AsmTrace tier drives these); the other nine gain them when they grow a whole-window scope
