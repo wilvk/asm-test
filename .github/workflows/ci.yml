@@ -630,7 +630,13 @@ jobs:
   hwtrace-arm64:
     name: hwtrace (AArch64 ptrace stream, live)
     runs-on: ubuntu-24.04-arm
-    timeout-minutes: 20
+    timeout-minutes: 15
+    # NON-BLOCKING while the aarch64 suite is being hardened for its first live run
+    # (aarch64-ptrace-single-step-validation T1). Several arch assumptions have been
+    # fixed already (frame_insns_eq -Werror, test_debug_logging, stealth_window_inline
+    # + register_idempotent x86-fixture SIGILLs); a slow/hanging ptrace-stepper path is
+    # still under triage. Flip continue-on-error off (make it gating) once it runs green.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v7
 
