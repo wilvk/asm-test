@@ -80,15 +80,19 @@ static int diff_offsets(const uint64_t *a, size_t na, const uint64_t *b,
 static asmtest_trace_t *single_step_trace(void) {
     void *base = 0;
     size_t len = 0;
-    if (asmtest_hwtrace_exec_alloc(ROUTINE, sizeof ROUTINE, &base, &len) !=
-        ASMTEST_HW_OK)
+    int rc = asmtest_hwtrace_exec_alloc(ROUTINE, sizeof ROUTINE, &base, &len);
+    if (rc != ASMTEST_HW_OK) {
+        printf("# single-step: exec_alloc failed (%d)\n", rc);
         return 0;
+    }
 
     asmtest_hwtrace_options_t opts;
     memset(&opts, 0, sizeof opts);
     opts.struct_size = sizeof opts;
     opts.backend = ASMTEST_HWTRACE_SINGLESTEP;
-    if (asmtest_hwtrace_init(&opts) != ASMTEST_HW_OK) {
+    rc = asmtest_hwtrace_init(&opts);
+    if (rc != ASMTEST_HW_OK) {
+        printf("# single-step: init failed (%d)\n", rc);
         asmtest_hwtrace_exec_free(base, len);
         return 0;
     }

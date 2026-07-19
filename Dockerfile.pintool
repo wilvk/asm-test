@@ -19,8 +19,13 @@ FROM ${BASE}
 ENV DEBIAN_FRONTEND=noninteractive
 
 # C/C++ toolchain + CMake (the DynamoRIO parity client is CMake-built), curl to
-# fetch both DBI kits. No Capstone/Unicorn: this lane produces no value trace,
-# only offset traces, so the disassembler tiers are unnecessary (keeps it light).
+# fetch both DBI kits. Capstone is built from pinned source below: the T6
+# single-step offset-parity arm needs it — asmtest_hwtrace_available(SINGLESTEP)
+# gates on the disassembler for block normalization (src/hwtrace.c decoder_present),
+# so without Capstone that arm can only self-skip, and "a test that can only ever
+# self-skip is not a test" (CLAUDE.md). (This corrects the source doc, which assumed
+# the single-step backend needs no decoder.) No Unicorn: this lane produces no value
+# trace, only offset traces.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential cmake pkg-config curl ca-certificates xz-utils git \
@@ -47,6 +52,11 @@ ENV DYNAMORIO_HOME=/opt/dynamorio
 
 WORKDIR /src
 COPY . .
+
+# Build Capstone from the pinned source release (no apt package — mirrors
+# Dockerfile.drtrace). Enables the single-step backend's block normalization, so
+# the T6 single-step offset-parity arm runs live in-container instead of self-skipping.
+RUN sh scripts/build-capstone.sh && ldconfig
 
 # Run the Pin trace parity lane: workload under `pin -t asmtest_pintool.so`, then
 # an out-of-process validator asserting the exact offsets AND byte-for-byte parity
