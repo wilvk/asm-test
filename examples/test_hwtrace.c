@@ -3995,6 +3995,37 @@ static void test_pt_window_pair_selfskip(void) {
            "hwtrace-pt-live (T5)\n");
 }
 
+/* intel-pt-attach-foreign-pid T1 — the foreign (pid>0) capture envelope. On this
+ * AMD host (no intel_pt PMU) the whole capture self-skips; we prove the EINVAL/
+ * EUNAVAIL envelope and no leak. The live foreign-pid capture is hardware-gated
+ * (bare-metal Intel PT + CAP_PERFMON) and validated by a separate agent. */
+static void test_pt_attach_selfskip(void) {
+    /* (1) NULL out is EINVAL on every host — the arg check precedes the gate. */
+    CHECK(asmtest_hwtrace_pt_attach_begin((int)getpid(), NULL, NULL) ==
+              ASMTEST_HW_EINVAL,
+          "pt attach: begin(NULL out) is EINVAL on every host (arg check "
+          "precedes the availability gate)");
+
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT)) {
+        /* (2) Off the intel_pt PMU: a clean EUNAVAIL self-skip with *out == NULL
+         * (nothing opened, nothing to leak). */
+        asmtest_pt_attach_t *a =
+            (asmtest_pt_attach_t
+                 *)(uintptr_t)0x1; /* poison: begin must NULL it */
+        int rc = asmtest_hwtrace_pt_attach_begin((int)getpid(), NULL, &a);
+        CHECK(rc == ASMTEST_HW_EUNAVAIL && a == NULL,
+              "pt attach: begin self-skips EUNAVAIL with *out==NULL off the "
+              "intel_pt PMU");
+        printf("# SKIP pt attach: no Intel PT on this host (live foreign-pid "
+               "capture is hardware-gated)\n");
+        return;
+    }
+    /* On real Intel PT silicon the live foreign capture is validated by the
+     * hardware-gated attach lane (a separate agent). */
+    printf("# NOTE pt attach: intel_pt present — live foreign-pid capture "
+           "validated by the hardware-gated attach lane\n");
+}
+
 /* T3 — the WEAK/STRONG window ladder + runtime decode-trust probe. Host-neutral: the
  * ladder must never return an unavailable backend, must not pick INTEL_PT off Intel PT,
  * and (where libipt is built) the trust probe must equal codeimage_available() exactly
@@ -10402,6 +10433,7 @@ int main(void) {
      * hardware). Self-skips where libipt is absent. */
     test_wholewindow_decode();
     test_pt_window_pair_selfskip();
+    test_pt_attach_selfskip();
     test_window_ladder();
     test_pt_live_selfjit();
 

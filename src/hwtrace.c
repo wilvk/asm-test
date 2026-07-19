@@ -34,9 +34,11 @@
 #if defined(__linux__)
 #include <fcntl.h>
 #include <linux/perf_event.h>
+#include <poll.h> /* intel-pt-attach-foreign-pid: bounded poll() drain of a live target */
 #include <pthread.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sys/stat.h> /* intel-pt-attach-foreign-pid: S_ISREG gate on the object filter */
 #include <sys/syscall.h>
 #include <unistd.h>
 #if defined(__x86_64__) || defined(__aarch64__)
@@ -1863,6 +1865,58 @@ int asmtest_hwtrace_sample_end_amd(void *ctx, uint64_t *ips, size_t cap,
 #endif /* __linux__ && __x86_64__ */
 
 /* ------------------------------------------------------------------ */
+/* Pure, portable helpers the foreign-attach PT path is built on         */
+/* (intel-pt-attach-foreign-pid.md T4). No PMU / no syscalls, so they    */
+/* compile and unit-test on ANY host — the software half of the attach   */
+/* capture that can be validated without Intel PT silicon.               */
+/* ------------------------------------------------------------------ */
+
+/* Linearize the valid extent [tail, head) of a circular AUX ring of `aux_sz`
+ * bytes (tail/head are the monotonic aux_tail/aux_head counters) into `dst`.
+ * `dst` must hold (head - tail) bytes; the caller guarantees head-tail <= aux_sz.
+ * Two memcpys across the wrap — the AUX blob libipt decodes must be a linear
+ * snapshot. No-op when head <= tail. */
+void asmtest_pt_aux_dewrap(const uint8_t *ring, size_t aux_sz, uint64_t tail,
+                           uint64_t head, uint8_t *dst) {
+    if (ring == NULL || dst == NULL || aux_sz == 0 || head <= tail)
+        return;
+    size_t n = (size_t)(head - tail);
+    size_t start = (size_t)(tail % aux_sz);
+    size_t first = n < (aux_sz - start) ? n : (aux_sz - start);
+    memcpy(dst, ring + start, first);
+    if (n > first)
+        memcpy(dst + first, ring, n - first); /* the wrapped remainder */
+}
+
+/* Drop trace entries appended at or after (insn0, blk0) whose ABSOLUTE ip
+ * (base_ip + offset) lies outside [region_base, region_base + region_len),
+ * compacting insns[]/blocks[] in place. A whole-thread PT capture with no
+ * hardware address filter records the loader and runtime too; this is the
+ * software fallback for anonymous/JIT code that cannot be address-filtered.
+ * region_len == 0 keeps everything (no region of interest set). */
+void asmtest_pt_ip_postfilter(asmtest_trace_t *trace, size_t insn0, size_t blk0,
+                              uint64_t base_ip, uint64_t region_base,
+                              size_t region_len) {
+    if (trace == NULL || region_len == 0)
+        return;
+    uint64_t lo = region_base, hi = region_base + (uint64_t)region_len;
+    size_t w = insn0;
+    for (size_t i = insn0; i < trace->insns_len; i++) {
+        uint64_t ip = base_ip + trace->insns[i];
+        if (ip >= lo && ip < hi)
+            trace->insns[w++] = trace->insns[i];
+    }
+    trace->insns_len = w;
+    w = blk0;
+    for (size_t i = blk0; i < trace->blocks_len; i++) {
+        uint64_t ip = base_ip + trace->blocks[i];
+        if (ip >= lo && ip < hi)
+            trace->blocks[w++] = trace->blocks[i];
+    }
+    trace->blocks_len = w;
+}
+
+/* ------------------------------------------------------------------ */
 /* Shared perf-AUX intel_pt capture arm — the ONE PT open/stop/close     */
 /*                                                                     */
 /* pt_aux_open opens a per-thread (pid==0 here) perf AUX intel_pt event   */
@@ -2365,6 +2419,203 @@ int asmtest_hwtrace_pt_set_filter(void *ctx, const char *filter) {
     return ASMTEST_HW_OK;
 #else
     (void)filter;
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+/* ------------------------------------------------------------------ */
+/* §Z1.3 Intel PT attach-to-foreign-PID capture (foreign pid>0)         */
+/* intel-pt-attach-foreign-pid.md — built on the ONE pt_aux_open arm,    */
+/* never a parallel perf_open. Off Intel PT every path self-skips.       */
+/* ------------------------------------------------------------------ */
+#if defined(__linux__)
+/* The opaque capture ctx (asmtest_pt_attach_t): one foreign pt_aux_t + its live
+ * code-image recorder + a growing linearized-AUX accumulation buffer drained
+ * incrementally across poll()s. */
+struct asmtest_pt_attach {
+    pid_t pid;
+    pt_aux_t aux;
+    asmtest_codeimage_t
+        *img;        /* foreign recorder (T2; NULL if substrate absent) */
+    int have_filter; /* a hardware address filter was armed from obj_hint */
+    uint8_t *acc;    /* accumulated linearized AUX bytes (grows per drain) */
+    size_t acc_len;
+    size_t acc_cap;
+    uint64_t
+        aux_tail; /* our consumer position in the AUX ring                  */
+    uint64_t
+        roi_base;   /* software post-filter region of interest (T4; 0 = none) */
+    size_t roi_len; /*   … its length                                        */
+    int truncated;  /* sticky: any overflow / fell-behind across the capture  */
+};
+
+/* Drain the AUX ring's [aux_tail, aux_head) into the accumulation buffer via the pure
+ * de-wrap helper, advance aux_tail, and OR any truncation (PERF_AUX_FLAG_TRUNCATED in the
+ * data ring, or we fell behind by more than aux_sz) into a->truncated. The AUX ring is
+ * linear (RW, non-snapshot), so the consumer advances aux_tail to free space. */
+static void pt_attach_drain(struct asmtest_pt_attach *a) {
+    struct perf_event_mmap_page *mp =
+        (struct perf_event_mmap_page *)a->aux.base_map;
+    uint64_t head = mp->aux_head;
+    __sync_synchronize(); /* acquire: see the AUX bytes before we copy them */
+    if (aux_data_ring_truncated(a->aux.base_map, a->aux.base_sz))
+        a->truncated = 1;
+    uint64_t tail = a->aux_tail;
+    if (head <= tail)
+        return;
+    uint64_t avail = head - tail;
+    if (avail > a->aux.aux_sz) {
+        /* We fell behind: the oldest bytes were overwritten. Keep the newest aux_sz. */
+        a->truncated = 1;
+        tail = head - a->aux.aux_sz;
+        avail = a->aux.aux_sz;
+    }
+    if (a->acc_len + (size_t)avail > a->acc_cap) {
+        size_t ncap = a->acc_cap ? a->acc_cap : 4096;
+        while (ncap < a->acc_len + (size_t)avail)
+            ncap *= 2;
+        uint8_t *nb = (uint8_t *)realloc(a->acc, ncap);
+        if (nb == NULL) {
+            a->truncated = 1;
+            return; /* leave aux_tail; retry the drain next poll */
+        }
+        a->acc = nb;
+        a->acc_cap = ncap;
+    }
+    asmtest_pt_aux_dewrap((const uint8_t *)a->aux.aux_map, a->aux.aux_sz, tail,
+                          head, a->acc + a->acc_len);
+    a->acc_len += (size_t)avail;
+    a->aux_tail = head;
+    mp->aux_tail = head; /* release: tell the kernel we consumed up to head */
+    __sync_synchronize();
+}
+#endif
+
+int asmtest_hwtrace_pt_attach_begin(int pid, const char *obj_hint,
+                                    asmtest_pt_attach_t **out) {
+    /* Argument validation FIRST (every host), so the (NULL out) call is EINVAL on a
+     * no-PT dev box — the self-skip test relies on it, mirroring begin_window. */
+    if (out == NULL)
+        return ASMTEST_HW_EINVAL;
+    *out = NULL;
+#if defined(__linux__)
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT))
+        return ASMTEST_HW_EUNAVAIL; /* clean off-Intel / no-permission self-skip */
+    struct asmtest_pt_attach *a =
+        (struct asmtest_pt_attach *)calloc(1, sizeof *a);
+    if (a == NULL)
+        return ASMTEST_HW_EUNAVAIL;
+    a->pid = (pid_t)pid;
+    a->aux.fd = -1;
+    /* A live foreign target wants a larger AUX ring than the self-window default; take it
+     * from the inited tier's opts when up, else pt_aux_open's shipped 8 KiB/64 KiB. A
+     * prompt AUX wakeup watermark (a quarter of the ring) lets poll() drain a RUNNING
+     * target rather than only when the ring is half full (the kernel default). The event
+     * is per-task (cpu==-1) — required for both the foreign attach and any address
+     * filter — which pt_aux_open already does. */
+    size_t data_size = g_inited ? g_opts.data_size : 0;
+    size_t aux_size = g_inited ? g_opts.aux_size : 0;
+    uint32_t wm = (uint32_t)((aux_size ? aux_size : (size_t)64 * 1024) / 4);
+    int rc = pt_aux_open((pid_t)pid, data_size, aux_size, wm, /*snapshot=*/0,
+                         &a->aux);
+    if (rc != ASMTEST_HW_OK) {
+        /* pt_aux_open unwound its fd/mmaps already; classify the still-set errno for the
+         * caller (EACCES/EPERM => lacks CAP_PERFMON or same-uid ptrace access to pid). */
+        int e = errno;
+        if (e == EACCES || e == EPERM)
+            ASMTEST_HWDBG("pt attach: NOPERM (errno=%d) — foreign-pid PT needs "
+                          "CAP_PERFMON + same-uid ptrace access to the target",
+                          e);
+        free(a);
+        return rc;
+    }
+    /* Optional hardware address filter: ONLY when obj_hint names a REGULAR backing file
+     * (file-backed VMAs by inode). Anonymous/JIT code cannot be address-filtered — it is
+     * captured whole and scoped by the software IP post-filter in end(). A rejected filter
+     * is non-fatal (fall through to whole-thread + software filter). */
+    if (obj_hint != NULL && obj_hint[0] != '\0') {
+        struct stat st;
+        if (stat(obj_hint, &st) == 0 && S_ISREG(st.st_mode)) {
+            char filt[512];
+            snprintf(filt, sizeof filt, "filter 0/%llu@%s",
+                     (unsigned long long)st.st_size, obj_hint);
+            if (ioctl(a->aux.fd, PERF_EVENT_IOC_SET_FILTER, (void *)filt) == 0)
+                a->have_filter = 1;
+        }
+    }
+    *out = a;
+    return ASMTEST_HW_OK;
+#else
+    (void)pid;
+    (void)obj_hint;
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+int asmtest_hwtrace_pt_attach_track(asmtest_pt_attach_t *a, uint64_t base,
+                                    uint64_t len) {
+    if (a == NULL || len == 0)
+        return ASMTEST_HW_EINVAL;
+#if defined(__linux__)
+    /* Record the region of interest for end()'s software IP post-filter, and (T2) snapshot
+     * it in the code-image recorder so the decode has the exact live bytes. */
+    a->roi_base = base;
+    a->roi_len = (size_t)len;
+    if (a->img != NULL)
+        asmtest_codeimage_track(a->img, (const void *)(uintptr_t)base,
+                                (size_t)len);
+    return ASMTEST_HW_OK;
+#else
+    (void)base;
+    (void)len;
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+int asmtest_hwtrace_pt_attach_poll(asmtest_pt_attach_t *a, int timeout_ms,
+                                   int *truncated_out) {
+    if (a == NULL)
+        return ASMTEST_HW_EINVAL;
+#if defined(__linux__)
+    if (a->aux.fd < 0)
+        return ASMTEST_HW_EINVAL;
+    struct pollfd pfd = {a->aux.fd, POLLIN, 0};
+    poll(&pfd, 1,
+         timeout_ms); /* bounded wait for a wakeup; a timeout just drains now */
+    pt_attach_drain(a);
+    if (a->img != NULL)
+        asmtest_codeimage_refresh(
+            a->img); /* re-snapshot pages patched post-exec */
+    if (truncated_out != NULL)
+        *truncated_out = a->truncated;
+    return ASMTEST_HW_OK;
+#else
+    (void)timeout_ms;
+    (void)truncated_out;
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+int asmtest_hwtrace_pt_attach_end(asmtest_pt_attach_t *a, uint64_t when,
+                                  asmtest_trace_t *trace) {
+    if (a == NULL)
+        return ASMTEST_HW_EINVAL;
+#if defined(__linux__)
+    /* Stop the event and drain anything left in the ring, then decode (T4). */
+    ioctl(a->aux.fd, PERF_EVENT_IOC_DISABLE, 0);
+    pt_attach_drain(a);
+    (void)when;
+    (void)trace;
+    /* The decode dispatch lands in T4; T1 proves the capture lifecycle + teardown. */
+    pt_aux_close(&a->aux);
+    if (a->img != NULL)
+        asmtest_codeimage_free(a->img);
+    free(a->acc);
+    free(a);
+    return ASMTEST_HW_OK;
+#else
+    (void)when;
+    (void)trace;
     return ASMTEST_HW_ENOSYS;
 #endif
 }

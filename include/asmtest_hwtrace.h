@@ -667,6 +667,62 @@ int asmtest_hwtrace_pt_end_window(void *ctx, asmtest_codeimage_t *img,
 int asmtest_hwtrace_pt_set_filter(void *ctx, const char *filter);
 
 /* ------------------------------------------------------------------ */
+/* §Z1.3 — Intel PT attach-to-foreign-PID capture                       */
+/* ------------------------------------------------------------------ */
+/* The foreign (pid>0) sibling of the begin/end window pair above: open an
+ * intel_pt perf-AUX event against a RUNNING process, drain its AUX honestly, and
+ * dispatch the blob into the SAME asmtest_pt_decode_window (there is one decode,
+ * not two). Built entirely on the substrate's pt_aux_open/stop/close helpers — no
+ * parallel PT arm. The capture ctx is opaque (its struct is internal to
+ * src/hwtrace.c, embedding one pt_aux_t + the foreign code-image recorder).
+ * intel-pt-attach-foreign-pid.md owns this surface. Linux x86-64 only; every path
+ * self-skips ASMTEST_HW_EUNAVAIL off bare-metal Intel PT (no fake gate).
+ *
+ * begin: NULL out is ASMTEST_HW_EINVAL (checked FIRST, on every host); off Intel
+ * PT / without CAP_PERFMON it self-skips ASMTEST_HW_EUNAVAIL with *out left NULL.
+ * `obj_hint`, when it names a REGULAR backing file for the region of interest,
+ * arms a hardware address filter (file-backed VMAs only — anonymous/JIT code
+ * CANNOT be filtered and falls back to the decode-time software IP filter). Opens
+ * with a prompt AUX wakeup watermark for live drain and a per-task (cpu==-1)
+ * event, both of which the foreign attach and any address filter require.
+ * poll: drain the AUX ring's [tail, head) into the ctx's linearized buffer,
+ * refresh the code-image, and OR any PERF_AUX_FLAG_TRUNCATED / fell-behind
+ * overflow into *truncated_out (may be NULL). timeout_ms bounds the poll() wait.
+ * track: record a region of interest — feeds the code-image recorder AND scopes
+ * the software IP post-filter end() applies when no hardware filter is armed.
+ * end: final drain, decode the accumulated AUX through asmtest_pt_decode_window
+ * against `img` as of `when` (img==NULL uses the ctx's own foreign image), fill
+ * `trace` with ABSOLUTE addresses + honest truncation, then free the ctx and its
+ * fd/mmaps/buffers. `trace==NULL` is a legal drain-less release (teardown only). */
+typedef struct asmtest_pt_attach asmtest_pt_attach_t;
+
+int asmtest_hwtrace_pt_attach_begin(int pid, const char *obj_hint,
+                                    asmtest_pt_attach_t **out);
+int asmtest_hwtrace_pt_attach_track(asmtest_pt_attach_t *a, uint64_t base,
+                                    uint64_t len);
+int asmtest_hwtrace_pt_attach_poll(asmtest_pt_attach_t *a, int timeout_ms,
+                                   int *truncated_out);
+int asmtest_hwtrace_pt_attach_end(asmtest_pt_attach_t *a, uint64_t when,
+                                  asmtest_trace_t *trace);
+
+/* Pure, portable (any-host, no PMU) helpers the attach path is built on, exposed so
+ * they are unit-testable directly:
+ *  - dewrap linearizes the valid extent [tail, head) of a circular AUX ring of
+ *    `aux_sz` bytes (tail/head are the monotonic aux_tail/aux_head counters) into
+ *    `dst` (which must hold head-tail bytes; caller ensures head-tail <= aux_sz) —
+ *    two memcpys across the wrap.
+ *  - ip_postfilter drops trace entries appended at or after (insn0, blk0) whose
+ *    ABSOLUTE ip (base_ip + offset) lies outside [region_base, region_base+len),
+ *    compacting insns[]/blocks[] in place — the software fallback for a whole-thread
+ *    capture with no hardware address filter (anonymous/JIT code). region_len==0 is
+ *    a no-op (keep everything). */
+void asmtest_pt_aux_dewrap(const uint8_t *ring, size_t aux_sz, uint64_t tail,
+                           uint64_t head, uint8_t *dst);
+void asmtest_pt_ip_postfilter(asmtest_trace_t *trace, size_t insn0, size_t blk0,
+                              uint64_t base_ip, uint64_t region_base,
+                              size_t region_len);
+
+/* ------------------------------------------------------------------ */
 /* §D3 — concealed out-of-process ptrace-stealth stepper               */
 /*                                                                     */
 /* The hardware-free path, hidden behind the scope façade, for hosts    */
