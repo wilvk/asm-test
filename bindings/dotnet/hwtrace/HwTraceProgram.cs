@@ -195,12 +195,31 @@ static class HwTraceProgram
                 Check(r4 == 42 && r4pre == 42, $"AsmTrace(): whole-window call returns 42 (got {r4})");
                 Check(ww.Addresses.Length > 0,
                       $"AsmTrace(): whole-window captured instructions (got {ww.Addresses.Length})");
-                Check(ww.Name.Contains(":"), $"AsmTrace(): auto-name is member:line (got {ww.Name})");
             }
             else
             {
                 // Honest self-skip (§Z5): no faithful whole-window backend on this host.
                 Check(ww.SkipReason.Length > 0, $"AsmTrace(): self-skip records a reason ({ww.SkipReason})");
+            }
+
+            // --- T6: the [CallerMemberName]/[CallerLineNumber] auto-name resolves to the
+            // EXACT call site, not merely "contains a colon". OpenScopeForNameTest builds the
+            // empty ctor, so ScopeName = $"{member}:{line}" must START with the exact member
+            // name and END with a numeric line. The name is set by the ctor BEFORE any arm
+            // attempt, so this holds on EVERY host (Armed or not) — name resolution does not
+            // depend on the tier arming, which is exactly why it is asserted unconditionally.
+            using (var named = OpenScopeForNameTest())
+            {
+                int colon = named.Name.LastIndexOf(':');
+                string suffix = colon >= 0 ? named.Name.Substring(colon + 1) : "";
+                bool exact = named.Name.StartsWith("OpenScopeForNameTest:")
+                             && int.TryParse(suffix, out int lineNo) && lineNo > 0;
+                Check(exact,
+                      $"AsmTrace(): auto-name resolves to OpenScopeForNameTest:<line> (got {named.Name})");
+                // The name reaches the handle side (it keys the §Z5 presentation), populated
+                // by the ctor before the arm attempt — so non-empty even when Armed == false.
+                Check(named.Name.Length > 0,
+                      $"AsmTrace(): scope is named before the arm attempt (Armed={named.Armed}, Name={named.Name})");
             }
 
             // --- §Z5 renderPath: opt-in whole-window render into Path --- //
@@ -1160,6 +1179,13 @@ static class HwTraceProgram
     // collide on the same [CallerMemberName]:[CallerLineNumber] auto-name — exactly
     // the aliasing case the handle-keyed begin_scope exists to disambiguate.
     static AsmTrace SameSiteScope(NativeCode c) => new AsmTrace(c, emit: false);
+
+    // T6 fixture: constructs the EMPTY (whole-window) ctor inside a NAMED method, so the
+    // ctor's [CallerMemberName] resolves to exactly "OpenScopeForNameTest" and its
+    // [CallerLineNumber] to THIS line — the call-site-exact auto-name the test asserts
+    // (ScopeName is $"{member}:{line}"). A class method, not a local function, so the
+    // member name is unambiguous.
+    static AsmTrace OpenScopeForNameTest() => new AsmTrace(emit: false);
 
     // §D0.3 fixtures: FRESH cold methods (first call happens inside the scope test) so
     // PrepareMethod's forced JIT is what the listener observes. Kept trivially small.
