@@ -113,7 +113,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
 | [asmspy-cli-enhancements.md](asmspy-cli-enhancements.md) — TUI hot-edge drill-in, syscall-arg content decode, coverage gaps | 9 | ☑ 9/9 (all landed, `make docker-cli` cli-smoke PASS; T1-T4 sockaddr/ioctl/fcntl/futex/stat decode, T6-T9 group-stop/negative-n/aggregation/breadth smokes all CI-green. T5's live mode-7→Enter→mode-9 drill-in is pty-driven + AMD-IBS-gated so its interactive leg is manual-only — its DECISION logic (`asmspy_edge_drill`, 6 checks) is unit-tested in `test_autoregion`, which this doc also fixed to actually RUN in the smoke (was built-but-never-executed). Not yet ✅: T5's live drill-in needs a manual pty run on an AMD IBS host) | — |
-| [asmspy-aarch64-support.md](asmspy-aarch64-support.md) — single-step engine abstraction + NT_ARM_HW_WATCH watchpoints | 7 | ☐ 0/7 | — |
+| [asmspy-aarch64-support.md](asmspy-aarch64-support.md) — single-step engine abstraction + NT_ARM_HW_WATCH watchpoints | 7 | ◐ 0/7 (batch wip: T1/T3/T4/T5/T6 + T2/T7 behind arm-CI gate) | — |
 
 ### Single-step & block-step tiers
 | Document | Tasks | Status | Depends on |
