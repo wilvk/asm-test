@@ -88,6 +88,8 @@ The `BENCH` tier above measures **real cycles on the host** — the honest answe
 to "how fast on this machine," but not comparable across architectures (`cyc` ≠
 `ticks`) or across machines. For a **host-independent** cross-architecture
 metric — deterministic instructions/basic blocks per call for x86-64, AArch64,
-RISC-V, ARM32, and the Win64 ABI — and to run both this real-cycle tier and a
+RISC-V, ARM32, and the Win64 ABI — plus a Capstone-weighted
+[`BM_MODEL_COST`](cross-system-benchmarking.md#the-weighted-model-cost-metric-bm_model_cost)
+cost proxy (a model, not silicon) — and to run both this real-cycle tier and a
 live feature/trace-completeness sweep across systems and diff the results, see
 [Cross-system benchmarking](cross-system-benchmarking.md) (`make bench-report`).

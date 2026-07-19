@@ -172,10 +172,15 @@ gold.mkdir(parents=True, exist_ok=True)
 boxdir.mkdir(parents=True, exist_ok=True)
 
 # Golden: the deterministic emu-bench counts — host/OS-independent, so this one
-# file is the SAME on every leg and any change is a reviewable, gated diff.
+# file is the SAME on every leg and any change is a reviewable, gated diff. Only
+# `insns` rows go in: `model_cost` rows are Capstone-version-dependent (repo pin
+# 5.0.1 vs MSYS2 5.0.9), so they are NOT "identical on every leg" material and are
+# filtered here to match bench-golden-check.py's read-side filter.
 golden = {"schema": "asmtest-emu-golden/v1",
-          "benchmarks": sorted(emu.get("benchmarks", []),
-                               key=lambda r: (r["name"], r["arch"]))}
+          "benchmarks": sorted(
+              (r for r in emu.get("benchmarks", [])
+               if r.get("kind", "insns") == "insns"),
+              key=lambda r: (r["name"], r["arch"]))}
 with open(gold / "emu-insns.json", "w") as f:
     json.dump(golden, f, indent=2)
     f.write("\n")

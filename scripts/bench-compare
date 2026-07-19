@@ -95,13 +95,24 @@ def main():
     P.append("")
 
     # --- deterministic instruction counts (name x arch) ---
-    counts = {}   # (name) -> {arch: value}
+    # Two row kinds share performance.emulated: `insns` (or an un-kinded golden
+    # row) is the host-independent count matrix; `model_cost` is a separate
+    # Capstone-weighted MODEL matrix below. Never mix the two units in one table.
+    counts = {}   # (name) -> {arch: value}   insns rows
+    model = {}    # (name) -> {arch: value}   model_cost rows
     archset = []
+    marchset = []
     for r in reports:
         for b in r["performance"]["emulated"].get("benchmarks", []):
-            counts.setdefault(b["name"], {})[b["arch"]] = b["value"]
-            if b["arch"] not in archset:
-                archset.append(b["arch"])
+            kind = b.get("kind")
+            if kind in (None, "insns"):
+                counts.setdefault(b["name"], {})[b["arch"]] = b["value"]
+                if b["arch"] not in archset:
+                    archset.append(b["arch"])
+            elif kind == "model_cost":
+                model.setdefault(b["name"], {})[b["arch"]] = b["value"]
+                if b["arch"] not in marchset:
+                    marchset.append(b["arch"])
     if counts:
         P.append("\n## Deterministic instruction count (insns/call, "
                  "host-independent)\n")
@@ -110,6 +121,17 @@ def main():
         rows = [[name] + [c.get(a, "·") for a in archset]
                 for name, c in sorted(counts.items())]
         P.append(md_table(["suite.name"] + archset, rows))
+        P.append("")
+    if model:
+        P.append("\n## Model cost (model-cyc/call — a MODEL, not silicon)\n")
+        P.append("A Capstone-weighted cost proxy comparable across ISAs BY "
+                 "CONSTRUCTION (weights OTHER=1, MEM=3, BRANCH=2, MULDIV=8) — "
+                 "NOT measured cycles. Present only on Capstone-linked legs, and "
+                 "value depends on the Capstone version. See "
+                 "docs/guides/cross-system-benchmarking.md.\n")
+        rows = [[name] + [c.get(a, "·") for a in marchset]
+                for name, c in sorted(model.items())]
+        P.append(md_table(["suite.name"] + marchset, rows))
         P.append("")
 
     # --- real-time, grouped by unit ---

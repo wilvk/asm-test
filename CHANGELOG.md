@@ -19,6 +19,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   slides a live object onto a dead object's vacated slot is reproduced under
   address identity and then eliminated by object identity.
 
+- **Weighted cross-ISA cost proxy `BM_MODEL_COST` in the cross-system benchmark.**
+  `emu-bench` now emits a `model_cost` row beside each deterministic `insns` row:
+  each executed instruction is classified with Capstone (new
+  `asmtest_disas_class` → OTHER/MEM/BRANCH/MULDIV) and summed against a fixed
+  weight table (1/3/2/8), an honest cross-architecture cost *model* — comparable
+  by construction, **not** silicon cycles. `bench-compare` renders it as its own
+  *Model cost* matrix (never mixed with raw counts or real cycles). The metric
+  needs Capstone: without it the bench emits the `insns` rows alone and every gate
+  still passes. Model values depend on the Capstone version, so they are kept out
+  of the golden file — `bench-golden-check` filters `model_cost` rows (and fails
+  loudly if any `insns` row is missing its model sibling). See
+  [cross-system benchmarking](https://github.com/wilvk/asm-test/blob/main/docs/guides/cross-system-benchmarking.md#the-weighted-model-cost-metric-bm_model_cost).
+
 - **Native RISC-V (rv64) host tier — the capture framework now runs *on* a RISC-V
   machine, not just as an emulator guest.** A `regs_t` branch and trampolines
   (`src/capture.s`) for the RV64GC / LP64D psABI: `a0`/`a1` return pair, integer

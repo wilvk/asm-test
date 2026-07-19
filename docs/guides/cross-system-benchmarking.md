@@ -26,6 +26,51 @@ x86-64 count are directly comparable, and the number is identical on every host.
 The **real-cycle** numbers answer "how fast on *this* box" and must never be
 compared across architectures (or across the `cyc`/`ticks` unit line).
 
+## The weighted model-cost metric (`BM_MODEL_COST`)
+
+The raw instruction count treats every instruction as equal work, which
+understates ISAs that fold a memory access or a multiply/divide into one
+instruction. `BM_MODEL_COST` is a second cross-ISA metric that weights each
+executed instruction by a coarse class before summing — an honest cost *proxy*,
+**comparable across ISAs by construction, not a measurement of silicon cycles**.
+
+`emu-bench` classifies each executed instruction with Capstone
+(`asmtest_disas_class`) into one bucket, applying a fixed precedence (an
+instruction that matches several lands in the first that hits):
+
+1. **BRANCH** — any control transfer (Capstone JUMP/CALL/RET/IRET groups)
+2. **MULDIV** — else the mnemonic contains `mul` or `div` (a deliberately
+   model-grade match: `mul`/`imul`/`umull`/`sdiv`/`udiv`/`divss`… across every
+   ISA, no per-arch opcode tables)
+3. **MEM** — else any explicit memory operand
+4. **OTHER** — else the 1-weight default (ALU / move / …)
+
+then sums a fixed weight table:
+
+| class | OTHER | MEM | BRANCH | MULDIV |
+|---|---|---|---|---|
+| weight (model-cyc) | 1 | 3 | 2 | 8 |
+
+So `math.add3` is `mov+add+add+ret` = 1+1+1+2 = **5** model-cyc on x86-64, and
+`add+add+ret` = 1+1+2 = **4** on AArch64 / RISC-V / ARM32 (the RISC forms drop
+the register-move) — the same cross-ISA story the raw count tells, now weighted.
+`emu-bench` emits a `model_cost` row beside each `insns` row:
+
+```json
+{"name": "math.add3", "arch": "x86_64", "kind": "model_cost",
+ "value": 5, "unit": "model-cyc", "deterministic": true, "complete": true}
+```
+
+**Capstone is required.** The classifier needs the disassembler, so model rows
+appear only on Capstone-linked legs; a build without it emits the `insns` rows
+alone (the `-` column in the text report) and every gate still passes — absence
+is data. Because a model value depends on the *Capstone version*'s decode (the
+repo pins 5.0.1; some ecosystems pour 5.0.9), model rows are deterministic *per
+build* but are **not** "identical on every leg" golden material:
+`bench-golden-check` filters them out and they never enter
+`benchmarks/golden/emu-insns.json`. `bench-compare` renders them in their own
+**Model cost** matrix, never mixed with the raw-count or real-cycle units.
+
 ## Running it
 
 ```sh

@@ -107,6 +107,20 @@ jobs:
       - name: Install the emulator tier deps
         run: make deps DEPS_ARGS=--emu
 
+      # Capstone (pinned source build, K1-cached) so emu-bench can classify each
+      # executed instruction and emit the BM_MODEL_COST model_cost rows; without
+      # it the bench still runs and simply omits the model matrix (absence is
+      # data). Mirrors the emu job's steps. (The nightly macos-15-intel leg gets
+      # the same pair when it lands.)
+      - name: Cache the pinned Capstone source build (K1)
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/asmtest-thirdparty/capstone
+          key: tp-capstone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-capstone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
+
+      - name: Build and install Capstone from source (model-cost weighting)
+        run: sh scripts/thirdparty-cache.sh cached-build capstone   # pinned source build; restores from the cache when warm
+
       - name: Gate the deterministic golden emu counts (host-independent)
         run: make bench-check
 
