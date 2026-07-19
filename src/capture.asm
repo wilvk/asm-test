@@ -925,3 +925,20 @@ ASM_FUNC asm_bigstruct_x86
     pop     rbp
     ret
 ASM_ENDFUNC asm_bigstruct_x86
+
+; void asm_call_capture_sve(svec_t *z, spred_t *p, void *fn, const long *iargs,
+;                           const svec_t *zargs, const spred_t *pargs);
+; SVE is AArch64-Linux-only; NASM builds are x86-64 only, so this is a ret stub
+; purely to resolve the symbol. Never called: asmtest_cpu_has_sve() is false on
+; x86-64, so ASM_SVCALL_* self-skip and the C wrapper is gated. (Real body lives
+; in the GAS twin capture.s.)
+ASM_FUNC asm_call_capture_sve
+    ret
+ASM_ENDFUNC asm_call_capture_sve
+
+; unsigned long asmtest_sve_rdvl(void) — 0 on x86-64 (no SVE). Clear eax first
+; so a misuse returns 0, not garbage.
+ASM_FUNC asmtest_sve_rdvl
+    xor     eax, eax
+    ret
+ASM_ENDFUNC asmtest_sve_rdvl

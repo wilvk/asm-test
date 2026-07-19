@@ -2582,3 +2582,208 @@ ASM_FUNC asm_bigstruct_x86
     ret
 ASM_ENDFUNC asm_bigstruct_x86
 #endif
+
+/*
+ * void asm_call_capture_sve(svec_t *z, spred_t *p, void *fn,
+ *                           const long *iargs, const svec_t *zargs,
+ *                           const spred_t *pargs);
+ *   z -> x0, p -> x1, fn -> x2, iargs -> x3, zargs -> x4, pargs -> x5
+ *
+ * The SVE analog of asm_call_capture_vec256: marshal predicate args
+ * pargs[0..3] -> p0..p3 and vector args zargs[0..7] -> z0..z7 (AAPCS64
+ * §6.1.3/§6.1.4) and iargs[0..5] -> x0..x5, call fn, then capture the WHOLE z
+ * file (z0..z31) into z[0..31] and the predicate file (p0..p15) into p[0..15].
+ * Only the low VL (resp. VL/8) bytes of each slot are written by the SVE
+ * stores; the container tails are untouched. Fixed C-side container strides
+ * (256-byte svec_t, 32-byte spred_t), so this uses only zero-offset [xN]
+ * addressing with explicit add — never a VL/PL-scaled MUL-VL immediate.
+ *
+ * ABI: this trampoline itself takes no SVE arguments, so per AAPCS64 it owes
+ * its caller only the usual d8-d15 low-64-bit preservation, and it touches
+ * neither (it writes only z0-z7 arg regs before the call), so no vector
+ * save/restore is needed. The routine UNDER TEST does take SVE arguments, so
+ * z8-z23 and p4-p15 are callee-saved FOR IT — which is why the corpus routine
+ * (T4) must scratch only p0-p3/z0-z7. Last in the file on purpose: the
+ * `.arch armv8-a+sve` directive persists to end-of-file and nothing SVE may
+ * leak into the plain-ARMv8 functions above.
+ */
+ASM_FUNC asm_call_capture_sve
+
+#if defined(__aarch64__) && defined(__linux__)
+    .arch   armv8-a+sve
+    sub     sp, sp, #48
+    stp     x29, x30, [sp, #0]
+    mov     x29, sp
+    str     x0, [sp, #16]           /* stash z out across the call */
+    str     x1, [sp, #24]           /* stash p out across the call */
+    str     x2, [sp, #32]           /* stash fn  across the call */
+
+    /* Predicate args pargs[0..3] -> p0..p3. Fixed 32-byte container stride:
+     * zero-offset [xN] addressing only (no VL/PL-scaled immediates). */
+    mov     x9, x5
+    ldr     p0, [x9]
+    add     x9, x9, #32
+    ldr     p1, [x9]
+    add     x9, x9, #32
+    ldr     p2, [x9]
+    add     x9, x9, #32
+    ldr     p3, [x9]
+
+    /* Vector args zargs[0..7] -> z0..z7 (fixed 256-byte stride; each ldr
+     * moves only VL bytes). */
+    mov     x9, x4
+    ldr     z0, [x9]
+    add     x9, x9, #256
+    ldr     z1, [x9]
+    add     x9, x9, #256
+    ldr     z2, [x9]
+    add     x9, x9, #256
+    ldr     z3, [x9]
+    add     x9, x9, #256
+    ldr     z4, [x9]
+    add     x9, x9, #256
+    ldr     z5, [x9]
+    add     x9, x9, #256
+    ldr     z6, [x9]
+    add     x9, x9, #256
+    ldr     z7, [x9]
+
+    /* Integer args iargs[0..5] -> x0..x5 (mirrors asm_call_capture). Loaded
+     * last: this clobbers x0-x5, which held the marshalled pointer args. */
+    mov     x9, x3
+    ldp     x0, x1, [x9, #0]
+    ldp     x2, x3, [x9, #16]
+    ldp     x4, x5, [x9, #32]
+
+    ldr     x10, [sp, #32]          /* fn */
+    blr     x10
+
+    /* Capture the full z file: z0..z31 -> z[0..31], 256-byte stride. */
+    ldr     x9, [sp, #16]
+    str     z0, [x9]
+    add     x9, x9, #256
+    str     z1, [x9]
+    add     x9, x9, #256
+    str     z2, [x9]
+    add     x9, x9, #256
+    str     z3, [x9]
+    add     x9, x9, #256
+    str     z4, [x9]
+    add     x9, x9, #256
+    str     z5, [x9]
+    add     x9, x9, #256
+    str     z6, [x9]
+    add     x9, x9, #256
+    str     z7, [x9]
+    add     x9, x9, #256
+    str     z8, [x9]
+    add     x9, x9, #256
+    str     z9, [x9]
+    add     x9, x9, #256
+    str     z10, [x9]
+    add     x9, x9, #256
+    str     z11, [x9]
+    add     x9, x9, #256
+    str     z12, [x9]
+    add     x9, x9, #256
+    str     z13, [x9]
+    add     x9, x9, #256
+    str     z14, [x9]
+    add     x9, x9, #256
+    str     z15, [x9]
+    add     x9, x9, #256
+    str     z16, [x9]
+    add     x9, x9, #256
+    str     z17, [x9]
+    add     x9, x9, #256
+    str     z18, [x9]
+    add     x9, x9, #256
+    str     z19, [x9]
+    add     x9, x9, #256
+    str     z20, [x9]
+    add     x9, x9, #256
+    str     z21, [x9]
+    add     x9, x9, #256
+    str     z22, [x9]
+    add     x9, x9, #256
+    str     z23, [x9]
+    add     x9, x9, #256
+    str     z24, [x9]
+    add     x9, x9, #256
+    str     z25, [x9]
+    add     x9, x9, #256
+    str     z26, [x9]
+    add     x9, x9, #256
+    str     z27, [x9]
+    add     x9, x9, #256
+    str     z28, [x9]
+    add     x9, x9, #256
+    str     z29, [x9]
+    add     x9, x9, #256
+    str     z30, [x9]
+    add     x9, x9, #256
+    str     z31, [x9]
+
+    /* Capture the predicate file: p0..p15 -> p[0..15], 32-byte stride. */
+    ldr     x10, [sp, #24]
+    str     p0, [x10]
+    add     x10, x10, #32
+    str     p1, [x10]
+    add     x10, x10, #32
+    str     p2, [x10]
+    add     x10, x10, #32
+    str     p3, [x10]
+    add     x10, x10, #32
+    str     p4, [x10]
+    add     x10, x10, #32
+    str     p5, [x10]
+    add     x10, x10, #32
+    str     p6, [x10]
+    add     x10, x10, #32
+    str     p7, [x10]
+    add     x10, x10, #32
+    str     p8, [x10]
+    add     x10, x10, #32
+    str     p9, [x10]
+    add     x10, x10, #32
+    str     p10, [x10]
+    add     x10, x10, #32
+    str     p11, [x10]
+    add     x10, x10, #32
+    str     p12, [x10]
+    add     x10, x10, #32
+    str     p13, [x10]
+    add     x10, x10, #32
+    str     p14, [x10]
+    add     x10, x10, #32
+    str     p15, [x10]
+
+    ldp     x29, x30, [sp, #0]
+    add     sp, sp, #48
+    ret
+#else
+/* SVE is AArch64-Linux-only; a stub so the symbol resolves on other targets
+ * (x86-64, macOS arm64 — Apple silicon has no non-streaming SVE). Never
+ * called: asmtest_cpu_has_sve() is false there, so the macros self-skip. */
+    ret
+#endif
+
+ASM_ENDFUNC asm_call_capture_sve
+
+/* unsigned long asmtest_sve_rdvl(void) — the SVE vector length in bytes via
+ * `rdvl x0, #1`. Used by asmtest_sve_vl() (gated on asmtest_cpu_has_sve).
+ * On aarch64 without SVE (macOS) and on x86-64, returns 0 so a misuse never
+ * yields garbage. */
+ASM_FUNC asmtest_sve_rdvl
+#if defined(__aarch64__) && defined(__linux__)
+    .arch   armv8-a+sve
+    rdvl    x0, #1
+    ret
+#elif defined(__aarch64__)
+    mov     x0, #0
+    ret
+#else
+    xorl    %eax, %eax
+    ret
+#endif
+ASM_ENDFUNC asmtest_sve_rdvl

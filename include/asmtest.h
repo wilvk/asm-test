@@ -423,6 +423,18 @@ void asm_call_capture_vec256(vec256_t *vec, void *fn, const long *iargs,
 void asm_call_capture_vec512(vec512_t *vec, void *fn, const long *iargs,
                              const vec512_t *vargs);
 
+/* The SVE analog of asm_call_capture_vec256: marshal up to 8 scalable
+ * vector args into z0..z7 and up to 4 predicate args into p0..p3 (AAPCS64
+ * §6.1.3/§6.1.4), call fn, then capture the WHOLE z file (z0..z31) into
+ * z[0..31] and predicate file (p0..p15) into p[0..15]. Only the low VL
+ * (resp. VL/8) bytes of each slot are written — the container tails are
+ * untouched. z[0] = the scalable-vector return. AArch64 Linux + SVE only —
+ * gate with asmtest_cpu_has_sve(), or use ASM_SVCALL_*, which self-skip.
+ * Captures the vector/predicate file only; use the 128-bit path for
+ * GP/flags capture. iargs has 6 slots, zargs 8, pargs 4 (none may be NULL). */
+void asm_call_capture_sve(svec_t *z, spred_t *p, void *fn, const long *iargs,
+                          const svec_t *zargs, const spred_t *pargs);
+
 /* Like asm_call_capture_fp, but with an arbitrary number of double args: the
  * first 8 go in the FP argument registers (xmm0-7 / d0-7), the rest spill onto
  * the stack per the ABI. iargs has 6 register slots; fargs has `nfargs` entries.

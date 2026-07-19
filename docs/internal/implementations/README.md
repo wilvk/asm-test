@@ -137,7 +137,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 ### Architecture ports
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
-| [aarch64-sve-capture.md](aarch64-sve-capture.md) — AArch64 SVE wide-vector capture | 8 | ◐ 1/8 (T2 wip) | — |
+| [aarch64-sve-capture.md](aarch64-sve-capture.md) — AArch64 SVE wide-vector capture | 8 | ◐ 2/8 | — |
 | [riscv-native-tier.md](riscv-native-tier.md) — native RISC-V (rv64) host tier | 7 | ☑ 7/7 (all landed; rv64 lane green: `make docker-riscv64` under qemu + the `test-riscv64` CI Actions leg, ~3m29s; `make docker-docs`/`make test`/`make check` clean) | — |
 
 ### CI, distribution & infrastructure
