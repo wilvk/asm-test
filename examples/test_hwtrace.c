@@ -298,6 +298,17 @@ int pthread_mutex_lock(pthread_mutex_t *m) {
  * arch, before the availability gate). */
 static void test_debug_logging(void) {
 #if defined(__linux__)
+    /* The log line under test is emitted by asmtest_hwtrace_init AFTER its
+     * availability gate, so it needs a backend that init accepts here. SINGLESTEP
+     * (in-process TF/#DB) is x86-64/macOS-only, and no other backend is available on
+     * an AArch64 CI VM (no Intel PT / AMD / cs_etm PMU) — so init would refuse before
+     * logging. Skip where the in-process single-step backend is unavailable; the
+     * env-gated ASMTEST_HWDBG mechanism itself is arch-neutral and covered on x86-64. */
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP debug logging: no in-process single-step backend here "
+               "(x86-64/macOS only) to drive an init log line\n");
+        return;
+    }
     for (int on = 0; on <= 1; on++) {
         int fds[2];
         if (pipe(fds) != 0) {
