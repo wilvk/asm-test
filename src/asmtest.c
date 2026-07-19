@@ -607,9 +607,20 @@ int asmtest_cpu_has_avx512f(void) {
         return 0;
     return (b & (1u << 16)) != 0; /* AVX-512F */
 }
+int asmtest_cpu_has_apx(void) {
+    unsigned a, b, c, d;
+    /* APX_F is reported in CPUID leaf 7, SUBLEAF 1, EDX bit 21. No OS-enablement
+     * (XCR0) check: the EGPRs r16-r31 need no new save area beyond what SDE's
+     * -future guest already provides, and the whole reason for the probe is to
+     * open under SDE's emulated CPUID. */
+    if (!__get_cpuid_count(7, 1, &a, &b, &c, &d))
+        return 0;
+    return (d & (1u << 21)) != 0; /* APX_F */
+}
 #else
 int asmtest_cpu_has_avx2(void) { return 0; }
 int asmtest_cpu_has_avx512f(void) { return 0; }
+int asmtest_cpu_has_apx(void) { return 0; }
 #endif
 
 /* SVE feature probe (AArch64 Linux). HWCAP_SVE in the aux vector reports SVE

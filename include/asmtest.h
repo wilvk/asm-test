@@ -391,6 +391,13 @@ void asm_call_capture_vec(regs_t *out, void *fn, const long *iargs,
  * executing an unsupported instruction and faulting. */
 int asmtest_cpu_has_avx2(void);
 int asmtest_cpu_has_avx512f(void);
+/* Intel APX (Advanced Performance Extensions): the extended GP register set
+ * r16-r31 and the REX2/EVEX encodings that reach them (EGPRs, NDD, NF, CCMP,
+ * CFCMOV). No non-Intel silicon ships APX yet, so on real hardware this is 0
+ * everywhere today — but under `sde64 -future` the emulated CPUID reports APX_F,
+ * opening the gate so an APX routine actually runs (that is the SDE lane's whole
+ * point). x86-64 only; 0 on other hosts. */
+int asmtest_cpu_has_apx(void);
 
 /* SVE presence and vector length, same self-skip-never-fault contract as the
  * AVX probes above. AArch64 Linux only; 0 elsewhere (Apple silicon has no

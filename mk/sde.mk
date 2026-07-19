@@ -47,6 +47,7 @@ else
 # (the APX suite, the AVX-512 un-skip, the Unicorn cross-check) each add one line.
 sde-test:
 	@$(MAKE) --no-print-directory sde-null-test
+	@$(MAKE) --no-print-directory sde-apx-test
 	@echo "== sde-test: all SDE sub-lanes passed =="
 endif
 
@@ -64,3 +65,31 @@ sde-null-test: $(BUILD)/test_arith $(BUILD)/test_capture $(BUILD)/test_mem
 	  $(SDE64) $(SDE_CHIP) -- $(BUILD)/$$t > $(BUILD)/sde-null-$$t.sde.tap; \
 	  diff -u $(BUILD)/sde-null-$$t.native.tap $(BUILD)/sde-null-$$t.sde.tap; \
 	done; echo "sde-null-test: native and sde64 $(SDE_CHIP) TAP identical"
+
+# --- APX (r16-r31 / REX2 / NDD) fixture suite -------------------------------
+# The APX routines in examples/apx_basic.s #UD on all shipping silicon, so they
+# run ONLY under SDE. test_apx_basic is in SUITE_EXCLUDES so `make test` never has
+# to assemble it; a host-side sde-test degrades honestly when the host assembler
+# predates APX (older binutils) — probe the compiler's assembler for an EGPR move
+# + NDD add first. The pinned Dockerfile.sde carries binutils 2.46.1, so the probe
+# always passes in-container.
+SDE_GAS_APX := $(shell printf 'movq %%r16, %%rax\naddq %%rsi, %%rdi, %%rax\n' | \
+                 $(CC) -x assembler -c -o /dev/null - 2>/dev/null && echo 1)
+
+.PHONY: sde-apx-test
+sde-apx-test:
+	@echo "== sde-apx-test =="
+ifneq ($(SDE_GAS_APX),1)
+	@echo "# SKIP: assembler cannot encode APX (need binutils >= 2.43; make docker-sde runs the pinned 2.46.1)"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) --no-print-directory $(BUILD)/test_apx_basic
+	@$(SDE64) $(SDE_CHIP) -- $(BUILD)/test_apx_basic > $(BUILD)/sde-apx.tap; rc=$$?; \
+	 cat $(BUILD)/sde-apx.tap; \
+	 [ $$rc -eq 0 ] || { echo "FAIL: test_apx_basic exited $$rc under sde64 $(SDE_CHIP)"; exit 1; }; \
+	 if grep -E '^(ok|not ok) [0-9]+ - apx\.' $(BUILD)/sde-apx.tap | grep -q '# SKIP'; then \
+	   echo "FAIL: an apx.* case is STILL skipped under $(SDE_CHIP) — APX CPUID gate did not open"; \
+	   exit 1; \
+	 fi; \
+	 echo "sde-apx-test: all apx.* cases ran green under sde64 $(SDE_CHIP) (no CPUID skip)"
+endif
