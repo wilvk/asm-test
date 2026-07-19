@@ -14,11 +14,19 @@
 # -DASMTEST_HAVE_LIBIPT + links -lipt, so the synthetic PT-decode fixture
 # (test_wholewindow_decode) drives the real asmtest_pt_decode[_window] end-to-end —
 # no intel_pt PMU needed. Without it the same test self-skips (decoder absent).
+#
+# libopencsd-dev is the ARM CoreSight DECODER — the same story as libipt: a
+# userspace build dependency, NOT CoreSight hardware. Ubuntu 24.04 noble ships
+# 1.4.1-1build1; with it installed native-trace.mk builds cs_backend.o
+# -DASMTEST_HAVE_OPENCSD and links the OpenCSD C API (-lopencsd_c_api), giving
+# the docker-hwtrace lane the same build parity the CI `hwtrace` job has. The
+# CoreSight tier still self-skips in a container (no cs_etm PMU) — this only
+# closes the build gap so the decode tree compiles/links everywhere it is present.
 ARG BASE_IMAGE=asmtest-bindings-base
 FROM ${BASE_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
- && apt-get install -y --no-install-recommends python3 python3-pytest libipt-dev \
+ && apt-get install -y --no-install-recommends python3 python3-pytest libipt-dev libopencsd-dev \
  && rm -rf /var/lib/apt/lists/*
 COPY . .
 CMD sh -c 'make hwtrace-test && make codeimage-test && make hwtrace-python-test'

@@ -2035,11 +2035,20 @@ LIBIPT_LIBS ?=
 endif
 
 # ARM CoreSight decoder (OpenCSD). Its pkg-config module is `libopencsd` (NOT
-# `opencsd`), and ships -lopencsd.
+# `opencsd`). Debian/Ubuntu's libopencsd.pc `Libs:` line is `-lopencsd` ONLY (the
+# C++ core) — the C API entry points this backend actually calls
+# (ocsd_create_dcd_tree etc.) live in the separate libopencsd_c_api.so that the
+# same libopencsd-dev package installs, so append `-lopencsd_c_api` explicitly
+# (packages.ubuntu.com/noble/arm64/libopencsd-dev/filelist). `-lopencsd_c_api`
+# pulls -lopencsd transitively via its own DT_NEEDED, so C link lines need no
+# -lstdc++. Scope the libs to the module-present arm so a libopencsd-free host
+# links nothing here (empty OPENCSD_LIBS).
 OPENCSD_CFLAGS ?= $(shell pkg-config --cflags libopencsd 2>/dev/null)
-OPENCSD_LIBS   ?= $(shell pkg-config --libs libopencsd 2>/dev/null)
 ifeq ($(shell pkg-config --exists libopencsd 2>/dev/null && echo 1),1)
-OPENCSD_DEF := -DASMTEST_HAVE_OPENCSD
+OPENCSD_DEF  := -DASMTEST_HAVE_OPENCSD
+OPENCSD_LIBS ?= $(shell pkg-config --libs libopencsd 2>/dev/null) -lopencsd_c_api
+else
+OPENCSD_LIBS ?=
 endif
 
 # LbrExtV2 speculation flags (AMD Phase 4): struct perf_branch_entry gained the
