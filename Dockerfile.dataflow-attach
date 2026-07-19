@@ -15,9 +15,15 @@ FROM ${BASE}
 ENV DEBIAN_FRONTEND=noninteractive
 
 # The analysis lib + operand enumerator need Capstone; the oracle cross-check needs Unicorn.
+# libipt-dev (Ubuntu noble 2.0.6-1build1 = libipt v2.0.6, the same pin Dockerfile.hwtrace carries)
+# is the Intel PT DECODER the F5 dataflow-pt-replay tier needs so its SYNTHETIC-AUX decode->replay
+# bridge (asmtest_pt_encode_fixture -> asmtest_pt_decode_window -> Unicorn replay) actually runs in
+# CI with no PT hardware. It is an apt-pinned distro package — the CLAUDE.md dependency rule
+# (add it where the work runs, do not self-skip); apt distro packages need no
+# scripts/third-party-digests.txt line (only built-from-source deps do).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      build-essential ca-certificates pkg-config libcapstone-dev libunicorn-dev \
+      build-essential ca-certificates pkg-config libcapstone-dev libunicorn-dev libipt-dev \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
