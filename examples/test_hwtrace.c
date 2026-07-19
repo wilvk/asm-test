@@ -171,6 +171,116 @@ static int checks, failures;
         (o).backend = (b);                                                     \
     } while (0)
 
+/* ZC-HYGIENE (zeroconfig-scoped-tracing-hardening T5) — process-global allocation +
+ * mutex-lock counters, so test_zeroctor_scope_hygiene can assert the SIGTRAP handler
+ * path (ss_on_sigtrap) allocates nothing and takes no lock. These interpose the global
+ * malloc family + pthread_mutex_lock, forwarding to the real symbols via
+ * dlsym(RTLD_NEXT), with the classic static-arena bootstrap for the allocations dlsym
+ * itself performs before the real pointer is resolved. glibc-only (musl images self-skip
+ * the no-malloc CHECK, printing a reason); NOT exported beyond this TU. The test binary
+ * already links -ldl. */
+#if defined(__linux__) && defined(__GLIBC__)
+#include <stdatomic.h>
+static _Atomic unsigned long g_hyg_alloc_calls;
+static _Atomic unsigned long g_hyg_lock_calls;
+static char g_hyg_arena[32768];
+static _Atomic size_t g_hyg_arena_off;
+static void *(*real_malloc)(size_t);
+static void *(*real_calloc)(size_t, size_t);
+static void *(*real_realloc)(void *, size_t);
+static void (*real_free)(void *);
+static int (*real_mutex_lock)(pthread_mutex_t *);
+static int g_hyg_resolving;
+
+static int hyg_in_arena(const void *p) {
+    return (const char *)p >= g_hyg_arena &&
+           (const char *)p < g_hyg_arena + sizeof g_hyg_arena;
+}
+static void *hyg_arena_alloc(size_t n) {
+    n = (n + 15u) & ~(size_t)15u; /* 16-byte align */
+    size_t off = atomic_fetch_add(&g_hyg_arena_off, n);
+    if (off + n > sizeof g_hyg_arena)
+        return NULL; /* bootstrap arena exhausted (should not happen) */
+    return g_hyg_arena +
+           off; /* BSS-zeroed, never reused: valid for calloc too */
+}
+static void hyg_resolve(void) {
+    if (real_malloc != NULL)
+        return;
+    g_hyg_resolving =
+        1; /* dlsym may itself allocate — serve those from the arena */
+    real_malloc = (void *(*)(size_t))dlsym(RTLD_NEXT, "malloc");
+    real_calloc = (void *(*)(size_t, size_t))dlsym(RTLD_NEXT, "calloc");
+    real_realloc = (void *(*)(void *, size_t))dlsym(RTLD_NEXT, "realloc");
+    real_free = (void (*)(void *))dlsym(RTLD_NEXT, "free");
+    real_mutex_lock =
+        (int (*)(pthread_mutex_t *))dlsym(RTLD_NEXT, "pthread_mutex_lock");
+    g_hyg_resolving = 0;
+}
+void *malloc(size_t n) {
+    if (real_malloc == NULL) {
+        if (g_hyg_resolving)
+            return hyg_arena_alloc(n);
+        hyg_resolve();
+        if (real_malloc == NULL)
+            return hyg_arena_alloc(n);
+    }
+    atomic_fetch_add(&g_hyg_alloc_calls, 1);
+    return real_malloc(n);
+}
+void *calloc(size_t nm, size_t sz) {
+    if (real_calloc == NULL) {
+        if (g_hyg_resolving)
+            return hyg_arena_alloc(nm * sz);
+        hyg_resolve();
+        if (real_calloc == NULL)
+            return hyg_arena_alloc(nm * sz);
+    }
+    atomic_fetch_add(&g_hyg_alloc_calls, 1);
+    return real_calloc(nm, sz);
+}
+void *realloc(void *p, size_t n) {
+    if (hyg_in_arena(p)) {
+        /* Bootstrap arena pointer: hand back fresh arena memory, copying the old prefix
+         * (old size unknown, so copy up to n, bounded by the arena end). */
+        void *np = hyg_arena_alloc(n);
+        if (np != NULL && p != NULL) {
+            size_t avail =
+                (size_t)(g_hyg_arena + sizeof g_hyg_arena - (const char *)p);
+            size_t c = n < avail ? n : avail;
+            memcpy(np, p, c);
+        }
+        return np;
+    }
+    if (real_realloc == NULL) {
+        hyg_resolve();
+        if (real_realloc == NULL)
+            return hyg_arena_alloc(n);
+    }
+    atomic_fetch_add(&g_hyg_alloc_calls, 1);
+    return real_realloc(p, n);
+}
+void free(void *p) {
+    if (p == NULL || hyg_in_arena(p))
+        return; /* arena pointers are never returned to the real allocator */
+    if (real_free == NULL) {
+        hyg_resolve();
+        if (real_free == NULL)
+            return;
+    }
+    real_free(p);
+}
+int pthread_mutex_lock(pthread_mutex_t *m) {
+    if (real_mutex_lock == NULL) {
+        hyg_resolve();
+        if (real_mutex_lock == NULL)
+            return 0; /* pre-resolution (single-threaded init): no-op success */
+    }
+    atomic_fetch_add(&g_hyg_lock_calls, 1);
+    return real_mutex_lock(m);
+}
+#endif /* __linux__ && __GLIBC__ */
+
 /* AMD-LBR reconstruction is validated WITHOUT capture hardware: feed the decoder
  * a synthetic branch-record array (what Zen 3/4 would capture for a known path)
  * and assert it reconstructs the exact same offsets the PT/DynamoRIO backends do.
@@ -8765,11 +8875,14 @@ static int ww_has_addr(const asmtest_trace_t *t, uint64_t addr) {
  * asserts, and isolated from it here by a trace cap large enough that
  * insns_total == insns_len, so the flag can only have come from the ring.
  *
- * NOT asserted, and not assertable at this tier: the plan's second truncation path,
- * the §L3 instruction budget + ITIMER_REAL/SIGALRM watchdog. Those are the
- * OUT-OF-PROCESS descent handle's guards (asmtest_descent_set_insn_budget /
- * _set_watchdog_ms), gated by test_descent_fork; the in-process TF window has
- * neither. Any x86-64 Linux; no PMU/perf/privilege. */
+ * The plan's second + third truncation paths — the §L3 instruction BUDGET and the
+ * DENY-region table — are now ported onto the in-process TF window too
+ * (zeroconfig-scoped-tracing-hardening T1), and asserted here: a budgeted window over
+ * AMD_LOOP stops at the budget (guard BUDGET), and a window that denies the callee
+ * region records the caller but not the callee (guard DENY), the discriminator against
+ * run 1 where the same callee IS captured. The fourth, the ITIMER_REAL/SIGALRM
+ * WATCHDOG (T2), needs a blocking syscall and lives in test_wholewindow_watchdog.
+ * Any x86-64 Linux; no PMU/perf/privilege. */
 static void test_wholewindow_ss_descend(void) {
 #if defined(__linux__) && defined(__x86_64__)
     if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
@@ -8902,38 +9015,120 @@ static void test_wholewindow_ss_descend(void) {
         free(buf);
         asmtest_codeimage_free(img);
     }
+
+    /* Run 3 — the DENY guard (T1). SAME caller/callee, but the region-free window arms
+     * a deny region over the CALLEE's page. When the stepped RIP first lands in the
+     * callee (kb+0x0), the handler ends the capture (guard SS_GUARD_DENY, do NOT record
+     * it) and the callee then runs at native speed. So the trace holds the caller's
+     * cb+0x0/cb+0xa (recorded before the denied call) but NONE of the callee's kb+… IPs
+     * — the exact inverse of run 1, where the same callee IS captured. The call still
+     * returns 42 (deny stops the CAPTURE, not the code). */
+    asmtest_trace_t *trd = asmtest_trace_new(4096, 0);
+    asmtest_hwtrace_scope_t dscope = {0xffffffffu, 0, -1};
+    asmtest_hwtrace_deny_t deny_callee = {kp, sizeof WW_CALLEE};
+    asmtest_hwtrace_window_guards_t gd;
+    memset(&gd, 0, sizeof gd);
+    gd.struct_size = sizeof gd;
+    gd.deny = &deny_callee;
+    gd.deny_len = 1;
+    int rc_bd = asmtest_hwtrace_begin_window_ex(trd, &gd, &dscope);
+    long rd = (rc_bd == ASMTEST_HW_OK) ? fn(20, 22) : -1;
+    int gd_code =
+        (rc_bd == ASMTEST_HW_OK) ? asmtest_hwtrace_window_guard(dscope) : -999;
+    int rc_ed =
+        (rc_bd == ASMTEST_HW_OK) ? asmtest_hwtrace_end_window(dscope, trd) : -1;
+    if (rc_bd == ASMTEST_HW_OK) {
+        int caller_present =
+            ww_has_addr(trd, cb + 0x0) && ww_has_addr(trd, cb + 0xa);
+        int callee_absent = !ww_has_addr(trd, kb + 0x0) &&
+                            !ww_has_addr(trd, kb + 0x3) &&
+                            !ww_has_addr(trd, kb + 0x6);
+        CHECK(rc_ed == ASMTEST_HW_OK && rd == 42 && caller_present &&
+                  callee_absent && asmtest_emu_trace_truncated(trd) &&
+                  gd_code == ASMTEST_HW_GUARD_DENY,
+              "whole-window descend: a DENY region over the callee ends the "
+              "capture at its entry (caller kept, callee dropped, guard DENY)");
+    } else {
+        printf("# SKIP whole-window descend deny: begin_window_ex unavailable "
+               "(rc=%d)\n",
+               rc_bd);
+    }
+    asmtest_trace_free(trd);
+
     asmtest_hwtrace_shutdown();
     asmtest_trace_free(tr);
     asmtest_trace_free(trr);
     munmap(cp, sizeof WW_CALLER);
     munmap(kp, sizeof WW_CALLEE);
 
-    /* The capture ring's OWN self-truncation. AMD_LOOP(1,trips) runs 3 insns per
-     * trip, so a big trip count overruns the frame's bounded absolute-RIP buffer;
-     * the handler sets the frame's overflow flag and the post-pass turns it into
-     * trace.truncated. The trace cap is deliberately far LARGER than the ring, so
-     * insns_total == insns_len proves trace_append_insn's cap was never reached and
-     * the flag can ONLY be the ring's — the two paths, told apart. */
     void *lp = ss_map_exec(AMD_LOOP, sizeof AMD_LOOP);
     if (lp == NULL) {
-        printf("# SKIP whole-window descend ring overflow: mmap failed\n");
+        printf("# SKIP whole-window descend ring/budget: mmap failed\n");
         return;
     }
     INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     asmtest_hwtrace_init(&opts);
+    long (*loop)(long, long) = (long (*)(long, long))lp;
+
+    /* The BUDGET guard (T1). Re-run the runaway AMD_LOOP fixture with the instruction
+     * budget clamped to 1000 and the watchdog OFF, so stepping stops ≈ at the budget —
+     * well before the bounded ring (1<<20) — and the discriminator against the ring
+     * case below is which guard fired. insns_len is >= the budget and far under the
+     * ring cap; exact equality is not promised (ss_normalize may collapse repeats). */
+    asmtest_trace_t *trb = asmtest_trace_new(1u << 22, 0);
+    asmtest_hwtrace_scope_t bscope = {0xffffffffu, 0, -1};
+    asmtest_hwtrace_window_guards_t gb;
+    memset(&gb, 0, sizeof gb);
+    gb.struct_size = sizeof gb;
+    gb.insn_budget = 1000;
+    gb.watchdog_ms =
+        UINT32_MAX; /* watchdog OFF: the budget is provably the stopper */
+    int bb = asmtest_hwtrace_begin_window_ex(trb, &gb, &bscope);
+    if (bb == ASMTEST_HW_OK) {
+        loop(1,
+             600000); /* would run 1.8M+ insns — the budget stops it at ~1000 */
+        int bguard = asmtest_hwtrace_window_guard(bscope);
+        asmtest_hwtrace_end_window(bscope, trb);
+        CHECK(
+            asmtest_emu_trace_truncated(trb) &&
+                bguard == ASMTEST_HW_GUARD_BUDGET && trb->insns_len >= 1000 &&
+                trb->insns_len < (1u << 20),
+            "whole-window descend: a budgeted window stops ~at the instruction "
+            "budget (guard BUDGET, well under the ring cap)");
+    } else {
+        printf(
+            "# SKIP whole-window descend budget: begin_window_ex unavailable "
+            "(rc=%d)\n",
+            bb);
+    }
+    asmtest_trace_free(trb);
+
+    /* The capture ring's OWN self-truncation. With the budget AND watchdog explicitly
+     * DISABLED, the bounded absolute-RIP buffer (1<<20) is provably the only stopper on
+     * any host speed: AMD_LOOP(1,trips) runs 3 insns per trip, so a big trip count
+     * overruns the ring; the handler latches SS_GUARD_RING (but keeps stepping) and the
+     * post-pass turns overflow into trace.truncated. The trace cap is far LARGER than
+     * the ring, so insns_total == insns_len proves trace_append_insn's cap was never
+     * reached and the flag can ONLY be the ring's — the two paths, told apart. */
     asmtest_trace_t *tro = asmtest_trace_new(1u << 22, 0); /* >> the ring cap */
     asmtest_hwtrace_scope_t oscope = {0xffffffffu, 0, -1};
-    long (*loop)(long, long) = (long (*)(long, long))lp;
-    int ob = asmtest_hwtrace_begin_window(tro, &oscope);
+    asmtest_hwtrace_window_guards_t go;
+    memset(&go, 0, sizeof go);
+    go.struct_size = sizeof go;
+    go.insn_budget = UINT64_MAX; /* budget OFF   */
+    go.watchdog_ms = UINT32_MAX; /* watchdog OFF */
+    int ob = asmtest_hwtrace_begin_window_ex(tro, &go, &oscope);
     if (ob == ASMTEST_HW_OK) {
         loop(1, 600000); /* 1.8M+ insns — far past the bounded ring */
+        int oguard = asmtest_hwtrace_window_guard(oscope);
         asmtest_hwtrace_end_window(oscope, tro);
         CHECK(asmtest_emu_trace_truncated(tro) &&
-                  tro->insns_total == tro->insns_len && tro->insns_len > 0,
+                  tro->insns_total == tro->insns_len && tro->insns_len > 0 &&
+                  oguard == ASMTEST_HW_GUARD_RING,
               "whole-window descend: a runaway window self-truncates on the "
-              "BOUNDED RING (not the trace cap)");
+              "BOUNDED RING (guard RING, not the trace cap or the budget)");
     } else {
-        printf("# SKIP whole-window descend ring overflow: begin_window "
+        printf("# SKIP whole-window descend ring overflow: begin_window_ex "
                "unavailable (rc=%d)\n",
                ob);
     }
@@ -8942,6 +9137,114 @@ static void test_wholewindow_ss_descend(void) {
     munmap(lp, sizeof AMD_LOOP);
 #else
     printf("# SKIP whole-window descend: x86-64 Linux only\n");
+#endif
+}
+
+#if defined(__linux__) && defined(__x86_64__)
+/* The blocking leaf for the watchdog case: read() on the read end of a pipe with NO
+ * writer blocks forever. Under a whole-window watchdog the repeating SIGALRM (installed
+ * without SA_RESTART) breaks it with EINTR; the helper tolerates EINTR by returning, so
+ * the window's next trap observes the expiry and stops. */
+static int g_wd_pipe_rd = -1;
+static void wd_blocking_read(void) {
+    char b;
+    ssize_t n =
+        read(g_wd_pipe_rd, &b, 1); /* blocks; EINTR -> -1, we fall through */
+    (void)n;
+}
+#endif
+
+/* T2/T4 — the whole-window WATCHDOG bounds a window whose stepped code blocks in a
+ * syscall. A read() on an empty pipe would hang forever; the 300 ms watchdog breaks it
+ * (SIGALRM/EINTR), the next trap observes the expiry, stepping stops, and the trace is
+ * truncated with guard SS_GUARD_WATCHDOG. The descent-style save/restore is asserted
+ * byte-identical before/after. The process is single-threaded here, so ITIMER_REAL's
+ * process-wide SIGALRM reaches the blocked stepping thread — the T2 multi-thread
+ * limitation made explicit. NOTE an external alarm() belt cannot guard THIS case: the
+ * window's watchdog OWNS SIGALRM/ITIMER_REAL for the window's duration (it saves and
+ * reinstalls the caller's), so the watchdog IS the anti-hang belt (reaching the CHECKs
+ * proves it fired); the harness's outer CI timeout is the final backstop. */
+static void test_wholewindow_watchdog(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf("# SKIP whole-window watchdog: single-step unavailable\n");
+        return;
+    }
+    asmtest_hwtrace_options_t opts;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
+    CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK,
+          "whole-window watchdog init");
+
+    /* Probe the caller's SIGALRM disposition + ITIMER_REAL BEFORE the window, so the
+     * descent-style save/restore can be asserted byte-identical afterward. */
+    struct sigaction sa_before, sa_after;
+    struct itimerval it_before, it_after;
+    memset(&sa_before, 0, sizeof sa_before);
+    memset(&sa_after, 0, sizeof sa_after);
+    sigaction(SIGALRM, NULL, &sa_before);
+    getitimer(ITIMER_REAL, &it_before);
+
+    int fds[2];
+    if (pipe(fds) != 0) {
+        printf("# SKIP whole-window watchdog: pipe() failed\n");
+        asmtest_hwtrace_shutdown();
+        return;
+    }
+    g_wd_pipe_rd = fds[0];
+
+    asmtest_trace_t *tr = asmtest_trace_new(65536, 0);
+    asmtest_hwtrace_scope_t sc = {0xffffffffu, 0, -1};
+    asmtest_hwtrace_window_guards_t g;
+    memset(&g, 0, sizeof g);
+    g.struct_size = sizeof g;
+    g.watchdog_ms = 300; /* budget + denylist stay at their defaults (0) */
+
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    int rb = asmtest_hwtrace_begin_window_ex(tr, &g, &sc);
+    if (rb == ASMTEST_HW_OK) {
+        wd_blocking_read(); /* blocks; the watchdog's SIGALRM/EINTR breaks it */
+        int re = asmtest_hwtrace_end_window(sc, tr);
+        int guard = asmtest_hwtrace_window_guard(sc); /* render-on-close read */
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        double secs = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+        CHECK(re == ASMTEST_HW_OK,
+              "whole-window watchdog: the window closes after the blocked read "
+              "returned (no hang)");
+        CHECK(
+            asmtest_emu_trace_truncated(tr) &&
+                guard == ASMTEST_HW_GUARD_WATCHDOG,
+            "whole-window watchdog: a blocked read is bounded by the watchdog "
+            "(truncated, guard == WATCHDOG)");
+        CHECK(secs < 5.0,
+              "whole-window watchdog: the window returned in well under 5 s "
+              "(watchdog_ms=300, not a hang)");
+    } else {
+        printf("# SKIP whole-window watchdog: begin_window_ex unavailable "
+               "(rc=%d)\n",
+               rb);
+    }
+
+    /* Full teardown done: SIGALRM disposition + ITIMER_REAL must be byte-identical to
+     * the pre-window probe (the descent-style save/restore held). */
+    sigaction(SIGALRM, NULL, &sa_after);
+    getitimer(ITIMER_REAL, &it_after);
+    CHECK(sa_after.sa_handler == sa_before.sa_handler,
+          "whole-window watchdog: SIGALRM disposition restored after teardown");
+    CHECK(it_after.it_value.tv_sec == it_before.it_value.tv_sec &&
+              it_after.it_value.tv_usec == it_before.it_value.tv_usec &&
+              it_after.it_interval.tv_sec == it_before.it_interval.tv_sec &&
+              it_after.it_interval.tv_usec == it_before.it_interval.tv_usec,
+          "whole-window watchdog: ITIMER_REAL restored after teardown "
+          "(no leaked timer)");
+
+    close(fds[0]);
+    close(fds[1]);
+    g_wd_pipe_rd = -1;
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tr);
+#else
+    printf("# SKIP whole-window watchdog: x86-64 Linux only\n");
 #endif
 }
 
@@ -9314,6 +9617,18 @@ static void test_zeroctor_scope_hygiene(void) {
     INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
     CHECK(asmtest_hwtrace_init(&opts) == ASMTEST_HW_OK, "scope hygiene init");
 
+    /* (T5) Lazy arm: asmtest_hwtrace_init installs NOTHING — the SIGTRAP disposition is
+     * still the pre-init one; only the FIRST begin_window installs the handler (the
+     * sa_mid probe below covers "installed while armed"). This is the observable for
+     * "no arming machinery appears until the first window". */
+    struct sigaction sa_postinit;
+    memset(&sa_postinit, 0, sizeof sa_postinit);
+    sigaction(SIGTRAP, NULL, &sa_postinit);
+    CHECK(
+        sa_postinit.sa_sigaction == sa_before.sa_sigaction,
+        "hygiene: init installs NO SIGTRAP handler (lazy arm — only the first "
+        "begin_window does)");
+
     /* (a) Nested: open a region-free window, then a region scope INSIDE it. */
     asmtest_trace_t *tr_win = asmtest_trace_new(65536, 0);
     asmtest_trace_t *tr_in = asmtest_trace_new(64, 64);
@@ -9410,6 +9725,56 @@ static void test_zeroctor_scope_hygiene(void) {
     CHECK(final_ok,
           "hygiene churn: capture #301 still records the routine's absolute "
           "addresses");
+
+    /* (T5) No slot: a whole-window scope registers NO region. The registry holds
+     * MAX_REGIONS = 32 slots and only "hyg_inner" was ever registered, so a fresh
+     * DISTINCT name still registers — had each of the 300 churn windows claimed a slot,
+     * this would have returned EFULL long ago. This is the observable for "a window
+     * claims no registry slot". */
+    CHECK(asmtest_hwtrace_register_region("hyg_slots", p, sizeof ROUTINE,
+                                          tr_in) == ASMTEST_HW_OK,
+          "hygiene: a whole-window scope claims NO region slot (register still "
+          "succeeds after 300 windows)");
+
+    /* (T5) No malloc / no lock under the SIGTRAP handler. Bracket ONLY the stepped
+     * leaf call fn(20,22): begin_window (which DOES allocate the mmap ring and take
+     * g_ss_lock) is OUTSIDE the snapshot, so the claim under test is the HANDLER, not
+     * the arm. ROUTINE is pure asm and ss_on_sigtrap is malloc/lock-free by contract,
+     * so both deltas must be zero — and insns_len > 0 afterward proves the window
+     * really trapped (the zero is not vacuous). Single-threaded here, so a zero delta
+     * is attributable to the leaf + the handler. */
+#if defined(__GLIBC__)
+    {
+        asmtest_trace_t *trh = asmtest_trace_new(4096, 0);
+        asmtest_hwtrace_scope_t hsc = {0xffffffffu, 0, -1};
+        int rbh = asmtest_hwtrace_begin_window(trh, &hsc);
+        if (rbh == ASMTEST_HW_OK) {
+            unsigned long m0 =
+                atomic_load_explicit(&g_hyg_alloc_calls, memory_order_relaxed);
+            unsigned long l0 =
+                atomic_load_explicit(&g_hyg_lock_calls, memory_order_relaxed);
+            long rh = fn(20, 22); /* stepped: each insn -> ss_on_sigtrap */
+            unsigned long m1 =
+                atomic_load_explicit(&g_hyg_alloc_calls, memory_order_relaxed);
+            unsigned long l1 =
+                atomic_load_explicit(&g_hyg_lock_calls, memory_order_relaxed);
+            asmtest_hwtrace_end_window(
+                hsc, trh); /* normalize runs OUTSIDE the bracket */
+            CHECK((m1 - m0) == 0 && (l1 - l0) == 0 && trh->insns_len > 0 &&
+                      rh == 42,
+                  "hygiene: no malloc and no lock under the armed window's "
+                  "SIGTRAP "
+                  "handler (alloc/lock delta 0 over a real trapped leaf)");
+        } else {
+            printf(
+                "# SKIP hygiene no-malloc: begin_window unavailable (rc=%d)\n",
+                rbh);
+        }
+        asmtest_trace_free(trh);
+    }
+#else
+    printf("# SKIP hygiene no-malloc: glibc interposition unavailable\n");
+#endif
 
     asmtest_hwtrace_shutdown();
     /* Full teardown done (the last end_window dropped the arm-refcount to 0):
@@ -9773,6 +10138,11 @@ int main(void) {
      * render of a REAL ring against a self code-image, and the bounded ring's own
      * self-truncation told apart from the trace cap. */
     test_wholewindow_ss_descend();
+
+    /* T2/T4: the whole-window WATCHDOG bounds a window whose stepped code blocks in a
+     * syscall (a read() on an empty pipe) — SIGALRM/EINTR breaks it, guard == WATCHDOG,
+     * and the caller's SIGALRM/ITIMER_REAL are restored byte-identical. */
+    test_wholewindow_watchdog();
 
     /* §Z4: the async-hop honesty DEFAULT — a REGION-FREE window closed from a
      * second thread flags truncated (the region-keyed backstop cannot fire), and
