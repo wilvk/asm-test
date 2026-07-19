@@ -8,6 +8,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Intel SDE future/absent-ISA test lane** (`make docker-sde` / `make sde-test
+  SDE_HOME=$(scripts/fetch-sde.sh)`). Assembly that uses an ISA extension the host
+  CPU lacks — APX's `r16`-`r31`, AVX10.2, AMX, or AVX-512 on an AVX2-only box — was
+  untestable by this framework (the DynamoRIO tier runs on real silicon; the
+  Unicorn tier's vendored QEMU 5.0.1 predates AVX TCG). A **pinned, digest-gated
+  Intel SDE 10.8.0** (`scripts/fetch-sde.sh` + `Dockerfile.sde`, with APX-capable
+  GAS from binutils 2.46.1 and NASM 3.02, all SHA-256-pinned) emulates those
+  extensions for the *whole process*, so an **unmodified** suite binary runs under
+  `sde64 -future` and gets the full register/flag/memory/ABI assertion battery on
+  any x86-64 host, including CI runners. The lane proves SDE is byte-for-byte
+  **transparent** to correct baseline code (native vs SDE TAP identical), adds an
+  **APX fixture suite** (`examples/apx_basic.s` + `test_apx_basic`, gated on a new
+  `asmtest_cpu_has_apx()` CPUID probe) that skips on real pre-APX silicon and runs
+  green under emulation, asserts the **AVX-512-on-AVX2 un-skip** (an existing
+  `test_simd` capability skip becomes a real execution under `-future`),
+  **cross-checks SDE against the Unicorn tier** on overlapping baseline ISA, and
+  offers an optional `-mix` **instruction-mix report** (`make sde-mix`) folded into
+  the canonical `asmtest_trace_t` shape. SDE is proprietary freeware, fetched +
+  digest-verified at build/test time and never bundled into a shipped artifact —
+  test-lane only. Documented in
+  [the SDE testing guide](https://github.com/wilvk/asm-test/blob/main/docs/guides/tracing/sde-testing.md)
+  and
+  [the implementation doc](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/pin-sde-future-isa-lane.md).
+
 - **Data-flow F5: an out-of-band PT + code-image + Unicorn-replay value
   producer** (`make dataflow-pt-test` / `make docker-dataflow-pt`). The
   least-perturbing L0 value tier: it reconstructs an Intel PT trace's executed

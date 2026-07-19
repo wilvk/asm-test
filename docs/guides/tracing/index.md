@@ -18,6 +18,7 @@ native, real-CPU tiers:
 | [Hardware tracing](hardware-tracing.md) | Intel PT / AMD LBR / ARM CoreSight / single-step, plus the **statistical AMD IBS-Op lane** (sampled hot edges, out of band, unprivileged) | native blocks + instructions, near-zero capture overhead | bare-metal Intel / AMD / AArch64 (single-step: x86-64 Linux/macOS; IBS: any AMD Zen) |
 | [Scoped tracing](scoped-tracing.md) | any hardware backend, cross-language | *import + scope* over a region → the assembly that executed, rendered on close | x86-64 Linux/macOS (single-step) |
 | [Data-flow tracing](data-flow.md) | emulator / ptrace / DynamoRIO producers, cross-language | operand **values** → def-use graph → forward/backward **slices**; managed method-identity + GC-move canonicalization | x86-64 Linux |
+| [SDE future-ISA lane](sde-testing.md) | Intel SDE emulation under `sde64 -future` | full register/flag/memory/ABI assertions on emulated ISA (APX / AVX10.2 / AMX / AVX-512-on-AVX2) | any x86-64 Linux |
 | [asmspy CLI](asmspy.md) | out-of-process ptrace (attach) + IBS-Op sampling | interactive TUI + headless: a running process's live syscalls-with-data, a function's live assembly (heat counts), whole-process call graph (JSON/DOT export) / call tree / instruction stream, the process/thread topology, and statistical hot edges sampled out of band (safe on a live JIT); processes sortable by pid / CPU activity / string-scan density | x86-64 Linux |
 
 The AMD LBR backend's reach knobs — window sizing, `lbr_period`,
@@ -45,5 +46,6 @@ hardware-tracing
 amd-lbr-tuning
 scoped-tracing
 data-flow
+sde-testing
 asmspy
 ```

@@ -389,6 +389,26 @@ jobs:
       - name: Build + run the Python native-trace wrapper suite
         run: make drtrace-python-test DYNAMORIO_HOME="$HOME/dynamorio"
 
+  # Intel SDE future/absent-ISA lane (pin-sde-future-isa-lane). Container-first:
+  # the pinned, digest-gated tools (SDE 10.8.0 + APX-capable GAS 2.46.1 + NASM
+  # 3.02) all live in Dockerfile.sde, so the runner needs only Docker. SDE emulates
+  # ISA the host CPU lacks (APX/AVX10.2/AMX/AVX-512-on-AVX2) for the whole process,
+  # so `make docker-sde` runs the suite under `sde64 -future`: the transparency
+  # null test (native == SDE TAP), the APX fixtures that cannot run any other way,
+  # the AVX-512-on-AVX2 un-skip, and the Unicorn cross-check. ubuntu-latest runners
+  # are x86-64, so the lane executes rather than skipping. No macOS leg: SDE ships
+  # Linux/Windows kits only (if one is ever added it must use macos-15-intel, never
+  # the retired macos-13).
+  sde:
+    name: sde (Intel SDE future/absent-ISA lane)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the SDE image + run the suite under sde64 -future
+        run: make docker-sde
+
   # DynamoRIO extension-load probe (data-flow taint tier, Increment 2). The
   # Phase-5 taint re-platform onto inlined drmgr/drreg/drx instrumentation is
   # gated on those prebuilt extensions loading under DR's private loader — a
