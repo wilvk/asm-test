@@ -586,22 +586,37 @@ jobs:
   # opt in via PR_SET_PTRACER_ANY, so ptrace attach works under the runner's
   # default yama scope. Same dependency set as the hwtrace job, plus ncurses.
   cli:
-    name: cli (asmspy headless smoke)
-    runs-on: ubuntu-latest
+    name: cli (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # asmspy runs on Linux x86-64 AND AArch64 (the reg/step/detach shim in
+        # cli/asmspy_arch.h). ubuntu-24.04-arm is a REAL VM (Azure Cobalt 100 /
+        # Neoverse N2), not qemu, so the ptrace tracer/tracee single-step engines
+        # run natively there — the correct validation vehicle for the AArch64 half.
+        os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v7
 
       # Capstone comes from the pinned 5.0.1 source build (the version the docs
       # and the docker CLI image ship), NOT apt's Capstone 4 — the older library
       # silently degrades some disassembly, so the smoke must run against what
-      # users actually get. libipt/OpenCSD/ncurses stay apt.
-      # gcc-multilib builds the -m32 i386 victim. Without it, mk/cli.mk's parse-time
-      # probe silently drops the i386-refusal block from cli-smoke — so the check
-      # that asmspy REFUSES a 32-bit tracee would never run on this (bare, non-docker)
-      # runner. Docker CLI image installs it too (Dockerfile.cli).
-      - name: Install libipt/OpenCSD (hwtrace tier) + ncurses (TUI) + pkg-config + gcc-multilib (i386 victim)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libipt-dev libopencsd-dev libncurses-dev pkg-config gcc-multilib
+      # users actually get. OpenCSD/ncurses/pkg-config stay apt.
+      # libipt (Intel PT decoder) is an x86-only apt package — its absence just
+      # leaves LIBIPT_LIBS empty (mk/native-trace.mk header-probes it), so it is
+      # installed ONLY on x86-64. gcc-multilib builds the -m32 i386 victim for the
+      # EI_CLASS-refusal check; there is no -m32 on arm64 (the i386-refusal block
+      # self-drops via mk/cli.mk's parse-time probe), so it too is x86-only.
+      - name: Install hwtrace decoders + ncurses (TUI) + pkg-config (+ libipt/gcc-multilib on x86-64)
+        run: |
+          sudo apt-get update
+          if [ "$(uname -m)" = "x86_64" ]; then
+            sudo apt-get install -y --no-install-recommends libipt-dev libopencsd-dev libncurses-dev pkg-config gcc-multilib
+          else
+            sudo apt-get install -y --no-install-recommends libopencsd-dev libncurses-dev pkg-config
+          fi
 
       # K1: cache the exact file set the pinned source build installs, keyed on
       # the pinned inputs. Cold cache / unavailable backend: builds from source.

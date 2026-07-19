@@ -8,17 +8,21 @@
 # ncursesw dev files ship in libncurses-dev on Ubuntu (Dockerfile.cli adds it).
 NCURSES_LIBS ?= $(shell pkg-config --libs ncursesw 2>/dev/null || echo -lncursesw)
 
-# asmspy's single-step engines are x86-64-hardcoded (rip / eflags-TF /
-# orig_rax; the reg/step/detach abstraction that would lift this is the open
-# asmspy-plan.md Theme F row) — on any other architecture the compile dumps raw
-# errors (`SYS_open undeclared`, `no member named 'rip'`) instead of gating.
-# An architecture is a REAL gate (CLAUDE.md): unlike the CLI_MISSING branch
-# below there is nothing to apt-install, so it is checked FIRST — falling
-# through would tell an arm64 user to install libncurses-dev, which cannot fix
-# it. This also covers `make docker-cli` on an arm64 HOST: _docker_plat follows
-# the host unless DOCKER_PLATFORM is set, so the in-container make sees aarch64
-# and hits this same gate instead of the raw compile errors.
+# asmspy runs on Linux x86-64 AND AArch64: its register/single-step/detach reads
+# are lifted behind the arch shim (cli/asmspy_arch.h — the landed asmspy-plan.md
+# Theme F row). Every OTHER machine (32-bit ARM, riscv, ...) still has no register
+# body, so the compile would dump raw errors (`no member named 'rip'`) instead of
+# gating. An architecture is a REAL gate (CLAUDE.md): unlike the CLI_MISSING branch
+# below there is nothing to apt-install, so it is checked FIRST — falling through
+# would tell a riscv user to install libncurses-dev, which cannot fix it. And
+# `make docker-cli` on an arm64 HOST is now the SUPPORTED path, not a skip:
+# _docker_plat follows the host unless DOCKER_PLATFORM is set, so the in-container
+# make sees aarch64 and builds asmspy natively.
 CLI_ARCH := $(shell uname -m)
+
+# The machines asmspy has a register/step/detach body for (cli/asmspy_arch.h).
+# uname -m reports aarch64 on Linux; some toolchains say arm64 — accept both.
+CLI_ARCH_SUPPORTED := x86_64 aarch64 arm64
 
 # asmspy needs Capstone (disassembly, via the hwtrace tier) AND ncursesw (the TUI).
 # Both are present in the asmtest-cli / asmtest-hwtrace images; a bare host often
@@ -44,7 +48,7 @@ $(BUILD)/asmspy_syscall_names.inc: cli/gen-syscall-names.sh | $(BUILD)
 # thread owns the ptrace loop while the ncurses UI thread stays responsive).
 $(BUILD)/%.o: cli/%.c cli/asmspy.h cli/asmspy_graphsort.h \
               cli/asmspy_dataview.h cli/asmspy_treefilter.h \
-              cli/asmspy_autoregion.h \
+              cli/asmspy_autoregion.h cli/asmspy_arch.h \
               include/asmtest_ptrace.h \
               include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -I$(BUILD) -pthread -c $< -o $@
@@ -69,13 +73,12 @@ $(BUILD)/asmspy: $(HWTRACE_OBJS) $(ASMSPY_OBJS) $(ASMSPY_DATAFLOW_OBJS)
 	  $(LINK_LIBBPF) -ldl $(NCURSES_LIBS) -lstdc++ -o $@
 
 .PHONY: cli
-ifneq ($(CLI_ARCH),x86_64)
+ifeq ($(filter $(CLI_ARCH),$(CLI_ARCH_SUPPORTED)),)
 cli:
-	@echo "# SKIP cli: asmspy is x86-64-only and this host is $(CLI_ARCH)."
-	@echo "#   Its single-step engines read rip/eflags-TF/orig_rax directly; the"
-	@echo "#   ARM64 reg/step/detach abstraction is the open asmspy-plan.md Theme F"
-	@echo "#   row. Nothing to install — this is an architecture gate, not a"
-	@echo "#   missing dependency."
+	@echo "# SKIP cli: asmspy supports Linux x86-64 and AArch64; this host is $(CLI_ARCH)."
+	@echo "#   Its register/single-step/detach reads (cli/asmspy_arch.h) have no body"
+	@echo "#   for this architecture. Nothing to install — this is an architecture"
+	@echo "#   gate, not a missing dependency."
 else ifeq ($(strip $(CLI_MISSING)),)
 cli: $(BUILD)/asmspy
 	@echo "built $(BUILD)/asmspy — run it with no args for the TUI, or --help"
@@ -318,6 +321,15 @@ $(BUILD)/test_autoregion: cli/test_autoregion.c cli/asmspy_autoregion.h \
                           cli/asmspy.h | $(BUILD)
 	$(CC) $(CFLAGS) -Icli -o $@ cli/test_autoregion.c
 
+# test_arch — headless unit test for the register/step/watch arch seam
+# (cli/asmspy_arch.h): the per-arch register accessors (pc/sp/ret/lr/syscall-nr)
+# and the AArch64 NT_ARM_HW_WATCH DBGWCR/DBGWVR/BAS control-word encoder. Both are
+# pure (no ptrace, no hardware), so this runs green on EVERY host — and pins the
+# AArch64 watchpoint encoding even on x86-64, where no AArch64 watchpoint can ever
+# fire (the "pure module carries the burden" discipline test_autoregion uses).
+$(BUILD)/test_arch: cli/test_arch.c cli/asmspy_arch.h | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -o $@ cli/test_arch.c
+
 # test_symtab — unit test for the symbol REVERSE lookup (asmspy_symtab_at), the
 # one function every view that names an address goes through. Pins the edges
 # where a resolver lies quietly instead of failing: one byte past a function,
@@ -337,21 +349,21 @@ $(BUILD)/test_jitdump: cli/test_jitdump.c $(BUILD)/asmspy_proc.o \
 	  -lstdc++ -o $@
 
 .PHONY: cli-smoke
-ifneq ($(CLI_ARCH),x86_64)
+ifeq ($(filter $(CLI_ARCH),$(CLI_ARCH_SUPPORTED)),)
 # Same architecture gate as `cli` above: without it, the smoke's prerequisites
-# try to compile the x86-64-only TUs and dump the raw errors the gate exists to
-# replace. A green skip here is honest — the smoke measures asmspy, and there
-# is no asmspy to measure on this architecture (recorded, per CLAUDE.md's
-# hardware-gate rule, in asmspy-plan.md Theme F).
+# try to compile TUs that have no register body for this machine and dump the raw
+# errors the gate exists to replace. A green skip here is honest — the smoke
+# measures asmspy, and there is no asmspy to measure on this architecture
+# (recorded, per CLAUDE.md's hardware-gate rule).
 cli-smoke:
-	@echo "# SKIP cli-smoke: asmspy is x86-64-only and this host is $(CLI_ARCH)"
+	@echo "# SKIP cli-smoke: asmspy supports Linux x86-64 and AArch64; this host is $(CLI_ARCH)"
 else
 cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/cpp_victim \
            $(BUILD)/jit_victim $(BUILD)/jitdump_victim $(BUILD)/int3_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/watch_victim \
            $(BUILD)/auto_victim \
-           $(BUILD)/debuglink_victim $(BUILD)/test_logview \
+           $(BUILD)/debuglink_victim $(BUILD)/test_arch $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
            $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/test_autoregion \
            $(BUILD)/test_ghash \

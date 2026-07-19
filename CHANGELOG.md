@@ -65,6 +65,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   [portability](https://github.com/wilvk/asm-test/blob/main/docs/reference/portability.md)
   record the whole-window facility's Linux-only floor.
 
+- **asmspy runs on AArch64 Linux.** The out-of-process tracer's
+  register / single-step / detach reads are lifted behind an architecture shim
+  (`cli/asmspy_arch.h`: PC / return / SP / LR / syscall-number accessors over
+  `PTRACE_GETREGS` on x86-64 and `PTRACE_GETREGSET(NT_PRSTATUS)` on AArch64), so
+  every engine — `--stream`, `--graph`, `--tree`, `--region`, `--log`, `--procs`
+  — runs on both arches. The single-step teardown honours AArch64's kernel-owned
+  step model (no user trap flag; `svc #0` syscall-instruction guard), the
+  call-graph / call-tree frame logic uses AArch64 `bl`-writes-LR semantics
+  (frame identity `(entry_lr, sp)`), and `--log` decodes the AArch64 syscall ABI
+  (number in `x8`, args in `x0`-`x5`, `*at`-only name table). `--watch` gains an
+  AArch64 arm over the `NT_ARM_HW_WATCH` regset (`DBGWCR`/`DBGWVR`/`BAS`
+  encoding, pinned by a pure `cli/test_arch.c` unit test on every host); it
+  self-skips where the host exposes no watchpoint slots (qemu-user, some
+  hypervisors). Validated on the native `ubuntu-24.04-arm` CI runner (a real VM,
+  not qemu) alongside the existing x86-64 leg; see
+  [the asmspy guide](https://github.com/wilvk/asm-test/blob/main/docs/guides/tracing/asmspy.md).
 - **libFuzzer / AFL++ external-engine fuzzing shim (`make docker-fuzz`).** Drive
   an x86-64 guest routine under the emulator with an industrial fuzzer, feeding
   the emulator's basic-block coverage into the engine's feedback channel without

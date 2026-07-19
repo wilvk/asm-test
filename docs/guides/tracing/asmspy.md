@@ -27,9 +27,11 @@ the same [out-of-process ptrace seam](native-tracing.md#out-of-process-variant-w
 wrapped in a terminal UI, plus a headless mode for scripting and CI. It lives in
 [`cli/`](https://github.com/wilvk/asm-test/tree/main/cli).
 
-> **Linux x86-64 only.** asmspy is built on `ptrace` single-stepping and
-> `/proc`; there is no Windows or macOS build. The tracing *engine* it drives is
-> the same one documented under [Hardware tracing](hardware-tracing.md) and
+> **Linux x86-64 and AArch64.** asmspy is built on `ptrace` single-stepping and
+> `/proc`; there is no Windows or macOS build. Its register / single-step /
+> detach reads are lifted behind an architecture shim, so every engine runs on
+> both x86-64 and AArch64 Linux. The tracing *engine* it drives is the same one
+> documented under [Hardware tracing](hardware-tracing.md) and
 > [Native runtime tracing](native-tracing.md).
 
 ## Build
@@ -513,13 +515,14 @@ Where perf refuses the open entirely (Docker's default seccomp profile blocks
 samplers print a `# SKIP` naming the real errno and exit 0.
 
 **Data watchpoint** — `--watch` answers *who touches this field, and with
-what value*: it arms an x86 hardware **data** watchpoint (DR0-3; writes by
-default, `--rw` adds reads; width `--len=1|2|4|8`) on an address in **every**
-thread of the target, and reports each toucher and the value — while the
-target runs at **native speed** between hits (no single-stepping, no code
-patching; near-zero perturbation). The address can be a data symbol,
-`sym+off`, or a raw `0xADDR`. x86-64 only (debug registers); it self-skips
-where arming is refused (qemu-user, some sandboxes).
+what value*: it arms a hardware **data** watchpoint (x86-64 DR0-3, or AArch64
+`NT_ARM_HW_WATCH`; writes by default, `--rw` adds reads; width `--len=1|2|4|8`)
+on an address in **every** thread of the target, and reports each toucher and
+the value — while the target runs at **native speed** between hits (no
+single-stepping, no code patching; near-zero perturbation). The address can be
+a data symbol, `sym+off`, or a raw `0xADDR`. x86-64 (DR0-3) and AArch64
+(`NT_ARM_HW_WATCH`); self-skips where the host exposes no watchpoint slots
+(qemu-user, some hypervisors) or arming is otherwise refused.
 
 ## How it works
 
@@ -644,9 +647,10 @@ seccomp vs missing PMU), so trust what it says over guesswork.
   and a target's own traps are delivered, not swallowed), but a genuinely
   W^X-enforced JIT page refuses the entry breakpoint (reported as exactly
   that — a self-skip, not "never executed") and a method re-JIT'd *mid-capture*
-  decodes from the live snapshot. `--watch` is x86-64-only (DR0-3 debug
-  registers) and self-skips where arming is refused (qemu-user, some
-  sandboxes).
+  decodes from the live snapshot. `--watch` uses x86-64 DR0-3 (debug registers)
+  and AArch64 `NT_ARM_HW_WATCH` (`DBGWCR`/`DBGWVR`); it self-skips where the host
+  exposes no watchpoint slots (qemu-user, some hypervisors) or arming is
+  otherwise refused.
 - **`--sample` is statistical and AMD-only.** It reports edges that *were*
   sampled — it can never prove code did not run, cold paths may be missing from
   a short window, and per-thread sampling can miss a thread born and dead
