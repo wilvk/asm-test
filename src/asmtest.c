@@ -540,6 +540,25 @@ int asmtest_cpu_has_avx2(void) { return 0; }
 int asmtest_cpu_has_avx512f(void) { return 0; }
 #endif
 
+/* SVE feature probe (AArch64 Linux). HWCAP_SVE in the aux vector reports SVE
+ * presence; the length is read from the CPU by rdvl (capture.s). Everywhere
+ * else — x86-64, macOS arm64 (no non-streaming SVE), Win64 — both return 0 so
+ * the ASM_SVCALL_* macros self-skip instead of executing an SVE instruction. */
+#if defined(__aarch64__) && defined(__linux__)
+#include <sys/auxv.h>
+#ifndef HWCAP_SVE
+#define HWCAP_SVE (1UL << 22) /* linux uapi asm/hwcap.h */
+#endif
+int asmtest_cpu_has_sve(void) { return (getauxval(AT_HWCAP) & HWCAP_SVE) != 0; }
+extern unsigned long asmtest_sve_rdvl(void); /* capture.s (T2) */
+unsigned long asmtest_sve_vl(void) {
+    return asmtest_cpu_has_sve() ? asmtest_sve_rdvl() : 0;
+}
+#else
+int asmtest_cpu_has_sve(void) { return 0; }
+unsigned long asmtest_sve_vl(void) { return 0; }
+#endif
+
 /* Whether the native 128-bit vector capture path (asm_call_capture_vec and the
  * ASM_VCALL* macros) exists on this target. x86-64 (SSE) and AArch64 (NEON) have
  * a 128-bit vector register file and a real trampoline; rv64gc has NO vector

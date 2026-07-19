@@ -127,6 +127,27 @@ typedef union {
  * so a vec512_t[32] is the 2048-byte zmm file the trampoline writes. */
 ASMTEST_STATIC_ASSERT(sizeof(vec512_t) == 64, "vec512_t is 64 bytes");
 
+/* One SVE scalable vector register (z0..z31). VL is implementation-defined
+ * (16..256 bytes on Linux), so this is a MAX-SIZE container: only the low
+ * asmtest_sve_vl() bytes are live after asm_call_capture_sve; the rest are
+ * untouched. Same lane-view idiom as vec128_t/vec256_t/vec512_t. */
+typedef union {
+    unsigned char u8[256];
+    uint32_t u32[64];
+    uint64_t u64[32];
+    float f32[64];
+    double f64[32];
+} svec_t;
+ASMTEST_STATIC_ASSERT(sizeof(svec_t) == 256, "svec_t is 256 bytes (SVE VLmax)");
+
+/* One SVE predicate register (p0..p15): one bit per vector byte, so PL = VL/8
+ * (max 32 bytes). Only the low asmtest_sve_vl()/8 bytes are live. */
+typedef union {
+    unsigned char u8[32];
+    uint64_t u64[4];
+} spred_t;
+ASMTEST_STATIC_ASSERT(sizeof(spred_t) == 32, "spred_t is 32 bytes (SVE PLmax)");
+
 #if defined(ASMTEST_ABI_WIN64)
 
 /* --- Microsoft x64 ("Win64") ABI on x86-64 ---------------------------------
@@ -370,6 +391,13 @@ void asm_call_capture_vec(regs_t *out, void *fn, const long *iargs,
  * executing an unsupported instruction and faulting. */
 int asmtest_cpu_has_avx2(void);
 int asmtest_cpu_has_avx512f(void);
+
+/* SVE presence and vector length, same self-skip-never-fault contract as the
+ * AVX probes above. AArch64 Linux only; 0 elsewhere (Apple silicon has no
+ * non-streaming SVE, so macOS arm64 reports 0). */
+int asmtest_cpu_has_sve(void);
+/* SVE vector length in BYTES via rdvl (16..256); 0 when SVE is absent. */
+unsigned long asmtest_sve_vl(void);
 
 /* Whether the native 128-bit vector capture path exists on this target (x86-64
  * SSE / AArch64 NEON: yes; rv64gc: no — no vector registers). The ASM_VCALL*
