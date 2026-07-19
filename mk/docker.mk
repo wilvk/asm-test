@@ -75,6 +75,22 @@ docker-emu: docker-build
 docker-asm: docker-build
 	$(_docker_run) make asm-test
 
+# libFuzzer/AFL external-engine coverage shim lane (libfuzzer-afl-shim, Track E).
+# FROM asmtest-bindings-base (libunicorn + libcapstone already present); the
+# Dockerfile.fuzz layer adds clang + libclang-rt + afl++ — all apt-installable,
+# so per CLAUDE.md they are added HERE where the work runs, not gated away. Runs
+# `make fuzz-shim-test`, which builds both engines' harnesses and FAILS unless
+# each one finds its planted crash — a real test, never a self-skip. The AFL env
+# vars keep afl-fuzz from aborting on the container's cpufreq/core-pattern
+# settings. Linux x86-64 (the guest is x86-64 run under Unicorn).
+.PHONY: docker-fuzz
+docker-fuzz: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.fuzz \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-fuzz .
+	$(DOCKER) run --rm $(_docker_plat) \
+	  -e AFL_SKIP_CPUFREQ=1 -e AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
+	  asmtest-fuzz make fuzz-shim-test
+
 # --- docker-sve-sweep: pre-hardware SVE validation under qemu binfmt --------
 # Runs the simd suite in an arm64 container at several SVE vector lengths by
 # steering qemu-user's CPU through the QEMU_CPU env var (read by the binfmt

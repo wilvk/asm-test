@@ -93,3 +93,45 @@ $(BUILD)/fuzz_afl_driver_crash: examples/fuzz_libfuzzer.c $(FUZZ_ENGINE_OBJS) $(
 .PHONY: fuzz-afl-driver
 fuzz-afl-driver: $(BUILD)/fuzz_afl_driver $(BUILD)/fuzz_afl_driver_crash
 	@echo "built $(BUILD)/fuzz_afl_driver (+_crash) via afl-clang-fast -fsanitize=fuzzer (aflpp_driver)"
+
+# --- CI smoke: prove BOTH engines find the planted crash (T4) ---------------
+# The one command `make docker-fuzz` runs: build every harness, then a bounded
+# libFuzzer baseline (no crash) + crash-finding run, the AFL native single-input
+# replay, and a short `afl-fuzz -V` on the crashing guest. Each engine MUST find
+# its planted crash — a non-zero exit with a "FAIL:" line otherwise. This is a
+# real test, never a self-skip: clang + afl++ are installed in Dockerfile.fuzz.
+FUZZ_LIBFUZZER_RUNS ?= 50000
+FUZZ_CRASH_RUNS     ?= 200000
+FUZZ_AFL_SECONDS    ?= 15
+
+.PHONY: fuzz-shim-test
+fuzz-shim-test: fuzz-libfuzzer fuzz-afl fuzz-afl-driver
+	@echo "== fuzz-shim-test: libFuzzer + AFL++ external-engine coverage shim =="
+	@set -e; \
+	work="$$(mktemp -d)"; trap 'rm -rf "$$work"' EXIT; \
+	echo "-- libFuzzer baseline (CLASSIFY3, no crash expected) --"; \
+	$(BUILD)/fuzz_libfuzzer -runs=$(FUZZ_LIBFUZZER_RUNS) -max_len=8 \
+	  -artifact_prefix=$$work/ >$$work/lf.log 2>&1; \
+	echo "   exit 0, $$(grep -oE 'cov: [0-9]+ ft: [0-9]+' $$work/lf.log | tail -1) (guest paths grew coverage)"; \
+	echo "-- libFuzzer crash-finding (planted fault on the negative path) --"; \
+	if $(BUILD)/fuzz_libfuzzer_crash -runs=$(FUZZ_CRASH_RUNS) -max_len=8 \
+	     -artifact_prefix=$$work/ >$$work/lfc.log 2>&1; then \
+	  echo "FAIL: libFuzzer crash harness exited 0 — coverage feedback did not reach the fault"; \
+	  exit 1; fi; \
+	ls $$work/crash-* >/dev/null 2>&1 || { \
+	  echo "FAIL: libFuzzer produced no crash artifact"; tail -20 $$work/lfc.log; exit 1; }; \
+	echo "   libFuzzer found the crash: $$(basename $$(ls $$work/crash-* | head -1))"; \
+	echo "-- AFL native single-input replay (deterministic, no afl-fuzz) --"; \
+	printf '\371\377\377\377' | $(BUILD)/fuzz_afl >/dev/null 2>&1; \
+	echo "   AFL replay exit 0"; \
+	echo "-- AFL crash-finding under afl-fuzz -V $(FUZZ_AFL_SECONDS) --"; \
+	mkdir -p $$work/seeds; printf '\005\000\000\000' > $$work/seeds/a; \
+	AFL_SKIP_CPUFREQ=1 AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
+	  afl-fuzz -i $$work/seeds -o $$work/out -V $(FUZZ_AFL_SECONDS) \
+	    -- $(BUILD)/fuzz_afl_crash >$$work/afl.log 2>&1 || true; \
+	n=$$(ls $$work/out/default/crashes/ 2>/dev/null | grep -c '^id:' || true); \
+	[ "$$n" -ge 1 ] || { \
+	  echo "FAIL: afl-fuzz found no crash in $(FUZZ_AFL_SECONDS)s — coverage feedback broke"; \
+	  tail -25 $$work/afl.log; exit 1; }; \
+	echo "   afl-fuzz found $$n crash(es) via the emulator-coverage forkserver"; \
+	echo "== fuzz-shim-test PASS: both engines steered to the planted crash =="
