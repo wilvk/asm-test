@@ -2428,6 +2428,7 @@ hwtrace-syscall-log: $(BUILD)/syscall_log $(BUILD)/syscall_victim
 
 .PHONY: hwtrace-jit hwtrace-jit-node hwtrace-jit-dotnet hwtrace-jit-java \
         hwtrace-jit-java-jitdump hwtrace-jit-jitdump hwtrace-jit-dotnet-jitdump \
+        hwtrace-jit-dotnet-attach-jitdump hwtrace-jit-java-attach-jitdump \
         hwtrace-jit-dotnet-bcl hwtrace-jit-java-bcl hwtrace-jit-java-bci
 hwtrace-jit: hwtrace-jit-node # back-compat alias for the default (Node.js) lane
 

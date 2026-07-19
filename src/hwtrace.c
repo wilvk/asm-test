@@ -2632,25 +2632,28 @@ int asmtest_hwtrace_pt_attach_end(asmtest_pt_attach_t *a, uint64_t when,
     } else {
         asmtest_codeimage_refresh(a->img);
         uint64_t dwhen = when ? when : asmtest_codeimage_now(a->img);
-        /* Re-base the appended entries to ABSOLUTE addresses (the window ABI): snapshot the
-         * append cursors, decode (records offsets from the first decoded IP, returns it in
-         * base_ip), then add base_ip to ONLY the newly appended insns[]/blocks[]. */
+        /* Snapshot the append cursors, then decode (records offsets from the first decoded
+         * IP, returns it in base_ip). */
         size_t insn0 = trace->insns_len;
         size_t blk0 = trace->blocks_len;
         uint64_t base_ip = 0;
         rc = asmtest_pt_decode_window(a->acc, a->acc_len, a->img, dwhen, trace,
                                       &base_ip);
+        /* Software IP post-filter (T4): with no hardware address filter a whole-thread
+         * capture records the loader/runtime too — drop decoded IPs outside the tracked
+         * region of interest (the mandatory fallback for anonymous/JIT memory). It runs on
+         * the OFFSETS (ip = base_ip + offset) and MUST precede the absolute rebase below, or
+         * it would double-add base_ip; no-op when a region was hardware-filtered or none was
+         * tracked. */
+        if (!a->have_filter && a->roi_len > 0)
+            asmtest_pt_ip_postfilter(trace, insn0, blk0, base_ip, a->roi_base,
+                                     a->roi_len);
+        /* Re-base the SURVIVING appended entries to ABSOLUTE addresses (the window ABI):
+         * add base_ip to ONLY the newly appended, in-region insns[]/blocks[]. */
         for (size_t i = insn0; i < trace->insns_len; i++)
             trace->insns[i] += base_ip;
         for (size_t i = blk0; i < trace->blocks_len; i++)
             trace->blocks[i] += base_ip;
-        /* Software IP post-filter (T4): with no hardware address filter a whole-thread
-         * capture records the loader/runtime too — drop decoded IPs outside the tracked
-         * region of interest (the mandatory fallback for anonymous/JIT memory). No-op when
-         * a region was hardware-filtered or none was tracked. */
-        if (!a->have_filter && a->roi_len > 0)
-            asmtest_pt_ip_postfilter(trace, insn0, blk0, base_ip, a->roi_base,
-                                     a->roi_len);
     }
     /* Truncation policy: overflow (across any drain) OR a decode failure flags it. */
     if (a->truncated || rc != ASMTEST_HW_OK)

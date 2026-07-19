@@ -41,6 +41,7 @@
 #include <string.h>
 #include <sys/ptrace.h>
 #include <sys/socket.h>
+#include <sys/time.h> /* struct timeval — SO_RCVTIMEO/SO_SNDTIMEO on the diag-IPC socket */
 #include <sys/types.h>
 #include <sys/uio.h>
 #include <sys/un.h>
@@ -475,7 +476,10 @@ static int dotnet_enable_perfmap(pid_t pid, const char *engine) {
     char sockpath[256] = {0};
     for (int i = 0; i < 100 && sockpath[0] == '\0'; i++) {
         int st;
-        if (waitpid(pid, &st, WNOHANG) == pid)
+        /* WNOWAIT: detect the child's exit WITHOUT reaping it, so its pid stays a
+         * (waitable) zombie — the caller's kill()+waitpid() in trace_jitdump then
+         * still targets a live pid, with no reap-then-recycle race. */
+        if (waitpid(pid, &st, WNOHANG | WNOWAIT) == pid)
             return 1; /* runtime exited before the socket appeared */
         char pattern[80];
         snprintf(pattern, sizeof pattern, "/tmp/dotnet-diagnostic-%d-*-socket",
@@ -497,6 +501,12 @@ static int dotnet_enable_perfmap(pid_t pid, const char *engine) {
     int fd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (fd < 0)
         return 1;
+    /* Bound read()/write() so a wedged runtime that accepts the connection but never
+     * replies self-skips instead of hanging the lane (the in-tree C# DiagnosticsIpc sets
+     * the same 1s timeout; 15s here matches the java lane's flush watchdog). */
+    struct timeval tv = {15, 0};
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof tv);
     struct sockaddr_un sa;
     memset(&sa, 0, sizeof sa);
     sa.sun_family = AF_UNIX;
