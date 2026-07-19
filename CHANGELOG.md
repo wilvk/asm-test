@@ -8,6 +8,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Native trace-point → IL / bytecode / source-line attribution.** A captured native
+  offset of a managed method now resolves to a **source line**, a **.NET IL offset**, or a
+  **JVM bytecode index** — not just a method name — from feeds the runtimes already emit.
+  `asmtest_jitdump_debug_find` (`include/asmtest_ptrace.h`) recovers the per-address
+  `(line, column, file)` table from a jitdump's `JIT_CODE_DEBUG_INFO` records the byte
+  reader skips, and `asmtest_jitdump_debug_line_map` bridges it into the shipped
+  `emu_line_map_t` (works today for **V8** `node --perf-prof`). A widened,
+  backend-neutral schema (`asmtest_srcmap_*`, `asmtest_srcreg_*`, `include/asmtest_trace.h`)
+  carries `offset → {kind, value, file, column}` with enclosing-point lookup and a
+  version-keyed registry stamped on the code-image capture sequence, so a method re-JIT'd at
+  a reused address resolves against the body live when the trace ran. For **CoreCLR**, a new
+  `IlToNativeMap` EventListener (`bindings/dotnet/hwtrace/HwTrace.cs`) subscribes the
+  `MethodILToNativeMap` JIT keyword (0x20000) in-process — no launch knob, no Intel PT — and
+  resolves an address to `(method, nativeOffset, ilOffset)`. For **HotSpot**, a new
+  `make docker-hwtrace-jit-java-bci` lane loads an in-tree JVMTI agent
+  (`examples/jvmti_bci_agent.c`, test-support only, never shipped) that captures
+  `CompiledMethodLoad`'s address→bytecode-index map into an `asmtest_srcreg` and proves a
+  native address resolves to a real bytecode index. The V8/HotSpot/CoreCLR jitdump debug
+  lanes (`make docker-hwtrace-jit-jitdump`, `-jit-java-jitdump`, `-jit-dotnet-jitdump`) print
+  the per-method attribution table and CHECK the reader against each real encoder. Attribution
+  covers **JIT-compiled code only**: interpreted code keeps its bytecode index in VM state
+  the native PC stream cannot see — see
+  [il-bytecode-attribution.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/il-bytecode-attribution.md).
+
 - **libdft64 differential taint oracle** (`make docker-taint-oracle`). The shipped
   DynamoRIO in-band taint client had only an offline emulator/Capstone forward-slice
   as an independent check. This lane cross-validates it against a **second, live,

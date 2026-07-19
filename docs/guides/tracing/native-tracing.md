@@ -539,6 +539,72 @@ non-`LOAD` records, picking the latest re-JIT body, and recovering the recorded 
 bytes. The text perf-map remains the portable lowest common denominator for JITs that
 only emit symbols.
 
+#### From native offsets to source lines, IL offsets, and bytecode indexes
+
+The tracers above tell you *which native instructions of a managed method ran*. Four
+in-tree feeds turn a captured native offset into a **source line**, a **.NET IL offset**,
+or a **JVM bytecode index** — the runtimes already carry the data; asm-test ingests it.
+
+- **Source lines from a jitdump** (`asmtest_jitdump_debug_find`, `include/asmtest_ptrace.h`).
+  A jitdump's `JIT_CODE_DEBUG_INFO` records carry a per-address `(line, column, file)`
+  table that `asmtest_jitdump_find` skips. `asmtest_jitdump_debug_find(path, pid, name, …)`
+  recovers that table for a named method — paired to its `JIT_CODE_LOAD` by `code_addr`,
+  latest re-JIT winning, exactly like the byte path — and
+  `asmtest_jitdump_debug_line_map` bridges it into the shipped `emu_line_map_t`
+  (`include/asmtest_trace.h`), so `emu_trace_source_report` resolves a traced offset to a
+  source line **today, with no schema change**. This works for **V8** (`node --perf-prof`,
+  a launch-time flag), which writes line *and* column. It does **not** yet work for HotSpot
+  or CoreCLR from the jitdump: CoreCLR's PAL writer and the `linux-tools`
+  `libperf-jvmti.so` agent both emit `JIT_CODE_LOAD` records only (no `JIT_CODE_DEBUG_INFO`
+  in the builds validated here) — HotSpot's per-address route is the `java-bci` JVMTI lane
+  below, and CoreCLR's is the `IlToNativeMap` listener. One honest caveat: V8's tiny
+  Sparkplug (baseline) bodies emit source positions *at or past* the reported `code_size`,
+  so the reader keeps at-or-above-base entries and drops only below-base prologue markers.
+
+- **A widened attribution schema** (`asmtest_srcmap_*` / `asmtest_srcreg_*`,
+  `include/asmtest_trace.h`). `asmtest_srcmap_entry_t` widens the line-only row to
+  `offset → {kind, value, file, column}`, where `kind` is a source line, a .NET IL offset
+  (the `ICorDebugInfo` pseudo-offsets `NO_MAPPING`/`PROLOG`/`EPILOG` pass through), or a JVM
+  bytecode index. `asmtest_srcmap_lookup` is **enclosing-point**: it returns the nearest
+  debug point at or before an offset — the documented granularity ceiling, never a
+  per-instruction claim. `asmtest_srcmap_report` prints kind-labelled coverage (`line 21`,
+  `IL_0x1a`, `bci 7`). `asmtest_srcreg_*` stores per-method maps stamped with a **capture
+  sequence** and resolves `(addr, when)` to the map live at that time — the same temporal
+  contract as `asmtest_codeimage_now` (see below), so a method re-JIT'd at a reused address
+  resolves against the body that was live when the trace ran, not a late snapshot.
+
+- **.NET IL offsets in-process** (`IlToNativeMap`, `bindings/dotnet/hwtrace/HwTrace.cs`).
+  A `System.Diagnostics.Tracing.EventListener` that subscribes CoreCLR's own JIT keyword
+  `JittedMethodILToNativeMapKeyword` (0x20000) at `Verbose`, joins each
+  `MethodLoadVerbose` load to its `MethodILToNativeMap` by `(MethodID, ReJITID)`, and
+  resolves an absolute address to `(method, nativeOffset, ilOffset)` — **no launch knob and
+  no Intel PT**. Construct it **before** the code under trace is JIT'd (an in-proc listener
+  gets no rundown of already-jitted methods). Two verified caveats: `ReJITID` does **not**
+  distinguish tiers (Tier0/Tier1/OSR share ReJITID 0 at different addresses — identity is
+  the code *range*, which the emission-order join preserves); and on .NET 8 an in-proc
+  listener receives the event and its `CountOfMapEntries` but the runtime **truncates** the
+  offset arrays, so `ilOffset` resolves to `NO_MAPPING` until an out-of-proc EventPipe trace
+  parser or a future build surfaces them (the wiring — keyword, event, entry count, method
+  range — is proven; concrete IL-offset decode is the tracked follow-on).
+
+- **JVM bytecode indexes** (`make docker-hwtrace-jit-java-bci`). A minimal in-tree JVMTI
+  agent (`examples/jvmti_bci_agent.c`, loaded with `-agentpath`, never shipped in the
+  library) captures `CompiledMethodLoad`'s address→bytecode-index map — inline-aware via the
+  `jvmticmlr.h` `JVMTI_CMLR_INLINE_INFO` leaf frames, else the flat `jvmtiAddrLocationMap`
+  whose `location` *is* the bci on HotSpot — to a live per-event sidecar. The lane ingests a
+  method's points into an `asmtest_srcreg` and proves a native address resolves to a **real
+  bytecode index**. (The lane traces a counted-loop method, `Hot.asmtbci`: a trivial leaf
+  like `a + b` compiles to a single `bci = -1` safepoint, so HotSpot yields real bcis only
+  where the compiled code has bytecode-bearing safepoints — the loop back-edge does.)
+
+**The honest boundary: JIT-compiled code only.** Every feed above reads a JIT's own
+address→semantics map. **Interpreted** code (V8 Ignition, CPython, JVM before C1/C2, YARV,
+PUC-Lua) keeps its bytecode index in *VM state* — a `pc` field in the interpreter frame —
+that the native PC stream cannot see, so attributing interpreted execution needs a separate
+state probe and is out of scope here. See the
+[IL/bytecode attribution analysis](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/il-bytecode-attribution.md)
+for the full design and the interpreter-probe follow-on.
+
 #### macOS (Mach exception ports)
 
 Everything above is `ptrace`. macOS cannot follow that path at all: XNU deliberately
@@ -809,6 +875,16 @@ against real output from **three independent producers** (V8, HotSpot, CoreCLR):
   (one routine parameterized by runtime and method name). It recovers `Program::Add`'s
   recorded bytes (`lea eax,[rdi+rsi]; ret`) and runs the same four checks. With this, the
   binary jitdump reader is validated against all three managed runtimes.
+
+A further lane validates **true per-address JVM bytecode-index attribution** (a route the
+jitdump cannot give — HotSpot's perf agent writes no debug records):
+
+- `make docker-hwtrace-jit-java-bci` (OpenJDK / **HotSpot**): loads the in-tree JVMTI agent
+  (`examples/jvmti_bci_agent.c`) with `-agentpath`, which captures `CompiledMethodLoad`'s
+  address→bytecode-index map to a live sidecar; the lane ingests a counted-loop method's
+  points into an `asmtest_srcreg` and proves a native address resolves to a real bytecode
+  index. See the attribution subsection under the W2 variant above for the schema and the
+  in-process .NET `IlToNativeMap` counterpart.
 
 ### Time-aware code-image recorder (the foreign-JIT byte source)
 

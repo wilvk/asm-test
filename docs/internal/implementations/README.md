@@ -152,7 +152,7 @@ Everything below started ☐ not started — these are freshly authored specs.
 | Document | Tasks | Status | Depends on |
 |---|---|---|---|
 | [code-review-plausible-triage.md](code-review-plausible-triage.md) — triage & fix the 2026-07-02 review's still-present findings | 8 | ☑ 8/8 | — |
-| [native-il-bytecode-attribution.md](native-il-bytecode-attribution.md) — native trace-point → IL/bytecode/source-line attribution | 7 | ◐ 6/7 (implementing agent in progress) | — |
+| [native-il-bytecode-attribution.md](native-il-bytecode-attribution.md) — native trace-point → IL/bytecode/source-line attribution | 7 | ☑ 7/7 (all lanes green, no gates: `docker-hwtrace` 666/666; `-jit-jitdump`/`-jit-java-jitdump`/`-jit-dotnet-jitdump` debug tables 5/5 each; `docker-hwtrace-dotnet` IlToNativeMap 19 maps/465 entries; new `docker-hwtrace-jit-java-bci` 3/3 [16 real bcis]; `docker-docs` clean. Doc corrections: only V8 emits jitdump DEBUG_INFO [CoreCLR + HotSpot's perf agent emit none — HotSpot's bci route is java-bci]; V8 baseline positions can exceed code_size [reader keeps at-or-above-base]; .NET 8 truncates the in-proc IL-offset arrays [wiring proven, decode is out-of-proc follow-on]; java-bci traces a loop method [asmtbci] since a trivial leaf gives one bci=-1) | — |
 
 ## Parallelism & the critical path
 
