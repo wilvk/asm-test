@@ -8593,7 +8593,11 @@ static void test_descent_handle(void) {
 #endif
 }
 
-/* Match a descent frame's ordered instruction stream against `exp`. */
+/* Match a descent frame's ordered instruction stream against `exp`. Used only by the
+ * call-descent tests, whose x86 call-blob fixtures gate every caller on
+ * `__linux__ && __x86_64__` — so the definition carries the same guard, else it is an
+ * unused-function -Werror on AArch64 (and macOS), where those tests self-skip. */
+#if defined(__linux__) && defined(__x86_64__)
 static int frame_insns_eq(asmtest_descent_t *d, size_t f, const uint64_t *exp,
                           size_t nexp) {
     if (asmtest_descent_frame_insn_count(d, f) != nexp)
@@ -8603,6 +8607,7 @@ static int frame_insns_eq(asmtest_descent_t *d, size_t f, const uint64_t *exp,
             return 0;
     return 1;
 }
+#endif
 
 /* Phases 3-5 (call-descent): the fork-path descending step loop across all four levels.
  * One in-page fixture (R calls sibling S and sibling K) drives L1 (edges) and L2 (descend
