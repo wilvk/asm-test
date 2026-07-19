@@ -79,4 +79,37 @@ TEST(simd, avx512_adds_eight_doubles_512bit) {
     vec512_t expect = {.f64 = {11.0, 22.0, 33.0, 44.0, 55.0, 66.0, 77.0, 88.0}};
     ASSERT_VEC512_EQ(out, 0, expect.u8);
 }
+#elif defined(__aarch64__) && defined(__linux__)
+/* SVE scalable-vector capture (Track D): asm_call_capture_sve marshals svec_t
+ * args into z0..z7 and captures the whole z/predicate file at whatever VL the
+ * host provides (z[0] = return). AArch64 Linux only; ASM_SVCALL_* self-skips a
+ * host without SVE (Apple silicon has no non-streaming SVE; a native non-SVE
+ * arm64 host also skips — only qemu-user under TCG exposes SVE here). */
+extern void sve_addd(void); /* svec sve_addd(svec a, svec b), SVE */
+
+TEST(simd, sve_adds_doubles_at_any_vl) {
+    svec_t a = {{0}}, b = {{0}};
+    for (int i = 0; i < 32; i++) { /* fill to VLmax so ANY VL is covered */
+        a.f64[i] = (double)(i + 1);
+        b.f64[i] = 10.0 * (double)(i + 1);
+    }
+    svec_t z[32];
+    spred_t p[16];
+    ASM_SVCALL_2(z, p, sve_addd, a, b); /* self-skips without SVE */
+
+    unsigned long vl = asmtest_sve_vl(); /* bytes; >= 16 once here */
+    ASSERT_UGE(vl, 16);
+    for (unsigned long i = 0; i < vl / 8; i++)
+        ASSERT_DEQ(z[0].f64[i], 11.0 * (double)(i + 1));
+
+    svec_t expect = {{0}};
+    for (unsigned long i = 0; i < vl / 8; i++)
+        expect.f64[i] = 11.0 * (double)(i + 1);
+    ASSERT_SVEC_EQ(z, 0, expect.u8); /* compares exactly vl bytes */
+
+    /* ptrue p3.d in the routine: one predicate bit per vector byte, so a
+     * .d all-true pattern reads 0x01 in every live predicate byte. */
+    for (unsigned long i = 0; i < vl / 8; i++)
+        ASSERT_UEQ(p[3].u8[i], 0x01);
+}
 #endif

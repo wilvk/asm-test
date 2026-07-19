@@ -45,3 +45,21 @@ ASM_FUNC vec_add8d
     ret
 ASM_ENDFUNC vec_add8d
 #endif
+
+#if defined(__aarch64__) && defined(__linux__)
+/*
+ * svec sve_addd(svec a, svec b);  lane-wise add of VL/8 64-bit doubles
+ * (SVE): a -> z0, b -> z1, result -> z0. AArch64 Linux only; the capture
+ * path is HWCAP_SVE-gated and the test self-skips where SVE is absent.
+ * p3 is the scratch governing predicate: p0-p3 are argument/caller-saved
+ * registers, while p4-p15 are callee-saved HERE because this routine takes
+ * SVE arguments (AAPCS64) — so only p0-p3 may be clobbered. `.arch` last in
+ * the file, mirroring the capture.s end-of-file rule (nothing SVE below).
+ */
+    .arch   armv8-a+sve
+ASM_FUNC sve_addd
+    ptrue   p3.d
+    fadd    z0.d, p3/m, z0.d, z1.d
+    ret
+ASM_ENDFUNC sve_addd
+#endif
