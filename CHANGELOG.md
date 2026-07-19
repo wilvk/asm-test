@@ -8,6 +8,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Runtime-enabled jitdump byte recovery on an already-running process** — turn jitdump
+  emission on in a live foreign runtime and recover a JIT method's recorded bytes with
+  `asmtest_jitdump_find`, with **no launch flag** on the target. For **CoreCLR**
+  (`make docker-hwtrace-jit-dotnet-attach-jitdump`) the harness sends `EnablePerfMap(All)`
+  over the runtime's diagnostics IPC socket (the documented `DOTNET_IPC_V1` wire, hand-rolled
+  in C — no NuGet), so an already-JITted `Program::Add` is rundown-emitted into
+  `/tmp/jit-<pid>.dump` even though the victim was launched without `DOTNET_PerfMapEnabled`.
+  For **HotSpot** (`make docker-hwtrace-jit-java-attach-jitdump`) it loads a new in-tree
+  attach-capable JVMTI jitdump agent (`examples/jvmti_jitdump_agent.c`, test-support only,
+  never shipped) into the running JVM with `jcmd JVMTI.agent_load`; on attach the agent
+  replays every already-compiled method via `GenerateEvents(COMPILED_METHOD_LOAD)` into the
+  dump. **Correction:** the linux-tools `libperf-jvmti.so` exports only `Agent_OnLoad` (no
+  `Agent_OnAttach`), so HotSpot refuses to load it via `jcmd` — it is `-agentpath`-only and
+  cannot serve the attach case; hence the bespoke agent. V8/Node has no runtime-enable path
+  (`--perf-prof` is wired once at isolate init), so there is deliberately no Node attach lane.
+  Both lanes run on any host with the runtime — **no Intel PT / hardware gate**.
+
 - **Native trace-point → IL / bytecode / source-line attribution.** A captured native
   offset of a managed method now resolves to a **source line**, a **.NET IL offset**, or a
   **JVM bytecode index** — not just a method name — from feeds the runtimes already emit.

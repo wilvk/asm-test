@@ -2450,6 +2450,15 @@ $(BUILD)/libasmtest_bci_agent.so: examples/jvmti_bci_agent.c | $(BUILD)
 	$(CC) $(CFLAGS) -shared -fPIC -I$(JAVA_HOME_BCI)/include \
 	  -I$(JAVA_HOME_BCI)/include/linux $< -o $@
 
+# The ATTACH-capable JVMTI jitdump agent (intel-pt-attach-foreign-pid T3). Also test-support
+# only — never shipped, never linked into libasmtest. Unlike the launch-only linux-tools
+# libperf-jvmti.so (Agent_OnLoad only), this exports Agent_OnAttach so it can be loaded into
+# an ALREADY-RUNNING JVM with `jcmd JVMTI.agent_load`, and it replays already-compiled methods
+# into /tmp/jit-<pid>.dump on attach. Compiled with the JDK's JVMTI headers.
+$(BUILD)/libasmtest_jitdump_agent.so: examples/jvmti_jitdump_agent.c | $(BUILD)
+	$(CC) $(CFLAGS) -shared -fPIC -I$(JAVA_HOME_BCI)/include \
+	  -I$(JAVA_HOME_BCI)/include/linux $< -o $@ -lpthread
+
 # Node.js (V8): trace the optimized `asmtjit` body (needs node + Capstone).
 hwtrace-jit-node: $(BUILD)/jit_trace
 	@echo "== hwtrace-jit-node (real Node.js V8 JIT method) =="
@@ -2493,6 +2502,17 @@ hwtrace-jit-dotnet-jitdump: $(BUILD)/jit_trace
 	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
 	  dotnet build examples/dotnet/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
 	$(BUILD)/jit_trace dotnet-jitdump $(abspath $(BUILD)/jit_dotnet/jit_dotnet.dll)
+
+# ATTACH variant (intel-pt-attach-foreign-pid T3): recover a method's bytes from a CoreCLR
+# process launched WITHOUT DOTNET_PerfMapEnabled — the harness turns jitdump emission on out
+# of band over the diagnostics IPC socket (EnablePerfMap, the runtime re-runs down already-
+# JITted methods). Same validation as the launch-time lane; needs no NuGet, no privilege
+# (attaching to one's own child over the diagnostic socket). Needs the dotnet SDK + Capstone.
+hwtrace-jit-dotnet-attach-jitdump: $(BUILD)/jit_trace
+	@echo "== hwtrace-jit-dotnet-attach-jitdump (runtime-enabled CoreCLR jitdump, no launch flag) =="
+	DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1 \
+	  dotnet build examples/dotnet/jit_dotnet -c Release -o $(BUILD)/jit_dotnet >/dev/null
+	$(BUILD)/jit_trace dotnet-attach-jitdump $(abspath $(BUILD)/jit_dotnet/jit_dotnet.dll)
 
 # OpenJDK (HotSpot): compile the one-method hot loop and trace its `Hot.asmtjit` C2 body.
 # -XX:-TieredCompilation + CompileCommand dontinline (set by the harness) give a stable,
@@ -2553,6 +2573,19 @@ hwtrace-jit-java-jitdump: $(BUILD)/jit_trace
 	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
 	@rm -rf /tmp/.debug/jit 2>/dev/null || true
 	$(BUILD)/jit_trace java-jitdump $(BUILD)/jit_java "$(PERF_JVMTI)"
+
+# ATTACH variant (intel-pt-attach-foreign-pid T3): recover asmtjit's bytes from a HotSpot
+# launched WITHOUT -agentpath — the harness loads the in-tree attach-capable JVMTI jitdump
+# agent into the RUNNING JVM with `jcmd JVMTI.agent_load` (replaying already-compiled methods).
+# DOC CORRECTION: the doc named libperf-jvmti.so here, but it exports only Agent_OnLoad — jcmd
+# JVMTI.agent_load refuses it ("Agent_OnAttach is not available"), so the lane needs the in-tree
+# agent. Needs the JDK (javac + jcmd) + the JVMTI headers + Capstone.
+hwtrace-jit-java-attach-jitdump: $(BUILD)/jit_trace $(BUILD)/libasmtest_jitdump_agent.so
+	@echo "== hwtrace-jit-java-attach-jitdump (runtime-enabled HotSpot jitdump via jcmd, no launch flag) =="
+	@mkdir -p $(BUILD)/jit_java
+	javac -d $(BUILD)/jit_java examples/jit_java/Hot.java
+	@rm -f /tmp/jit-*.dump 2>/dev/null || true
+	$(BUILD)/jit_trace java-attach-jitdump $(BUILD)/jit_java $(abspath $(BUILD)/libasmtest_jitdump_agent.so)
 
 # TRUE per-address bytecode-index attribution (T6): load the in-tree JVMTI bci agent into
 # HotSpot, capture CompiledMethodLoad's address->bci map to a live sidecar, ingest asmtjit's

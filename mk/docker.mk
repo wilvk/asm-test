@@ -588,6 +588,7 @@ HWTRACE_DOCKER_LANGS := cpp rust go node java dotnet ruby lua zig
         docker-hwtrace-jit docker-hwtrace-jit-dotnet docker-hwtrace-jit-java \
         docker-hwtrace-jit-java-jitdump docker-hwtrace-jit-jitdump \
         docker-hwtrace-jit-dotnet-jitdump docker-hwtrace-jit-java-bci \
+        docker-hwtrace-jit-dotnet-attach-jitdump docker-hwtrace-jit-java-attach-jitdump \
         docker-hwtrace-jit-dotnet-bcl docker-hwtrace-jit-java-bcl \
         $(addprefix docker-hwtrace-,$(HWTRACE_DOCKER_LANGS))
 
@@ -670,6 +671,13 @@ docker-hwtrace-jit-java-descend docker-hwtrace-jit-java-descend-all: docker-java
 docker-hwtrace-jit-dotnet-jitdump: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-jit-dotnet-jitdump
 
+# Runtime-enabled (attach) jitdump byte recovery — the victim is launched WITHOUT the
+# jitdump flag and emission is turned on out of band against the running pid (CoreCLR
+# EnablePerfMap over the diagnostics IPC socket / HotSpot jcmd JVMTI.agent_load). Plain
+# container, no privilege (attaching to one's own child needs none).
+docker-hwtrace-jit-dotnet-attach-jitdump: docker-dotnet
+	$(DOCKER) run --rm $(_docker_plat) asmtest-dotnet make hwtrace-jit-dotnet-attach-jitdump
+
 docker-hwtrace-jit-java: docker-java
 	$(DOCKER) run --rm $(_docker_plat) asmtest-java make hwtrace-jit-java
 
@@ -678,6 +686,9 @@ docker-hwtrace-jit-java-bcl: docker-java
 
 docker-hwtrace-jit-java-jitdump: docker-java
 	$(DOCKER) run --rm $(_docker_plat) asmtest-java make hwtrace-jit-java-jitdump
+
+docker-hwtrace-jit-java-attach-jitdump: docker-java
+	$(DOCKER) run --rm $(_docker_plat) asmtest-java make hwtrace-jit-java-attach-jitdump
 
 # True per-address JVM bytecode-index attribution: build the in-tree JVMTI bci agent in the
 # java image (JDK headers present) and run the java-bci lane — CompiledMethodLoad's

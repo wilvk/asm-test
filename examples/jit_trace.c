@@ -40,8 +40,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ptrace.h>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/uio.h>
+#include <sys/un.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -445,6 +447,91 @@ static int print_debug_table(const char *path, pid_t pid, const char *name,
     return rc;
 }
 
+/* Read exactly n bytes from fd (a stream socket may deliver a short read). */
+static int read_full(int fd, void *buf, size_t n) {
+    size_t got = 0;
+    while (got < n) {
+        ssize_t r = read(fd, (char *)buf + got, n - got);
+        if (r <= 0)
+            return -1;
+        got += (size_t)r;
+    }
+    return 0;
+}
+
+/* Turn on CoreCLR perf-map + jitdump emission in an ALREADY-RUNNING process, out of band,
+ * over its diagnostics IPC socket — with NO DOTNET_PerfMapEnabled launch flag (the whole
+ * point of the attach lane: recover a method's bytes from a process not launched for it).
+ * Hand-rolls the documented DOTNET_IPC_V1 EnablePerfMap command — the same wire the in-tree
+ * bindings/dotnet DiagnosticsIpc speaks — chosen over the NuGet DiagnosticsClient so the
+ * lane needs no NuGet restore in the asmtest-dotnet image (offline). PerfMapType.All(1) writes
+ * BOTH the text /tmp/perf-<pid>.map (name resolution + the perf-map cross-check) and the binary
+ * /tmp/jit-<pid>.dump, and runs the ReadyToRun rundown so an already-JITted Program::Add is
+ * re-emitted. Returns 0 on an OK response; nonzero on any failure (the caller self-skips). */
+static int dotnet_enable_perfmap(pid_t pid, const char *engine) {
+    (void)engine;
+    /* Wait for the runtime to open its diagnostics socket (on by default; lives in /tmp,
+     * name carries a runtime-chosen disambiguator, so glob it). */
+    char sockpath[256] = {0};
+    for (int i = 0; i < 100 && sockpath[0] == '\0'; i++) {
+        int st;
+        if (waitpid(pid, &st, WNOHANG) == pid)
+            return 1; /* runtime exited before the socket appeared */
+        char pattern[80];
+        snprintf(pattern, sizeof pattern, "/tmp/dotnet-diagnostic-%d-*-socket",
+                 (int)pid);
+        glob_t g;
+        if (glob(pattern, 0, NULL, &g) == 0 && g.gl_pathc > 0) {
+            strncpy(sockpath, g.gl_pathv[0], sizeof sockpath - 1);
+            sockpath[sizeof sockpath - 1] = '\0';
+        }
+        globfree(&g);
+        if (sockpath[0] == '\0') {
+            struct timespec ts = {0, 100 * 1000 * 1000};
+            nanosleep(&ts, NULL);
+        }
+    }
+    if (sockpath[0] == '\0')
+        return 1;
+
+    int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (fd < 0)
+        return 1;
+    struct sockaddr_un sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sun_family = AF_UNIX;
+    strncpy(sa.sun_path, sockpath, sizeof sa.sun_path - 1);
+    if (connect(fd, (struct sockaddr *)&sa, sizeof sa) != 0) {
+        close(fd);
+        return 1;
+    }
+
+    /* IpcMessage: header(20) = magic(14) "DOTNET_IPC_V1\0" + size(u16 LE) + cmdSet + cmdId
+     * + reserved(u16); payload(4) = PerfMapType (u32 LE). All(1) => perf-map + jitdump. */
+    unsigned char msg[24];
+    memset(msg, 0, sizeof msg);
+    memcpy(msg, "DOTNET_IPC_V1\0", 14);
+    msg[14] = (unsigned char)(sizeof msg); /* size = 24, LE */
+    msg[15] = 0;
+    msg[16] = 0x04; /* CommandSet = Process        */
+    msg[17] = 0x05; /* CommandId  = EnablePerfMap  */
+    /* msg[18..19] reserved = 0 */
+    msg[20] =
+        0x01; /* PerfMapType.All = 1 (perf-map + jitdump, with R2R rundown) */
+    ssize_t w = write(fd, msg, sizeof msg);
+    if (w != (ssize_t)sizeof msg) {
+        close(fd);
+        return 1;
+    }
+    /* Response header(20): magic(14) + size(u16) + cmdSet + cmdId + reserved. Success is the
+     * server command set (0xFF) with the OK id (0x00). */
+    unsigned char hdr[20];
+    int ok = read_full(fd, hdr, sizeof hdr) == 0 && hdr[16] == 0xFF &&
+             hdr[17] == 0x00;
+    close(fd);
+    return ok ? 0 : 1;
+}
+
 /* The BINARY JITDUMP path (asmtest_jitdump_find), against a real runtime that emits a
  * *native* perf jitdump. Unlike the text perf-map (address + size + name), a jitdump carries
  * the JIT's recorded CODE BYTES — the byte source a branch-trace decoder must be handed —
@@ -459,7 +546,8 @@ static int print_debug_table(const char *path, pid_t pid, const char *name,
  * which has no native jitdump, is the separate trace_jitdump_java lane.) Callers pass any
  * runtime path argument (e.g. the .dll) as an ABSOLUTE path, since the child chdirs to /tmp. */
 static int trace_jitdump(const char *engine, const char *method_substr,
-                         char *const cmd[]) {
+                         char *const cmd[],
+                         int (*on_started)(pid_t, const char *)) {
     if (!asmtest_disas_available()) {
         printf("# SKIP jitdump (%s): needs Capstone\n1..0 # skipped\n", engine);
         return 0;
@@ -478,6 +566,19 @@ static int trace_jitdump(const char *engine, const char *method_substr,
     if (pid < 0) {
         perror("fork");
         printf("1..0 # skipped\n");
+        return 0;
+    }
+
+    /* ATTACH variant: the victim was launched WITHOUT the jitdump flag; turn emission on
+     * now, out of band, against the running pid (e.g. CoreCLR EnablePerfMap over the
+     * diagnostics IPC socket). A failure here is a clean self-skip, not a hard error — the
+     * runtime may simply be absent. NULL for the launch-time lanes (flag set at exec). */
+    if (on_started != NULL && on_started(pid, engine) != 0) {
+        printf("# SKIP jitdump (%s): could not enable jitdump on the running "
+               "process (runtime absent or diagnostics off)\n1..0 # skipped\n",
+               engine);
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
         return 0;
     }
 
@@ -877,6 +978,233 @@ static int trace_jitdump_java(const char *cp, const char *agent) {
     return failures ? 1 : 0;
 }
 
+/* Load a JVMTI agent into a RUNNING HotSpot via `jcmd <pid> JVMTI.agent_load <agent>` (the
+ * attach case). Returns 0 when the agent's Agent_OnAttach returned success (jcmd prints
+ * "return code: 0"), nonzero otherwise — jcmd absent, the JVM's attach listener not ready
+ * yet, or (the reason this whole lane needs the in-tree agent) the agent has no
+ * Agent_OnAttach: libperf-jvmti.so is -agentpath-only and jcmd prints "Agent_OnAttach is not
+ * available in ...". Output is captured to a temp file and scanned, kept off the TAP stream. */
+static int jcmd_agent_load(pid_t pid, const char *agent) {
+    char out[64];
+    snprintf(out, sizeof out, "/tmp/asmtest-jcmd-%d.out", (int)pid);
+    pid_t j = fork();
+    if (j == 0) {
+        int f = open(out, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+        if (f >= 0) {
+            dup2(f, STDOUT_FILENO);
+            dup2(f, STDERR_FILENO);
+        }
+        char pidbuf[16];
+        snprintf(pidbuf, sizeof pidbuf, "%d", (int)pid);
+        execlp("jcmd", "jcmd", pidbuf, "JVMTI.agent_load", agent, (char *)NULL);
+        _exit(127);
+    }
+    if (j <= 0)
+        return 1;
+    int st = 0;
+    waitpid(j, &st, 0);
+    FILE *f = fopen(out, "r");
+    if (f == NULL)
+        return 1;
+    char line[256];
+    int ok = 0;
+    while (fgets(line, sizeof line, f))
+        if (strstr(line, "return code: 0") != NULL)
+            ok = 1;
+    fclose(f);
+    unlink(out);
+    return ok ? 0 : 1;
+}
+
+/* Runtime-enabled jitdump byte recovery on a LIVE JVM (intel-pt-attach-foreign-pid T3): the
+ * HotSpot analogue of the CoreCLR EnablePerfMap-attach path. The victim is launched with NO
+ * -agentpath; the in-tree JVMTI jitdump agent (examples/jvmti_jitdump_agent.c) is loaded into
+ * the already-running JVM with `jcmd JVMTI.agent_load`, and on attach it replays every
+ * already-compiled nmethod via GenerateEvents(COMPILED_METHOD_LOAD) into /tmp/jit-<pid>.dump.
+ * asmtest_jitdump_find then recovers asmtjit's bytes — proving jitdump emission was turned on
+ * AFTER launch, with no tracing flag on the java command line.
+ *
+ * DOC CORRECTION (verified 2026-07-19): the doc prescribes `jcmd JVMTI.agent_load
+ * libperf-jvmti.so`, but the linux-tools perf agent exports only Agent_OnLoad (no
+ * Agent_OnAttach), so HotSpot refuses the dynamic load ("Agent_OnAttach is not available").
+ * It is a launch-only agent and cannot serve the attach case — hence the bespoke in-tree
+ * agent, which exports Agent_OnAttach and does the replay. Unlike the buffered perf agent, it
+ * flushes per event, so the dump is readable while the JVM is alive (no SIGTERM-to-flush). */
+static int trace_attach_jitdump_java(const char *cp, const char *agent) {
+    if (!asmtest_disas_available()) {
+        printf("# SKIP java-attach-jitdump: needs Capstone\n1..0 # skipped\n");
+        return 0;
+    }
+    if (agent == NULL || agent[0] == '\0' || access(agent, R_OK) != 0) {
+        printf("# SKIP java-attach-jitdump: needs the in-tree JVMTI jitdump "
+               "agent (libasmtest_jitdump_agent.so)\n1..0 # skipped\n");
+        return 0;
+    }
+
+    pid_t pid = fork();
+    if (pid == 0) {
+        /* PLAIN launch — NO -agentpath. -XX:+EnableDynamicAgentLoading lets the later jcmd
+         * JVMTI.agent_load succeed (JDK 21+ gates dynamic loading on it, JEP 451). The other
+         * knobs mirror the launch-time java-jitdump lane: a single stable C2 nmethod for
+         * asmtjit, compiled promptly so the attach replay (or a live event) has a body. */
+        char *cmd[] = {(char *)"java",
+                       (char *)"-XX:+EnableDynamicAgentLoading",
+                       (char *)"-XX:-TieredCompilation",
+                       (char *)"-XX:CompileThreshold=1000",
+                       (char *)"-XX:CompileCommand=dontinline,Hot.asmtjit",
+                       (char *)"-cp",
+                       (char *)cp,
+                       (char *)"Hot",
+                       NULL};
+        execvp(cmd[0], cmd);
+        _exit(127);
+    }
+    if (pid < 0) {
+        perror("fork");
+        printf("1..0 # skipped\n");
+        return 0;
+    }
+
+    /* Attach the agent to the RUNNING JVM (the property under test: emission enabled AFTER
+     * launch). Retry until the attach listener is ready, or the JVM exits, or we time out. */
+    int attached = 0;
+    for (int i = 0; i < 40 && !attached; i++) {
+        int st;
+        if (waitpid(pid, &st, WNOHANG) == pid) {
+            pid = -1;
+            break;
+        }
+        if (jcmd_agent_load(pid, agent) == 0)
+            attached = 1;
+        else {
+            struct timespec ts = {0, 300 * 1000 * 1000};
+            nanosleep(&ts, NULL);
+        }
+    }
+    if (pid < 0) {
+        printf("# SKIP java-attach-jitdump: java exited early (JDK not "
+               "installed?)\n1..0 # skipped\n");
+        return 0;
+    }
+    if (!attached) {
+        printf("# SKIP java-attach-jitdump: could not jcmd-attach the agent "
+               "(jcmd absent or JVM attach not ready)\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        printf("1..0 # skipped\n");
+        return 0;
+    }
+
+    /* Recover asmtjit's (addr,size) from HotSpot's jcmd perf-map (the independent cross-check)
+     * and its recorded bytes from the agent's /tmp/jit-<pid>.dump (flushed per event). */
+    char mappath[64];
+    snprintf(mappath, sizeof mappath, "/tmp/perf-%d.map", (int)pid);
+    unsigned long paddr = 0, psize = 0;
+    asmtest_jitdump_entry_t e;
+    memset(&e, 0, sizeof e);
+    uint8_t jbytes[1024];
+    size_t jblen = 0;
+    int found = 0;
+    for (int i = 0; i < 200 && !found; i++) {
+        struct timespec ts = {0, 100 * 1000 * 1000};
+        nanosleep(&ts, NULL);
+        int st;
+        if (waitpid(pid, &st, WNOHANG) == pid) {
+            pid = -1;
+            break;
+        }
+        java_perfmap_refresh(pid, i);
+        FILE *f = fopen(mappath, "r");
+        if (f != NULL) {
+            char line[512];
+            while (fgets(line, sizeof line, f)) {
+                unsigned long aa, ss;
+                int soff = 0;
+                if (sscanf(line, "%lx %lx %n", &aa, &ss, &soff) < 2 ||
+                    soff == 0)
+                    continue;
+                char *t = line + soff;
+                t[strcspn(t, "\r\n")] = '\0';
+                if (strstr(t, "asmtjit") != NULL) {
+                    paddr = aa;
+                    psize = ss;
+                }
+            }
+            fclose(f);
+        }
+        /* The agent names asmtjit in JVM-descriptor form; asmtest_jitdump_find matches it. */
+        if (asmtest_jitdump_find(NULL, pid, JAVA_JITDUMP_METHOD, &e, jbytes,
+                                 sizeof jbytes, &jblen) == ASMTEST_PTRACE_OK &&
+            jblen > 0)
+            found = 1;
+    }
+    if (pid < 0) {
+        printf(
+            "# SKIP java-attach-jitdump: java exited early\n1..0 # skipped\n");
+        return 0;
+    }
+    if (!found || paddr == 0) {
+        printf("# SKIP java-attach-jitdump: asmtjit not recovered from the "
+               "attach-written jitdump in time\n");
+        kill(pid, SIGKILL);
+        waitpid(pid, NULL, 0);
+        printf("1..0 # skipped\n");
+        return 0;
+    }
+
+    /* Snapshot the LIVE code for the byte-match cross-check (child; no attach needed). */
+    uint8_t live[1024];
+    size_t ln = psize > 0 && psize < sizeof live ? (size_t)psize : sizeof live;
+    struct iovec lv = {live, ln}, rv = {(void *)(uintptr_t)paddr, ln};
+    ssize_t livegot = process_vm_readv(pid, &lv, 1, &rv, 1, 0);
+
+    printf("# recovered real HotSpot method from the ATTACH-loaded agent's "
+           "jitdump: '%s' @ 0x%llx (%llu bytes, code_index %llu)\n",
+           JAVA_JITDUMP_METHOD, (unsigned long long)e.code_addr,
+           (unsigned long long)e.code_size, (unsigned long long)e.code_index);
+
+    /* (1) A real method's recorded bytes came from a jitdump turned on AFTER launch. */
+    CHECK(jblen > 0 && e.code_size > 0,
+          "java-attach-jitdump: asmtest_jitdump_find recovered bytes from a "
+          "runtime-enabled (jcmd JVMTI.agent_load) jitdump");
+    /* (2) Cross-check: jitdump address/size == HotSpot's own jcmd perf-map. */
+    CHECK((unsigned long)e.code_addr == paddr &&
+              (unsigned long)e.code_size == psize,
+          "java-attach-jitdump: code_addr/size agree with HotSpot's jcmd "
+          "perf-map (two independent outputs)");
+    /* (3) The recorded bytes are real machine code. */
+    CHECK(asmtest_disas(ASMTEST_ARCH_X86_64, jbytes, jblen, e.code_addr, 0,
+                        NULL, 0) > 0,
+          "java-attach-jitdump: the recorded bytes disassemble to real x86-64 "
+          "instructions");
+    /* (4) The recorded bytes == the live code (best-effort). */
+    if (livegot == (ssize_t)ln &&
+        memcmp(live, jbytes, ln < jblen ? ln : jblen) == 0)
+        CHECK(1, "java-attach-jitdump: recorded bytes == the live JIT code "
+                 "(jitdump captured the running bytes)");
+    else
+        printf("# SKIP java-attach-jitdump byte-match: live snapshot "
+               "unavailable or differs\n");
+
+    printf("# real HotSpot JIT code recovered from the attach-written "
+           "jitdump:\n");
+    for (uint64_t off = 0; off < jblen;) {
+        char text[128];
+        size_t l = asmtest_disas(ASMTEST_ARCH_X86_64, jbytes, jblen,
+                                 e.code_addr, off, text, sizeof text);
+        if (l == 0)
+            break;
+        printf("    0x%llx  %s\n", (unsigned long long)off, text);
+        off += l;
+    }
+
+    kill(pid, SIGKILL);
+    waitpid(pid, NULL, 0);
+    printf("1..%d\n# %d passed, %d failed\n", checks, checks - failures,
+           failures);
+    return failures ? 1 : 0;
+}
+
 /* T6: TRUE per-address JVM bytecode-index attribution. Load the in-tree JVMTI agent
  * (examples/jvmti_bci_agent.c -> libasmtest_bci_agent.so) into a HotSpot that keeps
  * Hot.asmtbci hot (a counted-loop method — a trivial leaf like asmtjit compiles to a
@@ -1209,6 +1537,16 @@ int main(int argc, char **argv) {
         }
         return trace_jitdump_java(argv[2], argv[3]);
     }
+    if (strcmp(mode, "java-attach-jitdump") == 0) {
+        if (argc < 4) {
+            fprintf(stderr,
+                    "usage: %s java-attach-jitdump <classpath> "
+                    "<libasmtest_jitdump_agent.so>\n",
+                    argv[0]);
+            return 2;
+        }
+        return trace_attach_jitdump_java(argv[2], argv[3]);
+    }
     if (strcmp(mode, "java-bci") == 0) {
         if (argc < 4) {
             fprintf(
@@ -1229,7 +1567,7 @@ int main(int argc, char **argv) {
                        (char *)"-e",
                        (char *)HOT_JS,
                        NULL};
-        return trace_jitdump("V8", "asmtjit", cmd);
+        return trace_jitdump("V8", "asmtjit", cmd, NULL);
     }
     if (strcmp(mode, "dotnet-jitdump") == 0) {
         if (argc < 3) {
@@ -1246,14 +1584,32 @@ int main(int argc, char **argv) {
         setenv("DOTNET_PerfMapEnabled", "1", 1);
         setenv("DOTNET_CLI_TELEMETRY_OPTOUT", "1", 1);
         char *cmd[] = {(char *)"dotnet", argv[2], NULL};
-        return trace_jitdump("CoreCLR", "Program::Add", cmd);
+        return trace_jitdump("CoreCLR", "Program::Add", cmd, NULL);
+    }
+    if (strcmp(mode, "dotnet-attach-jitdump") == 0) {
+        if (argc < 3) {
+            fprintf(stderr,
+                    "usage: %s dotnet-attach-jitdump <app.dll-abspath>\n",
+                    argv[0]);
+            return 2;
+        }
+        /* Launch the victim PLAIN — NO DOTNET_PerfMapEnabled (the whole point). TC=0 pins a
+         * single stable Add body; the on_started hook turns on the perf-map + jitdump over
+         * the diagnostics IPC socket once the runtime is up. Absolute dll (child chdirs). */
+        setenv("DOTNET_TieredCompilation", "0", 1);
+        setenv("DOTNET_TC_QuickJitForLoops", "0", 1);
+        setenv("DOTNET_CLI_TELEMETRY_OPTOUT", "1", 1);
+        char *cmd[] = {(char *)"dotnet", argv[2], NULL};
+        return trace_jitdump("CoreCLR", "Program::Add", cmd,
+                             dotnet_enable_perfmap);
     }
 
     fprintf(stderr,
             "usage: %s {node|dotnet <app.dll>|dotnet-bcl <app.dll>|java "
             "<classpath>|"
-            "java-bcl <classpath>|java-jitdump <classpath> <agent.so>|jitdump|"
-            "dotnet-jitdump <app.dll>}\n",
+            "java-bcl <classpath>|java-jitdump <classpath> <agent.so>|"
+            "java-attach-jitdump <classpath> <agent.so>|jitdump|"
+            "dotnet-jitdump <app.dll>|dotnet-attach-jitdump <app.dll>}\n",
             argv[0]);
     return 2;
 }
