@@ -82,6 +82,17 @@ int main(void) {
     FIELD(vec256_t, f64);
     end_struct();
 
+    BEGIN(svec_t); /* SVE scalable-vector container: fixed 256-byte (VLmax)
+                      box; live bytes = asmtest_sve_vl() at runtime */
+    FIELD(svec_t, u8);
+    FIELD(svec_t, u64);
+    FIELD(svec_t, f64);
+    end_struct();
+
+    BEGIN(spred_t); /* SVE predicate container: fixed 32-byte (PLmax) box */
+    FIELD(spred_t, u8);
+    end_struct();
+
     BEGIN(regs_t);
     FIELD(regs_t, ret);
 #if defined(ASMTEST_ABI_WIN64)
