@@ -1,0 +1,79 @@
+# Self-hosted hardware-trace lanes (allowed-to-be-absent).
+#
+# Every hardware-exact live capture path in this repo self-skips on GitHub's
+# hosted pool (no AMD LbrExtV2/IBS, no bare-metal Intel PT, no CoreSight, no
+# Apple Silicon, no bare-metal /dev/kvm). This workflow carries the self-hosted
+# jobs that run those paths for real on registered silicon. It is designed to
+# LAND AND STAY GREEN WITH ZERO RUNNERS: every job is guarded by a repo variable
+# (`vars.HW_RUNNER_*`) that is `0`/absent by default, so it skips instantly
+# instead of queuing forever. Registering a box and flipping one variable to `1`
+# lights exactly one lane.
+#
+# SECURITY POSTURE (this is a constraint, not taste — see
+# docs/internal/ci/runners.md): this workflow deliberately has NO `push` and NO
+# `pull_request`/`pull_request_target` trigger, so fork-PR code can never reach a
+# self-hosted runner. Only maintainer-driven `workflow_dispatch` and a nightly
+# `schedule` (which always runs `main`) trigger it. Every self-hosted job carries
+# `environment: hw-runners` (required-reviewer approval), the workflow grants only
+# `contents: read`, and no secrets are exposed. The hosted bitrot gate
+# (`hwtrace-privileged` in ci.yml) STAYS in ci.yml on ubuntu-latest — it must not
+# move here, and a self-hosted `runs-on` must never appear in ci.yml.
+name: hw (self-hosted, allowed-to-be-absent)
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 05:00 UTC — two hours before ci.yml's 0 7 * * * nightly, so the two never
+    # contend for a single one-box runner.
+    - cron: '0 5 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  # Static group => two hw.yml runs (a manual dispatch overlapping the nightly)
+  # serialize instead of running at once; cancel-in-progress:false lets the first
+  # finish rather than killing it. Keying on ${{ github.run_id }} would be UNIQUE
+  # per run and group nothing — a no-op. A single self-hosted box also runs one
+  # job at a time, so this is the belt to the runner's suspenders.
+  group: hw-self-hosted
+  cancel-in-progress: false
+
+jobs:
+  hwtrace-privileged-zen:
+    name: hwtrace-privileged (self-hosted Zen — LIVE AMD LBR + IBS)
+    # Guarded off by default: with the variable absent or `0` this reads "not 1"
+    # and the job skips instantly, so the file lands ahead of all hardware. Flip
+    # HW_RUNNER_AMD_ZEN to '1' only once a Zen 4/5 runner is registered.
+    if: vars.HW_RUNNER_AMD_ZEN == '1'
+    runs-on: [self-hosted, linux, x64, amd-zen]
+    environment: hw-runners
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Live AMD capture under CAP_PERFMON (default seccomp)
+        run: |
+          set -o pipefail
+          make docker-hwtrace-privileged 2>&1 | tee /tmp/hwzen.log
+
+      - name: Assert the AMD live paths RAN (a self-skip HERE is a failure)
+        run: |
+          log=/tmp/hwzen.log
+          if grep -q '# SKIP AMD LBR live capture' "$log"; then
+            echo "::error::AMD LBR live capture SELF-SKIPPED on the Zen runner — the lane tested nothing. Wrong host, missing amd_lbr_v2, or a broken cap add."
+            exit 1
+          fi
+          if grep -q '# SKIP IBS live capture' "$log"; then
+            echo "::error::IBS live capture SELF-SKIPPED on the Zen runner."
+            exit 1
+          fi
+          grep '# call_auto escalate:' "$log"
+          if grep '# call_auto escalate:' "$log" | grep -q 'LBR window sufficed'; then
+            echo "::error::call_auto did NOT escalate off the 16-deep window on a 25-back-edge loop — a REGRESSION of the 5d8e0d2 fix, not a known issue."
+            exit 1
+          fi
+          if grep -q '^not ok' "$log"; then
+            echo "::error::failing assertions:"; grep '^not ok' "$log"; exit 1
+          fi
+          echo "hwtrace-privileged-zen: AMD LbrExtV2 + live IBS ran (no self-skip); call_auto escalated off the LBR window."
