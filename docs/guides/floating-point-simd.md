@@ -121,11 +121,62 @@ The lane scalars use the same `ASSERT_DEQ`/`FEQ` macros; `ASSERT_VEC256_EQ(out,
 idx, expect)` is the 32-byte whole-register compare. Lane counts double versus
 `vec128_t` — `f64[0..3]`, `f32[0..7]`, `u64[0..3]`.
 
+### Wide vectors — SVE (scalable, AArch64 Linux)
+
+AArch64's Scalable Vector Extension has an *implementation-defined* vector length
+(VL) — 16 to 256 bytes, fixed by the silicon, not the ISA. A fixed-true-width
+type is therefore impossible, so `svec_t` is a **256-byte container** (the
+architectural VLmax) of which only the low `asmtest_sve_vl()` bytes are live
+after a capture, and `spred_t` is the matching 32-byte predicate container
+(PL = VL/8). Fill and compare only up to the runtime VL:
+
+```c
+extern void sve_addd(void); // svec sve_addd(svec a, svec b), SVE
+
+TEST(simd, sve_add_doubles) {
+    svec_t a = {{0}}, b = {{0}};
+    for (int i = 0; i < 32; i++) {        // fill to VLmax so any VL is covered
+        a.f64[i] = i + 1;
+        b.f64[i] = 10.0 * (i + 1);
+    }
+    svec_t z[32];
+    spred_t p[16];
+    ASM_SVCALL_2(z, p, sve_addd, a, b);   // self-skips cleanly without SVE
+
+    unsigned long vl = asmtest_sve_vl();  // vector length in BYTES (>= 16)
+    for (unsigned long i = 0; i < vl / 8; i++)
+        ASSERT_DEQ(z[0].f64[i], 11.0 * (i + 1));  // loop to vl/8, not a fixed count
+
+    svec_t want = {{0}};
+    for (unsigned long i = 0; i < vl / 8; i++)
+        want.f64[i] = 11.0 * (i + 1);
+    ASSERT_SVEC_EQ(z, 0, want.u8);        // compares exactly vl live bytes
+}
+```
+
+- `ASM_SVCALL_1`/`ASM_SVCALL_2` marshal `svec_t` arguments into `z0..z7`, call the
+  routine, and capture the whole `z` file into `svec_t z[32]` (`z[0]` is the
+  return) plus the predicate file into `spred_t p[16]`. The predicate *arguments*
+  are all-false; a routine that needs predicate arguments calls
+  `asm_call_capture_sve` directly (`iargs`/`zargs`/`pargs`).
+- `asmtest_cpu_has_sve()` gates a direct call; `asmtest_sve_vl()` returns the VL
+  in bytes (0 where SVE is absent). `ASSERT_SVEC_EQ` / `ASSERT_SPRED_EQ` are
+  **VL-aware** — they compare only the low VL (resp. VL/8) live bytes, never the
+  untouched container tail — so the same test is correct at any VL.
+- **Linux AArch64 only.** Apple silicon has no *non-streaming* SVE — plain SVE
+  instructions `SIGILL` on macOS arm64 — so the probe returns 0 and the macros
+  self-skip there, exactly as on x86-64.
+- Before any SVE silicon is available, `make docker-sve-sweep` runs this suite
+  under qemu-user at several vector lengths (VQ 1/3/8/16 → VL 16/48/128/256
+  bytes, including a non-power-of-two) to flush out VL-assumption bugs.
+
 > **AVX-512 (`zmm`), SVE, and the emulator.** Native 512-bit capture is wired:
 > `asm_call_capture_vec512` with the `ASM_VCALL512_*` macros and
 > `ASSERT_VEC512_EQ`, gated at runtime by `asmtest_cpu_has_avx512f()` — on both
-> System V and the Win64 tier (`asm_call_capture_vec512_win64`). **AArch64 SVE is
-> not yet wired.** The [emulator tier](emulator.md) exposes the YMM/ZMM registers
+> System V and the Win64 tier (`asm_call_capture_vec512_win64`). AArch64 SVE is
+> wired too — see the **Wide vectors — SVE** section above
+> (`asm_call_capture_sve` / `ASM_SVCALL_*`, gated by `asmtest_cpu_has_sve()`).
+> The [emulator tier](emulator.md) exposes the YMM/ZMM registers
 > but its bundled Unicorn does not *execute* AVX/AVX-512 instructions
 > (`UC_ERR_INSN_INVALID`), so wide-vector capture is **native-only** for now; the
 > emulator path self-skips until Unicorn ships wide-vector execution.

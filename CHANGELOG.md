@@ -8,6 +8,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **AArch64 SVE wide-vector capture.** `asm_call_capture_sve` (GAS trampoline in
+  `src/capture.s`; `ret` stubs elsewhere, incl. the NASM twin) marshals
+  scalable-vector `z0..z7` and predicate `p0..p3` arguments per AAPCS64 and
+  captures the whole `z0..z31` / `p0..p15` file into two new max-size containers
+  — `svec_t` (256-byte VLmax) and `spred_t` (32-byte PLmax), of which only the
+  low `asmtest_sve_vl()` (resp. `/8`) live bytes are written. `ASM_SVCALL_1`/`_2`
+  call and **self-skip** without SVE, and `ASSERT_SVEC_EQ`/`ASSERT_SPRED_EQ`
+  compare exactly the live VL. A `HWCAP_SVE` runtime probe
+  (`asmtest_cpu_has_sve` / `asmtest_sve_vl`) returns 0 everywhere SVE is absent
+  (x86-64, and macOS arm64 — Apple silicon has no non-streaming SVE); the ABI
+  manifest pins both containers, and the corpus routine `sve_addd` exercises the
+  path. The new `make docker-sve-sweep` lane runs the SIMD suite under qemu-user
+  at several vector lengths (VQ 1/3/8/16 → VL 16/48/128/256 bytes, including a
+  non-power-of-two) to flush out VL-assumption bugs before any SVE silicon is
+  available; execution sign-off on real SVE hardware (Graviton3/Grace/A64FX-class)
+  remains pending — see
+  [aarch64-sve-capture.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/implementations/aarch64-sve-capture.md).
+
 - **XED-decoded Intel Pin trace lane (`make docker-pintool` / `make
   pintool-test`).** A pinned, digest-gated Intel Pin 4.2 kit
   (`scripts/fetch-pin.sh`, SHA-256 pinned in `scripts/third-party-digests.txt`)

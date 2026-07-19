@@ -341,8 +341,9 @@ with the framework code exact and the `extern` routine under test left to you.
 **You need:** to trust hand-vectorised kernels lane by lane, and to prove the
 fast path equals a scalar reference. `ASM_VCALLn` marshals 128-bit vectors into
 the vector registers and captures the whole vector file; on x86-64 `ASM_VCALL256n`
-does the same for 256-bit AVX2 and self-skips a host without it. See
-[Floating-point & SIMD](../guides/floating-point-simd.md).
+does the same for 256-bit AVX2, and on AArch64 Linux `ASM_SVCALL_*` captures the
+scalable SVE z/predicate file at the host's vector length — each self-skips a host
+without the feature. See [Floating-point & SIMD](../guides/floating-point-simd.md).
 
 ```c
 extern void vec_add4f(void);            /* vec128 vec_add4f(vec128 a, vec128 b) */
@@ -365,6 +366,18 @@ TEST(simd, avx2_adds_four_doubles_256bit) {
     vec256_t out[16];
     ASM_VCALL256_2(out, vec_add4d, a, b);   /* self-skips without AVX2 */
     ASSERT_DEQ(out[0].f64[3], 44.0);
+}
+#elif defined(__aarch64__) && defined(__linux__)
+extern void sve_addd(void);             /* svec sve_addd(svec a, svec b), SVE */
+TEST(simd, sve_adds_doubles_at_any_vl) {
+    svec_t a = {{0}}, b = {{0}};
+    for (int i = 0; i < 32; i++) { a.f64[i] = i + 1; b.f64[i] = 10.0 * (i + 1); }
+    svec_t z[32];
+    spred_t p[16];
+    ASM_SVCALL_2(z, p, sve_addd, a, b);     /* self-skips without SVE */
+    unsigned long vl = asmtest_sve_vl();    /* VL in bytes; loop to vl/8 */
+    for (unsigned long i = 0; i < vl / 8; i++)
+        ASSERT_DEQ(z[0].f64[i], 11.0 * (i + 1));  /* VL-agnostic: any host VL */
 }
 #endif
 ```

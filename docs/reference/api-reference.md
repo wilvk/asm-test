@@ -30,6 +30,7 @@ See [Writing tests](../getting-started/writing-tests.md).
 | `ASM_VCALLN(&r, fn, …)` | Any number of `vec128_t` args |
 | `ASM_VCALL256_1`/`_2(out, fn, …)` | 1–2 `vec256_t` (AVX2 ymm) args; **self-skips** without AVX2. `out` is a `vec256_t[16]` |
 | `ASM_VCALL512_1`/`_2(out, fn, …)` | 1–2 `vec512_t` (AVX-512 zmm) args; **self-skips** without AVX-512F. `out` is a `vec512_t[32]` |
+| `ASM_SVCALL_1`/`_2(z, p, fn, …)` | 1–2 `svec_t` (AArch64 SVE z) args; **self-skips** without SVE. `z` is a `svec_t[32]`, `p` a `spred_t[16]` (whole z/predicate file; `z[0]` is the return) |
 | `ASM_CALL_WIN64_0`…`_6` / `_N(&r, fn, …)` | Microsoft x64 convention (args in `rcx/rdx/r8/r9`); needs `ASMTEST_ABI_WIN64` |
 
 See [ABI capture](../guides/abi-capture.md) and [Floating-point & SIMD](../guides/floating-point-simd.md).
@@ -64,6 +65,8 @@ See [ABI capture](../guides/abi-capture.md) and [Floating-point & SIMD](../guide
 | `ASSERT_VEC_EQ(&r, idx, expect_ptr)` | whole 128-bit lane `r.vec[idx]` |
 | `ASSERT_VEC256_EQ(vec, idx, expect_ptr)` | whole 256-bit ymm lane (AVX2 capture) |
 | `ASSERT_VEC512_EQ(vec, idx, expect_ptr)` | whole 512-bit zmm lane (AVX-512 capture) |
+| `ASSERT_SVEC_EQ(z, idx, expect_ptr)` | SVE z lane, VL-aware — compares the live `asmtest_sve_vl()` bytes only |
+| `ASSERT_SPRED_EQ(p, idx, expect_ptr)` | SVE predicate lane, VL-aware — compares the live `asmtest_sve_vl()/8` bytes only |
 | `ASSERT_DEQ/DNEAR(actual, expected[, ulps])` | one `double` lane |
 | `ASSERT_FEQ/FNEAR(actual, expected[, ulps])` | one `float` lane |
 
@@ -102,6 +105,14 @@ void asm_call_capture_vec512(vec512_t *vec, void *fn, const long *iargs,
                              const vec512_t *vargs);                        // zmm
 int  asmtest_cpu_has_avx2(void);      // gate for the _vec256 / ASM_VCALL256 path
 int  asmtest_cpu_has_avx512f(void);   // gate for the _vec512 / ASM_VCALL512 path
+
+// SVE scalable-vector capture (AArch64 Linux; gate on asmtest_cpu_has_sve).
+// Captures the whole z file into z[32] and the predicate file into p[16];
+// only the low asmtest_sve_vl() (resp. /8) bytes of each slot are live.
+void asm_call_capture_sve(svec_t *z, spred_t *p, void *fn, const long *iargs,
+                          const svec_t *zargs, const spred_t *pargs);
+int           asmtest_cpu_has_sve(void); // gate for the _sve / ASM_SVCALL path
+unsigned long asmtest_sve_vl(void);      // SVE vector length in BYTES (0 if absent)
 
 // Microsoft x64 ("Win64") capture (needs ASMTEST_ABI_WIN64; args are 64-bit).
 void asm_call_capture_win64(regs_t *out, void *fn, const long long *args);  // 6
@@ -197,7 +208,7 @@ consumer points at an older, leaner lib that lacks them.)
 
 | Group | Symbols | Notes |
 |---|---|---|
-| Capture (array form) | `asm_call_capture`, `asm_call_capture_args`, `asm_call_capture_fp`/`_fp_n`, `asm_call_capture_vec`/`_vec_n`, `asm_call_capture_vec256` (AVX2), `asm_call_capture_sret`, `asm_call_capture_bigstruct` | Every call path has a non-variadic array form a binding can target — no cpp expansion to emulate. `_vec256` captures the ymm file; gate on `asmtest_cpu_has_avx2`. |
+| Capture (array form) | `asm_call_capture`, `asm_call_capture_args`, `asm_call_capture_fp`/`_fp_n`, `asm_call_capture_vec`/`_vec_n`, `asm_call_capture_vec256` (AVX2), `asm_call_capture_sve` (SVE), `asm_call_capture_sret`, `asm_call_capture_bigstruct` | Every call path has a non-variadic array form a binding can target — no cpp expansion to emulate. `_vec256` captures the ymm file (gate on `asmtest_cpu_has_avx2`); `_sve` captures the z/predicate file (gate on `asmtest_cpu_has_sve`). |
 | Verdict shims | `asmtest_check_abi`, `asmtest_check_flag`, `asmtest_check_abi_vec` (Win64 / AArch64 builds) | Return `0`/nonzero + a reason string instead of `longjmp`-ing into the runner; for validating a capture across the FFI boundary without the C runner. `_abi_vec` is the vector complement (`xmm6–15` / `d8–d15`) after a `_vec`/`_vec_n` capture. |
 | Opaque-handle accessors | `asmtest_regs_new`/`_free`, `asmtest_regs_ret`/`_flags`/`_fret`/`_vec_f32`/`_flag_set`, `asmtest_capture6`/`asmtest_capture_fp2`/`asmtest_capture_vec_f32`, `asmtest_capture_args` (wide arity: register + stack args), `asmtest_capture_mix` (integer + FP argument files in one call), `asmtest_capture_sret` (struct return via the hidden pointer, into a caller byte buffer); emulator: `asmtest_emu_result_new`/`_free`/`_ok`/`_faulted`/`_fault_addr`/`_fault_kind`, `asmtest_emu_x86_reg` (GP + `rip`/`rflags`), `asmtest_emu_x86_xmm_f64`/`_f32` | For dynamic-FFI bindings (Node, Ruby, Lua, …) that can't mirror `regs_t` offsets: allocate a handle, call with scalar args, read fields by accessor — the universal FFI subset. |
 | Scalar-arg emu wrappers | `asmtest_emu_call2`, `asmtest_emu_call6` (≤6 int args), `asmtest_emu_call_fp2`, `asmtest_emu_call_vec_f32`, `asmtest_emu_call_win64_6`, `asmtest_emu_call6_traced` | Drive the emulator over a 64-byte code window with scalar args — FP, vector, Win64, and traced runs — without marshalling C argument arrays. |
