@@ -115,6 +115,7 @@ guides/runner
 guides/benchmarks
 guides/cross-system-benchmarking
 guides/emulator
+guides/fuzzing-shim
 guides/tracing/index
 guides/disassembly
 guides/win64

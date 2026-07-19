@@ -8,7 +8,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **AArch64 SVE wide-vector capture.** `asm_call_capture_sve` (GAS trampoline in
+- **libFuzzer / AFL++ external-engine fuzzing shim (`make docker-fuzz`).** Drive
+  an x86-64 guest routine under the emulator with an industrial fuzzer, feeding
+  the emulator's basic-block coverage into the engine's feedback channel without
+  compiler-instrumenting the guest bytes (they run under Unicorn). A new tested
+  seam `emu_cover_hits` (`src/fuzz.c`) reports one input's distinct executed
+  block offsets; `examples/fuzz_libfuzzer.c` registers them as SanitizerCoverage
+  8-bit counters (+ the PC table clang-18's libFuzzer requires), and
+  `examples/fuzz_afl.c` (native persistent-mode forkserver) plus an
+  aflpp_driver reuse of the libFuzzer harness write them into AFL++'s
+  shared-memory bitmap via a plain-compiled helper (`examples/fuzz_afl_map.c`).
+  `Dockerfile.fuzz` (clang 18 + afl++ 4.09c on the bindings base) runs
+  `make fuzz-shim-test`, which fails unless **both** engines steer to a planted
+  crash — a real test, never a self-skip. Node (per-block) coverage; documented
+  in [the fuzzing-shim guide](https://github.com/wilvk/asm-test/blob/main/docs/guides/fuzzing-shim.md).
   `src/capture.s`; `ret` stubs elsewhere, incl. the NASM twin) marshals
   scalable-vector `z0..z7` and predicate `p0..p3` arguments per AAPCS64 and
   captures the whole `z0..z31` / `p0..p15` file into two new max-size containers

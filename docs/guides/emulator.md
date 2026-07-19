@@ -366,6 +366,10 @@ emu_mutation_test1(e, code, len, strong, 3, 0,            0xABCD, &s); //  16 su
 The original routine is the oracle (its result must be a function of its
 argument); `max_mutants = 0` runs every single-bit flip, else a seeded sample.
 
+To drive a routine with an **external** engine (libFuzzer or AFL++) instead of
+this in-tree loop — feeding the same block coverage into the engine's feedback
+channel — see the [external-engine fuzzing shim](fuzzing-shim.md).
+
 ## When to reach for the emulator
 
 | Use the emulator when you need… | Otherwise use… |
