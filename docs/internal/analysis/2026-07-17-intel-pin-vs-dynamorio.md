@@ -92,7 +92,9 @@ own decoder must model it to rebuild the block in its code cache. Pin decodes wi
 maintains its own decoder and lags structurally:
 
 - AVX-512 was a multi-**month** effort and landed years late ([DR #1312][dr1312]);
-- VNNI programs still break ([DR #5440][dr5440]);
+- AVX-512 VNNI was itself once broken, but that gap is **closed** — [DR #5440][dr5440]
+  was resolved 2022-04-25 (PR #5444), and the pinned DR 11.91.20630 post-dates the
+  fix, so it decodes VNNI. The live decoder gap is APX alone, next;
 - **APX is an open future-work item ([DR #6226][dr6226])** — a routine using
   APX's r16–r31 cannot pass through DR's code cache **today**, so the drtrace /
   taint tier would abort on it.

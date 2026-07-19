@@ -122,8 +122,9 @@ A `libasmtest_pintool` control-flow producer filling
 [asmtest_trace_t](../../../include/asmtest_trace.h), whose reason to exist is
 **decoder currency**: Pin decodes with XED, so it instruments routines using the
 newest extensions (APX **today**, [DR #6226][dr6226] open) that DynamoRIO's code
-cache rejects ([DR #5440][dr5440] VNNI still breaks). On capable silicon this is a
-DBI trace where the drtrace tier aborts.
+cache rejects. The pinned DR *does* decode AVX-512 VNNI ([DR #5440][dr5440] was
+fixed 2022-04-25, PR #5444), so PIN-2's case rests on APX ([DR #6226][dr6226])
+alone. On capable silicon this is a DBI trace where the drtrace tier aborts.
 
 **The plug-in contract** (from the DynamoRIO tier map): a Pintool resolves the
 app's exported marker PCs (`asmtest_trace_begin` / `_end`, the region markers) by

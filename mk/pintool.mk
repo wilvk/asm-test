@@ -23,17 +23,17 @@
 PINTOOL_ARCH := $(shell uname -m)
 PINTOOL_SO   := pintool/obj-intel64/asmtest_pintool.so
 
-.PHONY: pintool-tool pintool-test
+.PHONY: pintool-tool pintool-test pintool-apx-test
 
 ifneq ($(PINTOOL_ARCH),x86_64)
 
-pintool-tool pintool-test:
+pintool-tool pintool-test pintool-apx-test:
 	@echo "# SKIP pintool: Intel Pin is x86-only and this host is $(PINTOOL_ARCH)."
 	@echo "1..0 # skipped"
 
 else ifneq ($(UNAME_S),Linux)
 
-pintool-tool pintool-test:
+pintool-tool pintool-test pintool-apx-test:
 	@echo "# SKIP pintool: the pinned Pin kit is gcc-linux; this host is $(UNAME_S)."
 	@echo "1..0 # skipped"
 
@@ -98,5 +98,65 @@ pintool-test:
 	rm -f /dev/shm$(PIN_SHM) 2>/dev/null || true; \
 	"$$home/pin" -t $(PINTOOL_SO) -shm $(PIN_SHM) -- $(BUILD)/pin_trace_workload $(PIN_SHM); \
 	env $$dr_env $(BUILD)/pin_trace_validator $(PIN_SHM)
+	@$(MAKE) --no-print-directory pintool-apx-test
+
+# --- T8: APX (EGPR/REX2) fixture — Pin traces it, DynamoRIO decoder-errors -----
+# The negative control that proves the tier earns its keep: an APX routine Intel's
+# XED decodes on any x86-64 host but the pinned DynamoRIO decoder rejects (DR #6226).
+
+# Ungated XED decode assertion (runs on ANY x86-64 host — never executes the bytes).
+# Links the Pin kit's XED. libxed.so pulls in libpincrt.so transitively; DT_RPATH
+# (--disable-new-dtags) propagates the rpath to that transitive dep, unlike the
+# default DT_RUNPATH. -isystem on the kit headers keeps -Wextra quiet about them.
+$(BUILD)/pin_apx_decode: examples/pin_apx_decode.c pintool/pin_apx_fixture.h \
+                         $(BUILD)/.build-flags | $(BUILD)
+	@home=$${PIN_HOME:-$$(sh scripts/fetch-pin.sh)}; \
+	xed="$$home/extras/xed-intel64"; \
+	$(CC) $(CFLAGS) -Ipintool -isystem $$xed/include examples/pin_apx_decode.c \
+	  -L$$xed/lib -lxed -Wl,--disable-new-dtags \
+	  -Wl,-rpath,$$xed/lib -Wl,-rpath,$$home/intel64/pinrt/lib -o $@
+
+# APX workload (executes r16/r17 — run ONLY behind the CPUID gate) + validator
+# (positive complete-trace check + fork-isolated DR negative control).
+$(BUILD)/pin_apx_workload: examples/pin_apx_workload.c pintool/pin_apx_fixture.h \
+                           pintool/pintool_shm.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -Ipintool -rdynamic examples/pin_apx_workload.c -lrt -o $@
+
+$(BUILD)/pin_apx_validator: examples/pin_apx_validator.c pintool/pin_apx_fixture.h \
+                            pintool/pintool_shm.h include/asmtest_drtrace.h \
+                            include/asmtest_trace.h $(BUILD)/drtrace_app.o \
+                            $(DRAPP_KS_OBJ) $(BUILD)/trace.o \
+                            $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -Ipintool -rdynamic examples/pin_apx_validator.c \
+	      $(BUILD)/drtrace_app.o $(DRAPP_KS_OBJ) $(BUILD)/trace.o \
+	      $(DRAPP_KS_LIBS) -ldl -lpthread -lrt -o $@
+
+# pintool-apx-test: the decode assertion runs unconditionally; the execution halves
+# (Pin positive trace + DR negative control) run only when CPUID reports APX_F — a
+# REAL hardware gate (running APX on a non-APX CPU is a #UD), self-skipping with the
+# printed reason otherwise. Appended to pintool-test above.
+PIN_APX_SHM ?= /asmtest_pin_apx_ci
+pintool-apx-test:
+	@home=$${PIN_HOME:-$$(sh scripts/fetch-pin.sh)}; \
+	echo "== pintool-apx-test (PIN_ROOT=$$home) =="; \
+	$(MAKE) --no-print-directory $(BUILD)/pin_apx_decode PIN_HOME=$$home; \
+	echo "-- apx XED decode assertion (ungated) --"; \
+	$(BUILD)/pin_apx_decode; \
+	if $(BUILD)/pin_apx_decode cpuid; then \
+	  echo "-- apx execution halves (CPUID APX_F present) --"; \
+	  $(MAKE) --no-print-directory pintool-tool PIN_HOME=$$home; \
+	  $(MAKE) --no-print-directory $(BUILD)/pin_apx_workload $(BUILD)/pin_apx_validator; \
+	  dr_env=""; \
+	  if [ -n "$(DR_AVAILABLE)" ]; then \
+	    $(MAKE) --no-print-directory drtrace-client; \
+	    dr_env="ASMTEST_DRCLIENT=$(abspath $(BUILD)/libasmtest_drclient.so) ASMTEST_DR_LIB=$(abspath $(DR_DLLIB))"; \
+	  fi; \
+	  rm -f /dev/shm$(PIN_APX_SHM) 2>/dev/null || true; \
+	  "$$home/pin" -t $(PINTOOL_SO) -shm $(PIN_APX_SHM) -- $(BUILD)/pin_apx_workload $(PIN_APX_SHM); \
+	  env $$dr_env $(BUILD)/pin_apx_validator $(PIN_APX_SHM); \
+	else \
+	  echo "# SKIP pintool-apx: host CPU lacks APX (hardware gate)"; \
+	  echo "1..0 # skipped"; \
+	fi
 
 endif

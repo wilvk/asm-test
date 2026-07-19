@@ -8,6 +8,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **XED-decoded Intel Pin trace lane (`make docker-pintool` / `make
+  pintool-test`).** A pinned, digest-gated Intel Pin 4.2 kit
+  (`scripts/fetch-pin.sh`, SHA-256 pinned in `scripts/third-party-digests.txt`)
+  drives a Pintool (`pintool/asmtest_pintool.cpp`) that fills the shared
+  `asmtest_trace_t` offset model over POSIX shared memory. The lane asserts
+  byte-for-byte instruction/block offset parity with both the in-process
+  single-step backend and the DynamoRIO backend (Pin ≡ DynamoRIO ≡ single-step),
+  and carries an Intel APX (EGPR/REX2) fixture whose bytes Pin's XED decodes on
+  any x86-64 host while the pinned DynamoRIO decoder rejects them — the
+  decoder-currency gap the tier exists to close
+  ([DR #6226](https://github.com/DynamoRIO/dynamorio/issues/6226) is open; the APX
+  execution halves are gated on APX silicon). Test-lane only: Pin is
+  digest-verified at build/test time and never bundled into a shipped package.
+
 - **Real object identity for managed memory def-use on the live-attach tier.** A
   heap snapshot of `{Address, Size, TypeID}` nodes from the runtime's
   GCBulkNode / GCBulkEdge / GCBulkType events, joined with the `MovedReferences2`
@@ -320,7 +334,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   generation" **hardware self-skip into an installable, pinnable dependency**;
   **PIN-2** an **XED**-decoded Pin trace tier for the newest extensions DR's own
   decoder rejects (**APX is open — [DR #6226](https://github.com/DynamoRIO/dynamorio/issues/6226)**;
-  VNNI still breaks — [DR #5440](https://github.com/DynamoRIO/dynamorio/issues/5440));
+  the once-broken AVX-512 VNNI is fixed — [DR #5440](https://github.com/DynamoRIO/dynamorio/issues/5440)
+  closed 2022-04-25, and the pinned DR post-dates it — so the case rests on APX alone);
   **PIN-3** Pin **probe-mode** arg/return capture (original code runs native, no
   code cache — the `capture-args-returns.md` middle tier DR has no equivalent
   for); and **PIN-4** **libdft64** as an independent taint oracle diffed
