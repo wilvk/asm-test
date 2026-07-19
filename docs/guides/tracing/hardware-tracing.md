@@ -298,6 +298,90 @@ API. To extend the choice *across* the hardware, DynamoRIO, and emulator tiers
 
 ---
 
+## The zero-config whole-window scope (region-free)
+
+Everything above brackets a **registered region** — a `[base, len)` you named. The
+zero-config whole-window scope drops even that: no `NativeCode`, no `[base, len)`,
+just *"trace whatever the calling thread runs inside this block"*. It is the
+aspirational `using (new AsmTrace())` form, and it works today on any x86-64 Linux
+host with zero setup. The full design is in the internal plan,
+[scoped-tracing-zeroconfig-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/scoped-tracing-zeroconfig-plan.md).
+
+The C surface is three calls:
+
+- `asmtest_hwtrace_begin_window(trace, &scope)` — arm a region-free capture on the
+  calling thread; `trace->insns[]` will hold **absolute** addresses (not
+  base-relative offsets).
+- `asmtest_hwtrace_end_window(scope, trace)` — close it (and normalize).
+- `asmtest_hwtrace_render_window(scope, buf, buflen)` — disassemble the recorded
+  absolute addresses from live self-memory (valid for non-moving native code).
+
+```c
+asmtest_trace_t *tr = asmtest_trace_new(4096, 0);
+asmtest_hwtrace_scope_t scope = {0xffffffffu, 0, -1};
+if (asmtest_hwtrace_begin_window(tr, &scope) == ASMTEST_HW_OK) {
+    fn(20, 22);                          /* whatever runs here is captured */
+    asmtest_hwtrace_end_window(scope, tr);
+}
+```
+
+In .NET the same scope is the empty constructor:
+
+```csharp
+using (new AsmTrace()) {
+    Fn(20, 22);
+}
+```
+
+### The WEAK / STRONG / CEILING ladder
+
+The whole-window scope resolves to one of three tiers, most-portable first. Because
+the region-free frame has no `[base, len)` to *step over*, "capture whatever ran
+here" is descent-into-everything — so the WEAK tier needs the same safety guards the
+out-of-process descent tier has, which it now carries.
+
+| Tier | Backend | Fidelity | Needs | State |
+|---|---|---|---|---|
+| **WEAK** | in-process single-step (`EFLAGS.TF`) | exact, descends into every call; honestly noisy | any x86-64 Linux, unprivileged | **ships today** |
+| **STRONG** | whole-window Intel PT (`asmtest_pt_decode_window`) | exact, low-perturbation | bare-metal Intel PT + `perf_event_paranoid < 0` or `CAP_PERFMON` | decode **synthetic-validated**; live capture forward-look |
+| **CEILING** | AMD LBR sampled survey (`IsStatistical`) | a hot-method histogram, **never** an exact whole window | Zen 4+ bare metal + `CAP_PERFMON` | ships as a statistical survey |
+
+- **WEAK** — the single-step tier records the absolute RIP of every instruction the
+  thread runs. It is CI-runnable on any x86-64 Linux for a **native leaf** (pointing
+  single-step at live managed code is forbidden — it fights the runtime's SIGTRAP/JIT).
+  It is honestly noisy (the runtime's own machinery is stepped too) and **bounded**:
+  a capture ring caps memory, a per-frame **instruction budget** (default 4× the ring)
+  and a wall-clock **watchdog** (default 10 s) cap runaway/blocking windows, and an
+  opt-in **deny-region** set ends the capture at a blocking libc entry. Overflow or any
+  guard firing flags the trace `truncated`; `asmtest_hwtrace_begin_window_ex` configures
+  the guards per window and `asmtest_hwtrace_window_guard` reports which one fired.
+- **STRONG** — on an inited Intel PT tier `begin_window` instead arms a real
+  whole-window PT capture. The decode is **validated on a synthetic PT-packet fixture**
+  (see below); its **live** capture is forward-look. Off bare-metal Intel PT (VMs,
+  containers, every AMD host) the arm self-skips cleanly.
+- **CEILING** — AMD LBR is shipped as a **sampled hot-method survey** (`IsStatistical`),
+  never an exact whole window: the exact-whole-window contract cannot be met by a
+  sampled 16-deep branch stack. It needs **Zen 4+** bare metal (LbrExtV2) with
+  `CAP_PERFMON`. The complete AMD capture path is instead the **out-of-process ptrace
+  stepper** (block-step mode — landed) and the **eBPF boundary LBR snapshot** (landed;
+  Zen 4/5, Linux ≥ 6.10), which reads the 16-entry window deterministically at scope
+  boundaries. Callers wanting the quiet sampled complement use the explicit
+  `asmtest_hwtrace_sample_begin_amd` / `new AsmTrace(HwBackend.AmdLbr)` path.
+
+### Synthetic decode-validation (no silicon required)
+
+The STRONG tier's PT decode is de-risked without Intel PT hardware.
+`asmtest_pt_encode_fixture` ([src/pt_backend.c](../../../src/pt_backend.c))
+hand-assembles a **valid PT byte stream** with libipt's own packet encoder, and
+`test_wholewindow_decode` decodes it end-to-end through `asmtest_pt_decode_window`
+with **libipt at build time and no PT hardware** — the `docker-hwtrace` image installs
+`libipt-dev` for exactly this. That exercises the decode *logic* (packet walk, IP
+reconstruction against a code-image), but **not** a live AUX ring's PSB cadence or
+`aux_tail` wrap: it is necessary, not sufficient, for trusting the live path, which
+remains gated on real Intel PT silicon.
+
+---
+
 ## W^X executable memory
 
 A caller — notably a language binding — often needs to turn raw host-native machine

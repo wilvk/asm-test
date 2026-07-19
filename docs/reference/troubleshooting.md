@@ -75,6 +75,36 @@ Lower it with `sudo sysctl kernel.perf_event_paranoid=1` (or `-1`). The
 **single-step** backend needs no PMU/perf/privilege — it runs on any x86-64 Linux
 **or macOS** host and is what the language-binding wrappers use.
 
+**Reading the skip reason.** `asmtest_hwtrace_skip_reason` returns one of a small set
+of static strings. In .NET the same information surfaces as `AsmTrace.SkipReason`
+(per-scope) and `HwTrace.DegradationNote()` (the composed ladder message). Each string
+tells you whether the gate is a **fixable** build/permission issue or a **real**
+hardware/OS gate:
+
+| Skip reason | What it means | Fix |
+|---|---|---|
+| `built without libipt` / `built without OpenCSD` | the decoder library was not compiled in | install the pinned decoder (`libipt-dev` / OpenCSD — see the `Dockerfile.hwtrace`) and rebuild |
+| `built without Capstone (single-step block normalization)` / `built without Capstone (AMD reconstruction)` | the length decoder is absent | build Capstone (`./scripts/build-capstone.sh`, pinned) and rebuild |
+| `not a GenuineIntel x86-64 host` / `not an AuthenticAMD x86-64 host` / `not an AArch64 host` | wrong CPU vendor/ISA for that backend | **real gate** — use a backend the host supports (single-step is the x86-64 floor) |
+| `single-step backend is x86-64 Linux/macOS only (Windows/AArch64 planned)` | wrong OS/ISA for the stepper | **real gate** — run on x86-64 Linux or macOS |
+| `no intel_pt PMU (needs bare-metal Intel; absent on AMD/VM)` | no `intel_pt` PMU node | **real gate** — needs bare-metal Intel (absent on AMD, VMs, most containers) |
+| `no cs_etm PMU (needs a CoreSight-capable AArch64 board)` | no `cs_etm` PMU node | **real gate** — needs a CoreSight-capable AArch64 board |
+| *AMD LBR live capture needs Zen 4+ (LbrExtV2)* | the AMD branch-stack facility is absent | **real gate** — the AMD LBR live-capture floor is **Zen 4+** (LbrExtV2); Zen 2/3 have no openable facility in this tree |
+| `perf_event capture not permitted (…)` / `perf branch-stack not permitted (…)` | the silicon is present but perf is blocked | see **One-time provisioning** below |
+
+**One-time provisioning.** A "not permitted" skip (the substrate is present, perf is
+blocked) is fixed once per host/container by one of these grants:
+
+| Facility | Grant (pick one) | Notes |
+|---|---|---|
+| Whole-window Intel PT / AMD LBR | `sudo sysctl kernel.perf_event_paranoid=-1`, **or** `setcap cap_perfmon+ep <binary>`, **or** (container) `--cap-add=PERFMON` | Unprivileged PT still arms with a **128 KiB AUX ring** — stated, not failed |
+| ptrace-stealth fallback stepper | Yama `PR_SET_PTRACER`, **or** `CAP_SYS_PTRACE` | Default Docker seccomp already permits `ptrace(2)` on host kernel ≥ 4.8 |
+| eBPF emission/code-image slicer | `CAP_BPF` + kernel BTF | See [eBPF code-image detector](#ebpf-code-image-detector) below |
+
+**Zero-config whole-window scope is Linux-only.** The region-free `using (new
+AsmTrace())` whole-window facility is **Linux-only across every binding**. Off Linux the
+scope records nothing and reports why through `SkipReason` — it never hard-fails.
+
 ## DynamoRIO in-process tracing
 
 **`# SKIP: DynamoRIO not found`.** Set `DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-…`

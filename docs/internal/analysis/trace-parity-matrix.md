@@ -169,6 +169,30 @@ findings from that first real-hardware run:
   keeps the sample **richest in in-region branches** and flags `truncated` when none
   is found.
 
+### Whole-window (region-free) scope
+
+The zero-config `using (new AsmTrace())` whole-window scope resolves across the same
+vendor/microarch axis, with one caveat worth recording distinctly from the region path:
+
+- The **region-free single-step** whole-window path (`asmtest_hwtrace_begin_window`,
+  [src/hwtrace.c](../../../src/hwtrace.c)) is **live on any x86-64 Linux** — the WEAK
+  tier, exercised green in CI (`test_wholewindow_ss_descend`,
+  [examples/test_hwtrace.c](../../../examples/test_hwtrace.c)). It is now **guard-bounded**
+  (zeroconfig-scoped-tracing-hardening): a per-frame instruction budget, an opt-in
+  blocking-libc deny set, and an `ITIMER_REAL`/`SIGALRM` watchdog cap runaway/blocking
+  windows, each firing observed by `test_wholewindow_ss_descend` / `test_wholewindow_watchdog`.
+- The **whole-window Intel PT decode** (`asmtest_pt_decode_window`) is exercised **only**
+  by the synthetic fixture (`asmtest_pt_encode_fixture` → `test_wholewindow_decode`,
+  wherever libipt is built) and has **never run against live Intel PT silicon** — the
+  live whole-window PT capture is forward-look. Hosts built without libipt compile the
+  `ENOSYS` stub and provide no de-risk at all. So the STRONG whole-window tier is
+  **synthetic-validated on decode, forward-look on live capture** — necessary, not
+  sufficient (the fixture does not exercise a live AUX ring's PSB cadence / `aux_tail`
+  wrap).
+- The **CEILING** whole-window tier stays AMD LBR at the **Zen 4+** floor and is a
+  sampled survey, never an exact whole window (the exact contract cannot be met by a
+  16-deep sampled stack).
+
 ---
 
 ## Matrix 4 — Emulator guest ISAs (run on any host)

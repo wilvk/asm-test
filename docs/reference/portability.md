@@ -27,6 +27,16 @@ follows the same Linux/macOS split: `ptrace`-based on Linux x86-64/AArch64, and
 on **macOS x86-64** via Mach exception ports (`asmtest_mach.h`) instead, since
 macOS `ptrace` cannot edit `RIP`/`RFLAGS` at all.
 
+**Scoped tracing has a narrower floor than the capture library.** The
+**region-scoped** in-process single-step tracer (register a `[base, len)`, then
+`begin`/`end`) runs on x86-64 **Linux and macOS (Intel)**. The zero-config
+**region-free whole-window** scope — `asmtest_hwtrace_begin_window` and the .NET empty
+`new AsmTrace()` ctor — is **Linux x86-64 only** (its body is `#if defined(__linux__)`);
+everywhere else the same code **self-skips with a reason** (`SkipReason`) rather than
+hard-failing. See the [zero-config whole-window scope](../guides/tracing/hardware-tracing.md#the-zero-config-whole-window-scope-region-free)
+guide and the [hardware-trace tiers section of troubleshooting](troubleshooting.md)
+for the grants that unlock the privileged whole-window backends.
+
 One source set reaches every target two ways: a **native** build for the host
 architecture (through either assembler backend), and the **emulator** guests,
 which run on any host:
