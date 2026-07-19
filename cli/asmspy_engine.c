@@ -40,8 +40,13 @@
 #include <unistd.h>
 
 #include "asmspy.h"
+#include "asmspy_arch.h" /* register/step/detach arch seam (x86-64 | AArch64) + ASMSPY_HOST_ARCH */
 #include "asmtest_codeimage.h" /* asmtest_codeimage_t — the attach_jit versioned-decode param (unused today, NULL) */
 #include "asmtest_ibs.h" /* the out-of-band statistical sampler (asmspy_engine_sample) */
+
+#if defined(__aarch64__)
+#include <asm/ptrace.h> /* struct user_hwdebug_state — NT_ARM_HW_BREAK/NT_ARM_HW_WATCH regsets */
+#endif
 
 #define DUMP_CAP 200 /* bytes of a buffer/path decoded per syscall */
 
@@ -235,48 +240,129 @@ static const char *scname(long nr) {
 typedef enum { PATH_NONE = 0, PATH_RDI, PATH_AT_RSI } path_kind_t;
 
 static path_kind_t path_kind(long nr) {
+    /* Every case is #ifdef-guarded on its SYS_ macro: the AArch64 syscall ABI
+     * dropped the legacy non-`*at` forms (no SYS_open / SYS_stat / SYS_readlink /
+     * SYS_mkdir / SYS_rename / SYS_creat / SYS_futimesat …), so an unguarded case
+     * would be an undeclared identifier there. A syscall the host lacks simply
+     * cannot arrive, so compiling its case out changes nothing on x86-64. */
     switch (nr) {
-    /* path is the first argument */
+        /* path is the first argument */
+#ifdef SYS_open
     case SYS_open:
+#endif
+#ifdef SYS_stat
     case SYS_stat:
+#endif
+#ifdef SYS_lstat
     case SYS_lstat:
+#endif
+#ifdef SYS_access
     case SYS_access:
+#endif
+#ifdef SYS_unlink
     case SYS_unlink:
+#endif
+#ifdef SYS_rmdir
     case SYS_rmdir:
+#endif
+#ifdef SYS_chdir
     case SYS_chdir:
+#endif
+#ifdef SYS_readlink
     case SYS_readlink:
+#endif
+#ifdef SYS_statfs
     case SYS_statfs:
+#endif
+#ifdef SYS_truncate
     case SYS_truncate:
+#endif
+#ifdef SYS_chmod
     case SYS_chmod:
+#endif
+#ifdef SYS_chown
     case SYS_chown:
+#endif
+#ifdef SYS_lchown
     case SYS_lchown:
+#endif
+#ifdef SYS_mkdir
     case SYS_mkdir:
+#endif
+#ifdef SYS_rename
     case SYS_rename:
+#endif
+#ifdef SYS_link
     case SYS_link:
-    case SYS_symlink:   /* (target, linkpath) — target is the datum */
+#endif
+#ifdef SYS_symlink
+    case SYS_symlink: /* (target, linkpath) — target is the datum */
+#endif
+#ifdef SYS_symlinkat
     case SYS_symlinkat: /* (target, newdirfd, linkpath) — likewise */
+#endif
+#ifdef SYS_creat
     case SYS_creat:
+#endif
+#ifdef SYS_mknod
     case SYS_mknod:
+#endif
+#ifdef SYS_utimes
     case SYS_utimes:
+#endif
+#ifdef SYS_chroot
     case SYS_chroot:
+#endif
+#ifdef SYS_acct
     case SYS_acct:
+#endif
+#ifdef SYS_mount
     case SYS_mount: /* (source, target, ...) */
+#endif
+#ifdef SYS_umount2
     case SYS_umount2:
+#endif
+#ifdef SYS_swapon
     case SYS_swapon:
+#endif
+#ifdef SYS_swapoff
     case SYS_swapoff:
+#endif
         return PATH_RDI;
-    /* (dirfd, path, ...) — openat has its own case, with flag formatting */
+        /* (dirfd, path, ...) — openat has its own case, with flag formatting */
+#ifdef SYS_newfstatat
     case SYS_newfstatat:
+#endif
+#ifdef SYS_unlinkat
     case SYS_unlinkat:
+#endif
+#ifdef SYS_faccessat
     case SYS_faccessat:
+#endif
+#ifdef SYS_readlinkat
     case SYS_readlinkat:
+#endif
+#ifdef SYS_mkdirat
     case SYS_mkdirat:
+#endif
+#ifdef SYS_mknodat
     case SYS_mknodat:
+#endif
+#ifdef SYS_fchownat
     case SYS_fchownat:
+#endif
+#ifdef SYS_fchmodat
     case SYS_fchmodat:
+#endif
+#ifdef SYS_renameat
     case SYS_renameat:
+#endif
+#ifdef SYS_futimesat
     case SYS_futimesat:
+#endif
+#ifdef SYS_linkat
     case SYS_linkat:
+#endif
 #ifdef SYS_renameat2
     case SYS_renameat2:
 #endif
@@ -553,8 +639,15 @@ typedef struct {
     unsigned char c[6];
 } argshape_t; /* arg classes in register order; A_END = absent */
 
-/* x86-64 syscall arg registers, in order. */
+/* Syscall argument register i (0..5), in ABI order. The ONE funnel every arg
+ * decode goes through — x86-64 maps 0..5 to rdi/rsi/rdx/r10/r8/r9; the AArch64
+ * syscall ABI passes them in x0..x5. `struct user_regs_struct` has no `rdi`
+ * member on AArch64, so gating the body here (not duplicating it in the shim) is
+ * what makes the whole ap_* decode surface port. */
 static unsigned long long scarg(const struct user_regs_struct *e, int i) {
+#if defined(__aarch64__)
+    return (i >= 0 && i <= 5) ? (unsigned long long)e->regs[i] : 0ULL;
+#else
     switch (i) {
     case 0:
         return e->rdi;
@@ -571,6 +664,7 @@ static unsigned long long scarg(const struct user_regs_struct *e, int i) {
     default:
         return 0;
     }
+#endif
 }
 
 #define SHAPE(...)                                                             \
@@ -1576,27 +1670,28 @@ static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
     switch (nr) {
     case SYS_write:
         o = apf(b, cap, o, "write(");
-        o = ap_fd(b, cap, o, pid, (long long)e->rdi);
+        o = ap_fd(b, cap, o, pid, (long long)scarg(e, 0));
         o = apf(b, cap, o, ", ");
-        o = ap_data(b, cap, o, pid, e->rsi, (uint32_t)e->rdx);
-        o = apf(b, cap, o, ", %llu) = %ld", (unsigned long long)e->rdx, ret);
-        decode_data(pid, e->rsi, (uint32_t)e->rdx, sout, scap);
+        o = ap_data(b, cap, o, pid, scarg(e, 1), (uint32_t)scarg(e, 2));
+        o = apf(b, cap, o, ", %llu) = %ld", (unsigned long long)scarg(e, 2),
+                ret);
+        decode_data(pid, scarg(e, 1), (uint32_t)scarg(e, 2), sout, scap);
         break;
     case SYS_read:
         o = apf(b, cap, o, "read(");
-        o = ap_fd(b, cap, o, pid, (long long)e->rdi);
-        o = apf(b, cap, o, ", %llu) = ", (unsigned long long)e->rdx);
+        o = ap_fd(b, cap, o, pid, (long long)scarg(e, 0));
+        o = apf(b, cap, o, ", %llu) = ", (unsigned long long)scarg(e, 2));
         if (ret > 0) {
-            o = ap_data(b, cap, o, pid, e->rsi, (uint32_t)ret);
+            o = ap_data(b, cap, o, pid, scarg(e, 1), (uint32_t)ret);
             o = apf(b, cap, o, " [%ld]", ret);
-            decode_data(pid, e->rsi, (uint32_t)ret, sout, scap);
+            decode_data(pid, scarg(e, 1), (uint32_t)ret, sout, scap);
         } else {
             o = apf(b, cap, o, "%ld", ret);
         }
         break;
     case SYS_close:
         o = apf(b, cap, o, "close(");
-        o = ap_fd(b, cap, o, pid, (long long)e->rdi);
+        o = ap_fd(b, cap, o, pid, (long long)scarg(e, 0));
         o = apf(b, cap, o, ") = %ld", ret);
         break;
     default: {
@@ -1633,20 +1728,22 @@ static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
         /* UNKNOWN shape. The path tables still name the datum that matters. */
         path_kind_t pk = nm ? path_kind(nr) : PATH_NONE;
         if (pk == PATH_RDI) {
-            o = ap_cstr(b, cap, o, pid, e->rdi);
-            o = apf(b, cap, o, ", 0x%llx, 0x%llx", (unsigned long long)e->rsi,
-                    (unsigned long long)e->rdx);
-            decode_cstr(pid, e->rdi, sout, scap);
+            o = ap_cstr(b, cap, o, pid, scarg(e, 0));
+            o = apf(b, cap, o, ", 0x%llx, 0x%llx",
+                    (unsigned long long)scarg(e, 1),
+                    (unsigned long long)scarg(e, 2));
+            decode_cstr(pid, scarg(e, 0), sout, scap);
         } else if (pk == PATH_AT_RSI) {
-            o = ap_dirfd(b, cap, o, (long long)e->rdi);
+            o = ap_dirfd(b, cap, o, (long long)scarg(e, 0));
             o = apf(b, cap, o, ", ");
-            o = ap_cstr(b, cap, o, pid, e->rsi);
-            o = apf(b, cap, o, ", 0x%llx", (unsigned long long)e->rdx);
-            decode_cstr(pid, e->rsi, sout, scap);
+            o = ap_cstr(b, cap, o, pid, scarg(e, 1));
+            o = apf(b, cap, o, ", 0x%llx", (unsigned long long)scarg(e, 2));
+            decode_cstr(pid, scarg(e, 1), sout, scap);
         } else {
             o = apf(b, cap, o, "0x%llx, 0x%llx, 0x%llx",
-                    (unsigned long long)e->rdi, (unsigned long long)e->rsi,
-                    (unsigned long long)e->rdx);
+                    (unsigned long long)scarg(e, 0),
+                    (unsigned long long)scarg(e, 1),
+                    (unsigned long long)scarg(e, 2));
         }
         /* "..." because the arity is UNKNOWN, not because it is three. The old
          * default printed exactly three slots and thereby ASSERTED an arity it
@@ -1869,10 +1966,27 @@ static void frm_push(thr_t *t, uint64_t ret, uint64_t sp) {
 }
 
 /* Pop every frame the thread's stack pointer has moved ABOVE. See the block
- * comment: this single comparison is what a push/pop counter cannot express. */
-static void frm_unwind(thr_t *t, uint64_t rsp) {
-    while (t->stk_n > 0 && rsp > t->stk[t->stk_n - 1].sp)
+ * comment: this single comparison is what a push/pop counter cannot express.
+ *
+ * x86 `ret` pops the return address, so SP rises strictly above the callee-entry
+ * SP the frame recorded — the `>` catches it. AArch64 differs: `bl` never pushed
+ * and `ret` never pops, so a normal return leaves SP EXACTLY at the frame's
+ * recorded SP (the caller's pre-call SP), not above it. There the frame is
+ * identified by (entry_lr, sp): pop the top frame when control has returned to it
+ * (pc == its recorded return address AND sp == its recorded sp). A non-local exit
+ * (longjmp / C++ unwind) that raises SP above the frame is still swept by the same
+ * `>` on both arches. `pc` is unused on x86 (the `>` alone is exact there). */
+static void frm_unwind(thr_t *t, uint64_t sp, uint64_t pc) {
+#if defined(__aarch64__)
+    while (t->stk_n > 0 &&
+           (sp > t->stk[t->stk_n - 1].sp ||
+            (sp == t->stk[t->stk_n - 1].sp && pc == t->stk[t->stk_n - 1].ret)))
         t->stk_n--;
+#else
+    (void)pc;
+    while (t->stk_n > 0 && sp > t->stk[t->stk_n - 1].sp)
+        t->stk_n--;
+#endif
 }
 
 /* ---- pending INDIRECT call: arm at the call site, VERIFY at the callee ----
@@ -1898,28 +2012,46 @@ static void frm_unwind(thr_t *t, uint64_t rsp) {
  * x86 reg-id -> user_regs_struct mapping) and strictly stronger: it validates
  * the ACTUAL post-call machine state instead of re-deriving a prediction from
  * registers that the same signal could have changed underneath it. */
-static void call_pend_arm(thr_t *t, uint64_t rip, size_t ilen, uint64_t rsp) {
+static void call_pend_arm(thr_t *t, uint64_t rip, size_t ilen, uint64_t sp) {
     t->pending_call = 1;
     t->call_site = rip;
-    t->pend_ret = rip + ilen;
-    t->pend_sp = rsp - 8;
+    t->pend_ret =
+        rip + ilen; /* return address: x86 pushed it; arm64 put it in LR */
+#if defined(__aarch64__)
+    t->pend_sp = sp; /* `bl` does not touch SP */
+#else
+    t->pend_sp = sp - 8; /* `call` pushed the return address (SP -= 8) */
+#endif
 }
 
-/* 1 only if `regs` really is the armed call's callee entry: the call must have
- * pushed pend_ret and left rsp at pend_sp. A handler entry fails both — the
- * kernel's signal frame sits ~1KB BELOW pend_sp (past the 128-byte red zone),
- * and the word at its rsp is the sigreturn trampoline, not our return address.
+/* 1 only if `g` really is the armed call's callee entry.
+ *
+ * x86: the call must have pushed pend_ret and left rsp at pend_sp. A handler entry
+ * fails both — the kernel's signal frame sits ~1KB BELOW pend_sp (past the
+ * 128-byte red zone), and the word at its rsp is the sigreturn trampoline, not our
+ * return address.
+ *
+ * AArch64: a `bl` writes the return address to x30 (LR), not the stack, and does
+ * not move SP — so the check is `sp == pend_sp AND lr == pend_ret` (frame identity
+ * (entry_lr, sp)). A handler entry fails it: the kernel sets LR into the signal
+ * frame, and SP is well below pend_sp.
+ *
  * A failed read is a failed check: never attribute what could not be confirmed. */
 static int call_pend_at_callee(const thr_t *t, pid_t tgid,
-                               const struct user_regs_struct *regs) {
-    if (regs->rsp != t->pend_sp)
+                               const asmspy_regs_t *g) {
+    if (asmspy_reg_sp(g) != t->pend_sp)
         return 0;
+#if defined(__aarch64__)
+    (void)tgid;
+    return asmspy_reg_lr(g) == t->pend_ret; /* `bl` wrote LR, not the stack */
+#else
     uint64_t ra = 0;
     struct iovec lv = {&ra, sizeof ra};
-    struct iovec rv = {(void *)(uintptr_t)regs->rsp, sizeof ra};
+    struct iovec rv = {(void *)(uintptr_t)asmspy_reg_sp(g), sizeof ra};
     if (process_vm_readv(tgid, &lv, 1, &rv, 1, 0) != (ssize_t)sizeof ra)
         return 0;
     return ra == t->pend_ret;
+#endif
 }
 
 /* Test-only lever for the boundary above (ASMSPY_TEST_SIGRACE=<signo>).
@@ -2194,26 +2326,46 @@ static void psym_free(psym_tab_t *pt) {
  * it does NOT undo a step already COMPLETED but not yet reported — see
  * drain_pending_step for that.) */
 static void clear_trap_flag(pid_t tid) {
+#if defined(__aarch64__)
+    /* AArch64 has NO user-writable trap flag: PTRACE_SINGLESTEP sets
+     * TIF_SINGLESTEP in-kernel and PTRACE_CONT/PTRACE_DETACH clear it
+     * (user_disable_single_step). The tracer CANNOT set or clear the step bit
+     * with a pstate write — valid_user_regs forces pstate bit 21 to mirror
+     * TIF_SINGLESTEP. So there is nothing to clear here AND nothing to worry
+     * about: a DETACH cancels any armed step for us. No-op. */
+    (void)tid;
+#else
     struct user_regs_struct regs;
     if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) != 0)
         return;
     regs.eflags &= ~ASMSPY_EFLAGS_TF;
     ptrace(PTRACE_SETREGS, tid, NULL, &regs);
+#endif
 }
 
-/* True if `rip` points at a syscall-entry instruction (x86-64 `syscall`, or the
- * legacy `sysenter` / `int 0x80`). We must never single-step ACROSS one at teardown:
- * the step would only complete when the — possibly indefinitely blocking — syscall
- * returns. Fails safe (returns 1) if the bytes can't be read, so an unreadable rip
- * is treated as "don't step". */
-static int at_syscall_insn(pid_t pid, uint64_t rip) {
+/* True if `rip`/`pc` points at a syscall-entry instruction (x86-64 `syscall`, or
+ * the legacy `sysenter` / `int 0x80`; AArch64 `svc #0` = 0xd4000001, little-endian
+ * `01 00 00 d4`). We must never single-step ACROSS one at teardown: the step would
+ * only complete when the — possibly indefinitely blocking — syscall returns. Fails
+ * safe (returns 1) if the bytes can't be read, so an unreadable pc is treated as
+ * "don't step". */
+static int at_syscall_insn(pid_t pid, uint64_t pc) {
+#if defined(__aarch64__)
+    unsigned char b[4] = {0};
+    struct iovec l = {b, 4}, r = {(void *)(uintptr_t)pc, 4};
+    if (process_vm_readv(pid, &l, 1, &r, 1, 0) != 4)
+        return 1;
+    return b[0] == 0x01 && b[1] == 0x00 && b[2] == 0x00 &&
+           b[3] == 0xd4; /* svc #0 */
+#else
     unsigned char b[2] = {0};
-    struct iovec l = {b, 2}, r = {(void *)(uintptr_t)rip, 2};
+    struct iovec l = {b, 2}, r = {(void *)(uintptr_t)pc, 2};
     if (process_vm_readv(pid, &l, 1, &r, 1, 0) != 2)
         return 1;
     return (b[0] == 0x0f &&
             (b[1] == 0x05 || b[1] == 0x34)) || /* syscall/sysenter */
            (b[0] == 0xcd && b[1] == 0x80);     /* int 0x80 */
+#endif
 }
 
 /* Drain a single-step trap the kernel has already QUEUED on a stopped thread but not
@@ -2228,10 +2380,10 @@ static int at_syscall_insn(pid_t pid, uint64_t rip) {
  * the call — and clear_trap_flag alone disarms that not-yet-taken step. Because we
  * only ever step a NON-syscall instruction, the follow-up wait cannot hang. */
 static void drain_pending_step(pid_t pid, pid_t tid) {
-    struct user_regs_struct regs;
-    if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) != 0)
+    asmspy_regs_t regs;
+    if (asmspy_regs_read(tid, &regs) != 0)
         return;
-    if (at_syscall_insn(pid, regs.rip))
+    if (at_syscall_insn(pid, asmspy_reg_pc(&regs)))
         return;
     if (ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL) != 0)
         return;
@@ -2433,14 +2585,16 @@ int asmspy_engine_syscalls(pid_t pid, int follow, long max, atomic_bool *stop,
 
         if (sig == (SIGTRAP | 0x80)) { /* syscall-stop (TRACESYSGOOD) */
             thr_t *ts = thr_get(&tab, tid);
-            struct user_regs_struct regs;
-            if (ts && ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
+            asmspy_regs_t regs;
+            if (ts && asmspy_regs_read(tid, &regs) == 0) {
                 int entry = syscall_stop_is_entry(tid);
                 if (entry < 0)
                     entry = ts->at_entry; /* pre-5.3 fallback toggle */
                 if (entry) {
-                    ts->ent_nr = (long)regs.orig_rax;
-                    ts->entry = regs;
+                    /* x86-64 keeps the number in orig_rax; AArch64 in x8 (no
+                     * orig_ shadow). The shim gates that read per-arch. */
+                    ts->ent_nr = (long)asmspy_reg_syscall_nr(&regs);
+                    ts->entry = regs.r; /* raw struct: scarg/ap_* read it */
                     ts->at_entry = 0;
                 } else if (ts->ent_nr >=
                            0) { /* skip an exit we saw no entry for */
@@ -2454,7 +2608,7 @@ int asmspy_engine_syscalls(pid_t pid, int follow, long max, atomic_bool *stop,
                      * The per-thread label is added below, not in the decoder. */
                     format_syscall(line, sizeof line, sdata, sizeof sdata,
                                    thr_tgid(&tab, tid, pid), ts->ent_nr,
-                                   &ts->entry, (long)regs.rax);
+                                   &ts->entry, (long)asmspy_reg_ret(&regs));
                     const char *emit = line;
                     if (multi) {
                         snprintf(out, sizeof out, "[%d] %s", (int)tid, line);
@@ -2543,18 +2697,25 @@ int asmspy_engine_syscalls(pid_t pid, int follow, long max, atomic_bool *stop,
 /*    seize_for_engine() the way the pure single-step engines do.        */
 /* ------------------------------------------------------------------ */
 
-/* Plant the shared entry int3 at `base` via any STOPPED thread of the target (one
- * address space). PTRACE_POKETEXT patches an r-x text page the way a debugger does.
- * The original word lands in *orig for the later restore. 0 on success, -1 on failure
- * (notably a W^X-enforced JIT page, which refuses POKETEXT with EIO — this engine has
- * no DR0 fallback yet, the same gap the data-flow tier carries, so such a target
- * self-skips cleanly rather than being traced wrong). */
+/* Plant the shared entry software breakpoint at `base` via any STOPPED thread of
+ * the target (one address space). PTRACE_POKETEXT patches an r-x text page the way
+ * a debugger does. The original word lands in *orig for the later restore. On
+ * x86-64 the trap is a one-byte `int3` (0xcc); on AArch64 it is the four-byte
+ * `brk #0` (0xd4200000), spliced into the low bytes of the peeked word — mirroring
+ * src/ptrace_backend.c's PTRACE_BP_INSN/PTRACE_BP_LEN split. 0 on success, -1 on
+ * failure (notably a W^X-enforced JIT page, which refuses POKETEXT with EIO — this
+ * engine has no hardware-bp fallback for the shared plant, the same gap the
+ * data-flow tier carries, so such a target self-skips cleanly). */
 static int rgn_plant_bp(pid_t tid, uint64_t base, long *orig) {
     errno = 0;
     long o = ptrace(PTRACE_PEEKTEXT, tid, (void *)(uintptr_t)base, NULL);
     if (o == -1 && errno != 0)
         return -1;
-    long trap = (o & ~0xffL) | 0xccL;
+#if defined(__aarch64__)
+    long trap = (o & ~0xffffffffL) | (long)0xd4200000L; /* brk #0 (4 bytes) */
+#else
+    long trap = (o & ~0xffL) | 0xccL; /* int3 (1 byte) */
+#endif
     if (ptrace(PTRACE_POKETEXT, tid, (void *)(uintptr_t)base,
                (void *)(uintptr_t)trap) != 0)
         return -1;
@@ -2567,23 +2728,65 @@ static void rgn_remove_bp(pid_t tid, uint64_t base, long orig) {
            (void *)(uintptr_t)orig);
 }
 
-/* THE SAFETY NET. A thread trap-stopped just past the shared int3 has rip == base+1,
- * which is the MIDDLE of the region's first real instruction once the original byte is
- * restored — resuming it there executes garbage and would crash a process we do not own.
- * So every path that observes a stopped thread rewinds it here before letting it run,
- * and because every thread stays seized for the engine's lifetime, no such stop can be
- * lost: it can only be delivered later, and is rewound whenever it surfaces. Returns 1
- * if it rewound, 0 otherwise. */
+/* THE SAFETY NET. On x86 a thread trap-stopped just past the shared int3 has
+ * rip == base+1, which is the MIDDLE of the region's first real instruction once
+ * the original byte is restored — resuming it there executes garbage and would
+ * crash a process we do not own. So every path that observes a stopped thread
+ * rewinds it here before letting it run, and because every thread stays seized for
+ * the engine's lifetime, no such stop can be lost. On AArch64 `brk #0` is a fault
+ * whose stop-PC lands AT base (nothing to rewind); this then only confirms the
+ * thread is alive and really at our breakpoint. Returns 1 if the thread is at the
+ * breakpoint (x86: rewound; arm64: nothing to do), 0 otherwise. */
 static int rgn_rewind_from_bp(pid_t tid, uint64_t base) {
-    struct user_regs_struct regs;
-    if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) != 0)
+    asmspy_regs_t regs;
+    if (asmspy_regs_read(tid, &regs) != 0)
         return 0;
-    if (regs.rip != base + 1)
+#if defined(__aarch64__)
+    return asmspy_reg_pc(&regs) == base; /* brk lands AT base: no rewind */
+#else
+    if (asmspy_reg_pc(&regs) != base + 1)
         return 0;
-    regs.rip = base;
-    return ptrace(PTRACE_SETREGS, tid, NULL, &regs) == 0;
+    asmspy_set_pc(&regs, base);
+    return asmspy_regs_write(tid, &regs) == 0;
+#endif
 }
 
+#if defined(__aarch64__)
+/* AArch64 hardware EXECUTION breakpoints are reached through the NT_ARM_HW_BREAK
+ * regset (struct user_hwdebug_state), not debug-register POKEUSER. DBGBCR control
+ * word 0x1e5: E=1, PMC=0b10 (EL0/user), BAS=0b1111 (all four insn bytes) — the
+ * exact encoding src/ptrace_backend.c's set_hw_bp ships. */
+#define RGN_HWBP_CTRL 0x1e5u
+
+static int rgn_hw_bp_arm(pid_t tid, uint64_t addr) {
+    struct user_hwdebug_state dbg;
+    memset(&dbg, 0, sizeof dbg);
+    struct iovec iov = {&dbg, sizeof dbg};
+    if (ptrace(PTRACE_GETREGSET, tid, (void *)(uintptr_t)NT_ARM_HW_BREAK,
+               &iov) != 0)
+        return -1;
+    if ((dbg.dbg_info & 0xffu) == 0)
+        return -1; /* no breakpoint register slots on this host (qemu-user) */
+    dbg.dbg_regs[0].addr = addr;
+    dbg.dbg_regs[0].ctrl = RGN_HWBP_CTRL;
+    iov.iov_len = sizeof dbg;
+    return ptrace(PTRACE_SETREGSET, tid, (void *)(uintptr_t)NT_ARM_HW_BREAK,
+                  &iov);
+}
+
+static void rgn_hw_bp_disarm(pid_t tid) {
+    struct user_hwdebug_state dbg;
+    memset(&dbg, 0, sizeof dbg);
+    struct iovec iov = {&dbg, sizeof dbg};
+    if (ptrace(PTRACE_GETREGSET, tid, (void *)(uintptr_t)NT_ARM_HW_BREAK,
+               &iov) != 0)
+        return;
+    dbg.dbg_regs[0].addr = 0;
+    dbg.dbg_regs[0].ctrl = 0;
+    iov.iov_len = sizeof dbg;
+    ptrace(PTRACE_SETREGSET, tid, (void *)(uintptr_t)NT_ARM_HW_BREAK, &iov);
+}
+#else
 /* DR0..DR3 + DR6/DR7 via struct user's u_debugreg[] — the same door the data-watchpoint
  * engine below opens, and the one src/ptrace_backend.c uses for EXECUTION breakpoints. */
 #define RGN_DR_OFFSET(n)                                                       \
@@ -2610,6 +2813,7 @@ static void rgn_hw_bp_disarm(pid_t tid) {
     ptrace(PTRACE_POKEUSER, tid, (void *)RGN_DR_OFFSET(0), (void *)0UL);
     ptrace(PTRACE_POKEUSER, tid, (void *)RGN_DR_OFFSET(6), (void *)0UL);
 }
+#endif /* region hardware execution breakpoint */
 
 /* Resume `tid` (forwarding `sig`, 0 for none) and record that it is no longer stopped.
  * Every resume in the race goes through here so the stopped-bookkeeping detach relies
@@ -2856,8 +3060,8 @@ static int rgn_race_to_entry(thr_tab_t *tab, pid_t planter, uint64_t base,
         }
 
         if (sig == SIGTRAP && event == 0) {
-            struct user_regs_struct regs;
-            if (ptrace(PTRACE_GETREGS, w, NULL, &regs) != 0) {
+            asmspy_regs_t regs;
+            if (asmspy_regs_read(w, &regs) != 0) {
                 rgn_cont(tab, w, 0);
                 continue;
             }
@@ -2865,9 +3069,18 @@ static int rgn_race_to_entry(thr_tab_t *tab, pid_t planter, uint64_t base,
              * si_code == TRAP_HWBKPT, which that helper (correctly, for its own
              * callers) reads as "the target's own". Ours is identified by the PC.
              * A hardware execution breakpoint is a FAULT — it stops AT base, before
-             * the instruction runs — so, unlike the int3, there is nothing to rewind. */
-            int mine = hw ? (w == only_tid && regs.rip == base)
-                          : (regs.rip == base + 1);
+             * the instruction runs — so, unlike the x86 int3, there is nothing to
+             * rewind. On AArch64 the software `brk #0` ALSO faults AT base (a 4-byte
+             * fault whose stop-PC is the instruction), so both cases match pc==base
+             * there; only the x86 int3 leaves the stop one byte past. */
+            uint64_t pc_now = asmspy_reg_pc(&regs);
+#if defined(__aarch64__)
+            int mine =
+                hw ? (w == only_tid && pc_now == base) : (pc_now == base);
+#else
+            int mine =
+                hw ? (w == only_tid && pc_now == base) : (pc_now == base + 1);
+#endif
             if (mine) {
                 if (!thr_get(tab, w)) { /* OOM: don't strand it trap-stopped */
                     if (!hw)
@@ -3323,9 +3536,9 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, int follow, long max,
                 deliver_app_sigtrap(tid);
                 continue;
             }
-            struct user_regs_struct regs;
-            if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
-                uint64_t rip = regs.rip;
+            asmspy_regs_t regs;
+            if (asmspy_regs_read(tid, &regs) == 0) {
+                uint64_t rip = asmspy_reg_pc(&regs);
                 /* This task's OWN process: with --follow the tracee set spans
                  * several address spaces, and reading/naming through the
                  * original leader would silently describe the wrong one. */
@@ -3342,8 +3555,8 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, int follow, long max,
                  * refused, which would blank the disassembly */
                 ssize_t got = process_vm_readv(tgid, &liov, 1, &riov, 1, 0);
                 if (got >= 1 && asmtest_disas_available())
-                    asmtest_disas(ASMTEST_ARCH_X86_64, code, (size_t)got, rip,
-                                  0, dis, sizeof dis);
+                    asmtest_disas(ASMSPY_HOST_ARCH, code, (size_t)got, rip, 0,
+                                  dis, sizeof dis);
 
                 /* resolve the function this address lands in (ELF, else JIT) */
                 char loc[96];
@@ -3720,9 +3933,9 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
                 deliver_app_sigtrap(tid);
                 continue;
             }
-            struct user_regs_struct regs;
-            if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
-                uint64_t rip = regs.rip;
+            asmspy_regs_t regs;
+            if (asmspy_regs_read(tid, &regs) == 0) {
+                uint64_t rip = asmspy_reg_pc(&regs);
                 thr_t *ts = thr_get(&tab, tid);
                 /* this task's own process (see the stream engine's note) */
                 pid_t tgid = thr_tgid(&tab, tid, pid);
@@ -3755,18 +3968,19 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
                 int isc = 0;
                 size_t ilen = 0;
                 if (got >= 1 && asmtest_disas_available())
-                    ilen = asmtest_disas_probe(ASMTEST_ARCH_X86_64, code,
+                    ilen = asmtest_disas_probe(ASMSPY_HOST_ARCH, code,
                                                (size_t)got, 0, &isc, NULL);
                 if (isc) {
                     uint64_t tgt = 0;
-                    if (asmtest_disas_call_target(ASMTEST_ARCH_X86_64, code,
+                    if (asmtest_disas_call_target(ASMSPY_HOST_ARCH, code,
                                                   (size_t)got, rip, 0, &tgt)) {
                         /* DIRECT call: target known now — record immediately */
                         recorded += grecord(&g, ps->syms, &ps->jit, ps->exebase,
                                             rip, tgt);
                     } else if (ts && ilen) {
-                        /* INDIRECT call: arm, and VERIFY at the next stop */
-                        call_pend_arm(ts, rip, ilen, regs.rsp);
+                        /* INDIRECT call: arm, and VERIFY at the next stop
+                         * (call_pend_arm gates the SP adjustment per-arch) */
+                        call_pend_arm(ts, rip, ilen, asmspy_reg_sp(&regs));
                         call_pend_sigrace_inject(tid, tgid);
                     }
                 }
@@ -3978,9 +4192,9 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
                 deliver_app_sigtrap(tid);
                 continue;
             }
-            struct user_regs_struct regs;
-            if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
-                uint64_t rip = regs.rip;
+            asmspy_regs_t regs;
+            if (asmspy_regs_read(tid, &regs) == 0) {
+                uint64_t rip = asmspy_reg_pc(&regs);
                 thr_t *ts = thr_get(&tab, tid);
                 /* this task's own process (see the stream engine's note) */
                 pid_t tgid = thr_tgid(&tab, tid, pid);
@@ -3996,12 +4210,14 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
                 ssize_t got = process_vm_readv(tgid, &liov, 1, &riov, 1, 0);
 
                 /* FIRST, before anything is attributed to a depth: unwind
-                 * every frame this thread's rsp has moved above. This is where
+                 * every frame this thread's sp has moved above. This is where
                  * a RET pops — and, crucially, where a longjmp/unwind that
-                 * executed NO ret at all pops every frame it jumped over. */
+                 * executed NO ret at all pops every frame it jumped over. (The
+                 * PC lets the AArch64 pop tell a normal `ret` — which leaves SP
+                 * exactly at the frame's SP — from still being inside it.) */
                 if (ts) {
                     size_t was = ts->stk_n;
-                    frm_unwind(ts, regs.rsp);
+                    frm_unwind(ts, asmspy_reg_sp(&regs), rip);
                     if (ts->stk_n < was) /* left the --focus subtree? */
                         asmspy_tree_filter_ret(filter, (int)ts->stk_n,
                                                &ts->focus_depth);
@@ -4035,17 +4251,22 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
                  * than inferred from wherever the next step happens to land */
                 size_t ilen = 0;
                 if (got >= 1 && asmtest_disas_available())
-                    ilen = asmtest_disas_probe(ASMTEST_ARCH_X86_64, code,
+                    ilen = asmtest_disas_probe(ASMSPY_HOST_ARCH, code,
                                                (size_t)got, 0, &isc, NULL);
                 if (isc && ts) {
-                    /* Push the frame the call is ABOUT to create: it will push
-                     * rip+ilen and leave rsp at regs.rsp-8. Both are known now,
-                     * from the call site — no dependence on the next stop. */
+                    /* Push the frame the call is ABOUT to create. x86 `call`
+                     * pushes rip+ilen and leaves rsp at regs.rsp-8; AArch64 `bl`
+                     * writes rip+4 to LR and leaves SP UNCHANGED (frame identity
+                     * (entry_lr, sp)). Both are known now, from the call site. */
                     int d = (int)ts->stk_n; /* the CALLER's depth */
                     if (ilen)
-                        frm_push(ts, rip + ilen, regs.rsp - 8);
+#if defined(__aarch64__)
+                        frm_push(ts, rip + ilen, asmspy_reg_sp(&regs));
+#else
+                        frm_push(ts, rip + ilen, asmspy_reg_sp(&regs) - 8);
+#endif
                     uint64_t tgt = 0;
-                    if (asmtest_disas_call_target(ASMTEST_ARCH_X86_64, code,
+                    if (asmtest_disas_call_target(ASMSPY_HOST_ARCH, code,
                                                   (size_t)got, rip, 0, &tgt)) {
                         emitted +=
                             tree_emit(sink, ctx, multi, tid, ps->syms, &ps->jit,
@@ -4054,7 +4275,7 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
                         /* indirect: arm, and VERIFY at the next stop. Without a
                          * length there is nothing to verify against, so leave
                          * it unarmed rather than attribute on a guess. */
-                        call_pend_arm(ts, rip, ilen, regs.rsp);
+                        call_pend_arm(ts, rip, ilen, asmspy_reg_sp(&regs));
                         call_pend_sigrace_inject(tid, tgid);
                     }
                 }
@@ -4304,16 +4525,17 @@ int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
                 deliver_app_sigtrap(tid);
                 continue;
             }
-            struct user_regs_struct regs;
-            if (ptrace(PTRACE_GETREGS, tid, NULL, &regs) == 0) {
+            asmspy_regs_t regs;
+            if (asmspy_regs_read(tid, &regs) == 0) {
                 thr_t *ts = thr_get(&tab, tid);
                 uint8_t code[16];
                 struct iovec liov = {code, sizeof code};
-                struct iovec riov = {(void *)(uintptr_t)regs.rip, sizeof code};
+                struct iovec riov = {(void *)(uintptr_t)asmspy_reg_pc(&regs),
+                                     sizeof code};
                 ssize_t got = process_vm_readv(pid, &liov, 1, &riov, 1, 0);
                 if (ts && got >= 1 && asmtest_disas_available() &&
-                    asmtest_disas_is_call(ASMTEST_ARCH_X86_64, code,
-                                          (size_t)got, 0)) {
+                    asmtest_disas_is_call(ASMSPY_HOST_ARCH, code, (size_t)got,
+                                          0)) {
                     ts->inv++; /* count every CALL this task executes */
                     counted++;
                 }
@@ -4767,7 +4989,293 @@ int asmspy_engine_watch(pid_t pid, uint64_t addr, int rw, int len, long max,
     return arm_refused ? ASMSPY_WATCH_UNAVAIL : 0;
 }
 
-#else /* !__x86_64__ — no DR0..DR3/DR7 reachable via PTRACE_POKEUSER */
+#elif defined(__aarch64__) /* AArch64 NT_ARM_HW_WATCH data watchpoints */
+
+/* The AArch64 analog of the x86 DR0-3 data-watchpoint engine, over the
+ * NT_ARM_HW_WATCH ptrace regset (DBGWVR address + DBGWCR control), mirroring the
+ * library's NT_ARM_HW_BREAK path (src/ptrace_backend.c set_hw_bp) — only the note
+ * type and the ctrl-word encoding differ. The DBGWCR/DBGWVR/BAS encoding is pinned
+ * by cli/test_arch.c (asmspy_watch_encode, cli/asmspy_arch.h). */
+
+/* Arm slot-0 (DBGWVR = enc.dbgwvr, DBGWCR = enc.dbgwcr) on one stopped thread.
+ * Returns 0, or -1 where the host exposes no watchpoint slot / the regset write is
+ * refused. */
+static int watch_arm(pid_t tid, const asmspy_watch_enc_t *enc) {
+    struct user_hwdebug_state dbg;
+    memset(&dbg, 0, sizeof dbg);
+    struct iovec iov = {&dbg, sizeof dbg};
+    if (ptrace(PTRACE_GETREGSET, tid, (void *)(uintptr_t)NT_ARM_HW_WATCH,
+               &iov) != 0)
+        return -1;
+    if ((dbg.dbg_info & 0xffu) == 0)
+        return -1; /* no watchpoint register slots on this host */
+    dbg.dbg_regs[0].addr = enc->dbgwvr;
+    dbg.dbg_regs[0].ctrl = enc->dbgwcr;
+    iov.iov_len = sizeof dbg;
+    return ptrace(PTRACE_SETREGSET, tid, (void *)(uintptr_t)NT_ARM_HW_WATCH,
+                  &iov);
+}
+
+/* Disarm slot 0 (addr = ctrl = 0) — the survival step: a thread released with a
+ * slot still armed would take a debug exception with no tracer -> a fatal
+ * SIGTRAP. Best-effort/idempotent. */
+static void watch_disarm(pid_t tid) {
+    struct user_hwdebug_state dbg;
+    memset(&dbg, 0, sizeof dbg);
+    struct iovec iov = {&dbg, sizeof dbg};
+    if (ptrace(PTRACE_GETREGSET, tid, (void *)(uintptr_t)NT_ARM_HW_WATCH,
+               &iov) != 0)
+        return;
+    dbg.dbg_regs[0].addr = 0;
+    dbg.dbg_regs[0].ctrl = 0;
+    iov.iov_len = sizeof dbg;
+    ptrace(PTRACE_SETREGSET, tid, (void *)(uintptr_t)NT_ARM_HW_WATCH, &iov);
+}
+
+/* 1 if this SIGTRAP is a data-watchpoint hit (si_code TRAP_HWBKPT). While a thread
+ * is armed, a TRAP_HWBKPT is OURS (unlike sigtrap_is_app, which — correctly for
+ * its own single-step callers — reads every hw breakpoint as the target's own). */
+static int watch_is_hit(pid_t tid) {
+    siginfo_t si;
+    if (ptrace(PTRACE_GETSIGINFO, tid, NULL, &si) != 0)
+        return 0;
+    return si.si_code == TRAP_HWBKPT;
+}
+
+/* For --rw: classify the faulting instruction (at the stop PC — AArch64 takes the
+ * watchpoint exception on the accessing load/store, so unlike x86 there is no
+ * variable-length window to walk back through) as write (1) / read (0) / unknown
+ * (-1). Uses the same Capstone operand enumerator asmspy's --dataflow path links. */
+static int watch_decode_dir(pid_t pid, uint64_t pc, uint64_t *access_pc) {
+    if (!asmtest_operands_available())
+        return -1;
+    uint8_t buf[4];
+    struct iovec l = {buf, 4};
+    struct iovec r = {(void *)(uintptr_t)pc, 4};
+    if (process_vm_readv(pid, &l, 1, &r, 1, 0) != 4)
+        return -1;
+    at_val_rec_t reads[24], writes[24];
+    size_t nr = 24, nw = 24;
+    size_t ilen =
+        asmtest_operands(ASMSPY_HOST_ARCH, buf, 4, 0, reads, &nr, writes, &nw);
+    if (ilen == 0)
+        return -1;
+    int wrote_mem = 0, read_mem = 0;
+    for (size_t i = 0; i < nw; i++)
+        if (writes[i].kind != AT_LOC_REG)
+            wrote_mem = 1;
+    for (size_t i = 0; i < nr; i++)
+        if (reads[i].kind != AT_LOC_REG)
+            read_mem = 1;
+    if (access_pc)
+        *access_pc = pc;
+    return wrote_mem ? 1 : (read_mem ? 0 : -1);
+}
+
+/* Interrupt every thread, DISARM its watchpoint, then DETACH — the survival
+ * teardown (identical shape to the x86 arm's; only watch_disarm differs). */
+static void watch_teardown(thr_tab_t *tab) {
+    for (size_t i = 0; i < tab->n; i++) { /* phase 1: interrupt + disarm */
+        pid_t tid = tab->v[i].tid;
+        ptrace(PTRACE_INTERRUPT, tid, NULL, NULL);
+        for (;;) {
+            int st;
+            pid_t r = waitpid(tid, &st, __WALL);
+            if (r < 0) {
+                if (errno == EINTR)
+                    continue;
+                break; /* ECHILD — already gone */
+            }
+            if (WIFEXITED(st) || WIFSIGNALED(st))
+                break;
+            if (WIFSTOPPED(st)) {
+                watch_disarm(tid);
+                break; /* leave it stopped; released below */
+            }
+        }
+    }
+    for (size_t i = 0; i < tab->n; i++) /* phase 2: release */
+        ptrace(PTRACE_DETACH, tab->v[i].tid, NULL, NULL);
+    free(tab->v);
+    tab->v = NULL;
+    tab->n = tab->cap = 0;
+}
+
+int asmspy_engine_watch(pid_t pid, uint64_t addr, int rw, int len, long max,
+                        atomic_bool *stop, const asmspy_symtab_t *syms,
+                        asmspy_watch_sink sink, void *ctx) {
+    /* Refuse a 32-bit tracee BEFORE attaching (asmspy.h: ASMSPY_ETRACEE_I386). */
+    if (asmspy_elf_class(pid) == 32)
+        return ASMSPY_ETRACEE_I386;
+
+    /* Encode the DBGWVR/DBGWCR/BAS. Rejects a bad length OR a window that would
+     * cross the 8-byte boundary (the AArch64 analog of x86's length-alignment
+     * reject) — asmspy_watch_encode, pinned by cli/test_arch.c. */
+    asmspy_watch_enc_t enc = asmspy_watch_encode(addr, len, rw);
+    if (!enc.ok)
+        return ASMTEST_PTRACE_EINVAL;
+
+    arm_quit_wake();
+
+    /* SEIZE every thread (debug registers are per-thread on AArch64 too, so we arm
+     * them all) and follow threads spawned later via PTRACE_O_TRACECLONE. */
+    thr_tab_t tab = {0};
+    if (seize_threads(pid, PTRACE_O_TRACECLONE, &tab) != 0) {
+        detach_threads(pid, &tab, 0); /* frees the (empty) table */
+        return ASMTEST_PTRACE_ETRACE;
+    }
+
+    asmspy_jitmap_t jit;
+    asmspy_jitmap_init(&jit, pid);
+    asmspy_jitmap_refresh(&jit);
+
+    int any_armed = 0;   /* at least one thread's slot was successfully armed */
+    int arm_refused = 0; /* the FIRST arm failed -> host has no slots (skip)  */
+    unsigned long hits = 0;
+
+    while ((max < 0 || (long)hits < max) && !(stop && atomic_load(stop))) {
+        int status;
+        pid_t tid = waitpid(-1, &status, __WALL);
+        if (tid < 0) {
+            if (errno == EINTR) {
+                if (stop && atomic_load(stop))
+                    break;
+                continue;
+            }
+            break; /* ECHILD — every tracee is gone */
+        }
+
+        if (WIFEXITED(status) || WIFSIGNALED(status)) {
+            thr_del(&tab, tid);
+            if (tab.n == 0)
+                break;
+            continue;
+        }
+        if (!WIFSTOPPED(status))
+            continue;
+
+        int sig = WSTOPSIG(status);
+        int event = (status >> 16) & 0xff;
+
+        /* A newly-spawned thread: table it (armed on its own first stop), resume
+         * the parent. Watchpoint registers are per-thread and NOT inherited across
+         * clone, so every new thread must be armed explicitly. */
+        if (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
+            event == PTRACE_EVENT_VFORK) {
+            unsigned long child = 0;
+            if (ptrace(PTRACE_GETEVENTMSG, tid, NULL, &child) == 0 && child)
+                thr_get(&tab, (pid_t)child);
+            ptrace(PTRACE_CONT, tid, NULL, NULL);
+            continue;
+        }
+
+        thr_t *ts = thr_get(&tab, tid);
+
+        /* Our data watchpoint fired? A hit reports SIGTRAP with si_code
+         * TRAP_HWBKPT. Unlike x86's after-the-fact #DB, AArch64 takes the
+         * watchpoint exception ON the accessing load/store, so a plain resume would
+         * re-fault forever — we DISARM, single-step ONCE over the access (which
+         * also completes the store, so the value read next is post-access), then
+         * re-arm and continue. */
+        if (sig == SIGTRAP && ts && ts->armed && watch_is_hit(tid)) {
+            asmspy_regs_t regs;
+            uint64_t pc = 0;
+            if (asmspy_regs_read(tid, &regs) == 0)
+                pc = asmspy_reg_pc(&regs);
+
+            watch_disarm(tid);
+            if (ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL) == 0) {
+                int st2;
+                while (waitpid(tid, &st2, __WALL) < 0 && errno == EINTR)
+                    ;
+                if (WIFEXITED(st2) || WIFSIGNALED(st2)) {
+                    thr_del(&tab, tid);
+                    if (tab.n == 0)
+                        break;
+                    continue;
+                }
+            }
+
+            /* value: the watched bytes AFTER the access (read via the leader
+             * `pid` — process_vm_readv on a non-leader tid can be refused). */
+            uint64_t value = 0;
+            int value_ok = (pc != 0) && rd(pid, addr, &value, (size_t)len) == 0;
+
+            /* who: the access instruction resolved to function+offset. A
+             * write-only watch is self-labelling; for --rw decode the insn. */
+            uint64_t apc = pc, access_pc = 0;
+            int dir = rw ? watch_decode_dir(pid, pc, &access_pc) : 1;
+            if (access_pc)
+                apc = access_pc;
+            const asmspy_sym_t *s = asmspy_resolve(syms, &jit, apc);
+
+            hits++;
+            if (sink) {
+                asmspy_watch_hit_t h;
+                h.hit_no = hits;
+                h.tid = tid;
+                h.pc = apc;
+                h.addr = addr;
+                h.is_write = rw ? dir : 1;
+                h.value_ok = value_ok;
+                h.value_len = (unsigned)len;
+                h.value = value;
+                h.func = s ? s->name : NULL;
+                h.module = s ? s->module : NULL;
+                h.off = s ? (apc - s->addr) : 0;
+                sink(ctx, &h);
+            }
+
+            watch_arm(tid, &enc); /* re-arm and resume */
+            ptrace(PTRACE_CONT, tid, NULL, (void *)0);
+            continue;
+        }
+
+        /* A SIGTRAP that is NOT our watchpoint (the target's own int3 / hw bp). */
+        if (sig == SIGTRAP && ts && ts->armed) {
+            if (sigtrap_is_app(tid))
+                deliver_app_sigtrap(tid);
+            else
+                ptrace(PTRACE_CONT, tid, NULL, (void *)0);
+            continue;
+        }
+
+        /* First stop for this thread: ARM its watchpoint, then CONT. */
+        if (ts && !ts->armed) {
+            if (watch_arm(tid, &enc) == 0) {
+                any_armed = 1;
+            } else if (!any_armed) {
+                /* the host exposes no watchpoint slots (qemu-user / a hypervisor
+                 * that withholds debug registers) — a clean, whole-op skip. */
+                arm_refused = 1;
+                ptrace(PTRACE_CONT, tid, NULL, (void *)0);
+                break;
+            }
+            ts->armed = 1;
+            ptrace(PTRACE_CONT, tid, NULL, (void *)0);
+            continue;
+        }
+
+        /* A job-control group-stop (^Z / SIGSTOP / tty) under SEIZE: PTRACE_LISTEN
+         * so the target stays suspended (honoring ^Z) instead of being resumed. */
+        if (event == PTRACE_EVENT_STOP && (sig == SIGSTOP || sig == SIGTSTP ||
+                                           sig == SIGTTIN || sig == SIGTTOU)) {
+            ptrace(PTRACE_LISTEN, tid, NULL, NULL);
+            continue;
+        }
+
+        /* Otherwise a real signal-delivery-stop: forward the signal and resume. */
+        int deliver = (event == 0 && sig != SIGTRAP) ? sig : 0;
+        ptrace(PTRACE_CONT, tid, NULL, (void *)(long)deliver);
+    }
+
+    watch_teardown(&tab);
+    asmspy_jitmap_free(&jit);
+    (void)any_armed;
+    return arm_refused ? ASMSPY_WATCH_UNAVAIL : 0;
+}
+
+#else /* neither x86-64 nor AArch64 — no debug-register data watchpoint */
 
 int asmspy_engine_watch(pid_t pid, uint64_t addr, int rw, int len, long max,
                         atomic_bool *stop, const asmspy_symtab_t *syms,
@@ -4781,7 +5289,7 @@ int asmspy_engine_watch(pid_t pid, uint64_t addr, int rw, int len, long max,
     (void)syms;
     (void)sink;
     (void)ctx;
-    return ASMSPY_WATCH_UNAVAIL; /* x86 debug registers only */
+    return ASMSPY_WATCH_UNAVAIL; /* x86 DR0-3 / AArch64 NT_ARM_HW_WATCH only */
 }
 
-#endif /* __x86_64__ */
+#endif /* __x86_64__ / __aarch64__ */
