@@ -1618,20 +1618,30 @@ static void test_stealth_window_inline(void) {
         return;
     }
 
-    void *p = mmap(NULL, sizeof ROUTINE, PROT_READ | PROT_WRITE,
+    /* Arch-select the executable fixture: the x86 ROUTINE would #UD (SIGILL) if run on
+     * AArch64. Both are the same add2 body — add2(10,32) == 42 — so the assertions hold
+     * on either arch (the OOP stealth stepper itself is arch-neutral). */
+#if defined(__aarch64__)
+    const unsigned char *RT = ROUTINE_A64;
+    const size_t RTL = sizeof ROUTINE_A64;
+#else
+    const unsigned char *RT = ROUTINE;
+    const size_t RTL = sizeof ROUTINE;
+#endif
+
+    void *p = mmap(NULL, RTL, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (p == MAP_FAILED) {
         printf("# SKIP stealth_window_inline: mmap failed\n");
         return;
     }
-    memcpy(p, ROUTINE, sizeof ROUTINE);
-    mprotect(p, sizeof ROUTINE, PROT_READ | PROT_EXEC);
-    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+    memcpy(p, RT, RTL);
+    mprotect(p, RTL, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + RTL);
 
     asmtest_addr_channel_t *chan = asmtest_addr_channel_new_shared();
     CHECK(chan != NULL, "stealth_window_inline: alloc channel");
-    asmtest_addr_channel_publish(chan, (uint64_t)(uintptr_t)p, sizeof ROUTINE,
-                                 0);
+    asmtest_addr_channel_publish(chan, (uint64_t)(uintptr_t)p, RTL, 0);
 
     void *ctx = NULL;
     int rc = asmtest_hwtrace_stealth_window_begin(chan, &ctx);
@@ -1660,7 +1670,7 @@ static void test_stealth_window_inline(void) {
         asmtest_trace_free(tr);
     }
     asmtest_addr_channel_free_shared(chan);
-    munmap(p, sizeof ROUTINE);
+    munmap(p, RTL);
 #else
     printf("# SKIP stealth_window_inline: not Linux x86-64/AArch64\n");
 #endif
