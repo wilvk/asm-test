@@ -168,6 +168,7 @@ help:
 	@echo '  docker-drtrace             DynamoRIO native-trace tier (C + Python) in a container'
 	@echo '  docker-drtrace-bindings    DynamoRIO native-trace wrapper tests for every language'
 	@echo '  docker-drext-probe         DynamoRIO extension-load probe (taint tier, Increment 2)'
+	@echo '  docker-sve-sweep           SVE suite at VQ 1/3/8/16 under qemu binfmt (arm64)'
 	@echo '  docker-syspkg[-brew|-deb|-aur|-vcpkg|-conan]  system-package build+install lanes'
 	@echo ''
 	@echo 'Native Win64 (cross-compile + Wine):'

@@ -75,6 +75,37 @@ docker-emu: docker-build
 docker-asm: docker-build
 	$(_docker_run) make asm-test
 
+# --- docker-sve-sweep: pre-hardware SVE validation under qemu binfmt --------
+# Runs the simd suite in an arm64 container at several SVE vector lengths by
+# steering qemu-user's CPU through the QEMU_CPU env var (read by the binfmt
+# interpreter): sve-max-vq=N caps VL at N*16 bytes and
+# sve-default-vector-length=-1 selects the max, so the sweep covers VQ 1
+# (128-bit), 3 (384-bit — non-power-of-two), 8 (1024-bit) and 16 (2048-bit).
+# Verified 2026-07-19 on an x86-64 Zen 5 Docker host (qemu-user TCG binfmt):
+# default VL=64B; vq=1 -> 16B, vq=3 -> 48B, vq=8 -> 128B, vq=16 +
+# sve-default-vector-length=-1 -> 256B (the architectural max). On a NATIVE
+# arm64 host there is no qemu to steer: QEMU_CPU is ignored and the test itself
+# self-skips without SVE silicon (Apple silicon has none) — that skip line is
+# this lane's honest output there, not a failure. TCG timings are meaningless;
+# never point bench targets at this lane. No new pinned dependency: the host's
+# binfmt qemu is unpinnable from inside the repo (no QEMU version is pinned
+# anywhere in the tree). The simd suite links no optional engine, so the image
+# is built with DEPS_ARGS=--pkgconfig — like docker-riscv64, it keeps its TCG
+# image light rather than compiling Unicorn/Keystone under emulation.
+DOCKER_SVE_IMAGE ?= asmtest-ci-arm64
+DOCKER_SVE_VQS   ?= 1 3 8 16
+.PHONY: docker-sve-sweep
+docker-sve-sweep:
+	$(DOCKER) build --platform linux/arm64 --build-arg BASE=$(DOCKER_BASE) \
+	  --build-arg DEPS_ARGS=--pkgconfig -t $(DOCKER_SVE_IMAGE) .
+	set -e; for vq in $(DOCKER_SVE_VQS); do \
+	  echo "== docker-sve-sweep: QEMU_CPU=max,sve-max-vq=$$vq =="; \
+	  $(DOCKER) run --rm --platform linux/arm64 \
+	    -e QEMU_CPU=max,sve-max-vq=$$vq,sve-default-vector-length=-1 \
+	    $(DOCKER_SVE_IMAGE) \
+	    sh -c 'make build/test_simd >/dev/null && ./build/test_simd'; \
+	done
+
 # Data-flow live-attach lane (live-attach-dataflow-plan.md, Increment 1). A dedicated Capstone +
 # Unicorn image (the base CI image builds Capstone from source only under --emu/--asm, not --all)
 # running `make dataflow-test` with seccomp=unconfined so the PTRACE_SEIZE-based attach_pid
