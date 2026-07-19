@@ -416,6 +416,35 @@ static int trace_runtime(const char *engine, const char *method_substr,
     return failures ? 1 : 0;
 }
 
+/* T2: recover and print a method's offset->file:line[.column] source table from the
+ * SAME jitdump asmtest_jitdump_find matched (via the JIT_CODE_DEBUG_INFO records the byte
+ * path skips), filling the caller-owned `dbg` buffer. Returns the debug reader's status
+ * and sets *dlen to the entry count. A method that carries no debug info still returns
+ * ASMTEST_PTRACE_OK with *dlen == 0 (the CoreCLR case), so a caller distinguishes "no
+ * debug records" from an error. */
+static int print_debug_table(const char *path, pid_t pid, const char *name,
+                             asmtest_jitdump_debug_t *dbg, size_t cap,
+                             size_t *dlen) {
+    asmtest_jitdump_entry_t de;
+    memset(&de, 0, sizeof de);
+    *dlen = 0;
+    int rc = asmtest_jitdump_debug_find(path, pid, name, &de, dbg, cap, dlen);
+    if (rc == ASMTEST_PTRACE_OK && *dlen > 0) {
+        printf("# offset -> file:line[.column] from the jitdump DEBUG_INFO "
+               "records:\n");
+        for (size_t i = 0; i < *dlen; i++) {
+            if (dbg[i].discrim)
+                printf("    +0x%llx  %s:%u.%u\n",
+                       (unsigned long long)dbg[i].off, dbg[i].file, dbg[i].line,
+                       dbg[i].discrim);
+            else
+                printf("    +0x%llx  %s:%u\n", (unsigned long long)dbg[i].off,
+                       dbg[i].file, dbg[i].line);
+        }
+    }
+    return rc;
+}
+
 /* The BINARY JITDUMP path (asmtest_jitdump_find), against a real runtime that emits a
  * *native* perf jitdump. Unlike the text perf-map (address + size + name), a jitdump carries
  * the JIT's recorded CODE BYTES — the byte source a branch-trace decoder must be handed —
@@ -569,6 +598,42 @@ static int trace_jitdump(const char *engine, const char *method_substr,
             break;
         printf("    0x%llx  %s\n", (unsigned long long)off, text);
         off += l;
+    }
+
+    /* T2: the source-attribution table from the SAME jitdump, validated per
+     * ENCODER. DOC CORRECTIONS, verified against real dumps in the per-language
+     * images: only V8 (--perf-prof) writes JIT_CODE_DEBUG_INFO at all — CoreCLR's
+     * PAL writer and the HotSpot perf-JVMTI agent (libperf-jvmti.so) both emit
+     * JIT_CODE_LOAD only (the true HotSpot bytecode route is T6's own JVMTI
+     * agent). And V8 emits source positions AT or PAST a tiny body's reported
+     * code_size, so the reader keeps at-or-above-base entries (it no longer drops
+     * past-end ones). */
+    static asmtest_jitdump_debug_t dbg[256];
+    size_t dlen = 0;
+    int drc = print_debug_table(NULL, pid, name, dbg, 256, &dlen);
+    if (strcmp(engine, "V8") == 0) {
+        int ok_v8 = (drc == ASMTEST_PTRACE_OK && dlen >= 1);
+        for (size_t i = 0; i < dlen; i++) {
+            if (dbg[i].line < 1) /* every entry names a real 1-based line */
+                ok_v8 = 0;
+            if (i > 0 && dbg[i].off < dbg[i - 1].off)
+                ok_v8 = 0;
+        }
+        CHECK(ok_v8,
+              "v8-jitdump-debug: reader recovers >=1 well-formed DEBUG_INFO "
+              "entry "
+              "(1-based line, non-decreasing offsets; V8 writes line+column)");
+    } else {
+        CHECK(drc == ASMTEST_PTRACE_OK,
+              "dotnet-jitdump-debug: debug-info lookup returns OK (records "
+              "present or absent, never an error)");
+        if (dlen == 0)
+            printf("# CoreCLR jitdump carries no debug-info records (expected; "
+                   "IL route is T5)\n");
+        else
+            printf("# CoreCLR jitdump now carries %zu debug-info entries "
+                   "(bonus; a future SDK)\n",
+                   dlen);
     }
 
     kill(pid, SIGKILL);
@@ -770,6 +835,41 @@ static int trace_jitdump_java(const char *cp, const char *agent) {
             break;
         printf("    0x%llx  %s\n", (unsigned long long)off, text);
         off += l;
+    }
+
+    /* T2 step D: the source-attribution table from the SAME flushed jitdump.
+     * DOC CORRECTION (verified against a real HotSpot dump in the java image):
+     * the perf JVMTI agent shipped by linux-tools (libperf-jvmti.so) writes
+     * JIT_CODE_LOAD records ONLY — it emits NO JIT_CODE_DEBUG_INFO for these
+     * methods — so the jitdump route gives HotSpot no source lines, exactly like
+     * CoreCLR. HotSpot's real per-address BYTECODE-INDEX route is the dedicated
+     * JVMTI agent + srcreg lane in T6 (java-bci), not this dump. So CHECK the
+     * reader returns OK (present or absent, never an error); if a future agent
+     * build DOES emit DEBUG_INFO, validate it (in-range, non-decreasing,
+     * Hot.java) rather than fail. */
+    static asmtest_jitdump_debug_t dbg[256];
+    size_t dlen = 0;
+    int drc =
+        print_debug_table(dump, pid, JAVA_JITDUMP_METHOD, dbg, 256, &dlen);
+    CHECK(drc == ASMTEST_PTRACE_OK,
+          "java-jitdump-debug: debug-info lookup returns OK (the perf JVMTI "
+          "agent emits none — present or absent, never an error)");
+    if (dlen == 0)
+        printf("# HotSpot's perf JVMTI agent (libperf-jvmti.so) writes no "
+               "DEBUG_INFO records; the per-address bytecode route is the "
+               "java-bci JVMTI lane (T6)\n");
+    else {
+        int ordered = 1, has_file = 0;
+        for (size_t i = 0; i < dlen; i++) {
+            if (i > 0 && dbg[i].off < dbg[i - 1].off)
+                ordered = 0;
+            if (strstr(dbg[i].file, "Hot.java") != NULL)
+                has_file = 1;
+        }
+        CHECK(
+            ordered && has_file,
+            "java-jitdump-debug: recovered DEBUG_INFO entries are ordered and "
+            "resolve to Hot.java (a debug-emitting agent build)");
     }
 
     printf("1..%d\n# %d passed, %d failed\n", checks, checks - failures,

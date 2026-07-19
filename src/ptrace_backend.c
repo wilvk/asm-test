@@ -515,11 +515,15 @@ int asmtest_jitdump_debug_find(const char *path, pid_t pid, const char *name,
         size_t written = 0;
         for (size_t i = 0; i < cap_n; i++) {
             uint64_t a = cap_entries[i].addr;
-            if (a < cap_code_addr) /* prologue markers etc. — drop */
+            /* Drop only entries BELOW the method base (prologue markers — the
+             * defensive case). Real encoders (V8's Sparkplug in particular) emit
+             * source positions AT or slightly PAST the LOAD's reported code_size
+             * for tiny bodies; those are kept verbatim so a live-encoder map is
+             * never silently emptied (verified against a real V8 jit-<pid>.dump). */
+            if (a < cap_code_addr)
                 continue;
             uint64_t off = a - cap_code_addr;
-            if (off >= cap_code_size)
-                continue;
+            (void)cap_code_size;
             if (dbg != NULL && written < dbg_cap) {
                 dbg[written].off = off;
                 dbg[written].line = cap_entries[i].line;
