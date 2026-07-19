@@ -175,3 +175,8 @@ ALL asmtest_hwtrace_pt_set_filter         # thin PERF_EVENT_IOC_SET_FILTER ioctl
 # wraps; the _ex/guard-query knobs are C-level until a binding needs them.
 ALL asmtest_hwtrace_begin_window_ex
 ALL asmtest_hwtrace_window_guard
+
+# Jitdump debug-info readers (native-il-bytecode-attribution, 2026-07-19): C-tier only
+# until a binding grows an attribution surface; remove per-binding when wrapped.
+ALL asmtest_jitdump_debug_find
+ALL asmtest_jitdump_debug_line_map

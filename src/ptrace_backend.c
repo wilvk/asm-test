@@ -129,9 +129,10 @@ static uint64_t jd_rd64(const unsigned char *p, int swap) {
     return swap ? __builtin_bswap64(v) : v;
 }
 
-#define JITDUMP_MAGIC    0x4A695444u /* 'JiTD'           */
-#define JITDUMP_MAGIC_SW 0x4454694Au /* byte-swapped     */
-#define JIT_CODE_LOAD    0
+#define JITDUMP_MAGIC       0x4A695444u /* 'JiTD'           */
+#define JITDUMP_MAGIC_SW    0x4454694Au /* byte-swapped     */
+#define JIT_CODE_LOAD       0
+#define JIT_CODE_DEBUG_INFO 2
 
 int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
                          asmtest_jitdump_entry_t *out, uint8_t *bytes_out,
@@ -256,6 +257,335 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
     return rc;
 }
 
+/* Debug-info reader scratch: one raw JIT_CODE_DEBUG_INFO entry (absolute addr
+ * before it is rebased to a method-relative offset) and a pending record keyed
+ * by code_addr (the spec writes DEBUG_INFO before the LOAD it describes, so we
+ * buffer the record until its LOAD names the method). */
+typedef struct {
+    uint64_t addr;
+    uint32_t line;
+    uint32_t discrim;
+    char file[128];
+} jd_dbg_raw_t;
+
+typedef struct {
+    uint64_t code_addr;
+    jd_dbg_raw_t *entries;
+    size_t n;
+} jd_pending_t;
+
+int asmtest_jitdump_debug_find(const char *path, pid_t pid, const char *name,
+                               asmtest_jitdump_entry_t *out,
+                               asmtest_jitdump_debug_t *dbg, size_t dbg_cap,
+                               size_t *dbg_len) {
+    if (name == NULL)
+        return ASMTEST_PTRACE_EINVAL;
+    if (dbg_len != NULL)
+        *dbg_len = 0;
+    char buf[64];
+    const char *p = path;
+    if (p == NULL) {
+        snprintf(buf, sizeof buf, "/tmp/jit-%d.dump", (int)pid);
+        p = buf;
+    }
+    FILE *f = fopen(p, "rb");
+    if (f == NULL)
+        return ASMTEST_PTRACE_ENOENT;
+
+    unsigned char hdr[40];
+    if (fread(hdr, 1, sizeof hdr, f) != sizeof hdr) {
+        fclose(f);
+        return ASMTEST_PTRACE_EINVAL;
+    }
+    uint32_t magic = jd_rd32(hdr, 0);
+    int swap;
+    if (magic == JITDUMP_MAGIC)
+        swap = 0;
+    else if (magic == JITDUMP_MAGIC_SW)
+        swap = 1;
+    else {
+        fclose(f);
+        return ASMTEST_PTRACE_EINVAL;
+    }
+    uint32_t header_size = jd_rd32(hdr + 8, swap);
+    if (fseek(f, (long)header_size, SEEK_SET) != 0) {
+        fclose(f);
+        return ASMTEST_PTRACE_EINVAL;
+    }
+
+    jd_pending_t *pend = NULL;
+    size_t pend_n = 0, pend_cap = 0;
+    /* The debug map adopted for the LATEST matching LOAD (latest-wins). */
+    jd_dbg_raw_t *cap_entries = NULL;
+    size_t cap_n = 0;
+    uint64_t cap_code_addr = 0, cap_code_size = 0;
+    int rc = ASMTEST_PTRACE_ENOENT;
+    int err = 0; /* 1 = EINVAL (malformed), 2 = ETRACE (oom) */
+
+    for (;;) {
+        unsigned char pre[16]; /* id, total_size, timestamp */
+        if (fread(pre, 1, sizeof pre, f) != sizeof pre)
+            break; /* EOF */
+        uint32_t id = jd_rd32(pre, swap);
+        uint32_t total = jd_rd32(pre + 4, swap);
+        if (total < sizeof pre)
+            break; /* malformed framing */
+        uint32_t body_size = total - (uint32_t)sizeof pre;
+
+        if (id == JIT_CODE_DEBUG_INFO) {
+            unsigned char *body =
+                (unsigned char *)malloc(body_size ? body_size : 1);
+            if (body == NULL) {
+                err = 2;
+                break;
+            }
+            if (fread(body, 1, body_size, f) != body_size) {
+                free(body);
+                break; /* truncated tail — stop, keep whatever we resolved */
+            }
+            if (body_size < 16) { /* need code_addr u64 + nr_entry u64 */
+                free(body);
+                err = 1;
+                break;
+            }
+            uint64_t code_addr = jd_rd64(body, swap);
+            uint64_t nr_entry = jd_rd64(body + 8, swap);
+            size_t pos = 16;
+            jd_dbg_raw_t *raw = NULL;
+            size_t raw_n = 0, raw_cap = 0;
+            int ok = 1;
+            for (uint64_t k = 0; k < nr_entry; k++) {
+                if (pos + 16 >
+                    body_size) { /* addr u64 + lineno u32 + discrim u32 */
+                    ok = 0;
+                    break;
+                }
+                uint64_t eaddr = jd_rd64(body + pos, swap);
+                uint32_t lineno = jd_rd32(body + pos + 8, swap);
+                uint32_t discr = jd_rd32(body + pos + 12, swap);
+                pos += 16;
+                size_t fstart = pos; /* NUL-terminated source file name */
+                while (pos < body_size && body[pos] != '\0')
+                    pos++;
+                if (pos >= body_size) { /* no NUL terminator in range */
+                    ok = 0;
+                    break;
+                }
+                size_t flen = pos - fstart;
+                pos++; /* consume the NUL */
+                if (raw_n == raw_cap) {
+                    size_t nc = raw_cap ? raw_cap * 2 : 8;
+                    jd_dbg_raw_t *nr =
+                        (jd_dbg_raw_t *)realloc(raw, nc * sizeof *nr);
+                    if (nr == NULL) {
+                        ok = 0;
+                        err = 2;
+                        break;
+                    }
+                    raw = nr;
+                    raw_cap = nc;
+                }
+                raw[raw_n].addr = eaddr;
+                raw[raw_n].line = lineno;
+                raw[raw_n].discrim = discr;
+                size_t fcap = sizeof raw[raw_n].file - 1;
+                size_t cpy = flen < fcap ? flen : fcap;
+                memcpy(raw[raw_n].file, body + fstart, cpy);
+                raw[raw_n].file[cpy] = '\0';
+                raw_n++;
+            }
+            free(body);
+            if (!ok) {
+                free(raw);
+                if (err == 0)
+                    err = 1; /* malformed record */
+                break;
+            }
+            /* Store into pending, replacing any prior record for code_addr. */
+            size_t idx;
+            for (idx = 0; idx < pend_n; idx++)
+                if (pend[idx].code_addr == code_addr)
+                    break;
+            if (idx < pend_n) {
+                free(pend[idx].entries);
+                pend[idx].entries = raw;
+                pend[idx].n = raw_n;
+            } else {
+                if (pend_n == pend_cap) {
+                    size_t nc = pend_cap ? pend_cap * 2 : 4;
+                    jd_pending_t *np =
+                        (jd_pending_t *)realloc(pend, nc * sizeof *np);
+                    if (np == NULL) {
+                        free(raw);
+                        err = 2;
+                        break;
+                    }
+                    pend = np;
+                    pend_cap = nc;
+                }
+                pend[pend_n].code_addr = code_addr;
+                pend[pend_n].entries = raw;
+                pend[pend_n].n = raw_n;
+                pend_n++;
+            }
+            continue;
+        }
+
+        if (id != JIT_CODE_LOAD) {
+            if (fseek(f, (long)body_size, SEEK_CUR) != 0)
+                break;
+            continue;
+        }
+
+        /* jr_code_load body: pid, tid, vma, code_addr, code_size, code_index. */
+        uint64_t ts = jd_rd64(pre + 8, swap);
+        if (body_size < 40)
+            break; /* malformed */
+        unsigned char fx[40];
+        if (fread(fx, 1, sizeof fx, f) != sizeof fx)
+            break;
+        uint64_t code_addr = jd_rd64(fx + 16, swap);
+        uint64_t code_size = jd_rd64(fx + 24, swap);
+        uint64_t code_index = jd_rd64(fx + 32, swap);
+        long name_len = (long)body_size - 40 - (long)code_size;
+        if (name_len <= 0)
+            break;
+        char *nm = (char *)malloc((size_t)name_len);
+        if (nm == NULL) {
+            err = 2;
+            break;
+        }
+        if (fread(nm, 1, (size_t)name_len, f) != (size_t)name_len) {
+            free(nm);
+            break;
+        }
+        nm[name_len - 1] = '\0';
+        int match = (strcmp(nm, name) == 0);
+        free(nm);
+        if (fseek(f, (long)code_size, SEEK_CUR) != 0) /* skip the code bytes */
+            break;
+
+        if (match) {
+            rc = ASMTEST_PTRACE_OK;
+            if (out) {
+                out->code_addr = code_addr;
+                out->code_size = code_size;
+                out->timestamp = ts;
+                out->code_index = code_index;
+            }
+            /* Adopt pending[code_addr]; latest matching LOAD wins. */
+            free(cap_entries);
+            cap_entries = NULL;
+            cap_n = 0;
+            cap_code_addr = code_addr;
+            cap_code_size = code_size;
+            size_t idx;
+            for (idx = 0; idx < pend_n; idx++)
+                if (pend[idx].code_addr == code_addr)
+                    break;
+            if (idx < pend_n && pend[idx].n > 0) {
+                cap_entries =
+                    (jd_dbg_raw_t *)malloc(pend[idx].n * sizeof *cap_entries);
+                if (cap_entries == NULL) {
+                    err = 2;
+                    break;
+                }
+                memcpy(cap_entries, pend[idx].entries,
+                       pend[idx].n * sizeof *cap_entries);
+                cap_n = pend[idx].n;
+            }
+        }
+    }
+    fclose(f);
+
+    for (size_t i = 0; i < pend_n; i++)
+        free(pend[i].entries);
+    free(pend);
+
+    if (err == 2) {
+        free(cap_entries);
+        return ASMTEST_PTRACE_ETRACE;
+    }
+    if (err == 1) {
+        free(cap_entries);
+        return ASMTEST_PTRACE_EINVAL;
+    }
+
+    if (rc == ASMTEST_PTRACE_OK) {
+        size_t written = 0;
+        for (size_t i = 0; i < cap_n; i++) {
+            uint64_t a = cap_entries[i].addr;
+            if (a < cap_code_addr) /* prologue markers etc. — drop */
+                continue;
+            uint64_t off = a - cap_code_addr;
+            if (off >= cap_code_size)
+                continue;
+            if (dbg != NULL && written < dbg_cap) {
+                dbg[written].off = off;
+                dbg[written].line = cap_entries[i].line;
+                dbg[written].discrim = cap_entries[i].discrim;
+                size_t fcap = sizeof dbg[written].file - 1;
+                size_t cpy = strlen(cap_entries[i].file);
+                if (cpy > fcap)
+                    cpy = fcap;
+                memcpy(dbg[written].file, cap_entries[i].file, cpy);
+                dbg[written].file[cpy] = '\0';
+                written++;
+            }
+        }
+        if (dbg_len != NULL)
+            *dbg_len = written;
+    }
+    free(cap_entries);
+    return rc;
+}
+
+/* Sort key for the emu_line_map bridge: ascending offset, ties broken by input
+ * index so the dedup below deterministically keeps the LAST equal-offset row. */
+typedef struct {
+    uint64_t off;
+    uint32_t line;
+    size_t idx;
+} jd_line_sort_t;
+
+static int jd_line_cmp(const void *a, const void *b) {
+    const jd_line_sort_t *x = (const jd_line_sort_t *)a;
+    const jd_line_sort_t *y = (const jd_line_sort_t *)b;
+    if (x->off != y->off)
+        return x->off < y->off ? -1 : 1;
+    return (x->idx > y->idx) - (x->idx < y->idx);
+}
+
+size_t asmtest_jitdump_debug_line_map(const asmtest_jitdump_debug_t *dbg,
+                                      size_t n, emu_line_entry_t *rows,
+                                      size_t cap) {
+    if (dbg == NULL || rows == NULL || cap == 0 || n == 0)
+        return 0;
+    jd_line_sort_t *tmp = (jd_line_sort_t *)malloc(n * sizeof *tmp);
+    if (tmp == NULL)
+        return 0;
+    for (size_t i = 0; i < n; i++) {
+        tmp[i].off = dbg[i].off;
+        tmp[i].line = dbg[i].line;
+        tmp[i].idx = i;
+    }
+    qsort(tmp, n, sizeof *tmp, jd_line_cmp);
+    size_t out = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (out > 0 && rows[out - 1].offset == tmp[i].off) {
+            rows[out - 1].line = tmp[i].line; /* equal offset: keep the last */
+            continue;
+        }
+        if (out >= cap)
+            break;
+        rows[out].offset = tmp[i].off;
+        rows[out].line = tmp[i].line;
+        out++;
+    }
+    free(tmp);
+    return out;
+}
+
 #else /* readers need Linux /proc + perf files */
 
 int asmtest_proc_region_by_addr(pid_t pid, const void *addr, void **base_out,
@@ -287,6 +617,31 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
     (void)bytes_cap;
     (void)bytes_len;
     return ASMTEST_PTRACE_ENOSYS;
+}
+
+int asmtest_jitdump_debug_find(const char *path, pid_t pid, const char *name,
+                               asmtest_jitdump_entry_t *out,
+                               asmtest_jitdump_debug_t *dbg, size_t dbg_cap,
+                               size_t *dbg_len) {
+    (void)path;
+    (void)pid;
+    (void)name;
+    (void)out;
+    (void)dbg;
+    (void)dbg_cap;
+    if (dbg_len != NULL)
+        *dbg_len = 0;
+    return ASMTEST_PTRACE_ENOSYS;
+}
+
+size_t asmtest_jitdump_debug_line_map(const asmtest_jitdump_debug_t *dbg,
+                                      size_t n, emu_line_entry_t *rows,
+                                      size_t cap) {
+    (void)dbg;
+    (void)n;
+    (void)rows;
+    (void)cap;
+    return 0;
 }
 
 #endif /* __linux__ readers */

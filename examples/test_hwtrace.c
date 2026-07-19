@@ -7805,6 +7805,40 @@ static void write_jit_load(FILE *f, uint64_t ts, uint64_t addr, uint64_t idx,
     fwrite(name, 1, namelen, f);
     fwrite(code, 1, code_size, f);
 }
+
+/* One synthetic jitdump debug entry (native little-endian). */
+struct jd_test_dbg {
+    uint64_t addr;
+    uint32_t line;
+    uint32_t discrim;
+    const char *file;
+};
+
+/* Serialize one jitdump JIT_CODE_DEBUG_INFO record (id 2). Layout: prefix{id,
+ * total,ts} + body{code_addr u64, nr_entry u64} + nr_entry x {addr u64,
+ * lineno u32, discrim u32, file char[] NUL}. The spec requires this record be
+ * emitted BEFORE the JIT_CODE_LOAD it describes. */
+static void write_jit_debug(FILE *f, uint64_t ts, uint64_t code_addr,
+                            const struct jd_test_dbg *ents, size_t n) {
+    uint32_t id = 2; /* JIT_CODE_DEBUG_INFO */
+    uint32_t total = 16 + 16;
+    for (size_t i = 0; i < n; i++)
+        total += 16 + (uint32_t)strlen(ents[i].file) + 1;
+    uint64_t nr = n;
+    fwrite(&id, 4, 1, f);
+    fwrite(&total, 4, 1, f);
+    fwrite(&ts, 8, 1, f);
+    fwrite(&code_addr, 8, 1, f);
+    fwrite(&nr, 8, 1, f);
+    for (size_t i = 0; i < n; i++) {
+        uint64_t addr = ents[i].addr;
+        uint32_t line = ents[i].line, discr = ents[i].discrim;
+        fwrite(&addr, 8, 1, f);
+        fwrite(&line, 4, 1, f);
+        fwrite(&discr, 4, 1, f);
+        fwrite(ents[i].file, 1, strlen(ents[i].file) + 1, f);
+    }
+}
 #endif
 
 /* Binary jitdump reader: the bytes-accurate, time-stamped code image a JIT writes
@@ -7871,6 +7905,103 @@ static void test_jitdump_reader(void) {
     remove(path);
 #else
     printf("# SKIP jitdump: not Linux\n");
+#endif
+}
+
+/* Jitdump JIT_CODE_DEBUG_INFO reader (asmtest_jitdump_debug_find): the per-address
+ * source-line records the byte reader skips. Synthesize DEBUG_INFO-before-LOAD pairs
+ * (the spec order), including the SAME method re-JITted at a new address so latest-wins
+ * carries the map too, plus a method with NO debug info. Assert the reader adopts the
+ * latest body's map, round-trips the file/discrim, distinguishes no-debug (OK, len 0)
+ * from no-method (ENOENT), and bridges into the shipped emu_line_map_t. Arch-independent
+ * binary parsing — runs on ANY Linux, no single-step. */
+static void test_jitdump_debug_reader(void) {
+#if defined(__linux__)
+    char path[80];
+    snprintf(path, sizeof path, "/tmp/asmtest-jitdbg-%d.dump", (int)getpid());
+    FILE *f = fopen(path, "wb");
+    if (f == NULL) {
+        printf("# SKIP jitdump-debug: cannot write %s\n", path);
+        return;
+    }
+    uint32_t magic = 0x4A695444u, version = 1, hsize = 40, elf_mach = 62,
+             pad1 = 0, mpid = (uint32_t)getpid();
+    uint64_t z = 0;
+    fwrite(&magic, 4, 1, f);
+    fwrite(&version, 4, 1, f);
+    fwrite(&hsize, 4, 1, f);
+    fwrite(&elf_mach, 4, 1, f);
+    fwrite(&pad1, 4, 1, f);
+    fwrite(&mpid, 4, 1, f);
+    fwrite(&z, 8, 1, f); /* timestamp */
+    fwrite(&z, 8, 1, f); /* flags */
+
+    const char *name = "void asmtest::jit::method(long, long)";
+    /* DEBUG_INFO must precede the LOAD it describes; the tier-0 body at 0x1000. */
+    struct jd_test_dbg d1[3] = {
+        {0x1000, 10, 0, "a.java"},
+        {0x1004, 11, 0, "a.java"},
+        {0x1010, 12, 0, "a.java"},
+    };
+    write_jit_debug(f, 1, 0x1000, d1, 3);
+    write_jit_load(f, 2, 0x1000, 7, name, ROUTINE, (uint32_t)sizeof ROUTINE,
+                   mpid);
+    /* The SAME method re-JITted at 0x2000 (tiered/OSR) with a DIFFERENT map —
+     * latest LOAD must win, dragging its map with it. discrim 5 on the 2nd row. */
+    struct jd_test_dbg d2[2] = {
+        {0x2000, 20, 0, "Hot.java"},
+        {0x2008, 21, 5, "Hot.java"},
+    };
+    write_jit_debug(f, 2, 0x2000, d2, 2);
+    write_jit_load(f, 3, 0x2000, 9, name, ROUTINE, (uint32_t)sizeof ROUTINE,
+                   mpid);
+    /* A third method with a LOAD but NO DEBUG_INFO record. */
+    const char *other = "int asmtest::jit::other()";
+    write_jit_load(f, 4, 0x3000, 11, other, ROUTINE, (uint32_t)sizeof ROUTINE,
+                   mpid);
+    fclose(f);
+
+    asmtest_jitdump_entry_t e;
+    memset(&e, 0, sizeof e);
+    asmtest_jitdump_debug_t dbg[16];
+    size_t dlen = 0;
+    int rc = asmtest_jitdump_debug_find(path, 0, name, &e, dbg, 16, &dlen);
+    CHECK(rc == ASMTEST_PTRACE_OK && e.code_addr == 0x2000 && e.timestamp == 3,
+          "jitdump-debug: resolves the latest LOAD (addr 0x2000, ts 3)");
+    CHECK(dlen == 2 && dbg[0].off == 0 && dbg[1].off == 8,
+          "jitdump-debug: latest body's map wins (2 entries, offsets 0,8)");
+    CHECK(dbg[0].line == 20 && dbg[1].line == 21,
+          "jitdump-debug: lines 20,21 attach to offsets 0,8");
+    CHECK(strcmp(dbg[0].file, "Hot.java") == 0 && dbg[1].discrim == 5,
+          "jitdump-debug: file round-trips and discrim (column) survives");
+
+    /* A method that exists but carries no debug info: OK with dbg_len 0. */
+    asmtest_jitdump_debug_t dbg2[16];
+    size_t dlen2 = 99;
+    int rc_nd =
+        asmtest_jitdump_debug_find(path, 0, other, &e, dbg2, 16, &dlen2);
+    CHECK(rc_nd == ASMTEST_PTRACE_OK && dlen2 == 0,
+          "jitdump-debug: a method with no DEBUG_INFO returns OK, dbg_len 0");
+
+    /* Missing method: ENOENT, dbg_len reset to 0. */
+    size_t dlen3 = 99;
+    int rc_ne =
+        asmtest_jitdump_debug_find(path, 0, "no::such()", &e, dbg2, 16, &dlen3);
+    CHECK(rc_ne == ASMTEST_PTRACE_ENOENT && dlen3 == 0,
+          "jitdump-debug: missing method -> ENOENT (dbg_len reset to 0)");
+
+    /* The emu_line_map_t bridge: ascending rows; lookup(0xb) -> the row at 8. */
+    emu_line_entry_t rows[16];
+    size_t nrows = asmtest_jitdump_debug_line_map(dbg, dlen, rows, 16);
+    emu_line_map_t map = {rows, nrows};
+    const emu_line_entry_t *hit = emu_line_lookup(&map, 0xb);
+    CHECK(
+        nrows == 2 && rows[0].offset == 0 && rows[1].offset == 8 &&
+            hit != NULL && hit->line == 21,
+        "jitdump-debug: emu_line_map bridge ascending; lookup(0xb) -> line 21");
+    remove(path);
+#else
+    printf("# SKIP jitdump-debug: not Linux\n");
 #endif
 }
 
@@ -10212,6 +10343,7 @@ int main(void) {
 
     test_perfmap_resolve();
     test_jitdump_reader();
+    test_jitdump_debug_reader();
 
     /* The auto-select orchestrator: pick + use the best available backend. */
     test_auto_resolve();

@@ -490,6 +490,49 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
                          asmtest_jitdump_entry_t *out, uint8_t *bytes_out,
                          size_t bytes_cap, size_t *bytes_len);
 
+/* One source-attribution entry recovered from a jitdump JIT_CODE_DEBUG_INFO
+ * record, offset-relative to the matched method's code_addr. */
+typedef struct {
+    uint64_t off;     /* entry addr - code_addr (byte offset into the body) */
+    uint32_t line;    /* 1-based source line                                */
+    uint32_t discrim; /* column discriminator (V8 writes the column here)   */
+    char file[128];   /* NUL-terminated source file, truncated to fit       */
+} asmtest_jitdump_debug_t;
+
+/* Recover a named method's per-address SOURCE-LINE map from a jitdump's
+ * JIT_CODE_DEBUG_INFO records — the records asmtest_jitdump_find skips. The
+ * jitdump spec requires each DEBUG_INFO record be written BEFORE the
+ * JIT_CODE_LOAD it describes, so this pairs the pending debug record (keyed by
+ * code_addr) with the matching LOAD (same exact-name test as
+ * asmtest_jitdump_find); as with the byte path, a method re-emitted at a reused
+ * address resolves to the LATEST matching LOAD's map. Reads from `path`, or from
+ * `/tmp/jit-<pid>.dump` when `path` is NULL; endianness is auto-detected.
+ *
+ * On the most recent matching LOAD: fills *out (if non-NULL) exactly like
+ * asmtest_jitdump_find, and — if `dbg` is non-NULL — copies up to `dbg_cap`
+ * debug entries (those whose address lies inside
+ * [code_addr, code_addr+code_size)) as byte offsets from code_addr, setting
+ * *dbg_len to the number written. *dbg_len is ALWAYS set: it is 0 when the
+ * method exists but carries no debug info, and the call still returns
+ * ASMTEST_PTRACE_OK, so a caller distinguishes "no such method"
+ * (ASMTEST_PTRACE_ENOENT) from "no debug info" (OK, dbg_len 0). Returns
+ * ASMTEST_PTRACE_EINVAL (not a jitdump / malformed debug record) or a negative
+ * status otherwise. Caller owns `out`/`dbg`. */
+int asmtest_jitdump_debug_find(const char *path, pid_t pid, const char *name,
+                               asmtest_jitdump_entry_t *out,
+                               asmtest_jitdump_debug_t *dbg, size_t dbg_cap,
+                               size_t *dbg_len);
+
+/* Bridge the jitdump debug entries recovered above into the shipped
+ * emu_line_map_t shape (asmtest_trace.h), so emu_trace_source_report /
+ * emu_trace_lcov_source resolve a traced JIT method to source lines with zero
+ * schema change. Sorts a copy ascending by `off`, dedups equal offsets (last
+ * wins, matching latest-wins), fills at most `cap` emu_line_entry_t{offset,line}
+ * rows, and returns the row count. `rows` is caller-owned. */
+size_t asmtest_jitdump_debug_line_map(const asmtest_jitdump_debug_t *dbg,
+                                      size_t n, emu_line_entry_t *rows,
+                                      size_t cap);
+
 #ifdef __cplusplus
 }
 #endif
