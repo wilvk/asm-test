@@ -105,6 +105,13 @@ jobs:
     # ptrace record step below overrides this inline with its own committed id.
     env:
       ASMTEST_BOX_ID: gh-${{ matrix.os }}
+      # The pinned Capstone build installs to /usr/local (build-capstone.sh) and its dylib's
+      # install-name is @rpath/libcapstone.5.dylib. On Linux `ldconfig` makes it findable; macOS
+      # has no loader cache and emu-bench carries no matching LC_RPATH, so on the macos-latest
+      # (arm64) leg dyld fails with "Library not loaded: @rpath/libcapstone.5.dylib" and emu-bench
+      # aborts (SIGABRT) under bench-check/-report. Point dyld's fallback search at the install
+      # dir; ignored on Linux (DYLD_* is macOS-only), so it is safe job-wide.
+      DYLD_FALLBACK_LIBRARY_PATH: /usr/local/lib
     strategy:
       fail-fast: false
       matrix:
@@ -778,7 +785,8 @@ jobs:
   # tested NOTHING. So the run is captured and echoed (failures stay debuggable), the skip
   # sentinel is a HARD failure, any `not ok` is a failure, and the exact assertion count is
   # asserted: the pure `--selftest` plan `1..5`, then one phase per GCCANON_PHASES value —
-  # `1..10` / `1..11` / `1..11` for 1, 2 and 3 compacting GCs per call-out window = 37 `ok`.
+  # `1..10` / `1..11` / `1..11` for 1, 2 and 3 compacting GCs per call-out window = 37 `ok`,
+  # plus the T5 alias phase `1..6` (object-identity severs a false address-aliased edge) = 43 `ok`.
   # See docs/internal/plans/live-attach-dataflow-followup-plan.md.
   gccanon-attach:
     name: dataflow (F4 live GC-move canon, attach tier)
@@ -805,11 +813,11 @@ jobs:
             exit 1
           fi
           n=$(grep -c '^ok ' "$log" || true)
-          if [ "$n" -ne 37 ]; then
-            echo "::error::gccanon-attach ran $n assertions, expected 37 (selftest 1..5 + phases 1..10 / 1..11 / 1..11 for 1, 2 and 3 GCs per call-out window). A phase did not run, or the lane changed shape — if the change is intended, update this count."
+          if [ "$n" -ne 43 ]; then
+            echo "::error::gccanon-attach ran $n assertions, expected 43 (selftest 1..5 + phases 1..10 / 1..11 / 1..11 for 1, 2 and 3 GCs per call-out window + T5 alias phase 1..6). A phase did not run, or the lane changed shape — if the change is intended, update this count."
             exit 1
           fi
-          echo "gccanon-attach: 37/37 assertions — pure selftest + live 1, 2 and 3 GCs per call-out window."
+          echo "gccanon-attach: 43/43 assertions — pure selftest + live 1, 2 and 3 GCs per call-out window + object-identity alias phase."
 
   # Optional hardware-assisted trace tier. The live capture backends (Intel PT,
   # ARM CoreSight, AMD LBR) need bare-metal hardware that GitHub-hosted runners do
@@ -1025,19 +1033,25 @@ jobs:
       - name: Assert the C suite really ran (nothing self-skipped) and every assertion passed
         run: |
           log=/tmp/dataflow-attach.log
-          # ONE skip is expected here and is an environmental fact, not a lapse: GitHub's
-          # runners are VMs whose hypervisor MASKS BTF/DEBUGCTL, so PTRACE_SINGLEBLOCK is
-          # non-functional and the live block-step/replay tier (F1 increment 1) self-skips.
-          # It runs for real on bare metal (verified 22/22 on a Zen 5 host), so F1 inc 1 is
-          # HOST-gated, not CI-gated — recorded in live-attach-dataflow-followup-plan.md F1.
-          # Every OTHER skip is still a hard failure: allow this one BY NAME, never blanket.
-          if grep '^# SKIP' "$log" | grep -qv 'live block-step/replay'; then
+          # TWO skips are expected here, each an environmental hardware fact, not a lapse:
+          #  (1) GitHub's runners are VMs whose hypervisor MASKS BTF/DEBUGCTL, so PTRACE_SINGLEBLOCK
+          #      is non-functional and the live block-step/replay tier (F1 increment 1) self-skips.
+          #  (2) No CI/AMD host exposes an intel_pt PMU, so F5's `pt live replay` leg
+          #      (dataflow-pt-replay-tier T4) self-skips — it needs bare-metal Intel PT silicon.
+          # Both run for real on the right hardware (F1 inc 1 on bare metal, verified 22/22 on a
+          # Zen 5 host; F5 pt-live on an Intel-PT box), so both are HOST-gated, not CI-gated —
+          # recorded in live-attach-dataflow-followup-plan.md F1 / dataflow-pt-replay-tier.md T4.
+          # Every OTHER skip is still a hard failure: allow these two BY NAME, never blanket.
+          if grep '^# SKIP' "$log" | grep -qvE 'live block-step/replay|pt live replay'; then
             echo "::error::the data-flow C suite SELF-SKIPPED — the gate tested less than it claims:"
-            grep '^# SKIP' "$log" | grep -v 'live block-step/replay'
+            grep '^# SKIP' "$log" | grep -vE 'live block-step/replay|pt live replay'
             exit 1
           fi
           if grep -q '^# SKIP live block-step/replay' "$log"; then
             echo "::notice::block-step/replay self-skipped (PTRACE_SINGLEBLOCK masked on this VM) — expected on GitHub runners; F1 inc 1 is gated on bare metal only."
+          fi
+          if grep -q '^# SKIP pt live replay' "$log"; then
+            echo "::notice::F5 pt live replay self-skipped (no intel_pt PMU on this runner) — expected on GitHub/AMD; T4 is gated on bare-metal Intel PT only."
           fi
           if grep -q '^not ok' "$log"; then
             echo "::error::the data-flow C suite reported FAILING assertions:"

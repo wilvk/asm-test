@@ -1630,6 +1630,40 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   specific call — a strengthening, not a weakening. `make docker-cli` cli-smoke
   PASS restored end-to-end.
 
+- **Five red `main` CI jobs unbroken — regressions the individual lanes that
+  introduced them did not catch.** Each surfaced on the shared `ci.yml` matrix
+  after an unrelated lane landed; all five were failing on every recent push.
+  - **`cli` (both `ubuntu-latest` and `ubuntu-24.04-arm`): a `-Werror` build
+    break in `cli/asmspy_engine.c`.** Two `#include` lines carried comments whose
+    body contained `*/` (`/* … TIOC*/FIO* … */`, `/* … S_IF*/STATX_* … */`), which
+    closes the block comment early and leaves the tail as `error: extra tokens at
+    end of #include directive [-Werror]`. Only the WERROR CI leg (`make WERROR=1
+    cli-smoke`) is gated on it, so the non-WERROR `docker-cli` path stayed green and
+    the break went unnoticed. Reworded both comments (`TIOC*, FIO*` / `S_IF*,
+    STATX_*`); `make docker-cli` now builds and the smoke passes end-to-end.
+  - **`test (riscv64 container)`: an x86-only opcode in a supposedly-portable asm
+    stub.** `asmtest_sve_rdvl` in `src/capture.s` (added with the SVE trampolines)
+    zeroed its return via `xorl %eax, %eax` in a catch-all `#else` that also covers
+    RV64 — `src/capture.s:2786: Error: unrecognized opcode`. Split the arm to match
+    the file's own 4-way pattern (`#elif __x86_64__` → `xorl`, `#elif __riscv` → `li
+    a0, 0`, `#else` → `#error`); the riscv64 container builds and runs green again.
+  - **`dataflow (analysis lib + bindings)`: a legitimate new hardware self-skip
+    not on the gate's by-name allowlist.** Chaining F5's PT replay suite into
+    `dataflow-test` added a `# SKIP pt live replay: no intel_pt PMU …` line, which
+    tripped the anti-vacuity gate (it allowed only the BTF block-step skip). Extended
+    the allowlist to permit the Intel-PT skip by name — a host gate exactly like the
+    BTF one — with a matching `::notice`.
+  - **`dataflow (F4 GC-move canon)`: a stale exact-count gate.** The lane grew from
+    37 to 43 assertions when the object-identity alias phase (`1..6`) landed, but the
+    gate still asserted `-ne 37`. Updated to 43 with the phase noted in the message.
+  - **`benchmarks (macos-latest)`: Capstone `@rpath` dylib not found at runtime.**
+    The pinned Capstone build installs to `/usr/local` and its dylib install-name is
+    `@rpath/libcapstone.5.dylib`; recent macOS dropped `/usr/local/lib` from dyld's
+    default fallback search, so `emu-bench` aborted (`Library not loaded:
+    @rpath/libcapstone.5.dylib`). Set `DYLD_FALLBACK_LIBRARY_PATH=/usr/local/lib` on
+    the benchmarks job (ignored on Linux). Diagnosis-based; awaits a macOS CI run to
+    confirm (no local macOS host).
+
 - **macOS (Intel) native build correctness (fourth pass): the asmspy CLI lane +
   two ungated example lanes**, surfaced by building the lanes *outside* the
   nightly `test-macos-x86` contract on a macOS 14.7.5 / Intel host — `make cli`,
