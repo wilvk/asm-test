@@ -7,6 +7,7 @@
 // stays green. Otherwise it traces both fixtures live, prints TAP-style
 // "ok N - ..." lines, and returns nonzero on any assertion failure.
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
@@ -438,6 +439,9 @@ static class HwTraceProgram
             // --- §Z4 (T11) ambient stitching: zero-call AsyncLocal producer, live half --- //
             // PT-only; self-skips off Intel PT here (the hook->tag->merge logic is the T12 twin).
             AmbientStitchChecks().GetAwaiter().GetResult();
+            // --- §Z4 (T12) ambient logic twin: the hook->tag->merge chain via a scripted stub,
+            // host-testable everywhere (no PT). Catches runtime-contract drift on .NET 9 too.
+            AmbientHookTwinChecks().GetAwaiter().GetResult();
 
             // --- §1 handle-keyed scopes: concurrent SAME-SITE regions don't alias --- //
             // Both threads construct their scope through SameSiteScope below, so they
@@ -1728,6 +1732,100 @@ static class HwTraceProgram
             if (op.Hops[i].Seq <= op.Hops[i - 1].Seq) seqOrdered = false;
         Check(seqOrdered, "ambient: slices merged in ascending seq order");
         Check(op.Path.Length > 0, "ambient: merged Path renders the per-slice disassembly");
+    }
+
+    // §Z4 (managed-wholewindow-compose T12) — a scripted IHopCapture stub: Open records the
+    // attaching tid + hands back a sentinel ctx; CloseDecode fills the trace with a fixed
+    // 3-insn / 1-block pattern (via trace_append_*). The hook->tag->merge logic runs on it
+    // with ZERO PT hardware — the ".NET twin of test_stitch_hops_scripted".
+    sealed class ScriptedHopCapture : AsmAmbientStitchedTrace.IHopCapture
+    {
+        public readonly ConcurrentQueue<int> Opened = new ConcurrentQueue<int>(); // tids attached
+        public readonly ConcurrentQueue<int> Closed = new ConcurrentQueue<int>(); // tids detached
+        long _ctr;
+        public bool Available => true;                       // the stub runs everywhere (no PT gate)
+        public IntPtr Open(int tid)
+        {
+            Opened.Enqueue(tid);
+            return new IntPtr(Interlocked.Increment(ref _ctr)); // a non-Zero sentinel ctx
+        }
+        public int CloseDecode(IntPtr ctx, IntPtr img, ulong when, IntPtr trace)
+        {
+            Closed.Enqueue(HwNative.asmtest_ss_self_tid());
+            // A scripted per-hop offset pattern so stitch bounds are verifiable.
+            HwNative.asmtest_trace_append_block(trace, 0);
+            HwNative.asmtest_trace_append_insn(trace, 0);
+            HwNative.asmtest_trace_append_insn(trace, 3);
+            HwNative.asmtest_trace_append_insn(trace, 6);
+            return HwNative.ASMTEST_HW_OK;
+        }
+    }
+
+    // §Z4 (T12) — the ambient hook→tag→merge chain, host-testable with the scripted stub.
+    // Asserts the AsyncLocal handler fires the attach/detach pair (the documented
+    // ResetThreadPoolThread contract), that every attach parks a seq-dense slice whose tid
+    // matches the recording thread, that stitch preserves order + bounds, and that a
+    // synchronous no-hop scope degenerates to exactly one slice. Because it pins our reliance
+    // on the runtime contract, a future runtime that changes it fails HERE (and on .NET 9).
+    static async System.Threading.Tasks.Task AmbientHookTwinChecks()
+    {
+        int ctorTid = HwNative.asmtest_ss_self_tid();
+        var stub = new ScriptedHopCapture();
+        var op = new AsmAmbientStitchedTrace(captureForTest: stub);
+        Check(op.SkipReason.Length == 0,
+              $"ambient twin: the scripted stub runs everywhere (no PT gate; skip='{op.SkipReason}')");
+
+        int poolTid = -1;
+        using (op)
+        {
+            await System.Threading.Tasks.Task.Run(() =>
+            {
+                poolTid = HwNative.asmtest_ss_self_tid();   // a real pool-thread hop
+                return AmbientWork(1, 2);
+            });
+            await System.Threading.Tasks.Task.Run(() => AmbientWork(3, 4)); // a second hop
+        }
+        // Dispose() (the using close) ran Complete().
+
+        var opened = stub.Opened.ToArray();
+        var closed = stub.Closed.ToArray();
+
+        // (a) the handler fired attach + detach on a pool thread (ResetThreadPoolThread pair).
+        Check(opened.Length >= 2, $"ambient twin: handler opened >=2 hops ({opened.Length})");
+        Check(opened.Length == closed.Length,
+              $"ambient twin: every attach paired with a detach ({opened.Length} open / {closed.Length} close)");
+        bool poolHop = false;
+        foreach (var t in opened) if (t != ctorTid) poolHop = true;
+        Check(poolHop && poolTid != ctorTid,
+              $"ambient twin: a hop opened on a pool thread (attach, CurrentValue!=null; pool tid {poolTid} != ctor {ctorTid})");
+
+        // (b) parked slices seq-dense, tids match recording threads, stitch preserves order+bounds.
+        Check(op.Hops.Count == opened.Length,
+              $"ambient twin: every attached hop stitched ({op.Hops.Count} vs {opened.Length} opened)");
+        bool seqDense = true;
+        for (int i = 0; i < op.Hops.Count; i++) if (op.Hops[i].Seq != (uint)i) seqDense = false;
+        Check(seqDense, "ambient twin: stitched slices are seq-dense (0..N-1)");
+        bool boundsAsc = true;
+        for (int i = 1; i < op.Hops.Count; i++) if (op.Hops[i].InsnOffset <= op.Hops[i - 1].InsnOffset) boundsAsc = false;
+        Check(op.Hops.Count == 0 || (op.Hops[0].InsnOffset == 0 && boundsAsc),
+              "ambient twin: stitch bounds ascend from 0 (each slice concatenates after the last)");
+        var openedSet = new HashSet<int>(opened);
+        bool tidsMatch = true;
+        foreach (var h in op.Hops) if (!openedSet.Contains(h.Tid)) tidsMatch = false;
+        Check(tidsMatch, "ambient twin: each stitched slice's tid is a thread the handler attached on");
+
+        // (c) a synchronous no-hop scope yields exactly one slice (the degenerate case).
+        // Capture the tid HERE, not at method entry: after the awaits above the continuation
+        // resumed on a different pool thread, so `ctorTid` is stale — the sync scope's lone
+        // slice is captured on whatever thread constructs it now.
+        int syncTid = HwNative.asmtest_ss_self_tid();
+        var stub2 = new ScriptedHopCapture();
+        var sync = new AsmAmbientStitchedTrace(captureForTest: stub2);
+        using (sync) { AmbientWork(5, 6); } // no thread hop: only the ctor's slice
+        Check(sync.Hops.Count == 1,
+              $"ambient twin: a synchronous no-hop scope yields exactly one slice ({sync.Hops.Count})");
+        Check(sync.Hops.Count != 1 || sync.Hops[0].Tid == syncTid,
+              $"ambient twin: the lone synchronous slice was captured on its ctor thread ({(sync.Hops.Count == 1 ? sync.Hops[0].Tid : -1)} == {syncTid})");
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

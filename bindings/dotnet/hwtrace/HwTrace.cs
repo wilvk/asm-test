@@ -5876,9 +5876,10 @@ namespace Asmtest
             if (_completed) return;
             _completed = true;
             // Close every hop still open — the closing thread's, plus any that never detached
-            // (a thread the flow left without a reset). Snapshot to avoid mutate-during-iterate.
-            foreach (var kv in _openHops) CloseHop(kv.Value);
-            _openHops.Clear();
+            // (a thread the flow left without a reset). TryRemove makes the take-and-close
+            // atomic against a detach racing Complete, so no hop is closed (or parked) twice.
+            foreach (var kv in _openHops)
+                if (_openHops.TryRemove(kv.Key, out OpenHop h)) CloseHop(h);
             if (_scope != null) _current.Value = null; // ThreadContextChanged==false -> no detach fires
 
             var parked = _parked.ToArray();
