@@ -1656,13 +1656,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`dataflow (F4 GC-move canon)`: a stale exact-count gate.** The lane grew from
     37 to 43 assertions when the object-identity alias phase (`1..6`) landed, but the
     gate still asserted `-ne 37`. Updated to 43 with the phase noted in the message.
-  - **`benchmarks (macos-latest)`: Capstone `@rpath` dylib not found at runtime.**
-    The pinned Capstone build installs to `/usr/local` and its dylib install-name is
-    `@rpath/libcapstone.5.dylib`; recent macOS dropped `/usr/local/lib` from dyld's
-    default fallback search, so `emu-bench` aborted (`Library not loaded:
-    @rpath/libcapstone.5.dylib`). Set `DYLD_FALLBACK_LIBRARY_PATH=/usr/local/lib` on
-    the benchmarks job (ignored on Linux). Diagnosis-based; awaits a macOS CI run to
-    confirm (no local macOS host).
+  - **`benchmarks (macos-latest)`: Capstone `@rpath` dylib not found at runtime
+    (one of two macOS issues; partial).** The pinned Capstone build installs to
+    `/usr/local` and its dylib install-name is `@rpath/libcapstone.5.dylib`; recent
+    macOS dropped `/usr/local/lib` from dyld's default fallback search, so `emu-bench`
+    aborted (`Library not loaded: @rpath/libcapstone.5.dylib`). Set
+    `DYLD_FALLBACK_LIBRARY_PATH=/usr/local/lib` on the benchmarks job (ignored on
+    Linux); the CI run confirmed this resolves the `bench-check` abort. It then
+    surfaced a **separate, pre-existing** failure the abort had masked: `bench-report`
+    cannot link `build/asmfeatures` on the **Apple-Silicon** `macos-latest` runner —
+    `Undefined symbols for architecture arm64: _catch_mach_exception_raise*`. Those
+    MIG callbacks are defined in `src/mach_backend.c`, whose body is x86_64-only (the
+    Mach out-of-process stepper was ported to Intel macOS only), while the MIG server
+    `mach_excServer.o` references them unconditionally. Porting the Mach tier to
+    arm64-macOS (or excluding it from the arm64 `asmfeatures` link) is a follow-on for
+    a macOS-capable agent — tracked against macos-oop-mach-stepper / benchmarks-ci-followups.
 
 - **macOS (Intel) native build correctness (fourth pass): the asmspy CLI lane +
   two ungated example lanes**, surfaced by building the lanes *outside* the
