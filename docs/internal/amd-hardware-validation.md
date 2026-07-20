@@ -126,3 +126,37 @@ change that records the run.
       and do not tag; it is not a known issue.
 - [ ] For MSR-direct coverage additionally run `make docker-hwtrace-msr` (needs
       the host `msr` module loaded).
+
+## Recorded runs
+
+The checklist above is a reusable template — leave its boxes blank. Record each
+observed run here (host, date, the values each item asks for), newest first.
+
+### 2026-07-20 — Ryzen 9 9950X (Zen 5, Family 1Ah), validating agent
+
+Box: `amd_lbr_v2` + `ibs_op`/`ibs_fetch` present, `perf_event_paranoid=4`,
+kernel 6.17, Docker (no `--privileged`). Two lanes were run — one for the
+positive paths, one for the honesty/blocked path — both **exit 0, 0 `not ok`**:
+
+- **`make docker-hwtrace-privileged`** (CAP_PERFMON, default seccomp — bypasses
+  paranoid=4): `test_hwtrace` **`1..658`**, the AMD LBR live tests ran (not
+  skipped); `test_ibs` **`1..84`** with **no** `# SKIP IBS …` lines — the live
+  IBS lanes genuinely executed. `ibs_probe` printed **`IBS-Op … AVAILABLE`** and
+  **`IBS-Fetch … AVAILABLE`** via the real-open path (T1). `# whole-process:
+  3/3 worker functions covered` (56 edges) and `# system-wide: 3/3 worker
+  functions covered` (58 edges); `phase5: callchain survey succeeds` +
+  `callchain-on survey still recovers the spin_loop edge`; the `record-bound`
+  checks (base 112, callchain ≥1192, ring still usable) all `ok`.
+- **`call_auto escalate` (the regression signal):** `# call_auto escalate:
+  rc=0 result=25 used.backend=3 insns=77 truncated=0 (escalated off the LBR
+  window)` → `ok - call_auto: escalates past the 16-branch window to a COMPLETE
+  trace`. **Escalation fired (`backend=3 insns=77`) — not a regression**; the
+  small-routine case is complete without escalation (`insns=5`, `ok`).
+- **Honesty/blocked path — `make docker-hwtrace-ibs`** (seccomp=unconfined, NO
+  CAP_PERFMON, so paranoid=4 still refuses the open): `ibs_probe` printed
+  `IBS-Op: substrate present but sampling is BLOCKED — perf_event_open refused
+  (EACCES) …` and `# SKIP ibs_probe: … not openable`, and the 5 live IBS tests
+  self-skipped with the real `unavail_reason` (EACCES) — **T1's fix confirmed:
+  a substrate-only host prints BLOCKED, never AVAILABLE.** `1..60`, 0 `not ok`.
+- Not run here: `docker-hwtrace-msr` (host `msr` module not loaded) and bare-metal
+  Intel PT — recorded as gated, not observed.
