@@ -667,12 +667,17 @@ tiering.
 > a divergence. Lanes: `make dataflow-pt-test` (native, Unicorn) + `make docker-dataflow-pt`
 > (the libipt+Unicorn image; `libipt-dev` added to `Dockerfile.dataflow-attach`).
 >
-> **The LIVE foreign-pid half (T4) is wiring-complete but hardware-unvalidated**, gated on
-> **two** un-installable prerequisites: (1) bare-metal Intel PT silicon (the `intel_pt` PMU
-> with `perf_event_paranoid < 0` / `CAP_PERFMON`), and (2) the sibling
-> [intel-pt-attach-foreign-pid.md](../implementations/intel-pt-attach-foreign-pid.md) capture
-> arm (its foreign-pid AUX capture + paired live code-image, whose entry symbol is not in the
-> tree yet). Until a bare-metal Intel box runs the oracle match, this status stays
+> **The LIVE foreign-pid half (T4) is wiring-complete but hardware-unvalidated**, gated now on
+> ONE un-installable prerequisite: bare-metal Intel PT silicon (the `intel_pt` PMU with
+> `perf_event_paranoid < 0` / `CAP_PERFMON`). Its second gate is **resolved** — the sibling
+> [intel-pt-attach-foreign-pid.md](../implementations/intel-pt-attach-foreign-pid.md) landed
+> ☑5/5, so its `asmtest_hwtrace_pt_attach_begin/track/poll/end` capture arm is in the tree, and
+> `examples/test_dataflow_pt.c`'s live case now CONSUMES it (2026-07-20): a runtime
+> `asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT)` probe replaces the old never-defined
+> compile-time gate, and where PT is present it forks a victim, captures ONE in-region
+> invocation with zero single-steps, subtracts the region base from the decoded absolute IPs,
+> replays through F5, and oracle-matches against both the emulator L0 and the `force_singlestep`
+> block-step ground truth. Until a bare-metal Intel box runs the oracle match, this status stays
 > **wiring-complete, not validated** (verify-before-declaring-done); the fail-not-skip target
 > is `make dataflow-pt-live` (`ASMTEST_REQUIRE_PT=1`), which reddens a supposed-PT box whose
 > PMU is silently hidden. Proving command on silicon:

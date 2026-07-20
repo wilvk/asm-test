@@ -8,6 +8,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **F5 live foreign-pid PT replay wired to the landed capture (dataflow-pt-replay-tier.md T4).**
+  The out-of-band data-flow value tier's live case now CONSUMES the
+  `asmtest_hwtrace_pt_attach_*` foreign-pid capture that landed with
+  intel-pt-attach-foreign-pid: `examples/test_dataflow_pt.c` forks a deterministic
+  victim, captures ONE in-region invocation over Intel PT with zero single-steps of
+  the target, replays the decoded offset path through F5, and asserts the value trace
+  matches both the emulator L0 and the `force_singlestep` block-step oracle's executed
+  path + result. It was previously a dead-code stub behind a never-defined macro; it is
+  now a runtime-probed body (`asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT)`) that
+  self-skips off Intel PT and, under `ASMTEST_REQUIRE_PT=1` (`make dataflow-pt-live`),
+  fails rather than skips. Gated on bare-metal Intel PT silicon for the live oracle
+  match; `make docker-dataflow-pt` runs the synthetic decode→replay bridge + both
+  block-step-layout guards green (19/19) with the live half self-skipping.
+
 - **Java binding publishable to Maven Central (distribution-packaging.md T6).**
   `make java-package` now runs a real `mvn package` against `bindings/java/pom.xml`
   (the same POM Central publishes) instead of raw `javac` + `jar cf`, emitting the

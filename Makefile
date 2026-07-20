@@ -128,7 +128,7 @@ help:
 	@echo '  ibs-test        statistical AMD IBS-Op edge lane (pure decoder + live out-of-band)'
 	@echo '  dataflow-test   data-flow tracing: L0 value trace / L1 def-use / L2 slice (emulator L0; pure spine runs everywhere)'
 	@echo '  dataflow-pt-test  F5 PT + code-image + Unicorn-replay value tier: synthetic-AUX decode->replay + emu-oracle equivalence (make docker-dataflow-pt)'
-	@echo '  dataflow-pt-live  F5 live foreign-pid PT replay vs single-step oracle (bare-metal Intel PT + intel-pt-attach-foreign-pid; ASMTEST_REQUIRE_PT=1 fails rather than skips)'
+	@echo '  dataflow-pt-live  F5 live foreign-pid PT replay vs single-step oracle (gated: bare-metal Intel PT; ASMTEST_REQUIRE_PT=1 fails rather than skips)'
 	@echo '  hwtrace-bindings-test  per-language hardware-trace wrapper tests (all bindings)'
 	@echo '  hwtrace-dotnet-unwarmed  live whole-window compose set (method JIT in-window, mid-window re-tier; also docker-)'
 	@echo '  hwtrace-dotnet-example  the .NET scoped-tracing demos (examples/dotnet; also docker-)'

@@ -26,9 +26,15 @@
  *   T5  test_pt_defuse_slice_equiv — the def-use (L1) graph and a backward slice
  *       (L2) built over the F5 replay trace EQUAL those built over the emu oracle
  *       trace: F5 is a drop-in L0 producer, not a special case the analysis knows.
- *   T4  test_pt_live_replay — the live foreign-pid single-step-oracle match. DOUBLE-
- *       gated (bare-metal Intel PT silicon AND the sibling intel-pt-attach-foreign-
- *       pid capture symbol, absent today), so it self-skips naming BOTH gates.
+ *   T4  test_pt_live_replay — the live foreign-pid single-step-oracle match. It CONSUMES
+ *       the now-landed intel-pt-attach-foreign-pid capture (asmtest_hwtrace_pt_attach_*,
+ *       that sibling is ☑5/5): forks a deterministic victim, PT-captures ONE in-region
+ *       invocation with ZERO single-steps of the target, and asserts the F5 replay of the
+ *       decoded path matches the emulator L0 AND the force_singlestep block-step oracle's
+ *       executed path + GP result. Gated only on bare-metal Intel PT silicon now (a RUNTIME
+ *       availability probe, no compile-time gate — the capture symbol links on every host),
+ *       so it self-skips — or, under ASMTEST_REQUIRE_PT, fails-not-skips — naming that one
+ *       remaining hardware gate.
  *
  * The tier ships NO header — a value-trace PRODUCER is a tier, not part of the
  * shared asmtest_valtrace.h sink API — so this suite re-declares its entry points,
@@ -41,6 +47,7 @@
 #define _GNU_SOURCE
 
 #include "asmtest_codeimage.h" /* the temporal byte source the T2 bridge tracks */
+#include "asmtest_hwtrace.h" /* T4: the landed intel-pt-attach-foreign-pid capture this tier CONSUMES */
 #include "asmtest_valtrace.h" /* L0 sink + L1 def-use + L2 slice + at_val_rec_t */
 
 #include <stddef.h> /* offsetof — the re-declared-struct layout guard */
@@ -50,6 +57,10 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/prctl.h> /* PR_SET_PTRACER — the T4 live victim opts into being traced (Yama) */
+#include <sys/wait.h> /* waitpid — reap the T4 live PT victim */
+#endif
 
 /* --- F5 producer surface, re-declared (the tier ships no header) --- */
 #define DF_PT_OK     0
@@ -88,10 +99,63 @@ int asmtest_dataflow_emu_run(const uint8_t *code, size_t code_len,
                              asmtest_valtrace_t *vt);
 
 /* The synthetic PT AUX fixture (src/pt_backend.c) — libipt's own packet encoder, NO PT
- * hardware. Only referenced under ASMTEST_HAVE_LIBIPT (else it is an ENOSYS stub anyway). */
-#define ASMTEST_HW_OK 0
+ * hardware. Only referenced under ASMTEST_HAVE_LIBIPT (else it is an ENOSYS stub anyway).
+ * ASMTEST_HW_OK / ASMTEST_HWTRACE_INTEL_PT / the asmtest_hwtrace_pt_attach_* capture the
+ * T4 live case consumes all come from asmtest_hwtrace.h, included above. */
 int asmtest_pt_encode_fixture(uint8_t *buf, size_t cap, uint64_t base_ip,
                               int taken, size_t *out_len);
+
+/* The single-step ORACLE (src/dataflow_blockstep.c), re-declared exactly as
+ * test_dataflow_blockstep.c does — T4 compares the OUT-OF-BAND PT replay against the
+ * force_singlestep=1 ground truth (which itself single-steps a forked child, so it runs on
+ * any ptrace Linux; on a PT box both the capture and this oracle execute). The layout guard
+ * in main() asserts these re-declarations match the producer before any info.* is trusted. */
+typedef struct {
+    uint64_t off, len;
+} asmtest_blockstep_extent_t;
+
+typedef struct {
+    uint64_t max_insns;
+    int force_singlestep;
+    int inject_divergence;
+    int inject_block;
+    uint64_t region_off;
+    int no_vec_seed;
+    int no_mxcsr_seed;
+    int no_vec_canary;
+    int force_replay;
+    uint64_t stack_hi_pad;
+    int no_syscall_inject;
+    int no_undef_mask;
+    uint64_t inject_flag_bit;
+    int no_hw_record;
+    const asmtest_blockstep_extent_t *extents;
+    size_t nextents;
+} asmtest_blockstep_opts_t;
+
+typedef struct {
+    int pure;
+    const char *reason;
+    uint64_t stops;
+    uint64_t steps;
+    uint64_t entry_rsp;
+    int vec_width;
+    int vec_nregs;
+    int uc_vec_width;
+    int vec_seeded;
+    int mxcsr_seeded;
+    int injectable;
+    uint64_t injected;
+    uint64_t hw_hits;
+} asmtest_blockstep_info_t;
+
+int asmtest_dataflow_blockstep_run(const uint8_t *code, size_t code_len,
+                                   const long *args, int nargs,
+                                   const asmtest_blockstep_opts_t *opts,
+                                   long *result, asmtest_valtrace_t *vt,
+                                   asmtest_blockstep_info_t *info);
+void asmtest_dataflow_blockstep_info_layout(size_t *size, size_t *last_off);
+void asmtest_dataflow_blockstep_opts_layout(size_t *size, size_t *last_off);
 
 static int checks, failures;
 #define CHECK(c, ...)                                                          \
@@ -198,13 +262,14 @@ static asmtest_valtrace_t *emu_oracle(const uint8_t *code, size_t code_len,
     return v;
 }
 
-/* The final GP result of a value trace = the last value written to rax (Capstone RAX id 35). */
-#define REG_RAX 35
+/* The final GP result of a value trace = the last value written to rax (Capstone RAX id 35).
+ * AT_ prefix so it does not collide with <sys/ucontext.h>'s REG_RAX (pulled in via <sys/wait.h>). */
+#define AT_REG_RAX 35
 static int last_rax(const asmtest_valtrace_t *v, uint64_t *out) {
     int found = 0;
     for (size_t i = 0; i < v->recs_len; i++) {
         const at_val_rec_t *r = &v->recs[i];
-        if (r->kind == AT_LOC_REG && r->reg == REG_RAX && r->is_write &&
+        if (r->kind == AT_LOC_REG && r->reg == AT_REG_RAX && r->is_write &&
             r->value_valid) {
             *out = r->value;
             found = 1;
@@ -516,50 +581,233 @@ static void test_pt_replay_from_fixture(void) {
 #endif /* ASMTEST_HAVE_LIBIPT */
 
 /* ------------------------------------------------------------------ */
-/* T4 — live foreign-pid + single-step oracle match (DOUBLE-gated, self-skips)        */
+/* T4 — live foreign-pid PT capture + single-step oracle match                        */
+/*                                                                                    */
+/* The sibling intel-pt-attach-foreign-pid (now ☑5/5) OWNS the capture: this tier opens */
+/* NO perf event (doc-set position 9). It forks a deterministic victim, PT-captures ONE */
+/* in-region invocation with ZERO single-steps via asmtest_hwtrace_pt_attach_*, then    */
+/* replays the decoded offset path through F5 and asserts the value trace matches the   */
+/* emulator L0 AND the force_singlestep block-step oracle's executed path + GP result.  */
+/*                                                                                    */
+/* The ONE remaining gate is bare-metal Intel PT silicon (the intel_pt PMU with         */
+/* perf_event_paranoid<0 / CAP_PERFMON) — the single legitimate self-skip under         */
+/* CLAUDE.md. asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT) is the RUNTIME probe;  */
+/* there is no compile-time gate any more — the capture symbol is in the tree, so the    */
+/* live body always LINKS and is reachable the instant a PT box runs it.                */
 /* ------------------------------------------------------------------ */
+#if defined(__linux__) && defined(__x86_64__)
+#ifndef PR_SET_PTRACER
+#define PR_SET_PTRACER 0x59616d61
+#endif
+#ifndef PR_SET_PTRACER_ANY
+#define PR_SET_PTRACER_ANY ((unsigned long)-1)
+#endif
+
+/* Fork a victim that runs ROUTINE(a,b) ONCE on a pipe go-signal, PT-capture that single
+ * invocation over the foreign pid with no single-step, and return the decoded trace (its
+ * insns[] hold ABSOLUTE addresses = base_ip + offset, the pt_attach_end window ABI).
+ * *result_out gets the victim's region return value. Returns a heap asmtest_trace_t* (caller
+ * frees) or NULL on setup failure. The fork shares the ROUTINE mapping at [base, base+len). */
+static asmtest_trace_t *pt_capture_one_region(uint64_t base, size_t len, long a,
+                                              long b, long *result_out) {
+    int go[2], done[2];
+    if (pipe(go) != 0)
+        return NULL;
+    if (pipe(done) != 0) {
+        close(go[0]);
+        close(go[1]);
+        return NULL;
+    }
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(go[0]);
+        close(go[1]);
+        close(done[0]);
+        close(done[1]);
+        return NULL;
+    }
+    if (pid == 0) {
+        /* Victim: opt into ptrace (Yama), wait for the parent to arm PT, run the region
+         * exactly ONCE, hand the result back. A closed go pipe (parent bailed) reads EOF — it
+         * still runs once and exits, so the parent's waitpid never hangs. */
+        int pr = prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+        (void)pr;
+        close(go[1]);
+        close(done[0]);
+        long (*fn)(long, long) = (long (*)(long, long))(uintptr_t)base;
+        char c;
+        ssize_t rn = read(go[0], &c, 1);
+        (void)rn;
+        long r = fn(a, b);
+        ssize_t wn = write(done[1], &r, sizeof r);
+        (void)wn;
+        _exit(0);
+    }
+    /* Parent: arm PT on the foreign pid BEFORE releasing the child, so the one region walk
+     * falls inside the capture window. The ROUTINE mapping is anonymous => obj_hint NULL =>
+     * pt_attach_end's software IP post-filter (scoped by attach_track) keeps only in-region
+     * offsets. */
+    close(go[0]);
+    close(done[1]);
+    asmtest_pt_attach_t *at = NULL;
+    asmtest_trace_t *tr = NULL;
+    long r = 0;
+    if (asmtest_hwtrace_pt_attach_begin((int)pid, NULL, &at) == ASMTEST_HW_OK &&
+        at != NULL) {
+        asmtest_hwtrace_pt_attach_track(at, base, len);
+        char one = 1;
+        ssize_t wn =
+            write(go[1], &one, 1); /* release: victim runs the region */
+        (void)wn;
+        ssize_t rn =
+            read(done[0], &r, sizeof r); /* wait for region completion */
+        (void)rn;
+        int trunc = 0;
+        asmtest_hwtrace_pt_attach_poll(at, 100, &trunc);
+        tr = asmtest_trace_new(256, 64);
+        if (tr != NULL) {
+            if (asmtest_hwtrace_pt_attach_end(at, 0, tr) != ASMTEST_HW_OK) {
+                asmtest_trace_free(tr);
+                tr = NULL;
+            }
+        } else {
+            asmtest_hwtrace_pt_attach_end(at, 0, NULL); /* teardown only */
+        }
+    }
+    close(go[1]); /* EOF unblocks the child even if we never released it */
+    close(done[0]);
+    int st;
+    waitpid(pid, &st, 0);
+    if (result_out)
+        *result_out = r;
+    return tr;
+}
+
+/* One live case: capture ROUTINE(a,b), replay the decoded path through F5, and assert the
+ * out-of-band value trace matches BOTH the emulator L0 and the single-step block-step oracle.
+ * want = ROUTINE's own semantics (a+b, or a+b-1 when a+b>100 so the 0xe dec runs) — a property
+ * of the args, never a baked constant. */
+static void run_live_case(uint64_t base, size_t len, long a, long b) {
+    char nm[64];
+    snprintf(nm, sizeof nm, "live(%ld,%ld)", a, b);
+    long args[2] = {a, b};
+    long want = (a + b <= 100) ? (a + b) : (a + b - 1);
+
+    long vres = 0;
+    asmtest_trace_t *cap = pt_capture_one_region(base, len, a, b, &vres);
+    if (cap == NULL) {
+        CHECK(0, "T4 %s: PT capture of one region invocation", nm);
+        return;
+    }
+    CHECK((uint64_t)vres == (uint64_t)want,
+          "T4 %s: victim region returned %ld (want %ld)", nm, vres, want);
+
+    /* Decoded insns[] are ABSOLUTE (base_ip + offset) — recover region-relative offsets. */
+    size_t n = cap->insns_len;
+    uint64_t *path = (uint64_t *)malloc((n ? n : 1) * sizeof(uint64_t));
+    if (path == NULL) {
+        CHECK(0, "T4 %s: malloc decoded path", nm);
+        asmtest_trace_free(cap);
+        return;
+    }
+    int in_region = (n > 0);
+    for (size_t i = 0; i < n; i++) {
+        if (cap->insns[i] < base || cap->insns[i] >= base + len)
+            in_region = 0;
+        else
+            path[i] = cap->insns[i] - base;
+    }
+    CHECK(in_region && !cap->truncated,
+          "T4 %s: decoded %zu in-region offsets, no truncation", nm, n);
+
+    /* The single-step ground truth (force_singlestep=1) — its executed offset path is what the
+     * PT decode must equal, and its GP result the cross-check for the victim's. */
+    asmtest_blockstep_opts_t oo;
+    memset(&oo, 0, sizeof oo);
+    oo.force_singlestep = 1;
+    asmtest_valtrace_t *ss = asmtest_valtrace_new(256, 8192, 4096);
+    asmtest_blockstep_info_t si;
+    long sres = 0;
+    int src = asmtest_dataflow_blockstep_run(ROUTINE, sizeof ROUTINE, args, 2,
+                                             &oo, &sres, ss, &si);
+    int path_eq = (src == 0 && ss != NULL && ss->steps_len == n);
+    for (size_t i = 0; path_eq && i < n; i++)
+        if (ss->insn_off[i] != path[i])
+            path_eq = 0;
+    CHECK(
+        path_eq && (uint64_t)sres == (uint64_t)want,
+        "T4 %s: PT-decoded path == single-step oracle path (%zu steps, result "
+        "%ld==%ld)",
+        nm, n, sres, want);
+
+    /* Replay the PT path through F5 and prove the reconstructed value trace is byte-identical
+     * to the emulator L0. ROUTINE is register-only (no memory records), so the doc's
+     * rsp-relative normalization is a no-op here — the register value trace is process-
+     * independent, so a byte-identical compare is exact. */
+    asmtest_valtrace_t *replay = asmtest_valtrace_new(256, 8192, 4096);
+    asmtest_dataflow_pt_info_t info;
+    int rc = asmtest_dataflow_pt_replay_path(ROUTINE, sizeof ROUTINE, path, n,
+                                             args, 2, replay, &info);
+    uint64_t rr = 0;
+    CHECK(rc == DF_PT_OK && !replay->truncated && last_rax(replay, &rr) &&
+              rr == (uint64_t)want,
+          "T4 %s: F5 replay of the PT path is clean, rax=%llu (want %llu)", nm,
+          (unsigned long long)rr, (unsigned long long)want);
+    asmtest_valtrace_t *emu = emu_oracle(ROUTINE, sizeof ROUTINE, args, 2);
+    int raw = 0;
+    CHECK(emu != NULL && traces_identical(emu, replay, &raw),
+          "T4 %s: F5 replay value trace is byte-identical to the emulator L0 "
+          "(zero single-steps of the target)",
+          nm);
+
+    if (emu != NULL)
+        asmtest_valtrace_free(emu);
+    asmtest_valtrace_free(replay);
+    asmtest_valtrace_free(ss);
+    free(path);
+    asmtest_trace_free(cap);
+}
 
 static void test_pt_live_replay(void) {
-#if defined(__linux__) && defined(__x86_64__)
-    /* T4 is gated on TWO independent, un-installable prerequisites:
-     *   (1) BARE-METAL INTEL PT SILICON — the intel_pt PMU with perf_event_paranoid<0 or
-     *       CAP_PERFMON. This host is AMD Zen 2; VMs, Docker, and GitHub-hosted runners hide
-     *       the PMU. (Hardware gate — the one legitimate self-skip under the CLAUDE.md rule.)
-     *   (2) THE SIBLING intel-pt-attach-foreign-pid CAPTURE — its #T1 foreign-pid AUX capture
-     *       entry and #T2 paired live code-image (position 9: F5 opens NO perf event; it
-     *       CONSUMES that doc's capture). That dependency is 0/5: the capture entry SYMBOL does
-     *       not exist in the tree yet, so a call to it cannot even be COMPILED. The live body is
-     *       therefore guarded out below (ASMTEST_PT_FOREIGN_CAPTURE is never defined today) with
-     *       a TODO tied to that doc, rather than referencing a symbol that does not link.
-     *
-     * When BOTH land, the body: spawn a deterministic victim (bindings/dataflow_victim.c shape —
-     * publishes base=/len=/pid=, args from argv), capture its PT trace over one region invocation
-     * with NO single-step of the target, asmtest_dataflow_pt_replay it, and assert (a) the value
-     * trace's region result == a+b, (b) truncated == false, and (c) it matches the single-step
-     * oracle from asmtest_dataflow_blockstep_run(force_singlestep=1), compared rsp-relative. */
-#if defined(                                                                   \
-    ASMTEST_PT_FOREIGN_CAPTURE) /* the sibling capture symbol — absent today */
-    /* TODO(intel-pt-attach-foreign-pid#T1/#T2): call the foreign-pid capture entry here to obtain
-     * (a) the linearized AUX blob and (b) the code-image it tracked, then feed both to
-     * asmtest_dataflow_pt_replay and oracle-match against blockstep force_singlestep. */
-#else
-    const char *msg =
-        "pt live replay: no intel_pt PMU (needs bare-metal Intel; absent on "
-        "AMD/VM/CI) AND intel-pt-attach-foreign-pid capture symbol not in tree "
-        "yet (sibling dep 0/5)";
-    if (getenv("ASMTEST_REQUIRE_PT") != NULL) {
-        /* Fail-not-skip: a runner that CLAIMS PT (ASMTEST_REQUIRE_PT=1) must go RED on a
-         * silently-hidden PMU, exactly as intel-pt-whole-window-substrate#T5's hwtrace-pt-live
-         * does. Here it also stays red until the sibling capture symbol lands. */
-        CHECK(0, "T4 [ASMTEST_REQUIRE_PT=1]: %s", msg);
-    } else {
-        printf("# SKIP %s\n", msg);
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT)) {
+        const char *msg = "pt live replay: no intel_pt PMU (needs bare-metal "
+                          "Intel; absent on AMD/VM/CI)";
+        if (getenv("ASMTEST_REQUIRE_PT") != NULL) {
+            /* Fail-not-skip: a runner that CLAIMS PT (ASMTEST_REQUIRE_PT=1) goes RED on a
+             * silently-hidden PMU, exactly as intel-pt-whole-window-substrate#T5's
+             * hwtrace-pt-live does. The sibling capture symbol is in the tree now, so the ONLY
+             * thing keeping this red is missing silicon. */
+            CHECK(0, "T4 [ASMTEST_REQUIRE_PT=1]: %s", msg);
+        } else {
+            printf("# SKIP %s\n", msg);
+        }
+        return;
     }
-#endif
-#else
-    printf("# SKIP pt live replay: not Linux x86-64\n");
-#endif
+    /* Intel PT present: run the real out-of-band capture + oracle match on BOTH walks. */
+    long ps = sysconf(_SC_PAGESIZE);
+    if (ps <= 0)
+        ps = 4096;
+    uint8_t *p = (uint8_t *)mmap(NULL, (size_t)ps, PROT_READ | PROT_WRITE,
+                                 MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        CHECK(0, "T4: mmap ROUTINE for the live victim");
+        return;
+    }
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    mprotect(p, (size_t)ps, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+    uint64_t base = (uint64_t)(uintptr_t)p;
+    run_live_case(base, sizeof ROUTINE, 20,
+                  22); /* a+b=42<=100 -> jle taken, 0xe skipped */
+    run_live_case(base, sizeof ROUTINE, 200,
+                  1); /* a+b=201>100 -> jle not taken, 0xe runs */
+    munmap(p, (size_t)ps);
 }
+#else
+static void test_pt_live_replay(void) {
+    printf("# SKIP pt live replay: not Linux x86-64\n");
+}
+#endif
 
 /* ------------------------------------------------------------------ */
 
@@ -579,6 +827,28 @@ int main(void) {
               "layout: the suite's re-declared info struct matches the "
               "producer's SIZE (%zu) and final-field OFFSET (%zu)",
               isz, ioff);
+    }
+
+    /* Same F6-hazard guard for the block-step oracle structs the T4 live case re-declares
+     * (opts + info from src/dataflow_blockstep.c). These run on EVERY host (the layout fns are
+     * defined unconditionally, in the real producer and its ENOSYS stub alike), so a skew in
+     * the re-declared oracle structs is caught HERE — before a PT box ever runs the gated live
+     * body that passes these structs to asmtest_dataflow_blockstep_run. */
+    {
+        size_t osz = 0, ooff = 0;
+        asmtest_dataflow_blockstep_opts_layout(&osz, &ooff);
+        CHECK(osz == sizeof(asmtest_blockstep_opts_t) &&
+                  ooff == offsetof(asmtest_blockstep_opts_t, nextents),
+              "layout: the re-declared block-step OPTS struct matches the "
+              "producer's SIZE (%zu) and final-field OFFSET (%zu)",
+              osz, ooff);
+        size_t bisz = 0, bioff = 0;
+        asmtest_dataflow_blockstep_info_layout(&bisz, &bioff);
+        CHECK(bisz == sizeof(asmtest_blockstep_info_t) &&
+                  bioff == offsetof(asmtest_blockstep_info_t, hw_hits),
+              "layout: the re-declared block-step INFO struct matches the "
+              "producer's SIZE (%zu) and final-field OFFSET (%zu)",
+              bisz, bioff);
     }
 
     /* Platform probe: on a build without Capstone+Unicorn the producer is an ENOSYS stub. */
@@ -602,7 +872,7 @@ int main(void) {
     test_pt_gates();                   /* T3 */
     test_pt_replay_from_fixture();     /* T2 (libipt-gated) */
     test_pt_defuse_slice_equiv();      /* T5 */
-    test_pt_live_replay();             /* T4 (double-gated, self-skips) */
+    test_pt_live_replay(); /* T4 (Intel-PT-silicon-gated; self-skips off PT) */
 
     printf("1..%d\n", checks);
     if (failures)

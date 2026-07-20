@@ -492,7 +492,9 @@ endif
 #
 # This tier opens NO perf event and adds NO PT capture code (doc-set position 9): the synthetic
 # AUX comes from asmtest_pt_encode_fixture (pt_backend.o, libipt's own encoder — no PT PMU), and
-# real foreign-pid capture is owned by intel-pt-attach-foreign-pid (the T4 live half, gated).
+# real foreign-pid capture is CONSUMED from intel-pt-attach-foreign-pid (now landed): the T4 live
+# case links its asmtest_hwtrace_pt_attach_* entry (in HWTRACE_OBJS below) and runtime-self-skips
+# off Intel PT silicon — F5 still adds no capture code of its own.
 $(BUILD)/dataflow_pt.o: src/dataflow_pt.c include/asmtest_valtrace.h \
                         include/asmtest_trace.h include/asmtest_codeimage.h \
                         $(BUILD)/.build-flags | $(BUILD)
@@ -501,25 +503,27 @@ $(BUILD)/dataflow_pt.o: src/dataflow_pt.c include/asmtest_valtrace.h \
 
 # The equivalence suite links: the F5 producer + the pure sink/L1/L2 (dataflow.o) + the operand
 # enumerator (dataflow_operands.o) + the emulator L0 ORACLE it cross-checks against (dataflow_emu.o)
-# + the blockstep verdicts it reuses (dataflow_blockstep.o) + the PT decode (pt_backend.o) + the
-# temporal byte source (codeimage.o). Libs: Unicorn + Capstone + libipt (empty where absent) +
-# the optional libbpf codeimage.o may reference.
-# trace.o supplies asmtest_trace_new/free + trace_append_insn/block (the asmtest_trace_t sink
-# pt_backend.o fills and the T2 bridge allocates) — self-contained (no Capstone/Unicorn), pulled
-# in only when libipt makes those decode symbols live.
+# + the block-step verdicts it reuses AND (T4) the force_singlestep single-step oracle
+# (dataflow_blockstep.o) + HWTRACE_OBJS. HWTRACE_OBJS supplies the T4 live case's CONSUMED capture —
+# asmtest_hwtrace_pt_attach_* (hwtrace.o) and its closure (pt_backend.o PT decode, codeimage.o byte
+# source, trace.o sink, disasm.o, and the rest of the hwtrace backends the one PT arm drags in) — and
+# already CONTAINS pt_backend.o + codeimage.o + trace.o, so those are NOT listed separately (a
+# duplicate object on the link line is a multiple-definition error). dataflow_blockstep.o is NOT in
+# HWTRACE_OBJS, so it stays explicit. HWTRACE_OBJS is defined in mk/native-trace.mk, included before
+# this file. Libs: Unicorn + Capstone + libipt + OpenCSD (empty where absent) + the optional libbpf
+# codeimage.o may reference + -ldl -lpthread the hwtrace backends need (mirrors the test_hwtrace link).
 $(BUILD)/test_dataflow_pt: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
                            $(BUILD)/dataflow_emu.o $(BUILD)/dataflow_blockstep.o \
-                           $(BUILD)/dataflow_pt.o $(BUILD)/pt_backend.o \
-                           $(BUILD)/codeimage.o $(BUILD)/trace.o \
-                           $(BUILD)/test_dataflow_pt.o
+                           $(BUILD)/dataflow_pt.o \
+                           $(HWTRACE_OBJS) $(BUILD)/test_dataflow_pt.o
 	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) $(LIBIPT_LIBS) \
-	  $(LINK_LIBBPF) -o $@
+	  $(OPENCSD_LIBS) $(LINK_LIBBPF) -ldl -lpthread -o $@
 
 # Dedicated lane: build + run where libunicorn is present (the replay engine), else a clean SKIP —
 # the "optional tiers need libunicorn" convention. At runtime the synthetic decode->replay bridge
 # runs wherever libipt is present (the docker lane); the LIVE foreign-pid half self-skips off
-# bare-metal Intel PT silicon (and is additionally gated on the sibling intel-pt-attach-foreign-pid
-# capture symbol, absent today).
+# bare-metal Intel PT silicon — its ONLY remaining gate now that the consumed intel-pt-attach-
+# foreign-pid capture (asmtest_hwtrace_pt_attach_*) has landed and is linked in.
 .PHONY: dataflow-pt-test
 ifeq ($(DF_HAVE_UNICORN),1)
 dataflow-pt-test: $(BUILD)/test_dataflow_pt
@@ -532,10 +536,11 @@ endif
 
 # T4 fail-not-skip: the target a bare-metal Intel PT runner invokes. ASMTEST_REQUIRE_PT=1 turns the
 # live-replay availability SKIP into a CHECK FAILURE, so a supposed-PT box whose intel_pt PMU is
-# silently hidden (or whose intel-pt-attach-foreign-pid capture symbol has not landed) goes RED
-# instead of quietly green — exactly as intel-pt-whole-window-substrate#T5's hwtrace-pt-live does.
-# Deliberately NOT chained into dataflow-test/aggregate: on every host here it FAILS by design (no
-# PT silicon + the sibling capture dep is 0/5), which is the whole point of a fail-not-skip target.
+# silently hidden goes RED instead of quietly green — exactly as intel-pt-whole-window-substrate#T5's
+# hwtrace-pt-live does. Deliberately NOT chained into dataflow-test/aggregate: on every host without
+# Intel PT silicon it FAILS by design (missing PMU), which is the whole point of a fail-not-skip
+# target. The sibling capture dep is satisfied (intel-pt-attach-foreign-pid ☑5/5), so silicon is the
+# only thing left that keeps it red.
 .PHONY: dataflow-pt-live
 ifeq ($(DF_HAVE_UNICORN),1)
 dataflow-pt-live: $(BUILD)/test_dataflow_pt
