@@ -37,6 +37,7 @@
 #include <unistd.h>
 
 #include "asmspy.h"
+#include "asmspy_arch.h" /* ASMSPY_HOST_ARCH — decode the tracee with the HOST arch */
 #include "asmspy_autoregion.h" /* --dataflow --auto: rank the hottest ENTRY edge */
 #include "asmspy_dataview.h" /* --dataflow value annotation + slice/def-use logic */
 #include "asmspy_graphsort.h" /* gsort_t + gnode_cmp (unit-tested separately) */
@@ -137,7 +138,7 @@ static void region_render(char *header, size_t hcap, svec *dis, svec *fn,
     for (size_t i = 0; i < nd && i < MAX_DISASM; i++) {
         char line[200], dbuf[160] = "";
         if (code && asmtest_disas_available())
-            asmtest_disas(ASMTEST_ARCH_X86_64, code, len, base, offs[i], dbuf,
+            asmtest_disas(ASMSPY_HOST_ARCH, code, len, base, offs[i], dbuf,
                           sizeof dbuf);
         if (dbuf[0])
             snprintf(line, sizeof line, "%4u×  +0x%-4llx  %s", cnts[i],
@@ -442,7 +443,7 @@ static void asm_of_function(pid_t pid, const asmspy_symtab_t *syms,
         uint64_t off = 0;
         while (off < (uint64_t)got) {
             char dis[160];
-            size_t ilen = asmtest_disas(ASMTEST_ARCH_X86_64, code, (size_t)got,
+            size_t ilen = asmtest_disas(ASMSPY_HOST_ARCH, code, (size_t)got,
                                         base, off, dis, sizeof dis);
             if (!ilen)
                 break;
@@ -1756,7 +1757,7 @@ static void dataflow_render_sink(void *ctx, long result,
             uint64_t off = vt->insn_off[s];
             char dis[160] = "", ed[4 * 160];
             if (code && asmtest_disas_available())
-                asmtest_disas(ASMTEST_ARCH_X86_64, code, len, base, off, dis,
+                asmtest_disas(ASMSPY_HOST_ARCH, code, len, base, off, dis,
                               sizeof dis);
             json_escape(dis, ed, sizeof ed);
             printf("%s\n  {\"step\":%zu,\"off\":\"0x%llx\",\"disasm\":\"%s\","
@@ -1802,7 +1803,7 @@ static void dataflow_render_sink(void *ctx, long result,
         uint64_t off = vt->insn_off[s];
         char dis[160] = "";
         if (code && asmtest_disas_available())
-            asmtest_disas(ASMTEST_ARCH_X86_64, code, len, base, off, dis,
+            asmtest_disas(ASMSPY_HOST_ARCH, code, len, base, off, dis,
                           sizeof dis);
         /* Annotate with the captured VALUES the disassembly can't show: memory
          * addresses/values (load "->", store "<-") and register WRITE results
@@ -3714,7 +3715,7 @@ static void df_disas_step(const dfview_t *V, uint64_t off, char *dis,
                           size_t cap) {
     dis[0] = '\0';
     if (V->code && asmtest_disas_available())
-        asmtest_disas(ASMTEST_ARCH_X86_64, V->code, V->len, V->base, off, dis,
+        asmtest_disas(ASMSPY_HOST_ARCH, V->code, V->len, V->base, off, dis,
                       cap);
 }
 

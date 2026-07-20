@@ -221,17 +221,24 @@ nvrc=$?
 t1=$(date +%s)
 set -e
 [ "$nvrc" -eq 124 ] && fail "--dataflow on a never-re-entered region HUNG (the entry wait is unbounded again)"
-[ "$nvrc" -eq 1 ] || fail "--dataflow main: expected rc=1 (not-seen-entering), got $nvrc"
-printf '%s\n' "$nvout" | grep -q 'not seen entering' \
-    || fail "--dataflow main: no honest not-seen-entering report: $nvout"
-# The name must be the SYMBOL, not freed memory: dc.func borrows into the symtab,
-# which is released before this message is formatted. A use-after-free here printed
-# plausible-looking garbage rather than crashing.
-printf '%s\n' "$nvout" | grep -q '^main not seen entering' \
-    || fail "--dataflow main: region name wrong/garbled (symtab use-after-free?): $nvout"
-[ $((t1 - t0)) -lt 15 ] \
-    || fail "--dataflow main took $((t1-t0))s — the 800ms bound did not drive it"
-echo "  bounded: reported in $((t1-t0))s instead of hanging"
+if printf '%s\n' "$nvout" | grep -q '^# SKIP --dataflow'; then
+    # The producer gate fires BEFORE the entry wait is armed (e.g. AArch64: the
+    # data-flow value producer is x86-64-only), so the bounded-wait shape cannot
+    # engage — the honest self-skip is the correct outcome, as in the hotfn case.
+    echo "(data-flow producer unavailable here — entry-wait case self-skipped, OK)"
+else
+    [ "$nvrc" -eq 1 ] || fail "--dataflow main: expected rc=1 (not-seen-entering), got $nvrc"
+    printf '%s\n' "$nvout" | grep -q 'not seen entering' \
+        || fail "--dataflow main: no honest not-seen-entering report: $nvout"
+    # The name must be the SYMBOL, not freed memory: dc.func borrows into the symtab,
+    # which is released before this message is formatted. A use-after-free here printed
+    # plausible-looking garbage rather than crashing.
+    printf '%s\n' "$nvout" | grep -q '^main not seen entering' \
+        || fail "--dataflow main: region name wrong/garbled (symtab use-after-free?): $nvout"
+    [ $((t1 - t0)) -lt 15 ] \
+        || fail "--dataflow main took $((t1-t0))s — the 800ms bound did not drive it"
+    echo "  bounded: reported in $((t1-t0))s instead of hanging"
+fi
 
 # THE CONTROL, and it is the whole test's guard: the SAME victim's hotfn must still
 # capture. Without this, "rc=1 and a message" would also be produced by a --dataflow

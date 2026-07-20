@@ -27,6 +27,20 @@
 #define PR_SET_PTRACER_ANY ((unsigned long)-1)
 #endif
 
+#if defined(__aarch64__)
+/* long f(int n): a=0; do a++; while (a<n); return a;  (AAPCS64: n in w0)
+ *   52800001         mov  w1, #0
+ *   11000421   L:    add  w1, w1, #1
+ *   6b00003f         cmp  w1, w0
+ *   54ffffc3         b.lo L          ; a < n (unsigned)
+ *   2a0103e0         mov  w0, w1
+ *   d65f03c0         ret
+ */
+static const unsigned char HOT_CODE[] = {0x01, 0x00, 0x80, 0x52, 0x21, 0x04,
+                                         0x00, 0x11, 0x3f, 0x00, 0x00, 0x6b,
+                                         0xc3, 0xff, 0xff, 0x54, 0xe0, 0x03,
+                                         0x01, 0x2a, 0xc0, 0x03, 0x5f, 0xd6};
+#else
 /* long f(int n): a=0; do a++; while (a<n); return a;  (System V: n in edi)
  *   31 c0            xor  eax, eax
  *   83 c0 01   L:    add  eax, 1
@@ -36,6 +50,7 @@
  */
 static const unsigned char HOT_CODE[] = {0x31, 0xc0, 0x83, 0xc0, 0x01,
                                          0x39, 0xf8, 0x72, 0xf9, 0xc3};
+#endif
 
 static void put32(FILE *f, uint32_t v) { fwrite(&v, 4, 1, f); }
 static void put64(FILE *f, uint64_t v) { fwrite(&v, 8, 1, f); }
