@@ -30,11 +30,15 @@ static int checks, failures;
 /* Two distinct 7-byte routines that share an address: A = add, B = sub. They differ at
  * one byte (0x01 vs 0x29), so a recorder that conflates them by address is caught.
  *   A: mov rax,rdi ; add rax,rsi ; ret
- *   B: mov rax,rdi ; sub rax,rsi ; ret */
+ *   B: mov rax,rdi ; sub rax,rsi ; ret
+ * Referenced only inside the __linux__ blocks below, so guard the definitions to match
+ * their use — otherwise they draw -Werror,-Wunused-const-variable off Linux (macOS). */
+#if defined(__linux__)
 static const unsigned char BLOB_A[] = {0x48, 0x89, 0xf8, 0x48,
                                        0x01, 0xf0, 0xc3};
 static const unsigned char BLOB_B[] = {0x48, 0x89, 0xf8, 0x48,
                                        0x29, 0xf0, 0xc3};
+#endif
 
 /* Phase A: the temporal correctness proof. Track a region, rewrite it IN PLACE with
  * different bytes (a re-JIT at a reused address), and assert the timeline still answers

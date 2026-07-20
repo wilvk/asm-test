@@ -1606,6 +1606,45 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **macOS (Intel) native build correctness (fourth pass): the asmspy CLI lane +
+  two ungated example lanes**, surfaced by building the lanes *outside* the
+  nightly `test-macos-x86` contract on a macOS 14.7.5 / Intel host — `make cli`,
+  `make cli-smoke`, `make WERROR=1 codeimage-test`, `make WERROR=1 build/jit_trace`
+  — none of which a Linux or Docker-on-Mac (Linux) lane exercises. A tree-wide
+  `make WERROR=1` sweep of every other macOS-buildable native lane
+  (test/check/emu-test/asm-test/usecases/usecases-emu/dataflow-test/dataflow-pt-test/
+  hwtrace-test and the C/C++/Ruby/Python binding lanes) was already clean; these
+  three lanes were the gap.
+  - `mk/cli.mk` gated `cli` / `cli-smoke` on **architecture only**
+    (`x86_64 aarch64 arm64`), not OS. asmspy is a Linux-only out-of-process tracer
+    (ptrace / `process_vm_readv` / `personality` / `/proc` / `<linux/futex.h>` /
+    `<sys/user.h>` / the glibc extension `pthread_timedjoin_np`, plus `<sys/prctl.h>`
+    in every victim), so on macOS-**x86_64** the arch gate passed and the build fell
+    through and hard-failed — `cli/asmspy.c` at undeclared `process_vm_readv` /
+    `pthread_timedjoin_np`, and the whole `cli/` tree at `<elf.h>` / `<linux/futex.h>` /
+    `<sys/prctl.h>`. Per-file include guards can't fix this (`cli/asmspy_engine.c`
+    alone carries ~473 Linux-only ptrace/`user_regs_struct`/`SYS_*` references);
+    macOS's single-step tracer is the separate Mach-exception tier
+    (`src/mach_backend.c`, `make mach-stepper-test`). Added a Linux **OS gate**
+    checked *before* the arch gate to both targets, mirroring the existing arch-gate
+    self-skip idiom, so `make cli` / `cli-smoke` now print `# SKIP … this is an OS
+    gate` on non-Linux instead of a compile cascade. `make docker-cli` (Linux
+    in-container, `UNAME_S=Linux`) falls through the gate and builds asmspy + drives
+    the cli-smoke sequence exactly as before — the gate is host-OS-keyed, not
+    container-keyed (verified: asmspy built and the smoke ran its full sequence).
+  - `examples/test_codeimage.c`: the `BLOB_A` / `BLOB_B` file-scope `static const`
+    routines are referenced only inside the two `#if defined(__linux__)` bodies, so
+    off Linux they drew `-Werror,-Wunused-const-variable` — and the ungated
+    `codeimage-test` lane compiles this C TU under `-Werror` (the test itself is
+    *designed* to compile everywhere and self-skip at runtime via its `#else` stub).
+    Guarded the two definitions with `#if defined(__linux__)` to match their use.
+  - `examples/jit_trace.c`: `static int checks, failures;` and the `CHECK` macro are
+    used only from the `#if defined(__linux__) && defined(__x86_64__)` body (the
+    `#else` is a self-skip stub `main` that reports neither), so off that target
+    (macOS, and Linux-arm64) they drew `-Werror,-Wunused-variable`. Guarded both with
+    the same condition as their callers, honouring the file's own compile-and-skip
+    design.
+
 - **macOS (Intel) native build + binding self-skip correctness (third pass)**,
   surfaced by building the binding conformance corpus and the per-language
   `dataflow-*` / `hwtrace-*` lanes natively on a macOS 14.7.5 / Intel host — a

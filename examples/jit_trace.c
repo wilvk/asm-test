@@ -49,6 +49,10 @@
 #include <time.h>
 #include <unistd.h>
 
+/* checks/failures and CHECK are used only from the Linux/x86-64 body below (the
+ * #else is a self-skip stub main that reports neither), so guard them to match —
+ * otherwise they draw -Werror,-Wunused-variable off that target (macOS, Linux-arm64). */
+#if defined(__linux__) && defined(__x86_64__)
 static int checks, failures;
 #define CHECK(c, m)                                                            \
     do {                                                                       \
@@ -57,6 +61,7 @@ static int checks, failures;
         if (!(c))                                                              \
             failures++;                                                        \
     } while (0)
+#endif
 
 /* A uniquely-named JS function in a tight int32 loop (the `|0` keeps it int32, so V8
  * keeps stable integer types and a stable optimized body). */

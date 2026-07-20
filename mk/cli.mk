@@ -72,8 +72,23 @@ $(BUILD)/asmspy: $(HWTRACE_OBJS) $(ASMSPY_OBJS) $(ASMSPY_DATAFLOW_OBJS)
 	$(CC) $(CFLAGS) -pthread $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) \
 	  $(LINK_LIBBPF) -ldl $(NCURSES_LIBS) -lstdc++ -o $@
 
+# asmspy is a Linux-only out-of-process tracer: its reads use ptrace(2),
+# process_vm_readv(2), personality(2), /proc, <linux/futex.h>, <sys/user.h> and the
+# glibc extension pthread_timedjoin_np — none of which exist on macOS/BSD, and its
+# per-file victims include <sys/prctl.h>. On macOS the single-step tracer is the
+# SEPARATE Mach-exception tier (src/mach_backend.c, `make mach-stepper-test`); asmspy
+# has no Mach body. Like the arch gate this is a REAL gate (nothing to apt-install),
+# and it is checked FIRST: on macOS `uname -m` is a SUPPORTED arch (x86_64), so
+# without an OS gate the build would fall through and HARD-FAIL at process_vm_readv /
+# pthread_timedjoin_np / <elf.h> instead of skipping honestly (per-file include guards
+# cannot help — asmspy_engine.c alone carries ~473 Linux-only ptrace/user_regs refs).
 .PHONY: cli
-ifeq ($(filter $(CLI_ARCH),$(CLI_ARCH_SUPPORTED)),)
+ifneq ($(UNAME_S),Linux)
+cli:
+	@echo "# SKIP cli: asmspy is a Linux-only out-of-process tracer (ptrace / process_vm_readv / personality / /proc); this host is $(UNAME_S)."
+	@echo "#   Nothing to install — this is an OS gate, not a missing dependency. On macOS"
+	@echo "#   the single-step tracer is the Mach-exception tier: make mach-stepper-test."
+else ifeq ($(filter $(CLI_ARCH),$(CLI_ARCH_SUPPORTED)),)
 cli:
 	@echo "# SKIP cli: asmspy supports Linux x86-64 and AArch64; this host is $(CLI_ARCH)."
 	@echo "#   Its register/single-step/detach reads (cli/asmspy_arch.h) have no body"
@@ -349,7 +364,15 @@ $(BUILD)/test_jitdump: cli/test_jitdump.c $(BUILD)/asmspy_proc.o \
 	  -lstdc++ -o $@
 
 .PHONY: cli-smoke
-ifeq ($(filter $(CLI_ARCH),$(CLI_ARCH_SUPPORTED)),)
+ifneq ($(UNAME_S),Linux)
+# Same OS gate as `cli` above: asmspy is a Linux-only ptrace/proc tracer and its
+# victims include <sys/prctl.h>/<linux/futex.h>, so there is nothing to smoke off
+# Linux — and the prerequisites below would hard-fail to compile before the smoke
+# ever runs. A green skip is honest: the smoke measures asmspy, and there is no
+# asmspy off Linux.
+cli-smoke:
+	@echo "# SKIP cli-smoke: asmspy is Linux-only (this host is $(UNAME_S)); nothing to measure."
+else ifeq ($(filter $(CLI_ARCH),$(CLI_ARCH_SUPPORTED)),)
 # Same architecture gate as `cli` above: without it, the smoke's prerequisites
 # try to compile TUs that have no register body for this machine and dump the raw
 # errors the gate exists to replace. A green skip here is honest — the smoke
