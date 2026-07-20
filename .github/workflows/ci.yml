@@ -857,12 +857,15 @@ jobs:
     name: hwtrace (AArch64 ptrace stream, live)
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
-    # NON-BLOCKING while the aarch64 suite is being hardened for its first live run
-    # (aarch64-ptrace-single-step-validation T1). Several arch assumptions have been
-    # fixed already (frame_insns_eq -Werror, test_debug_logging, stealth_window_inline
-    # + register_idempotent x86-fixture SIGILLs); a slow/hanging ptrace-stepper path is
-    # still under triage. Flip continue-on-error off (make it gating) once it runs green.
-    continue-on-error: true
+    # GATING since 2026-07-20: the first green live run (a53b5df) executed the whole
+    # ptrace tier on real silicon — 205 ok assertions, zero unexpected skips — after
+    # the hardening pass fixed five arch assumptions (frame_insns_eq -Werror,
+    # test_debug_logging, stealth_window_inline + register_idempotent x86-fixture
+    # SIGILLs, and the callout fixture's x30 clobber, which looped tracer+tracee
+    # in-region forever). Measured T2 outcome on this runner: NT_ARM_HW_BREAK is
+    # ARMED-BUT-SILENT (slots reported, arm accepted, debug exception withheld by
+    # the hypervisor) — the forced-hw call-out self-skips with that named reason;
+    # bare-metal arm64 validation is self-hosted-ci-runners territory.
     steps:
       - uses: actions/checkout@v7
 
@@ -921,7 +924,7 @@ jobs:
           fi
           # (4) Pass-count floor (backstop against 'the suite did not run').
           n=$(grep -c '^ok ' "$log" || true)
-          floor=50   # first-green TODO: raise to (observed - a few) once the live count is recorded here with a date
+          floor=200  # first green live run 2026-07-20 (a53b5df): 205 ok assertions
           if [ "$n" -lt "$floor" ]; then
             echo "::error::hwtrace-arm64 ran $n ok assertions (< floor $floor) — the suite did not execute the ptrace stream."
             exit 1
@@ -938,6 +941,86 @@ jobs:
           elif grep -q 'ptrace callout (hardware bp): NT_ARM_HW_BREAK armed but never fired' "$log"; then
             echo "::notice::hwtrace-arm64 NT_ARM_HW_BREAK: ARMED-BUT-SILENT — slots present but the hypervisor withholds the debug exception; bare-metal validation moves to self-hosted-ci-runners."
           fi
+
+      # T5 (aarch64-ptrace-single-step-validation): python is not in
+      # HWTRACE_DOCKER_LANGS (it runs on the host job in the x86 lane too), so this
+      # step is its ONLY arm64 lane — the wrapper's T4 A64 ptrace fixtures live.
+      - name: Python wrapper LIVE on AArch64 (single-step self-skips; ptrace toolkit live)
+        run: make WERROR=1 hwtrace-python-test
+
+  # The nine COMPILED binding lanes, natively on the arm64 runner (T5,
+  # aarch64-ptrace-single-step-validation): on an arm64 host DOCKER_PLATFORM stays
+  # empty, so mk/docker.mk builds and runs linux/arm64 images directly — the T4
+  # AArch64 ptrace fixtures execute live for the first time. The dotnet lane
+  # self-skips WHOLESALE via its top-level '# SKIP single-step backend unavailable'
+  # gate (HwTraceProgram.cs Main gates on the x86-only in-process backend before
+  # its ptrace subset — relaxing that is a recorded follow-on), so that named skip
+  # is the ONE allowed unavailability line; the other eight lanes must run their
+  # ptrace tier live. The dotnet9/dotnet-stress extras stay x86-only (their own
+  # hardening history); add them here only if they prove arm64-clean.
+  hwtrace-bindings-arm64:
+    name: hwtrace-bindings (AArch64, live)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+    env:
+      # K1-style buildx layer cache for the shared bindings-base image, in a
+      # DISTINCT scope from the x86 job — one shared scope would poison/thrash
+      # both caches with foreign-arch layers.
+      DOCKER_BASE_BUILD: >-
+        docker buildx build --load
+        --cache-from type=gha,scope=asmtest-bindings-base-arm64
+        --cache-to type=gha,scope=asmtest-bindings-base-arm64,mode=max,ignore-error=true
+    steps:
+      - uses: actions/checkout@v7
+      - name: Probe Docker (whether the arm64 image ships it is not publicly documented)
+        run: |
+          if ! docker version >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends docker.io
+            sudo systemctl start docker
+          fi
+          docker version
+      - uses: docker/setup-buildx-action@v4
+      - name: Expose the Actions runtime to buildx (gha cache backend)
+        uses: actions/github-script@v9
+        with:
+          script: |
+            for (const k of ['ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2', 'ACTIONS_RUNTIME_TOKEN']) {
+              if (process.env[k]) core.exportVariable(k, process.env[k]);
+            }
+      - name: Trace every compiled wrapper natively on AArch64 (ptrace tier LIVE)
+        run: |
+          set -o pipefail
+          make docker-hwtrace-bindings 2>&1 | tee /tmp/hwb-arm64.log
+      - name: Assert the ptrace tier ran LIVE (no unavailability skips, every lane present)
+        run: |
+          log=/tmp/hwb-arm64.log
+          # (1) The qemu-emulation self-skip reason must NEVER print on real silicon.
+          if grep -q 'AArch64 PTRACE_SINGLESTEP is non-functional' "$log"; then
+            echo "::error::hwtrace-bindings-arm64: a lane self-skipped with the qemu-emulation reason on a REAL AArch64 runner — its live fixtures tested nothing."
+            grep -n 'AArch64 PTRACE_SINGLESTEP is non-functional' "$log"
+            exit 1
+          fi
+          # (2) No lane may report its out-of-process ptrace tier unavailable — on a
+          #     native arm64 VM the stepper is live inside every container. These are
+          #     the exact per-binding unavailability strings (python/node/cpp/zig/lua
+          #     'ptrace backend unavailable', dotnet 'ptrace toolkit unavailable',
+          #     ruby/rust 'out-of-process ptrace tier/toolkit' + ruby's descent
+          #     'ptrace unavailable'); dotnet's top-level single-step gate prints
+          #     'single-step backend unavailable', which is NOT in this set.
+          if grep -nE 'ptrace backend unavailable|ptrace toolkit unavailable|out-of-process ptrace (tier|toolkit) .?unavailable|ptrace unavailable' "$log"; then
+            echo "::error::hwtrace-bindings-arm64: a binding's ptrace tier self-skipped as UNAVAILABLE on real AArch64 — the T4 live fixtures never executed there. Triage the lane above."
+            exit 1
+          fi
+          # (3) Every lane actually ran — its banner must be present (a lane silently
+          #     dropped from the aggregate would otherwise pass by absence).
+          for lang in cpp rust go node java dotnet ruby lua zig; do
+            if ! grep -q "== hwtrace-$lang-test ==" "$log"; then
+              echo "::error::hwtrace-bindings-arm64: lane $lang never ran (no '== hwtrace-$lang-test ==' banner in the log)."
+              exit 1
+            fi
+          done
+          echo "::notice::hwtrace-bindings-arm64: all nine compiled lanes ran natively on AArch64 with the ptrace tier live (dotnet's top-level single-step gate is the one recorded wholesale skip)."
 
   # asmspy, the ncurses front-end over the out-of-process tracer (cli/). The
   # headless smoke drives every non-interactive subcommand (--list/--syms/
