@@ -9,7 +9,8 @@
 > missed, plus the doc drift that the fast landing wave left behind.
 >
 > **Every code:line and doc claim below was independently verified against HEAD**
-> (`73c060a`) — the raw audit produced two framing errors that were corrected
+> (`73c060a`; re-verified line-by-line at `b054cd7` with three corrections
+> applied in place — see [§ Provenance](#provenance)) — the raw audit produced two framing errors that were corrected
 > before they reached this plan; see [§ Provenance](#provenance) so they are not
 > re-introduced. Sources: [src/ibs_backend.c](../../../src/ibs_backend.c),
 > [src/trace_auto.c](../../../src/trace_auto.c), [src/msr_lbr.c](../../../src/msr_lbr.c),
@@ -64,7 +65,7 @@ on OOM the caller receives `ASMTEST_IBS_OK` with `edges == NULL`, `n == 0`, yet
 empty survey with **no** `lost`/`throttled`/error tell. `n == 0` is also the
 legitimate no-branch outcome, so nothing distinguishes lost-to-OOM from
 honestly-empty. The IBS-precover consumer in
-[src/trace_auto.c:248](../../../src/trace_auto.c) (`nrc != OK || blk.n == 0`)
+[src/trace_auto.c:250](../../../src/trace_auto.c) (`nrc != OK || blk.n == 0`)
 reads it as "IBS honestly covered no blocks."
 
 **It is an oversight, not a design choice** — the sibling software-clock lane
@@ -111,7 +112,8 @@ silicon, NOT openable by this tree"), but the recommendation tables were not:
 - [:254](../analysis/trace-parity-matrix.md) (Matrix 7) recommends
   "**AMD LBR (Tier A; Tier-B stitches past 16 live)**" as *Primary* for "AMD Zen 3
   / Zen 4, small routine" — false for Zen 3, where the open is `-EINVAL` →
-  `AMD_NOHW` ([hwtrace.c:275-278](../../../src/hwtrace.c)).
+  `AMD_NOHW` (open at [hwtrace.c:276](../../../src/hwtrace.c), errno mapped at
+  [:294](../../../src/hwtrace.c)).
 - [:324-325](../analysis/trace-parity-matrix.md) (Matrix 8) list
   "AMD LBR → DynamoRIO → …" and "*(LBR sets `truncated`)*" for "AMD Zen 3 / Zen 4";
   on Zen 3 AMD LBR never opens, so it never "sets truncated" — the real
@@ -132,11 +134,17 @@ header). Only BRS (Zen 3) is genuinely forward-look.
 **(d) Orphan review page reads "zero IBS code."**
 [docs/amd_tracing_review.md:68](../../amd_tracing_review.md) still states "There
 is currently zero IBS code in the repo; IBS appears only in planning docs" — now
-false. Its P0/P1 items (F5/F7 clamp, F22 mechanism, F24 empty-trace, F27
-`struct_size`) have all shipped. It is `orphan: true` (low blast radius) but
-marked superseded nowhere.
+false. Its P0/P1 items are shipped **except half of F7**: F5's `nr` clamp
+(all three drain sites), F22 mechanism, F24 empty-trace and F27 `struct_size`
+landed in full, but F7's short-SAMPLE guard landed only at the shared seam
+parser ([hwtrace.c:1015](../../../src/hwtrace.c)) — 1 of its 3 sites; the two
+live survey drains still lack it, and that residual is exactly T3's
+short-SAMPLE bullet. It is `orphan: true` (low blast radius) but marked
+superseded nowhere.
 - *Acceptance:* add a "SUPERSEDED — see [2026-07-17 review](../analysis/2026-07-17-amd-hardware-review.md)
-  + this plan" banner at the top; fix or strike the "zero IBS code" line.
+  + this plan" banner at the top; fix or strike the "zero IBS code" line. The
+  banner must credit F7 as *partially* landed (residual → T3), not claim it
+  shipped.
 
 **(e) AMD plan freeze residual + validation-checklist P9 shrink.**
 - [amd-tracing-plan.md:1669](amd-tracing-plan.md)/[:1682](amd-tracing-plan.md)
@@ -152,7 +160,10 @@ marked superseded nowhere.
   historical "what green proves" counts ([:67-80](../amd-hardware-validation.md))
   also cite the 2026-07-12 capture (`1..410` / `1..23`) while the 2026-07-20 run
   is `1..658` / `1..84`. *Acceptance:* add the runner-vs-manual coverage split;
-  refresh or explicitly date-stamp the historical counts.
+  refresh the counts to the 2026-07-20 run (the "what green proves" section
+  already carries its 2026-07-12 date-stamp inline — the live residual is the
+  checklist line [:114](../amd-hardware-validation.md) still asserting
+  `1..410`).
 
 **(f) asmspy-plan IBS residual is itself stale.**
 [asmspy-plan.md:131](asmspy-plan.md)'s "REMAINING" clause says
@@ -181,13 +192,18 @@ Batch three low-severity items:
   "prints this host's actual support so the freeze gate in `hwtrace_end_amd` is
   observable" — the freeze gate was retired (`3e5454a`) and never lived in
   `hwtrace_end_amd`. This is the round-1 P5 residual. *Acceptance:* rewrite the
-  block to describe the substrate probe it now heads, or delete it.
+  block to describe the substrate probe it now heads, or delete it. A third
+  sibling this plan had missed — [hwtrace.c:147-148](../../../src/hwtrace.c)
+  claimed `_freeze_available` is "declared in the shared amd_backend.h", which
+  declares no such probe — was found in the `b054cd7` re-verification pass and
+  *(landed)* with that pass's commit.
 - **Short-SAMPLE guard symmetry (defensive, optional).** The hardened test-seam
   parser guards `off + sizeof(header) + 8 <= span` before loading `nr`; the two
   *live* survey drains at [src/hwtrace.c:1539](../../../src/hwtrace.c) and
   [:1805](../../../src/hwtrace.c) do not. **Unreachable** on real kernel records
   (they consume only complete records from a disabled ring), so this closes an
-  asymmetry, not a reachable defect. *Acceptance:* add the same guard at both
+  asymmetry, not a reachable defect — it is the surviving remainder of the
+  orphan review's F7, whose fix landed only at the seam parser (see T2(d)). *Acceptance:* add the same guard at both
   sites, or add a one-line comment recording why the drains are safe without it.
   Zero runtime cost either way.
 
@@ -204,8 +220,11 @@ truncated MSR read (window overflow —
 [src/msr_lbr.c:190-196](../../../src/msr_lbr.c) fills `trace` then flags
 `truncated`) fails that guard, `ran` stays 0, and if block-step
 ([:380](../../../src/trace_auto.c)) and per-insn ([:414](../../../src/trace_auto.c))
-are both unavailable-or-failing, the function returns `EUNAVAIL` +
+are both **unavailable**, the function returns `EUNAVAIL` +
 `used=MECH_NONE` while a usable 16-deep partial sits in `trace`, unreturned.
+(A later rung that runs and *fails* wipes the partial via its own
+`call_auto_reset` first — the return is still `EUNAVAIL`, but beside an empty
+trace, so the unreturned-partial state needs the steppers absent, not failing.)
 
 **This errs safe** (`EUNAVAIL` is never a false-complete) and needs a narrow
 config (MSR available, both ptrace rungs down, MSR result nonempty-truncated), so
@@ -310,3 +329,31 @@ convention):
 Two T2 sub-items (b Matrix 7/8, e freeze residual) and the T3 short-SAMPLE
 symmetry note were confirmed against source during this pass; all file:line
 references above were re-checked at `73c060a`.
+
+**2026-07-20 re-verification (later the same day, at `b054cd7`).** An
+independent line-by-line pass confirmed T1/T3/T4/T5/T6 and T2(a–c,e,f) as
+written, and applied three corrections in place:
+
+- **T2(d) overstated F7.** "F5/F7 clamp … have all shipped" was true only for
+  F5 — F7's short-SAMPLE guard landed at the shared seam parser
+  ([hwtrace.c:1015](../../../src/hwtrace.c)), 1 of its 3 sites; the two live
+  survey drains remain unguarded (= T3's short-SAMPLE bullet, now
+  cross-linked). The text and acceptance were corrected so the SUPERSEDED
+  banner cannot ship a false "F7 shipped" claim.
+- **T4 was overbroad.** "unavailable-or-failing" implied the discarded MSR
+  partial survives a failing later rung; a failing rung `call_auto_reset`s
+  first ([:381](../../../src/trace_auto.c)/[:415](../../../src/trace_auto.c)),
+  so the unreturned-partial-in-`trace` state needs the steppers *unavailable*.
+  Narrowed.
+- **Anchors.** trace_auto consumer guard `:248`→`:250`; the T2(b) citation now
+  splits the branch-stack open ([hwtrace.c:276](../../../src/hwtrace.c)) from
+  the `AMD_NOHW` errno mapping ([:294](../../../src/hwtrace.c)). All other
+  anchors re-checked exact — including the `:1669`/`:1682` freeze residuals,
+  which the pass first mis-flagged as drifted (the doc lists the symbol in
+  `_freeze_available` shorthand, which a full-symbol grep misses) and then
+  confirmed exact.
+
+The pass also surfaced one residual this plan had missed — the stale
+`_freeze_available` comment at [hwtrace.c:147-148](../../../src/hwtrace.c)
+(names a probe `amd_backend.h` does not declare) — folded into T3's
+false-freeze bullet and fixed directly in the re-verification commit.

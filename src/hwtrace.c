@@ -144,8 +144,8 @@ void asmtest_ss_end(void);
 /* Whether each decoder was compiled in (queried by available()). */
 int asmtest_pt_decoder_present(void);
 int asmtest_cs_decoder_present(void);
-/* asmtest_amd_decoder_present / _freeze_available / _snapshot_available are declared in
- * the shared "amd_backend.h". */
+/* asmtest_amd_decoder_present / _snapshot_available are declared in the shared
+ * "amd_backend.h". */
 
 /* ------------------------------------------------------------------ */
 /* Gating: detect-and-skip                                             */
