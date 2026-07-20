@@ -188,6 +188,7 @@ help:
 	@echo '  win64-check     substrate smoke + capture + runner-port slices'
 	@echo '  win64-msabi-test  fast native lane (no Wine; x86-64)'
 	@echo '  docker-win64-bench  gate the golden emu counts from a PE producer under Wine (x86-64)'
+	@echo '  win64-bench-record  persist this Windows box report into benchmarks/boxes/ (real Win)'
 	@echo ''
 	@echo 'Clean-room (macOS plan; see docs/clean-room-testing.md):'
 	@echo '  clean-room-test / macos-clean-test / docker-clean-room  (above) scrubbed fresh-install leak checks'

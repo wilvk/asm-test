@@ -28,10 +28,14 @@ jobs cover the rest of the surface:
   `format` (clang-format drift), and `coverage` (gcov).
 - **Benchmarks** — `benchmarks` runs the cross-system report (`make bench-report`)
   on each per-push OS × arch leg, gates the deterministic golden emu counts
-  (`make bench-check`, host/OS-independent), and uploads a per-system JSON;
-  `benchmarks-compare` merges them into one cross-system matrix (performance +
-  the feature & trace-completeness grid). See
-  [Cross-system benchmarking](../guides/cross-system-benchmarking.md).
+  (`make bench-check`, host/OS-independent), and uploads a per-system JSON, plus a
+  per-push `benchmarks-windows` (`windows-latest`) leg and a nightly
+  `benchmarks-macos-x86` (`macos-15-intel`) leg so all five OS × arch systems
+  produce a report; `benchmarks-compare` merges them into one cross-system matrix
+  (performance + the feature & trace-completeness grid). On the nightly schedule
+  `benchmarks-record` commits each leg's per-box record (`benchmarks/boxes/gh-**`)
+  back to `main` as `github-actions[bot]`; golden files stay a reviewed human PR.
+  See [Cross-system benchmarking](../guides/cross-system-benchmarking.md).
 - **Packaging** — `package-libs` (+ its macOS and collect legs).
 
 The framework's own [self-tests](../getting-started/writing-tests.md)

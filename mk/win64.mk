@@ -17,6 +17,7 @@
 #   make win64-emu-bench   cross-build the deterministic emu-bench producer (PE)
 #   make win64-bench-check gate the golden emu counts from the PE producer (Wine)
 #   make win64-bench-report full per-system report via the PE producers (real Win)
+#   make win64-bench-record persist this Windows box's report into benchmarks/boxes/
 #   make docker-win64-bench win64-bench-check inside the asmtest-win64 image (x86-64)
 WIN64_CC        ?= x86_64-w64-mingw32-gcc
 WIN64_NASM      ?= nasm
@@ -287,6 +288,20 @@ win64-bench-report: $(WIN64_BUILD)/suite_win64.exe $(WIN64_BUILD)/emu-bench.exe
 	  EMU_BENCH=$(WIN64_BUILD)/emu-bench.exe \
 	  ASMFEATURES=$(WIN64_BUILD)/asmfeatures.exe \
 	  scripts/bench-report.sh
+
+# --record variant of win64-bench-report: persist this Windows box's report into
+# benchmarks/boxes/<box_id>/ (features.json + one appended perf-history.jsonl
+# line). Driven by the nightly `benchmarks-record` CI job with ASMTEST_BOX_ID set;
+# mirrors mk/bench.mk's bench-record. Run on a REAL Windows host (descriptor), like
+# win64-bench-report. Golden emu-insns.json is rewritten too but the CI record job
+# never commits it (golden drift stays a reviewed PR).
+.PHONY: win64-bench-record
+win64-bench-record: $(WIN64_BUILD)/suite_win64.exe $(WIN64_BUILD)/emu-bench.exe
+	BUILD=$(BUILD) \
+	  TEST_BENCH=$(WIN64_BUILD)/suite_win64.exe \
+	  EMU_BENCH=$(WIN64_BUILD)/emu-bench.exe \
+	  ASMFEATURES=$(WIN64_BUILD)/asmfeatures.exe \
+	  scripts/bench-report.sh --record
 
 # Windows mirror of `make hwtrace-attach-demo`: attach to a SEPARATE process the
 # framework did NOT start (attach_victim_win) and single-step one call of its hot

@@ -8,6 +8,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Cross-system benchmark legs on real Windows and Intel macOS.** The deterministic
+  golden gate now runs on every OS the framework targets: a per-push
+  `benchmarks-windows` leg (`windows-latest`, mingw/MSYS2) builds the PE benchmark
+  producers and runs `make win64-bench-check` + `win64-bench-report` on a genuine
+  Windows kernel, and a nightly `benchmarks-macos-x86` leg (`macos-15-intel`)
+  produces the Intel-macOS report. `benchmarks-compare` merges all five OS × arch
+  reports.
+
+- **Nightly auto-commit of per-box benchmark records.** On the nightly schedule
+  (and manual dispatch) each benchmark leg records its per-box history and a new
+  `benchmarks-record` job commits `benchmarks/boxes/gh-**` back to `main` as
+  `github-actions[bot]` (a `GITHUB_TOKEN` push, so it never re-triggers CI). Golden
+  emu counts stay human-reviewed — never auto-committed — so a real count drift
+  fails a leg's `bench-check` instead of being laundered into history. New
+  `make win64-bench-record` persists the Windows box record.
+
 - **Ambient stitched operations (.NET, opt-in, Intel PT).** `AsmAmbientStitchedTrace`
   follows one logical operation across `await` / thread hops with **zero calls in the
   body** — an `AsyncLocal` value-changed handler opens a per-thread `intel_pt` slice

@@ -271,10 +271,18 @@ a `unit`, never across it.
 
 ## In your CI
 
-Each per-push leg (`ubuntu-latest`, `ubuntu-24.04-arm`, `macos-latest`) runs
-`make bench-check` (the golden gate) and `make bench-report`, uploads its
-per-system JSON, and the `benchmarks-compare` job merges them. See
-[CI & Docker](../reference/ci.md). Extending to the Windows and Intel-macOS legs,
-and auto-committing per-box history on the nightly schedule, are the tracked
-follow-ups in
-[the plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/cross-arch-benchmarking-plan.md).
+Five legs cover the full OS × arch matrix. Four run per push —
+`ubuntu-latest`, `ubuntu-24.04-arm`, `macos-latest` (arm64), and
+`benchmarks-windows` (`windows-latest`) — and `benchmarks-macos-x86`
+(`macos-15-intel`) runs nightly and on manual dispatch, because Intel-macOS
+runners are scarce. Each runs `make bench-check` (the golden gate) and
+`make bench-report` (`make win64-bench-check` / `win64-bench-report` on the
+Windows leg's mingw toolchain), uploads its per-system JSON, and the
+`benchmarks-compare` job merges them.
+
+On the nightly schedule (and manual dispatch) each leg also records its per-box
+history and the `benchmarks-record` job commits `benchmarks/boxes/gh-**` back to
+`main` as `github-actions[bot]` — a `GITHUB_TOKEN` push, so it never re-triggers
+CI. Golden regeneration stays a human PR: the golden emu counts are never
+auto-committed, so a real count drift fails a leg's `bench-check` rather than
+being laundered into history. See [CI & Docker](../reference/ci.md).

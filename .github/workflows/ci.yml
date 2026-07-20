@@ -88,13 +88,23 @@ jobs:
   # them into one cross-system matrix. Every leg also gates the DETERMINISTIC
   # golden emu counts (host/OS-independent, so the committed golden must match a
   # fresh run everywhere — the manifest/conformance golden pattern).
-  # Follow-ups (per the plan): the windows-latest + macos-15-intel(x86) legs (the
-  # shell runner is portable but those lanes need the emu deps installed), and the
-  # nightly auto-commit of per-box records into benchmarks/ (needs contents:write).
+  # The five-system matrix: the three per-push legs here (ubuntu x86-64, ubuntu
+  # arm64, macOS arm64), the per-push `benchmarks-windows` leg, and the nightly
+  # `benchmarks-macos-x86` (Intel) leg. `benchmarks-compare` merges every leg's
+  # report; on the nightly schedule `benchmarks-record` commits each leg's per-box
+  # record (benchmarks/boxes/gh-**) back to main. Golden emu counts stay a reviewed
+  # human PR — never auto-committed.
   benchmarks:
     name: benchmarks (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    # Runner VMs draw from a fleet of CPU models, so the default box_id (a hash of
+    # the CPU string) would mint a new box per model. Pin the box id to the runner
+    # label so per-box history is stable across VM swaps (the plan's §6.1 rule; the
+    # nightly record commit in `benchmarks-record` depends on it). The arm64 live
+    # ptrace record step below overrides this inline with its own committed id.
+    env:
+      ASMTEST_BOX_ID: gh-${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
@@ -155,11 +165,31 @@ jobs:
           path: benchmarks/boxes/arm-linux-arm64-gha/
           if-no-files-found: error
 
+      # Nightly (and manual dispatch) only: persist this leg's per-box record
+      # (features.json + one perf-history line, box id = the job's gh-<label>) so
+      # `benchmarks-record` can commit it. Per-push runs skip this — history is a
+      # nightly trend, not a per-commit assertion.
+      - name: Record this box (nightly)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: make bench-record
+
+      - name: Upload this box record (nightly)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-boxes-${{ matrix.os }}
+          path: benchmarks/boxes/
+          if-no-files-found: error
+
   # Merge every leg's report into one cross-system comparison (performance
   # matrices + the feature & trace-completeness grid) and publish it.
   benchmarks-compare:
     name: benchmarks (cross-system compare)
-    needs: [benchmarks]
+    # The macOS-Intel (nightly) and Windows (per-push) legs feed the same compare.
+    # The `if` keys only off the per-push `benchmarks` matrix, so per-push runs
+    # still compare the three matrix reports even though the nightly Intel leg is
+    # skipped (the package-libs-collect needs-many / if-one pattern).
+    needs: [benchmarks, benchmarks-macos-x86, benchmarks-windows]
     if: ${{ !cancelled() && needs.benchmarks.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -182,6 +212,173 @@ jobs:
           name: benchmark-comparison
           path: comparison.md
           if-no-files-found: error
+
+  # The x86-64 macOS benchmark leg. Intel runners are scarce/slow, so — exactly
+  # like `test-macos-x86` — this runs nightly (and on manual dispatch) rather than
+  # gating every push; `benchmarks-compare` merges its report when present and the
+  # three per-push legs compare fine without it. macos-15-intel is GitHub's last
+  # x86_64 image (supported through 2027-08); NEVER macos-13 (retired 2025-12-08).
+  benchmarks-macos-x86:
+    name: benchmarks (macos-15-intel, nightly)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-15-intel
+    timeout-minutes: 15
+    env:
+      ASMTEST_BOX_ID: gh-macos-15-intel
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the emulator tier deps
+        run: make deps DEPS_ARGS=--emu
+
+      # Capstone (pinned source build, K1-cached) so emu-bench emits the
+      # BM_MODEL_COST model_cost rows on this leg too; mirrors the `benchmarks` job.
+      - name: Cache the pinned Capstone source build (K1)
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/asmtest-thirdparty/capstone
+          key: tp-capstone-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-capstone.sh', 'scripts/lib-thirdparty.sh', 'scripts/third-party-digests.txt', 'scripts/thirdparty-cache.sh') }}
+
+      - name: Build and install Capstone from source (model-cost weighting)
+        run: sh scripts/thirdparty-cache.sh cached-build capstone   # pinned source build; restores from the cache when warm
+
+      - name: Gate the deterministic golden emu counts (host-independent)
+        run: make bench-check
+
+      - name: Run the cross-system benchmark report
+        run: make bench-report
+
+      - name: Upload the per-system report
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-report-macos-15-intel
+          path: build/bench-report-*.json
+          if-no-files-found: error
+
+      # Nightly-only per-box record (this job is already nightly-gated, but keep the
+      # step gate explicit and uniform with the per-push legs).
+      - name: Record this box (nightly)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: make bench-record
+
+      - name: Upload this box record (nightly)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-boxes-macos-15-intel
+          path: benchmarks/boxes/
+          if-no-files-found: error
+
+  # The real-Windows benchmark leg — per push (windows runners are plentiful,
+  # unlike Intel macs). Builds the PE producers with the mingw toolchain and runs
+  # the deterministic golden gate on a genuine Windows kernel, then a full
+  # per-system report. Uses the same MSYS2/MINGW64 shell as the `windows` job.
+  # Engine versions cannot be pinned here (MSYS2 is a rolling repo); the golden
+  # gate is Capstone-version-independent (model rows are filtered out of it) and
+  # the poured versions are logged below.
+  benchmarks-windows:
+    name: benchmarks (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      ASMTEST_BOX_ID: gh-windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: true
+          # nasm builds suite_win64.exe's capture/routines objects (win64-bench-report);
+          # git + python3 are needed by bench-report.sh; pkgconf resolves the mingw
+          # unicorn/capstone the win64.mk flag defaults pick up.
+          install: >-
+            make git coreutils nasm
+            mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-unicorn
+            mingw-w64-x86_64-capstone
+            mingw-w64-x86_64-python
+            mingw-w64-x86_64-pkgconf
+
+      # MSYS2 is a rolling repo (no version pin), so record what was actually
+      # poured — the golden gate does not depend on it, but the report's native
+      # cycle values and any future triage do.
+      - name: Toolchain + engine versions
+        run: pacman -Q mingw-w64-x86_64-unicorn mingw-w64-x86_64-capstone mingw-w64-x86_64-gcc
+
+      - name: Gate the deterministic golden emu counts on real Windows
+        run: make win64-bench-check WIN64_CC=gcc WINE=
+
+      - name: Full per-system Windows report
+        run: make win64-bench-report WIN64_CC=gcc WINE=
+
+      - name: Upload the per-system report
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-report-windows-latest
+          path: build/bench-report-*.json
+          if-no-files-found: error
+
+      # Nightly (and manual dispatch) only: persist this Windows box's record.
+      - name: Record this box (nightly)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: make win64-bench-record WIN64_CC=gcc WINE=
+
+      - name: Upload this box record (nightly)
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
+        with:
+          name: bench-boxes-windows-latest
+          path: benchmarks/boxes/
+          if-no-files-found: error
+
+  # Nightly (and manual dispatch): collect every leg's per-box record and commit
+  # benchmarks/boxes/gh-** back to main as github-actions[bot]. GITHUB_TOKEN pushes
+  # do not trigger new workflow runs (the [skip ci] trailer is belt-and-braces), so
+  # there is no recursive-CI risk. Only the auto-managed gh-<runner> boxes are
+  # staged — the human-curated boxes (arm-linux-arm64-gha, the amd-linux dev boxes)
+  # are never auto-committed. Golden files are DELIBERATELY excluded: golden drift is
+  # a reviewed change (every leg's bench-check already gates it), so auto-committing
+  # it would launder a regression into history.
+  benchmarks-record:
+    name: benchmarks (nightly record commit)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: [benchmarks, benchmarks-macos-x86, benchmarks-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Naming any permission zeroes the unspecified scopes FOR THIS JOB ONLY (other
+    # jobs keep the repo default). Do NOT lift this to a workflow-level block.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7   # default persist-credentials keeps the token for `git push`
+
+      - name: Collect every leg's box record
+        uses: actions/download-artifact@v8
+        with:
+          pattern: bench-boxes-*
+          path: benchmarks/boxes/
+          merge-multiple: true
+
+      - name: Bound each auto-recorded box's history (last 200 runs)
+        run: |
+          for f in benchmarks/boxes/gh-*/perf-history.jsonl; do
+            [ -f "$f" ] || continue
+            tail -n 200 "$f" > "$f.trim" && mv "$f.trim" "$f"
+          done
+
+      - name: Commit the per-box records (bot; golden stays human-reviewed)
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # Stage ONLY the auto-managed gh-<runner> box dirs; -r skips git add when
+          # none exist so the job can't error on an empty match.
+          find benchmarks/boxes -maxdepth 1 -type d -name 'gh-*' -print0 | xargs -0 -r git add
+          git diff --cached --quiet && { echo "no record changes"; exit 0; }
+          git commit -m "chore(benchmarks): nightly per-box records [skip ci]"
+          git push || { git pull --rebase origin main && git push; }
 
   # x86-64 macOS / Mach-O tier (clang). The Intel runners are scarce and slow, so
   # this corner of the {arch} x {OS} matrix runs nightly (and on manual
