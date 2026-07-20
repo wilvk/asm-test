@@ -26,11 +26,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/ioctl.h> /* _IOC + TIOC*/FIO* request macros (Theme E) */
+#include <sys/ioctl.h> /* _IOC + TIOC*, FIO* request macros (Theme E) */
 #include <sys/mman.h>  /* PROT_* / MAP_* — the mmap flag tables */
 #include <sys/ptrace.h>
 #include <sys/socket.h> /* AF_*, sockaddr_storage (Theme E) */
-#include <sys/stat.h> /* struct stat / struct statx + S_IF*/STATX_* (Theme E) */
+#include <sys/stat.h> /* struct stat / struct statx + S_IF*, STATX_* (Theme E) */
 #include <sys/syscall.h>
 #include <sys/uio.h>
 #include <sys/un.h> /* sockaddr_un (Theme E) */
