@@ -1617,6 +1617,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **asmspy `cli-smoke`: deterministic unknown-arity arg-decode assertion (de-flake).**
+  The `--log` syscall arg-decode smoke (`cli/cli_smoke.sh`) asserts that at least
+  one syscall in a 400-event window renders the honest unknown-arity form (`…`)
+  rather than a fabricated arity-of-three. The only undescribed syscall the victim's
+  stream produced was the *incidental* `restart_syscall` the kernel emits when a
+  signal interrupts a blocking call — nondeterministic, and it flaked to zero
+  matches under some kernels (measured 1-of-N on Docker-Desktop's LinuxKit kernel),
+  so `make docker-cli` failed at that step. `cli/argdecode_victim.c` now makes one
+  DELIBERATELY-undescribed syscall (`sysinfo`, absent from asmspy's `arg_shape`
+  table), so the `…` rendering appears every iteration; the assertion keys off that
+  specific call — a strengthening, not a weakening. `make docker-cli` cli-smoke
+  PASS restored end-to-end.
+
 - **macOS (Intel) native build correctness (fourth pass): the asmspy CLI lane +
   two ungated example lanes**, surfaced by building the lanes *outside* the
   nightly `test-macos-x86` contract on a macOS 14.7.5 / Intel host — `make cli`,

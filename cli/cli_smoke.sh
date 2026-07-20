@@ -1537,9 +1537,15 @@ ad_has 'mmap(0x0, 4096,' "arity 6 (mmap's later args are no longer truncated awa
 ad_has 'O_RDONLY) = ' "a non-creating open with NO mode slot"
 # mmap's fd is -1: an int arg arrives zero-extended, and must be shown as -1
 ad_has 'fd=-1' "mmap's -1 fd sign-extended (not 4294967295)"
-# an UNKNOWN shape must say it is unknown rather than claim three
-printf '%s\n' "$adout" | grep -qE '\.\.\.\) = ' \
-    || fail "arg decode: no '...' anywhere — an undescribed syscall is still claiming an arity of exactly three"
+# an UNKNOWN shape must say it is unknown rather than claim three. The victim
+# makes one DELIBERATELY-undescribed syscall (sysinfo) for this — a determinate
+# source, unlike the incidental restart_syscall the kernel only emits when a signal
+# interrupts a blocking call inside the window (that flaked to zero matches under
+# some kernels). sysinfo's name still resolves; its arg shape does not, so it must
+# render "<3 raw words>, ...".
+ad_has 'sysinfo(' "an undescribed syscall (name resolves, arg shape does not)"
+printf '%s\n' "$adout" | grep -qE 'sysinfo\(.*\.\.\.\) = ' \
+    || fail "arg decode: the undescribed sysinfo() did not render '...' — an unknown shape is still claiming a fixed arity"
 # CONTROL: the ellipsis must NOT appear on a shape we DO know, or it would just
 # be decoration rather than a statement about arity.
 printf '%s\n' "$adout" | grep -E '^(openat|mmap|getpid|writev|tgkill)\(' \

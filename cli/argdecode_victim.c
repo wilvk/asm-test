@@ -35,6 +35,7 @@
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/sysinfo.h>
 #include <sys/uio.h>
 #include <time.h>
 #include <unistd.h>
@@ -99,6 +100,16 @@ int main(void) {
             close(wfd);
         }
         syscall(SYS_getppid); /* T9: a second arity-ZERO shape */
+
+        /* The DELIBERATELY-UNDESCRIBED control: asmspy carries no arg-shape for
+         * sysinfo, so it must render the honest unknown-arity form
+         * (sysinfo(<3 raw words>, ...) = 0) instead of inventing a fixed arity of
+         * three. This is a DETERMINATE source of that "..." every iteration — the
+         * smoke used to rely on the incidental restart_syscall, which the kernel
+         * only emits when a signal happens to interrupt a blocking call inside the
+         * trace window, and which flaked to zero matches under some kernels. */
+        struct sysinfo si;
+        syscall(SYS_sysinfo, &si);
 
         /* two flag words and a 6-arg shape */
         void *m = mmap(NULL, 4096, PROT_READ | PROT_WRITE,
