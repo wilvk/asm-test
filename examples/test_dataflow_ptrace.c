@@ -97,6 +97,8 @@ static const uint8_t df_chain[] = {
  * records df_chain as version 0 (the bytes live when the trace runs) and this as version 1;
  * decoding at v0 must still enumerate the RDI read even though live memory holds the RSI
  * read — the "time-correct bytes survive a mid-capture patch/relocate" contract. */
+/* df_chain_v2 is used only by test_versioned, inside the Linux/x86-64 block below. */
+#if defined(__linux__) && defined(__x86_64__)
 static const uint8_t df_chain_v2[] = {
     0x48, 0x89, 0xf0, /* 0x00 mov rax, rsi   (patched; was mov rax,rdi) */
     0x48, 0x89, 0x44, 0x24,
@@ -107,6 +109,7 @@ static const uint8_t df_chain_v2[] = {
     0x48, 0x89, 0xd0,       /* 0x11 mov rax, rdx                              */
     0xc3,                   /* 0x14 ret                                       */
 };
+#endif /* __linux__ && __x86_64__ */
 
 /* mov rax, rdi / mov r8d, esi / add rax, r8 / ret — T1: gp_value must resolve
  * X86_REG_R8D (the WRITE operand of `mov r8d, esi`) to its r8 container, or the write
@@ -156,7 +159,9 @@ static const uint8_t rip_load[] = {
  * inherited mapping, so `call rdi` leaves the recorded region [base,base+9): the producer
  * must STEP OVER it and resume, yielding a value trace whose rax chain (step0 write ->
  * step3 read) threads ACROSS the call AND the T2 gap-barrier step the call-out now
- * inserts at index 2 (see test_callout). Returns rsi + rdx = 12. */
+ * inserts at index 2 (see test_callout). Returns rsi + rdx = 12. The call-out
+ * fixtures below are used only by the ptrace call-out tests, all in this block. */
+#if defined(__linux__) && defined(__x86_64__)
 static const uint8_t call_region[] = {
     0x48, 0x89, 0xf0, /* 0x00 mov rax, rsi   (rax = arg1)      */
     0xff, 0xd7,       /* 0x03 call rdi       (call the helper) */
@@ -241,6 +246,7 @@ static const uint8_t risk_overflow_loop_no_callout[] = {
 /* > DFP_WIN_RISK_BYTES (4096): forces the memory-side risk-set cap before either loop's
  * own last iteration. */
 #define RISK_OVERFLOW_TRIPS 4200
+#endif /* __linux__ && __x86_64__ (call-out fixtures) */
 
 static int has_edge(const asmtest_defuse_t *g, uint32_t from, uint32_t to) {
     for (size_t i = 0; i < g->n; i++)

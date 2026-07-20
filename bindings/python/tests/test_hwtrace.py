@@ -128,18 +128,26 @@ def test_window_region_free_whole_window(hwtrace):
     box = {}
     w = HwTrace.window(lambda: box.__setitem__("r", code.call(20, 22)))
     assert box["r"] == 42  # fn ALWAYS runs, armed or self-skipped
-    assert w.armed  # the `hwtrace` fixture inited single-step, so the window arms here
-    assert not w.truncated  # the generous 1M-insn cap is not overflowed by the tiny leaf
-    # The window CLOSED: end_window takes the scope handle BY VALUE, and a window is only
-    # normalized into its trace by a close that RESOLVES, so a nonzero count is proof the
-    # by-value marshalling matches the C struct's ABI. Nothing else here can witness that:
-    # `path` is empty whenever Capstone is absent (so it must be guarded, and an empty
-    # render is exactly the failure signature), and `truncated` stays False when a close
-    # does not resolve, which is indistinguishable from a clean capture. Without this, a
-    # scope struct whose layout has drifted from the header passes the whole test.
-    assert w.insns > 0
-    if w.path:  # non-empty when Capstone is present
-        assert "ret" in w.path.lower()
+    # Whole-window (§Z1) arms on Linux/x86-64 single-step; on a non-single-step host
+    # (macOS single-step lacks begin_window, AArch64) it honestly self-skips (armed
+    # False) and fn still ran. The C suite's test_wholewindow_singlestep takes the same
+    # skip, and node's/cpp's window tests guard their deep checks the same way. Assert
+    # the arming-dependent bits only when the window actually armed.
+    if w.armed:
+        assert not w.truncated  # the generous 1M-insn cap is not overflowed by the tiny leaf
+        # The window CLOSED: end_window takes the scope handle BY VALUE, and a window is only
+        # normalized into its trace by a close that RESOLVES, so a nonzero count is proof the
+        # by-value marshalling matches the C struct's ABI. Nothing else here can witness that:
+        # `path` is empty whenever Capstone is absent (so it must be guarded, and an empty
+        # render is exactly the failure signature), and `truncated` stays False when a close
+        # does not resolve, which is indistinguishable from a clean capture. Without this, a
+        # scope struct whose layout has drifted from the header passes the whole test.
+        assert w.insns > 0
+        if w.path:  # non-empty when Capstone is present
+            assert "ret" in w.path.lower()
+    else:
+        print("# note: window self-skipped (begin_window unavailable — the region-free "
+              "§Z1 window is Linux/x86-64-only)")
     code.free()
 
 

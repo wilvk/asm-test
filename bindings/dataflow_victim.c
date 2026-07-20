@@ -47,7 +47,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <sys/prctl.h>
+#if defined(__linux__)
+#include <sys/prctl.h> /* PR_SET_PTRACER: Yama trace opt-in — Linux-only (macOS has no Yama) */
+#endif
 #include <time.h>
 #include <unistd.h>
 
@@ -83,8 +85,11 @@ int main(int argc, char **argv) {
     const long a = strtol(argv[2], NULL, 0);
     const long b = strtol(argv[3], NULL, 0);
 
-    /* Opt in to being traced (see the header comment). Advisory: ignore failure. */
+#if defined(__linux__)
+    /* Opt in to being traced (see the header comment). Advisory: ignore failure.
+     * Yama/PR_SET_PTRACER is Linux-only; on macOS the live-attach lanes self-skip. */
     (void)prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
+#endif
 
     const size_t len = sizeof df_chain;
     void *ex = mmap(NULL, len, PROT_READ | PROT_WRITE,

@@ -25,7 +25,11 @@
 #include <stdio.h>
 #include <string.h>
 
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
+/* POSIX: mmap/mprotect/munmap for the CL_HAVE ptrace_descent fixture below. The
+ * mmap block is gated on ARCH (x86-64/aarch64), not OS, so it compiles on macOS
+ * too — the include must match its use, not just Linux (mirrors src/hwtrace.c's
+ * asmtest_hwtrace_exec_alloc W^X path). */
 #include <sys/mman.h>
 #include <unistd.h>
 #endif

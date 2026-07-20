@@ -1596,6 +1596,40 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **macOS (Intel) native build + binding self-skip correctness (third pass)**,
+  surfaced by building the binding conformance corpus and the per-language
+  `dataflow-*` / `hwtrace-*` lanes natively on a macOS 14.7.5 / Intel host — a
+  surface no Linux or Docker-on-Mac (Linux) lane exercises (`make python-test`,
+  `make WERROR=1 dataflow-test`, `make dataflow-cpp-test` / `-python-test` /
+  `-ruby-test`, `make hwtrace-python-test`):
+  - `bindings/conformance/conformance.c` included `<sys/mman.h>` / `<unistd.h>`
+    only under `#if defined(__linux__)`, but the `CL_HAVE` `ptrace_descent`
+    fixture that calls `mmap` / `mprotect` / `munmap` is gated on ARCH
+    (x86-64 / aarch64), not OS — so it compiles on macOS and hit
+    implicit-function-declaration errors there, breaking `make python-test`.
+    Broadened the include guard to `__linux__ || __APPLE__`, matching
+    `src/hwtrace.c`'s `asmtest_hwtrace_exec_alloc` W^X path.
+  - `examples/test_dataflow_ptrace.c`: nine `static const` fixtures
+    (`df_chain_v2` + the call-out / overflow set) used only inside the
+    `__linux__ && __x86_64__` block drew `-Werror,-Wunused-const-variable` under
+    `make WERROR=1 dataflow-test` on macOS. Guarded their definitions to match
+    their use (completing the earlier `#else`-stub fix to the same file).
+  - `bindings/dataflow_victim.c` — compiled by every `dataflow-<lang>` lane,
+    which run on macOS — unconditionally included `<sys/prctl.h>` and called
+    `prctl(PR_SET_PTRACER, …)` (a Linux-only Yama trace opt-in), so the shared
+    victim failed to build on macOS (`'sys/prctl.h' file not found`). Guarded
+    both under `__linux__`; the live-attach lanes self-skip off Linux regardless.
+  - `bindings/python/tests/test_hwtrace.py`'s
+    `test_window_region_free_whole_window` still hard-asserted `w.armed` — the
+    one binding missed when the second pass guarded the C++/Ruby/Lua/Zig/Rust
+    window tests. Now guards the arming-dependent checks on `armed` and notes the
+    honest self-skip, matching node's and cpp's shape.
+  - `bindings/ruby/dataflow.rb` used Ruby-3.0 endless-method syntax
+    (`def steps = …`) that fails to parse on Ruby 2.6, violating the binding's
+    own `required_ruby_version >= 2.6` (`asmtest.gemspec`) — and stock macOS
+    ships Ruby 2.6. Rewrote as classic single-line defs (`def steps; …; end`),
+    matching every sibling ruby file.
+
 - **macOS (Intel) native build + whole-window self-skip correctness (second
   pass)**, surfaced by building the wider native tier set on a macOS 14.7.5 /
   Intel host (`make hwtrace-test`, `make dataflow-test`, `make WERROR=1

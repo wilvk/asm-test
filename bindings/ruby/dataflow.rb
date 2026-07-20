@@ -338,8 +338,11 @@ module Asmtest
         [rc, out[0, 8].unpack1("q<")]
       end
 
-      def steps = VALTRACE_STEPS.call(@v)
-      def recs = VALTRACE_RECS.call(@v)
+      # Classic single-line defs (not `def x = ...` endless methods, which are Ruby
+      # 3.0+): the gemspec floor is `required_ruby_version >= 2.6`, and stock macOS
+      # ships Ruby 2.6 — every sibling file stays 2.6-parseable, so this one must too.
+      def steps; VALTRACE_STEPS.call(@v); end
+      def recs; VALTRACE_RECS.call(@v); end
 
       # The L1 last-writer def-use graph over this trace, built once and cached
       # until the next #step / attach invalidates it.
