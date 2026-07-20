@@ -1007,15 +1007,18 @@ jobs:
             grep -n 'AArch64 PTRACE_SINGLESTEP is non-functional' "$log"
             exit 1
           fi
-          # (2) No lane may report its out-of-process ptrace tier unavailable — on a
-          #     native arm64 VM the stepper is live inside every container. These are
-          #     the exact per-binding unavailability strings (python/node/cpp/zig/lua
-          #     'ptrace backend unavailable', dotnet 'ptrace toolkit unavailable',
-          #     ruby/rust 'out-of-process ptrace tier/toolkit' + ruby's descent
-          #     'ptrace unavailable'); dotnet's top-level single-step gate prints
-          #     'single-step backend unavailable', which is NOT in this set.
+          # (2) No lane that RUNS its ptrace tier may report it UNAVAILABLE — where the
+          #     tier runs on a native arm64 VM the stepper is live. Bindings split two ways:
+          #     go + java run the ptrace toolkit before any single-step gate, so their T4
+          #     A64 fixtures execute live here; cpp/node/zig/lua/ruby/rust/dotnet gate their
+          #     WHOLE hwtrace suite on the x86-only in-process single-step backend and so
+          #     self-skip on arm64 with 'single-step backend unavailable' (never reaching
+          #     their ptrace section — running THAT live is a per-binding follow-on). The
+          #     first set must never print a ptrace-unavailability string; the make step
+          #     itself already fails (exit propagates through docker) if their assertions
+          #     regress, so this is the silent-skip backstop.
           if grep -nE 'ptrace backend unavailable|ptrace toolkit unavailable|out-of-process ptrace (tier|toolkit) .?unavailable|ptrace unavailable' "$log"; then
-            echo "::error::hwtrace-bindings-arm64: a binding's ptrace tier self-skipped as UNAVAILABLE on real AArch64 — the T4 live fixtures never executed there. Triage the lane above."
+            echo "::error::hwtrace-bindings-arm64: a running binding's ptrace tier self-skipped as UNAVAILABLE on real AArch64 — its T4 live fixtures never executed. Triage the lane above."
             exit 1
           fi
           # (3) Every lane actually ran — its banner must be present (a lane silently
@@ -1026,7 +1029,15 @@ jobs:
               exit 1
             fi
           done
-          echo "::notice::hwtrace-bindings-arm64: all nine compiled lanes ran natively on AArch64 with the ptrace tier live (dotnet's top-level single-step gate is the one recorded wholesale skip)."
+          # (4) Non-vacuity: go + java are the two lanes that RUN the ptrace tier live on
+          #     arm64 (the others gate wholesale on single-step). At least their suites must
+          #     have executed live assertions — a green run where BOTH silently degraded to
+          #     the single-step skip would defeat the point.
+          if ! grep -q '^ok .*github.com/wilvk/asm-test/bindings/go' "$log"; then
+            echo "::error::hwtrace-bindings-arm64: the go lane did not report a passing package run — its live arm64 ptrace tier did not execute."
+            exit 1
+          fi
+          echo "::notice::hwtrace-bindings-arm64: go + java ran the out-of-process ptrace tier LIVE on AArch64 (T4 A64 fixtures); cpp/node/zig/lua/ruby/rust/dotnet self-skip on their x86-only in-process single-step gate (running their ptrace section live on arm64 is a recorded per-binding follow-on)."
 
   # asmspy, the ncurses front-end over the out-of-process tracer (cli/). The
   # headless smoke drives every non-interactive subcommand (--list/--syms/

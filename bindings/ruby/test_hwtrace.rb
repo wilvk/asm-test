@@ -68,6 +68,18 @@ IS_ARM64 = !(RUBY_PLATFORM =~ /aarch64|arm64/).nil?
 PTRACE_ROUTINE = IS_ARM64 ? ROUTINE_A64 : ROUTINE
 PTRACE_OFFSETS = IS_ARM64 ? [0x0, 0x4, 0x8, 0x10] : [0x0, 0x3, 0x6, 0xC, 0x11]
 
+# AArch64 twin of LOOP. trace_call_auto's complete floor on arm64 is the fork+ptrace
+# per-instruction rung, which EXECUTES the bytes, so a call-auto fixture must be
+# host-native (x86 bytes would SIGILL into a truncated result-0 capture). Loop-body block
+# starts at the b.ne back-edge target, offset 0x4.
+#   mov x2,#0; L: add x2,x2,x0; subs x1,x1,#1; b.ne L; mov x0,x2; ret
+LOOP_A64 = [0x02, 0x00, 0x80, 0xD2, 0x42, 0x00, 0x00, 0x8B,
+            0x21, 0x04, 0x00, 0xF1, 0xC1, 0xFF, 0xFF, 0x54,
+            0xE0, 0x03, 0x02, 0xAA, 0xC0, 0x03, 0x5F, 0xD6].pack("C*")
+CALLAUTO_ROUTINE = IS_ARM64 ? ROUTINE_A64 : ROUTINE
+CALLAUTO_LOOP = IS_ARM64 ? LOOP_A64 : LOOP
+CALLAUTO_LOOPBODY = IS_ARM64 ? 0x4 : 0x7
+
 $n = 0
 $failed = false
 
@@ -504,7 +516,7 @@ end
 # HwTrace.init fixture here; it runs standalone. Accept rc in {OK, EUNAVAIL}: OK on any
 # call-owning native host (single-step floor on x86-64 Linux), EUNAVAIL where none is
 # available. Mirrors the Python test_trace_call_auto_owns_the_call_and_completes. ----
-tca_code = NativeCode.from_bytes(ROUTINE)
+tca_code = NativeCode.from_bytes(CALLAUTO_ROUTINE) # host-native: the arm64 floor forks+ptraces it
 tca = HwTrace.trace_call_auto(tca_code, 20, 22) # 42 <= 100 -> jle taken, dec skipped
 if tca.rc == EUNAVAIL
   puts "# note: trace_call_auto self-skip (no call-owning tier): rc=#{tca.rc}"
@@ -522,14 +534,15 @@ tca_code.free
 # A loop past the 16-taken-branch LBR window must STILL yield a complete trace
 # (escalating off the ceiling-bounded backend on an AMD host; the single-step floor
 # completes it directly elsewhere). mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret.
-tca_loop = NativeCode.from_bytes(LOOP)
+tca_loop = NativeCode.from_bytes(CALLAUTO_LOOP)
 tcal = HwTrace.trace_call_auto(tca_loop, 1, 25) # 25 back-edges > 16-deep window
 if tcal.rc == EUNAVAIL
   puts "# note: trace_call_auto(loop) self-skip: rc=#{tcal.rc}"
 else
   ok(tcal.result == 25, "trace_call_auto(loop,1,25).result == 25 (got #{tcal.result.inspect})")
   ok(!tcal.truncated, "trace_call_auto(loop) not truncated (escalated to a ceiling-free tier)")
-  ok(tcal.trace.covered?(0x7), "trace_call_auto(loop) covers loop-body block 0x7")
+  ok(tcal.trace.covered?(CALLAUTO_LOOPBODY),
+     "trace_call_auto(loop) covers loop-body block 0x#{CALLAUTO_LOOPBODY.to_s(16)}")
   tcal.trace.free
 end
 tca_loop.free

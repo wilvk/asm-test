@@ -782,6 +782,12 @@ static int arg_shape(long nr, argshape_t *sh) {
     case __NR_dup2:
         SHAPE(A_FD, A_INT);
 #endif
+#ifdef __NR_dup3
+    /* AArch64 dropped the 2-arg dup2 syscall; glibc's dup2() routes to dup3
+     * there (oldfd, newfd, flags). flags=0 for a plain dup2. */
+    case __NR_dup3:
+        SHAPE(A_FD, A_INT, A_INT);
+#endif
 #ifdef __NR_dup
     case __NR_dup:
         SHAPE(A_FD);

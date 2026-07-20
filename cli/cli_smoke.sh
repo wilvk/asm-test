@@ -1618,8 +1618,18 @@ echo "  stat/statx buffers decoded on success; a failed stat stays a raw pointer
 #      assertion (a table-entry typo could land silently) ----
 ad_has 'readv(fd=' "readv with a resolved fd"
 ad_has '["iovec-one", "iovec-two"], 2) = 18' "readv CONTENTS at exit"
-ad_has 'dup2(fd=' "dup2 fd class"
-ad_has ', 17) = 17' "dup2's plain int second arg and return"
+# AArch64 has no dup2 syscall — glibc's dup2() routes to dup3(oldfd, newfd, 0)
+# there; x86-64 keeps the 2-arg dup2. Assert the exact per-arch rendering.
+case "$(uname -m)" in
+aarch64 | arm64)
+    ad_has 'dup3(fd=' "dup3 fd class (arm64 dup2 routes to dup3)"
+    ad_has ', 17, 0) = 17' "dup3's newfd + flags + return"
+    ;;
+*)
+    ad_has 'dup2(fd=' "dup2 fd class"
+    ad_has ', 17) = 17' "dup2's plain int second arg and return"
+    ;;
+esac
 ad_has 'ftruncate(fd=' "ftruncate"
 ad_has ', 4) = 0' "its A_SIZE arg"
 ad_has 'getppid() = ' "a second arity-ZERO shape"

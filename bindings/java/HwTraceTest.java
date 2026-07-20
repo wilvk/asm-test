@@ -50,6 +50,17 @@ public final class HwTraceTest {
         0x48, 0x01, (byte) 0xF8, 0x48, (byte) 0xFF, (byte) 0xCE, 0x75, (byte) 0xF8, (byte) 0xC3
     };
 
+    // AArch64 twin of LOOP. trace_call_auto's complete floor on arm64 is the fork+ptrace
+    // per-instruction rung, which EXECUTES the bytes — so a call-auto fixture must be
+    // host-native (x86 bytes would SIGILL into a truncated result-0 capture). Loop-body
+    // block starts at the b.ne back-edge target, offset 0x4.
+    //   mov x2,#0; L: add x2,x2,x0; subs x1,x1,#1; b.ne L; mov x0,x2; ret
+    private static final byte[] LOOP_A64 = {
+        0x02, 0x00, (byte) 0x80, (byte) 0xD2, 0x42, 0x00, 0x00, (byte) 0x8B,
+        0x21, 0x04, 0x00, (byte) 0xF1, (byte) 0xC1, (byte) 0xFF, (byte) 0xFF, 0x54,
+        (byte) 0xE0, 0x03, 0x02, (byte) 0xAA, (byte) 0xC0, 0x03, 0x5f, (byte) 0xD6
+    };
+
     // Whole-window OOP test leaves: two 7-byte native "methods" the driver frame calls into.
     private static final byte[] M1 = { 0x48, (byte) 0x89, (byte) 0xF8, 0x48, 0x01, (byte) 0xF0, (byte) 0xC3 }; // rax=rdi+rsi
     private static final byte[] M2 = { 0x48, (byte) 0x89, (byte) 0xF8, 0x48, 0x29, (byte) 0xF0, (byte) 0xC3 }; // rax=rdi-rsi
@@ -700,7 +711,10 @@ public final class HwTraceTest {
     // if the trace truncates. It self-manages the tier lifecycle (no HwTrace.init fixture), so
     // it runs standalone; off x86-64 Linux it self-skips with EUNAVAIL.
     private static void traceCallAutoOwnsTheCall() {
-        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(ROUTINE);
+        // Arch-select: on arm64 the cascade's floor forks+ptraces the bytes (the
+        // hwtrace/MSR/block-step rungs are x86-only), so feed host-native fixtures.
+        boolean x86 = hostIsX86_64();
+        HwTrace.NativeCode code = HwTrace.NativeCode.fromBytes(x86 ? ROUTINE : ROUTINE_A64);
         try {
             HwTrace.TraceCallAutoResult res = HwTrace.traceCallAuto(code, 20, 22); // 42 <= 100 -> jle taken
             ok(res.rc() == HwTrace.ASMTEST_HW_OK || res.rc() == HwTrace.ASMTEST_HW_EUNAVAIL,
@@ -720,7 +734,8 @@ public final class HwTraceTest {
         // A loop past the 16-taken-branch LBR window must STILL yield a complete trace
         // (escalating off the ceiling-bounded backend on an AMD host; the single-step floor
         // completes it directly elsewhere). result = rdi * rsi count = 1 * 25 = 25.
-        HwTrace.NativeCode loop = HwTrace.NativeCode.fromBytes(LOOP);
+        HwTrace.NativeCode loop = HwTrace.NativeCode.fromBytes(x86 ? LOOP : LOOP_A64);
+        long loopBody = x86 ? 0x7 : 0x4;
         try {
             HwTrace.TraceCallAutoResult res = HwTrace.traceCallAuto(loop, 1, 25); // 25 back-edges > 16-deep window
             ok(res.rc() == HwTrace.ASMTEST_HW_OK || res.rc() == HwTrace.ASMTEST_HW_EUNAVAIL,
@@ -728,7 +743,8 @@ public final class HwTraceTest {
             if (res.ok()) {
                 ok(res.result() == 25, "traceCallAuto(loop,1,25): result == 25 (got " + res.result() + ")");
                 ok(!res.truncated(), "traceCallAuto(loop) !truncated (escalated to a ceiling-free tier)");
-                ok(res.trace().covered(0x7), "traceCallAuto(loop) covers loop-body block offset 0x7");
+                ok(res.trace().covered(loopBody),
+                    "traceCallAuto(loop) covers loop-body block offset 0x" + Long.toHexString(loopBody));
                 res.trace().free();
             }
         } finally {

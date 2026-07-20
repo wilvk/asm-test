@@ -44,6 +44,18 @@ var hwtraceLoop = []byte{
 	0x48, 0x01, 0xF8, 0x48, 0xFF, 0xCE, 0x75, 0xF8, 0xC3,
 }
 
+// AArch64 twin of hwtraceLoop. The trace_call_auto cascade's complete floor on arm64 is
+// the fork+ptrace per-instruction rung (the hwtrace/MSR/block-step rungs are x86-only),
+// which EXECUTES the bytes in a forked child — so a call-auto fixture must be host-native
+// like the ptrace tests, not x86 bytes (which SIGILL into a truncated result-0 capture).
+//
+//	mov x2,#0; L: add x2,x2,x0; subs x1,x1,#1; b.ne L; mov x0,x2; ret
+var hwtraceLoopA64 = []byte{
+	0x02, 0x00, 0x80, 0xD2, 0x42, 0x00, 0x00, 0x8B,
+	0x21, 0x04, 0x00, 0xF1, 0xC1, 0xFF, 0xFF, 0x54,
+	0xE0, 0x03, 0x02, 0xAA, 0xC0, 0x03, 0x5F, 0xD6,
+}
+
 func TestHwtrace(t *testing.T) {
 	if !HwTraceAvailable(SingleStep) {
 		t.Skipf("single-step backend unavailable: %s", HwTraceSkipReason(SingleStep))
@@ -505,7 +517,13 @@ func TestHwtraceAutoLive(t *testing.T) {
 func TestHwtraceTraceCallAuto(t *testing.T) {
 	// The exec allocator only needs the lib loaded (not an armed tier); a failure here
 	// means libasmtest_hwtrace is absent, so self-skip exactly as the other tests do.
-	code, err := HwNativeCodeFromBytes(hwtraceRoutine)
+	// Arch-select: on arm64 the cascade's floor forks+ptraces the bytes, so feed the
+	// host-native twin (x86 bytes would SIGILL there — see hwtraceLoopA64).
+	autoRoutine := hwtraceRoutine
+	if isArm64 {
+		autoRoutine = hwtraceRoutineA64
+	}
+	code, err := HwNativeCodeFromBytes(autoRoutine)
 	if err != nil {
 		t.Skipf("hardware-trace tier unavailable: %v", err)
 	}
@@ -535,7 +553,13 @@ func TestHwtraceTraceCallAuto(t *testing.T) {
 	// A loop past the 16-taken-branch LBR window must STILL yield a complete trace
 	// (escalating off the ceiling-bounded backend on an AMD host; the single-step floor
 	// completes it directly elsewhere).
-	loop, err := HwNativeCodeFromBytes(hwtraceLoop)
+	autoLoop := hwtraceLoop
+	loopBody := uint64(0x7)
+	if isArm64 {
+		autoLoop = hwtraceLoopA64
+		loopBody = 0x4 // the b.ne back-edge target starts the loop-body block
+	}
+	loop, err := HwNativeCodeFromBytes(autoLoop)
 	if err != nil {
 		t.Fatalf("HwNativeCodeFromBytes(loop): %v", err)
 	}
@@ -552,8 +576,8 @@ func TestHwtraceTraceCallAuto(t *testing.T) {
 		if lres.Truncated {
 			t.Fatalf("TraceCallAuto(loop) truncated: escalation should have completed the trace")
 		}
-		if !lres.Trace.Covered(0x7) { // loop-body block covered
-			t.Fatalf("TraceCallAuto(loop): expected loop-body block (offset 0x7) covered")
+		if !lres.Trace.Covered(loopBody) { // loop-body block covered
+			t.Fatalf("TraceCallAuto(loop): expected loop-body block (offset 0x%x) covered", loopBody)
 		}
 		lres.Trace.Free()
 	}
