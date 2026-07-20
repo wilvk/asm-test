@@ -3080,6 +3080,11 @@ static void test_attach_worker(void) {}
 static void test_attach_worker_tid(void) {}
 static void test_signal_split(void) {}
 static void test_attach_jit_worker(void) {}
+static void test_window_survey(void) {}
+static void test_window_subreg_alias_gap(void) {}
+static void test_window_vec_gap(void) {}
+static void test_window_midpublish(void) {}
+static void test_window_cost(void) {}
 #endif
 
 int main(void) {

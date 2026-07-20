@@ -8782,7 +8782,12 @@ static void test_disas_queries(void) {
 static void noop_sigalrm(int s) { (void)s; }
 #endif
 
-/* Map `blob` (`n` bytes) as private R+X executable memory, or NULL on failure. */
+/* Map `blob` (`n` bytes) as private R+X executable memory, or NULL on failure.
+ * Every caller sits inside `__linux__ && (__x86_64__ || __aarch64__)` (the AMD/PT/
+ * descent tests), so the definition carries that same guard — else it is an
+ * unused-function -Werror on macOS (and any non-Linux host), where those tests
+ * compile out. Same discipline as frame_insns_eq below. */
+#if defined(__linux__) && (defined(__x86_64__) || defined(__aarch64__))
 static void *map_exec(const void *blob, size_t n) {
     void *p = mmap(NULL, n, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS,
                    -1, 0);
@@ -8793,6 +8798,7 @@ static void *map_exec(const void *blob, size_t n) {
     __builtin___clear_cache((char *)p, (char *)p + n);
     return p;
 }
+#endif
 
 /* Phase 2 (call-descent): the descent handle exists, allocates, reads back empty, and
  * frees idempotently; the _ex entry points reproduce the flat trace exactly whether the

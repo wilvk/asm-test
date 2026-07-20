@@ -747,18 +747,28 @@ int main() {
         NativeCode code = NativeCode::from_bytes(ROUTINE);
         long result = -1;
         auto w = HwTrace::window([&] { result = code.call(20, 22); });
+        std::printf("# window: armed=%d truncated=%d\n", (int)w.armed,
+                    (int)w.truncated);
         // fn ALWAYS runs — armed or self-skipped, code.call(20, 22) == 42.
         ok(result == 42, "window: fn ran and code.call(20, 22) == 42");
-        // On the single-step host the region-free window arms; a non-single-step
-        // backend would self-skip (armed == false), still an honest outcome.
-        ok(w.armed, "window: region-free whole-window scope armed on single-step");
-        ok(!w.truncated, "window: 1M-insn cap not overflowed by the tiny leaf");
-        if (w.armed && !w.path.empty())
-            ok(w.path.find("ret") != std::string::npos,
-               "window: rendered listing includes the traced leaf's ret");
-        else
-            std::printf("# note: window path empty (no decoder) — skipping "
-                        "listing check\n");
+        // Whole-window (§Z1) arms on Linux/x86-64 single-step; on macOS single-step
+        // it honestly self-skips (armed == false) — the C suite's
+        // test_wholewindow_singlestep takes the same skip, and node's window test
+        // guards its deep checks the same way. Assert the arming-dependent bits only
+        // when the window actually armed.
+        if (w.armed) {
+            ok(!w.truncated,
+               "window: 1M-insn cap not overflowed by the tiny leaf");
+            if (!w.path.empty())
+                ok(w.path.find("ret") != std::string::npos,
+                   "window: rendered listing includes the traced leaf's ret");
+            else
+                std::printf("# note: window path empty (no decoder) — skipping "
+                            "listing check\n");
+        } else {
+            std::printf("# note: window self-skipped (begin_window unavailable — "
+                        "the region-free §Z1 window is Linux/x86-64-only)\n");
+        }
         code.free();
         HwTrace::shutdown();
     }

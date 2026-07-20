@@ -2770,8 +2770,12 @@ int asmtest_hwtrace_pt_hop_open(int tid, void **ctx_out) {
     *ctx_out = h;
     return ASMTEST_HW_OK;
 #else
+    /* Non-Linux (e.g. macOS): PT is EUNAVAIL per the tier's one classifier
+     * (hw_classify reports INTEL_PT unavailable off libipt), so the hop-open
+     * self-skip must match — EUNAVAIL, not ENOSYS — with *ctx_out left NULL.
+     * Same fix already applied to pt_begin_window / pt_attach_begin. */
     (void)tid;
-    return ASMTEST_HW_ENOSYS;
+    return ASMTEST_HW_EUNAVAIL;
 #endif
 }
 

@@ -60,6 +60,21 @@
 #include <time.h>
 #include <unistd.h>
 
+/* memfd_create is a Linux-only syscall (glibc/musl); macOS/BSD lack it. The one
+ * caller is the F2 sc_pread fixture, reached only after main()'s
+ * asmtest_dataflow_blockstep_probe() == 1 gate — which off Linux x86-64 returns
+ * DF_BLOCKSTEP_ENOSYS and self-skips the whole suite before any test runs. This
+ * compile-only stub keeps the suite building on macOS (the fixture's own fd < 0
+ * SKIP path covers the never-reached call); it is never invoked off Linux. */
+#if !defined(__linux__)
+static int memfd_create(const char *name, unsigned int flags) {
+    (void)name;
+    (void)flags;
+    errno = ENOSYS;
+    return -1;
+}
+#endif
+
 /* T8: this suite is only ever built where libunicorn is present (mk/dataflow.mk gates
  * $(BUILD)/test_dataflow_blockstep.o's only caller, dataflow-blockstep-test, behind
  * DF_HAVE_UNICORN — see SUITE_EXCLUDES in the root Makefile, which keeps this suite OUT of the

@@ -201,17 +201,22 @@ fn window_region_free_whole_window() {
     let code = NativeCode::from_bytes(&ROUTINE);
     let mut result = -1i64;
     let w: WindowResult = HwTrace::window(|| result = code.call(20, 22));
+    eprintln!("# window: armed={} truncated={}", w.armed, w.truncated);
     // The closure ALWAYS runs — armed or self-skipped, code.call(20, 22) == 42.
     assert_eq!(result, 42, "window: closure ran and code.call(20, 22) == 42");
-    // The single-step tier is up, so the region-free window arms here; a
-    // non-single-step backend would self-skip (armed == false), still honest.
-    assert!(w.armed, "window: region-free whole-window scope armed on single-step");
-    assert!(!w.truncated, "window: 1M-insn cap not overflowed by the tiny leaf");
-    if !w.path.is_empty() {
-        // decoder present: the noisy listing still contains the traced leaf's ret.
-        assert!(w.path.contains("ret"), "window: rendered listing includes the leaf's ret");
+    // Whole-window (§Z1) arms on Linux/x86-64 single-step; on macOS single-step it
+    // honestly self-skips (armed == false), matching the C test_wholewindow_singlestep
+    // and node's window test. Assert the arming-dependent bits only when it armed.
+    if w.armed {
+        assert!(!w.truncated, "window: 1M-insn cap not overflowed by the tiny leaf");
+        if !w.path.is_empty() {
+            // decoder present: the noisy listing still contains the traced leaf's ret.
+            assert!(w.path.contains("ret"), "window: rendered listing includes the leaf's ret");
+        } else {
+            eprintln!("# note: window path empty (no decoder) — skipping listing check");
+        }
     } else {
-        eprintln!("# note: window path empty (no decoder) — skipping listing check");
+        eprintln!("# note: window self-skipped (begin_window unavailable — the region-free §Z1 window is Linux/x86-64-only)");
     }
 
     HwTrace::shutdown();

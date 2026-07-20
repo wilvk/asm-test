@@ -350,15 +350,22 @@ do
   local code = NativeCode.from_bytes(ROUTINE)
   local wresult
   local w = HwTrace.window(function() wresult = code:call(20, 22) end)
+  print(string.format("# window: armed=%s truncated=%s", tostring(w.armed), tostring(w.truncated)))
   eq(wresult, 42, "window: fn ran and call(20,22) == 42")
-  ok(w.armed, "window: region-free whole-window scope armed on single-step")
-  -- A decoder-present listing still holds the leaf's ret when the window did not
-  -- overflow; tolerate truncation (the interpreter noise may fill the ring).
-  if not w.truncated and #w.path > 0 then
-    ok(w.path:find("ret", 1, true) ~= nil, "window: rendered listing includes the leaf's ret")
+  -- Whole-window (§Z1) arms on Linux/x86-64 single-step; on macOS single-step it
+  -- honestly self-skips (armed == false), matching the C test_wholewindow_singlestep
+  -- and node's window test. Assert the arming-dependent bits only when it armed.
+  if w.armed then
+    -- A decoder-present listing still holds the leaf's ret when the window did not
+    -- overflow; tolerate truncation (the interpreter noise may fill the ring).
+    if not w.truncated and #w.path > 0 then
+      ok(w.path:find("ret", 1, true) ~= nil, "window: rendered listing includes the leaf's ret")
+    else
+      print(string.format("# note: window truncated=%s pathLen=%d (interpreter noise)",
+                          tostring(w.truncated), #w.path))
+    end
   else
-    print(string.format("# note: window truncated=%s pathLen=%d (interpreter noise)",
-                        tostring(w.truncated), #w.path))
+    print("# note: window self-skipped (begin_window unavailable — the region-free §Z1 window is Linux/x86-64-only)")
   end
   code:free()
 end

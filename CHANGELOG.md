@@ -1596,6 +1596,35 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **macOS (Intel) native build + whole-window self-skip correctness (second
+  pass)**, surfaced by building the wider native tier set on a macOS 14.7.5 /
+  Intel host (`make hwtrace-test`, `make dataflow-test`, `make WERROR=1
+  hwtrace-test`, `make hwtrace-cpp-test hwtrace-ruby-test`):
+  - `asmtest_hwtrace_pt_hop_open`'s non-Linux `#else` returned `ASMTEST_HW_ENOSYS`
+    while the tier's classifier reports Intel PT as `ASMTEST_HW_EUNAVAIL` off
+    libipt — so `test_pt_hop_surface`'s self-skip failed on macOS. Now returns
+    `EUNAVAIL` (the same fix already applied to `pt_begin_window` /
+    `pt_attach_begin`; the per-tid PT hop pair had reintroduced it).
+  - `examples/test_dataflow_ptrace.c` called five `test_window_*` functions
+    unconditionally in `main`, but their definitions live inside the
+    `__linux__ && __x86_64__` guard — no non-Linux stubs, unlike every sibling
+    test. Added the missing `#else` stubs.
+  - `examples/test_dataflow_blockstep.c` used Linux-only `memfd_create`
+    unconditionally (the F2 `sc_pread` fixture), breaking the macOS compile even
+    though the whole suite runtime-self-skips off Linux via
+    `asmtest_dataflow_blockstep_probe()`. Added a compile-only non-Linux stub
+    (the caller is unreachable there — the fixture's own `fd < 0` SKIP covers it).
+  - `examples/test_hwtrace.c`'s `map_exec` helper drew an unused-function
+    `-Werror` under `make WERROR=1 hwtrace-test` on macOS: every caller sits
+    inside a Linux guard. Guarded the definition to match its callers, exactly
+    like the adjacent `frame_insns_eq`.
+  - The region-free `§Z1` whole-window scope is Linux/x86-64-only (`begin_window`
+    self-skips on macOS single-step, where the region-based tier still works).
+    The C++, Ruby, Lua, Zig, and Rust binding tests hard-asserted `w.armed`,
+    failing on macOS; they now guard the arming-dependent checks on `armed` and
+    note the honest self-skip — matching node's already-correct shape and the C
+    `test_wholewindow_singlestep` skip.
+
 - **macOS (Intel) native build + PT self-skip correctness**, surfaced by
   validating the out-of-process Mach single-step tier natively on a macOS 14.7.5
   / Intel host (`make mach-stepper-test`, 25/25 live):
