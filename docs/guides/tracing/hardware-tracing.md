@@ -705,7 +705,9 @@ works unprivileged in a container; the perf syscall must be allowed by seccomp).
   [Tuning AMD LBR window reach](amd-lbr-tuning.md).
 - **CoreSight is a scaffold** pending AArch64 board access — it always self-skips.
 - **Single-step is x86-64 Linux/macOS** (Windows/AArch64 planned); the
-  out-of-process ptrace form adds AArch64. It targets well-behaved compute routines
+  out-of-process ptrace form adds AArch64 — **validated live on real AArch64 silicon
+  2026-07-20** (GitHub `ubuntu-24.04-arm` / Azure Cobalt 100, the gating `hwtrace-arm64`
+  CI job). It targets well-behaved compute routines
   with stable bytes — self-modifying code, `POPF`/`IRET`, and in-routine signal
   handlers are flagged `truncated`, not emitted as complete.
 

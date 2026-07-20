@@ -8,6 +8,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **AArch64 out-of-process single-step stream validated live on real silicon
+  (aarch64-ptrace-single-step-validation.md T1–T6).** The out-of-process `ptrace`
+  tracer's AArch64 arm — written and decode/execute-validated under qemu, but whose
+  live capture had never run — now runs LIVE on GitHub's `ubuntu-24.04-arm` hosted
+  runners (Azure Cobalt 100 / Neoverse-N2 VMs) via a gating `hwtrace-arm64` CI job:
+  205 `ok` assertions, the whole ptrace tier (`trace_call` / `trace_attached` /
+  `run_to` software-`brk` plant / call-out step-over) exercised on real hardware, with
+  an anti-vacuity step that fails the build if the tier self-skips. A companion
+  `hwtrace-bindings-arm64` job runs the Go and Java wrappers' AArch64 ptrace fixtures
+  live (the other wrappers gate their whole hwtrace suite on the x86-only in-process
+  single-step backend and self-skip), plus a live Python host step. The first arm64
+  `benchmarks/boxes/` record (`arm-linux-arm64-gha`) is committed with a live
+  `native-oop` capability row. Measured answer to the previously-undetermined
+  hardware-breakpoint question: `NT_ARM_HW_BREAK` is *armed-but-silent* on this
+  hypervisor (slots reported, arm accepted, the debug exception withheld), so the
+  forced-hardware `run_to` self-skips there with that named reason and bare-metal
+  arm64 hw-breakpoint firing moves to self-hosted-runner territory. qemu-user keeps
+  self-skipping honestly. Also brought the asmspy CLI toward AArch64: fixed the
+  `SYS_stat`/`dup2` legacy-syscall gaps (arm64 uses `newfstatat`/`dup3` — the latter
+  now decoded), the host-arch disassembly of traced code, and `R_AARCH64_JUMP_SLOT` /
+  2-slot-PLT0 stub resolution (asmspy-aarch64-support.md T2/T7).
+
 - **F5 live foreign-pid PT replay wired to the landed capture (dataflow-pt-replay-tier.md T4).**
   The out-of-band data-flow value tier's live case now CONSUMES the
   `asmtest_hwtrace_pt_attach_*` foreign-pid capture that landed with

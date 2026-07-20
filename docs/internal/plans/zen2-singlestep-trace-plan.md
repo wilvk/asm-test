@@ -143,15 +143,21 @@ validated against all three real runtimes (V8, HotSpot, CoreCLR) — richer than
 perf-map, which remains the portable lowest common denominator. See the Phase 5 detail
 below for both.
 
-**The one genuinely remaining Phase-5 front is the AArch64 live single-step *stream*** —
-the tracer is written and its code fixtures are decode- and execute-validated under qemu,
-but qemu-user does not emulate the ptrace tracer/tracee relationship at all, so the
-capture itself **cannot be validated without real AArch64 silicon** (Apple Silicon /
-Linux-ARM64 / Windows-on-ARM — no dev box here provides it). `asmtest_ptrace_available()`
-is a cached, hang-proof self-probe that returns 0 under emulation, so the stepper
-self-skips there exactly as the PT/CoreSight tiers self-skip off their hardware. The ten
-binding wrappers gate on the same `available()`, so their live AArch64 fixtures are a
-small follow-on alongside that hardware. The **in-process BTF** variant (W3) has since
+**The AArch64 live single-step *stream* is VALIDATED (2026-07-20)** — the last open
+Phase-5 front closed without buying hardware: GitHub's `ubuntu-24.04-arm` hosted
+runners are real Neoverse-N2-class silicon (Azure Cobalt 100 VMs), and the gating
+`hwtrace-arm64` CI job now runs the whole ptrace tier LIVE there on every push —
+205 ok assertions, zero unexpected skips: `trace_call`/`trace_attached`/`run_to`
+(software-`brk` plant), the call-out step-over (whose AArch64 fixture had to become
+AAPCS64-correct: `bl` writes x30 rather than pushing, so a callout region must
+save/restore LR or its final `ret` loops back into the region — the first live runs
+hung exactly there), and the `/proc`/perf-map/jitdump resolvers. The ten binding
+wrappers' live A64 fixtures run natively in the `hwtrace-bindings-arm64` job +
+the python host step. `asmtest_ptrace_available()` still returns 0 under qemu-user
+(which cannot emulate the tracer/tracee relationship), so emulated environments
+keep self-skipping honestly — that posture is unchanged. The first arm64 box
+record is committed (`benchmarks/boxes/arm-linux-arm64-gha/`, `native-oop`
+row `trace_insns=3 == insns_truth`). The **in-process BTF** variant (W3) has since
 landed as a raw-MSR pinned-envelope tier — the kernel-helper blocker this paragraph
 once cited was not load-bearing after all; see W3 below.
 
@@ -309,11 +315,18 @@ Linux/x86-64 backend.
 > honest truncation
 > ([inproc-btf-block-step.md](../implementations/inproc-btf-block-step.md)); the
 > "kernel helper / uapi patch" blocker this status note previously cited was not
-> load-bearing. **One front remains:**
-> - **AArch64 live single-step *stream*** — blocked on **real AArch64 hardware** (Apple
->   Silicon / Linux-ARM64 / Windows-on-ARM). The tracer is written; qemu-user cannot
->   validate it (it does not emulate the ptrace tracer/tracee relationship), so it
->   self-skips there.
+> load-bearing. **All fronts now closed:**
+> - **AArch64 live single-step *stream*** — **VALIDATED 2026-07-20** on GitHub's
+>   `ubuntu-24.04-arm` hosted runners (Azure Cobalt 100 / Neoverse-N2 VMs, real
+>   silicon), via the gating `hwtrace-arm64` job (205 live ok assertions, zero
+>   unexpected skips) plus `hwtrace-bindings-arm64` (the nine wrappers' A64 ptrace
+>   fixtures live) and the python host step. qemu-user still self-skips honestly
+>   (it cannot emulate the tracer/tracee relationship) — that posture is unchanged;
+>   only the "needs real hardware" gate is gone. Measured bonus: `NT_ARM_HW_BREAK`
+>   is *armed-but-silent* on this hypervisor (slots reported, arm accepted, the
+>   debug exception withheld), so the forced-hardware `run_to` self-skips there with
+>   that named reason — bare-metal arm64 hw-breakpoint validation moves to
+>   [self-hosted-ci-runners.md](../implementations/self-hosted-ci-runners.md).
 
 - **Windows (x86-64)** *(shipped — see the status note above)*. Same `TF`, delivered
   as `EXCEPTION_SINGLE_STEP` to a Vectored Exception Handler (the classic technique);
@@ -441,8 +454,12 @@ Linux/x86-64 backend.
     refusal (the W^X JIT-text case), on **both** arches. The A64 control word is a 4-byte
     aligned EL0 execution breakpoint (`E=1`, `PMC=0b10`, `BAS=0b1111`). `set_hw_bp` fails
     when the host exposes no breakpoint slots — qemu-user emulates none — so `run_until`
-    returns `ETRACE` there and the caller self-skips rather than hanging; like the AArch64
-    stream itself, the live path is **pending real AArch64 hardware**.
+    returns `ETRACE` there and the caller self-skips rather than hanging. **Validated
+    2026-07-20** on the `ubuntu-24.04-arm` runner: the software-`brk` `run_to` path runs
+    live (the `hwtrace-arm64` job's `run_to` assertions), while the forced-hardware path
+    measured `NT_ARM_HW_BREAK` as *armed-but-silent* under Azure's hypervisor (slots
+    reported, arm accepted, debug exception withheld), so it self-skips there with that
+    named reason — bare-metal hw-breakpoint firing stays a self-hosted-runner leg.
 
   - _Done._ Binary jitdump reader — `asmtest_jitdump_find` parses the `jit-<pid>.dump`
     image format CoreCLR/HotSpot/V8 emit. Richer than the text perf-map: it carries the
@@ -499,17 +516,23 @@ Linux/x86-64 backend.
     body. The `/proc` + jitdump **code-region readers** (`asmtest_proc_*`,
     `asmtest_jitdump_find`) — pure file parsing — became Linux-**any-arch** in the same
     change and are **validated live on AArch64** (in a `linux/arm64` container, where
-    they pass). The single-step **trace capture** itself awaits a real AArch64 host:
-    `asmtest_ptrace_available()` is a cached, hang-proof self-probe that returns 0 under
-    qemu-user — which does not emulate the ptrace tracer/tracee relationship at all (a
-    blocking `waitpid` for a `PTRACE_TRACEME` child never returns there) — so the stepper
-    self-skips on emulation exactly as the PT/CoreSight tiers self-skip off their
-    hardware. The AArch64 code fixtures are decode- and execute-validated under qemu;
-    only the live single-step *stream* is pending real Apple-Silicon / Linux-ARM64 /
-    Windows-on-ARM hardware. (The ten binding wrappers call the same C entry points and
-    gate on `available()`, so they self-skip under emulation with no per-binding change;
-    their own live AArch64 fixtures are a small follow-on alongside real-hardware
-    validation.)
+    they pass). The single-step **trace capture** is **validated live on AArch64
+    (2026-07-20)** by the gating `hwtrace-arm64` CI job on GitHub's `ubuntu-24.04-arm`
+    hosted runner (Azure Cobalt 100 / Neoverse-N2 silicon): 205 live `ok` assertions,
+    the whole ptrace tier — `trace_call`/`trace_attached`/`run_to`/the call-out
+    step-over — running for the first time on real silicon, with a CI anti-vacuity step
+    that fails the build if the tier self-skips. `asmtest_ptrace_available()` still
+    returns 0 under qemu-user — which does not emulate the ptrace tracer/tracee
+    relationship at all (a blocking `waitpid` for a `PTRACE_TRACEME` child never returns
+    there) — so the stepper self-skips on *emulation* exactly as the PT/CoreSight tiers
+    self-skip off their hardware; that behaviour is unchanged and still correct. One
+    AArch64-specific correctness fix the live run flushed out: the call-out fixture had to
+    become AAPCS64-correct (`bl` writes x30 rather than pushing a return address, so a
+    region that calls out must save/restore LR — otherwise its final `ret` re-enters the
+    region and the tracer/tracee loop forever; the first live runs hung there). The ten
+    binding wrappers' A64 fixtures run live in the `hwtrace-bindings-arm64` job + the
+    python host step, and the first arm64 `benchmarks/boxes/` record is committed
+    (`arm-linux-arm64-gha`, `native-oop` row `trace_insns == insns_truth`).
 - **W3 — BTF branch-granular step.** `DEBUGCTL.BTF=1` + `TF=1` traps **only on taken
   branches** — one fault per branch (the AMD LBR waypoint set, no 16-entry ceiling),
   feedable into [amd_backend.c](../../../src/amd_backend.c)'s replay loop as `(from,to)`

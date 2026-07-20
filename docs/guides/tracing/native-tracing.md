@@ -460,11 +460,13 @@ body — the AArch64 arm reads the PC + return register via `PTRACE_GETREGSET`/`
 and, through Mach exception ports rather than `ptrace` (macOS has no working `ptrace`
 register-edit path at all), on **macOS x86-64** too — see "macOS (Mach exception ports)"
 below.
-(The AArch64 single-step *stream* can **only** be validated on a real AArch64 host —
-not under qemu-user, which cannot emulate the ptrace tracer/tracee relationship — so it
-is code-implemented and build/self-skip-validated, with the live stream **pending real
-hardware**; `available()` self-probes and self-skips under qemu. The `/proc`+jitdump
-readers, being pure file parsing, run on any Linux arch and are validated live on AArch64.) The supported target is a
+(The AArch64 single-step *stream* is **validated live on real AArch64 silicon**
+(2026-07-20) — the gating `hwtrace-arm64` CI job runs the whole ptrace tier on GitHub's
+`ubuntu-24.04-arm` hosted runner (Azure Cobalt 100 / Neoverse-N2), with an anti-vacuity
+step that fails the build if the tier self-skips. It still self-skips under qemu-user,
+which cannot emulate the ptrace tracer/tracee relationship — `available()` self-probes
+and returns 0 there — so emulated builds stay honest. The `/proc`+jitdump readers, being
+pure file parsing, run on any Linux arch.) The supported target is a
 deterministic, single-threaded routine (≤6 integer args) that **may call out to helpers**
 outside the registered region — call-outs (runtime helpers, GC barriers, PLT stubs) are
 **stepped over at native speed** and not recorded, so a real method that calls helpers
@@ -666,8 +668,14 @@ whole pipeline at a live JIT — not a fixture — for **three** runtimes:
   per-thread, so they never trap a sibling runtime thread the way a process-wide `int3`
   can. The fallback engages automatically when `POKETEXT` is refused; `ASMTEST_PTRACE_HW_BP`
   forces it (the `hwtrace-test` suite uses that to exercise the hardware path
-  deterministically on ordinary memory). AArch64's hardware-breakpoint ptrace interface
-  is a separate follow-on; there `run_to` is software-only for now.
+  deterministically on ordinary memory). AArch64 reaches the same fallback through the
+  `NT_ARM_HW_BREAK` regset (`set_hw_bp`/`clear_hw_bp`, control word `0x1e5`), so `run_to`
+  is not software-only there. Whether the debug exception is *delivered* is
+  host-dependent: on GitHub's `ubuntu-24.04-arm` hypervisor it measured
+  *armed-but-silent* (2026-07-20 — slots reported and the arm accepted, but no SIGTRAP),
+  so the forced-hardware path self-skips there with that named reason and bare-metal
+  arm64 hw-breakpoint firing is a self-hosted-runner leg; the software-`brk` `run_to`
+  path runs live on that runner.
 - `make docker-hwtrace-jit-java` (OpenJDK / **HotSpot**, `asmtest-java` image): compiles a
   one-method hot loop and traces its `Hot.asmtjit`, recovering the C2 JIT's `lea eax, [rsi
   + rdx]` (the `a + b` body, wrapped by HotSpot's nmethod entry barrier and stack-bang).
