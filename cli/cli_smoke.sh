@@ -1980,19 +1980,30 @@ echo "distinct tids in stream: $stids"
 printf '%s\n' "$out" | grep -qE 'mov|jmp|cmp|add|push|call|lea|test|sub|nop' \
     || fail "multi-thread stream: no disassembly"
 
-# process/thread topology: the same multi-threaded victim must render as ONE
-# process node with its threads listed underneath, each with an invocation count.
-echo "--- asmspy --procs $TVPID 120 (process/thread topology) ---"
-# Retry a transient EMPTY topology ("0 tasks observed") — under heavy load the
-# attach/first-syscall-count window occasionally comes up empty; the assertions
-# below still hold on any non-empty capture.
+# process/thread topology: a multi-threaded victim must render as ONE process node
+# with its threads listed underneath, each with an invocation count.
+#
+# Give --procs its OWN fresh victim rather than the thrice-attached $TVPID above:
+# re-seizing a target right after --stream's single-step DETACH is a distinct
+# transition that races on a loaded runner (observed on ubuntu-24.04-arm — the
+# leader's SEIZE can return EPERM before the prior detach has fully settled), and
+# it is not what THIS view validates. The retry respawns the victim so a persistent
+# re-seize race gets a clean target each round, not just a fresh attach window.
+kill "$TVPID" 2>/dev/null || true
+wait "$TVPID" 2>/dev/null || true
 out=""
 for try in 1 2 3; do
+    "$BUILD/threads_victim" 2>/dev/null &
+    TVPID=$!
+    sleep 1
+    echo "--- asmspy --procs $TVPID 120 (process/thread topology, try $try) ---"
     set +e
     out=$(timeout 30 "$ASM" --procs "$TVPID" 120 2>&1); rc=$?
     set -e
     [ "$rc" -eq 124 ] && fail "--procs hung on a multi-threaded target"
     printf '%s\n' "$out" | grep -qE "^node $TVPID \[threads_victim\]  inv=[0-9]" && break
+    kill "$TVPID" 2>/dev/null || true
+    wait "$TVPID" 2>/dev/null || true
     sleep 1
 done
 printf '%s\n' "$out" | head -8
