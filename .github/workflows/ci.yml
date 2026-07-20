@@ -948,16 +948,22 @@ jobs:
       - name: Python wrapper LIVE on AArch64 (single-step self-skips; ptrace toolkit live)
         run: make WERROR=1 hwtrace-python-test
 
-  # The nine COMPILED binding lanes, natively on the arm64 runner (T5,
-  # aarch64-ptrace-single-step-validation): on an arm64 host DOCKER_PLATFORM stays
-  # empty, so mk/docker.mk builds and runs linux/arm64 images directly — the T4
-  # AArch64 ptrace fixtures execute live for the first time. The dotnet lane
-  # self-skips WHOLESALE via its top-level '# SKIP single-step backend unavailable'
-  # gate (HwTraceProgram.cs Main gates on the x86-only in-process backend before
-  # its ptrace subset — relaxing that is a recorded follow-on), so that named skip
-  # is the ONE allowed unavailability line; the other eight lanes must run their
-  # ptrace tier live. The dotnet9/dotnet-stress extras stay x86-only (their own
-  # hardening history); add them here only if they prove arm64-clean.
+  # The nine COMPILED binding lanes' HWTRACE suites, natively on the arm64 runner
+  # (T5, aarch64-ptrace-single-step-validation): on an arm64 host DOCKER_PLATFORM
+  # stays empty, so mk/docker.mk builds and runs linux/arm64 images directly — the
+  # T4 AArch64 ptrace fixtures execute live for the first time. Runs
+  # `docker-hwtrace-bindings-only`, which builds each image but runs ONLY
+  # `make hwtrace-<lang>-test` — NOT the base binding conformance suite (the image's
+  # default CMD, run by the plain `docker-<lang>` target). That base suite exercises
+  # the x86-64 Unicorn emulator guest, AVX corpus routines, and x86 flag semantics;
+  # porting those nine conformance suites to AArch64 is the `bindings` job's
+  # territory (x86-only today) and a separate effort — out of scope for this doc,
+  # which validates the ptrace single-step STREAM. The dotnet lane self-skips
+  # WHOLESALE via its top-level '# SKIP single-step backend unavailable' gate
+  # (HwTraceProgram.cs Main gates on the x86-only in-process backend before its
+  # ptrace subset — relaxing that is a recorded follow-on), so that named skip is
+  # the ONE allowed unavailability line; the other eight lanes must run their
+  # ptrace tier live.
   hwtrace-bindings-arm64:
     name: hwtrace-bindings (AArch64, live)
     runs-on: ubuntu-24.04-arm
@@ -988,10 +994,10 @@ jobs:
             for (const k of ['ACTIONS_CACHE_URL', 'ACTIONS_RESULTS_URL', 'ACTIONS_CACHE_SERVICE_V2', 'ACTIONS_RUNTIME_TOKEN']) {
               if (process.env[k]) core.exportVariable(k, process.env[k]);
             }
-      - name: Trace every compiled wrapper natively on AArch64 (ptrace tier LIVE)
+      - name: Trace every compiled wrapper's HWTRACE suite natively on AArch64 (ptrace tier LIVE)
         run: |
           set -o pipefail
-          make docker-hwtrace-bindings 2>&1 | tee /tmp/hwb-arm64.log
+          make docker-hwtrace-bindings-only 2>&1 | tee /tmp/hwb-arm64.log
       - name: Assert the ptrace tier ran LIVE (no unavailability skips, every lane present)
         run: |
           log=/tmp/hwb-arm64.log

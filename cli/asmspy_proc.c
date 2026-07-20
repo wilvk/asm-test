@@ -967,15 +967,25 @@ static void load_module_syms(pid_t pid, const module_t *mod, asmspy_symtab_t *t,
                                         ? dstr->sh_size
                                         : flen - dstr->sh_offset;
                     uint64_t es = stub->sh_entsize ? stub->sh_entsize : 16;
-                    uint64_t slot0 =
-                        (stub == plt) ? 1 : 0; /* skip PLT0 in .plt */
+                    /* Skip the reserved resolver header in bare .plt: x86-64's
+                     * PLT0 is one 16-byte entry (slot 1 is the first real stub),
+                     * AArch64's is a 32-byte 2-entry header (slot 2). .plt.sec
+                     * (CET, x86-only) has no reserved header, so slot 0. */
+#if defined(__aarch64__)
+                    uint64_t plt0_slots = 2;
+                    const unsigned long JUMP_SLOT = R_AARCH64_JUMP_SLOT;
+#else
+                    uint64_t plt0_slots = 1;
+                    const unsigned long JUMP_SLOT = R_X86_64_JUMP_SLOT;
+#endif
+                    uint64_t slot0 = (stub == plt) ? plt0_slots : 0;
                     size_t ndsym = dsym->sh_size / dsym->sh_entsize;
                     size_t nrela = rela->sh_size / rela->sh_entsize;
                     for (size_t i = 0; i < nrela; i++) {
                         const Elf64_Rela *r =
                             (const Elf64_Rela *)(base + rela->sh_offset +
                                                  i * rela->sh_entsize);
-                        if (ELF64_R_TYPE(r->r_info) != R_X86_64_JUMP_SLOT)
+                        if (ELF64_R_TYPE(r->r_info) != JUMP_SLOT)
                             continue;
                         uint64_t si = ELF64_R_SYM(r->r_info);
                         if (si == 0 || si >= ndsym)

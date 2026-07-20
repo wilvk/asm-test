@@ -648,7 +648,9 @@ HWTRACE_DOCKER_LANGS := cpp rust go node java dotnet ruby lua zig
         docker-hwtrace-jit-dotnet-jitdump docker-hwtrace-jit-java-bci \
         docker-hwtrace-jit-dotnet-attach-jitdump docker-hwtrace-jit-java-attach-jitdump \
         docker-hwtrace-jit-dotnet-bcl docker-hwtrace-jit-java-bcl \
-        $(addprefix docker-hwtrace-,$(HWTRACE_DOCKER_LANGS))
+        docker-hwtrace-bindings-only \
+        $(addprefix docker-hwtrace-,$(HWTRACE_DOCKER_LANGS)) \
+        $(addprefix docker-hwtrace-only-,$(HWTRACE_DOCKER_LANGS))
 
 docker-hwtrace: docker-bindings-base
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace \
@@ -877,6 +879,21 @@ endef
 $(foreach L,$(HWTRACE_DOCKER_LANGS),$(eval $(call docker_hwtrace_lang_rule,$(L))))
 
 docker-hwtrace-bindings: $(addprefix docker-hwtrace-,$(HWTRACE_DOCKER_LANGS))
+
+# Same per-language hwtrace test, but built on docker-build-<lang> (image only)
+# instead of docker-<lang> (which ALSO runs the base binding conformance suite as
+# the image's default CMD). The base emulator/AVX/x86-flag conformance is the
+# `bindings` job's x86-only territory — porting those nine suites to AArch64 is a
+# separate effort — whereas THIS validates the live AArch64 ptrace hwtrace fixtures
+# (which run natively on arm64, no self-skip). Used by the hwtrace-bindings-arm64 CI
+# lane so a base-suite x86 assumption can't mask the hwtrace deliverable.
+define docker_hwtrace_only_rule
+docker-hwtrace-only-$(1): docker-build-$(1)
+	$$(DOCKER) run --rm $$(_docker_plat) $$(DOCKER_RUNENV_$(1)) asmtest-$(1) \
+	  make hwtrace-$(1)-test
+endef
+$(foreach L,$(HWTRACE_DOCKER_LANGS),$(eval $(call docker_hwtrace_only_rule,$(L))))
+docker-hwtrace-bindings-only: $(addprefix docker-hwtrace-only-,$(HWTRACE_DOCKER_LANGS))
 
 # Forward-runtime drift check: the dotnet hwtrace self-test on .NET 9, in the same
 # asmtest-dotnet image (net9 installed user-local at run time; self-skips offline).
