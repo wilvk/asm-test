@@ -99,10 +99,31 @@ ts="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
 # --- run the producers into fragment files ---------------------------------
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-"$BUILD/test_bench" --bench --bench-format=json --bench-reps="${BENCH_REPS:-4096}" \
+# Producer paths are overridable so a non-default toolchain lane (e.g. the
+# Windows/mingw win64-bench-report, which builds PE binaries under a different
+# BUILD subdir) can point at its own producers without a second copy of the
+# merge/descriptor logic. Defaults reproduce the historical Linux/macOS behavior.
+TEST_BENCH="${TEST_BENCH:-$BUILD/test_bench}"
+EMU_BENCH="${EMU_BENCH:-$BUILD/emu-bench}"
+ASMFEATURES="${ASMFEATURES:-$BUILD/asmfeatures}"
+
+"$TEST_BENCH" --bench --bench-format=json --bench-reps="${BENCH_REPS:-4096}" \
     >"$tmp/native.json" 2>/dev/null
-"$BUILD/emu-bench" --format=json >"$tmp/emu.json"
-"$BUILD/asmfeatures" >"$tmp/features.json"
+"$EMU_BENCH" --format=json >"$tmp/emu.json"
+# asmfeatures links the POSIX native-trace objects, so it is not built on every
+# OS (Windows in particular). Absent capability is DATA WITH A REASON, not a
+# crash: emit a one-row probe fragment so the report schema keeps its `features`
+# array on every leg. The full asmfeatures/VEH port is out of scope.
+if [ -x "$ASMFEATURES" ]; then
+    "$ASMFEATURES" >"$tmp/features.json"
+else
+    cat >"$tmp/features.json" <<EOF
+{"features": [{"tier": "probe", "backend": "asmfeatures", "arch": "$arch",
+  "scope": "host", "available": false,
+  "skip_reason": "asmfeatures links the POSIX native-trace objects; not built on this OS",
+  "fidelity": ""}]}
+EOF
+fi
 
 out="$BUILD/bench-report-${os}-${arch}.json"
 

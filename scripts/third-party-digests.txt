@@ -25,6 +25,10 @@ tarball-sha256  pin        3.20-98437-gf02b61307  sha256:ca2f542eee2013471961bb6
 # libdft64 differential-oracle engine (AngoraFuzzer fork), master HEAD 2025-02-21,
 # git-commit-pinned like keystone/capstone (pin-libdft-taint-oracle.md).
 git-commit      libdft64   20804d5      commit:20804d5bae5d8aed31a71761b1a1149e35a0da95
+# unicorn: cross-built static for the Windows/mingw benchmark producer lane
+# (Dockerfile.win64 builds it from this pinned source for docker-win64-bench;
+# benchmarks-ci-followups). GitHub source-archive tarball SHA-256.
+tarball-sha256  unicorn    2.1.4  sha256:ea8863f095a0136388694e5a6063afd9bb7650e30243dd6251af59c5ce5601f4
 # binutils + nasm: APX-capable assemblers for the SDE future-ISA lane
 # (Dockerfile.sde builds them from these pinned sources; pin-sde-future-isa-lane).
 tarball-sha256  binutils   2.46.1  sha256:e127a709cba24c76de8936cb7083dd768f28cd37eb010492e2f19b71eb1294e4

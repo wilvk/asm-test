@@ -30,7 +30,10 @@ nasm_ver=$(read_ver Dockerfile.sde           'ARG NASM_VERSION=([0-9][0-9.]*)')
 ks_ver=$(read_ver scripts/build-keystone.sh  'VERSION="\$\{1:-([0-9][0-9.]*)\}"')
 cs_ver=$(read_ver scripts/build-capstone.sh  'VERSION="\$\{1:-([0-9][0-9.]*)\}"')
 zig_ver=$(read_ver mk/docker.mk              'ZIG_VERSION \?= ([0-9][0-9.]*)')
-[ -n "$dr_ver" ] && [ -n "$pin_ver" ] && [ -n "$sde_ver" ] && [ -n "$binutils_ver" ] && [ -n "$nasm_ver" ] && [ -n "$ks_ver" ] && [ -n "$cs_ver" ] && [ -n "$zig_ver" ] || {
+# unicorn pin lives as an ARG in Dockerfile.win64 (the Windows/mingw benchmark
+# producer lane cross-builds it from source) — read it there.
+unicorn_ver=$(read_ver Dockerfile.win64      'ARG UNICORN_VERSION=([0-9][0-9.]*)')
+[ -n "$dr_ver" ] && [ -n "$pin_ver" ] && [ -n "$sde_ver" ] && [ -n "$binutils_ver" ] && [ -n "$nasm_ver" ] && [ -n "$ks_ver" ] && [ -n "$cs_ver" ] && [ -n "$zig_ver" ] && [ -n "$unicorn_ver" ] || {
     echo "refresh: could not read one of the pinned versions (patterns changed?)" >&2; exit 1; }
 
 # Immutable commit a tag resolves to (peeled ^{} for annotated tags).
@@ -96,6 +99,16 @@ nasm_digest() { # <version>
     echo "$d"
 }
 
+# unicorn source-archive tarball SHA-256 (GitHub auto-generated tag archive, no API).
+unicorn_digest() { # <version>
+    url="https://github.com/unicorn-engine/unicorn/archive/refs/tags/$1.tar.gz"
+    tmp=$(mktemp)
+    curl -fsSL "$url" -o "$tmp" || { rm -f "$tmp"; echo "refresh: cannot download unicorn $1 tarball" >&2; exit 1; }
+    d="sha256:$(tp_sha256 "$tmp")"
+    rm -f "$tmp"
+    echo "$d"
+}
+
 # zig release tarball SHA-256, per architecture (ziglang.org hosts directly, no API).
 zig_digest() { # <version> <arch>
     url="https://ziglang.org/download/$1/zig-linux-$2-$1.tar.xz"
@@ -113,6 +126,7 @@ pin_sha=$(pin_digest "$pin_ver")
 sde_sha=$(sde_digest "$sde_ver")
 binutils_sha=$(binutils_digest "$binutils_ver")
 nasm_sha=$(nasm_digest "$nasm_ver")
+unicorn_sha=$(unicorn_digest "$unicorn_ver")
 zig_x86_64_sha=$(zig_digest "$zig_ver" x86_64)
 zig_aarch64_sha=$(zig_digest "$zig_ver" aarch64)
 
@@ -125,6 +139,7 @@ zig_aarch64_sha=$(zig_digest "$zig_ver" aarch64)
     printf 'tarball-sha256  intel-sde  %s  %s\n' "$sde_ver" "$sde_sha"
     printf 'tarball-sha256  binutils   %s  %s\n' "$binutils_ver" "$binutils_sha"
     printf 'tarball-sha256  nasm       %s  %s\n' "$nasm_ver" "$nasm_sha"
+    printf 'tarball-sha256  unicorn    %s  %s\n' "$unicorn_ver" "$unicorn_sha"
     printf 'git-commit      keystone   %s        commit:%s\n' "$ks_ver" "$ks_commit"
     printf 'git-commit      capstone   %s        commit:%s\n' "$cs_ver" "$cs_commit"
     printf 'tarball-sha256  zig-linux-x86_64   %s  %s\n' "$zig_ver" "$zig_x86_64_sha"

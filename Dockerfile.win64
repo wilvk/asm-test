@@ -18,9 +18,11 @@ ENV DEBIAN_FRONTEND=noninteractive
 # mingw-w64: the x86_64-w64-mingw32-gcc cross-compiler/linker (PE output).
 # nasm:      assembles the Win64 trampoline/sources with `-f win64`.
 # wine64:    runs the resulting PE headless — the substitute for a Windows host.
+# cmake/git/curl/xz-utils: cross-build the pinned engines below (win64-bench lane).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       mingw-w64 nasm wine64 \
+      cmake git curl ca-certificates xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 # Ubuntu's `wine64` package ships only the loader at /usr/lib/wine/wine64 — the
@@ -33,6 +35,65 @@ RUN ln -s /usr/lib/wine/wine64 /usr/local/bin/wine64
 # and silence Wine's debug chatter. Best-effort; a runtime run would init too.
 ENV WINEDEBUG=-all WINEPREFIX=/opt/wineprefix
 RUN wine64 wineboot --init >/dev/null 2>&1 || true
+
+# --- pinned engines cross-built to a Windows PE (benchmarks-ci-followups T2) --
+# The Windows/mingw benchmark producer (emu-bench.exe) needs unicorn + capstone
+# as PE static libs — no distro ships mingw cross builds, so per the repo's
+# missing-dependency rule we build them from the SAME pinned sources the Linux
+# tiers use, digest-gated against scripts/third-party-digests.txt. Static so the
+# resulting emu-bench.exe runs under Wine with no DLL-path dance. Built BEFORE
+# `COPY . .` so a source edit does not re-run the (slow) engine cross-build.
+#
+# Copy the trust anchors first and reuse the SAME tested helpers the fetch
+# scripts use (tp_digest/tp_sha256); TP_MANIFEST is overridden explicitly because
+# the lib resolves the manifest from $0's dir, which is wrong under `sh -c`.
+COPY scripts/lib-thirdparty.sh scripts/third-party-digests.txt /tmp/tp/
+
+# Unicorn: GitHub source-archive tarball, SHA-256-gated. Cross-compiled with the
+# mingw toolchain to a static libunicorn.a in /opt/win64-deps.
+ARG UNICORN_VERSION=2.1.4
+ARG UNICORN_URL=https://github.com/unicorn-engine/unicorn/archive/refs/tags/2.1.4.tar.gz
+RUN curl -fsSL "$UNICORN_URL" -o /tmp/unicorn.tar.gz \
+ && sh -c 'TP_MANIFEST=/tmp/tp/third-party-digests.txt; . /tmp/tp/lib-thirdparty.sh; \
+           want=$(tp_digest tarball-sha256 unicorn '"$UNICORN_VERSION"') || exit 1; \
+           got="sha256:$(tp_sha256 /tmp/unicorn.tar.gz)"; \
+           [ "$got" = "$want" ] || { echo "unicorn digest mismatch: $got != $want" >&2; exit 1; }' \
+ && mkdir -p /tmp/unicorn && tar -xzf /tmp/unicorn.tar.gz -C /tmp/unicorn --strip-components=1 \
+ && cmake -S /tmp/unicorn -B /tmp/unicorn/build \
+      -DCMAKE_SYSTEM_NAME=Windows \
+      -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+      -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+      -DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres \
+      -DBUILD_SHARED_LIBS=OFF \
+      -DUNICORN_BUILD_TESTS=OFF \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/opt/win64-deps \
+ && cmake --build /tmp/unicorn/build -j"$(nproc)" \
+ && cmake --install /tmp/unicorn/build \
+ && cd / && rm -rf /tmp/unicorn /tmp/unicorn.tar.gz
+
+# Capstone: the same immutable commit the Linux disas tier pins (git-commit-gated),
+# cross-compiled to a static libcapstone.a in the same prefix.
+ARG CAPSTONE_VERSION=5.0.1
+RUN git clone --depth 1 --branch "$CAPSTONE_VERSION" \
+      https://github.com/capstone-engine/capstone.git /tmp/capstone \
+ && sh -c 'TP_MANIFEST=/tmp/tp/third-party-digests.txt; . /tmp/tp/lib-thirdparty.sh; \
+           want=$(tp_digest git-commit capstone '"$CAPSTONE_VERSION"') || exit 1; \
+           commit="${want#commit:}"; got=$(cd /tmp/capstone && git rev-parse HEAD); \
+           [ "$got" = "$commit" ] || { echo "capstone commit mismatch: $got != $commit (moved tag?)" >&2; exit 1; }' \
+ && cmake -S /tmp/capstone -B /tmp/capstone/build \
+      -DCMAKE_SYSTEM_NAME=Windows \
+      -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc \
+      -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++ \
+      -DCMAKE_RC_COMPILER=x86_64-w64-mingw32-windres \
+      -DBUILD_SHARED_LIBS=OFF \
+      -DCAPSTONE_BUILD_TESTS=OFF \
+      -DCAPSTONE_BUILD_CSTOOL=OFF \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_INSTALL_PREFIX=/opt/win64-deps \
+ && cmake --build /tmp/capstone/build -j"$(nproc)" \
+ && cmake --install /tmp/capstone/build \
+ && cd / && rm -rf /tmp/capstone
 
 COPY . .
 

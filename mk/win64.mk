@@ -14,11 +14,34 @@
 #   make win64-msabi-test  fast native lane (no Wine; clang/gcc ms_abi, x86-64)
 #   make win64-check       smoke + capture test (the image's CMD)
 #   make docker-win64      all of the above inside the asmtest-win64 image (x86-64)
+#   make win64-emu-bench   cross-build the deterministic emu-bench producer (PE)
+#   make win64-bench-check gate the golden emu counts from the PE producer (Wine)
+#   make win64-bench-report full per-system report via the PE producers (real Win)
+#   make docker-win64-bench win64-bench-check inside the asmtest-win64 image (x86-64)
 WIN64_CC        ?= x86_64-w64-mingw32-gcc
 WIN64_NASM      ?= nasm
 WIN64_NASMFLAGS ?= -f win64
 WINE            ?= wine64
 WIN64_BUILD     := $(BUILD)/win64
+
+# Engine flags for the benchmark producers (emu-bench.exe). Default to pkg-config
+# (empty on a host with no mingw-cross unicorn/capstone), so docker-win64-bench and
+# the real-Windows CI leg pass explicit -I/-L flags for their static builds. The
+# CAPSTONE def mirrors the main Makefile: disasm.c degrades to stubs without it, so
+# without capstone the producer still builds and simply emits no model_cost rows.
+WIN64_UNICORN_CFLAGS  ?= $(shell pkg-config --cflags unicorn 2>/dev/null)
+WIN64_UNICORN_LIBS    ?= $(shell pkg-config --libs unicorn 2>/dev/null || echo -lunicorn)
+WIN64_CAPSTONE_CFLAGS ?= $(shell pkg-config --cflags capstone 2>/dev/null)
+WIN64_CAPSTONE_LIBS   ?= $(shell pkg-config --libs capstone 2>/dev/null)
+WIN64_CAPSTONE_DEF    ?= $(if $(WIN64_CAPSTONE_LIBS),-DASMTEST_HAVE_CAPSTONE,)
+# The statically cross-built unicorn uses QEMU's POSIX thread backend, whose
+# pthread symbols mingw-w64 supplies via winpthread. Overridable so a shared-DLL
+# route (e.g. MSYS2's mingw-w64-unicorn on the real Windows leg) can blank it.
+WIN64_ENGINE_SYSLIBS  ?= -lpthread
+# Static-link the mingw runtime (libgcc + libwinpthread) so the PE runs under Wine
+# and on a bare Windows host with no mingw DLLs on PATH. Blank it on a shared-DLL
+# route where those runtimes are already resolvable.
+WIN64_LDFLAGS         ?= -static
 
 $(WIN64_BUILD):
 	mkdir -p $@
@@ -156,18 +179,27 @@ win64-ss-test: | $(WIN64_BUILD)
 # child's death) and the hang via the parent's deadline; --no-fork uses the
 # in-process vectored handler + watchdog. Verifies the integrated runner end to
 # end on every path.
-.PHONY: win64-runner-test
-win64-runner-test: | $(WIN64_BUILD)
-	$(WIN64_NASM) $(WIN64_NASMFLAGS) -Iinclude/ src/capture_win64.asm \
-	  -o $(WIN64_BUILD)/capture_win64.obj
-	$(WIN64_NASM) $(WIN64_NASMFLAGS) -Iinclude/ tests/win64/routines_win64.asm \
-	  -o $(WIN64_BUILD)/routines_win64.obj
+# suite_win64.exe as a shared file target: both win64-runner-test and
+# win64-bench-report (the full-report producer) need this same PE, so build it
+# once here instead of duplicating the mingw compile line.
+$(WIN64_BUILD)/capture_win64.obj: src/capture_win64.asm | $(WIN64_BUILD)
+	$(WIN64_NASM) $(WIN64_NASMFLAGS) -Iinclude/ $< -o $@
+
+$(WIN64_BUILD)/routines_win64.obj: tests/win64/routines_win64.asm | $(WIN64_BUILD)
+	$(WIN64_NASM) $(WIN64_NASMFLAGS) -Iinclude/ $< -o $@
+
+$(WIN64_BUILD)/suite_win64.exe: src/asmtest.c src/platform_win32.c src/glob_match.c \
+    tests/win64/suite_win64.c \
+    $(WIN64_BUILD)/capture_win64.obj $(WIN64_BUILD)/routines_win64.obj | $(WIN64_BUILD)
 	$(WIN64_CC) -O2 -Wall -Iinclude -Isrc -DASMTEST_ABI_WIN64 \
 	  -D__USE_MINGW_ANSI_STDIO=1 \
 	  src/asmtest.c src/platform_win32.c src/glob_match.c \
 	  tests/win64/suite_win64.c \
 	  $(WIN64_BUILD)/capture_win64.obj $(WIN64_BUILD)/routines_win64.obj \
-	  -o $(WIN64_BUILD)/suite_win64.exe
+	  -o $@
+
+.PHONY: win64-runner-test
+win64-runner-test: $(WIN64_BUILD)/suite_win64.exe
 	@echo "# Track B: per-test re-exec isolation (default)"
 	timeout 60 $(WINE) $(WIN64_BUILD)/suite_win64.exe --timeout 3 \
 	  > $(WIN64_BUILD)/runner.out 2>&1 || true
@@ -210,6 +242,51 @@ win64-runner-test: | $(WIN64_BUILD)
 win64-check: win64-smoke win64-test win64-guard-test win64-isolate-test \
              win64-pool-test win64-filter-test win64-seh-test \
              win64-veh-scope-test win64-ss-test win64-runner-test
+
+# --- cross-system benchmarks on Windows (benchmarks-ci-followups T2) ---------
+# emu-bench is the deterministic, host-INDEPENDENT instruction/block-count
+# producer; building it as a PE proves the "OS-independent counts" claim on a
+# real Windows kernel and lets the golden gate run there. emu.c/trace.c/disasm.c
+# pull only stdio/stdlib/string + unicorn/capstone (no POSIX), so the mingw
+# cross-compile is the same object set the Linux build uses.
+$(WIN64_BUILD)/emu-bench.exe: tools/emu_bench.c tools/asmbench_fixtures.h \
+    src/emu.c src/trace.c src/disasm.c \
+    include/asmtest_emu.h include/asmtest_trace.h | $(WIN64_BUILD)
+	$(WIN64_CC) -O2 -Wall -Iinclude -Itools -D__USE_MINGW_ANSI_STDIO=1 \
+	  $(WIN64_CAPSTONE_DEF) \
+	  $(WIN64_UNICORN_CFLAGS) $(WIN64_CAPSTONE_CFLAGS) \
+	  tools/emu_bench.c src/emu.c src/trace.c src/disasm.c \
+	  $(WIN64_LDFLAGS) \
+	  $(WIN64_UNICORN_LIBS) $(WIN64_CAPSTONE_LIBS) $(WIN64_ENGINE_SYSLIBS) \
+	  -o $@
+
+.PHONY: win64-emu-bench
+win64-emu-bench: $(WIN64_BUILD)/emu-bench.exe
+
+# Gate the deterministic golden emu counts using the PE producer under Wine (WINE=
+# empty on a real Windows host, exactly like win64-runner-test). Proves the
+# committed golden emu-insns.json reproduces from a Windows binary — the first
+# executable proof of the host/OS-independence claim on a PE.
+.PHONY: win64-bench-check
+win64-bench-check: $(WIN64_BUILD)/emu-bench.exe
+	$(WINE) $(WIN64_BUILD)/emu-bench.exe --format=json \
+	  > $(WIN64_BUILD)/emu-insns.fresh.json
+	python3 scripts/bench-golden-check.py benchmarks/golden/emu-insns.json \
+	  $(WIN64_BUILD)/emu-insns.fresh.json
+
+# Full per-system report from the PE producers. Runs the merge with the win64
+# producer paths overridden; the asmfeatures path names a file that does not
+# exist on purpose (asmfeatures links the POSIX native-trace objects and is not
+# built here), so bench-report.sh takes its absent-probe branch. NOTE: run this
+# on a REAL Windows host — inside the Linux image `uname` reports Linux, so the
+# descriptor would be wrong; the container lane runs win64-bench-check only.
+.PHONY: win64-bench-report
+win64-bench-report: $(WIN64_BUILD)/suite_win64.exe $(WIN64_BUILD)/emu-bench.exe
+	BUILD=$(BUILD) \
+	  TEST_BENCH=$(WIN64_BUILD)/suite_win64.exe \
+	  EMU_BENCH=$(WIN64_BUILD)/emu-bench.exe \
+	  ASMFEATURES=$(WIN64_BUILD)/asmfeatures.exe \
+	  scripts/bench-report.sh
 
 # Windows mirror of `make hwtrace-attach-demo`: attach to a SEPARATE process the
 # framework did NOT start (attach_victim_win) and single-step one call of its hot
@@ -258,4 +335,19 @@ docker-win64-syscall-log: docker-bindings-base
 	$(DOCKER) build $(_docker_plat) -f Dockerfile.win64 \
 	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-win64 .
 	$(DOCKER) run --rm $(_docker_plat) asmtest-win64 make win64-syscall-log
+
+# Gate the deterministic golden emu counts from the PE producer, cross-built
+# against the image's pinned static unicorn+capstone (/opt/win64-deps) and run
+# under Wine — the first executable proof that the counts reproduce on a PE.
+# x86-64 only: under linux/arm64 emulation an x86-64 PE will not run via Wine.
+.PHONY: docker-win64-bench
+docker-win64-bench: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.win64 \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-win64 .
+	$(DOCKER) run --rm $(_docker_plat) asmtest-win64 make win64-bench-check \
+	  WIN64_UNICORN_CFLAGS=-I/opt/win64-deps/include \
+	  WIN64_UNICORN_LIBS='-L/opt/win64-deps/lib -lunicorn' \
+	  WIN64_CAPSTONE_CFLAGS=-I/opt/win64-deps/include \
+	  WIN64_CAPSTONE_LIBS='-L/opt/win64-deps/lib -lcapstone' \
+	  WIN64_CAPSTONE_DEF=-DASMTEST_HAVE_CAPSTONE
 

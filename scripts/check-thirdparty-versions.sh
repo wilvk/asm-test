@@ -59,6 +59,12 @@ check_group "Capstone" \
     'scripts/build-capstone.sh|VERSION="\$\{1:-([0-9][0-9.]*)\}"' \
     'scripts/fetch-corresponding-source.sh|CAPSTONE_VERSION="\$\{CAPSTONE_VERSION:-([0-9][0-9.]*)\}"'
 
+# Unicorn (GPL-2.0): the Windows/mingw benchmark producer lane cross-builds it
+# from a pinned source archive (Dockerfile.win64). Only one declaration exists
+# today, so this just surfaces the version; the manifest check below is the teeth.
+check_group "Unicorn" \
+    'Dockerfile.win64|ARG UNICORN_VERSION=([0-9][0-9.]*)'
+
 # The integrity manifest (B5) must carry a pinned digest/commit for each version
 # above, or a bump would ship unpinned. Assert an entry exists for each declared
 # version — a name+version present in scripts/third-party-digests.txt.
@@ -79,6 +85,7 @@ check_manifest capstone  "$(extract scripts/build-capstone.sh 'VERSION="\$\{1:-(
 # anchor the single ZIG_VERSION declared in mk/docker.mk.
 check_manifest zig-linux-x86_64  "$(extract mk/docker.mk 'ZIG_VERSION \?= ([0-9][0-9.]*)')"
 check_manifest zig-linux-aarch64 "$(extract mk/docker.mk 'ZIG_VERSION \?= ([0-9][0-9.]*)')"
+check_manifest unicorn "$(extract Dockerfile.win64 'ARG UNICORN_VERSION=([0-9][0-9.]*)')"
 
 if [ "$fail" -ne 0 ]; then
     echo "third-party version drift detected — reconcile the versions above." >&2
