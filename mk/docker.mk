@@ -209,6 +209,8 @@ docker-clean:
 #   make docker-bindings   build + run every language's image
 #   make docker-python / -cpp / -rust / -zig / -node / -java / -dotnet /
 #        -ruby / -lua / -go    just that language
+#   make docker-java-package  build the java Maven package + verify the jar
+#        (real `mvn package`, no Central credentials — distribution-packaging.md T6)
 # Emulate aarch64 with DOCKER_PLATFORM=linux/arm64.
 DOCKER_BINDINGS_BASE ?= asmtest-bindings-base
 # K1 (repo-review 2026-07-04): how the shared bindings-base image is built. Its
@@ -262,6 +264,20 @@ DOCKER_SETUP_zig  := arch="$$(uname -m)"; \
   mkdir -p /opt/zig; tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1; \
   rm /tmp/zig.tar.xz; ln -s /opt/zig/zig /usr/local/bin/zig; zig version
 
+# Java packaging (distribution-packaging.md T6): a real `mvn package` that consumes
+# bindings/java/pom.xml and emits the classified jar + sources + javadoc for Maven
+# Central. Maven is fetched as a pinned Apache binary tarball (NOT apt, whose `maven`
+# package would drag in a second default-jre) and verified against the official
+# SHA-512 (anchored in scripts/third-party-digests.txt); the base image's openjdk-25
+# already provides java/javac/javadoc on PATH, which the `mvn` wrapper auto-detects.
+MAVEN_VERSION ?= 3.9.9
+MAVEN_SHA512  := a555254d6b53d267965a3404ecb14e53c3827c09c3b94b5678835887ab404556bfaf78dcfe03ba76fa2508649dca8531c74bca4d5846513522404d48e8c4ac8b
+DOCKER_SETUP_java := \
+  curl -fsSL "https://archive.apache.org/dist/maven/maven-3/$(MAVEN_VERSION)/binaries/apache-maven-$(MAVEN_VERSION)-bin.tar.gz" -o /tmp/maven.tar.gz; \
+  echo "$(MAVEN_SHA512)  /tmp/maven.tar.gz" | sha512sum -c -; \
+  mkdir -p /opt/maven; tar -xzf /tmp/maven.tar.gz -C /opt/maven --strip-components=1; \
+  rm /tmp/maven.tar.gz; ln -s /opt/maven/bin/mvn /usr/local/bin/mvn; mvn -v
+
 DOCKER_RUNENV_node   := -e NODE_PATH=/usr/local/lib/node_modules:/usr/lib/node_modules
 DOCKER_RUNENV_go     := -e GOTOOLCHAIN=local -e GOFLAGS=-mod=mod -e GOPROXY=off
 DOCKER_RUNENV_dotnet := -e DOTNET_CLI_TELEMETRY_OPTOUT=1 -e DOTNET_NOLOGO=1
@@ -304,6 +320,23 @@ $(foreach L,$(BINDING_LANGS),$(eval $(call docker_lang_rule,$(L))))
 # wheel. The link bindings (cpp/rust/go/zig) ship source (no bundled payload) — out of scope.
 CLEANROOM_LANGS := ruby node java dotnet lua
 docker-clean-room: $(addprefix docker-clean-,$(CLEANROOM_LANGS))
+
+# distribution-packaging.md T6: prove the java binding's real `mvn package` build in
+# the java image (which now carries pinned Maven). Runs the full local package —
+# package-libs stages the native payload, then `mvn package` consumes bindings/java/
+# pom.xml — and asserts the emitted jar carries BOTH the compiled binding class and the
+# bundled native library, and that the sources + javadoc jars were produced. A
+# self-skip-proof positive that needs no Central credentials (GPG signing is skipped).
+.PHONY: docker-java-package
+docker-java-package: docker-build-java
+	$(DOCKER) run --rm $(_docker_plat) asmtest-java sh -euxc '\
+	  make java-package-full; \
+	  d=build/dist/java; ls -l $$d; \
+	  jar=$$d/asmtest-$(ASMTEST_VERSION).jar; \
+	  jar tf $$jar | grep -q "^Asmtest.class$$"; \
+	  jar tf $$jar | grep -qE "native/.*/libasmtest_emu"; \
+	  ls build/java-mvn/target/asmtest-*-sources.jar build/java-mvn/target/asmtest-*-javadoc.jar >/dev/null; \
+	  echo "docker-java-package: OK — mvn jar carries Asmtest.class + native payload; sources+javadoc emitted"'
 
 docker-bindings: $(addprefix docker-,$(BINDING_LANGS)) docker-win64
 

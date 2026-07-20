@@ -140,7 +140,7 @@ make rust-package      # crate  -> bindings/rust/target/package/  (cargo package
 make zig-package       # source tarball -> build/dist/zig/
 make cpp-package       # header + CMake tarball -> build/dist/cpp/
 make node-package      # npm tarball -> build/dist/node/   (npm pack)
-make java-package      # jar -> build/dist/java/           (javac + jar)
+make java-package      # jar -> build/dist/java/           (mvn package, Central-ready)
 make dotnet-package    # nupkg (AsmTest.dll + runtimes/<rid>/native) -> build/dist/dotnet/  (dotnet pack)
 make ruby-package      # gem -> build/dist/ruby/           (gem build)
 make lua-package       # rock source -> build/dist/lua/    (luarocks pack/make)

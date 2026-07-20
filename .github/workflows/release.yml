@@ -455,6 +455,58 @@ jobs:
             *) echo "no registry publish for ${{ matrix.lang }}" ;;
           esac
 
+  # Maven Central (java) — distribution-packaging.md T6. The java leg of
+  # dlopen-package above already BUILDS + smokes the jar via `make java-package`
+  # (a real `mvn package` consuming bindings/java/pom.xml); this job additionally
+  # PUBLISHES it — sources + javadoc + detached PGP signatures, via the Central
+  # Portal publisher plugin declared in the pom. The build step always runs (a
+  # workflow_dispatch dry-run proves the mvn build stays green); the deploy step is
+  # tag-gated AND doubly secret-gated — it no-ops unless BOTH MAVEN_CENTRAL_TOKEN and
+  # MAVEN_GPG_KEY are present, exactly like the crates/npm publishes. GATED until the
+  # `io.github.wilvk` namespace is verified on central.sonatype.com and those secrets
+  # exist; the plugin's default autoPublish=false uploads to STAGING only (the Portal
+  # validation report is the acceptance test) — see releasing.md.
+  maven:
+    name: java (Maven Central)
+    needs: [native-all]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      # setup-java gives the JDK; `mvn` itself is preinstalled on the ubuntu runner
+      # (as it is for the java leg of dlopen-package's `make java-package`).
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: "25" }
+      - uses: actions/download-artifact@v8
+        with: { name: native-all, path: build/dist/native }
+      # Always: build the classified jar + sources + javadoc (dispatch-safe, no
+      # secrets — GPG is the verify-phase step, skipped here). Leaves the staged
+      # standard-layout tree in build/java-mvn for the deploy step to publish from.
+      - name: Build the Maven artifacts (mvn package)
+        run: make java-package
+      - name: Deploy to Maven Central (mvn deploy — signs + uploads to staging)
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        # Secrets scoped to this step only, so the build step above can't read them.
+        env:
+          MAVEN_CENTRAL_TOKEN: ${{ secrets.MAVEN_CENTRAL_TOKEN }}
+          MAVEN_GPG_KEY: ${{ secrets.MAVEN_GPG_KEY }}
+          MAVEN_GPG_PASSPHRASE: ${{ secrets.MAVEN_GPG_PASSPHRASE }}
+        run: |
+          if [ -z "$MAVEN_CENTRAL_TOKEN" ] || [ -z "$MAVEN_GPG_KEY" ]; then
+            echo "no MAVEN_CENTRAL_TOKEN / MAVEN_GPG_KEY; skip Central publish"; exit 0
+          fi
+          # Import the release signing key for maven-gpg-plugin. The pom already
+          # configures loopback pinentry, so the passphrase flows from -Dgpg.passphrase.
+          printf '%s' "$MAVEN_GPG_KEY" | gpg --batch --import
+          # Central Portal server creds; the id MUST match the pom's
+          # publishingServerId=central. MAVEN_CENTRAL_TOKEN holds "<user>:<pass>" from
+          # the Portal-generated user token.
+          mkdir -p ~/.m2
+          printf '<settings><servers><server><id>central</id><username>%s</username><password>%s</password></server></servers></settings>' \
+            "${MAVEN_CENTRAL_TOKEN%%:*}" "${MAVEN_CENTRAL_TOKEN#*:}" > ~/.m2/settings.xml
+          cd build/java-mvn && mvn -B -Dgpg.skip=false \
+            -Dgpg.passphrase="$MAVEN_GPG_PASSPHRASE" deploy
+
   # ---- Link bindings (source dists) ----------------------------------------- #
   # These ship source, not a prebuilt binary: the consumer links/builds the
   # framework itself. There is no registry payload to install, so the release

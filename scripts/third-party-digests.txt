@@ -37,6 +37,11 @@ git-commit      keystone   0.9.2        commit:dc7932ef2b2c4a793836caec6ecab4850
 git-commit      capstone   5.0.1        commit:097c04d9413c59a58b00d4d1c8d5dc0ac158ffaa
 tarball-sha256  zig-linux-x86_64   0.13.0  sha256:d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea
 tarball-sha256  zig-linux-aarch64  0.13.0  sha256:041ac42323837eb5624068acd8b00cd5777dac4cf91179e8dad7a7e90dd0c556
+# Apache Maven: the java binding's real `mvn package` build (distribution-packaging.md
+# T6). Fetched as a pinned binary tarball in DOCKER_SETUP_java (mk/docker.mk) and
+# verified against Apache's OFFICIAL published SHA-512 (record-only here; no fetch
+# script consumes this line — the image build does the verify inline).
+tarball-sha512  apache-maven  3.9.9  sha512:a555254d6b53d267965a3404ecb14e53c3827c09c3b94b5678835887ab404556bfaf78dcfe03ba76fa2508649dca8531c74bca4d5846513522404d48e8c4ac8b
 # riscv-native-tier: the qemu-user emulator bundle for the linux/riscv64 CI lane
 # (mk/docker.mk BINFMT_IMAGE). Pinned to the multi-arch index digest of the
 # tonistiigi/binfmt:qemu-v10.2.3 tag; no fetch script consumes this line.

@@ -44,6 +44,7 @@ others still publish.
 | RubyGems | `RUBYGEMS_API_KEY` | ruby |
 | crates.io | **OIDC — no secret** (Trusted Publishing) | rust |
 | NuGet | `NUGET_API_KEY` | dotnet |
+| Maven Central | `MAVEN_CENTRAL_TOKEN` + `MAVEN_GPG_KEY` (+ optional `MAVEN_GPG_PASSPHRASE`) | java |
 
 PyPI and crates.io use **OIDC Trusted Publishing** (no stored token): the workflow
 mints a short-lived token per run via `id-token: write`. Each requires a one-time
@@ -51,6 +52,17 @@ mints a short-lived token per run via `id-token: write`. Each requires a one-tim
 workflow `release.yml`; PyPI also wants a `pypi` environment) — without it the OIDC
 upload is refused. npm publishes with `--provenance` (verify with
 `npm audit signatures`); RubyGems/NuGet still use stored API keys.
+
+**Maven Central** (the `maven` job) publishes the java binding via the Central Portal
+publisher plugin declared in `bindings/java/pom.xml`. One-time setup: register the
+namespace `io.github.wilvk` on [central.sonatype.com](https://central.sonatype.com)
+(auto-granted for the GitHub username, verified via a temporary repo), then generate a
+Portal **user token** and a release-signing PGP key (publish the public key to
+`keyserver.ubuntu.com`). Store the token as `MAVEN_CENTRAL_TOKEN` in `<user>:<pass>`
+form and the ASCII-armored private key as `MAVEN_GPG_KEY` (its passphrase, if any, as
+`MAVEN_GPG_PASSPHRASE`). Without both, the deploy step no-ops; with them, a tag build
+signs + uploads sources/javadoc/jar to **staging** (`autoPublish=false`) — the Portal
+validation report is the acceptance test before you release the staged deployment.
 
 ## Cutting a release
 
@@ -76,11 +88,19 @@ Re-publishing the same version fails on most registries (NuGet uses
 
 ## Manual registries
 
-- **LuaRocks** — `make lua-package` stages the rock payload; publish with
-  `luarocks upload bindings/lua/asmtest-1.1.0-1.rockspec --api-key=...` (a binary
-  rock with a prebuilt native payload isn't automated here).
-- **Maven Central** — the jar is built by `make java-package`; Central requires
-  GPG signing + a Sonatype account, done out of band.
+- **LuaRocks** — `make lua-package` stages the rock payload; a binary rock with a
+  prebuilt native payload isn't automated in `release.yml`, so publish it by hand
+  once per release from an account holding an upload API key:
+  ```sh
+  luarocks upload bindings/lua/asmtest-1.1.0-1.rockspec --api-key="$LUAROCKS_API_KEY"
+  ```
+  Record the publishing account here when first used; verify afterward with
+  `luarocks install asmtest`.
+- **Maven Central** — **now automated** by the tag-gated `maven` job (a real
+  `mvn deploy` from `bindings/java/pom.xml`, sources + javadoc + PGP signatures); it
+  needs the `MAVEN_CENTRAL_TOKEN` + `MAVEN_GPG_KEY` secrets and the one-time namespace
+  registration described under *Required secrets* above. `make java-package` (a real
+  `mvn package`) builds the same jar locally.
 - **Go** — no publish step: `proxy.golang.org` serves the module from the tagged
   repo automatically.
 

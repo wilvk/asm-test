@@ -54,16 +54,16 @@
   <!-- FFM is final since JDK 22 (preview in 21), so we target release 22 with no
        preview flags — the jar then loads on any JDK >= 22. The native libs are
        bundled as resources under src/main/resources/native/<os-arch>/ (staged by
-       `make java-package`). -->
+       `make java-package` into a throwaway standard-layout tree under build/). -->
 
-  <!-- Maven Central requires source + javadoc jars and detached ASCII-armored PGP
-       signatures, uploaded via the Central Portal (distribution-packaging.md T6).
-       These plugins are DORMANT for `make java-package` (which builds the jar with
-       raw javac + `jar cf` and does not run Maven); they activate only on a real
-       `mvn deploy`, which is credential-gated — it needs a namespace registered on
-       central.sonatype.com plus MAVEN_GPG_KEY and a MAVEN_CENTRAL_TOKEN. Wiring
-       that mvn build/publish so it produces the classified native jars is the
-       remaining (gated) work; see docs/reference/releasing.md. -->
+  <!-- distribution-packaging.md T6: `make java-package` now runs a real `mvn package`
+       against THIS pom (mk/bindings.mk), so the maven-source and maven-javadoc plugins
+       are LIVE — every local package emits asmtest-<v>.jar + -sources.jar + -javadoc.jar.
+       Only the two credential-gated pieces stay deploy-only: maven-gpg-plugin binds to
+       the `verify` phase (skipped in `package` via -Dgpg.skip=true; it signs only on a
+       real `mvn deploy` with MAVEN_GPG_KEY) and central-publishing-maven-plugin uploads
+       to the Central Portal (needs the `io.github.wilvk` namespace + MAVEN_CENTRAL_TOKEN).
+       The gated `mvn deploy` runs from release.yml's `maven` job; see releasing.md. -->
   <build>
     <plugins>
       <plugin>
@@ -81,6 +81,15 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-javadoc-plugin</artifactId>
         <version>3.11.2</version>
+        <configuration>
+          <!-- The binding is one FFM class; match the compiler release (22) and
+               do not let a doc-comment lint nit fail the packaging build. Central
+               only requires the javadoc jar to exist, not to be lint-clean. -->
+          <release>22</release>
+          <doclint>none</doclint>
+          <failOnError>false</failOnError>
+          <quiet>true</quiet>
+        </configuration>
         <executions>
           <execution>
             <id>attach-javadocs</id>
@@ -92,6 +101,15 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-gpg-plugin</artifactId>
         <version>3.2.7</version>
+        <configuration>
+          <!-- Non-interactive signing in CI: gpg 2.1+ needs loopback pinentry so the
+               passphrase can come from -Dgpg.passphrase (release.yml maven job) instead
+               of a TTY prompt. Inert for `make java-package` (gpg.skip=true). -->
+          <gpgArguments>
+            <arg>--pinentry-mode</arg>
+            <arg>loopback</arg>
+          </gpgArguments>
+        </configuration>
         <executions>
           <execution>
             <id>sign-artifacts</id>

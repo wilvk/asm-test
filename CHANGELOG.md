@@ -8,6 +8,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Java binding publishable to Maven Central (distribution-packaging.md T6).**
+  `make java-package` now runs a real `mvn package` against `bindings/java/pom.xml`
+  (the same POM Central publishes) instead of raw `javac` + `jar cf`, emitting the
+  binding jar plus matching `-sources`/`-javadoc` jars. A new tag-gated, secret-guarded
+  `maven` job in `release.yml` `mvn deploy`s them — GPG-signed — to the Central Portal
+  staging, no-opping unless both `MAVEN_CENTRAL_TOKEN` and `MAVEN_GPG_KEY` are set
+  (mirroring the crates/npm publishes). Maven is a version-pinned Apache tarball in the
+  java docker image; `make docker-java-package` proves the whole build locally with no
+  credentials, and `docs/reference/releasing.md` carries the Central + LuaRocks runbooks.
+
 - **Cross-system benchmark legs on real Windows and Intel macOS.** The deterministic
   golden gate now runs on every OS the framework targets: a per-push
   `benchmarks-windows` leg (`windows-latest`, mingw/MSYS2) builds the PE benchmark

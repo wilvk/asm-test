@@ -228,6 +228,7 @@ GEM      ?= gem
 NPM      ?= npm
 CARGO    ?= cargo
 JAR      ?= jar
+MVN      ?= mvn
 LUAROCKS ?= luarocks
 PYBUILD  ?= python3 -m build
 # The unversioned names the dlopen bindings look up (libasmtest_emu.dylib, ...).
@@ -411,13 +412,26 @@ node-package: native-payload-check
 	$(call emu_lib_slots,bindings/node/native)
 	cd bindings/node && $(NPM) pack --pack-destination $(abspath $(PKG_DIST))/node
 
+# distribution-packaging.md T6: a real Maven build that consumes bindings/java/pom.xml
+# — the very POM Maven Central publishes — instead of raw `javac` + `jar cf`, so the
+# emitted jar carries the Central metadata and a matching sources + javadoc jar. The
+# single library class (Asmtest.java, default package) plus the staged native payload
+# are copied into a throwaway standard-layout tree under $(BUILD) (keeping the source
+# tree clean and letting Maven's default src/main/{java,resources} resolve). GPG
+# signing binds to the `verify` phase, so `package` never needs a key — it runs only
+# on the credentialed `mvn deploy` (release.yml `maven` job).
 java-package: native-payload-check
-	rm -rf bindings/java/src/main/resources/native
-	mkdir -p $(BUILD)/java-pkg $(PKG_DIST)/java
-	$(call emu_lib_slots,bindings/java/src/main/resources/native)
-	$(JAVAC) --release 22 -d $(BUILD)/java-pkg bindings/java/Asmtest.java
-	cp -r bindings/java/src/main/resources/native $(BUILD)/java-pkg/
-	cd $(BUILD)/java-pkg && $(JAR) cf $(abspath $(PKG_DIST))/java/asmtest-$(ASMTEST_VERSION).jar .
+	rm -rf $(BUILD)/java-mvn
+	mkdir -p $(BUILD)/java-mvn/src/main/java $(BUILD)/java-mvn/src/main/resources/native $(PKG_DIST)/java
+	cp bindings/java/pom.xml $(BUILD)/java-mvn/pom.xml
+	cp bindings/java/Asmtest.java $(BUILD)/java-mvn/src/main/java/Asmtest.java
+	$(call emu_lib_slots,$(BUILD)/java-mvn/src/main/resources/native)
+	cd $(BUILD)/java-mvn && $(MVN) -q -B -Dgpg.skip=true package
+	# Only the main jar lands in $(PKG_DIST)/java (the single-artifact invariant every
+	# consumer relies on — the release.yml java smoke globs asmtest-*.jar there). The
+	# -sources/-javadoc jars stay in $(BUILD)/java-mvn/target for the `mvn deploy`
+	# Central publish (release.yml `maven` job) to sign and upload from.
+	cp $(BUILD)/java-mvn/target/asmtest-$(ASMTEST_VERSION).jar $(PKG_DIST)/java/
 
 # .NET: stage a runtimes/<rid>/native/ slot per platform (mapping the <os>-<arch>
 # payload name to the .NET RID the loader resolves), then `dotnet pack` the
