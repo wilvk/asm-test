@@ -378,6 +378,20 @@ namespace Asmtest
             IntPtr[] traces, ulong[] scopeIds, uint[] seqs, int[] tids, ulong[] versions,
             UIntPtr n, IntPtr @out, [Out] SliceBound[] bounds, out UIntPtr nbounds);
 
+        // §Z4 per-tid PT hop capture (managed-wholewindow-compose T10) — the capture
+        // primitive AsmAmbientStitchedTrace opens on thread-attach and closes-with-decode
+        // on thread-detach. hop_close decodes the drained AUX against `img` as of `when`
+        // into `trace`. Live capture is Intel-PT-hardware-gated; off PT hop_open self-skips
+        // EUNAVAIL. asmtest_ss_self_tid (src/ss_backend.c) is the OS tid of the calling
+        // thread — the handler opens a per-tid hop for whichever thread the flow lands on.
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_pt_hop_open(int tid, out IntPtr ctx);
+        [DllImport(HWTRACE)] public static extern int asmtest_hwtrace_pt_hop_close(IntPtr ctx, IntPtr img, ulong when, IntPtr trace);
+        [DllImport(HWTRACE)] public static extern int asmtest_ss_self_tid();
+        // Scripted trace fill (asmtest_trace.h; not a tier-parity symbol) — the ambient
+        // logic twin (T12) appends a per-thread offset pattern through the stub capture.
+        [DllImport(HWTRACE, EntryPoint = "trace_append_insn")] public static extern void asmtest_trace_append_insn(IntPtr trace, ulong off);
+        [DllImport(HWTRACE, EntryPoint = "trace_append_block")] public static extern void asmtest_trace_append_block(IntPtr trace, ulong off);
+
         // §D3 — concealed out-of-process ptrace-stealth stepper: run_region(arg) runs on
         // the CALLING thread while a helper process reverse-attaches and single-steps the
         // [base,len) region out of band. Cdecl upcall; keep the delegate alive across it.
@@ -5685,6 +5699,234 @@ namespace Asmtest
             lock (_lock)
                 foreach (var h in _hops)
                     if (h.Handle != IntPtr.Zero) HwNative.asmtest_trace_free(h.Handle);
+            if (_merged != IntPtr.Zero) { HwNative.asmtest_trace_free(_merged); _merged = IntPtr.Zero; }
+        }
+    }
+
+    /// <summary>
+    /// §Z4 (managed-wholewindow-compose T11) — the AMBIENT escalation of
+    /// <see cref="AsmStitchedTrace"/>: follow ONE logical operation across async / thread
+    /// hops with ZERO calls in the user's body. A static <see cref="AsyncLocal{T}"/>
+    /// constructed with a value-changed handler fires synchronously on the exact OS thread
+    /// performing every execution-context transition, so the producer opens a per-thread
+    /// Intel-PT slice when the flow LANDS on a thread (attach) and decodes-at-disable when
+    /// it LEAVES (detach), then stitches the slices at close.
+    /// <code>
+    /// using (var op = new AsmAmbientStitchedTrace())
+    ///     await SomeAsyncWork();     // each thread the flow touches becomes one PT slice
+    /// // op.Hops — each slice's (seq, tid, offset); op.Path — per-slice disassembly
+    /// </code>
+    /// PT-ONLY by construction: the per-thread hop is a per-tid <c>intel_pt</c> event (the
+    /// T10 hop surface), and the §D3 single-thread stepper follows one thread and cannot
+    /// exercise a hop. Off Intel PT (and its <c>perf_event_paranoid&lt;0</c>/CAP_PERFMON)
+    /// the scope sets <see cref="SkipReason"/> and runs the body UNINSTRUMENTED — never a
+    /// hard failure, never in-process TF single-step. Unlike <see cref="AsmStitchedTrace.Step"/>
+    /// there are no per-hop calls; the price is the hardware gate. One operation per async
+    /// context (not nested), mirroring the explicit-Step sibling. The full live chain (a
+    /// live managed runtime ON bare-metal Intel PT) has no CI coverage — a real hardware
+    /// gate; the hook→tag→merge LOGIC is CI-covered everywhere via the T12 stub-capture twin.
+    /// </summary>
+    public sealed class AsmAmbientStitchedTrace : IDisposable
+    {
+        /// <summary>The per-thread PT hop capture seam. The real implementation P/Invokes the
+        /// T10 hop surface; the T12 twin injects a scripted stub so the hook→park→stitch
+        /// logic is host-testable with no PT hardware.</summary>
+        internal interface IHopCapture
+        {
+            bool Available { get; }
+            IntPtr Open(int tid);                                             // hop ctx (Zero on failure)
+            int CloseDecode(IntPtr ctx, IntPtr img, ulong when, IntPtr trace); // rc; fills `trace`
+        }
+
+        // The real capture: a per-tid intel_pt AUX event (T10), decode-at-disable.
+        sealed class PtHopCapture : IHopCapture
+        {
+            public bool Available =>
+                HwNative.LibAvailable &&
+                HwNative.asmtest_hwtrace_available((int)HwBackend.IntelPt) != 0;
+            public IntPtr Open(int tid) =>
+                HwNative.asmtest_hwtrace_pt_hop_open(tid, out IntPtr ctx) == HwNative.ASMTEST_HW_OK
+                    ? ctx : IntPtr.Zero;
+            public int CloseDecode(IntPtr ctx, IntPtr img, ulong when, IntPtr trace) =>
+                HwNative.asmtest_hwtrace_pt_hop_close(ctx, img, when, trace);
+        }
+
+        // The boxed value that flows through ExecutionContext. Identity (not content) drives
+        // the handler: a transition to/from THIS instance fires an attach/detach pair.
+        sealed class AmbientScope { public readonly AsmAmbientStitchedTrace Owner; public AmbientScope(AsmAmbientStitchedTrace o) { Owner = o; } }
+
+        sealed class OpenHop { public IntPtr Ctx; public uint Seq; public int Tid; }
+        sealed class Parked { public IntPtr Trace; public uint Seq; public int Tid; public ulong Version; public string Text; }
+
+        // ONE static AsyncLocal + handler serves every operation; the handler routes each
+        // transition to the right instance via the boxed value's Owner.
+        static readonly AsyncLocal<AmbientScope> _current = new AsyncLocal<AmbientScope>(OnAmbientChanged);
+
+        readonly IHopCapture _capture;
+        readonly JitMethodMap _map;            // §Z3 code-image for decode-at-version (null for the stub twin)
+        readonly AmbientScope _scope;          // this operation's boxed value (null when uninstrumented)
+        readonly ConcurrentDictionary<int, OpenHop> _openHops = new ConcurrentDictionary<int, OpenHop>();
+        readonly ConcurrentQueue<Parked> _parked = new ConcurrentQueue<Parked>();
+        int _seq;                              // Interlocked hop counter (lock-free hot path)
+        IntPtr _merged = IntPtr.Zero;
+        bool _completed;
+        bool _disposed;
+
+        /// <summary>Honest self-skip reason when the ambient producer could not run ("" when it ran).</summary>
+        public string SkipReason { get; private set; } = "";
+        /// <summary>Merged per-slice disassembly in seq order (empty until <see cref="Complete"/>).</summary>
+        public string Path { get; private set; } = "";
+        /// <summary>True when any stitched slice's trace was truncated.</summary>
+        public bool Truncated { get; private set; }
+        /// <summary>Per-slice bounds after <see cref="Complete"/>, in seq order.</summary>
+        public IReadOnlyList<StitchHop> Hops { get; private set; } = System.Array.Empty<StitchHop>();
+        /// <summary>Slices parked so far (each a successfully decoded per-thread hop).</summary>
+        public int HopCount => _parked.Count;
+
+        /// <summary>Public entry: real per-tid PT capture (the T10 hop surface).</summary>
+        public AsmAmbientStitchedTrace() : this(null) { }
+
+        /// <summary>Test seam (T12): inject a scripted <see cref="IHopCapture"/> so the
+        /// hook→tag→merge logic is CI-covered with no PT hardware. Not part of the public
+        /// contract — the shipped ambient producer always uses the real per-tid capture.</summary>
+        internal AsmAmbientStitchedTrace(IHopCapture captureForTest)
+        {
+            _capture = captureForTest ?? new PtHopCapture();
+            if (!_capture.Available)
+            {
+                SkipReason = "ambient stitching needs Intel PT per-thread events — the " +
+                             "explicit-Step AsmStitchedTrace works everywhere";
+                return; // body runs uninstrumented: no scope flows, the handler never sees us
+            }
+            // The real capture tracks JIT'd bytes so each hop decodes at the version live in
+            // its window; the stub scripts offsets directly and needs no image.
+            if (captureForTest == null) _map = new JitMethodMap(trackBytes: true);
+            _scope = new AmbientScope(this);
+            _current.Value = _scope;   // ctor set: ThreadContextChanged==false (bookkeeping only, no attach fires)
+            OnThreadAttach();          // so open the FIRST hop on the ctor thread explicitly (the sync slice)
+        }
+
+        // The ambient handler: fires INLINE on the transitioning OS thread for every
+        // execution-context change (RunInternal on each await resumption, the thread-pool
+        // dispatch loop, ResetThreadPoolThread). Allocation-light, lock-free, and swallows
+        // everything — a dead producer only loses stitching, never the process.
+        static void OnAmbientChanged(AsyncLocalValueChangedArgs<AmbientScope> args)
+        {
+            try
+            {
+                if (!args.ThreadContextChanged) return;        // explicit Value set -> bookkeeping only
+                if (args.CurrentValue != null)
+                    args.CurrentValue.Owner.OnThreadAttach();  // the flow LANDED on this thread
+                else if (args.PreviousValue != null)
+                    args.PreviousValue.Owner.OnThreadDetach(); // the flow LEFT this thread (pool reset)
+            }
+            catch { }
+        }
+
+        void OnThreadAttach()
+        {
+            if (_completed) return;
+            int tid = HwNative.asmtest_ss_self_tid();
+            // One PT event per tid: if a slice is already open on THIS thread for this op,
+            // keep it (resumed execution rides the same slice). A given tid runs on one
+            // thread at a time, so this check-then-open needs no lock.
+            if (_openHops.ContainsKey(tid)) return;
+            IntPtr ctx = _capture.Open(tid);
+            if (ctx == IntPtr.Zero) return;                    // open failed -> this hop uninstrumented
+            uint seq = unchecked((uint)(Interlocked.Increment(ref _seq) - 1));
+            _openHops[tid] = new OpenHop { Ctx = ctx, Seq = seq, Tid = tid };
+        }
+
+        void OnThreadDetach()
+        {
+            int tid = HwNative.asmtest_ss_self_tid();
+            if (_openHops.TryRemove(tid, out OpenHop h)) CloseHop(h);
+        }
+
+        // Decode-at-disable this hop against the version live in the window, then park its
+        // trace with (seq, tid, version). Runs inline on the detaching thread.
+        void CloseHop(OpenHop h)
+        {
+            IntPtr img = _map != null ? _map.ImageHandle : IntPtr.Zero;
+            ulong when = _map != null ? _map.ImageNow : 0;
+            IntPtr trace = HwNative.asmtest_trace_new((UIntPtr)(1 << 16), (UIntPtr)256);
+            if (trace == IntPtr.Zero) { _capture.CloseDecode(h.Ctx, IntPtr.Zero, 0, IntPtr.Zero); return; } // teardown only
+            int rc = _capture.CloseDecode(h.Ctx, img, when, trace);
+            if (rc != HwNative.ASMTEST_HW_OK) { HwNative.asmtest_trace_free(trace); return; } // decode failed -> drop
+            if (HwNative.asmtest_emu_trace_truncated(trace) != 0) Truncated = true;
+            string text = RenderSlice(img, when, trace);
+            _parked.Enqueue(new Parked { Trace = trace, Seq = h.Seq, Tid = h.Tid, Version = when, Text = text });
+        }
+
+        static string RenderSlice(IntPtr img, ulong when, IntPtr trace)
+        {
+            if (img == IntPtr.Zero || !HwNative.asmtest_disas_available()) return "";
+            int need = HwNative.asmtest_hwtrace_render_versioned(img, when, trace, null, UIntPtr.Zero);
+            if (need <= 0) return "";
+            var buf = new byte[need + 1];
+            HwNative.asmtest_hwtrace_render_versioned(img, when, trace, buf, (UIntPtr)(need + 1));
+            return Encoding.ASCII.GetString(buf, 0, need);
+        }
+
+        /// <summary>Close the operation: close any hop still open, then stitch every parked
+        /// slice into one ordered trace by seq. Populates <see cref="Hops"/>, <see cref="Path"/>,
+        /// <see cref="Truncated"/>. Idempotent; clears the ambient scope for this context.</summary>
+        public void Complete()
+        {
+            if (_completed) return;
+            _completed = true;
+            // Close every hop still open — the closing thread's, plus any that never detached
+            // (a thread the flow left without a reset). Snapshot to avoid mutate-during-iterate.
+            foreach (var kv in _openHops) CloseHop(kv.Value);
+            _openHops.Clear();
+            if (_scope != null) _current.Value = null; // ThreadContextChanged==false -> no detach fires
+
+            var parked = _parked.ToArray();
+            System.Array.Sort(parked, (a, b) => a.Seq.CompareTo(b.Seq));
+            if (parked.Length == 0 || !HwNative.LibAvailable) { Path = ""; return; }
+
+            var traces = new IntPtr[parked.Length];
+            var scopeIds = new ulong[parked.Length];
+            var seqs = new uint[parked.Length];
+            var tids = new int[parked.Length];
+            var versions = new ulong[parked.Length];
+            for (int i = 0; i < parked.Length; i++)
+            {
+                traces[i] = parked[i].Trace; scopeIds[i] = 0;
+                seqs[i] = parked[i].Seq; tids[i] = parked[i].Tid; versions[i] = parked[i].Version;
+            }
+            _merged = HwNative.asmtest_trace_new((UIntPtr)(1 << 16), (UIntPtr)256);
+            if (_merged == IntPtr.Zero) { SkipReason = "merged trace allocation failed"; return; }
+            var bounds = new HwNative.SliceBound[parked.Length];
+            int rc = HwNative.asmtest_hwtrace_stitch_handles(
+                traces, scopeIds, seqs, tids, versions, (UIntPtr)parked.Length, _merged, bounds, out UIntPtr nbUp);
+            if (rc != HwNative.ASMTEST_HW_OK) { SkipReason = $"stitch failed (rc={rc})"; return; }
+            int nb = (int)nbUp;
+            var hops = new List<StitchHop>(nb);
+            for (int i = 0; i < nb; i++)
+                hops.Add(new StitchHop(bounds[i].Seq, bounds[i].Tid, (long)(ulong)bounds[i].InsnOff));
+            Hops = hops;
+            if (HwNative.asmtest_emu_trace_truncated(_merged) != 0) Truncated = true;
+
+            var sb = new StringBuilder();
+            foreach (var b in hops)
+            {
+                Parked p = System.Array.Find(parked, x => x.Seq == b.Seq);
+                sb.Append($"; hop {b.Seq} (tid {b.Tid}, +{b.InsnOffset}):\n");
+                if (p != null && !string.IsNullOrEmpty(p.Text)) sb.Append(p.Text);
+            }
+            Path = sb.ToString();
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            if (!_completed) Complete();
+            if (_map != null) _map.Dispose();
+            if (!HwNative.LibAvailable) return;
+            foreach (var p in _parked)
+                if (p.Trace != IntPtr.Zero) HwNative.asmtest_trace_free(p.Trace);
             if (_merged != IntPtr.Zero) { HwNative.asmtest_trace_free(_merged); _merged = IntPtr.Zero; }
         }
     }

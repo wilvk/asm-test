@@ -435,6 +435,10 @@ static class HwTraceProgram
             // --- §D0.4 async-hop stitching: one logical op across a real thread hop --- //
             StitchChecks().GetAwaiter().GetResult();
 
+            // --- §Z4 (T11) ambient stitching: zero-call AsyncLocal producer, live half --- //
+            // PT-only; self-skips off Intel PT here (the hook->tag->merge logic is the T12 twin).
+            AmbientStitchChecks().GetAwaiter().GetResult();
+
             // --- §1 handle-keyed scopes: concurrent SAME-SITE regions don't alias --- //
             // Both threads construct their scope through SameSiteScope below, so they
             // share ONE auto-name (member:line). begin_scope gives each its own
@@ -1689,6 +1693,41 @@ static class HwTraceProgram
         }
         Check(captured == 40,
               $"stitched: 40 operations (>32 MAX_REGIONS) all captured ({captured}/40) — registry-free, no exhaustion");
+    }
+
+    static long AmbientWork(long a, long b) => a + b;
+
+    // §Z4 (managed-wholewindow-compose T11) — the AMBIENT AsyncLocal producer's LIVE half.
+    // Zero calls in the body: the operation is captured purely by the ExecutionContext
+    // value-changed handler. PT-only, so on this AMD host (no intel_pt PMU) it self-skips
+    // with a PT reason and runs the body UNINSTRUMENTED (never a crash); on a real PT host
+    // it asserts >=2 seq-ordered slices with a non-empty Path. The hook->tag->merge LOGIC
+    // is host-tested everywhere by the T12 stub twin (AmbientHookTwinChecks).
+    static async System.Threading.Tasks.Task AmbientStitchChecks()
+    {
+        var op = new AsmAmbientStitchedTrace();
+        long r;
+        using (op)
+            r = await System.Threading.Tasks.Task.Run(() => AmbientWork(20, 22)); // a real thread hop
+        // Dispose() (the using close) ran Complete().
+
+        Check(r == 42, $"ambient: the body ran and returned its result (r={r})");
+        if (op.SkipReason.Length != 0)
+        {
+            Check(op.SkipReason.Contains("PT") || op.SkipReason.Contains("Intel"),
+                  $"ambient: self-skip names the Intel PT gate ('{op.SkipReason}')");
+            // Mutation posture: with no PT the handler never ran, so the body is untouched —
+            // r==42 above IS that check (the uninstrumented run is byte-for-byte the plain call).
+            Console.WriteLine($"# SKIP ambient stitching: {op.SkipReason}");
+            return;
+        }
+        // A real PT host: the flow touched at least the ctor thread + the pool thread.
+        Check(op.Hops.Count >= 2, $"ambient: >=2 stitched slices captured ({op.Hops.Count})");
+        bool seqOrdered = true;
+        for (int i = 1; i < op.Hops.Count; i++)
+            if (op.Hops[i].Seq <= op.Hops[i - 1].Seq) seqOrdered = false;
+        Check(seqOrdered, "ambient: slices merged in ascending seq order");
+        Check(op.Path.Length > 0, "ambient: merged Path renders the per-slice disassembly");
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]

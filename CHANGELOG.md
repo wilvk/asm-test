@@ -8,6 +8,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Ambient stitched operations (.NET, opt-in, Intel PT).** `AsmAmbientStitchedTrace`
+  follows one logical operation across `await` / thread hops with **zero calls in the
+  body** — an `AsyncLocal` value-changed handler opens a per-thread `intel_pt` slice
+  when the flow lands on a thread and decodes-at-disable when it leaves, then stitches
+  the slices at close (`op.Hops` / `op.Path`). PT-only by construction; off Intel PT it
+  self-skips and runs the body uninstrumented. Built on the new per-tid PT hop capture
+  primitive (`asmtest_hwtrace_pt_hop_open`/`_hop_close`) on the one shared `intel_pt`
+  perf-AUX arm. The default whole-window capture is unchanged (it stays the honest
+  per-thread window that flags `truncated` on a cross-thread hop — never auto-stitch).
+
 - **Runtime-enabled jitdump byte recovery on an already-running process** — turn jitdump
   emission on in a live foreign runtime and recover a JIT method's recorded bytes with
   `asmtest_jitdump_find`, with **no launch flag** on the target. For **CoreCLR**

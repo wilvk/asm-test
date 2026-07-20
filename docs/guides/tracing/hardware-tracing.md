@@ -574,6 +574,30 @@ The .NET binding is the reference: see
 model (following one logical operation across `await` thread hops) is a further,
 opt-in layer not covered here.
 
+### Ambient stitched operations (opt-in, Intel PT)
+
+`AsmStitchedTrace.Step` follows one logical operation across `await` thread hops
+with an **explicit call per hop**. `AsmAmbientStitchedTrace` is the **zero-call**
+escalation: an `AsyncLocal` value-changed handler fires on every execution-context
+transition, so the producer opens a per-thread Intel-PT slice when the flow lands
+on a thread and decodes-at-disable when it leaves — no calls in the operation body.
+
+```csharp
+using (var op = new AsmAmbientStitchedTrace())
+    await SomeAsyncWork();      // each thread the flow touches becomes one PT slice
+// op.Hops — each slice's (seq, tid, offset); op.Path — per-slice disassembly
+```
+
+This is **PT-only by construction**: the per-thread hop is a per-tid `intel_pt`
+event (the single-thread §D3 stepper follows one thread and cannot exercise a hop),
+so it needs bare-metal Intel PT with `perf_event_paranoid < 0` or `CAP_PERFMON`. Off
+Intel PT the scope sets `SkipReason` and runs the body **uninstrumented** — never a
+hard failure, never in-process single-step. The **default whole-window capture is
+unchanged**: it stays the honest per-thread window that flags the trace `truncated`
+when work hopped OS threads (see above) — ambient stitching is an explicit opt-in,
+never automatic. Use the everywhere-runnable `AsmStitchedTrace.Step` when Intel PT
+is not available.
+
 ## Statistical edges out of band: the AMD IBS-Op lane
 
 The four backends above produce **exact** traces — ordered offsets that can back
