@@ -956,4 +956,71 @@ int asmtest_mach_run_to(pid_t pid, const void *addr) {
     return ASMTEST_MACH_ENOSYS;
 }
 
+#if defined(__APPLE__)
+/* Apple Silicon (arm64) macOS: the stepper above is x86-64 only, but the MIG
+ * server mach_excServer.c is GENERATED and compiled on every macOS arch and
+ * references these three catch_* callbacks with external linkage. Without a
+ * definition, any executable that links the Mach objects (e.g. tools/asmfeatures,
+ * built by `make bench-report` on the macos-latest CI leg) fails at link on arm64
+ * with "Undefined symbols for architecture arm64: _catch_mach_exception_raise*".
+ * The stepper never arms an exception port here (asmtest_mach_available() == 0),
+ * so these are never invoked — they exist only to satisfy the linker. Signatures
+ * are the MIG-fixed ones (mach_exc.h), copied verbatim from the x86-64 arm above. */
+#include <mach/mach.h>
+
+#include "mach_exc.h"
+
+kern_return_t catch_mach_exception_raise(mach_port_t exception_port,
+                                         mach_port_t thread, mach_port_t task,
+                                         exception_type_t exception,
+                                         mach_exception_data_t code,
+                                         mach_msg_type_number_t codeCnt) {
+    (void)exception_port;
+    (void)thread;
+    (void)task;
+    (void)exception;
+    (void)code;
+    (void)codeCnt;
+    return KERN_FAILURE;
+}
+
+kern_return_t catch_mach_exception_raise_state(
+    mach_port_t exception_port, exception_type_t exception,
+    const mach_exception_data_t code, mach_msg_type_number_t codeCnt,
+    int *flavor, const thread_state_t old_state,
+    mach_msg_type_number_t old_stateCnt, thread_state_t new_state,
+    mach_msg_type_number_t *new_stateCnt) {
+    (void)exception_port;
+    (void)exception;
+    (void)code;
+    (void)codeCnt;
+    (void)flavor;
+    (void)old_state;
+    (void)old_stateCnt;
+    (void)new_state;
+    (void)new_stateCnt;
+    return KERN_FAILURE;
+}
+
+kern_return_t catch_mach_exception_raise_state_identity(
+    mach_port_t exception_port, mach_port_t thread, mach_port_t task,
+    exception_type_t exception, mach_exception_data_t code,
+    mach_msg_type_number_t codeCnt, int *flavor, thread_state_t old_state,
+    mach_msg_type_number_t old_stateCnt, thread_state_t new_state,
+    mach_msg_type_number_t *new_stateCnt) {
+    (void)exception_port;
+    (void)thread;
+    (void)task;
+    (void)exception;
+    (void)code;
+    (void)codeCnt;
+    (void)flavor;
+    (void)old_state;
+    (void)old_stateCnt;
+    (void)new_state;
+    (void)new_stateCnt;
+    return KERN_FAILURE;
+}
+#endif /* __APPLE__ */
+
 #endif

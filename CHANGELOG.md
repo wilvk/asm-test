@@ -1617,6 +1617,32 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **asmspy CLI victims build on AArch64 — completes the `cli (ubuntu-24.04-arm)`
+  build (follows the include-comment fix below).** That fix revealed asmspy-aarch64
+  T5's arm64 `cli` leg had never actually built: two victims carried unguarded x86 asm.
+  Ported both to AArch64 — `cli/int3_victim.c` `int3` → `brk #0` with an `SA_SIGINFO`
+  handler that advances `uc_mcontext.pc` past the 4-byte brk (AArch64 `brk` is a fault,
+  not a trap: the handler must step PC or the return re-executes it forever), and
+  `cli/exec_stage2.c`'s freestanding x86 `syscall` stub + `_start` → a `svc #0` stub,
+  AArch64 syscall numbers, and an AArch64 `_start`. Verified under qemu-user: both
+  compile + link with `WERROR` on aarch64, the whole cli builds to an arm64 `build/asmspy`,
+  `exec_stage2` prints its freestanding banner (its `svc`/`_start` run), and `int3_victim`
+  survives its own breakpoints with no `SWALLOWED` (the PC-advance works). The ptrace
+  tracer interaction (asmspy re-injecting the brk) is validated by the native arm64 CI leg.
+
+- **`tools/asmfeatures` links on Apple-Silicon macOS — `benchmarks (macos-latest)`
+  `bench-report` (the second of the two macOS issues; follows the `@rpath` fix below).**
+  `src/mach_backend.c`'s whole body — including the MIG `catch_mach_exception_raise*`
+  callbacks — is `#if x86_64 && __APPLE__`, but the generated MIG server `mach_excServer.o`
+  is compiled on every macOS arch and references those callbacks unconditionally, so any
+  executable linking the Mach objects (`asmfeatures`, via `make bench-report`) failed to
+  link on arm64: "Undefined symbols for architecture arm64: _catch_mach_exception_raise*".
+  Added `__APPLE__`-guarded stub definitions (return `KERN_FAILURE`; the stepper never arms
+  on arm64, so they are never invoked) in the non-x86_64-Darwin branch — excluded on Linux
+  and on x86_64-macOS's real branch. Reasoned fix (no local macOS host); the macos-latest
+  CI leg confirms the link. The Mach OOP stepper itself stays Intel-macOS only —
+  single-stepping on arm64-macOS is a separate port.
+
 - **asmspy `cli-smoke`: deterministic unknown-arity arg-decode assertion (de-flake).**
   The `--log` syscall arg-decode smoke (`cli/cli_smoke.sh`) asserts that at least
   one syscall in a 400-event window renders the honest unknown-arity form (`…`)

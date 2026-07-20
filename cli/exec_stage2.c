@@ -31,18 +31,37 @@
  * own load bias, with its own .symtab, which the pre-exec table cannot name.
  */
 
-/* x86-64 Linux syscall numbers — no libc headers are available here. */
+/* Linux syscall numbers — no libc headers are available here. */
+#if defined(__aarch64__)
+#define SYS_write      64
+#define SYS_nanosleep  101
+#define SYS_exit_group 94
+#else
 #define SYS_write      1
 #define SYS_nanosleep  35
 #define SYS_exit_group 231
+#endif
 
 static long sys3(long n, long a, long b, long c) {
+#if defined(__aarch64__)
+    /* AArch64: number in x8, args in x0..x5, return in x0, trap via `svc #0`. */
+    register long x8 __asm__("x8") = n;
+    register long x0 __asm__("x0") = a;
+    register long x1 __asm__("x1") = b;
+    register long x2 __asm__("x2") = c;
+    __asm__ volatile("svc #0"
+                     : "+r"(x0)
+                     : "r"(x8), "r"(x1), "r"(x2)
+                     : "memory");
+    return x0;
+#else
     long r;
     __asm__ volatile("syscall"
                      : "=a"(r)
                      : "a"(n), "D"(a), "S"(b), "d"(c)
                      : "rcx", "r11", "memory");
     return r;
+#endif
 }
 
 /* The symbol the whole test turns on: present only in THIS image. noinline so it
@@ -69,11 +88,19 @@ void stage2_main(void) {
 }
 
 /* Our own entry point: with -nostdlib there is no crt1.o to set one up. The
- * kernel enters here with a 16-byte-aligned rsp; `call` then leaves the callee
- * at the ABI's rsp%16==8. stage2_main never returns. */
+ * kernel enters here with a 16-byte-aligned SP; the ABI keeps it 16-aligned.
+ * stage2_main never returns. */
+#if defined(__aarch64__)
+__asm__(".globl _start\n"
+        "_start:\n"
+        "  mov x29, #0\n" /* clear the frame pointer: the backtrace root */
+        "  bl stage2_main\n"
+        "  brk #0\n"); /* never reached; a trap net if stage2_main returned */
+#else
 __asm__(".globl _start\n"
         "_start:\n"
         "  xorl %ebp, %ebp\n"
         "  andq $-16, %rsp\n"
         "  call stage2_main\n"
         "  hlt\n");
+#endif
