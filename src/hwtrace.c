@@ -2706,6 +2706,168 @@ int asmtest_hwtrace_pt_attach_end(asmtest_pt_attach_t *a, uint64_t when,
 }
 
 /* ------------------------------------------------------------------ */
+/* §Z4 per-tid PT hop capture (managed-wholewindow-compose T10)          */
+/*                                                                     */
+/* The capture half of the ambient-stitching escalation: open a per-tid   */
+/* intel_pt AUX event on an arbitrary tid, then at the hop's DISABLE drain */
+/* the quiesced ring and decode-at-version. Built on the SAME              */
+/* pt_aux_open/stop/close arm the window + foreign-attach surfaces ride —  */
+/* never a parallel PT open. (The doc placed these in pt_backend.c; that    */
+/* TU is libipt-DECODE only and cannot reach this static perf-capture arm,  */
+/* so the pair sits beside its attach sibling instead — honoring the        */
+/* one-PT-arm invariant the doc's own Constraints demand.)                  */
+/* ------------------------------------------------------------------ */
+#if defined(__linux__)
+/* The opaque hop ctx: one per-tid pt_aux_t. A test-only fixture ctx sets fd<0 and
+ * points fx_aux at a caller-owned synthetic AUX blob, so hop_close decodes it
+ * through the same asmtest_pt_decode_window path with zero PT silicon. */
+struct asmtest_pt_hop {
+    pt_aux_t aux; /* live per-tid perf AUX event (fd<0 = fixture ctx) */
+    const uint8_t
+        *fx_aux; /* test-only synthetic AUX bytes (NULL for a live event) */
+    size_t fx_len;
+};
+#endif
+
+int asmtest_hwtrace_pt_hop_open(int tid, void **ctx_out) {
+    /* Argument validation FIRST (every host), so the (NULL ctx_out) call is EINVAL
+     * on a no-PT dev box — the self-skip test relies on it, mirroring begin_window. */
+    if (ctx_out == NULL)
+        return ASMTEST_HW_EINVAL;
+    *ctx_out = NULL;
+#if defined(__linux__)
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT))
+        return ASMTEST_HW_EUNAVAIL; /* clean off-Intel / no-permission self-skip */
+    struct asmtest_pt_hop *h = (struct asmtest_pt_hop *)calloc(1, sizeof *h);
+    if (h == NULL)
+        return ASMTEST_HW_EUNAVAIL;
+    h->aux.fd = -1;
+    /* Per-tid PT AUX through the ONE arm: pid==tid is perf's per-task selector
+     * (tid==0 is the calling thread), cpu==-1, inherit=0 (pt_aux_open leaves
+     * attr.inherit zeroed — mandatory for a per-task AUX mmap). aux_watermark==0
+     * (kernel default) suits the disable-then-drain shape (no live poll). Ring
+     * sizes from the inited tier's opts when up, else pt_aux_open's shipped
+     * 8 KiB / 64 KiB. */
+    size_t data_size = g_inited ? g_opts.data_size : 0;
+    size_t aux_size = g_inited ? g_opts.aux_size : 0;
+    int rc = pt_aux_open((pid_t)tid, data_size, aux_size, 0, /*snapshot=*/0,
+                         &h->aux);
+    if (rc != ASMTEST_HW_OK) {
+        int e = errno;
+        if (e == EACCES || e == EPERM)
+            ASMTEST_HWDBG("pt hop: NOPERM (errno=%d) — per-tid PT needs "
+                          "CAP_PERFMON + same-uid ptrace access to the tid",
+                          e);
+        free(h);
+        return rc; /* pt_aux_open already unwound its fd/mmaps */
+    }
+    *ctx_out = h;
+    return ASMTEST_HW_OK;
+#else
+    (void)tid;
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+/* Test-only: wrap a synthetic linear AUX blob in a hop ctx so hop_close decodes it
+ * through the SAME asmtest_pt_decode_window path the live per-tid capture uses —
+ * the decode leg exercised with zero PT silicon. `aux` must outlive the close. */
+int asmtest_pt_hop_ctx_for_fixture(const uint8_t *aux, size_t aux_len,
+                                   void **ctx_out) {
+    if (aux == NULL || aux_len == 0 || ctx_out == NULL)
+        return ASMTEST_HW_EINVAL;
+    *ctx_out = NULL;
+#if defined(__linux__)
+    struct asmtest_pt_hop *h = (struct asmtest_pt_hop *)calloc(1, sizeof *h);
+    if (h == NULL)
+        return ASMTEST_HW_EUNAVAIL;
+    h->aux.fd = -1; /* no live event — the fixture path skips pt_aux_stop */
+    h->fx_aux = aux;
+    h->fx_len = aux_len;
+    *ctx_out = h;
+    return ASMTEST_HW_OK;
+#else
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+int asmtest_hwtrace_pt_hop_close(void *ctx, asmtest_codeimage_t *img,
+                                 uint64_t when, asmtest_trace_t *out) {
+    if (ctx == NULL)
+        return ASMTEST_HW_EINVAL;
+#if defined(__linux__)
+    struct asmtest_pt_hop *h = (struct asmtest_pt_hop *)ctx;
+    /* Test-only synthetic ctx: decode the injected AUX directly through the SAME
+     * asmtest_pt_decode_window the live path calls (the decode-at-version leg,
+     * exercised with no PT hardware), then free. Same drain-less contract as the
+     * live path: out==NULL is a clean teardown (OK); out!=NULL with img==NULL is
+     * EDECODE. */
+    if (h->aux.fd < 0 && h->fx_aux != NULL) {
+        int rc = ASMTEST_HW_OK;
+        if (out != NULL) {
+            if (img == NULL) {
+                rc = ASMTEST_HW_EDECODE;
+            } else {
+                uint64_t base_ip = 0;
+                rc = asmtest_pt_decode_window(h->fx_aux, h->fx_len, img, when,
+                                              out, &base_ip);
+            }
+        }
+        free(h);
+        return rc;
+    }
+    if (h->aux.fd <
+        0) { /* neither a live event nor a fixture — nothing armed */
+        free(h);
+        return ASMTEST_HW_EINVAL;
+    }
+    /* Live per-tid capture: DISABLE (the sanctioned read point for a linear AUX
+     * ring), then drain [0, head) and decode-at-version. pt_aux_stop reports the
+     * honest overflow signal; a decode failure OR overflow flags the trace
+     * truncated (the same policy as pt_attach_end). */
+    uint64_t head = 0;
+    int overflow = 0;
+    pt_aux_stop(&h->aux, &head, &overflow);
+    if (out == NULL) { /* drain-less release: teardown only (a finalizer) */
+        pt_aux_close(&h->aux);
+        free(h);
+        return ASMTEST_HW_OK;
+    }
+    int rc;
+    if (img == NULL) {
+        rc = ASMTEST_HW_EDECODE; /* no image to decode against */
+    } else if (head == 0) {
+        rc = ASMTEST_HW_EDECODE; /* empty capture (no PT bytes) */
+    } else {
+        uint8_t *buf = (uint8_t *)malloc((size_t)head);
+        if (buf == NULL) {
+            rc = ASMTEST_HW_EUNAVAIL;
+        } else {
+            /* Linear ring: tail==0, [0, head). One de-wrap (a single memcpy — the
+             * wrap arm is never taken for a [0,head) extent) into a snapshot the
+             * decoder walks. */
+            asmtest_pt_aux_dewrap((const uint8_t *)h->aux.aux_map,
+                                  h->aux.aux_sz, 0, head, buf);
+            uint64_t base_ip = 0;
+            rc = asmtest_pt_decode_window(buf, (size_t)head, img, when, out,
+                                          &base_ip);
+            free(buf);
+        }
+    }
+    if (overflow || rc != ASMTEST_HW_OK)
+        out->truncated = true;
+    pt_aux_close(&h->aux);
+    free(h);
+    return rc;
+#else
+    (void)img;
+    (void)when;
+    (void)out;
+    return ASMTEST_HW_ENOSYS;
+#endif
+}
+
+/* ------------------------------------------------------------------ */
 /* W^X executable-memory helper (self-contained; for language bindings) */
 /* ------------------------------------------------------------------ */
 int asmtest_hwtrace_exec_alloc(const void *bytes, size_t len, void **base_out,

@@ -199,6 +199,15 @@ ALL asmtest_hwtrace_pt_attach_end         #   (paired with pt_attach_begin: deco
 ALL asmtest_pt_aux_dewrap                 # pure AUX-ring de-wrap helper: PMU-free logic, host-tested (test_pt_attach_helpers), not per-binding FFI — same posture as asmtest_hwtrace_stitch
 ALL asmtest_pt_ip_postfilter              # pure software IP post-filter helper: PMU-free logic, host-tested (test_pt_attach_helpers), not per-binding FFI
 
+# Per-tid PT hop capture (managed-wholewindow-compose T10) — the §Z4 ambient-stitching
+# capture half, built on the SAME one pt_aux_open arm as the attach siblings above. A
+# C-level open/decode-at-disable pair the .NET ambient stitcher (T11) P/Invokes internally
+# (not a public AsmTrace surface method); the other nine bindings grow it only if they add
+# ambient stitching. Hardware-gated live (bare-metal Intel PT + CAP_PERFMON + per-tid
+# access); the decode leg is host-tested through a synthetic AUX fixture (test_pt_hop_surface).
+ALL asmtest_hwtrace_pt_hop_open
+ALL asmtest_hwtrace_pt_hop_close           #   (paired with pt_hop_open: DISABLE + drain [0,head) + asmtest_pt_decode_window teardown)
+
 # Whole-window guard knobs (zeroconfig-scoped-tracing-hardening, 2026-07-19). The zero-config
 # path gets the defaults through plain begin_window, which every binding already
 # wraps; the _ex/guard-query knobs are C-level until a binding needs them.

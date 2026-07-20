@@ -126,6 +126,11 @@ int asmtest_pt_decode_window(const uint8_t *aux, size_t aux_len,
                              asmtest_trace_t *trace, uint64_t *base_ip_out);
 int asmtest_pt_encode_fixture(uint8_t *buf, size_t cap, uint64_t base_ip,
                               int taken, size_t *out_len);
+/* §Z4 per-tid PT hop capture (managed-wholewindow-compose T10). The test-only
+ * ctx constructor is declared here (not on the tier surface) — it wraps a
+ * synthetic AUX blob so hop_close's decode leg runs with no PT silicon. */
+int asmtest_pt_hop_ctx_for_fixture(const uint8_t *aux, size_t aux_len,
+                                   void **ctx_out);
 
 /* mov rax,rdi; add rax,rsi; cmp rax,100; jle +3; dec rax; ret  (two blocks). */
 static const unsigned char ROUTINE[] = {0x48, 0x89, 0xf8, 0x48, 0x01, 0xf0,
@@ -4230,6 +4235,133 @@ static void test_pt_attach_helpers(void) {
     asmtest_pt_ip_postfilter(&t2, 0, 0, 0, 0, 0);
     CHECK(t2.insns_len == 3,
           "pt attach ip_postfilter: region_len==0 keeps everything (no ROI)");
+}
+
+/* managed-wholewindow-compose T10 — the per-tid PT hop capture envelope. Two legs:
+ * (1) hop_open's EINVAL/EUNAVAIL self-skip on this AMD host (no intel_pt PMU); and
+ * (2) where libipt is built, hop_close's decode-at-version leg driven through a
+ * SYNTHETIC AUX fixture (asmtest_pt_encode_fixture) with zero PT silicon — the
+ * exact asmtest_pt_decode_window path the hardware-gated live capture uses,
+ * mirroring test_wholewindow_decode. The live per-tid arm is hardware-gated
+ * (bare-metal Intel PT + CAP_PERFMON + per-tid access), validated separately. */
+static void test_pt_hop_surface(void) {
+    /* (1) NULL ctx_out is EINVAL on every host — the arg check precedes the gate. */
+    CHECK(asmtest_hwtrace_pt_hop_open(0, NULL) == ASMTEST_HW_EINVAL,
+          "pt hop: open(NULL ctx_out) is EINVAL on every host (arg check "
+          "precedes the availability gate)");
+
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT)) {
+        /* Off the intel_pt PMU: a clean EUNAVAIL self-skip with *ctx == NULL. */
+        void *ctx =
+            (void *)(uintptr_t)0x1; /* poison: open must overwrite NULL */
+        int rc = asmtest_hwtrace_pt_hop_open(0, &ctx);
+        CHECK(rc == ASMTEST_HW_EUNAVAIL && ctx == NULL,
+              "pt hop: open self-skips EUNAVAIL with *ctx_out==NULL off the "
+              "intel_pt PMU");
+        printf(
+            "# SKIP pt hop: no Intel PT on this host (live per-tid capture is "
+            "hardware-gated — CAP_PERFMON + bare-metal Intel PT)\n");
+    } else {
+        /* On real Intel PT silicon the live per-tid arm is validated by the
+         * hardware-gated lane; here prove only drain-less teardown of a real ctx.
+         * Close ONCE into a local — CHECK expands its condition twice, so a
+         * side-effecting call must not live inside it (a double free otherwise). */
+        void *ctx = NULL;
+        if (asmtest_hwtrace_pt_hop_open(0, &ctx) == ASMTEST_HW_OK) {
+            int rcc = asmtest_hwtrace_pt_hop_close(ctx, NULL, 0, NULL);
+            CHECK(rcc == ASMTEST_HW_OK,
+                  "pt hop: drain-less close (out==NULL) tears a live ctx down "
+                  "cleanly");
+        }
+        printf(
+            "# NOTE pt hop: intel_pt present — live per-tid capture validated "
+            "by the hardware-gated lane\n");
+    }
+
+    /* (2) The decode-at-version leg through a synthetic fixture — where libipt is
+     * built (the docker-hwtrace lane), with NO PT hardware. Encode the taken-jle
+     * ROUTINE walk, wrap it in a hop ctx, and close it against a self code-image;
+     * assert the {0,3,6,c,11} walk + {0,0x11} partition the AMD/CoreSight/DR
+     * backends reconstruct — the discriminating (0xe dec skipped) taken side. */
+    if (!asmtest_pt_decoder_present()) {
+        printf("# SKIP pt hop synthetic decode: built without libipt (ENOSYS "
+               "stub)\n");
+        return;
+    }
+    if (!asmtest_codeimage_available()) {
+        printf("# SKIP pt hop synthetic decode: soft-dirty code-image recorder "
+               "unavailable on this host kernel\n");
+        return;
+    }
+    long ps = sysconf(_SC_PAGESIZE);
+    unsigned char *p =
+        (unsigned char *)mmap(NULL, (size_t)ps, PROT_READ | PROT_WRITE,
+                              MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) {
+        printf("# SKIP pt hop synthetic decode: mmap failed\n");
+        return;
+    }
+    memcpy(p, ROUTINE, sizeof ROUTINE);
+    mprotect(p, (size_t)ps, PROT_READ | PROT_EXEC);
+    __builtin___clear_cache((char *)p, (char *)p + sizeof ROUTINE);
+
+    asmtest_codeimage_t *img = asmtest_codeimage_new(0);
+    int trk = img ? asmtest_codeimage_track(img, p, sizeof ROUTINE) : -1;
+    CHECK(trk == ASMTEST_CI_OK,
+          "pt hop synthetic decode: ROUTINE tracked in a self code image");
+    uint64_t when = img ? asmtest_codeimage_now(img) : 0;
+
+    uint8_t aux[256];
+    size_t aux_len = 0;
+    int enc = asmtest_pt_encode_fixture(aux, sizeof aux, (uint64_t)(uintptr_t)p,
+                                        1, &aux_len);
+    CHECK(enc == ASMTEST_HW_OK && aux_len > 0,
+          "pt hop synthetic decode: encoded the taken-jle AUX fixture");
+
+    if (trk == ASMTEST_CI_OK && enc == ASMTEST_HW_OK) {
+        void *hop = NULL;
+        int cc = asmtest_pt_hop_ctx_for_fixture(aux, aux_len, &hop);
+        CHECK(cc == ASMTEST_HW_OK && hop != NULL,
+              "pt hop synthetic decode: fixture ctx constructed");
+        asmtest_trace_t *tr = asmtest_trace_new(64, 64);
+        int rc = asmtest_hwtrace_pt_hop_close(hop, img, when, tr);
+        CHECK(rc == ASMTEST_HW_OK,
+              "pt hop close: decodes the synthetic AUX through "
+              "asmtest_pt_decode_window (the SAME path the live hop uses)");
+        static const uint64_t EXPECT[] = {0x0, 0x3, 0x6, 0xc, 0x11};
+        int seq = (asmtest_emu_trace_insns_total(tr) == 5);
+        for (size_t i = 0; seq && i < 5; i++)
+            seq = (tr->insns[i] == EXPECT[i]);
+        CHECK(seq, "pt hop close: instruction offsets == {0,3,6,c,11} "
+                   "(recorder-served bytes, decode-at-version)");
+        CHECK(asmtest_trace_covered(tr, 0x0) &&
+                  asmtest_trace_covered(tr, 0x11) &&
+                  asmtest_emu_trace_blocks_len(tr) == 2,
+              "pt hop close: block partition == {0, 0x11}");
+        CHECK(
+            !asmtest_trace_covered(tr, 0xe),
+            "pt hop close: the 0xe dec is NOT covered — the taken TNT skipped "
+            "it (the decode follows the packet stream, not a baked answer)");
+        asmtest_trace_free(tr);
+
+        /* Drain-less release of a fixture ctx (out==NULL): a clean teardown, no
+         * leak — the same contract the live path honors for a finalizer. Close
+         * ONCE into a local: CHECK expands its condition twice, and a second
+         * hop_close on the just-freed ctx would be a use-after-free. */
+        void *hop2 = NULL;
+        if (asmtest_pt_hop_ctx_for_fixture(aux, aux_len, &hop2) ==
+            ASMTEST_HW_OK) {
+            int rc2 = asmtest_hwtrace_pt_hop_close(hop2, NULL, 0, NULL);
+            CHECK(
+                rc2 == ASMTEST_HW_OK,
+                "pt hop close: drain-less release of a fixture ctx (out==NULL) "
+                "is a clean teardown");
+        }
+    }
+
+    if (img != NULL)
+        asmtest_codeimage_free(img);
+    munmap(p, (size_t)ps);
 }
 
 /* T3 — the WEAK/STRONG window ladder + runtime decode-trust probe. Host-neutral: the
@@ -10865,6 +10997,7 @@ int main(void) {
     test_pt_window_pair_selfskip();
     test_pt_attach_selfskip();
     test_pt_attach_helpers();
+    test_pt_hop_surface();
     test_window_ladder();
     test_pt_live_selfjit();
 

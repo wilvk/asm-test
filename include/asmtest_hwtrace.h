@@ -740,6 +740,47 @@ void asmtest_pt_ip_postfilter(asmtest_trace_t *trace, size_t insn0, size_t blk0,
                               size_t region_len);
 
 /* ------------------------------------------------------------------ */
+/* §Z4 — per-tid PT hop capture (the ambient-stitching capture half)    */
+/* ------------------------------------------------------------------ */
+/* managed-wholewindow-compose.md T10. A minimal open/decode-at-disable  */
+/* pair around the SAME one pt_aux_open arm the window/attach surfaces    */
+/* ride (no parallel PT plumbing — only a tid parameter over the          */
+/* substrate): open a per-thread intel_pt AUX event on an arbitrary tid,  */
+/* then at the hop's DISABLE drain the quiesced ring and decode it        */
+/* against the code image live in the window. This is the capture         */
+/* primitive the .NET ambient AsyncLocal stitcher (T11) opens on          */
+/* thread-attach and closes-with-decode on thread-detach — one PT slice   */
+/* per thread the logical operation lands on.                             */
+/*                                                                        */
+/* hop_open opens perf_event_open(pid=tid, cpu=-1, inherit=0) with the    */
+/* intel_pt PMU + an AUX ring and ENABLEs it, returning a heap ctx in     */
+/* *ctx_out. tid==0 is perf's "calling thread". NULL ctx_out is           */
+/* ASMTEST_HW_EINVAL (checked FIRST, on every host); off bare-metal Intel */
+/* PT / without CAP_PERFMON it self-skips ASMTEST_HW_EUNAVAIL with        */
+/* *ctx_out left NULL. inherit=0 is mandatory: a per-task cpu==-1 event   */
+/* cannot mmap an AUX ring with inherit=1, and per-thread PT has no        */
+/* inheritance — threads spawned later stay untraced until opened per-tid */
+/* (exactly what the ambient thread-attach callback does).                */
+/*                                                                        */
+/* hop_close issues PERF_EVENT_IOC_DISABLE (a linear/overwrite AUX reader */
+/* must disable before reading — the perf contract), drains [0, head) of  */
+/* the now-quiesced ring, decodes it through asmtest_pt_decode_window     */
+/* against `img` as of `when` (appending offsets from the first decoded   */
+/* IP into `out`, honest truncation on overflow), then frees the ctx and  */
+/* its fd/mmaps. `out == NULL` is a legal drain-less release (teardown    */
+/* only, ASMTEST_HW_OK). `img == NULL` returns ASMTEST_HW_EDECODE, still   */
+/* after a full teardown (never leaks). A NULL ctx is ASMTEST_HW_EINVAL.   */
+/* Linux only; ASMTEST_HW_ENOSYS where per-tid PT capture is not          */
+/* compiled. */
+int asmtest_hwtrace_pt_hop_open(int tid, void **ctx_out);
+int asmtest_hwtrace_pt_hop_close(void *ctx, asmtest_codeimage_t *img,
+                                 uint64_t when, asmtest_trace_t *out);
+/* A test-only ctx constructor (asmtest_pt_hop_ctx_for_fixture) wraps a synthetic
+ * AUX blob so hop_close's decode leg is host-testable with no PT silicon; it is
+ * forward-declared in the test that uses it, not on the tier surface — the same
+ * posture as the PT fixture encoder it feeds. */
+
+/* ------------------------------------------------------------------ */
 /* §D3 — concealed out-of-process ptrace-stealth stepper               */
 /*                                                                     */
 /* The hardware-free path, hidden behind the scope façade, for hosts    */
