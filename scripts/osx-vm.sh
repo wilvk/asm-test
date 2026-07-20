@@ -28,7 +28,7 @@
 #   - tart:    brew install cirruslabs/cli/tart
 #   - sshpass: the vanilla images use password auth (admin/admin)
 #   - a vanilla base image, e.g.:
-#       tart clone ghcr.io/cirruslabs/macos-sequoia-vanilla:latest macos-vanilla
+#       tart clone ghcr.io/cirruslabs/macos-sequoia-vanilla:15.7.7 macos-vanilla
 #
 # Usage: scripts/osx-vm.sh    (or `make osx-vm-test`)
 #   ASMTEST_TART_BASE  base VM/image name             (default: macos-vanilla)
@@ -53,7 +53,7 @@ command -v tart >/dev/null 2>&1 || {
 command -v sshpass >/dev/null 2>&1 || {
     echo "$prog: sshpass not found (vanilla images use password auth) — brew install sshpass" >&2; exit 1; }
 tart get "$BASE" >/dev/null 2>&1 || {
-    echo "$prog: no base VM '$BASE' — e.g.: tart clone ghcr.io/cirruslabs/macos-sequoia-vanilla:latest $BASE" >&2; exit 1; }
+    echo "$prog: no base VM '$BASE' — e.g.: tart clone ghcr.io/cirruslabs/macos-sequoia-vanilla:15.7.7 $BASE" >&2; exit 1; }
 
 # The guest is toolchain-free, so the payload + packages must be staged HERE.
 [ -f "$REPO/build/dist/native/darwin-arm64/libasmtest_emu.dylib" ] || {
