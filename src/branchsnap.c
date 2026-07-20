@@ -423,14 +423,15 @@ int asmtest_amd_snapshot_end(asmtest_trace_t *trace) {
  * BOUNDARY ASSUMPTION (inherited, and load-bearing here): tiling relies on the same
  * Zen 4/5 property Phase 9 validated for the region path — a #DB execution breakpoint
  * does NOT evict the recent branch history before the BPF helper reads it (the AMD
- * freeze path holds). That is now validated live on Zen 5 for BOTH region-exit shapes:
- * a `ret` boundary and a tail-`jmp` boundary. A managed method-entry checkpoint is
- * neither — it is a CALL target — so it is nearer the validated shape (the call retires,
- * then the breakpoint fires on the entry instruction) but is still not literally either
- * validated case. test_branchtile.c's check 3b (a preamble_leaf called immediately before
- * the checkpoint) directly measures CALL-target non-eviction — the 2-3 next-newest slots
- * must survive the #DB — so this third shape is asserted, not assumed; its live green on
- * the Zen 5 dev box (make docker-hwtrace-codeimage) is a hardware-gated validation leg.
+ * freeze path holds). That is now validated live on Zen 5 for ALL THREE boundary shapes:
+ * a `ret` exit, a tail-`jmp` exit, and — the managed method-entry case — a CALL target.
+ * A method-entry checkpoint is a CALL target (the call retires, then the breakpoint fires
+ * on the entry instruction), the third shape after the two region exits; it is no longer
+ * assumed. test_branchtile.c's check 3b (a preamble_leaf called immediately before the
+ * checkpoint) directly measures CALL-target non-eviction — the 2-3 next-newest slots must
+ * survive the #DB — and its live green was OBSERVED 2026-07-20 on the Ryzen 9 9950X (Zen 5)
+ * dev box (make docker-hwtrace-codeimage), with a mutation dropping the preamble slot
+ * flipping 3b red — so all three shapes are asserted, not assumed.
  * The test also asserts the entry edge is present rather than assuming it. */
 struct btile_state {
     int active;

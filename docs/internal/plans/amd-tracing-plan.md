@@ -1916,5 +1916,13 @@ in `amd_backend.c` (`asmtest_amd_lbr_depth`, next to the other CPUID probes) rat
   exit is empirically sound on Zen 5. **Residual (unmeasured, honest):** this is one part
   (Zen 5 / `amd_lbr_v2`); Zen 4 and Zen 3 BRS remain under the standing "Hardware coverage"
   gate above. The tiling consumer's inherited assumption
-  ([branchsnap.c:415-422](../../../src/branchsnap.c)) is a CALL-target checkpoint, which is a
-  third shape and still not literally either validated case.
+  ([branchsnap.c:415-422](../../../src/branchsnap.c)) is a CALL-target checkpoint — the third
+  shape after the `ret` and tail-`jmp` exits — and it is **now validated live too** (2026-07-20,
+  same Zen 5 box / Ryzen 9 9950X, `make docker-hwtrace-codeimage`):
+  [test_branchtile.c](../../../examples/test_branchtile.c)'s check 3b plants a `preamble_leaf`
+  call immediately before the checkpoint and asserts its entry survives in the frozen island
+  (`preamble_in_tiles=1 tile_truncated=0`); an env-gated mutation dropping that preamble slot
+  flips 3b to `not ok` while the never-reached negative control stays green, so the check
+  discriminates. All three boundary shapes (`ret` exit, tail-`jmp` exit, CALL-target checkpoint)
+  are now measured on Zen 5, not assumed; Zen 4 and Zen 3 BRS remain under the standing
+  "Hardware coverage" gate.

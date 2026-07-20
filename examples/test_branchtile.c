@@ -324,10 +324,13 @@ int main(void) {
      * (check 1) cannot give. Disjoined with tile_truncated (the island merge lost
      * endpoints), NEVER the survey-wide truncated (causally untied — see the file header).
      * MUTATION EVIDENCE (documented one-off, never committed — Phase-9 style): in
-     * btile_on_event (src/branchsnap.c), temporarily `continue` on entries whose e.to
-     * equals the preamble entry PC; the check flips to `not ok` while the negative
-     * control (check 2) stays green — proving 3b can fail. The live PASS on the Zen 5
-     * dev box (make docker-hwtrace-codeimage) is a HARDWARE-GATED validation leg. */
+     * btile_on_event (src/branchsnap.c), an env-gated `continue` on entries whose e.to
+     * equals the preamble entry PC. OBSERVED 2026-07-20 on the Ryzen 9 9950X (Zen 5)
+     * dev box (ASLR off for a stable PC): baseline 3b `ok` (preamble_in_tiles=1,
+     * tile_truncated=0); with the drop armed on that PC, 3b flips to `not ok` (island
+     * prefix missing the pre-call preamble entry) while the negative control (check 2)
+     * stays green — 3b can fail. LIVE PASS confirmed the same day, unmutated:
+     * make docker-hwtrace-codeimage (CAP_BPF+CAP_PERFMON, real LbrExtV2, lbr_depth=16). */
     if (probe.preamble_in_tiles || probe.tile_truncated)
         printf(
             "ok - branchtile: the island prefix contains preamble_leaf's entry "

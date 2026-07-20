@@ -94,8 +94,13 @@ as evidence, exactly as described above. It now asserts the PATH-SPECIFIC block 
 `covered(want_off) && !covered(other_off)`, the two exits' own `mov` blocks — real evidence that the
 default-on snapshot captured the exit that actually ran. `amd_backend.c:267` itself is unchanged and
 correct (block 0 SHOULD be appended unconditionally); the fix was entirely at the assertion site.
-Live-hardware verification blocked this session on a missing BPF toolchain (clang/libbpf-dev) and a
-`sudo` password this session could not supply; verified by compilation and the ENOSYS stub path only.
+**Live-verified 2026-07-20** on the Ryzen 9 9950X (Zen 5, Family 1Ah) dev box via
+`make docker-hwtrace-codeimage` (CAP_BPF + CAP_PERFMON, real LbrExtV2 — not a self-skip): the
+default-on multi-exit snapshot covers BOTH exits path-specifically —
+`branchsnap multi-exit path-A(ret@0x08): max2(10,3)=10; ... want(0x05)=1, other(0x09)=0, truncated=0`
+and `path-B(ret@0x0c): max2(3,10)=10; ... want(0x09)=1, other(0x05)=0, truncated=0` →
+`ok - branchsnap multi-exit`. The a89a1cb `covered(want_off) && !covered(other_off)` rewrite holds
+against real LBR captures on both exits; neither offset (0x05/0x09) needed correcting.
 
 ## 3. `examples/test_dataflow_blockstep.c` re-declares `asmtest_blockstep_info_t` with no layout guard — LANDED 2026-07-17
 
