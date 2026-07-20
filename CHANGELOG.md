@@ -1580,6 +1580,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **macOS (Intel) native build + PT self-skip correctness**, surfaced by
+  validating the out-of-process Mach single-step tier natively on a macOS 14.7.5
+  / Intel host (`make mach-stepper-test`, 25/25 live):
+  - `examples/test_hwtrace.c` included `<unistd.h>` only under
+    `#if defined(__linux__)`, so the portable `test_pt_attach_selfskip` (it calls
+    `getpid()` on every host) failed to compile on macOS; the include moved to the
+    unconditional POSIX block.
+  - `asmtest_hwtrace_pt_begin_window` / `asmtest_hwtrace_pt_attach_begin` returned
+    `ASMTEST_HW_ENOSYS` from their non-Linux `#else` arms, but the tier's single
+    availability classifier reports Intel PT as `ASMTEST_HW_EUNAVAIL` on any host
+    without libipt — so the PT `begin()` self-skip envelope diverged from the
+    `status`/`skip_reason` contract on macOS. Both `#else` arms now return
+    `EUNAVAIL`, matching the classifier and the Linux `!available` path.
+  - `tests/glob_parity.c` compared `asmtest_glob_match` (pinned to glibc
+    `fnmatch`) against the *host* `fnmatch` on undefined-behavior patterns
+    (unterminated `[`, trailing `\`), which BSD/macOS `fnmatch` resolves
+    differently — failing `make check` 11/44 on macOS. The divergent cases now
+    assert the glibc-pinned contract directly, cross-checking the host `fnmatch`
+    only under `__GLIBC__`; well-defined cases keep the live host differential
+    everywhere.
+
 - parallel runner (`-jN`): a non-EINTR `poll()` failure no longer abandons the
   run and reports never-run tests as passed; the scheduler degrades to
   blocking reaps.

@@ -2364,7 +2364,11 @@ int asmtest_hwtrace_pt_begin_window(void **ctx_out) {
     *ctx_out = c;
     return ASMTEST_HW_OK;
 #else
-    return ASMTEST_HW_ENOSYS;
+    /* Off Linux (macOS/other) INTEL_PT is never available — no libipt, no perf.
+     * EUNAVAIL matches the one classifier (hw_classify reports PT as EUNAVAIL
+     * "built without libipt" here) and the Linux !available arm above, so the
+     * self-skip envelope is byte-identical on every host. */
+    return ASMTEST_HW_EUNAVAIL;
 #endif
 }
 
@@ -2590,7 +2594,9 @@ int asmtest_hwtrace_pt_attach_begin(int pid, const char *obj_hint,
 #else
     (void)pid;
     (void)obj_hint;
-    return ASMTEST_HW_ENOSYS;
+    /* Off Linux INTEL_PT is never available; EUNAVAIL matches hw_classify and the
+     * Linux !available arm so the self-skip envelope is uniform on every host. */
+    return ASMTEST_HW_EUNAVAIL;
 #endif
 }
 

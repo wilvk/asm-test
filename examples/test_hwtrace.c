@@ -27,6 +27,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <unistd.h> /* getpid — used portably by the PT-attach self-skip envelope
+                       (test_pt_attach_selfskip runs on every host, not just Linux) */
 
 /* POSIX + ptrace headers: needed by the out-of-process stepper tests (x86-64 AND
  * AArch64) and the any-Linux /proc + jitdump reader tests (getpid, etc.). */
@@ -44,7 +46,6 @@
 #include <time.h>
 #include <ucontext.h> /* the windowed block-step signal leg fixes up the tracee's
                          RIP/RAX from its SIGSEGV handler */
-#include <unistd.h>
 #endif
 
 /* AMD branch-stack decoder declarations + perf_event are x86-64-only. */
