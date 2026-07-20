@@ -143,8 +143,13 @@ set -e
 [ "$rc" -eq 124 ] && fail "--dataflow hung (producer never reached the region entry)"
 printf '%s\n' "$dfout" | head -14
 if printf '%s\n' "$dfout" | grep -q '^# SKIP --dataflow'; then
+    # Remember the producer's absence: every later case that asserts a CAPTURE
+    # (steps/ret=57/def-use) gates on DF_AVAIL — the honest skip is the correct
+    # outcome wherever the value producer is x86-64-only (e.g. AArch64).
+    DF_AVAIL=0
     echo "(data-flow producer unavailable here — subcommand self-skipped, OK)"
 else
+    DF_AVAIL=1
     [ "$rc" -eq 0 ] || fail "--dataflow exited $rc"
     printf '%s\n' "$dfout" | grep -q 'data flow' || fail "--dataflow: no header"
     printf '%s\n' "$dfout" | grep -q 'ret=57' \
@@ -242,17 +247,20 @@ fi
 
 # THE CONTROL, and it is the whole test's guard: the SAME victim's hotfn must still
 # capture. Without this, "rc=1 and a message" would also be produced by a --dataflow
-# that had simply stopped working.
-echo "--- asmspy --dataflow $AVPID hotfn (control: the bound must not break capture) ---"
-set +e
-# NB no --max: a --max BELOW the region's step count makes the producer FAIL
-# (pre-existing, filed under Theme H; hotfn is 83 steps, so --max=5 => rc=1).
-ctlout=$(timeout 40 "$ASM" --dataflow "$AVPID" hotfn 2>&1); ctlrc=$?
-set -e
-[ "$ctlrc" -eq 0 ] || fail "--dataflow hotfn broke under the entry bound (rc=$ctlrc)"
-printf '%s\n' "$ctlout" | grep -q 'ret=57' \
-    || fail "--dataflow hotfn: no capture under the entry bound"
-echo "  control: hotfn still captures (ret=57)"
+# that had simply stopped working. Where the producer self-skips (DF_AVAIL=0) the
+# main case above skipped too, so there is nothing for this control to guard.
+if [ "${DF_AVAIL:-1}" = 1 ]; then
+    echo "--- asmspy --dataflow $AVPID hotfn (control: the bound must not break capture) ---"
+    set +e
+    # NB no --max: a --max BELOW the region's step count makes the producer FAIL
+    # (pre-existing, filed under Theme H; hotfn is 83 steps, so --max=5 => rc=1).
+    ctlout=$(timeout 40 "$ASM" --dataflow "$AVPID" hotfn 2>&1); ctlrc=$?
+    set -e
+    [ "$ctlrc" -eq 0 ] || fail "--dataflow hotfn broke under the entry bound (rc=$ctlrc)"
+    printf '%s\n' "$ctlout" | grep -q 'ret=57' \
+        || fail "--dataflow hotfn: no capture under the entry bound"
+    echo "  control: hotfn still captures (ret=57)"
+fi
 
 # The target must OUTLIVE the timeout path. The disarm INTERRUPTs a thread, restores
 # the byte, rewinds rip if it sits AT the trap, and CONTs it. Skip any of that and the
@@ -278,35 +286,39 @@ echo "  target survived the timeout path + settle"
 # THE ASSERTION IS THE EXACT STEP COUNT, not merely rc=0. "It did not fail" would also
 # pass if --max were ignored entirely — and an ignored cap is the other way this breaks.
 # n steps for --max=n can only come from a cap that caps.
-for m in 3 5; do
-    echo "--- asmspy --dataflow $AVPID hotfn --max=$m (must truncate to exactly $m) ---"
+if [ "${DF_AVAIL:-1}" = 1 ]; then
+    for m in 3 5; do
+        echo "--- asmspy --dataflow $AVPID hotfn --max=$m (must truncate to exactly $m) ---"
+        set +e
+        mxout=$(timeout 40 "$ASM" --dataflow "$AVPID" hotfn --max=$m 2>&1); mxrc=$?
+        set -e
+        [ "$mxrc" -eq 0 ] || fail "--dataflow --max=$m failed (rc=$mxrc) instead of truncating: $mxout"
+        printf '%s\n' "$mxout" | grep -qE "[^0-9]$m steps," \
+            || fail "--dataflow --max=$m did not truncate to $m steps: $(printf '%s' "$mxout" | grep -o '[0-9]* steps, [0-9]* records')"
+        echo "  truncated to exactly $m steps"
+    done
+    # JSON must ANNOUNCE the truncation — a prefix that claims to be a whole capture is the
+    # same confidently-wrong shape the ETRACE return had.
+    mjout=$(timeout 40 "$ASM" --dataflow "$AVPID" hotfn --max=5 --json 2>/dev/null)
+    printf '%s' "$mjout" | grep -q '"steps":5' \
+        || fail "--dataflow --max=5 --json: steps != 5"
+    printf '%s' "$mjout" | grep -q '"truncated":true' \
+        || fail "--dataflow --max=5 --json: a truncated capture did not set truncated"
+    echo "  json: steps=5, truncated=true"
+    # THE CONTROL: a cap ABOVE the region's size must be indistinguishable from no cap —
+    # proves --max truncates at the CAP rather than just capping everything short.
     set +e
-    mxout=$(timeout 40 "$ASM" --dataflow "$AVPID" hotfn --max=$m 2>&1); mxrc=$?
+    bigout=$(timeout 40 "$ASM" --dataflow "$AVPID" hotfn --max=200 2>&1); bigrc=$?
     set -e
-    [ "$mxrc" -eq 0 ] || fail "--dataflow --max=$m failed (rc=$mxrc) instead of truncating: $mxout"
-    printf '%s\n' "$mxout" | grep -qE "[^0-9]$m steps," \
-        || fail "--dataflow --max=$m did not truncate to $m steps: $(printf '%s' "$mxout" | grep -o '[0-9]* steps, [0-9]* records')"
-    echo "  truncated to exactly $m steps"
-done
-# JSON must ANNOUNCE the truncation — a prefix that claims to be a whole capture is the
-# same confidently-wrong shape the ETRACE return had.
-mjout=$(timeout 40 "$ASM" --dataflow "$AVPID" hotfn --max=5 --json 2>/dev/null)
-printf '%s' "$mjout" | grep -q '"steps":5' \
-    || fail "--dataflow --max=5 --json: steps != 5"
-printf '%s' "$mjout" | grep -q '"truncated":true' \
-    || fail "--dataflow --max=5 --json: a truncated capture did not set truncated"
-echo "  json: steps=5, truncated=true"
-# THE CONTROL: a cap ABOVE the region's size must be indistinguishable from no cap —
-# proves --max truncates at the CAP rather than just capping everything short.
-set +e
-bigout=$(timeout 40 "$ASM" --dataflow "$AVPID" hotfn --max=200 2>&1); bigrc=$?
-set -e
-[ "$bigrc" -eq 0 ] || fail "--dataflow --max=200 (above hotfn's 83 steps) failed: $bigrc"
-printf '%s\n' "$bigout" | grep -q 'ret=57' \
-    || fail "--dataflow --max=200: no full capture (a cap above the region must not truncate)"
-printf '%s\n' "$bigout" | grep -qE '[^0-9]83 steps,' \
-    || fail "--dataflow --max=200: expected the full 83 steps"
-echo "  control: --max=200 (> 83) captures in full, ret=57"
+    [ "$bigrc" -eq 0 ] || fail "--dataflow --max=200 (above hotfn's 83 steps) failed: $bigrc"
+    printf '%s\n' "$bigout" | grep -q 'ret=57' \
+        || fail "--dataflow --max=200: no full capture (a cap above the region must not truncate)"
+    printf '%s\n' "$bigout" | grep -qE '[^0-9]83 steps,' \
+        || fail "--dataflow --max=200: expected the full 83 steps"
+    echo "  control: --max=200 (> 83) captures in full, ret=57"
+else
+    echo "  (--max truncation cases need the value producer — skipped with it)"
+fi
 
 # ---------------------------------------------------------------------------
 # --dataflow --auto: trace what the target is DOING, no symbol named (Theme H)
@@ -397,7 +409,11 @@ set +e
 swout=$(timeout 60 env ASMTEST_DF_ENTRY_WAIT_MS=1500 "$ASM" --dataflow "$SWPID" --auto --sampler=sw 2>&1); swrc=$?
 set -e
 [ "$swrc" -eq 124 ] && fail "--auto --sampler=sw hung (the entry wait or the candidate walk is unbounded)"
-if printf '%s\n' "$swout" | grep -q '^# SKIP --dataflow --auto'; then
+if printf '%s\n' "$swout" | grep -q '^# SKIP --dataflow:'; then
+    # The sw SAMPLER may work here while the value PRODUCER is x86-64-only
+    # (AArch64): the pick half runs, then the capture self-skips honestly.
+    echo "  (sw sampler ran but the value producer is unavailable — capture half self-skipped, OK)"
+elif printf '%s\n' "$swout" | grep -q '^# SKIP --dataflow --auto'; then
     printf '%s\n' "$swout" | grep -qE '^# SKIP --dataflow --auto: .*perf' \
         || fail "--sampler=sw skipped with an empty/vague reason (the --sample lesson): $swout"
     echo "  (perf_event_open blocked here — sw sampler self-skipped WITH a real reason. Use make docker-cli-ibs)"

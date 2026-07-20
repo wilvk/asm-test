@@ -154,10 +154,15 @@ def test_window_region_free_whole_window(hwtrace):
 def test_trace_call_auto_owns_the_call_and_completes():
     # trace_call_auto OWNS the invocation: run under the fastest exact tier and
     # auto-escalate to a ceiling-free tier if the trace truncates. It self-manages the
-    # tier lifecycle (no `hwtrace` init fixture), so it runs standalone; off x86-64
-    # Linux it self-skips with EUNAVAIL. Mirrors the C reference test_call_auto.
-    code = NativeCode.from_bytes(ROUTINE)
-    res = HwTrace.trace_call_auto(code, 20, 22)  # 42 <= 100 -> jle taken, dec skipped
+    # tier lifecycle (no `hwtrace` init fixture), so it runs standalone; where NO rung
+    # can own the call it self-skips with EUNAVAIL. Mirrors the C reference
+    # test_call_auto — but arch-selected: on arm64 the cascade's complete floor is the
+    # fork+ptrace per-instruction rung (the hwtrace/MSR/block-step rungs are x86-only),
+    # which EXECUTES the bytes in a forked child, so the fixture must be the host's
+    # bytes exactly like the ptrace tests. Feeding x86 bytes there SIGILLed the tracee
+    # into an honest-but-failing truncated capture (result 0).
+    code = NativeCode.from_bytes(PTRACE_ROUTINE)
+    res = HwTrace.trace_call_auto(code, 20, 22)  # 42 <= 100 -> branch taken, dec skipped
     assert res.rc in (0, ASMTEST_HW_EUNAVAIL)
     if res.rc == 0:
         assert res.result == 42
@@ -168,17 +173,26 @@ def test_trace_call_auto_owns_the_call_and_completes():
     code.free()
 
     # A loop past the 16-taken-branch LBR window must STILL yield a complete trace
-    # (escalating off the ceiling-bounded backend on an AMD host; the single-step floor
-    # completes it directly elsewhere). mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret.
-    loop = bytes([0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00,
-                  0x48, 0x01, 0xF8, 0x48, 0xFF, 0xCE, 0x75, 0xF8, 0xC3])
+    # (escalating off the ceiling-bounded backend on an AMD host; the single-step /
+    # ptrace floor completes it directly elsewhere).
+    if IS_ARM64:
+        # mov x2,#0; L: add x2,x2,x0; subs x1,x1,#1; b.ne L; mov x0,x2; ret
+        loop = bytes([0x02, 0x00, 0x80, 0xD2, 0x42, 0x00, 0x00, 0x8B,
+                      0x21, 0x04, 0x00, 0xF1, 0xC1, 0xFF, 0xFF, 0x54,
+                      0xE0, 0x03, 0x02, 0xAA, 0xC0, 0x03, 0x5F, 0xD6])
+        loop_body = 0x4  # the b.ne back-edge target starts the loop-body block
+    else:
+        # mov rax,0; L: add rax,rdi; dec rsi; jnz L; ret.
+        loop = bytes([0x48, 0xC7, 0xC0, 0x00, 0x00, 0x00, 0x00,
+                      0x48, 0x01, 0xF8, 0x48, 0xFF, 0xCE, 0x75, 0xF8, 0xC3])
+        loop_body = 0x7
     lcode = NativeCode.from_bytes(loop)
     lres = HwTrace.trace_call_auto(lcode, 1, 25)  # 25 back-edges > 16-deep window
     assert lres.rc in (0, ASMTEST_HW_EUNAVAIL)
     if lres.rc == 0:
         assert lres.result == 25
         assert not lres.truncated  # escalated to a ceiling-free tier
-        assert lres.trace.covered(0x7)  # loop-body block covered
+        assert lres.trace.covered(loop_body)  # loop-body block covered
         lres.trace.free()
     lcode.free()
 

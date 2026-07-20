@@ -97,7 +97,13 @@ TEST(cpp, tier2_assertions) {
     regs_t r = capture(reinterpret_cast<void *>(add_signed), {40, 2});
     assert_ret(r, 42);
     assert_abi_preserved(r);
+#if defined(__x86_64__)
+    // x86 `add` always writes CF (clear for 40+2). AArch64's add.s fixture uses
+    // the non-flag-setting `add`, so NZCV.C there is trampoline residue, not a
+    // statement about the sum — deliberate flag fixtures (set_carry/clear_carry,
+    // cpp.flags above) carry the flag checks on every arch.
     assert_flag(r, ASMTEST_CF, false);
+#endif
     regs_t fr = capture_fp(reinterpret_cast<void *>(fp_add), {}, {1.5, 2.25});
     assert_fp(fr, 3.75);
 

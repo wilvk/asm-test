@@ -9,7 +9,8 @@
  * LLVM, Julia) — mmaps the file's header page so the filename is visible in
  * /proc/<pid>/maps, which is exactly how asmspy (and perf) discover it. No
  * perf-map is written, so a resolved name can only have come from the jitdump
- * reader. Opts in via PR_SET_PTRACER_ANY like the other victims. x86-64, LE.
+ * reader. Opts in via PR_SET_PTRACER_ANY like the other victims. LE hosts
+ * (x86-64 and AArch64 — the hot loop and elf_mach are arch-selected).
  */
 #define _GNU_SOURCE
 #include <fcntl.h>
@@ -36,10 +37,9 @@
  *   2a0103e0         mov  w0, w1
  *   d65f03c0         ret
  */
-static const unsigned char HOT_CODE[] = {0x01, 0x00, 0x80, 0x52, 0x21, 0x04,
-                                         0x00, 0x11, 0x3f, 0x00, 0x00, 0x6b,
-                                         0xc3, 0xff, 0xff, 0x54, 0xe0, 0x03,
-                                         0x01, 0x2a, 0xc0, 0x03, 0x5f, 0xd6};
+static const unsigned char HOT_CODE[] = {
+    0x01, 0x00, 0x80, 0x52, 0x21, 0x04, 0x00, 0x11, 0x3f, 0x00, 0x00, 0x6b,
+    0xc3, 0xff, 0xff, 0x54, 0xe0, 0x03, 0x01, 0x2a, 0xc0, 0x03, 0x5f, 0xd6};
 #else
 /* long f(int n): a=0; do a++; while (a<n); return a;  (System V: n in edi)
  *   31 c0            xor  eax, eax
@@ -81,8 +81,12 @@ int main(int argc, char **argv) {
     put32(d, 0x4A695444); /* magic 'JiTD' (little-endian writer) */
     put32(d, 1);          /* version                             */
     put32(d, 40);         /* header total_size                   */
-    put32(d, 62);         /* elf_mach = EM_X86_64                */
-    put32(d, 0);          /* pad1                                */
+#if defined(__aarch64__)
+    put32(d, 183); /* elf_mach = EM_AARCH64                       */
+#else
+    put32(d, 62); /* elf_mach = EM_X86_64                         */
+#endif
+    put32(d, 0); /* pad1                                */
     put32(d, (uint32_t)getpid());
     put64(d, 1); /* timestamp */
     put64(d, 0); /* flags     */
