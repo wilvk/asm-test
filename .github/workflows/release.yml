@@ -186,33 +186,33 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with: { python-version: "3.12" }
-      - name: Install build deps + patchelf + tier deps, build Keystone + Capstone
+      # macOS builds on the runner; Linux builds inside the manylinux_2_28 container in
+      # the next step (which brings its own toolchain + source-built engines), so this
+      # runner-side dep install is macOS-only now.
+      - name: Install build deps + build Keystone + Capstone (macOS)
+        if: ${{ runner.os != 'Linux' }}
         run: |
           make deps DEPS_ARGS=--asm
-          # `if` so a real Linux apt failure fails the step, and libipt only on
-          # x86_64 — it does not exist on Ubuntu ports/arm64 (see native job).
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            sudo apt-get install -y patchelf cmake libopencsd-dev
-            if [ "$(uname -m)" = "x86_64" ]; then sudo apt-get install -y libipt-dev; fi
-          fi
           ./scripts/build-keystone.sh && ./scripts/build-capstone.sh
-      - name: Build the platform-tagged wheel (superset + tiers + vendored deps)
-        run: pip install build twine auditwheel delocate && make python-package
-      - name: Repair -> manylinux / macOS (vendor libunicorn)
+      - name: "Build + repair the platform wheel (Linux: manylinux_2_28 container; macOS: host)"
         run: |
-          mkdir -p wheelhouse
           if [ "$RUNNER_OS" = "Linux" ]; then
-            # The native-trace tier libs (libasmtest_hwtrace/_drapp/_drclient +
-            # libdynamorio) are already self-contained in _libs/ ($ORIGIN rpath,
-            # libdynamorio co-located). Exclude them from repair so auditwheel does
-            # not relocate/rename them — renaming libdynamorio would break drapp's
-            # dladdr sibling lookup — nor fail the manylinux policy on the prebuilt
-            # DynamoRIO lib. They dlopen at run time, so they need no dep vendoring.
-            python -m auditwheel repair \
-              --exclude libasmtest_hwtrace.so --exclude libasmtest_drapp.so \
-              --exclude libasmtest_drclient.so --exclude libdynamorio.so \
-              build/dist/python/*.whl -w wheelhouse
+            # manylinux_2_28 floor (distribution-packaging.md T5): build AND repair the wheel
+            # INSIDE the AlmaLinux-8 manylinux container so it links glibc 2.28, not the
+            # ubuntu-latest glibc. scripts/build-manylinux-wheel.sh source-builds the four
+            # engines (dnf has none), runs `make python-package`, and `auditwheel repair`s
+            # (same --exclude list as the macOS path, + --plat manylinux_2_28) -> wheelhouse/.
+            arch="$(uname -m)"
+            docker run --rm -v "$PWD":/src -w /src \
+              "quay.io/pypa/manylinux_2_28_${arch}" bash scripts/build-manylinux-wheel.sh
+            pip install twine   # runner-side, for the twine check + venv smoke below
           else
+            pip install build twine auditwheel delocate && make python-package
+            mkdir -p wheelhouse
+            # The native-trace tier libs (libasmtest_hwtrace/_drapp/_drclient + libdynamorio)
+            # are self-contained ($ORIGIN rpath, libdynamorio co-located) and dlopen'd at run
+            # time; the Linux script excludes them for the same reason (renaming libdynamorio
+            # breaks drapp's dladdr sibling lookup). macOS has no such tiers to exclude.
             delocate-wheel -w wheelhouse build/dist/python/*.whl
           fi
           ls wheelhouse

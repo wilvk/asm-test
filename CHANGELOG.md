@@ -1391,6 +1391,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Linux Python wheels now build on the `manylinux_2_28` floor (install on older distros).**
+  The two Linux legs of the release `python` job build inside
+  `quay.io/pypa/manylinux_2_28_{x86_64,aarch64}` (AlmaLinux 8, glibc 2.28) instead of the
+  ubuntu-latest glibc, via `scripts/build-manylinux-wheel.sh` — which source-builds the four
+  native engines the image lacks (unicorn/keystone/capstone/libipt, pinned; libopencsd is a
+  dead link-only dep and skipped) + fetches DynamoRIO, runs `make python-package`, and
+  `auditwheel repair --plat manylinux_2_28` with the load-bearing tier `--exclude` list.
+  `make docker-python-manylinux` proves it end to end with no credentials: the
+  manylinux_2_28 wheel installs and imports (asm + disas) on a clean AlmaLinux 8.
+  (distribution-packaging.md T5.)
+
 - **The out-of-process whole-window stepper block-steps where `PTRACE_SINGLEBLOCK` is
   functional (~4–10× fewer stops).** The §D3 stealth whole-window helper now drives
   `asmtest_ptrace_trace_attached_window_stop_blockstep` (one `#DB` per taken branch)

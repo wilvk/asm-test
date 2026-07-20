@@ -686,6 +686,12 @@ size_t asmtest_srcmap_from_jitdump(const asmtest_jitdump_debug_t *dbg, size_t n,
 #include <elf.h>   /* NT_PRSTATUS */
 #include <errno.h>
 #include <signal.h>
+/* TRAP_HWBKPT (a hardware-breakpoint si_code) reached glibc's <signal.h> only in 2.30;
+ * define the stable kernel-UAPI value on older libc — e.g. AlmaLinux 8 / glibc 2.28, the
+ * manylinux_2_28 Python-wheel floor — so the block-step SIGTRAP classifier still builds. */
+#ifndef TRAP_HWBKPT
+#define TRAP_HWBKPT 4
+#endif
 #include <stdlib.h>
 #include <sys/mman.h>
 #include <sys/ptrace.h>

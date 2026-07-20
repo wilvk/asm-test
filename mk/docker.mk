@@ -321,6 +321,31 @@ $(foreach L,$(BINDING_LANGS),$(eval $(call docker_lang_rule,$(L))))
 CLEANROOM_LANGS := ruby node java dotnet lua
 docker-clean-room: $(addprefix docker-clean-,$(CLEANROOM_LANGS))
 
+# distribution-packaging.md T5: build the self-contained manylinux_2_28 Python wheel in
+# a real quay.io/pypa/manylinux_2_28 container (AlmaLinux 8, glibc 2.28 — the recorded
+# floor), then PROVE it installs and imports its optional tiers on a clean AlmaLinux 8.
+# The four functional native engines (unicorn/keystone/capstone/libipt) are source-built
+# inside the image (none are in dnf) + DynamoRIO fetched; the wheel is repaired with
+# release.yml's exact --exclude list. A credential-free green positive that the published
+# Linux wheel drops below the ubuntu-latest glibc floor.
+MANYLINUX_ARCH ?= $(shell uname -m)
+.PHONY: docker-python-manylinux
+docker-python-manylinux:
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.manylinux-wheel \
+	  --build-arg MANYLINUX_ARCH=$(MANYLINUX_ARCH) -t asmtest-manylinux-wheel .
+	rm -rf build/manylinux-wheelhouse && mkdir -p build/manylinux-wheelhouse
+	$(DOCKER) run --rm -v $(abspath build/manylinux-wheelhouse):/out asmtest-manylinux-wheel \
+	  sh -euc 'scripts/build-manylinux-wheel.sh wheel && cp wheelhouse/*.whl /out/'
+	@echo "=== manylinux_2_28 tag check (fails if the wheel is tagged plain linux_* or a higher floor) ==="
+	ls build/manylinux-wheelhouse/*manylinux_2_28*.whl
+	@echo "=== fresh install + import + optional tiers on a clean AlmaLinux 8 ==="
+	$(DOCKER) run --rm -v $(abspath build/manylinux-wheelhouse):/w almalinux:8 sh -euxc '\
+	  dnf -y install python3.12 >/dev/null; \
+	  python3.12 -m venv /venv; . /venv/bin/activate; \
+	  pip install -q /w/*manylinux_2_28*.whl; \
+	  cd /tmp; \
+	  python -c "import asmtest; assert asmtest.asm_available() and asmtest.disas_available(), \"optional tiers not available from the manylinux_2_28 wheel\"; print(\"docker-python-manylinux: OK — manylinux_2_28 wheel installs + imports with asm+disas on AlmaLinux 8\")"'
+
 # distribution-packaging.md T6: prove the java binding's real `mvn package` build in
 # the java image (which now carries pinned Maven). Runs the full local package —
 # package-libs stages the native payload, then `mvn package` consumes bindings/java/

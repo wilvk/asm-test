@@ -42,6 +42,14 @@ tarball-sha256  zig-linux-aarch64  0.13.0  sha256:041ac42323837eb5624068acd8b00c
 # verified against Apache's OFFICIAL published SHA-512 (record-only here; no fetch
 # script consumes this line — the image build does the verify inline).
 tarball-sha512  apache-maven  3.9.9  sha512:a555254d6b53d267965a3404ecb14e53c3827c09c3b94b5678835887ab404556bfaf78dcfe03ba76fa2508649dca8531c74bca4d5846513522404d48e8c4ac8b
+# libipt: the Intel PT decode library the manylinux Python wheel's hwtrace tier actually
+# uses (distribution-packaging.md T5). On Ubuntu it comes from apt (libipt-dev); the
+# AlmaLinux-8 manylinux_2_28 image has no libipt-devel, so scripts/build-manylinux-wheel.sh
+# builds it from this pinned GitHub source archive, at the version Ubuntu noble provides
+# (2.0.6) so the manylinux wheel's PT decode equals the apt-built ubuntu-latest wheel.
+# (libopencsd is NOT built for the wheel — it is a dead link-only dep today; see the note
+# in build-manylinux-wheel.sh.)
+tarball-sha256  libipt      2.0.6  sha256:631f4ebc81e12c0493288af3cc307b0de5b65f018d3e3839c87014b0d26acd75
 # riscv-native-tier: the qemu-user emulator bundle for the linux/riscv64 CI lane
 # (mk/docker.mk BINFMT_IMAGE). Pinned to the multi-arch index digest of the
 # tonistiigi/binfmt:qemu-v10.2.3 tag; no fetch script consumes this line.

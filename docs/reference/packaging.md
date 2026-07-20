@@ -217,12 +217,18 @@ The scaffolding stops short of a credentialed, multi-platform release:
      (`auditwheel` / `delocate`, vendoring libunicorn), so `pip install` needs no
      system libs. The recorded **manylinux floor is `manylinux_2_28`** (AlmaLinux 8,
      GCC 14 — the most compatible currently-supported image whose toolchain still
-     builds the tiers; `manylinux2014`'s is too old, `manylinux_2_34` is alpha).
-     Building the two Linux legs inside `quay.io/pypa/manylinux_2_28_{x86_64,aarch64}`
-     (keeping the load-bearing `auditwheel --exclude` list intact) is
-     distribution-packaging.md T5 — **gated on a CI dispatch to confirm the wheel
-     tags + tier asserts**, since it changes the non-tag-gated wheel build and
-     cannot be verified without the native-payload matrix on the runners.
+     builds the tiers; `manylinux2014`'s is too old, `manylinux_2_34` is alpha). The
+     two Linux legs build inside `quay.io/pypa/manylinux_2_28_{x86_64,aarch64}` via
+     `scripts/build-manylinux-wheel.sh` (distribution-packaging.md T5): that image ships
+     none of the native engines, so the script source-builds unicorn/keystone/capstone/
+     libipt (+ fetches DynamoRIO), runs `make python-package`, and
+     `auditwheel repair --plat manylinux_2_28` — keeping the load-bearing `--exclude`
+     list intact. `libopencsd` is skipped (it is a link-only dep with no functional
+     effect today — `src/cs_backend.c` calls no OpenCSD symbol; the CoreSight decode is
+     board-gated). `make docker-python-manylinux` proves this end to end with **no
+     credentials** — the manylinux_2_28 wheel installs and imports (asm + disas) on a
+     clean AlmaLinux 8. Confirming both arches + the full tier asserts across the runner
+     matrix still needs a CI dispatch (the aarch64 leg builds under emulation).
    - **link bindings** (Go, C++, Zig, Rust) ship source, so the check is that the
      published source is *consumable* — the cgo module vets+builds, a C++ consumer
      compiles+links+runs against the packaged header, the Zig package builds, and

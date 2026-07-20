@@ -1,0 +1,17 @@
+# Dockerfile.manylinux-wheel — build the manylinux_2_28 asm-test Python wheel locally,
+# mirroring release.yml's containerised python job (distribution-packaging.md T5). The
+# expensive engine builds (scripts/build-manylinux-wheel.sh deps: unicorn/keystone/
+# capstone/libipt/libopencsd from pinned source + the DynamoRIO fetch) are a CACHED
+# layer keyed only on scripts/; the wheel step runs at `docker run` time so editing the
+# framework sources never busts that layer. Driven by `make docker-python-manylinux`.
+#   docker build -f Dockerfile.manylinux-wheel --build-arg MANYLINUX_ARCH=x86_64 \
+#     -t asmtest-manylinux-wheel .
+ARG MANYLINUX_ARCH=x86_64
+FROM quay.io/pypa/manylinux_2_28_${MANYLINUX_ARCH}
+WORKDIR /src
+# Only scripts/ (build-manylinux-wheel.sh + the engine builders + the pinned-digest
+# manifest) so the slow engine-build layer caches independently of the sources.
+COPY scripts/ ./scripts/
+RUN chmod +x scripts/build-manylinux-wheel.sh && scripts/build-manylinux-wheel.sh deps
+COPY . .
+CMD ["scripts/build-manylinux-wheel.sh", "wheel"]
