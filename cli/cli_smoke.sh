@@ -1577,8 +1577,18 @@ ad_has 'statx(AT_FDCWD, ' "statx dirfd + path"
 ad_has 'stx_size=18' "a statx buffer honoring its mask"
 # NEGATIVE control: a FAILED stat must render a raw pointer + negative return,
 # not a struct from a buffer the kernel never filled (proves the ret==0 gate).
-printf '%s\n' "$adout" | grep -qE 'stat\("/nonexistent-asmspy", 0x[0-9a-f]+\) = -' \
-    || fail "stat: a failed stat did not render a raw pointer + negative return"
+# The victim's path-stat is arch-split (AArch64 never had legacy SYS_stat; it
+# calls newfstatat there) — assert the exact per-arch rendering either way.
+case "$(uname -m)" in
+aarch64 | arm64)
+    printf '%s\n' "$adout" | grep -qE 'newfstatat\(AT_FDCWD, "/nonexistent-asmspy", 0x[0-9a-f]+, 0x0\) = -' \
+        || fail "stat: a failed newfstatat did not render a raw pointer + negative return"
+    ;;
+*)
+    printf '%s\n' "$adout" | grep -qE 'stat\("/nonexistent-asmspy", 0x[0-9a-f]+\) = -' \
+        || fail "stat: a failed stat did not render a raw pointer + negative return"
+    ;;
+esac
 echo "  stat/statx buffers decoded on success; a failed stat stays a raw pointer"
 
 # ---- T9: decoder-breadth pins for shapes that landed WITHOUT a rendered-text

@@ -73,13 +73,24 @@ int main(void) {
             fstat(fd, &fst); /* T4: fstat's result buffer (st_size=18) */
             close(fd);
         }
-        /* T4: stat/statx result buffers over the 18-byte file just written */
+        /* T4: stat/statx result buffers over the 18-byte file just written.
+         * The path-stat is arch-split: AArch64 never had the legacy non-`*at`
+         * syscalls (no SYS_stat), so the kernel path-stat there is newfstatat —
+         * same A_STATBUF decode, with a dirfd and a flags word around it. */
         struct stat st;
+#ifdef SYS_stat
         syscall(SYS_stat, TMP, &st);
+#else
+        syscall(SYS_newfstatat, AT_FDCWD, TMP, &st, 0);
+#endif
         struct statx sx;
         syscall(SYS_statx, AT_FDCWD, TMP, 0, STATX_BASIC_STATS, &sx);
         /* NEGATIVE control: a FAILED stat renders a raw pointer, not a struct */
+#ifdef SYS_stat
         syscall(SYS_stat, "/nonexistent-asmspy", &st);
+#else
+        syscall(SYS_newfstatat, AT_FDCWD, "/nonexistent-asmspy", &st, 0);
+#endif
         /* openat WITHOUT one: mode must NOT be rendered */
         int rf = open(TMP, O_RDONLY);
         if (rf >= 0) {

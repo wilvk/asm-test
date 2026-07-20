@@ -906,7 +906,13 @@ jobs:
           #   'hardware bp' call-out — with T2's NT_ARM_HW_BREAK arm-and-fire probe it self-skips
           #   only when it MEASURES no debug slots or an armed-but-silent hypervisor (both carry
           #   'NT_ARM_HW_BREAK' in the reason); where the breakpoint fires it runs live (ok, no skip).
-          allow='not Linux x86-64|x86-64 Linux only|x86-64 only|Linux x86-64|Intel PT|intel_pt|GenuineIntel|libipt|wholewindow|window ladder|AMD|IBS|ibs precover|CoreSight|cs_etm|in-process|BTF|SINGLEBLOCK|block-step|blockstep|libbpf|soft-dirty|codeimage|descent|call_auto|pt attach|pt live|pt window|pt image|single-step unavailable|no in-process single-step|register-idempotent|debug logging|hardware bp|hardware breakpoints are x86-64|NT_ARM_HW_BREAK|MSR|msr'
+          #   Three more by-name entries, found by replaying this grep offline against the
+          #   run-29739614837 log (the assert step itself had never reached a full log before
+          #   the callout-fixture hang was fixed): the stealth-window thread pair ("needs
+          #   x86-64 Linux threads"), the in-process single-step live capture ("single-step
+          #   backend is x86-64 Linux/macOS only"), and the options-ABI guard's non-x86 arm
+          #   ("single-step tier not on this arch/OS") — all honestly x86-only tiers.
+          allow='not Linux x86-64|x86-64 Linux only|x86-64 only|Linux x86-64|Intel PT|intel_pt|GenuineIntel|libipt|wholewindow|window ladder|AMD|IBS|ibs precover|CoreSight|cs_etm|in-process|BTF|SINGLEBLOCK|block-step|blockstep|libbpf|soft-dirty|codeimage|descent|call_auto|pt attach|pt live|pt window|pt image|single-step unavailable|no in-process single-step|register-idempotent|debug logging|hardware bp|hardware breakpoints are x86-64|NT_ARM_HW_BREAK|MSR|msr|needs x86-64 Linux threads|single-step backend is x86-64|single-step tier not on this arch/OS'
           unexpected=$(grep '# SKIP' "$log" | grep -vE "$allow" || true)
           if [ -n "$unexpected" ]; then
             echo "::error::hwtrace-arm64: UNEXPECTED # SKIP lines (not on the by-name allowlist) — a tier that should run live self-skipped. Triage, then either fix the tier or add the reason to the allowlist:"

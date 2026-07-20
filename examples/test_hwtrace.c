@@ -7985,20 +7985,29 @@ static void test_ptrace_callout(const char *label, int force_hw) {
             break;
         }
     }
-    /* R: bl H ; add x0,x0,x1 ; ret    H@0xc: add x0,x0,#1 ; ret */
+    /* R must be AAPCS64-correct: `bl` writes the return address to x30 (no
+     * stack push like x86 `call`), so a region that calls out MUST save and
+     * restore LR or its final `ret` jumps back to its own bl fall-through and
+     * the tracee loops in-region forever (the first live arm64 run hung there).
+     *
+     * R: stp x29,x30,[sp,#-16]! ; bl H ; add x0,x0,x1 ; ldp x29,x30,[sp],#16 ;
+     * ret        H@0x14: add x0,x0,#1 ; ret */
     static const unsigned char BLOB[] = {
-        0x03, 0x00, 0x00, 0x94, 0x00, 0x00, 0x01, 0x8b, 0xc0, 0x03,
-        0x5f, 0xd6, 0x00, 0x04, 0x00, 0x91, 0xc0, 0x03, 0x5f, 0xd6};
-    static const uint64_t EXPECT[] = {0x0, 0x4, 0x8};
+        0xfd, 0x7b, 0xbf, 0xa9, 0x04, 0x00, 0x00, 0x94, 0x00, 0x00,
+        0x01, 0x8b, 0xfd, 0x7b, 0xc1, 0xa8, 0xc0, 0x03, 0x5f, 0xd6,
+        0x00, 0x04, 0x00, 0x91, 0xc0, 0x03, 0x5f, 0xd6};
+    static const uint64_t EXPECT[] = {0x0, 0x4, 0x8, 0xc, 0x10};
+    const size_t REGION =
+        0x14; /* trace R only; the helper H at 0x14 is outside it */
 #else
     /* R: mov rax,rdi ; call H ; add rax,rsi ; ret    H@0xc: inc rax ; ret */
     static const unsigned char BLOB[] = {0x48, 0x89, 0xf8, 0xe8, 0x04, 0x00,
                                          0x00, 0x00, 0x48, 0x01, 0xf0, 0xc3,
                                          0x48, 0xff, 0xc0, 0xc3};
     static const uint64_t EXPECT[] = {0x0, 0x3, 0x8, 0xb};
-#endif
     const size_t REGION =
         0xc; /* trace R only; the helper H at 0xc is outside it */
+#endif
     const size_t NEXP = sizeof EXPECT / sizeof EXPECT[0];
     char msg[96];
 
