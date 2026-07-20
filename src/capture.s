@@ -2782,8 +2782,13 @@ ASM_FUNC asmtest_sve_rdvl
 #elif defined(__aarch64__)
     mov     x0, #0
     ret
-#else
+#elif defined(__x86_64__)
     xorl    %eax, %eax
     ret
+#elif defined(__riscv) && __riscv_xlen == 64
+    li      a0, 0
+    ret
+#else
+#  error "capture.s supports x86-64, AArch64 and RV64 only"
 #endif
 ASM_ENDFUNC asmtest_sve_rdvl
