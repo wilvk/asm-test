@@ -12,7 +12,7 @@ each tier. Narrative docs: [native runtime tracing](../../guides/tracing/native-
 [emulator traces](../../guides/tracing/traces.md), [portability](../../reference/portability.md). Roadmaps:
 [hardware-trace](../plans/hardware-trace-plan.md),
 [AMD LBR](../plans/amd-tracing-plan.md),
-[Zen 2 single-step](../plans/zen2-singlestep-trace-plan.md),
+[Zen 2 single-step](../archive/plans/zen2-singlestep-trace-plan.md),
 [DynamoRIO native-trace](../archive/plans/dynamorio-native-trace-plan.md). Host-specific,
 live-verified instantiation (Apple Intel / macOS): [Apple Intel host trace coverage](2026-07-08-apple-intel-host-trace-coverage.md).*
 
@@ -65,7 +65,7 @@ Two facts worth stating up front because they are easy to get wrong:
   and the Windows x86-64 VEH front (`win64-ss-test`) — so single-step rows below read
   *implemented* on Linux x86-64/AArch64, macOS-Intel, and Windows x86-64; only the AArch64
   *live stream* remains hardware-pending. See the
-  [Zen 2 single-step plan](../plans/zen2-singlestep-trace-plan.md).
+  [Zen 2 single-step plan](../archive/plans/zen2-singlestep-trace-plan.md).
 - **Time-aware code-image recorder (`asmtest_codeimage`).** The byte-source half of
   foreign-JIT tracing: a userspace `PERF_RECORD_TEXT_POKE` that time-versions a process's
   code (cross-process **soft-dirty + `PAGEMAP_SCAN`**, bytes via `process_vm_readv`) so the
@@ -261,7 +261,7 @@ Node/.NET gap is the managed-runtime takeover limit (`dr_app_start` aborts with
 
 The managed-runtime-on-AMD path is **W2 (out-of-process `ptrace` single-step)**, not
 W3 (`DEBUGCTL.BTF` branch-granular step, which is ring-0-blocked in portable form).
-See the [Zen 2 single-step plan, Phase 5](../plans/zen2-singlestep-trace-plan.md).
+See the [Zen 2 single-step plan, Phase 5](../archive/plans/zen2-singlestep-trace-plan.md).
 
 ---
 
@@ -549,8 +549,15 @@ payload).
 | `linux-x86_64` | ubuntu-latest | ✅ | ✅ bundled | ✅ bundled (single-step/ptrace live; PT/AMD/CoreSight decoders self-skip off their hw) |
 | `linux-aarch64` | ubuntu-24.04-arm | ✅ | ✗ (DR is x86-64 only) | ✅ bundled (single-step/ptrace; stream HW-pending, CoreSight scaffold) |
 | `darwin-arm64` | macos-latest | ✅ | ✗ (Linux-only → self-skips) | ✗ (Linux-only → self-skips) |
-| `darwin-x86_64` | macos-13 (nightly) | ✅ | ✗ (Linux-only → self-skips) | ✗ (Linux-only → self-skips) |
+| `darwin-x86_64` | macos-15-intel (nightly) | ✅ | ✗ (Linux-only → self-skips) | ✗ (Linux-only → self-skips) |
 | `windows-x64` | — (no slot) | source / Win64 tier only | ✗ | ✗ |
+
+*(Runner cell corrected 2026-07-21: `macos-13` was retired by GitHub on
+2025-12-08; the slot builds on `macos-15-intel` —
+[.github/workflows/release.yml](../../../.github/workflows/release.yml)
+~:31-35, 180-184, [ci.yml](../../../.github/workflows/ci.yml) ~:226;
+[implementations/_positions.md](../implementations/_positions.md) #6 is
+binding.)*
 
 Per-ecosystem the slot is named conventionally — Java `native/<os>-<arch>/`, .NET
 RIDs (`osx-arm64`, `linux-x64`, …), Python per-platform wheel tags repaired by

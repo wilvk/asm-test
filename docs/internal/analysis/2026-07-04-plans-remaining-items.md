@@ -22,6 +22,19 @@
 > §2 (hardware/privilege-blocked) and §3 (maintainer/credential actions —
 > the first real tag remains user-gated) are unchanged.
 
+> **2026-07-21 update — much of §2 has since unblocked and landed.** Intel PT
+> live AUX capture **and** the Phase-2 PT-attach-to-live-PID both landed and were
+> silicon-validated
+> ([intel-pt-attach-foreign-pid.md](../implementations/intel-pt-attach-foreign-pid.md)
+> T1–T5; commits `a35f049`, `2e230f6`, `622cd98`, `7215560`; live validation
+> `c7b4ef7` + [intel-hardware-validation.md](../intel-hardware-validation.md)).
+> AArch64 live single-step + hw-breakpoint validation now runs on real arm64 CI
+> runners (`8c3d81f`, `fd5991e`, `604a2b5`). P3-7 IBS shipped
+> (`src/ibs_backend.c`; plan archived at
+> [zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-tracing-plan.md)). Still
+> accurate and unchanged: CoreSight (board-gated), P3-6 BRS (no Zen 3 box), the
+> macOS DynamoRIO port NO-GO (`47ae918`), and §3's tag gate.
+
 **Scope:** a cross-check of all 11 active plans in [docs/internal/plans/](../plans/) plus the
 still-open items from the [2026-07-04 repo review](../archive/reviews/2026-07-04-repo-review.md)
 against the actual codebase (`src/`, `include/`, `mk/`, `Makefile`, `tests/`,
@@ -124,5 +137,3 @@ single-step W2 tracer (x86-64 + AArch64 code), AMD LBR Part I (Zen 5-validated),
 Intel PT / CoreSight / AMD *reconstruction* cores, the Win64 tier, Capstone
 disasm, fuzzing/mutation, watchpoint asserts, and the open-defects P0–P3 (Go
 flaky crash, supply-chain pinning, Intel-mac payload, `-j` recursive-make race).
-</content>
-</invoke>

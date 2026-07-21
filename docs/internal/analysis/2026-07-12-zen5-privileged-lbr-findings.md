@@ -73,6 +73,10 @@ Why it went unseen: every host in CI either lacks AMD LBR (self-skips) or is the
 unprivileged dev box (self-skips at `paranoid=4`). The `docker-hwtrace-privileged`
 lane is the first place this rung runs live, and it is **not yet in CI**.
 
+> **Update 2026-07-21: resolved** — the `hwtrace-privileged` CI job now exists
+> ([.github/workflows/ci.yml](../../../.github/workflows/ci.yml) ~:1342-1369,
+> running `make docker-hwtrace-privileged`).
+
 ### Suggested next step
 
 - Make the `call_auto` LBR rung derive truncation the same way the direct
@@ -85,6 +89,12 @@ lane is the first place this rung runs live, and it is **not yet in CI**.
 - Consider gating the privileged lane in CI (a self-hosted AMD runner or a
   documented manual pre-release step) so the exact AMD paths get continuous
   coverage.
+
+  **Update 2026-07-21:** all three shapes now exist — the `hwtrace-privileged` CI
+  job above, the rewritten [amd-hardware-validation.md](../amd-hardware-validation.md)
+  manual step, and the self-hosted-runner scaffold
+  ([self-hosted-ci-runners.md](../implementations/self-hosted-ci-runners.md);
+  `hw.yml` dispatch green, `7506410`).
 
 ## 3. Cosmetic misreports (low priority)
 

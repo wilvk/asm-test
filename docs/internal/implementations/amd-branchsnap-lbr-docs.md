@@ -1,7 +1,7 @@
 # AMD branchsnap depth fix, LBR tiling validation, freeze-probe cleanup, and the Zen 3 BRS story (doc honesty now, silicon-gated capture arm) — implementation
 
 > **Sources.** Actioned from
-> [amd-review-followup-plan.md](../plans/amd-review-followup-plan.md) (P2, P4,
+> [amd-review-followup-plan.md](../archive/plans/amd-review-followup-plan.md) (P2, P4,
 > P5), [2026-07-17-amd-hardware-review.md](../analysis/2026-07-17-amd-hardware-review.md)
 > (§2.1, §2.2, §2.4),
 > [2026-07-17-dataflow-tier-open-followups.md](../analysis/2026-07-17-dataflow-tier-open-followups.md)

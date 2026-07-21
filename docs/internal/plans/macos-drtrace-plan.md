@@ -483,7 +483,7 @@ main `test` job so a DR failure never blocks the Unicorn tier:
 
 ```yaml
 drtrace-macos:
-  runs-on: macos-13            # Intel: M0/M1a, no MAP_JIT entitlement question
+  runs-on: macos-15-intel      # Intel: M0/M1a, no MAP_JIT entitlement question
   steps:
     - uses: actions/checkout@v4
     - name: Download + pin DynamoRIO macOS release
@@ -493,7 +493,8 @@ drtrace-macos:
     - run: make drtrace-client drtrace-test-macos
 ```
 
-- Start on **`macos-13` (Intel)** — it exercises M0 + M1a and dodges the arm64
+- Start on **`macos-15-intel` (Intel)** (`macos-13` was retired 2025-12-08 —
+  [_positions.md #6](../implementations/_positions.md)) — it exercises M0 + M1a and dodges the arm64
   entitlement question entirely. Add `macos-latest` (arm64) only after M1b is
   proven, and expect the hosted-runner hardened-runtime/entitlement constraint to
   bite (ad-hoc signing may not grant `allow-jit` there); a self-hosted arm64
@@ -533,7 +534,7 @@ M0 (x86-64 attach + compiled-fn)  ── go/no-go for everything ──┐
    │                                                            │
    └─ M1b (arm64: W^X + MAP_JIT + entitlement)  ── needs arm64 DR + arm64 HW
                                                                 │
-M2 (bindings = compiled-fn path; Makefile; CI on macos-13) ────┘
+M2 (bindings = compiled-fn path; Makefile; CI on macos-15-intel) ┘
 ```
 
 Run M0 first. Do not invest in M1b until M0 passes and a stable arm64 DR macOS

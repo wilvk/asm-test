@@ -18,7 +18,7 @@ registered-region begin/end markers: instruction offsets identical to the Unicor
 emulator, the DynamoRIO native tier, and Intel PT, and block offsets that match after
 the same branch-edge normalization step. It is a **sibling** of the
 [hardware-trace plan](hardware-trace-plan.md) (Intel PT / ARM CoreSight), the
-[single-step plan](zen2-singlestep-trace-plan.md) (Trap Flag `#DB`), and the
+[single-step plan](../archive/plans/zen2-singlestep-trace-plan.md) (Trap Flag `#DB`), and the
 [DynamoRIO native-trace plan](../archive/plans/dynamorio-native-trace-plan.md).
 
 > Status legend: **planned** unless noted; forward-look phases are tagged
@@ -104,7 +104,7 @@ which has no branch hardware at all, and runs rootless). The AMD LBR tier stays 
 fast/non-perturbing complement, never a default; the `truncated` bit continues to route
 the caller to DynamoRIO for whole-program reach. No phase changes that contract. On
 **pre-Zen3** AMD (e.g. Zen 2) the exact in-process backend is instead the
-[single-step plan](zen2-singlestep-trace-plan.md)'s Trap-Flag stepper.
+[single-step plan](../archive/plans/zen2-singlestep-trace-plan.md)'s Trap-Flag stepper.
 
 ---
 
@@ -448,11 +448,11 @@ verified dead end. It is two concrete programmes:
    also covers Zen 2 (which has no branch hardware at all) and runs rootless.
 
 Both are buildable today. One of them — the BTF block-step tier — also **corrects a
-factual error in the repo's own** [single-step plan](zen2-singlestep-trace-plan.md).
+factual error in the repo's own** [single-step plan](../archive/plans/zen2-singlestep-trace-plan.md).
 
 ## The headline correction: BTF block-step is available on x86
 
-[zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md) files the W3 "DEBUGCTL.BTF
+[zen2-singlestep-trace-plan.md](../archive/plans/zen2-singlestep-trace-plan.md) files the W3 "DEBUGCTL.BTF
 branch-granular step" idea under *research-only*, on the stated grounds that
 *"`PTRACE_SINGLEBLOCK` is wired only on PowerPC/s390 … unwired on x86."*
 
@@ -873,7 +873,7 @@ target, but only capability-gated and only for retired taken branches.)
 
 ## Documentation corrections this analysis implies
 
-- [zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md): the
+- [zen2-singlestep-trace-plan.md](../archive/plans/zen2-singlestep-trace-plan.md): the
   `PTRACE_SINGLEBLOCK`-unwired-on-x86 claim is wrong (see the headline correction); it is
   what currently strands BTF block-step in "research only."
 - [native-tracing.md](../../guides/tracing/native-tracing.md) / [hardware-tracing.md](../../guides/tracing/hardware-tracing.md):
@@ -909,7 +909,7 @@ fill — so no new public trace struct or field is introduced and overflow / los
 to collapse onto the existing `truncated` bit. Block offsets are computed with the
 **same** branch-edge normalization as [src/pt_backend.c](../../../src/pt_backend.c) so a
 reconstructed trace stays byte-identical to the other tiers. The block-step phase extends
-the [single-step plan](zen2-singlestep-trace-plan.md)'s W2 out-of-process ptrace stepper
+the [single-step plan](../archive/plans/zen2-singlestep-trace-plan.md)'s W2 out-of-process ptrace stepper
 (and **corrects** its "W3 is blocked on x86" claim); the window phases extend Part I's
 shipped LBR backend.
 
@@ -959,7 +959,7 @@ the Zen 2 host — via [zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-trac
 
 Two **documentation corrections** Part II surfaced shipped alongside Phase 0/2 (see
 Deliverables): the `PTRACE_SINGLEBLOCK`-unwired-on-x86 claim in
-[zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md), and the "AMD LBR is
+[zen2-singlestep-trace-plan.md](../archive/plans/zen2-singlestep-trace-plan.md), and the "AMD LBR is
 finished, no forward-look" framing in [native-tracing.md](../../guides/tracing/native-tracing.md) /
 [hardware-tracing.md](../../guides/tracing/hardware-tracing.md).
 
@@ -1666,8 +1666,9 @@ continue;` — the `|| spec` term dropped exactly as prescribed here.)*
   prototypes are forward-declared inline — in `hwtrace.c` a `perf_branch_entry`-typed block under
   `#if defined(__linux__) && defined(__x86_64__)` ([hwtrace.c:90-119](../../../src/hwtrace.c):
   `asmtest_amd_decode` 91, `_stitch` 96, `_decode_stitched` 101, `_snapshot_begin` 116, `_snapshot_end`
-  118) plus the unconditional `_decoder_present`/`_freeze_available`/`_snapshot_available` at
-  [hwtrace.c:152-159](../../../src/hwtrace.c), and the same decls hand-copied into
+  118) plus the unconditional `_decoder_present`/`_snapshot_available` at
+  [hwtrace.c:152-159](../../../src/hwtrace.c) (`_freeze_available` was listed here too until
+  its deletion in `3e5454a` — see the freeze-gate retirement above), and the same decls hand-copied into
   [branchsnap.c:29-32](../../../src/branchsnap.c) and
   [msr_lbr.c:28-31](../../../src/msr_lbr.c). A signature change in `amd_backend.c` would compile
   and link cleanly yet be UB at the call boundary. Create `src/amd_backend.h` mirroring the
@@ -1679,7 +1680,7 @@ continue;` — the `|| spec` term dropped exactly as prescribed here.)*
   `void*`-typed stubs in the `#else` (matching [amd_backend.c:506](../../../src/amd_backend.c) /
   [516](../../../src/amd_backend.c) / [532](../../../src/amd_backend.c)) — exactly why
   `hwtrace.c` guards them today — and the stable-signature `_lbr_depth` / `_decoder_present` /
-  `_freeze_available` / `_snapshot_available` / `_snapshot_begin` / `_snapshot_end` unconditional.
+  `_snapshot_available` / `_snapshot_begin` / `_snapshot_end` unconditional.
   Have it `#include "asmtest_hwtrace.h"` so it re-exports the `ASMTEST_HW_*` codes, then include it
   from `hwtrace.c`, `amd_backend.c`, `branchsnap.c`, and `msr_lbr.c`, deleting all four inline decl
   blocks; a definition/decl mismatch then becomes a compile error.
@@ -1798,7 +1799,7 @@ in `amd_backend.c` (`asmtest_amd_lbr_depth`, next to the other CPUID probes) rat
   (the `3 * sizeof(int)` static-assert at
   [asmtest_trace_auto.h:83-84](../../../include/asmtest_trace_auto.h) holds).
 - **Docs:** correct the `PTRACE_SINGLEBLOCK` claim in
-  [zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md) (Phase 2 makes it real);
+  [zen2-singlestep-trace-plan.md](../archive/plans/zen2-singlestep-trace-plan.md) (Phase 2 makes it real);
   update the "AMD LBR is finished" framing in [native-tracing.md](../../guides/tracing/native-tracing.md) /
   [hardware-tracing.md](../../guides/tracing/hardware-tracing.md); refresh the
   [trace-parity-matrix](../analysis/trace-parity-matrix.md) AMD rows.

@@ -3,8 +3,8 @@
 A phased roadmap for a **debug-exception** native-trace backend that delivers
 **exact, complete** `asmtest_trace_t` offsets on hardware that has *no* branch-trace
 facility at all — most importantly **AMD Zen 2** (Family 17h), the project's primary
-dev host. Where the [Intel PT](hardware-trace-plan.md) and
-[AMD LBR](amd-tracing-plan.md) backends reconstruct the instruction stream from a
+dev host. Where the [Intel PT](../../plans/hardware-trace-plan.md) and
+[AMD LBR](../../plans/amd-tracing-plan.md) backends reconstruct the instruction stream from a
 hardware *trace* (a PT AUX ring, or a 16-deep branch stack), this backend
 reconstructs it from the x86 **single-step debug exception** (`#DB`) driven by the
 `EFLAGS.TF` trap flag — a baseline ISA feature present on *every* x86 CPU since
@@ -13,9 +13,9 @@ library. The output is identical to the other backends: instruction offsets
 matching the Unicorn emulator, the DynamoRIO native tier, and Intel PT, and block
 offsets that match after the same branch-edge normalization.
 
-This plan is a **sibling** of the [hardware-trace plan](hardware-trace-plan.md)
-(Intel PT / ARM CoreSight), the [AMD LBR plan](amd-tracing-plan.md) (Zen 3 BRS /
-Zen 4 LbrExtV2), and the [DynamoRIO native-trace plan](../archive/plans/dynamorio-native-trace-plan.md).
+This plan is a **sibling** of the [hardware-trace plan](../../plans/hardware-trace-plan.md)
+(Intel PT / ARM CoreSight), the [AMD LBR plan](../../plans/amd-tracing-plan.md) (Zen 3 BRS /
+Zen 4 LbrExtV2), and the [DynamoRIO native-trace plan](dynamorio-native-trace-plan.md).
 It exists because of a hardware fact established while validating the AMD LBR
 backend: **Zen 2 has no branch-trace facility of any kind** — no Intel-PT-style ring
 (AMD has none on any Zen part), no BRS (Zen 3), no LbrExtV2 (Zen 4); its legacy LBR
@@ -27,8 +27,21 @@ one instruction at a time and record each `RIP`. This plan specifies that backen
 its single hard limit (overhead, not completeness), and its portability story.
 
 > Status legend: **planned** unless noted. Update this file as phases land, the way
-> [hardware-trace-plan.md](hardware-trace-plan.md) and
-> [amd-tracing-plan.md](amd-tracing-plan.md) track theirs.
+> [hardware-trace-plan.md](../../plans/hardware-trace-plan.md) and
+> [amd-tracing-plan.md](../../plans/amd-tracing-plan.md) track theirs.
+>
+> **Status (2026-07-21): COMPLETE — all phases (0–5) and all Phase-5 fronts are closed;
+> plan archived.** The last two fronts landed: the **AArch64 live single-step stream** was
+> validated 2026-07-20
+> ([aarch64-ptrace-single-step-validation.md](../../implementations/aarch64-ptrace-single-step-validation.md)
+> ✅ 6/6; commit `604a2b5`; gating `hwtrace-arm64` job, 205 live ok), and the **in-process
+> BTF** variant (W3) landed 2026-07-18
+> ([inproc-btf-block-step.md](../../implementations/inproc-btf-block-step.md) ☑ 6/6,
+> [src/ss_btf.c](../../../../src/ss_btf.c)). Residual owners: bare-metal arm64 hw-breakpoint
+> firing → [self-hosted-ci-runners.md](../../implementations/self-hosted-ci-runners.md)
+> (◐ 2/6); macOS out-of-process stepping →
+> [macos-oop-mach-stepper.md](../../implementations/macos-oop-mach-stepper.md) ✅ 7/7
+> (validated on the Intel MacBook).
 
 ---
 
@@ -67,12 +80,12 @@ single-step has no install/dependency and no ceiling; DynamoRIO has no per-step 
 > facility — making single-step "the only exact native option here." An earlier
 > revision of this note then over-corrected to "the dev host is a Zen 5, not Zen 2."
 > Both hosts exist and both run the suites (see the two AMD records under
-> [benchmarks/boxes/](../../../benchmarks/boxes/)): a **Ryzen 9 9950X (Family 0x1A,
+> [benchmarks/boxes/](../../../../benchmarks/boxes/)): a **Ryzen 9 9950X (Family 0x1A,
 > Zen 5, `amd_lbr_v2`)**, on which **AMD LBR is available and live-verified** (see the
-> [AMD LBR plan](amd-tracing-plan.md) and
-> [trace-parity-matrix](../analysis/trace-parity-matrix.md)), and a **Ryzen 9 4900HS
+> [AMD LBR plan](../../plans/amd-tracing-plan.md) and
+> [trace-parity-matrix](../../analysis/trace-parity-matrix.md)), and a **Ryzen 9 4900HS
 > (Family 0x17, Zen 2)** with no branch stack at all, on which the premise holds
-> literally and the [IBS statistical lane](../archive/plans/zen2-ibs-tracing-plan.md) was built and
+> literally and the [IBS statistical lane](zen2-ibs-tracing-plan.md) was built and
 > validated. The single-step backend's value is **unchanged** — it is the portable,
 > no-PMU/perf/privilege, depth-unbounded backend that runs on *any* x86-64 Linux host
 > (including the true Zen 2, VMs, plain containers, and standard CI) and is the
@@ -81,11 +94,11 @@ single-step has no install/dependency and no ceiling; DynamoRIO has no per-step 
 > as "this x86-64 Linux dev host" on the 9950X: single-step runs live on both.
 
 **Phases 0–4 implemented (Linux/x86-64).** The `ASMTEST_HWTRACE_SINGLESTEP` backend
-ships: gating ([src/hwtrace.c](../../../src/hwtrace.c)), the stepper + block
-normalization ([src/ss_backend.c](../../../src/ss_backend.c)), the begin/end dispatch
+ships: gating ([src/hwtrace.c](../../../../src/hwtrace.c)), the stepper + block
+normalization ([src/ss_backend.c](../../../../src/ss_backend.c)), the begin/end dispatch
 arm, the Makefile wiring (`ss_backend.o` in `HWTRACE_OBJS` + the PIC/`shared-hwtrace`
 variant), a **live** cross-backend parity test in
-[examples/test_hwtrace.c](../../../examples/test_hwtrace.c) (`make hwtrace-test`, plus a
+[examples/test_hwtrace.c](../../../../examples/test_hwtrace.c) (`make hwtrace-test`, plus a
 20-trip loop proving no depth ceiling), an `hwtrace` language wrapper + live test for
 **all ten bindings** (`make hwtrace-bindings-test`), and **plain-container** Docker
 lanes (`make docker-hwtrace` / `docker-hwtrace-bindings` — no privilege, no
@@ -94,7 +107,7 @@ CoreSight / AMD LBR) are unaffected — this is a fourth, perf-free backend behi
 same `asmtest_hwtrace_*` API, selected by enum exactly as PT and AMD LBR are.
 
 **Phase 5, W2 (out-of-process `ptrace`) now ships for Linux x86-64**
-([asmtest_ptrace.h](../../../include/asmtest_ptrace.h), `src/ptrace_backend.c`). Two
+([asmtest_ptrace.h](../../../../include/asmtest_ptrace.h), `src/ptrace_backend.c`). Two
 entry points: `asmtest_ptrace_trace_call` forks its own tracee and traces a code blob;
 `asmtest_ptrace_trace_attached(pid, base, len, &result, trace)` traces a region in a
 **separate, already-running process attached to from the outside** — the
@@ -115,12 +128,12 @@ to the signal path when no Mach exception port claims it), so re-asserting `TF` 
 saved thread state re-arms stepping across `sigreturn` exactly as on Linux. The only
 platform deltas are the feature-test macro (`_DARWIN_C_SOURCE`) and the mcontext field
 access (`uc_mcontext->__ss.__rip`/`__rflags` vs. Linux's `gregs[REG_RIP]`/`[REG_EFL]`),
-isolated behind two shims in [src/ss_backend.c](../../../src/ss_backend.c); the
-[src/hwtrace.c](../../../src/hwtrace.c) facade runs the full single-step lifecycle on
+isolated behind two shims in [src/ss_backend.c](../../../../src/ss_backend.c); the
+[src/hwtrace.c](../../../../src/hwtrace.c) facade runs the full single-step lifecycle on
 x86-64 Darwin, validated live by `make hwtrace-test` there (61 pass) with the Linux
 tier unchanged (`make docker-hwtrace`, 178 pass). The **Windows x86-64 VEH
 front-end has since landed** in the win64 native tier
-([src/ss_win64.c](../../../src/ss_win64.c), `asmtest_win64_ss_trace_call`): the same
+([src/ss_win64.c](../../../../src/ss_win64.c), `asmtest_win64_ss_trace_call`): the same
 EFLAGS.TF mechanism, delivered as `EXCEPTION_SINGLE_STEP` to a Vectored Exception
 Handler that records the in-region offsets and re-arms TF in the resumed CONTEXT —
 with stepping ENDED BY THE HANDLER at the call's return landing rather than by a
@@ -133,12 +146,12 @@ steps across the loop back-edge) prove front-end parity — validated under Wine
 **The AArch64 ptrace tracer and the binary jitdump reader have both since landed**
 (amended 2026-07-16; an earlier revision of this paragraph filed both as forward-look and
 the Phase-5 detail below has recorded them as *Done* since). The **AArch64** tracer ships
-in [src/ptrace_backend.c](../../../src/ptrace_backend.c) — `MDSCR_EL1.SS` is kernel-only,
+in [src/ptrace_backend.c](../../../../src/ptrace_backend.c) — `MDSCR_EL1.SS` is kernel-only,
 so out-of-process ptrace is its *only* single-step form; it rides the same
 `PTRACE_SINGLESTEP` seam as x86-64, reading the PC + return register via
 `PTRACE_GETREGSET`/`NT_PRSTATUS` (AArch64 has no `PTRACE_GETREGS`) and decoding block
 lengths with `ASMTEST_ARCH_ARM64` Capstone. The **binary jitdump** reader ships as
-`asmtest_jitdump_find` ([asmtest_ptrace.h](../../../include/asmtest_ptrace.h)) and is
+`asmtest_jitdump_find` ([asmtest_ptrace.h](../../../../include/asmtest_ptrace.h)) and is
 validated against all three real runtimes (V8, HotSpot, CoreCLR) — richer than the text
 perf-map, which remains the portable lowest common denominator. See the Phase 5 detail
 below for both.
@@ -175,8 +188,8 @@ planned)".)*
 **Work.**
 
 - Add `ASMTEST_HWTRACE_SINGLESTEP` to `asmtest_trace_backend_t` in
-  [include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h).
-- In [src/hwtrace.c](../../../src/hwtrace.c)'s gating chain, give the new backend its
+  [include/asmtest_hwtrace.h](../../../../include/asmtest_hwtrace.h).
+- In [src/hwtrace.c](../../../../src/hwtrace.c)'s gating chain, give the new backend its
   own arm that **bypasses** `pmu_type()`/`perf_permitted()`/`decoder_present()`
   (none apply): `cpu_matches` requires `__x86_64__`; availability is otherwise
   unconditional on `__linux__`. Block-coverage mode additionally needs the Capstone
@@ -224,7 +237,7 @@ filtered out by the in-region test). Keep the bracket tight, exactly as the tier
 single-active-region MVP already advises.
 
 **Acceptance.** For the shared fixture routine (`mov; add; cmp; jle; dec; ret`,
-[examples/test_hwtrace.c](../../../examples/test_hwtrace.c)) called so the `jle` is
+[examples/test_hwtrace.c](../../../../examples/test_hwtrace.c)) called so the `jle` is
 taken, `insn_offsets()` is exactly `[0x0, 0x3, 0x6, 0xc, 0x11]` — byte-for-byte the
 Unicorn/DynamoRIO/PT/AMD result — captured live on this Zen 2 host.
 
@@ -239,11 +252,11 @@ Single-step yields instructions, not branch edges, so blocks are derived: a bloc
 starts at the **region entry** and at any `RIP` that is **not the fall-through** of
 the previously recorded in-region instruction. Fall-through is
 `prev_RIP + len(prev)`, where `len` comes from the Capstone length-decoder
-(`asmtest_disas`, the same dependency [src/amd_backend.c](../../../src/amd_backend.c)
+(`asmtest_disas`, the same dependency [src/amd_backend.c](../../../../src/amd_backend.c)
 uses) — so a control transfer (taken branch, or region re-entry) is detected as a
 discontinuity and opens a new block via `trace_append_block`. This reproduces the
 single-entry/ends-at-branch model **identically to
-[pt_backend.c](../../../src/pt_backend.c)** without needing hardware branch flags.
+[pt_backend.c](../../../../src/pt_backend.c)** without needing hardware branch flags.
 
 **Acceptance.** Single-step `blocks[]` == DynamoRIO `blocks[]` == PT/AMD `blocks[]`
 for the shared fixtures (reusing the existing `hwtrace-test` cross-backend parity
@@ -295,7 +308,7 @@ cross-language wrappers trace and assert coverage on the same host.
 
 ---
 
-## Phase 5 — Cross-OS and cross-arch portability *(mostly LANDED; two fronts remain — see below)*
+## Phase 5 — Cross-OS and cross-arch portability *(LANDED — all fronts closed; see the status note below)*
 
 The CPU mechanism (`TF` → `#DB`) is x86-universal, but the OS plumbing is per-OS and
 the in-process variant does not exist on ARM. Each is an additive front-end behind a
@@ -313,7 +326,7 @@ Linux/x86-64 backend.
 > CoreCLR / HotSpot × perf-map and jitdump), and — as of 2026-07-18 — the **in-process
 > BTF** variant (W3, see below): a raw-MSR pinned-envelope tier with per-trap re-arm and
 > honest truncation
-> ([inproc-btf-block-step.md](../implementations/inproc-btf-block-step.md)); the
+> ([inproc-btf-block-step.md](../../implementations/inproc-btf-block-step.md)); the
 > "kernel helper / uapi patch" blocker this status note previously cited was not
 > load-bearing. **All fronts now closed:**
 > - **AArch64 live single-step *stream*** — **VALIDATED 2026-07-20** on GitHub's
@@ -326,16 +339,19 @@ Linux/x86-64 backend.
 >   is *armed-but-silent* on this hypervisor (slots reported, arm accepted, the
 >   debug exception withheld), so the forced-hardware `run_to` self-skips there with
 >   that named reason — bare-metal arm64 hw-breakpoint validation moves to
->   [self-hosted-ci-runners.md](../implementations/self-hosted-ci-runners.md).
+>   [self-hosted-ci-runners.md](../../implementations/self-hosted-ci-runners.md) (◐ 2/6).
 
 - **Windows (x86-64)** *(shipped — see the status note above)*. Same `TF`, delivered
   as `EXCEPTION_SINGLE_STEP` to a Vectored Exception Handler (the classic technique);
   ~6× the Linux per-step cost. Landed in the
-  [win64 native tier](../archive/plans/win64-native-tier-plan.md) as
+  [win64 native tier](win64-native-tier-plan.md) as
   `src/ss_win64.c` + `make win64-ss-test` (Wine + real-Windows CI).
 - **macOS (Intel).** The BSD signal layer delivers `SIGTRAP` in-process like Linux;
   out-of-process needs Mach exception ports + the `com.apple.security.cs.debugger`
-  entitlement. Slots into the [macOS clean-test plan](macos-clean-test-plan.md).
+  entitlement. Slots into the [macOS clean-test plan](../../plans/macos-clean-test-plan.md).
+  **The out-of-process Mach-exception-port stepper has since LANDED** —
+  [macos-oop-mach-stepper.md](../../implementations/macos-oop-mach-stepper.md) ✅ 7/7,
+  validated on the Intel MacBook.
 - **W2 — out-of-process `ptrace` single-step + foreign-process tracing.** The
   out-of-band managed-runtime path: in-process DynamoRIO cannot take over a JIT/GC
   runtime's threads, IBS only samples statistically, and Intel PT is Intel-only — so on
@@ -343,7 +359,7 @@ Linux/x86-64 backend.
   parent `PTRACE_SINGLESTEP`s the target and reads the program counter per stop,
   reconstructing the same exact stream as the in-process stepper. The Linux core has
   landed in stages on **x86-64 and AArch64**
-  ([asmtest_ptrace.h](../../../include/asmtest_ptrace.h), `src/ptrace_backend.c`):
+  ([asmtest_ptrace.h](../../../../include/asmtest_ptrace.h), `src/ptrace_backend.c`):
   - _Done._ `asmtest_ptrace_trace_call` — fork a tracee, single-step it, reconstruct
     the same offsets out of band (verified byte-for-byte incl. a 62-instruction loop).
   - _Done._ `asmtest_ptrace_trace_attached(pid, base, len, …)` — trace a region in a
@@ -448,7 +464,7 @@ Linux/x86-64 backend.
     interface `NT_ARM_HW_BKPT` — a constant that does not exist. Both are corrected.)*
     AArch64 reaches hardware execution breakpoints through the **`NT_ARM_HW_BREAK`**
     regset (`struct user_hwdebug_state`: `dbg_info` + `dbg_regs[]`), not debug-register
-    `POKEUSER` like x86. It ships in [src/ptrace_backend.c](../../../src/ptrace_backend.c)
+    `POKEUSER` like x86. It ships in [src/ptrace_backend.c](../../../../src/ptrace_backend.c)
     as the same `set_hw_bp`/`clear_hw_bp` seam the x86-64 path uses, so `run_until` is
     arch-neutral: software `int3`/`brk` by default, hardware fallback on a `POKETEXT`
     refusal (the W^X JIT-text case), on **both** arches. The A64 control word is a 4-byte
@@ -459,22 +475,23 @@ Linux/x86-64 backend.
     live (the `hwtrace-arm64` job's `run_to` assertions), while the forced-hardware path
     measured `NT_ARM_HW_BREAK` as *armed-but-silent* under Azure's hypervisor (slots
     reported, arm accepted, debug exception withheld), so it self-skips there with that
-    named reason — bare-metal hw-breakpoint firing stays a self-hosted-runner leg.
+    named reason — bare-metal hw-breakpoint firing stays a self-hosted-runner leg
+    ([self-hosted-ci-runners.md](../../implementations/self-hosted-ci-runners.md) ◐ 2/6).
 
   - _Done._ Binary jitdump reader — `asmtest_jitdump_find` parses the `jit-<pid>.dump`
     image format CoreCLR/HotSpot/V8 emit. Richer than the text perf-map: it carries the
     code **bytes** and per-method load **timestamps**, so a method re-emitted at a
     reused address (tiered/OSR) resolves to the **latest** body — the *temporal*
     same-address-different-bytes problem the [JIT runtime tracing
-    analysis](../analysis/jit-runtime-tracing.md) centres on. (It is also the byte
-    source the [hardware-trace plan, Phase 2](hardware-trace-plan.md) PT-attach path
+    analysis](../../analysis/jit-runtime-tracing.md) centres on. (It is also the byte
+    source the [hardware-trace plan, Phase 2](../../plans/hardware-trace-plan.md) PT-attach path
     needs.) Endianness auto-detected; non-`LOAD` records skipped; verified by a
     synthetic 2-record-plus-re-JIT fixture.
 
   - _Done._ **Time-aware code-image recorder + versioned tracing** — the jitdump reader
     above resolves the *latest* body at a reused address, but a foreign JIT's bytes can
     change *during* a trace; `trace_attached`'s single `process_vm_readv` then decodes
-    against the wrong bytes. `asmtest_codeimage` ([asmtest_codeimage.h](../../../include/asmtest_codeimage.h),
+    against the wrong bytes. `asmtest_codeimage` ([asmtest_codeimage.h](../../../../include/asmtest_codeimage.h),
     `src/codeimage.c`) is the general fix: a userspace `PERF_RECORD_TEXT_POKE` that
     records a **timestamped code-image timeline** — `track`/`refresh` snapshot a region's
     bytes as versions (change detection via cross-process **soft-dirty + `PAGEMAP_SCAN`**,
@@ -489,8 +506,8 @@ Linux/x86-64 backend.
     proof and the versioned W2 trace in `make codeimage-test` / `make hwtrace-test` (any
     x86-64 Linux, no privilege), the eBPF detector in `make docker-hwtrace-codeimage` (a
     `--cap-add=BPF,PERFMON` container — not privileged). This is approach #2 of the [JIT
-    runtime tracing analysis](../analysis/jit-runtime-tracing.md) and the byte-source half
-    of [hardware-trace Phase 2](hardware-trace-plan.md); the remaining Phase-2 piece is
+    runtime tracing analysis](../../analysis/jit-runtime-tracing.md) and the byte-source half
+    of [hardware-trace Phase 2](../../plans/hardware-trace-plan.md); the remaining Phase-2 piece is
     feeding this timeline into the Intel PT decoder (needs PT hardware — this host is AMD).
 
   - _Done._ Per-binding surface — the `asmtest_ptrace_*` / `asmtest_proc_*` /
@@ -535,19 +552,19 @@ Linux/x86-64 backend.
     (`arm-linux-arm64-gha`, `native-oop` row `trace_insns == insns_truth`).
 - **W3 — BTF branch-granular step.** `DEBUGCTL.BTF=1` + `TF=1` traps **only on taken
   branches** — one fault per branch (the AMD LBR waypoint set, no 16-entry ceiling),
-  feedable into [amd_backend.c](../../../src/amd_backend.c)'s replay loop as `(from,to)`
+  feedable into [amd_backend.c](../../../../src/amd_backend.c)'s replay loop as `(from,to)`
   pairs. **The out-of-process form SHIPPED** (AMD plan P3-2): `PTRACE_SINGLEBLOCK`
   *is* wired on x86 (this plan's earlier "PowerPC/s390 only" claim was wrong —
-  corrected by [src/ptrace_backend.c](../../../src/ptrace_backend.c)'s
+  corrected by [src/ptrace_backend.c](../../../../src/ptrace_backend.c)'s
   `asmtest_ptrace_trace_call_blockstep` / `_attached_blockstep`), behind a hang-proof
   functional probe because some hypervisors (GitHub-hosted runners included) mask
   `DEBUGCTL.BTF` and silently degrade SINGLEBLOCK to per-instruction stepping —
   `blockstep_available()` self-skips there. **The in-process form (no ptrace child)
   has since LANDED** as the raw-MSR pinned-envelope tier
-  ([inproc-btf-block-step.md](../implementations/inproc-btf-block-step.md),
+  ([inproc-btf-block-step.md](../../implementations/inproc-btf-block-step.md),
   `asmtest_ss_btf_available()` / `asmtest_ss_btf_trace()` in
-  [src/ss_btf.c](../../../src/ss_btf.c)): the same thread-pinned `/dev/cpu/N/msr`
-  route [src/msr_lbr.c](../../../src/msr_lbr.c) uses, with per-trap re-arm (BTF is a
+  [src/ss_btf.c](../../../../src/ss_btf.c)): the same thread-pinned `/dev/cpu/N/msr`
+  route [src/msr_lbr.c](../../../../src/msr_lbr.c) uses, with per-trap re-arm (BTF is a
   hardware one-shot the CPU clears on every `#DB`) and honest truncation on any
   observed context switch (Linux does not preserve a user-written BTF across one). The
   robust, context-switch-proof general form remains kernel-coupled and already ships
@@ -561,8 +578,8 @@ Linux/x86-64 backend.
 
 - `ASMTEST_HWTRACE_SINGLESTEP` enum + a no-perf gating arm in
   `available()`/`skip_reason()` in
-  [include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h) /
-  [src/hwtrace.c](../../../src/hwtrace.c).
+  [include/asmtest_hwtrace.h](../../../../include/asmtest_hwtrace.h) /
+  [src/hwtrace.c](../../../../src/hwtrace.c).
 - `src/ss_backend.c`: the `TF`/`SIGTRAP` stepper + Capstone-based block
   normalization, its own TU like `pt_backend.c`/`amd_backend.c`, plus the `begin`/
   `end` dispatch arm in `hwtrace.c`.

@@ -110,7 +110,7 @@ already-shipping out-of-process stepper from a **region** primitive into a
 > (why in-process whole-window cannot be crash-proof),
 > [scoped-tracing-managed-plan.md](scoped-tracing-managed-plan.md) (§D3 is item 7's
 > "concealed out-of-process ptrace stepper scope"),
-> [zen2-singlestep-trace-plan.md](../../plans/zen2-singlestep-trace-plan.md) Phase 5 (the W2 ptrace
+> [zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md) Phase 5 (the W2 ptrace
 > tier this extends).
 
 ## The forcing problem

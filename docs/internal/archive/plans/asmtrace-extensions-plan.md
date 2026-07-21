@@ -30,7 +30,7 @@ sibling-thread publish landed, so mid-window JIT is no longer elided), the AMD f
 (`WindowHot` delegate + `new AsmTrace(HwBackend.AmdLbr)` inline) are statistical-but-near-native
 and — because the block runs at native speed — give the RICHEST managed attribution (deep BCL
 named). The extensions below close the remaining gaps. See
-[asmtrace-inline-using-plan.md](../../plans/asmtrace-inline-using-plan.md) for the inline-`using`
+[asmtrace-inline-using-plan.md](asmtrace-inline-using-plan.md) for the inline-`using`
 conformance of each form.
 
 > **This plan is CLOSED (2026-07-17).** E1–E7 have all landed; E6's branchsnap-at-managed-
@@ -97,7 +97,7 @@ ordering). See [managed-wholewindow-oop-plan.md](managed-wholewindow-oop-plan.md
 
 ### E4 — inline `using (new AsmTrace(outOfProcess: true))` OOP form — **LANDED (`578caed`)**
 
-> **Consolidated in [asmtrace-inline-using-plan.md](../../plans/asmtrace-inline-using-plan.md) R4** — the
+> **Consolidated in [asmtrace-inline-using-plan.md](asmtrace-inline-using-plan.md) R4** — the
 > same item (the async stop-flag split of the OOP stepper), which **shipped there ahead of
 > R1–R3**: a `volatile int stop` in the shared stealth scratch, a begin/end split of
 > `stealth_trace_windowed`, and a **distinct** ctor `new AsmTrace(bool outOfProcess)`
@@ -246,7 +246,7 @@ form). [examples/dotnet/amdlbr](../../../../examples/dotnet/amdlbr/) demonstrate
 since AMD region sampling is non-deterministic per attempt), self-skipping off Zen/`CAP_PERFMON`.
 Distinct from `amdhot`, which is the region-FREE statistical whole-window (also LANDED, as the
 inline `using (new AsmTrace(HwBackend.AmdLbr))` — see
-[asmtrace-inline-using-plan.md](../../plans/asmtrace-inline-using-plan.md)).
+[asmtrace-inline-using-plan.md](asmtrace-inline-using-plan.md)).
 
 ## Priority
 

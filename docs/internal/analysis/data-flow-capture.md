@@ -12,6 +12,21 @@ cooperative `using`-block face); for where the boundary is drawn today see the
 published [scoped-tracing guide](../../guides/tracing/scoped-tracing.md) ("**not**
 register/memory values per step").*
 
+> **Update 2026-07-21 — landed.** The capability scoped here has since shipped
+> end-to-end: the entire 7-step build order at the bottom landed — L0 sink
+> [`include/asmtest_valtrace.h`](../../../include/asmtest_valtrace.h), operand
+> enumerator `src/dataflow_operands.c`, L1 `asmtest_defuse_build`, L2
+> `asmtest_slice_forward`/`asmtest_slice_backward`, producers
+> `src/dataflow_emu.c` / `src/dataflow_ptrace.c` /
+> `src/dataflow_dr_client_inlined.c`, GC canonicalization
+> (`src/dataflow_gcmove.c`, `src/dataflow_objid.c`), and the PT-replay path
+> (`src/dataflow_pt.c`, commits `1f6b676`/`68a2fe7`). All ten bindings ship F7
+> live-attach data flow; user guide at
+> [docs/guides/tracing/data-flow.md](../../guides/tracing/data-flow.md). The
+> linked phased plan is complete (reconciled 2026-07-16, every phase
+> re-verified). The analysis below is preserved as written, including its
+> 2026-07-12 inline corrections.
+
 ## The boundary today
 
 Every backend — the single-step / out-of-process ptrace stepper
@@ -344,6 +359,12 @@ record. **The build order is now committed as a phased plan:**
 [data-flow-tracing-plan.md](../archive/plans/data-flow-tracing-plan.md) (targets: real live
 out-of-band values via the scoped ptrace tier, and production managed taint via
 DynamoRIO).
+
+**Update 2026-07-21:** "None of this is shipped" is no longer true — all seven
+steps above landed (see the landed banner at the top for the shipped files and
+commits), and the phased plan completed (reconciled 2026-07-16, every phase
+re-verified). The scoping text is kept as the record of the original trade-off
+analysis.
 
 ## Cross-reference & validation (2026-07-12)
 

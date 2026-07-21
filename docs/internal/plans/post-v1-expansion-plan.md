@@ -70,6 +70,10 @@ such is what let a dead pipeline read as "done" for three weeks. The lesson is
 structural, not incidental: **a release workflow that only runs on dispatch decays
 silently.** Nothing merged between 2026-06-26 and 2026-07-17 was release-tested.
 
+> **Pointer (2026-07-21):** the go-live remainder is specified in
+> [distribution-packaging.md](../implementations/distribution-packaging.md)
+> (◐ 7/13 live; its T1–T6 are the credential-gated registry publishes).
+
 | # | Defect | Kind | Why it hid |
 |---|--------|------|-----------|
 | 1 | `libipt-dev` installed unguarded on arm64 (no such package on Ubuntu ports) | workflow config | the arm64 leg is release-only |
@@ -380,8 +384,13 @@ drives the emulator with the framework's seedable splitmix64 RNG:
   demonstrably kills more.
 
 Used byte-flip mutation rather than the Keystone path (deliverable #2's stated
-alternative), keeping `fuzz.o` emulator-only with no assembler dependency. The
-optional libFuzzer/AFL shim (#3) is left for concrete demand. Acceptance met by
+alternative), keeping `fuzz.o` emulator-only with no assembler dependency. ~~The
+optional libFuzzer/AFL shim (#3) is left for concrete demand.~~ — **LANDED since
+(noted 2026-07-21)**: [libfuzzer-afl-shim.md](../implementations/libfuzzer-afl-shim.md)
+✅ 5/5 — the `emu_cover_hits` seam plus libFuzzer and AFL++ harnesses, verified in a
+clang-18/afl++ image. Caveat: the 2026-07-21 repo review's **K4** records that **no CI
+workflow exercises the fuzz lane yet**
+([2026-07-21-repo-review.md](../reviews/2026-07-21-repo-review.md)). Acceptance met by
 two host-independent example tests in `examples/test_emu.c`.
 
 ### Deliverables

@@ -2,7 +2,7 @@
 
 > **Sources.** Actioned from the two remaining AArch64 items (SS-A64-STREAM,
 > SS-A64-BIND) of
-> [zen2-singlestep-trace-plan.md](../plans/zen2-singlestep-trace-plan.md)
+> [zen2-singlestep-trace-plan.md](../archive/plans/zen2-singlestep-trace-plan.md)
 > (Phase 5, "The one genuinely remaining Phase-5 front"). Written 2026-07-17.
 > If this doc and a source disagree, this doc wins (sources may be stale); if
 > the CODE and this doc disagree, re-verify before implementing.
@@ -234,7 +234,7 @@ where it does not.
 3. Do NOT add a public `asmtest_ptrace_*` probe symbol: the binding
    function-parity gate counts the tier's exported surface across all ten
    bindings (51 symbols × 10 per the
-   [plan](../plans/zen2-singlestep-trace-plan.md)), so a new export would
+   [plan](../archive/plans/zen2-singlestep-trace-plan.md)), so a new export would
    ripple through every wrapper for no user value. Keep it test-static.
 4. Update the `hwtrace-arm64` job's skip-allowlist (T1 step 3): the `hardware
    bp` skip is no longer blanket-allowed; instead the assert step emits a
@@ -492,7 +492,7 @@ tells the new truth, including the measured hardware-breakpoint outcome.
 
 **Steps.**
 
-1. [docs/internal/plans/zen2-singlestep-trace-plan.md](../plans/zen2-singlestep-trace-plan.md):
+1. [docs/internal/archive/plans/zen2-singlestep-trace-plan.md](../archive/plans/zen2-singlestep-trace-plan.md):
    rewrite the "one genuinely remaining Phase-5 front" paragraph (lines
    146–155) and the Phase-5 status bullets (lines 307–311, the AArch64-tracer
    *Done* note's "awaits a real AArch64 host" sentences at lines 498–508, and

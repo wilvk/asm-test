@@ -1,7 +1,13 @@
 # Data-flow tier — open follow-ups after the 2026-07-17 batch (F1/F2/F6/F7 + W-1)
 
-**Status: items 2 and 3 landed 2026-07-17 (same day, separate diff); item 1 landed 2026-07-18
-(DFP-CALLOUT-1 / T2). Items 4 and 5 remain OPEN.**
+**Status (updated 2026-07-21): ALL FIVE items landed — items 2 and 3 on 2026-07-17 (same day,
+separate diff); item 1 on 2026-07-18 (DFP-CALLOUT-1 / T2); item 4 on 2026-07-18 (T5+T6); item 5
+on 2026-07-18 via [dataflow-bindings-slice-codeimage.md](../implementations/dataflow-bindings-slice-codeimage.md)
+T1–T4 (commits `84d5bae`, `5cd22a5`, `9be3f0c`, `d8bf20d`/`db835c7`) — all ten bindings now share
+the def-use/slice surface.** *This header previously read "Items 4 and 5 remain OPEN", which was
+doubly stale (item 4's own section already said LANDED 2026-07-18); that staleness was the
+[2026-07-21 repo review](../reviews/2026-07-21-repo-review.md) §0 discrepancy — this doc was the
+stale side, the implementation brief is authoritative.*
 None was a regression; each was surfaced (not introduced) while landing the batch, and each was
 recorded here rather than fixed inline, because fixing them inside the diff that found them would
 have been scope creep — or, in one case, would have disturbed a neighbouring oracle.
@@ -139,7 +145,7 @@ the producer-local write-set synthesis (Capstone already reports the complete wr
 five mnemonics). `sysenter` remains gated: it still has no BTF boundary and no DR-breakpoint plan
 either — it was never the primitive gap this item named.
 
-## 5. Seven bindings still lack the def-use / slice half
+## 5. Seven bindings still lack the def-use / slice half — LANDED 2026-07-18
 
 F7 gave all ten bindings the live-attach producer (`attach_pid` / `attach_pid_tid` / `attach_jit`) on
 a minimal `ValueTrace`. Only python/cpp/node carry the full valtrace→defuse→slice pipeline; the other
@@ -150,6 +156,12 @@ own surface deliberately passes no struct by value — which is the only reason 
 despite the parity gate being unable to see them at all (a producer ships no header; the gate derives
 from `TIER_HEADERS`). Widening to the slice half re-opens exactly the ABI-cliff exposure that has
 already bitten Ruby/Java once.
+
+**LANDED 2026-07-18**
+([dataflow-bindings-slice-codeimage.md](../implementations/dataflow-bindings-slice-codeimage.md)
+T1–T4; commits `84d5bae`, `5cd22a5`, `9be3f0c`, `d8bf20d`/`db835c7`): the seven remaining bindings
+gained the def-use/slice half — all ten bindings now share the surface. See the brief for how the
+by-value FFI-boundary concern above was handled.
 
 ---
 

@@ -164,8 +164,15 @@ each hit (best-effort) so a multi-slot arm stays unambiguous.
 
 ## Recommended landing shape
 
+> **Resolution 2026-07-21: the x86 half landed as specified.**
+> `asmspy --watch <pid> <sym|sym+off|0xADDR> [--rw] [--len=…]` ships in
+> [cli/asmspy.c](../../../cli/asmspy.c) (~:5457 dispatch, ~:5171 usage, ~:1609
+> JSON schema; ~:1668 arms every tid). The AArch64 `NT_ARM_HW_WATCH` analog below
+> has **not** landed in `src/` — F3-arm64-watch remains genuinely open, consistent
+> with [implementations/_positions.md](../implementations/_positions.md) #5.
+
 A new near-zero-perturbation asmspy mode, exactly as the plan sketches
-([live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md), F3):
+([live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md), F3):
 
 ```
 asmspy --watch <pid> <addr | func+off | &symbol> [--rw] [--len 1|2|4|8]

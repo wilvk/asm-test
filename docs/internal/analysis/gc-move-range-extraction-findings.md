@@ -228,6 +228,11 @@ missing input:
   behind the disabled `ASMTEST_TAINT_GCREMAP` flag, already does the byte-granular
   snapshot/clear/paint over an arbitrary `{old,new,len}` and is proven by the
   synthetic-triple unit test. Nothing about the remap changes; the profiler only *calls* it.
+  **Update 2026-07-21:** no longer behind the disabled flag — `at_gc_remap` is
+  "now in the main taint build (not the disabled `ASMTEST_TAINT_GCREMAP` flag)
+  because the LIVE path drives it"
+  ([dataflow_dr_client_inlined.c:492-493](../../../src/dataflow_dr_client_inlined.c#L492)),
+  driven by `at_gc_remap_live` at the GC fence (~:737).
 - **The profiler shim reuses the co-loaded-native-`.so` pattern of**
   [taint_managed_shim.c](../../../examples/taint_managed_shim.c) — a native `.so` mapped into
   the launched .NET workload that owns plumbing the managed side cannot express. Where
@@ -240,6 +245,10 @@ missing input:
   then the fallback EventPipe helper (feeding triples over the existing POSIX shm channel)
   remains the contingency, and Increment 7 stays at its landable partial slice (disabled-flag
   remap + synthetic-triple test).
+  **Update 2026-07-21:** Increment 7 no longer sits at the partial slice —
+  Increment 7 Slice 1+2 and Increment 9 have shipped (commits `e5b196f`,
+  `75342d4`, `6e8ad4c`), with the live path driving the remap (see the note
+  above).
 
 ## Sources
 

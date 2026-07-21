@@ -25,8 +25,14 @@ Intel runner for the day-to-day signal.
 >   builds, **and the same fix gives a real Intel-macOS clean room on genuine Apple
 >   hardware in CI** (7/7 Intel legs green on run 29514910178), which is most of what
 >   Track D was standing in for. It remains a useful local backstop; it is no longer the
->   first thing to try, and it still needs a host `sudo` for `sshpass`.
+>   first thing to try~~, and it still needs a host `sudo` for `sshpass`~~ *(that gate is
+>   gone — see the Track D gate list below)*.
 > - **Track C (arm64 tart) is genuinely Apple-Silicon-gated** and cannot run here.
+>
+> **Update (2026-07-21):** the Tracks C/D shakedowns are now tracked in
+> [macos-cleanroom-lanes.md](../implementations/macos-cleanroom-lanes.md) (◐ 2/6 — its T4
+> containerised `sshpass`, removing Track D's host-`sudo` gate). The plan stays **active**:
+> Track C remains Apple-Silicon-gated and Track D's shakedown is unrun.
 
 ---
 
@@ -38,7 +44,8 @@ not rebuild it:
 - [`ci.yml`](../../../.github/workflows/ci.yml) `test` runs **arm64 macOS** natively on
   `macos-latest` every push; `test-macos-x86-rosetta` cross-builds `-arch x86_64`
   and runs it under **Rosetta 2** every push; `test-macos-x86` runs the **native
-  Intel `macos-13`** corner nightly (it's flagged scarce/slow).
+  Intel `macos-15-intel`** corner nightly (it's flagged scarce/slow; `macos-13`
+  was retired 2025-12-08 — [_positions.md #6](../implementations/_positions.md)).
 - [`release.yml`](../../../.github/workflows/release.yml) packages each binding from the
   cross-platform native payload, installs it **fresh with `ASMTEST_LIB` unset**, and
   smoke-loads it (a `cpu_has_avx2` probe — exercises the load path alone) on
@@ -262,9 +269,11 @@ Apple-Silicon box; optionally a self-hosted CI lane.
 > Hackintosh: real Apple userland, no OpenCore, no EULA question.
 >
 > **Remaining gates for actually running Track D (unchanged by the above):**
-> - **`sshpass` is absent and installing it needs a host `sudo` password** — a user action, not
->   an agent one. (It could instead be containerised — CLAUDE.md's "add it where the work runs,
->   not the host" — which would also remove the host dependency.)
+> - ~~**`sshpass` is absent and installing it needs a host `sudo` password**~~ — **LANDED**:
+>   `sshpass` is containerised (`Dockerfile.sshpass` + `make docker-sshpass`), and
+>   [scripts/docker-osx-bindings.sh](../../../scripts/docker-osx-bindings.sh) routes every ssh
+>   call through it — no host `sshpass`/`sudo` needed
+>   ([macos-cleanroom-lanes.md](../implementations/macos-cleanroom-lanes.md) T4 done; brief ◐ 2/6).
 > - A tens-of-GB Docker-OSX image pull against a disk at 89% (≈202 GB free).
 > - The lane is EULA-gray on non-Apple hosts, as this document already records.
 >
@@ -285,8 +294,10 @@ Apple-Silicon box; optionally a self-hosted CI lane.
 > (Docker-OSX is a brittle virtualised-Hackintosh path — see the tradeoffs below)
 > and flip this status when green.
 
-On-demand **x86 macOS** clean room that doesn't wait on the scarce nightly `macos-13`
-runner. **Self-hosted bare-metal Linux only** (needs `/dev/kvm`; GitHub hosted runners
+On-demand **x86 macOS** clean room that doesn't wait on the scarce nightly Intel-macOS
+runner (`macos-15-intel`; `macos-13` was retired 2025-12-08 —
+[_positions.md #6](../implementations/_positions.md)).
+**Self-hosted bare-metal Linux only** (needs `/dev/kvm`; GitHub hosted runners
 don't expose nested KVM). Fits the repo's "prefer Docker via `docker-*` targets"
 convention.
 

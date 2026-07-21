@@ -1,7 +1,7 @@
 # libdft64 differential oracle for the DynamoRIO taint tier — implementation
 
 > **Sources.** Actioned from
-> [intel-pin-capabilities-plan.md](../plans/intel-pin-capabilities-plan.md) (track
+> [intel-pin-capabilities-plan.md](../archive/plans/intel-pin-capabilities-plan.md) (track
 > **PIN-4**), [data-flow-capture.md](../analysis/data-flow-capture.md) (the
 > libdft coverage-gap ground truth), and the archived
 > [dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md)
@@ -614,7 +614,7 @@ up on the libdft tag API before T3.
   propagation rules may be wrong", only "basic instructions" supported. **SSE
   nuance:** the "famously skips XMM/SSE" line in this repo's own docs
   ([data-flow-capture.md](../analysis/data-flow-capture.md),
-  [intel-pin-capabilities-plan.md](../plans/intel-pin-capabilities-plan.md) PIN-4)
+  [intel-pin-capabilities-plan.md](../archive/plans/intel-pin-capabilities-plan.md) PIN-4)
   is true of the *original Columbia* libdft, **not** this fork — AngoraFuzzer's
   README claims "basic SSE, AVX" and `src/ins_helper.h` maps
   `REG_XMM0..15`/`REG_YMM0..15` to tag slots; **ZMM has no slot** (logs "found

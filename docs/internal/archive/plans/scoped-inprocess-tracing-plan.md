@@ -303,7 +303,7 @@ local specifics.
 - **[amd-tracing-plan.md](../../plans/amd-tracing-plan.md)** — the AMD LBR backend and Tier-B
   stitching this plan's AMD path rides; the data-ring ceiling and `CEILING_FREE`
   escape are its concern.
-- **[zen2-singlestep-trace-plan.md](../../plans/zen2-singlestep-trace-plan.md)** — the W2
+- **[zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md)** — the W2
   out-of-process ptrace stepper the Managed slice conceals behind the scope façade
   for Zen 2 / Docker-on-Mac.
 - **[multi-language-bindings-plan.md](../../archive/plans/multi-language-bindings-plan.md)** — the

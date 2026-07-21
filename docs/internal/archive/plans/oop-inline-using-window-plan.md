@@ -11,7 +11,7 @@ Report.Print(ww);
 ```
 
 in ADDITION to the delegate factory `AsmTrace.Window(() => { … })` that ships today. This is
-**R4** of the companion [asmtrace-inline-using-plan.md](../../plans/asmtrace-inline-using-plan.md)
+**R4** of the companion [asmtrace-inline-using-plan.md](asmtrace-inline-using-plan.md)
 (§Roadmap, "build reluctantly, LAST") — the one trace form whose backend is COORDINATION-class
 rather than START/STOP, promoted from roadmap sketch to a concrete spec.
 
@@ -291,7 +291,7 @@ a peer bool.
 
 ## Sources
 
-- Companion roadmap (this is its R4): [asmtrace-inline-using-plan.md](../../plans/asmtrace-inline-using-plan.md)
+- Companion roadmap (this is its R4): [asmtrace-inline-using-plan.md](asmtrace-inline-using-plan.md)
   §Roadmap; the shipped AMD-LBR inline split is the START/STOP template.
 - Windowed stealth monolith to split: [src/hwtrace.c:2574](../../../../src/hwtrace.c#L2574),
   helper body [src/stealth_helper.c:116](../../../../src/stealth_helper.c#L116), step loop

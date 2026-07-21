@@ -10,6 +10,17 @@ The repro programs are in the session scratchpad (`hwprobe2.c`, `ibsraw.c`, `ibs
 `ibsattach.c`); the plan that turns this into work is
 [zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-tracing-plan.md).
 
+> **Since landed (banner added 2026-07-21).** This review's central complaint is
+> resolved: §1's "zero IBS code in the repo" and §4's "sits idle" are no longer
+> true. `src/ibs_backend.c` shipped, `asmspy --sample` exists
+> ([cli/asmspy.c](../../../cli/asmspy.c)), `test_ibs` ran **23/23 live** on the
+> Zen 5 box ([2026-07-12-zen5-privileged-lbr-findings.md](2026-07-12-zen5-privileged-lbr-findings.md)
+> §1), the IBS pre-cover landed (`ASMTEST_TRACE_IBS_PRECOVER`), and §5's ranked
+> options 1–3 all landed (the edge lane, `survey_process`, the pre-cover). The
+> plan is archived at
+> [zen2-ibs-tracing-plan.md](../archive/plans/zen2-ibs-tracing-plan.md). The body
+> below is preserved as filed.
+
 ## 1. Executive summary
 
 Every hardware-assisted trace tier in the tree **self-skips on this Zen 2 host**, so the
@@ -157,5 +168,5 @@ reconciling when the plan below lands.
 > is the Ryzen 9 9950X (zen5) and `amd-linux-x86_64-9e05f0f2` is the Ryzen 9 4900HS
 > (zen1-2, this review's machine). The single-host wording in
 > [amd-tracing-followup-plan.md](../archive/plans/amd-tracing-followup-plan.md) and
-> [zen2-singlestep-trace-plan.md](../plans/zen2-singlestep-trace-plan.md) has been amended
+> [zen2-singlestep-trace-plan.md](../archive/plans/zen2-singlestep-trace-plan.md) has been amended
 > to the two-host reality.

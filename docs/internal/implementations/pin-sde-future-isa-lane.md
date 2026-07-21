@@ -1,7 +1,7 @@
 # Intel SDE future/absent-ISA test lane — implementation
 
 > **Sources.** Actioned from
-> [intel-pin-capabilities-plan.md](../plans/intel-pin-capabilities-plan.md)
+> [intel-pin-capabilities-plan.md](../archive/plans/intel-pin-capabilities-plan.md)
 > (track PIN-1) and
 > [2026-07-17-intel-pin-vs-dynamorio.md](../analysis/2026-07-17-intel-pin-vs-dynamorio.md)
 > (genuine delta #1). Written 2026-07-17. If this doc and a source disagree,
@@ -14,7 +14,7 @@ Assembly that uses an ISA extension the host CPU lacks — APX's r16–r31,
 AVX10.2, AMX, or AVX-512 on an AVX2-only box — is untestable by this framework
 today: the DynamoRIO tier executes on real silicon, and the Unicorn tier
 vendors QEMU 5.0.1, which predates AVX TCG (see
-[live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md),
+[live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md),
 the F1 "AVX-instruction replay is an UPSTREAM GATE" note). Intel's Software
 Development Emulator (SDE) emulates those extensions for the *whole process*,
 so running an **unmodified** suite binary under `sde64 -future` gives future-ISA
@@ -739,7 +739,7 @@ T3..T6 ──> T8
   follow-up inside the Pin plan's PIN-2 track; nothing here depends on it.
 - **Raising the Unicorn tier's AVX ceiling** (upstream QEMU/Unicorn gate):
   tracked in
-  [live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md);
+  [live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md);
   this lane routes around it, it does not fix it.
 - **Packaging/notice generation for shipped artifacts** (SDE never ships):
   [distribution-packaging.md](distribution-packaging.md).

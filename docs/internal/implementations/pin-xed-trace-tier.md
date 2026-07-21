@@ -1,7 +1,7 @@
 # XED-decoded Pin trace tier + shared pintool substrate — implementation
 
 > **Sources.** Actioned from
-> [intel-pin-capabilities-plan.md](../plans/intel-pin-capabilities-plan.md)
+> [intel-pin-capabilities-plan.md](../archive/plans/intel-pin-capabilities-plan.md)
 > (track PIN-2 + the shared constraints) and
 > [2026-07-17-intel-pin-vs-dynamorio.md](../analysis/2026-07-17-intel-pin-vs-dynamorio.md)
 > (genuine-delta #2, "DBI decode of the newest extensions"). Written
@@ -656,7 +656,7 @@ refuted premise.
    corrected statement: #5440 was closed as completed 2022-04-25 (PR #5444);
    the pinned DR 11.91.20630 decodes VNNI; APX (#6226) is the live gap.
 3. Same correction in
-   [intel-pin-capabilities-plan.md](../plans/intel-pin-capabilities-plan.md)
+   [intel-pin-capabilities-plan.md](../archive/plans/intel-pin-capabilities-plan.md)
    line 125 ("[DR #5440][dr5440] VNNI still breaks") — reword to cite #5440
    as fixed and rest PIN-2's case on #6226 alone.
 4. Run `make docs` (or `make docker-docs`) — `docs/internal/**` is excluded

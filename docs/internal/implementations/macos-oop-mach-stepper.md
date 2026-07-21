@@ -1,7 +1,7 @@
 # macOS out-of-process single-step via Mach exception ports — implementation
 
 > **Sources.** Actioned from
-> [zen2-singlestep-trace-plan.md](../plans/zen2-singlestep-trace-plan.md) — the
+> [zen2-singlestep-trace-plan.md](../archive/plans/zen2-singlestep-trace-plan.md) — the
 > Phase 5 / W2 **"macOS (Intel)."** bullet, which notes that out-of-process needs
 > Mach exception ports + the `com.apple.security.cs.debugger` entitlement and says
 > the work "Slots into the

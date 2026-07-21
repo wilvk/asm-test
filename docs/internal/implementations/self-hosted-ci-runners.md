@@ -1,7 +1,7 @@
 # Self-hosted CI runner lanes for hardware-gated tiers (AMD Zen, Intel PT/CoreSight, macOS arm64, KVM Linux) — implementation
 
 > **Sources.** Actioned from
-> [amd-review-followup-plan.md](../plans/amd-review-followup-plan.md) (P9),
+> [amd-review-followup-plan.md](../archive/plans/amd-review-followup-plan.md) (P9),
 > [hardware-trace-plan.md](../plans/hardware-trace-plan.md) (the CI section of
 > Phase 1), [macos-clean-test-plan.md](../plans/macos-clean-test-plan.md)
 > (Track E's one open exception), and

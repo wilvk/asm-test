@@ -89,6 +89,11 @@ This frontier is gated on **all** of:
 - **Bare-metal Intel PT** on that host (the same silicon gate as the in-tree PT
   lanes).
 
+> **Update 2026-07-21:** a bare-metal Intel PT box has since been used for the
+> in-tree PT validation ([intel-hardware-validation.md](../intel-hardware-validation.md),
+> 2026-07-21), so the PT-silicon sub-gate is no longer unreachable in principle;
+> the Xen sub-gate still is.
+
 Until every one is met this stays a design record. When it is met, the
 implementation reuses the existing libipt decode + Capstone render + the
 `asmtest_trace_t` report format; the new surface is only the `xc_vmtrace_*`

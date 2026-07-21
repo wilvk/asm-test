@@ -29,12 +29,20 @@ Paths are repo-relative; `file:line` points at the exact site.
 decode-side fixed (its Intel-PT address-filter half needs Intel hardware), #19
 resolved by correcting the header claim, #36 mitigated (Win64 kernel-wait; a full
 fix needs a Windows host). Fixes landed in batches; each has an implementation note
-under `docs/summaries/`, and the working tree was validated on
+under `docs/summaries/` (since removed in `7cb8431`, 2026-07-04, "archive completed
+plans, remove batch summaries"), and the working tree was validated on
 x86-64 (core + sanitizer + emu + hwtrace) and linux/arm64 (via qemu). Items whose
 full validation needs hardware this AMD Zen 5 dev box lacks (Intel PT, AArch64
 CoreSight, Zen 3 BRS), a non-AMD OS (macOS/Windows runtime), or a privileged/manual
 action (`perf_event_paranoid`, package-publish credentials) are called out inline
-and mapped in roadmap-assessment.
+and mapped in roadmap-assessment (since removed in `7cb8431`).
+
+> **Update 2026-07-21:** two of the hardware gates above have since been cleared —
+> Intel PT was validated on a separate bare-metal Intel box
+> (`docs/internal/intel-hardware-validation.md`), and AArch64 validation now runs
+> on real arm64 CI runners (`604a2b5`, `8c3d81f`). CoreSight remains genuinely
+> hardware-gated. #11's capture-side address-filter half also shipped — see its
+> row below.
 
 | Finding | Status | Note |
 |---|---|---|
@@ -44,7 +52,7 @@ and mapped in roadmap-assessment.
 | #4 pst_mixed AArch64 body | ✅ Fixed | batch-a |
 | #5 vm.s x23 + frame | ✅ Fixed | batch-a |
 | #6 ASSERT_ABI_PRESERVED sp claim (doc) | ✅ Fixed | batch-a |
-| #11 Intel PT empty trace as complete | ⚠️ Partial | batch-c — decode-side truncated fix done; PT address-filter needs Intel HW |
+| #11 Intel PT empty trace as complete | ⚠️ Partial → ✅ 2026-07-21 | batch-c — decode-side truncated fix done; PT address-filter needs Intel HW. **Update 2026-07-21:** the capture-side `PERF_EVENT_IOC_SET_FILTER` half shipped (`src/hwtrace.c` §Z1.2 window-filter wrapper ~:2478-2493, attach-path filter ~:2616-2626, plus the `asmtest_pt_ip_postfilter` software fallback ~:1925) and was live-validated on real Intel PT silicon 2026-07-21 (`c7b4ef7`; `docs/internal/intel-hardware-validation.md` records `# pt nr_addr_filters: 2`) |
 | #12 AMD LBR ring-full undetectable | ✅ Fixed | batch-c |
 | #13 single-step block partition | ✅ Fixed | batch-c (live-validated vs Unicorn) |
 | #14 available(SINGLESTEP) non-Linux stub | ✅ Fixed | batch-c |
@@ -73,7 +81,7 @@ and mapped in roadmap-assessment.
 | #33 Win64 teardown skipped | ✅ Fixed | batch-g |
 | #34 Win64 DF not cleared on recovery | ✅ Fixed | batch-g |
 | #35 Win64 watchdog double-delete | ✅ Fixed | batch-g |
-| #36 Win64 --no-fork kernel-wait hang | ⚠️ Mitigated | batch-g (bounded hard-exit + doc; full fix needs a Windows host) |
+| #36 Win64 --no-fork kernel-wait hang | ⚠️ Mitigated | batch-g (bounded hard-exit + doc; full fix needs a Windows host). **Update 2026-07-21:** a real-Windows CI job now exists — `win64 (real Windows)` in `.github/workflows/ci.yml` runs `make win64-runner-test`/`win64-ss-test` natively on `windows-latest`; the mitigation itself is unchanged |
 | #40 release.yml corresponding-source | ✅ Fixed | batch-i |
 | #41 lua rockspec hardcoded version | ✅ Fixed | batch-i |
 | #42 asmtest.o/test header prereqs | ✅ Fixed | batch-i |

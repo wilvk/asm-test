@@ -633,7 +633,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Intel Pin vs. DynamoRIO analysis + a four-track umbrella plan — what Pin
   makes possible that the shipped DynamoRIO tier cannot.**
   [2026-07-17-intel-pin-vs-dynamorio.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/2026-07-17-intel-pin-vs-dynamorio.md)
-  and [intel-pin-capabilities-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/intel-pin-capabilities-plan.md).
+  and [intel-pin-capabilities-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/intel-pin-capabilities-plan.md).
   Most "Pin advantages" are **maturity, not impossibility** (DR has
   `drrun -attach`, supports Windows, and the taint ground is already held
   in-tree), and the note separates those out. Four items survive as separable
@@ -660,7 +660,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **AMD hardware review + follow-up plan — an adversarial pass over the AMD
   tiers in which four of nine candidate findings were REFUTED and recorded as
   such.** [2026-07-17-amd-hardware-review.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/analysis/2026-07-17-amd-hardware-review.md)
-  and [amd-review-followup-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/amd-review-followup-plan.md).
+  and [amd-review-followup-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/amd-review-followup-plan.md).
   Every claim resting on kernel or silicon behaviour was checked against
   **fetched primary source at pinned tags** (v6.10/v6.12/v6.14), not recall —
   one verifier caught `master` shifting line numbers mid-review and re-pinned.
@@ -2746,7 +2746,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `libasmtest_hwtrace`; `make hwtrace-test` exercises it live — including in a
     **plain unprivileged container** — asserting byte-for-byte parity with the
     in-process stepper plus a 62-instruction loop (no depth ceiling). This lands the
-    Linux x86-64 front of the [Zen 2 single-step plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/zen2-singlestep-trace-plan.md)
+    Linux x86-64 front of the [Zen 2 single-step plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/zen2-singlestep-trace-plan.md)
     Phase 5 (W2). `asmtest_ptrace_trace_attached(pid, base, len, &result, trace)`
     extends it to the **foreign-process** case — the building block for tracing a
     managed runtime: it traces a region in a **separate, already-running process you

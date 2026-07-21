@@ -76,6 +76,13 @@ per [trace-parity-matrix.md Matrix 13](trace-parity-matrix.md)) does not run
 `hwtrace-test`. Only a build on real Intel-macOS hardware surfaces it. This host is
 the natural regression anchor for the macOS-Intel single-step front.
 
+> **Update 2026-07-21: resolved in CI.** The `test-macos-x86` nightly job now runs
+> on `macos-15-intel` and executes `make hwtrace-test` plus
+> `hwtrace-cpp-test`/`hwtrace-ruby-test`
+> ([.github/workflows/ci.yml](../../../.github/workflows/ci.yml) ~:400-460), so
+> this class of macOS-Intel regression is caught without needing this box.
+> (GitHub retired the macos-13 image on 2025-12-08.)
+
 ---
 
 ## Tier B — Docker Linux lanes (verified)
@@ -102,7 +109,10 @@ and **Intel PT** (see below).
 
 ### AMD LBR
 No AMD silicon exists to expose — not natively, not in the VM. All AMD-LBR work
-(the recent Zen-focused commits) can only be validated on a real Zen 3+ host.
+(the recent Zen-focused commits) can only be validated on a real ~~Zen 3+~~
+**Zen 4+** host *(corrected 2026-07-21: per
+[implementations/_positions.md](../implementations/_positions.md) #2, Zen 3 BRS is
+never opened by this tree, so Zen 4+ LbrExtV2 is the actual floor)*.
 
 ### Intel PT — the interesting "no"
 

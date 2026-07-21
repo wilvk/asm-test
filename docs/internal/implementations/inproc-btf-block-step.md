@@ -1,7 +1,7 @@
 # W3: in-process BTF branch-granular single-step — implementation
 
 > **Sources.** Actioned from
-> [zen2-singlestep-trace-plan.md](../plans/zen2-singlestep-trace-plan.md) (the W3
+> [zen2-singlestep-trace-plan.md](../archive/plans/zen2-singlestep-trace-plan.md) (the W3
 > item, filed forward-look) and
 > [amd-tracing-plan.md](../plans/amd-tracing-plan.md) (the headline BTF
 > correction and Improvement Phase 2, which shipped the out-of-process form).
@@ -504,7 +504,7 @@ distrust this tier; the two source plans stop calling W3 "forward-look".
 2. [CHANGELOG.md](../../../CHANGELOG.md): one entry under `## [Unreleased]` /
    `### Added` describing the tier and its gates (match the existing entry
    style — bold lead, GitHub blob links for internal docs).
-3. [docs/internal/plans/zen2-singlestep-trace-plan.md](../plans/zen2-singlestep-trace-plan.md):
+3. [docs/internal/archive/plans/zen2-singlestep-trace-plan.md](../archive/plans/zen2-singlestep-trace-plan.md):
    amend the three W3 status sites — the "stays forward-look" sentence at
    lines 154–155, the Phase-5 status bullet at lines 311–312, and the W3
    paragraph at lines 509–521 — from "needs a kernel helper / uapi patch" to:
@@ -532,7 +532,7 @@ distrust this tier; the two source plans stop calling W3 "forward-look".
 
 **Done when.**
 - `make docker-docs` exits 0.
-- `grep -n "forward-look" docs/internal/plans/zen2-singlestep-trace-plan.md`
+- `grep -n "forward-look" docs/internal/archive/plans/zen2-singlestep-trace-plan.md`
   no longer matches the W3 sites amended above.
 - The changelog entry renders under `## [Unreleased]` / `### Added`.
 

@@ -36,7 +36,7 @@ those edges, descend into `get_Out`, or descend the whole tree.
 > suspension, tail-call keep-open) are documented deferrals, not pending work.
 
 This plan is a **sibling** of the
-[zen2-singlestep-trace-plan](../../plans/zen2-singlestep-trace-plan.md) (which shipped the W2
+[zen2-singlestep-trace-plan](zen2-singlestep-trace-plan.md) (which shipped the W2
 out-of-process stepper this extends) and the
 [hardware-trace-plan](../../plans/hardware-trace-plan.md) (the foreign-JIT resolution toolkit
 descent consumes). Descent is **Linux x86-64 + AArch64 only** — the two arches the

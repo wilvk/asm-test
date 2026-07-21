@@ -30,6 +30,20 @@ Throughout this plan, **native-trace Phase N** means a phase of the
 
 ## Implementation status
 
+> **Update 2026-07-21 (`c7b4ef7` + [intel-hardware-validation.md](../intel-hardware-validation.md)).**
+> The Intel-PT half of this plan — Phase 1's live capture **and** Phase 2's
+> foreign-pid capture + decode wiring — is **DONE and silicon-validated** on a
+> bare-metal i7-8559U (`make hwtrace-pt-live` 631/631 across four consecutive
+> runs; `make dataflow-pt-live` 29/29 ×3); the two owning briefs are ✅
+> ([intel-pt-whole-window-substrate.md](../implementations/intel-pt-whole-window-substrate.md),
+> [intel-pt-attach-foreign-pid.md](../implementations/intel-pt-attach-foreign-pid.md)).
+> What genuinely remains forward-look: the ARM CoreSight live OpenCSD decode tree
+> ([cs_backend.c:109](../../../src/cs_backend.c)/[:123](../../../src/cs_backend.c) —
+> `asmtest_cs_decoder_present()` returns 0, board-gated;
+> [coresight-live-decode.md](../implementations/coresight-live-decode.md) ◐ 1/5)
+> and the HV/EPT research frontier. **This plan stays in `plans/` only for the
+> CoreSight board gate.**
+
 Phase 1 is **implemented** for **Intel PT**: the `perf_event_open` AUX capture
 (`src/hwtrace.c`), the libipt instruction decode + branch-boundary block
 normalization (`src/pt_backend.c`), the full `asmtest_hwtrace_available()` gating
@@ -39,10 +53,13 @@ chain, and the `hwtrace-test` / `shared-hwtrace` targets all ship behind
 serving both the region path and the `asmtest_hwtrace_begin_window`/`_end_window`
 + native `pt_begin_window`/`_end_window` pair, a WEAK/STRONG runtime-trust ladder,
 the `asmtest_hwtrace_pt_set_filter` (`PERF_EVENT_IOC_SET_FILTER`) knob, and the
-`make hwtrace-pt-live` smoke — but the **live PT capture** those exercise stays
-hardware-gated (no `intel_pt` PMU on the reachable AMD/VM boxes): `hwtrace-pt-live`
-is landed and self-skipping and **has not yet run on silicon**; do not record the
-live smoke validated until it has. **ARM CoreSight** (`src/cs_backend.c`) is now **split like the
+`make hwtrace-pt-live` smoke — ~~but the **live PT capture** those exercise stays
+hardware-gated: `hwtrace-pt-live` is landed and self-skipping and has not yet run
+on silicon~~ **it HAS now run on silicon (2026-07-21, `c7b4ef7`)**:
+`make hwtrace-pt-live` passed 631/631 across four consecutive runs on a bare-metal
+i7-8559U ([intel-hardware-validation.md](../intel-hardware-validation.md)). The
+AMD/VM dev boxes still have no `intel_pt` PMU — the tier keeps self-skipping there
+— but a PT box is reachable out-of-lab for the manual validation step. **ARM CoreSight** (`src/cs_backend.c`) is now **split like the
 AMD backend**: its decoder-independent **reconstruction core**
 (`asmtest_cs_reconstruct`) — ordered ETM/ETE instruction *ranges* → the same
 instruction/block partition the PT backend produces — is **implemented and
@@ -50,8 +67,10 @@ host-validated** with synthetic ranges (`examples/test_hwtrace.c`
 `test_cs_reconstruction`, the CoreSight analogue of `test_amd_reconstruction`),
 asserting byte-for-byte parity with the PT/AMD/single-step backends over the shared
 fixture. Only the **live OpenCSD decode tree** (`ocsd_create_dcd_tree` + ETMv4/ETE
-decoder + memory accessor feeding ranges to the core) remains: it needs libopencsd
-*and* a real AArch64 CoreSight board to write and validate, so per the project's
+decoder + memory accessor feeding ranges to the core) remains: it now needs only a
+real AArch64 CoreSight board to write and validate (`libopencsd-dev` is installed
+in the `docker-hwtrace` image —
+[coresight-live-decode](../implementations/coresight-live-decode.md) T1), so per the project's
 "no untested hardware code" rule it is not yet implemented and
 `asmtest_cs_decoder_present()` returns 0 — the tier still self-skips on every host
 until the tree is completed on a board, but the half that the board glue will feed
@@ -84,7 +103,7 @@ bare-metal Intel PT — plus the research-grade hypervisor/EPT frontier (see the
 doc). It is intentionally not implemented as untested code.
 
 Phase 2's **code-image building blocks have, however, already landed** out of the
-[single-step plan's W2 work](zen2-singlestep-trace-plan.md) (Phase 5) and are reusable
+[single-step plan's W2 work](../archive/plans/zen2-singlestep-trace-plan.md) (Phase 5) and are reusable
 here: the code-region resolvers `asmtest_proc_region_by_addr` (`/proc/<pid>/maps`) and
 `asmtest_proc_perfmap_symbol` (`/tmp/perf-<pid>.map`), **and** `asmtest_jitdump_find` —
 the binary jitdump reader that recovers a JIT method's recorded **code bytes** and load
@@ -128,22 +147,28 @@ instruction offsets `{0,3,6,0xc,0x11}`, block partition `{0,0x11}`, not truncate
 the same ground-truth walk the AMD / CoreSight / DynamoRIO backends reconstruct for these
 bytes, so a decoder regression fails CI.
 
-What Phase 2 still needs is therefore **narrower than earlier revisions of this plan
-claimed** — two things, rooted in **bare-metal Intel PT silicon, which neither dev box
-provides** (a Ryzen 9 9950X / Zen 5 and a Ryzen 9 4900HS / Zen 2). Only the first is
-strictly hardware-gated; the second is gated on the first:
+What Phase 2 still needed was therefore **narrower than earlier revisions of this plan
+claimed** — two things, rooted in bare-metal Intel PT silicon — **and both are now DONE,
+silicon-validated 2026-07-21 (`c7b4ef7`,
+[intel-hardware-validation.md](../intel-hardware-validation.md))**:
 
 - **PT-attach-to-live-PID capture** (`perf record -p <pid>` / `perf_event_open` against a
-  running process, versus Phase 1's `pid=0` self-trace). Nothing in
-  [src/hwtrace.c](../../../src/hwtrace.c) opens a PT event on a foreign pid today.
-- **Wiring** that capture to the decode: `asmtest_pt_decode_window` has **no production
+  running process, versus Phase 1's `pid=0` self-trace). ~~Nothing in
+  [src/hwtrace.c](../../../src/hwtrace.c) opens a PT event on a foreign pid today.~~
+  **Landed**: [hwtrace.c:2507](../../../src/hwtrace.c) §Z1.3 (`asmtest_pt_attach_*`) opens
+  PT on a foreign pid, live-verified via `make dataflow-pt-live` 29/29 ×3 —
+  [intel-pt-attach-foreign-pid.md](../implementations/intel-pt-attach-foreign-pid.md) ✅ 5/5.
+- **Wiring** that capture to the decode: ~~`asmtest_pt_decode_window` has **no production
   caller** — the hwtrace facade never dispatches to it (its only caller is
-  `test_wholewindow_decode`). Note the distinction, which earlier revisions of this plan
-  blurred: the **decode** is *not* hardware-gated — the synthetic fixture validates it
-  end-to-end here today. What genuinely needs silicon is **PT capture**: producing a real
-  AUX stream from a real `intel_pt` PMU against a live PID. The residual hardware-gated
-  risk is narrow: whether real-silicon AUX (PSB cadence, overflow/`ovf`, timing packets,
-  perf AUX wraparound) matches what the encoder emits.
+  `test_wholewindow_decode`)~~ **Landed**: the facade dispatches to it at
+  [hwtrace.c:2458](../../../src/hwtrace.c), and
+  [dataflow_pt.c:536](../../../src/dataflow_pt.c) is a second production caller. The
+  distinction earlier revisions blurred still holds: the **decode** was never
+  hardware-gated — the synthetic fixture validates it end-to-end on any host. What
+  genuinely needed silicon was **PT capture**, and the narrow residual risk this bullet
+  named — whether real-silicon AUX (PSB cadence, overflow/`ovf`, timing packets, perf AUX
+  wraparound) matches what the encoder emits — was answered on silicon by the live runs
+  recorded in [intel-hardware-validation.md](../intel-hardware-validation.md).
 
   > **Correction (2026-07-17): "a fixture-fed facade test could cover most of it" was
   > OVERSTATED — retracted.** An earlier revision of this bullet claimed the wiring was
@@ -177,6 +202,12 @@ strictly hardware-gated; the second is gated on the first:
   > without it. That is a small minority of the path, not "most of it". **The facade
   > dispatch for PT is genuinely Intel-PT-gated; it stays forward-look, and this plan should
   > stop implying a test could close it.**
+  >
+  > **Update 2026-07-21:** the hardware gate this correction insisted on was met — the
+  > capture arm and its dispatch landed and ran on real silicon (`c7b4ef7`,
+  > [intel-hardware-validation.md](../intel-hardware-validation.md)); see the bullets
+  > above. The correction stands as the record of *why* no fixture-fed facade test could
+  > have closed this off-Intel.
   >
   > **What WAS coverable here, and is now done — the decode's discriminating power.**
   > `asmtest_pt_encode_fixture` could previously emit only the **taken**-`jle` walk, so
@@ -352,7 +383,7 @@ dev boards/phones (Juno, ZCU102/Kria, Jetson, Pixel) with `CONFIG_CORESIGHT*` an
 
 ---
 
-## Phase 2 - Attach-to-foreign-JIT tracing *(byte-source recorder + recorder-backed decode done; PT capture + wiring forward-look, Intel-PT-gated)*
+## Phase 2 - Attach-to-foreign-JIT tracing *(Intel-PT half DONE — capture + wiring silicon-validated 2026-07-21; HV/EPT frontier forward-look)*
 
 **Goal.** Trace the machine code a *foreign* JIT (JVM, V8, CoreCLR, the CPython
 3.13+ JIT, LLVM ORC) generates inside a **running** process — attached at runtime,
@@ -390,7 +421,7 @@ position.
   register, so soft-dirty is the cross-process primitive). Runtime-enabled **jitdump**
   (a) — .NET `DiagnosticsClient.EnablePerfMap(JitDump)` / JVM jitdump agent + `perf inject
   --jit` — remains the PT-hardware half below.
-- _Done (decoder-side, validated; unwired)._ Feeding the recorder's bytes into libipt's
+- _Done (decoder-side, validated; wired 2026-07-21 — see Status)._ Feeding the recorder's bytes into libipt's
   `pt_image_set_callback` keyed to trace position — `asmtest_pt_decode_window`
   ([src/pt_backend.c:221](../../../src/pt_backend.c)), image callback at
   [pt_backend.c:239](../../../src/pt_backend.c), adapter `asmtest_pt_read_codeimage` at
@@ -405,10 +436,11 @@ position.
   and BOTH sides of the `jle` are driven through both decode entries, so the assertion is
   no longer one-sided: not-taken yields `{0,3,6,0xc,0xe,0x11}` / blocks `{0,0xe}`, and the
   `0xe` `dec` block discriminates a decoder that follows the TNT from a baked-in answer.
-  What it lacks is a **production caller**: the PT capture that would drive it does not
-  exist yet, and — see the Phase 2 correction above — no facade entry point can reach it on
-  a non-Intel host anyway, because `asmtest_hwtrace_init` refuses the backend at the
-  `available()` gate (see Status).
+  ~~What it lacks is a **production caller**: the PT capture that would drive it does not
+  exist yet~~ **Update 2026-07-21 (`c7b4ef7`):** the production callers now exist — the
+  facade dispatches to it at [hwtrace.c:2458](../../../src/hwtrace.c) and
+  [dataflow_pt.c:536](../../../src/dataflow_pt.c) is a second — and the capture that
+  drives them ran on silicon (see Status).
 - libipt (or libxdc) decode; reuse the Capstone layer to render recovered bytes —
   no new decoder API in the bindings.
 - The hypervisor/EPT frontier as the research-grade, maximum-stealth option:
@@ -433,17 +465,22 @@ is written *and* end-to-end validated** — `asmtest_pt_decode_window`
 ([src/pt_backend.c:221](../../../src/pt_backend.c)) reconstructs the ground-truth walk from
 a synthetic AUX stream (`asmtest_pt_encode_fixture`) in `test_wholewindow_decode`, on
 hosts with no PT silicon, now for BOTH sides of the `jle` (the not-taken control proves the
-decode follows the TNT rather than reproducing a baked-in answer); it simply has no
-production caller. What remains forward-look is strictly the **PT capture and its wiring**:
-attach-to-live-PID PT capture, dispatched into that decode entry. The **capture** is
-genuinely gated on **bare-metal Intel PT hardware, which neither dev box provides** (Zen 5
-9950X / Zen 2 4900HS). **The wiring is gated on the same hardware, not merely on the
-capture existing** — a 2026-07-17 correction to what this paragraph used to claim: every
-facade entry refuses `INTEL_PT` at the `asmtest_hwtrace_init` -> `asmtest_hwtrace_available`
--> `vendor_is("GenuineIntel")` + `intel_pt`-PMU gate, so on a non-Intel host no facade code
-path reaches the decode at all and a fixture-fed *facade* test is not constructible without
-faking that gate. The fixture shows the **decode** side is testable here; it does not make
-the **dispatch** testable here. See the Phase 2 correction above. Distinct from the
+decode follows the TNT rather than reproducing a baked-in answer). **And the PT capture and
+its wiring — what this paragraph used to call the strict forward-look remainder — landed and
+ran on silicon on 2026-07-21 (`c7b4ef7`)**: the foreign-pid attach
+([hwtrace.c:2507](../../../src/hwtrace.c) §Z1.3, `asmtest_pt_attach_*`) and the facade
+dispatch of `asmtest_pt_decode_window` ([hwtrace.c:2458](../../../src/hwtrace.c), with
+[dataflow_pt.c:536](../../../src/dataflow_pt.c) a second production caller) were
+live-verified on a bare-metal i7-8559U — `make hwtrace-pt-live` 631/631 across four
+consecutive runs, `make dataflow-pt-live` 29/29 ×3 — per
+[intel-hardware-validation.md](../intel-hardware-validation.md) and the two ✅ briefs
+[intel-pt-whole-window-substrate.md](../implementations/intel-pt-whole-window-substrate.md) /
+[intel-pt-attach-foreign-pid.md](../implementations/intel-pt-attach-foreign-pid.md). (The
+2026-07-17 correction above — that the wiring was gated on the same hardware, not merely on
+the capture existing, because every facade entry refuses `INTEL_PT` at the `available()`
+gate on a non-Intel host — is retained as the record of why only silicon could close this.)
+What remains forward-look in Phase 2 is the **hypervisor/EPT research frontier**; the plan
+as a whole stays in `plans/` only for Phase 1's CoreSight board gate. Distinct from the
 Phase 0-8 work of the native-trace plan, which traces code asm-test generates itself;
 depends on this plan's Phase 1 (PT substrate) and **native-trace Phase 5**
 (instruction-mode semantics). See the analysis doc for the ranked approaches, per-runtime

@@ -7,7 +7,7 @@ DynamoRIO does not." It is a sibling of the DBI trade-off notes
 [jit-runtime-tracing.md](jit-runtime-tracing.md) (why in-process DBI fights
 managed runtimes), and [capture-args-returns.md](capture-args-returns.md) (arg/
 return capture). The implementation roadmap it feeds is
-[intel-pin-capabilities-plan.md](../plans/intel-pin-capabilities-plan.md), which
+[intel-pin-capabilities-plan.md](../archive/plans/intel-pin-capabilities-plan.md), which
 decomposes each surviving item into its own separable plan track.*
 
 ## The question, sharpened
@@ -33,7 +33,7 @@ Three commonly-cited Pin strengths are **not** exclusive to it here:
 
 | Claimed Pin edge | Why it is not a DR *impossibility* |
 |---|---|
-| Attach to a running PID | DR has `drrun -attach` / `dr_inject` (Linux ptrace takeover). Unwired in this repo (the tier uses the cooperative `dr_app_*` model), but a DR capability, not a Pin-only one. See [dr-attach-probe-findings.md](dr-attach-probe-findings.md). |
+| Attach to a running PID | DR has `drrun -attach` / `dr_inject` (Linux ptrace takeover). Unwired in this repo (the tier uses the cooperative `dr_app_*` model), but a DR capability, not a Pin-only one. See [dr-attach-probe-findings.md](dr-attach-probe-findings.md). **Update 2026-07-21:** "unwired" needs qualifying — DR external attach IS wired for the taint/dataflow tier since 2026-07-14 ([Dockerfile.taint-attach](../../../Dockerfile.taint-attach), the `docker-dataflow-attach` lane; [implementations/_positions.md](../implementations/_positions.md) #7 is binding); only the drtrace control-flow tier remains `dr_app_*`-cooperative. |
 | Windows in-band DBI | DR supports Windows. The repo's DR tier is Linux-x86-64 by the repo's own scoping, not DR's limit ([macos-drtrace-plan.md](../plans/macos-drtrace-plan.md) tracks the port surface). |
 | Whole-process taint (libdft/Triton) | The taint **ground is already held** in-tree on DR. Pin's value here is as an *independent oracle* (below), not a new capability. |
 
@@ -64,7 +64,7 @@ execute it. (DR's `drcpusim` only *detects* too-new instructions; it does not
 emulate them.) The gap is documented on both of the repo's other flanks:
 
 - **The emulator tier cannot cover it.**
-  [live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md)
+  [live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md)
   (F1 increment 2) measured that Unicorn — even 2.1.3, built from source — vendors
   QEMU 5.0.1, which predates AVX TCG (QEMU 7.2): `vaddps ymm` returns
   `UC_ERR_INSN_INVALID`, and worse, **VEX-128 is silently mis-executed as legacy
@@ -163,6 +163,12 @@ the framework's mission:
 
 All four are **test/oracle-only, fetched-and-pinned, never-shipped** — and #1 is
 the only one that extends the core promise to code no host can run.
+
+> **Update 2026-07-21:** ranked items 1, 3 and 4 have since shipped per the
+> roadmap plan cited above — the SDE future-ISA lane (#1), probe-mode capture
+> validated live on Zen 5 (#3, `fd00e46`), and the libdft64 differential taint
+> oracle (#4, `d504081`); #2's XED-decoded trace tier has its own brief,
+> [pin-xed-trace-tier.md](../implementations/pin-xed-trace-tier.md).
 
 ## Sources
 

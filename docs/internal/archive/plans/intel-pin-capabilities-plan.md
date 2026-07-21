@@ -1,7 +1,7 @@
 # asm-test — Intel Pin capabilities: one umbrella, four separable plans
 
 > **Context (2026-07-17).** This plan actions the surviving items of
-> [2026-07-17-intel-pin-vs-dynamorio.md](../analysis/2026-07-17-intel-pin-vs-dynamorio.md)
+> [2026-07-17-intel-pin-vs-dynamorio.md](../../analysis/2026-07-17-intel-pin-vs-dynamorio.md)
 > — the investigation into what Intel Pin makes possible that the shipped
 > DynamoRIO tier cannot. Four items survived; each is a **self-contained plan
 > track** below (`PIN-1..PIN-4`), ordered by how squarely it is a DynamoRIO
@@ -11,16 +11,22 @@
 > (license, pinning, never-ship) are stated once.
 >
 > Siblings: the DBI substrate this compares against
-> ([asmtest_drtrace.h](../../../include/asmtest_drtrace.h),
-> [asmtest_taint.h](../../../include/asmtest_taint.h),
-> [dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md));
+> ([asmtest_drtrace.h](../../../../include/asmtest_drtrace.h),
+> [asmtest_taint.h](../../../../include/asmtest_taint.h),
+> [dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md));
 > the Unicorn future-ISA ceiling this routes around
 > ([live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md),
 > F1 increment 2); the arg/return-capture note PIN-3 serves
-> ([capture-args-returns.md](../analysis/capture-args-returns.md)).
+> ([capture-args-returns.md](../../analysis/capture-args-returns.md)).
 
-> **Status legend: planned** unless a track is marked *(landed)*. No track is
-> started.
+> **Status (2026-07-21): ALL FOUR TRACKS LANDED — plan complete; archived.**
+> Each track is owned by its implementations brief: PIN-1
+> [pin-sde-future-isa-lane.md](../../implementations/pin-sde-future-isa-lane.md) ☑ 8/8,
+> PIN-2 [pin-xed-trace-tier.md](../../implementations/pin-xed-trace-tier.md) ☑ 9/9,
+> PIN-3 [pin-probe-mode-capture.md](../../implementations/pin-probe-mode-capture.md)
+> ✅ 7/7, PIN-4 [pin-libdft-taint-oracle.md](../../implementations/pin-libdft-taint-oracle.md)
+> ✅ 7/7 (PIN-3/PIN-4 live-verified on Zen 5, commit `fd00e46`). The per-track
+> headings below carry the pointers.
 
 ## Shared constraints (stated once, apply to every track)
 
@@ -30,27 +36,27 @@ fetched-and-pinned test lanes rather than shipped tiers.
 1. **Pin and SDE are proprietary freeware.** Redistributable binaries, not open
    source. They are therefore **test/oracle-only** and **never linked into
    `libasmtest`, `libasmtest_emu`, or any distributed binding package** — exactly
-   how DynamoRIO is handled ([asmtest_drtrace.h](../../../include/asmtest_drtrace.h)
+   how DynamoRIO is handled ([asmtest_drtrace.h](../../../../include/asmtest_drtrace.h)
    banner: "kept entirely out of the core libasmtest and the libasmtest_emu
    superset"). No track adds a bindings-parity obligation, because no track ships
    a public tier symbol.
 2. **Pin down the version, exactly like DynamoRIO.** Follow the
-   [Dockerfile.drtrace](../../../Dockerfile.drtrace) pattern verbatim — `ARG
+   [Dockerfile.drtrace](../../../../Dockerfile.drtrace) pattern verbatim — `ARG
    PIN_VERSION` / `ARG SDE_VERSION` + `curl` the kit tarball + **assert its
    SHA-256** against a new line in
-   [scripts/third-party-digests.txt](../../../scripts/third-party-digests.txt) +
-   vendor the license text under [licenses/](../../../licenses/). A
+   [scripts/third-party-digests.txt](../../../../scripts/third-party-digests.txt) +
+   vendor the license text under [licenses/](../../../../licenses/). A
    `scripts/fetch-pin.sh` / `scripts/fetch-sde.sh` mirrors
-   [scripts/fetch-dynamorio.sh](../../../scripts/fetch-dynamorio.sh) (download →
+   [scripts/fetch-dynamorio.sh](../../../../scripts/fetch-dynamorio.sh) (download →
    verify digest → capture license → echo the home dir).
 3. **CLAUDE.md governs the gate.** SDE and Pin are **installable**, so per
-   [CLAUDE.md](../../../CLAUDE.md) ("a missing dependency is not a blocker — add
+   [CLAUDE.md](../../../../CLAUDE.md) ("a missing dependency is not a blocker — add
    it") they are added to the relevant `Dockerfile.*` + `docker-*` rule, **not**
    self-skipped. The only real self-skip gates that remain are (a) non-x86 hosts
    (Pin/SDE are x86-only — AArch64 / macOS-arm64 lanes self-skip with a reason)
    and (b) for PIN-1's *native cross-check* half only, the actual silicon.
 4. **Reuse the shared sink.** Any trace-producing track fills
-   [asmtest_trace_t](../../../include/asmtest_trace.h) (offsets from the region
+   [asmtest_trace_t](../../../../include/asmtest_trace.h) (offsets from the region
    base, append/dedup/`truncated` discipline) so its output is diffable against
    every existing backend — the whole point of a new producer here is
    cross-validation.
@@ -66,9 +72,9 @@ fetched-and-pinned test lanes rather than shipped tiers.
 
 ---
 
-## PIN-1 — SDE future/absent-ISA test lane *(planned)*
+## PIN-1 — SDE future/absent-ISA test lane *(LANDED — [pin-sde-future-isa-lane.md](../../implementations/pin-sde-future-isa-lane.md) ☑ 8/8: `Dockerfile.sde`, `scripts/fetch-sde.sh`, `mk/sde.mk`)*
 
-**The one to build.** Turns [CLAUDE.md](../../../CLAUDE.md)'s "specific CPU
+**The one to build.** Turns [CLAUDE.md](../../../../CLAUDE.md)'s "specific CPU
 generation" hardware self-skip into a runnable tier: assemble a routine using an
 extension no host has (APX r16–r31, AMX tiles, AVX10.2, AVX-512 on an
 AVX2-only box), then run the **unmodified** suite binary under
@@ -116,10 +122,10 @@ cleanly on aarch64; SDE is fetched, digest-verified, and its license vendored.
 
 ---
 
-## PIN-2 — XED-decoded Pin trace tier *(planned)*
+## PIN-2 — XED-decoded Pin trace tier *(LANDED — [pin-xed-trace-tier.md](../../implementations/pin-xed-trace-tier.md) ☑ 9/9: `Dockerfile.pintool`, `scripts/fetch-pin.sh` pinned Pin 4.2, `mk/pintool.mk`)*
 
 A `libasmtest_pintool` control-flow producer filling
-[asmtest_trace_t](../../../include/asmtest_trace.h), whose reason to exist is
+[asmtest_trace_t](../../../../include/asmtest_trace.h), whose reason to exist is
 **decoder currency**: Pin decodes with XED, so it instruments routines using the
 newest extensions (APX **today**, [DR #6226][dr6226] open) that DynamoRIO's code
 cache rejects. The pinned DR *does* decode AVX-512 VNNI ([DR #5440][dr5440] was
@@ -132,7 +138,7 @@ symbol and instruments basic blocks in `[base, base+len)` to append offsets. The
 **one thing that does not map from DR** is the in-process no-IPC hand-off: Pin's
 model is launch-under-`pin`, so the trace crosses a **shared-memory segment**
 (reuse the taint tier's `drrun`-shm precedent,
-[asmtest_taint_shm.h](../../../include/asmtest_taint_shm.h)) rather than being
+[asmtest_taint_shm.h](../../../../include/asmtest_taint_shm.h)) rather than being
 written straight into the app struct.
 
 **Increments**
@@ -161,9 +167,9 @@ is launch-under-`pin` with the trace delivered over shm; zero diff under
 
 ---
 
-## PIN-3 — Pin probe-mode arg/return capture *(planned)*
+## PIN-3 — Pin probe-mode arg/return capture *(LANDED — [pin-probe-mode-capture.md](../../implementations/pin-probe-mode-capture.md) ✅ 7/7, live-verified on Zen 5, commit `fd00e46`)*
 
-The [capture-args-returns.md](../analysis/capture-args-returns.md) "middle tier":
+The [capture-args-returns.md](../../analysis/capture-args-returns.md) "middle tier":
 Pin **probe mode** trampolines at function entry/exit while the app runs its
 **original code natively** between probes — stronger than LD_PRELOAD (dynamic
 symbols only) and far cheaper than full DBI, with no code cache. DR has no
@@ -175,12 +181,12 @@ without Pin, so this is a robustness/ergonomics win, ranked below PIN-1/2.
 1. **Entry/exit capture Pintool.** In probe mode, instrument a named function:
    record the SysV integer/FP arg registers at entry and the return
    register(s) + flags at exit into the `asmtest_valtrace_t`-shaped shm record
-   ([asmtest_valtrace.h](../../../include/asmtest_valtrace.h)); resolve pointed-to
+   ([asmtest_valtrace.h](../../../../include/asmtest_valtrace.h)); resolve pointed-to
    buffers with a configurable size cap (the note's 4 KiB default) and strict
    validation against mapped ranges.
 2. **Cross-check against the ptrace arg/return path.** Diff Pin's captured
    arg/return values against the out-of-process ptrace stepper's `read_pc_ret`
-   ([src/ptrace_backend.c](../../../src/ptrace_backend.c)) on the same fixture —
+   ([src/ptrace_backend.c](../../../../src/ptrace_backend.c)) on the same fixture —
    two independent producers must agree.
 3. **Safety posture** per the note: caps on pointer reads, never trust a pointer,
    treat captured buffers as sensitive; documented, not just coded.
@@ -196,10 +202,10 @@ pointer is refused, not faulted on; probe-mode refusals report a reason.
 
 ---
 
-## PIN-4 — libdft64 differential oracle for the DR taint tier *(planned)*
+## PIN-4 — libdft64 differential oracle for the DR taint tier *(LANDED — [pin-libdft-taint-oracle.md](../../implementations/pin-libdft-taint-oracle.md) ✅ 7/7, `fd00e46`; `Dockerfile.taint-oracle`, `docker-taint-oracle`)*
 
 Not a DR impossibility — an **oracle**. The DR taint client
-([src/dataflow_dr_client_inlined.c](../../../src/dataflow_dr_client_inlined.c) built
+([src/dataflow_dr_client_inlined.c](../../../../src/dataflow_dr_client_inlined.c) built
 `-DASMTEST_TAINT`) is home-grown and today validated against an **offline**
 emulator/Capstone L2 slice. **libdft64** is the canonical, independently
 implemented byte-level taint engine on Pin. Running it as a second in-band DBI
@@ -209,7 +215,7 @@ independent-reference idiom, applied to the one tier lacking a live peer.
 
 **The interface work is a mapping, not a rebuild:** libdft's sink observations
 (tainted bytes reaching a watched operand) must be projected onto
-[at_taint_report_t](../../../include/asmtest_taint.h) `at_taint_hit_t` records
+[at_taint_report_t](../../../../include/asmtest_taint.h) `at_taint_hit_t` records
 (region `off`, effective address `ea`, union `tag`, `kind`) so the two reports
 diff directly. Seeds are shared verbatim (`at_taint_seed_t` base/len/color).
 
@@ -223,7 +229,7 @@ diff directly. Seeds are shared verbatim (`at_taint_seed_t` base/len/color).
    (`examples/dr_taint*.c`) under both the DR client and libdft64; assert the sink
    sets agree (same `off`/`ea`, compatible `tag` union). Where they differ,
    classify: a real DR-client bug, a libdft coverage gap (it famously skips
-   XMM/SSE — [data-flow-capture.md](../analysis/data-flow-capture.md)), or a
+   XMM/SSE — [data-flow-capture.md](../../analysis/data-flow-capture.md)), or a
    modelling difference — and record the boundary, do not paper over it.
 3. **Wire as an optional gate,** not a blocker: `docker-taint-oracle` runs the
    diff; a divergence in the covered subset fails, a known libdft coverage gap

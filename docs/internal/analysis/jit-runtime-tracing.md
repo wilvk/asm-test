@@ -29,6 +29,16 @@ in a `using` block, non-intrusively — see the sibling
 > hardware (this dev host is AMD); the recorder is already paired with the on-host
 > ptrace stepper instead. Read the rest of this document as the design rationale; the
 > [CHANGELOG](../../../CHANGELOG.md) tracks the shipped surface.
+>
+> **Update 2026-07-21 — the "hardware half" has narrowed.** That feeding is now
+> decode-side complete: `asmtest_pt_decode_window` decodes PT with a
+> recorder-backed `pt_image_set_callback` (`src/pt_backend.c`), foreign-pid PT
+> capture ships as `asmtest_hwtrace_pt_attach_begin`
+> ([src/hwtrace.c](../../../src/hwtrace.c) ~:2570), and commit `c7b4ef7`
+> (2026-07-21) validated whole-window and foreign-pid decode on real silicon.
+> The residual forward-look is [hardware-trace plan
+> Phase 2](../plans/hardware-trace-plan.md)'s remaining **CoreSight** gate, not
+> "wire the decoder".
 
 ## Question
 

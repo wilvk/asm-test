@@ -12,7 +12,7 @@ delivered) observed across 320 post-attach compacting gen2 GCs. The victim survi
 cleanly. **None of the four kill criteria tripped.**
 
 This retires the risk the F4 section of
-[live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md) named as
+[live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md) named as
 "the honest open question to spike first". F4's GC-move feed is **not** restricted to launched
 targets, and the ptrace live-attach tier does **not** need the DR tier's startup-env-var wiring.
 
@@ -169,6 +169,12 @@ accidental startup wiring.
   boundary** the compaction takes effect at and canonicalize before `asmtest_defuse_build`.
   Getting the triples is solved; **stamping them coherently against the trace is the next open
   question**, and it is a different one.
+  **Update 2026-07-21:** since answered — the stamping question was resolved by
+  **S0-stamping**
+  ([f4-gc-fence-freeze-probe-findings.md](f4-gc-fence-freeze-probe-findings.md)),
+  and the F4 object-identity join has landed
+  ([dataflow-f4-object-identity.md](../implementations/dataflow-f4-object-identity.md)
+  T1–T6, commits `b80d1f9`…`9520e8a`).
 - The probe is a **throwaway research spike**, not product, and is not wired into the main CI
   gate — same posture as its sibling probes.
 

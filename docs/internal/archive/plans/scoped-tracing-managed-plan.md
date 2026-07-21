@@ -604,7 +604,7 @@ perturbation, not deadlock, form of the L3 hazard). Document this prominently.
 - A bundled helper binary + spawn/`PR_SET_PTRACER`/`PTRACE_SEIZE`/sentinel-step glue,
   reusing `asmtest_ptrace_trace_attached_versioned` against the **foreign-pid**
   recorder (above). This is the
-  [zen2-singlestep-trace-plan.md](../../plans/zen2-singlestep-trace-plan.md) W2 machinery in a
+  [zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md) W2 machinery in a
   scope wrapper — no new *tracer*, but the reverse-attach protocol (`PR_SET_PTRACER` +
   `PTRACE_SEIZE` of the parent), the sentinels, and the cross-process address channel
   **are** new.
@@ -876,5 +876,5 @@ and
 [four-qualifications](../../analysis/scoped-inprocess-tracing.md#qualification-1--the-threadasync-boundary-the-deep-one)
 sections. Foreign-JIT and W2 background:
 [jit-runtime-tracing.md](../../analysis/jit-runtime-tracing.md),
-[zen2-singlestep-trace-plan.md](../../plans/zen2-singlestep-trace-plan.md),
+[zen2-singlestep-trace-plan.md](zen2-singlestep-trace-plan.md),
 [hardware-trace-plan.md](../../plans/hardware-trace-plan.md).

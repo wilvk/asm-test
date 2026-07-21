@@ -21,6 +21,28 @@ Matrix 3 records its dead ends.
 Hosts referenced: Zen 5 (Ryzen 9 9950X) and Zen 2 (Ryzen 9 4900HS) — the two dev
 boxes. **No Zen 3 silicon exists here**, which is load-bearing for §2.1.
 
+---
+
+## Remediation status
+
+**Update 2026-07-21: all confirmed findings closed in-tree.** The round-1
+follow-ups P1–P8
+([amd-review-followup-plan.md](../archive/plans/amd-review-followup-plan.md))
+addressed every confirmed finding, and the closures were re-audited by
+[amd-review-followup-2-plan.md](../plans/amd-review-followup-2-plan.md)
+(2026-07-20). Specific closures: §2.2 — branchsnap now passes the raw hardware
+count separately ([src/branchsnap.c](../../../src/branchsnap.c) ~:349-363);
+§2.3 — `IBS_MAX_RECORD` is callchain-aware
+([src/ibs_backend.c](../../../src/ibs_backend.c) ~:348-380); §2.4 —
+`asmtest_amd_freeze_available` deleted; §2.5 —
+[amd-hardware-validation.md](../amd-hardware-validation.md) rewritten; §2.7 —
+`asmtest_ibs.h` installed (Makefile ~:568,580); §2.1 — the documentation half
+corrected ([trace-parity-matrix.md](trace-parity-matrix.md) now records "BRS in
+silicon, NOT openable by this tree"), while its code fix remains
+hardware-blocked (no Zen 3 box), exactly as the finding records.
+
+---
+
 ## 1. The headline: AMD's verification, not AMD's code
 
 The AMD code is in better shape than the process that validates it. Three facts

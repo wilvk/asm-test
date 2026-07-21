@@ -9,7 +9,7 @@ live process, unprivileged**, and can observe a JIT/managed runtime without sing
 it (which can crash it).
 
 It is a **sibling** of the [AMD LBR plan](../../plans/amd-tracing-plan.md) (BRS / LbrExtV2 — absent on
-Zen 2), the [single-step plan](../../plans/zen2-singlestep-trace-plan.md) (the exact Zen 2 path), the
+Zen 2), the [single-step plan](zen2-singlestep-trace-plan.md) (the exact Zen 2 path), the
 [hardware-trace plan](../../plans/hardware-trace-plan.md) (Intel PT / CoreSight), and the
 [asmspy plan](../../plans/asmspy-plan.md) (the interactive tracer that gains the flagship view here).
 

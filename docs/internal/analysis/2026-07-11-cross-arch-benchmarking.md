@@ -2,6 +2,16 @@
 
 Analysis date: 2026-07-11
 
+> **Since landed (note added 2026-07-21).** The plan this analysis fed (§7,
+> [cross-arch-benchmarking-plan.md](../archive/plans/cross-arch-benchmarking-plan.md))
+> is implemented and archived: `make emu-bench` / `bench-report` / `bench-record`
+> exist ([mk/bench.mk](../../../mk/bench.mk)), per-box result records are
+> committed under `benchmarks/`, and §3's "three CI legs" are now **five** —
+> benchmarks also run on `windows-latest`
+> ([.github/workflows/ci.yml](../../../.github/workflows/ci.yml) ~:287) and the
+> `macos-15-intel` nightly (~:229), added in `c811ccb`. The body below is the
+> original design analysis, preserved as written.
+
 ## Summary
 
 "Benchmark different architectures" is really **two different questions**, and

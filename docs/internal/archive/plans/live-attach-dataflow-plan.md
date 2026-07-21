@@ -13,7 +13,7 @@ and gives it a UI. The design investigation behind the JIT half is
 and start observing"); this document is the build order. The emulator-replay perturbation
 optimization, hardware data-watchpoints, the PT-derived value path, and live GC-move
 canonicalization are deliberately **out of scope here** and carried in the companion
-[live-attach-dataflow-followup-plan.md](../../plans/live-attach-dataflow-followup-plan.md).
+[live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md).
 
 > Status: **All seven increments LANDED (2026-07-15).** Increment 1 (native live-attach) was
 > the recommended first milestone — it is low-risk reuse of the landed capture core and needs no

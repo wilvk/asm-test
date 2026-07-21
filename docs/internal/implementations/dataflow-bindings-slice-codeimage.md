@@ -1,9 +1,9 @@
 # Data-flow bindings: def-use/slice surface and code-image argument across the language wrappers — implementation
 
 > **Sources.** Actioned from
-> [live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md)
+> [live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md)
 > (§F7, the two carryovers named at
-> [its close](../plans/live-attach-dataflow-followup-plan.md): "the def-use/slice
+> [its close](../archive/plans/live-attach-dataflow-followup-plan.md): "the def-use/slice
 > surface for the seven … and `attach_pid_versioned`'s code-image argument, which
 > every binding passes as NULL"). Written 2026-07-17. If this doc and a source
 > disagree, this doc wins (sources may be stale); if the CODE and this doc
@@ -318,7 +318,7 @@ mis-marshalled slice reddens the lane.
    bytes as the native oracle, the expected slice `{0,1,2,3,4}` is known exactly.
 3. Bump each lane's expected assertion count. The lanes today are python 17, cpp 48,
    node 44, ruby 36, lua 36, zig 36, rust 36, go 36, java 36, dotnet 36
-   ([plan §F7 landing note](../plans/live-attach-dataflow-followup-plan.md)). The
+   ([plan §F7 landing note](../archive/plans/live-attach-dataflow-followup-plan.md)). The
    suites self-count (`n`/`_n` incremented per `check`) and print `1..N`, so no
    hard-coded total needs editing — but any lane that prints a summary line
    ("36/36") must be updated to the new count, and the docker lane's green

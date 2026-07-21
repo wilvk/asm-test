@@ -1,7 +1,7 @@
 # Data-flow F4: real object identity via GCBulkType/Node/Edge — implementation
 
 > **Sources.** Actioned from
-> [live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md) (F4,
+> [live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md) (F4,
 > "Full object identity via `GCBulkType`/`Node`/`Edge` is a further step"),
 > [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md) and
 > [f4-attach-profiler-probe-findings.md](../analysis/f4-attach-profiler-probe-findings.md).
@@ -480,7 +480,7 @@ landed.
    "Full object identity via GCBulkType / Node / Edge is likewise deferred." with a sentence
    pointing at the Phase-4 increment-4 block T1 added (the live feed is the gccanon lane; the
    pure transform is `asmtest_objid_canonicalize`).
-2. [docs/internal/plans/live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md)
+2. [docs/internal/archive/plans/live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md)
    F4 section: append an `UPDATE` block in the section's established voice — the further step
    landed; the address-identity residual ("a pre-window record touching memory that a GC then
    slides a live object into aliases that object") is retired by the objid pass; cite the lane

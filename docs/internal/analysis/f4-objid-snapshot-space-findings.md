@@ -7,6 +7,10 @@ convention** — GCBulkNode `Address` is the object's FINAL, post-relocation add
 GC's own move ranges **belong** in the trace-to-snapshot translation set. Measured directly on a
 live CoreCLR .NET 8 victim; see "Evidence" below.*
 
+*(Update 2026-07-21: the T5 objid join + assertion battery described below as
+future have since landed — `de71fc9` (T5), `9520e8a` "retire F4 objid deferral"
+(T6).)*
+
 ## The question
 
 The T5 objid join keys a captured memory record on *(object, offset)* by inverse-walking a heap

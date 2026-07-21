@@ -184,8 +184,13 @@ fn-pointer in native code (`call_scoped` — the runtime is never stepped, sound
 *tracer*, immune to the tracee's signal mask); or **hardware trace** (Intel PT clean; AMD
 routes to the OOP stepper for exact, or the LBR WindowHot survey for a cheap statistical
 histogram). Today only **.NET** wraps the full Class-3 machinery; Java/Node have the in-process
-whole-window trio but their live-managed capture rides a native leaf (Class-2 posture) with the
-crash-proof OOP family still forward-look.
+whole-window trio but their live-managed capture rides a native leaf (Class-2 posture) — and
+their crash-proof out-of-process whole-window family shipped on 2026-07-09
+(`stealthWindow`/`stealthWindowed` → `asmtest_hwtrace_stealth_trace_windowed`, commit
+`272bd65`; exercised in [bindings/node/test_hwtrace.js](../../../bindings/node/test_hwtrace.js)
+~:766 and [bindings/java/HwTraceTest.java](../../../bindings/java/HwTraceTest.java)
+~:959-985). *(Corrected 2026-07-21 — this note previously ended "with the crash-proof OOP
+family still forward-look", which was stale.)*
 
 ---
 

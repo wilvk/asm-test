@@ -3,11 +3,11 @@
 > **Sources.** Actioned from
 > [asmspy-plan.md](../plans/asmspy-plan.md) (Theme F row `F-arch-abstraction`,
 > line 140),
-> [live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md)
+> [live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md)
 > (F3 carryover, the AArch64 `NT_ARM_HW_WATCH` analog),
 > [2026-07-15-hw-watchpoint-spike.md](../analysis/2026-07-15-hw-watchpoint-spike.md)
 > (the "AArch64 analog" section), and
-> [zen2-singlestep-trace-plan.md](../plans/zen2-singlestep-trace-plan.md)
+> [zen2-singlestep-trace-plan.md](../archive/plans/zen2-singlestep-trace-plan.md)
 > (the landed AArch64 library stepper this doc mirrors). Written 2026-07-17. If
 > this doc and a source disagree, this doc wins (sources may be stale); if the
 > CODE and this doc disagree, re-verify before implementing.
@@ -626,7 +626,7 @@ drift). Sources inline.
   the `asmtest_ptrace_*` stepper in
   [src/ptrace_backend.c](../../../src/ptrace_backend.c) whose live capture is "the
   one genuinely remaining Phase-5 front" in
-  [zen2-singlestep-trace-plan.md](../plans/zen2-singlestep-trace-plan.md) — belongs
+  [zen2-singlestep-trace-plan.md](../archive/plans/zen2-singlestep-trace-plan.md) — belongs
   to [aarch64-ptrace-single-step-validation.md](aarch64-ptrace-single-step-validation.md).
   This doc consumes that stepper (the region engine calls
   `asmtest_ptrace_trace_attached_ex`); it does not re-validate it.

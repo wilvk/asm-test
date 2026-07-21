@@ -4,6 +4,16 @@ Status: draft — an engineering analysis of approaches to capture and trace
 values passed between a process and libraries (entry/exit arguments, buffers,
 returns, and related memory).
 
+> **Update 2026-07-21 — superseded.** The capability this note scopes has since
+> shipped in full: `asmtest_valtrace_t` is no longer a "future" format — it lives
+> in [`include/asmtest_valtrace.h`](../../../include/asmtest_valtrace.h)
+> (~:88-135 — `asmtest_valtrace_t`, `_append`, the wide-value stash, and the
+> L1/L2 API), backed by the whole `src/dataflow_*.c` tier. The current analysis
+> is [data-flow-capture.md](data-flow-capture.md); the user-facing guide is
+> [docs/guides/tracing/data-flow.md](../../guides/tracing/data-flow.md). The
+> text below is preserved as written; dated notes mark the statements that have
+> been overtaken.
+
 This note summarizes practical capture techniques, trade-offs, limitations,
 and recommended prototypes. It is intended to guide implementing low-level
 instrumentation in `asm-test` and to provide a reference for choosing a
@@ -17,6 +27,8 @@ capture strategy during analysis, debugging, malware research, or profiling.
 - Support live attach and process-launch instrumentation modes.
 - Produce structured trace artifacts compatible with the project's trace
   formats (future `asmtest_valtrace_t`) and with offline analysis tools.
+  *(Update 2026-07-21: no longer future — shipped in
+  [`include/asmtest_valtrace.h`](../../../include/asmtest_valtrace.h).)*
 
 ## Approaches
 
@@ -93,6 +105,10 @@ mapped ranges and limit reads (configurable cap, e.g., 4 KiB per pointer).
 - Emit captured events into a structured trace format (suggested prototype:
   `asmtest_valtrace_t`) compatible with `asmtest_trace_t` so analysis passes
   (def-use, taint) can be applied uniformly.
+  *(Update 2026-07-21: no longer a suggestion — `asmtest_valtrace_t` ships in
+  [`include/asmtest_valtrace.h`](../../../include/asmtest_valtrace.h) ~:88-135,
+  with append/wide-stash and the L1 def-use / L2 slicing API, and the
+  `src/dataflow_*.c` producers feed it.)*
 - Add a `tools/instrument/preload-logger.c` LD_PRELOAD prototype that logs a
   small default set (`read`, `write`, `send`, `recv`, `fread`, `fwrite`, and a
   user-specified function list) and a `tools/instrument/ptrace-attach.c`
@@ -111,8 +127,11 @@ mapped ranges and limit reads (configurable cap, e.g., 4 KiB per pointer).
 1. Add `docs/internal/analysis/capture-args-returns.md` (this document).
 2. Implement `tools/instrument/preload-logger.c` (LD_PRELOAD) that logs
    function entry/exit and small buffers into `build/traces/` as JSON lines.
+   *(Update 2026-07-21: shipped — commit `fad1548`.)*
 3. Implement `tools/instrument/ptrace-attach.c` that demonstrates live attach
    capture for a short target run (uses `PTRACE_SINGLEBLOCK` where available).
+   *(Update 2026-07-21: did not ship as such — the ptrace live-attach value
+   path landed instead as `src/dataflow_ptrace.c`.)*
 4. Wire a small parser that converts these logs into a `asmtest_valtrace_t`
    placeholder so downstream analysis (L1 def-use) can exercise on CI.
 
@@ -121,7 +140,10 @@ mapped ranges and limit reads (configurable cap, e.g., 4 KiB per pointer).
 - Which capture prototype do we want first: LD_PRELOAD (fastest) or DBI
   (most versatile)? The design above favors LD_PRELOAD for a quick win.  
 - Define the `asmtest_valtrace_t` schema and storage semantics (truncate,
-  sampling, and JSON vs binary).  
+  sampling, and JSON vs binary).
+  *(Update 2026-07-21: answered — the schema is defined and shipped in
+  [`include/asmtest_valtrace.h`](../../../include/asmtest_valtrace.h); see
+  [data-flow-capture.md](data-flow-capture.md).)*  
 - Decide safe defaults for max-pointer read sizes and whether to include
   sensitive data redaction in the logger.
 

@@ -3,7 +3,7 @@
 > **Sources.** Actioned from
 > [scoped-tracing-zeroconfig-plan.md](../plans/scoped-tracing-zeroconfig-plan.md)
 > (§Z1.2 ZC-STRONG, §Z2 ZC-Z2-LIVE),
-> [asmtrace-inline-using-plan.md](../plans/asmtrace-inline-using-plan.md) (R2), and
+> [asmtrace-inline-using-plan.md](../archive/plans/asmtrace-inline-using-plan.md) (R2), and
 > [hardware-trace-plan.md](../plans/hardware-trace-plan.md) (Phase 1 PT capture,
 > Phase 2 corrections). Written 2026-07-17. If this doc and a source disagree,
 > this doc wins (sources may be stale); if the CODE and this doc disagree,
@@ -563,7 +563,7 @@ the image recipe).
 and the hardware-trace tier section of
 [docs/guides/tracing/native-tracing.md](../../guides/tracing/native-tracing.md)
 (IntelPt inline: wired, silicon-gated live). CHANGELOG `### Added` bullet.
-Also update [asmtrace-inline-using-plan.md](../plans/asmtrace-inline-using-plan.md)'s
+Also update [asmtrace-inline-using-plan.md](../archive/plans/asmtrace-inline-using-plan.md)'s
 status line (R2 no longer "the sole remainder" once landed).
 
 **Done when.**

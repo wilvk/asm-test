@@ -1,7 +1,7 @@
 # Pin probe-mode argument/return capture — implementation
 
 > **Sources.** Actioned from
-> [intel-pin-capabilities-plan.md](../plans/intel-pin-capabilities-plan.md)
+> [intel-pin-capabilities-plan.md](../archive/plans/intel-pin-capabilities-plan.md)
 > (track **PIN-3**) and
 > [capture-args-returns.md](../analysis/capture-args-returns.md) (the "middle
 > tier" design note). Written 2026-07-17. If this doc and a source disagree,

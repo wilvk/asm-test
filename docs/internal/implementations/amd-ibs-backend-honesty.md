@@ -1,7 +1,7 @@
 # AMD IBS backend: honesty, record sizing, ABI guards, and the validation gate — implementation
 
 > **Sources.** Actioned from
-> [amd-review-followup-plan.md](../plans/amd-review-followup-plan.md) (P1, P3,
+> [amd-review-followup-plan.md](../archive/plans/amd-review-followup-plan.md) (P1, P3,
 > P6, P7, P8), the
 > [2026-07-17 AMD hardware review](../analysis/2026-07-17-amd-hardware-review.md)
 > (§2.3, §2.5, §2.6, §2.7, §4 row 3),

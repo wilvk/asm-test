@@ -16,6 +16,12 @@ data-value sibling); the managed-runtime address plumbing is planned in
 (`JIT`, `jitdump`, `ReadyToRun`, `CoreCLR`, `BCL`) are in the
 [glossary](../../project/glossary.md).*
 
+> **Update 2026-07-21 — superseded.** This investigation has since been built:
+> see
+> [native-il-bytecode-attribution.md](../implementations/native-il-bytecode-attribution.md)
+> (T1–T7 landed, commits `25fd351`…`f599777`). The analysis below is preserved
+> as written; dated notes mark the determinations that are now false.
+
 ## Question
 
 For the managed languages — and for Node/V8 and the other runtimes the project
@@ -29,8 +35,10 @@ enclosing method name?
 on one property the architecture already forces.** asm-test ships **method-level**
 naming for managed code and can map native offsets to **source lines** through one
 existing out-of-band hook; it carries **no bytecode/IL-offset representation
-anywhere**. Whether the mapping *can* be built depends on whether the managed code
-runs:
+anywhere** *(update 2026-07-21: no longer true — the `asmtest_srcmap` schema
+shipped in [`include/asmtest_trace.h`](../../../include/asmtest_trace.h)
+~:159-243, T3)*. Whether the mapping *can* be built depends on whether the
+managed code runs:
 
 - **JIT-compiled** — the native PC *is* the managed machine code, and the runtime
   emits a native-offset → IL/bytecode table you can join. Buildable.
@@ -62,13 +70,18 @@ Three facts from the shipped source set the ceiling.
    (bci), no file id, no module/function-offset field.** Expressing true
    bytecode-offset granularity would require a schema extension that exists nowhere
    in `include/` or `src/`.
+   *(Update 2026-07-21: that schema extension now exists — `asmtest_srcmap`,
+   [`include/asmtest_trace.h`](../../../include/asmtest_trace.h) ~:159-243, T3.)*
 
 3. **The managed name resolvers stop at method identity.** The perf-map parser
    `perfmap_symbol_at` reads only `start size name`
    ([src/hwtrace.c:2289](../../../src/hwtrace.c)); the jitdump reader
    `asmtest_jitdump_find` parses only `JIT_CODE_LOAD` and *skips every other record*
    — including the `JIT_CODE_DEBUG_INFO` records that carry per-address line/IL data
-   ([src/ptrace_backend.c:190](../../../src/ptrace_backend.c)). The one explicit
+   ([src/ptrace_backend.c:190](../../../src/ptrace_backend.c)).
+   *(Update 2026-07-21: no longer skipped — `JIT_CODE_DEBUG_INFO` is parsed at
+   [src/ptrace_backend.c:335](../../../src/ptrace_backend.c) and bridged into
+   the line map, T1.)* The one explicit
    IL-level statement in the analysis docs is a **negative** one: *"you need the
    JIT's IL-to-native map (rich debug info / PDB)… without it, data flow stays at
    the assembly level"* ([data-flow-capture.md](data-flow-capture.md)).
@@ -95,6 +108,10 @@ Three facts from the shipped source set the ceiling.
 | **Ruby / YJIT** | nothing wired | **Partial** (YJIT native) | `(ISEQ, insn_idx)` per block |
 | **Go / Rust / C / C++ / Zig** | method name + symbols | **N/A** — no bytecode exists | source line via DWARF / pclntab |
 
+*(Update 2026-07-21: the .NET row's "unbuilt" and the JVM row are overtaken —
+the .NET `0x20000` listener shipped (T5, `dfd5a85`) and a JVMTI bci agent +
+`java-bci` lane shipped (T6, `a998179`); see the banner at top.)*
+
 ## Per-runtime findings
 
 ### .NET / CoreCLR — the cleanest win
@@ -118,6 +135,10 @@ implementation:
   `JIT_CODE_LOAD` (debug-info is a standing TODO), and the perf `JIT_CODE_DEBUG_INFO`
   record is a *source-file/line/column* table anyway, not an IL-offset map. So the
   IL route is the ETW/EventPipe/profiler surface, not the jitdump.
+  *(Update 2026-07-21: the reader half of this gap is closed — `JIT_CODE_DEBUG_INFO`
+  records are now parsed ([src/ptrace_backend.c:335](../../../src/ptrace_backend.c))
+  and bridged to the line map, T1; the point that the .NET IL route is the
+  EventPipe surface stands, and that surface shipped too — see below.)*
 - **The join is two events, keyed `(MethodID, ReJITID)`.** `MethodILToNativeMap`
   carries no start address; you correlate it to `MethodLoadVerbose_V2` to recover
   `MethodStartAddress`, then `native_off = ip − MethodStartAddress` and binary-search
@@ -132,6 +153,10 @@ Today the in-proc `EventListener` subscribes only `JITKeyword 0x10`;
 [scoped-inprocess-tracing.md](scoped-inprocess-tracing.md) (§ "runtime-events
 route") names `0x20000` as a *plan*, not shipped. `NativeAOT` is the exception (no
 runtime ICorProfiler IL map; only limited AOT DWARF).
+*(Update 2026-07-21: shipped — the in-proc `MethodILToNativeMap` (keyword
+`0x20000`) listener landed in
+[bindings/dotnet/hwtrace/HwTraceProgram.cs](../../../bindings/dotnet/hwtrace/HwTraceProgram.cs)
+~:1530; T5, commit `dfd5a85`.)*
 
 **Granularity ceiling:** enclosing IL offset, not one IL offset per native
 instruction — entries are recorded only at IL-instruction / stack-empty / call-site
@@ -158,6 +183,10 @@ The bridge is JVMTI `CompiledMethodLoad`, which hands two things per nmethod:
 (`addr, line, file`) records it already receives.* That is the cheap interim path:
 extend the jitdump parser, get address→source-line with no new agent (at the cost of
 flattened inlines and line-not-bci granularity).
+*(Update 2026-07-21: both halves have shipped — the jitdump parser now consumes
+`JIT_CODE_DEBUG_INFO` ([src/ptrace_backend.c:335](../../../src/ptrace_backend.c),
+T1), and a JVMTI bci agent + `java-bci` lane landed for true bci granularity
+(T6, commit `a998179`).)*
 
 Caveats (verified): the `AddrLocationMap` is **optional** (may be `NULL`), its
 entries are coarse ranges at debug points (safepoint polls, call return addresses,

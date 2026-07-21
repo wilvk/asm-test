@@ -128,6 +128,11 @@ finding is a **split**, and it is not what the plan assumed:
    Either way, the plan's blanket "options (a)/(b)/(c) keep the tier LGPL-clean **as
    long as we avoid drwrap**" claim is **too weak**: it must additionally avoid `umbra`
    (or accept LGPL for it). Updated in the plan's License-posture section and Increment 4.
+   *(Pointer, 2026-07-21: the "built to avoid umbra" stance still holds by default, but
+   opt-in compliance machinery to include LGPL-2.1 `drwrap`/`umbra` under the project's
+   MIT terms was later added — commit `0a76717`,
+   [licenses/LGPL-2.1.txt](../../../licenses/LGPL-2.1.txt). The finding itself is
+   unchanged.)*
 3. **No change to the shipped Increment-1 client.** It stays on the raw core API,
    untouched, as the oracle/fallback until Increment 3 regression-proves its replacement
    byte-for-byte. `make drtrace-client` (both shipped `.so`s) was reconfirmed to build

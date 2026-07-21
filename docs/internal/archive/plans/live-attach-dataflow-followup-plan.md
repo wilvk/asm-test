@@ -1,6 +1,6 @@
 # asm-test — live-attach data-flow: post-implementation follow-up plan
 
-The next steps **after** [live-attach-dataflow-plan.md](../archive/plans/live-attach-dataflow-plan.md) lands
+The next steps **after** [live-attach-dataflow-plan.md](live-attach-dataflow-plan.md) lands
 its native + JIT-aware live-attach value producer and the asmspy Data flow window. That plan
 deliberately ships the **conservative core**: direct single-step value capture (proven, but
 it perturbs the stepped thread), scoped to a region, with managed memory def-use left GC-
@@ -8,13 +8,27 @@ uncanonicalized. This plan lands the improvements that were held out of the crit
 each one either **reduces perturbation**, **raises fidelity on managed targets**, or
 **broadens the target set** — ordered so the highest-value, lowest-risk work comes first.
 
+> **Status (2026-07-21): everything this plan owns is LANDED or brief-owned — plan archived.**
+> F5's hardware gate has been met: commit `c7b4ef7` +
+> [intel-hardware-validation.md](../../intel-hardware-validation.md) record `make dataflow-pt-live`
+> **29/29, stable ×3**, on a bare-metal Intel Core i7-8559U, with the F5 replay **byte-identical
+> to the emulator L0 at zero single-steps** on both walks — the plan's own exit criterion. The
+> brief [dataflow-pt-replay-tier.md](../../implementations/dataflow-pt-replay-tier.md) is ✅ 5/5.
+> The remaining carryovers are brief-owned: F3's arm64 live validation by
+> [asmspy-aarch64-support.md](../../implementations/asmspy-aarch64-support.md) (◐ 5/7); F7's
+> def-use/slice + code-image carryover CLOSED by
+> [dataflow-bindings-slice-codeimage.md](../../implementations/dataflow-bindings-slice-codeimage.md)
+> ✅ 4/4. The 2026-07-17 reconciliation below is retained for provenance.
+
 > Status *(reconciled 2026-07-17, after F1 increment 2)*: **F3 LANDED (asmspy `--watch`); F1
 > increments 1+2 LANDED (pure-method block-step tier + vector breadth — the YMM/ZMM carryover is
 > CLOSED, with AVX-instruction replay recorded as an upstream Unicorn/QEMU gate); F4 increments
 > 1+2 LANDED — its exit criterion is MET on a live attach; **F2 increment 1 LANDED — the syscall
 > half of record-and-inject, exit criterion MET**; **F6 increment 1 LANDED — the gap barrier,
 > with whole-process DECLINED on measured arithmetic rather than deferred**; **F7 LANDED — all
-> ten bindings, every one on a real attach. So F5 alone is open, and only on hardware.** The two bets this plan was written around
+> ten bindings, every one on a real attach.** ~~So F5 alone is open, and only on hardware.~~
+> *(Superseded 2026-07-21: F5's oracle match ran green on bare-metal Intel PT — see the status
+> note above.)* The two bets this plan was written around
 > have both been settled in its favour. F1 was the marquee item and carried a spike increment
 > because its value-reconstruction claim was the one genuinely **unproven** bet in the whole
 > design — that spike came back **GO** (byte-identical to single-step by literal `memcmp`, ~6×
@@ -25,10 +39,11 @@ each one either **reduces perturbation**, **raises fidelity on managed targets**
 > the `step` stamp MUST come from the profiler-sampled S0, because the "counter freezes across
 > the fence" assumption measured **FALSE**), increment 1 landed the join, and increment 2 chained
 > the same-window GC collapse it landed with — `make docker-gccanon-attach`, 37 assertions, each
-> half proven by a negative control. F5 remains **hardware-gated** on bare-metal Intel PT and
+> half proven by a negative control. ~~F5 remains **hardware-gated** on bare-metal Intel PT and
 > self-skips; the dev boxes are AMD, so it is a ceiling to demonstrate elsewhere, not a default
-> path. House rule unchanged: foreign targets are never killed; every tier self-skips where its
-> substrate is absent.
+> path.~~ *(Demonstrated 2026-07-21 on the bare-metal Core i7-8559U — commit `c7b4ef7`;
+> off-PT hosts still self-skip.)* House rule unchanged: foreign targets are never killed; every
+> tier self-skips where its substrate is absent.
 
 ---
 
@@ -42,7 +57,7 @@ least-perturbing PT-derived value path where the silicon allows; (F6) broaden to
 whole-process; (F7) expose it through the language bindings.
 
 **Non-goals** — production whole-process **taint** over managed code (that remains the
-DynamoRIO tier, [dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md)); this plan
+DynamoRIO tier, [dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md)); this plan
 stays on the out-of-band observe-don't-instrument side. Windows / macOS attach (Linux
 x86-64 first, AArch64 where the primitive exists).
 
@@ -171,7 +186,7 @@ x86-64 first, AArch64 where the primitive exists).
 
 > **UPDATE 2026-07-17 — F1 increment 1 CANNOT be CI-gated on GitHub runners, and now we know why.**
 > It was an orphan until 2026-07-17 (`dataflow-blockstep-test` was defined at
-> [mk/dataflow.mk](../../../mk/dataflow.mk) but omitted from the `dataflow-test` aggregate, and
+> [mk/dataflow.mk](../../../../mk/dataflow.mk) but omitted from the `dataflow-test` aggregate, and
 > `grep blockstep .github/` returned zero). It is now chained into the aggregate, and the aggregate
 > runs in CI via `docker-dataflow-attach` — but the block-step tier **self-skips there**:
 >
@@ -222,23 +237,23 @@ cross-thread deadlock window on a live runtime. Decouple values from stops.
 
 - Drive the region with **`PTRACE_SINGLEBLOCK`** — one `#DB` per taken branch, an order of
   magnitude fewer stops (the library already block-steps for control flow,
-  [asmtest_ptrace_trace_attached_blockstep](../../../include/asmtest_ptrace.h#L125),
-  [ptrace_backend.c:1761](../../../src/ptrace_backend.c#L1761); flagged as an unapplied
+  [asmtest_ptrace_trace_attached_blockstep](../../../../include/asmtest_ptrace.h#L125),
+  [ptrace_backend.c:1761](../../../../src/ptrace_backend.c#L1761); flagged as an unapplied
   perturbation lever).
 - At each boundary add a **`GETREGS` + XSTATE** read (the existing block-step reads only
   PC + the return register via `read_pc_ret`,
-  [ptrace_backend.c:1829](../../../src/ptrace_backend.c#L1829) — this is *new* capture, not
+  [ptrace_backend.c:1829](../../../../src/ptrace_backend.c#L1829) — this is *new* capture, not
   free reuse), giving a real ground-truth register snapshot at every branch. *(Both halves are
   now landed: `GETREGS` in increment 1, `NT_X86_XSTATE` in increment 2 — the latter paying for
   the read only where the region's scan says it touches vector state. Note the XSTATE component
   offsets MUST come from `CPUID.0xD`; they are not constants, and this Zen 5's layout
   (576/832/896/1408) differs from the commonly-quoted one because its XCR0 omits MPX.)*
 - **Replay the straight-line block** through the Unicorn L0 producer
-  ([src/dataflow_emu.c](../../../src/dataflow_emu.c)), seeded with that real register state
+  ([src/dataflow_emu.c](../../../../src/dataflow_emu.c)), seeded with that real register state
   and memory faulted in lazily from the tracee, to reconstruct the per-instruction values
   *between* boundaries. The endpoints are always real observations, so replay only ever
   fills a bounded pure interior — the plan's Phase-3b idea
-  ([data-flow-tracing-plan.md:183-186](../archive/plans/data-flow-tracing-plan.md#L183)), promoted to the
+  ([data-flow-tracing-plan.md:183-186](data-flow-tracing-plan.md#L183)), promoted to the
   primary perturbation win.
 - **Region-granularity purity classification** to avoid emulating through the OS: static-scan
   the method's (time-correct) bytes once for `syscall`/`sysenter`/`int 0x80`/`rdtsc`/
@@ -286,7 +301,7 @@ silently wrong.
 >
 > **THE PLAN'S "reuse asmspy's syscall decoder" PREMISE DOES NOT HOLD, and did not need to.**
 > asmspy's decoder is a NUMBER→name table plus a path-argument formatter **for display**
-> ([cli/gen-syscall-names.sh](../../../cli/gen-syscall-names.sh)); it has no model of output
+> ([cli/gen-syscall-names.sh](../../../../cli/gen-syscall-names.sh)); it has no model of output
 > buffers, which is the only thing record-and-inject would have needed from it. It is also in
 > `cli/`, which ships no such surface. Nothing was reused, and the tier is **safer** for it: a
 > per-syscall table is exactly the fabrication surface this tier exists to avoid.
@@ -394,7 +409,7 @@ Let block-step + replay cover **impure** methods too, instead of falling back to
   decode is reused). During replay, when the emulator reaches that syscall, **inject** the
   recorded result and memory delta rather than executing it — the rr / WinDbg-TTD model, the
   "full input-capture record/replay" escalation the base plan names
-  ([data-flow-tracing-plan.md:184-186](../archive/plans/data-flow-tracing-plan.md#L184)).
+  ([data-flow-tracing-plan.md:184-186](data-flow-tracing-plan.md#L184)).
 - Same treatment for nondeterministic instructions (`rdtsc`/`rdrand`/`cpuid`): record the
   real retired value on the forward pass, inject on replay.
 
@@ -423,7 +438,7 @@ value) is documented as the remaining limit and detected via the real endpoints.
 
 ---
 
-## F3 — Hardware data-watchpoint targeted mode *(**LANDED 2026-07-15** — asmspy --watch; AArch64 analog planned)*
+## F3 — Hardware data-watchpoint targeted mode *(**LANDED 2026-07-15** — asmspy --watch; AArch64 analog LANDED since — remaining arm64 validation owned by [asmspy-aarch64-support.md](../../implementations/asmspy-aarch64-support.md) ◐ 5/7)*
 
 > **UPDATE 2026-07-15 — LANDED as `asmspy --watch`.** `asmspy --watch <pid> <addr|func+off> [--rw] [--len=N]
 > [--json]` arms an x86 data watchpoint (DR0-3; DR7 R/W=01 write / 11 r/w, LEN 1/2/4/8) via `PTRACE_POKEUSER`,
@@ -431,8 +446,12 @@ value) is documented as the remaining limit and detected via the real endpoints.
 > faulting PC resolved to function+offset. **Per-thread arming across `/proc/<pid>/task/*` + `PTRACE_O_TRACECLONE`**
 > (the spike's mandated fix) — verified capturing writes on a WORKER thread (tid ≠ leader). New
 > `asmspy_engine_watch` lives in `cli/`; `src/ptrace_backend.c` untouched. Two-phase detach so the target
-> survives; self-skips on POKEUSER-refused / qemu / non-x86-64. `make docker-cli` cli-smoke PASS. Carryover:
-> the AArch64 `NT_ARM_HW_WATCH`/`DBGWCR` analog. Increment-0 spike evidence retained below.
+> survives; self-skips on POKEUSER-refused / qemu / non-x86-64. `make docker-cli` cli-smoke PASS. ~~Carryover:
+> the AArch64 `NT_ARM_HW_WATCH`/`DBGWCR` analog.~~ — **LANDED since**: the analog ships at
+> [cli/asmspy_engine.c:4998-5021](../../../../cli/asmspy_engine.c#L4998) (`NT_ARM_HW_WATCH`
+> `DBGWVR`/`DBGWCR` slot-0 arming); the remaining arm64 **live validation** is owned by
+> [asmspy-aarch64-support.md](../../implementations/asmspy-aarch64-support.md) (◐ 5/7).
+> Increment-0 spike evidence retained below.
 
 > **SPIKE — GO, 2026-07-15.** Data watchpoints work exactly as bet: a WRITE watchpoint (`DR7=0x90001`:
 > R/W0=01, LEN0=8B) on a chosen global captured all 16 stores with the correct value (`process_vm_readv`)
@@ -446,7 +465,7 @@ value) is documented as the remaining limit and detected via the real endpoints.
 > labelling, and the AArch64 `NT_ARM_HW_WATCH`/`DBGWCR` analog.
 
 The repo wires only **execution** breakpoints today (`set_hw_bp` hard-codes `DR7 = 0x1`,
-i.e. `R/W0 = 00`, [ptrace_backend.c:485-493](../../../src/ptrace_backend.c#L485)). The x86
+i.e. `R/W0 = 00`, [ptrace_backend.c:485-493](../../../../src/ptrace_backend.c#L485)). The x86
 debug registers also support **data watchpoints**: `R/Wn = 01` (write) or `11` (read/write)
 and `LENn` = 1/2/4/8 bytes — **4** of them, touching **no code**, running at **native speed
 between hits**. This is the only non-code-modifying, non-single-step primitive that observes
@@ -458,12 +477,12 @@ memory data flow, and enabling it is a one-line DR7 change plus a value read at 
   resolved to a function). Answers "**who touched this field, and with what value**" — a
   data-flow question nothing else in asmspy can, at near-zero perturbation.
 - AArch64 analog via the `NT_ARM_HW_WATCH` regset (mirrors the existing `NT_ARM_HW_BREAK`
-  path, [ptrace_backend.c:502-550](../../../src/ptrace_backend.c#L502)).
+  path, [ptrace_backend.c:502-550](../../../../src/ptrace_backend.c#L502)).
 
 **Exit criteria:** watch a chosen location on a live process and report every read/write with
 its value and function at native speed; the 4-location / 1-2-4-8-byte caps are documented and
 enforced; self-skips under qemu-user (which emulates zero breakpoint slots,
-[ptrace_backend.c:527-529](../../../src/ptrace_backend.c#L527)).
+[ptrace_backend.c:527-529](../../../../src/ptrace_backend.c#L527)).
 
 ---
 
@@ -487,9 +506,9 @@ enforced; self-skips under qemu-user (which emulates zero breakpoint slots,
 > vacated slot.
 >
 > **Two prior spikes settled the design** and are recorded in
-> [f4-attach-profiler-probe-findings.md](../analysis/f4-attach-profiler-probe-findings.md) (the
+> [f4-attach-profiler-probe-findings.md](../../analysis/f4-attach-profiler-probe-findings.md) (the
 > feed: a profiler CAN attach to a process we did not launch) and
-> [f4-gc-fence-freeze-probe-findings.md](../analysis/f4-gc-fence-freeze-probe-findings.md) (the
+> [f4-gc-fence-freeze-probe-findings.md](../../analysis/f4-gc-fence-freeze-probe-findings.md) (the
 > stamp: `step` MUST come from the profiler-sampled S0, because the "step counter freezes across
 > the fence" assumption measured FALSE — single-stepping a futex-blocked thread is what un-blocks
 > it).
@@ -517,7 +536,7 @@ enforced; self-skips under qemu-user (which emulates zero breakpoint slots,
 > trace's `steps_len` *and* `recs_len` at the start **and** end of every fence, and for the window's
 > GCs — selected by `gc_seq`, so the victim's out-of-window fragmentation GCs cannot pollute it —
 > all of them are identical, so nothing was appended across the fences **or the gaps between them**.
-> (Structurally it could not be otherwise: [dataflow_ptrace.c](../../../src/dataflow_ptrace.c) runs
+> (Structurally it could not be otherwise: [dataflow_ptrace.c](../../../../src/dataflow_ptrace.c) runs
 > a call-out via int3 + `PTRACE_CONT` and records nothing over the helper, so the producer is blocked
 > in `waitpid` for the whole window. The samples travel a 20 µs mirror, so they corroborate that
 > structural fact rather than replace it.)
@@ -556,7 +575,7 @@ enforced; self-skips under qemu-user (which emulates zero breakpoint slots,
 > address-identity model): a pre-window record touching memory that a GC then slides a *live* object
 > into aliases that object. That exists in the one-GC case too and is retired only by real object
 > identity (`GCBulkType`/`Node`/`Edge`), which
-> [asmtest_valtrace.h](../../../include/asmtest_valtrace.h#L316) explicitly defers.
+> [asmtest_valtrace.h](../../../../include/asmtest_valtrace.h#L316) explicitly defers.
 
 > **UPDATE 2026-07-16 — F4's stated blocker is obsolete, and the plan's own risk note was
 > wrong.** This item was written as "hard-gated on a runtime feed the .NET in-proc
@@ -571,10 +590,10 @@ enforced; self-skips under qemu-user (which emulates zero breakpoint slots,
 > concern in the parent plan's risk list for this route.
 >
 > It is not speculative. The DR taint tier's Increment 7 **ships it**: the profiler feeds
-> `at_gc_remap_live` ([dataflow_dr_client_inlined.c:732](../../../src/dataflow_dr_client_inlined.c#L732))
+> `at_gc_remap_live` ([dataflow_dr_client_inlined.c:732](../../../../src/dataflow_dr_client_inlined.c#L732))
 > through a POSIX-shm handshake and remapped 60,021 real ranges on a live compacting GC under
 > DynamoRIO, with `make docker-gcprofiler-probe` proving profiler/DR coexistence. Findings:
-> [gc-move-range-extraction-findings.md](../analysis/gc-move-range-extraction-findings.md).
+> [gc-move-range-extraction-findings.md](../../analysis/gc-move-range-extraction-findings.md).
 >
 > **So F4 is now "point a proven feed at a landed transform."** Both halves exist; only the
 > join is missing. Note the two tiers need genuinely different plumbing from the same
@@ -592,9 +611,9 @@ The base plan leaves managed **memory** def-use GC-uncanonicalized: a store befo
 compaction (old address) and its matching load after (new address) look unrelated, so the
 edge is lost, and an object reusing the vacated address forges a false edge. The **pure
 transform is already landed** — `asmtest_gcmove_canonicalize`
-([asmtest_valtrace.h:353](../../../include/asmtest_valtrace.h#L353)),
-[src/dataflow_gcmove.c](../../../src/dataflow_gcmove.c), whose only callers today are its unit
-test [examples/test_dataflow_gcmove.c](../../../examples/test_dataflow_gcmove.c) — what is
+([asmtest_valtrace.h:353](../../../../include/asmtest_valtrace.h#L353)),
+[src/dataflow_gcmove.c](../../../../src/dataflow_gcmove.c), whose only callers today are its unit
+test [examples/test_dataflow_gcmove.c](../../../../examples/test_dataflow_gcmove.c) — what is
 missing is the live feed.
 
 - Extract concrete `{old_base, new_base, len}` triples **from an in-process
@@ -631,16 +650,16 @@ control, re-validated for the live data path).
 > there) is reproduced as the NEGATIVE CONTROL and then SEVERED by object identity — green over two
 > consecutive runs. The snapshot-space convention (GCBulkNode addresses are POST-relocation, so the
 > dump GC's own ranges belong in the translation set) was **measured, not assumed** — see
-> [f4-objid-snapshot-space-findings.md](../analysis/f4-objid-snapshot-space-findings.md). Increments
+> [f4-objid-snapshot-space-findings.md](../../analysis/f4-objid-snapshot-space-findings.md). Increments
 > 1+2 correctly shipped ADDRESS identity; this is the next increment atop them, not a fix to them.
 
 ---
 
-## F5 — PT + code-image + replay: the least-perturbing ceiling *(**decode→replay bridge LANDED + CI-validated 2026-07-19**; live capture **wiring-complete, hardware-unvalidated** — Intel-PT-gated)*
+## F5 — PT + code-image + replay: the least-perturbing ceiling *(**LANDED + SILICON-VALIDATED 2026-07-21** — decode→replay bridge CI-validated 2026-07-19; live capture validated on bare-metal Intel PT, commit `c7b4ef7`; [dataflow-pt-replay-tier.md](../../implementations/dataflow-pt-replay-tier.md) ✅ 5/5)*
 
 The conceptual minimum-perturbation path from the design doc ("stop instrumenting and start
 observing"): reconstruct the **exact executed instruction stream** out of band via Intel PT /
-CoreSight ([asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h)), supply time-correct bytes
+CoreSight ([asmtest_hwtrace.h](../../../../include/asmtest_hwtrace.h)), supply time-correct bytes
 from the code-image recorder, then **replay that exact path** through the emulator to derive
 values — zero code touch, zero single-step, owns no signals, never faults a JIT page. This is
 to the JIT what the base plan's single-step is to native: the "safe on any JIT, when the
@@ -654,7 +673,7 @@ values** — the values come entirely from the replay, so F5 inherits F1/F2's OS
 tiering.
 
 > **STATUS 2026-07-19 (actioned as
-> [dataflow-pt-replay-tier.md](../implementations/dataflow-pt-replay-tier.md)).** The
+> [dataflow-pt-replay-tier.md](../../implementations/dataflow-pt-replay-tier.md)).** The
 > decode→rebase→materialize→replay **bridge is LANDED and CI-validated with no PT
 > hardware**: `src/dataflow_pt.c` (`asmtest_dataflow_pt_replay_path` +
 > `asmtest_dataflow_pt_replay`) fills the shared `asmtest_valtrace_t` **byte-identically to
@@ -670,7 +689,7 @@ tiering.
 > **The LIVE foreign-pid half (T4) is wiring-complete but hardware-unvalidated**, gated now on
 > ONE un-installable prerequisite: bare-metal Intel PT silicon (the `intel_pt` PMU with
 > `perf_event_paranoid < 0` / `CAP_PERFMON`). Its second gate is **resolved** — the sibling
-> [intel-pt-attach-foreign-pid.md](../implementations/intel-pt-attach-foreign-pid.md) landed
+> [intel-pt-attach-foreign-pid.md](../../implementations/intel-pt-attach-foreign-pid.md) landed
 > ☑5/5, so its `asmtest_hwtrace_pt_attach_begin/track/poll/end` capture arm is in the tree, and
 > `examples/test_dataflow_pt.c`'s live case now CONSUMES it (2026-07-20): a runtime
 > `asmtest_hwtrace_available(ASMTEST_HWTRACE_INTEL_PT)` probe replaces the old never-defined
@@ -682,6 +701,15 @@ tiering.
 > is `make dataflow-pt-live` (`ASMTEST_REQUIRE_PT=1`), which reddens a supposed-PT box whose
 > PMU is silently hidden. Proving command on silicon:
 > `make dataflow-pt-live` (or `ASMTEST_REQUIRE_PT=1 make dataflow-pt-test`) on the Intel-PT runner.
+>
+> **VALIDATED 2026-07-21 — the oracle match RAN on silicon.** Commit `c7b4ef7` +
+> [intel-hardware-validation.md](../../intel-hardware-validation.md): `make dataflow-pt-live` →
+> **29/29, stable across 3 consecutive runs**, on a bare-metal Intel Core i7-8559U (Coffee
+> Lake). Both live walks (`live(20,22)`, `live(200,1)`) captured one foreign-pid region
+> invocation with **zero single-steps of the target**, the PT-decoded path equalled the
+> single-step oracle path, and the F5 replay value trace was **byte-identical to the emulator
+> L0** — the exit criterion above, met as written. The brief
+> [dataflow-pt-replay-tier.md](../../implementations/dataflow-pt-replay-tier.md) is ✅ 5/5.
 
 ---
 
@@ -689,10 +717,10 @@ tiering.
 
 Lift the scoped-region bound. The windowed steppers + the addr-channel already follow a live
 JIT's methods across a whole window for control flow
-([asmtest_ptrace_trace_attached_windowed](../../../include/asmtest_ptrace.h#L142)); extend
+([asmtest_ptrace_trace_attached_windowed](../../../../include/asmtest_ptrace.h#L142)); extend
 the value producer onto that windowed frame for a **survey** (sampled) def-use over a whole
 window rather than one region. Where the ask is production whole-process **taint**, this hands
-off to [dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md) (whose in-band L0 value
+off to [dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md) (whose in-band L0 value
 producer already landed) rather than pushing single-step past its cost envelope.
 
 **Exit criteria:** a windowed capture produces a def-use survey spanning multiple JIT'd
@@ -756,7 +784,7 @@ method ranges of a live process; the hand-off boundary to the DR taint tier is d
 > classify. An unbounded window is an unbounded bill. **So the hand-off is not a preference,
 > it is arithmetic** — ptrace for a BOUNDED window answered exactly off a live process with
 > no code modification; **DynamoRIO for whole-process breadth**
-> ([dynamorio-taint-tier-plan.md](../archive/plans/dynamorio-taint-tier-plan.md)). Lifting
+> ([dynamorio-taint-tier-plan.md](dynamorio-taint-tier-plan.md)). Lifting
 > the window further does not approach whole-process; it just makes the bill bigger while
 > re-opening every hazard region scoping dodges.
 >
@@ -772,13 +800,13 @@ method ranges of a live process; the hand-off boundary to the DR taint tier is d
 > a location at risk the barrier must then decline to decide (→ `truncated`). That was a
 > **pre-existing gap in this producer's register map**, surfaced by F6, not introduced by it —
 > **CLOSED** by
-> [dataflow-producer-correctness.md T1](../implementations/dataflow-producer-correctness.md#T1):
+> [dataflow-producer-correctness.md T1](../../implementations/dataflow-producer-correctness.md#T1):
 > `gp_value` and `dfp_alias_shape` now fold R8D/R8W/R8B..R15D/R15W/R15B to their 64-bit
 > container in both the scoped producer and the blockstep tier's own copy. (4) **No vector
 > clobber across a gap** is
 > exercised: the barrier diffs XMM/YMM (one batched snapshot per gap) but no fixture makes the
 > glue clobber a vector register the survey recorded. **CLOSED** by
-> [dataflow-producer-correctness.md T3](../implementations/dataflow-producer-correctness.md#T3):
+> [dataflow-producer-correctness.md T3](../../implementations/dataflow-producer-correctness.md#T3):
 > `test_window_vec_gap` (`examples/test_dataflow_ptrace.c`) makes the glue clobber a live `xmm0`
 > the survey recorded and asserts the GAP step carries the real post-glue value out of `wide[]`,
 > and the post-gap read resolves to it rather than the stale pre-gap write. (T3 also closed a
@@ -807,7 +835,7 @@ method ranges of a live process; the hand-off boundary to the DR taint tier is d
 > wrap `asmtest_dataflow_ptrace_attach_pid` / `_pid_tid` / `_jit` on the opaque-handle pattern
 > (methods on each language's `ValueTrace`, which owns the `asmtest_valtrace_t*`), and every one
 > of them **really attaches to a live foreign process** — none stops at "the symbol resolves".
-> Per-lane totals via `make docker-dataflow-<lang>` (new, in [mk/dataflow.mk](../../../mk/dataflow.mk)):
+> Per-lane totals via `make docker-dataflow-<lang>` (new, in [mk/dataflow.mk](../../../../mk/dataflow.mk)):
 > python 17, cpp 48, node 44, ruby 36, lua 36, zig 36, rust 36, go 36, java 36, dotnet 36 —
 > 20+ live assertions per lane, 0 skips, 0 failures.
 >
@@ -819,7 +847,7 @@ method ranges of a live process; the hand-off boundary to the DR taint tier is d
 > it was never load-bearing: the producer self-stubs to `ENOSYS` off Linux x86-64, so the lib
 > still links on every host, and Capstone/libbpf were already this lib's dependencies.
 >
-> **The shared victim** ([bindings/dataflow_victim.c](../../../bindings/dataflow_victim.c)) is what
+> **The shared victim** ([bindings/dataflow_victim.c](../../../../bindings/dataflow_victim.c)) is what
 > keeps ten lanes honest with one fixture: same `df_chain` bytes as the native suite, publishes
 > `base=/len=/pid=` on stdout, loops calling the region, bumps a counter file so a caller can
 > prove it SURVIVED the detach. Its `a`/`b` come from **argv**, which is the anti-vacuity hinge —
@@ -851,13 +879,15 @@ method ranges of a live process; the hand-off boundary to the DR taint tier is d
 > valtrace→defuse→slice pipeline (`ValueTrace`)" was **false**. Only python/cpp/node did; the other
 > seven wrapped `gcmove_canon` + `method_resolve_pc` and nothing else (16/16 = 8 + 8). Those seven
 > now have a minimal `ValueTrace` (the opaque handle + attach + step/record counts), so the name
-> means the same thing everywhere. The def-use/slice half stays unwrapped in them for a real
+> means the same thing everywhere. ~~The def-use/slice half stays unwrapped in them for a real
 > reason: the slice seed crosses **by value** as an `at_val_rec_t`, which Fiddle (and friends) have
-> no type for. That is a pre-existing gap, not F7's — and the natural next increment.
+> no type for. That is a pre-existing gap, not F7's — and the natural next increment.~~ —
+> **CLOSED**: [dataflow-bindings-slice-codeimage.md](../../implementations/dataflow-bindings-slice-codeimage.md)
+> ✅ 4/4 (its T2 wraps defuse/forward/backward-slice in all seven).
 
 Wrap the new attach entry points in the dynamic-FFI bindings, the way the L0/L1/L2 ValueTrace
 pipeline is already wrapped for Python/C++/Node
-([data-flow-tracing-plan.md:237](../archive/plans/data-flow-tracing-plan.md#L237)) — opaque-handle pattern,
+([data-flow-tracing-plan.md:237](data-flow-tracing-plan.md#L237)) — opaque-handle pattern,
 each gated by a `make dataflow-<lang>-test` lane (host or docker) as the other seven bindings
 already are for the pure helpers.
 
@@ -869,9 +899,12 @@ least the native path in their pinned toolchain images.
 > attached pid; `make dataflow-<lang>-test` covers it for all ten (each with a `docker-dataflow-<lang>`
 > lane in its pinned image); and the seven docker-gated bindings do more than "wrap the native
 > path" — they exercise a real attach against a live victim, with the same 20-assertion battery.
-> Carryover: the def-use/slice surface for the seven (blocked on by-value `at_val_rec_t`
+> ~~Carryover: the def-use/slice surface for the seven (blocked on by-value `at_val_rec_t`
 > marshalling, not on F7), and `attach_pid_versioned`'s code-image argument, which every binding
-> passes as NULL because the code-image recorder is its own binding surface.
+> passes as NULL because the code-image recorder is its own binding surface.~~ — **CLOSED** by
+> [dataflow-bindings-slice-codeimage.md](../../implementations/dataflow-bindings-slice-codeimage.md)
+> ✅ 4/4: T2 wraps defuse/forward/backward-slice in all seven, and T4 lands the `CodeImage`
+> surface plus a real `img` argument to `attach_pid_versioned` in all ten.
 
 ---
 
@@ -896,6 +929,8 @@ least the native path in their pinned toolchain images.
   update above.
 - **F5's hardware is absent** on most cloud/GitHub-hosted VMs (Intel PT needs Intel bare
   metal); it is a ceiling to demonstrate on the right box, not a default path.
+  *(Demonstrated 2026-07-21 on the bare-metal Core i7-8559U — commit `c7b4ef7`,
+  [intel-hardware-validation.md](../../intel-hardware-validation.md); CI still self-skips.)*
 - **The deadlock residual persists** across all of these — block-step and replay *shrink* the
   perturbation window; only a fully out-of-band stream (F5) or a paused/single-threaded target
   removes it entirely.
@@ -917,8 +952,9 @@ least the native path in their pinned toolchain images.
 > `asmtest_defuse_build`. After F4, **F7** (bindings) is the cheapest remaining item and is
 > pure software; ~~**F2** extends F1's replay to impure methods~~ (**increment 1 LANDED** — the
 > syscall half; increment 2, rdtsc/cpuid via a hw exec breakpoint, is the open remainder);
-> **F6** is scope-gated; **F5**
-> waits on silicon this project does not have.
+> **F6** is scope-gated; ~~**F5**
+> waits on silicon this project does not have~~ (**validated 2026-07-21** on a bare-metal
+> Intel box — commit `c7b4ef7`, `make dataflow-pt-live` 29/29 ×3).
 >
 > The original recommendation is retained below for provenance.
 

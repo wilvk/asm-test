@@ -2,7 +2,7 @@
 
 > **Context (2026-07-20).** This plan actions a fresh review of the AMD tracing
 > surface performed after the [2026-07-17 adversarial review](../analysis/2026-07-17-amd-hardware-review.md)
-> and its [follow-up plan](amd-review-followup-plan.md) had largely landed
+> and its [follow-up plan](../archive/plans/amd-review-followup-plan.md) had largely landed
 > (`amd-ibs-backend-honesty` + `amd-branchsnap-lbr-docs` series, 2026-07-18..20).
 > The round-1 findings P1–P8 are shipped; this round covers what a re-audit of
 > the *current* HEAD surfaced — two genuinely new code defects the earlier passes
@@ -95,8 +95,15 @@ value is honest gaps, and this is a silent one.
 Five separate documents assert things the current code contradicts. Each is a
 pure doc edit; group them.
 
+> **Note (2026-07-21).** The
+> [2026-07-21 whole-repo review](../reviews/2026-07-21-repo-review.md) folds its
+> doc-drift findings **D1/D2/D3** into this T2. **D2** in particular reshapes
+> **T2(d)**: the review wants
+> [docs/amd_tracing_review.md](../../amd_tracing_review.md) **moved under
+> `docs/internal/`**, not just banner-fixed.
+
 **(a) Round-1 follow-up plan is stale.**
-[amd-review-followup-plan.md](amd-review-followup-plan.md) still tags **P1, P2,
+[amd-review-followup-plan.md](../archive/plans/amd-review-followup-plan.md) still tags **P1, P2,
 P3, P4, P5, P6, P7, P8** `*(planned)*` though all shipped (verified at HEAD:
 `b16f087`, `0d1dc42`, `0ded0d6`, `f58c096`, `3e5454a`, header install,
 `0b60060`, `19237a2`). A reader is told the release-blocking P1 is unrepaired and

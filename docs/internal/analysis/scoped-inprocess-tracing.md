@@ -239,6 +239,14 @@ Four qualifications shape what comes back — the first is a real semantic trap:
    an `AsmTrace` inside an `AsmTrace`, or two threads scoping concurrently, degrades to
    the outer/first one. Lifting this means per-thread capture slots, a known MVP
    boundary.
+   **Update 2026-07-21 — half-stale.** The single-step backend now ships a
+   per-thread, nesting-safe handle-keyed scope API
+   ([include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h) ~:297-346 —
+   "nested begin/end pairs on one thread compose … via a per-thread TLS range
+   stack"; via
+   [zeroconfig-scoped-tracing-hardening.md](../implementations/zeroconfig-scoped-tracing-hardening.md)).
+   The PT and AMD-LBR backends still use the single process-global slot, so
+   this qualification continues to hold for them.
 
 Under the **single-step fallback** the answer flips to **no** — the envelope narrows
 sharply. The scope body should be effectively single-threaded, non-blocking, and
@@ -537,6 +545,15 @@ one the header itself points at — **per-thread state**:
   allocation). The SIGTRAP disposition is process-wide, so concurrent scopes on different
   threads still share one handler, but per-thread `g_armed` + TLS state makes that safe.
 
+**Update 2026-07-21:** the single-step half of this fix has shipped — a
+per-thread, nesting-safe handle-keyed scope API with exactly the TLS range stack
+sketched above ("nested begin/end pairs on one thread compose … via a per-thread
+TLS range stack",
+[include/asmtest_hwtrace.h](../../../include/asmtest_hwtrace.h) ~:297-346; via
+[zeroconfig-scoped-tracing-hardening.md](../implementations/zeroconfig-scoped-tracing-hardening.md)).
+The PT bullet remains forward-look: PT/AMD capture still sits on the
+process-global slot, so Q4 is now only half-open.
+
 ### Net
 
 Q2, Q3, and Q4 are ordinary engineering — and PT already ships the decode-side half of
@@ -797,6 +814,10 @@ hook; **refcount / interpreter (Python, Ruby, Lua)** — easy, with real import-
 **moving-GC + M:N scheduler (Go)** — the instructive middle, already solved by *pinning* the
 OS thread; **JIT-managed (.NET, Node, Java)** — the real project, needing the hardware-decode
 half plus async-hop stitching.
+
+*(Update 2026-07-21, on the Node/Java "medium" rows: their crash-proof
+out-of-process whole-window capture has since shipped —
+`stealthWindow`/`stealthWindowed`, commit `272bd65`.)*
 
 ### One shared core, thin per-language shims
 

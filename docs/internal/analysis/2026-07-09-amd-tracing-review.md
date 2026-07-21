@@ -8,6 +8,9 @@
 > was closed when the MSR-direct rung landed in `asmtest_trace_call_auto`
 > ([src/trace_auto.c](../../../src/trace_auto.c), `37118ec`, 2026-07-10), and §3.3's
 > wrong-path-spec concern is handled at the source in `asmtest_amd_msr_decode_entry`.
+> **Update 2026-07-21:** "two findings" is now an undercount — §1.1 and §2.1 have
+> also since closed in-tree (the shared `ASMTEST_AMD_REDUCED_FILTER` definition and
+> real prototypes now live in `src/amd_backend.h`).
 
 Review date: 2026-07-09
 

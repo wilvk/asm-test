@@ -1,7 +1,7 @@
 # Data-flow F5: PT + code-image + Unicorn-replay value tier — implementation
 
 > **Sources.** Actioned from
-> [live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md)
+> [live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md)
 > (§F5) and [hardware-trace-plan.md](../plans/hardware-trace-plan.md) (Phase 2,
 > the code-image + recorder-backed decode). Written 2026-07-17. If this doc and a
 > source disagree, this doc wins (sources may be stale); if the CODE and this doc
@@ -523,7 +523,7 @@ before F5 lands it; today it documents only the DynamoRIO and Unicorn
 control-flow tiers), so here you extend the section T5 added — once the smoke has
 actually run on silicon: the PT-derived value path is wired and, when the box
 exists, live-validated. Record the validation host. Update the F5 status block in
-[live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md)
+[live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md)
 **only after** it runs on silicon.
 
 **Done when.**

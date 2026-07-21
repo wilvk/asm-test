@@ -3,7 +3,7 @@
 > **Sources.** Actioned from
 > [2026-07-17-dataflow-tier-open-followups.md](../analysis/2026-07-17-dataflow-tier-open-followups.md)
 > (item 1, item 4),
-> [live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md)
+> [live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md)
 > (F1's pin follow-on, F2's increment-2 carryover, F6's known-limits list), and
 > [2026-07-15-blockstep-value-spike.md](../analysis/2026-07-15-blockstep-value-spike.md)
 > (gotchas 5 and 6). Written 2026-07-17. If this doc and a source disagree, this
@@ -274,7 +274,7 @@ currently unexercised).
 
 **Docs.** `CHANGELOG.md` `[Unreleased]` → `Fixed` ("cross-alias register
 def-use edges resolved"). Annotate the F6 known-limits rows (3) and (4) in
-[live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md)
+[live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md)
 as closed by this doc.
 
 **Done when.**
@@ -509,7 +509,7 @@ the witness that the per-step decode, not the canary, guards this path.
 **Docs.** `CHANGELOG.md` `[Unreleased]` → `Added` ("block-step replay covers
 rdtsc/rdtscp/rdrand/rdseed/cpuid via hardware exec-breakpoint
 record-and-inject; per-block gating"). Annotate the F2 carryover paragraph in
-[live-attach-dataflow-followup-plan.md](../plans/live-attach-dataflow-followup-plan.md)
+[live-attach-dataflow-followup-plan.md](../archive/plans/live-attach-dataflow-followup-plan.md)
 and item 4 of the
 [followups analysis](../analysis/2026-07-17-dataflow-tier-open-followups.md)
 as landed.
@@ -573,7 +573,7 @@ reuse the existing `island` fixture (:316):
 **Docs.** `CHANGELOG.md` `[Unreleased]` → `Added`. Annotate gotcha 6 of the
 [spike doc](../analysis/2026-07-15-blockstep-value-spike.md) and the HIGH-1
 row's island note in the
-[follow-up plan](../plans/live-attach-dataflow-followup-plan.md) as addressed.
+[follow-up plan](../archive/plans/live-attach-dataflow-followup-plan.md) as addressed.
 
 **Done when.**
 - Island-with-extents fixture byte-identical on the Zen 5 box; scan verdict
@@ -633,7 +633,7 @@ the intended alarm, and its message routes the reader here.
 
 **Docs.** `CHANGELOG.md` `[Unreleased]` → `Added` (one line: upstream
 sentinel). Annotate the F1 "revisit the pin" carryover in the
-[follow-up plan](../plans/live-attach-dataflow-followup-plan.md) with a
+[follow-up plan](../archive/plans/live-attach-dataflow-followup-plan.md) with a
 pointer to this task.
 
 **Done when.**

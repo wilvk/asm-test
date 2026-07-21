@@ -7,7 +7,7 @@ of the record arrays, struct padding included) to the true single-step value tra
 **block-step cut the in-region stop count 6.06×** (303 → 50 on a loop) — the perturbation
 win F1 exists to capture. The region-granularity purity classifier and the coherence
 canary both work. The one genuinely unproven claim in the whole
-[live-attach data-flow follow-up plan](../plans/live-attach-dataflow-followup-plan.md#f1--block-step--emulator-replay-value-optimization-planned--marquee-spike-first)
+[live-attach data-flow follow-up plan](../archive/plans/live-attach-dataflow-followup-plan.md)
 — "the emulator and the real CPU agree on a straight-line block" — held on every step of
 every fixture. The verdict is **conditional** only on the boundaries this spike also
 mapped (undefined-flag bits, OS-interaction, vector/XSTATE, memory coherence), each with a
@@ -231,6 +231,14 @@ Deterministic: 8/8 repeat runs identical (same pass set, same 6.06× / 6.00× ra
 - **Then, in order:** F2 (record-and-inject for impure methods — replay through recorded
   syscall/`rdtsc` effects), vector/XSTATE seeding (YMM/ZMM), and undefined-flag masking. Each
   is a bounded extension of what this spike proved; none re-opens the go/no-go.
+
+  **LANDED** (noted 2026-07-21;
+  [dataflow-producer-correctness.md](../implementations/dataflow-producer-correctness.md)):
+  this recommendation shipped in full. F1 increment 1 landed exactly as specified — the
+  [src/dataflow_blockstep.c](../../../src/dataflow_blockstep.c) replay producer, with its
+  `dataflow-blockstep-test` lane in [mk/dataflow.mk](../../../mk/dataflow.mk); F2's
+  record-and-inject plus the `rdtsc`/`cpuid` hardware-execution-breakpoint increment landed
+  as T5+T6; and the undefined-flag masking landed as T4 (see gotchas 5/6 above).
 - The probe is a **manual diagnostic** — a self-contained host program, not wired into CI
   (it needs real ptrace + Unicorn, and it characterizes a research bet rather than gating the
   product). Rebuild/run with the two commands above.

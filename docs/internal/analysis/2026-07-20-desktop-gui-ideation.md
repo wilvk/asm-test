@@ -90,10 +90,18 @@ during review.
    SINGLESTEP on most hosts (PT is bare-metal-Intel-Linux; LBR Zen 4+;
    CoreSight board-gated; macOS has no hardware backend). The real
    completeness story is the features sweep's `trace_insns` vs `insns_truth`.
-6. **The Rust binding has no dataflow module.** `ValueTrace` +
-   `forward_slice`/`backward_slice` ship in Python, Node, Ruby, Lua, C++, and
-   .NET — not Rust, Go, Zig, or Java. A Rust daemon cannot reach the def-use
-   slicer without new FFI. And `asmspy_engine.c` lives in `cli/`, not a
+6. **The Rust *crate API* has no dataflow module.** *(Corrected 2026-07-21 —
+   as originally filed this said `ValueTrace` + `forward_slice`/`backward_slice`
+   "ship in Python, Node, Ruby, Lua, C++, and .NET — not Rust, Go, Zig, or
+   Java", which was already false when written: commit `5cd22a5`, 2026-07-18,
+   two days before this doc, gave all ten bindings the def-use/slice surface —
+   `bindings/rust/test_dataflow.rs`, `go/cmd/dataflowsmoke`,
+   `java/TestDataflow.java`, `zig/src/test_dataflow.zig`.)* The nuance that
+   survives: in Rust and Go that surface lives in **smoke drivers carrying
+   their own `extern` declarations**, not in the published crate/package API
+   (`bindings/rust/src/` has no dataflow module), so a Rust daemon still cannot
+   reach the def-use slicer through the crate without first promoting those
+   declarations into the API. And `asmspy_engine.c` lives in `cli/`, not a
    linkable library; re-implementing attach elsewhere would abandon tested
    behavior (two-phase detach, own-`int3` delivery by `si_code`, JIT
    perf-map/jitdump refresh-on-miss, the one-tracer-thread rule).
@@ -191,8 +199,9 @@ Decisive facts:
   A TS/web reimplementation reintroduces the parity-drift surface this repo
   maintains an entire conformance harness to kill.
 - The C ABI reaches the valtrace slicer and emulator directly — no FFI gap
-  (the Rust binding's missing dataflow module rules out a Rust-daemon seam
-  for the flagship view).
+  (the Rust *crate API* still lacks a dataflow module — see corrected
+  constraint 6 — so a Rust-daemon seam for the flagship view would first need
+  the smoke driver's `extern` declarations promoted into the crate).
 - The audience runs Tracy and perf, not Electron apps; Tracy is the existence
   proof that ImGui handles zoomable timelines and dense live data at this
   fidelity.
@@ -248,9 +257,12 @@ manifest and ships the full slicer) and treat the frontend as a renderer of
 
 ## Rejected alternatives (for the record)
 
-- **Tauri + Rust trace daemon** — the Rust binding lacks the dataflow module;
-  a webview discards the tested C view-models; re-implementing attach outside
-  `asmspy_engine.c` risks the detach/int3/JIT-refresh guarantees.
+- **Tauri + Rust trace daemon** — the Rust *crate API* lacks the dataflow
+  module (per corrected constraint 6, the surface exists only in the
+  `test_dataflow.rs` smoke driver's own `extern` declarations, not in
+  `bindings/rust/src/`); a webview discards the tested C view-models;
+  re-implementing attach outside `asmspy_engine.c` risks the
+  detach/int3/JIT-refresh guarantees.
 - **Spawn-and-poll `asmspy --json`** — batch exporters + per-poll
   seize/detach churn (constraint 1/2 above).
 - **Live force-directed call graph** — layout thrash on every snapshot; the

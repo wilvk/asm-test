@@ -27,7 +27,7 @@ through the DynamoRIO and .NET-interpretability phases rather than stopping at t
 > producer + asmspy Data-flow view (all seven increments,
 > [live-attach-dataflow-plan.md](live-attach-dataflow-plan.md)) and the followup tier's
 > **F1 block-step + emulator replay** and **F3 hardware data-watchpoint** modes
-> ([live-attach-dataflow-followup-plan.md](../../plans/live-attach-dataflow-followup-plan.md)).
+> ([live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md)).
 >
 > **Phase 4 (.NET interpretability): Increments 1–3 LANDED 2026-07-12/13; the `{old,new,len}`
 > wiring LANDED 2026-07-16 as followup F4** — the pure host-independent PC→method+version
@@ -48,7 +48,7 @@ through the DynamoRIO and .NET-interpretability phases rather than stopping at t
 > [gccanon_tracer.c:1285](../../../../examples/gccanon_attach/gccanon_tracer.c#L1285) over an
 > attach-mode profiler feed, with same-window multi-GC chaining. `make docker-gccanon-attach`,
 > 37 assertions, negative control included. See
-> [live-attach-dataflow-followup-plan.md](../../plans/live-attach-dataflow-followup-plan.md) F4.
+> [live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md) F4.
 >
 > **Phase 5 (DynamoRIO taint tier): ALL NINE INCREMENTS LANDED** *(1–3 2026-07-13; 4–9 through
 > 2026-07-15)* — in-band tag propagation, the launch-under-DR container, GC-move shadow remap,
@@ -63,7 +63,7 @@ through the DynamoRIO and .NET-interpretability phases rather than stopping at t
 > `{old,new,len}` wiring — the last open item this legend carried — landed 2026-07-16 as followup
 > F4; Phases 3 and 5 are the two target tiers and both are delivered. Work that continues *near*
 > this plan lives in the followup tier
-> ([live-attach-dataflow-followup-plan.md](../../plans/live-attach-dataflow-followup-plan.md)): F2, F5–F7 and
+> ([live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md)): F2, F5–F7 and
 > F1's vector breadth, plus F4's optional extension to full object identity
 > (`GCBulkType`/`Node`/`Edge`), which the address-identity model defers by design
 > (`asmtest_valtrace.h`). Update this file as phases land, the way
@@ -224,7 +224,7 @@ to a `using` region.
   thread — valid only for **OS-interaction-free** regions (a syscall/futex/vDSO/signal in the
   region has no kernel under the emulator); anything else escalates to full input-capture
   record/replay. Nice-to-have, not on the critical path. **Realized 2026-07-15** as followup
-  **F1 increment 1** ([live-attach-dataflow-followup-plan.md](../../plans/live-attach-dataflow-followup-plan.md)) —
+  **F1 increment 1** ([live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md)) —
   the block-step + Unicorn-replay value tier `src/dataflow_blockstep.c`: purity-gated, byte-identical
   to single-step, ~6× fewer stops; impure regions fall back to single-step (F2 record-inject is the
   input-capture escalation).
@@ -255,7 +255,7 @@ cost is documented per-region, not per-run.
 > ([dataflow_gcmove.c:74](../../../../src/dataflow_gcmove.c#L74)) is **landed and unit-tested but
 > has no live caller** — its only callers are `examples/test_dataflow_gcmove.c`. Pointing the
 > proven profiler feed at that transform is followup **F4**
-> ([live-attach-dataflow-followup-plan.md](../../plans/live-attach-dataflow-followup-plan.md)), and it is
+> ([live-attach-dataflow-followup-plan.md](live-attach-dataflow-followup-plan.md)), and it is
 > ordinary wiring work, not a research lift. Note the two tiers legitimately need different
 > plumbing even from the same profiler: the DR client is in-process with the target (shm
 > handshake, DR-API-free remap at the fence), whereas the ptrace tier is out-of-process and
