@@ -123,6 +123,43 @@ printf '%s\n' "$out" | grep -q 'ret=57' \
 "$ASM" --trace "$AVPID" 0x1 1 >/dev/null 2>&1 && fail "--trace accepted an uncovered bare address"
 "$ASM" --trace "$AVPID" "$HOTADDR:0" 1 >/dev/null 2>&1 && fail "--trace accepted a zero-length range"
 
+# SIGINT mid region-trace must run the two-phase detach — unplant the 0xcc
+# entry breakpoint and leave the target alive — not kill the tracer with the
+# int3 still planted (2026-07-21 review C1: a POKETEXT byte is plain memory the
+# kernel does NOT restore on tracer death; the orphaned int3 later kills the
+# target). A negative n runs until interrupted, so the plant/step cycle is
+# guaranteed live when the signal lands. attach_victim calls hotfn continuously,
+# so a leaked breakpoint would SIGTRAP it within the grace period below.
+echo "--- asmspy --trace $AVPID hotfn -1 + SIGTERM (planted-0xcc unwind) ---"
+tsig_log="$BUILD/trace_sigint.log"
+# SIGTERM, not SIGINT: sh starts `&` jobs with SIGINT SIG_IGNed (and asmspy
+# honors an inherited SIG_IGN — the nohup convention), so a headless smoke
+# cannot deliver the interactive Ctrl-C. SIGTERM keeps its default disposition
+# in a background job and takes the exact same handler -> stop-flag -> detach
+# path, so the invariant under test is the same.
+"$ASM" --trace "$AVPID" hotfn -1 >"$tsig_log" 2>&1 &
+TRPID=$!
+i=0
+until grep -q 'ret=57' "$tsig_log" 2>/dev/null; do # >=1 sample -> mid-cycle
+    i=$((i+1)); [ "$i" -le 100 ] || fail "sigterm: no sample within 10s"
+    kill -0 "$TRPID" 2>/dev/null || fail "sigterm: tracer exited before signal"
+    sleep 0.1
+done
+kill -TERM "$TRPID"
+i=0
+while :; do # poll /proc state: kill -0 stays true on a zombie, this doesn't
+    st=$(awk '{print $3}' "/proc/$TRPID/stat" 2>/dev/null) || st=""
+    { [ -z "$st" ] || [ "$st" = "Z" ]; } && break
+    i=$((i+1)); [ "$i" -le 100 ] || fail "sigterm: tracer alive 10s after SIGTERM"
+    sleep 0.1
+done
+set +e; wait "$TRPID"; trc=$?; set -e
+[ "$trc" -eq 0 ] || fail "sigterm: tracer exited $trc (expected a clean detach)"
+sleep 1 # grace: the victim keeps entering hotfn — an orphaned int3 kills it
+kill -0 "$AVPID" 2>/dev/null || fail "sigterm: victim died (leaked breakpoint)"
+rm -f "$tsig_log"
+echo "SIGTERM mid-trace: clean detach, victim survived"
+
 echo "--- asmspy --stream $AVPID 30 (live instruction stream) ---"
 out=$("$ASM" --stream "$AVPID" 30 2>&1) || true
 printf '%s\n' "$out" | head -8

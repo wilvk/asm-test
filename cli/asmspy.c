@@ -45,6 +45,45 @@
 #include "asmtest_ibs.h" /* --sample: out-of-band statistical hot-edge capture */
 
 /* ================================================================== */
+/* Interrupt-to-detach: SIGINT/SIGTERM/SIGHUP must run the engines'    */
+/* two-phase detach, never the default kill                            */
+/* ================================================================== */
+
+/* A planted region breakpoint is a PTRACE_POKETEXT 0xcc in the TARGET's text —
+ * plain memory the kernel does NOT restore if this tracer simply dies. Dying on
+ * an unhandled SIGINT mid-trace therefore leaves the target to execute the
+ * orphaned int3 later and crash. The handler only sets flags: the engines poll
+ * g_sigstop (their `stop` param) and, with SA_RESTART cleared, a blocked
+ * waitpid/getch returns EINTR — the same wake contract as the SIGALRM quit-wake
+ * — so the normal unplant + detach unwind runs and the TUI reaches endwin(). */
+static atomic_bool g_sigstop;           /* engines poll this to stop */
+static volatile sig_atomic_t g_sigquit; /* TUI loops read this as 'quit' */
+
+static void stop_on_signal(int sig) {
+    (void)sig;
+    g_sigquit = 1;
+    atomic_store(&g_sigstop, true);
+}
+
+static void install_stop_handlers(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = stop_on_signal;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0; /* no SA_RESTART: a blocked waitpid/getch must see EINTR */
+    /* SIGHUP included: a closed terminal is Ctrl-C as far as the leak goes. An
+     * inherited SIG_IGN is honored (the nohup / background-job convention: the
+     * parent explicitly asked for the signal to be ignored). */
+    static const int sigs[] = {SIGINT, SIGTERM, SIGHUP};
+    for (size_t i = 0; i < sizeof sigs / sizeof sigs[0]; i++) {
+        struct sigaction old;
+        if (sigaction(sigs[i], NULL, &old) == 0 && old.sa_handler == SIG_IGN)
+            continue;
+        sigaction(sigs[i], &sa, NULL);
+    }
+}
+
+/* ================================================================== */
 /* Shared rendering: one captured region sample -> header + 2 panes    */
 /* ================================================================== */
 
@@ -762,7 +801,8 @@ static void log_print_sink(void *ctx, const char *line, const char *str) {
 }
 
 static int cmd_log(pid_t pid, int follow, long n) {
-    int rc = asmspy_engine_syscalls(pid, follow, n, NULL, log_print_sink, NULL);
+    int rc = asmspy_engine_syscalls(pid, follow, n, &g_sigstop, log_print_sink,
+                                    NULL);
     if (rc != 0) {
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
@@ -781,7 +821,7 @@ static void stream_print_sink(void *ctx, const char *line) {
 static int cmd_stream(pid_t pid, pid_t tid, int follow, long n) {
     asmspy_symtab_t t;
     asmspy_symtab_load(pid, &t); /* best-effort; raw addresses if empty */
-    int rc = asmspy_engine_stream(pid, tid, follow, n, NULL, &t,
+    int rc = asmspy_engine_stream(pid, tid, follow, n, &g_sigstop, &t,
                                   stream_print_sink, NULL);
     asmspy_symtab_free(&t);
     if (rc != 0) {
@@ -959,7 +999,7 @@ static int cmd_tree(pid_t pid, pid_t tid, int follow, long n,
     asmspy_symtab_load(pid, &t); /* best-effort; raw addrs if empty */
     tree_capture tc = {0};
     int export = json || dot;
-    int rc = asmspy_engine_tree(pid, tid, follow, n, NULL, &t, filter,
+    int rc = asmspy_engine_tree(pid, tid, follow, n, &g_sigstop, &t, filter,
                                 export ? tree_capture_sink : tree_print_sink,
                                 export ? &tc : NULL);
     asmspy_symtab_free(&t);
@@ -991,7 +1031,7 @@ static int cmd_graph(pid_t pid, pid_t tid, int follow, long n, gsort_t sort,
     asmspy_symtab_load(pid,
                        &t); /* best-effort; raw addrs (all internal) if empty */
     graph_snap snap = {0};
-    int rc = asmspy_engine_graph(pid, tid, follow, n, NULL, &t,
+    int rc = asmspy_engine_graph(pid, tid, follow, n, &g_sigstop, &t,
                                  graph_capture_sink, &snap);
     asmspy_symtab_free(&t);
     if (rc != 0) {
@@ -1171,6 +1211,11 @@ static int cmd_sample(pid_t pid, long ms, int json) {
     asmspy_jitmap_refresh(
         &jit); /* name methods already JIT-compiled at attach */
     sample_snap snap = {0};
+    /* stop stays NULL here ON PURPOSE: a NULL stop is this engine's "exactly
+     * one window" headless mode — passing g_sigstop would flip it into the
+     * TUI's survey-until-stopped loop and hang the one-shot CLI. --sample is
+     * out-of-band (no ptrace, nothing planted), so a Ctrl-C that merely ends
+     * the bounded window leaks nothing. */
     int rc = asmspy_engine_sample(pid, (unsigned)ms, NULL, &t, &jit,
                                   sample_capture_sink, &snap);
     asmspy_jitmap_free(&jit);
@@ -1332,7 +1377,8 @@ static void procs_export_dot(const asmspy_task_t *t, size_t n) {
 static int cmd_procs(pid_t pid, long n, asmspy_count_t mode, int json,
                      int dot) {
     topo_snap snap = {0};
-    int rc = asmspy_engine_procs(pid, n, NULL, mode, topo_capture_sink, &snap);
+    int rc =
+        asmspy_engine_procs(pid, n, &g_sigstop, mode, topo_capture_sink, &snap);
     if (rc != 0) {
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
@@ -1445,7 +1491,7 @@ static int cmd_trace(pid_t pid, const char *sym, pid_t only_tid, long n) {
     }
     fprintf(stderr, "tracing %s @ 0x%llx (%zu bytes) in pid %d\n", sym,
             (unsigned long long)base, len, (int)pid);
-    int rc = asmspy_engine_region(pid, only_tid, base, len, n, NULL,
+    int rc = asmspy_engine_region(pid, only_tid, base, len, n, &g_sigstop,
                                   region_print_sink, &t);
     if (rc == ASMSPY_REGION_NEVER_RAN) {
         /* The engine races EVERY thread to the entry, so this is no longer the
@@ -1672,8 +1718,8 @@ static int cmd_watch(pid_t pid, const char *loc, int rw, int len, long n,
 
     watch_ctx w = {0};
     w.json = json;
-    int rc =
-        asmspy_engine_watch(pid, addr, rw, len, n, NULL, &t, watch_sink, &w);
+    int rc = asmspy_engine_watch(pid, addr, rw, len, n, &g_sigstop, &t,
+                                 watch_sink, &w);
     asmspy_symtab_free(&t);
 
     if (rc == ASMSPY_WATCH_UNAVAIL) {
@@ -2180,7 +2226,7 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         /* Copy the name BEFORE the symtab dies: dc.func borrows into `t` (or argv),
          * and the messages below outlive asmspy_symtab_free. */
         snprintf(fname, sizeof fname, "%s", dc.func);
-        rc = asmspy_engine_dataflow(pid, tid, base, len, max, NULL,
+        rc = asmspy_engine_dataflow(pid, tid, base, len, max, &g_sigstop,
                                     dataflow_render_sink, &dc);
         /* The sw candidate walk: residency's winner can be a function that
          * never re-enters (the picker header's documented hazard), and
@@ -2613,6 +2659,8 @@ static void run_graph_detail(const char *title, const asmspy_gnode_t *sel,
 
         timeout(150);
         int ch = getch();
+        if (g_sigquit)
+            ch = 'q'; /* unwind to the view, which sees it and detaches */
         int page = vis > 1 ? vis - 1 : 1;
         if (ch == 'q' || ch == 27 || ch == 'b' || ch == '\n' || ch == KEY_ENTER)
             break;
@@ -2911,6 +2959,8 @@ static int run_live_view(pid_t pid, int mode, uint64_t base, size_t len,
 
         timeout(120);
         int ch = getch();
+        if (g_sigquit)
+            ch = 'q'; /* signal quit: run the normal stop+join detach path */
         if (ch == 'q' || ch == 27) {
             back = 1;
             break;
@@ -3260,6 +3310,8 @@ static int run_topo_view(pid_t pid, asmspy_count_t cmode, const char *title,
 
         timeout(150);
         int ch = getch();
+        if (g_sigquit)
+            ch = 'q'; /* signal quit: run the normal stop+join detach path */
         if (ch == 'q' || ch == 27) {
             back = 1;
             break;
@@ -3479,6 +3531,8 @@ static int run_sample_view(pid_t pid, const char *title,
 
         timeout(120);
         int ch = getch();
+        if (g_sigquit)
+            ch = 'q'; /* signal quit: run the normal stop+join detach path */
         if (ch != ERR)
             drill_msg = NULL; /* a keypress dismisses the drill status line */
         if (ch == 'q' || ch == 27) {
@@ -3867,6 +3921,8 @@ static int run_dataflow_view(pid_t pid, uint64_t base, size_t len,
             refresh();
             timeout(120);
             int ch = getch();
+            if (g_sigquit)
+                ch = 'q'; /* signal quit: cancel the capture and detach */
             if (ch == 'q') {
                 back = 1;
                 break;
@@ -3907,6 +3963,8 @@ static int run_dataflow_view(pid_t pid, uint64_t base, size_t len,
             refresh();
             timeout(150);
             int ch = getch();
+            if (g_sigquit)
+                ch = 'q'; /* signal quit: leave the finished-capture screen */
             if (ch == 'q') {
                 back = 1;
                 break;
@@ -4016,6 +4074,8 @@ static int run_dataflow_view(pid_t pid, uint64_t base, size_t len,
 
         timeout(120);
         int ch = getch();
+        if (g_sigquit)
+            ch = 'q'; /* signal quit: run the normal stop+join detach path */
         int page = top_h > 1 ? top_h - 1 : 1;
         if (ch == 'q') {
             back = 1;
@@ -4149,6 +4209,8 @@ static int screen_mode(const asmspy_proc_t *p) {
         mvprintw(rows - 1, 0, "1/2/3/4/5/6/7/8/9: choose   b/ESC: back");
         refresh();
         int ch = getch();
+        if (g_sigquit)
+            ch = 27; /* signal quit: unwind to the process list, then out */
         if (ch == '1')
             return 0;
         if (ch == '2')
@@ -4383,6 +4445,8 @@ static int screen_syms(pid_t pid, uint64_t *base, size_t *len,
             clrtoeol();
             refresh();
             int ch = getch();
+            if (g_sigquit)
+                ch = 27; /* signal quit: unwind to the process list, then out */
             if (ch == 27)
                 outcome = 2;
             else if (ch == KEY_F(3))
@@ -4726,6 +4790,8 @@ static int screen_procs(asmspy_proc_t *picked) {
             refresh();
             timeout(1000); /* poll so the detail strip refreshes while idle */
             int ch = getch();
+            if (g_sigquit)
+                ch = 27; /* signal quit: leave the TUI (checked before ERR) */
             refresh_tick--;
             if (ch == ERR)
                 continue; /* idle tick: redraw (refreshes the detail strip) */
@@ -4872,6 +4938,8 @@ static int run_details_view(pid_t pid, const char *title) {
 
         timeout(125);
         int ch = getch();
+        if (g_sigquit)
+            ch = 'q'; /* signal quit: leave the details view, then out */
         tick--;
         if (ch == 'q' || ch == 27) {
             back = 1;
@@ -4911,6 +4979,10 @@ static int run_details_view(pid_t pid, const char *title) {
 
 int asmspy_tui(void) {
     setlocale(LC_ALL, "");
+    /* cbreak() leaves Ctrl-C delivering SIGINT; without a handler the default
+     * action kills the TUI mid-trace and orphans a planted 0xcc in the target
+     * (see stop_on_signal). Installed before the first view can attach. */
+    install_stop_handlers();
     initscr();
     cbreak();
     noecho();
@@ -5190,6 +5262,10 @@ int main(int argc, char **argv) {
         return asmspy_tui();
     if (strcmp(argv[1], "--help") == 0 || strcmp(argv[1], "-h") == 0)
         return usage(argv[0]);
+    /* Headless modes: usage promises "interrupt with Ctrl-C" for a negative n,
+     * and a region/dataflow trace has a planted 0xcc to unplant — so Ctrl-C
+     * must end the engine loop (each polls g_sigstop), not kill the tracer. */
+    install_stop_handlers();
     if (strcmp(argv[1], "--list") == 0) {
         asmspy_sort_t s = ASMSPY_SORT_PID;
         if (argc >= 3) {
