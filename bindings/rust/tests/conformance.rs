@@ -7,7 +7,11 @@
 //! the ABI up correctly. Run via `make rust-test`.
 use std::os::raw::c_void;
 
-use asmtest::{self, Vec128, CF};
+use asmtest::{self, Vec128};
+// No CF on rv64 (no condition-flags register; ASMTEST_NO_FLAGS) — the carry
+// tests below carry the same arch gate.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+use asmtest::CF;
 
 // Canonical routines under test (examples/{add,flags,fp,simd}.s), linked from
 // the fixture lib via build.rs. Signatures are nominal — we only take addresses.
@@ -15,8 +19,6 @@ extern "C" {
     fn add_signed(a: i64, b: i64) -> i64;
     fn sum_via_rbx(a: i64, b: i64) -> i64;
     fn clobbers_rbx(a: i64, b: i64) -> i64;
-    fn set_carry() -> i64;
-    fn clear_carry() -> i64;
     fn fp_add(a: f64, b: f64) -> f64;
     fn vec_add4f();
     fn read_fault(p: *const i64) -> i64;
@@ -30,6 +32,14 @@ extern "C" {
 extern "C" {
     fn vec_add4d(); // AVX2 256-bit (Track D); x86-64 only
     fn vec_add8d(); // AVX-512 512-bit (Track D); x86-64 only
+}
+
+// Carry fixtures: omitted from the rv64 corpus (examples/flags.s — no flags
+// register to set), so both the externs and their tests are arch-gated.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+extern "C" {
+    fn set_carry() -> i64;
+    fn clear_carry() -> i64;
 }
 
 fn pm(addr: usize) -> *mut c_void {
@@ -56,12 +66,14 @@ fn clobbers_rbx_abi_violation_detected() {
     assert!(!asmtest::abi_preserved(&r), "violation should be reported");
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 #[test]
 fn set_carry_cf_set() {
     let r = asmtest::capture(pm(set_carry as usize), &[]);
     assert!(r.flag_set(CF));
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 #[test]
 fn clear_carry_cf_clear() {
     let r = asmtest::capture(pm(clear_carry as usize), &[]);

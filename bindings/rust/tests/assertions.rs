@@ -1,14 +1,23 @@
 //! Tier-2 assertion methods: the pass paths succeed and the failure paths panic.
 use std::os::raw::c_void;
 
-use asmtest::{self, CF};
+// No CF on rv64: RISC-V has no condition-flags register (asmtest.h's
+// ASMTEST_NO_FLAGS), so the constant is not defined for that arch.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+use asmtest::CF;
+use asmtest::{self};
 
 extern "C" {
     fn add_signed(a: i64, b: i64) -> i64;
     fn clobbers_rbx(a: i64, b: i64) -> i64;
+    fn fp_add(a: f64, b: f64) -> f64;
+}
+// The carry fixtures have no rv64 analog and are omitted from the corpus there
+// (examples/flags.s) — same gate test_capture.c uses via ASMTEST_NO_FLAGS.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+extern "C" {
     fn set_carry() -> i64;
     fn clear_carry() -> i64;
-    fn fp_add(a: f64, b: f64) -> f64;
 }
 
 fn pm(addr: usize) -> *mut c_void {
@@ -21,8 +30,11 @@ fn pass_paths() {
     r.assert_ret(42);
     r.assert_abi_preserved();
 
-    asmtest::capture(pm(set_carry as usize), &[]).assert_flag(CF, true);
-    asmtest::capture(pm(clear_carry as usize), &[]).assert_flag(CF, false);
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    {
+        asmtest::capture(pm(set_carry as usize), &[]).assert_flag(CF, true);
+        asmtest::capture(pm(clear_carry as usize), &[]).assert_flag(CF, false);
+    }
 
     asmtest::capture_fp(pm(fp_add as usize), &[], &[1.5, 2.25]).assert_fp(3.75);
 

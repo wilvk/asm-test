@@ -97,6 +97,34 @@ pub struct Regs {
     pub vec: [Vec128; 32],
 }
 
+/// RV64GC / LP64D `regs_t` (asmtest.h): `ret`/`a1` are the a0/a1 return pair
+/// (unlike AArch64, the second return register is captured, so a 9–16-byte
+/// sret high eightbyte is observable). `flags` exists for the shared runner's
+/// layout but is ALWAYS 0 — RISC-V has no condition-flags register, which is
+/// also why no flag-mask constants (CF/ZF/…) are defined for this arch.
+#[cfg(target_arch = "riscv64")]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Regs {
+    pub ret: u64,
+    pub a1: u64,
+    pub s0: u64,
+    pub s1: u64,
+    pub s2: u64,
+    pub s3: u64,
+    pub s4: u64,
+    pub s5: u64,
+    pub s6: u64,
+    pub s7: u64,
+    pub s8: u64,
+    pub s9: u64,
+    pub s10: u64,
+    pub s11: u64,
+    pub flags: u64,
+    pub fret: f64,
+    pub vec: [Vec128; 32],
+}
+
 impl Default for Regs {
     fn default() -> Self {
         // All fields are plain integers/floats/POD unions; zero is valid.
@@ -596,9 +624,11 @@ impl Drop for Emulator {
 //
 // The assembler entry points live in libasmtest_emu (now the full superset:
 // emulator + Keystone assembler + Capstone disassembler). To keep this crate
-// dependency-free *and* link-clean, resolve them at run time with the libc dynamic
-// loader: dlopen the lib named by `ASMTEST_LIB`, then dlsym. They normally resolve,
-// so the helpers run by default; against an older/leaner Keystone-free lib the
+// dependency-free *and* link-clean, resolve them at run time with the libc
+// dynamic loader: dlopen the lib named by `ASMTEST_LIB` when set, else
+// dlopen(NULL) — the crate already dylib-links libasmtest_emu, so the global
+// scope carries the symbols with no env var at all. They normally resolve, so
+// the helpers run by default; against an older/leaner Keystone-free lib the
 // pointers stay `None` and the helpers report unavailability — matching the
 // dlopen-based bindings (Ruby, Node, ...).
 
@@ -640,12 +670,20 @@ fn asm_fns() -> &'static AsmFns {
     // dlopen/dlsym/transmute each carry their own `unsafe` block — a closure does
     // not inherit an enclosing one, so the unsafety is marked at each call.
     FNS.get_or_init(|| {
+        // An explicit ASMTEST_LIB override is honored as-is — including its
+        // FAILURE (a deliberate override that cannot load must surface as
+        // "unavailable", not be silently substituted). With no override, the
+        // symbols are already IN this process: build.rs dylib-links
+        // libasmtest_emu (Keystone + Capstone included), so dlopen(NULL)
+        // hands back the global scope to dlsym them from. Gating on the env
+        // var alone made assemble()/disas() report "not in this build" in the
+        // common no-env downstream case despite the linked-in symbols.
         let handle = match std::env::var("ASMTEST_LIB") {
-            Ok(p) => match CString::new(p) {
+            Ok(p) if !p.is_empty() => match CString::new(p) {
                 Ok(c) => unsafe { dlopen(c.as_ptr(), RTLD_NOW) },
                 Err(_) => std::ptr::null_mut(),
             },
-            Err(_) => std::ptr::null_mut(),
+            _ => unsafe { dlopen(std::ptr::null(), RTLD_NOW) },
         };
         if handle.is_null() {
             return AsmFns {
