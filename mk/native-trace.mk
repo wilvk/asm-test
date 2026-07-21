@@ -2860,6 +2860,11 @@ hwtrace-java-test: shared-hwtrace
 	  bindings/java/HwTrace.java bindings/java/HwTraceTest.java
 	$(hwtrace_env) $(JAVA) --enable-native-access=ALL-UNNAMED \
 	  -cp $(BUILD)/java-hwtrace HwTraceTest
+	@# B2 (2026-07-21 review): the availability-QUERY family must self-skip, never
+	@# throw, with the library ABSENT. Bogus env path + cwd outside the repo so the
+	@# cwd-relative build/ fallback candidate cannot link either.
+	cd $(BUILD)/java-hwtrace && ASMTEST_HWTRACE_LIB=/nonexistent/libasmtest_hwtrace.so \
+	  $(JAVA) --enable-native-access=ALL-UNNAMED -cp . HwTraceTest --not-loaded-contract
 
 hwtrace-dotnet-test: shared-hwtrace
 	@echo "== hwtrace-dotnet-test =="

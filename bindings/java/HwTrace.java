@@ -22,8 +22,12 @@
  *   ASMTEST_HWTRACE_LIB   libasmtest_hwtrace.{so,dylib}   (else <repo>/build/...)
  *
  * The library may be absent (e.g. not built), so the static initializer swallows
- * a load failure and {@link #available(int)} self-skips cleanly — callers never
- * see a throw out of {@code available()}.
+ * a load failure and the whole availability-QUERY family self-skips cleanly —
+ * callers never see a throw out of {@code available()}, {@code skipReason()},
+ * {@code status()}, {@code resolve()}, {@code auto()}, {@code resolveTiers()},
+ * {@code autoTier()} or {@code perfEventParanoid()}; each degrades to its honest
+ * "unavailable" value. Only the ACTION entry points ({@code init()} and the
+ * trace/capture calls) throw when the library is not loaded.
  *
  * FFM is final since JDK 22: compile with `--release 22`, run with
  * `--enable-native-access=ALL-UNNAMED`.
@@ -879,7 +883,12 @@ public final class HwTrace {
      *  {@link #ASMTEST_HW_EUNAVAIL} (hardware/decoder/PMU absent), with the failing
      *  {@code stage} ({@code STAGE_*}), the probe errno and the kernel paranoid level. */
     public static HwStatus status(int backend) {
-        if (HW_STATUS == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        // Availability QUERY, so it honors the class's self-skip contract like
+        // available(): an absent library is an honest "unavailable" verdict,
+        // never a throw (a harness may ask status() before its skip guard).
+        if (HW_STATUS == null)
+            return new HwStatus(false, ASMTEST_HW_EUNAVAIL, STAGE_DECODER,
+                perfEventParanoid(), 0, skipReason(backend));
         try (Arena a = Arena.ofConfined()) {
             MemorySegment out = a.allocate(STATUS_LAYOUT);
             int rc = (int) HW_STATUS.invoke(backend, out);
@@ -913,7 +922,9 @@ public final class HwTrace {
      *  {@code policy}. Empty only off x86-64 Linux (single-step is the floor there).
      *  {@code CEILING_FREE} drops the ceiling-bounded backend (AMD LBR). */
     public static int[] resolve(int policy) {
-        if (HW_RESOLVE == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        // Query family: an absent library degrades to the empty cascade, the
+        // same self-skip contract as available() — see status().
+        if (HW_RESOLVE == null) return new int[0];
         try (Arena a = Arena.ofConfined()) {
             // up to 4 backend ints. A sequence layout sizes by element count
             // unambiguously (a.allocate(JAVA_INT, n) sizes to one int on this
@@ -932,7 +943,8 @@ public final class HwTrace {
      *  ready to {@link #init(int)}), or {@link #ASMTEST_HW_EUNAVAIL} (-3) when no
      *  hardware-trace backend is available on this host. */
     public static int auto(int policy) {
-        if (HW_AUTO == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        // Query family: an absent library is EUNAVAIL, not a throw — see status().
+        if (HW_AUTO == null) return ASMTEST_HW_EUNAVAIL;
         try { return (int) HW_AUTO.invoke(policy); }
         catch (Throwable t) { throw rethrow(t); }
     }
@@ -943,7 +955,9 @@ public final class HwTrace {
      *  drops the emulator floor (no native->emulator fidelity crossing);
      *  {@code TRACE_CEILING_FREE} drops AMD LBR. */
     public static java.util.List<TierChoice> resolveTiers(int policy) {
-        if (TRACE_RESOLVE == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        // Query family: an absent library degrades to the empty cascade — see
+        // status(). (Without the library even the emulator floor is unknowable.)
+        if (TRACE_RESOLVE == null) return java.util.List.of();
         try (Arena a = Arena.ofConfined()) {
             final int cap = 8; // the cascade is at most 6 entries; headroom
             // 4 consecutive JAVA_INT per choice (asmtest_trace_choice_t, no padding).
@@ -966,7 +980,9 @@ public final class HwTrace {
      *  (asmtest_trace_auto), or an empty {@link java.util.Optional} on EUNAVAIL (only
      *  off a native host under {@code TRACE_NATIVE_ONLY}). */
     public static java.util.Optional<TierChoice> autoTier(int policy) {
-        if (TRACE_AUTO == null) throw new RuntimeException("libasmtest_hwtrace not loaded", LOAD_ERROR);
+        // Query family: an absent library is an empty choice, not a throw — see
+        // status().
+        if (TRACE_AUTO == null) return java.util.Optional.empty();
         try (Arena a = Arena.ofConfined()) {
             MemorySegment out = a.allocate(
                 MemoryLayout.sequenceLayout(CHOICE_INTS, JAVA_INT));

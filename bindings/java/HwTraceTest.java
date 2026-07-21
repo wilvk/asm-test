@@ -114,6 +114,40 @@ public final class HwTraceTest {
 
     private static int testNo = 0;
 
+    // B2 (2026-07-21 review): with libasmtest_hwtrace ABSENT, every
+    // availability-QUERY entry point must degrade to its honest "unavailable"
+    // value — never throw. A harness legitimately asks status()/resolve()
+    // BEFORE its available() skip guard; pre-fix these threw RuntimeException
+    // ("Bail out!" + exit 1) instead of a clean "# SKIP".
+    private static void notLoadedQueryContract() {
+        // Anti-vacuity: this mode only proves anything if the load really
+        // failed. If a candidate linked anyway (repo cwd, system-wide lib),
+        // fail loudly rather than pass vacuously.
+        if (HwTrace.loadError() == null)
+            throw new AssertionError("--not-loaded-contract ran but the "
+                + "library LOADED (path: " + HwTrace.libraryPath() + ") — "
+                + "run it with a bogus ASMTEST_HWTRACE_LIB from outside the repo");
+        ok(!HwTrace.available(HwTrace.SINGLESTEP), "not-loaded: available() is false");
+        ok(HwTrace.skipReason(HwTrace.SINGLESTEP).contains("not loaded"),
+            "not-loaded: skipReason() names the missing library");
+        HwTrace.HwStatus st = HwTrace.status(HwTrace.SINGLESTEP);
+        ok(!st.available() && st.code() == HwTrace.ASMTEST_HW_EUNAVAIL,
+            "not-loaded: status() degrades to EUNAVAIL (code " + st.code() + ")");
+        ok(st.reason() != null && st.reason().contains("not loaded"),
+            "not-loaded: status().reason() names the missing library");
+        ok(HwTrace.resolve(HwTrace.BEST).length == 0,
+            "not-loaded: resolve() is the empty cascade");
+        ok(HwTrace.auto(HwTrace.BEST) == HwTrace.ASMTEST_HW_EUNAVAIL,
+            "not-loaded: auto() == EUNAVAIL");
+        ok(HwTrace.resolveTiers(HwTrace.TRACE_BEST).isEmpty(),
+            "not-loaded: resolveTiers() is empty");
+        ok(HwTrace.autoTier(HwTrace.TRACE_BEST).isEmpty(),
+            "not-loaded: autoTier() is empty");
+        ok(HwTrace.perfEventParanoid() == Integer.MIN_VALUE,
+            "not-loaded: perfEventParanoid() degrades to MIN_VALUE");
+        System.out.println("# not-loaded query contract: all queries degraded, none threw");
+    }
+
     private static void ok(boolean cond, String name) {
         testNo++;
         if (cond) {
@@ -125,6 +159,20 @@ public final class HwTraceTest {
     }
 
     public static void main(String[] args) {
+        // Run with the library resolver pointed off a cliff (bogus
+        // ASMTEST_HWTRACE_LIB, cwd outside the repo) to prove the
+        // availability-QUERY family self-skips instead of throwing.
+        if (args.length > 0 && args[0].equals("--not-loaded-contract")) {
+            try {
+                notLoadedQueryContract();
+            } catch (Throwable t) {
+                System.out.println("Bail out! " + t);
+                t.printStackTrace();
+                System.exit(1);
+            }
+            System.exit(0);
+        }
+
         // The orchestrator's selection invariants hold on every host (even where all
         // backends self-skip and the cascade is empty), so run them before any skip.
         try {
