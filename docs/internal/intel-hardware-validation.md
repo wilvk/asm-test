@@ -106,22 +106,28 @@ Box: `intel_pt` PMU present (`type=10`, `nr_addr_filters=2`),
   decodes 2.4M instructions / 104 k TNT+TIP from a ~114 KB AUX record — confirming
   the silicon does full PT flow and the earlier all-zero decode was the code-image
   gap above, not a hardware limit.
-- **.NET inline `new AsmTrace(HwBackend.IntelPt)` — arms + captures live, but
-  crashes at process exit (a recorded blocker).** With `libipt-dev` temporarily
-  added to the dotnet image and `make hwtrace-dotnet-test` run under
-  `--cap-add=PERFMON`, the inline IntelPt ctor DID arm on this box: **`ok
-  AsmTrace(IntelPt): armed on Intel PT silicon — captured 863180 instructions`**,
-  the PT window is EXACT (not statistical), and all **81/81** TAP checks pass —
-  proving the whole-window T4 .NET arm works on real silicon. BUT the process then
-  **SIGSEGVs at exit** (`Error 139`, after the final TAP line, no crash dump). The
-  live PT whole-window of a managed process is unfiltered, so the caller-fallback
-  decoder walks the *entire* runtime execution in the window (hence 863k
-  instructions), and something in that teardown path faults. This is a distinct,
-  non-trivial managed-runtime/PT issue; the `libipt-dev` dotnet-image addition was
-  **reverted** so no privileged lane ships a crash. Whole-window T4's .NET leg
-  stays `◐` pending that fix (the CLAUDE.md image-extension is ready; the crash is
-  the real blocker, not a missing install).
-- Not run here: the T5/T11 managed-compose PT prongs
+- **.NET inline `new AsmTrace(HwBackend.IntelPt)` — arms + captures live, but the
+  managed multi-threaded PT suite is non-deterministically racy (a recorded
+  blocker, NOT in the decode fix).** With `libipt-dev` temporarily added to the
+  dotnet image and `make hwtrace-dotnet-test` run under `--cap-add=PERFMON`, the
+  inline IntelPt ctor DID arm on this box: **`ok AsmTrace(IntelPt): armed on Intel
+  PT silicon — captured 863180 instructions`**, the PT window is EXACT (not
+  statistical). But the suite is unstable across runs: one run **SIGSEGVs**
+  (createdump: **`signal 11 … code 0080 (SI_KERNEL) addr (nil)`** — a NULL-pointer
+  deref) at a run-varying point (once after `ok 23`, once after `ok 81`), and
+  another run completed all 227 checks but flaked one timing-sensitive compose
+  check (`not ok unwarmed/PT compose: >=1 method JIT'd inside the window (got 0)`).
+  The crash is a **race in the managed MULTI-THREADED live PT path** — the ambient
+  hop / stitched-trace tests (T10/T11) spawn PT hops across async/pool threads and
+  only run at all once libipt is present — NOT the single-threaded decode path this
+  change fixed (a first gdb pass caught the abort with the main thread mid
+  `ss_arm_tf`, i.e. a single-step TF window colliding with concurrent thread work,
+  the managed-compose doc's documented per-thread hazard territory). Because it is
+  non-deterministic and cross-thread, it needs dedicated concurrency work on the
+  T10/T11 hop/stitch code; the `libipt-dev` dotnet-image addition was **reverted**
+  so no privileged lane ships a race. Whole-window T4's .NET leg stays `◐` on that
+  work, not on a missing install.
+- Not run here to green: the T5/T11 managed-compose PT prongs
   ([managed-wholewindow-compose.md](implementations/managed-wholewindow-compose.md))
-  — same dotnet-image / exit-crash gate as above, plus a live managed runtime on
-  PT (this box qualifies once the crash is resolved).
+  — same dotnet-image + managed-concurrency gate as above (this box's PT hardware
+  qualifies once the race + JIT-timing flake are resolved).
