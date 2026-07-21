@@ -23,8 +23,10 @@ but no independent second read — treat as a lead. `make test` and `make check`
 (54/54) are green on the x86-64 dev host; the review is not blocked on hardware,
 privileges, or credentials.
 
-**Remediation status:** OPEN — nothing actioned yet. This file moves to
-`../archive/reviews/` in the change that closes the last finding.
+**Remediation status:** IN PROGRESS — C1, S1, B2, K1, K2, K3, K4, B1, B4, B6
+claimed 2026-07-21 (fix-order groups 1–4); per-finding markers below record
+closures. This file moves to `../archive/reviews/` in the change that closes
+the last finding.
 
 Paths are repo-relative; every `file:line` is a snapshot as of 2026-07-21 and,
 like every review here, may drift.
