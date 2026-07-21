@@ -485,6 +485,27 @@ int asmtest_codeimage_bytes_at(const asmtest_codeimage_t *img, const void *addr,
     return ASMTEST_CI_ENOENT; /* addr not in any tracked region */
 }
 
+int asmtest_codeimage_read_live(const asmtest_codeimage_t *img, uint64_t addr,
+                                uint8_t *buf, size_t size) {
+    if (img == NULL || buf == NULL || size == 0)
+        return ASMTEST_CI_EINVAL;
+    /* One process_vm_readv fails atomically if any byte in the range is unmapped, so
+     * clamp to the current page's remaining bytes — the decoder asks for up to a
+     * max-instruction-length window that can straddle an unmapped next page. */
+    long pg = sysconf(_SC_PAGESIZE);
+    uint64_t psz = pg > 0 ? (uint64_t)pg : 4096;
+    uint64_t page_end = (addr + psz) & ~(psz - 1);
+    size_t avail = (size_t)(page_end - addr);
+    if (size > avail)
+        size = avail;
+    struct iovec liov = {buf, size};
+    struct iovec riov = {(void *)(uintptr_t)addr, size};
+    ssize_t n = process_vm_readv(img->pid, &liov, 1, &riov, 1, 0);
+    if (n <= 0)
+        return ASMTEST_CI_ENOENT;
+    return (int)n;
+}
+
 #else /* not Linux — link-compatible stubs */
 
 int asmtest_codeimage_available(void) { return 0; }
@@ -515,6 +536,11 @@ int asmtest_codeimage_bytes_at(const asmtest_codeimage_t *img, const void *addr,
                                uint64_t when, const uint8_t **out,
                                size_t *out_len) {
     (void)img, (void)addr, (void)when, (void)out, (void)out_len;
+    return ASMTEST_CI_ENOSYS;
+}
+int asmtest_codeimage_read_live(const asmtest_codeimage_t *img, uint64_t addr,
+                                uint8_t *buf, size_t size) {
+    (void)img, (void)addr, (void)buf, (void)size;
     return ASMTEST_CI_ENOSYS;
 }
 

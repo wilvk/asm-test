@@ -1653,6 +1653,37 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Intel PT whole-window & foreign-pid decode now works on real silicon — the tier
+  had never once run on a live Intel PT box until now (intel-pt-whole-window-substrate.md
+  T5, intel-pt-attach-foreign-pid.md T1/T2/T4, dataflow-pt-replay-tier.md T4).** First
+  live run on a bare-metal Intel PT host (Core i7-8559U, Coffee Lake) via CAP_PERFMON
+  in-container surfaced that the PT *capture* was fine but the *decode* produced ZERO
+  instructions on every real capture — the synthetic-fixture tests hid it because they
+  place trace-enable (`TIP.PGE`) at the region base, whereas a real unfiltered capture
+  enables tracing in the **caller**. The decoder's code image only covered the tracked
+  target region, so it hit `-pte_nomap` at the first caller IP and stopped before
+  reaching the region. Fixes: (1) new `asmtest_codeimage_read_live()` serves the static
+  caller/loader bytes from the target's live memory (`process_vm_readv`, page-clamped) as
+  a fallback in `read_recorder`, and the region-keyed `read_region` gained the same
+  self-memory fallback — the decode loop still records only in-region offsets, so the
+  temporal-JIT guarantee and the synthetic-fixture path stay byte-identical. (2)
+  `pt_aux_open` now explicitly requests the `pt` + `branch` (COFI) config bits from the
+  PMU's sysfs format rather than relying on a kernel default enabling `RTIT_CTL.BranchEn`
+  (the kernel rejects `branch` without `pt`; timing bits stay off since the decoder
+  carries no MTC/CYC calibration). (3) `pt_capture_one_region` keeps its foreign victim
+  alive through `attach_end` so the decoder can read the victim's own `.text` (where PGE
+  landed). (4) Corrected the `hwtrace-pt-live` capture-side address-filter checks to the
+  verified silicon behavior: the filter size must not overlap the adjacent
+  `pt_filter_sibling` (`perf` traces the whole `[start, start+size)` range, and the two
+  functions sit ~0x1f bytes apart), and a `@file` filter naming an anonymous region is
+  *accepted-but-unmatched* on this kernel (not rejected) — either way un-filterable, which
+  is why the decode-time fallback exists. Result: `make hwtrace-pt-live` 631/631 and
+  `make dataflow-pt-live` 29/29 — the live PT replay matching the single-step oracle with
+  **zero single-steps of the target** — both green and stable, first-ever on real PT
+  silicon. The non-PT lanes are unchanged (`docker-hwtrace` 625/625 with PT self-skipping;
+  `docker-dataflow-pt` synthetic 19/19 `-Werror`). Recorded in the internal
+  `docs/internal/intel-hardware-validation.md` note.
+
 - **asmspy CLI victims build on AArch64 — completes the `cli (ubuntu-24.04-arm)`
   build (follows the include-comment fix below).** That fix revealed asmspy-aarch64
   T5's arm64 `cli` leg had never actually built: two victims carried unguarded x86 asm.

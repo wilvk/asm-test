@@ -610,12 +610,19 @@ static void test_pt_replay_from_fixture(void) {
  * frees) or NULL on setup failure. The fork shares the ROUTINE mapping at [base, base+len). */
 static asmtest_trace_t *pt_capture_one_region(uint64_t base, size_t len, long a,
                                               long b, long *result_out) {
-    int go[2], done[2];
+    int go[2], done[2], stay[2];
     if (pipe(go) != 0)
         return NULL;
     if (pipe(done) != 0) {
         close(go[0]);
         close(go[1]);
+        return NULL;
+    }
+    if (pipe(stay) != 0) {
+        close(go[0]);
+        close(go[1]);
+        close(done[0]);
+        close(done[1]);
         return NULL;
     }
     pid_t pid = fork();
@@ -624,16 +631,22 @@ static asmtest_trace_t *pt_capture_one_region(uint64_t base, size_t len, long a,
         close(go[1]);
         close(done[0]);
         close(done[1]);
+        close(stay[0]);
+        close(stay[1]);
         return NULL;
     }
     if (pid == 0) {
         /* Victim: opt into ptrace (Yama), wait for the parent to arm PT, run the region
-         * exactly ONCE, hand the result back. A closed go pipe (parent bailed) reads EOF — it
-         * still runs once and exits, so the parent's waitpid never hangs. */
+         * exactly ONCE, hand the result back — then STAY ALIVE until the parent has
+         * decoded. The decode walks the victim's own .text (where TIP.PGE landed, in the
+         * caller) via process_vm_readv, so the victim must outlive attach_end; the parent
+         * closes stay[1] once decode is done. A closed go pipe (parent bailed) reads EOF —
+         * it still runs once and exits, so the parent's waitpid never hangs. */
         int pr = prctl(PR_SET_PTRACER, PR_SET_PTRACER_ANY, 0, 0, 0);
         (void)pr;
         close(go[1]);
         close(done[0]);
+        close(stay[1]);
         long (*fn)(long, long) = (long (*)(long, long))(uintptr_t)base;
         char c;
         ssize_t rn = read(go[0], &c, 1);
@@ -641,6 +654,9 @@ static asmtest_trace_t *pt_capture_one_region(uint64_t base, size_t len, long a,
         long r = fn(a, b);
         ssize_t wn = write(done[1], &r, sizeof r);
         (void)wn;
+        ssize_t sn =
+            read(stay[0], &c, 1); /* block until the parent finishes decode */
+        (void)sn;
         _exit(0);
     }
     /* Parent: arm PT on the foreign pid BEFORE releasing the child, so the one region walk
@@ -649,11 +665,12 @@ static asmtest_trace_t *pt_capture_one_region(uint64_t base, size_t len, long a,
      * offsets. */
     close(go[0]);
     close(done[1]);
+    close(stay[0]);
     asmtest_pt_attach_t *at = NULL;
     asmtest_trace_t *tr = NULL;
     long r = 0;
-    if (asmtest_hwtrace_pt_attach_begin((int)pid, NULL, &at) == ASMTEST_HW_OK &&
-        at != NULL) {
+    int brc = asmtest_hwtrace_pt_attach_begin((int)pid, NULL, &at);
+    if (brc == ASMTEST_HW_OK && at != NULL) {
         asmtest_hwtrace_pt_attach_track(at, base, len);
         char one = 1;
         ssize_t wn =
@@ -666,15 +683,22 @@ static asmtest_trace_t *pt_capture_one_region(uint64_t base, size_t len, long a,
         asmtest_hwtrace_pt_attach_poll(at, 100, &trunc);
         tr = asmtest_trace_new(256, 64);
         if (tr != NULL) {
-            if (asmtest_hwtrace_pt_attach_end(at, 0, tr) != ASMTEST_HW_OK) {
+            int erc = asmtest_hwtrace_pt_attach_end(at, 0, tr);
+            if (erc != ASMTEST_HW_OK) {
+                if (getenv("ASMTEST_PT_DEBUG"))
+                    fprintf(stderr, "# pt capture: attach_end rc=%d\n", erc);
                 asmtest_trace_free(tr);
                 tr = NULL;
             }
         } else {
             asmtest_hwtrace_pt_attach_end(at, 0, NULL); /* teardown only */
         }
+    } else if (getenv("ASMTEST_PT_DEBUG")) {
+        fprintf(stderr, "# pt capture: attach_begin rc=%d at=%p\n", brc,
+                (void *)at);
     }
-    close(go[1]); /* EOF unblocks the child even if we never released it */
+    close(stay[1]); /* let the (now-decoded) victim exit */
+    close(go[1]);   /* EOF unblocks the child even if we never released it */
     close(done[0]);
     int st;
     waitpid(pid, &st, 0);

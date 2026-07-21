@@ -111,6 +111,18 @@ int asmtest_codeimage_bytes_at(const asmtest_codeimage_t *img, const void *addr,
                                uint64_t when, const uint8_t **out,
                                size_t *out_len);
 
+/* Read up to `size` bytes of the target's CURRENT memory at `addr` into `buf`. Unlike
+ * bytes_at (which serves only tracked, temporally-versioned regions), this reads live
+ * process memory for ANY mapped address — used by the PT decoder to cover the STATIC
+ * caller/loader code between a real capture's trace-enable point (TIP.PGE) and the
+ * tracked JIT region. That code never moves, so it needs no versioning; serving it lets
+ * the decoder walk into the region instead of stopping at the first unmapped IP. Reads
+ * are clamped to the addressed page (process_vm_readv fails atomically). Returns the
+ * number of bytes read (> 0), ASMTEST_CI_ENOENT if unmapped, or ASMTEST_CI_EINVAL /
+ * ASMTEST_CI_ENOSYS. */
+int asmtest_codeimage_read_live(const asmtest_codeimage_t *img, uint64_t addr,
+                                uint8_t *buf, size_t size);
+
 /* ------------------------------------------------------------------ */
 /* Optional eBPF emission detector (Phase C). Self-skips without       */
 /* libbpf / CAP_BPF; the userspace poll path above is the fallback.    */

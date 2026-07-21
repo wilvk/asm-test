@@ -4557,22 +4557,31 @@ static void test_pt_live_selfjit(void) {
     /* (d) Capture-side address filter (FILE-BACKED): filter to pt_filter_target in the test
      * binary's own text; the decoded stream must then contain it and NOT its sibling. Try
      * the object-relative file offset first (perf's @file spec) and, on rejection, retry
-     * with the runtime vaddr — recording which form the kernel accepted (a known caveat). */
+     * with the runtime vaddr — recording which form the kernel accepted (a known caveat).
+     * The filter size must NOT reach the adjacent pt_filter_sibling: perf traces the whole
+     * [start, start+size) range, and the two functions sit only ~0x1f bytes apart, so a
+     * nominal 0x80 would spill into the sibling and defeat the "bounded" assertion (found
+     * on real silicon). Clamp to the gap when the sibling follows the target. */
     {
         void *ctx = NULL;
         if (asmtest_hwtrace_pt_begin_window(&ctx) == ASMTEST_HW_OK) {
+            uintptr_t ta = (uintptr_t)&pt_filter_target;
+            uintptr_t sa = (uintptr_t)&pt_filter_sibling;
+            uint64_t fsz = 0x80;
+            if (sa > ta && sa - ta < fsz)
+                fsz = sa - ta; /* stop short of the adjacent sibling */
             int okoff = 0;
-            uint64_t foff =
-                pt_file_offset_of((uintptr_t)&pt_filter_target, "/", &okoff);
+            uint64_t foff = pt_file_offset_of(ta, "/", &okoff);
             char filt[192];
-            snprintf(filt, sizeof filt, "filter 0x%llx/0x80@/proc/self/exe",
-                     (unsigned long long)foff);
+            snprintf(filt, sizeof filt, "filter 0x%llx/0x%llx@/proc/self/exe",
+                     (unsigned long long)foff, (unsigned long long)fsz);
             int frc = okoff ? asmtest_hwtrace_pt_set_filter(ctx, filt)
                             : ASMTEST_HW_EUNAVAIL;
             const char *form = "object-relative";
             if (frc != ASMTEST_HW_OK) {
-                snprintf(filt, sizeof filt, "filter 0x%llx/0x80@/proc/self/exe",
-                         (unsigned long long)(uintptr_t)&pt_filter_target);
+                snprintf(filt, sizeof filt,
+                         "filter 0x%llx/0x%llx@/proc/self/exe",
+                         (unsigned long long)ta, (unsigned long long)fsz);
                 frc = asmtest_hwtrace_pt_set_filter(ctx, filt);
                 form = "runtime-vaddr";
             }
@@ -4595,33 +4604,59 @@ static void test_pt_live_selfjit(void) {
         }
     }
 
-    /* (e) Anonymous-JIT constraint: the SAME filter against an ANONYMOUS exec_alloc region
-     * must FAIL (kernel address-filters match only file-backed VMAs by inode) — then the
-     * shipped decode-time fallback (no capture filter, full-stream decode against the
-     * code-image) must still recover the region's instructions. */
+    /* (e) Anonymous-JIT constraint + the decode-time fallback. A perf @file address filter
+     * matches only file-backed VMAs by inode, so it can NEVER bound capture to an anonymous
+     * exec_alloc region. Real silicon shows the SET_FILTER *spec* is validated (kernel-
+     * dependent: this kernel ACCEPTS a syntactically-valid @exe filter whose start lands in
+     * no exe VMA; others reject) — but either way the anon region is un-filterable, which is
+     * exactly why the decode-time fallback (unfiltered capture + code image) exists. */
     {
+        /* e1: a file-filter naming the anon region cannot capture it. */
         void *ctx = NULL;
         if (asmtest_hwtrace_pt_begin_window(&ctx) == ASMTEST_HW_OK) {
             char afilt[128];
             snprintf(afilt, sizeof afilt, "filter 0x%llx/0x%zx@/proc/self/exe",
                      (unsigned long long)b, blen);
-            /* an anon region's runtime address is not backed by the named file's inode,
-             * so the kernel's perf_addr_filter_match rejects it */
             int arc = asmtest_hwtrace_pt_set_filter(ctx, afilt);
-            CHECK(arc != ASMTEST_HW_OK, "pt live: SET_FILTER against an "
-                                        "anonymous JIT region is REJECTED "
-                                        "(file-backed VMAs only)");
+            printf("# pt live: anon @exe SET_FILTER rc=%d (accepted-but-"
+                   "unmatched or rejected — both un-filterable)\n",
+                   arc);
+            if (arc == ASMTEST_HW_OK) {
+                /* Accepted but matches no exe VMA -> the anon fn is NOT captured. */
+                asmtest_codeimage_t *si = asmtest_codeimage_new(0);
+                if (si != NULL)
+                    asmtest_codeimage_track(si, base, blen);
+                (void)fn(20, 22);
+                asmtest_trace_t *et = asmtest_trace_new(1 << 16, 1 << 16);
+                asmtest_hwtrace_pt_end_window(
+                    ctx, si, si ? asmtest_codeimage_now(si) : 0, et);
+                CHECK(!asmtest_trace_covered(et, b + 0x0),
+                      "pt live: a file-filter naming the anon region captures "
+                      "nothing (no exe VMA matches — the fallback's reason)");
+                asmtest_trace_free(et);
+                if (si != NULL)
+                    asmtest_codeimage_free(si);
+            } else {
+                /* Rejected outright -> equally un-filterable; release the ctx. */
+                asmtest_hwtrace_pt_end_window(ctx, NULL, 0, NULL);
+                CHECK(1, "pt live: a file-filter for the anon region is "
+                         "rejected (file-backed VMAs only)");
+            }
+        }
+        /* e2: the decode-time fallback — UNFILTERED capture + code image — recovers it. */
+        void *ctx2 = NULL;
+        if (asmtest_hwtrace_pt_begin_window(&ctx2) == ASMTEST_HW_OK) {
             asmtest_codeimage_t *img = asmtest_codeimage_new(0);
             if (img != NULL)
                 asmtest_codeimage_track(img, base, blen);
             uint64_t when = img ? asmtest_codeimage_now(img) : 0;
             (void)fn(20, 22);
             asmtest_trace_t *at = asmtest_trace_new(1 << 16, 1 << 16);
-            asmtest_hwtrace_pt_end_window(ctx, img, when, at);
+            asmtest_hwtrace_pt_end_window(ctx2, img, when, at);
             CHECK(
                 asmtest_trace_covered(at, b + 0x0),
-                "pt live: the decode-time fallback recovers the anon region's "
-                "instructions (no capture filter)");
+                "pt live: the decode-time fallback (unfiltered capture + code "
+                "image) recovers the anon region's instructions");
             asmtest_trace_free(at);
             if (img != NULL)
                 asmtest_codeimage_free(img);

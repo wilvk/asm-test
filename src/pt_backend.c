@@ -17,6 +17,7 @@
  * still compiles, reporting the decoder absent so asmtest_hwtrace_available()
  * self-skips.
  */
+#define _GNU_SOURCE /* process_vm_readv — read_region's caller fallback */
 #include "asmtest_codeimage.h"
 #include "asmtest_trace.h"
 
@@ -65,7 +66,26 @@ int asmtest_pt_read_codeimage(const asmtest_codeimage_t *img, uint64_t when,
 #ifdef ASMTEST_HAVE_LIBIPT
 #include <intel-pt.h>
 #include <sys/mman.h> /* §Z1.3 trust-probe scratch page (libipt is Linux-only here) */
+#include <sys/uio.h> /* process_vm_readv — read_region's caller fallback */
 #include <unistd.h>
+
+/* Read up to `size` bytes of THIS process's live memory at `ip`, clamped to the addressed
+ * page (process_vm_readv fails atomically on an unmapped straddle). The region-keyed
+ * INTEL_PT capture is self-traced (pt_aux_open pid==0); a real PT capture enables tracing
+ * (TIP.PGE) in the CALLER, so read_region must serve the static caller/loader bytes to let
+ * the decoder walk into the registered region. Returns bytes read (> 0) or -1. */
+static int pt_read_self_live(uint8_t *buffer, size_t size, uint64_t ip) {
+    long pg = sysconf(_SC_PAGESIZE);
+    uint64_t psz = pg > 0 ? (uint64_t)pg : 4096;
+    uint64_t page_end = (ip + psz) & ~(psz - 1);
+    size_t avail = (size_t)(page_end - ip);
+    if (size > avail)
+        size = avail;
+    struct iovec liov = {buffer, size};
+    struct iovec riov = {(void *)(uintptr_t)ip, size};
+    ssize_t n = process_vm_readv(getpid(), &liov, 1, &riov, 1, 0);
+    return n > 0 ? (int)n : -1;
+}
 
 int asmtest_pt_decoder_present(void) { return 1; }
 
@@ -80,8 +100,16 @@ static int read_region(uint8_t *buffer, size_t size, const struct pt_asid *asid,
                        uint64_t ip, void *context) {
     (void)asid;
     pt_read_ctx_t *c = (pt_read_ctx_t *)context;
-    if (ip < c->base_ip || ip >= c->base_ip + c->len)
-        return -pte_nomap;
+    if (ip < c->base_ip || ip >= c->base_ip + c->len) {
+        /* Outside the registered region: serve the static caller/loader code the real
+         * capture traversed to reach it (TIP.PGE lands in the caller). The decode loop
+         * still records only in-region offsets, so the trace stays region-scoped; this
+         * only lets the decoder WALK into the region instead of stopping at the first
+         * caller IP. On the synthetic fixture (PGE == region base) no out-of-region read
+         * ever happens, so that path stays byte-identical. */
+        int n = pt_read_self_live(buffer, size, ip);
+        return n > 0 ? n : -pte_nomap;
+    }
     uint64_t avail = c->base_ip + c->len - ip;
     size_t n = (size < avail) ? size : (size_t)avail;
     memcpy(buffer, c->base + (ip - c->base_ip), n);
@@ -104,6 +132,16 @@ static int read_recorder(uint8_t *buffer, size_t size,
     (void)asid;
     pt_recorder_ctx_t *c = (pt_recorder_ctx_t *)context;
     int n = asmtest_pt_read_codeimage(c->img, c->when, ip, buffer, size);
+    if (n > 0)
+        return n;
+    /* The temporal recorder serves only tracked (JIT) regions. A REAL PT capture is
+     * unfiltered: it enables tracing (TIP.PGE) at the current IP — in the CALLER, not
+     * the tracked region — and the decoder must walk the static caller/loader code to
+     * reach the region. That code never moves, so it needs no versioning; serve it from
+     * the target's live memory. Without this, decode stops at the first caller IP with
+     * -pte_nomap and yields zero instructions on real silicon (the synthetic fixture
+     * hides it by placing PGE at the region base). */
+    n = asmtest_codeimage_read_live(c->img, ip, buffer, size);
     return (n > 0) ? n : -pte_nomap;
 }
 

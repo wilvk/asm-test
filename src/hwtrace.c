@@ -1976,6 +1976,23 @@ typedef struct {
     size_t aux_sz; /* AUX (PT trace) ring     */
 } pt_aux_t;
 
+/* Low bit index of an intel_pt PMU config format field, read from sysfs
+ * (e.g. format/branch = "config:13" -> 13), or -1 if absent/unparseable. */
+static int pt_format_lowbit(const char *field) {
+    char path[160];
+    snprintf(path, sizeof path,
+             "/sys/bus/event_source/devices/intel_pt/format/%s", field);
+    FILE *f = fopen(path, "r");
+    if (f == NULL)
+        return -1;
+    int lo = -1;
+    if (fscanf(f, "config:%d", &lo) !=
+        1) /* "config:<lo>" / "config:<lo>-<hi>" */
+        lo = -1;
+    fclose(f);
+    return lo;
+}
+
 static int pt_aux_open(pid_t pid, size_t data_size, size_t aux_size,
                        uint32_t aux_watermark, int snapshot, pt_aux_t *out) {
     if (out == NULL)
@@ -1992,6 +2009,27 @@ static int pt_aux_open(pid_t pid, size_t data_size, size_t aux_size,
     attr.exclude_kernel = 1;
     attr.exclude_hv = 1;
     attr.disabled = 1;
+    /* Enable COFI (branch) packets so libipt can reconstruct control flow. Two
+     * config bits are load-bearing here:
+     *   - `pt`     (config:0, RTIT_CTL.TraceEn) — the kernel REJECTS the open
+     *     (EINVAL) if `branch` is requested without it; it must be set too.
+     *   - `branch` (config:13, RTIT_CTL.BranchEn) — a modern kernel leaves
+     *     BranchEn clear unless this bit is set, so with config==0 the CPU emits
+     *     only PSB/MODE/timing and NO TNT/TIP, and libipt reconstructs ZERO
+     *     instructions from a control-flow-less AUX (whole-window decode returns
+     *     EDECODE on real silicon — the failure this fixes).
+     * Bit indices are architectural (SDM Vol 3 §33.2.8.2: TraceEn=0, BranchEn=13);
+     * read them from sysfs and fall back to those. We deliberately leave
+     * tsc/mtc/cyc OFF: those timing packets would require the decoder to carry
+     * mtc_freq/cpuid_0x15 calibration (absent here), and a bare TNT/TIP stream is
+     * exactly what the decode path expects. */
+    int pt_bit = pt_format_lowbit("pt");
+    int branch_bit = pt_format_lowbit("branch");
+    if (pt_bit < 0)
+        pt_bit = 0;
+    if (branch_bit < 0)
+        branch_bit = 13;
+    attr.config |= ((uint64_t)1 << pt_bit) | ((uint64_t)1 << branch_bit);
     if (aux_watermark != 0)
         attr.aux_watermark = aux_watermark;
     long fd = perf_open(&attr, pid, -1, -1, 0);
