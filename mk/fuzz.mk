@@ -21,8 +21,10 @@ AFL_CLANG_FAST ?= afl-clang-fast
 # carries the test-runner main — a multiple-definition clash). asmtest.c documents
 # -DASMTEST_NO_MAIN for exactly this ("omit it and supply your own"); the object
 # still exports the asmtest_rng_* symbols src/fuzz.c references.
-$(BUILD)/asmtest_nomain.o: src/asmtest.c include/asmtest.h $(PLATFORM_HDRS) $(BUILD)/.build-flags | $(BUILD)
-	$(CC) $(CFLAGS) -DASMTEST_NO_MAIN -c $< -o $@
+# The ONE $(BUILD)/asmtest_nomain.o recipe lives in mk/bindings.mk (the
+# conformance runner links the same object) — a second recipe here made GNU
+# make warn "overriding recipe" on every run and silently dropped this file's
+# .build-flags prerequisite (bindings.mk, included later, won).
 
 # The emulator object set `emu-test` links, minus the test file AND with the
 # main-less framework object. Built by $(CC) via the parent Makefile's rules; the

@@ -14,7 +14,12 @@
 # Without main(), the runner-only static helpers (install_handlers, run_forked,
 # the JUnit/TAP printers, the CLI parser, ...) are legitimately unused, so quiet
 # that one warning for this build only.
-$(BUILD)/asmtest_nomain.o: src/asmtest.c include/asmtest.h $(PLATFORM_HDRS) | $(BUILD)
+# This is the ONE recipe for this object — mk/fuzz.mk's harnesses link it too
+# (its former duplicate recipe was overridden by this one, with a make warning
+# on every run), hence the .build-flags prerequisite: a knob flip must rebuild
+# the fuzz engine object set like every other framework object.
+$(BUILD)/asmtest_nomain.o: src/asmtest.c include/asmtest.h $(PLATFORM_HDRS) \
+                           $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -DASMTEST_NO_MAIN -Wno-unused-function -c $< -o $@
 
 $(BUILD)/conformance.o: bindings/conformance/conformance.c include/asmtest.h \

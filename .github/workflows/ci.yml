@@ -633,6 +633,22 @@ jobs:
       - name: Build the SDE image + run the suite under sde64 -future
         run: make docker-sde
 
+  # libFuzzer / AFL++ external-engine coverage shim (libfuzzer-afl-shim, Track E).
+  # The lane existed (`make docker-fuzz`) but no workflow ran it — a whole
+  # capability tier unexercised, contrary to the repo's anti-vacuity posture
+  # (2026-07-21 review K4). fuzz-shim-test is a REAL bounded test, never a
+  # self-skip: it fails unless BOTH engines steer to their planted crash
+  # (~1 min of fuzzing on top of the harness builds).
+  fuzz:
+    name: fuzz (libFuzzer + AFL++ coverage shim)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build the fuzz image + run the bounded shim test
+        run: make docker-fuzz
+
   # DynamoRIO extension-load probe (data-flow taint tier, Increment 2). The
   # Phase-5 taint re-platform onto inlined drmgr/drreg/drx instrumentation is
   # gated on those prebuilt extensions loading under DR's private loader — a
