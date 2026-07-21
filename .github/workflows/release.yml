@@ -203,8 +203,11 @@ jobs:
             # engines (dnf has none), runs `make python-package`, and `auditwheel repair`s
             # (same --exclude list as the macOS path, + --plat manylinux_2_28) -> wheelhouse/.
             arch="$(uname -m)"
+            # MANYLINUX_TAG: pinned dated tag, same knob as Dockerfile.manylinux-wheel
+            # (check-thirdparty-versions.sh keeps the two in sync).
+            MANYLINUX_TAG=2026.07.19-1
             docker run --rm -v "$PWD":/src -w /src \
-              "quay.io/pypa/manylinux_2_28_${arch}" bash scripts/build-manylinux-wheel.sh
+              "quay.io/pypa/manylinux_2_28_${arch}:${MANYLINUX_TAG}" bash scripts/build-manylinux-wheel.sh
             pip install twine   # runner-side, for the twine check + venv smoke below
           else
             pip install build twine auditwheel delocate && make python-package

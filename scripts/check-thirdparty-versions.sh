@@ -40,13 +40,33 @@ check_group() { # <name> <expected-nonempty?> then pairs of "file|regex"
 echo "Checking pinned third-party engine versions are consistent..."
 
 # DynamoRIO (bundled binary + CI test + Dockerfiles + corresponding-source path).
+# Every DR image is listed: they all route the fetch through fetch-dynamorio.sh
+# (which enforces the manifest digest), and this group keeps their ARG pins from
+# drifting apart.
 check_group "DynamoRIO" \
     'mk/bindings.mk|DR_VERSION \?= ([0-9][0-9.]*)' \
     'mk/docker.mk|DR_VERSION \?= ([0-9][0-9.]*)' \
     '.github/workflows/ci.yml|DR_VERSION: ([0-9][0-9.]*)' \
     'scripts/fetch-dynamorio.sh|DR_VERSION="\$\{DR_VERSION:-([0-9][0-9.]*)\}"' \
     'Dockerfile.drtrace|ARG DR_VERSION=([0-9][0-9.]*)' \
-    'Dockerfile.drtrace-lang|ARG DR_VERSION=([0-9][0-9.]*)'
+    'Dockerfile.drtrace-lang|ARG DR_VERSION=([0-9][0-9.]*)' \
+    'Dockerfile.drext-probe|ARG DR_VERSION=([0-9][0-9.]*)' \
+    'Dockerfile.pintool|ARG DR_VERSION=([0-9][0-9.]*)' \
+    'Dockerfile.gcprofiler-probe|ARG DR_VERSION=([0-9][0-9.]*)' \
+    'Dockerfile.suspendprof-probe|ARG DR_VERSION=([0-9][0-9.]*)' \
+    'Dockerfile.taint-native|ARG DR_VERSION=([0-9][0-9.]*)' \
+    'Dockerfile.taint-dotnet|ARG DR_VERSION=([0-9][0-9.]*)' \
+    'Dockerfile.taint-attach|ARG DR_VERSION=([0-9][0-9.]*)' \
+    'Dockerfile.taint-attach-probe|ARG DR_VERSION=([0-9][0-9.]*)' \
+    'Dockerfile.taint-managed-attach-probe|ARG DR_VERSION=([0-9][0-9.]*)' \
+    'Dockerfile.taint-oracle|ARG DR_VERSION=([0-9][0-9.]*)'
+
+# manylinux wheel base (K2): the pinned dated tag must agree between the local
+# lane's Dockerfile and release.yml's containerised python job — the base that
+# builds the published PyPI wheel must never float.
+check_group "manylinux_2_28" \
+    'Dockerfile.manylinux-wheel|ARG MANYLINUX_TAG=([0-9][0-9.-]*)' \
+    '.github/workflows/release.yml|MANYLINUX_TAG=([0-9][0-9.-]*)'
 
 # Keystone (GPL-2.0): the version built/vendored must equal the one whose source
 # the release attaches for GPL §3.

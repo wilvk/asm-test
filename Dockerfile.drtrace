@@ -33,11 +33,15 @@ RUN apt-get update \
 
 # Pin a DynamoRIO release. Override DR_VERSION/DR_URL to bump.
 ARG DR_VERSION=11.91.20630
-ARG DR_URL=https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz
-RUN curl -fsSL "$DR_URL" -o /tmp/dr.tar.gz \
- && mkdir -p /opt/dynamorio \
- && tar -xzf /tmp/dr.tar.gz -C /opt/dynamorio --strip-components=1 \
- && rm /tmp/dr.tar.gz
+ARG DR_URL=
+# Fetched through the repo's digest-verifying script, not a raw curl (which
+# bypassed the integrity manifest): the tarball's SHA-256 must match
+# scripts/third-party-digests.txt or the build fails. An empty DR_URL uses the
+# script's pinned upstream URL; set it only for a mirror of the SAME artifact.
+COPY scripts/fetch-dynamorio.sh scripts/lib-thirdparty.sh scripts/third-party-digests.txt /tmp/dr-fetch/scripts/
+RUN home=$(DR_CACHE=/tmp/dr-cache sh /tmp/dr-fetch/scripts/fetch-dynamorio.sh) \
+ && mv "$home" /opt/dynamorio \
+ && rm -rf /tmp/dr-cache /tmp/dr-fetch
 ENV DYNAMORIO_HOME=/opt/dynamorio
 
 WORKDIR /src

@@ -601,18 +601,17 @@ jobs:
       - name: Install build deps (python3 + pytest for the wrapper)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake python3 python3-pytest
 
-      - name: Fetch a pinned DynamoRIO release
-        run: |
-          url="https://github.com/DynamoRIO/dynamorio/releases/download/cronbuild-${DR_VERSION}/DynamoRIO-Linux-${DR_VERSION}.tar.gz"
-          curl -fsSL "$url" -o /tmp/dr.tar.gz
-          mkdir -p "$HOME/dynamorio"
-          tar -xzf /tmp/dr.tar.gz -C "$HOME/dynamorio" --strip-components=1
+      - name: Fetch a pinned DynamoRIO release (digest-verified)
+        # Through the repo's own fetch script, not a raw curl: the tarball's
+        # SHA-256 must match scripts/third-party-digests.txt (the Dockerfile
+        # lanes route through the same script).
+        run: echo "DYNAMORIO_HOME=$(sh scripts/fetch-dynamorio.sh)" >> "$GITHUB_ENV"
 
       - name: Build + run the C native-trace smoke harness
-        run: make drtrace-test DYNAMORIO_HOME="$HOME/dynamorio"
+        run: make drtrace-test DYNAMORIO_HOME="$DYNAMORIO_HOME"
 
       - name: Build + run the Python native-trace wrapper suite
-        run: make drtrace-python-test DYNAMORIO_HOME="$HOME/dynamorio"
+        run: make drtrace-python-test DYNAMORIO_HOME="$DYNAMORIO_HOME"
 
   # Intel SDE future/absent-ISA lane (pin-sde-future-isa-lane). Container-first:
   # the pinned, digest-gated tools (SDE 10.8.0 + APX-capable GAS 2.46.1 + NASM

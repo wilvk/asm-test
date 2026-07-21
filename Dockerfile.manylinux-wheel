@@ -7,7 +7,14 @@
 #   docker build -f Dockerfile.manylinux-wheel --build-arg MANYLINUX_ARCH=x86_64 \
 #     -t asmtest-manylinux-wheel .
 ARG MANYLINUX_ARCH=x86_64
-FROM quay.io/pypa/manylinux_2_28_${MANYLINUX_ARCH}
+# Pinned DATED tag, never the floating default (K2, 2026-07-21 review): this is
+# the one container base that reaches end users (it builds the published PyPI
+# wheel), so its toolchain must change only on a deliberate bump. The pypa repos
+# publish the same dated tag for every arch, which is why the pin is a tag (one
+# knob across ${MANYLINUX_ARCH}), not a per-arch digest. Must match release.yml's
+# MANYLINUX_TAG — scripts/check-thirdparty-versions.sh gates the pair.
+ARG MANYLINUX_TAG=2026.07.19-1
+FROM quay.io/pypa/manylinux_2_28_${MANYLINUX_ARCH}:${MANYLINUX_TAG}
 WORKDIR /src
 # Only scripts/ (build-manylinux-wheel.sh + the engine builders + the pinned-digest
 # manifest) so the slow engine-build layer caches independently of the sources.
