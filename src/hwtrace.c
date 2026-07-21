@@ -751,8 +751,12 @@ static hw_region_t *find_region(const char *name) {
 
 /* Nonzero while the active AMD region is captured by the deterministic boundary
  * snapshot (branchsnap.c) instead of the sampled data ring below. Single-slot,
- * reset in hwtrace_end_amd — the same invariant as g_fd/g_base_map/g_active. */
-static int g_amd_snap = 0;
+ * reset in hwtrace_end_amd — the same invariant as g_fd/g_base_map/g_active,
+ * so per-thread like them: a process-global here would let one thread's arm
+ * flip another thread's end() onto the wrong teardown branch (leaking that
+ * thread's g_fd/g_base_map) while its own end() drained a snapshot it never
+ * armed. */
+static __thread int g_amd_snap = 0;
 
 /* P5 — enumerate the region's EXIT instructions: the sites the boundary snapshot plants
  * its hardware breakpoints on. An exit is a ret-class instruction OR a region-LEAVING
