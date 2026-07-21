@@ -23,10 +23,12 @@ but no independent second read — treat as a lead. `make test` and `make check`
 (54/54) are green on the x86-64 dev host; the review is not blocked on hardware,
 privileges, or credentials.
 
-**Remediation status:** IN PROGRESS — C1, S1, B2, K1, K2, K3, K4, B1, B4, B6
-claimed 2026-07-21 (fix-order groups 1–4); per-finding markers below record
-closures. This file moves to `../archive/reviews/` in the change that closes
-the last finding.
+**Remediation status:** PARTIAL — fix-order groups 1–4 (C1, S1, B2, K1, K2,
+K3, K4, B1, B4, B6) fixed & lane-verified 2026-07-21; see the per-finding
+[FIXED] markers. Still open: C2/C3, S2–S7, B3/B5/B7, K5, T1/T2, and D1–D3
+(D-items belong to the tracked doc-drift sweep, amd-review-followup-2-plan T2).
+This file moves to `../archive/reviews/` in the change that closes the last
+finding.
 
 Paths are repo-relative; every `file:line` is a snapshot as of 2026-07-21 and,
 like every review here, may drift.
@@ -59,7 +61,11 @@ this review is self-contained, not to re-open them:
 ## 1. asmspy / CLI
 
 - **C1 — TUI has no SIGINT / SIGTERM / terminal-restore handler; Ctrl-C can leak
-  a planted breakpoint into the live target. [verified]** *(highest-value item in
+  a planted breakpoint into the live target. [verified] [FIXED 2026-07-21]**
+  *(Fixed as filed, plus the headless engines — usage promises Ctrl-C interruption
+  there too; every CLI engine call now passes a signal-set stop flag, `--sample`
+  excepted by design since its NULL stop means "one window" and it plants nothing.
+  New differential cli-smoke leg; `make docker-cli` PASS.)* *(highest-value item in
   this review.)* [cli/asmspy.c:4914-4915](../../../cli/asmspy.c#L4914) does
   `initscr(); cbreak();` and only reaches `endwin()` at
   [:5090](../../../cli/asmspy.c#L5090); the sole signal handler installed is the
@@ -96,7 +102,7 @@ host cannot fully exercise; they do not affect the well-tested
 in-process/emulator/single-step paths.
 
 - **S1 — `g_amd_snap` is a process-global `int` amid per-thread AMD state.
-  [verified]** [src/hwtrace.c:755](../../../src/hwtrace.c#L755)
+  [verified] [FIXED 2026-07-21]** *(now `__thread`; `docker-hwtrace` 697 ok.)* [src/hwtrace.c:755](../../../src/hwtrace.c#L755)
   (`static int g_amd_snap = 0;`) sits beside the `__thread` `g_fd`/`g_base_map`/
   `g_active` at [:601-606](../../../src/hwtrace.c#L601) — and its own comment
   claims "same invariant." Set at [:863](../../../src/hwtrace.c#L863), read in
@@ -139,7 +145,9 @@ bindings, so there is **no ABI-layout risk in the core FFI**. Findings are
 localized cleanups.
 
 - **B1 — Rust in-line assembler/disassembler is silently unreachable without
-  `ASMTEST_LIB` set. [verified]** The crate links `libasmtest_emu` (which carries
+  `ASMTEST_LIB` set. [verified] [FIXED 2026-07-21]** *(dlopen(NULL) fallback when
+  the env var is unset; a SET-but-unloadable override still reports unavailable.
+  Own-process regression test `tests/asm_no_env.rs`.)* The crate links `libasmtest_emu` (which carries
   Keystone/Capstone), yet `asm_available()`
   ([rust/src/lib.rs:701](../../../bindings/rust/src/lib.rs#L701)) gates on a
   separate `dlopen($ASMTEST_LIB)`
@@ -149,7 +157,10 @@ localized cleanups.
   [:792](../../../bindings/rust/src/lib.rs#L792)) despite the symbols being
   linked in. *Fix:* fall back to `dlopen(NULL)` on the already-linked image.
 - **B2 — Java `HwTrace.resolve/resolveTiers/status/…` throw when the hwtrace lib
-  fails to load, contradicting the class's own self-skip contract. [verified]**
+  fails to load, contradicting the class's own self-skip contract. [verified]
+  [FIXED 2026-07-21]** *(query family degrades to honest unavailable values; new
+  `--not-loaded-contract` second-JVM leg in `hwtrace-java-test` with an
+  anti-vacuity loaded-anyway guard.)*
   `available(int)` self-skips cleanly
   ([java/HwTrace.java:850](../../../bindings/java/HwTrace.java#L850)) exactly as
   the header promises ("callers never see a throw … available self-skips
@@ -169,7 +180,10 @@ localized cleanups.
   `Arena` discipline for *transient* buffers is correct — the gap is only the
   long-lived handles.) Contrast Python/Rust/C++/Go/Zig, which tie freeing to
   scope/Drop/deinit.
-- **B4 — Rust has no `riscv64` capture struct. [reported]**
+- **B4 — Rust has no `riscv64` capture struct. [reported] [FIXED 2026-07-21]**
+  *(rv64 `Regs` added mirroring asmtest.h; carry fixtures arch-gated in the test
+  files like the corpus; `cargo check --target riscv64gc-unknown-linux-gnu
+  --all-targets` passes.)*
   [rust/src/lib.rs:62](../../../bindings/rust/src/lib.rs#L62) defines only
   `x86_64`/`aarch64` `Regs`, so the binding won't compile as a capture tier on a
   RISC-V host even though the C `regs_t` exists there (Python's manifest path is
@@ -181,7 +195,8 @@ localized cleanups.
   offsets are correct today but desync silently on a header change until a test
   catches it. The shared `at_val_rec_t` hand-offset mirror in both dataflow smoke
   drivers is the riskiest single spot.
-- **B6 — Go `go vet` defect. [reported]** `go/conformance_test.go:405` uses
+- **B6 — Go `go vet` defect. [reported] [FIXED 2026-07-21]** *(uses
+  `HwNativeCode.Ptr()`; `go vet ./...` clean.)* `go/conformance_test.go:405` uses
   `unsafe.Pointer(nc.Base())` — the exact `uintptr→unsafe.Pointer` round-trip the
   API added `HwNativeCode.Ptr()` to avoid (`hwtrace.go:996-1002`). Trivial.
 - **B7 — Dynamic-language integer-width edges. [reported]** Ruby binds the
@@ -201,7 +216,10 @@ Pin-everything discipline with an integrity manifest
 anti-vacuity CI. The gaps are supply-chain drift, not breakage.
 
 - **K1 — DynamoRIO is fetched by raw `curl` with no digest check in 12
-  Dockerfiles, bypassing the repo's own verifier. [verified]**
+  Dockerfiles, bypassing the repo's own verifier. [verified] [FIXED 2026-07-21]**
+  *(all 12 route through `fetch-dynamorio.sh`, as does the drtrace CI job's
+  runner-side fetch; `check-thirdparty-versions.sh` now gates every image's ARG.
+  `docker-drtrace` rebuilt green through the verified path.)*
   [Dockerfile.drtrace:37](../../../Dockerfile.drtrace#L37)
   (`RUN curl -fsSL "$DR_URL" …`) plus 11 siblings (drtrace-lang, drext-probe,
   pintool, gcprofiler-probe, suspendprof-probe, taint-{native,attach,
@@ -210,12 +228,18 @@ anti-vacuity CI. The gaps are supply-chain drift, not breakage.
   SHA-256 anchor from the manifest, and `check-thirdparty-versions.sh` gates only
   2 of the 12. *Fix:* route all 12 through `fetch-dynamorio.sh` (kills the
   integrity gap and the ×12 copy-paste in one move).
-- **K2 — The manylinux PyPI wheel base is fully unpinned. [reported]**
+- **K2 — The manylinux PyPI wheel base is fully unpinned. [reported]
+  [FIXED 2026-07-21]** *(dated tag `2026.07.19-1` pinned in both
+  Dockerfile.manylinux-wheel and release.yml; new checker group keeps the pair
+  in sync.)*
   [Dockerfile.manylinux-wheel:10](../../../Dockerfile.manylinux-wheel#L10)
   (`FROM quay.io/pypa/manylinux_2_28_${ARCH}`, no tag/digest; same in
   `release.yml:207`). This is the one packaging path that reaches end users, on a
   floating base.
-- **K3 — Duplicate make recipe for `build/asmtest_nomain.o`. [verified]**
+- **K3 — Duplicate make recipe for `build/asmtest_nomain.o`. [verified]
+  [FIXED 2026-07-21]** *(one canonical recipe in mk/bindings.mk carrying the
+  union — `.build-flags` prereq + `-Wno-unused-function`; `make help` warning
+  gone.)*
   Defined in both [mk/fuzz.mk:24](../../../mk/fuzz.mk#L24) (adds a `.build-flags`
   prereq) and [mk/bindings.mk:17](../../../mk/bindings.mk#L17) (adds
   `-Wno-unused-function`) with *different* recipes. GNU make prints
@@ -223,7 +247,9 @@ anti-vacuity CI. The gaps are supply-chain drift, not breakage.
   `make help`); bindings.mk wins (included last), so the fuzz object silently
   loses its `.build-flags` dependency — a latent stale-rebuild bug plus permanent
   warning noise. *Fix:* one canonical recipe (or distinct object names).
-- **K4 — The fuzz lane is never exercised by CI. [verified]** `Dockerfile.fuzz`,
+- **K4 — The fuzz lane is never exercised by CI. [verified] [FIXED 2026-07-21]**
+  *(new `fuzz` CI job runs `make docker-fuzz`; lane verified green locally —
+  both engines steered to their planted crash.)* `Dockerfile.fuzz`,
   `docker-fuzz`, and `fuzz-shim-test` exist and `make help` advertises them, but
   no `.github/workflows/*` references fuzz — a whole capability lane unexercised,
   contrary to the repo's anti-vacuity posture.

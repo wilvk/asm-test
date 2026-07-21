@@ -1653,6 +1653,76 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **asmspy no longer orphans a planted breakpoint when the tracer is interrupted
+  (2026-07-21 review C1 — the one hole in the "never kill the target" invariant).**
+  A `PTRACE_POKETEXT` 0xcc is plain memory the kernel does NOT restore on tracer
+  death, so an unhandled Ctrl-C mid region-trace left the target to execute the
+  orphaned int3 later and die. asmspy (TUI *and* headless modes) now installs a
+  SIGINT/SIGTERM/SIGHUP handler that only sets flags: the engines see their `stop`
+  flag (every headless engine call now passes one), a blocked `waitpid`/`getch`
+  returns EINTR (no `SA_RESTART` — the SIGALRM quit-wake contract), and the normal
+  unplant + two-phase-detach unwind runs, with the TUI reaching `endwin()`. An
+  inherited `SIG_IGN` is honored (the nohup convention). `--sample` deliberately
+  keeps a NULL stop — that engine's NULL means "exactly one window", and it plants
+  nothing. New cli-smoke leg: `--trace hotfn -1`, SIGTERM mid-cycle → tracer exits
+  0 and the victim survives a grace period of continuous re-entry (differentially
+  confirmed: the pre-fix binary dies 143 with no detach).
+
+- **`g_amd_snap` is per-thread, like every other hwtrace lifecycle slot (2026-07-21
+  review S1).** The AMD boundary-snapshot flag sat as a process-global `int` beside
+  the `__thread` `g_fd`/`g_base_map`/`g_active` it claims to share an invariant
+  with; a concurrent snapshot arm on one thread could flip another thread's
+  `hwtrace_end_amd` onto the wrong teardown branch (leaking that thread's perf
+  fd/ring). Now `__thread`. `make docker-hwtrace` 697 ok / 0 failed.
+
+- **Java `HwTrace`'s availability-QUERY family self-skips instead of throwing when
+  the native library is absent (2026-07-21 review B2).** `status()`, `resolve()`,
+  `auto()`, `resolveTiers()` and `autoTier()` threw `RuntimeException` with the
+  library unloaded, contradicting the class's own "callers never see a throw"
+  self-skip contract (masked only because the lib is always bundled); each now
+  degrades to its honest unavailable value (EUNAVAIL status/empty cascade/empty
+  Optional). New `hwtrace-java-test` leg runs `HwTraceTest --not-loaded-contract`
+  in a second JVM with the resolver pointed off a cliff (bogus `ASMTEST_HWTRACE_LIB`,
+  cwd outside the repo), with an anti-vacuity guard that fails if the library
+  loaded anyway.
+
+- **Rust binding: the in-line assembler/disassembler is reachable without
+  `ASMTEST_LIB` (B1), and rv64 gets its capture struct (B4) (2026-07-21 review).**
+  `asm_fns()` gated on `dlopen($ASMTEST_LIB)` alone, so the common no-env
+  downstream case reported "not in this build" despite the crate dylib-linking
+  `libasmtest_emu` (which carries Keystone + Capstone); it now falls back to
+  `dlopen(NULL)` on the already-linked image — while an explicitly SET but
+  unloadable override still surfaces as unavailable rather than being silently
+  substituted (new own-process `tests/asm_no_env.rs` proves an assemble+disas
+  round trip with the env var removed). The missing `riscv64` `Regs` mirror of
+  asmtest.h's rv64 `regs_t` is added (a0/a1 return pair, s0–s11, always-0 `flags`
+  — no flag-mask constants, as rv64 has no flags register), and the test files'
+  carry-fixture externs/tests gained the same arch gate the corpus itself uses;
+  `cargo check --target riscv64gc-unknown-linux-gnu --all-targets` now passes.
+
+- **Supply-chain: every DynamoRIO image fetch is digest-verified (K1), and the
+  manylinux wheel base is pinned (K2) (2026-07-21 review).** 12 Dockerfiles (plus
+  the drtrace CI job) fetched the DynamoRIO tarball with a raw `curl`, bypassing
+  the repo's own `scripts/third-party-digests.txt` gate; all now route through
+  `scripts/fetch-dynamorio.sh`, which refuses a download whose SHA-256 does not
+  match the manifest, and `check-thirdparty-versions.sh` gates every image's
+  `ARG DR_VERSION` (was 2 of 12). `Dockerfile.manylinux-wheel` / `release.yml`
+  built the published PyPI wheel on a floating `quay.io/pypa/manylinux_2_28_*`
+  base; both now pin the dated tag `2026.07.19-1` (one knob across arches — the
+  pypa repos publish identical dated tags per arch), with a new checker group
+  keeping the pair in sync.
+
+- **Build/CI mechanics (2026-07-21 review K3/K4/B6).** `build/asmtest_nomain.o`
+  had two competing recipes (mk/fuzz.mk vs mk/bindings.mk) — GNU make warned
+  "overriding recipe" on every run and the winning recipe silently dropped the
+  fuzz object's `.build-flags` prerequisite (a latent stale-rebuild bug); one
+  canonical recipe now carries the union (`.build-flags` dep +
+  `-Wno-unused-function`). The libFuzzer/AFL++ coverage-shim lane existed but no
+  workflow ran it — a new `fuzz` CI job runs `make docker-fuzz` (bounded, fails
+  unless both engines find their planted crash). The Go conformance test used the
+  exact `uintptr→unsafe.Pointer` round-trip `HwNativeCode.Ptr()` exists to avoid;
+  `go vet ./...` is clean again.
+
 - **Intel PT whole-window & foreign-pid decode now works on real silicon — the tier
   had never once run on a live Intel PT box until now (intel-pt-whole-window-substrate.md
   T5, intel-pt-attach-foreign-pid.md T1/T2/T4, dataflow-pt-replay-tier.md T4).** First
