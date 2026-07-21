@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"runtime"
 	"testing"
-	"unsafe"
 )
 
 // --- Tier 1: corpus replay (capture trampoline) ----------------------------
@@ -402,7 +401,7 @@ func TestPtraceDescent(t *testing.T) {
 			tr := NewHwTrace(64, 64)
 			defer tr.Free()
 
-			result, err := PtraceTraceCallEx(unsafe.Pointer(nc.Base()), nc.Len(), c.args, tr, d, c.region)
+			result, err := PtraceTraceCallEx(nc.Ptr(), nc.Len(), c.args, tr, d, c.region)
 			if err != nil {
 				t.Fatalf("PtraceTraceCallEx: %v", err)
 			}
