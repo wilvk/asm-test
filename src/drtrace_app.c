@@ -497,24 +497,69 @@ void asmtest_trace_end(const char *name) {
 /* Host-native executable code (W^X)                                   */
 /* ------------------------------------------------------------------ */
 
+/* Platform seam (macos-dynamorio-port.md T7). Apple Silicon forbids
+ * simultaneously writable+executable pages for every process: JIT memory must
+ * be mapped RWX with MAP_JIT and toggled between the per-thread RW/RX views
+ * with pthread_jit_write_protect_np — mprotect must never touch the region.
+ * Everywhere else (Linux, macOS x86-64) the classic
+ * PROT_NONE -> mprotect(RW) -> copy -> mprotect(RX) dance applies unchanged.
+ *
+ * exec_alloc_platform() yields a writable len-byte mapping (so callers know
+ * the run address before the bytes exist — the two-pass assembler needs it);
+ * exec_copy() writes src_len bytes and seals the whole map_len mapping
+ * executable (the assemble path copies fewer bytes than it mapped). Both
+ * return 0 on success, -1 on failure with nothing left protected-wrong;
+ * the caller owns the munmap on any post-alloc failure. */
+#if defined(__APPLE__) && defined(__aarch64__)
+static int exec_alloc_platform(size_t len, void **outp) {
+    void *p = mmap(NULL, len, PROT_READ | PROT_WRITE | PROT_EXEC,
+                   MAP_PRIVATE | MAP_ANONYMOUS | MAP_JIT, -1, 0);
+    if (p == MAP_FAILED)
+        return -1;
+    *outp = p;
+    return 0;
+}
+static int exec_copy(void *dst, const uint8_t *src, size_t src_len,
+                     size_t map_len) {
+    pthread_jit_write_protect_np(0); /* this thread: write view open */
+    memcpy(dst, src, src_len);
+    pthread_jit_write_protect_np(1); /* close: executable view */
+    __builtin___clear_cache((char *)dst, (char *)dst + map_len);
+    return 0;
+}
+#else /* Linux + macOS x86-64: PROT_NONE -> RW -> RX */
+static int exec_alloc_platform(size_t len, void **outp) {
+    void *p = mmap(NULL, len, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED)
+        return -1;
+    if (mprotect(p, len, PROT_READ | PROT_WRITE) != 0) {
+        munmap(p, len);
+        return -1;
+    }
+    *outp = p;
+    return 0;
+}
+static int exec_copy(void *dst, const uint8_t *src, size_t src_len,
+                     size_t map_len) {
+    memcpy(dst, src, src_len);
+    if (mprotect(dst, map_len, PROT_READ | PROT_EXEC) != 0)
+        return -1;
+    __builtin___clear_cache((char *)dst, (char *)dst + map_len);
+    return 0;
+}
+#endif
+
 int asmtest_exec_alloc(const uint8_t *bytes, size_t len,
                        asmtest_exec_code_t *out) {
     if (bytes == NULL || len == 0 || out == NULL)
         return ASMTEST_DR_EINVAL;
-    /* W^X: map without permissions, flip to RW to copy, then to RX. */
-    void *p = mmap(NULL, len, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (p == MAP_FAILED)
+    void *p;
+    if (exec_alloc_platform(len, &p) != 0)
         return ASMTEST_DR_EINVAL;
-    if (mprotect(p, len, PROT_READ | PROT_WRITE) != 0) {
+    if (exec_copy(p, bytes, len, len) != 0) {
         munmap(p, len);
         return ASMTEST_DR_EINVAL;
     }
-    memcpy(p, bytes, len);
-    if (mprotect(p, len, PROT_READ | PROT_EXEC) != 0) {
-        munmap(p, len);
-        return ASMTEST_DR_EINVAL;
-    }
-    __builtin___clear_cache((char *)p, (char *)p + len);
     out->base = p;
     out->len = len;
     return ASMTEST_DR_OK;
@@ -523,6 +568,15 @@ int asmtest_exec_alloc(const uint8_t *bytes, size_t len,
 int asmtest_asm_exec_native(const char *src, int syntax,
                             asmtest_exec_code_t *out) {
 #ifndef ASMTEST_HAVE_KEYSTONE
+    (void)src;
+    (void)syntax;
+    (void)out;
+    return ASMTEST_DR_ENOSYS;
+#else
+#if !defined(__x86_64__)
+    /* Host-native assembly is x86-64-only: the hardcoded ASM_X86_64 below
+     * would hand an arm64 host x86-64 bytes. arm64 Keystone host-native
+     * assembly is explicitly out of scope (macos-dynamorio-port.md T7). */
     (void)src;
     (void)syntax;
     (void)out;
@@ -540,9 +594,9 @@ int asmtest_asm_exec_native(const char *src, int syntax,
     asmtest_asm_free(&r0);
     if (len == 0)
         return ASMTEST_DR_EINVAL;
-    /* Reserve the executable mapping so we know the real run address. */
-    void *p = mmap(NULL, len, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (p == MAP_FAILED)
+    /* Reserve the mapping first so we know the real run address. */
+    void *p;
+    if (exec_alloc_platform(len, &p) != 0)
         return ASMTEST_DR_EINVAL;
     /* Pass 2: re-assemble at the real address so PC-relative targets resolve. */
     asm_result_t r1;
@@ -553,21 +607,16 @@ int asmtest_asm_exec_native(const char *src, int syntax,
         munmap(p, len);
         return ASMTEST_DR_EINVAL;
     }
-    if (mprotect(p, len, PROT_READ | PROT_WRITE) != 0) {
+    if (exec_copy(p, r1.bytes, r1.len, len) != 0) {
         asmtest_asm_free(&r1);
         munmap(p, len);
         return ASMTEST_DR_EINVAL;
     }
-    memcpy(p, r1.bytes, r1.len);
     asmtest_asm_free(&r1);
-    if (mprotect(p, len, PROT_READ | PROT_EXEC) != 0) {
-        munmap(p, len);
-        return ASMTEST_DR_EINVAL;
-    }
-    __builtin___clear_cache((char *)p, (char *)p + len);
     out->base = p;
     out->len = len;
     return ASMTEST_DR_OK;
+#endif
 #endif
 }
 
