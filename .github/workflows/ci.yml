@@ -471,6 +471,12 @@ jobs:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: macos-15-intel
     timeout-minutes: 90
+    env:
+      # Pin Xcode 16, exactly like upstream DynamoRIO's own ci-osx.yml on this
+      # runner: the runner-default (newer) Apple clang breaks DR's option-type
+      # token pasting (OPTION_TYPE_##bool -> OPTION_TYPE__Bool once bool is the
+      # C17 stdbool macro _Bool) — measured on run 29899361267.
+      DEVELOPER_DIR: /Applications/Xcode_16.app/Contents/Developer
     steps:
       - uses: actions/checkout@v7
 
