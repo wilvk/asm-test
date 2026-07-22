@@ -351,8 +351,20 @@ and a `### Added` bullet under `## [Unreleased]` in
 > `test` matrix per the plan's M2 requirement; the arm64 leg stays deferred to
 > self-hosted-ci-runners (port-doc T7/T8 + upstream i#5383). Local proofs:
 > `actionlint` exit 0 with zero ci.yml findings; `python3 yaml.safe_load`
-> parses (47 jobs). Live dispatch validation recorded below when the run
-> completes.
+> parses (47 jobs).
+>
+> **Dispatch validation GREEN (2026-07-22).** First dispatch
+> ([run 29899361267](https://github.com/wilvk/asm-test/actions/runs/29899361267))
+> failed compiling the fork: the runner-default newer Apple clang breaks DR's
+> option-type token pasting (`OPTION_TYPE_##bool` → `OPTION_TYPE__Bool` once
+> `bool` is the C17 stdbool macro `_Bool`) — fixed by pinning
+> `DEVELOPER_DIR=/Applications/Xcode_16.app`, exactly what upstream's own
+> `ci-osx.yml` does on this runner. Second dispatch
+> ([run 29899563218](https://github.com/wilvk/asm-test/actions/runs/29899563218)):
+> `drtrace (macOS x86-64, nightly)` **green** — pinned fork built from source
+> on `macos-15-intel` and the M0 harness ran **13/13, 0 failed** (`1..13`, no
+> self-skip) — a second, independent macOS host (macOS 15 / Xcode 16)
+> reproducing the dev-host result end to end.
 
 ## Task order & parallelism
 
