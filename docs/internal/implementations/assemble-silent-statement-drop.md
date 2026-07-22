@@ -425,3 +425,33 @@ the guard sits at its tightest bound and a single over-count would have fired.
   folded into a comment, will not be detected. This is the deliberate trade: a
   missed detection is a return to today's behaviour for that source, whereas an
   over-count would reject valid input for every downstream suite.
+
+## Validation record — 2026-07-23 (independent re-verify → ✅ 3/3)
+
+A separate validating agent re-ran the whole task set from clean `main`
+(`b17d384`) on the AMD Zen 5 dev box (Ryzen 9 9950X), in the `asmtest-ci`
+container image so Keystone 0.9.2 is the pinned build. All legs green:
+
+- **`make asm-test` on unmodified `main`: 16 passed, 0 failed.** The three
+  drop-detectors (`rejects_dropped_statement`, `rejects_att_source_in_intel_syntax`,
+  `arm_hash_immediates_are_not_comments`) and the anti-false-rejection control
+  (`guard_admits_valid_separator_edge_cases`) all pass. The lone
+  `# SKIP RISC-V not supported by this Keystone build` is a pre-existing
+  capability skip on an unrelated `asm_run` case — not a T1–T3 self-skip, and the
+  "must not self-skip anywhere" constraint holds for this work.
+- **Adversarial teeth-check — the guard is load-bearing.** In an isolated
+  `git worktree` at the same commit, with the count guard neutralized
+  (`if (0 && stat_count < expected)`), the three drop-detectors flip to `not ok`
+  while the control stays `ok`. Red-then-green is reproduced independently, so the
+  regression tests are not vacuous.
+- **`make docker-test` (`make test && make check`): exit 0, 57/57 self-tests.**
+  Note `test_asm` sits in `SUITE_EXCLUDES`, so `make test` does *not* run the
+  assembler suite — `asm-test` is the separate leg above.
+- **`make docker-bindings`: exit 0, zero false rejections.** Every conformance
+  suite that assembles through `asmtest_assemble` is green (ruby 37/0, lua 36/0,
+  go ok, python/cpp/rust/zig/node/java/dotnet `PASSED (0 failures)`). The win64
+  `crash_contained`/`hang_timed_out` reds are expected-by-design (`mk/win64.mk`
+  asserts they print `not ok`, proving the runner *contains* a crash/hang) and
+  unrelated to the assembler guard.
+- **`make docker-docs` (Sphinx `-W`): exit 0.** Header all-or-nothing contract,
+  the residue, and the Keystone-version-sensitivity note are all present.
