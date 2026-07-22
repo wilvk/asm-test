@@ -159,6 +159,19 @@ $(BUILD)/pic/drtrace_app.o: src/drtrace_app.c include/asmtest_drtrace.h \
 $(BUILD)/test_drtrace: $(BUILD)/drtrace_app.o $(BUILD)/trace.o \
                        $(DRAPP_KS_OBJ) $(BUILD)/test_drtrace.o
 	$(CC) $(CFLAGS) $(DRTRACE_LDFLAGS) $^ $(DRAPP_KS_LIBS) -o $@
+# Ad-hoc sign with the JIT entitlement (macos-dynamorio-port.md T8). Only this
+# main executable — entitlements bind to the process's main executable, so
+# signing libasmtest_drapp.dylib would grant nothing. Never add
+# `--options runtime`: without the hardened runtime the entitlement is not even
+# required for MAP_JIT, and WITH it a process may create only ONE MAP_JIT
+# region — this harness allocates three (code/code2/code3), so a
+# hardened-runtime signature would break the suite by design.
+# -f: arm64 ld ad-hoc-signs at link time, so the fresh binary is already
+# signed there and codesign would refuse to re-sign without it (no-op on Intel,
+# where linked binaries come out unsigned).
+ifeq ($(UNAME_S),Darwin)
+	codesign -f --entitlements drtrace.entitlements -s - $@
+endif
 
 .PHONY: drtrace-test
 drtrace-test:

@@ -528,6 +528,31 @@ M1a and the bindings' compiled-function path still deliver value.
 codesigning `test_drtrace`; the binding-level limitation (no generated code on
 hardened interpreters) is documented.
 
+> **RESULT 2026-07-22 — implementable slice landed
+> ([macos-dynamorio-port.md](../implementations/macos-dynamorio-port.md)
+> T7+T8); arm64 acceptance NOT RUN (two gates).**
+> **What ran (Intel-mac dev host):** the Problem-2 helpers
+> (`exec_alloc_platform`/`exec_copy`) landed with the arm64-macOS arm exactly
+> as sketched (`MAP_JIT` RWX map + per-thread `pthread_jit_write_protect_np`
+> toggle; helpers return int so the existing `mprotect(RX)` failure check
+> survives, and copy/seal lengths are carried separately — pure refactor
+> elsewhere, `make docker-drtrace` green); `asmtest_asm_exec_native` returns
+> `ASMTEST_DR_ENOSYS` off x86-64; `drtrace.entitlements` + the Darwin
+> `codesign -f --entitlements … -s -` step on `$(BUILD)/test_drtrace` landed
+> (`-f` because arm64 ld ad-hoc-signs at link time — a plain `-s -` would
+> refuse on exactly the arm64 leg; no-op on Intel), and
+> `codesign -d --entitlements :-` prints the `allow-jit` key with the signed
+> harness still 18/18 green.
+> **Extent of MAP_JIT exercise: compile + link only** — `cc -arch arm64`
+> cross-compile exits 0 and `nm` shows `_pthread_jit_write_protect_np`
+> referenced in the arm64 object (absent from x86-64), but no MAP_JIT
+> allocation has ever executed.
+> **Gated (both required before arm64 acceptance can run):** Apple Silicon
+> hardware — this host is Intel; an arm64/universal macOS DR runtime —
+> upstream i#5383 still open. Acceptance routes through the M0
+> compiled-function harness (option (b)); no arm64 `ROUTINE[]` fixture is
+> planned.
+
 **Effort.** 2–4 days on confirmed arm64 hardware, after M0.
 
 ---

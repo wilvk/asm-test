@@ -291,6 +291,32 @@ native Intel silicon, which enforces no hardware W^X; under Rosetta 2 it is
 unverified and stays must-verify). The val/taint sub-lanes stay Linux-only.
 Both targets self-skip off macOS x86-64 (arm64 needs the upstream arm64 DR
 port, i#5383).
+
+### macOS arm64 (limitation, not a TODO)
+
+Apple Silicon forbids simultaneously writable+executable pages for every
+process: executable memory must be mapped with `MAP_JIT` and flipped between
+per-thread RW/RX views via `pthread_jit_write_protect_np` — which
+`asmtest_exec_alloc` already does on that platform. The consequences are a
+property of the OS security model, not missing work:
+
+- **Compiled-function / symbol mode is the supported arm64 path.** It touches
+  no generated memory, needs no entitlement, and works from any process.
+- **Generated code (`exec_alloc`) is standalone-executable-only.** Under the
+  hardened runtime, `MAP_JIT` requires the `com.apple.security.cs.allow-jit`
+  entitlement **on the process's main executable** — the build ad-hoc signs
+  `test_drtrace` with `drtrace.entitlements` (never `--options runtime`:
+  hardened-runtime signatures permit only ONE `MAP_JIT` region per process,
+  and the harness allocates three).
+- **Hardened interpreters are excluded by the OS.** An Apple-signed
+  `python3`/`node`/`ruby` cannot be re-signed with `allow-jit` without
+  breaking its notarization, so bindings on arm64 use compiled-function /
+  symbol mode. Ad-hoc-signed Homebrew interpreters happen to be exempt
+  (non-hardened processes don't need the entitlement), but that is their
+  packaging accident, not this project's contract.
+
+Everything arm64 additionally waits on an arm64/universal DynamoRIO runtime
+(upstream i#5383) — until then the lane self-skips there.
 Multi-threaded takeover is not available on macOS (upstream i#58): DynamoRIO
 takes over the calling thread only, which the single-threaded marker/symbol
 model never notices.

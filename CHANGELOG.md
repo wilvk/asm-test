@@ -55,7 +55,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `exec_alloc` W^X path, coverage accumulation, the exact instruction-mode
   offset stream, and the truncation bit all pass on native Intel silicon
   (18/18 on the same host; Rosetta stays must-verify, gated on Apple Silicon
-  hardware). Fork
+  hardware). M1b groundwork (T7/T8): executable-memory allocation now sits
+  behind a platform seam whose arm64-macOS arm uses `MAP_JIT` +
+  per-thread `pthread_jit_write_protect_np` (byte-identical elsewhere;
+  `asmtest_asm_exec_native` returns ENOSYS on non-x86-64 hosts), and on
+  Darwin the `test_drtrace` harness is ad-hoc signed with the new
+  `drtrace.entitlements` (`com.apple.security.cs.allow-jit`; never
+  `--options runtime`, whose one-MAP_JIT-region limit the harness's three
+  allocations would trip). arm64 acceptance itself stays gated on Apple
+  Silicon hardware plus an arm64 DR runtime (upstream i#5383); the guide's
+  new "macOS arm64" section records the hardened-interpreter limitation as
+  a property of the OS model. Fork
   `api.startstop`/`api.detach` run 10/10 crash-free (their multi-thread
   takeover assertions are upstream-NYI on macOS, i#58, and upstream macOS CI
   never runs them — they are outside the `OSX` ctest label set). arm64 stays
