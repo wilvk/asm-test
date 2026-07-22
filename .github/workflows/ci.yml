@@ -294,7 +294,7 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v7
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
         with:
           msystem: MINGW64
           update: true
@@ -1001,7 +1001,7 @@ jobs:
             sudo systemctl start docker
           fi
           docker version
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Expose the Actions runtime to buildx (gha cache backend)
         uses: actions/github-script@v9
         with:
@@ -1291,7 +1291,7 @@ jobs:
         --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Expose the Actions runtime to buildx (gha cache backend)
         uses: actions/github-script@v9
         with:
@@ -1326,7 +1326,7 @@ jobs:
         --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Expose the Actions runtime to buildx (gha cache backend)
         uses: actions/github-script@v9
         with:
@@ -1366,7 +1366,7 @@ jobs:
         --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Expose the Actions runtime to buildx (gha cache backend)
         uses: actions/github-script@v9
         with:
@@ -1410,7 +1410,7 @@ jobs:
         --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Expose the Actions runtime to buildx (gha cache backend)
         uses: actions/github-script@v9
         with:
@@ -1448,7 +1448,7 @@ jobs:
         --cache-to type=gha,scope=asmtest-bindings-base,mode=max,ignore-error=true
     steps:
       - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
       - name: Expose the Actions runtime to buildx (gha cache backend)
         uses: actions/github-script@v9
         with:
@@ -1554,7 +1554,7 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v7
-      - uses: msys2/setup-msys2@v2
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
         with:
           msystem: MINGW64
           update: true
@@ -1638,7 +1638,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
       - name: Install the docs toolchain
