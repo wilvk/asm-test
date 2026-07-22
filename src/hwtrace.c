@@ -16,6 +16,9 @@
  * gating and decode-dispatch logic here is exercised on every host; the live
  * capture is exercised only on capable hardware.
  */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE /* process_vm_readv — render_window's fault-safe self-read (S3) */
+#endif
 #include "amd_backend.h" /* shared AMD branch-record backend decls + reduced-filter macro */
 #include "asmtest_addr_channel.h" /* §D3 windowed multi-region channel */
 #include "asmtest_codeimage.h"
@@ -40,6 +43,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h> /* intel-pt-attach-foreign-pid: S_ISREG gate on the object filter */
 #include <sys/syscall.h>
+#include <sys/uio.h> /* process_vm_readv — render_window's fault-safe self-read (S3) */
 #include <unistd.h>
 #if defined(__x86_64__) || defined(__aarch64__)
 #include <sys/prctl.h>
@@ -620,6 +624,15 @@ static size_t round_pages(size_t want, size_t dflt) {
     if (pg <= 0)
         pg = 4096;
     size_t v = want ? want : dflt;
+    /* S7: clamp the caller-controlled ring size. Without a ceiling, (v + pg - 1)
+     * wraps for v near SIZE_MAX and the p<<=1 round-up can shift to 0, yielding a
+     * bogus tiny mmap length. A perf AUX/data ring larger than this is never
+     * legitimate (the kernel's mlock limits would refuse it anyway), so a hostile or
+     * garbage aux_size/data_size is bounded here, keeping the math below in range. */
+    const size_t MAX_RING = (size_t)1
+                            << 30; /* 1 GiB — far above any real ring */
+    if (v > MAX_RING)
+        v = MAX_RING;
     size_t pages = (v + (size_t)pg - 1) / (size_t)pg;
     size_t p = 1; /* AUX/data ring needs a power-of-two page count */
     while (p < pages)
@@ -3588,6 +3601,34 @@ asmtest_codeimage_t *asmtest_hwtrace_window_image(void) {
 #endif
 }
 
+#if defined(__linux__) && defined(__x86_64__)
+/* S3: fault-safe read of up to `size` bytes of THIS process's live code at `ip`.
+ * render_window disassembles recorded ABSOLUTE addresses; if the traced region was
+ * unmapped after capture (a JIT freed it, a dlclose, a torn-down thread stack) a raw
+ * dereference SIGSEGVs. process_vm_readv on self returns EFAULT for an unmapped range
+ * instead of faulting — but a single iovec transfers all-or-nothing, so a read that
+ * straddles into an unmapped page returns -1; retry clamped to the addressed page to
+ * recover the mapped prefix (enough to decode a short leading instruction). Mirrors
+ * pt_backend.c's pt_read_self_live. Returns bytes read (> 0), or -1 if ip is unmapped. */
+static int hw_read_self_live(uint8_t *buf, size_t size, uint64_t ip) {
+    struct iovec liov = {buf, size};
+    struct iovec riov = {(void *)(uintptr_t)ip, size};
+    ssize_t n = process_vm_readv(getpid(), &liov, 1, &riov, 1, 0);
+    if (n > 0)
+        return (int)n;
+    long pg = sysconf(_SC_PAGESIZE);
+    uint64_t psz = pg > 0 ? (uint64_t)pg : 4096;
+    size_t avail =
+        (size_t)(((ip + psz) & ~(psz - 1)) - ip); /* bytes to page end */
+    if (avail == 0 || avail >= size)
+        return -1; /* the full read did not straddle -> ip's own page is unmapped */
+    liov.iov_len = avail;
+    riov.iov_len = avail;
+    n = process_vm_readv(getpid(), &liov, 1, &riov, 1, 0);
+    return n > 0 ? (int)n : -1;
+}
+#endif
+
 int asmtest_hwtrace_render_window(asmtest_hwtrace_scope_t handle, char *buf,
                                   size_t buflen) {
 #if defined(__linux__) && defined(__x86_64__)
@@ -3611,8 +3652,13 @@ int asmtest_hwtrace_render_window(asmtest_hwtrace_scope_t handle, char *buf,
         uint64_t addr = trace->insns[i];
         char txt[128];
         txt[0] = '\0';
-        asmtest_disas(ASMTEST_ARCH_X86_64, (const uint8_t *)(uintptr_t)addr, 16,
-                      addr, 0, txt, sizeof txt);
+        /* S3: copy the bytes fault-safely first; an address whose region was unmapped
+         * after capture yields "(undecodable)" instead of crashing the renderer. */
+        uint8_t code[16];
+        int got = hw_read_self_live(code, sizeof code, addr);
+        if (got > 0)
+            asmtest_disas(ASMTEST_ARCH_X86_64, code, (size_t)got, addr, 0, txt,
+                          sizeof txt);
         int n = snprintf(lineb, sizeof lineb, "%12llx:\t%s\n",
                          (unsigned long long)addr,
                          txt[0] != '\0' ? txt : "(undecodable)");

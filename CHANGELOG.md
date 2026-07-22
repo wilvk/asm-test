@@ -1653,6 +1653,33 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **2026-07-21 review batch 3 — core-C robustness S3, S5, S7 (fixed 2026-07-22).**
+  Three memory-/integer-safety hardenings in the hardware-trace core, all verified
+  on Linux via `make docker-hwtrace` (514/514, 0 failed) and macOS-Intel-portable
+  (native `WERROR=1 hwtrace-test` 145/145 — the fixes and their tests are Linux/
+  x86-64-guarded and self-skip cleanly off it). **S3:** `render_window` recorded
+  ABSOLUTE RIPs and disassembled them straight from live self memory, so a region
+  unmapped after capture (a JIT free, a dlclose, a torn-down stack) SIGSEGV'd the
+  renderer. It now copies each RIP fault-safely through a new `hw_read_self_live`
+  helper — `process_vm_readv(getpid())`, page-clamped on an unmapped straddle,
+  mirroring `pt_backend.c`'s `pt_read_self_live` — and renders "(undecodable)" for
+  a freed address instead of faulting. New `test_wholewindow_render_unmapped`
+  mprotects the traced page `PROT_NONE` post-capture; mutation-checked (the
+  raw-deref revert SIGSEGVs at that test). **S5:** the jitdump readers
+  (`asmtest_jitdump_find`, `asmtest_jitdump_debug_find`) computed
+  `name_len = (long)total - 56 - (long)code_size` over an untrusted
+  `jit-<pid>.dump`, where a `code_size > LONG_MAX` cast is implementation-defined
+  and yields a plausible-but-wrong positive `name_len` the `<= 0` guard misses.
+  Both now reject a `code_size` overflowing the declared record (unsigned,
+  underflow-guarded) before the cast. New `test_jitdump_hostile` feeds a
+  `code_size == UINT64_MAX` record; mutation-checked (removing the guards flips
+  both asserts `not ok`). **S7:** `round_pages` clamps the caller-controlled
+  AUX/data-ring size to 1 GiB so `(v + pg - 1)` cannot wrap and the power-of-two
+  round-up cannot shift to 0 on a hostile/garbage `aux_size`/`data_size`. See
+  `docs/internal/reviews/2026-07-21-repo-review.md`; the §2 remainder S2 (PT-window
+  race) / S4 (arm64 hw-bp resume) is gated on PT / arm64 runtime this host lacks,
+  and S6 (the ~15-site pool-growth clamp) is left as a mechanical follow-on.
+
 - **2026-07-21 review batch 2 — T1, D1–D3, K5 (fixed 2026-07-22).**
   **T1:** the permanent `SKIP("partial-fill semantics not finalized")` in the
   default `make test` set is retired — the semantics are finalized and asserted:

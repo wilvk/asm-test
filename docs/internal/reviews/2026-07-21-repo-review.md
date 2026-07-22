@@ -24,12 +24,16 @@ but no independent second read — treat as a lead. `make test` and `make check`
 privileges, or credentials.
 
 **Remediation status:** PARTIAL — fix-order groups 1–4 (C1, S1, B2, K1, K2,
-K3, K4, B1, B4, B6) fixed & lane-verified 2026-07-21, and **T1, D1, D2, D3,
-K5 fixed & verified 2026-07-22** (macOS-Intel host); see the per-finding
+K3, K4, B1, B4, B6) fixed & lane-verified 2026-07-21; **T1, D1, D2, D3, K5
+fixed & verified 2026-07-22**; then the core-C robustness trio **S3, S5, S7
+fixed & verified 2026-07-22** (all on the macOS-Intel host); see the per-finding
 [FIXED] markers. The D-items were fixed as this review's own
 separately-fixable instances; the broader amd-review-followup-2-plan T2
-doc-drift sweep stays open in that plan. Still open: C2/C3, S2–S7, B3/B5/B7,
-and T2.
+doc-drift sweep stays open in that plan. Still open: C2/C3, S2, S4, S6,
+B3/B5/B7, and T2 — the §2 remainder is deferred, not skipped: S2 (PT-window
+race) and S4 (arm64 hw-bp resume) whose runtime validation is gated on this
+host (no bare-metal Intel PT; no arm64), and S6 (the ~15-site pool `ncap *= 2`
+clamp) as a mechanical multi-file pass with a purely theoretical trigger.
 This file moves to `../archive/reviews/` in the change that closes the last
 finding.
 
@@ -117,7 +121,15 @@ in-process/emulator/single-step paths.
   :3521-3532 — a genuine data race if two threads open a PT window, unlike the
   mutex-guarded region registry. Documented as single-slot but unguarded.
 - **S3 — `render_window` dereferences raw captured absolute RIPs with no
-  liveness guard. [reported]** [hwtrace.c:3610](../../../src/hwtrace.c#L3610)
+  liveness guard. [verified] [FIXED 2026-07-22]** *(render_window now copies each
+  recorded RIP fault-safely via a new `hw_read_self_live` helper —
+  `process_vm_readv(getpid())`, page-clamped on a straddle, mirroring
+  pt_backend.c's `pt_read_self_live` — before disassembling, so a region unmapped
+  after capture renders "(undecodable)" instead of faulting. New
+  `test_wholewindow_render_unmapped` mprotects the traced page `PROT_NONE`
+  post-capture and asserts render survives + marks the freed RIPs undecodable;
+  mutation-checked — reverting to the raw deref SIGSEGVs at that exact test.
+  `docker-hwtrace` 514/514.)* [hwtrace.c:3610](../../../src/hwtrace.c#L3610)
   reads 16 bytes per address → SIGSEGV if the traced region was unmapped after
   capture. The sibling `render_versioned` correctly uses the bounds-checked
   code-image instead; `render_window` should too.
@@ -126,7 +138,15 @@ in-process/emulator/single-step paths.
   ([ptrace_backend.c:1192](../../../src/ptrace_backend.c#L1192)) relying on RF
   auto-advance, which AArch64 lacks; an arm64 W^X JIT re-entering the return
   breakpoint could spin re-trapping. x86-validated only.
-- **S5 — Hostile-jitdump integer cast is implementation-defined. [reported]**
+- **S5 — Hostile-jitdump integer cast is implementation-defined. [verified]
+  [FIXED 2026-07-22]** *(both readers now reject an untrusted `code_size` that
+  overflows the declared record — `code_size > (uint64_t)total - 56` in
+  `asmtest_jitdump_find`, `> body_size - 40` in `asmtest_jitdump_debug_find`,
+  unsigned and underflow-guarded — BEFORE the signed cast. New
+  `test_jitdump_hostile` feeds a `code_size == UINT64_MAX` record; mutation-checked
+  — removing the two guards flips both asserts `not ok` (512 passed / 2 failed),
+  because the impl-defined `(long)UINT64_MAX == -1` yields a plausible positive
+  name_len that mis-parses attacker bytes. `docker-hwtrace` 514/514.)*
   `name_len = (long)total - 56 - (long)code_size`
   ([ptrace_backend.c:206](../../../src/ptrace_backend.c#L206), also :450) over an
   untrusted `/tmp/jit-<pid>.dump`; a `code_size > LONG_MAX` cast is UB/impl-defined
@@ -136,7 +156,14 @@ in-process/emulator/single-step paths.
   hwtrace.c:2549-2552, trace.c:480, codeimage.c:208/391 and the dataflow
   producers — `ncap` can wrap to 0. Bounded in practice by instruction budgets;
   theoretical, but cheap to harden with a max-cap clamp.
-- **S7 — `round_pages` can overflow on caller-controlled sizes. [reported]**
+- **S7 — `round_pages` can overflow on caller-controlled sizes. [verified]
+  [FIXED 2026-07-22]** *(round_pages clamps the caller-controlled ring size to
+  1 GiB — far above any real AUX/data ring, which the kernel's mlock limits would
+  refuse anyway — so `(v + pg - 1)` cannot wrap and the `p <<= 1` round-up cannot
+  shift to 0. Defensive clamp validated by non-regression: `docker-hwtrace`
+  514/514, the whole-window/PT arming paths that call it unaffected at real sizes.
+  No positive trigger asserted — the overflow needs a ~SIZE_MAX ring the opts path
+  can't deliver.)*
   [hwtrace.c:618-628](../../../src/hwtrace.c#L618) — `(v+pg-1)/pg` can wrap and
   the `p <<= 1` loop shift to 0 on a hostile `aux_size`/`data_size`; no upper clamp.
 
@@ -350,6 +377,9 @@ cases. Two minor items:
    ([amd-review-followup-2-plan.md](../plans/amd-review-followup-2-plan.md) T2).
 6. **T1**, **C2/C3**, **S2–S7**, **B3/B5/B7**, **K5** — harden as the
    multi-thread hardware-capture and arm64 paths mature; none is blocking.
+   *(T1, K5, and the core-C robustness trio S3/S5/S7 are now fixed; the §2
+   remainder — S2/S4 (gated on PT / arm64 runtime) and S6 (mechanical multi-file
+   clamp) — and C2/C3, B3/B5/B7, T2 remain.)*
 
 Nothing in this review is blocked on hardware, privileges, or a credentialed
 action except the live *reproduction* of the tracked .NET PT race (§0), which

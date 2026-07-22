@@ -203,6 +203,14 @@ int asmtest_jitdump_find(const char *path, pid_t pid, const char *name,
         uint64_t code_addr = jd_rd64(fx + 16, swap);
         uint64_t code_size = jd_rd64(fx + 24, swap);
         uint64_t code_index = jd_rd64(fx + 32, swap);
+        /* S5: code_size is untrusted (a corrupt/hostile jit-<pid>.dump). The record
+         * is `total` bytes = 16 prefix + 40 body + name + code, so a well-formed
+         * code_size fits in total-56; reject before the signed subtraction below.
+         * A (long)code_size cast for code_size > LONG_MAX is implementation-defined
+         * and can yield a plausible-but-wrong (positive) name_len that the `<= 0`
+         * guard never catches — driving a bogus malloc/fread off attacker bytes. */
+        if (total < 56 || code_size > (uint64_t)total - 56)
+            break; /* malformed: declared code bytes overflow the record */
         long name_len = (long)total - 56 - (long)code_size;
         if (name_len <= 0) /* total = 16 prefix + 40 body + name + code */
             break;
@@ -447,6 +455,11 @@ int asmtest_jitdump_debug_find(const char *path, pid_t pid, const char *name,
         uint64_t code_addr = jd_rd64(fx + 16, swap);
         uint64_t code_size = jd_rd64(fx + 24, swap);
         uint64_t code_index = jd_rd64(fx + 32, swap);
+        /* S5: reject an untrusted code_size that overflows the record body before the
+         * implementation-defined signed cast (see asmtest_jitdump_find). body_size is
+         * already >= 40 here (guarded above), so the subtraction cannot underflow. */
+        if (code_size > (uint64_t)body_size - 40)
+            break; /* malformed: declared code bytes overflow the record */
         long name_len = (long)body_size - 40 - (long)code_size;
         if (name_len <= 0)
             break;

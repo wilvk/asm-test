@@ -8541,6 +8541,73 @@ static void test_jitdump_debug_reader(void) {
 #endif
 }
 
+/* S5: a corrupt/hostile jit-<pid>.dump must never drive an implementation-defined
+ * (long)code_size cast. Write a JIT_CODE_LOAD whose declared code_size (u64) is
+ * UINT64_MAX — far larger than the record's own `total` — with `total` sized so that
+ * WITHOUT the bounds check the impl-defined cast yields a plausible positive name_len
+ * ((long)UINT64_MAX == -1, so name_len == total-56+1 == 8) that the `<= 0` guard never
+ * catches, and the reader mis-parses attacker bytes. With the check the record is
+ * rejected as malformed and the method is simply not found (ENOENT), for BOTH the code
+ * reader (site 1) and the debug-info reader (site 2, shared body/name_len math). */
+static void test_jitdump_hostile(void) {
+#if defined(__linux__)
+    char path[80];
+    snprintf(path, sizeof path, "/tmp/asmtest-jit-hostile-%d.dump",
+             (int)getpid());
+    FILE *f = fopen(path, "wb");
+    if (f == NULL) {
+        printf("# SKIP jitdump-hostile: cannot write %s\n", path);
+        return;
+    }
+    uint32_t magic = 0x4A695444u, version = 1, hsize = 40, elf_mach = 62,
+             pad1 = 0, mpid = (uint32_t)getpid();
+    uint64_t z = 0;
+    fwrite(&magic, 4, 1, f);
+    fwrite(&version, 4, 1, f);
+    fwrite(&hsize, 4, 1, f);
+    fwrite(&elf_mach, 4, 1, f);
+    fwrite(&pad1, 4, 1, f);
+    fwrite(&mpid, 4, 1, f);
+    fwrite(&z, 8, 1, f); /* timestamp */
+    fwrite(&z, 8, 1, f); /* flags */
+    /* Hostile JIT_CODE_LOAD (id 0). `total` == 63 so the pre-fix name_len lands at
+     * exactly the 8-byte name and the reader mis-parses (matches, then faults on the
+     * absent UINT64_MAX code bytes); the bounds check rejects it outright instead. */
+    const char *name = "hostile"; /* 8 bytes incl. NUL */
+    uint32_t id = 0, total = 63;
+    uint64_t ts = 1, vma = 0x1000, code_addr = 0x1000,
+             code_size = 0xFFFFFFFFFFFFFFFFull, code_index = 1;
+    fwrite(&id, 4, 1, f);
+    fwrite(&total, 4, 1, f);
+    fwrite(&ts, 8, 1, f);
+    fwrite(&mpid, 4, 1, f); /* pid */
+    fwrite(&mpid, 4, 1, f); /* tid */
+    fwrite(&vma, 8, 1, f);
+    fwrite(&code_addr, 8, 1, f);
+    fwrite(&code_size, 8, 1, f);
+    fwrite(&code_index, 8, 1, f);
+    fwrite(name, 1, strlen(name) + 1, f);
+    fclose(f);
+
+    asmtest_jitdump_entry_t e;
+    memset(&e, 0, sizeof e);
+    uint8_t bytes[64];
+    size_t blen = 0;
+    int rc =
+        asmtest_jitdump_find(path, 0, name, &e, bytes, sizeof bytes, &blen);
+    CHECK(rc == ASMTEST_PTRACE_ENOENT, "jitdump-hostile: oversize code_size "
+                                       "rejected as malformed (no UB cast)");
+    asmtest_jitdump_debug_t dbg[4];
+    size_t dlen = 0;
+    int rc2 = asmtest_jitdump_debug_find(path, 0, name, &e, dbg, 4, &dlen);
+    CHECK(rc2 == ASMTEST_PTRACE_ENOENT,
+          "jitdump-debug-hostile: oversize code_size rejected as malformed");
+    remove(path);
+#else
+    printf("# SKIP jitdump-hostile: not Linux\n");
+#endif
+}
+
 /* The widened attribution schema (asmtest_srcmap_*): backend-neutral rows carrying a
  * KIND (source line / .NET IL offset / JVM bci) + file + column. Pure C, no OS gate —
  * assert the enclosing-point lookup boundaries (mirror the emu_line_lookup shape), that
@@ -9652,6 +9719,78 @@ static void test_wholewindow_singlestep(void) {
     munmap(p, sizeof ROUTINE);
 #else
     printf("# SKIP whole-window scope: x86-64 Linux only\n");
+#endif
+}
+
+/* S3 — render_window records ABSOLUTE addresses and decodes them from live self memory.
+ * If the traced region is freed after capture (a JIT frees the code, a dlclose, a
+ * torn-down thread stack) a raw dereference of those RIPs SIGSEGVs. Capture a tight
+ * whole window, make the routine's page inaccessible (mprotect PROT_NONE — like a free,
+ * but the VA can't be reclaimed by an intervening malloc, so the read stays a clean
+ * fault), then render: it must survive and mark the freed RIPs "(undecodable)" rather
+ * than crash the suite. (Reverting the fault-safe read in render_window SIGSEGVs here.) */
+static void test_wholewindow_render_unmapped(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
+        printf(
+            "# SKIP whole-window render-unmapped: single-step unavailable\n");
+        return;
+    }
+    void *p = ss_map_exec(ROUTINE, sizeof ROUTINE);
+    if (p == NULL) {
+        printf("# SKIP whole-window render-unmapped: mmap failed\n");
+        return;
+    }
+    asmtest_hwtrace_options_t opts;
+    INIT_OPTS(opts, ASMTEST_HWTRACE_SINGLESTEP);
+    if (asmtest_hwtrace_init(&opts) != ASMTEST_HW_OK) {
+        printf("# SKIP whole-window render-unmapped: init\n");
+        munmap(p, sizeof ROUTINE);
+        return;
+    }
+    asmtest_trace_t *tr = asmtest_trace_new(4096, 0);
+    asmtest_hwtrace_scope_t scope = {0xffffffffu, 0, -1};
+    add2_fn fn = (add2_fn)p;
+    int rc_begin = asmtest_hwtrace_begin_window(tr, &scope);
+    if (rc_begin != ASMTEST_HW_OK) {
+        printf("# SKIP whole-window render-unmapped: begin_window (rc=%d)\n",
+               rc_begin);
+        asmtest_hwtrace_shutdown();
+        asmtest_trace_free(tr);
+        munmap(p, sizeof ROUTINE);
+        return;
+    }
+    volatile long r = fn(20, 22);
+    (void)r;
+    asmtest_hwtrace_end_window(scope, tr);
+
+    CHECK(mprotect(p, sizeof ROUTINE, PROT_NONE) == 0,
+          "whole-window render-unmapped: traced region made inaccessible");
+    int need = asmtest_hwtrace_render_window(scope, NULL, 0);
+    if (need > 0) {
+        char *buf = (char *)malloc((size_t)need + 1);
+        int got = asmtest_hwtrace_render_window(scope, buf, (size_t)need + 1);
+        CHECK(got > 0,
+              "whole-window render-unmapped: render survives the freed "
+              "region (no SIGSEGV)");
+        CHECK(strstr(buf, "(undecodable)") != NULL,
+              "whole-window render-unmapped: the freed region's RIPs render as "
+              "(undecodable)");
+        free(buf);
+    } else {
+        CHECK(
+            need == ASMTEST_HW_ENOSYS,
+            "whole-window render-unmapped: no-Capstone render returns ENOSYS, "
+            "not a crash");
+    }
+
+    asmtest_hwtrace_shutdown();
+    asmtest_trace_free(tr);
+    mprotect(p, sizeof ROUTINE,
+             PROT_READ | PROT_WRITE); /* restore before unmap */
+    munmap(p, sizeof ROUTINE);
+#else
+    printf("# SKIP whole-window render-unmapped: x86-64 Linux only\n");
 #endif
 }
 
@@ -11131,6 +11270,7 @@ int main(void) {
     /* §Z0/§Z1: the region-free (empty-ctor) whole-window scope — WEAK single-step
      * tier + the §Z4 cross-thread honesty flag (any x86-64 Linux, no hardware). */
     test_wholewindow_singlestep();
+    test_wholewindow_render_unmapped();
     test_wholewindow_ss_managed_routes();
     test_wholewindow_buckets();
 
@@ -11214,6 +11354,7 @@ int main(void) {
     test_perfmap_resolve();
     test_jitdump_reader();
     test_jitdump_debug_reader();
+    test_jitdump_hostile();
     test_srcmap();
     test_srcreg();
 
