@@ -43,6 +43,13 @@ with_regs do |r|
   check("add_signed.basic", r.ret == 42 && r.abi_preserved?)
 end
 with_regs do |r|
+  # B7: 0x4000000000000000 + 0x4000000000000001 = 0x8000000000000001 — the sign
+  # bit is SET. A signed return type reads this back negative; the expected value
+  # is a property of the inputs, not a hardcoded constant.
+  r.capture6(routine("add_signed"), 0x4000000000000000, 0x4000000000000001)
+  check("add_signed.u64_high_bit", r.ret == 0x8000000000000001)
+end
+with_regs do |r|
   r.capture6(routine("sum_via_rbx"), 20, 22)
   check("sum_via_rbx.abi_preserved", r.ret == 42 && r.abi_preserved?)
 end

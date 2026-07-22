@@ -32,6 +32,11 @@ const builtin = @import("builtin");
 // Struct *types* only — the functions are resolved at runtime via DynLib.
 const c = @cImport({
     @cInclude("asmtest_hwtrace.h");
+    // B5: the mirrored value structs' C counterparts (asmtest_hwtrace.h does not
+    // transitively include these) — for the comptime layout cross-check below.
+    @cInclude("asmtest_trace_auto.h"); // asmtest_trace_choice_t
+    @cInclude("asmtest_codeimage.h"); // asmtest_codeimage_event_t
+    @cInclude("asmtest_ptrace.h"); // asmtest_jitdump_entry_t
 });
 
 /// Success status from the lifecycle / registration calls (ASMTEST_HW_OK).
@@ -214,6 +219,23 @@ pub const JitEntry = extern struct {
     timestamp: u64,
     code_index: u64,
 };
+
+comptime {
+    // The hand-mirrored extern structs cross the FFI by value / by-pointer; a
+    // header drift must FAIL THE BUILD here, not corrupt a capture silently
+    // (repo-review B5). Pin size AND every field offset — a size-only check
+    // would miss a same-size field reorder.
+    for ([_][]const u8{ "tier", "backend", "fidelity", "mechanism" }) |f|
+        std.debug.assert(@offsetOf(Choice, f) == @offsetOf(c.asmtest_trace_choice_t, f));
+    std.debug.assert(@sizeOf(Choice) == @sizeOf(c.asmtest_trace_choice_t));
+    for ([_][]const u8{ "available", "code", "stage", "perf_event_paranoid", "probe_errno", "reason" }) |f|
+        std.debug.assert(@offsetOf(Status, f) == @offsetOf(c.asmtest_hwtrace_status_t, f));
+    std.debug.assert(@sizeOf(Status) == @sizeOf(c.asmtest_hwtrace_status_t));
+    for ([_][]const u8{ "addr", "len", "timestamp", "pid", "tid", "kind", "fd" }) |f|
+        std.debug.assert(@offsetOf(Event, f) == @offsetOf(c.asmtest_codeimage_event_t, f));
+    std.debug.assert(@sizeOf(Event) == @sizeOf(c.asmtest_codeimage_event_t));
+    std.debug.assert(@sizeOf(JitEntry) == @sizeOf(c.asmtest_jitdump_entry_t));
+}
 
 /// A JIT method resolved from a jitdump (the safe wrapper over `JitEntry`): its
 /// load address, byte size, the JIT's timestamp/index, and — unlike the text

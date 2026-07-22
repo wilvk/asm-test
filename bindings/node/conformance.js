@@ -43,6 +43,16 @@ withRegs((r) => {
   check('add_signed.basic', r.ret() === 42 && r.abiPreserved());
 });
 withRegs((r) => {
+  // B7: 0x4000000000000000 + 0x4000000000000001 = 0x8000000000000001 — sign bit
+  // set AND not a power of two, so a Number round-trip both mis-signs and drops
+  // the low bit. Pass the args as BigInt so capture6's `long` params receive them
+  // exactly (koffi accepts BigInt for integer params); ret() must come back as an
+  // exact BigInt, not a narrowed Number.
+  r.capture6(routine('add_signed'), 0x4000000000000000n, 0x4000000000000001n);
+  const got = r.ret();
+  check('add_signed.u64_high_bit', typeof got === 'bigint' && got === 9223372036854775809n);
+});
+withRegs((r) => {
   r.capture6(routine('sum_via_rbx'), 20, 22);
   check('sum_via_rbx.abi_preserved', r.ret() === 42 && r.abiPreserved());
 });

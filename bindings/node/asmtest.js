@@ -235,7 +235,9 @@ class Regs {
     fn.captureVecF32(this._h, routine, Float32Array.from(lanes), vectors.length);
   }
   /** The integer return value (rax / x0). */
-  ret() { return Number(fn.regsRet(this._h)); }
+  // koffi returns a Number for uint64 values <= 2^53 and a BigInt above (B7):
+  // do NOT Number()-narrow it — that dropped precision on a high-bit return.
+  ret() { return fn.regsRet(this._h); }
   /** The scalar FP return value (xmm0 / d0). */
   fret() { return fn.regsFret(this._h); }
   /** The four float32 lanes of vector register `index` (0 = the vector return). */

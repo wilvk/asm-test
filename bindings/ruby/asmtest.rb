@@ -47,6 +47,8 @@ module Asmtest
 
   VOIDP = Fiddle::TYPE_VOIDP
   LONG  = Fiddle::TYPE_LONG
+  ULONG = -LONG            # unsigned long (== uint64_t on LP64); Fiddle negates
+                           # the type constant to mark it unsigned (B7)
   INT   = Fiddle::TYPE_INT
   DBL   = Fiddle::TYPE_DOUBLE
   FLT   = Fiddle::TYPE_FLOAT
@@ -78,7 +80,7 @@ module Asmtest
     capture_args:   func(L, "asmtest_capture_args", [VOIDP, VOIDP, VOIDP, INT], VOID),
     capture_mix:    func(L, "asmtest_capture_mix", [VOIDP, VOIDP, VOIDP, INT, VOIDP, INT], VOID),
     capture_sret:   func(L, "asmtest_capture_sret", [VOIDP, VOIDP, VOIDP, VOIDP, INT], VOID),
-    regs_ret:       func(L, "asmtest_regs_ret", [VOIDP], LONG),
+    regs_ret:       func(L, "asmtest_regs_ret", [VOIDP], ULONG),  # uint64_t: unsigned (B7)
     regs_fret:      func(L, "asmtest_regs_fret", [VOIDP], DBL),
     regs_vec_f32:   func(L, "asmtest_regs_vec_f32", [VOIDP, INT, INT], FLT),
     regs_flag_set:  func(L, "asmtest_regs_flag_set", [VOIDP, VOIDP], INT),

@@ -200,7 +200,7 @@ dataflow-lua-test: $(DATAFLOW_LIVE_DEPS)
 # own ELF loader wants a hash table the plain shared lib omits — ElfHashTableNotFound).
 .PHONY: dataflow-zig-test
 dataflow-zig-test: $(DATAFLOW_LIVE_DEPS)
-	$(dataflow_live_env) $(ZIG) run -lc bindings/zig/src/test_dataflow.zig
+	$(dataflow_live_env) $(ZIG) run -lc -I$(abspath include) bindings/zig/src/test_dataflow.zig
 
 # Phase 6 — the Rust data-flow binding (bindings/rust/test_dataflow.rs, direct FFI).
 # Standalone rustc smoke (no cargo project) linked against the analysis lib; needs

@@ -5,6 +5,11 @@
 //   zig run -lc bindings/zig/src/test_dataflow.zig  (ASMTEST_DATAFLOW_LIB +
 //                                                    ASMTEST_DATAFLOW_VICTIM set)
 const std = @import("std");
+// B5: cross-check the hand-mirrored value structs against the C header at
+// compile time (requires -Iinclude on the `zig run` line — see mk/dataflow.mk).
+const c = @cImport({
+    @cInclude("asmtest_valtrace.h");
+});
 
 const GcMove = extern struct { old_base: u64, new_base: u64, len: u64, step: u32 };
 const Method = extern struct { addr: u64, size: u64, name: [*:0]const u8, version: u64 };
@@ -65,6 +70,16 @@ const AtValRec = extern struct {
     value: u64 = 0,
     step: u32 = 0,
 };
+
+comptime {
+    // A header layout drift must fail the build here, not corrupt the shared
+    // at_val_rec_t mirror silently (repo-review B5 — the riskiest single spot).
+    for ([_][]const u8{ "kind", "reg", "base", "index", "scale", "disp", "addr", "size", "is_write", "value_valid", "wide", "wide_off", "value", "step" }) |f|
+        std.debug.assert(@offsetOf(AtValRec, f) == @offsetOf(c.at_val_rec_t, f));
+    std.debug.assert(@sizeOf(AtValRec) == @sizeOf(c.at_val_rec_t));
+    std.debug.assert(@sizeOf(GcMove) == @sizeOf(c.asmtest_gcmove_t));
+    std.debug.assert(@sizeOf(Method) == @sizeOf(c.asmtest_method_t));
+}
 
 // at_loc_kind_t: the location space of an operand.
 const LOC_REG: i32 = 0; // a register (key = Capstone reg id)
