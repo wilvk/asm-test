@@ -218,6 +218,14 @@ Verify the scaffold with no hardware (repo admin):
 gh workflow run hw.yml && gh run watch   # all jobs "skipped"; run green in seconds
 ```
 
+Verified after each job was added — 2026-07-22, with all three lanes present and
+every `HW_RUNNER_*` absent:
+[run 29920565410](https://github.com/wilvk/asm-test/actions/runs/29920565410)
+completed in ~12 s with `hwtrace-privileged-zen`, `hwtrace-pt-baremetal` and
+`hwtrace-coresight-board` all **skipped** (an all-skipped run is a non-failing
+conclusion). That is the property that lets these jobs land ahead of the
+hardware.
+
 ## Operator status table
 
 Fill this in as boxes come online (one row per registered runner). It is the
