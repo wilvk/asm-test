@@ -106,6 +106,47 @@ sufficed`. The regression signal is guarded by the lane, not by this checklist.
 
 Record each observed run here (host, date, values), newest first.
 
+### 2026-07-22 — Ryzen 9 4900HS (Zen 2, Family 17h): residue items 1 + 2 run
+
+Box: `ibs_op` + `ibs_fetch` PMUs present, **no `amd_lbr_v2`** (the residue's Zen 2
+degradation premise, confirmed live), host `perf_event_paranoid=2`, `msr` module
+loaded, kernel 6.14. Three lanes, all **exit 0, 0 `not ok`**:
+
+- **Residue item 1 — `make docker-hwtrace-ibs`** (seccomp=unconfined, no caps):
+  `test_ibs` **`1..81`** with the live surveys RUNNING unprivileged (paranoid=2 +
+  `swfilt`): `# IBS-Op on this host: AVAILABLE` + `# IBS-Fetch … AVAILABLE` via
+  the real-open path, out-of-band pid survey (spin-loop back-edge captured, `3
+  edges, 5818/24431 branch/total samples, throttled`), whole-process survey
+  `3/3 worker functions covered, 39 edges`, fetch survey (`4 addrs, 21795/21795
+  valid, 0 ic-miss, 0 itlb-miss`), phase5 callchain + record-bound checks all
+  `ok`. ONE honest skip: system-wide capture (`needs CAP_PERFMON / paranoid<=0
+  (substrate present) — EACCES`). This is exactly the IBS-present /
+  LbrExtV2-absent path the Zen 4/5 runner can never reach.
+- **`make docker-hwtrace-amd`** (CAP_PERFMON): `test_hwtrace` `1..645` +
+  `test_ibs` `1..84` — 729 ok, 0 failed. The AMD-LBR tier degrades honestly on
+  this box: every AMD-LBR live test self-skips with `no AMD branch records
+  (needs Zen 3 BRS / Zen 4 LbrExtV2)`, never a false AVAILABLE; with CAP_PERFMON
+  the system-wide IBS capture also ran (**zero** `# SKIP IBS` lines). The
+  regression signal reads `# call_auto escalate: rc=0 result=25 used.backend=3
+  insns=77 truncated=0 (escalated off the LBR window)` — escalation fires, not
+  `LBR window sufficed`.
+- **Residue item 2 — `make docker-hwtrace-msr`** (`--privileged`, host `msr`
+  module loaded): `1..654` + `1..84` — 738 ok, 0 failed. The **MSR-direct
+  LbrExtV2 path itself self-skips on this box** (`# SKIP AMD MSR-direct:
+  substrate absent (needs amd_lbr_v2 + /dev/cpu/N/msr + CAP_SYS_ADMIN)`) — Zen 2
+  has no LbrExtV2 MSRs, so item 2's primary observation (the MSR path opening
+  and capturing) **still awaits the Zen 4/5 box with the `msr` module loaded**.
+  Recorded here instead: the lane's `/dev/cpu/N/msr` mechanics work, and its
+  second consumer — the W3 in-process BTF block-step — ran LIVE through the same
+  access: `# in-process BTF: rc=0 result=42 insns=5 truncated=0` (stream
+  `[0,3,6,c,11]`, block partition `{0, 0x11}` matching
+  single-step/PT/AMD/DynamoRIO) and the 62-insn loop fixture complete with no
+  depth ceiling (`insns=62 truncated=0`) — the independent re-validation now
+  recorded on [inproc-btf-block-step](implementations/inproc-btf-block-step.md).
+- Item 3's premise re-confirmed in both capability-bearing lanes: `# SKIP status
+  live-EPERM lane: … (stage=4 paranoid=2 root=1)` — root-in-container keeps the
+  unprivileged-EPERM branch unreachable, as recorded (noted, not run).
+
 ### 2026-07-22 — self-hosted CI Zen lane went live (Ryzen 9 9950X, Zen 5)
 
 The `hwtrace-privileged-zen` lane in `hw.yml` ran green end-to-end for the first
