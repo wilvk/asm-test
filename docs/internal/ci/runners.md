@@ -226,6 +226,17 @@ recorded form of each hardware gate.
 | tart | _(record for osx-arm64)_ | _(Apple Silicon)_ | ☐ | `0` | — |
 | kvm | _(record)_ | _(bare-metal `/dev/kvm`)_ | ☐ | `0` | — |
 
+> **amd-zen local pre-registration proof (T3 step 2, 2026-07-22).** Before any
+> runner is registered, the target itself was proven green on the Ryzen 9 9950X
+> (Zen 5) dev box (`amd_lbr_v2` present): `make docker-hwtrace-privileged` →
+> **666 `ok` / 0 failed**, zero `# SKIP AMD LBR live capture`, zero
+> `# SKIP IBS live capture`, and `# call_auto escalate: rc=0 result=25
+> used.backend=3 insns=77 truncated=0 (escalated off the LBR window)`. This
+> separates a hardware problem from a CI problem — the AMD-exact live paths run
+> on this silicon. The **CI** `amd-zen` row above stays ☐ / `Live-lane last
+> green: —` until a runner is registered (repo-admin token) and
+> `HW_RUNNER_AMD_ZEN` is flipped to `1`.
+
 ## Hardware & credential gates (recorded, per CLAUDE.md)
 
 Per [CLAUDE.md](../../../CLAUDE.md), only **hardware** and **credentials** are

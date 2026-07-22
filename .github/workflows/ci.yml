@@ -1337,23 +1337,28 @@ jobs:
       - name: Build + run the eBPF code-image detector
         run: make docker-hwtrace-codeimage
 
-  # K2: the privileged hardware-capture lane — the ONE place the exact AMD
-  # LbrExtV2 branch-stack + live IBS paths get exercised end to end. Runs
-  # `make docker-hwtrace-privileged`: the hwtrace image under Docker's DEFAULT
-  # seccomp profile with --cap-add=PERFMON (which gates perf_event_open on
-  # exactly that cap and bypasses kernel.perf_event_paranoid — no
-  # seccomp=unconfined, no --privileged). On GitHub's non-AMD runner the
-  # AMD-exact live tests (LbrExtV2 capture, sample_window survey, live IBS
-  # out-of-band + whole-process survey) self-skip — they need a Zen 3+/4/5 CPU
-  # — so here this lane validates that the target builds and runs, the IBS-Op
-  # decoder + substrate/PMU detection execute, and the whole detect-and-skip
-  # gating chain stays green. It goes RED only on a real regression, never for
-  # lack of AMD silicon; the missing coverage is exactly the exact-AMD paths,
-  # which are validated manually pre-release on Zen hardware — see
-  # docs/internal/amd-hardware-validation.md (and the open call_auto finding in
-  # docs/internal/analysis/2026-07-12-zen5-privileged-lbr-findings.md that this
-  # lane exists to eventually catch). A future self-hosted AMD runner would
-  # light the live paths up here for free.
+  # K2: the privileged hardware-capture lane, run on GitHub's HOSTED (non-AMD)
+  # runners. Runs `make docker-hwtrace-privileged`: the hwtrace image under
+  # Docker's DEFAULT seccomp profile with --cap-add=PERFMON (which gates
+  # perf_event_open on exactly that cap and bypasses kernel.perf_event_paranoid
+  # — no seccomp=unconfined, no --privileged). On a non-AMD runner the AMD-exact
+  # live tests (LbrExtV2 capture, sample_window survey, live IBS out-of-band +
+  # whole-process survey) self-skip — they need Zen silicon (LbrExtV2 is Zen 4+;
+  # live IBS is Zen 2+) — so here this lane validates that the target builds and
+  # runs, the IBS-Op decoder + substrate/PMU detection execute, and the whole
+  # detect-and-skip gating chain stays green. It goes RED only on a real
+  # regression, never for lack of AMD silicon: this hosted copy is the
+  # build/decode bitrot gate.
+  #
+  # The exact-AMD live paths now have a real CI home: the self-hosted lane
+  # `hwtrace-privileged-zen` in .github/workflows/hw.yml runs this same target on
+  # a registered Zen 4/5 runner and asserts the live paths RAN (a self-skip there
+  # is a hard failure). Off that runner the residue is validated manually
+  # pre-release — see docs/internal/amd-hardware-validation.md. The call_auto
+  # non-escalation finding from
+  # docs/internal/analysis/2026-07-12-zen5-privileged-lbr-findings.md was FIXED in
+  # 5d8e0d2 (a non-escalation is now the regression signal that lane guards
+  # against, not an open bug).
   hwtrace-privileged:
     name: hwtrace-privileged (PERFMON; AMD-exact self-skips off Zen)
     runs-on: ubuntu-latest

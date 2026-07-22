@@ -10,8 +10,8 @@ GitLab template, and the raw recipe.)
 
 The pipeline is ~20 jobs. The core `test` job runs the suites across all four
 OS/architecture combinations (`ubuntu-latest`, `ubuntu-24.04-arm`,
-`macos-latest`, and the nightly `macos-13`/`rosetta` x86-64 legs), and dedicated
-jobs cover the rest of the surface:
+`macos-latest`, and the nightly `macos-15-intel` x86-64 leg — the `macos-13`
+image was retired 2025-12-08), and dedicated jobs cover the rest of the surface:
 
 - **Backends & tiers** — `nasm` (Intel-syntax backend), `emu` (Unicorn emulator),
   `asm` (in-line Keystone assembler), `drtrace` (DynamoRIO), `hwtrace`
@@ -37,6 +37,16 @@ jobs cover the rest of the surface:
   back to `main` as `github-actions[bot]`; golden files stay a reviewed human PR.
   See [Cross-system benchmarking](../guides/cross-system-benchmarking.md).
 - **Packaging** — `package-libs` (+ its macOS and collect legs).
+
+A separate **`hw` workflow** (`.github/workflows/hw.yml`) is *allowed to be absent*:
+it never runs on `push`/`pull_request` (only `workflow_dispatch` + a nightly
+schedule) and carries the jobs that need real silicon the hosted runners lack —
+e.g. `hwtrace-privileged-zen`, which runs `make docker-hwtrace-privileged` on a
+registered AMD Zen 4/5 self-hosted runner and fails hard if any AMD-exact live
+path (LbrExtV2, live IBS) self-skips. Every job is guarded by an `HW_RUNNER_*`
+repository variable that is `0`/absent by default, so with no runner registered
+the workflow still lands green with each job skipped. See the
+[self-hosted runner runbook](https://github.com/wilvk/asm-test/blob/main/docs/internal/ci/runners.md).
 
 The framework's own [self-tests](../getting-started/writing-tests.md)
 (`tests/positive.c`, `tests/negative.c`, the `tests/expect.sh` black-box harness)
