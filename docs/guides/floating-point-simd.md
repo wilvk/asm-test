@@ -166,9 +166,13 @@ TEST(simd, sve_add_doubles) {
 - **Linux AArch64 only.** Apple silicon has no *non-streaming* SVE — plain SVE
   instructions `SIGILL` on macOS arm64 — so the probe returns 0 and the macros
   self-skip there, exactly as on x86-64.
-- Before any SVE silicon is available, `make docker-sve-sweep` runs this suite
-  under qemu-user at several vector lengths (VQ 1/3/8/16 → VL 16/48/128/256
-  bytes, including a non-power-of-two) to flush out VL-assumption bugs.
+- **Validated on real SVE silicon** — CI's `ubuntu-24.04-arm` leg is a
+  Neoverse-N2 host (SVE2, VL=16 bytes), where this suite *executes* the `ptrue`
+  / `fadd` rather than emulating it, and the job fails if it ever self-skips
+  there. For the vector lengths no reachable hardware provides,
+  `make docker-sve-sweep` runs the suite under qemu-user at VQ 1/3/8/16 →
+  VL 16/48/128/256 bytes (including a non-power-of-two) to flush out
+  VL-assumption bugs.
 
 > **AVX-512 (`zmm`), SVE, and the emulator.** Native 512-bit capture is wired:
 > `asm_call_capture_vec512` with the `ASM_VCALL512_*` macros and

@@ -8,6 +8,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **AArch64 SVE capture signed off on real silicon, and the sign-off is now a CI
+  gate (aarch64-sve-capture.md T8).** The SVE execution sign-off had been recorded
+  as hardware-gated ("no SVE host in this environment"); the hosted
+  `ubuntu-24.04-arm` runner is Azure Cobalt 100 / Neoverse-N2, which carries `sve`
+  and `sve2` in HWCAP at `sve_default_vector_length` = 16 bytes on
+  `Linux 6.17.0-1020-azure` — so `asm_call_capture_sve` and its `ptrue`/`fadd`
+  corpus body had been *executing* on real silicon in every CI run, not only under
+  qemu-user TCG (`ok 5 - simd.sve_adds_doubles_at_any_vl`, `0 skipped`;
+  `make check` 57 passed / 0 failed). The `test` job's arm64 leg gains an **SVE
+  silicon sign-off** step that prints the silicon facts (kernel, `CPU part`, VL)
+  and fails if that test ever self-skips there, so a runner-fleet change or a
+  regressed `HWCAP_SVE` probe cannot silently retire the only real-silicon
+  validation the SVE path has. Still gated, and reported as such: a *native* VL
+  other than 16 B (Graviton3 at 32 B, A64FX at 64 B) — the sweep lane's
+  48/128/256 B legs remain qemu-TCG emulation.
+
 - **Self-hosted AMD Zen CI lane ran green live on real silicon
   (self-hosted-ci-runners.md T3).** The `hwtrace-privileged-zen` job in
   `.github/workflows/hw.yml` runs `make docker-hwtrace-privileged` on a registered

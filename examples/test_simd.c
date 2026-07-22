@@ -84,7 +84,10 @@ TEST(simd, avx512_adds_eight_doubles_512bit) {
  * args into z0..z7 and captures the whole z/predicate file at whatever VL the
  * host provides (z[0] = return). AArch64 Linux only; ASM_SVCALL_* self-skips a
  * host without SVE (Apple silicon has no non-streaming SVE; a native non-SVE
- * arm64 host also skips — only qemu-user under TCG exposes SVE here). */
+ * arm64 host also skips). This EXECUTES on real silicon in CI: the hosted
+ * ubuntu-24.04-arm runner is Neoverse-N2 (SVE2, VL=16 B) and the `test` job
+ * fails if this line ever self-skips there. qemu-user under TCG additionally
+ * exposes the wider VLs that make docker-sve-sweep sweeps. */
 extern void sve_addd(void); /* svec sve_addd(svec a, svec b), SVE */
 
 TEST(simd, sve_adds_doubles_at_any_vl) {

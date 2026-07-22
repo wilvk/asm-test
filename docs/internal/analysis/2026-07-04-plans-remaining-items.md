@@ -104,12 +104,14 @@ batches landed in `59adb74`/`817cc72`). Highest-leverage:
 - **AArch64:** live single-step trace stream + HW-breakpoint `run_to` validation
   (qemu-user can't emulate the ptrace tracer/tracee relationship — self-skips).
 - **W3 BTF branch-step:** needs a kernel helper / uapi patch.
-- **Wide-vector SVE — execution sign-off only** (post-v1 Track D /
-  aarch64-sve-capture T8): capture is **landed and qemu-TCG validated** as of
-  2026-07-19 (`asm_call_capture_sve` / `svec_t`/`spred_t` / `ASM_SVCALL_*`;
-  `make docker-sve-sweep` executes the `ptrue`/`fadd` at VL 16/48/128/256 B). Only
-  *executing* the trampoline on real AArch64+SVE silicon (Graviton3/Grace/A64FX-class)
-  stays gated; emu wide-vector remains blocked upstream (bundled Unicorn rejects AVX).
+- ~~**Wide-vector SVE — execution sign-off only**~~ **RESOLVED 2026-07-22, and it was
+  never a hardware gate** (post-v1 Track D / aarch64-sve-capture T8): the hosted
+  `ubuntu-24.04-arm` CI runner is Neoverse-N2 with `sve`/`sve2` in HWCAP at VL=16 B, so
+  the trampoline had been executing on real silicon in CI since it landed —
+  `ok 5 - simd.sve_adds_doubles_at_any_vl`, `0 skipped`, `make check` 57/0. The `test`
+  job now asserts that line never self-skips on arm64. Narrower gate remains: a *native*
+  VL other than 16 B (Graviton3 32 B / A64FX 64 B) — 48/128/256 B stay qemu-TCG. Emu
+  wide-vector remains blocked upstream (bundled Unicorn rejects AVX).
 - **macOS DynamoRIO port (entire `macos-drtrace-plan`):** BLOCKED-upstream — no
   macOS DynamoRIO release has ever existed; correctly parked at its Step-0 gate.
 - **P3 RISC-V native host tier** (review): large, needs the binfmt lane.

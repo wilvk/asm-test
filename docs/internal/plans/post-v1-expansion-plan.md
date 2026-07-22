@@ -266,7 +266,7 @@ a small surface and an already-familiar optional-dependency pattern.
 
 ---
 
-## Track D — Wide-vector capture (AVX/AVX-512, SVE) — **AVX2 + AVX-512 done (SysV + Win64, all ten bindings); SVE capture landed + qemu-TCG validated, real-silicon execution sign-off gated**
+## Track D — Wide-vector capture (AVX/AVX-512, SVE) — **DONE: AVX2 + AVX-512 (SysV + Win64, all ten bindings); SVE capture landed and SIGNED OFF ON REAL SILICON (Neoverse-N2, VL=16 B, 2026-07-22)**
 
 **Goal.** Capture vector state wider than 128 bits, so AVX2 / AVX-512 (`ymm`/`zmm`)
 and AArch64 SVE routines are testable to their full register width.
@@ -317,9 +317,16 @@ which has no non-streaming SVE); self-skipping `ASM_SVCALL_*`; VL-aware
 `simd.sve_adds_doubles_at_any_vl` at the default VL=64 B, and the new
 `make docker-sve-sweep` passes it at VL 16/48/128/256 B (VQ 1/3/8/16, including the
 non-power-of-two 48 B) by steering `QEMU_CPU=…,sve-max-vq=N,sve-default-vector-length=-1`.
-**Still gated:** *execution sign-off on real SVE silicon* (Graviton3/3E/4, NVIDIA
-Grace, or an A64FX-class host) — a genuine hardware gate per CLAUDE.md, like Intel PT;
-qemu TCG is the best-available validation until then, **not** the silicon sign-off. The
+**Silicon sign-off DONE, 2026-07-22 (T8):** the execution sign-off was recorded as
+hardware-gated on the belief that no SVE host was reachable — but the hosted
+**`ubuntu-24.04-arm`** CI runner is Azure Cobalt 100 / **Neoverse-N2**, which carries
+`sve`+`sve2` in HWCAP at `sve_default_vector_length` = **16 bytes**, on
+`Linux 6.17.0-1020-azure`. The suite had been executing the trampoline on that silicon
+all along: `make WERROR=1 test` shows `ok 5 - simd.sve_adds_doubles_at_any_vl` with
+`0 skipped`, and `make WERROR=1 check` is `57 passed, 0 failed`. That sign-off is now a
+standing gate rather than a read log — the `test` job's arm64 leg prints the silicon
+facts and FAILS if the SVE line ever self-skips. Narrower gate remaining: a native VL
+other than 16 B (Graviton3 at 32 B, A64FX at 64 B); VL 48/128/256 B stay qemu-TCG. The
 implementation brief and its T1–T8 breakdown live in
 [aarch64-sve-capture.md](../implementations/aarch64-sve-capture.md).
 
@@ -488,8 +495,9 @@ instruction text, no host crash.
    on a real AVX-512 host. **SVE capture is now landed and qemu-TCG validated**
    (`asm_call_capture_sve` / `svec_t`/`spred_t` / `ASM_SVCALL_*`; the
    `make docker-sve-sweep` VL sweep runs the `ptrue`/`fadd` under qemu at VL
-   16–256 B); only the **execution sign-off on real AArch64+SVE silicon** stays
-   hardware-gated.
+   16–256 B), and the **execution sign-off on real AArch64+SVE silicon is DONE**
+   (2026-07-22, Neoverse-N2 at VL=16 B on the hosted `ubuntu-24.04-arm` runner,
+   now a standing CI gate). Only a *native* VL other than 16 B remains gated.
 4. **Track F** (invariants) — **done.** Small, compounded with Track C (the
    offending store is disassembled).
 5. **Track E** (fuzzing/mutation) — **done.** Built on C and F; coverage now

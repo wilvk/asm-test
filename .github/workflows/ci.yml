@@ -47,6 +47,29 @@ jobs:
       - name: Build and run test suites
         run: make WERROR=1 test
 
+      # AArch64 SVE EXECUTION sign-off (aarch64-sve-capture T8). ubuntu-24.04-arm is
+      # Azure Cobalt 100 / Neoverse-N2 — real SVE2 silicon at VL=16 B — so the SVE
+      # trampoline and its ptrue/fadd body actually EXECUTE here; the docker-sve-sweep
+      # lane's wider VLs are qemu-user TCG *emulation*, which is not a silicon sign-off.
+      # The assertion that matters is the negative one: the SVE test must NOT self-skip.
+      # ASM_SVCALL_* skips cleanly on a host without HWCAP_SVE (by design — macOS arm64
+      # has no non-streaming SVE, and older arm64 parts have none at all), so a runner
+      # fleet change or a regressed HWCAP probe would keep this leg green while quietly
+      # retiring the ONLY real-silicon validation the SVE path has. Fail loudly instead,
+      # and print the silicon facts every run so the sign-off (VL, CPU part, kernel)
+      # stays checkable rather than remembered.
+      - name: SVE silicon sign-off (must execute, not skip)
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: |
+          uname -srm
+          grep -m1 '^CPU part' /proc/cpuinfo
+          grep -m1 '^Features' /proc/cpuinfo | tr ' ' '\n' | grep -qx sve \
+            || { echo "FAIL: no SVE in HWCAP — this runner is not SVE silicon"; exit 1; }
+          echo "SVE VL (bytes): $(cat /proc/sys/abi/sve_default_vector_length)"
+          ./build/test_simd | tee /tmp/simd.tap
+          grep -q '^ok [0-9]* - simd\.sve_adds_doubles_at_any_vl$' /tmp/simd.tap \
+            || { echo "FAIL: simd.sve_adds_doubles_at_any_vl skipped or absent — the SVE execution sign-off is gone"; exit 1; }
+
       # xmllint validates the JUnit XML (incl. escaping of < & > " in failure
       # messages) in `make check`. Preinstalled on the runners, but make it
       # deterministic; macOS ships it natively.

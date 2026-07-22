@@ -660,43 +660,78 @@ the stale "SVE is not yet wired" text is gone.
 **Done when.**
 - Docs build green; the SVE section renders; changelog entry present.
 
-### T8 — Real-silicon execution sign-off  (S, depends on: T6; HARDWARE-GATED)
+### T8 — Real-silicon execution sign-off  (S, depends on: T6) — **DONE 2026-07-22**
 
 **Goal.** The trampoline is *executed* (not just assembled and TCG-emulated)
 on real SVE silicon, and Track D's status flips to done.
 
+> **The gate was never real — the SVE host was already in CI.** This task was
+> written as hardware-gated on the belief that "hosts are x86-64 Zen 5 and
+> non-SVE arm64". That belief was wrong about the hosted **`ubuntu-24.04-arm`**
+> runner: it is Azure Cobalt 100 / **Neoverse-N2**, whose `/proc/cpuinfo`
+> `Features` carries `sve sve2 sveaes svebitperm svesha3 svesm4 svei8mm svebf16`
+> at `sve_default_vector_length` = **16 bytes**. The suite had therefore been
+> *executing* the SVE trampoline on real silicon in every CI run — the evidence
+> was sitting unread in the `test (ubuntu-24.04-arm)` log (`ok N -
+> simd.sve_adds_doubles_at_any_vl`, `0 skipped`). Measured live 2026-07-22:
+>
+> ```
+> Linux 6.17.0-1020-azure aarch64          # kernel
+> CPU part : 0xd49                         # Neoverse-N2
+> Features : … sve … sve2 sveaes svebitperm svesha3 svesm4 … svei8mm svebf16
+> /proc/sys/abi/sve_default_vector_length = 16    # VL = 16 B (128-bit)
+> make WERROR=1 test   → ok 5 - simd.sve_adds_doubles_at_any_vl (0 skipped)
+> make WERROR=1 check  → # 57 passed, 0 failed
+> ```
+>
+> Before believing a hardware gate, check the CI fleet: "no such host in this
+> environment" is a claim about the runner matrix, not only about the desk.
+
 **Steps.**
-1. Obtain an AArch64+SVE Linux host — Graviton3/3E/4 (VL=32B), NVIDIA Grace
-   (VL=16B), or an A64FX/Fugaku-class machine (VL=64B). None exists in this
-   repo's current environment (hosts are x86-64 Zen 5 and non-SVE arm64) —
-   this is a REAL hardware gate per CLAUDE.md, like Intel PT or Apple silicon.
-2. On that host: `git clone`, `make test && make check`, and confirm the
-   output shows `simd.sve_adds_doubles_at_any_vl` passing (not skipping).
-   Record `grep -o 'sve' /proc/cpuinfo | head -1` and
-   `cat /proc/sys/abi/sve_default_vector_length` alongside.
-3. Optionally cross-check VL honesty: `make docker-sve-sweep` also runs there
-   (natively — no qemu, so the sweep collapses to the silicon VL; expect the
-   banner runs to pass at the host's single VL).
+1. ~~Obtain an AArch64+SVE Linux host~~ — **done: the hosted
+   `ubuntu-24.04-arm` runner is one** (Neoverse-N2, VL=16 B). Graviton3/3E/4
+   (VL=32B), NVIDIA Grace (VL=16B) or A64FX (VL=64B) would additionally cover
+   wider *native* VLs, but the sign-off this task asks for — the trampoline
+   executing on silicon rather than under TCG — is met on the hosted runner.
+   A remaining honest gate: no native VL **other than 16 B** has been executed
+   on hardware (the 48/128/256 B legs remain qemu-emulated).
+2. **Done** — `make WERROR=1 test && make WERROR=1 check` ran green on that
+   runner with the SVE test *executing*, and the silicon facts are recorded
+   above (kernel, CPU part, HWCAP `sve`, VL).
+3. **Turn the one-off into a standing gate** (this is the part that keeps the
+   sign-off from rotting): the `test` job in `.github/workflows/ci.yml` gains
+   an arm64-only **"SVE silicon sign-off (must execute, not skip)"** step that
+   prints `uname -srm` / `CPU part` / VL every run and then asserts
+   `^ok [0-9]* - simd\.sve_adds_doubles_at_any_vl$` — i.e. the line WITHOUT a
+   `# SKIP` suffix. `ASM_SVCALL_*` self-skipping is correct behaviour on a
+   non-SVE host, which is exactly why it is dangerous here: a runner-fleet
+   change or a regressed `HWCAP_SVE` probe would keep the leg green while
+   silently retiring the only real-silicon validation the SVE path has.
 4. Update [post-v1-expansion-plan.md](../plans/post-v1-expansion-plan.md)
    Track D: "SVE staged" → done, naming the host and VL validated (the plan
    header instructs tracks to update it as they land); update the CHANGELOG
    entry's sign-off note; update the gate line in
-   [2026-07-04-plans-remaining-items.md](../analysis/2026-07-04-plans-remaining-items.md)
-   (line 94).
+   [2026-07-04-plans-remaining-items.md](../analysis/2026-07-04-plans-remaining-items.md).
 
-**Code.** None expected; any fix found on silicon feeds back into T2–T4.
+**Code.** No source change was needed — the trampoline executed correctly on
+first contact with silicon. CI gains the sign-off step above; the stale
+"only qemu-user under TCG exposes SVE here" comment in `examples/test_simd.c`
+is corrected.
 
 **Tests.** The suite run on the SVE host is the test; the observable is the
-pass line at a VL the QEMU sweep never produced natively.
+`ok` line with `0 skipped` at a VL (16 B) the qemu sweep produces only by
+steering `QEMU_CPU`, now produced natively.
 
 **Docs.** The two status updates + changelog note in step 4.
 
 **Done when.**
-- A dated note in the plan names the silicon, kernel, and VL, with
-  `make test && make check` green there.
-- Until such a host exists: this task stays open and the lane's QEMU sweep
-  (T6) is the recorded best-available validation — say exactly that anywhere
-  status is reported, never "done".
+- ~~A dated note in the plan names the silicon, kernel, and VL, with~~
+  `make test && make check` green there — **met 2026-07-22** (Neoverse-N2,
+  Linux 6.17.0-1020-azure, VL=16 B; `check` 57/0).
+- The CI step above fails the arm64 `test` leg if that line ever self-skips,
+  so the claim stays true rather than being re-asserted from memory.
+- Still honestly gated: a **native VL other than 16 B** (Graviton3 at 32 B,
+  A64FX at 64 B). The 48/128/256 B legs are qemu TCG and are reported as such.
 
 ## Task order & parallelism
 
@@ -713,10 +748,15 @@ T1 ──► T2 ──► T3 ──► T4 ──► T6 ──► T8
 
 ## Constraints & gates
 
-- **Hardware gate (real):** executing on SVE silicon (T8). Per CLAUDE.md,
-  hardware is a legitimate self-skip gate — record it, skip cleanly, never
-  fail. Everything else here is installable/runnable today and must not
-  self-skip: the QEMU sweep lane executes on any host with binfmt qemu.
+- ~~**Hardware gate (real):** executing on SVE silicon (T8).~~ **CLOSED
+  2026-07-22** — the hosted `ubuntu-24.04-arm` runner IS SVE silicon
+  (Neoverse-N2, VL=16 B), so the execution sign-off runs in CI on every push
+  and is asserted not to self-skip. What remains gated is narrower and stated
+  as such: a native VL other than 16 B (Graviton3 32 B / A64FX 64 B). Per
+  CLAUDE.md, hardware is a legitimate self-skip gate — but check the CI runner
+  matrix before recording one: this gate was self-inflicted for three days.
+  Everything else here is installable/runnable today and must not self-skip:
+  the QEMU sweep lane executes on any host with binfmt qemu.
 - **Apple silicon is not an SVE host.** Apple's SME implementation makes SVE
   accessible only inside streaming mode; plain SVE instructions are
   inaccessible (SIGILL) on macOS arm64. The probe returning 0 there is

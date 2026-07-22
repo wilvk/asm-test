@@ -91,7 +91,10 @@ docker-fuzz: docker-bindings-base
 	  -e AFL_SKIP_CPUFREQ=1 -e AFL_I_DONT_CARE_ABOUT_MISSING_CRASHES=1 \
 	  asmtest-fuzz make fuzz-shim-test
 
-# --- docker-sve-sweep: pre-hardware SVE validation under qemu binfmt --------
+# --- docker-sve-sweep: off-hardware SVE VL sweep under qemu binfmt ----------
+# (Not "pre-hardware" any more: CI's ubuntu-24.04-arm leg is Neoverse-N2 and
+# executes the suite at the silicon's VL=16 B. This lane covers the VLs no
+# reachable hardware provides — 48/128/256 B — under TCG emulation.)
 # Runs the simd suite in an arm64 container at several SVE vector lengths by
 # steering qemu-user's CPU through the QEMU_CPU env var (read by the binfmt
 # interpreter): sve-max-vq=N caps VL at N*16 bytes and
