@@ -2,14 +2,20 @@
 
 Operator runbook for bringing **Track D** (`make docker-osx-bindings`, the
 vanilla x86-64 macOS clean room) up on a new bare-metal Linux box. It captures
-what the first real shakedown attempt (2026-07-22/23, Ryzen 9 4900HS, Ubuntu,
-snap Docker) actually hit, so the next host takes an hour of babysitting
-instead of an afternoon of debugging. That attempt ended **blocked, not
-green**: the host's boot carried a kernel-measured TSC warp, which freezes
+what two real shakedowns hit, so the next host takes an hour of babysitting
+instead of an afternoon of debugging.
+
+**Status: GREEN as of 2026-07-23.** The lane ran end-to-end on a healthy-TSC
+Ryzen 9 9950X (Zen 5, `current_clocksource=tsc`): the one-time Ventura 13.7.8
+install completed headless over VNC, and
+`DOCKER_OSX_DISK=… DOCKER_OSX_CPU=Haswell-noTSX-IBRS make docker-osx-bindings`
+exited rc=0 (stable ×2) with `clean-room-test: OK` on `darwin-x86_64` (ruby PASS,
+rest SKIP). The earlier attempt (2026-07-22/23, Ryzen 9 4900HS, Ubuntu, snap
+Docker) ended **blocked, not green** on the same hard gate this runbook opens
+with: that host's boot carried a kernel-measured TSC warp, which freezes
 macOS/KVM guests under load no matter what (see the clocksource check below —
-it is a hard gate, verify it FIRST). The lane itself is documented for users
-in [docs/clean-room-testing.md](../clean-room-testing.md); the task-level spec
-is
+verify it FIRST). The lane itself is documented for users in
+[docs/clean-room-testing.md](../clean-room-testing.md); the task-level spec is
 [implementations/macos-cleanroom-lanes.md](implementations/macos-cleanroom-lanes.md).
 
 The flow has two halves: a **one-time interactive install** that produces a
@@ -172,11 +178,15 @@ on the host, no graphical session needed.
      ID, Siri, Screen Time, Location) → **create the account
      `user` / `alpine`** (the lane's default credentials; anything else
      needs `ASMTEST_OSX_USER`/`ASMTEST_OSX_PASS` on every run) → at the
-     desktop, open Terminal and turn on Remote Login:
-
-     ```
-     sudo systemsetup -setremotelogin on    # password: alpine
-     ```
+     desktop, turn on **Remote Login (SSH)**. On Ventura use the GUI toggle,
+     **not** `systemsetup`: open Spotlight (Cmd-Space) → `System Settings` →
+     **General → Sharing → Remote Login → on**. The CLI `sudo systemsetup
+     -setremotelogin on` is **refused on Ventura** — it prints `Turning Remote
+     Login on or off requires Full Disk Access privileges` unless Terminal is
+     first granted Full Disk Access (Privacy & Security → Full Disk Access),
+     which is more clicks than the Sharing toggle. Confirm from the host:
+     `sshpass -p alpine ssh -p 50922 -o StrictHostKeyChecking=no user@localhost
+     'sw_vers -productVersion'` prints the guest version.
 
    - Shut down cleanly (` → Shut Down`), then remove the container:
      `docker rm -f asmtest-osx-install`. The finished disk is
@@ -195,12 +205,35 @@ lane exactly as it does to the install; the script warns and pins if not.)
 
 The lane stages nothing by itself — the host must have run
 `gh run download <release-run> -n native-all -D build/dist/native` (or an
-Intel-mac build) plus `make packages`/the per-language packers first, exactly
-as [clean-room-testing.md](../clean-room-testing.md) describes; the script
-preflights the darwin-x86_64 payload and refuses to boot without it.
-`DOCKER_OSX_VNC=99` re-attaches a VNC display for triage. The script's sshd
-wait loop allows 30 minutes; a prebuilt-disk boot is expected well inside
-that (not yet measured — the shakedown never got a completed disk).
+Intel-mac build) plus at minimum `make ruby-package` (the only lane that live-
+PASSes on a vanilla guest; `make packages` if you have the toolchains) first,
+exactly as [clean-room-testing.md](../clean-room-testing.md) describes; the
+script preflights the darwin-x86_64 payload and refuses to boot without it. The
+gem is a fat gem — `ruby-package` bundles one native slot per platform present
+under `build/dist/native/`, so staging all four via `native-all` puts the
+`darwin-x86_64` dylib inside the gem that the guest installs.
+`DOCKER_OSX_VNC=99` re-attaches a VNC display for triage.
+
+**Measured on the 2026-07-23 green run** (prebuilt disk, healthy TSC):
+
+- The `:latest` image **honours the mounted disk** — `-v <disk>:/image -e
+  IMAGE_PATH=/image` (the make target sets both) boots the installed system; the
+  `Dockerfile.naked` fallback the script header hedged on is **not** needed.
+- `NOPICKER=true` (set by the target) auto-boots the installed `macos` entry:
+  the OpenCore picker flashes for a moment, then boots the default. No keypress
+  needed for a headless run.
+- **Every fresh-container run re-downloads the ~850 MB recovery BaseSystem**
+  before QEMU starts (docker-osx's `Launch.sh` fetches it per container, even
+  with a prebuilt disk). Budget ~5 min of the 30-minute sshd-wait window for it;
+  `docker logs -f asmtest-docker-osx` shows the download. (A `docker commit` of a
+  container that has already fetched BaseSystem, used as `DOCKER_OSX_IMAGE`,
+  removes the re-download — a local cache optimisation, not required for green.)
+- sshd answers **at the login screen** — Remote Login is a system daemon, so the
+  lane connects without a graphical login. End to end (recovery download → boot →
+  tree copy → clean-room test) took a few minutes past the download on this box.
+- The tree copy includes everything under the repo except `.git` and the guest
+  disk, so a large `build/` (DynamoRIO/SDE/Pin trees) makes the copy slower over
+  QEMU user-net — harmless (the guest only reads `build/dist`), just not fast.
 
 ## Troubleshooting quick table
 

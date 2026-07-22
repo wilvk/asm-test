@@ -91,18 +91,22 @@ make clean-room-test      # the scrub unsets this; feed the path straight to
   slice, `@rpath`/`@loader_path` install names (no `/Users`, `/opt/homebrew`,
   `/usr/local` baked in), and a min-OS load command.
 
-## The macOS VM lanes (Tracks C/D — written per plan, unvalidated)
+## The macOS VM lanes (Track C unvalidated; Track D validated 2026-07-23)
 
 Hosted `macos-*` runners are fresh-per-job but **not pristine** — they ship
 Xcode CLT and Homebrew, so a binding that accidentally depends on either passes
-there and fails on a bare user Mac. Two additional lanes exist for that class;
-both were **written to the plan's spec and have not yet run green end to
-end**. Track C has never executed (no Apple-Silicon/tart host has been
-available). Track D's first real shakedown was attempted 2026-07-22/23 on a
-Ryzen 9 4900HS/snap-Docker box: it hardened the lane script substantially (see
-the findings note below) but the one-time guest install froze repeatedly
-because that host's boot carried a kernel-measured TSC warp — rerun it on (or
-after rebooting into) a host whose clocksource is `tsc`:
+there and fails on a bare user Mac. Two additional lanes exist for that class.
+**Track D (Docker-OSX x86) ran its first green shakedown 2026-07-23** on a
+healthy-TSC Ryzen 9 9950X/Zen 5 Linux/KVM box: the one-time Ventura 13.7.8
+install completed headless over VNC into a reusable prebuilt disk, and
+`DOCKER_OSX_DISK=… DOCKER_OSX_CPU=Haswell-noTSX-IBRS make docker-osx-bindings`
+exited rc=0 (stable ×2) with `clean-room-test: OK` on `darwin-x86_64` — ruby
+PASS (the fresh gem resolved its bundled `libasmtest_emu.dylib`), the rest SKIP.
+**Track C (tart arm64) has never executed** (no Apple-Silicon/tart host has been
+available). A hard host gate learned the hard way: the box's
+`current_clocksource` **must read `tsc`** — a warped-TSC boot freezes macOS
+guests under load (the 2026-07-22/23 attempt on a 4900HS blocked exactly there,
+before the lane could run):
 
 | Lane | Target | Host needed | Entry point |
 |---|---|---|---|
@@ -147,6 +151,19 @@ Notes the plan calls out:
   X-less container), `DOCKER_OSX_VNC=<display>` re-attaches a VNC view for
   triage, and the tree-copy step excludes the guest's own disk image when it
   lives inside the repo.
+- **Track D green-run findings (2026-07-23 shakedown)**: (1) the current
+  `:latest` image **does** honour an overridden `IMAGE_PATH`, so a prebuilt disk
+  mounted with `-v <disk>:/image -e IMAGE_PATH=/image` boots — the
+  `Dockerfile.naked` fallback the header hedged on is **not** needed; and
+  `NOPICKER=true` auto-boots the installed `macos` entry (the OpenCore picker
+  flashes, then boots the default). (2) During the one-time install, enable SSH
+  via **System Settings → General → Sharing → Remote Login** — `sudo systemsetup
+  -setremotelogin on` is **refused on Ventura** ("Turning Remote Login on or off
+  requires Full Disk Access privileges") unless Terminal is granted Full Disk
+  Access first. (3) Each fresh-container run of the lane re-downloads the ~850 MB
+  recovery BaseSystem from Apple's CDN before QEMU starts (docker-osx's
+  `Launch.sh` fetches it per container) — budget ~5 min of the sshd wait window
+  for that even with a prebuilt disk.
 - **EULA**: macOS's license permits up to 2 macOS VMs **on Apple hardware**, so
   tart-on-Mac (Track C) is above board; Docker-OSX on non-Apple hosts
   (Track D) is EULA-gray — it is an opt-in, self-hosted-only lane.

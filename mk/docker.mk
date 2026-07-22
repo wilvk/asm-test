@@ -967,10 +967,12 @@ docker-sshpass:
 # image), SSHes in on localhost:50922, and runs the same Track-A clean-room
 # install test (scripts/docker-osx-bindings.sh). Hard-errors without /dev/kvm —
 # hosted CI runners and most laptops don't have it, by design.
-# WRITTEN PER docs/internal/plans/macos-clean-test-plan.md, NOT YET VALIDATED —
-# the 2026-07-22/23 shakedown attempt hardened the lane script but the guest
-# install froze on that host's warped-TSC boot (host reboot required first);
-# docs/internal/docker-osx-linux-host.md records the runbook + evidence.
+# VALIDATED 2026-07-23 (first green shakedown, Ryzen 9 9950X/Zen 5, healthy TSC):
+# the prebuilt Ventura 13.7.8 disk boots headless and the lane exits rc=0 with
+# ruby PASS (bundled darwin-x86_64 dylib) / rest SKIP, stable x2. NOTE the host's
+# current_clocksource must be tsc — a warped-TSC boot freezes macOS guests (the
+# 2026-07-22/23 attempt on a 4900HS blocked exactly there). Setup runbook +
+# evidence: docs/internal/docker-osx-linux-host.md.
 # Upstream note (verified 2026-07-17): sickcodes/docker-osx tags other than
 # :latest/:master were deleted from Docker Hub in 2024 — :ventura et al. 404.
 # :latest's first boot is an interactive macOS installer, so headless runs need

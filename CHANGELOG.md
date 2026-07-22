@@ -8,24 +8,31 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **macOS clean-room Track D lane hardened by its first real shakedown attempt
-  (macos-cleanroom-lanes.md T6 — attempted, not yet green).** The first
-  execution on a bare-metal Linux/KVM box (Ryzen 9 4900HS, snap Docker) drove
-  the one-time macOS install headless over QEMU VNC (no X11) and taught the
-  lane script what a real boot demands: QEMU `-display none` (gtk default is
-  fatal in an X-less container), `-i` on `docker run` (a closed stdin EOFs the
-  `-monitor stdio` monitor and quits QEMU), `DOCKER_OSX_CPU` /
-  `DOCKER_OSX_SMP` / `DOCKER_OSX_VNC` / `DOCKER_OSX_CPUSET` passthroughs (the
-  image's `Penryn` CPU default spins newer macOS userlands — use
-  `Haswell-noTSX-IBRS`), and a tree-copy exclude so the lane never tars the
-  guest's own disk image into the guest. The install itself froze four times
-  and the lane is **still unvalidated**: that host's boot carried a
-  kernel-measured inter-core TSC warp (clocksource demoted to `hpet`), and
-  macOS guests — TSC-only timebase — freeze under load on such a boot at any
-  vCPU count; core-pair pinning and masking CPUID `tsc-deadline` only moved
-  the freeze point. The script now detects the condition, warns, and pins;
-  the real fix is a host reboot restoring `clocksource=tsc`. Full evidence +
-  new-host runbook: `docs/internal/docker-osx-linux-host.md`.
+- **macOS clean-room Track D lane validated green — first shakedown complete
+  (macos-cleanroom-lanes.md T6).** `make docker-osx-bindings` now runs a vanilla
+  **x86-64 macOS 13.7.8 (Ventura)** guest under KVM on a bare-metal Linux host,
+  SSHes in, and runs the Track-A clean-room install test: on 2026-07-23 it exited
+  **rc=0 (stable ×2)** with `clean-room-test: OK` on `darwin-x86_64` — **ruby
+  PASS** (the freshly-installed gem resolved its *bundled*
+  `native/darwin-x86_64/libasmtest_emu.dylib`, proving no dev-`build/`/Homebrew/
+  `/usr/local` leak) and python/node/lua/java/dotnet/hdr SKIP (toolchain-free
+  guest, the expected shape). The one-time Ventura install was driven headless
+  over QEMU VNC (no X11), producing a reusable prebuilt disk
+  (`build/osx/mac_hdd_ng.img`, `DOCKER_OSX_DISK`). Getting there hardened the lane
+  script: QEMU `-display none` (gtk default is fatal in an X-less container), `-i`
+  on `docker run` (a closed stdin EOFs the `-monitor stdio` monitor and quits
+  QEMU), `DOCKER_OSX_CPU` / `DOCKER_OSX_SMP` / `DOCKER_OSX_VNC` /
+  `DOCKER_OSX_CPUSET` passthroughs (the image's `Penryn` default spins newer macOS
+  userlands — use `Haswell-noTSX-IBRS`), and a tree-copy exclude so the lane never
+  tars the guest's own disk into the guest. **Hard host gate:** the box's
+  `current_clocksource` must read `tsc` — an earlier 2026-07-22/23 attempt (Ryzen
+  9 4900HS) froze four times on a warped-TSC boot (clocksource demoted to `hpet`;
+  macOS is TSC-only and livelocks under load there, at any vCPU count); the green
+  run was on a healthy-TSC Ryzen 9 9950X/Zen 5 box. Two corrections vs the earlier
+  runbook: enable Remote Login via **System Settings → Sharing → Remote Login**
+  (Ventura refuses `systemsetup -setremotelogin on` without Full Disk Access), and
+  each fresh-container run re-downloads the ~850 MB recovery before QEMU starts.
+  Full evidence + runbook: `docs/internal/docker-osx-linux-host.md`.
 - **Bare-metal Intel PT self-hosted lane + a fail-not-skip docker target, and the
   dark CoreSight placeholder (self-hosted-ci-runners.md T5).** `hw.yml` gains
   `hwtrace-pt-baremetal` (`runs-on: [self-hosted, linux, x64, intel-pt]`) and

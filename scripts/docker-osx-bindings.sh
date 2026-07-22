@@ -9,14 +9,17 @@
 # scripts/clean-env.sh + scripts/assert-clean-path.sh), then tear the container
 # down. Driven by `make docker-osx-bindings`.
 #
-# *** WRITTEN PER THE PLAN — STILL NOT VALIDATED END TO END. First real
-# *** execution attempted 2026-07-22/23 (Ryzen 9 4900HS, snap Docker): the
-# *** attempt hardened this script (see DOCKER_OSX_* knobs, `-display none`,
-# *** `-di`, the tar exclude) but the guest install froze repeatedly because
-# *** that host's BOOT had a kernel-measured TSC warp (clocksource demoted to
-# *** hpet) — macOS/KVM guests freeze under load on such a boot; a host
-# *** reboot restoring clocksource=tsc is required first. Full evidence and
-# *** the one-time-install runbook: docs/internal/docker-osx-linux-host.md.
+# *** VALIDATED END TO END 2026-07-23 (first green shakedown): Ryzen 9 9950X
+# *** (Zen 5), healthy TSC (current_clocksource=tsc). The one-time Ventura 13.7.8
+# *** install completed headless over VNC -> build/osx/mac_hdd_ng.img (user/alpine,
+# *** Remote Login on), and `DOCKER_OSX_DISK=... DOCKER_OSX_CPU=Haswell-noTSX-IBRS
+# *** make docker-osx-bindings` exited rc=0 (stable x2): clean-room-test OK on
+# *** darwin-x86_64, ruby PASS (bundled dylib) / rest SKIP. The 2026-07-22/23
+# *** attempt (Ryzen 9 4900HS, snap Docker) that hardened this script (DOCKER_OSX_*
+# *** knobs, `-display none`, `-di`, the tar exclude) blocked only because THAT
+# *** host's BOOT had a warped TSC (clocksource demoted to hpet) — macOS/KVM guests
+# *** freeze under load on such a boot, so the host's clocksource MUST read tsc.
+# *** Full evidence + one-time-install runbook: docs/internal/docker-osx-linux-host.md.
 #
 # Honest tradeoffs (per the plan): x86-only (the OpenCore path has no arm64
 # guest); a "virtualized Hackintosh" that can break on macOS point-updates;

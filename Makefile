@@ -195,7 +195,7 @@ help:
 	@echo 'Clean-room (macOS plan; see docs/clean-room-testing.md):'
 	@echo '  clean-room-test / macos-clean-test / docker-clean-room  (above) scrubbed fresh-install leak checks'
 	@echo '  osx-vm-test          Track C: tart vanilla arm64 macOS VM (Apple Silicon; written per plan, UNVALIDATED)'
-	@echo '  docker-osx-bindings  Track D: Docker-OSX x86 macOS clean room (bare-metal Linux + /dev/kvm; written per plan, UNVALIDATED)'
+	@echo '  docker-osx-bindings  Track D: Docker-OSX x86 macOS clean room (bare-metal Linux + /dev/kvm; validated 2026-07-23)'
 	@echo ''
 	@echo 'Docs (Sphinx):'
 	@echo '  docs docs-serve docs-linkcheck docs-clean'

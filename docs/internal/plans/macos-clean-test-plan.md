@@ -50,6 +50,31 @@ Intel runner for the day-to-day signal.
 > `journalctl -k | grep -i tsc`), then the install + lane rerun. Evidence +
 > runbook: [docs/internal/docker-osx-linux-host.md](../docker-osx-linux-host.md)
 > and [clean-room-testing.md](../../clean-room-testing.md).
+>
+> **Update (2026-07-23): Track D shakedown GREEN — now 4 of 5 (A, B, D, E).**
+> Re-run on a *different* host whose boot has a healthy TSC — the Ryzen 9 9950X
+> (Zen 5) dev box `will-X870-EAGLE-WIFI7`, `current_clocksource=tsc`, journal
+> shows a clean TSC calibration with **no** warp and **no** "Marking TSC
+> unstable" — exactly the unblock the 4900HS attempt lacked. The one-time Ventura
+> **13.7.8** install ran to completion headlessly over VNC (`vncdotool`) with no
+> freeze at the image-default SMP=4, producing the reusable disk
+> `build/osx/mac_hdd_ng.img` (account `user`/`alpine`, Remote Login on). The
+> headless lane `DOCKER_OSX_DISK=… DOCKER_OSX_CPU=Haswell-noTSX-IBRS make
+> docker-osx-bindings` then exited **rc=0, stable across two runs**:
+> `clean-room-test: OK` on `darwin-x86_64` with **ruby PASS** (the freshly
+> installed gem resolved its **bundled** `native/darwin-x86_64/libasmtest_emu.dylib`,
+> not a dev `build/`/Homebrew/`/usr/local` leak) and python/node/lua/java/dotnet/hdr
+> SKIP (vanilla toolchain-free guest — the expected green shape). This also
+> **resolved T5's open hedge**: the current `:latest` image *does* honour an
+> overridden `IMAGE_PATH` (the mounted prebuilt disk boots; no `Dockerfile.naked`
+> fallback needed) and `NOPICKER=true` auto-boots the installed `macos` entry.
+> Two shakedown corrections vs the earlier runbook: `systemsetup -setremotelogin
+> on` is **refused on Ventura** ("requires Full Disk Access") — enable Remote
+> Login via **System Settings → General → Sharing → Remote Login** instead; and
+> each fresh-container lane run re-downloads the ~850 MB recovery BaseSystem
+> before QEMU starts (budget ~5 min). Track C stays Apple-Silicon-gated. Full
+> evidence + updated runbook:
+> [docs/internal/docker-osx-linux-host.md](../docker-osx-linux-host.md).
 
 ---
 
@@ -240,19 +265,28 @@ Apple-Silicon box; optionally a self-hosted CI lane.
 - **EULA note in the doc** — macOS's license permits up to **2 macOS VMs on Apple
   hardware**, so tart-on-Mac is above board (unlike Track D on non-Apple hosts).
 
-## Track D — Docker-OSX x86 clean-room — **written per spec (2026-07-07), UNVALIDATED — NOT Mac-gated; first attempt 2026-07-23 blocked by host TSC state**
+## Track D — Docker-OSX x86 clean-room — **done (validated green 2026-07-23 on a healthy-TSC Ryzen 9 9950X Linux/KVM box)**
 
-> **Status: written; first real shakedown attempted 2026-07-22/23 and blocked
-> before the lane could run.** The attempt (Ryzen 9 4900HS bare-metal
-> Linux/KVM, snap Docker) hardened the lane script per the shakedown findings
-> and produced the operator runbook
-> [docs/internal/docker-osx-linux-host.md](../docker-osx-linux-host.md), but
-> the one-time Ventura install froze four times: that host's boot had a
-> kernel-measured TSC warp (clocksource demoted to hpet), and macOS guests
-> freeze under load on such a boot regardless of vCPU count, core pinning, or
-> masking `tsc-deadline`. Rerun the install + lane after a host reboot that
-> restores `clocksource=tsc`. This lane needs NO Apple hardware — it runs a
-> macOS guest on Linux under KVM; nothing about it is Apple-Silicon-gated.
+> **Status: DONE — first green shakedown 2026-07-23.** After the 2026-07-22/23
+> attempt blocked on a warped-TSC host boot, the lane ran green on a *different*
+> host with a healthy TSC (Ryzen 9 9950X / Zen 5, `will-X870-EAGLE-WIFI7`,
+> `current_clocksource=tsc`): the one-time Ventura 13.7.8 install completed
+> headlessly over VNC producing `build/osx/mac_hdd_ng.img` (user/alpine, Remote
+> Login on), and `DOCKER_OSX_DISK=… DOCKER_OSX_CPU=Haswell-noTSX-IBRS make
+> docker-osx-bindings` exited **rc=0** (stable ×2) — `clean-room-test: OK` on
+> `darwin-x86_64`, ruby PASS (bundled `libasmtest_emu.dylib` from the fresh
+> install), rest SKIP. See the top-of-file 2026-07-23 GREEN update for the full
+> writeup and the two runbook corrections. This lane needs NO Apple hardware — it
+> runs a macOS guest on Linux under KVM; nothing about it is Apple-Silicon-gated.
+>
+> **Earlier (attempt) status, kept for history:** the 2026-07-22/23 attempt (Ryzen
+> 9 4900HS bare-metal Linux/KVM, snap Docker) hardened the lane script per the
+> shakedown findings and produced the operator runbook
+> [docs/internal/docker-osx-linux-host.md](../docker-osx-linux-host.md), but the
+> one-time Ventura install froze four times: that host's boot had a
+> kernel-measured TSC warp (clocksource demoted to hpet), and macOS guests freeze
+> under load on such a boot regardless of vCPU count, core pinning, or masking
+> `tsc-deadline`. The fix was a host with `current_clocksource=tsc` (above).
 >
 > **Two prerequisites, both satisfiable here (verified 2026-07-16):**
 > 1. **Bare-metal Linux + `/dev/kvm`** — **present on the current dev host**, so
