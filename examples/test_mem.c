@@ -1,6 +1,6 @@
 /*
  * test_mem.c — exercises memory/string/ordering assertions plus per-suite
- * setup/teardown and skip, against the fill_bytes routine in mem.s.
+ * setup/teardown, against the fill_bytes routine in mem.s.
  */
 #include "asmtest.h"
 
@@ -45,6 +45,11 @@ TEST(cmp, ordering_relations) {
 
 TEST(cmp, string_equality) { ASSERT_STREQ("asm", "asm"); }
 
-TEST(mem, partial_fill_not_yet_specified) {
-    SKIP("partial-fill semantics not finalized");
+TEST(mem, partial_fill_touches_only_first_n_bytes) {
+    memset(buf, 0x5A, BUFLEN);
+    fill_bytes(buf, 0x1CD, BUFLEN / 2); /* only the low byte (0xCD) lands */
+    unsigned char expect[BUFLEN];
+    memset(expect, 0xCD, BUFLEN / 2);
+    memset(expect + BUFLEN / 2, 0x5A, BUFLEN - BUFLEN / 2);
+    ASSERT_MEM_EQ(buf, expect, BUFLEN);
 }
