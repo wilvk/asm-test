@@ -24,12 +24,12 @@ but no independent second read — treat as a lead. `make test` and `make check`
 privileges, or credentials.
 
 **Remediation status:** PARTIAL — fix-order groups 1–4 (C1, S1, B2, K1, K2,
-K3, K4, B1, B4, B6) fixed & lane-verified 2026-07-21; see the per-finding
-[FIXED] markers. Still open: C2/C3, S2–S7, B3/B5/B7, K5, T1/T2, and D1–D3
-(D-items belong to the tracked doc-drift sweep, amd-review-followup-2-plan T2).
-**In progress 2026-07-22 (macOS-Intel host): T1, D1, D2, D3, K5** — claimed;
-the D-items are being fixed as the review's own separately-fixable instances,
-not as the broader T2 sweep, which stays open in the plan.
+K3, K4, B1, B4, B6) fixed & lane-verified 2026-07-21, and **T1, D1, D2, D3,
+K5 fixed & verified 2026-07-22** (macOS-Intel host); see the per-finding
+[FIXED] markers. The D-items were fixed as this review's own
+separately-fixable instances; the broader amd-review-followup-2-plan T2
+doc-drift sweep stays open in that plan. Still open: C2/C3, S2–S7, B3/B5/B7,
+and T2.
 This file moves to `../archive/reviews/` in the change that closes the last
 finding.
 
@@ -257,7 +257,14 @@ anti-vacuity CI. The gaps are supply-chain drift, not breakage.
   no `.github/workflows/*` references fuzz — a whole capability lane unexercised,
   contrary to the repo's anti-vacuity posture.
 - **K5 — Third-party GitHub Actions float, unlike the digest-pinned engines.
-  [reported]** `pypa/gh-action-pypi-publish@release/v1` (a moving *branch*, the
+  [reported] [FIXED 2026-07-22]** *(all six third-party actions SHA-pinned to
+  the commit of their then-current release with a `# vX.Y.Z` comment —
+  pypa/gh-action-pypi-publish v1.14.1, ruby/setup-ruby v1.320.0,
+  rust-lang/crates-io-auth-action v1.0.5, mlugg/setup-zig v2.2.1,
+  msys2/setup-msys2 v2.32.0, docker/setup-buildx-action v4.2.0 ×6 — and
+  ci.yml's `actions/setup-python@v5` unified to `@v6`; actionlint output
+  byte-identical to pre-change HEAD, YAML parses.)*
+  `pypa/gh-action-pypi-publish@release/v1` (a moving *branch*, the
   weakest), plus `setup-zig@v2`, `msys2/setup-msys2@v2`,
   `crates-io-auth-action@v1`, `docker/setup-buildx-action@v4` — all major-tag,
   none SHA-pinned; also `actions/setup-python@v6` (release.yml) vs `@v5`
@@ -270,21 +277,34 @@ weakness is synchronization lag (see §0 for the tracked sweep). Two concrete,
 separately-fixable instances:
 
 - **D1 — Residual Zen-3 LBR overclaim contradicting `_positions.md` #2.
-  [verified]** [docs/reference/features.md:114](../../reference/features.md#L114)
+  [verified] [FIXED 2026-07-22]** *(features.md now states the Zen 4–5 floor
+  with "Zen 3's BRS is not opened by this tree"; the diagrams.md node reads
+  "AMD LBR → built-in / bare-metal Zen 4+". Sphinx `-W` clean.)*
+  [docs/reference/features.md:114](../../reference/features.md#L114)
   lists "AMD LBR (Zen 3 BRS / Zen 4–5 …)" and `reference/diagrams.md:241` says
   "bare-metal Zen 3+", presenting Zen 3 as supported, while the project's own
   position ledger states the floor is Zen 4 and "Zen 3 BRS never opened by this
   tree." Most other pages caveat this correctly. *Fix:* qualify both cells.
 - **D2 — Two internal-engineering pages leak onto the public Sphinx site.
-  [reported]** `docs/amd_tracing_review.md` (a code review with `src/file.c:line`
+  [reported] [FIXED 2026-07-22]** *(both moved: the audit page →
+  `docs/internal/analysis/2026-07-09-amd-tracing-review-f1-f47.md` — one
+  correction to this finding: it is NOT a duplicate of the 07-09 analysis file
+  but its authoritative same-day F1–F47 successor, which that file's own
+  SUPERSEDED banner names — and the ledger →
+  `docs/internal/scoped-tracing-implementation.md` with its `../src/…` links
+  rebased. All 12 internal referrers retargeted; the published scoped-tracing
+  guide's three inline links became GitHub blob URLs per the internal-README
+  convention. Sphinx `-W` clean; neither page renders on the site any more.)*
+  `docs/amd_tracing_review.md` (a code review with `src/file.c:line`
   finding IDs, premised on the now-superseded Zen-2 host — stale, and a duplicate
   of `internal/analysis/2026-07-09-amd-tracing-review.md`) and
   `docs/scoped-tracing-implementation.md` (an implementation ledger whose
   `../src/…` relative links point at non-doc sources) are `orphan: true` but
   still built. *Fix:* move both under `docs/internal/`.
 - **D3 — `docs/guides/win64.md` self-contradicts on runner-port status.
-  [reported]** Intro says the port is "now underway"; the body ("The runner port")
-  says it is "done … full parity."
+  [reported] [FIXED 2026-07-22]** *(intro now reads "porting them was the
+  runner port, now complete", matching the body.)* Intro says the port is
+  "now underway"; the body ("The runner port") says it is "done … full parity."
 - **D-note — `internal/README.md` lists a `reviews/` directory that did not exist
   until this file created it** (only `archive/reviews/` was present); the layout
   table is now correct again.
@@ -295,7 +315,14 @@ The hard stuff (crash/timeout/guard-page/struct-ABI/JUnit-escaping/parallel
 ordering/differential shrinking) is genuinely asserted via paired positive+negative
 cases. Two minor items:
 
-- **T1 — Permanent placeholder SKIP in the default `make test` set. [verified]**
+- **T1 — Permanent placeholder SKIP in the default `make test` set. [verified]
+  [FIXED 2026-07-22]** *(semantics finalized and asserted:
+  `mem.partial_fill_touches_only_first_n_bytes` fills the first n bytes of a
+  0x5A-sentinel buffer with `fill_bytes(buf, 0x1CD, n)` and asserts the low
+  byte lands in `[0,n)` while `[n,…)` keeps the sentinel — the contract all
+  four implementations (GAS x86-64/AArch64/riscv64 + NASM) already share.
+  Green under both `make test` and `make ASM_SYNTAX=nasm test`; mutation-checked
+  — widening the fill to the whole buffer flips it `not ok`.)*
   [examples/test_mem.c:49](../../../examples/test_mem.c#L49) —
   `SKIP("partial-fill semantics not finalized")` shows a *permanent* SKIP in
   every core run. Either finalize the semantics and assert them, or move the case

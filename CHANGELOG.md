@@ -1653,6 +1653,32 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **2026-07-21 review batch 2 — T1, D1–D3, K5 (fixed 2026-07-22).**
+  **T1:** the permanent `SKIP("partial-fill semantics not finalized")` in the
+  default `make test` set is retired — the semantics are finalized and asserted:
+  `mem.partial_fill_touches_only_first_n_bytes` proves `fill_bytes(buf, val, n)`
+  writes the low byte of `val` into `buf[0..n)` and leaves the tail untouched
+  (the contract all four implementations — GAS x86-64/AArch64/riscv64 + NASM —
+  already share); green under both syntaxes, mutation-checked. **D1:** the two
+  residual Zen-3 LBR overclaims (`reference/features.md`, `reference/diagrams.md`)
+  now state the Zen 4+ live floor per `_positions.md` #2. **D2:** the two
+  internal-engineering pages that leaked onto the public Sphinx site moved under
+  `docs/internal/` — `amd_tracing_review.md` →
+  `internal/analysis/2026-07-09-amd-tracing-review-f1-f47.md` (the authoritative
+  F1–F47 edition, not a duplicate as the review first framed it) and
+  `scoped-tracing-implementation.md` → `internal/` with links rebased; all
+  referrers retargeted (published guide → GitHub blob URLs); Sphinx `-W` clean.
+  **D3:** `guides/win64.md`'s intro no longer calls the runner port "now
+  underway" while the body says full parity — it is complete. **K5:** all six
+  third-party GitHub Actions are SHA-pinned to their then-current release
+  commits (`pypa/gh-action-pypi-publish` v1.14.1 — previously the moving
+  `release/v1` branch — plus `ruby/setup-ruby`, `rust-lang/crates-io-auth-action`,
+  `mlugg/setup-zig`, `msys2/setup-msys2`, `docker/setup-buildx-action`), and
+  ci.yml's `actions/setup-python@v5` is unified to `@v6`; actionlint output
+  byte-identical to before, YAML parses. See
+  `docs/internal/reviews/2026-07-21-repo-review.md`; still open there:
+  C2/C3, S2–S7, B3/B5/B7, T2.
+
 - **asmspy no longer orphans a planted breakpoint when the tracer is interrupted
   (2026-07-21 review C1 — the one hole in the "never kill the target" invariant).**
   A `PTRACE_POKETEXT` 0xcc is plain memory the kernel does NOT restore on tracer
