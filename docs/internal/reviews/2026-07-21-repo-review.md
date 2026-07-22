@@ -27,6 +27,9 @@ privileges, or credentials.
 K3, K4, B1, B4, B6) fixed & lane-verified 2026-07-21; see the per-finding
 [FIXED] markers. Still open: C2/C3, S2–S7, B3/B5/B7, K5, T1/T2, and D1–D3
 (D-items belong to the tracked doc-drift sweep, amd-review-followup-2-plan T2).
+**In progress 2026-07-22 (macOS-Intel host): T1, D1, D2, D3, K5** — claimed;
+the D-items are being fixed as the review's own separately-fixable instances,
+not as the broader T2 sweep, which stays open in the plan.
 This file moves to `../archive/reviews/` in the change that closes the last
 finding.
 
