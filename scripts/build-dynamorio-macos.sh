@@ -34,7 +34,28 @@ prog=$(basename "$0")
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 DR_FORK_CACHE="${DR_FORK_CACHE:-$root/build/dynamorio-fork}"
 src="$DR_FORK_CACHE/dynamorio"
-prefix="${1:-$root/build/dynamorio-macos}"
+# Build flavor (macos-dynamorio-signal-chaining.md SC2): DR_MACOS_BUILD_TYPE=Debug
+# opt-in builds a DEBUG+INTERNAL runtime — DR internal asserts print file:line
+# where a release build executes a silent ud2 trap — into a separate default
+# prefix. The pinned release flow is byte-identical when the variable is unset.
+DR_MACOS_BUILD_TYPE="${DR_MACOS_BUILD_TYPE:-Release}"
+case "$DR_MACOS_BUILD_TYPE" in
+Release)
+    cmake_flavor="-DDEBUG=OFF"
+    libsub="release"
+    default_prefix="$root/build/dynamorio-macos"
+    ;;
+Debug)
+    cmake_flavor="-DDEBUG=ON -DINTERNAL=ON"
+    libsub="debug"
+    default_prefix="$root/build/dynamorio-macos-debug"
+    ;;
+*)
+    echo "$prog: ERROR: DR_MACOS_BUILD_TYPE must be Release or Debug (got $DR_MACOS_BUILD_TYPE)" >&2
+    exit 1
+    ;;
+esac
+prefix="${1:-$default_prefix}"
 
 log() { echo "$prog: $*" >&2; }
 
@@ -61,7 +82,7 @@ want=$(tp_digest git-commit dynamorio-fork "$DR_FORK_VERSION") || {
 commit="${want#commit:}"
 
 stamp="$prefix/.asmtest-dr-fork-commit"
-dylib="$prefix/lib64/release/libdynamorio.dylib"
+dylib="$prefix/lib64/$libsub/libdynamorio.dylib"
 if [ -f "$dylib" ] && [ -f "$stamp" ] && [ "$(cat "$stamp")" = "$commit" ]; then
     log "reusing $prefix (built at $commit)"
     echo "$prefix"
@@ -111,8 +132,9 @@ lic="$root/licenses/DynamoRIO-fork.txt"
 rm -rf "$prefix"
 mkdir -p "$prefix"
 
-log "configuring (cmake -DDEBUG=OFF -DBUILD_TESTS=OFF)"
-cmake -S "$src" -B "$prefix" -DDEBUG=OFF -DBUILD_TESTS=OFF >&2
+log "configuring (cmake $cmake_flavor -DBUILD_TESTS=OFF)"
+# shellcheck disable=SC2086 — cmake_flavor is deliberately word-split
+cmake -S "$src" -B "$prefix" $cmake_flavor -DBUILD_TESTS=OFF >&2
 
 # dynamorio is the runtime; drmgr/drreg/drx are the BSD-clean extensions the
 # asm-test drclient sub-build links (drclient/CMakeLists.txt) — built here so

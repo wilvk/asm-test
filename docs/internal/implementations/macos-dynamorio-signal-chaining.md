@@ -35,12 +35,13 @@ before `os.kill` returns. Under pytest the same case presents as a **hang**
 crashes instead — both are the same defect wearing different hats).
 
 **The crash site (lldb, stop-on-exec off, SIGUSR1 pass-through):**
-`EXC_BAD_INSTRUCTION` on a **DR-planted `ud2`** in the code cache, immediately
-followed by `movq %rcx, %gs:0x870; popq %rcx; jmp <ibl>` — the shape of a
-**ret-indirect-branch exit stub**. The pre-delivery stop shows the thread
-mid-fragment in cache TLS-spill code (`movabsq %rax, %gs:0x860`). I.e. DR's
-"redirect an in-cache thread to deliver an app signal" path executes a
-should-never-reach marker.
+`EXC_BAD_INSTRUCTION` on a `ud2` in the code cache. **SC2's debug run
+re-attributed this** (see Research notes): it is not DR-planted — it is the
+cache's faithful translation of **libsystem `_sigtramp`'s own `ud2` trap**,
+the instruction Apple places immediately after `_sigtramp`'s call to
+`sigreturn` ("sigreturn returned — cannot happen"). The defect is therefore:
+under DR, the app's `sigreturn` syscall for a DR-delivered frame is
+**rejected by the kernel and returns**, and `_sigtramp` falls into its trap.
 
 **Four minimal C repros that all PASS (3–5 runs each), narrowing the
 trigger:** the defect is *not* reproduced by (1) self-`kill()` at the syscall
@@ -296,6 +297,36 @@ path and consumes both. SC4 is mechanical once SC3 is green.
   reserves an alt stack); delivery landing inside DR gencode/IBL rather
   than a fragment (indirect-branch-dense dispatch); trace-fragment volume
   with inlined IBL. All three are debug-build-distinguishable (SC2).
+
+**SC2 findings (executed same-day, 2026-07-22 — the invariant is named):**
+
+- Debug build (`DR_MACOS_BUILD_TYPE=Debug`, pin unchanged) under the python
+  repro reports: *"Application exception at PC `<_sigtramp+51>`. Signal 4
+  delivered to application as default action."* — DR translated the cache
+  fault back to the app PC. `atos`/lldb on the live shared cache identify
+  `_sigtramp+51` (libsystem_platform) as **libsystem's own `ud2` trap**,
+  placed directly after `_sigtramp`'s `call sigreturn`. So the app's
+  `sigreturn` RETURNED — the kernel rejected the frame/token — which native
+  code treats as impossible. The earlier "DR-planted ud2" reading in the
+  probe notes is corrected by this.
+- `_sigtramp` on macOS 14.7.5 x86-64 passes **three** args to `sigreturn`:
+  `uctx` (rbx), `infostyle 0x1e`, and a **kernel validation token** (r12).
+  DR's stale NYI comment at `core/unix/signal.c:3292` says "need to pass 2
+  params to SYS_sigreturn" — it predates the token. DR's dispatcher DOES
+  intercept `SYS_sigreturn` on macOS (`core/unix/os.c` ~8011 →
+  `handle_sigreturn(dcontext, uctx, infostyle)`) — the token param is never
+  read; `handle_sigreturn`'s strategy is "doctor the frame, then let the
+  real sigreturn execute" (its own comment), so a token/frame the kernel
+  won't validate surfaces exactly as the observed fall-through.
+- The `heap.c:1995` vm-heap free-blocks debug assert fires later on the
+  death path — secondary damage, not the invariant. A startup `curiosity:
+  rex.w on OPSZ_6_irex10_short4` print is unattributed decode noise; do not
+  anchor on it.
+- **SC3's sharpened question:** why does the identical
+  `_sigtramp → sigreturn` sequence succeed for all four C shapes but get
+  kernel-rejected for the CPython shape — prime suspect: token/frame-address
+  validation vs where DR (re)builds the app frame, with CPython's startup
+  `sigaltstack` the ranked delta.
 
 ## Out of scope
 
