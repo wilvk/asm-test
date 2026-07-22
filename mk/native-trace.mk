@@ -26,7 +26,7 @@ endif
 #
 # Gated on DynamoRIO, located via two NEW knobs (every other optional dep uses
 # pkg-config; DynamoRIO can't, so this new shape is deliberate):
-#   DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>   runtime root (libdynamorio)
+#   DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>   runtime root (libdynamorio)
 #   DYNAMORIO_DIR=$(DYNAMORIO_HOME)/cmake           find_package config dir
 # When absent, drtrace-test self-skips with a clear message; drtrace_app.o still
 # compiles (its dr_app_* calls are #ifdef'd out, returning ASMTEST_DR_ENODR).
@@ -40,10 +40,13 @@ ifeq ($(UNAME_S),Darwin)
 DRCLIENT_EXT := .dylib
 # dlopen lives in libSystem on Darwin (no libdl); clang maps -rdynamic to
 # -export_dynamic, which the marker-resolving client still needs.
-DRTRACE_LDFLAGS := -rdynamic -lpthread
+DRTRACE_LDFLAGS   := -rdynamic -lpthread
+DRTRACE_SOLDFLAGS := -lpthread
 else
 DRCLIENT_EXT := .so
-DRTRACE_LDFLAGS := -rdynamic -ldl -lpthread
+DRTRACE_LDFLAGS   := -rdynamic -ldl -lpthread
+# The shared-lib variant: same libs, no -rdynamic (meaningless in a .so link).
+DRTRACE_SOLDFLAGS := -ldl -lpthread
 endif
 DR_LIBDIR      := $(DYNAMORIO_HOME)/lib64/release
 DR_DLLIB       := $(DR_LIBDIR)/libdynamorio$(if $(filter Darwin,$(UNAME_S)),.dylib,.so)
@@ -139,7 +142,7 @@ shared-drtrace: $(call shlib_dev,libasmtest_drapp)
 $(call shlib_real,libasmtest_drapp): $(BUILD)/pic/drtrace_app.o \
                                      $(BUILD)/pic/trace.o $(DRAPP_KS_PIC_OBJ)
 	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmtest_drapp) $^ \
-	      $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+	      $(DRAPP_KS_LIBS) $(DRTRACE_SOLDFLAGS) -o $@
 $(call shlib_dev,libasmtest_drapp): $(call shlib_real,libasmtest_drapp)
 	ln -sf $(notdir $<) $(call shlib_compat,libasmtest_drapp)
 	ln -sf $(notdir $(call shlib_compat,libasmtest_drapp)) $@
@@ -161,7 +164,7 @@ $(BUILD)/test_drtrace: $(BUILD)/drtrace_app.o $(BUILD)/trace.o \
 drtrace-test:
 ifndef DR_AVAILABLE
 	@echo "== drtrace-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -247,8 +250,8 @@ $(BUILD)/dr_valtrace: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
                       $(BUILD)/dataflow_dr.o $(BUILD)/dataflow_emu.o \
                       $(BUILD)/drtrace_app.o $(BUILD)/trace.o $(DRAPP_KS_OBJ) \
                       $(BUILD)/dr_valtrace.o
-	$(CC) $(CFLAGS) -rdynamic $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) \
-	      $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+	$(CC) $(CFLAGS) $(DRTRACE_LDFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) \
+	      $(DRAPP_KS_LIBS) -o $@
 else
 $(BUILD)/dr_valtrace.o: examples/dr_valtrace.c include/asmtest_valtrace.h \
                         $(BUILD)/.build-flags | $(BUILD)
@@ -257,15 +260,15 @@ $(BUILD)/dr_valtrace: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
                       $(BUILD)/dataflow_dr.o \
                       $(BUILD)/drtrace_app.o $(BUILD)/trace.o $(DRAPP_KS_OBJ) \
                       $(BUILD)/dr_valtrace.o
-	$(CC) $(CFLAGS) -rdynamic $^ $(CAPSTONE_LIBS) \
-	      $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+	$(CC) $(CFLAGS) $(DRTRACE_LDFLAGS) $^ $(CAPSTONE_LIBS) \
+	      $(DRAPP_KS_LIBS) -o $@
 endif
 
 .PHONY: dr-valtrace-test
 dr-valtrace-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-valtrace-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -289,7 +292,7 @@ endif
 dr-valtrace-inlined-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-valtrace-inlined-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -323,8 +326,8 @@ $(BUILD)/dr_taint: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
                    $(BUILD)/dataflow_dr_taint.o $(BUILD)/dataflow_emu.o \
                    $(BUILD)/drtrace_app.o $(BUILD)/trace.o $(DRAPP_KS_OBJ) \
                    $(BUILD)/dr_taint.o
-	$(CC) $(CFLAGS) -rdynamic $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) \
-	      $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+	$(CC) $(CFLAGS) $(DRTRACE_LDFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) \
+	      $(DRAPP_KS_LIBS) -o $@
 else
 $(BUILD)/dr_taint.o: examples/dr_taint.c include/asmtest_valtrace.h \
                      include/asmtest_taint.h $(BUILD)/.build-flags | $(BUILD)
@@ -333,15 +336,15 @@ $(BUILD)/dr_taint: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
                    $(BUILD)/dataflow_dr_taint.o \
                    $(BUILD)/drtrace_app.o $(BUILD)/trace.o $(DRAPP_KS_OBJ) \
                    $(BUILD)/dr_taint.o
-	$(CC) $(CFLAGS) -rdynamic $^ $(CAPSTONE_LIBS) \
-	      $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+	$(CC) $(CFLAGS) $(DRTRACE_LDFLAGS) $^ $(CAPSTONE_LIBS) \
+	      $(DRAPP_KS_LIBS) -o $@
 endif
 
 .PHONY: dr-taint-native-test
 dr-taint-native-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-native-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -406,8 +409,8 @@ $(BUILD)/dr_taint_simd: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
                         $(BUILD)/dataflow_dr_taint.o $(BUILD)/dataflow_emu.o \
                         $(BUILD)/drtrace_app.o $(BUILD)/trace.o $(DRAPP_KS_OBJ) \
                         $(BUILD)/dr_taint_simd.o
-	$(CC) $(CFLAGS) -rdynamic $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) \
-	      $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+	$(CC) $(CFLAGS) $(DRTRACE_LDFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) \
+	      $(DRAPP_KS_LIBS) -o $@
 else
 $(BUILD)/dr_taint_simd.o: examples/dr_taint_simd.c include/asmtest_valtrace.h \
                           include/asmtest_taint.h $(BUILD)/.build-flags | $(BUILD)
@@ -416,15 +419,15 @@ $(BUILD)/dr_taint_simd: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
                         $(BUILD)/dataflow_dr_taint.o \
                         $(BUILD)/drtrace_app.o $(BUILD)/trace.o $(DRAPP_KS_OBJ) \
                         $(BUILD)/dr_taint_simd.o
-	$(CC) $(CFLAGS) -rdynamic $^ $(CAPSTONE_LIBS) \
-	      $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+	$(CC) $(CFLAGS) $(DRTRACE_LDFLAGS) $^ $(CAPSTONE_LIBS) \
+	      $(DRAPP_KS_LIBS) -o $@
 endif
 
 .PHONY: dr-taint-simd-test
 dr-taint-simd-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-simd-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -552,7 +555,7 @@ $(BUILD)/taint_oracle_diff: $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
 dr-taint-oracle-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-oracle-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@home=$${PIN_ROOT:-$${PIN_HOME}}; \
@@ -641,7 +644,7 @@ LAUNCH_SHM ?= /asmtest_taint_launch_ci
 dr-taint-launch-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-launch-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -669,7 +672,7 @@ PROD_SHM ?= /asmtest_taint_prod_ci
 dr-taint-prod-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-prod-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -713,14 +716,14 @@ $(BUILD)/taint_attach_coop.o: examples/taint_attach_coop.c include/asmtest_drtra
 # symbols so the client resolves their PCs; -lrt for shm_open.
 $(BUILD)/taint_attach_coop: $(BUILD)/taint_attach_coop.o $(BUILD)/drtrace_app.o \
                             $(BUILD)/trace.o $(DRAPP_KS_OBJ)
-	$(CC) $(CFLAGS) -rdynamic $^ $(DRAPP_KS_LIBS) -ldl -lpthread -lrt -o $@
+	$(CC) $(CFLAGS) $(DRTRACE_LDFLAGS) $^ $(DRAPP_KS_LIBS) -lrt -o $@
 
 ATTACH_SHM ?= /asmtest_taint_attach_ci
 .PHONY: dr-taint-attach-coop-test
 dr-taint-attach-coop-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-attach-coop-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -752,7 +755,7 @@ $(BUILD)/attach_probe_victim: examples/attach_probe_victim.c $(BUILD)/.build-fla
 dr-taint-attach-probe:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-attach-probe =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@mkdir -p $(BUILD)/attach_probe
@@ -820,7 +823,7 @@ PROBE_SIGSTOP     ?=
 dr-taint-managed-attach-probe:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-managed-attach-probe =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@command -v $(DOTNET) >/dev/null 2>&1 || { \
@@ -896,7 +899,7 @@ MARKERLESS_SHM ?= /asmtest_taint_markerless_ci
 dr-taint-markerless-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-markerless-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -944,7 +947,7 @@ NUDGE_SHM ?= /asmtest_taint_nudge_ci
 dr-taint-nudge-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-nudge-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -1011,7 +1014,7 @@ ATTACH_EXT_SHM ?= /asmtest_taint_attach_ext_ci
 dr-taint-attach-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-attach-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -1061,7 +1064,7 @@ DETACH_SHM ?= /asmtest_taint_detach_ci
 dr-taint-detach-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-detach-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -1125,7 +1128,7 @@ CYCLE_GROWTH_SLACK_KB ?= 512
 dr-taint-cycle-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-cycle-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -1192,7 +1195,7 @@ $(BUILD)/taint_stress: examples/taint_stress.c include/asmtest_taint.h \
 dr-taint-stress-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-stress-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -1242,7 +1245,7 @@ MULTIRANGE_SHM ?= /asmtest_taint_multirange_ci
 dr-taint-multirange-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-multirange-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -1287,7 +1290,7 @@ endif
 dr-taint-gcremap-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-gcremap-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -1319,7 +1322,7 @@ DOTNET ?= dotnet
 dr-taint-dotnet-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-dotnet-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@command -v $(DOTNET) >/dev/null 2>&1 || { \
@@ -1358,7 +1361,7 @@ endif
 dr-taint-methods-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-methods-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@command -v $(DOTNET) >/dev/null 2>&1 || { \
@@ -1417,7 +1420,7 @@ MANAGED_SHM ?= /asmtest_taint_managed_ci
 dr-taint-managed-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-managed-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@command -v $(DOTNET) >/dev/null 2>&1 || { \
@@ -1472,7 +1475,7 @@ BAND_MAX ?= 50
 dr-taint-overhead-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-overhead-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -1549,7 +1552,7 @@ GCPROBE_RT     := $(BUILD)/coreclr-headers
 dr-gcprofiler-probe:
 ifndef DR_AVAILABLE
 	@echo "== dr-gcprofiler-probe =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@command -v $(DOTNET) >/dev/null 2>&1 || { echo "== dr-gcprofiler-probe =="; echo "# SKIP: dotnet SDK not found"; echo "1..0 # skipped"; exit 0; }
@@ -1738,7 +1741,7 @@ SUSPENDPROF_CYCLES ?= 5
 dr-suspendprof-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-suspendprof-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@command -v $(DOTNET) >/dev/null 2>&1 || { echo "== dr-suspendprof-test =="; echo "# SKIP: dotnet SDK not found"; echo "1..0 # skipped"; exit 0; }
@@ -1799,7 +1802,7 @@ endif
 dr-suspendprof-attach-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-suspendprof-attach-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@command -v $(DOTNET) >/dev/null 2>&1 || { echo "== dr-suspendprof-attach-test =="; echo "# SKIP: dotnet SDK not found"; echo "1..0 # skipped"; exit 0; }
@@ -1876,7 +1879,7 @@ endif
 dr-gcmove-live-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-gcmove-live-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@command -v $(DOTNET) >/dev/null 2>&1 || { echo "== dr-gcmove-live-test =="; echo "# SKIP: dotnet SDK not found"; echo "1..0 # skipped"; exit 0; }
@@ -1939,7 +1942,7 @@ GCMOVE_SURV_SHM ?= /asmtest_taint_gcmove_surv_ci
 dr-taint-gcmove-survival-test:
 ifndef DR_AVAILABLE
 	@echo "== dr-taint-gcmove-survival-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@command -v $(DOTNET) >/dev/null 2>&1 || { echo "== dr-taint-gcmove-survival-test =="; echo "# SKIP: dotnet SDK not found"; echo "1..0 # skipped"; exit 0; }
@@ -2006,7 +2009,7 @@ BENCH_SAMPLES ?= 5
 dr-valtrace-bench:
 ifndef DR_AVAILABLE
 	@echo "== dr-valtrace-bench =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@$(MAKE) drtrace-client
@@ -2048,7 +2051,7 @@ endif
 drext-probe:
 ifndef DR_AVAILABLE
 	@echo "== drext-probe =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 	@echo "1..0 # skipped"
 else
 	@mkdir -p $(BUILD)/drext_probe
@@ -2671,7 +2674,7 @@ hwtrace-jit-java-bci: $(BUILD)/jit_trace $(BUILD)/libasmtest_bci_agent.so
 drtrace-python-test: drtrace-shared-prep
 ifndef DR_AVAILABLE
 	@echo "== drtrace-python-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 else
 	@echo "== drtrace-python-test =="
 	@# One DR lifecycle per process (in-process re-attach is unreliable), so run
@@ -2704,7 +2707,7 @@ drtrace_env = ASMTEST_DRAPP_LIB=$(abspath $(BUILD)/libasmtest_drapp.so) \
 # $(call drtrace_skip,<lang>) — the shared "DynamoRIO absent" SKIP message body.
 define drtrace_skip
 	@echo "== drtrace-$(1)-test =="
-	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-Linux-<ver>"
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME=/path/to/DynamoRIO-$(UNAME_S)-<ver>"
 endef
 
 # $(call drtrace_run,<shell command>) — run a wrapper's drtrace test, but downgrade
