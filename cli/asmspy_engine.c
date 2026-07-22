@@ -2482,7 +2482,7 @@ static void drain_pending_step(pid_t pid, pid_t tid) {
     int st;
     while (waitpid(tid, &st, __WALL) < 0 && errno == EINTR)
         ;
-    /* Whatever it reported — the queued #DB, or the one guarded step — is consumed.
+        /* Whatever it reported — the queued #DB, or the one guarded step — is consumed.
      *
      * ...UNLESS what it reported was not a trap at all. Phase 1 INTERRUPTed every
      * thread, and a thread that was mid-flight re-stops for THAT before executing
@@ -2492,7 +2492,8 @@ static void drain_pending_step(pid_t pid, pid_t tid) {
      * no such lever, and an armed step outlives the DETACH and kills the target,
      * so there the drain must keep going until a genuine step trap lands. */
 #if defined(__aarch64__)
-    for (int retry = 0; retry < 4 && WIFSTOPPED(st) && (st >> 16) != 0; retry++) {
+    for (int retry = 0; retry < 4 && WIFSTOPPED(st) && (st >> 16) != 0;
+         retry++) {
         if (in_syscall_now(tid))
             return; /* re-entered a call: stepping it would block, not drain */
         if (ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL) != 0)
