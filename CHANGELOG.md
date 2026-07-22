@@ -8,7 +8,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **AArch64 SVE capture signed off on real silicon, and the sign-off is now a CI
+- **The macOS drgate gate now runs in CI — CPython signal chaining under attach
+  is regression-protected on an independent host
+  (macos-dynamorio-signal-chaining.md ✅ closure).** The nightly `drtrace-macos`
+  job (`macos-15-intel`) had run only the C harnesses (`drtrace-test-macos` +
+  `test_drtrace`), so the very case whose wedge motivated the fork's
+  macOS sigreturn fix — `test_drgate.py::test_signal_chaining`, a signal
+  delivered to a live CPython interpreter while DynamoRIO is attached — was
+  validated only on the dev box that landed the fix. The job now installs pytest
+  and runs `make drtrace-python-test` against the freshly built pinned fork
+  (`tests/test_drtrace.py` 3 cases + `tests/test_drgate.py` 4 cases, including
+  takeover scope, signal chaining, tracing under the managed host, and
+  start/stop bracketing), with the lane's standing self-skip-is-failure posture:
+  a DR-not-found skip, a pytest skip, or a short collection fails the job rather
+  than silently retiring the managed-host gate.
   gate (aarch64-sve-capture.md T8).** The SVE execution sign-off had been recorded
   as hardware-gated ("no SVE host in this environment"); the hosted
   `ubuntu-24.04-arm` runner is Azure Cobalt 100 / Neoverse-N2, which carries `sve`

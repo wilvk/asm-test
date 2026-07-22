@@ -534,6 +534,36 @@ jobs:
             exit 1
           fi
 
+      # The drgate gate on an independent host (macos-dynamorio-signal-chaining):
+      # the C harness above carries the SC1 signal-chaining guards, but the wedge
+      # that motivated the fork's sigreturn fix was CPython's
+      # test_drgate.py::test_signal_chaining — a signal delivered to a real
+      # managed host while DR is attached. Running the pytest gate here keeps
+      # signal chaining under attach regression-protected on a runner that is
+      # not the dev box that landed the fix.
+      - name: Install pytest (drgate gate)
+        run: |
+          python3 -m pip install pytest 2>/dev/null \
+            || python3 -m pip install --user pytest 2>/dev/null \
+            || python3 -m pip install --user --break-system-packages pytest
+
+      - name: drgate gate — CPython signal chaining under attach (pytest)
+        run: |
+          set -o pipefail
+          make drtrace-python-test DYNAMORIO_HOME="$HOME/dr" 2>&1 | tee drgate-macos.log
+          # Same posture as the harness step: the runner just built the runtime,
+          # so a self-skip (DR "not found", pytest skip, short collection) means
+          # the managed-host gate silently stopped testing. test_drtrace.py
+          # collects 3, test_drgate.py collects 4 — demand both full runs.
+          if ! grep -q '3 passed' drgate-macos.log || ! grep -q '4 passed' drgate-macos.log; then
+            echo '::error::drgate lane did not run all 3+4 pytest cases (self-skip or short collection)'
+            exit 1
+          fi
+          if grep -qi 'skipped' drgate-macos.log; then
+            echo '::error::drgate lane self-skipped on the runner that built the runtime'
+            exit 1
+          fi
+
   # x86-64 macOS / Mach-O on every push, without an Intel runner: the
   # Apple-Silicon `macos-latest` runner cross-builds the x86-64 slice with
   # `-arch x86_64` (a real x86-64 Mach-O, linked by the macOS linker) and the
