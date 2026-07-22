@@ -71,6 +71,7 @@ ruby asmtest_descent_set_denylist   # allow-set only: Fiddle hosts no GC-safe ca
 ALL asmtest_hwtrace_begin_scope       # §1 handle-keyed begin: additive over the name-keyed try_begin path the shims use (its render sibling, asmtest_hwtrace_render_scope, is now wrapped in all ten via call_scoped)
 ALL asmtest_hwtrace_render_versioned  # §1/§D4 version-aware render: dotnet (P/Invoke), node + java (CodeImage.renderVersioned) wrap it against a self code-image; the other seven gain it when they grow a codeimage-backed render path
 ALL asmtest_hwtrace_stitch            # §D4 async-hop merge core: pure C concatenation, host-tested (test_stitch_slices)
+ALL asmtest_codeimage_read_live       # internal PT-decoder read primitive (added in c7b4ef7): reads live process memory for the STATIC caller/loader code between a real capture's TIP.PGE and the tracked JIT region, consumed by src/pt_backend.c — NOT part of the user-facing CodeImage surface (new/track/now/bytes_at/free, wrapped in all ten). Wire one in (and drop this line) if a binding grows a use.
 # §D3 out-of-process ptrace-stealth stepper (the crash-proof, no-PT-host exact stepper):
 # dotnet (AsmTrace.Method outOfProcess), node + java (HwTrace.stealthTrace) and python
 # (HwTrace.stealth_trace) wrap it — the former ALL exemption was retired 2026-07-17 when
