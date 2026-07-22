@@ -184,7 +184,7 @@ jobs:
         os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest, macos-15-intel]
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with: { python-version: "3.12" }
       # macOS builds on the runner; Linux builds inside the manylinux_2_28 container in
       # the next step (which brings its own toolchain + source-built engines), so this
@@ -406,7 +406,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - if: ${{ matrix.lang == 'node' }}
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with: { node-version: "20" }
       - if: ${{ matrix.lang == 'ruby' }}
         uses: ruby/setup-ruby@a30dfa457ad68707b8b910ac3a244714b61c0626 # v1.320.0
@@ -418,7 +418,7 @@ jobs:
         uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: "25" }
       - if: ${{ matrix.lang == 'dotnet' }}
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with: { dotnet-version: "10.0.x" }
       - if: ${{ matrix.lang == 'lua' }}
         name: Install LuaJIT
@@ -555,7 +555,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with: { go-version: "stable" }
       # libasmtest_emu is the superset, so it needs Keystone + Capstone at build
       # time (no apt package for Keystone — pinned source build).

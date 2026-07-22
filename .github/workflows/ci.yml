@@ -1503,7 +1503,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with: { go-version: "stable" }
       # libasmtest_emu is the superset the cgo module links against; Keystone has no
       # apt package, so both pinned engines are built from source (as release.yml does).
@@ -1638,7 +1638,7 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.13'
       - name: Install the docs toolchain
