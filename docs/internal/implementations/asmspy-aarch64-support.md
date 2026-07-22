@@ -256,7 +256,13 @@ new unit test; the CI verification is that survival assertion on the arm64 leg.
 >   Stepping that one blocks until the call returns — never, for `pause()` — and
 >   its `waitpid` retries through every `EINTR`, so `timeout` could not even kill
 >   asmspy. `in_syscall_now()` (`/proc/<tid>/syscall`) is the guard that actually
->   matches the hazard.
+>   matches the hazard — **AArch64 only**: applying it on x86 too regressed the
+>   gating x86 `cli` leg, because a thread inside a call is exactly the queued-#DB
+>   case x86's drain exists to service (and x86 rewinds `rip` onto the `syscall`
+>   instruction for a restartable call, so `at_syscall_insn` already covers the
+>   shape that would block there). Same symptom, opposite arch: skipping the drain
+>   left the trap queued, the victim died after detach, and `--tid` — again — got
+>   the blame.
 > - its single wait could consume the queued **PTRACE_EVENT_STOP** from phase 1's
 >   INTERRUPT instead of the step trap (measured: `status 0x80057f` on both
 >   workers), leaving the step armed. x86 shrugs — `clear_trap_flag` disarms it —

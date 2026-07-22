@@ -2449,8 +2449,9 @@ static void step_resume(pid_t tgid, pid_t tid, int sig) {
  * only ever step a NON-syscall instruction, the follow-up wait cannot hang. */
 /* Is `tid` INSIDE a syscall right now? `at_syscall_insn` only catches a thread
  * poised ON the instruction; a thread stopped at a syscall-ENTRY stop is already
- * in the call with its pc PAST the `svc`, and stepping THAT blocks until the call
- * returns — forever, for a `pause()`/`futex` wait — with the waitpid below
+ * in the call with its pc PAST the `svc` (x86 rewinds rip onto the instruction
+ * for a restartable call; AArch64 does not), and stepping THAT blocks until the
+ * call returns — forever, for a `pause()`/`futex` wait — with the waitpid below
  * retrying through every EINTR, i.e. an unkillable tracer. /proc/<tid>/syscall
  * reports the current syscall number, or "running" when the task is in
  * userspace. Fails safe (1 = treat as in-syscall, do not step) if unreadable. */
@@ -2475,8 +2476,20 @@ static void drain_pending_step(pid_t pid, pid_t tid) {
     asmspy_regs_t regs;
     if (asmspy_regs_read(tid, &regs) != 0)
         return;
-    if (at_syscall_insn(pid, asmspy_reg_pc(&regs)) || in_syscall_now(tid))
+    if (at_syscall_insn(pid, asmspy_reg_pc(&regs)))
         return;
+#if defined(__aarch64__)
+    /* AArch64 ONLY. x86 MUST still drain a thread that is inside a call: that is
+     * precisely the queued-#DB case this function exists for, and x86 rewinds rip
+     * onto the `syscall` insn for a restartable call, so at_syscall_insn already
+     * catches the one shape that would block. AArch64 has no such rewind at a
+     * syscall-ENTRY stop (pc is past the `svc`), so without this the drain steps
+     * a thread parked in `pause()` and waits forever, retrying through EINTR —
+     * an asmspy that `timeout` cannot kill. (Applying it on x86 regressed the
+     * gating cli leg: the un-drained #DB killed the victim after detach.) */
+    if (in_syscall_now(tid))
+        return;
+#endif
     if (ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL) != 0)
         return;
     int st;
