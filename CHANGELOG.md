@@ -1653,6 +1653,42 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **2026-07-21 review — C2/C3, S2, S4, S6, B3, B5, B7, T2 (fixed 2026-07-22).**
+  The remaining review findings not covered by the S3/S5/S7 and D1–D3/T1/K5
+  batches, each with an anti-vacuity-checked test and lane verification:
+  - **asmspy CLI (C2/C3).** `--log --follow` now sets `PTRACE_O_TRACEEXEC` and
+    drops a followed child that `execve`s a 32-bit image (the syscall-stream
+    engine has no i386 table, so it would render i386 `write(4)` as x86-64
+    `stat(4)`); and a bare app-delivered `SIGTRAP` (executed int3 / hardware
+    breakpoint, by `si_code`) is re-injected in the syscall-stream and
+    `--procs --count=syscalls` engines instead of swallowed. `make docker-cli` PASS.
+  - **Core C (S2/S4/S6).** `g_pt_window` (the single whole-window PT slot) is
+    mutex-guarded with a reserved-arm sentinel so two INTEL_PT arms can't both
+    claim it (S2, host-testable seam proves exactly-one-of-8 wins); the AArch64
+    wrong-depth hardware-breakpoint resume single-steps over the re-matching PC
+    instead of relying on x86 `EFLAGS.RF` (S4, x86 byte-identical, aarch64
+    compile-checked, behavioural test gated on bare-metal `NT_ARM_HW_BREAK`); and
+    ~20 growable pools route through a shared overflow-checked
+    `asmtest_grow`/`asmtest_grow_pow2` helper so a capacity double can no longer
+    wrap `size_t` to 0 (S6, new `tests/grow_overflow` unit test in `make check`).
+    `make docker-hwtrace` green (621/0 here; the PT-window mutex + pool guards
+    join the S3/S5/S7 batch).
+  - **Bindings (B3/B5/B7).** The .NET long-lived native-handle types
+    (`DrTrace`/`HwTrace` `NativeCode`, `NativeTrace`, `HwTrace` recorder) are now
+    `IDisposable` with a finalizer backstop, and the Java equivalents plus
+    `AddrChannel`/`CodeImage` register a `java.lang.ref.Cleaner`, so a dropped
+    handle no longer leaks its native mapping/trace (B3; `Descent`'s late-bound
+    upcall arena staged; reclamation tests reclaim ~0 of N leaked mappings). Go
+    (a compile-time `_Static_assert` `abicheck` package) and Zig (`comptime`
+    `@offsetOf`/`@sizeOf`) now fail the build on a hand-mirrored FFI struct drift
+    (B5). Ruby reads the `uint64_t` `asmtest_regs_ret` as unsigned and Node stops
+    `Number()`-narrowing koffi's `BigInt`, preserving a >2⁶³/>2⁵³ return (B7).
+    Verified: `docker-hwtrace-dotnet`/`-java`, `docker-drtrace-java`,
+    `docker-go`, `docker-zig`, `docker-dataflow-zig`, `docker-ruby`, `docker-node`.
+  - **Tests (T2).** `tests/expect.sh` documents that the standalone-TAP tier
+    suites are gated by exit code in their own CI lanes (wiring them into
+    `make check` would only self-skip, which the dependency rule forbids).
+
 - **2026-07-21 review batch 3 — core-C robustness S3, S5, S7 (fixed 2026-07-22).**
   Three memory-/integer-safety hardenings in the hardware-trace core, all verified
   on Linux via `make docker-hwtrace` (514/514, 0 failed) and macOS-Intel-portable

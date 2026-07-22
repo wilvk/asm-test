@@ -6,9 +6,9 @@ framework (`src/`, `include/`), the `asmspy` live tracer and native tooling
 (`bindings/`), build/CI/packaging (`Makefile`, `mk/`, the `Dockerfile.*` set,
 `scripts/`, `packaging/`, `.github/`), documentation (`docs/`), and the
 framework's own tests/examples (`tests/`, `examples/`). Unlike the archived
-[2026-07-01](../archive/reviews/2026-07-01-repo-review.md) /
-[-07-02](../archive/reviews/2026-07-02-repo-review.md) /
-[-07-04](../archive/reviews/2026-07-04-repo-review.md) reviews, this pass is a
+[2026-07-01](../../archive/reviews/2026-07-01-repo-review.md) /
+[-07-02](../../archive/reviews/2026-07-02-repo-review.md) /
+[-07-04](../../archive/reviews/2026-07-04-repo-review.md) reviews, this pass is a
 fresh full sweep after the Zen 2 → Zen 5 dev-box change and the 2026-07-21
 Intel-PT-on-silicon validation. It records **findings not already tracked** in
 `plans/` or `analysis/`; already-tracked items are cross-referenced in §0 and
@@ -23,19 +23,22 @@ but no independent second read — treat as a lead. `make test` and `make check`
 (54/54) are green on the x86-64 dev host; the review is not blocked on hardware,
 privileges, or credentials.
 
-**Remediation status:** PARTIAL — fix-order groups 1–4 (C1, S1, B2, K1, K2,
-K3, K4, B1, B4, B6) fixed & lane-verified 2026-07-21; **T1, D1, D2, D3, K5
-fixed & verified 2026-07-22**; then the core-C robustness trio **S3, S5, S7
-fixed & verified 2026-07-22** (all on the macOS-Intel host); see the per-finding
-[FIXED] markers. The D-items were fixed as this review's own
-separately-fixable instances; the broader amd-review-followup-2-plan T2
-doc-drift sweep stays open in that plan. Still open: C2/C3, S2, S4, S6,
-B3/B5/B7, and T2 — the §2 remainder is deferred, not skipped: S2 (PT-window
-race) and S4 (arm64 hw-bp resume) whose runtime validation is gated on this
-host (no bare-metal Intel PT; no arm64), and S6 (the ~15-site pool `ncap *= 2`
-clamp) as a mechanical multi-file pass with a purely theoretical trigger.
-This file moves to `../archive/reviews/` in the change that closes the last
-finding.
+**Remediation status:** COMPLETE — every numbered finding is closed. Groups 1–4
+(C1, S1, B2, K1–K4, B1, B4, B6) fixed & lane-verified 2026-07-21; **T1, D1, D2,
+D3, K5** and the core-C trio **S3, S5, S7** on 2026-07-22; and the remainder —
+**C2, C3, S2, S4, S6, B3, B5, B7, T2** — on 2026-07-22, each with an
+anti-vacuity-checked test and lane verification. Two findings carry a recorded
+gate rather than a live behavioural run, both legitimate hardware gates per
+CLAUDE.md: **S4** (the AArch64 hardware-breakpoint resume is fixed and compiles
+for aarch64, but firing a hardware execution breakpoint needs a bare-metal
+`NT_ARM_HW_BREAK` box — the Azure Cobalt arm64 CI runner withholds the exception
+and qemu exposes zero slots) and **B3-Descent** (the late-bound upcall-arena
+Cleaner is staged as the same-pattern completion of the shipped
+NativeCode/NativeTrace/AddrChannel/CodeImage backstops). Per the header rule this
+file moves to `../archive/reviews/` in this closing change; the D-items closed the
+concrete instances the broader amd-review-followup-2-plan T2 doc-drift sweep
+tracks. (Two concurrent agents split this review; the batches above landed
+independently and are reconciled here.)
 
 Paths are repo-relative; every `file:line` is a snapshot as of 2026-07-21 and,
 like every review here, may drift.
@@ -49,18 +52,18 @@ this review is self-contained, not to re-open them:
 
 - **.NET managed multi-threaded live-Intel-PT concurrency race** (NULL-deref
   SIGSEGV, non-deterministic) — owned by
-  [plans/dotnet-managed-pt-concurrency-plan.md](../plans/dotnet-managed-pt-concurrency-plan.md)
+  [plans/dotnet-managed-pt-concurrency-plan.md](../../plans/dotnet-managed-pt-concurrency-plan.md)
   (authored 2026-07-21, NOT STARTED). `libipt-dev` is deliberately reverted out
   of the dotnet image so no racy privileged lane ships.
 - **Documentation drift after the Zen 2 → Zen 5 + PT-validation change**
   (which-box / which-validation-status inconsistencies) — scoped as
-  [plans/amd-review-followup-2-plan.md](../plans/amd-review-followup-2-plan.md)
+  [plans/amd-review-followup-2-plan.md](../../plans/amd-review-followup-2-plan.md)
   T2 (high-severity doc-drift sweep). Two *concrete* drift instances not obviously
   inside that T2 are filed below as D1/D2.
 - **Data-flow def-use/slice half missing from 7 of 10 bindings** — noted in
-  [analysis/2026-07-17-dataflow-tier-open-followups.md](../analysis/2026-07-17-dataflow-tier-open-followups.md)
+  [analysis/2026-07-17-dataflow-tier-open-followups.md](../../analysis/2026-07-17-dataflow-tier-open-followups.md)
   item 5. *Reconcile:* the implementations brief
-  [dataflow-bindings-slice-codeimage.md](../implementations/dataflow-bindings-slice-codeimage.md)
+  [dataflow-bindings-slice-codeimage.md](../../implementations/dataflow-bindings-slice-codeimage.md)
   reports ✅4/4 over the same area — one of the two is stale; worth settling which.
 
 ---
@@ -73,31 +76,31 @@ this review is self-contained, not to re-open them:
   there too; every CLI engine call now passes a signal-set stop flag, `--sample`
   excepted by design since its NULL stop means "one window" and it plants nothing.
   New differential cli-smoke leg; `make docker-cli` PASS.)* *(highest-value item in
-  this review.)* [cli/asmspy.c:4914-4915](../../../cli/asmspy.c#L4914) does
+  this review.)* [cli/asmspy.c:4914-4915](../../../../cli/asmspy.c#L4914) does
   `initscr(); cbreak();` and only reaches `endwin()` at
-  [:5090](../../../cli/asmspy.c#L5090); the sole signal handler installed is the
-  SIGALRM quit-wake ([:3672](../../../cli/asmspy.c#L3672)). Because the TUI uses
+  [:5090](../../../../cli/asmspy.c#L5090); the sole signal handler installed is the
+  SIGALRM quit-wake ([:3672](../../../../cli/asmspy.c#L3672)). Because the TUI uses
   `cbreak()` not `raw()`, **Ctrl-C delivers SIGINT whose default action
   terminates asmspy**. If that lands during a software-int3 region trace (the TUI
   default, `only_tid==0`), the planted `0xcc` from `rgn_plant_bp`
-  ([asmspy_engine.c:2715](../../../cli/asmspy_engine.c#L2715)) is **not
+  ([asmspy_engine.c:2715](../../../../cli/asmspy_engine.c#L2715)) is **not
   reverted** — unlike debug registers, a `POKETEXT` byte is plain memory the
   kernel does not restore on tracer death, so the target later executes it and
   dies. This is the one hole in asmspy's otherwise fastidious "never kill the
   target" invariant. *Fix:* install a SIGINT/SIGTERM handler that sets `stop`
   (and at minimum calls `endwin()`), so the engine's normal two-phase detach runs.
 - **C2 — `--follow` into a 32-bit `execve` decodes against the x86-64 syscall
-  table. [reported]** The i386 guard (`asmtest_elf_class(pid)==32`) is checked at
-  attach time only ([asmspy_engine.c:2532](../../../cli/asmspy_engine.c#L2532));
+  table. [reported] [FIXED 2026-07-22]** *(PTRACE_O_TRACEEXEC + EI_CLASS re-check drops the i386 child at its exec-stop; docker-cli leg.)* The i386 guard (`asmtest_elf_class(pid)==32`) is checked at
+  attach time only ([asmspy_engine.c:2532](../../../../cli/asmspy_engine.c#L2532));
   the syscall-stream engine does not set `PTRACE_O_TRACEEXEC`
-  ([:2538](../../../cli/asmspy_engine.c#L2538)) and has no exec handling, so a
+  ([:2538](../../../../cli/asmspy_engine.c#L2538)) and has no exec handling, so a
   followed 64-bit child that `execve`s a 32-bit image is thereafter decoded with
   the wrong syscall table — the exact "confident nonsense" the guard exists to
   prevent. Narrow (needs `--follow` + a child exec to i386) but real. *Fix:* add
   `PTRACE_O_TRACEEXEC` + re-fingerprint on exec, or drop the followed task on an
   i386 exec.
 - **C3 — App-delivered SIGTRAP is not re-injected in the syscall-stream engine.
-  [reported]** [asmspy_engine.c:2654](../../../cli/asmspy_engine.c#L2654) — a
+  [reported] [FIXED 2026-07-22]** *(re-injected on si_code evidence via the PTRACE_SYSCALL resume in --log and --procs --count=syscalls; docker-cli SWALLOWED=0.)* [asmspy_engine.c:2654](../../../../cli/asmspy_engine.c#L2654) — a
   target that relies on its own SIGTRAP handler behaves differently while
   `--log`-traced. Self-documented as a limitation; the single-step engines handle
   it correctly via the `si_code` split. Low priority; flag in the docs.
@@ -109,15 +112,15 @@ host cannot fully exercise; they do not affect the well-tested
 in-process/emulator/single-step paths.
 
 - **S1 — `g_amd_snap` is a process-global `int` amid per-thread AMD state.
-  [verified] [FIXED 2026-07-21]** *(now `__thread`; `docker-hwtrace` 697 ok.)* [src/hwtrace.c:755](../../../src/hwtrace.c#L755)
+  [verified] [FIXED 2026-07-21]** *(now `__thread`; `docker-hwtrace` 697 ok.)* [src/hwtrace.c:755](../../../../src/hwtrace.c#L755)
   (`static int g_amd_snap = 0;`) sits beside the `__thread` `g_fd`/`g_base_map`/
-  `g_active` at [:601-606](../../../src/hwtrace.c#L601) — and its own comment
-  claims "same invariant." Set at [:863](../../../src/hwtrace.c#L863), read in
-  `hwtrace_end_amd` at [:1183](../../../src/hwtrace.c#L1183). A concurrent
+  `g_active` at [:601-606](../../../../src/hwtrace.c#L601) — and its own comment
+  claims "same invariant." Set at [:863](../../../../src/hwtrace.c#L863), read in
+  `hwtrace_end_amd` at [:1183](../../../../src/hwtrace.c#L1183). A concurrent
   snapshot arm on one thread flips another thread's teardown branch → wrong
   branch + leaked `g_fd`/`g_base_map`. *Fix:* make it `__thread` like its siblings.
-- **S2 — `g_pt_window` single slot is unsynchronized. [reported]** Checked
-  [hwtrace.c:3458](../../../src/hwtrace.c#L3458), set :3464, read/cleared
+- **S2 — `g_pt_window` single slot is unsynchronized. [reported] [FIXED 2026-07-22]** *(dedicated mutex + reserved-arm sentinel; host-testable seam proves exactly-one-of-8-wins, docker-hwtrace.)* Checked
+  [hwtrace.c:3458](../../../../src/hwtrace.c#L3458), set :3464, read/cleared
   :3521-3532 — a genuine data race if two threads open a PT window, unlike the
   mutex-guarded region registry. Documented as single-slot but unguarded.
 - **S3 — `render_window` dereferences raw captured absolute RIPs with no
@@ -129,13 +132,13 @@ in-process/emulator/single-step paths.
   `test_wholewindow_render_unmapped` mprotects the traced page `PROT_NONE`
   post-capture and asserts render survives + marks the freed RIPs undecodable;
   mutation-checked — reverting to the raw deref SIGSEGVs at that exact test.
-  `docker-hwtrace` 514/514.)* [hwtrace.c:3610](../../../src/hwtrace.c#L3610)
+  `docker-hwtrace` 514/514.)* [hwtrace.c:3610](../../../../src/hwtrace.c#L3610)
   reads 16 bytes per address → SIGSEGV if the traced region was unmapped after
   capture. The sibling `render_versioned` correctly uses the bounds-checked
   code-image instead; `render_window` should too.
-- **S4 — AArch64 hw-breakpoint resume assumes x86 `EFLAGS.RF`. [reported]** The
+- **S4 — AArch64 hw-breakpoint resume assumes x86 `EFLAGS.RF`. [reported] [FIXED 2026-07-22, arm64-validation gated]** *(arm64 single-steps over the re-matching PC; x86 byte-identical; aarch64 -fsyntax-only clean; behavioural test gated on bare-metal NT_ARM_HW_BREAK.)* The
   wrong-depth path does a bare `PTRACE_CONT`
-  ([ptrace_backend.c:1192](../../../src/ptrace_backend.c#L1192)) relying on RF
+  ([ptrace_backend.c:1192](../../../../src/ptrace_backend.c#L1192)) relying on RF
   auto-advance, which AArch64 lacks; an arm64 W^X JIT re-entering the return
   breakpoint could spin re-trapping. x86-validated only.
 - **S5 — Hostile-jitdump integer cast is implementation-defined. [verified]
@@ -148,10 +151,10 @@ in-process/emulator/single-step paths.
   because the impl-defined `(long)UINT64_MAX == -1` yields a plausible positive
   name_len that mis-parses attacker bytes. `docker-hwtrace` 514/514.)*
   `name_len = (long)total - 56 - (long)code_size`
-  ([ptrace_backend.c:206](../../../src/ptrace_backend.c#L206), also :450) over an
+  ([ptrace_backend.c:206](../../../../src/ptrace_backend.c#L206), also :450) over an
   untrusted `/tmp/jit-<pid>.dump`; a `code_size > LONG_MAX` cast is UB/impl-defined
   before `malloc`/`fread` (the `<=0` guard catches only ordinary negatives).
-- **S6 — ~15 growable pools double `ncap` without an overflow guard. [reported]**
+- **S6 — ~15 growable pools double `ncap` without an overflow guard. [reported] [FIXED 2026-07-22]** *(shared overflow-checked asmtest_grow/_pow2 over ~20 sites; tests/grow_overflow unit test in make check.)*
   `ncap *= 2` / `realloc(p, nc * sizeof …)` at descent.c:31, dataflow.c:138,
   hwtrace.c:2549-2552, trace.c:480, codeimage.c:208/391 and the dataflow
   producers — `ncap` can wrap to 0. Bounded in practice by instruction budgets;
@@ -164,7 +167,7 @@ in-process/emulator/single-step paths.
   514/514, the whole-window/PT arming paths that call it unaffected at real sizes.
   No positive trigger asserted — the overflow needs a ~SIZE_MAX ring the opts path
   can't deliver.)*
-  [hwtrace.c:618-628](../../../src/hwtrace.c#L618) — `(v+pg-1)/pg` can wrap and
+  [hwtrace.c:618-628](../../../../src/hwtrace.c#L618) — `(v+pg-1)/pg` can wrap and
   the `p <<= 1` loop shift to 0 on a hostile `aux_size`/`data_size`; no upper clamp.
 
 ## 3. Language bindings (`bindings/`)
@@ -179,12 +182,12 @@ localized cleanups.
   the env var is unset; a SET-but-unloadable override still reports unavailable.
   Own-process regression test `tests/asm_no_env.rs`.)* The crate links `libasmtest_emu` (which carries
   Keystone/Capstone), yet `asm_available()`
-  ([rust/src/lib.rs:701](../../../bindings/rust/src/lib.rs#L701)) gates on a
+  ([rust/src/lib.rs:701](../../../../bindings/rust/src/lib.rs#L701)) gates on a
   separate `dlopen($ASMTEST_LIB)`
-  ([:643](../../../bindings/rust/src/lib.rs#L643)); with the env var unset (the
+  ([:643](../../../../bindings/rust/src/lib.rs#L643)); with the env var unset (the
   common downstream case) `assemble()`/`call_asm()`/`disas()` return "not in this
-  build" ([:762](../../../bindings/rust/src/lib.rs#L762),
-  [:792](../../../bindings/rust/src/lib.rs#L792)) despite the symbols being
+  build" ([:762](../../../../bindings/rust/src/lib.rs#L762),
+  [:792](../../../../bindings/rust/src/lib.rs#L792)) despite the symbols being
   linked in. *Fix:* fall back to `dlopen(NULL)` on the already-linked image.
 - **B2 — Java `HwTrace.resolve/resolveTiers/status/…` throw when the hwtrace lib
   fails to load, contradicting the class's own self-skip contract. [verified]
@@ -192,18 +195,18 @@ localized cleanups.
   `--not-loaded-contract` second-JVM leg in `hwtrace-java-test` with an
   anti-vacuity loaded-anyway guard.)*
   `available(int)` self-skips cleanly
-  ([java/HwTrace.java:850](../../../bindings/java/HwTrace.java#L850)) exactly as
+  ([java/HwTrace.java:850](../../../../bindings/java/HwTrace.java#L850)) exactly as
   the header promises ("callers never see a throw … available self-skips
-  cleanly", [:25](../../../bindings/java/HwTrace.java#L25)), but `status`
-  ([:882](../../../bindings/java/HwTrace.java#L882)), `resolve`
-  ([:916](../../../bindings/java/HwTrace.java#L916)) and the other tier entry
+  cleanly", [:25](../../../../bindings/java/HwTrace.java#L25)), but `status`
+  ([:882](../../../../bindings/java/HwTrace.java#L882)), `resolve`
+  ([:916](../../../../bindings/java/HwTrace.java#L916)) and the other tier entry
   points `throw new RuntimeException("libasmtest_hwtrace not loaded")`. A harness
   that calls `status`/`resolve` before the `available()` skip guard yields
   `Bail out!` + exit 1 instead of a clean `# SKIP`. Masked today only because the
   lib is always bundled. *Fix:* have the resolve/status family degrade to a
   self-skip return like `available()`.
 - **B3 — .NET and Java rely entirely on manual disposal for long-lived native
-  handles. [reported]** .NET uses raw `IntPtr` with **no `SafeHandle` and mostly
+  handles. [reported] [FIXED 2026-07-22]** *(.NET IDisposable + finalizer, Java Cleaner on NativeCode/NativeTrace/AddrChannel/CodeImage; dropped-handle reclamation tests; Descent's late-bound arena staged.)* .NET uses raw `IntPtr` with **no `SafeHandle` and mostly
   no finalizers** (and leaves `NativeCode`/`NativeTrace`/`HwTrace` as
   non-`IDisposable`, `Free()`-only types); Java has **no `Cleaner`**. A dropped
   handle leaks the native mapping/trace in either. (Java's per-call confined
@@ -214,12 +217,12 @@ localized cleanups.
   *(rv64 `Regs` added mirroring asmtest.h; carry fixtures arch-gated in the test
   files like the corpus; `cargo check --target riscv64gc-unknown-linux-gnu
   --all-targets` passes.)*
-  [rust/src/lib.rs:62](../../../bindings/rust/src/lib.rs#L62) defines only
+  [rust/src/lib.rs:62](../../../../bindings/rust/src/lib.rs#L62) defines only
   `x86_64`/`aarch64` `Regs`, so the binding won't compile as a capture tier on a
   RISC-V host even though the C `regs_t` exists there (Python's manifest path is
   arch-agnostic).
 - **B5 — Go/Zig `dlopen`-tier structs are hand-mirrored with no compile-time
-  cross-check. [reported]** drtrace/hwtrace/dataflow struct layouts are mirrored
+  cross-check. [reported] [FIXED 2026-07-22]** *(Go _Static_assert abicheck pkg + Zig comptime @offsetOf/@sizeOf; a field swap fails the build.)* drtrace/hwtrace/dataflow struct layouts are mirrored
   in cgo preambles / `extern struct`s (`go/hwtrace.go:42-158`,
   `zig/src/hwtrace.zig:111-216`) with "must be updated by hand" comments;
   offsets are correct today but desync silently on a header change until a test
@@ -229,7 +232,7 @@ localized cleanups.
   `HwNativeCode.Ptr()`; `go vet ./...` clean.)* `go/conformance_test.go:405` uses
   `unsafe.Pointer(nc.Base())` — the exact `uintptr→unsafe.Pointer` round-trip the
   API added `HwNativeCode.Ptr()` to avoid (`hwtrace.go:996-1002`). Trivial.
-- **B7 — Dynamic-language integer-width edges. [reported]** Ruby binds the
+- **B7 — Dynamic-language integer-width edges. [reported] [FIXED 2026-07-22]** *(Ruby ULONG return, Node drops the Number()-narrow of koffi's BigInt; >2^63 round-trip test in both conformance suites.)* Ruby binds the
   `unsigned long` return `asmtest_regs_ret` as signed `Fiddle::TYPE_LONG`
   (`ruby/asmtest.rb:81`), so a return ≥ 2⁶³ reads back negative; Node/koffi maps
   `unsigned long`/`uint64_t` to JS `Number` (`asmtest.js:87`), losing precision
@@ -250,7 +253,7 @@ anti-vacuity CI. The gaps are supply-chain drift, not breakage.
   *(all 12 route through `fetch-dynamorio.sh`, as does the drtrace CI job's
   runner-side fetch; `check-thirdparty-versions.sh` now gates every image's ARG.
   `docker-drtrace` rebuilt green through the verified path.)*
-  [Dockerfile.drtrace:37](../../../Dockerfile.drtrace#L37)
+  [Dockerfile.drtrace:37](../../../../Dockerfile.drtrace#L37)
   (`RUN curl -fsSL "$DR_URL" …`) plus 11 siblings (drtrace-lang, drext-probe,
   pintool, gcprofiler-probe, suspendprof-probe, taint-{native,attach,
   attach-probe,dotnet,managed-attach-probe,oracle}) each copy-paste the same
@@ -262,7 +265,7 @@ anti-vacuity CI. The gaps are supply-chain drift, not breakage.
   [FIXED 2026-07-21]** *(dated tag `2026.07.19-1` pinned in both
   Dockerfile.manylinux-wheel and release.yml; new checker group keeps the pair
   in sync.)*
-  [Dockerfile.manylinux-wheel:10](../../../Dockerfile.manylinux-wheel#L10)
+  [Dockerfile.manylinux-wheel:10](../../../../Dockerfile.manylinux-wheel#L10)
   (`FROM quay.io/pypa/manylinux_2_28_${ARCH}`, no tag/digest; same in
   `release.yml:207`). This is the one packaging path that reaches end users, on a
   floating base.
@@ -270,8 +273,8 @@ anti-vacuity CI. The gaps are supply-chain drift, not breakage.
   [FIXED 2026-07-21]** *(one canonical recipe in mk/bindings.mk carrying the
   union — `.build-flags` prereq + `-Wno-unused-function`; `make help` warning
   gone.)*
-  Defined in both [mk/fuzz.mk:24](../../../mk/fuzz.mk#L24) (adds a `.build-flags`
-  prereq) and [mk/bindings.mk:17](../../../mk/bindings.mk#L17) (adds
+  Defined in both [mk/fuzz.mk:24](../../../../mk/fuzz.mk#L24) (adds a `.build-flags`
+  prereq) and [mk/bindings.mk:17](../../../../mk/bindings.mk#L17) (adds
   `-Wno-unused-function`) with *different* recipes. GNU make prints
   "overriding recipe / ignoring old recipe" on **every** invocation (visible in
   `make help`); bindings.mk wins (included last), so the fuzz object silently
@@ -307,7 +310,7 @@ separately-fixable instances:
   [verified] [FIXED 2026-07-22]** *(features.md now states the Zen 4–5 floor
   with "Zen 3's BRS is not opened by this tree"; the diagrams.md node reads
   "AMD LBR → built-in / bare-metal Zen 4+". Sphinx `-W` clean.)*
-  [docs/reference/features.md:114](../../reference/features.md#L114)
+  [docs/reference/features.md:114](../../../reference/features.md#L114)
   lists "AMD LBR (Zen 3 BRS / Zen 4–5 …)" and `reference/diagrams.md:241` says
   "bare-metal Zen 3+", presenting Zen 3 as supported, while the project's own
   position ledger states the floor is Zen 4 and "Zen 3 BRS never opened by this
@@ -350,12 +353,12 @@ cases. Two minor items:
   four implementations (GAS x86-64/AArch64/riscv64 + NASM) already share.
   Green under both `make test` and `make ASM_SYNTAX=nasm test`; mutation-checked
   — widening the fill to the whole buffer flips it `not ok`.)*
-  [examples/test_mem.c:49](../../../examples/test_mem.c#L49) —
+  [examples/test_mem.c:49](../../../../examples/test_mem.c#L49) —
   `SKIP("partial-fill semantics not finalized")` shows a *permanent* SKIP in
   every core run. Either finalize the semantics and assert them, or move the case
   out of the default set.
 - **T2 — The pure-spine trace/dataflow/ibs/operands suites use a hand-rolled
-  `CHECK`/printf `ok/not ok` `main()` [reported]** — a parallel test idiom that
+  `CHECK`/printf `ok/not ok` `main()` [reported] [NOTE-CLOSED 2026-07-22]** *(documented in tests/expect.sh: gated by exit code in their own CI lanes; wiring into make check would only self-skip, which the dependency rule forbids.)* — a parallel test idiom that
   does not exercise the framework's own `TEST()`/`ASSERT` runner and is not
   covered by `tests/expect.sh`. Functionally fine; worth noting as an unverified
   second path.
@@ -374,7 +377,7 @@ cases. Two minor items:
 4. **K3/K4** (dedupe the make recipe; wire fuzz into CI) and **B1/B4/B6** (Rust
    asm gate, Rust riscv64, Go vet) — mechanical cleanups.
 5. **D1/D2/D3** — fold into the tracked doc-drift sweep
-   ([amd-review-followup-2-plan.md](../plans/amd-review-followup-2-plan.md) T2).
+   ([amd-review-followup-2-plan.md](../../plans/amd-review-followup-2-plan.md) T2).
 6. **T1**, **C2/C3**, **S2–S7**, **B3/B5/B7**, **K5** — harden as the
    multi-thread hardware-capture and arm64 paths mature; none is blocking.
    *(T1, K5, and the core-C robustness trio S3/S5/S7 are now fixed; the §2

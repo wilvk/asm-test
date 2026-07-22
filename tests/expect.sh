@@ -13,6 +13,19 @@
 # TAP changes don't break it. Output is captured (not a tty), so the runner
 # emits no color codes. POSIX sh; no dependencies beyond the built binaries
 # (xmllint is used only if present).
+#
+# SCOPE (repo-review T2): this harness covers the FRAMEWORK runner only — the
+# positive/negative suites that go through TEST()/ASSERT. The pure standalone-TAP
+# suites (examples/test_dataflow, test_ibs, test_operands and the rest of the
+# "no framework runtime" family — see mk/dataflow.mk) emit their own ok/not ok
+# from a hand-rolled CHECK main() and are deliberately NOT driven here. They are
+# gated by EXIT CODE in their own lanes: each is a bare recipe line in
+# `dataflow-test` (mk/dataflow.mk) and `ibs-test` (mk/native-trace.mk), so a
+# failing CHECK (nonzero exit) fails the lane — and those lanes run in CI via
+# docker-dataflow-attach and docker-hwtrace-privileged. They are not wired in
+# here because `make check` builds only the framework selftests (SELFTESTS), not
+# the tier binaries (SUITE_EXCLUDES); a guarded leg would only ever self-skip in
+# the plain `make check` context, which CLAUDE.md's dependency rule forbids.
 
 set -u
 
