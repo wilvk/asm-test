@@ -1741,6 +1741,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Source-built Capstone dylib unloadable on macOS (`benchmarks-ci-followups`
+  T1 validation).** The first dispatched run of the nightly
+  `benchmarks (macos-15-intel)` leg failed at `make bench-check`: dyld aborted
+  `emu-bench` with `Library not loaded: @rpath/libcapstone.5.dylib … no
+  LC_RPATH's found`. `scripts/build-capstone.sh` left CMake's Darwin default
+  `@rpath` install name on the dylib, while the tree links consumers with the
+  plain pkg-config `-L/usr/local/lib -lcapstone` (no rpath). The script now
+  bakes the absolute install-name directory (`-DCMAKE_INSTALL_NAME_DIR`, the
+  Homebrew convention) — a no-op on non-Apple platforms, and the K1 cache key
+  already hashes the script so CI rebuilds instead of restoring the stale
+  dylib.
+
 - **2026-07-21 review — C2/C3, S2, S4, S6, B3, B5, B7, T2 (fixed 2026-07-22).**
   The remaining review findings not covered by the S3/S5/S7 and D1–D3/T1/K5
   batches, each with an anti-vacuity-checked test and lane verification:

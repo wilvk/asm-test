@@ -49,11 +49,18 @@ cd "$work/capstone/build"
 # Capstone builds every architecture by default, so a plain Release shared build
 # covers the guests we decode (x86-64, AArch64, ARM, RISC-V). Skip the tests and
 # the cstool CLI — we only need the library + headers + capstone.pc.
+#
+# Darwin: CMake's default gives the dylib an `@rpath/libcapstone.N.dylib` install
+# name, so every consumer linked with a plain `-L$PREFIX/lib -lcapstone` (the
+# pkg-config flags the tree uses) aborts at load with "no LC_RPATH's found".
+# Bake the absolute install-name directory instead — the way Homebrew ships
+# dylibs — so plain links work. A no-op on non-Apple platforms.
 cmake -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_SHARED_LIBS=ON \
       -DCAPSTONE_BUILD_TESTS=OFF \
       -DCAPSTONE_BUILD_CSTOOL=OFF \
       -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+      -DCMAKE_INSTALL_NAME_DIR="$PREFIX/lib" \
       ..
 make "-j$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
 $SUDO make install
