@@ -231,6 +231,7 @@ public final class HwTraceTest {
             stitchedTraceZeroTouchAcrossVirtualThreadRemount();
             windowTracesAWholeScope();
             attributeWindowSplitsNamedLeaves();
+            lifecycleAndCleanerContract();
         } catch (Throwable t) {
             System.out.println("Bail out! " + t);
             t.printStackTrace();
@@ -562,6 +563,54 @@ public final class HwTraceTest {
             for (Thread t : churn) t.join();
             code.free();
         }
+    }
+
+    // B3: the long-lived native-handle classes are now backed by a Cleaner, so a
+    // handle dropped without free()/try-with-resources still releases its native
+    // resource. Proves idempotent free/close AND that a DROPPED NativeCode's exec
+    // mapping is reclaimed by the Cleaner's daemon thread.
+    private static int mapCount() throws java.io.IOException {
+        return Files.readAllLines(Path.of("/proc/self/maps")).size();
+    }
+
+    private static void leakNativeCode(int n) {
+        for (int i = 0; i < n; i++) {
+            HwTrace.NativeCode c = HwTrace.NativeCode.fromBytes(ROUTINE);
+            if (c.base() == 0) throw new AssertionError("alloc");
+        }
+    }
+
+    private static void lifecycleAndCleanerContract() throws Exception {
+        // (a) idempotent free/close across both entry points (the single Cleanable
+        // makes free()/close()/GC mutually exclusive and at-most-once).
+        HwTrace.NativeCode c = HwTrace.NativeCode.fromBytes(ROUTINE);
+        c.free(); c.free(); c.close();
+        ok(true, "NativeCode: free()+free()+close() is idempotent (no double-munmap)");
+        HwTrace.NativeTrace t = HwTrace.create(64, 0);
+        t.free(); t.close(); t.free();
+        ok(true, "NativeTrace: free/close idempotent");
+        try (HwTrace.NativeCode x = HwTrace.NativeCode.fromBytes(ROUTINE)) {
+            if (x.base() == 0) throw new AssertionError();
+        }
+        ok(true, "NativeCode: AutoCloseable try-with-resources frees");
+
+        // (b) Cleaner backstop reclaims DROPPED (never-freed) NativeCode mappings.
+        // Each is one distinct r-xp anon mmap, so /proc/self/maps grows by ~N
+        // without the backstop and returns near baseline once the Cleaner's daemon
+        // thread runs after System.gc(). Bounded poll (<= 5s) for the asynchrony.
+        final int N = 3000;
+        int before = mapCount();
+        leakNativeCode(N);
+        int after = before;
+        for (int i = 0; i < 50; i++) {
+            System.gc();
+            Thread.sleep(100);
+            after = mapCount();
+            if (after - before < N / 2) break;
+        }
+        ok(after - before < N / 2,
+           "NativeCode: Cleaner reclaimed dropped exec mappings (maps grew by "
+               + (after - before) + " of " + N + ")");
     }
 
     // Region-free WHOLE-WINDOW capture (§Z1 — the empty-ctor `using (new AsmTrace())`).

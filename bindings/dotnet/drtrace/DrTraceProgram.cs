@@ -98,6 +98,13 @@ static class DrTraceProgram
 
             tr3.Unregister("asmtest_symbol_demo");
             tr3.Free();
+
+            // B3: idempotent Free/Dispose + IDisposable using-scope on the
+            // now-finalizable long-lived handles (parallel to the hwtrace lane).
+            var lc = NativeCode.FromBytes(ROUTINE); lc.Free(); lc.Free(); lc.Dispose();
+            Assert(true, "NativeCode: Free/Free/Dispose idempotent");
+            using (var lt = NativeTrace.Create(blocks: 64, instructions: 0)) { }
+            Assert(true, "NativeTrace: IDisposable using-scope frees");
         }
         finally
         {

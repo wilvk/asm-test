@@ -24,6 +24,7 @@
  * `--enable-native-access=ALL-UNNAMED`.
  */
 import java.lang.foreign.Arena;
+import java.lang.ref.Cleaner;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemoryLayout;
@@ -38,6 +39,12 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 public final class DrTrace {
     private DrTrace() {}
+
+    // B3: one shared Cleaner backstops the long-lived native-handle classes below,
+    // so a handle dropped without free()/try-with-resources still releases its
+    // native resource. Cleanup actions capture ONLY the raw native locals, never
+    // `this` (which would pin the object and defeat the backstop).
+    private static final Cleaner CLEANER = Cleaner.create();
 
     /** ASMTEST_DR_OK — the success status returned by the lifecycle/registration calls. */
     public static final int ASMTEST_DR_OK = 0;
@@ -363,8 +370,20 @@ public final class DrTrace {
         // shared ARENA. Shared (not confined) to keep the original cross-thread use.
         private Arena arena;
         private MemorySegment code; // an asmtest_exec_code_t {base, len}
+        private final Cleaner.Cleanable cleanable;
 
-        private NativeCode(Arena arena, MemorySegment code) { this.arena = arena; this.code = code; }
+        private NativeCode(Arena arena, MemorySegment code) {
+            this.arena = arena;
+            this.code = code;
+            // Capture the arena + code locals (never `this`) so a dropped NativeCode
+            // still unmaps the mapping AND closes its shared arena (B3).
+            final Arena ar = arena; final MemorySegment ec = code;
+            this.cleanable = CLEANER.register(this, () -> {
+                try { if (EXEC_FREE != null) EXEC_FREE.invoke(ec); }
+                catch (Throwable ignored) {}
+                finally { try { ar.close(); } catch (Throwable ignored) {} }
+            });
+        }
 
         /** Map executable memory and copy {@code bytes} of host-native code into it. */
         public static NativeCode fromBytes(byte[] bytes) {
@@ -405,9 +424,9 @@ public final class DrTrace {
 
         /** Unmap the executable memory. Unregister any region over this code FIRST. */
         public void free() {
-            if (code == null || EXEC_FREE == null) return;
-            try { EXEC_FREE.invoke(code); } catch (Throwable t) { throw rethrow(t); }
-            finally { code = null; if (arena != null) { arena.close(); arena = null; } }
+            if (code == null) return;
+            code = null; arena = null; // fail-fast for accessors; the Cleaner action holds its own copies
+            cleanable.clean(); // frees the mapping then closes the shared arena, once
         }
 
         @Override public void close() { free(); }
@@ -416,8 +435,16 @@ public final class DrTrace {
     /** An app-owned coverage recorder for a registered native region. */
     public static final class NativeTrace implements AutoCloseable {
         private MemorySegment handle; // an asmtest_trace_t*
+        private final Cleaner.Cleanable cleanable;
 
-        private NativeTrace(MemorySegment handle) { this.handle = handle; }
+        private NativeTrace(MemorySegment handle) {
+            this.handle = handle;
+            final MemorySegment h = handle; // capture the local, not this.handle (B3)
+            this.cleanable = CLEANER.register(this, () -> {
+                if (TRACE_FREE != null && h != null)
+                    try { TRACE_FREE.invoke(h); } catch (Throwable ignored) {}
+            });
+        }
 
         /** Allocate a trace recording up to {@code blocks} basic blocks and
          *  {@code instructions} ordered instructions (instruction recording only
@@ -518,9 +545,9 @@ public final class DrTrace {
         }
 
         public void free() {
-            if (handle == null || TRACE_FREE == null) return;
-            try { TRACE_FREE.invoke(handle); } catch (Throwable t) { throw rethrow(t); }
-            finally { handle = null; }
+            if (handle == null) return;
+            handle = null; // fail-fast for accessors; the Cleaner action holds its own copy
+            cleanable.clean();
         }
 
         @Override public void close() { free(); }

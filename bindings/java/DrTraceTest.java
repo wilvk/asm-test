@@ -105,5 +105,13 @@ public final class DrTraceTest {
 
         tr.unregister("asmtest_symbol_demo");
         tr.free();
+
+        // B3: idempotent free/close + try-with-resources on the now-Cleaner-backed
+        // long-lived handles (parallel to the hwtrace lane).
+        DrTrace.NativeCode lc = DrTrace.NativeCode.fromBytes(ROUTINE);
+        lc.free(); lc.free(); lc.close();
+        check(true, "NativeCode: free/free/close idempotent");
+        try (DrTrace.NativeTrace lt = DrTrace.NativeTrace.create(64, 0)) { }
+        check(true, "NativeTrace: try-with-resources frees");
     }
 }

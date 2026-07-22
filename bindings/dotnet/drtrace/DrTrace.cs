@@ -313,7 +313,7 @@ namespace Asmtest
     /// <see cref="FromBytes"/>, invoke through a function pointer with
     /// <see cref="Call"/>, and release with <see cref="Free"/>.
     /// </summary>
-    public sealed class NativeCode
+    public sealed class NativeCode : IDisposable
     {
         DrNative.ExecCode _code;
         bool _freed;
@@ -353,6 +353,21 @@ namespace Asmtest
                 DrNative.asmtest_exec_free(ref _code);
                 _freed = true;
             }
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>Dispose pattern over <see cref="Free"/> (idempotent).</summary>
+        public void Dispose() => Free();
+
+        // Finalizer backstop (B3): a dropped (never-Free'd) NativeCode still
+        // unmaps its executable memory. Guarded + try/catch so it never throws on
+        // the finalizer thread (mirrors the AmdSampler finalizer in HwTrace.cs);
+        // asmtest_exec_free is thread-agnostic (a munmap).
+        ~NativeCode()
+        {
+            if (_freed || !DrNative.LibAvailable) return;
+            _freed = true;
+            try { DrNative.asmtest_exec_free(ref _code); } catch { }
         }
     }
 
@@ -361,7 +376,7 @@ namespace Asmtest
     /// <see cref="Create"/>, register a <see cref="NativeCode"/> under a name, run it
     /// inside <see cref="Region"/>, then read back coverage / the instruction stream.
     /// </summary>
-    public sealed class NativeTrace
+    public sealed class NativeTrace : IDisposable
     {
         IntPtr _handle;
 
@@ -460,6 +475,19 @@ namespace Asmtest
                 DrNative.asmtest_trace_free(_handle);
                 _handle = IntPtr.Zero;
             }
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>Dispose pattern over <see cref="Free"/> (idempotent).</summary>
+        public void Dispose() => Free();
+
+        // Finalizer backstop (B3): a dropped recorder still frees its native
+        // handle (asmtest_trace_free is a plain free(), thread-agnostic).
+        ~NativeTrace()
+        {
+            if (_handle == IntPtr.Zero || !DrNative.LibAvailable) return;
+            IntPtr h = _handle; _handle = IntPtr.Zero;
+            try { DrNative.asmtest_trace_free(h); } catch { }
         }
     }
 }

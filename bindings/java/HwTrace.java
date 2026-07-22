@@ -33,6 +33,7 @@
  * `--enable-native-access=ALL-UNNAMED`.
  */
 import java.lang.foreign.Arena;
+import java.lang.ref.Cleaner;
 import java.lang.foreign.FunctionDescriptor;
 import java.lang.foreign.Linker;
 import java.lang.foreign.MemoryLayout;
@@ -49,6 +50,14 @@ import static java.lang.foreign.ValueLayout.JAVA_LONG;
 
 public final class HwTrace {
     private HwTrace() {}
+
+    // B3: one shared Cleaner backstops every long-lived native-handle class below,
+    // so a handle dropped without free()/try-with-resources still releases its
+    // native resource (the JVM has no refcount-driven __del__ like the Python
+    // binding's). Each cleanup action captures ONLY the raw native locals
+    // (base/len/handle) — never `this`, which would pin the object and defeat both
+    // the backstop and normal collection.
+    private static final Cleaner CLEANER = Cleaner.create();
 
     /** ASMTEST_HW_OK — the success status returned by the lifecycle/registration calls. */
     public static final int ASMTEST_HW_OK = 0;
@@ -1321,7 +1330,17 @@ public final class HwTrace {
     public static final class AddrChannel implements AutoCloseable {
         private MemorySegment handle;
         private final boolean shared;
-        private AddrChannel(MemorySegment handle, boolean shared) { this.handle = handle; this.shared = shared; }
+        private final Cleaner.Cleanable cleanable;
+        private AddrChannel(MemorySegment handle, boolean shared) {
+            this.handle = handle;
+            this.shared = shared;
+            final MemorySegment h = handle; final boolean sh = shared; // capture locals, not this (B3)
+            this.cleanable = CLEANER.register(this, () -> {
+                MethodHandle f = sh ? ADDR_CHAN_FREE_SHARED : ADDR_CHAN_FREE;
+                if (f != null && h != null && !MemorySegment.NULL.equals(h))
+                    try { f.invoke(h); } catch (Throwable ignored) {}
+            });
+        }
 
         /** A process-local channel (for {@link #ptraceTraceWindowCall}). */
         public static AddrChannel newLocal() { return make(ADDR_CHAN_NEW, false); }
@@ -1350,9 +1369,8 @@ public final class HwTrace {
         /** Free the channel (routes to the process-local vs shared native free). Idempotent. */
         @Override public void close() {
             if (handle == null || MemorySegment.NULL.equals(handle)) return;
-            try { (shared ? ADDR_CHAN_FREE_SHARED : ADDR_CHAN_FREE).invoke(handle); }
-            catch (Throwable t) { throw rethrow(t); }
-            finally { handle = null; }
+            handle = null;
+            cleanable.clean();
         }
     }
 
@@ -1567,8 +1585,20 @@ public final class HwTrace {
         private long base;
         private final long len;
         private boolean freed;
+        private final Cleaner.Cleanable cleanable;
 
-        private NativeCode(long base, long len) { this.base = base; this.len = len; }
+        private NativeCode(long base, long len) {
+            this.base = base;
+            this.len = len;
+            // Capture only the raw {base,len} locals (never `this`) so a dropped
+            // NativeCode is still collectable and its mapping still unmapped (B3).
+            final long b = base, l = len;
+            this.cleanable = CLEANER.register(this, () -> {
+                if (EXEC_FREE != null && b != 0)
+                    try { EXEC_FREE.invoke(MemorySegment.ofAddress(b), l); }
+                    catch (Throwable ignored) {}
+            });
+        }
 
         /** Map executable memory and copy {@code bytes} of host-native code into it. */
         public static NativeCode fromBytes(byte[] bytes) {
@@ -1603,10 +1633,9 @@ public final class HwTrace {
 
         /** Unmap the executable memory. Unregister any region over this code FIRST. */
         public void free() {
-            if (freed || EXEC_FREE == null) return;
-            try { EXEC_FREE.invoke(MemorySegment.ofAddress(base), len); }
-            catch (Throwable t) { throw rethrow(t); }
-            finally { freed = true; }
+            if (freed) return;
+            freed = true;
+            cleanable.clean(); // runs the capture-only free once; disarms the Cleaner
         }
 
         @Override public void close() { free(); }
@@ -1615,8 +1644,16 @@ public final class HwTrace {
     /** A coverage recorder for a registered native region, via the hardware tier. */
     public static final class NativeTrace implements AutoCloseable {
         private MemorySegment handle; // an asmtest_trace_t*
+        private final Cleaner.Cleanable cleanable;
 
-        private NativeTrace(MemorySegment handle) { this.handle = handle; }
+        private NativeTrace(MemorySegment handle) {
+            this.handle = handle;
+            final MemorySegment h = handle; // capture the local, not this.handle (B3)
+            this.cleanable = CLEANER.register(this, () -> {
+                if (TRACE_FREE != null && h != null)
+                    try { TRACE_FREE.invoke(h); } catch (Throwable ignored) {}
+            });
+        }
 
         /** Register a non-overlapping native code range under {@code name}, recording
          *  coverage into this trace. */
@@ -1710,9 +1747,9 @@ public final class HwTrace {
         }
 
         public void free() {
-            if (handle == null || TRACE_FREE == null) return;
-            try { TRACE_FREE.invoke(handle); } catch (Throwable t) { throw rethrow(t); }
-            finally { handle = null; }
+            if (handle == null) return;
+            handle = null; // fail-fast for accessors; the Cleaner action holds its own copy
+            cleanable.clean();
         }
 
         @Override public void close() { free(); }
@@ -2512,6 +2549,14 @@ public final class HwTrace {
         }
 
         private MemorySegment handle; // an asmtest_descent_t*
+        // B3 NOTE: Descent is AutoCloseable + explicit free() but does NOT yet carry a
+        // Cleaner backstop like NativeCode/NativeTrace/AddrChannel/CodeImage above. Its
+        // late-bound upcallArena (assigned in setResolver/setDenylist, not the ctor)
+        // needs a static State holder the Cleaner cleans and the instance mutates — a
+        // higher-churn refactor through the callback-FFI path, staged as the same-pattern
+        // completion of B3 rather than risked in this change. Descent is used transiently
+        // (create → configure → trace call → free), so a dropped-without-free instance is
+        // the rarest leak; normal try-with-resources / free() usage is unaffected.
         // The upcall trampolines are native code the callback FFI jumps to; their backing
         // Arena MUST outlive every trace_call_ex that could fire them, so it is held for
         // the handle's lifetime and closed only in free() (after descent_free). Keeping the
@@ -2760,6 +2805,7 @@ public final class HwTrace {
     /** A timestamped code-image timeline for one target process (asmtest_codeimage_t). */
     public static final class CodeImage implements AutoCloseable {
         private MemorySegment handle; // an asmtest_codeimage_t*
+        private final Cleaner.Cleanable cleanable;
 
         /** Create a timeline recording {@code pid}'s memory ({@code pid == 0} => this
          *  process). Throws if the library is not loaded or allocation fails. */
@@ -2770,6 +2816,11 @@ public final class HwTrace {
                 if (MemorySegment.NULL.equals(h))
                     throw new RuntimeException("asmtest_codeimage_new failed");
                 this.handle = h;
+                final MemorySegment ch = h; // capture the local, not this (B3)
+                this.cleanable = CLEANER.register(this, () -> {
+                    if (CI_FREE != null && ch != null)
+                        try { CI_FREE.invoke(ch); } catch (Throwable ignored) {}
+                });
             } catch (RuntimeException re) { throw re; }
             catch (Throwable t) { throw rethrow(t); }
         }
@@ -2923,9 +2974,9 @@ public final class HwTrace {
 
         /** Free the timeline and all recorded versions (detaches any eBPF watch). */
         public void free() {
-            if (handle == null || CI_FREE == null) return;
-            try { CI_FREE.invoke(handle); } catch (Throwable t) { throw rethrow(t); }
-            finally { handle = null; }
+            if (handle == null) return;
+            handle = null;
+            cleanable.clean();
         }
 
         @Override public void close() { free(); }

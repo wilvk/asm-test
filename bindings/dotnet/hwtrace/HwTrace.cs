@@ -823,7 +823,7 @@ namespace Asmtest
     /// <see cref="FromBytes"/>, invoke through a function pointer with
     /// <see cref="Call"/>, and release with <see cref="Free"/>.
     /// </summary>
-    public sealed class NativeCode
+    public sealed class NativeCode : IDisposable
     {
         IntPtr _base;
         UIntPtr _len;
@@ -865,6 +865,21 @@ namespace Asmtest
                 HwNative.asmtest_hwtrace_exec_free(_base, _len);
                 _freed = true;
             }
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>Dispose pattern over <see cref="Free"/> (idempotent).</summary>
+        public void Dispose() => Free();
+
+        // Finalizer backstop (B3): a dropped (never-Free'd) NativeCode still
+        // unmaps its executable memory (asmtest_hwtrace_exec_free is a munmap,
+        // thread-agnostic). Guarded + try/catch to never throw on the finalizer
+        // thread (mirrors the AmdSampler/PtWindowCtx finalizers below).
+        ~NativeCode()
+        {
+            if (_freed || !HwNative.LibAvailable) return;
+            _freed = true;
+            try { HwNative.asmtest_hwtrace_exec_free(_base, _len); } catch { }
         }
     }
 
@@ -938,7 +953,7 @@ namespace Asmtest
     /// run it inside <see cref="Region"/>, then read back coverage / the instruction
     /// stream. Tear the process-wide tier down with <see cref="Shutdown"/>.
     /// </summary>
-    public sealed class HwTrace
+    public sealed class HwTrace : IDisposable
     {
         IntPtr _handle;
 
@@ -1349,6 +1364,20 @@ namespace Asmtest
                 HwNative.asmtest_trace_free(_handle);
                 _handle = IntPtr.Zero;
             }
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>Dispose pattern over <see cref="Free"/> (idempotent).</summary>
+        public void Dispose() => Free();
+
+        // Finalizer backstop (B3): a dropped recorder still frees its native
+        // handle. Only the OWNER's finalizer frees — the borrowed `Handle` below
+        // (the OOP tracer records into a trace it does not own) never does.
+        ~HwTrace()
+        {
+            if (_handle == IntPtr.Zero || !HwNative.LibAvailable) return;
+            IntPtr h = _handle; _handle = IntPtr.Zero;
+            try { HwNative.asmtest_trace_free(h); } catch { }
         }
 
         // The opaque trace handle, for the out-of-process tracer (which records into a

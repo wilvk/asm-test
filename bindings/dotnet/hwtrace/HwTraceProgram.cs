@@ -767,6 +767,13 @@ static class HwTraceProgram
             Check(tNat.Length > 0 && pick.HasValue && pick.Value.Fidelity == TraceFidelity.Native,
                   "cross-tier: NativeOnly resolves a Native choice on x86-64 Linux");
             Check(hasSsFloor, "cross-tier: single-step is the NativeOnly floor on x86-64 Linux");
+
+            // B3: the Free()-only long-lived handles (NativeCode, HwTrace) are now
+            // IDisposable with a finalizer backstop — dropped handles no longer leak.
+            // Runs LAST in this block: its GC.Collect + 4000-mapping churn must not
+            // perturb the delicate managed-tracing captures (R2R rundown, byMethod)
+            // above it.
+            LifecycleChecks();
         }
         finally
         {
@@ -955,6 +962,41 @@ static class HwTraceProgram
     static void MakeLeakedPtScope()
     {
         _ = new AsmTrace(HwBackend.IntelPt);
+    }
+
+    static int MapCount() => System.IO.File.ReadAllLines("/proc/self/maps").Length;
+
+    // Drop N NativeCode handles without ever Free()ing them, in a separate
+    // NoInlining frame so the references are genuinely collectable (B3).
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static void MakeLeakedNativeCode(int n)
+    {
+        for (int i = 0; i < n; i++) { var c = NativeCode.FromBytes(ROUTINE); _ = c.Base; }
+    }
+
+    static void LifecycleChecks()
+    {
+        // (a) idempotent Free/Dispose across both long-lived APIs — no crash, no
+        // double-free (the _freed / handle-zero guard makes repeats a no-op).
+        var c = NativeCode.FromBytes(ROUTINE); c.Free(); c.Free(); c.Dispose();
+        Check(true, "NativeCode: Free()+Free()+Dispose() is idempotent (no double-unmap)");
+        var t = HwTrace.Create(64, 0); t.Free(); t.Dispose(); t.Free();
+        Check(true, "HwTrace: Free()+Dispose()+Free() is idempotent");
+        using (var t2 = HwTrace.Create(64, 0)) { } // IDisposable -> using frees on scope exit
+        Check(true, "HwTrace: IDisposable using-scope frees without throwing");
+
+        // (b) finalizer backstop reclaims a DROPPED (never-Free'd) NativeCode's
+        // exec mapping. Each is one distinct r-xp anon mmap, so /proc/self/maps
+        // grows by ~N without the backstop and by ~0 with it. WaitForPending-
+        // Finalizers blocks until the finalizers actually run, so this is
+        // deterministic on this host.
+        const int N = 4000;
+        int before = MapCount();
+        MakeLeakedNativeCode(N);
+        GC.Collect(); GC.WaitForPendingFinalizers(); GC.Collect();
+        int after = MapCount();
+        Check(after - before < N / 2,
+              $"NativeCode: finalizer reclaimed dropped exec mappings (maps grew by {after - before} of {N})");
     }
 
     // §E1 fixtures for WindowHybridChecks — two distinct NoInlining managed methods so the
