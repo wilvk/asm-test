@@ -8,6 +8,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **asmspy names why a hardware watchpoint/breakpoint could not arm, and the
+  AArch64 `cli` CI leg is now gating (asmspy-aarch64-support.md T7).** "Hardware
+  watchpoint unavailable" was three different host facts behind one guessed
+  message ("qemu / seccomp / permission"). Measured on the hosted
+  `ubuntu-24.04-arm` runner: `NT_ARM_HW_BREAK` reports **6** slots and
+  `NT_ARM_HW_WATCH` **4** (`debug_arch=8`), and `PTRACE_SETREGSET` on either
+  returns **`ENOSPC`** — slots exposed, reservation refused, so nothing can arm
+  and nothing can fire. `asmspy_hwdebug_reason()` now records what actually
+  happened at the arm site, so `--watch` skips with *"host reports 4 watchpoint
+  slots but refused to reserve one: No space left on device"* and `--trace --tid`
+  adds the same note. The smoke's `--trace --tid=` block takes the host-capability
+  split the `--watch` block already had (named skip on AArch64, strict on x86-64)
+  and still asserts the property that survives it: an unarmable entry is reported
+  as an attach failure, never as a false "never executed". A `--watch` success
+  line that printed unconditionally — including on the skip path — now says which
+  happened. With those the arm64 `cli` leg is green end to end and
+  `continue-on-error` is removed.
+
 - **Fixed: `asmspy --stream` / `--graph` / `--tree` killed every multi-threaded
   AArch64 target they traced (asmspy-aarch64-support.md T2).** On AArch64 a
   single step armed on a thread parked in a blocking syscall survives

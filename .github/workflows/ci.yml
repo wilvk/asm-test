@@ -1169,29 +1169,31 @@ jobs:
     name: cli (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
-    # The arm64 leg is NON-BLOCKING while the AArch64 asmspy smoke is hardened for
-    # its first live runs (asmspy-aarch64-support T2/T7), mirroring how hwtrace-arm64
-    # was staged before it went gating. The bring-up already flushed out + fixed a
-    # string of real x86 assumptions live: the SYS_stat/dup2 legacy-syscall gaps (arm64
-    # uses newfstatat/dup3), the x86-only jit-victim HOT_CODE + host-arch disassembly,
-    # and the R_AARCH64_JUMP_SLOT / 2-slot-PLT0 stub resolution.
+    # GATING ON BOTH ARCHES since 2026-07-22. The arm64 leg was staged non-blocking
+    # while the AArch64 asmspy smoke was hardened for its first live runs
+    # (asmspy-aarch64-support T2/T7), mirroring how hwtrace-arm64 was staged before it
+    # went gating. The bring-up flushed out and fixed a string of real x86 assumptions
+    # live: the SYS_stat/dup2 legacy-syscall gaps (arm64 uses newfstatat/dup3), the
+    # x86-only jit-victim HOT_CODE + host-arch disassembly, and the
+    # R_AARCH64_JUMP_SLOT / 2-slot-PLT0 stub resolution. The last two items were a
+    # misattribution and a host fact, both settled ON the runner:
     #
-    # The last red item was NOT what it looked like. It was recorded here as "the
-    # --stream --tid= filter never lands in the worker's hot function — a throughput/
-    # scheduling behavior"; measured on the runner 2026-07-22, --tid is INNOCENT and
-    # the filter works on a fresh victim. The whole-process --stream CONTROL RUN that
-    # precedes it was killing the target: on AArch64 a step armed on a thread parked in
-    # a blocking syscall survives PTRACE_DETACH and fires as a fatal SIGTRAP once that
-    # syscall returns (~200-400 ms later), so the --tid run found a corpse and got the
-    # blame. Root cause + the asmspy-free reproducer are in asmspy-aarch64-support.md
-    # T2. FIXED (step_resume: PTRACE_SYSCALL, never a step, for a thread on an `svc`)
-    # and verified on the runner — --stream/--graph/--tree now leave the victim alive
-    # and the --tid case passes. The leg stays non-gating for one more item the fix
-    # made reachable: --trace --tid= reports the region unsampled on the thread that
-    # runs it (the region engine's NT_ARM_HW_BREAK entry breakpoint).
-    # The x86 leg stays GATING; flip this off once the arm64 leg is green.
-    # (asmspy-aarch64-support T2/T7.)
-    continue-on-error: ${{ matrix.os == 'ubuntu-24.04-arm' }}
+    #   - the "--stream --tid= filter is flaky on a contended vCPU" item was not about
+    #     --tid at all. The whole-process --stream control run before it was KILLING
+    #     the target: on AArch64 a step armed on a thread parked in a blocking syscall
+    #     survives PTRACE_DETACH and fires as a fatal SIGTRAP when that syscall returns
+    #     (~200-400 ms later), so --tid found a corpse and wore the blame. Fixed by
+    #     step_resume() — PTRACE_SYSCALL, never a step, for a thread poised on an svc.
+    #   - --trace --tid= and --watch need debug registers this runner will not grant:
+    #     NT_ARM_HW_BREAK reports 6 slots and NT_ARM_HW_WATCH 4 (debug_arch=8), yet
+    #     PTRACE_SETREGSET on either returns ENOSPC. asmspy now names that measured
+    #     reason and self-skips; the smoke asserts the honest outcome (an unarmable
+    #     entry is an attach failure, never a false "never executed") instead of
+    #     demanding a sample the host cannot produce.
+    #
+    # Root cause + the asmspy-free reproducers: asmspy-aarch64-support.md T2/T7.
+    # If this leg goes red on a flake, report it — do NOT quietly re-add
+    # continue-on-error. That is what hid a target-killing bug for weeks.
     strategy:
       fail-fast: false
       matrix:

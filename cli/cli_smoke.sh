@@ -1994,7 +1994,15 @@ kill -0 "$HWPID" 2>/dev/null \
 "$ASM" --watch "$HWPID" 0x1 --len=8 >/dev/null 2>&1 \
     && fail "--watch accepted a misaligned watch address"
 expect_badarg "$ASM" --watch "$HWPID" "$WADDR" --len=3
-echo "  --watch: value + PC captured, per-thread arming confirmed, target survived"
+# Say what actually happened. This line used to be printed unconditionally, so a
+# host where the watchpoint never armed still logged "value + PC captured,
+# per-thread arming confirmed" — a success sentence for a path that ran none of
+# those assertions, which is exactly how a skip turns into a false green.
+if [ -n "$WATCH_ARMED_SILENT" ] || printf '%s\n' "$wout" | grep -q '^# SKIP --watch'; then
+    echo "  --watch: SKIPPED (no usable hardware watchpoint here); rejects + target survival still asserted"
+else
+    echo "  --watch: value + PC captured, per-thread arming confirmed, target survived"
+fi
 kill "$HWPID" 2>/dev/null || true
 rm -f "$WLOG"
 
@@ -2414,17 +2422,43 @@ set +e
 pout=$(timeout 40 "$ASM" --trace "$YPID" alpha_work 1 --tid="$ATID" 2>&1); rc=$?
 set -e
 [ "$rc" -eq 124 ] && fail "--trace --tid=<runner> hung"
-printf '%s\n' "$pout" | grep -qE '^sample #1' \
-    || fail "--trace --tid=$ATID: alpha_work not sampled on the thread that runs it"
-set +e
-nout=$(timeout 40 "$ASM" --trace "$YPID" alpha_work 1 --tid="$BTID" 2>&1); rc=$?
-set -e
-[ "$rc" -eq 124 ] && fail "--trace --tid=<non-runner> hung (entry wait not bounded?)"
-printf '%s\n' "$nout" | grep -qE '^sample #' \
-    && fail "--trace --tid=$BTID: sampled alpha_work on a thread that never runs it"
-printf '%s\n' "$nout" | grep -q 'never executed' \
-    || fail "--trace --tid=$BTID: no honest never-executed report"
-echo "  --tid pins the sample (runner sampled; non-runner reports never-executed)"
+# HOST-CAPABILITY SPLIT (T7's rule, applied to the EXECUTION breakpoint). This path
+# needs a per-thread hardware breakpoint, and some hosts report debug-register slots
+# yet refuse to reserve one. MEASURED on the hosted ubuntu-24.04-arm runner
+# (Neoverse-N2, 2026-07-22): NT_ARM_HW_BREAK says 6 slots / NT_ARM_HW_WATCH says 4,
+# debug_arch=8 — and PTRACE_SETREGSET on either returns **ENOSPC**, so nothing can
+# ever arm. asmspy already reports that honestly (EUNARMABLE -> ETRACE "attach
+# failed", NOT "never executed" — the distinction the block above tests), so the
+# only wrong thing left would be this smoke DEMANDING a sample the host cannot
+# produce. Name it and skip; keep x86-64 strict, where the slots really do work.
+TRACE_TID_UNARMABLE=""
+if printf '%s\n' "$pout" | grep -qE 'trace failed|needs a per-thread hardware breakpoint'; then
+    case "$(uname -m)" in
+    aarch64 | arm64)
+        echo "# SKIP --trace --tid: per-thread hardware breakpoint unarmable on this host (debug slots reported but reservation refused, e.g. ENOSPC under a hypervisor)"
+        TRACE_TID_UNARMABLE=1
+        ;;
+    esac
+fi
+if [ -z "$TRACE_TID_UNARMABLE" ]; then
+    printf '%s\n' "$pout" | grep -qE '^sample #1' \
+        || fail "--trace --tid=$ATID: alpha_work not sampled on the thread that runs it"
+    set +e
+    nout=$(timeout 40 "$ASM" --trace "$YPID" alpha_work 1 --tid="$BTID" 2>&1); rc=$?
+    set -e
+    [ "$rc" -eq 124 ] && fail "--trace --tid=<non-runner> hung (entry wait not bounded?)"
+    printf '%s\n' "$nout" | grep -qE '^sample #' \
+        && fail "--trace --tid=$BTID: sampled alpha_work on a thread that never runs it"
+    printf '%s\n' "$nout" | grep -q 'never executed' \
+        || fail "--trace --tid=$BTID: no honest never-executed report"
+    echo "  --tid pins the sample (runner sampled; non-runner reports never-executed)"
+else
+    # The one thing still assertable here: an unarmable entry must NOT be reported
+    # as "never executed" (that would send an operator to the opposite place).
+    printf '%s\n' "$pout" | grep -q 'never executed' \
+        && fail "--trace --tid: unarmable entry reported as 'never executed'"
+    echo "  --tid: hardware breakpoint unarmable here — reported as an attach failure, not a false 'never executed'"
+fi
 
 # THE TARGET MUST OUTLIVE US. This is the assertion that matters: an entry trap
 # left behind on detach does NOT fail loudly — the victim runs on and dies of

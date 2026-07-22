@@ -1493,6 +1493,17 @@ static int cmd_trace(pid_t pid, const char *sym, pid_t only_tid, long n) {
             (unsigned long long)base, len, (int)pid);
     int rc = asmspy_engine_region(pid, only_tid, base, len, n, &g_sigstop,
                                   region_print_sink, &t);
+    if (rc == ASMTEST_PTRACE_ETRACE && only_tid) {
+        /* --tid arms a per-thread HARDWARE breakpoint, so an unarmable entry
+         * here is usually the host refusing a debug-register slot rather than
+         * anything about permissions or a W^X page. Say which. */
+        const char *why = asmspy_hwdebug_reason();
+        if (why)
+            fprintf(stderr,
+                    "  --tid=%d needs a per-thread hardware "
+                    "breakpoint: %s\n",
+                    (int)only_tid, why);
+    }
     if (rc == ASMSPY_REGION_NEVER_RAN) {
         /* The engine races EVERY thread to the entry, so this is no longer the
          * "it ran on a worker thread" case — it genuinely did not execute. */
@@ -1723,12 +1734,19 @@ static int cmd_watch(pid_t pid, const char *loc, int rw, int len, long n,
     asmspy_symtab_free(&t);
 
     if (rc == ASMSPY_WATCH_UNAVAIL) {
-        /* debug-register arming refused (qemu / seccomp / permission) or off
-         * x86-64 — a clean self-skip, exit 0, like --sample / --dataflow. */
-        printf(
-            "# SKIP --watch: hardware data watchpoint unavailable "
-            "(off x86-64, or debug-register arming refused: qemu / seccomp / "
-            "permission)\n");
+        /* debug-register arming refused, or no engine on this arch — a clean
+         * self-skip, exit 0, like --sample / --dataflow. Print the MEASURED
+         * reason when the engine recorded one: "unavailable" covers an absent
+         * regset, zero slots, and slots-that-cannot-be-reserved, and only the
+         * last of those is a hypervisor telling you it will never work. */
+        const char *why = asmspy_hwdebug_reason();
+        if (why)
+            printf("# SKIP --watch: hardware data watchpoint unavailable — "
+                   "%s\n",
+                   why);
+        else
+            printf("# SKIP --watch: hardware data watchpoint unavailable "
+                   "(no data-watchpoint engine on this architecture)\n");
         free(w.rows);
         return 0;
     }

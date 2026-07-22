@@ -602,6 +602,14 @@ typedef void (*asmspy_watch_sink)(void *ctx, const asmspy_watch_hit_t *hit);
  * ASMSPY_WATCH_UNAVAIL if arming is refused or off x86-64, ASMTEST_PTRACE_EINVAL
  * on a bad length/alignment, or a negative ASMTEST_PTRACE_* on an attach failure.
  * `syms` may be NULL (raw addresses). */
+/* Why the last hardware debug-register arm failed (NULL if none has), e.g.
+ * "host reports 6 breakpoint slots but refused to reserve one: No space left on
+ * device". The three host facts behind an "unavailable" watchpoint/breakpoint —
+ * regset absent, zero slots, slots present but unreservable — send an operator
+ * to three different places, so the message names the measured one instead of
+ * listing suspects. Valid until the next arm attempt; not thread-safe (CLI). */
+const char *asmspy_hwdebug_reason(void);
+
 int asmspy_engine_watch(pid_t pid, uint64_t addr, int rw, int len, long max,
                         atomic_bool *stop, const asmspy_symtab_t *syms,
                         asmspy_watch_sink sink, void *ctx);

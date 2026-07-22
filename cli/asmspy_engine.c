@@ -2926,6 +2926,31 @@ static int rgn_rewind_from_bp(pid_t tid, uint64_t base) {
 #endif
 }
 
+/* Why the last hardware debug-register arm failed, in the operator's words.
+ *
+ * "Unavailable" is three different host facts, and they send you to three
+ * different places: the regset is absent, the host reports ZERO slots, or the
+ * host reports slots and then refuses to reserve one. asmspy used to print a
+ * guess covering all three ("qemu / seccomp / permission"), which is wrong
+ * everywhere it matters — MEASURED on the hosted ubuntu-24.04-arm runner
+ * (Neoverse-N2, 2026-07-22): NT_ARM_HW_BREAK reports 6 slots, NT_ARM_HW_WATCH 4,
+ * debug_arch=8, and PTRACE_SETREGSET on either returns ENOSPC. Nothing about
+ * qemu, seccomp or permission; the hypervisor exposes the ID registers but the
+ * kernel cannot reserve a slot. Single-threaded CLI, so one static breadcrumb
+ * written at the failure site and read by the message is enough. */
+static char g_hwdbg_reason[160];
+
+static void hwdbg_note(const char *fmt, ...) {
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(g_hwdbg_reason, sizeof g_hwdbg_reason, fmt, ap);
+    va_end(ap);
+}
+
+const char *asmspy_hwdebug_reason(void) {
+    return g_hwdbg_reason[0] ? g_hwdbg_reason : NULL;
+}
+
 #if defined(__aarch64__)
 /* AArch64 hardware EXECUTION breakpoints are reached through the NT_ARM_HW_BREAK
  * regset (struct user_hwdebug_state), not debug-register POKEUSER. DBGBCR control
@@ -2938,15 +2963,28 @@ static int rgn_hw_bp_arm(pid_t tid, uint64_t addr) {
     memset(&dbg, 0, sizeof dbg);
     struct iovec iov = {&dbg, sizeof dbg};
     if (ptrace(PTRACE_GETREGSET, tid, (void *)(uintptr_t)NT_ARM_HW_BREAK,
-               &iov) != 0)
+               &iov) != 0) {
+        hwdbg_note("NT_ARM_HW_BREAK regset unavailable (errno %d)", errno);
         return -1;
-    if ((dbg.dbg_info & 0xffu) == 0)
+    }
+    unsigned slots = (unsigned)dbg.dbg_info & 0xffu;
+    if (slots == 0) {
+        hwdbg_note("host reports 0 breakpoint slots (qemu-user, or debug "
+                   "registers not exposed)");
         return -1; /* no breakpoint register slots on this host (qemu-user) */
+    }
     dbg.dbg_regs[0].addr = addr;
     dbg.dbg_regs[0].ctrl = RGN_HWBP_CTRL;
     iov.iov_len = sizeof dbg;
-    return ptrace(PTRACE_SETREGSET, tid, (void *)(uintptr_t)NT_ARM_HW_BREAK,
-                  &iov);
+    errno = 0;
+    if (ptrace(PTRACE_SETREGSET, tid, (void *)(uintptr_t)NT_ARM_HW_BREAK,
+               &iov) != 0) {
+        hwdbg_note("host reports %u breakpoint slots but refused to reserve "
+                   "one: %s",
+                   slots, strerror(errno));
+        return -1;
+    }
+    return 0;
 }
 
 static void rgn_hw_bp_disarm(pid_t tid) {
@@ -4949,12 +4987,16 @@ static unsigned long watch_dr7_word(int rw_rdwr, int len) {
 static int watch_arm(pid_t tid, uint64_t addr, unsigned long dr7) {
     errno = 0;
     if (ptrace(PTRACE_POKEUSER, tid, (void *)WATCH_DR_OFFSET(0),
-               (void *)(uintptr_t)addr) != 0)
+               (void *)(uintptr_t)addr) != 0) {
+        hwdbg_note("DR0 write refused: %s", strerror(errno));
         return -1;
+    }
     errno = 0;
     if (ptrace(PTRACE_POKEUSER, tid, (void *)WATCH_DR_OFFSET(7), (void *)dr7) !=
-        0)
+        0) {
+        hwdbg_note("DR7 write refused: %s", strerror(errno));
         return -1;
+    }
     return 0;
 }
 
@@ -5230,15 +5272,27 @@ static int watch_arm(pid_t tid, const asmspy_watch_enc_t *enc) {
     memset(&dbg, 0, sizeof dbg);
     struct iovec iov = {&dbg, sizeof dbg};
     if (ptrace(PTRACE_GETREGSET, tid, (void *)(uintptr_t)NT_ARM_HW_WATCH,
-               &iov) != 0)
+               &iov) != 0) {
+        hwdbg_note("NT_ARM_HW_WATCH regset unavailable (errno %d)", errno);
         return -1;
-    if ((dbg.dbg_info & 0xffu) == 0)
+    }
+    unsigned slots = (unsigned)dbg.dbg_info & 0xffu;
+    if (slots == 0) {
+        hwdbg_note("host reports 0 watchpoint slots");
         return -1; /* no watchpoint register slots on this host */
+    }
     dbg.dbg_regs[0].addr = enc->dbgwvr;
     dbg.dbg_regs[0].ctrl = enc->dbgwcr;
     iov.iov_len = sizeof dbg;
-    return ptrace(PTRACE_SETREGSET, tid, (void *)(uintptr_t)NT_ARM_HW_WATCH,
-                  &iov);
+    errno = 0;
+    if (ptrace(PTRACE_SETREGSET, tid, (void *)(uintptr_t)NT_ARM_HW_WATCH,
+               &iov) != 0) {
+        hwdbg_note(
+            "host reports %u watchpoint slots but refused to reserve one: %s",
+            slots, strerror(errno));
+        return -1;
+    }
+    return 0;
 }
 
 /* Disarm slot 0 (addr = ctrl = 0) — the survival step: a thread released with a

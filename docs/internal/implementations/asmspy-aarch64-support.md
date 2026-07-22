@@ -590,10 +590,63 @@ a *wrong value* or a *killed victim* is a failure.
 `--watch` fires on the hosted runner is worth recording once the CI run settles
 it). Internal note only until then.
 
+> ### ANSWERED 2026-07-22 on the runner — and it is a FOURTH outcome
+>
+> This task offered three outcomes: hit delivered, slots absent, or
+> armed-but-silent. The hosted `ubuntu-24.04-arm` runner (Neoverse-N2) is none of
+> them. A standalone probe (`PTRACE_SEIZE` a child, read both regsets, arm slot 0,
+> continue, wait for a hit) measured:
+>
+> ```
+> NT_ARM_HW_WATCH: dbg_info=0x804  slots=4  debug_arch=8
+> NT_ARM_HW_BREAK: dbg_info=0x806  slots=6  debug_arch=8
+> watch: SETREGSET rc=-1 errno=28   (ENOSPC)
+> break: SETREGSET rc=-1 errno=28   (ENOSPC)
+> ```
+>
+> **Slots are reported and arming is refused** — the kernel cannot reserve a
+> hardware breakpoint slot (`ENOSPC` comes from the perf hw-breakpoint
+> reservation path), so nothing ever arms and there is nothing to fire. That is
+> neither "slots absent" (`dbg_info` says 4 and 6) nor "armed but silent" (the
+> arm fails outright). It is a host property, and it applies to **execution**
+> breakpoints too — which is why `--trace --tid=` (per-thread `NT_ARM_HW_BREAK`
+> entry breakpoint) cannot work here either.
+>
+> Three things changed as a result:
+>
+> 1. **asmspy names the measured reason instead of listing suspects.** The skip
+>    read "(off x86-64, or debug-register arming refused: qemu / seccomp /
+>    permission)" — every one of those a wrong guess here. `asmspy_hwdebug_reason()`
+>    records what actually happened at the arm site, so the log now says
+>    *"host reports 4 watchpoint slots but refused to reserve one: No space left
+>    on device"*, and `--trace --tid` adds *"--tid=N needs a per-thread hardware
+>    breakpoint: …"*. Absent regset / zero slots / unreservable slots send an
+>    operator to three different places; the message must say which.
+> 2. **The smoke stops demanding what the host cannot give.** `--trace --tid=` now
+>    takes the same host-capability split the `--watch` block already had: on
+>    AArch64 an unarmable entry is a **named skip**, while the one property still
+>    assertable is checked — an unarmable entry must be reported as an attach
+>    failure, never as a false "never executed". x86-64 stays strict (its slots
+>    work), so the assertion that matters is not weakened anywhere it can run.
+> 3. **A false success line is gone.** The `--watch` block printed *"value + PC
+>    captured, per-thread arming confirmed, target survived"* **unconditionally** —
+>    including on the skip path, where none of those assertions had run. That is
+>    how a skip reads as a green in a log.
+>
+> With those, the arm64 `cli` leg goes **green end to end** and is now **gating**
+> (`continue-on-error` removed). The debug-register legs remain genuinely
+> unvalidatable on this runner; validating a real *hit* needs an AArch64 host
+> whose kernel will reserve a debug slot (bare metal, or a hypervisor that
+> virtualises debug state) — recorded as a hardware gate, not a to-do.
+
 **Done when.**
-- The arm64 `cli` CI job is green, taking exactly one of {hit-asserted,
-  slots-absent skip, armed-but-silent skip} — recorded in the run log.
-- A never-firing host produces a **named** skip, not a hang or a false pass.
+- ~~The arm64 `cli` CI job is green, taking exactly one of {hit-asserted,
+  slots-absent skip, armed-but-silent skip}~~ — **met, with a fourth outcome:
+  slots reported, reservation refused (`ENOSPC`). Recorded in the run log with
+  the measured numbers.**
+- A never-firing host produces a **named** skip, not a hang or a false pass —
+  **met**, and the name now carries the errno and slot count rather than a list
+  of suspects.
 
 ## Task order & parallelism
 
