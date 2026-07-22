@@ -1344,6 +1344,37 @@ printf '%s' "$fgout" | grep -q '"name":"postexec_fn","module":"exec_stage2"' \
     || fail "--graph --follow: postexec_fn [exec_stage2] missing — a followed child that EXECs is not getting its own symbol table"
 echo "  --follow + exec: two processes, two images, two symbol tables, one graph"
 
+# C2: --log --follow must DROP a followed child that execs a 32-bit image. The
+# syscall-stream engine decodes against the compile-time x86-64 table and has no
+# i386 table, so tracing the child past its exec would render i386 write(4) as
+# x86-64 stat(4) — the confident nonsense the attach-time i386 guard refuses. The
+# fix (PTRACE_O_TRACEEXEC + an EI_CLASS re-check at the exec-stop) detaches the
+# child, so no `stat(` ever appears and the 64-bit parent keeps being logged.
+# Gated on ASMSPY_HAVE_M32 (the -m32 fixture), like the refusal leg below. Neither
+# fork_victim nor i386_victim makes a REAL x86-64 stat, so any `stat(` is proof of
+# the mis-decode.
+if [ "${ASMSPY_HAVE_M32:-}" = "yes" ] && [ -x "$BUILD/i386_victim" ]; then
+    echo "--- asmspy --log --follow drops a child that execs a 32-bit image (C2) ---"
+    fk_spawn "$BUILD/i386_victim"
+    set +e
+    c2out=$(timeout 60 "$ASM" --log "$FKPID" 500 --follow 2>/dev/null); rc=$?
+    set -e
+    [ "$rc" -eq 124 ] && fail "--log --follow (C2) hung"
+    fk_kill
+    # anti-vacuity: the child WAS followed before its exec (its own fd-3 write),
+    # so "no stat" cannot pass merely because nothing was traced
+    printf '%s\n' "$c2out" | grep -q asmspy_fork_child \
+        || fail "C2: the followed child was never traced pre-exec — the drop check would be vacuous (is --follow working?)"
+    printf '%s\n' "$c2out" | grep -q asmspy_fork_parent \
+        || fail "C2: the 64-bit parent's writes are missing — the run is broken"
+    if printf '%s\n' "$c2out" | grep -qE '\bstat\('; then
+        printf '%s\n' "$c2out" | grep -E '\bstat\(' | head -3
+        fail "C2: an i386 syscall was decoded against the x86-64 table (write=4 shown as stat) — the followed child was NOT dropped at its 32-bit exec"
+    fi
+    echo "  --follow + 32-bit exec: child dropped at the exec-stop; parent still logged"
+    rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt 2>/dev/null || true
+fi
+
 # --tid pins ONE task; --follow adds whole processes. Asking for both is a
 # contradiction, so it is a usage error rather than a silent precedence rule.
 expect_badarg "$ASM" --stream 1 --tid=1 --follow
@@ -2460,8 +2491,10 @@ kill "$DVPID" 2>/dev/null || true
 # trap (TRAP_TRACE / TRAP_BRKPT) and RE-INJECT it via PTRACE_CONT. Two ways to get
 # it wrong, both caught here: SWALLOWING the trap (the app's handler never runs, so
 # it prints SWALLOWED), or re-injecting via SINGLESTEP (a fatal #DB in the masked
-# handler KILLS the victim). Trace under --stream and --procs --count=calls (the
-# two engine shapes) and assert the victim SURVIVES and never prints SWALLOWED.
+# handler KILLS the victim). Trace under all four engine shapes — the two
+# single-step engines (--stream, --procs --count=calls) AND the two syscall-stream
+# engines (--log, --procs --count=syscalls), which used to SWALLOW the app trap
+# (C3) — and assert the victim SURVIVES and never prints SWALLOWED.
 #
 # NB: CONT-delivery ends fine-grained stepping of that thread until its next stop,
 # so on a looping-int3 victim asmspy won't reach its step budget — the runs are
@@ -2474,7 +2507,8 @@ SWLOG="$BUILD/int3_swallow.log"
 IPID=$!
 sleep 1
 kill -0 "$IPID" 2>/dev/null || fail "int3_victim did not start"
-for view in "--stream $IPID 100000" "--procs $IPID 100000 --count=calls"; do
+for view in "--stream $IPID 100000" "--procs $IPID 100000 --count=calls" \
+            "--log $IPID 100000" "--procs $IPID 100000 --count=syscalls"; do
     # shellcheck disable=SC2086  # deliberate word-split of "<view> <pid> <count> ..."
     timeout 4 "$ASM" $view >/dev/null 2>&1 || true
     kill -0 "$IPID" 2>/dev/null \

@@ -2535,7 +2535,14 @@ int asmspy_engine_syscalls(pid_t pid, int follow, long max, atomic_bool *stop,
     arm_quit_wake();
 
     thr_tab_t tab = {0};
-    long opts = PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACECLONE;
+    /* PTRACE_O_TRACEEXEC (C2): the attach-time i386 guard (asmspy_elf_class==32,
+     * in the callers) vets the image ONCE, but a followed 64-bit child that
+     * execve's a 32-bit image would then be decoded against the compile-time
+     * x86-64 syscall table — the "confident nonsense" that guard exists to
+     * refuse. Trapping the exec lets us re-check the class and DROP an i386 image
+     * (this engine has no i386 syscall table) instead of mislabelling every call. */
+    long opts =
+        PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACECLONE | PTRACE_O_TRACEEXEC;
     if (follow) /* --follow: child PROCESSES too (strace -f) */
         opts |= PTRACE_O_TRACEFORK | PTRACE_O_TRACEVFORK;
     if (seize_threads(pid, opts, &tab) != 0) {
@@ -2586,6 +2593,37 @@ int asmspy_engine_syscalls(pid_t pid, int follow, long max, atomic_bool *stop,
                 multi = 1;
             }
             ptrace(PTRACE_SYSCALL, tid, NULL, NULL); /* resume the parent */
+            continue;
+        }
+
+        /* execve() replaced this task's image (C2). The attach-time i386 guard
+         * vetted only the ORIGINAL image; the new one may be 32-bit, which this
+         * engine cannot decode (it has no i386 syscall table — orig_rax + the
+         * compile-time x86-64 __NR_* map render i386 write(4) as x86-64 stat(4)).
+         * A syscall stream needs nothing re-resolved, so a 64-bit exec just
+         * resumes; a 32-bit one we DROP — PTRACE_DETACH resumes it running,
+         * untraced, and thr_del stops us reporting its calls, rather than report
+         * every one of them wrong. The exec-time counterpart of the attach-time
+         * i386 refusal. */
+        if (event == PTRACE_EVENT_EXEC) {
+            if (asmspy_elf_class(tid) == 32) {
+                ptrace(PTRACE_DETACH, tid, NULL, NULL);
+                thr_del(&tab, tid);
+                if (tab.n == 0)
+                    break;
+                continue;
+            }
+            thr_t *ts = thr_get(&tab, tid);
+            if (ts) {
+                /* post-exec the caller is the thread-group leader; the
+                 * interrupted execve has no syscall-EXIT, so the new image's
+                 * first stop is a fresh ENTRY (matters only on the pre-5.3
+                 * toggle fallback). */
+                ts->tgid = tid;
+                ts->at_entry = 1;
+                ts->ent_nr = -1;
+            }
+            ptrace(PTRACE_SYSCALL, tid, NULL, NULL);
             continue;
         }
 
@@ -2649,13 +2687,24 @@ int asmspy_engine_syscalls(pid_t pid, int follow, long max, atomic_bool *stop,
         }
 
         /* Otherwise: the initial INTERRUPT/EVENT_STOP, a clone child's first
-         * stop, an exec-stop, or a real signal-delivery-stop. Register a
-         * first-seen tid and resume; forward only a genuine signal. An
-         * app-delivered SIGTRAP is intentionally not re-injected (indistinguishable
-         * here from a ptrace-synthesized one) — a documented spy limitation. */
+         * stop, or a real signal-delivery-stop. Register a first-seen tid and
+         * resume; forward only a genuine signal. A bare SIGTRAP here is the
+         * target's OWN trap — an executed int3 or a hardware breakpoint — NOT
+         * one of ours: under PTRACE_SYSCALL our traps are syscall-stops
+         * (SIGTRAP|0x80) and the exec-stop is now a distinct PTRACE_EVENT_EXEC
+         * (C2). We re-inject it on the positive si_code evidence the single-step
+         * engines use (SI_KERNEL / TRAP_HWBKPT, via sigtrap_is_app), so a target
+         * driving its own breakpoints (a JIT, a debugger under --log) runs its
+         * handler instead of silently skipping it (C3), while a spurious
+         * SI_USER/SI_TKILL SIGTRAP is still swallowed. Delivery rides the ordinary
+         * PTRACE_SYSCALL resume below — no Trap Flag to re-arm (no fatal-#DB), and
+         * it keeps syscall-stopping the thread. */
         int deliver = 0;
         if (event == 0 && sig != SIGTRAP && sig != (SIGTRAP | 0x80))
             deliver = sig;
+        else if (event == 0 && sig == SIGTRAP && sigtrap_is_app(tid))
+            deliver =
+                SIGTRAP; /* re-inject the app's own int3 / hw breakpoint */
         if (!thr_get(&tab, tid)) { /* OOM: detach, never resume untracked */
             release_untracked(tid, 0);
             continue;
@@ -4567,6 +4616,11 @@ int asmspy_engine_procs(pid_t pid, long max, atomic_bool *stop,
         int deliver = 0;
         if (event == 0 && sig != SIGTRAP && sig != (SIGTRAP | 0x80))
             deliver = sig;
+        else if (mode == ASMSPY_COUNT_SYSCALLS && event == 0 &&
+                 sig == SIGTRAP && sigtrap_is_app(tid))
+            deliver = SIGTRAP; /* app int3 / hw bp: re-inject via the SYSCALL
+                                * resume (C3; COUNT_CALLS re-injects above via
+                                * its own CONT path) */
         if (!thr_get(&tab, tid)) { /* OOM: detach, never resume untracked */
             release_untracked(tid, (mode == ASMSPY_COUNT_CALLS));
             continue;
