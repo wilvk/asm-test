@@ -454,6 +454,12 @@ documented-unsupported).
 > **Rosetta: not run — no Apple Silicon hardware on this host.** The Rosetta
 > leg (`make CC="cc -arch x86_64" drtrace-test-macos` on an arm64 Mac) stays
 > must-verify and is recorded as gated, per T6's honesty rule.
+> **CI reproduction (same day):** the dispatched `drtrace-macos` job — run
+> 29903901986 — reproduced the extended lane on a fresh `macos-15-intel`
+> runner (macOS 15 / Xcode 16): M0 `13 passed, 0 failed`, then the
+> generated-bytes harness `18 passed, 0 failed`, signed via the T8 codesign
+> step, no self-skip. Native-Intel M1a therefore holds on two independent
+> macOS hosts.
 
 ### M1b — arm64 generated code
 
