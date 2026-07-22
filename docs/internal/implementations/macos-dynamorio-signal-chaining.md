@@ -397,6 +397,60 @@ landed.** Two pieces of hard evidence, plus three eliminations:
   limitation rather than a quick fix — pending a decision to take on the
   multi-thread signal work.
 
+**SC3 diagnosis v2 (2026-07-22, later) — SUPERSEDES v1: the multi-thread
+framing is REFUTED; the true mechanism is a signal interrupting DR gencode
+that is not safely resumed on macOS. Single-threaded, with a deterministic
+pure-C reproducer.** New hard evidence:
+
+- **CPython is single-threaded at signal time — measured, not inferred.** A
+  minimal `signal.signal(SIGUSR1, h)` + `os.kill` script reports
+  `threading.active_count() == 1` and `ps -M <pid>` shows exactly **one** OS
+  thread. So v1's "requires multi-thread / i#58" conclusion is WRONG: the
+  `pthread_create` hang was a *separate* macOS NYI that my race reproducer
+  tripped over, unrelated to the actual defect.
+- **A deterministic single-threaded pure-C reproducer exists**
+  (`scratchpad/sigchain_cpythonish.c`, to be folded into the SC1 harness /
+  a `cli/*_victim`): install handlers for a few signals **before** attach
+  (as CPython's interpreter init does), attach, build a little code, then
+  `sigaction(SIGUSR1)` + self-`kill`. It SIGILLs **6/6**, no hang. It is
+  **code-layout-sensitive**: a structurally-similar repro
+  (`sigchain_repro.c`) passes — the difference is whether the signal happens
+  to land while the thread is in a DR **gen routine/exit stub** vs at a clean
+  syscall boundary. This is the red gate SC3 needs (no `pthread_create` NYI).
+- **The handler IS recorded and IS delivered — v1's "action[30] NULL" was a
+  Python-re-exec artifact.** The clean-C debug ASYNCH log (`-loglevel 3
+  -logmask 0x10`, which finally flushes because pure C does not re-exec like
+  the Python framework binary) shows, in order: `app installed 0x… as
+  sigaction for signal 30` (recorded); `record_pending_signal(30) from gen
+  routine or stub 0x…c42` (**the signal interrupts DR gencode**);
+  `execute_handler_from_dispatch for signal 30` (delivered — the app handler
+  runs, sets its flag); `rt_sigreturn()`; then `record_pending_signal(4)
+  from cache pc 0x…` (a **SIGILL** now arises after the resume);
+  `app signal handler is SIG_DFL: executing default action` → terminate. So
+  DR delivers correctly, but **resuming the interrupted gencode after the
+  handler faults**.
+- **The fault is a DR-gencode `ud2` (lldb ground truth).** At the SIGILL:
+  `-> ud2 ; movq %rcx, %gs:0x830 ; jmp 0x…` with `rcx` = the interrupted gen
+  PC and `gs = 0x0` (selector; the TLS **base** is what matters). This is an
+  exit-stub / IBL-entry shape (spill `rcx` to `%gs` TLS, jump). Execution
+  resumed into DR's own generated code and hit a `ud2`; DR's macOS signal
+  path does **not** recognize this as its own internal trap — it classifies
+  the SIGILL as an app fault at a cache PC and takes the default action.
+- **Code locus.** `find_next_fragment_from_gencode` (`core/unix/signal.c`
+  ~4725) resolves the interrupted→next-fragment for **clean-call** and **IBL**
+  gencode but NOT for exit stubs — the explicit `XXX: should also check fine
+  stubs` gap at ~5030. For a stub interrupt it returns NULL, so
+  `info->interrupted` stays NULL and DR resumes the **raw** interrupted gen
+  PC rather than cleanly re-entering the app fragment. That resume path is
+  fine on Linux but faults on macOS — prime macOS-specific suspects: the
+  `%gs` TLS **base** not being restored across the app-handler/`sigreturn`
+  for a resumed stub; `save_fpstate` being a release no-op on the frame path;
+  and DR not treating its own gencode `ud2` as internal on the macOS SIGILL
+  path. **This is a real, tractable single-threaded fix target** — SC3 is
+  back in scope as a focused signal-path fix, not the i#58 multi-thread
+  project v1 feared. (A parallel code-read workflow is confirming the exact
+  culprit among those suspects; fix + validation against the C gate follow.)
+
 ## Out of scope
 
 - **macOS nudge support** (i#1286) — adjacent NYI, separate feature.
