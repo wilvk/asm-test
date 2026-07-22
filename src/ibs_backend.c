@@ -35,6 +35,7 @@
  * ibs_fetch PMU, decoding IbsFetchCtl/IbsFetchLinAd into a fetch-ADDRESS coverage
  * histogram (i-cache/ITLB miss + fetch latency) rather than control-flow edges.
  */
+#include "asmtest_grow.h" /* asmtest_grow / _pow2 — overflow-checked pool growth (S6) */
 #include "asmtest_ibs.h"
 
 #include "ibs_backend.h" /* internal window primitives (asmtest_ibs_window_*) */
@@ -580,7 +581,10 @@ static void eh_add(edge_hash *h, uint64_t from, uint64_t to, unsigned mispred,
 }
 static int eh_grow(edge_hash *h) {
     edge_hash bigger;
-    if (eh_init(&bigger, h->cap * 2) != 0)
+    size_t nc; /* overflow-checked h->cap * 2 (S6) */
+    if (!asmtest_grow_pow2(h->cap, h->cap + 1, sizeof *h->slots, &nc))
+        return -1;
+    if (eh_init(&bigger, nc) != 0)
         return -1;
     for (size_t i = 0; i < h->cap; i++) {
         eh_slot *s = &h->slots[i];
@@ -1602,7 +1606,10 @@ static void fh_add(fetch_hash *h, uint64_t addr, unsigned icmiss,
 }
 static int fh_grow(fetch_hash *h) {
     fetch_hash bigger;
-    if (fh_init(&bigger, h->cap * 2) != 0)
+    size_t nc; /* overflow-checked h->cap * 2 (S6) */
+    if (!asmtest_grow_pow2(h->cap, h->cap + 1, sizeof *h->slots, &nc))
+        return -1;
+    if (fh_init(&bigger, nc) != 0)
         return -1;
     for (size_t i = 0; i < h->cap; i++) {
         fh_slot *s = &h->slots[i];

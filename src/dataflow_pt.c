@@ -55,6 +55,7 @@
  * hardware; real PT CAPTURE is the one hardware gate (bare-metal Intel PT), owned
  * by the sibling doc.
  */
+#include "asmtest_grow.h" /* asmtest_grow / _pow2 — overflow-checked pool growth (S6) */
 #include <stddef.h> /* offsetof — the re-declared-struct layout guard */
 #include <stdint.h>
 #include <string.h> /* memset/memcpy — the ENOSYS stub needs it on every platform */
@@ -161,14 +162,9 @@ typedef struct {
 } df_pt_ctx;
 
 static void df_recbuf_push(df_recbuf *rb, const at_val_rec_t *r) {
-    if (rb->n == rb->cap) {
-        size_t nc = rb->cap ? rb->cap * 2 : 16;
-        at_val_rec_t *nv = (at_val_rec_t *)realloc(rb->v, nc * sizeof *nv);
-        if (nv == NULL)
-            return;
-        rb->v = nv;
-        rb->cap = nc;
-    }
+    if (rb->n == rb->cap &&
+        !asmtest_grow((void **)&rb->v, &rb->cap, rb->n + 1, sizeof *rb->v))
+        return;
     rb->v[rb->n++] = *r;
 }
 

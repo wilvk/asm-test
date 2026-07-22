@@ -22,6 +22,7 @@
 #include "amd_backend.h" /* shared AMD branch-record backend decls + reduced-filter macro */
 #include "asmtest_addr_channel.h" /* §D3 windowed multi-region channel */
 #include "asmtest_codeimage.h"
+#include "asmtest_grow.h" /* asmtest_grow / _pow2 — overflow-checked pool growth (S6) */
 #include "asmtest_hwtrace.h"
 #include "asmtest_ptrace.h" /* §D3 stealth stepper reuses the W2 attach tracer */
 #include "debug.h"          /* Phase 4: ASMTEST_HWDBG env-gated tier logging */
@@ -2564,9 +2565,15 @@ static void pt_attach_drain(struct asmtest_pt_attach *a) {
         avail = a->aux.aux_sz;
     }
     if (a->acc_len + (size_t)avail > a->acc_cap) {
-        size_t ncap = a->acc_cap ? a->acc_cap : 4096;
-        while (ncap < a->acc_len + (size_t)avail)
-            ncap *= 2;
+        /* Overflow-checked doubling (S6): seed 2048 doubles once to the original
+         * 4096 floor. An unrepresentable accumulator size fails closed the same
+         * way an OOM does — truncate and retry the drain next poll. */
+        size_t ncap;
+        if (!asmtest_grow_pow2(a->acc_cap ? a->acc_cap : 2048,
+                               a->acc_len + (size_t)avail, 1, &ncap)) {
+            a->truncated = 1;
+            return;
+        }
         uint8_t *nb = (uint8_t *)realloc(a->acc, ncap);
         if (nb == NULL) {
             a->truncated = 1;
@@ -3383,6 +3390,15 @@ int asmtest_hwtrace_render_versioned(asmtest_codeimage_t *img, uint64_t when,
 static void *g_pt_window;        /* the active pt_window_ctx (opaque here)   */
 static uint32_t g_pt_window_gen; /* bumped each arm; carried in the handle    */
 static int g_pt_window_tid; /* arming OS tid (the perf event is per-thread) */
+/* Per-thread HW capture means two threads can race begin_window on INTEL_PT, so
+ * the single window slot is a shared invariant like the region registry — guard
+ * it (S2). A dedicated lock (not g_reg_lock): the PT-window and region-table
+ * critical sections never nest, so no deadlock, and it keeps the one-lock-per-
+ * invariant precedent. RESERVED marks the slot claimed while the (syscall-heavy)
+ * arm runs OUTSIDE the lock, closing the check-then-set TOCTOU without holding
+ * the lock across perf_event_open. */
+static pthread_mutex_t g_pt_window_lock = PTHREAD_MUTEX_INITIALIZER;
+#define PT_WINDOW_RESERVED ((void *)(uintptr_t)1)
 #endif
 
 /* Plain zero-config whole-window begin: the SAFE-defaults forwarder (budget on,
@@ -3471,13 +3487,26 @@ int asmtest_hwtrace_begin_window_ex(asmtest_trace_t *trace,
     if (g_opts.backend == ASMTEST_HWTRACE_INTEL_PT) {
         /* STRONG tier: arm the ONE whole-window PT pair and hand back a reserved
          * sentinel handle end_window routes to the PT drain. One active PT window at
-         * a time (process-global slot), ASMTEST_HW_ESTATE if busy. */
-        if (g_pt_window != NULL)
+         * a time (process-global slot), ASMTEST_HW_ESTATE if busy. Reserve the slot
+         * under the lock, arm OUTSIDE it, then publish under the lock (S2). */
+        pthread_mutex_lock(&g_pt_window_lock);
+        if (g_pt_window != NULL) {
+            pthread_mutex_unlock(&g_pt_window_lock);
             return ASMTEST_HW_ESTATE;
+        }
+        g_pt_window =
+            PT_WINDOW_RESERVED; /* claim the slot; a racing arm sees busy */
+        pthread_mutex_unlock(&g_pt_window_lock);
+
         void *ctx = NULL;
         int rc = asmtest_hwtrace_pt_begin_window(&ctx);
-        if (rc != ASMTEST_HW_OK)
+        if (rc != ASMTEST_HW_OK) {
+            pthread_mutex_lock(&g_pt_window_lock);
+            g_pt_window = NULL; /* release the reservation on a failed arm */
+            pthread_mutex_unlock(&g_pt_window_lock);
             return rc; /* clean off-Intel / no-permission EUNAVAIL self-skip */
+        }
+        pthread_mutex_lock(&g_pt_window_lock);
         g_pt_window = ctx;
         g_pt_window_tid = hw_current_tid();
         g_arm_tid = g_pt_window_tid;
@@ -3488,6 +3517,7 @@ int asmtest_hwtrace_begin_window_ex(asmtest_trace_t *trace,
             out->gen = ++g_pt_window_gen;
             out->arm_tid = g_pt_window_tid;
         }
+        pthread_mutex_unlock(&g_pt_window_lock);
         return ASMTEST_HW_OK;
     }
 #endif
@@ -3536,6 +3566,9 @@ int asmtest_hwtrace_end_window(asmtest_hwtrace_scope_t handle,
      * single-step frame lookup. The handle names the live window only if BOTH gen and
      * arm_tid match the process-global slot. */
     if (handle.idx == 0xfffffffeu) {
+        /* Match + grab + clear atomically against a concurrent arm (S2). A
+         * RESERVED slot never matches — gen/tid are only set on publish. */
+        pthread_mutex_lock(&g_pt_window_lock);
         if (g_pt_window != NULL && handle.gen == g_pt_window_gen &&
             handle.arm_tid == g_pt_window_tid) {
             /* Its window: drain + free (never leak the fd/mmaps), even from a
@@ -3547,12 +3580,16 @@ int asmtest_hwtrace_end_window(asmtest_hwtrace_scope_t handle,
             void *ctx = g_pt_window;
             g_pt_window = NULL;
             g_pt_window_tid = 0;
-            g_arm_tid = -1;
+            pthread_mutex_unlock(&g_pt_window_lock);
+            g_arm_tid = -1; /* per-thread; safe unlocked. ctx is now privately
+                             * owned — no other thread can reach it, so drain
+                             * outside the lock. */
             int rc = asmtest_hwtrace_pt_end_window(ctx, NULL, 0, trace);
             if (crossthread && trace != NULL)
                 trace->truncated = true;
             return rc;
         }
+        pthread_mutex_unlock(&g_pt_window_lock);
         /* Stale / foreign / already-closed handle: never touch a different live
          * window — flag truncated and return (the SS path's non-resolving shape). */
         if (trace != NULL)
@@ -3593,13 +3630,40 @@ int asmtest_hwtrace_end_window(asmtest_hwtrace_scope_t handle,
  * is). The .NET side passes its own JitMethodMap image and never consults this. */
 asmtest_codeimage_t *asmtest_hwtrace_window_image(void) {
 #if defined(__linux__) && defined(__x86_64__)
-    if (g_pt_window == NULL)
-        return NULL;
-    return ((pt_window_ctx_t *)g_pt_window)->img;
+    /* Guard the read+deref (S2); RESERVED means "arm in progress, no img yet". */
+    pthread_mutex_lock(&g_pt_window_lock);
+    void *w = g_pt_window;
+    asmtest_codeimage_t *img = (w != NULL && w != PT_WINDOW_RESERVED)
+                                   ? ((pt_window_ctx_t *)w)->img
+                                   : NULL;
+    pthread_mutex_unlock(&g_pt_window_lock);
+    return img;
 #else
     return NULL;
 #endif
 }
+
+/* Test-only seams (S2): reserve/release the SAME g_pt_window slot under the SAME
+ * lock the live INTEL_PT arm uses, so the mutual-exclusion invariant is provable
+ * with no Intel PT silicon (mirrors the asmtest_amd_* host-testable seams). */
+#if defined(__linux__) && defined(__x86_64__)
+int asmtest_hwtrace_pt_window_reserve_test(void) {
+    pthread_mutex_lock(&g_pt_window_lock);
+    if (g_pt_window != NULL) {
+        pthread_mutex_unlock(&g_pt_window_lock);
+        return 0; /* busy — exactly what a racing arm sees */
+    }
+    g_pt_window = PT_WINDOW_RESERVED;
+    pthread_mutex_unlock(&g_pt_window_lock);
+    return 1;
+}
+void asmtest_hwtrace_pt_window_release_test(void) {
+    pthread_mutex_lock(&g_pt_window_lock);
+    g_pt_window = NULL;
+    g_pt_window_tid = 0;
+    pthread_mutex_unlock(&g_pt_window_lock);
+}
+#endif
 
 #if defined(__linux__) && defined(__x86_64__)
 /* S3: fault-safe read of up to `size` bytes of THIS process's live code at `ip`.

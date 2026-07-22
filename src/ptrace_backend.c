@@ -32,6 +32,7 @@
 #include "asmtest_blockstep_internal.h"
 #include "asmtest_codeimage.h"
 #include "asmtest_descent_internal.h"
+#include "asmtest_grow.h" /* asmtest_grow / _pow2 — overflow-checked pool growth (S6) */
 #include "asmtest_ptrace.h"
 #include "asmtest_trace.h"
 #include "bs_recon.h"
@@ -381,17 +382,11 @@ int asmtest_jitdump_debug_find(const char *path, pid_t pid, const char *name,
                 }
                 size_t flen = pos - fstart;
                 pos++; /* consume the NUL */
-                if (raw_n == raw_cap) {
-                    size_t nc = raw_cap ? raw_cap * 2 : 8;
-                    jd_dbg_raw_t *nr =
-                        (jd_dbg_raw_t *)realloc(raw, nc * sizeof *nr);
-                    if (nr == NULL) {
-                        ok = 0;
-                        err = 2;
-                        break;
-                    }
-                    raw = nr;
-                    raw_cap = nc;
+                if (raw_n == raw_cap && !asmtest_grow((void **)&raw, &raw_cap,
+                                                      raw_n + 1, sizeof *raw)) {
+                    ok = 0;
+                    err = 2;
+                    break;
                 }
                 raw[raw_n].addr = eaddr;
                 raw[raw_n].line = lineno;
@@ -419,17 +414,12 @@ int asmtest_jitdump_debug_find(const char *path, pid_t pid, const char *name,
                 pend[idx].entries = raw;
                 pend[idx].n = raw_n;
             } else {
-                if (pend_n == pend_cap) {
-                    size_t nc = pend_cap ? pend_cap * 2 : 4;
-                    jd_pending_t *np =
-                        (jd_pending_t *)realloc(pend, nc * sizeof *np);
-                    if (np == NULL) {
-                        free(raw);
-                        err = 2;
-                        break;
-                    }
-                    pend = np;
-                    pend_cap = nc;
+                if (pend_n == pend_cap &&
+                    !asmtest_grow((void **)&pend, &pend_cap, pend_n + 1,
+                                  sizeof *pend)) {
+                    free(raw);
+                    err = 2;
+                    break;
                 }
                 pend[pend_n].code_addr = code_addr;
                 pend[pend_n].entries = raw;
@@ -1203,9 +1193,39 @@ static int run_until_sp(pid_t pid, uint64_t target, uint64_t expected_sp,
              * breakpoint from a deeper frame first. Do not accept the hit — step
              * past it at native cost and keep waiting for the matching depth. */
             if (hw) {
+#if defined(__x86_64__)
                 /* The CPU sets EFLAGS.RF on debug-exception entry, so a plain CONT
                  * does not immediately re-trap on this same instruction. */
                 continue;
+#else
+                /* AArch64 (S4): a hardware execution breakpoint is a
+                 * before-execution PC match with no EFLAGS.RF equivalent, so a
+                 * plain CONT would re-match this same PC and re-trap forever
+                 * (sp stays wrong -> infinite spin — the arm64 W^X-JIT call-out
+                 * case). Disarm the slot, single-step over the instruction, and
+                 * re-arm — the hardware analogue of the software int3 step-over
+                 * below, using the same waitpid/exit/signal-forward handling. */
+                clear_hw_bp(pid);
+                if (ptrace(PTRACE_SINGLESTEP, pid, NULL, NULL) != 0) {
+                    rc = ASMTEST_PTRACE_ETRACE;
+                    break;
+                }
+                if (waitpid(pid, &status, 0) < 0) {
+                    rc = ASMTEST_PTRACE_ETRACE;
+                    break;
+                }
+                if (WIFEXITED(status) || WIFSIGNALED(status)) {
+                    rc = ASMTEST_PTRACE_ENOENT;
+                    break;
+                }
+                if (WIFSTOPPED(status) && WSTOPSIG(status) != SIGTRAP)
+                    sig = WSTOPSIG(status); /* forward on the next CONT */
+                if (set_hw_bp(pid, target) != 0) {
+                    rc = ASMTEST_PTRACE_ETRACE;
+                    break;
+                }
+                continue;
+#endif
             }
             if (ptrace(PTRACE_POKETEXT, pid, (void *)(uintptr_t)target,
                        (void *)orig) != 0) {
@@ -1391,15 +1411,10 @@ static void descend_maps_cache_parse(descend_maps_cache_t *mc, pid_t pid) {
         if (sscanf(line, "%lx-%lx %7s", &start, &end, perms) != 3 ||
             perms[2] != 'x')
             continue;
-        if (mc->len == mc->cap) {
-            size_t ncap = mc->cap ? mc->cap * 2 : 16;
-            descend_maps_range_t *nr =
-                (descend_maps_range_t *)realloc(mc->ranges, ncap * sizeof *nr);
-            if (nr == NULL)
-                break;
-            mc->ranges = nr;
-            mc->cap = ncap;
-        }
+        if (mc->len == mc->cap &&
+            !asmtest_grow((void **)&mc->ranges, &mc->cap, mc->len + 1,
+                          sizeof *mc->ranges))
+            break;
         mc->ranges[mc->len].start = (uint64_t)start;
         mc->ranges[mc->len].end = (uint64_t)end;
         mc->len++;
@@ -2357,15 +2372,9 @@ asmtest_bs_precover_build(const uint8_t *code, size_t len, uint64_t base_ip,
                     kind = BS_PC_COND;
                 }
             }
-            if (tn == tcap) {
-                size_t ncap = tcap ? tcap * 2 : 8;
-                bs_precover_insn_t *grown =
-                    (bs_precover_insn_t *)realloc(tmp, ncap * sizeof *tmp);
-                if (grown == NULL)
-                    break;
-                tmp = grown;
-                tcap = ncap;
-            }
+            if (tn == tcap &&
+                !asmtest_grow((void **)&tmp, &tcap, tn + 1, sizeof *tmp))
+                break;
             tmp[tn].off = walk;
             tmp[tn].len = l;
             tmp[tn].kind = kind;

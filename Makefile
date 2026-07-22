@@ -210,7 +210,7 @@ USECASE_SUITES := $(BUILD)/test_bittricks $(BUILD)/test_vm
 # plus the glob-matcher parity oracle (differential against the host's real
 # fnmatch; POSIX-only, code-review-plausible-triage T2).
 SELFTESTS := $(BUILD)/tests_positive $(BUILD)/tests_negative \
-             $(BUILD)/tests_glob_parity
+             $(BUILD)/tests_glob_parity $(BUILD)/tests_grow_overflow
 
 # --- Packaging & installation (Track B) ------------------------------------
 # `make lib`        build libasmtest.a (framework runtime + capture trampoline)
@@ -373,8 +373,12 @@ $(BUILD)/tests_glob_parity: tests/glob_parity.c src/glob_match.c \
                             src/glob_match.h | $(BUILD)
 	$(CC) $(CFLAGS) -Isrc tests/glob_parity.c src/glob_match.c -o $@
 
+$(BUILD)/tests_grow_overflow: tests/grow_overflow.c src/asmtest_grow.h | $(BUILD)
+	$(CC) $(CFLAGS) -Isrc tests/grow_overflow.c -o $@
+
 check: $(SELFTESTS) check-header-portability
 	@$(BUILD)/tests_glob_parity
+	@$(BUILD)/tests_grow_overflow
 	@BUILD=$(BUILD) sh tests/expect.sh
 
 # Public first-contact surface gate — three paths no other target covers, all

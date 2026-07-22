@@ -12,30 +12,11 @@
  * next to the ptrace backend and needs nothing Capstone/Unicorn.
  */
 #include "asmtest_descent_internal.h"
+#include "asmtest_grow.h" /* asmtest_grow — the shared overflow-checked pool grower (S6) */
 #include "asmtest_ptrace.h"
 
 #include <stdlib.h>
 #include <string.h>
-
-/* ------------------------------------------------------------------ */
-/* Growable-pool helpers                                               */
-/* ------------------------------------------------------------------ */
-
-/* Ensure *arr can hold at least `need` elements of `elem` bytes, doubling capacity.
- * Returns 1 on success, 0 on OOM (leaving the existing buffer intact). */
-static int pool_reserve(void **arr, size_t *cap, size_t need, size_t elem) {
-    if (need <= *cap)
-        return 1;
-    size_t ncap = *cap ? *cap : 8;
-    while (ncap < need)
-        ncap *= 2;
-    void *p = realloc(*arr, ncap * elem);
-    if (p == NULL)
-        return 0;
-    *arr = p;
-    *cap = ncap;
-    return 1;
-}
 
 /* ------------------------------------------------------------------ */
 /* Allocate / free / configure                                         */
@@ -89,7 +70,7 @@ void asmtest_descent_set_watchdog_ms(asmtest_descent_t *d, uint32_t ms) {
 
 static int region_add(asmtest_descent_region_t **arr, size_t *len, size_t *cap,
                       const void *base, size_t rlen) {
-    if (!pool_reserve((void **)arr, cap, *len + 1, sizeof **arr))
+    if (!asmtest_grow((void **)arr, cap, *len + 1, sizeof **arr))
         return ASMTEST_PTRACE_ETRACE;
     (*arr)[*len].base = (uint64_t)(uintptr_t)base;
     (*arr)[*len].len = (uint64_t)rlen;
@@ -158,7 +139,7 @@ int32_t asmtest_descent_push_frame(asmtest_descent_t *d, uint64_t base,
                                    int32_t parent) {
     if (d == NULL)
         return -1;
-    if (!pool_reserve((void **)&d->frames, &d->frames_cap, d->frames_len + 1,
+    if (!asmtest_grow((void **)&d->frames, &d->frames_cap, d->frames_len + 1,
                       sizeof *d->frames)) {
         d->truncated = 1;
         return -1;
@@ -187,14 +168,14 @@ int asmtest_descent_frame_record(asmtest_descent_t *d, int32_t fi, uint64_t off,
                 break;
             }
         if (!seen) {
-            if (pool_reserve((void **)&f->blocks, &f->blocks_cap,
+            if (asmtest_grow((void **)&f->blocks, &f->blocks_cap,
                              f->blocks_len + 1, sizeof *f->blocks))
                 f->blocks[f->blocks_len++] = off;
             else
                 d->truncated = 1;
         }
     }
-    if (pool_reserve((void **)&f->insns, &f->insns_cap, f->insns_len + 1,
+    if (asmtest_grow((void **)&f->insns, &f->insns_cap, f->insns_len + 1,
                      sizeof *f->insns))
         f->insns[f->insns_len++] = off;
     else
@@ -210,7 +191,7 @@ void asmtest_descent_add_edge(asmtest_descent_t *d, uint64_t site,
                               int32_t from_frame) {
     if (d == NULL)
         return;
-    if (!pool_reserve((void **)&d->edges, &d->edges_cap, d->edges_len + 1,
+    if (!asmtest_grow((void **)&d->edges, &d->edges_cap, d->edges_len + 1,
                       sizeof *d->edges)) {
         d->truncated = 1;
         return;

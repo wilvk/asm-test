@@ -23,6 +23,7 @@
 #define _GNU_SOURCE
 
 #include "asmtest_codeimage.h"
+#include "asmtest_grow.h" /* asmtest_grow / _pow2 — overflow-checked pool growth (S6) */
 
 #include <stddef.h>
 #include <stdint.h>
@@ -203,14 +204,9 @@ static uint8_t *ci_read_region(asmtest_codeimage_t *img, uint64_t base,
 /* Append a new version (a copy of `bytes`, ownership transferred) at the next sequence. */
 static int ci_region_add_version(asmtest_codeimage_t *img, ci_region_t *r,
                                  uint8_t *bytes) {
-    if (r->nver == r->cap_ver) {
-        size_t nc = r->cap_ver ? r->cap_ver * 2 : 4;
-        ci_version_t *nv = (ci_version_t *)realloc(r->vers, nc * sizeof *nv);
-        if (nv == NULL)
-            return ASMTEST_CI_EUNAVAIL;
-        r->vers = nv;
-        r->cap_ver = nc;
-    }
+    if (r->nver == r->cap_ver && !asmtest_grow((void **)&r->vers, &r->cap_ver,
+                                               r->nver + 1, sizeof *r->vers))
+        return ASMTEST_CI_EUNAVAIL;
     r->vers[r->nver].seq = ++img->seq;
     r->vers[r->nver].bytes = bytes;
     r->nver++;
@@ -386,14 +382,10 @@ int asmtest_codeimage_track(asmtest_codeimage_t *img, const void *base,
     if (!asmtest_codeimage_available())
         return ASMTEST_CI_EUNAVAIL;
 
-    if (img->nreg == img->cap_reg) {
-        size_t nc = img->cap_reg ? img->cap_reg * 2 : 4;
-        ci_region_t *nr = (ci_region_t *)realloc(img->regions, nc * sizeof *nr);
-        if (nr == NULL)
-            return ASMTEST_CI_EUNAVAIL;
-        img->regions = nr;
-        img->cap_reg = nc;
-    }
+    if (img->nreg == img->cap_reg &&
+        !asmtest_grow((void **)&img->regions, &img->cap_reg, img->nreg + 1,
+                      sizeof *img->regions))
+        return ASMTEST_CI_EUNAVAIL;
 
     uint64_t b = (uint64_t)(uintptr_t)base;
     uint64_t ps = (uint64_t)img->page_size;

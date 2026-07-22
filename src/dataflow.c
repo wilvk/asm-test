@@ -10,6 +10,7 @@
  */
 #include "asmtest_valtrace.h"
 
+#include "asmtest_grow.h" /* asmtest_grow / _pow2 — overflow-checked pool growth (S6) */
 #include <stdlib.h>
 #include <string.h>
 
@@ -133,9 +134,20 @@ static uint64_t lw_hash(uint8_t kind, uint64_t a) {
 }
 
 static bool lw_grow(lw_map *m, size_t want) {
-    size_t ncap = m->cap ? m->cap * 2 : 64;
-    while (ncap < want * 2)
-        ncap *= 2;
+    /* Overflow-checked power-of-two growth (S6): preserves the original result
+     * (smallest pow2 >= max(cap*2, want*2, 64)) while failing closed if want*2
+     * or the doubling would wrap size_t. */
+    size_t ncap;
+    if (!asmtest_grow_pow2(m->cap, (m->cap ? m->cap : 64), sizeof(lw_ent),
+                           &ncap) ||
+        (want > SIZE_MAX / 2)) /* want * 2 must not wrap */
+        return false;
+    while (ncap < want * 2) {
+        size_t g;
+        if (!asmtest_grow_pow2(ncap, ncap + 1, sizeof(lw_ent), &g))
+            return false;
+        ncap = g;
+    }
     lw_ent *ne = (lw_ent *)calloc(ncap, sizeof *ne);
     if (ne == NULL)
         return false;
@@ -197,15 +209,9 @@ typedef struct {
 
 static void edge_push(edgevec *ev, uint32_t from, uint32_t to,
                       const at_val_rec_t *loc) {
-    if (ev->n == ev->cap) {
-        size_t nc = ev->cap ? ev->cap * 2 : 32;
-        asmtest_defuse_edge_t *nv =
-            (asmtest_defuse_edge_t *)realloc(ev->v, nc * sizeof *nv);
-        if (nv == NULL)
-            return; /* OOM: drop the edge rather than crash */
-        ev->v = nv;
-        ev->cap = nc;
-    }
+    if (ev->n == ev->cap &&
+        !asmtest_grow((void **)&ev->v, &ev->cap, ev->n + 1, sizeof *ev->v))
+        return; /* OOM: drop the edge rather than crash */
     ev->v[ev->n].from_step = from;
     ev->v[ev->n].to_step = to;
     ev->v[ev->n].loc = *loc;

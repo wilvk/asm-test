@@ -12,6 +12,7 @@
  * The historical emu_* spellings stay exported verbatim so ASSERT_BLOCK_COVERED,
  * the language bindings, and the ABI manifest are unaffected.
  */
+#include "asmtest_grow.h" /* asmtest_grow / _pow2 — overflow-checked pool growth (S6) */
 #include "asmtest_trace.h"
 
 #include <stdlib.h>
@@ -475,14 +476,9 @@ int asmtest_srcreg_add(asmtest_srcreg_t *reg, uint64_t code_addr,
                        const char *file) {
     if (reg == NULL || code_size == 0)
         return -1;
-    if (reg->n == reg->cap) {
-        size_t nc = reg->cap ? reg->cap * 2 : 4;
-        srcreg_ent_t *ne = (srcreg_ent_t *)realloc(reg->ents, nc * sizeof *ne);
-        if (ne == NULL)
-            return -1;
-        reg->ents = ne;
-        reg->cap = nc;
-    }
+    if (reg->n == reg->cap && !asmtest_grow((void **)&reg->ents, &reg->cap,
+                                            reg->n + 1, sizeof *reg->ents))
+        return -1;
     srcreg_ent_t *e = &reg->ents[reg->n];
     e->code_addr = code_addr;
     e->code_size = code_size;

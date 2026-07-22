@@ -22,6 +22,7 @@
  * host. Helper identification from a LIVE runtime symbolizer is a producer concern;
  * this is the pure model it drives.
  */
+#include "asmtest_grow.h" /* asmtest_grow / _pow2 — overflow-checked pool growth (S6) */
 #include "asmtest_valtrace.h"
 
 #include <stdlib.h>
@@ -128,7 +129,12 @@ static uint64_t rv_hash(uint32_t reg) {
 }
 
 static bool rv_grow(rv_map *m) {
-    size_t ncap = m->cap ? m->cap * 2 : 32;
+    /* Overflow-checked power-of-two growth (S6): same result as cap*2 seeded
+     * at 32, fail-closed on wrap. */
+    size_t ncap;
+    if (!asmtest_grow_pow2(m->cap, (m->cap ? m->cap : 32), sizeof(rv_ent),
+                           &ncap))
+        return false;
     rv_ent *ne = (rv_ent *)calloc(ncap, sizeof *ne);
     if (ne == NULL)
         return false;
@@ -189,14 +195,9 @@ typedef struct {
 } recvec;
 
 static bool rec_push(recvec *rv, at_val_rec_t r) {
-    if (rv->n == rv->cap) {
-        size_t nc = rv->cap ? rv->cap * 2 : 64;
-        at_val_rec_t *nv = (at_val_rec_t *)realloc(rv->v, nc * sizeof *nv);
-        if (nv == NULL)
-            return false;
-        rv->v = nv;
-        rv->cap = nc;
-    }
+    if (rv->n == rv->cap &&
+        !asmtest_grow((void **)&rv->v, &rv->cap, rv->n + 1, sizeof *rv->v))
+        return false;
     rv->v[rv->n++] = r;
     return true;
 }

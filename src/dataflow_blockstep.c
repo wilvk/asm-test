@@ -227,6 +227,7 @@
  */
 #define _GNU_SOURCE
 
+#include "asmtest_grow.h" /* asmtest_grow / _pow2 — overflow-checked pool growth (S6) */
 #include <stddef.h> /* offsetof — the re-declared-struct layout guard */
 #include <string.h> /* memset — the ENOSYS stubs below need it on EVERY platform */
 #include <sys/types.h> /* pid_t — part of the entry-point signatures on every platform */
@@ -648,14 +649,9 @@ typedef struct {
 } recbuf;
 
 static void recbuf_push(recbuf *rb, const at_val_rec_t *r) {
-    if (rb->n == rb->cap) {
-        size_t nc = rb->cap ? rb->cap * 2 : 16;
-        at_val_rec_t *nv = (at_val_rec_t *)realloc(rb->v, nc * sizeof *nv);
-        if (nv == NULL)
-            return;
-        rb->v = nv;
-        rb->cap = nc;
-    }
+    if (rb->n == rb->cap &&
+        !asmtest_grow((void **)&rb->v, &rb->cap, rb->n + 1, sizeof *rb->v))
+        return;
     rb->v[rb->n++] = *r;
 }
 

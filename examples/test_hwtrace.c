@@ -75,6 +75,11 @@ int asmtest_amd_msr_decode_entry(uint64_t from, uint64_t to,
 size_t asmtest_amd_last_exit_off(const void *base, size_t len, int *nexit);
 size_t asmtest_amd_all_exits(const void *base, size_t len, size_t *out, int cap,
                              int *nexit);
+/* S2 PT-window slot arbitration seams: reserve/release the same guarded slot the
+ * live INTEL_PT arm uses, so the mutual-exclusion invariant is host-testable with
+ * no Intel PT silicon. */
+int asmtest_hwtrace_pt_window_reserve_test(void);
+void asmtest_hwtrace_pt_window_release_test(void);
 /* F43 ring-parse seam + P9 cpuinfo-flag matchers (internal, defined in
  * hwtrace.c / amd_backend.c; hand-declared here like the AMD decode entries above). */
 void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
@@ -8176,6 +8181,18 @@ static void test_ptrace_callout_reentrant(void) {
     asmtest_trace_free(tr);
     munmap(p, sizeof BLOB);
 #else
+    /* S4: the wrong-depth HARDWARE-breakpoint step-over is now arm64-correct
+     * (src/ptrace_backend.c: single-step over the re-matching PC instead of the
+     * x86-EFLAGS.RF `continue`). Behavioural validation of that branch needs a
+     * re-entrant A64 call-out driven under ASMTEST_PTRACE_HW_BP=1 on hardware
+     * whose NT_ARM_HW_BREAK actually DELIVERS debug exceptions — a bare-metal
+     * arm64 (self-hosted) box. The hosted Azure Cobalt arm64 runner reports slots
+     * but withholds the exception, and qemu-user exposes zero slots, so neither
+     * can fire a hardware execution breakpoint. GATED: no reachable arm64 hw-bp
+     * box; the fixture + forced-hw assertion land with the self-hosted arm64
+     * runner (self-hosted-ci-runners).
+     * NB: this reentrant test is x86-only (its BLOB is x86 machine code); the note
+     * documents where the arm64 code path is validated. */
     printf("# SKIP ptrace re-entrant callout: not Linux x86-64\n");
 #endif
 }
@@ -9622,6 +9639,52 @@ static void test_descent_attach(void) {
  * holds the surrounding harness instructions — whole-window is honest-but-noisy).
  * render_window decodes those absolute addresses from live self memory. Any x86-64
  * Linux; no PMU/perf/privilege. */
+
+/* S2: the single PT-window slot must be mutually exclusive under concurrent arms.
+ * The live double-arm fd/mmap leak needs Intel PT (self-skips EUNAVAIL here), but
+ * the mutual-exclusion invariant the fix installs is host-testable via the
+ * reserve/release seams that share the exact lock+slot the INTEL_PT arm uses. */
+#if defined(__linux__) && defined(__x86_64__)
+static void *pt_slot_racer(void *arg) {
+    int *won = (int *)arg;
+    *won = asmtest_hwtrace_pt_window_reserve_test();
+    return NULL;
+}
+#endif
+static void test_pt_window_slot_mutex(void) {
+#if defined(__linux__) && defined(__x86_64__)
+    /* Deterministic: reserve is exclusive until released. reserve_test() MUTATES
+     * the slot, and the CHECK macro evaluates its condition twice — so each
+     * reserve result is captured into a local FIRST, then asserted. */
+    int r_first = asmtest_hwtrace_pt_window_reserve_test();
+    CHECK(r_first == 1, "pt-window slot: first reserve wins");
+    int r_busy = asmtest_hwtrace_pt_window_reserve_test();
+    CHECK(r_busy == 0, "pt-window slot: a second reserve sees busy");
+    asmtest_hwtrace_pt_window_release_test();
+    int r_again = asmtest_hwtrace_pt_window_reserve_test();
+    CHECK(r_again == 1, "pt-window slot: reserve wins again after release");
+    asmtest_hwtrace_pt_window_release_test();
+
+    /* Threaded: exactly one of N concurrent reservers wins the slot. */
+    enum { NRACERS = 8 };
+    pthread_t th[NRACERS];
+    int won[NRACERS] = {0};
+    for (int i = 0; i < NRACERS; i++)
+        pthread_create(&th[i], NULL, pt_slot_racer, &won[i]);
+    int winners = 0;
+    for (int i = 0; i < NRACERS; i++) {
+        pthread_join(th[i], NULL);
+        winners += won[i];
+    }
+    CHECK(winners == 1,
+          "pt-window slot: exactly one of 8 concurrent arms wins (mutex "
+          "serializes the slot)");
+    asmtest_hwtrace_pt_window_release_test();
+#else
+    printf("# SKIP pt-window slot mutex: x86-64 Linux only\n");
+#endif
+}
+
 static void test_wholewindow_singlestep(void) {
 #if defined(__linux__) && defined(__x86_64__)
     if (!asmtest_hwtrace_available(ASMTEST_HWTRACE_SINGLESTEP)) {
@@ -11270,6 +11333,7 @@ int main(void) {
     /* §Z0/§Z1: the region-free (empty-ctor) whole-window scope — WEAK single-step
      * tier + the §Z4 cross-thread honesty flag (any x86-64 Linux, no hardware). */
     test_wholewindow_singlestep();
+    test_pt_window_slot_mutex();
     test_wholewindow_render_unmapped();
     test_wholewindow_ss_managed_routes();
     test_wholewindow_buckets();
