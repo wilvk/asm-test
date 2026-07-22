@@ -227,8 +227,11 @@ The scaffolding stops short of a credentialed, multi-platform release:
      effect today — `src/cs_backend.c` calls no OpenCSD symbol; the CoreSight decode is
      board-gated). `make docker-python-manylinux` proves this end to end with **no
      credentials** — the manylinux_2_28 wheel installs and imports (asm + disas) on a
-     clean AlmaLinux 8. Confirming both arches + the full tier asserts across the runner
-     matrix still needs a CI dispatch (the aarch64 leg builds under emulation).
+     clean AlmaLinux 8. **Both arches are confirmed in CI** (dispatch 2026-07-22): the
+     x86_64 and aarch64 legs each build natively — `ubuntu-latest` and `ubuntu-24.04-arm`,
+     not emulation — and both wheels install and run on a clean AlmaLinux 8 of the
+     matching arch (assemble + disas per-arch, the vendored Unicorn tier executing, and
+     the excluded sibling libs resolving through `dladdr`).
    - **link bindings** (Go, C++, Zig, Rust) ship source, so the check is that the
      published source is *consumable* — the cgo module vets+builds, a C++ consumer
      compiles+links+runs against the packaged header, the Zig package builds, and
