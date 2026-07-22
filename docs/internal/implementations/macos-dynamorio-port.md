@@ -8,6 +8,20 @@
 > source disagree, this doc wins (sources may be stale); if the CODE and this
 > doc disagree, re-verify before implementing.
 
+> **UPDATE 2026-07-22 — the upstream-release gate is retired; this doc is
+> unblocked via a source fork.** A local fork of DynamoRIO
+> (`wilvk/dynamorio`, at `/Users/willemvanketwich/source/dynamorio`) builds
+> `lib64/release/libdynamorio.dylib` on macOS x86-64 (verified live on the
+> Intel-mac dev host). See
+> [macos-dynamorio-fork-build.md](macos-dynamorio-fork-build.md), which
+> **supersedes T1** (release recheck) and **T2** (inspect a release tarball —
+> there is none; the fork confirms the `lib64/release/libdynamorio.dylib`
+> layout) and provides the runtime that **T3/T4/T5** consume once its FB2 (fix
+> the `dr_app_setup` startup crash at `core/unix/os.c:1192`) is green. T6–T10
+> below still apply unchanged; T6/T8's Apple-Silicon gates remain. Read the
+> "Constraints & gates" note at the bottom, now amended, before treating any T1
+> "blocked upstream" language below as current.
+
 ## Why this work exists
 
 The DynamoRIO in-process native-trace tier (trace real code on the real CPU,
@@ -704,23 +718,32 @@ T1 (recheck; the ONLY task runnable today)
 
 ## Constraints & gates
 
-- **The upstream gate is real and is not a CLAUDE.md violation.** CLAUDE.md's
-  rule — a missing installable dependency gets added to a `Dockerfile.*` with
-  a pinned version, never a self-skip — cannot apply here for two stacked
-  reasons: (1) the dependency **does not exist anywhere**: DynamoRIO has never
-  published a macOS release asset in its entire GitHub releases history
-  (~430 releases, 2015-2026; re-verified live 2026-07-17), so there is
-  nothing to pin; (2) even when it exists, a Darwin DR runtime cannot run in
-  any Docker lane — containers on every host are Linux — so the lane's
-  substrate is macOS hosts/runners, which fall under the rule's hardware
-  exemption. The recorded gate is the plan's STATUS block plus T1's standing
-  recheck; the self-skips (`drtrace-test-macos` off Darwin / off DR) print
-  their reason.
-- **A from-source macOS DynamoRIO build is explicitly out of scope** (plan
-  directive, restated by the bundle). Do not open it as a workaround; if it
-  is ever wanted, it is a separately-scoped research spike — upstream's own
-  macOS status is "in progress", x86-64-CI-only, with the `dr_app_*`
-  static/embedding path tracked by open issues since 2016.
+- **The upstream *release* gate was real — now retired (2026-07-22).** As
+  originally written, CLAUDE.md's rule (a missing installable dependency gets
+  pinned, never self-skipped) could not apply for two stacked reasons: (1) the
+  dependency **did not exist anywhere** — DynamoRIO has never published a macOS
+  *release asset* (~430 releases, 2015-2026; re-verified live through
+  2026-07-20), so there was nothing to pin; (2) even when it exists, a Darwin DR
+  runtime cannot run in any Docker lane — containers are Linux — so the lane's
+  substrate is macOS hosts/runners (the rule's hardware exemption).
+  **Reason (1) no longer holds:** a *source fork* now provides a pinnable
+  build (`wilvk/dynamorio` → `scripts/build-dynamorio-macos.sh`, per
+  [macos-dynamorio-fork-build.md](macos-dynamorio-fork-build.md)), so CLAUDE.md's
+  pin-the-dependency rule **does** apply — the pin is the fork commit + submodule
+  SHAs. Reason (2) still holds (macOS host substrate, not Docker). The recorded
+  gate is now the fork pin (not a release recheck); the self-skips
+  (`drtrace-test-macos` off Darwin / off DR) still print their reason.
+- ~~**A from-source macOS DynamoRIO build is explicitly out of scope**~~ **—
+  AMENDED 2026-07-22.** This was written when no macOS DynamoRIO binary could be
+  obtained by any means. A source fork now exists and builds
+  `libdynamorio.dylib` on macOS x86-64, so the from-source path is the
+  unblocking avenue after all — it is now scoped in
+  [macos-dynamorio-fork-build.md](macos-dynamorio-fork-build.md) (FB1 pins the
+  fork + adds `scripts/build-dynamorio-macos.sh`; FB2 fixes the `dr_app_setup`
+  startup crash). The original caution still holds in spirit: upstream macOS is
+  "in progress" and x86-64-CI-only, and the `dr_app_*` embedding path is the one
+  to prove first (which is exactly FB2's job — a real startup crash was found on
+  the dev host). It is no longer *out of scope*; it is the plan.
 - **Hardware gates**: M0/M1a-native need a macOS x86-64 host (the current dev
   host is Intel-Mac x86_64 — present, not gating). The Rosetta leg of T6 and
   all of T8 need Apple Silicon. T8 additionally needs an arm64/universal

@@ -88,6 +88,31 @@ DynamoRIO-based tier is addressed here.
 > that "fails successfully" for years is noise, not signal — a one-command check
 > does not warrant automation.
 
+> **STATUS 2026-07-22 — GATE CHANGED: unblocked via a source fork. The recheck
+> above is no longer the go/no-go.** A local fork of DynamoRIO
+> (`https://github.com/wilvk/dynamorio`, at `/Users/willemvanketwich/source/dynamorio`,
+> upstream master HEAD `cca42665b`) **builds `lib64/release/libdynamorio.dylib`
+> on macOS x86-64** — verified live on the Intel-mac dev host (macOS 14.7.5,
+> Apple clang 16, CMake 4.3.4; submodules `elfutils`/`libipt`/`zlib` init'd; deps
+> `nasm`+`lz4`+SDK `zlib`). So there is now a runtime to attach *with*; the
+> "buying a Mac buys nothing" framing above is superseded. The from-source path —
+> previously called out-of-scope — is now the scoped avenue:
+> [macos-dynamorio-fork-build.md](../implementations/macos-dynamorio-fork-build.md)
+> (FB1 pins the fork + adds `scripts/build-dynamorio-macos.sh`; FB2 fixes the M0
+> blocker; FB3 drives T3/T4/T5; FB4 adds the nightly CI lane).
+>
+> **The dominant risk below is now partly measured.** Upstream CI-gates
+> `api.startstop`/`api.detach` (the `dr_app_*` interface) on `macos-15-intel` —
+> they are **not** in the `$is_macos` ignore-failures list in
+> `suite/runsuite_wrapper.pl` (Windows ignores `api.startstop`; macOS does not),
+> so upstream expects that path to pass on macOS x86-64. On the dev host it runs
+> the full 10-iteration attach/detach cycle correctly **but** faults at
+> `dr_app_setup` startup in `get_application_name_helper` (`core/unix/os.c:1192`,
+> an exec-path-above-`envp` deref, stack-layout dependent). So M0's bar — "does
+> in-process attach work on this macOS/DR combination" — is **provisionally
+> cleared for the mechanism, pending FB2's fix of that startup crash.** M1/M2
+> unchanged.
+
 ---
 
 ## The dominant risk, stated first
