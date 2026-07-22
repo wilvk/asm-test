@@ -85,11 +85,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   platform-correct library names on Darwin (`drtrace_env` → `.dylib` +
   `DYLD_LIBRARY_PATH`), with `drtrace-cpp-test`, `drtrace-ruby-test`, and
   `drtrace-python-test` green on macOS x86-64 — compiled-function/symbol
-  mode is the documented macOS binding path. One measured limitation found
-  doing so: DR signal chaining hangs on the macOS fork build (a SIGUSR1
-  raised while attached never reaches CPython's handler), so the Python
-  signal-chaining gate is Darwin-skipped with that reason — a fork-side DR
-  issue recorded in the plan, sibling of the FB2 fixes. Fork
+  mode is the documented macOS binding path. **Signal chaining under an
+  attached trace now works on macOS** (a fourth fork fix): a signal raised
+  while attached is delivered to the host runtime's handler and the process
+  resumes cleanly, so the Python `test_drgate.py::test_signal_chaining` gate
+  runs on Darwin (previously Darwin-skipped). Root cause (confirmed
+  single-threaded, not the multi-thread i#58 first suspected): the app
+  handler is delivered fine, but its return through libsystem `_sigtramp` →
+  macOS 3-arg `sigreturn(uctx, infostyle, token)` needs a per-delivery kernel
+  token DR cannot forge for the frames it synthesizes, so the real
+  `sigreturn` was rejected and the thread resumed into DR gencode →
+  `ud2` → SIGILL → terminate. The fork (pin `b8785a5d8`) now restores the
+  app context in `handle_sigreturn` and skips the real `sigreturn` on macOS
+  x86-64, exactly as the VMX86 path does. Fork
   `api.startstop`/`api.detach` run 10/10 crash-free (their multi-thread
   takeover assertions are upstream-NYI on macOS, i#58, and upstream macOS CI
   never runs them — they are outside the `OSX` ctest label set). arm64 stays

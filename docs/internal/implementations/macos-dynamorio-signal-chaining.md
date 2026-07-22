@@ -1,5 +1,26 @@
 # macOS DynamoRIO fork: fix signal chaining under attach (the drgate hang) — implementation
 
+> **RESOLVED 2026-07-22 — ✅ signal chaining works on macOS.** All four tasks
+> landed. The root cause (confirmed by runtime instrumentation, **single-
+> threaded** — not the multi-thread i#58 first suspected): the app handler is
+> delivered correctly, but its return through libsystem `_sigtramp` → the macOS
+> 3-arg `sigreturn(uctx, infostyle, token)` needs a per-delivery kernel token
+> DR cannot forge for the signal frames it *synthesizes*, so the real
+> `sigreturn` was rejected and the thread resumed into DR gencode → `ud2` →
+> SIGILL → terminate. **Fix** (fork branch `asmtest/macos-fixes`, one commit,
+> pin advanced `bbbcc40b8` → **`b8785a5d8`**): on macOS x86-64
+> `handle_sigreturn` restores the app context into DR's mcontext via
+> `sigcontext_to_mcontext(DR_MC_ALL)` and returns `false` to skip the real
+> `sigreturn` — exactly what the VMX86 path already does — so no kernel token
+> is needed; `dcontext->asynch_target` is the redirect target. **Validated:**
+> the deterministic single-thread C reproducer (was SIGILL 6/6) exits 0 with
+> the handler run 5/5; `test_drgate.py::test_signal_chaining` (was wedge) and
+> the plain-python repro pass; the Darwin skip is removed;
+> `drtrace-test-macos` (15/18) + the cpp/ruby/python binding lanes stay green;
+> the pinned build reproduces from a fresh fetch of `b8785a5d8`. The SC1–SC3
+> narrative and every superseded hypothesis (v1 multi-thread, v2 suspects) are
+> kept below as the diagnostic trail.
+
 > **Sources.** Follow-up to
 > [macos-dynamorio-fork-build.md](macos-dynamorio-fork-build.md) (the pinned
 > fork + the three FB2 fixes this extends) and

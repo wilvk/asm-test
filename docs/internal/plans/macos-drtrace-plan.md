@@ -161,6 +161,23 @@ DynamoRIO-based tier is addressed here.
 > (i#58-adjacent, sibling of the three FB2 fixes), out of T9's bindings
 > scope — recorded here so it is a named limitation, not a silent one.
 
+> **STATUS 2026-07-22 (later) — RESOLVED: signal chaining now works on macOS
+> (fourth fork fix).** The limitation above is fixed. Root cause (confirmed by
+> runtime instrumentation, single-threaded — NOT the multi-thread i#58 that was
+> first suspected): the app handler is delivered correctly, but when it returns
+> through libsystem `_sigtramp` and issues the macOS 3-arg
+> `sigreturn(uctx, infostyle, token)`, the kernel's per-delivery **token** is
+> one DR cannot forge for the signal frames it *synthesizes* — so the real
+> `sigreturn` is rejected and the thread resumes into DR gencode → `ud2` →
+> SIGILL → terminate. Fix (fork branch `asmtest/macos-fixes`, pin advanced to
+> `b8785a5d8`): on macOS x86-64 `handle_sigreturn` now restores the app context
+> into DR's mcontext and skips the real `sigreturn`, exactly as the VMX86 path
+> does — no token needed. Validated: a deterministic single-thread C reproducer
+> (was SIGILL) and `test_drgate.py::test_signal_chaining` (was wedge) both pass;
+> the Darwin skip is removed; `drtrace-test-macos` + cpp/ruby/python lanes stay
+> green. Details in
+> [macos-dynamorio-signal-chaining.md](../implementations/macos-dynamorio-signal-chaining.md).
+
 ## The dominant risk, stated first
 
 **The single largest unknown is whether DynamoRIO's Application Interface

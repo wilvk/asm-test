@@ -300,11 +300,13 @@ port, i#5383).
 supported binding path on both Mac arches is **compiled-function / symbol
 mode**. Generated code from bindings works only where the interpreter is
 non-hardened (e.g. ad-hoc-signed Homebrew builds) and is never promised —
-see the arm64 section below. One measured limitation: **signal chaining
-under an attached trace hangs on macOS** (a signal raised while DynamoRIO
-is attached is not delivered through to the host runtime's handler), so
-don't rely on signals arriving inside a traced region on macOS; the
-Python suite's signal-chaining gate is Darwin-skipped with that reason.
+see the arm64 section below. Signal chaining under an attached trace works
+on macOS (a signal raised while DynamoRIO is attached is delivered through
+to the host runtime's handler and the process resumes cleanly), the same as
+on Linux; this needed a fork-side fix to DR's macOS `sigreturn` handling
+(the kernel's per-delivery token cannot be forged for DR's synthesized
+signal frames, so DR restores the context itself instead of issuing the
+real `sigreturn`).
 
 ### macOS arm64 (limitation, not a TODO)
 
