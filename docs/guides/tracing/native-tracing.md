@@ -289,8 +289,22 @@ detach) in both marker and symbol mode, then runs the **generated-bytes
 harness** (`exec_alloc`'s `PROT_NONE → RW → RX` W^X path — supported on
 native Intel silicon, which enforces no hardware W^X; under Rosetta 2 it is
 unverified and stays must-verify). The val/taint sub-lanes stay Linux-only.
+The whole macOS x86-64 lane is CI-covered **nightly** (plus manual
+dispatch): the `drtrace-macos` job builds the pinned fork from source on a
+`macos-15-intel` runner and treats a self-skip as failure.
 Both targets self-skip off macOS x86-64 (arm64 needs the upstream arm64 DR
 port, i#5383).
+
+**Bindings on macOS** use the same env-var contract as Linux
+(`drtrace_env` exports `.dylib` paths and `DYLD_LIBRARY_PATH` there); the
+supported binding path on both Mac arches is **compiled-function / symbol
+mode**. Generated code from bindings works only where the interpreter is
+non-hardened (e.g. ad-hoc-signed Homebrew builds) and is never promised —
+see the arm64 section below. One measured limitation: **signal chaining
+under an attached trace hangs on macOS** (a signal raised while DynamoRIO
+is attached is not delivered through to the host runtime's handler), so
+don't rely on signals arriving inside a traced region on macOS; the
+Python suite's signal-chaining gate is Darwin-skipped with that reason.
 
 ### macOS arm64 (limitation, not a TODO)
 

@@ -141,7 +141,25 @@ DynamoRIO-based tier is addressed here.
 > single-threaded and unaffected. Next: FB4 (nightly `drtrace-macos` CI lane),
 > then M1 (generated-bytes W^X path) / M2 per this plan.
 
----
+> **STATUS 2026-07-22 (M2 bindings,
+> [macos-dynamorio-port.md](../implementations/macos-dynamorio-port.md) T9) —
+> lanes green on macOS x86-64, with one NEW measured limitation.**
+> `drtrace_env` and the `drtrace-python-test` env block now resolve
+> platform-correct names (`shlib_dev` → `.dylib`, `$(DR_CLIENT)`, and
+> `DYLD_LIBRARY_PATH` on Darwin via the new `DR_LOADER_PATH` var); no wrapper
+> needed source fixes (zig/python already carry Darwin-correct fallbacks; all
+> wrappers honor the env-var contract). Live on the Intel-mac dev host:
+> `drtrace-cpp-test` PASS, `drtrace-ruby-test` PASS, `drtrace-python-test`
+> 3+3 passed / 1 skipped. **The skip is a real finding: DR signal chaining
+> HANGS on the macOS fork build.** `test_drgate.py::test_signal_chaining`
+> (SIGUSR1 self-raised while attached; the client answers
+> `DR_SIGNAL_DELIVER`) never delivers to CPython's handler and wedges the
+> process — exactly watch-item (5) of the M0 checklist, which the
+> single-threaded C harnesses never exercise. Skipped on Darwin only, with
+> this reason string, in `bindings/python/tests/test_drgate.py`; Linux keeps
+> running it. Root-causing DR's macOS signal delivery is fork-side work
+> (i#58-adjacent, sibling of the three FB2 fixes), out of T9's bindings
+> scope — recorded here so it is a named limitation, not a silent one.
 
 ## The dominant risk, stated first
 

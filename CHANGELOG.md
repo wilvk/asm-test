@@ -65,7 +65,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   allocations would trip). arm64 acceptance itself stays gated on Apple
   Silicon hardware plus an arm64 DR runtime (upstream i#5383); the guide's
   new "macOS arm64" section records the hardened-interpreter limitation as
-  a property of the OS model. Fork
+  a property of the OS model. M2 bindings (T9): the binding lanes resolve
+  platform-correct library names on Darwin (`drtrace_env` → `.dylib` +
+  `DYLD_LIBRARY_PATH`), with `drtrace-cpp-test`, `drtrace-ruby-test`, and
+  `drtrace-python-test` green on macOS x86-64 — compiled-function/symbol
+  mode is the documented macOS binding path. One measured limitation found
+  doing so: DR signal chaining hangs on the macOS fork build (a SIGUSR1
+  raised while attached never reaches CPython's handler), so the Python
+  signal-chaining gate is Darwin-skipped with that reason — a fork-side DR
+  issue recorded in the plan, sibling of the FB2 fixes. Fork
   `api.startstop`/`api.detach` run 10/10 crash-free (their multi-thread
   takeover assertions are upstream-NYI on macOS, i#58, and upstream macOS CI
   never runs them — they are outside the `OSX` ctest label set). arm64 stays

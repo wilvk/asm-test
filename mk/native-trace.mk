@@ -42,11 +42,16 @@ DRCLIENT_EXT := .dylib
 # -export_dynamic, which the marker-resolving client still needs.
 DRTRACE_LDFLAGS   := -rdynamic -lpthread
 DRTRACE_SOLDFLAGS := -lpthread
+# The dynamic-loader search-path env var the binding lanes export (the
+# wrappers dlopen by absolute env-var path, so this is belt-and-suspenders
+# for transitive loads; note SIP-protected system interpreters strip DYLD_*).
+DR_LOADER_PATH    := DYLD_LIBRARY_PATH
 else
 DRCLIENT_EXT := .so
 DRTRACE_LDFLAGS   := -rdynamic -ldl -lpthread
 # The shared-lib variant: same libs, no -rdynamic (meaningless in a .so link).
 DRTRACE_SOLDFLAGS := -ldl -lpthread
+DR_LOADER_PATH    := LD_LIBRARY_PATH
 endif
 DR_LIBDIR      := $(DYNAMORIO_HOME)/lib64/release
 DR_DLLIB       := $(DR_LIBDIR)/libdynamorio$(if $(filter Darwin,$(UNAME_S)),.dylib,.so)
@@ -2703,8 +2708,8 @@ else
 	@# One DR lifecycle per process (in-process re-attach is unreliable), so run
 	@# each native-trace test file as its OWN pytest invocation.
 	cd bindings/python && \
-	  export ASMTEST_DRAPP_LIB=$(abspath $(BUILD)/libasmtest_drapp.so) \
-	         ASMTEST_DRCLIENT=$(abspath $(BUILD)/libasmtest_drclient.so) \
+	  export ASMTEST_DRAPP_LIB=$(abspath $(call shlib_dev,libasmtest_drapp)) \
+	         ASMTEST_DRCLIENT=$(abspath $(DR_CLIENT)) \
 	         ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) && \
 	  python3 -m pytest tests/test_drtrace.py -v && \
 	  python3 -m pytest tests/test_drgate.py -v
@@ -2722,10 +2727,10 @@ endif
 
 # Env every binding wrapper reads to find the app lib, the DR client, and (for the
 # app's lazy dlopen) libdynamorio. Mirrors the drtrace-python-test recipe.
-drtrace_env = ASMTEST_DRAPP_LIB=$(abspath $(BUILD)/libasmtest_drapp.so) \
-              ASMTEST_DRCLIENT=$(abspath $(BUILD)/libasmtest_drclient.so) \
+drtrace_env = ASMTEST_DRAPP_LIB=$(abspath $(call shlib_dev,libasmtest_drapp)) \
+              ASMTEST_DRCLIENT=$(abspath $(DR_CLIENT)) \
               ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
-              LD_LIBRARY_PATH="$(abspath $(BUILD)):$$LD_LIBRARY_PATH"
+              $(DR_LOADER_PATH)="$(abspath $(BUILD)):$$$(DR_LOADER_PATH)"
 
 # $(call drtrace_skip,<lang>) — the shared "DynamoRIO absent" SKIP message body.
 define drtrace_skip
