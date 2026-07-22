@@ -22,6 +22,30 @@
 > "Constraints & gates" note at the bottom, now amended, before treating any T1
 > "blocked upstream" language below as current.
 
+> **UPDATE 2026-07-22 (later) — T6/T7/T8/T9 landed on the Intel-mac dev host;
+> T11 is SATISFIED by fork-build FB4's revised job.** T6: `drtrace-test-macos`
+> also runs the generated-bytes `test_drtrace` harness — M1a native-Intel
+> PASS (18/18), Rosetta recorded as gated. T7: the
+> `exec_alloc_platform`/`exec_copy` seam + the non-x86-64 ENOSYS gate landed
+> (pure refactor off arm64-macOS — `docker-drtrace` green; helpers return int
+> and carry copy/seal lengths separately, deviating from the plan's void
+> sketch to preserve the `mprotect(RX)` failure check). T8: entitlement +
+> `codesign -f … -s -` stanza landed and verified with `codesign -d`; arm64
+> acceptance stays gated (Apple Silicon + i#5383). T9: `drtrace_env`/python
+> env blocks are platform-correct (`shlib_dev`, `$(DR_CLIENT)`,
+> `DYLD_LIBRARY_PATH`); cpp/ruby/python lanes green on macOS x86-64, with one
+> NEW measured limitation recorded in the plan STATUS: **DR signal chaining
+> hangs on the macOS fork build** (Darwin-only named skip in
+> `test_drgate.py::test_signal_chaining`; fork-side fix is future work).
+> **T11 needs no separate implementation**: FB4's `drtrace-macos` job (landed,
+> dispatch-validated green — run 29899563218) IS this task revised for the
+> fork reality — nightly/dispatch-only, `macos-15-intel`, pinned by fork
+> commit + script/digest cache key (no release tarball exists to SHA-pin),
+> self-skip-is-failure — and because it runs `make drtrace-test-macos`, the
+> T6 extension gives the nightly lane the generated-bytes harness with no
+> YAML change. Only T6's Rosetta leg and T8's arm64 acceptance remain, both
+> Apple-Silicon-gated.
+
 ## Why this work exists
 
 The DynamoRIO in-process native-trace tier (trace real code on the real CPU,
