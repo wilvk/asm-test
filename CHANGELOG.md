@@ -53,7 +53,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `api.startstop`/`api.detach` run 10/10 crash-free (their multi-thread
   takeover assertions are upstream-NYI on macOS, i#58, and upstream macOS CI
   never runs them — they are outside the `OSX` ctest label set). arm64 stays
-  gated on the upstream arm64 port (i#5383).
+  gated on the upstream arm64 port (i#5383). A nightly/dispatch-only
+  `drtrace-macos` CI job on `macos-15-intel` builds the pinned fork from source
+  (commit-stamp cached) and runs the M0 harness, outside the `test` matrix so a
+  DR failure never blocks the emulator tier — with a self-skip-is-failure guard,
+  since the runner that just built the runtime must actually test it.
 
 - **AArch64 out-of-process single-step stream validated live on real silicon
   (aarch64-ptrace-single-step-validation.md T1–T6).** The out-of-process `ptrace`

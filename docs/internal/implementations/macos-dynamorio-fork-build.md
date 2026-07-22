@@ -338,6 +338,22 @@ and a `### Added` bullet under `## [Unreleased]` in
   pinned fork from source.
 - The job pins the fork commit (no floating branch) and is nightly/dispatch only.
 
+> **Landed 2026-07-22.** `drtrace-macos` job in ci.yml: schedule/dispatch-gated
+> (no `push`/`pull_request` trigger — an unrelated push cannot run it),
+> `runs-on: macos-15-intel`, `brew install nasm lz4`, then
+> `scripts/build-dynamorio-macos.sh "$HOME/dr"` (the pin lives in the script +
+> manifest — no floating branch) and
+> `make drtrace-test-macos DYNAMORIO_HOME="$HOME/dr"` with a
+> **self-skip-is-failure** guard (`1..0` in the log fails the job — the runner
+> that just built the runtime must actually test it). The fork build tree is
+> cached keyed on the build script + digest manifest, so a warm nightly reuses
+> the commit-stamped build and any pin bump rebuilds from scratch. Outside the
+> `test` matrix per the plan's M2 requirement; the arm64 leg stays deferred to
+> self-hosted-ci-runners (port-doc T7/T8 + upstream i#5383). Local proofs:
+> `actionlint` exit 0 with zero ci.yml findings; `python3 yaml.safe_load`
+> parses (47 jobs). Live dispatch validation recorded below when the run
+> completes.
+
 ## Task order & parallelism
 
 ```

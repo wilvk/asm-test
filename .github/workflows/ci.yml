@@ -459,6 +459,52 @@ jobs:
       - name: Native-trace single-step tier — language bindings (macOS-native path)
         run: make hwtrace-cpp-test hwtrace-ruby-test
 
+  # macOS x86-64 DynamoRIO tier (macos-dynamorio-fork-build.md FB4 /
+  # macos-dynamorio-port.md T11). DynamoRIO ships no macOS release asset, so this
+  # lane builds the git-commit-pinned wilvk/dynamorio fork from source
+  # (scripts/build-dynamorio-macos.sh; pin in scripts/third-party-digests.txt —
+  # never a floating branch) and runs the M0 compiled-function/symbol harness
+  # through it. Nightly/dispatch only, and OUTSIDE the `test` matrix, so a DR
+  # failure never blocks the emulator tier (the plan's M2 requirement).
+  drtrace-macos:
+    name: drtrace (macOS x86-64, nightly)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Toolchain versions
+        run: |
+          cc --version
+          cmake --version | head -1
+          uname -m
+
+      - name: Install DynamoRIO build deps (nasm, lz4)
+        run: brew install nasm lz4
+
+      # The prefix IS the fork's CMake build tree (see the build script header);
+      # a warm cache at the pinned commit is reused via the script's commit
+      # stamp, and any pin bump changes the key and rebuilds from scratch.
+      - name: Cache the pinned DynamoRIO fork build
+        uses: actions/cache@v6
+        with:
+          path: ~/dr
+          key: dr-fork-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/build-dynamorio-macos.sh', 'scripts/third-party-digests.txt') }}
+
+      - name: Build libdynamorio.dylib from the pinned fork
+        run: scripts/build-dynamorio-macos.sh "$HOME/dr"
+
+      - name: M0 harness — trace a compiled function through the fork runtime
+        run: |
+          make drtrace-test-macos DYNAMORIO_HOME="$HOME/dr" 2>&1 | tee drtrace-macos.log
+          # Self-skip is failure here: this runner just BUILT the runtime, so a
+          # "1..0 # skipped" would mean the lane silently stopped testing.
+          if grep -q '^1\.\.0' drtrace-macos.log; then
+            echo '::error::drtrace-test-macos self-skipped on the runner that built the runtime'
+            exit 1
+          fi
+
   # x86-64 macOS / Mach-O on every push, without an Intel runner: the
   # Apple-Silicon `macos-latest` runner cross-builds the x86-64 slice with
   # `-arch x86_64` (a real x86-64 Mach-O, linked by the macOS linker) and the
