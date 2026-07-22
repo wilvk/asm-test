@@ -12,6 +12,7 @@ below).
 | `Capstone-LICENSE.TXT` | Capstone (disassembler) | 5.0.1 ([build-capstone.sh](../scripts/build-capstone.sh)) | BSD-3-Clause |
 | `Capstone-LICENSE_LLVM.TXT` | Capstone (LLVM-derived tables) | 5.0.1 | LLVM (Apache-2.0-with-LLVM-exception) |
 | `DynamoRIO-<ver>.txt` | DynamoRIO (native-trace tier runtime) | 11.91.20630 ([fetch-dynamorio.sh](../scripts/fetch-dynamorio.sh)) | BSD-3-Clause |
+| `DynamoRIO-fork.txt` | DynamoRIO built from the wilvk/dynamorio source fork (macOS drtrace tier runtime — upstream publishes no macOS release asset) | git-commit pin in [third-party-digests.txt](../scripts/third-party-digests.txt) ([build-dynamorio-macos.sh](../scripts/build-dynamorio-macos.sh)) | BSD-3-Clause |
 | `LGPL-2.1.txt` | drwrap (DynamoRIO ext/) and umbra (Dr. Memory Framework) — verbatim GNU LGPL v2.1 | 11.91.20630 | LGPL-2.1-only |
 | `Pin-<ver>.txt` / `Pin-<ver>-third-party.txt` | Intel Pin (DBI pintool test lane) — **test-lane only, never bundled**: fetched and digest-verified at build/test time for `docker-pintool`/`pintool-test`, never linked into a shipped package | 4.2-99776-g21d818fa2 ([fetch-pin.sh](../scripts/fetch-pin.sh)) | LicenseRef-Intel-Simplified-Software-License |
 | `intel-sde-10.8.0/` | Intel SDE (test-lane oracle) — **test-lane only, never bundled**: the future/absent-ISA emulator, fetched and digest-verified at build/test time for `docker-sde`/`sde-test`, never linked into a shipped package | 10.8.0 ([fetch-sde.sh](../scripts/fetch-sde.sh)) | LicenseRef-Intel-Simplified-Software-License |

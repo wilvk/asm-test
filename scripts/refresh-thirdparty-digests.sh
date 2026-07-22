@@ -33,7 +33,10 @@ zig_ver=$(read_ver mk/docker.mk              'ZIG_VERSION \?= ([0-9][0-9.]*)')
 # unicorn pin lives as an ARG in Dockerfile.win64 (the Windows/mingw benchmark
 # producer lane cross-builds it from source) — read it there.
 unicorn_ver=$(read_ver Dockerfile.win64      'ARG UNICORN_VERSION=([0-9][0-9.]*)')
-[ -n "$dr_ver" ] && [ -n "$pin_ver" ] && [ -n "$sde_ver" ] && [ -n "$binutils_ver" ] && [ -n "$nasm_ver" ] && [ -n "$ks_ver" ] && [ -n "$cs_ver" ] && [ -n "$zig_ver" ] && [ -n "$unicorn_ver" ] || {
+# dynamorio-fork (the macOS drtrace runtime) is pinned by git commit, not tag —
+# the short sha is the manifest key; read it from the build script's default.
+drfork_ver=$(read_ver scripts/build-dynamorio-macos.sh 'DR_FORK_VERSION="\$\{DR_FORK_VERSION:-([0-9a-f][0-9a-f]*)\}"')
+[ -n "$dr_ver" ] && [ -n "$pin_ver" ] && [ -n "$sde_ver" ] && [ -n "$binutils_ver" ] && [ -n "$nasm_ver" ] && [ -n "$ks_ver" ] && [ -n "$cs_ver" ] && [ -n "$zig_ver" ] && [ -n "$unicorn_ver" ] && [ -n "$drfork_ver" ] || {
     echo "refresh: could not read one of the pinned versions (patterns changed?)" >&2; exit 1; }
 
 # Immutable commit a tag resolves to (peeled ^{} for annotated tags).
@@ -41,6 +44,16 @@ tag_commit() { # <repo> <tag>
     c=$(git ls-remote "https://github.com/$1.git" "refs/tags/$2^{}" 2>/dev/null | cut -f1)
     [ -n "$c" ] || c=$(git ls-remote "https://github.com/$1.git" "refs/tags/$2" 2>/dev/null | cut -f1)
     [ -n "$c" ] || { echo "refresh: cannot resolve $1@$2" >&2; exit 1; }
+    echo "$c"
+}
+
+# dynamorio-fork: expand the short-sha manifest key to the full immutable commit
+# and confirm it exists on the fork remote (there is no tag to resolve — the
+# commit itself is the pin; a vanished commit must fail loudly here).
+drfork_commit() { # <short-sha>
+    c=$(curl -fsSL "https://api.github.com/repos/wilvk/dynamorio/commits/$1" | jq -r '.sha')
+    [ -n "$c" ] && [ "$c" != "null" ] || { echo "refresh: cannot resolve wilvk/dynamorio@$1" >&2; exit 1; }
+    case "$c" in "$1"*) ;; *) echo "refresh: wilvk/dynamorio@$1 resolved to non-prefix $c" >&2; exit 1;; esac
     echo "$c"
 }
 
@@ -121,6 +134,7 @@ zig_digest() { # <version> <arch>
 
 ks_commit=$(tag_commit keystone-engine/keystone "$ks_ver")
 cs_commit=$(tag_commit capstone-engine/capstone "$cs_ver")
+drfork_sha=$(drfork_commit "$drfork_ver")
 dr_sha=$(dr_digest "$dr_ver")
 pin_sha=$(pin_digest "$pin_ver")
 sde_sha=$(sde_digest "$sde_ver")
@@ -140,6 +154,11 @@ zig_aarch64_sha=$(zig_digest "$zig_ver" aarch64)
     printf 'tarball-sha256  binutils   %s  %s\n' "$binutils_ver" "$binutils_sha"
     printf 'tarball-sha256  nasm       %s  %s\n' "$nasm_ver" "$nasm_sha"
     printf 'tarball-sha256  unicorn    %s  %s\n' "$unicorn_ver" "$unicorn_sha"
+    echo "# dynamorio-fork: the macOS drtrace tier's runtime. DynamoRIO publishes NO macOS"
+    echo "# release asset (0 across all 455 releases), so macOS builds the wilvk/dynamorio"
+    echo "# source fork at this pinned commit instead (scripts/build-dynamorio-macos.sh;"
+    echo "# macos-dynamorio-fork-build.md). Branch-independent commit pin, libdft64-style."
+    printf 'git-commit      dynamorio-fork  %s  commit:%s\n' "$drfork_ver" "$drfork_sha"
     printf 'git-commit      keystone   %s        commit:%s\n' "$ks_ver" "$ks_commit"
     printf 'git-commit      capstone   %s        commit:%s\n' "$cs_ver" "$cs_commit"
     printf 'tarball-sha256  zig-linux-x86_64   %s  %s\n' "$zig_ver" "$zig_x86_64_sha"

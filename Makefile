@@ -119,6 +119,7 @@ help:
 	@echo ''
 	@echo 'Native runtime trace tiers (optional, Linux x86-64; self-skip if absent):'
 	@echo '  drtrace-test    in-process DynamoRIO native trace (set DYNAMORIO_HOME)'
+	@echo '  dynamorio-macos  build libdynamorio.dylib from the pinned source fork (macOS x86-64; prints DYNAMORIO_HOME)'
 	@echo '  sde-test        run suites under Intel SDE -future (future/absent ISA; set SDE_HOME; make docker-sde)'
 	@echo '  drtrace-bindings-test  per-language DynamoRIO wrapper tests (all bindings)'
 	@echo '  hwtrace-test    hardware trace: single-step (x86-64 Linux/macOS) / PT / AMD LBR / IBS'

@@ -142,6 +142,20 @@ exits 0 and leaves `<prefix>/lib64/release/libdynamorio.dylib` (verify with
   refresh script; the license is vendored.
 - The script self-skips (exit 0) off macOS-x86-64.
 
+> **Landed 2026-07-22 — one doc correction (measured).** Step 2's "stage a
+> minimal `DYNAMORIO_HOME` … into a caller-named prefix" is unsound as a *copy*:
+> the build-tree cmake config (`cmake/DynamoRIOTarget64.cmake`) records
+> **absolute paths** into the build tree (128 `IMPORTED_LOCATION` entries), so a
+> relocated copy would silently resolve libraries from wherever the build ran —
+> and `cmake --install` fails on the not-built targets of a
+> `--target dynamorio`-only build. Upstream supports pointing `DynamoRIO_DIR` at
+> a build dir, so the script makes the caller-named prefix **be** the CMake
+> build tree, which already carries the exact `DYNAMORIO_HOME` shape
+> (`lib64/release/libdynamorio.dylib`, `cmake/`, `include/`, `ext/`). It also
+> builds `drmgr drreg drx` alongside `dynamorio` — the drclient sub-build's
+> `use_DynamoRIO_extension` set (drclient/CMakeLists.txt), which FB3's
+> `drtrace-client` needs present in the home.
+
 ### FB2 — Fix the dr_app_setup startup crash; prove api.startstop passes reliably  (M, depends on: FB1) — **the M0 go/no-go**
 
 **Goal.** `api.startstop` (and `api.detach`), linked against the fork's

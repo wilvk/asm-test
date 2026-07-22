@@ -40,6 +40,16 @@ endif
 # The app library dlopen()s libdynamorio at runtime (its constructor reads
 # DYNAMORIO_OPTIONS, which must be set first), so it links libdl, NOT libdynamorio.
 
+# --- macOS: build DynamoRIO from the pinned source fork ---------------------
+# DynamoRIO publishes no macOS release asset, so the macOS drtrace tier builds
+# the pinned wilvk/dynamorio fork from source (macos-dynamorio-fork-build.md).
+# Darwin-x86-64-only; everywhere else the script prints the skip and exits 0.
+# Prints the DYNAMORIO_HOME to export for drtrace-test-macos.
+DYNAMORIO_MACOS_PREFIX ?= $(abspath $(BUILD))/dynamorio-macos
+.PHONY: dynamorio-macos
+dynamorio-macos:
+	@scripts/build-dynamorio-macos.sh $(DYNAMORIO_MACOS_PREFIX)
+
 # Keystone lets the host-native exec path assemble text (asm_exec_native);
 # without it that one entry point returns ASMTEST_DR_ENOSYS and the rest works.
 # DRAPP_KEYSTONE=0 forces it off even when Keystone is installed: assemble.o also
