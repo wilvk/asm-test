@@ -451,6 +451,79 @@ pure-C reproducer.** New hard evidence:
   project v1 feared. (A parallel code-read workflow is confirming the exact
   culprit among those suspects; fix + validation against the C gate follow.)
 
+**SC3 diagnosis v3 (2026-07-22, later) — CONFIRMED root cause via full runtime
+instrumentation of a debug fork build. Supersedes v2's suspect list and the
+investigation workflow's exit-stub guess.** The fix is a real macOS
+sigreturn/context-restore feature, not a surgical patch. Method: a
+deterministic single-threaded C reproducer (`sigchain_cpythonish.c`) against a
+`DR_MACOS_BUILD_TYPE=Debug` build with added `LOG_ASYNCH` probes in
+`record_pending_signal`, `find_next_fragment_from_gencode`, and
+`execute_handler_from_dispatch`, plus lldb register dumps at the fault.
+
+Confirmed sequence (every step measured, not inferred):
+
+1. `kill(getpid(), SIGUSR1)` delivers the signal on **return from the `kill`
+   syscall, while the thread is in DR's `do_syscall` gencode** — probe:
+   `record_pending_signal(30) from gen routine or stub`, with
+   `get_at_syscall()==1`, `is_after_syscall_address(pc)==1`, and
+   `dcontext->asynch_target` already holding the correct post-syscall **app**
+   PC. (This is NOT the exit-stub/IBL case the workflow synthesis proposed
+   fixing — the `!get_at_syscall` guard at signal.c:5085 means
+   `find_next_fragment_from_gencode` is never even called here.)
+2. The signal is delayed and delivered at dispatch. **Delivery is CORRECT:**
+   `execute_handler_from_dispatch` probe shows `use_sigcontext=0`,
+   `next_tag == asynch_target == frame_xip == <app PC>`. `signal.c:6402` sets
+   the delivered/resume frame's `SC_XIP` to `next_tag` (the app PC), and the
+   app handler runs.
+3. The app handler returns through libsystem **`_sigtramp`, which calls the
+   macOS 3-arg `sigreturn(uctx, infostyle=0x1e, token)`.** DR intercepts
+   `SYS_sigreturn`, `handle_sigreturn` doctors the frame (`SC_XIP =
+   fcache_return`) and returns `true`, so **the real macOS `sigreturn` runs
+   against DR's synthesized frame.**
+4. **The resume faults**: lldb at the SIGILL shows `rip` on a DR gencode `ud2`
+   (`ud2 ; movq %rcx,%gs:0x830 ; popq %rcx ; jmp`), with `rcx` = the
+   interrupted `do_syscall` gencode PC and the register file in the exact
+   `_sigtramp→sigreturn` shape (`rsi=0x1e`, `r12=0xffffff00` = a bogus token).
+   macOS raises SIGILL; `main_signal_handler`→`handle_nudge_signal` (NUDGESIG
+   is SIGILL on macOS) sees a genuine `ud2` and passes it to the app; the app
+   has no SIGILL handler → default action → **terminate**.
+
+**Root cause.** macOS `sigreturn` takes a kernel-minted per-delivery
+**validation token** that DR cannot forge. DR delivers the app handler by
+*synthesizing* a signal frame (`copy_frame_to_stack`) — no kernel token — and
+then lets the app's `_sigtramp` issue the real `sigreturn` with a bogus token
+against DR's doctored frame. On Linux `sigreturn` has no token, so synthetic
+frames work (all the passing single-threaded C repros exercise this); on macOS
+the token makes the synthesized return invalid, and the resume lands in DR
+gencode. This is exactly why it is code-layout/timing sensitive: it only
+manifests when the signal lands such that the app return threads back through
+`_sigtramp`→`sigreturn` while DR's saved context still points at gencode.
+`thread_set_self_context`'s macOS arm is itself NYI here (the
+`ASSERT_NOT_IMPLEMENTED(false && "need to pass 2 params to SYS_sigreturn")` at
+`core/unix/signal.c:3292` is on this path), confirming the surface is
+unimplemented, not merely buggy.
+
+**A fix attempt was made and measured** (not landed): translating the
+interrupted `SC_XIP` to `asynch_target` early in `record_pending_signal`
+*eliminated the `ud2`/SIGILL crash* (clean thread-exit reached) but caused a
+native escape that skipped handler delivery (`got=0`) — proving the delivery
+path is fine and the defect is squarely the return/resume mechanism. Reverted.
+
+**The real fix (two options, both substantial DR-core macOS work):**
+(a) **Capture and propagate the token** — save the kernel-minted token when
+the original signal reaches `main_signal_handler`, thread it into the
+synthesized app frame so the app's `_sigtramp` `sigreturn` validates; or
+(b) **Never issue the real macOS `sigreturn`** — implement the macOS arm of
+`thread_set_self_context`/`handle_sigreturn` to drive the return directly via
+a DR context switch (make `handle_sigreturn` return `false` and restore state
+itself), the way the VMX86 path already does, removing the token dependency.
+Option (b) is the cleaner long-term shape and matches the fork's other FB
+fixes; both need careful iteration against the C gate plus the full baseline
+(Linux `docker-drtrace` neutrality, `api.startstop`/`api.detach`). This is a
+bounded feature, not a one-line patch, and is **not landed** — SC3 stays open
+here with the target now precisely identified (macOS synthetic-signal-frame
+`sigreturn` token, NOT multi-thread i#58 and NOT the exit-stub-lookup gap).
+
 ## Out of scope
 
 - **macOS nudge support** (i#1286) — adjacent NYI, separate feature.
