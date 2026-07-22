@@ -96,9 +96,13 @@ make clean-room-test      # the scrub unsets this; feed the path straight to
 Hosted `macos-*` runners are fresh-per-job but **not pristine** — they ship
 Xcode CLT and Homebrew, so a binding that accidentally depends on either passes
 there and fails on a bare user Mac. Two additional lanes exist for that class;
-both were **written to the plan's spec but have not yet been executed** (no
-Apple-Silicon/tart or bare-metal-KVM host was available where they were
-authored), so treat a first run as a shakedown:
+both were **written to the plan's spec and have not yet run green end to
+end**. Track C has never executed (no Apple-Silicon/tart host has been
+available). Track D's first real shakedown was attempted 2026-07-22/23 on a
+Ryzen 9 4900HS/snap-Docker box: it hardened the lane script substantially (see
+the findings note below) but the one-time guest install froze repeatedly
+because that host's boot carried a kernel-measured TSC warp — rerun it on (or
+after rebooting into) a host whose clocksource is `tsc`:
 
 | Lane | Target | Host needed | Entry point |
 |---|---|---|---|
@@ -126,6 +130,23 @@ Notes the plan calls out:
   [`scripts/docker-osx-bindings.sh`](https://github.com/wilvk/asm-test/blob/main/scripts/docker-osx-bindings.sh)'s
   header) — without it the script prints a warning and the boot will very
   likely time out waiting for sshd.
+- **Track D host findings** (measured on the 2026-07-22/23 shakedown attempt;
+  the full setup story for a new Linux box is the internal runbook
+  `docs/internal/docker-osx-linux-host.md`): the image's `Penryn` CPU default
+  predates what newer macOS userlands assume — pass
+  `DOCKER_OSX_CPU=Haswell-noTSX-IBRS`. **A host boot whose kernel measured
+  TSC warp (`/sys/…/current_clocksource` ≠ `tsc`) cannot run macOS guests
+  under sustained load** — macOS's only timebase is the TSC, and every
+  mitigation tried (1 vCPU; QEMU pinned to one physical core via the
+  script's automatic `--cpuset-cpus`; masking CPUID `tsc-deadline`) still
+  froze the guest, only later or sooner — reboot the host until
+  `current_clocksource` reads `tsc`, then run this lane. The script warns
+  and applies the core pin on such hosts (`DOCKER_OSX_CPUSET` overrides,
+  empty disables; `DOCKER_OSX_SMP=1` still recommended there). It always
+  boots the guest with `-display none` (QEMU's gtk default is fatal in an
+  X-less container), `DOCKER_OSX_VNC=<display>` re-attaches a VNC view for
+  triage, and the tree-copy step excludes the guest's own disk image when it
+  lives inside the repo.
 - **EULA**: macOS's license permits up to 2 macOS VMs **on Apple hardware**, so
   tart-on-Mac (Track C) is above board; Docker-OSX on non-Apple hosts
   (Track D) is EULA-gray — it is an opt-in, self-hosted-only lane.

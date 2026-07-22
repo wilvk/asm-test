@@ -33,6 +33,23 @@ Intel runner for the day-to-day signal.
 > [macos-cleanroom-lanes.md](../implementations/macos-cleanroom-lanes.md) (◐ 2/6 — its T4
 > containerised `sshpass`, removing Track D's host-`sudo` gate). The plan stays **active**:
 > Track C remains Apple-Silicon-gated and Track D's shakedown is unrun.
+>
+> **Update (2026-07-23): Track D shakedown ATTEMPTED — not green; still 3 of 5
+> (A, B, E).** The first real execution (Ryzen 9 4900HS bare-metal Linux/KVM, snap
+> Docker) hardened the lane substantially — QEMU `-display none` (gtk default is
+> fatal in an X-less container), `-di` (a closed stdin EOFs the `-monitor stdio`
+> monitor and kills QEMU), `DOCKER_OSX_CPU`/`SMP`/`VNC`/`CPUSET` passthroughs
+> (the image's `Penryn` default spins newer macOS userlands; use
+> `Haswell-noTSX-IBRS`), and a tar exclude so the lane never ships the guest its
+> own disk image — but the one-time Ventura install **froze four times**: that
+> host's *boot* carried a kernel-measured inter-core TSC warp (`Measured 4680
+> cycles TSC warp between CPUs`, clocksource demoted to hpet), and macOS guests
+> (TSC-only timebase) freeze under load on such a boot at any vCPU count; core
+> pinning and masking `tsc-deadline` only moved the freeze. **Blocked on an
+> operator host reboot** (restores `clocksource=tsc`, re-verify via
+> `journalctl -k | grep -i tsc`), then the install + lane rerun. Evidence +
+> runbook: [docs/internal/docker-osx-linux-host.md](../docker-osx-linux-host.md)
+> and [clean-room-testing.md](../../clean-room-testing.md).
 
 ---
 
@@ -223,12 +240,19 @@ Apple-Silicon box; optionally a self-hosted CI lane.
 - **EULA note in the doc** — macOS's license permits up to **2 macOS VMs on Apple
   hardware**, so tart-on-Mac is above board (unlike Track D on non-Apple hosts).
 
-## Track D — Docker-OSX x86 clean-room — **written per spec (2026-07-07), UNVALIDATED — NOT Mac-gated**
+## Track D — Docker-OSX x86 clean-room — **written per spec (2026-07-07), UNVALIDATED — NOT Mac-gated; first attempt 2026-07-23 blocked by host TSC state**
 
-> **Status: written, never executed. This lane needs NO Apple hardware** — it runs
-> a macOS guest on Linux under KVM. Unlike Track C, nothing about it is
-> Apple-Silicon-gated; it is the *cheaper* of the two unvalidated lanes to bring
-> up, and it is the one to try first.
+> **Status: written; first real shakedown attempted 2026-07-22/23 and blocked
+> before the lane could run.** The attempt (Ryzen 9 4900HS bare-metal
+> Linux/KVM, snap Docker) hardened the lane script per the shakedown findings
+> and produced the operator runbook
+> [docs/internal/docker-osx-linux-host.md](../docker-osx-linux-host.md), but
+> the one-time Ventura install froze four times: that host's boot had a
+> kernel-measured TSC warp (clocksource demoted to hpet), and macOS guests
+> freeze under load on such a boot regardless of vCPU count, core pinning, or
+> masking `tsc-deadline`. Rerun the install + lane after a host reboot that
+> restores `clocksource=tsc`. This lane needs NO Apple hardware — it runs a
+> macOS guest on Linux under KVM; nothing about it is Apple-Silicon-gated.
 >
 > **Two prerequisites, both satisfiable here (verified 2026-07-16):**
 > 1. **Bare-metal Linux + `/dev/kvm`** — **present on the current dev host**, so

@@ -8,6 +8,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **macOS clean-room Track D lane hardened by its first real shakedown attempt
+  (macos-cleanroom-lanes.md T6 — attempted, not yet green).** The first
+  execution on a bare-metal Linux/KVM box (Ryzen 9 4900HS, snap Docker) drove
+  the one-time macOS install headless over QEMU VNC (no X11) and taught the
+  lane script what a real boot demands: QEMU `-display none` (gtk default is
+  fatal in an X-less container), `-i` on `docker run` (a closed stdin EOFs the
+  `-monitor stdio` monitor and quits QEMU), `DOCKER_OSX_CPU` /
+  `DOCKER_OSX_SMP` / `DOCKER_OSX_VNC` / `DOCKER_OSX_CPUSET` passthroughs (the
+  image's `Penryn` CPU default spins newer macOS userlands — use
+  `Haswell-noTSX-IBRS`), and a tree-copy exclude so the lane never tars the
+  guest's own disk image into the guest. The install itself froze four times
+  and the lane is **still unvalidated**: that host's boot carried a
+  kernel-measured inter-core TSC warp (clocksource demoted to `hpet`), and
+  macOS guests — TSC-only timebase — freeze under load on such a boot at any
+  vCPU count; core-pair pinning and masking CPUID `tsc-deadline` only moved
+  the freeze point. The script now detects the condition, warns, and pins;
+  the real fix is a host reboot restoring `clocksource=tsc`. Full evidence +
+  new-host runbook: `docs/internal/docker-osx-linux-host.md`.
 - **Bare-metal Intel PT self-hosted lane + a fail-not-skip docker target, and the
   dark CoreSight placeholder (self-hosted-ci-runners.md T5).** `hw.yml` gains
   `hwtrace-pt-baremetal` (`runs-on: [self-hosted, linux, x64, intel-pt]`) and

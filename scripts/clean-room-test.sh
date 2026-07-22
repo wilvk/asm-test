@@ -209,7 +209,13 @@ should_run dotnet && dotnet_clean_test
 # C header install check: every header the published guides tell users to
 # include must ship with `make install` and compile standalone. Its own fresh
 # prefix ($WORK, always set — do not reuse a per-binding $dest).
-if command -v cc >/dev/null 2>&1; then
+# Vanilla macOS ships /usr/bin/cc as a CLT *stub* that errors until a real
+# toolchain is installed (same class as the JRE-less java stub above), so probe
+# that cc actually works before relying on it — a toolchain-free VM guest
+# (Tracks C/D) must SKIP here, not fail.
+if command -v cc >/dev/null 2>&1 && ! cc --version >/dev/null 2>&1; then
+  skip_b hdr "cc present but not functional (macOS CLT stub?) — header check needs a real compiler"
+elif command -v cc >/dev/null 2>&1; then
   hdr_prefix="$WORK/c-prefix"
   make -C "$ASMTEST_REPO_ROOT" install PREFIX="$hdr_prefix" >/dev/null
   cat > "$WORK/hdr_check.c" <<'EOF'

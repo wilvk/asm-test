@@ -967,8 +967,10 @@ docker-sshpass:
 # image), SSHes in on localhost:50922, and runs the same Track-A clean-room
 # install test (scripts/docker-osx-bindings.sh). Hard-errors without /dev/kvm —
 # hosted CI runners and most laptops don't have it, by design.
-# WRITTEN PER docs/internal/plans/macos-clean-test-plan.md, NOT YET VALIDATED — authored
-# without a KVM-capable bare-metal host; see docs/clean-room-testing.md.
+# WRITTEN PER docs/internal/plans/macos-clean-test-plan.md, NOT YET VALIDATED —
+# the 2026-07-22/23 shakedown attempt hardened the lane script but the guest
+# install froze on that host's warped-TSC boot (host reboot required first);
+# docs/internal/docker-osx-linux-host.md records the runbook + evidence.
 # Upstream note (verified 2026-07-17): sickcodes/docker-osx tags other than
 # :latest/:master were deleted from Docker Hub in 2024 — :ventura et al. 404.
 # :latest's first boot is an interactive macOS installer, so headless runs need
