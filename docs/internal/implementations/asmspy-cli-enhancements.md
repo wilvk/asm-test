@@ -455,8 +455,14 @@ back to `from_addr`), reusing the existing drill-in idiom — no new UI concept.
    documented pattern for every landed TUI row in the plan): on an AMD IBS
    host, `./build/asmspy` → pick a busy victim (`./build/auto_victim` from the
    smoke fixtures is ideal: `entered_often` is hot) → mode 7 → `space` →
-   arrows → Enter on an `entered_often` edge → the data-flow view captures and
-   renders; `b` returns to the still-frozen hot-edges table. On a non-AMD
+   arrows → Enter on an edge whose **destination** is `entered_often` (a
+   re-entering function — so the capture completes; drilling `grind_forever`,
+   which is entered once and never returns, opens the view but the capture
+   waits forever) → the data-flow view captures and renders → **`ESC`** returns
+   to the still-frozen hot-edges table. (NB: in the *captured* data-flow view
+   `b`/`f` are the backward/forward **slice** keys, not "back"; the drill-in
+   ignores `run_dataflow_view`'s return code and redraws the frozen sample view,
+   so `ESC` — or `q`, which unwinds further — is what returns.) On a non-AMD
    host, mode 7 shows the IBS-unavailable message before any drill-in — no
    new gate.
 
@@ -492,7 +498,8 @@ fails; swap the try-order to from-first → the first two checks fail.
 **Done when.**
 - `make docker-cli` passes with the new `test_autoregion` checks.
 - Manual pty run on an AMD IBS host: mode 7 → Enter → a data-flow capture of
-  the selected edge's function, and `b` returns to the frozen table.
+  the selected edge's function, and `ESC` returns to the frozen table (`b`/`f`
+  are slice keys in the captured view).
 - On a non-AMD host the view degrades exactly as today (message, no drill-in).
 
 ### T6 — Smoke the job-control group-stop branch  (S, depends on: none)
