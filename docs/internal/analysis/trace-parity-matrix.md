@@ -89,7 +89,7 @@ Two facts worth stating up front because they are easy to get wrong:
 | **Emulator** | Unicorn virtual CPU (isolated guest) | Capstone (annotate) | (Unicorn) | n/a (interpreted) | exact, unbounded | **implemented** |
 | **DynamoRIO** | software DBI, native code cache | none | DR core BSD | low (cached) | exact, unbounded | **implemented** |
 | **Intel PT** | continuous branch-trace AUX ring | libipt | BSD | near-zero | exact, unbounded (ring) | **implemented** |
-| **AMD LBR** | 16-deep branch stack snapshot (Tier-A) + `sample_period=1` window stitching (Tier-B) | Capstone (replay) | BSD | low (few PMIs) | Tier-A exact ≤16 taken branches; Tier-B stitches past 16 (bounded by ring size + throttling); else `truncated`→fallback | **impl. Part I Ph0–5 + Part III P3-0…P3-5** (spec filter, stitch guard, runtime depth, freeze probe, blockstep tiers, eBPF boundary snapshot); live capture + Tier-B verified on Zen 5 (Ryzen 9 9950X, `amd_lbr_v2`); forward-look: MSR-direct, BRS (Zen 3), IBS (Zen 2) |
+| **AMD LBR** | 16-deep branch stack snapshot (Tier-A) + `sample_period=1` window stitching (Tier-B) | Capstone (replay) | BSD | low (few PMIs) | Tier-A exact ≤16 taken branches; Tier-B stitches past 16 (bounded by ring size + throttling); else `truncated`→fallback | **impl. Part I Ph0–5 + Part III P3-0…P3-5** (spec filter, stitch guard, runtime depth, freeze probe, blockstep tiers, eBPF boundary snapshot); live capture + Tier-B verified on Zen 5 (Ryzen 9 9950X, `amd_lbr_v2`); shipped since: MSR-direct (`src/msr_lbr.c` + the `trace_auto` MSR rung) and the IBS-Op/IBS-Fetch statistical lanes (`src/ibs_backend.c`, installed `asmtest_ibs.h`); forward-look: BRS (Zen 3) only |
 | **CoreSight** | ETM/ETE waypoints | OpenCSD | BSD | near-zero | decoder coarser; normalized to match | **reconstruction core host-validated**; live OpenCSD decode awaits a board (self-skips) |
 | **Single-step (in-proc TF)** | `EFLAGS.TF` → `#DB`/`SIGTRAP`, in-process | Capstone (block mode) | n/a | ~2.3 µs/insn (Linux) | exact, unbounded | **implemented** (Ph0–4 Linux x86-64 + Ph5 fronts: macOS-Intel in-proc, Windows x86-64 VEH `win64-ss-test`; **x86-64 only** — TF is an x86 flag) |
 | **ptrace (out-of-proc step)** | out-of-process tracer: `PTRACE_SINGLESTEP` (per-insn) or `PTRACE_SINGLEBLOCK` block-step (per taken branch) over a forked/attached tracee | Capstone (block mode) | n/a | per-insn kernel round-trip; block-step ≈ one `#DB` per taken branch (cheaper) | exact, unbounded | **implemented** (Linux x86-64; AArch64 code-complete, *live stream* HW-pending — qemu-user can't emulate ptrace, self-skips). Adds the managed-runtime path + code-image `versioned` / whole-`window` capture |
@@ -251,7 +251,8 @@ Node/.NET gap is the managed-runtime takeover limit (`dr_app_start` aborts with
 |---|---|---|---|
 | Intel bare-metal, small routine | **Intel PT** | DynamoRIO | complete + near-zero overhead |
 | Intel/AMD, long or looping routine | **DynamoRIO** | — | native-speed code cache, no depth ceiling, vendor-independent |
-| AMD Zen 3 / Zen 4, small routine | **AMD LBR (Tier A; Tier-B stitches past 16 live)** | DynamoRIO (on `truncated`) | HW-attributed, exact within 16 branches; Tier-B extends reach, bounded by ring + throttling |
+| AMD Zen 4+, small routine | **AMD LBR (Tier A; Tier-B stitches past 16 live)** | DynamoRIO (on `truncated`) | HW-attributed, exact within 16 branches; Tier-B extends reach, bounded by ring + throttling |
+| AMD Zen 3, small routine | **DynamoRIO** | single-step | AMD LBR never opens here: Zen 3 is BRS-only silicon and this tree opens LbrExtV2 only — the open is `-EINVAL` → `AMD_NOHW` (see the Matrix 1 capability row) |
 | AMD Zen 2 | **DynamoRIO** | single-step | no branch facility exists on Zen 2 |
 | Any x86, exact + unprivileged + on CI | **single-step** | DynamoRIO | no PMU/perf/privilege; only depth-unbounded HW-tier path runnable on CI |
 | Managed runtime (JVM/.NET/Node), Intel | **Intel PT** | — | observes out-of-band; no thread takeover, no signal collision |
@@ -321,8 +322,9 @@ transparent, while a native→emulator fallback crosses a semantic line and shou
 |---|---|
 | Intel, bare-metal | Intel PT → DynamoRIO → single-step → emulator |
 | Intel, VM / cloud | DynamoRIO → single-step → emulator *(PT self-skips: no `intel_pt` PMU)* |
-| AMD Zen 3 / Zen 4, bare-metal, ≤16 branches | AMD LBR → DynamoRIO → single-step → emulator |
-| AMD Zen 3 / Zen 4, routine > 16 branches | *(LBR sets `truncated`)* → DynamoRIO → single-step → emulator |
+| AMD Zen 4+, bare-metal, ≤16 branches | AMD LBR → DynamoRIO → single-step → emulator |
+| AMD Zen 4+, routine > 16 branches | *(LBR sets `truncated`)* → DynamoRIO → single-step → emulator |
+| AMD Zen 3 | DynamoRIO → single-step → emulator *(AMD LBR never opens: BRS-only silicon, `-EINVAL` → `AMD_NOHW`)* |
 | AMD Zen 2 | DynamoRIO → single-step → emulator *(no branch facility exists)* |
 | AMD, VM / cloud | DynamoRIO → single-step → emulator |
 

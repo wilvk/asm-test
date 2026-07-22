@@ -40,6 +40,8 @@
 
 #include "ibs_backend.h" /* internal window primitives (asmtest_ibs_window_*) */
 
+#include "debug.h" /* Phase-4 ASMTEST_HWDBG env-gated tier logging (T5: IBS reach) */
+
 #include <errno.h>  /* asmtest_ibs_unavail_reason: the real perf_open failure */
 #include <stddef.h> /* offsetof — the additive-ABI struct_size guard (pure) */
 #include <stdlib.h>
@@ -476,6 +478,13 @@ static void ibs_probe(void) {
 
 int asmtest_ibs_available(void) {
     ibs_probe();
+    static int
+        logged; /* once per process — the probe result is cached anyway */
+    if (!logged) {
+        logged = 1;
+        ASMTEST_HWDBG("op probe: avail=%d reason=%s", g_avail,
+                      g_avail == 1 ? "" : g_reason);
+    }
     return g_avail;
 }
 const char *asmtest_ibs_skip_reason(void) {
@@ -614,12 +623,27 @@ static int eh_cmp_desc(const void *a, const void *b) {
         return x->to < y->to ? -1 : 1;
     return 0;
 }
+/* Test seam (amd-review-followup-2 T1): when armed, the next nonempty
+ * eh_export/fh_export fails as if its result allocation OOM'd, so tests can
+ * prove the lanes report EUNAVAIL instead of a complete-looking empty survey.
+ * No effect unless a test arms it. */
+static int g_export_fail_armed;
+void asmtest_ibs_test_set_export_fail(int armed) {
+    g_export_fail_armed = armed;
+}
+
 /* Export used slots into a freshly-malloc'd array sorted by descending count. */
 static int eh_export(edge_hash *h, asmtest_ibs_survey_t *out) {
     if (h->n == 0) {
         out->edges = NULL;
         out->n = 0;
         return 0;
+    }
+    if (g_export_fail_armed) {
+        ASMTEST_HWDBG("edge export: injected OOM (n=%zu) — lane will return "
+                      "EUNAVAIL",
+                      h->n);
+        return -1; /* injected OOM — see asmtest_ibs_test_set_export_fail */
     }
     asmtest_ibs_edge_t *arr = (asmtest_ibs_edge_t *)calloc(h->n, sizeof *arr);
     if (arr == NULL)
@@ -641,6 +665,28 @@ static int eh_export(edge_hash *h, asmtest_ibs_survey_t *out) {
     out->edges = arr;
     out->n = k;
     return 0;
+}
+
+/* Hardware-free proof of the export OOM contract: a one-edge hash whose export
+ * is seam-failed must report failure and leave *out untouched-empty; the same
+ * export with the seam disarmed must succeed. 1 = holds, 0 = broken. */
+int asmtest_ibs_test_export_oom_contract(void) {
+    edge_hash h;
+    if (eh_init(&h, 8) != 0)
+        return 0;
+    eh_add(&h, 0x1000, 0x2000, 0, 0);
+    asmtest_ibs_survey_t s;
+    memset(&s, 0, sizeof s);
+    asmtest_ibs_test_set_export_fail(1);
+    int failed = eh_export(&h, &s);
+    asmtest_ibs_test_set_export_fail(0);
+    int ok = failed != 0 && s.edges == NULL && s.n == 0;
+    if (ok)
+        ok = eh_export(&h, &s) == 0 && s.edges != NULL && s.n == 1 &&
+             s.edges[0].from == 0x1000 && s.edges[0].to == 0x2000;
+    free(s.edges);
+    eh_free(&h);
+    return ok;
 }
 
 /* --- ring drain ---------------------------------------------------------------- */
@@ -702,8 +748,11 @@ static void ibs_drain(void *base_map, size_t pg, size_t dsz, uint8_t *scratch,
      * less than one max record of headroom as loss (mirrors hwtrace.c). The bound
      * is callchain-aware: a callchain-enabled record is ~10x the base size, so the
      * base bound would under-reserve and callchain samples would vanish silently. */
-    if (span + ibs_max_record(has_callchain) > dsz)
+    if (span + ibs_max_record(has_callchain) > dsz) {
         out->throttled = 1;
+        ASMTEST_HWDBG("near-full ring: span=%zu dsz=%zu — flagged throttled",
+                      span, dsz);
+    }
 
     for (size_t i = 0; i < span; i++)
         scratch[i] = data[(tail + i) % dsz];
@@ -735,6 +784,8 @@ static void ibs_drain(void *base_map, size_t pg, size_t dsz, uint8_t *scratch,
                 out->lost += ld_u64(scratch + off + sizeof hd + 8);
             else
                 out->lost += 1;
+            ASMTEST_HWDBG("PERF_RECORD_LOST: lost=%llu so far",
+                          (unsigned long long)out->lost);
         } else if (hd.type == PERF_RECORD_THROTTLE) {
             out->throttled = 1;
         }
@@ -889,6 +940,8 @@ static int ibs_chan_open(ibs_chan *ch, pid_t tid, int cpu, int type,
          * "# SKIP --sample: " with an empty reason on exactly the host where the
          * reason matters (AMD, IBS present, perf locked down). */
         g_open_errno = errno;
+        ASMTEST_HWDBG("perf_event_open failed errno=%d (%s)", g_open_errno,
+                      strerror(g_open_errno));
         return -1;
     }
     size_t base_sz = pg + dsz;
@@ -969,6 +1022,7 @@ int asmtest_ibs_survey_pid(pid_t tid, unsigned ms,
     if (out == NULL)
         return ASMTEST_IBS_EINVAL;
     memset(out, 0, sizeof *out);
+    g_open_errno = 0; /* a stale failure must not outlive this fresh capture */
     if (!asmtest_ibs_available())
         return ASMTEST_IBS_EUNAVAIL;
     int type = ibs_op_type();
@@ -1009,11 +1063,11 @@ int asmtest_ibs_survey_pid(pid_t tid, unsigned ms,
     ibs_drain(ch.base_map, pg, dsz, scratch, &h, out, cfg.callchain,
               0); /* final drain */
 
-    eh_export(&h, out);
+    int xrc = eh_export(&h, out);
     eh_free(&h);
     free(scratch);
     ibs_chan_free(&ch);
-    return ASMTEST_IBS_OK;
+    return xrc == 0 ? ASMTEST_IBS_OK : ASMTEST_IBS_EUNAVAIL;
 }
 
 int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
@@ -1022,6 +1076,7 @@ int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
     if (out == NULL)
         return ASMTEST_IBS_EINVAL;
     memset(out, 0, sizeof *out);
+    g_open_errno = 0; /* see survey_pid */
     if (!asmtest_ibs_available())
         return ASMTEST_IBS_EUNAVAIL;
     int type = ibs_op_type();
@@ -1129,13 +1184,13 @@ int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
     ibs_drain_all(chans, nch, pg, dsz, scratch, &h, out, cfg.callchain,
                   filter_pid); /* final drain */
 
-    eh_export(&h, out);
+    int xrc = eh_export(&h, out);
     eh_free(&h);
     free(scratch);
     for (int i = 0; i < nch; i++)
         ibs_chan_free(&chans[i]);
     free(chans);
-    return ASMTEST_IBS_OK;
+    return xrc == 0 ? ASMTEST_IBS_OK : ASMTEST_IBS_EUNAVAIL;
 }
 
 /* --- portable software-clock IP sampler ----------------------------------------- */
@@ -1289,6 +1344,7 @@ int asmtest_swclock_survey_process(pid_t pid, unsigned ms, unsigned freq_hz,
     if (out == NULL)
         return ASMTEST_IBS_EINVAL;
     memset(out, 0, sizeof *out);
+    g_open_errno = 0; /* see survey_pid */
     if (pid == 0)
         pid = getpid();
     if (ms == 0)
@@ -1416,6 +1472,7 @@ int asmtest_ibs_window_begin(const asmtest_ibs_opts_t *opts, void **ctx_out) {
     if (ctx_out == NULL)
         return ASMTEST_IBS_EINVAL;
     *ctx_out = NULL;
+    g_open_errno = 0; /* see survey_pid */
     if (!asmtest_ibs_available())
         return ASMTEST_IBS_EUNAVAIL;
     int type = ibs_op_type();
@@ -1464,12 +1521,12 @@ int asmtest_ibs_window_end(void *ctx, asmtest_ibs_survey_t *out) {
      * branch-stack survey's near-full handling. */
     ibs_drain(w->ch.base_map, w->pg, w->dsz, w->scratch, &w->h, out,
               w->cfg.callchain, 0);
-    eh_export(&w->h, out);
+    int xrc = eh_export(&w->h, out);
     eh_free(&w->h);
     free(w->scratch);
     ibs_chan_free(&w->ch);
     free(w);
-    return ASMTEST_IBS_OK;
+    return xrc == 0 ? ASMTEST_IBS_OK : ASMTEST_IBS_EUNAVAIL;
 }
 
 /* ============================ IBS-Fetch front-end lane ========================= */
@@ -1532,6 +1589,12 @@ static void ibs_fetch_probe(void) {
 
 int asmtest_ibs_fetch_available(void) {
     ibs_fetch_probe();
+    static int logged;
+    if (!logged) {
+        logged = 1;
+        ASMTEST_HWDBG("fetch probe: avail=%d reason=%s", g_fetch_avail,
+                      g_fetch_avail == 1 ? "" : g_fetch_reason);
+    }
     return g_fetch_avail;
 }
 const char *asmtest_ibs_fetch_skip_reason(void) {
@@ -1642,6 +1705,12 @@ static int fh_export(fetch_hash *h, asmtest_ibs_fetch_survey_t *out) {
         out->n = 0;
         return 0;
     }
+    if (g_export_fail_armed) {
+        ASMTEST_HWDBG("fetch export: injected OOM (n=%zu) — lane will return "
+                      "EUNAVAIL",
+                      h->n);
+        return -1; /* injected OOM — see asmtest_ibs_test_set_export_fail */
+    }
     asmtest_ibs_fetch_hot_t *arr =
         (asmtest_ibs_fetch_hot_t *)calloc(h->n, sizeof *arr);
     if (arr == NULL)
@@ -1734,6 +1803,7 @@ int asmtest_ibs_survey_fetch_pid(pid_t tid, unsigned ms,
     if (out == NULL)
         return ASMTEST_IBS_EINVAL;
     memset(out, 0, sizeof *out);
+    g_open_errno = 0; /* see survey_pid */
     if (!asmtest_ibs_fetch_available())
         return ASMTEST_IBS_EUNAVAIL;
     int type = ibs_fetch_type();
@@ -1779,11 +1849,11 @@ int asmtest_ibs_survey_fetch_pid(pid_t tid, unsigned ms,
     ibs_chan_disable(&ch);
     ibs_fetch_drain(ch.base_map, pg, dsz, scratch, &h, out); /* final drain */
 
-    fh_export(&h, out);
+    int xrc = fh_export(&h, out);
     fh_free(&h);
     free(scratch);
     ibs_chan_free(&ch);
-    return ASMTEST_IBS_OK;
+    return xrc == 0 ? ASMTEST_IBS_OK : ASMTEST_IBS_EUNAVAIL;
 }
 
 #else /* not Linux x86-64 --------------------------------------------------------- */
@@ -1816,6 +1886,10 @@ int asmtest_ibs_survey_process(pid_t pid, unsigned ms,
     if (out != NULL)
         memset(out, 0, sizeof *out);
     return ASMTEST_IBS_EUNAVAIL;
+}
+void asmtest_ibs_test_set_export_fail(int armed) { (void)armed; }
+int asmtest_ibs_test_export_oom_contract(void) {
+    return -2; /* no IBS hash/export machinery on this build */
 }
 /* Portable software-clock sampler: perf_event_open is Linux-only, so off Linux
  * these self-skip. (On Linux non-x86-64 they are stubbed out today only

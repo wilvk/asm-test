@@ -87,6 +87,8 @@ void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
                                    asmtest_trace_t *trace);
 int asmtest_amd_has_cpu_flag(const char *flag);
 int asmtest_amd_flags_have(const char *line, const char *flag);
+/* MSR-rung commit-decision seam (defined in trace_auto.c; src/trace_auto.h). */
+int asmtest_trace_auto_msr_commits(int rc, int truncated, int nonempty);
 /* §E5 AutoFDO block-frequency reweighting of the survey endpoints + the survey entry
  * that drives it (internal, defined in hwtrace.c; not in the public header). */
 size_t asmtest_amd_block_weight_sample(const struct perf_branch_entry *e,
@@ -299,8 +301,9 @@ int pthread_mutex_lock(pthread_mutex_t *m) {
  * AMD capture self-skips). */
 /* AMD freeze-on-PMI probe (CPUID 0x80000022 EAX[2]). Unprivileged (CPUID needs no
  * perf access), so it runs even where the AMD LBR CAPTURE self-skips. Asserts the probe
- * returns a definite, stable answer; prints this host's actual support so the freeze gate
- * in hwtrace_end_amd is observable. On non-AMD / non-x86 it is honestly 0. */
+ * returns a definite, stable answer and prints this host's actual support — a plain
+ * substrate capability report; no runtime gate consumes it. On non-AMD / non-x86 it
+ * is honestly 0. */
 /* Phase 4 — env-gated debug logging (src/debug.{c,h}). Forked children so the
  * getenv-once cache starts pristine (this runs FIRST in main, before any tier call caches
  * it in the parent): a child with ASMTEST_HWTRACE_DEBUG=1 must emit a "[asmtest hwtrace] "
@@ -1952,6 +1955,24 @@ static void test_ss_btf_loop(void) {
  * it and a phantom edge would enter the reconstruction. Drives asmtest_amd_msr_decode_entry
  * with synthetic MSR words. Regression guard: against the pre-fix `valid || spec` test the
  * spec-only case would wrongly be KEPT. */
+/* Pure (every host): the MSR rung's commit decision (trace_auto.h seam). A
+ * nonempty truncated MSR partial commits under the same HW_OK+truncated
+ * contract as a fast-tier truncated partial ("HW_OK when some tier ran");
+ * only a failed read or the genuinely-empty truncated read (nothing
+ * in-region) falls through to the steppers. Live narrow-config coverage
+ * needs LbrExtV2 silicon; this pins the decision itself everywhere. */
+static void test_msr_commit_decision(void) {
+    CHECK(asmtest_trace_auto_msr_commits(ASMTEST_HW_OK, 0, 1),
+          "msr rung: a complete read commits");
+    CHECK(asmtest_trace_auto_msr_commits(ASMTEST_HW_OK, 1, 1),
+          "msr rung: a NONEMPTY truncated partial commits (HW_OK+truncated, "
+          "like the fast tier)");
+    CHECK(!asmtest_trace_auto_msr_commits(ASMTEST_HW_OK, 1, 0),
+          "msr rung: the genuinely-empty truncated read falls through");
+    CHECK(!asmtest_trace_auto_msr_commits(ASMTEST_HW_EUNAVAIL, 0, 1),
+          "msr rung: a failed read never commits");
+}
+
 static void test_amd_msr_spec_filter(void) {
 #if defined(__linux__) && defined(__x86_64__)
     const uint64_t VALID = 1ULL << 63;   /* TO[63] retired      */
@@ -11224,6 +11245,7 @@ int main(void) {
     test_amd_spec_filter();
     test_amd_decode_hw_ceiling();
     test_amd_msr_spec_filter();
+    test_msr_commit_decision();
     test_ss_btf_pairing();
     test_amd_tailcall_exit();
     test_amd_reduced_filter();

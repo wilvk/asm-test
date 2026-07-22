@@ -2267,7 +2267,7 @@ $(BUILD)/debug.o: src/debug.c src/debug.h | $(BUILD)
 # to prime the block-step rung; both objects are already in HWTRACE_OBJS below.
 $(BUILD)/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
                        include/asmtest_hwtrace.h include/asmtest_trace.h \
-                       include/asmtest_ibs.h \
+                       include/asmtest_ibs.h src/trace_auto.h src/debug.h \
                        include/asmtest_blockstep_internal.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 # Out-of-process ptrace single-step backend (W2): no external library, just the
@@ -2315,7 +2315,7 @@ $(BUILD)/stealth_helper_main.o: src/stealth_helper_main.c src/stealth_helper.h |
 # external library and no Capstone (Phase 0-1) — raw perf_event_open + a pure decoder
 # that is host-independent (unit-tested on every CI host). A SEPARATE statistical
 # producer, never a member of the exact insns[]/blocks[] parity cascade.
-$(BUILD)/ibs_backend.o: src/ibs_backend.c include/asmtest_ibs.h | $(BUILD)
+$(BUILD)/ibs_backend.o: src/ibs_backend.c include/asmtest_ibs.h src/ibs_backend.h src/debug.h | $(BUILD)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 HWTRACE_OBJS := $(BUILD)/hwtrace.o $(BUILD)/pt_backend.o $(BUILD)/cs_backend.o \
@@ -2358,8 +2358,9 @@ branchtile-test: $(BUILD)/test_branchtile
 
 # Statistical AMD IBS-Op edge lane. test_ibs's PURE decoder checks (synthetic raw
 # records) run and pass on ANY host; its live out-of-band capture self-skips (exit 0)
-# off AMD IBS-Op. Links only ibs_backend.o (a self-contained producer, no Capstone /
-# PT / OpenCSD decoders) + -lpthread for the test's worker thread. ibs_probe is the
+# off AMD IBS-Op. Links ibs_backend.o (a self-contained producer, no Capstone /
+# PT / OpenCSD decoders) + debug.o (its ASMTEST_HWDBG sites) + -lpthread for the
+# test's worker thread. ibs_probe is the
 # standalone capability probe. Both are wired into hwtrace-test below.
 #
 # test_ibs.c / ibs_probe.c include the INTERNAL src/ibs_backend.h — the Phase 7
@@ -2373,9 +2374,9 @@ $(BUILD)/test_ibs.o: examples/test_ibs.c include/asmtest_ibs.h src/ibs_backend.h
 $(BUILD)/ibs_probe.o: examples/ibs_probe.c include/asmtest_ibs.h src/ibs_backend.h \
                       $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) -Isrc -c $< -o $@
-$(BUILD)/test_ibs: $(BUILD)/ibs_backend.o $(BUILD)/test_ibs.o
+$(BUILD)/test_ibs: $(BUILD)/ibs_backend.o $(BUILD)/debug.o $(BUILD)/test_ibs.o
 	$(CC) $(CFLAGS) $^ -lpthread -o $@
-$(BUILD)/ibs_probe: $(BUILD)/ibs_backend.o $(BUILD)/ibs_probe.o
+$(BUILD)/ibs_probe: $(BUILD)/ibs_backend.o $(BUILD)/debug.o $(BUILD)/ibs_probe.o
 	$(CC) $(CFLAGS) $^ -o $@
 .PHONY: ibs-test
 ibs-test: $(BUILD)/test_ibs $(BUILD)/ibs_probe
@@ -3139,7 +3140,7 @@ $(BUILD)/pic/mach_excServer.o: $(BUILD)/mach_excServer.c $(BUILD)/mach_exc.h | $
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/trace_auto.o: src/trace_auto.c include/asmtest_trace_auto.h \
                            include/asmtest_hwtrace.h include/asmtest_trace.h \
-                           include/asmtest_ibs.h \
+                           include/asmtest_ibs.h src/trace_auto.h src/debug.h \
                            include/asmtest_blockstep_internal.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 $(BUILD)/pic/ptrace_backend.o: src/ptrace_backend.c include/asmtest_ptrace.h \
@@ -3172,7 +3173,7 @@ $(BUILD)/pic/debug.o: src/debug.c src/debug.h | $(BUILD)/pic
 # hwtrace.c calls asmtest_ibs_window_begin/_end, so omitting it left
 # libasmtest_hwtrace.so with an undefined symbol at dlopen (every binding's
 # trace_call_auto/resolve_tiers path loads unconditionally, on any host).
-$(BUILD)/pic/ibs_backend.o: src/ibs_backend.c include/asmtest_ibs.h | $(BUILD)/pic
+$(BUILD)/pic/ibs_backend.o: src/ibs_backend.c include/asmtest_ibs.h src/ibs_backend.h src/debug.h | $(BUILD)/pic
 	$(CC) $(CFLAGS) -fPIC -c $< -o $@
 
 # K5: rebuild the hardware/native-trace object tree on a build-knob flip

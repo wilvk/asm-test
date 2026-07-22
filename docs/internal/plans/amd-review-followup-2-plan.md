@@ -47,7 +47,7 @@ CI pool.
 
 ---
 
-## T1 — IBS export OOM must not report a complete empty survey *(planned)*
+## T1 — IBS export OOM must not report a complete empty survey *(landed 2026-07-23)*
 
 **The defect.** [src/ibs_backend.c:614](../../../src/ibs_backend.c) `eh_export`
 returns `-1` when its result `calloc` fails and leaves `out->edges`/`out->n`
@@ -90,7 +90,7 @@ value is honest gaps, and this is a silent one.
 - The window lane ([:1463](../../../src/ibs_backend.c)) is covered too, not just
   the surveys.
 
-## T2 — Un-stale the AMD docs the landing wave outran *(planned)*
+## T2 — Un-stale the AMD docs the landing wave outran *(landed 2026-07-23 — (a)/(e)/(f) verified already closed by the 2026-07-21/22 wave; (b)/(c)/(d) fixed with this landing)*
 
 Five separate documents assert things the current code contradicts. Each is a
 pure doc edit; group them.
@@ -183,7 +183,7 @@ but it now attempts a real `asmtest_ibs_survey_pid` open and prints
 - *Acceptance:* mark that clause closed (the substrate-vs-open honesty fix
   landed for `ibs_probe` and `report_fetch`).
 
-## T3 — Minor code + comment cleanups *(planned)*
+## T3 — Minor code + comment cleanups *(landed 2026-07-23 — errno reset on every capture entry + test; both live drains got the short-SAMPLE floor; comment rewritten)*
 
 Batch three low-severity items:
 
@@ -217,7 +217,7 @@ Batch three low-severity items:
   sites, or add a one-line comment recording why the drains are safe without it.
   Zero runtime cost either way.
 
-## T4 — `trace_auto` MSR rung: return a truncated partial, like the fast rung *(planned)*
+## T4 — `trace_auto` MSR rung: return a truncated partial, like the fast rung *(landed 2026-07-23 — preferred option: nonempty-truncated commits; decision extracted as a host-testable seam and pinned pure)*
 
 **The asymmetry.** The tail return is
 `return ran ? ASMTEST_HW_OK : ASMTEST_HW_EUNAVAIL`
@@ -257,7 +257,7 @@ contract "Returns `HW_OK` when some tier ran"
 - Either way: a test drives the narrow config (MSR truncated + steppers absent)
   and pins the chosen behaviour.
 
-## T5 — Extend the debug facility into IBS and the cascade *(planned)*
+## T5 — Extend the debug facility into IBS and the cascade *(landed 2026-07-23 — probe/open-errno/near-full/export sites in ibs_backend.c; per-rung commit/skip + final mechanism in trace_auto.c; same getenv-once gate, no new env var)*
 
 The Phase-4 env-gated logging (`ASMTEST_HWTRACE_DEBUG=1` /
 `ASMTEST_AMD_DEBUG=1`, [src/debug.c:18](../../../src/debug.c);
@@ -279,7 +279,7 @@ but not an IBS open failure or an escalation-rung decision.
   disabled. Keep it out of any async-signal-unsafe context (per
   [debug.h:16](../../../src/debug.h)).
 
-## T6 — Self-hosted Zen runner *(forward-look — infra-gated)*
+## T6 — Self-hosted Zen runner *(forward-look — infra-gated; its one-shot leg ran GREEN 2026-07-22 via self-hosted-ci-runners T3, run 29897214772 — the STANDING-runner deployment decision stays owned there)*
 
 Round-1 **P9** built the lane and it is correct:
 [.github/workflows/hw.yml](../../../.github/workflows/hw.yml) carries

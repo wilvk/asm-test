@@ -438,10 +438,24 @@ static void test_live(void) {
         nanosleep(&s, NULL);
     }
 
+    /* A failed open must not leave a stale errno behind a later success: fail
+     * an open first (nonexistent tid -> ESRCH), then the successful capture
+     * below must clear it — g_open_errno resets on every capture entry. */
+    asmtest_ibs_survey_t gone;
+    int gone_rc = asmtest_ibs_survey_pid((pid_t)2147480000, 20, NULL, &gone);
+    asmtest_ibs_survey_free(&gone);
+
     /* Survey the WORKER's thread out of band from THIS thread — proving the
      * capture observes another running thread without single-stepping it. */
     asmtest_ibs_survey_t survey;
     int rc = asmtest_ibs_survey_pid(g_worker_tid, 300, NULL, &survey);
+
+    /* Same capture with the export seam armed: an OOM'd export must surface
+     * as EUNAVAIL, never as OK beside an empty edge list. */
+    asmtest_ibs_survey_t oom_survey;
+    asmtest_ibs_test_set_export_fail(1);
+    int oom_rc = asmtest_ibs_survey_pid(g_worker_tid, 120, NULL, &oom_survey);
+    asmtest_ibs_test_set_export_fail(0);
 
     g_stop = 1;
     pthread_join(th, NULL);
@@ -453,6 +467,7 @@ static void test_live(void) {
     if (rc == ASMTEST_IBS_EUNAVAIL) {
         printf("# SKIP IBS live capture: %s\n", asmtest_ibs_unavail_reason());
         asmtest_ibs_survey_free(&survey);
+        asmtest_ibs_survey_free(&oom_survey);
         return;
     }
 
@@ -461,6 +476,23 @@ static void test_live(void) {
     CHECK(survey.branch_samples > 0,
           "survey_pid: recorded retired taken-branch edges");
     CHECK(survey.n > 0, "survey_pid: produced at least one aggregated edge");
+
+    if (gone_rc == ASMTEST_IBS_EUNAVAIL)
+        CHECK(asmtest_ibs_unavail_reason()[0] == '\0',
+              "unavail_reason: a later successful capture cleared the stale "
+              "open errno");
+
+    if (oom_rc == ASMTEST_IBS_OK && oom_survey.branch_samples == 0) {
+        /* legit: not one branch sample landed in the seam run's window, so
+         * the (nonempty) export never ran — nothing to assert this time */
+        printf("# note: live export-OOM check inconclusive (empty window)\n");
+    } else {
+        CHECK(oom_rc == ASMTEST_IBS_EUNAVAIL,
+              "survey_pid: injected export OOM returns EUNAVAIL, not empty OK");
+        CHECK(oom_survey.edges == NULL && oom_survey.n == 0,
+              "survey_pid: no edges beside the injected-OOM EUNAVAIL");
+    }
+    asmtest_ibs_survey_free(&oom_survey);
 
     /* The spin loop's edges must fall within spin_loop()'s own code window; its
      * hottest edge should be the loop back-edge (target before source). */
@@ -830,6 +862,20 @@ static void test_record_bound(void) {
 }
 #endif
 
+/* Pure (no perf): the export OOM contract. An OOM'd edge/fetch export must
+ * surface as failure — never as a complete-looking empty survey (the defect
+ * class: every lane discarded the export return). Runs everywhere; the
+ * non-Linux/x86-64 stub returns -2 and skips. */
+static void test_export_oom_contract(void) {
+    int c = asmtest_ibs_test_export_oom_contract();
+    if (c == -2) {
+        printf("# SKIP export-OOM contract: no IBS machinery on this build\n");
+        return;
+    }
+    CHECK(c == 1,
+          "export OOM surfaces as failure, never a complete empty survey");
+}
+
 int main(void) {
     test_decode();
     test_normalize();
@@ -839,6 +885,7 @@ int main(void) {
     test_available();
     test_fetch_available();
     test_record_bound();
+    test_export_oom_contract();
     test_live();
     test_live_process();
     test_live_fetch();

@@ -152,6 +152,15 @@ int asmtest_ibs_survey_fetch_pid(pid_t tid, unsigned ms,
  * NULL-safe). Pure/host-independent. */
 void asmtest_ibs_fetch_survey_free(asmtest_ibs_fetch_survey_t *s);
 
+/* --- Test seams (export OOM honesty) ----------------------------------------- */
+/* While armed, the next nonempty edge/fetch export fails as if its result
+ * allocation OOM'd; the capture lanes must then return EUNAVAIL rather than a
+ * complete-looking empty survey. Test-only. */
+void asmtest_ibs_test_set_export_fail(int armed);
+/* Hardware-free proof of that contract: 1 = holds, 0 = broken, -2 = this build
+ * has no IBS machinery (non-Linux/x86-64 stub — callers skip). */
+int asmtest_ibs_test_export_oom_contract(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -1550,8 +1550,12 @@ static int sample_window_amd_impl(void (*run_fn)(void *), void *arg, int period,
                 if (h.type == PERF_RECORD_LOST ||
                     h.type == PERF_RECORD_THROTTLE) {
                     lost = 1;
-                } else if (h.type == PERF_RECORD_SAMPLE) {
-                    /* body = {u64 nr; perf_branch_entry[nr]} (only BRANCH_STACK set). */
+                } else if (h.type == PERF_RECORD_SAMPLE &&
+                           h.size >= sizeof h + sizeof(uint64_t)) {
+                    /* body = {u64 nr; perf_branch_entry[nr]} (only BRANCH_STACK set).
+                     * The h.size floor keeps the nr load inside the record even for
+                     * a lying short header — unreachable from a real ring (records
+                     * are whole); mirrors the F43 seam parser's guard. */
                     uint8_t *body = buf + off + sizeof h;
                     uint64_t nr;
                     memcpy(&nr, body, sizeof nr);
@@ -1817,7 +1821,9 @@ int asmtest_hwtrace_sample_end_amd(void *ctxp, uint64_t *ips, size_t cap,
                 if (h.type == PERF_RECORD_LOST ||
                     h.type == PERF_RECORD_THROTTLE) {
                     lost = 1;
-                } else if (h.type == PERF_RECORD_SAMPLE) {
+                } else if (h.type == PERF_RECORD_SAMPLE &&
+                           h.size >= sizeof h + sizeof(uint64_t)) {
+                    /* h.size floor: see the sibling drain above (F7 residue). */
                     uint8_t *body = buf + off + sizeof h;
                     uint64_t nr;
                     memcpy(&nr, body, sizeof nr);

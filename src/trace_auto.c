@@ -19,6 +19,10 @@
  */
 #include "asmtest_trace_auto.h"
 
+#include "trace_auto.h" /* internal host-testable seams */
+
+#include "debug.h" /* Phase-4 ASMTEST_HWDBG env-gated tier logging (T5: cascade reach) */
+
 #include "asmtest_blockstep_internal.h" /* T8: IBS covered-block pre-cover table */
 #include "asmtest_ibs.h" /* T8: statistical survey for pre-cover  */
 #include "asmtest_ptrace.h" /* block-step / per-insn call-owning escalation tiers */
@@ -162,6 +166,14 @@ static void call_auto_reset(asmtest_trace_t *t) {
 /* Phase 8 MSR-rung plumbing: asmtest_amd_msr_trace invokes an out-of-line void(void*)
  * callback that IT calls (it owns the enable->run->freeze bracket), so the routine's long
  * result is recovered across that void boundary via this small closure. */
+/* Rung 1b commit decision (internal seam, trace_auto.h): commit an MSR read
+ * that succeeded and recorded something. A nonempty truncated partial commits
+ * under the same contract a fast-tier truncated partial returns under; the
+ * genuinely-empty truncated read must fall through to the steppers. */
+int asmtest_trace_auto_msr_commits(int rc, int truncated, int nonempty) {
+    return rc == ASMTEST_HW_OK && (!truncated || nonempty);
+}
+
 struct msr_call_closure {
     const void *code;
     const long *args;
@@ -313,6 +325,8 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
             asmtest_hwtrace_shutdown();
         }
     }
+    ASMTEST_HWDBG("rung1 fast: ran=%d truncated=%d", ran,
+                  (int)trace->truncated);
     if (ran && !trace->truncated)
         return ASMTEST_HW_OK; /* the fast tier captured the whole path */
 
@@ -343,16 +357,24 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
      * steppers below), asmtest_amd_msr_trace runs the routine IN-PROCESS — a second real
      * execution, so non-idempotent side effects happen again and a faulting routine takes
      * down the tracer. call_auto_reset() first so the truncated fast-tier trace cannot
-     * contaminate the read; on ANY miss/failure set truncated and fall through (never
-     * early-return on a failed tier) so a too-small-for-MSR routine still reaches block-step. */
+     * contaminate the read. A NONEMPTY truncated read commits (HW_OK + truncated —
+     * the same contract a fast-tier truncated partial returns under, per the
+     * header's "HW_OK when some tier ran"); only a failed or genuinely-empty read
+     * (nothing in-region) sets truncated and falls through (never early-return on
+     * a failed tier) so a too-small-for-MSR routine still reaches block-step. */
     if (!(policy & ASMTEST_TRACE_CEILING_FREE) && asmtest_amd_msr_available()) {
         call_auto_reset(trace);
         ran =
             0; /* F24: the reset discarded any prior partial — re-earn `ran` below */
         struct msr_call_closure cl = {code, args, nargs, 0};
-        if (asmtest_amd_msr_trace(code, len, msr_call_trampoline, &cl, trace) ==
-                ASMTEST_HW_OK &&
-            !trace->truncated) {
+        int mrc =
+            asmtest_amd_msr_trace(code, len, msr_call_trampoline, &cl, trace);
+        ASMTEST_HWDBG("rung1b msr: rc=%d truncated=%d nonempty=%d", mrc,
+                      (int)trace->truncated,
+                      trace->insns_total > 0 || trace->blocks_total > 0);
+        if (asmtest_trace_auto_msr_commits(mrc, trace->truncated,
+                                           trace->insns_total > 0 ||
+                                               trace->blocks_total > 0)) {
             if (result != NULL)
                 *result = cl.result;
             ran = 1;
@@ -364,7 +386,12 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
             }
             return ASMTEST_HW_OK;
         }
-        trace->truncated = true; /* miss/failure: fall through to block-step */
+        trace->truncated =
+            true; /* failed or empty read: fall through to block-step */
+    } else {
+        ASMTEST_HWDBG("rung1b msr: skipped (%s)",
+                      (policy & ASMTEST_TRACE_CEILING_FREE) ? "CEILING_FREE"
+                                                            : "unavailable");
     }
 
     /* (2) Complete rootless — BTF block-step (no window ceiling), fork-isolated re-run.
@@ -389,6 +416,8 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
         }
         int bstep_rc = asmtest_ptrace_trace_call_blockstep(
             code, len, args, nargs, result, trace);
+        ASMTEST_HWDBG("rung2 blockstep: rc=%d truncated=%d precover=%d",
+                      bstep_rc, (int)trace->truncated, precover != NULL);
         if (precover != NULL) {
             asmtest_bs_precover_set_current(NULL);
             asmtest_bs_precover_free(precover);
@@ -411,6 +440,8 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
     }
 
     /* (3) Complete floor — per-instruction single-step, fork-isolated re-run. */
+    if (!asmtest_ptrace_blockstep_available())
+        ASMTEST_HWDBG("rung2 blockstep: skipped (unavailable)");
     if (asmtest_ptrace_available()) {
         call_auto_reset(trace);
         ran =
@@ -427,6 +458,9 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
         } else {
             trace->truncated = true;
         }
+        ASMTEST_HWDBG("rung3 per-insn: ran=%d", ran);
+    } else {
+        ASMTEST_HWDBG("rung3 per-insn: skipped (unavailable)");
     }
 
     if (!ran && used != NULL) {
@@ -439,5 +473,8 @@ int asmtest_trace_call_auto(const void *code, size_t len, const long *args,
         used->fidelity = ASMTEST_FIDELITY_NATIVE;
         used->mechanism = ASMTEST_TRACE_MECH_NONE;
     }
+    ASMTEST_HWDBG("done: ran=%d truncated=%d mechanism=%d", ran,
+                  (int)trace->truncated,
+                  used != NULL ? (int)used->mechanism : -1);
     return ran ? ASMTEST_HW_OK : ASMTEST_HW_EUNAVAIL;
 }

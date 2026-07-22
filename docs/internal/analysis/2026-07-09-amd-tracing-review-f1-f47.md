@@ -1,5 +1,17 @@
 # AMD Tracing – Review & Recommendations
 
+> **SUPERSEDED (recorded 2026-07-23).** This page is the 2026-07-09 snapshot;
+> the surface it reviews has been re-audited twice since — see the
+> [2026-07-17 adversarial review](2026-07-17-amd-hardware-review.md) and the
+> [round-2 follow-up plan](../plans/amd-review-followup-2-plan.md). Its P0/P1
+> items are shipped: F5's `nr` clamp (all three drain sites), F22 mechanism,
+> F24 empty-trace and F27 `struct_size` in full; **F7's short-SAMPLE guard
+> landed in two steps** — first at the shared seam parser only, with the two
+> live survey drains closed later by round-2 T3 (this banner's commit). The
+> "zero IBS code" premise below is long false: the IBS-Op/IBS-Fetch lanes
+> shipped in `src/ibs_backend.c` with the installed `asmtest_ibs.h`. Kept
+> verbatim below as the record of what the 2026-07-09 tree looked like.
+
 _Revision 2026-07-09. This revision is a full independent re-verification of the
 2026-07-08 review: every finding was adversarially checked against the current
 code, stale items were struck, and new findings were added. See §5 for the
@@ -57,7 +69,7 @@ This is where the highest-value *host-today* work is. All three AMD-LBR TUs self
 
 - **Use block-step in the managed-runtime JIT lanes — F18** (`examples/jit_trace.c:346-351`). The foreign-attach tracer captures via `asmtest_ptrace_run_to` + `asmtest_ptrace_trace_attached[_ex]` — per-instruction `PTRACE_SINGLESTEP`, one kernel round-trip per retired instruction. The library already ships `asmtest_ptrace_trace_attached_blockstep` (`src/ptrace_backend.c:1736`, probe at 1524, reconstruct at 1540-1575) which stops once per taken branch and reconstructs a **byte-identical** offset stream (proven by `test_hwtrace.c:3276-3337`), stepping over call-outs at native speed via `classify_region_exit`/`run_until`. It is only called from a synthetic fixture, never from `jit_trace.c`. **Fix:** on the `dh==NULL` (default) lane at line 351, prefer `blockstep` when `asmtest_ptrace_blockstep_available()`, falling back to `trace_attached` — mirroring the fork path in `trace_auto.c:181-183`. **Scope caveat:** block-step has no descent parameter, so it substitutes only on the default lanes, *not* the `*-descend`/`*-descend-all` lanes (which need `trace_attached_ex`). For a branch-light method this is roughly an order-of-magnitude fewer round-trips with zero output change, and keeps the `alarm(10)` watchdog far from firing.
 
-- **Add an IBS-Op fallback to the statistical survey — F6** (`src/hwtrace.c:983-1105` window; begin `1117-1161`, end `1163+`). `asmtest_hwtrace_sample_window_amd` and its begin/end split arm `PERF_COUNT_HW_BRANCH_INSTRUCTIONS` + `PERF_SAMPLE_BRANCH_STACK`; AMD backs branch-stack only via BRS (Zen 3) / LbrExtV2 (Zen 4+), so on Zen 2 `perf_open` returns EOPNOTSUPP and the whole survey bails to `ASMTEST_HW_EUNAVAIL` (1008-1009, 1135-1136). The tier advertised as crash-proof / out-of-band / portable yields nothing on the machine it runs on. **Fix:** when the branch-stack open fails, fall back to IBS-Op (`PERF_TYPE` from `/sys/bus/event_source/devices/ibs_op/type`, `PERF_SAMPLE_RAW`, bucketing the retired-branch target from `IbsOpData`) at `perf_event_paranoid<=2`, restoring a working statistical hot-method survey on Zen 2. This is the *only* legitimate IBS work: IBS is statistical and must never feed the exact `insns[]`/`blocks[]` parity contract — the exact managed-runtime niche is already covered by shipped ptrace code, not IBS. (There is currently zero IBS code in the repo; IBS appears only in planning docs.)
+- **Add an IBS-Op fallback to the statistical survey — F6** (`src/hwtrace.c:983-1105` window; begin `1117-1161`, end `1163+`). `asmtest_hwtrace_sample_window_amd` and its begin/end split arm `PERF_COUNT_HW_BRANCH_INSTRUCTIONS` + `PERF_SAMPLE_BRANCH_STACK`; AMD backs branch-stack only via BRS (Zen 3) / LbrExtV2 (Zen 4+), so on Zen 2 `perf_open` returns EOPNOTSUPP and the whole survey bails to `ASMTEST_HW_EUNAVAIL` (1008-1009, 1135-1136). The tier advertised as crash-proof / out-of-band / portable yields nothing on the machine it runs on. **Fix:** when the branch-stack open fails, fall back to IBS-Op (`PERF_TYPE` from `/sys/bus/event_source/devices/ibs_op/type`, `PERF_SAMPLE_RAW`, bucketing the retired-branch target from `IbsOpData`) at `perf_event_paranoid<=2`, restoring a working statistical hot-method survey on Zen 2. This is the *only* legitimate IBS work: IBS is statistical and must never feed the exact `insns[]`/`blocks[]` parity contract — the exact managed-runtime niche is already covered by shipped ptrace code, not IBS. (At this revision there was zero IBS code in the repo — since shipped as `src/ibs_backend.c`; see the SUPERSEDED banner.)
 
 - **Configurable stealth-helper timeout — F38** (`src/stealth_helper.c:86, 137, 184`). The out-of-process exact-parity stepper hardcodes `alarm(15)` at three sites with no env override; a window spanning managed-runtime execution (e.g. debug .NET, tiered compilation off) can exceed 15 s, and for a flat region the ptrace descend watchdog is not armed, so this `alarm` is the sole backstop — its expiry silently truncates. **Fix:** read `ASMTEST_STEALTH_TIMEOUT` once (default 15) and apply at all three sites.
 

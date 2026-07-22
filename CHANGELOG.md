@@ -1853,6 +1853,34 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **IBS surveys can no longer report a complete, empty capture when the edge
+  export OOMs (amd-review-followup-2 T1), plus the round-2 review's smaller
+  residues (T3/T4/T5).** All four IBS lanes (`survey_pid`, `survey_process`,
+  `window_end`, `survey_fetch_pid`) discarded `eh_export`/`fh_export`'s
+  return, so an OOM'd export surfaced as `OK` with `n==0` beside
+  `branch_samples>0` — indistinguishable from an honestly-empty survey; they
+  now return `EUNAVAIL`, mirroring the software-clock lane, with a test seam
+  (`asmtest_ibs_test_set_export_fail`) proving the contract pure everywhere
+  and live under injected OOM on an IBS host. T3: `g_open_errno` now resets
+  on every capture entry (no stale `ESRCH` reason after a later success,
+  test-pinned); the two live survey drains gained the seam parser's
+  short-SAMPLE `h.size` floor (F7's last two sites); the retired-freeze-gate
+  comment in `test_hwtrace.c` now describes the substrate probe it heads.
+  T4: the `trace_auto` MSR rung commits a NONEMPTY truncated partial as
+  `HW_OK`+`truncated` — the same contract a fast-tier truncated partial
+  returns under — instead of discarding it and, with both steppers absent,
+  returning `EUNAVAIL` beside a usable 16-deep partial; the genuinely-empty
+  read still falls through (decision extracted as a host-testable seam,
+  pinned by pure tests). T5: the Phase-4 `ASMTEST_HWDBG` env-gated logging
+  now reaches the two AMD TUs it never covered — `ibs_backend.c` (probe
+  outcomes, `perf_event_open` errno, near-full/LOST, export-OOM decision)
+  and `trace_auto.c` (per-rung commit/skip and the final mechanism). T2 doc
+  drift: parity-matrix recommendation rows no longer put AMD LBR primary on
+  Zen 3 (BRS-only silicon — the open is `-EINVAL`), Matrix 1 records
+  MSR-direct + IBS as shipped (only Zen 3 BRS stays forward-look), and the
+  2026-07-09 orphan review page carries a SUPERSEDED banner correcting its
+  "zero IBS code" premise.
+
 - **Source-built Capstone dylib unloadable on macOS (`benchmarks-ci-followups`
   T1 validation).** The first dispatched run of the nightly
   `benchmarks (macos-15-intel)` leg failed at `make bench-check`: dyld aborted
