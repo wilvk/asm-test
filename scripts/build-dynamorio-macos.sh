@@ -27,7 +27,7 @@
 # DR_FORK_CACHE to relocate the source checkout.
 set -eu
 
-DR_FORK_VERSION="${DR_FORK_VERSION:-cca42665b}"
+DR_FORK_VERSION="${DR_FORK_VERSION:-bbbcc40b8}"
 DR_FORK_URL="${DR_FORK_URL:-https://github.com/wilvk/dynamorio.git}"
 prog=$(basename "$0")
 . "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/lib-thirdparty.sh"

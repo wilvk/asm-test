@@ -26,6 +26,35 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   self-hosted counterpart is no longer "future" — it now exists in `hw.yml`. See
   the runbook `docs/internal/ci/runners.md` (standing unattended-nightly coverage
   needs a persistent runner via the JIT/ephemeral loop).
+- **macOS x86-64 DynamoRIO native-trace tier — M0 is GO
+  (macos-dynamorio-fork-build.md FB1–FB3 driving macos-dynamorio-port.md T3–T5).**
+  DynamoRIO publishes no macOS release asset (0 across all 455 releases), so the
+  macOS tier now builds the runtime from a git-commit-pinned source fork:
+  `scripts/build-dynamorio-macos.sh` + `make dynamorio-macos` produce
+  `lib64/release/libdynamorio.dylib` (plus the `drmgr`/`drreg`/`drx` extension
+  set the drclient sub-build links), pinned in `scripts/third-party-digests.txt`
+  with the license vendored, Darwin-x86-64-gated (clean skip everywhere else).
+  Three root-caused fixes in the fork (`wilvk/dynamorio`, branch
+  `asmtest/macos-fixes`) make the `dr_app_*` embedding functional on modern
+  macOS: the `dr_app_setup` startup fault (exec path read from
+  `KERN_PROCARGS2` instead of the above-envp walk; baseline was 10/10 SIGSEGV),
+  the invisible environment in dylib embeddings (dyld passes no envp to
+  initializers, so `DYNAMORIO_OPTIONS` was never read and no client ever
+  loaded; now captured live via `_NSGetEnviron`, the STATIC_LIBRARY approach),
+  and `dr_get_proc_address` returning NULL on every modern binary
+  (`LC_DYLD_EXPORTS_TRIE` unparsed, plus a trie rebase that was only correct
+  for preferred-base-0 dylibs — never the main executable). On the asm-test
+  side, `libdynamorio` resolution is dylib-aware (`DR_LIBNAME`), the DR make
+  tier resolves `.dylib` client names on Darwin, and the new
+  `make drtrace-test-macos` M0 harness traces a **normally-compiled `__TEXT`
+  function** end to end — attach, Mach-O marker resolution, coverage
+  accumulation, symbol mode, clean detach — 13/13 twice in a row on the
+  macOS-14.7.5/Intel host, against the pinned script-built home. Fork
+  `api.startstop`/`api.detach` run 10/10 crash-free (their multi-thread
+  takeover assertions are upstream-NYI on macOS, i#58, and upstream macOS CI
+  never runs them — they are outside the `OSX` ctest label set). arm64 stays
+  gated on the upstream arm64 port (i#5383).
+
 - **AArch64 out-of-process single-step stream validated live on real silicon
   (aarch64-ptrace-single-step-validation.md T1–T6).** The out-of-process `ptrace`
   tracer's AArch64 arm — written and decode/execute-validated under qemu, but whose

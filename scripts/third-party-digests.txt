@@ -37,7 +37,7 @@ tarball-sha256  nasm       3.02  sha256:87336eba53b4acfe917424ab5d500d2b0054d9f5
 # release asset (0 across all 455 releases), so macOS builds the wilvk/dynamorio
 # source fork at this pinned commit instead (scripts/build-dynamorio-macos.sh;
 # macos-dynamorio-fork-build.md). Branch-independent commit pin, libdft64-style.
-git-commit      dynamorio-fork  cca42665b  commit:cca42665b014ab109b64d98fdc9d3eecd91273b5
+git-commit      dynamorio-fork  bbbcc40b8  commit:bbbcc40b8100820a8f5f7aecd740f65a7f44c657
 git-commit      keystone   0.9.2        commit:dc7932ef2b2c4a793836caec6ecab485005139d6
 git-commit      capstone   5.0.1        commit:097c04d9413c59a58b00d4d1c8d5dc0ac158ffaa
 tarball-sha256  zig-linux-x86_64   0.13.0  sha256:d45312e61ebcc48032b77bc4cf7fd6915c11fa16e4aad116b66c9468211230ea

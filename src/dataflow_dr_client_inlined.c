@@ -2328,8 +2328,10 @@ static void nudge_snapshot(void) {
 /* Nudge event handler (drnudgeunix / dr_nudge_client). The low byte of `argument` selects
  * arm/disarm/snapshot; higher bits are reserved. Runs on a DR-managed nudge context with a valid
  * drcontext, so the DR APIs the arm/disarm paths use (module iterator, the dr_mutex inside
- * register_range, dr_delay_flush_region, the shadow alloc inside on_seed) are all in-context. */
-static void handle_nudge(void *drcontext, uint64_t argument) {
+ * register_range, dr_delay_flush_region, the shadow alloc inside on_seed) are all in-context.
+ * `uint64` is DR's own typedef, NOT uint64_t: same width everywhere, but a distinct C type on
+ * LP64 macOS (unsigned long vs unsigned long long), where the mismatch is a compile error. */
+static void handle_nudge(void *drcontext, uint64 argument) {
     (void)drcontext;
     switch ((unsigned)(argument & AT_NUDGE_OP_MASK)) {
     case AT_NUDGE_ARM:

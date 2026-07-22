@@ -36,6 +36,15 @@
 #include "asmtest_assemble.h"
 #endif
 
+/* DynamoRIO's runtime is a Mach-O dylib on Darwin (built from the pinned
+ * source fork — upstream ships no macOS release asset) and an ELF .so
+ * everywhere else. One name, used by every resolution site below. */
+#if defined(__APPLE__)
+#define DR_LIBNAME "libdynamorio.dylib"
+#else
+#define DR_LIBNAME "libdynamorio.so"
+#endif
+
 /* ------------------------------------------------------------------ */
 /* DynamoRIO Application Interface, resolved via dlopen (see banner)    */
 /* ------------------------------------------------------------------ */
@@ -50,14 +59,14 @@ static char (*p_dr_app_running)(
 /* When drapp is shipped inside a package payload (wheel/gem/jar/...), libdynamorio
  * is vendored right next to it. dlopen() does NOT consult drapp's own RUNPATH for
  * that call, so locate the sibling explicitly via dladdr on one of our own symbols
- * and write "<drapp-dir>/libdynamorio.so" into buf (return NULL if undeterminable
+ * and write "<drapp-dir>/" DR_LIBNAME into buf (return NULL if undeterminable
  * or the sibling is absent). Lets a bundled tier self-locate with no env/opts. */
 static const char *dr_bundled_lib(char *buf, size_t buflen) {
     Dl_info info;
     if (dladdr((void *)dr_bundled_lib, &info) && info.dli_fname != NULL) {
         const char *slash = strrchr(info.dli_fname, '/');
         if (slash != NULL) {
-            snprintf(buf, buflen, "%.*s/libdynamorio.so",
+            snprintf(buf, buflen, "%.*s/" DR_LIBNAME,
                      (int)(slash - info.dli_fname), info.dli_fname);
             if (access(buf, R_OK) == 0)
                 return buf;
@@ -79,7 +88,7 @@ static const char *dr_lib_path(const asmtest_drtrace_options_t *opts, char *buf,
     const char *home = getenv("DYNAMORIO_HOME");
     if (opts != NULL && opts->dynamorio_home != NULL &&
         opts->dynamorio_home[0] != '\0') {
-        snprintf(buf, buflen, "%s/lib64/release/libdynamorio.so",
+        snprintf(buf, buflen, "%s/lib64/release/" DR_LIBNAME,
                  opts->dynamorio_home);
         return buf;
     }
@@ -90,10 +99,10 @@ static const char *dr_lib_path(const asmtest_drtrace_options_t *opts, char *buf,
     if (dr_bundled_lib(buf, buflen) != NULL)
         return buf;
     if (home != NULL && home[0] != '\0') {
-        snprintf(buf, buflen, "%s/lib64/release/libdynamorio.so", home);
+        snprintf(buf, buflen, "%s/lib64/release/" DR_LIBNAME, home);
         return buf;
     }
-    snprintf(buf, buflen, "libdynamorio.so");
+    snprintf(buf, buflen, DR_LIBNAME);
     return buf;
 }
 
@@ -177,21 +186,20 @@ static int dr_probe(char *why, size_t wn) {
     }
     const char *home = getenv("DYNAMORIO_HOME");
     if (home != NULL && home[0] != '\0') {
-        snprintf(buf, sizeof buf, "%s/lib64/release/libdynamorio.so", home);
+        snprintf(buf, sizeof buf, "%s/lib64/release/" DR_LIBNAME, home);
         if (access(buf, R_OK) == 0) {
             dr_reason(why, wn, "available");
             return 1;
         }
         dr_reason(why, wn,
-                  "DYNAMORIO_HOME set but lib64/release/libdynamorio.so not "
+                  "DYNAMORIO_HOME set but lib64/release/" DR_LIBNAME " not "
                   "found under it");
         return 0;
     }
-    dr_reason(
-        why, wn,
-        "no libdynamorio resolved: set ASMTEST_DR_LIB or DYNAMORIO_HOME, "
-        "or bundle it (a bare libdynamorio.so on the loader path is still "
-        "tried at init)");
+    dr_reason(why, wn,
+              "no libdynamorio resolved: set ASMTEST_DR_LIB or DYNAMORIO_HOME, "
+              "or bundle it (a bare " DR_LIBNAME " on the loader path is still "
+              "tried at init)");
     return 0;
 }
 

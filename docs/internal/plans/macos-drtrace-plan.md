@@ -113,6 +113,34 @@ DynamoRIO-based tier is addressed here.
 > cleared for the mechanism, pending FB2's fix of that startup crash.** M1/M2
 > unchanged.
 
+> **STATUS 2026-07-22 (later) — M0 = GO. Landed and measured on the Intel-mac
+> dev host (macOS 14.7.5).** FB1–FB3 of
+> [macos-dynamorio-fork-build.md](../implementations/macos-dynamorio-fork-build.md)
+> are done: the fork is pinned + script-built (`make dynamorio-macos`), and
+> **three** root-caused fixes in the fork (branch `asmtest/macos-fixes`, pin
+> `bbbcc40b8`) made the `dr_app_*` embedding functional — (1) the
+> `get_application_name_helper` startup fault (exec path now read from
+> `KERN_PROCARGS2`; standalone baseline was 10/10 SIGSEGV, after: 10/10 clean);
+> (2) `our_environ` was NULL in the dlopen embedding (dyld passes no envp to
+> dylib initializers), so `DYNAMORIO_OPTIONS` was invisible and **no client
+> ever loaded** — now captured live via `_NSGetEnviron` (the STATIC_LIBRARY
+> approach); (3) `dr_get_proc_address` returned NULL on every modern binary —
+> `LC_DYLD_EXPORTS_TRIE` was unparsed, and the trie rebase used the ASLR slide,
+> correct only for preferred-base-0 dylibs, never for the main executable.
+> With those, port-doc **T3/T4/T5 are landed** and the M0 harness
+> (`make drtrace-test-macos`) traces a normally-compiled `__TEXT` function end
+> to end — attach, **Mach-O marker resolution via `dr_get_proc_address` (the
+> load-bearing unknown: it resolves)**, coverage accumulation, symbol mode,
+> clean detach — **13/13, twice in a row**, against the pinned script-built
+> home. **One premise above is corrected by measurement:** upstream does NOT
+> CI-gate `api.startstop`/`api.detach` on macOS — its macOS suite runs only
+> tests labeled `OSX` (`INCLUDE_LABEL OSX`, i#1815) and those two are not in
+> the label set, so their absence from the ignore list is vacuous; their
+> multi-thread takeover assertions are unpassable in-tree anyway
+> (`os_list_threads`/`thread_signal` NYI on macOS, i#58). The M0/M1 tier is
+> single-threaded and unaffected. Next: FB4 (nightly `drtrace-macos` CI lane),
+> then M1 (generated-bytes W^X path) / M2 per this plan.
+
 ---
 
 ## The dominant risk, stated first

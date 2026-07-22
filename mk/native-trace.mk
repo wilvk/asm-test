@@ -32,8 +32,22 @@ endif
 # compiles (its dr_app_* calls are #ifdef'd out, returning ASMTEST_DR_ENODR).
 DYNAMORIO_HOME ?=
 DYNAMORIO_DIR  ?= $(DYNAMORIO_HOME)/cmake
+# DynamoRIO's runtime and the CMake-built clients are Mach-O .dylib on Darwin
+# and ELF .so elsewhere. The docker-drtrace* lanes are NOT affected by this
+# conditional: they run Linux containers regardless of host, so in-container
+# UNAME_S=Linux keeps every docker lane on .so.
+ifeq ($(UNAME_S),Darwin)
+DRCLIENT_EXT := .dylib
+# dlopen lives in libSystem on Darwin (no libdl); clang maps -rdynamic to
+# -export_dynamic, which the marker-resolving client still needs.
+DRTRACE_LDFLAGS := -rdynamic -lpthread
+else
+DRCLIENT_EXT := .so
+DRTRACE_LDFLAGS := -rdynamic -ldl -lpthread
+endif
 DR_LIBDIR      := $(DYNAMORIO_HOME)/lib64/release
-DR_DLLIB       := $(DR_LIBDIR)/libdynamorio.so
+DR_DLLIB       := $(DR_LIBDIR)/libdynamorio$(if $(filter Darwin,$(UNAME_S)),.dylib,.so)
+DR_CLIENT      := $(BUILD)/libasmtest_drclient$(DRCLIENT_EXT)
 ifneq ($(wildcard $(DR_DLLIB)),)
 DR_AVAILABLE := 1
 endif
@@ -96,10 +110,10 @@ $(BUILD)/drtrace_app.o: src/drtrace_app.c include/asmtest_drtrace.h \
 # (libasmtest_drval_client.so, Phase 5). The value client's .so is tied to this rule as
 # a grouped output below so a target that needs it triggers this same build.
 .PHONY: drtrace-client
-drtrace-client: $(BUILD)/libasmtest_drclient.so
-$(BUILD)/libasmtest_drclient.so: src/drtrace_client.c src/dataflow_dr_client.c \
-                                 src/dataflow_dr_client_inlined.c src/dataflow_dr.h \
-                                 include/asmtest_taint.h drclient/CMakeLists.txt | $(BUILD)
+drtrace-client: $(DR_CLIENT)
+$(DR_CLIENT): src/drtrace_client.c src/dataflow_dr_client.c \
+              src/dataflow_dr_client_inlined.c src/dataflow_dr.h \
+              include/asmtest_taint.h drclient/CMakeLists.txt | $(BUILD)
 ifndef DR_AVAILABLE
 	@echo "drtrace-client: DynamoRIO not found (set DYNAMORIO_HOME); skipping"
 else
@@ -107,18 +121,18 @@ else
 	cd $(BUILD)/drclient && cmake -DDynamoRIO_DIR=$(abspath $(DYNAMORIO_DIR)) \
 	    -DASMTEST_BUILD_DIR=$(abspath $(BUILD)) $(abspath drclient) >/dev/null
 	cmake --build $(BUILD)/drclient >/dev/null
-	@echo "drtrace-client: built $@ + $(BUILD)/libasmtest_drval_client.so"
+	@echo "drtrace-client: built $@ + $(BUILD)/libasmtest_drval_client$(DRCLIENT_EXT)"
 endif
 # The value client is emitted by the SAME cmake --build as the control client (both are
 # add_library targets), so it need not re-run cmake: an empty recipe ties it to the rule
 # above (the grouped-output idiom, avoiding GNU make 4.3's `&:` for portability).
-$(BUILD)/libasmtest_drval_client.so: $(BUILD)/libasmtest_drclient.so ;
+$(BUILD)/libasmtest_drval_client$(DRCLIENT_EXT): $(DR_CLIENT) ;
 # The inlined value client (taint-tier Increment 3) is emitted by the SAME cmake
 # --build (a third add_library target), so tie it to the rule above too.
-$(BUILD)/libasmtest_drval_client_inlined.so: $(BUILD)/libasmtest_drclient.so ;
+$(BUILD)/libasmtest_drval_client_inlined$(DRCLIENT_EXT): $(DR_CLIENT) ;
 # The taint client (taint-tier Increment 4) is the SAME source built -DASMTEST_TAINT (a
 # fourth add_library target), emitted by the SAME cmake --build; tie it in too.
-$(BUILD)/libasmtest_drtaint_client.so: $(BUILD)/libasmtest_drclient.so ;
+$(BUILD)/libasmtest_drtaint_client$(DRCLIENT_EXT): $(DR_CLIENT) ;
 
 # App-side shared library (libasmtest_drapp) for the language bindings.
 shared-drtrace: $(call shlib_dev,libasmtest_drapp)
@@ -141,7 +155,7 @@ $(BUILD)/pic/drtrace_app.o: src/drtrace_app.c include/asmtest_drtrace.h \
 # them by default visibility; an executable needs --export-dynamic).
 $(BUILD)/test_drtrace: $(BUILD)/drtrace_app.o $(BUILD)/trace.o \
                        $(DRAPP_KS_OBJ) $(BUILD)/test_drtrace.o
-	$(CC) $(CFLAGS) -rdynamic $^ $(DRAPP_KS_LIBS) -ldl -lpthread -o $@
+	$(CC) $(CFLAGS) $(DRTRACE_LDFLAGS) $^ $(DRAPP_KS_LIBS) -o $@
 
 .PHONY: drtrace-test
 drtrace-test:
@@ -153,7 +167,7 @@ else
 	@$(MAKE) drtrace-client
 	@$(MAKE) $(BUILD)/test_drtrace
 	@echo "== drtrace-test =="
-	ASMTEST_DRCLIENT=$(abspath $(BUILD)/libasmtest_drclient.so) \
+	ASMTEST_DRCLIENT=$(abspath $(DR_CLIENT)) \
 	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
 	    $(BUILD)/test_drtrace
 	@$(MAKE) --no-print-directory dr-valtrace-test
@@ -168,6 +182,37 @@ else
 	@$(MAKE) --no-print-directory dr-taint-multirange-test
 	@$(MAKE) --no-print-directory dr-taint-gcremap-test
 	@$(MAKE) --no-print-directory dr-taint-simd-test
+endif
+
+# The macOS M0 harness (macos-dynamorio-port.md T5): a normally-compiled
+# function + the exported-symbol demo traced through the fork-built
+# libdynamorio.dylib (make dynamorio-macos). Base harness only — the
+# val/taint sub-lanes above stay Linux-only.
+$(BUILD)/test_drtrace_macos: $(BUILD)/drtrace_app.o $(BUILD)/trace.o \
+                             $(DRAPP_KS_OBJ) $(BUILD)/test_drtrace_macos.o
+	$(CC) $(CFLAGS) $(DRTRACE_LDFLAGS) $^ $(DRAPP_KS_LIBS) -o $@
+
+.PHONY: drtrace-test-macos
+drtrace-test-macos:
+ifneq ($(UNAME_S),Darwin)
+	@echo "== drtrace-test-macos =="
+	@echo "# SKIP: Darwin-only target (host is $(UNAME_S))"
+	@echo "1..0 # skipped"
+else ifndef DR_AVAILABLE
+	@echo "== drtrace-test-macos =="
+	@echo "# SKIP: DynamoRIO not found. Set DYNAMORIO_HOME (make dynamorio-macos prints one)"
+	@echo "1..0 # skipped"
+else
+	@$(MAKE) drtrace-client
+# DRAPP_KEYSTONE=0: the harness exercises none of the Keystone surface, and a
+# Keystone-enabled assemble.o carries emu_* bridge references that this
+# standalone link (no emulator objects) cannot resolve — the same reason the
+# binding lanes build shared-drtrace Keystone-less (see DRAPP_KEYSTONE above).
+	@$(MAKE) DRAPP_KEYSTONE=0 $(BUILD)/test_drtrace_macos
+	@echo "== drtrace-test-macos =="
+	ASMTEST_DRCLIENT=$(abspath $(DR_CLIENT)) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/test_drtrace_macos
 endif
 
 # --- Data-flow L0 VALUE producer (Phase 5, increment 1) --------------------

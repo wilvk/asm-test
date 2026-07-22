@@ -197,6 +197,46 @@ single green run is not sufficient). Record the before/after in this doc.
 - If the crash proves to be a genuine upstream macOS defect, that is recorded
   (with the issue/PR link) as the substantive M0 finding.
 
+> **Landed 2026-07-22 — fixed, with two measured corrections to this doc's
+> premises.**
+>
+> **The fix.** Root cause confirmed: the above-envp walk is only valid when
+> `our_environ` is the original kernel-provided stack vector; in the `dr_app_*`
+> embedding it is libc's (possibly heap-relocated) `environ`, and the word above
+> its terminating NULL is arbitrary heap memory. Running `api.startstop`
+> **standalone** (outside ctest's environment) made the crash deterministic:
+> **baseline 10/10 SIGSEGV at startup with zero output**. The fix
+> (fork commit `92f165a60`, branch `asmtest/macos-fixes`) reads the path from
+> the kernel instead — `KERN_PROCARGS2` (argc + NUL-terminated exec path),
+> size-query first + raw-mmap'd full-size buffer because the kernel fills a
+> too-small buffer with the **tail** of the args block and reports success
+> (measured on macOS 14.7); raw syscalls only, early-init-safe; the legacy walk
+> is kept as a defensive fallback. After: **10/10 runs, exit 0, no fault** for
+> both `api.startstop` and `api.detach`.
+>
+> **Correction 1 — this doc's premise #4 ("upstream CI-gates api.startstop on
+> macOS") is wrong.** Upstream macOS CI runs `INCLUDE_LABEL OSX` only ("a
+> quarter of the tests", i#1815, `suite/runsuite.cmake`), and
+> `api.startstop`/`api.detach` are **not** in the OSX label list
+> (`suite/tests/CMakeLists.txt`) — so their absence from the
+> `runsuite_wrapper.pl` macOS ignore-failures list is vacuous: upstream never
+> runs them on macOS at all.
+>
+> **Correction 2 — the literal "pass ≥5/5" acceptance is unachievable in this
+> tree, for a reason out of FB2's scope.** Both tests assert that DR takes over
+> their 10 *pre-existing sibling threads*, but multi-thread takeover is
+> upstream-NYI on macOS (**i#58**): `os_list_threads` returns 0 threads and
+> `thread_signal` for an unknown tid is `ASSERT_NOT_IMPLEMENTED` (no tid→Mach
+> port mapping). No macOS build has ever passed those assertions. The re-scoped
+> acceptance — everything the single-threaded `dr_app_*` M0 tier consumes —
+> **passed 10/10 for both tests**: exit 0, and output **byte-identical to the
+> `.expect` file** after filtering exactly the two i#58 line classes
+> (`ERROR: thread N should be under DynamoRIO` / `failed to take over thread
+> N!`); the attach/detach callback pairs, ordering, and the main-thread
+> under-DR/native checks all hold. Implementing i#58 Mach takeover is recorded
+> as the gate for any future *multi-threaded* macOS DR work; the M0/M1
+> compiled-function tier is single-threaded and unaffected.
+
 ### FB3 — Hand off to the M0 harness: DYNAMORIO_HOME → the asm-test drtrace tier  (M, depends on: FB2)
 
 **Goal.** With a working fork dylib, drive
@@ -228,6 +268,38 @@ symbol mode. `make docker-drtrace` still green (Linux unchanged).
   green on macOS x86-64 through the fork runtime.
 - Port-doc T3/T4/T5 "Done when" are all met; the plan records M0 = GO (or the
   documented marker-resolution no-go).
+
+> **Landed 2026-07-22 — M0 = GO, after two MORE fork fixes FB2's crash was
+> masking.** With the startup crash fixed, the harness exposed, in sequence:
+> **(a) DR never loaded the client** — `our_environ` is NULL in the dlopen
+> embedding (dyld does not pass envp to dylib initializers; the fault address
+> 0x8 of FB2's crash was exactly `NULL_env++` dereferenced), so
+> `DYNAMORIO_OPTIONS` was invisible; fixed by capturing libc's live environ via
+> `_NSGetEnviron()` (mirrors upstream's own STATIC_LIBRARY
+> `#define our_environ environ`), in `our_init` + lazily in `our_getenv`.
+> **(b) `dr_get_proc_address` returned NULL for every module** — including
+> libdynamorio itself: `module_macho.c` parsed only `LC_DYLD_INFO(_ONLY)` for
+> the export trie, but chained-fixups binaries (the modern ld64 default) carry
+> it in the standalone `LC_DYLD_EXPORTS_TRIE` load command; and once parsed,
+> the trie rebase (`start - base_address` = the ASLR slide) resolved only
+> preferred-base-0 **dylibs** — for the **main executable** (preferred base
+> `0x100000000` above `__PAGEZERO`) it produced unmapped near-slide addresses.
+> Trie offsets are mach_header-relative, so the rebase is now the mapped
+> header address (`ma->start`) — the same thing the shared-cache arm already
+> passed. Both fixes are in fork commit `bbbcc40b8` (branch
+> `asmtest/macos-fixes`); the FB1 pin advanced to it. **Result:** port-doc
+> T3 (DR_LIBNAME) + T4 (`DRCLIENT_EXT`/`DRTRACE_LDFLAGS`/`drtrace-test-macos`,
+> with the harness link Keystone-less via `DRAPP_KEYSTONE=0` — a
+> keystone-enabled `assemble.o` carries emu_* refs this standalone link can't
+> resolve) + T5 (`examples/test_drtrace_macos.c`) landed;
+> `make drtrace-test-macos DYNAMORIO_HOME=build/dynamorio-macos` is **13/13,
+> twice in a row** — attach, Mach-O marker resolution (the T5 load-bearing
+> unknown: `dr_get_proc_address` RESOLVES on the Mach-O main executable),
+> coverage accumulation, symbol mode, clean detach. One extra asm-test fix
+> surfaced: the taint client's nudge handler used `uint64_t` where DR's
+> `uint64` is `unsigned long` on LP64 macOS (a hard compile error there;
+> byte-identical on Linux). All five drclient dylibs build on macOS. M0
+> verdict recorded in [macos-drtrace-plan.md](../plans/macos-drtrace-plan.md).
 
 ### FB4 — Nightly drtrace-macos CI: build the pinned fork, run the lane  (S, depends on: FB3)
 

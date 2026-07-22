@@ -67,7 +67,7 @@ SUITE_EXCLUDES := test_robust test_failure_demo test_bench \
                   test_dataflow_gcmove test_dataflow_objid \
                   test_dataflow_helpers test_dataflow_blockstep \
                   test_dataflow_pt \
-                  test_apx_basic test_sde_crosscheck
+                  test_apx_basic test_sde_crosscheck test_drtrace_macos
 SUITES         := $(filter-out $(addprefix $(BUILD)/,$(SUITE_EXCLUDES)), \
                   $(patsubst examples/%.c,$(BUILD)/%, \
                   $(sort $(wildcard examples/test_*.c))))
@@ -120,6 +120,7 @@ help:
 	@echo 'Native runtime trace tiers (optional, Linux x86-64; self-skip if absent):'
 	@echo '  drtrace-test    in-process DynamoRIO native trace (set DYNAMORIO_HOME)'
 	@echo '  dynamorio-macos  build libdynamorio.dylib from the pinned source fork (macOS x86-64; prints DYNAMORIO_HOME)'
+	@echo '  drtrace-test-macos  macOS M0 harness: trace a compiled function through the fork-built dylib (set DYNAMORIO_HOME)'
 	@echo '  sde-test        run suites under Intel SDE -future (future/absent ISA; set SDE_HOME; make docker-sde)'
 	@echo '  drtrace-bindings-test  per-language DynamoRIO wrapper tests (all bindings)'
 	@echo '  hwtrace-test    hardware trace: single-step (x86-64 Linux/macOS) / PT / AMD LBR / IBS'
