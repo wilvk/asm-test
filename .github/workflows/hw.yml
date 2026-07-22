@@ -86,3 +86,58 @@ jobs:
             echo "::error::failing assertions:"; grep '^not ok' "$log"; exit 1
           fi
           echo "hwtrace-privileged-zen: AMD LbrExtV2 + live IBS ran (no self-skip); call_auto escalated off the LBR window."
+
+  hwtrace-pt-baremetal:
+    name: hwtrace-pt (self-hosted bare-metal Intel — LIVE Intel PT)
+    # Same guard pair as the Zen lane: absent/`0` variable => instant skip, and the
+    # actor clause keeps the box unreachable by anyone but the repo owner. Flip
+    # HW_RUNNER_INTEL_PT to '1' only once a BARE-METAL Intel PT box is registered
+    # with the `intel-pt` label (a VM will not do — a hypervisor that hides the
+    # intel_pt PMU makes this lane red, which is the intended answer, not a flake).
+    if: vars.HW_RUNNER_INTEL_PT == '1' && github.actor == github.repository_owner
+    runs-on: [self-hosted, linux, x64, intel-pt]
+    environment: hw-runners
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      # The broad tier first, in the same CAP_PERFMON / default-seccomp posture the
+      # Zen lane uses. On Intel silicon the AMD LBR and IBS blocks inside it
+      # self-skip (correctly — wrong vendor); what runs live here is the PT tier.
+      - name: Hardware-capture tier under CAP_PERFMON (default seccomp)
+        run: make docker-hwtrace-privileged
+
+      # THE NON-VACUITY STEP, and deliberately not a grep. The Zen lane asserts by
+      # grepping its live markers; PT cannot be checked that way — its skip text has
+      # a known cosmetic misreport (analysis/2026-07-12-zen5-privileged-lbr-findings.md
+      # §3), so a grep-based gate would be asserting on a string that lies. The honest
+      # mechanism is the require-mode target: ASMTEST_REQUIRE_PT=1 turns the PT tier's
+      # availability self-skip into a hard CHECK failure, so a host whose intel_pt PMU
+      # is missing, hidden by a hypervisor, or unauthorized goes RED instead of quietly
+      # green. The lane also prints the in-container PMU node so the shakedown answer
+      # is in every run's log, not just the runbook.
+      - name: Live Intel PT — REQUIRE mode (a self-skip here is a hard failure)
+        run: make docker-hwtrace-pt-live
+
+  hwtrace-coresight-board:
+    name: hwtrace-coresight (self-hosted AArch64 board — DARK, no decoder yet)
+    # DARK ON PURPOSE. Leave HW_RUNNER_CORESIGHT at `0`: the CoreSight tier
+    # self-skips on every host today because asmtest_cs_decoder_present() returns 0
+    # — the OpenCSD decode tree does not exist yet. Flipping this variable is the
+    # ACCEPTANCE STEP of coresight-live-decode.md#T4, on the board that doc's #T2
+    # brings up; turning it on before then buys a green lane that tests nothing.
+    # No assert-greps here either: that doc owns its live markers, and writing
+    # guesses at them now would be untested hardware code.
+    if: vars.HW_RUNNER_CORESIGHT == '1' && github.actor == github.repository_owner
+    runs-on: [self-hosted, linux, arm64, coresight]
+    environment: hw-runners
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      # docker-hwtrace, not a host-native `make hwtrace-test`: the hwtrace image is
+      # where libopencsd lives (coresight-live-decode T1 put it there so cs_backend.c
+      # builds with -DASMTEST_HAVE_OPENCSD), so the container is the only place the
+      # decode tree will link once it exists.
+      - name: CoreSight tier (self-skips until the OpenCSD decode tree lands)
+        run: make docker-hwtrace

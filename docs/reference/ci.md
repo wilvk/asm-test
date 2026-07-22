@@ -41,11 +41,23 @@ image was retired 2025-12-08), and dedicated jobs cover the rest of the surface:
 A separate **`hw` workflow** (`.github/workflows/hw.yml`) is *allowed to be absent*:
 it never runs on `push`/`pull_request` (only `workflow_dispatch` + a nightly
 schedule) and carries the jobs that need real silicon the hosted runners lack —
-e.g. `hwtrace-privileged-zen`, which runs `make docker-hwtrace-privileged` on a
-registered AMD Zen 4/5 self-hosted runner and fails hard if any AMD-exact live
-path (LbrExtV2, live IBS) self-skips. Every job is guarded by an `HW_RUNNER_*`
-repository variable that is `0`/absent by default, so with no runner registered
-the workflow still lands green with each job skipped. See the
+three today:
+
+- `hwtrace-privileged-zen` runs `make docker-hwtrace-privileged` on a registered
+  AMD Zen 4/5 runner and fails hard if any AMD-exact live path (LbrExtV2, live
+  IBS) self-skips.
+- `hwtrace-pt-baremetal` runs the same broad tier plus
+  `make docker-hwtrace-pt-live` on a **bare-metal** Intel PT box. That second
+  target sets `ASMTEST_REQUIRE_PT=1`, which turns the PT tier's availability
+  self-skip into a hard failure — so a host whose `intel_pt` PMU is missing or
+  hidden by a hypervisor goes red rather than quietly green.
+- `hwtrace-coresight-board` is written but deliberately **dark**: the CoreSight
+  decode tree does not exist yet, so its variable stays `0` and turning it on is
+  the acceptance step of that work, not a thing to do early.
+
+Every job is guarded by an `HW_RUNNER_*` repository variable that is `0`/absent
+by default (and by an actor guard restricting it to the repo owner), so with no
+runner registered the workflow still lands green with each job skipped. See the
 [self-hosted runner runbook](https://github.com/wilvk/asm-test/blob/main/docs/internal/ci/runners.md).
 
 The framework's own [self-tests](../getting-started/writing-tests.md)

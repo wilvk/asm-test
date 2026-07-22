@@ -466,15 +466,54 @@ while its variable is `0`.
 sentence to name all three hardware lanes as allowed-to-be-absent.
 `CHANGELOG.md` `### Added` bullet for the PT lane when it first runs green.
 
+> ### Landed 2026-07-22 — the ungated half, and two of the doc's hedges are obsolete
+>
+> Both jobs are in `hw.yml`, guarded off (`HW_RUNNER_INTEL_PT` /
+> `HW_RUNNER_CORESIGHT` absent) plus the owner actor guard the workflow now
+> requires of every self-hosted job. Two things this task had to hedge on are
+> settled, so the lane is stronger than specified:
+>
+> - **Step 2's "until `hwtrace-pt-live` lands, this is a build-and-run gate" is
+>   obsolete** — [intel-pt-whole-window-substrate#T5](intel-pt-whole-window-substrate.md)
+>   shipped it (`mk/native-trace.mk`, `ASMTEST_REQUIRE_PT=1`). The job is
+>   self-skip-proof from its first run; no `# TODO` deferral was needed. New
+>   `make docker-hwtrace-pt-live` wraps it in the hwtrace image with the same
+>   `--cap-add=PERFMON` / default-seccomp posture the Zen lane uses. **Verified on
+>   this AMD host that it fails for the right reason** — `1..662`, `661 passed,
+>   1 failed`, non-zero exit, with `# SKIP hwtrace PT capture (Intel PT): not a
+>   GenuineIntel x86-64 host` — i.e. the fail-not-skip contract works end to end
+>   minus the silicon. A grep-based assert was deliberately NOT written: the PT
+>   skip text has a known cosmetic misreport, so the require-mode target is the
+>   only honest gate.
+> - **Step 1's shakedown question is already answered** ("confirm
+>   `/sys/bus/event_source/devices/intel_pt/type` is visible inside the
+>   container"). The 2026-07-21 bare-metal run did exactly that:
+>   `docker run --rm --cap-add=PERFMON asmtest-hwtrace make hwtrace-pt-live` →
+>   `631 passed, 0 failed` on the i7-8559U box. So the PMU IS visible in-container
+>   and the Docker-first rule holds — no host-native fallback, no
+>   `perf_event_paranoid` lowering (CAP_PERFMON bypasses `paranoid=4`). The answer
+>   is recorded in the runbook, and the make target prints the node on every run
+>   so it stays visible in the log rather than only in a doc.
+>
+> **What is left is registration, not engineering**: a runner on that box with
+> `--labels intel-pt`, `HW_RUNNER_INTEL_PT=1`, dispatch, approve, confirm green,
+> power down — the exact flow the `amd-zen` lane already went through. The
+> *nightly* half of the first bullet additionally needs a STANDING runner, the
+> same deferred deployment choice recorded for amd-zen.
+
 **Done when.**
 
 - `hwtrace-pt-baremetal` green on real PT silicon via dispatch AND schedule.
-- The in-container `intel_pt` visibility answer is recorded in
-  `docs/internal/ci/runners.md`.
-- `hwtrace-coresight-board` exists, is skipped, and names its unblock
-  condition in a comment.
-- Off all hardware (variables `0`), `gh workflow run hw.yml` still completes
-  green in seconds.
+  **Job landed and guarded-off green; the live run needs the box registered
+  (operator step, ~10 min) and the nightly needs a standing runner.**
+- ~~The in-container `intel_pt` visibility answer is recorded in
+  `docs/internal/ci/runners.md`~~ — **done** (visible; `CAP_PERFMON`, no
+  `--privileged`, no paranoid change), and re-printed by the make target each run.
+- ~~`hwtrace-coresight-board` exists, is skipped, and names its unblock
+  condition in a comment~~ — **done** (`coresight-live-decode.md#T4` named as the
+  acceptance step; no assert-greps written, since that doc owns its live markers).
+- ~~Off all hardware (variables `0`), `gh workflow run hw.yml` still completes
+  green in seconds~~ — **verified after the change** (see the status cell).
 
 ### T6 — Wire the macOS-arm64 tart and KVM Docker-OSX dispatch lanes  (S, depends on: T1, T2, [macos-cleanroom-lanes.md#T2](macos-cleanroom-lanes.md) and [#T6](macos-cleanroom-lanes.md) green; **gated: Apple-Silicon host + bare-metal KVM Linux box**)
 

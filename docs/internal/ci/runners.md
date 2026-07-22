@@ -124,8 +124,8 @@ every listed label.
 | Lane | `runs-on` | Custom `--labels` | Runs | Doc/task |
 |---|---|---|---|---|
 | AMD Zen live capture | `[self-hosted, linux, x64, amd-zen]` | `amd-zen` | `make docker-hwtrace-privileged` | T3 |
-| Bare-metal Intel PT | `[self-hosted, linux, x64, intel-pt]` | `intel-pt` | `make docker-hwtrace-privileged`; later `hwtrace-pt-live` | T5 |
-| AArch64 CoreSight board | `[self-hosted, linux, arm64, coresight]` | `coresight` | `make hwtrace-test` once [coresight-live-decode.md](../implementations/coresight-live-decode.md) lands | T5 (dark until [coresight #T4](../implementations/coresight-live-decode.md)) |
+| Bare-metal Intel PT | `[self-hosted, linux, x64, intel-pt]` | `intel-pt` | `make docker-hwtrace-privileged` **and** `make docker-hwtrace-pt-live` (`ASMTEST_REQUIRE_PT=1` — fail-not-skip) | T5 |
+| AArch64 CoreSight board | `[self-hosted, linux, arm64, coresight]` | `coresight` | `make docker-hwtrace` (the image is where `libopencsd` lives) once [coresight-live-decode.md](../implementations/coresight-live-decode.md) lands | T5 (dark until [coresight #T4](../implementations/coresight-live-decode.md)) |
 | Apple-Silicon tart host | `[self-hosted, macos, arm64, tart]` | `tart` | `make osx-vm-test` | T6 |
 | Bare-metal KVM Linux | `[self-hosted, linux, x64, kvm]` | `kvm` | `make docker-osx-bindings` | T6 |
 
@@ -203,9 +203,14 @@ registering the matching runner:
   the two contend). **No `push`, no `pull_request`.**
 - **Concurrency:** a static `group: hw-self-hosted`, `cancel-in-progress: false`
   — a manual dispatch overlapping the nightly serializes rather than racing.
-- **Jobs** (each `if: vars.HW_RUNNER_<LANE> == '1'`, `environment: hw-runners`):
+- **Jobs** (each `if: vars.HW_RUNNER_<LANE> == '1' && github.actor ==
+  github.repository_owner`, `environment: hw-runners`):
   `hwtrace-privileged-zen` (T3), `hwtrace-pt-baremetal` +
-  `hwtrace-coresight-board` (T5), `cleanroom-tart` + `cleanroom-kvm-osx` (T6).
+  `hwtrace-coresight-board` (T5). T6's `cleanroom-tart` / `cleanroom-kvm-osx` are
+  **not written yet, on purpose**: their hard precondition is
+  [macos-cleanroom-lanes](../implementations/macos-cleanroom-lanes.md) #T2/#T6
+  green *locally first*, and wiring ahead of that buys a job that can only fail
+  its own shakedown in CI.
 
 Verify the scaffold with no hardware (repo admin):
 
@@ -221,7 +226,7 @@ recorded form of each hardware gate.
 | Lane | Runner tarball SHA-256 (verified on box) | Box (SoC / kernel) | Registered | `HW_RUNNER_*` | Live-lane last green |
 |---|---|---|---|---|---|
 | amd-zen | `4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf` (v2.335.1, verified on box 2026-07-22 == GitHub's published digest) | Ryzen 9 9950X (Zen 5, `amd_lbr_v2` present) | ☐ (ephemeral one-shot; de-registered after the proof run) | `0` | ✅ [run 29897214772](https://github.com/wilvk/asm-test/actions/runs/29897214772) — 2026-07-22 |
-| intel-pt | _(record)_ | _(bare-metal `intel_pt` PMU)_ | ☐ | `0` | — |
+| intel-pt | _(record at registration)_ | MacBookPro15,2 / Core i7-8559U (Coffee Lake), Ubuntu 26.04 `7.0.0-28-generic`, **bare metal** (no `hypervisor` flag), `intel_pt` type=10 `nr_addr_filters=2`, `perf_event_paranoid=4` | ☐ (box proven, runner not yet registered) | `0` | — (lane ready; needs registration) |
 | coresight | _(record)_ | _(AArch64 ETM/ETE + sink)_ | ☐ | `0` | — |
 | tart | _(record for osx-arm64)_ | _(Apple Silicon)_ | ☐ | `0` | — |
 | kvm | _(record)_ | _(bare-metal `/dev/kvm`)_ | ☐ | `0` | — |
@@ -245,6 +250,29 @@ recorded form of each hardware gate.
 > `amd-zen` row above shows `☐ (ephemeral one-shot)`. For an **unattended
 > nightly**, register a standing runner via the JIT/ephemeral loop and leave
 > `HW_RUNNER_AMD_ZEN=1`.
+
+> **intel-pt local pre-registration proof (T5 step 1-2, recorded 2026-07-21).**
+> Same shape as the amd-zen proof above, and it answers the shakedown question T5
+> raises before anyone touches the runner: **is the `intel_pt` PMU visible INSIDE
+> the container?** Yes — measured on the box above, where
+> `docker run --rm --cap-add=PERFMON asmtest-hwtrace make hwtrace-pt-live` ran
+> `1..632`, **631 passed / 0 failed**, stable across 4 consecutive runs, with the
+> PT tier live (self-JIT'd routine traced under PT capture, TNT follow on both the
+> taken and not-taken walks, `SET_FILTER` accepted, AUX truncation reported). So
+> the Docker-first rule holds here — no host-native fallback and no
+> `perf_event_paranoid` lowering is needed, because `CAP_PERFMON` bypasses
+> `paranoid=4`. `make docker-hwtrace-pt-live` prints the PMU node
+> (`/sys/bus/event_source/devices/intel_pt/type`) at the top of every run, so the
+> answer stays visible in the log rather than only here. Full record:
+> [intel-hardware-validation.md](../intel-hardware-validation.md) "Recorded runs".
+>
+> **What remains for this lane is registration, not engineering:** register a
+> `v2.335.1` runner on that box with `--labels intel-pt` (verify the tarball
+> SHA-256 on the box per the flow above), set `HW_RUNNER_INTEL_PT=1`, dispatch
+> `hw.yml`, approve the `hw-runners` environment, confirm green, then power down
+> per the same rule as amd-zen. The **nightly** half of T5's Done-when needs a
+> STANDING runner (JIT/ephemeral loop) — the same deferred deployment choice the
+> amd-zen row records.
 
 ## Hardware & credential gates (recorded, per CLAUDE.md)
 

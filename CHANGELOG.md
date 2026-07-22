@@ -8,6 +8,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Bare-metal Intel PT self-hosted lane + a fail-not-skip docker target, and the
+  dark CoreSight placeholder (self-hosted-ci-runners.md T5).** `hw.yml` gains
+  `hwtrace-pt-baremetal` (`runs-on: [self-hosted, linux, x64, intel-pt]`) and
+  `hwtrace-coresight-board`, both carrying the workflow's required guard pair — an
+  `HW_RUNNER_*` variable that is `0`/absent by default and the
+  `github.actor == github.repository_owner` actor guard — so they land and stay
+  green with zero runners. The PT job's non-vacuity check is **not** a skip-string
+  grep (the PT skip text has a known cosmetic misreport, so a grep would assert on
+  a string that lies): new `make docker-hwtrace-pt-live` runs the require-mode
+  target `hwtrace-pt-live` (`ASMTEST_REQUIRE_PT=1`) in the hwtrace image under
+  `--cap-add=PERFMON` with default seccomp, turning the PT tier's availability
+  self-skip into a hard failure — verified on a non-PT host to fail for the right
+  reason (`661 passed, 1 failed`, non-zero exit, `not a GenuineIntel x86-64
+  host`). It also prints `/sys/bus/event_source/devices/intel_pt/type` from inside
+  the container each run: that shakedown answer was already measured on the
+  bare-metal i7-8559U box (PMU visible in-container; `CAP_PERFMON` bypasses
+  `perf_event_paranoid=4`, so no `--privileged` and no host-native fallback) and
+  is now recorded in the runner runbook. The CoreSight job is deliberately dark —
+  flipping `HW_RUNNER_CORESIGHT` is the acceptance step of the OpenCSD decode
+  work, not something to do early.
+
 - **asmspy names why a hardware watchpoint/breakpoint could not arm, and the
   AArch64 `cli` CI leg is now gating (asmspy-aarch64-support.md T7).** "Hardware
   watchpoint unavailable" was three different host facts behind one guessed

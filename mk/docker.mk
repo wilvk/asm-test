@@ -645,7 +645,7 @@ docker-drtrace-bindings: $(addprefix docker-drtrace-,$(DRTRACE_BINDING_LANGS))
 #   make docker-hwtrace-jit-java-bci resolve a real HotSpot native address to a bytecode index
 HWTRACE_DOCKER_LANGS := cpp rust go node java dotnet ruby lua zig
 
-.PHONY: docker-hwtrace docker-hwtrace-attach-demo docker-hwtrace-syscall-log docker-hwtrace-amd docker-hwtrace-msr docker-hwtrace-ibs docker-hwtrace-privileged docker-hwtrace-codeimage docker-hwtrace-dotnet-amd docker-hwtrace-bindings \
+.PHONY: docker-hwtrace docker-hwtrace-attach-demo docker-hwtrace-syscall-log docker-hwtrace-amd docker-hwtrace-msr docker-hwtrace-ibs docker-hwtrace-privileged docker-hwtrace-pt-live docker-hwtrace-codeimage docker-hwtrace-dotnet-amd docker-hwtrace-bindings \
         docker-hwtrace-jit docker-hwtrace-jit-dotnet docker-hwtrace-jit-java \
         docker-hwtrace-jit-java-jitdump docker-hwtrace-jit-jitdump \
         docker-hwtrace-jit-dotnet-jitdump docker-hwtrace-jit-java-bci \
@@ -825,6 +825,31 @@ docker-hwtrace-privileged: docker-bindings-base
 	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
 	$(DOCKER) run --rm $(_docker_plat) --cap-add=PERFMON \
 	  asmtest-hwtrace make hwtrace-test ibs-test
+
+# Live Intel PT lane for a BARE-METAL self-hosted runner: the same hwtrace image and
+# the same CAP_PERFMON posture as docker-hwtrace-privileged (default seccomp, no
+# --privileged), but running the REQUIRE-mode target — `hwtrace-pt-live` sets
+# ASMTEST_REQUIRE_PT=1, which turns the PT tier's availability self-skip into a hard
+# CHECK failure. That is the whole point of a separate lane: `hwtrace-test` is
+# correct to skip PT everywhere else, so a self-hosted PT job running only that would
+# stay green on a host whose intel_pt PMU had vanished, and the skip text itself has a
+# known cosmetic misreport (2026-07-12-zen5-privileged-lbr-findings.md §3) — greppable
+# assertions on it are not trustworthy. Fail-not-skip is.
+#
+# Verified reachable in-container on the bare-metal box, 2026-07-21 (MacBookPro15,2 /
+# i7-8559U, Ubuntu 26.04, intel_pt type=10, perf_event_paranoid=4): the PMU node IS
+# visible inside the container and CAP_PERFMON authorizes the open — `hwtrace-pt-live`
+# ran 1..632 with 631 passed / 0 failed. On any host WITHOUT bare-metal Intel PT this
+# target is EXPECTED to go red (that is what "requires" means); use plain
+# `make docker-hwtrace` there.
+docker-hwtrace-pt-live: docker-bindings-base
+	$(DOCKER) build $(_docker_plat) -f Dockerfile.hwtrace \
+	  --build-arg BASE_IMAGE=$(DOCKER_BINDINGS_BASE) -t asmtest-hwtrace .
+	@echo "== in-container intel_pt PMU visibility (recorded in docs/internal/ci/runners.md) =="
+	-$(DOCKER) run --rm $(_docker_plat) asmtest-hwtrace \
+	  sh -c 'cat /sys/bus/event_source/devices/intel_pt/type 2>/dev/null || echo "(no intel_pt PMU node visible in-container)"'
+	$(DOCKER) run --rm $(_docker_plat) --cap-add=PERFMON \
+	  asmtest-hwtrace make hwtrace-pt-live
 
 # Optional eBPF code-emission detector lane. Builds an image WITH the eBPF toolchain
 # (clang + libbpf-dev + bpftool — which the plain hwtrace image omits), compiles the CO-RE
