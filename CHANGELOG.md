@@ -1445,6 +1445,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **AMD manual pre-release validation shrunk to the runner-uncoverable residue
+  (self-hosted-ci-runners.md T4).** `docs/internal/amd-hardware-validation.md`
+  was the "one validation step that cannot run in CI"; now that the self-hosted
+  `hwtrace-privileged-zen` lane runs the exact LbrExtV2 + live-IBS paths on a Zen
+  4/5 runner, that tier moved to CI and the doc is reframed as the **residue** —
+  the four AMD paths the Zen 4/5 runner cannot reach, each with its command,
+  hardware/privilege gate, and owning doc: Zen 2 IBS-without-LBR degradation
+  (`make docker-hwtrace-ibs` on the Ryzen 9 4900HS), MSR-direct (`make
+  docker-hwtrace-msr`, `--privileged` + host `msr` module — kept **off** the CI
+  runner by security policy), the `status` live-EPERM path (unreachable
+  root-in-container), and Zen 3 BRS (a link to amd-branchsnap-lbr-docs.md#T8, not
+  a checklist item). The `call_auto` non-escalation regression signal is now
+  enforced by the CI lane's assert rather than a manual eyeball.
 - **Linux Python wheels now build on the `manylinux_2_28` floor (install on older distros).**
   The two Linux legs of the release `python` job build inside
   `quay.io/pypa/manylinux_2_28_{x86_64,aarch64}` (AlmaLinux 8, glibc 2.28) instead of the
