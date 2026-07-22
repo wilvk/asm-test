@@ -1174,12 +1174,23 @@ jobs:
     # was staged before it went gating. The bring-up already flushed out + fixed a
     # string of real x86 assumptions live: the SYS_stat/dup2 legacy-syscall gaps (arm64
     # uses newfstatat/dup3), the x86-only jit-victim HOT_CODE + host-arch disassembly,
-    # and the R_AARCH64_JUMP_SLOT / 2-slot-PLT0 stub resolution. One item remains under
-    # triage on real silicon: the --stream --tid= single-thread filter never lands in
-    # the worker's hot function on the loaded shared runner (the whole-process --stream
-    # control sees it fine — a single-thread-step throughput/scheduling behavior, not a
-    # decode bug). The x86 leg stays GATING; flip this off once the arm64 --tid case is
-    # settled on hardware. (asmspy-aarch64-support T2/T7.)
+    # and the R_AARCH64_JUMP_SLOT / 2-slot-PLT0 stub resolution.
+    #
+    # The last red item was NOT what it looked like. It was recorded here as "the
+    # --stream --tid= filter never lands in the worker's hot function — a throughput/
+    # scheduling behavior"; measured on the runner 2026-07-22, --tid is INNOCENT and
+    # the filter works on a fresh victim. The whole-process --stream CONTROL RUN that
+    # precedes it was killing the target: on AArch64 a step armed on a thread parked in
+    # a blocking syscall survives PTRACE_DETACH and fires as a fatal SIGTRAP once that
+    # syscall returns (~200-400 ms later), so the --tid run found a corpse and got the
+    # blame. Root cause + the asmspy-free reproducer are in asmspy-aarch64-support.md
+    # T2. FIXED (step_resume: PTRACE_SYSCALL, never a step, for a thread on an `svc`)
+    # and verified on the runner — --stream/--graph/--tree now leave the victim alive
+    # and the --tid case passes. The leg stays non-gating for one more item the fix
+    # made reachable: --trace --tid= reports the region unsampled on the thread that
+    # runs it (the region engine's NT_ARM_HW_BREAK entry breakpoint).
+    # The x86 leg stays GATING; flip this off once the arm64 leg is green.
+    # (asmspy-aarch64-support T2/T7.)
     continue-on-error: ${{ matrix.os == 'ubuntu-24.04-arm' }}
     strategy:
       fail-fast: false

@@ -193,13 +193,97 @@ new unit test; the CI verification is that survival assertion on the arm64 leg.
 
 **Docs.** Internal-only.
 
+> ### MEASURED 2026-07-22 on Neoverse-N2: step 1's premise is FALSE, and it costs the target its life
+>
+> This task's step 1 says the AArch64 `clear_trap_flag` body can be a no-op
+> because "a `DETACH` clears `TIF_SINGLESTEP` for us". A detach does clear
+> `TIF_SINGLESTEP` — and that is not enough. arm64's `ptrace_disable()` is
+> `user_rewind_single_step()` + `user_disable_single_step()`: the rewind **SETS
+> `SPSR.SS`** (`TIF_SINGLESTEP` is still set at that instant) and the disable
+> then clears only the thread flag. A thread detached while carrying an armed,
+> never-consumed step therefore returns to userspace still active-pending and
+> takes a **SIGTRAP with no tracer to absorb it**, killing the whole target.
+>
+> `drain_pending_step` is what normally consumes that step — but it deliberately
+> **refuses to step a thread poised on a syscall instruction** (`at_syscall_insn`),
+> because that step would only complete when the call returns, which for a thread
+> parked in `pause()`/`futex` is never. So exactly those threads keep the armed
+> step, and exactly those threads kill the process.
+>
+> **Reproduced without asmspy** (~40 lines: SEIZE every thread, INTERRUPT, resume
+> once, INTERRUPT, DETACH; victim = two spinners + a leader in `pause()`):
+>
+> | resume mode for the parked leader | outcome |
+> |---|---|
+> | none (seize + interrupt only) | target **survives** |
+> | `PTRACE_SINGLESTEP` | target **DIES** — kernel `SIGTRAP` (`si_pid=0`, `si_code=0`) at `svc+4` |
+> | `PTRACE_CONT` | target **survives** |
+>
+> The kill lands **200-400 ms after the tracer exits** — once the parked syscall
+> returns. Two consequences:
+>
+> 1. **`asmspy --stream <pid>` was fatal to every multi-threaded AArch64 target.**
+>    Not the `--tid` filter, which this doc's status cell blamed for months: on a
+>    fresh victim `--stream --tid=` works perfectly (20/20 lines, victim alive).
+>    It ran *after* the whole-process control run in `cli_smoke.sh` and found the
+>    corpse, so it wore the blame. Verified by an experiment matrix on the runner:
+>    `--tid` alone ✔, `--tid` twice ✔, whole-process **twice** ✘ (run 2 finds all
+>    threads dead, `termsig=5`), whole-process then `--tid` ✘.
+> 2. **The existing survival tripwire could not see it.** The detach-survival
+>    block checked `kill -0` *immediately*, and the victim is still alive then.
+>    It now polls for ~2 s, which is what makes the tripwire test the class of bug
+>    it was written for.
+>
+> **Fix (landed):** never arm a step on a thread that is poised on an `svc`.
+> `step_resume()` resumes such a thread with `PTRACE_SYSCALL` instead — the call
+> runs, the thread stops on the way *out*, and stepping resumes there, so nothing
+> is armed across a call that may block and the thread is not dropped from the
+> trace either (`PTRACE_CONT` would survive too, but would lose the thread). The
+> syscall-stops are tagged `SIGTRAP|0x80` via `PTRACE_O_TRACESYSGOOD` (AArch64
+> only — x86 never resumes with `PTRACE_SYSCALL` here, so its stop stream is
+> byte-identical), and entry-vs-exit comes from the existing
+> `syscall_stop_is_entry()` (`PTRACE_GET_SYSCALL_INFO`, no toggle to desync).
+> Teardown fixes do NOT work and were tried and rejected on hardware: once armed
+> inside a blocking call, the step cannot be revoked by the tracer — neither by
+> `PTRACE_CONT` + re-INTERRUPT, nor by a `GETREGSET`/`SETREGSET` round-trip after
+> the `TIF_SINGLESTEP` clear.
+>
+> The same rule had to be applied to `drain_pending_step`, which surfaced two more
+> defects the first fix exposed:
+>
+> - it refused to step a thread poised **on** an `svc`, but not one already
+>   **inside** the call (at a syscall-entry stop the pc is past the `svc`).
+>   Stepping that one blocks until the call returns — never, for `pause()` — and
+>   its `waitpid` retries through every `EINTR`, so `timeout` could not even kill
+>   asmspy. `in_syscall_now()` (`/proc/<tid>/syscall`) is the guard that actually
+>   matches the hazard.
+> - its single wait could consume the queued **PTRACE_EVENT_STOP** from phase 1's
+>   INTERRUPT instead of the step trap (measured: `status 0x80057f` on both
+>   workers), leaving the step armed. x86 shrugs — `clear_trap_flag` disarms it —
+>   so on AArch64 the drain now keeps stepping until a genuine trap lands.
+>
+> **Verified on the runner (Neoverse-N2, 2026-07-22)**: whole-process `--stream`,
+> `--graph` and `--tree` each traced the victim and **left it alive** (all three
+> killed it before), and a `--stream --tid=` run on the *same* victim afterwards
+> returned a full 60-line single-thread trace. x86 is unaffected by construction
+> and `make docker-cli` is green (`cli-smoke: PASS`).
+>
+> **Frontier moved, not closed**: with the kill gone, the arm64 `cli-smoke` now
+> runs ~1400 lines further and fails at a *different*, pre-existing item —
+> `--trace <pid> alpha_work 1 --tid=<runner>` reports the region as not sampled
+> on the thread that runs it (the region engine's per-thread NT_ARM_HW_BREAK
+> entry breakpoint; that engine seizes via `seize_threads`, so it is untouched by
+> this change and was simply never reached before). The arm64 cli leg therefore
+> stays `continue-on-error` until that one is settled too.
+
 **Done when.**
 - On the arm64 CI leg (T5), the detach-survival block
-  ([cli/cli_smoke.sh](../../../cli/cli_smoke.sh) ~2118) passes: `--stream` /
-  `--tree` on `threads_victim` followed by detach leaves the victim alive (the
-  `kill -0` at ~line 2140 succeeds).
+  ([cli/cli_smoke.sh](../../../cli/cli_smoke.sh)) passes **after its ~2 s wait**:
+  `--stream` / `--tree` on `threads_victim` followed by detach leaves the victim
+  alive. An immediate `kill -0` is not an acceptable form of this assertion —
+  it is blind to the delayed kill above.
 - `grep -n 'svc\|0xd4000001' cli/asmspy_engine.c` shows the AArch64 syscall-insn
-  test present.
+  test present, and `step_resume` routes every whole-process step resume.
 
 ### T3 — Disassembler arch parameter + AArch64 call/return frame semantics  (M, depends on: T1)
 

@@ -8,6 +8,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Fixed: `asmspy --stream` / `--graph` / `--tree` killed every multi-threaded
+  AArch64 target they traced (asmspy-aarch64-support.md T2).** On AArch64 a
+  single step armed on a thread parked in a blocking syscall survives
+  `PTRACE_DETACH` — arm64's `ptrace_disable()` sets `SPSR.SS` and clears only
+  `TIF_SINGLESTEP` — and fires as a fatal `SIGTRAP` when that syscall returns,
+  200-400 ms after asmspy has exited. Whole-process tracing therefore left the
+  target dying: measured on Neoverse-N2, a second trace of the same process
+  found every thread already dead with `termsig=5`. The whole-process engines
+  now resume a thread poised on an `svc` with `PTRACE_SYSCALL` instead of a step
+  (`step_resume`), so nothing is armed across a call that may block and the
+  thread is still stepped again from the syscall-exit stop; `PTRACE_O_TRACESYSGOOD`
+  tags those stops on AArch64 only, leaving the x86 stop stream unchanged. The
+  teardown drain gained the matching guard (`/proc/<tid>/syscall`, since a thread
+  at a syscall-entry stop has its pc *past* the `svc` — stepping it hung asmspy
+  unkillably) and now keeps stepping until it consumes a real trap rather than a
+  queued `PTRACE_EVENT_STOP`. The detach-survival smoke assertion, which checked
+  `kill -0` immediately and so was blind to a delayed kill, now polls for ~2 s.
+
 - **The macOS drgate gate now runs in CI — CPython signal chaining under attach
   is regression-protected on an independent host
   (macos-dynamorio-signal-chaining.md ✅ closure).** The nightly `drtrace-macos`

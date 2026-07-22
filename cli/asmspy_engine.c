@@ -2162,6 +2162,13 @@ static int seize_one(pid_t tid, long opts, thr_tab_t *tab) {
 static int seize_for_engine(pid_t pid, pid_t only_tid, int follow,
                             thr_tab_t *tab) {
     long opts = PTRACE_O_TRACEEXEC;
+#if defined(__aarch64__)
+    /* AArch64 resumes a thread poised on an `svc` with PTRACE_SYSCALL rather
+     * than a step (step_resume), so the resulting syscall-stops must be
+     * distinguishable from step traps: TRACESYSGOOD tags them SIGTRAP|0x80.
+     * x86 never resumes that way here, so its stop stream is unchanged. */
+    opts |= PTRACE_O_TRACESYSGOOD;
+#endif
     if (only_tid) /* --tid: exactly this task; follow neither clones nor forks */
         return seize_one(only_tid, opts, tab);
     opts |= PTRACE_O_TRACECLONE;
@@ -2374,6 +2381,61 @@ static int at_syscall_insn(pid_t pid, uint64_t pc) {
 #endif
 }
 
+/* Resume `tid` for ONE more instruction, the way this thread can safely be
+ * resumed right now.
+ *
+ * On x86 that is always PTRACE_SINGLESTEP. On AArch64 it is NOT: a step armed on
+ * a thread poised on an `svc` whose syscall then BLOCKS outlives everything the
+ * tracer can do about it. MEASURED 2026-07-22 on Neoverse-N2 (hosted
+ * ubuntu-24.04-arm), asmspy out of the picture — a 40-line SEIZE/INTERRUPT/
+ * resume/DETACH reproducer against a victim whose leader sits in pause():
+ *
+ *   resume mode for the parked leader   outcome
+ *   ---------------------------------   ----------------------------------
+ *   none (seize+interrupt only)         target survives
+ *   PTRACE_SINGLESTEP                   target DIES: kernel SIGTRAP (si_pid=0)
+ *                                       at svc+4 once the syscall returns
+ *   PTRACE_CONT                         target survives
+ *
+ * The step is armed inside the blocking call, so it neither completes (nothing
+ * to drain — drain_pending_step deliberately refuses to step a thread poised on
+ * a syscall, or it would block there) nor gets revoked by the DETACH: arm64's
+ * ptrace_disable() is user_rewind_single_step() + user_disable_single_step(),
+ * which SETS SPSR.SS and clears only TIF_SINGLESTEP. The detached thread returns
+ * to userspace still active-pending and takes a SIGTRAP with no tracer to absorb
+ * it, killing the whole target — hundreds of ms after asmspy exited, which is
+ * why this read as "the NEXT asmspy command is broken" for so long.
+ *
+ * Both survivable modes work by never arming that step, so this does the same:
+ * PTRACE_SYSCALL runs the call and stops the thread on the way OUT, where
+ * stepping is safe again, and arms nothing meanwhile. Unlike PTRACE_CONT it
+ * keeps the thread in the trace — it is stepped again from the syscall-exit stop
+ * (see the ASMSPY_SYSCALL_SIG handling in each engine loop), so a target that
+ * makes syscalls is not silently dropped from the stream.
+ *
+ * x86-64 keeps its unconditional PTRACE_SINGLESTEP: there the Trap Flag IS
+ * writable, so clear_trap_flag() at teardown disarms whatever is left. */
+static void step_resume(pid_t tgid, pid_t tid, int sig) {
+#if defined(__aarch64__)
+    asmspy_regs_t r;
+    if (asmspy_regs_read(tid, &r) == 0 &&
+        at_syscall_insn(tgid, asmspy_reg_pc(&r))) {
+        ptrace(PTRACE_SYSCALL, tid, NULL, (void *)(long)sig);
+        return;
+    }
+#else
+    (void)tgid;
+#endif
+    ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)sig);
+}
+
+/* A syscall-stop reports SIGTRAP|0x80 under PTRACE_O_TRACESYSGOOD, which the
+ * whole-process engines set on AArch64 only (x86 never resumes with
+ * PTRACE_SYSCALL here, so it never sees one). Entry-vs-exit comes from the
+ * existing syscall_stop_is_entry() above (PTRACE_GET_SYSCALL_INFO, no per-thread
+ * toggle to desync); its -1 "unknown" is treated as ENTRY, which costs one extra
+ * PTRACE_SYSCALL round trip and never a wrongly-armed step. */
+#define ASMSPY_SYSCALL_SIG (SIGTRAP | 0x80)
 /* Drain a single-step trap the kernel has already QUEUED on a stopped thread but not
  * yet reported. When a step completes across a syscall, the resulting #DB is deferred
  * until the syscall returns; if the thread was parked in a blocking call (a JIT's
@@ -2385,18 +2447,60 @@ static int at_syscall_insn(pid_t pid, uint64_t pc) {
  * ON a syscall instruction is skipped — stepping it would enter (and maybe block in)
  * the call — and clear_trap_flag alone disarms that not-yet-taken step. Because we
  * only ever step a NON-syscall instruction, the follow-up wait cannot hang. */
+/* Is `tid` INSIDE a syscall right now? `at_syscall_insn` only catches a thread
+ * poised ON the instruction; a thread stopped at a syscall-ENTRY stop is already
+ * in the call with its pc PAST the `svc`, and stepping THAT blocks until the call
+ * returns — forever, for a `pause()`/`futex` wait — with the waitpid below
+ * retrying through every EINTR, i.e. an unkillable tracer. /proc/<tid>/syscall
+ * reports the current syscall number, or "running" when the task is in
+ * userspace. Fails safe (1 = treat as in-syscall, do not step) if unreadable. */
+static int in_syscall_now(pid_t tid) {
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d/syscall", (int)tid);
+    int fd = open(path, O_RDONLY);
+    if (fd < 0)
+        return 1;
+    char buf[128];
+    ssize_t n = read(fd, buf, sizeof buf - 1);
+    close(fd);
+    if (n <= 0)
+        return 1;
+    buf[n] = 0;
+    if (strncmp(buf, "running", 7) == 0)
+        return 0;
+    return strtol(buf, NULL, 10) >= 0;
+}
+
 static void drain_pending_step(pid_t pid, pid_t tid) {
     asmspy_regs_t regs;
     if (asmspy_regs_read(tid, &regs) != 0)
         return;
-    if (at_syscall_insn(pid, asmspy_reg_pc(&regs)))
+    if (at_syscall_insn(pid, asmspy_reg_pc(&regs)) || in_syscall_now(tid))
         return;
     if (ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL) != 0)
         return;
     int st;
     while (waitpid(tid, &st, __WALL) < 0 && errno == EINTR)
         ;
-    /* Whatever it reported — the queued #DB, or the one guarded step — is consumed. */
+    /* Whatever it reported — the queued #DB, or the one guarded step — is consumed.
+     *
+     * ...UNLESS what it reported was not a trap at all. Phase 1 INTERRUPTed every
+     * thread, and a thread that was mid-flight re-stops for THAT before executing
+     * anything, so the wait above can consume a PTRACE_EVENT_STOP while the step
+     * stays armed (MEASURED on AArch64: status 0x80057f, twice, on both workers).
+     * x86 does not care — clear_trap_flag() disarms whatever is left. AArch64 has
+     * no such lever, and an armed step outlives the DETACH and kills the target,
+     * so there the drain must keep going until a genuine step trap lands. */
+#if defined(__aarch64__)
+    for (int retry = 0; retry < 4 && WIFSTOPPED(st) && (st >> 16) != 0; retry++) {
+        if (in_syscall_now(tid))
+            return; /* re-entered a call: stepping it would block, not drain */
+        if (ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL) != 0)
+            return;
+        while (waitpid(tid, &st, __WALL) < 0 && errno == EINTR)
+            ;
+    }
+#endif
 }
 
 /* Stop tracing and let the target run on normally. A SINGLE-STEP engine leaves the
@@ -3553,6 +3657,21 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, int follow, long max,
         int sig = WSTOPSIG(status);
         int event = (status >> 16) & 0xff;
 
+        /* A syscall-stop (AArch64 only — TRACESYSGOOD is set there): the thread
+         * was resumed with PTRACE_SYSCALL by step_resume() because it sat on an
+         * `svc`. At ENTRY let the call actually run — arming a step across a
+         * call that may block is what kills the target — and at EXIT the thread
+         * is past the `svc`, so ordinary stepping resumes. The `svc` itself is
+         * not emitted as a stepped instruction; the next line is the one after
+         * it. */
+        if (sig == ASMSPY_SYSCALL_SIG) {
+            if (syscall_stop_is_entry(tid) != 0)
+                ptrace(PTRACE_SYSCALL, tid, NULL, NULL);
+            else
+                step_resume(thr_tgid(&tab, tid, pid), tid, 0);
+            continue;
+        }
+
         if (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
             event == PTRACE_EVENT_VFORK) {
             unsigned long child = 0;
@@ -3567,7 +3686,7 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, int follow, long max,
                                    : (pid_t)child;
                 multi = 1;
             }
-            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            step_resume(thr_tgid(&tab, tid, pid), tid, 0);
             continue;
         }
 
@@ -3580,7 +3699,7 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, int follow, long max,
             if (ts)
                 ts->tgid = tid;
             psym_exec(&pt, tid);
-            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            step_resume(thr_tgid(&tab, tid, pid), tid, 0);
             continue;
         }
 
@@ -3636,7 +3755,7 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, int follow, long max,
                     sink(ctx, emit);
                 done++;
             }
-            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            step_resume(thr_tgid(&tab, tid, pid), tid, 0);
             continue;
         }
 
@@ -3664,7 +3783,7 @@ int asmspy_engine_stream(pid_t pid, pid_t only_tid, int follow, long max,
             release_untracked(tid, 1);
             continue;
         }
-        ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)deliver);
+        step_resume(thr_tgid(&tab, tid, pid), tid, deliver);
     }
 
     detach_threads(pid, &tab, 1);
@@ -3954,6 +4073,21 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
         int sig = WSTOPSIG(status);
         int event = (status >> 16) & 0xff;
 
+        /* A syscall-stop (AArch64 only — TRACESYSGOOD is set there): the thread
+         * was resumed with PTRACE_SYSCALL by step_resume() because it sat on an
+         * `svc`. At ENTRY let the call actually run — arming a step across a
+         * call that may block is what kills the target — and at EXIT the thread
+         * is past the `svc`, so ordinary stepping resumes. The `svc` itself is
+         * not emitted as a stepped instruction; the next line is the one after
+         * it. */
+        if (sig == ASMSPY_SYSCALL_SIG) {
+            if (syscall_stop_is_entry(tid) != 0)
+                ptrace(PTRACE_SYSCALL, tid, NULL, NULL);
+            else
+                step_resume(thr_tgid(&tab, tid, pid), tid, 0);
+            continue;
+        }
+
         if (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
             event == PTRACE_EVENT_VFORK) {
             unsigned long child = 0;
@@ -3964,7 +4098,7 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
                                    ? thr_tgid(&tab, tid, pid)
                                    : (pid_t)child;
             }
-            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            step_resume(thr_tgid(&tab, tid, pid), tid, 0);
             continue;
         }
 
@@ -3977,7 +4111,7 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
             if (ts)
                 ts->tgid = tid; /* post-exec the caller IS the leader */
             psym_exec(&pt, tid);
-            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            step_resume(thr_tgid(&tab, tid, pid), tid, 0);
             continue;
         }
 
@@ -3996,7 +4130,7 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
                 pid_t tgid = thr_tgid(&tab, tid, pid);
                 psym_t *ps = psym_get(&pt, tgid);
                 if (!ps) { /* OOM: keep stepping rather than mis-name */
-                    ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+                    step_resume(thr_tgid(&tab, tid, pid), tid, 0);
                     continue;
                 }
 
@@ -4046,7 +4180,7 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
                     published = recorded;
                 }
             }
-            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            step_resume(thr_tgid(&tab, tid, pid), tid, 0);
             continue;
         }
 
@@ -4067,7 +4201,7 @@ int asmspy_engine_graph(pid_t pid, pid_t only_tid, int follow, long max,
             release_untracked(tid, 1);
             continue;
         }
-        ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)deliver);
+        step_resume(thr_tgid(&tab, tid, pid), tid, deliver);
     }
 
     detach_threads(pid, &tab, 1);
@@ -4190,6 +4324,21 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
         int sig = WSTOPSIG(status);
         int event = (status >> 16) & 0xff;
 
+        /* A syscall-stop (AArch64 only — TRACESYSGOOD is set there): the thread
+         * was resumed with PTRACE_SYSCALL by step_resume() because it sat on an
+         * `svc`. At ENTRY let the call actually run — arming a step across a
+         * call that may block is what kills the target — and at EXIT the thread
+         * is past the `svc`, so ordinary stepping resumes. The `svc` itself is
+         * not emitted as a stepped instruction; the next line is the one after
+         * it. */
+        if (sig == ASMSPY_SYSCALL_SIG) {
+            if (syscall_stop_is_entry(tid) != 0)
+                ptrace(PTRACE_SYSCALL, tid, NULL, NULL);
+            else
+                step_resume(thr_tgid(&tab, tid, pid), tid, 0);
+            continue;
+        }
+
         if (event == PTRACE_EVENT_CLONE || event == PTRACE_EVENT_FORK ||
             event == PTRACE_EVENT_VFORK) {
             unsigned long child = 0;
@@ -4220,7 +4369,7 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
                 }
                 multi = 1;
             }
-            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            step_resume(thr_tgid(&tab, tid, pid), tid, 0);
             continue;
         }
 
@@ -4236,7 +4385,7 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
                 ts->focus_depth = ASMSPY_TF_NO_FOCUS;
             }
             psym_exec(&pt, tid);
-            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            step_resume(thr_tgid(&tab, tid, pid), tid, 0);
             continue;
         }
 
@@ -4255,7 +4404,7 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
                 pid_t tgid = thr_tgid(&tab, tid, pid);
                 psym_t *ps = psym_get(&pt, tgid);
                 if (!ps) { /* OOM: keep stepping rather than mis-name */
-                    ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+                    step_resume(thr_tgid(&tab, tid, pid), tid, 0);
                     continue;
                 }
 
@@ -4335,7 +4484,7 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
                     }
                 }
             }
-            ptrace(PTRACE_SINGLESTEP, tid, NULL, NULL);
+            step_resume(thr_tgid(&tab, tid, pid), tid, 0);
             continue;
         }
 
@@ -4356,7 +4505,7 @@ int asmspy_engine_tree(pid_t pid, pid_t only_tid, int follow, long max,
             release_untracked(tid, 1);
             continue;
         }
-        ptrace(PTRACE_SINGLESTEP, tid, NULL, (void *)(long)deliver);
+        step_resume(thr_tgid(&tab, tid, pid), tid, deliver);
     }
 
     detach_threads(pid, &tab, 1);

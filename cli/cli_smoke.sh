@@ -2479,9 +2479,20 @@ for view in --stream --tree; do
     [ "$rc" -eq 124 ] && fail "detach-survival: $view hung on the multi-threaded victim"
     # THE ASSERTION: the target is still alive after asmspy single-stepped every
     # thread and detached. A regression in detach_threads() kills it here.
+    #
+    # WAIT FIRST — a detach-left step is not always instantly fatal. On AArch64 a
+    # step armed on a thread parked in a blocking syscall only fires when that
+    # syscall RETURNS: MEASURED at 200-400 ms after asmspy exited (Neoverse-N2,
+    # 2026-07-22), i.e. long after an immediate `kill -0` says "alive". Checking
+    # right away made this tripwire blind to exactly the class it exists to
+    # catch, and the corpse was then blamed on whichever command ran next.
+    for _s in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "$DVPID" 2>/dev/null || break
+        sleep 0.2
+    done
     kill -0 "$DVPID" 2>/dev/null \
         || fail "detach-survival: victim KILLED by $view detach (two-phase detach regressed)"
-    echo "  survived $view detach"
+    echo "  survived $view detach (+2s)"
 done
 kill "$DVPID" 2>/dev/null || true
 
