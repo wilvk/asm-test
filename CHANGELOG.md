@@ -49,7 +49,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `make drtrace-test-macos` M0 harness traces a **normally-compiled `__TEXT`
   function** end to end — attach, Mach-O marker resolution, coverage
   accumulation, symbol mode, clean detach — 13/13 twice in a row on the
-  macOS-14.7.5/Intel host, against the pinned script-built home. Fork
+  macOS-14.7.5/Intel host, against the pinned script-built home. M1a
+  (macos-dynamorio-port.md T6): the same target now also runs the
+  generated-bytes `test_drtrace` harness on Darwin — the `PROT_NONE → RW → RX`
+  `exec_alloc` W^X path, coverage accumulation, the exact instruction-mode
+  offset stream, and the truncation bit all pass on native Intel silicon
+  (18/18 on the same host; Rosetta stays must-verify, gated on Apple Silicon
+  hardware). Fork
   `api.startstop`/`api.detach` run 10/10 crash-free (their multi-thread
   takeover assertions are upstream-NYI on macOS, i#58, and upstream macOS CI
   never runs them — they are outside the `OSX` ctest label set). arm64 stays

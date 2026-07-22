@@ -8,7 +8,7 @@ the **real CPU, in-process**:
 | Tier | Backend | Records | Runs where |
 |---|---|---|---|
 | Emulator trace ([traces.md](traces.md)) | Unicorn | guest blocks + instructions | any host |
-| **DynamoRIO native trace** | DynamoRIO (software DBI) | native blocks + instructions | Linux x86-64 · macOS x86-64 (compiled-function + symbol mode, fork-built runtime) |
+| **DynamoRIO native trace** | DynamoRIO (software DBI) | native blocks + instructions | Linux x86-64 · macOS x86-64 (compiled-function, symbol mode + generated code on native Intel; fork-built runtime) |
 | **Hardware trace** | Intel PT / ARM CoreSight | native blocks + instructions | bare-metal Intel / AArch64 |
 | **Single-step trace** | EFLAGS.TF → SIGTRAP (debug exception) | native blocks + instructions | **any x86-64 Linux or macOS** (no PMU/perf/privilege) |
 
@@ -285,9 +285,12 @@ make drtrace-test-macos DYNAMORIO_HOME=$(make -s dynamorio-macos)
 
 The macOS harness traces a **normally-compiled `__TEXT` function** end to end
 (attach, Mach-O marker resolution via `dr_get_proc_address`, coverage, clean
-detach) in both marker and symbol mode — the generated-bytes (`exec_alloc`)
-path and the val/taint sub-lanes stay Linux-only for now. Both targets
-self-skip off macOS x86-64 (arm64 needs the upstream arm64 DR port, i#5383).
+detach) in both marker and symbol mode, then runs the **generated-bytes
+harness** (`exec_alloc`'s `PROT_NONE → RW → RX` W^X path — supported on
+native Intel silicon, which enforces no hardware W^X; under Rosetta 2 it is
+unverified and stays must-verify). The val/taint sub-lanes stay Linux-only.
+Both targets self-skip off macOS x86-64 (arm64 needs the upstream arm64 DR
+port, i#5383).
 Multi-threaded takeover is not available on macOS (upstream i#58): DynamoRIO
 takes over the calling thread only, which the single-threaded marker/symbol
 model never notices.

@@ -423,6 +423,20 @@ known-good. The dev machine (Intel x86-64) covers the native-Intel case directly
 run pass on native Intel macOS; the Rosetta result is recorded (pass or
 documented-unsupported).
 
+> **RESULT 2026-07-22 — native Intel: PASS.** `drtrace-test-macos` (extended by
+> [macos-dynamorio-port.md](../implementations/macos-dynamorio-port.md) T6 to
+> also build and run `test_drtrace` after the M0 harness, `DRAPP_KEYSTONE=0`)
+> is green on the macOS 14.7.5 / Intel Core i7 dev host against the fork-built
+> `libdynamorio.dylib` (`make dynamorio-macos` home): **18/18 `ok`, three
+> consecutive runs, 0 failures** — `exec_alloc` W^X (`PROT_NONE → RW → RX`)
+> maps and executes, coverage accumulates across re-runs, instruction mode
+> records the exact ordered offset sequence `[0x0,0x3,0x6,0xc,0x11]`, the
+> cap-1 truncation bit sets, and symbol mode resolves — on top of the 13/13 M0
+> harness in the same invocation.
+> **Rosetta: not run — no Apple Silicon hardware on this host.** The Rosetta
+> leg (`make CC="cc -arch x86_64" drtrace-test-macos` on an arm64 Mac) stays
+> must-verify and is recorded as gated, per T6's honesty rule.
+
 ### M1b — arm64 generated code
 
 **Two distinct problems, ranked by severity.**

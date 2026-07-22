@@ -216,6 +216,16 @@ else
 	ASMTEST_DRCLIENT=$(abspath $(DR_CLIENT)) \
 	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
 	    $(BUILD)/test_drtrace_macos
+# M1a (macos-dynamorio-port.md T6): the generated-bytes harness. On Intel
+# silicon the PROT_NONE -> RW -> RX mprotect dance in asmtest_exec_alloc works
+# unchanged (no hardware W^X). Base harness only — drtrace-test's val/taint
+# sub-lanes stay Linux-only (-lrt, /dev/shm, drrun launch lanes). Keystone-less
+# for the same standalone-link reason as test_drtrace_macos above; the harness
+# never calls the Keystone surface.
+	@$(MAKE) DRAPP_KEYSTONE=0 $(BUILD)/test_drtrace
+	ASMTEST_DRCLIENT=$(abspath $(DR_CLIENT)) \
+	ASMTEST_DR_LIB=$(abspath $(DR_DLLIB)) \
+	    $(BUILD)/test_drtrace
 endif
 
 # --- Data-flow L0 VALUE producer (Phase 5, increment 1) --------------------
