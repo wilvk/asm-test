@@ -17,9 +17,12 @@
  */
 #include "asmtest_drtrace.h"
 
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/time.h>
+#include <unistd.h>
 
 static int failures = 0;
 static int checks = 0;
@@ -38,6 +41,25 @@ static int checks = 0;
 /* Compiled straight into __TEXT — no exec_alloc, no W^X, no entitlement.
  * noinline + a volatile sink keep it a real, addressable function. */
 __attribute__((noinline)) static long add2(long a, long b) { return a + b; }
+
+/* Signal-chaining guards (macos-dynamorio-signal-chaining.md SC1): pin the
+ * delivery shapes that DO work under attach — at-syscall self-kill, and an
+ * async timer signal landing mid-spin in indirect-branch-dense code — so the
+ * fork's signal-path surgery cannot silently regress them. The known-broken
+ * CPython shape lives in bindings/python/tests/test_drgate.py. */
+static volatile sig_atomic_t g_sig_got;
+static void sig_note(int sig) {
+    (void)sig;
+    g_sig_got = 1;
+}
+__attribute__((noinline)) static unsigned long sig_step1(unsigned long a) {
+    return a * 1103515245u + 12345u;
+}
+__attribute__((noinline)) static unsigned long sig_step2(unsigned long a) {
+    return a ^ (a >> 13);
+}
+typedef unsigned long (*sig_step_fn)(unsigned long);
+static sig_step_fn volatile g_sig_steps[2] = {sig_step1, sig_step2};
 
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF,
@@ -102,6 +124,34 @@ int main(int argc, char **argv) {
           "symbol mode records coverage with no manual region calls");
     asmtest_dr_unregister_region("asmtest_symbol_demo");
     asmtest_trace_free(str);
+
+    /* Signal chaining under attach (SC1 guards; plain sa_handler, empty
+     * mask, flags 0 — CPython's PyOS_setsig shape). */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = sig_note;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGUSR1, &sa, NULL);
+    g_sig_got = 0;
+    kill(getpid(), SIGUSR1);
+    for (int i = 0; i < 200 && !g_sig_got; i++)
+        usleep(5000);
+    CHECK(g_sig_got == 1,
+          "self-raised SIGUSR1 chains to the app handler under attach");
+
+    sigaction(SIGALRM, &sa, NULL);
+    g_sig_got = 0;
+    struct itimerval it;
+    memset(&it, 0, sizeof it);
+    it.it_value.tv_usec = 50000; /* lands mid-spin, thread in the code cache */
+    setitimer(ITIMER_REAL, &it, NULL);
+    unsigned long sig_acc = 1;
+    for (unsigned long i = 0; i < 2000000000ul && !g_sig_got; i++)
+        sig_acc = g_sig_steps[i & 1](sig_acc); /* indirect call+ret per iter */
+    CHECK(g_sig_got == 1,
+          "async SIGALRM mid-indirect-spin chains to the app handler");
+    if (sig_acc == 0) /* consume the accumulator so the spin can't fold */
+        printf("# spin accumulator hit zero\n");
 
     asmtest_dr_unregister_region("add2");
     asmtest_trace_free(tr);

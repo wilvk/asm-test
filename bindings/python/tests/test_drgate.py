@@ -54,11 +54,12 @@ def test_takeover_scope(gate):
 
 
 @pytest.mark.skipif(
-    sys.platform == "darwin",
-    reason="DR signal chaining HANGS on the macOS fork build: SIGUSR1 raised "
-    "while attached never reaches CPython's handler and the process wedges "
-    "(DR_SIGNAL_DELIVER path; measured 2026-07-22, recorded in "
-    "macos-drtrace-plan.md — a fork-side DR fix, not a wrapper issue)",
+    sys.platform == "darwin" and not os.environ.get("ASMTEST_SIGCHAIN_DARWIN"),
+    reason="DR signal chaining is broken on the macOS fork build: the app's "
+    "sigreturn is rejected by the kernel and _sigtramp's own ud2 trap kills "
+    "(or under pytest wedges) the process. ASMTEST_SIGCHAIN_DARWIN=1 "
+    "force-runs the red case (macos-dynamorio-signal-chaining.md SC1); "
+    "root cause + fix tracked there, measured 2026-07-22",
 )
 def test_signal_chaining(gate):
     # A signal raised while DR is started must still reach CPython's own handler
