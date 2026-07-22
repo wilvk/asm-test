@@ -35,13 +35,16 @@ before `os.kill` returns. Under pytest the same case presents as a **hang**
 crashes instead — both are the same defect wearing different hats).
 
 **The crash site (lldb, stop-on-exec off, SIGUSR1 pass-through):**
-`EXC_BAD_INSTRUCTION` on a `ud2` in the code cache. **SC2's debug run
-re-attributed this** (see Research notes): it is not DR-planted — it is the
-cache's faithful translation of **libsystem `_sigtramp`'s own `ud2` trap**,
-the instruction Apple places immediately after `_sigtramp`'s call to
-`sigreturn` ("sigreturn returned — cannot happen"). The defect is therefore:
-under DR, the app's `sigreturn` syscall for a DR-delivered frame is
-**rejected by the kernel and returns**, and `_sigtramp` falls into its trap.
+`EXC_BAD_INSTRUCTION` on a `ud2` in the code cache — the cache's translation
+of **libsystem `_sigtramp`'s own `ud2` trap** (the instruction after its
+`call sigreturn`). **This is only the release-build *face* of the defect;
+SC3's symbolicated debug callstack re-locates the true cause** (see Research
+notes → "SC3 diagnosis"): at delivery DR takes the signal's **default action
+(terminate)** because `info->sighand->action[SIGUSR1]` is not recorded in
+time, and the bug is **timing-sensitive / multi-thread-entangled** (the
+pure-C reproducer hangs on macOS thread-takeover NYI, i#58). Treat the
+`ud2`/sigreturn framing below as the symptom trail, not the final root
+cause.
 
 **Four minimal C repros that all PASS (3–5 runs each), narrowing the
 trigger:** the defect is *not* reproduced by (1) self-`kill()` at the syscall
@@ -327,6 +330,72 @@ path and consumes both. SC4 is mechanical once SC3 is green.
   kernel-rejected for the CPython shape — prime suspect: token/frame-address
   validation vs where DR (re)builds the app frame, with CPython's startup
   `sigaltstack` the ranked delta.
+
+**SC3 diagnosis (executed 2026-07-22) — root cause re-located and the bug
+class identified as a race, NOT a static sigreturn defect. Fix not yet
+landed.** Two pieces of hard evidence, plus three eliminations:
+
+- **Symbolicated debug callstack (no debugger)** — `atos` against the debug
+  dylib resolves the crash path to, top-down:
+  `main_signal_handler → record_pending_signal → execute_handler_from_cache
+  → send_signal_to_client_and_handle_action →
+  handle_client_action_from_cache (signal.c:4290) →
+  execute_default_from_cache → execute_default_action (signal.c:7159) →
+  dynamo_process_exit`. So the true mechanism is NOT the release `ud2`
+  symptom (SC2's reading): at delivery DR takes the signal's **default
+  action (terminate)** via the branch at `signal.c:4285`, which fires when
+  `action == DR_SIGNAL_BYPASS || info->sighand->action[sig] == NULL ||
+  handler == SIG_DFL`. The client returns `DR_SIGNAL_DELIVER` (the C cases
+  prove it — same client), so the trigger is **`info->sighand->action[30]`
+  being NULL/SIG_DFL at delivery** — DR has no record of CPython's SIGUSR1
+  handler at the instant the signal is processed. The `_sigtramp` ud2 is the
+  release-build face of the same termination; the `heap.c:1995` assert is
+  exit-cleanup noise.
+- **The bug is timing-sensitive (the load-bearing find).** Under lldb (SIGUSR1
+  passed through, break on `handle_sigaction`), `handle_sigaction(sig=30)`
+  **does** fire — DR *can* and *does* intercept CPython's
+  `signal.signal(SIGUSR1)` registration — and with it recorded the
+  default-action path does **not** run. Yet the process still reaches the
+  `ud2` by another route under lldb. So DR's ability to have `action[30]`
+  populated in time is **order-dependent**: without the debugger the signal
+  is processed before/around the registration being committed; with it, the
+  timing shifts. A race between the app's post-attach handler registration
+  (recorded via the intercepted `SYS_sigaction`) and signal delivery/return
+  on the macOS path — consistent with that path's NYI/undermaintained state
+  (`save_fpstate` no-op, the stale sigreturn comment) — not a single static
+  mispredicate.
+- **Eliminations (pure-C repros, all PASS ⇒ none is the trigger):** an
+  alternate signal stack + `SA_ONSTACK` (CPython's faulthandler shape),
+  3/3; a `write()` syscall inside the handler after
+  SIGINT/SIGPIPE/SIGXFSZ + SIGUSR1 registrations, 3/3; async in-cache
+  delivery across direct- and indirect-branch spins, 3/3 and 5/5. The
+  distinguishing ingredient is CPython's volume/threading/eval-loop timing,
+  not any single API shape a small C program reproduces.
+- **Where SC3's fix must look:** the ordering guarantee between
+  `handle_sigaction` committing `info->sighand->action[sig]` and
+  `record_pending_signal`/`send_signal_to_client_and_handle_action`
+  consulting it on macOS (`core/unix/signal.c`), plus whether the macOS
+  `_sigtramp`/sigreturn return path re-reads a handler that was installed
+  post-attach.
+- **A pure-C reproducer attempt tied the defect to macOS multi-thread
+  support (i#58).** The candidate red gate — a background thread churning
+  fragments while the main thread registers-then-self-kills SIGUSR1 in a
+  loop — does not reach its signal loop: it **hangs at `pthread_create`
+  under attach**, DR's macOS multi-thread takeover being NYI
+  (`os_list_threads` returns 0, `thread_signal` NOT_IMPLEMENTED — the same
+  i#58 the fork-build doc records). So a *single-threaded* C program cannot
+  reproduce the defect (all such guards pass), and a *multi-threaded* one
+  hits the thread-takeover NYI first. CPython is multi-threaded (GIL,
+  faulthandler), so its signal delivery runs straight into that same
+  undermaintained surface. **This re-scopes SC3:** it is very likely not a
+  surgical "fourth fork fix" but part of macOS multi-thread signal delivery
+  (i#58) — a substantial DR-core effort. **No fork fix is committed; SC3
+  remains open at this diagnosis, with the scope corrected.** The honest
+  fallback (SC3 step 4) is now the live option: the guide/plan wording is
+  already precise ("signal chaining under an attached trace hangs on
+  macOS"), the Darwin skip stays, and the residual is a named i#58-class
+  limitation rather than a quick fix — pending a decision to take on the
+  multi-thread signal work.
 
 ## Out of scope
 

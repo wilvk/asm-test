@@ -248,7 +248,14 @@ int asmtest_dr_init(const asmtest_drtrace_options_t *opts) {
     /* Configure the in-process client load BEFORE dlopen'ing libdynamorio (its
      * constructor reads DYNAMORIO_OPTIONS). */
     char buf[2048];
-    snprintf(buf, sizeof buf, "-code_api -client_lib '%s;0;%s'", client, extra);
+    /* ASMTEST_DR_OPTIONS: extra raw DR options appended verbatim, for
+     * diagnosis against a debug runtime (e.g. "-loglevel 3 -logmask 0x10
+     * -logdir /tmp" for the ASYNCH log). Unset in normal operation. */
+    const char *diag = getenv("ASMTEST_DR_OPTIONS");
+    if (diag == NULL)
+        diag = "";
+    snprintf(buf, sizeof buf, "-code_api -client_lib '%s;0;%s'%s%s", client,
+             extra, diag[0] != '\0' ? " " : "", diag);
     setenv("DYNAMORIO_OPTIONS", buf, 1);
 
     /* Load libdynamorio once and cache the handle + entry points; a re-init
