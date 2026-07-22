@@ -103,7 +103,7 @@ The landed substrate, all verified against the working tree today:
   `asmtest_hwtrace_skip_reason` mention at
   [docs/reference/troubleshooting.md:70](../../reference/troubleshooting.md)).
   The landed half of the plan's doc list is the zero-config section at
-  [docs/scoped-tracing-implementation.md:122](../../scoped-tracing-implementation.md)
+  [docs/scoped-tracing-implementation.md:122](../scoped-tracing-implementation.md)
   — the tone/content model for Task T7.
 
 **Prove the baseline green before touching anything** (from the repo root, on an
@@ -540,7 +540,7 @@ how the PT decode is validated without silicon.
    after `## Auto-selecting a backend` (`:244`) and before
    `## W^X executable memory` (`:301`). Mirror the tone and honesty of the
    zero-config section at
-   [docs/scoped-tracing-implementation.md:122](../../scoped-tracing-implementation.md);
+   [docs/scoped-tracing-implementation.md:122](../scoped-tracing-implementation.md);
    this is a **published** page, so link the internal plan via its GitHub blob
    URL (`https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/scoped-tracing-zeroconfig-plan.md`),
    exactly as that page already does — never a relative link into

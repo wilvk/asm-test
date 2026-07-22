@@ -99,8 +99,10 @@ pure doc edit; group them.
 > [2026-07-21 whole-repo review](../reviews/2026-07-21-repo-review.md) folds its
 > doc-drift findings **D1/D2/D3** into this T2. **D2** in particular reshapes
 > **T2(d)**: the review wants
-> [docs/amd_tracing_review.md](../../amd_tracing_review.md) **moved under
-> `docs/internal/`**, not just banner-fixed.
+> [docs/amd_tracing_review.md](../analysis/2026-07-09-amd-tracing-review-f1-f47.md) **moved under
+> `docs/internal/`**, not just banner-fixed. *(The move landed 2026-07-22 —
+> the page is now `analysis/2026-07-09-amd-tracing-review-f1-f47.md`; T2(d)'s
+> banner/"zero IBS code" fix below is still open and applies to the moved file.)*
 
 **(a) Round-1 follow-up plan is stale.**
 [amd-review-followup-plan.md](../archive/plans/amd-review-followup-plan.md) still tags **P1, P2,
@@ -139,7 +141,8 @@ header). Only BRS (Zen 3) is genuinely forward-look.
   forward-look.
 
 **(d) Orphan review page reads "zero IBS code."**
-[docs/amd_tracing_review.md:68](../../amd_tracing_review.md) still states "There
+[2026-07-09-amd-tracing-review-f1-f47.md:68](../analysis/2026-07-09-amd-tracing-review-f1-f47.md)
+(moved from `docs/amd_tracing_review.md` 2026-07-22) still states "There
 is currently zero IBS code in the repo; IBS appears only in planning docs" — now
 false. Its P0/P1 items are shipped **except half of F7**: F5's `nr` clamp
 (all three drain sites), F22 mechanism, F24 empty-trace and F27 `struct_size`

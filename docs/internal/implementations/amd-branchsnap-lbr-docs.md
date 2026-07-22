@@ -394,9 +394,11 @@ user-visible).
 explaining the Zen 3 situation where the guide discusses it.
 
 **Steps.** Correct these verified sites (grep
-`-rn 'Zen 3' docs/guides docs/*.md include/ | grep -v amd_tracing_review.md`
+`-rn 'Zen 3' docs/guides docs/*.md include/`
 afterward to confirm none is missed — the list below was verified 2026-07-17;
-the one excluded file is the dated historical audit page called out in step 9):
+the dated historical audit page called out in step 9 was moved to
+`docs/internal/analysis/2026-07-09-amd-tracing-review-f1-f47.md` on 2026-07-22,
+outside this grep's scope, so it no longer needs a `grep -v` exclusion):
 
 1. [docs/guides/tracing/hardware-tracing.md](../../guides/tracing/hardware-tracing.md)
    lines 38 (backend table: "bare-metal AMD (Zen 3+)"), 290, 473, 533 — floor
@@ -406,7 +408,7 @@ the one excluded file is the dated historical audit page called out in step 9):
    line 137 ("Zen 3+ silicon" requirement row) → Zen 4+.
 3. [docs/guides/tracing/native-tracing.md](../../guides/tracing/native-tracing.md)
    line 993 ("Zen 3+/4/5 host") → Zen 4/5.
-4. [docs/scoped-tracing-implementation.md](../../scoped-tracing-implementation.md)
+4. [docs/scoped-tracing-implementation.md](../scoped-tracing-implementation.md)
    lines 106, 148, 241, 255 (four "Zen 3+" gate statements) → Zen 4+.
 5. [hardware-trace-plan.md](../plans/hardware-trace-plan.md) lines 59-60
    ("live capture needs Zen 3+") → Zen 4+.
@@ -429,28 +431,31 @@ the one excluded file is the dated historical audit page called out in step 9):
    silicon-gated arm — changing the strings without the probe retry would
    trade one wrong message for another.
 9. **Historical audit page — deliberately not rewritten.**
-   [docs/amd_tracing_review.md](../../amd_tracing_review.md) is a dated,
-   orphaned audit snapshot (`orphan: true`, "_Revision 2026-07-09_") that
-   Sphinx builds but the toctree does not link. Its two `Zen 3` mentions —
+   [2026-07-09-amd-tracing-review-f1-f47.md](../analysis/2026-07-09-amd-tracing-review-f1-f47.md)
+   (until 2026-07-22 published as the orphan page `docs/amd_tracing_review.md`;
+   moved under `docs/internal/analysis/` by the 2026-07-21 review's D2) is a
+   dated audit snapshot ("_Revision 2026-07-09_"). Its two `Zen 3` mentions —
    line 18 ("no Zen 3 BRS", already true of the Zen 2 host) and line 68
    ("branch-stack only via BRS (Zen 3) / LbrExtV2 (Zen 4+)", the imprecise
    implication this sweep otherwise kills) — record what the 2026-07-09 review
    said, not live guidance. Rewriting a dated review would falsify the
    historical record, and this file is outside the "guides and headers" sweep
    (global position 2 scopes the correction to guides, headers, and the parity
-   matrix). Leave it untouched; the confirmation and done-when greps exclude it
-   via `| grep -v amd_tracing_review.md` so a junior dev is not left guessing
-   whether these two hits are in scope — they are not.
+   matrix). Leave it untouched; since the 2026-07-22 move its home under
+   `docs/internal/analysis/` is outside the confirmation and done-when greps'
+   scope, so a junior dev is not left guessing whether its two hits are in
+   scope — they are not.
 10. `make docs` (Sphinx, `-W` fail-on-warning) — the guides are published
    pages; the build must stay warning-clean. Off-host, `make docker-docs`.
 
 **Code.** Header/guide comment text only; zero behavior change.
 
 **Tests.** `make docs` green is the gate for the published pages. Manual
-check: `grep -rn 'Zen 3' docs/guides docs/*.md include/ | grep -v
-amd_tracing_review.md` returns only lines that state the corrected floor or the
-explicit cannot-open explanation (the excluded file is the dated 2026-07-09
-audit page, deliberately left as historical record — step 9).
+check: `grep -rn 'Zen 3' docs/guides docs/*.md include/` returns only lines
+that state the corrected floor or the explicit cannot-open explanation (the
+dated 2026-07-09 audit page is deliberately left as historical record and,
+since its 2026-07-22 move under `docs/internal/analysis/`, sits outside this
+grep's scope — step 9).
 
 **Docs.** This task is docs. `CHANGELOG.md` `### Fixed`: guides and the
 public header no longer claim AMD LBR live capture works on Zen 3; the floor

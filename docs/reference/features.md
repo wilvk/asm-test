@@ -111,9 +111,9 @@ hardware is absent. All are exposed through **all ten language wrappers**
   host-native code (W^X executable memory). BSD-only (raw DynamoRIO core API; no
   drwrap/LGPL). Linux x86-64.
 - **Hardware trace** — four backends behind one API and one `available()` gate:
-  **Intel PT** (`perf_event_open` + libipt) and **AMD LBR** (Zen 3 BRS / Zen 4–5
-  LbrExtV2, 16-deep stack with Tier-B window stitching past it, live-verified on
-  Zen 5) on bare metal; an **ARM CoreSight**
+  **Intel PT** (`perf_event_open` + libipt) and **AMD LBR** (Zen 4–5 LbrExtV2,
+  16-deep stack with Tier-B window stitching past it, live-verified on Zen 5;
+  Zen 3's BRS is not opened by this tree) on bare metal; an **ARM CoreSight**
   (OpenCSD) scaffold; and **single-step** (`EFLAGS.TF` → `SIGTRAP`) — the universal
   backend recording the same exact offsets on **any x86-64 Linux or macOS** host
   (CI, containers, VMs) with no PMU / perf / privilege / decoder. Branch-boundary

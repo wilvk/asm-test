@@ -44,7 +44,7 @@ own.
 > remains is marked by the **architecture / OS it needs** (bare-metal Intel PT, an
 > AArch64 CoreSight board, Windows/macOS single-step, or a live managed runtime for the
 > §D0 hooks). Full accounting + the Docker-can/can't matrix:
-> [docs/scoped-tracing-implementation.md](../../../scoped-tracing-implementation.md).
+> [docs/scoped-tracing-implementation.md](../../scoped-tracing-implementation.md).
 >
 > Status legend: **planned** unless noted. Update this file (and the slice files)
 > as slices land, the way

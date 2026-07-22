@@ -9,7 +9,7 @@ concrete improvements to the AMD branch-record trace tier
 [src/trace_auto.c](../../../../src/trace_auto.c)). The items come from a fresh drill-down
 against the source of record — the gating chain and capture paths above, cross-read
 with the [tracing decision matrix](../../analysis/tracing-decision-matrix.md) and the
-F1–F47 audit in [../../amd_tracing_review.md](../../../amd_tracing_review.md) — and every
+F1–F47 audit in [../analysis/2026-07-09-amd-tracing-review-f1-f47.md](../../analysis/2026-07-09-amd-tracing-review-f1-f47.md) — and every
 finding here was **re-verified against the current tree** (the `src/` anchors hold at
 `58d8263` — the intervening commits are docs-only) before being written down, not carried
 forward from the audit.

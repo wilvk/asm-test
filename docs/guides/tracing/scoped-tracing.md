@@ -16,7 +16,7 @@ This repackages shipped machinery — the per-thread `begin`/`end` region marker
 single-step / hardware backends, and the Capstone renderer — behind a thin per-language
 shim over a small shared C core. It adds **no new capture primitive**. See
 [Hardware tracing](hardware-tracing.md) for the backends and the shared-core primitives
-this rides, and the [implementation summary](../../scoped-tracing-implementation.md)
+this rides, and the [implementation summary](https://github.com/wilvk/asm-test/blob/main/docs/internal/scoped-tracing-implementation.md)
 for the full done-vs-forward-look accounting.
 
 ## The model
@@ -96,7 +96,7 @@ Each per-binding page carries a runnable **Scoped tracing** example.
 - **Managed JIT (.NET, Node, Java).** The scope over a **known native leaf** works
   today; tracing the runtime's own live JIT output (async-hop stitching, the
   out-of-process ptrace-stealth stepper) is a forward-look managed-tier capability —
-  see the [implementation summary](../../scoped-tracing-implementation.md).
+  see the [implementation summary](https://github.com/wilvk/asm-test/blob/main/docs/internal/scoped-tracing-implementation.md).
 
 ## The boundary
 
@@ -110,5 +110,5 @@ assembly — **not** register/memory values per step. Value capture stays the
   primitives (`try_begin` / `arm_tid` / `render`, idempotent `register_region`).
 - [Native runtime tracing](native-tracing.md) — the region lifecycle and the
   out-of-process ptrace stepper the managed tier conceals.
-- [Scoped-tracing implementation summary](../../scoped-tracing-implementation.md) —
+- [Scoped-tracing implementation summary](https://github.com/wilvk/asm-test/blob/main/docs/internal/scoped-tracing-implementation.md) —
   what is built + tested vs. forward-look.

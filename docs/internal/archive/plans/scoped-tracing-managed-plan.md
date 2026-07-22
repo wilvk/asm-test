@@ -65,7 +65,7 @@ thread → logical-operation model change). It is deliberately sequenced **last*
 > per-hop slices — it needs the shared-core libipt glue on bare-metal Intel PT to validate.
 > The ptrace fallback runs on ordinary CI-adjacent hosts (Zen 2 / Docker) but exercises a
 > second process, and so cannot exercise a cross-thread hop. See
-> [docs/scoped-tracing-implementation.md](../../../scoped-tracing-implementation.md).
+> [docs/scoped-tracing-implementation.md](../../scoped-tracing-implementation.md).
 
 **Hard dependencies:**
 

@@ -107,7 +107,7 @@ the [§Z0–§Z5 phases](#sequencing-dependency-correct-order) below own the spl
 > privilege (§Z1's *AMD fork*: with `CAP_PERFMON` a sampled LBR hot-method survey — see
 > §Z1.3 — with ptrace the complete §D3-stepper window). Full accounting + the
 > Docker-can/can't matrix:
-> [docs/scoped-tracing-implementation.md](../../scoped-tracing-implementation.md).
+> [docs/scoped-tracing-implementation.md](../scoped-tracing-implementation.md).
 >
 > Status legend: **planned** unless noted. Per-phase status *(refreshed 2026-07-21)*:
 > **§Z0 landed** · **§Z1** WEAK
@@ -1334,7 +1334,7 @@ primitives are Core §2 / Managed §D0/§D4. All are **Linux-only**.
 
 ### Docs to update
 
-- **[../scoped-tracing-implementation.md](../../scoped-tracing-implementation.md)** —
+- **[../scoped-tracing-implementation.md](../scoped-tracing-implementation.md)** —
   *(instruction rewritten 2026-07-16: it previously asked that page to state the empty-ctor
   form is "not built", which was true when drafted but is false since §Z0 + §Z1-WEAK
   landed.)* The empty ctor **is** built and renders a real whole-window trace of a native

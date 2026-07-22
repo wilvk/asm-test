@@ -11,9 +11,9 @@ Wine, or drives the trampoline directly via a compiler ABI attribute.
 > snapshot its registers/flags/ABI-preservation — ships today and runs
 > `--no-fork`. The framework's POSIX runner guarantees (per-test fork isolation,
 > timeouts, guard pages, the `-jN` pool, in-process crash-to-failure) rest on
-> POSIX primitives with no Win32 equivalent; porting them is the **runner port**,
-> now underway — all five primitives are ported and verified under
-> Wine, with the runner's execution model being wired through a platform seam
+> POSIX primitives with no Win32 equivalent; porting them was the **runner
+> port**, now complete — all five primitives are ported and verified under
+> Wine, and the runner's execution model is wired through a platform seam
 > (see [The runner port](#the-runner-port) below). See the
 > [implementation plan](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/win64-native-tier-plan.md)
 > for the full breakdown.

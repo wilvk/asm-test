@@ -50,7 +50,7 @@ Three tiers, by where the work can happen:
 
   The Linux-only variants (nested/concurrent single-step, ptrace W2, whole-window,
   AMD sample) self-skip cleanly. This confirms the "62-insn loop, live, on this box"
-  claim in [scoped-tracing-implementation.md](../../scoped-tracing-implementation.md)
+  claim in [scoped-tracing-implementation.md](../scoped-tracing-implementation.md)
   and resolves the parity-matrix drift (below).
 - Also native here: quality lanes (`sanitize`, `tidy`, `fmt-check`), `macos-clean-test`,
   the emulator/Keystone/Capstone tiers, and the language-binding suites that build

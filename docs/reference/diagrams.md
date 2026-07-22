@@ -238,7 +238,7 @@ flowchart TB
     end
     subgraph HW["Native hardware / single-step — asmtest_hwtrace.h"]
         PT["Intel PT → libipt<br/>bare-metal Intel x86-64"]
-        AMD["AMD LBR/BRS → built-in<br/>bare-metal Zen 3+"]
+        AMD["AMD LBR → built-in<br/>bare-metal Zen 4+"]
         CS["ARM CoreSight → OpenCSD<br/>AArch64 boards (scaffold)"]
         SS["Single-step EFLAGS.TF → #DB<br/>any x86-64 Linux (exact)"]
     end

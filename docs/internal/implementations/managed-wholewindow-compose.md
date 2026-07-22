@@ -277,7 +277,7 @@ re-tier env armed, so "the live §Z3 half" has a lane a release checklist can na
 (env-gated).
 
 **Docs.** `CHANGELOG.md` `Added` (one line, lane name). Extend
-[docs/scoped-tracing-implementation.md](../../scoped-tracing-implementation.md)'s
+[docs/scoped-tracing-implementation.md](../scoped-tracing-implementation.md)'s
 zero-config section: the §Z3 live half now has a Docker-testable lane over the
 in-process WEAK tier and the §D3 OOP stepper; only the PT prong remains
 silicon-gated (T5).

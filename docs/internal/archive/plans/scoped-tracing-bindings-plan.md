@@ -24,7 +24,7 @@ x86-64 Linux) or available hardware trace.
 > the .NET reference `AsmTrace : IDisposable` (`[CallerMemberName]`/`[CallerLineNumber]`).
 > Each per-binding `hwtrace-<lang>-test` lane's scope case passes green (see the
 > implementation summary at
-> [docs/scoped-tracing-implementation.md](../../../scoped-tracing-implementation.md)).
+> [docs/scoped-tracing-implementation.md](../../scoped-tracing-implementation.md)).
 >
 > Status legend: **planned** unless noted. .NET's `Region(Action)` and the other
 > nine `region(name, fn)` helpers already ship (see anchors below); this slice adds

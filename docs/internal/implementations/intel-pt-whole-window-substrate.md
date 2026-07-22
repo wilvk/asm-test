@@ -467,7 +467,7 @@ single-step (`Armed == true`, no PT).
 **Docs.** Update
 [docs/guides/tracing/scoped-tracing.md](../../guides/tracing/scoped-tracing.md)
 (tier table: STRONG is now wired and auto-selected on trusted Intel PT hosts)
-and [docs/scoped-tracing-implementation.md](../../scoped-tracing-implementation.md)
+and [docs/scoped-tracing-implementation.md](../scoped-tracing-implementation.md)
 (the Docker-can/can't matrix row for the STRONG tier). CHANGELOG `### Added`:
 window-path PT tier + ladder.
 

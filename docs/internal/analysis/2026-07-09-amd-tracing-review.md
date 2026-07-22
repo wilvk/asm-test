@@ -2,8 +2,9 @@
 
 > **SUPERSEDED (2026-07-09, same day).** This was the first-pass review; it was
 > re-verified and expanded the same day into
-> [docs/amd_tracing_review.md](../../amd_tracing_review.md) (the F1–F47 adversarially
-> re-checked edition — the authoritative one). Kept for history. **Note two findings here
+> [2026-07-09-amd-tracing-review-f1-f47.md](2026-07-09-amd-tracing-review-f1-f47.md)
+> (the F1–F47 adversarially re-checked edition — the authoritative one; published
+> as the orphan page `docs/amd_tracing_review.md` until its 2026-07-22 move here). Kept for history. **Note two findings here
 > have since gone stale:** §4.4 ("the auto-escalation path doesn't try the MSR-direct path")
 > was closed when the MSR-direct rung landed in `asmtest_trace_call_auto`
 > ([src/trace_auto.c](../../../src/trace_auto.c), `37118ec`, 2026-07-10), and §3.3's
