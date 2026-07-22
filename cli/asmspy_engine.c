@@ -2447,6 +2447,7 @@ static void step_resume(pid_t tgid, pid_t tid, int sig) {
  * ON a syscall instruction is skipped — stepping it would enter (and maybe block in)
  * the call — and clear_trap_flag alone disarms that not-yet-taken step. Because we
  * only ever step a NON-syscall instruction, the follow-up wait cannot hang. */
+#if defined(__aarch64__)
 /* Is `tid` INSIDE a syscall right now? `at_syscall_insn` only catches a thread
  * poised ON the instruction; a thread stopped at a syscall-ENTRY stop is already
  * in the call with its pc PAST the `svc` (x86 rewinds rip onto the instruction
@@ -2471,6 +2472,7 @@ static int in_syscall_now(pid_t tid) {
         return 0;
     return strtol(buf, NULL, 10) >= 0;
 }
+#endif /* __aarch64__ (in_syscall_now: the drain guard is AArch64-only) */
 
 static void drain_pending_step(pid_t pid, pid_t tid) {
     asmspy_regs_t regs;
