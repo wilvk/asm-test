@@ -8,19 +8,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **Self-hosted AMD Zen CI lane wired and hardware-proven locally, pending runner
-  registration (self-hosted-ci-runners.md T3).** The `hwtrace-privileged-zen` job
-  in `.github/workflows/hw.yml` runs `make docker-hwtrace-privileged` on a
-  registered AMD Zen 4/5 runner and asserts the exact LbrExtV2 branch-stack +
-  live-IBS paths RAN (a self-skip there is a hard failure). The target was proven
-  green locally on the Ryzen 9 9950X (Zen 5) dev box before registration — 666
-  `ok` / 0 failed, zero AMD-LBR/IBS self-skips, `call_auto` escalating off the LBR
-  window (`insns=77 truncated=0`). The hosted `hwtrace-privileged` bitrot-gate
-  comment in `ci.yml` was corrected: the `call_auto` non-escalation finding is
-  FIXED (5d8e0d2) rather than open, and the self-hosted counterpart is no longer
-  "future" — it now exists in `hw.yml`. Registering the runner and flipping
-  `HW_RUNNER_AMD_ZEN=1` is an operator step gated on repo-admin credentials (see
-  the runbook `docs/internal/ci/runners.md`).
+- **Self-hosted AMD Zen CI lane ran green live on real silicon
+  (self-hosted-ci-runners.md T3).** The `hwtrace-privileged-zen` job in
+  `.github/workflows/hw.yml` runs `make docker-hwtrace-privileged` on a registered
+  AMD Zen 4/5 runner and asserts the exact LbrExtV2 branch-stack + live-IBS paths
+  RAN (a self-skip there is a hard failure). It was exercised end to end on the
+  Ryzen 9 9950X (Zen 5) box on 2026-07-22: a pinned `v2.335.1` ephemeral runner
+  (tarball SHA-256 verified against GitHub's published digest) picked up a
+  `workflow_dispatch` and went **green** — `# 667 passed, 0 failed`, zero
+  AMD-LBR/IBS self-skips, `call_auto` escalating off the LBR window (`insns=77
+  truncated=0`), assert step passing. `hw.yml` was additionally hardened with an
+  explicit `github.actor == github.repository_owner` actor guard on the
+  self-hosted job (on top of the existing no-`push`/no-`pull_request` posture), so
+  the lane runs only for a trigger the repo owner initiated. The hosted
+  `hwtrace-privileged` bitrot-gate comment in `ci.yml` was corrected: the
+  `call_auto` non-escalation finding is FIXED (5d8e0d2) rather than open, and the
+  self-hosted counterpart is no longer "future" — it now exists in `hw.yml`. See
+  the runbook `docs/internal/ci/runners.md` (standing unattended-nightly coverage
+  needs a persistent runner via the JIT/ephemeral loop).
 - **AArch64 out-of-process single-step stream validated live on real silicon
   (aarch64-ptrace-single-step-validation.md T1–T6).** The out-of-process `ptrace`
   tracer's AArch64 arm — written and decode/execute-validated under qemu, but whose

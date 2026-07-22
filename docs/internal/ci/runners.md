@@ -220,7 +220,7 @@ recorded form of each hardware gate.
 
 | Lane | Runner tarball SHA-256 (verified on box) | Box (SoC / kernel) | Registered | `HW_RUNNER_*` | Live-lane last green |
 |---|---|---|---|---|---|
-| amd-zen | _(record for v2.335.1)_ | _(Zen 4/5 — `amd_lbr_v2` present)_ | ☐ | `0` | — |
+| amd-zen | `4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf` (v2.335.1, verified on box 2026-07-22 == GitHub's published digest) | Ryzen 9 9950X (Zen 5, `amd_lbr_v2` present) | ☐ (ephemeral one-shot; de-registered after the proof run) | `0` | ✅ [run 29897214772](https://github.com/wilvk/asm-test/actions/runs/29897214772) — 2026-07-22 |
 | intel-pt | _(record)_ | _(bare-metal `intel_pt` PMU)_ | ☐ | `0` | — |
 | coresight | _(record)_ | _(AArch64 ETM/ETE + sink)_ | ☐ | `0` | — |
 | tart | _(record for osx-arm64)_ | _(Apple Silicon)_ | ☐ | `0` | — |
@@ -233,9 +233,18 @@ recorded form of each hardware gate.
 > `# SKIP IBS live capture`, and `# call_auto escalate: rc=0 result=25
 > used.backend=3 insns=77 truncated=0 (escalated off the LBR window)`. This
 > separates a hardware problem from a CI problem — the AMD-exact live paths run
-> on this silicon. The **CI** `amd-zen` row above stays ☐ / `Live-lane last
-> green: —` until a runner is registered (repo-admin token) and
-> `HW_RUNNER_AMD_ZEN` is flipped to `1`.
+> on this silicon. **The CI lane then ran green live** ([run
+> 29897214772](https://github.com/wilvk/asm-test/actions/runs/29897214772),
+> 2026-07-22): a `v2.335.1` runner was registered `--ephemeral --labels amd-zen`
+> on this box, `HW_RUNNER_AMD_ZEN` flipped to `1`, `gh workflow run hw.yml`
+> dispatched, and `hwtrace-privileged-zen` executed on the `amd-zen` runner with
+> the assert step passing (`AMD LbrExtV2 + live IBS ran (no self-skip);
+> call_auto escalated off the LBR window` — `# 667 passed, 0 failed`). Because
+> this was a **one-shot ephemeral** proof, the runner de-registered after the job
+> and `HW_RUNNER_AMD_ZEN` was reset to `0` per the power-down rule — so the
+> `amd-zen` row above shows `☐ (ephemeral one-shot)`. For an **unattended
+> nightly**, register a standing runner via the JIT/ephemeral loop and leave
+> `HW_RUNNER_AMD_ZEN=1`.
 
 ## Hardware & credential gates (recorded, per CLAUDE.md)
 

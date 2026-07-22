@@ -13,9 +13,15 @@
 # docs/internal/ci/runners.md): this workflow deliberately has NO `push` and NO
 # `pull_request`/`pull_request_target` trigger, so fork-PR code can never reach a
 # self-hosted runner. Only maintainer-driven `workflow_dispatch` and a nightly
-# `schedule` (which always runs `main`) trigger it. Every self-hosted job carries
-# `environment: hw-runners` (required-reviewer approval), the workflow grants only
-# `contents: read`, and no secrets are exposed. The hosted bitrot gate
+# `schedule` (which always runs `main`) trigger it. On top of that, every
+# self-hosted job carries an explicit actor guard — `github.actor ==
+# github.repository_owner` in its `if:` — so the job only executes for a trigger
+# initiated by the repo owner; anyone else's dispatch (or a schedule attributed to
+# another actor) skips instead of running code on the box. Every self-hosted job
+# also carries `environment: hw-runners` (required-reviewer approval), the
+# workflow grants only `contents: read`, and no secrets are exposed. Any future
+# self-hosted job added here MUST keep both the `HW_RUNNER_*` variable guard and
+# the `github.actor == github.repository_owner` actor guard. The hosted bitrot gate
 # (`hwtrace-privileged` in ci.yml) STAYS in ci.yml on ubuntu-latest — it must not
 # move here, and a self-hosted `runs-on` must never appear in ci.yml.
 name: hw (self-hosted, allowed-to-be-absent)
@@ -44,8 +50,11 @@ jobs:
     name: hwtrace-privileged (self-hosted Zen — LIVE AMD LBR + IBS)
     # Guarded off by default: with the variable absent or `0` this reads "not 1"
     # and the job skips instantly, so the file lands ahead of all hardware. Flip
-    # HW_RUNNER_AMD_ZEN to '1' only once a Zen 4/5 runner is registered.
-    if: vars.HW_RUNNER_AMD_ZEN == '1'
+    # HW_RUNNER_AMD_ZEN to '1' only once a Zen 4/5 runner is registered. The
+    # `github.actor == github.repository_owner` clause is the actor guard: the job
+    # runs ONLY for a trigger the repo owner initiated (see the SECURITY POSTURE
+    # note above) — a non-owner dispatch skips rather than executing on the box.
+    if: vars.HW_RUNNER_AMD_ZEN == '1' && github.actor == github.repository_owner
     runs-on: [self-hosted, linux, x64, amd-zen]
     environment: hw-runners
     timeout-minutes: 45
