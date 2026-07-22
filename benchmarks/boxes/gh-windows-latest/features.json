@@ -10,8 +10,8 @@
     "cc": "cc.exe (Rev5, Built by MSYS2 project) 16.1.0",
     "virtualized": false,
     "asmtest_version": "1.1.0",
-    "commit": "769ac96",
-    "timestamp": "2026-07-22T09:01:55Z"
+    "commit": "45315dc",
+    "timestamp": "2026-07-22T09:25:55Z"
   },
   "features": [
     {

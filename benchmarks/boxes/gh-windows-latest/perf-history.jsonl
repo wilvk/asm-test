@@ -1,1 +1,2 @@
 {"timestamp": "2026-07-22T09:01:55Z", "commit": "769ac96", "os": "windows", "arch": "x86_64", "unit": "cyc", "virtualized": false, "native": [{"name": "win64.ret_arg0", "median": 23.3577, "unit": "cyc"}]}
+{"timestamp": "2026-07-22T09:25:55Z", "commit": "45315dc", "os": "windows", "arch": "x86_64", "unit": "cyc", "virtualized": false, "native": [{"name": "win64.ret_arg0", "median": 23.3755, "unit": "cyc"}]}
