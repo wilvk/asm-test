@@ -284,3 +284,144 @@ doc in this directory.
 - Keystone's own error recovery. Upstream may consider partial assembly with a
   success return intentional; this doc makes our wrapper's contract explicit
   regardless of what upstream decides.
+
+## Implementation record — 2026-07-23 (T1-T3 landed)
+
+Implemented on the Zen 5 dev box against the pinned Keystone 0.9.2 in
+`asmtest-ci` (`ks_version` reports 0.9). Everything below was re-measured before
+implementing, as the doc's own preamble requires.
+
+### Corrections to *What was measured*
+
+The doc's tables were re-run and hold, with **two corrections**:
+
+1. **Table 2 overstates the syntax spread for its own example.** With the *same
+   Intel-syntax* 4-statement source, `ATT` and `GAS` do **not** silently drop —
+   they fail loudly (`rc=-1`, `KS_ERR_ASM_MNEMONICFAIL`), because Intel `mov
+   rax, 1` is not AT&T at all. Written in each dialect's own syntax, the bad-`#`
+   operand also fails loudly in ATT/GAS (`KS_ERR_ASM_INVALIDOPERAND`). The
+   *conclusion* the table draws is nonetheless correct and is what the guard
+   rests on: a **truncated** operand (`mov rax,` + `ret`) drops silently in all
+   five x86 dialects — `rc=0`, `stat_count=1`, one byte out — so the guard must
+   not be syntax-conditional.
+2. **The defect is not x86-only.** It reproduces on the ARM guests the emu
+   bridges assemble: `mov x0, #1 / mov x1, $2 / ret` on ARM64 gives `rc=0`,
+   `stat_count=2` of 3; `mov x0,` + `ret` gives 1 of 2. Same on ARM32. The doc
+   scoped the fix to x86 syntaxes; the guard is arch-wide, and T1 gained a case
+   for it.
+
+### The `#` rule the doc got wrong, and why it matters
+
+T2 step 1 prescribes truncating each chunk at `#` "for every syntax". That is
+**wrong for ARM and would have cost most of the detection there**: `#` is the
+immediate prefix, so `mov x0, #1; mov x1, #2; ret` (measured: `stat_count=3`)
+would have been counted as **one** statement, and any drop after the first `#`
+made invisible. It is also wrong for x86/NASM, where `#` is not a comment
+(`mov rax, 1 # a;b` fails with `KS_ERR_ASM_INVALIDOPERAND`) — harmless, since
+that never reaches the success path, but not a rule worth stating falsely. The
+shipped `stmt_rules()` therefore measures out three knobs rather than one:
+
+| dialect | `;` | `#` | `//`, `/* */` |
+|---|---|---|---|
+| x86 Intel / MASM / AT&T / GAS | separator | comment | comment |
+| x86 NASM | **comment** | not a comment (parse error) | comment |
+| ARM64 / ARM32 | separator | **immediate prefix** | comment |
+
+### T2 step 5 — the constructs that break a naive counter
+
+Each was measured, and each **needed handling**: a naive splitter over-counts
+and rejects valid code in all four cases. `want` is what the shipped counter
+returns; `stat` is Keystone's.
+
+| construct | naive split | shipped `want` | `stat` | verdict |
+|---|---|---|---|---|
+| `.ascii "a;b"` + `ret` | 3 | 2 | 2 | needed string tracking |
+| `.byte ';'` + `ret` | 3 | 2 | 2 | needed **char**-literal tracking |
+| `mov rax, 1 // a;b` + `ret` | 3 | 2 | 2 | needed `//` handling |
+| `mov rax, 1 /* a;b */` + `ret` | 3 | 2 | 2 | needed block-comment handling |
+| `/* a;` … `b */` across a newline | 3 | 2 | 2 | block comment spans lines |
+| `.ascii "a\";b"` | 3 | 2 | 2 | needed `\"` escape handling |
+| `mov rax, 1 # a;b` + `ret` | 3 | 2 | 2 | `#` truncation covers it |
+| NASM `mov rax, 1; mov rbx, 2; ret` | 3 | 1 | 1 | the doc's headline NASM rule |
+| `mov rax, 1;;ret` | 2 | 2 | 3 | empty chunk skipped, safe |
+| label sharing a line, `l1: mov rax, 1; jmp l1` | 3 | 3 | 3 | exact |
+| CRLF + blank lines | — | 2 | 8 | Keystone over-counts, safe |
+
+`'` is tracked as a literal delimiter even though an **unterminated** one (GAS
+`'a`) then swallows the rest of the source. That is deliberate: swallowing only
+*lowers* the count, costing a detection rather than rejecting valid code, which
+is the direction the doc mandates.
+
+### T2 step 4 — the false-rejection sweep
+
+A scratch harness (`#include "../src/assemble.c"`, not committed) split the
+question in two, because they are not the same question:
+
+- **NATIVE** — every source in the dialect it is actually written for. Any
+  `want > stat` here is a false rejection and blocks the fix.
+- **CROSS** — the same sources under every other `(arch, syntax)`. `want > stat`
+  here is the guard *working*: a dialect mismatch is the silent drop being
+  closed.
+
+Corpora: the 27 string literals extracted from the ~103 assemble call sites
+under `examples/`, `bindings/`, `tools/`, `tests/`, `src/`, tagged with the
+dialect each call site passes; the adversarial shapes above; and the
+`examples/*.s` / `*.asm` corpus files whole. The raw `.s` files are C-preprocessor
+sources (`#include "asm.h"`, `#if defined(__x86_64__)`) that Keystone cannot
+parse, so they were also swept **after the preprocessing the build applies**
+(`cpp -C`, comments kept, unsupported directives dropped) — that form is what a
+user actually pastes into `assemble()`, and it is where the large-source stress
+lives: 14 files assembling cleanly at 9-74 counted statements against Keystone's
+36-131.
+
+Result, re-run at the final commit:
+
+```
+# NATIVE: 47 tagged sources + 42 *.s + 19 *.asm corpus files
+# NATIVE: 74 assembled cleanly and passed the guard, 95 skipped (ks_asm failed loudly / unsupported guest)
+# NATIVE: 31 of those sat at the guard's tightest (want == stat)
+# CROSS:  123 clean assembles in a foreign dialect, 21 of them caught as dropped statements
+# keystone hangs (excluded, pre-existing): 19
+# anti-vacuity: 8 fixtures caught, 0 missed
+# whole-file drops caught (unsupported ISA, KS_ERR_OK + 0 bytes): 1
+# FALSE REJECTIONS: 0
+```
+
+The 31 exact-count cases matter more than the total: those are the sources where
+the guard sits at its tightest bound and a single over-count would have fired.
+
+### Two findings the sweep surfaced
+
+- **Keystone drops a whole unsupported-ISA source with `KS_ERR_OK` and zero
+  bytes.** `examples/apx_basic.s` is Intel APX (EGPR + NDD). Keystone 0.9.2 has
+  no APX support and does not say so: `addq %rsi, %rdi, %rdx` returns `rc=0`,
+  `ks_errno=KS_ERR_OK`, `stat_count=0`, **0 bytes**. Before this change,
+  `asmtest_assemble` on that file returned `ok=true` with an empty buffer — the
+  defect in its most extreme form. The guard catches it (`want=26 stat=0`). It
+  is *not* pinned by a test, deliberately: a Keystone bump that adds APX would
+  legitimately flip the behaviour, and the doc's rule is to re-measure across a
+  bump rather than freeze a version's quirk.
+- **Keystone hangs on a large NASM-syntax source** (>8s, all 19
+  `examples/*.asm` files under `ASM_SYNTAX_NASM`). Pre-existing, inside
+  `ks_asm` and reached before any code here runs — the guard neither causes nor
+  fixes it. Recorded because a binding user assembling a large NASM source will
+  hit it; out of scope for this doc.
+
+### Residue — what this does not close
+
+- **The guard catches a *dropped* statement, not a *misassembled* one.** A
+  statement that parses in the requested dialect but means something the caller
+  did not intend still assembles silently. `mov rax, rdi` is a valid, and
+  different, instruction under Intel and under a dialect where the operand order
+  flips; nothing here can see that.
+- **It rests on Keystone behaviour measured at one pinned version** (0.9.2, via
+  `scripts/build-keystone.sh`). The three dialect rules in `stmt_rules()`, the
+  over-count direction of `stat_count`, and the APX finding are all properties
+  of that build. **Re-run the *What was measured* probes across a Keystone
+  bump** — the probe programs are ~20 lines of `ks_asm` printing `rc`,
+  `ks_errno`, `stat_count` and the encoding.
+- **The counter is a lower bound by construction, so some drops go unseen.** An
+  unterminated `"` or `'`, or a drop of a statement that the counter had already
+  folded into a comment, will not be detected. This is the deliberate trade: a
+  missed detection is a return to today's behaviour for that source, whereas an
+  over-count would reject valid input for every downstream suite.

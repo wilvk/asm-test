@@ -11,6 +11,7 @@
 #include "asmtest.h"
 #include "asmtest_assemble.h"
 
+#include <stdio.h>
 #include <string.h>
 
 /* ---- Assembler core: deterministic, host-independent --------------------- */
@@ -72,6 +73,109 @@ TEST(assemble, x86_nasm_masm_gas_match_intel) {
     asmtest_asm_free(&nasm);
     asmtest_asm_free(&masm);
     asmtest_asm_free(&gas);
+}
+
+TEST(assemble, rejects_dropped_statement) {
+    /* Keystone drops a statement it cannot parse, leaves ks_errno at
+     * KS_ERR_OK, and returns success — so without the statement-count guard
+     * this call returns ok=true with `mov rbx, #2` silently missing from the
+     * machine code. A wrong answer is worse than a missing one: fail instead. */
+    asm_result_t r;
+    ASSERT_FALSE(asmtest_assemble(ASM_X86_64, ASM_SYNTAX_INTEL,
+                                  "mov rax, 1\nmov rbx, #2\nmov rcx, 3\nret\n",
+                                  EMU_CODE_BASE, &r));
+    ASSERT_TRUE(r.bytes == NULL);
+    ASSERT_TRUE(r.err[0] != '\0');
+    ASSERT_TRUE(strstr(r.err, "skipped") != NULL);
+    asmtest_asm_free(&r);
+}
+
+TEST(assemble, rejects_att_source_in_intel_syntax) {
+    /* The reachable trigger: a user pastes AT&T text and does not name a
+     * syntax, so every binding passes the ASM_SYNTAX_INTEL default. Keystone
+     * drops the AT&T `movq` and returns just {0xc3}, ok=true — an assertion
+     * would then run against a bare `ret` the caller never wrote. */
+    asm_result_t r;
+    ASSERT_FALSE(asmtest_assemble(ASM_X86_64, ASM_SYNTAX_INTEL,
+                                  "movq $42, %rax\nret\n", EMU_CODE_BASE, &r));
+    ASSERT_TRUE(r.bytes == NULL);
+    ASSERT_TRUE(r.err[0] != '\0');
+    /* The diagnostic must point at the syntax argument — the dominant cause. */
+    ASSERT_TRUE(strstr(r.err, "syntax") != NULL);
+    /* Naming the right syntax assembles the same source cleanly. */
+    asm_result_t att;
+    ASSERT_TRUE(asmtest_assemble(ASM_X86_64, ASM_SYNTAX_ATT,
+                                 "movq $42, %rax\nret\n", EMU_CODE_BASE, &att));
+    ASSERT_EQ(att.len, 8);
+    asmtest_asm_free(&att);
+    asmtest_asm_free(&r);
+}
+
+TEST(assemble, guard_admits_valid_separator_edge_cases) {
+    /* The guard's own risk is the opposite failure: rejecting valid code. Each
+     * source below puts a ';' somewhere a naive splitter would treat as a
+     * statement separator — inside a string literal, a character literal, and
+     * each comment form — and all of them are ONE statement to Keystone. */
+    static const char *ok_srcs[] = {
+        ".ascii \"a;b\"\nret\n",         /* ';' inside a string literal    */
+        ".ascii \"a\\\";b\"\nret\n",     /* ...after an escaped quote      */
+        ".byte ';'\nret\n",              /* ';' inside a char literal      */
+        "mov rax, 1 // a;b\nret\n",      /* ';' inside a // comment        */
+        "mov rax, 1 /* a;b */\nret\n",   /* ...inside a block comment      */
+        "mov rax, 1 /* a;\nb */\nret\n", /* ...spanning a newline        */
+        "mov rax, 1 # a;b\nret\n",       /* ...inside a # comment        */
+        "mov rax, 1;;ret\n",             /* empty statement between ';'  */
+        "\tmov rax, 1  \n\tret\t\n",     /* tabs and trailing whitespace */
+        "mov rax, 1\r\n\r\nret\r\n",     /* CRLF and blank lines         */
+        "l1: mov rax, 1; jmp l1\n",      /* label sharing an insn's line */
+    };
+    for (size_t i = 0; i < sizeof ok_srcs / sizeof ok_srcs[0]; i++) {
+        asm_result_t r;
+        bool ok = asmtest_assemble(ASM_X86_64, ASM_SYNTAX_INTEL, ok_srcs[i],
+                                   EMU_CODE_BASE, &r);
+        if (!ok)
+            printf("# false rejection on source %zu: %s\n", i, r.err);
+        ASSERT_TRUE(ok);
+        asmtest_asm_free(&r);
+    }
+
+    /* NASM's ';' is a comment, not a separator: a source-side counter that
+     * split on it unconditionally would demand 3 statements here and reject
+     * a source Keystone assembles as 1. */
+    asm_result_t nasm;
+    ASSERT_TRUE(asmtest_assemble(ASM_X86_64, ASM_SYNTAX_NASM,
+                                 "mov rax, 1; mov rbx, 2; ret\n", EMU_CODE_BASE,
+                                 &nasm));
+    ASSERT_EQ(nasm.stat_count, 1);
+    asmtest_asm_free(&nasm);
+}
+
+TEST(assemble, arm_hash_immediates_are_not_comments) {
+    /* '#' introduces a comment on x86 but is the immediate prefix on ARM, so
+     * the counter must not truncate an ARM line there — `mov x0, #1; mov x1,
+     * #2; ret` is three statements, and treating '#' as a comment would count
+     * one and miss any drop after it. Both directions are checked: the valid
+     * source assembles, and a dropped statement in the same shape is caught. */
+    asm_result_t r;
+    ASSERT_TRUE(asmtest_assemble(ASM_ARM64, ASM_SYNTAX_INTEL,
+                                 "mov x0, #1; mov x1, #2; ret", EMU_CODE_BASE,
+                                 &r));
+    ASSERT_EQ(r.stat_count, 3);
+    ASSERT_EQ(r.len, 12);
+    asmtest_asm_free(&r);
+
+    /* $2 is x86 immediate syntax: Keystone drops it and reports 2 of 3. */
+    ASSERT_FALSE(asmtest_assemble(ASM_ARM64, ASM_SYNTAX_INTEL,
+                                  "mov x0, #1\nmov x1, $2\nret", EMU_CODE_BASE,
+                                  &r));
+    ASSERT_TRUE(strstr(r.err, "skipped") != NULL);
+    asmtest_asm_free(&r);
+
+    ASSERT_TRUE(asmtest_assemble(ASM_ARM32, ASM_SYNTAX_INTEL,
+                                 "mov r0, #1; mov r1, #2; bx lr", EMU_CODE_BASE,
+                                 &r));
+    ASSERT_EQ(r.stat_count, 3);
+    asmtest_asm_free(&r);
 }
 
 TEST(assemble, bad_mnemonic_reported_as_data) {

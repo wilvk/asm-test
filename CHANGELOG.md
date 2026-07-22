@@ -1853,6 +1853,43 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The in-line assembler no longer returns machine code with a statement
+  silently missing (assemble-silent-statement-drop.md T1-T3).** Keystone drops
+  a statement it can only partially parse — a bad, truncated or wrong-dialect
+  operand — leaves `ks_errno` at `KS_ERR_OK` and still returns success, so
+  `asmtest_assemble` handed back `ok=true` with an instruction the caller wrote
+  missing from the bytes. For a library whose purpose is asserting on machine
+  code that is the worst failure shape available: the assertion runs and
+  reports on code the caller never wrote. The most reachable trigger needed no
+  typo — **AT&T source assembled under the `ASM_SYNTAX_INTEL` default that
+  every binding passes when the caller does not name a syntax**
+  (`asmtest_assemble(…, ASM_SYNTAX_INTEL, "movq $42, %rax\nret\n", …)` returned
+  `ok=true` with a bare `{0xc3}`); an ARM-style immediate on x86
+  (`mov rax, #42`) and a truncated operand (`mov rax,`) took the same path, and
+  the truncated-operand shape drops silently in **all five** x86 dialects and on
+  ARM64/ARM32 as well. `asmtest_assemble` now counts the statements its source
+  contains and fails the whole assemble when Keystone reports fewer —
+  "assembler skipped N of M statements (check the syntax argument)" — through
+  the existing error path, so all ten bindings inherit it with no ABI change
+  (the guard is in the core; `asmtest_asm_bytes` never exposed `stat_count`, so
+  no binding could have worked around it). The header now states the
+  all-or-nothing contract. Callers with a test that passes today while
+  asserting on short code will start seeing this failure — that is the point.
+  The counter is deliberately a **lower bound**: it tracks string and character
+  literals, `#`/`//`/block comments and the two measured dialect rules (`;`
+  separates statements everywhere except x86/NASM where it starts a comment;
+  `#` is a comment on x86 but the immediate prefix on ARM), and never
+  special-cases labels, directives or comment lines because Keystone counts
+  those as statements too — every construct it walks past can only lower the
+  count, so a false rejection of valid code is not reachable through them.
+  Verified by a sweep over every assembler source in the tree, each in the
+  dialect it is written for: the tagged call-site literals, the doc's
+  adversarial separator/comment/literal shapes, and the `examples/*.s` corpus
+  files whole — the last preprocessed the way the build preprocesses them
+  (`cpp -C`, comments kept), which is what actually reaches the assembler, 14
+  of them landing 9-74 counted statements against Keystone's 36-131. Zero false
+  rejections, alongside an anti-vacuity pass confirming the guard still fires on
+  all eight defect fixtures.
 - **IBS surveys can no longer report a complete, empty capture when the edge
   export OOMs (amd-review-followup-2 T1), plus the round-2 review's smaller
   residues (T3/T4/T5).** All four IBS lanes (`survey_pid`, `survey_process`,

@@ -75,6 +75,99 @@ static asm_syntax_t syntax_from_int(int syntax) {
     return ASM_SYNTAX_INTEL;
 }
 
+/* Statement-counting rules for one (arch, syntax) pair. Keystone parses each
+ * guest with the matching LLVM assembly dialect, and the three knobs below are
+ * the only ones a statement counter needs. All three were measured against the
+ * pinned Keystone (0.9.2) — see docs/internal/implementations/
+ * assemble-silent-statement-drop.md; re-measure them across a Keystone bump.
+ *
+ *   ';'  separates statements everywhere EXCEPT x86/NASM, where it introduces
+ *        an end-of-line comment (so a NASM source separates with newlines).
+ *   '#'  introduces a comment on x86 (Intel/MASM/AT&T/GAS) but is the IMMEDIATE
+ *        prefix on ARM64/ARM32 — truncating an ARM line there would swallow the
+ *        rest of `mov x0, #1; mov x1, #2` and lose the count. On x86/NASM '#'
+ *        is neither (it fails to parse), so the truncation is moot there.
+ *   '//' and slash-star comments are LLVM-wide and apply to every dialect. */
+typedef struct {
+    bool semi_is_comment; /* ';' starts a comment rather than separating */
+    bool hash_is_comment; /* '#' starts a comment rather than being data */
+} stmt_rules_t;
+
+static stmt_rules_t stmt_rules(asm_arch_t arch, asm_syntax_t syntax) {
+    stmt_rules_t r = {false, true};
+    if (arch == ASM_ARM64 || arch == ASM_ARM32) {
+        r.hash_is_comment = false; /* '#' is an immediate: mov x0, #1 */
+    } else if (arch == ASM_X86_64 && syntax == ASM_SYNTAX_NASM) {
+        r.semi_is_comment = true; /* NASM: "mov rax, 1 ; note" */
+        r.hash_is_comment = false;
+    }
+    return r;
+}
+
+/* A LOWER BOUND on the statements `source` contains, for comparison against the
+ * stat_count Keystone reports. Deliberately conservative in one direction only:
+ * it may under-count (a construct it walks past costs a detection), but it must
+ * never over-count, because an over-count rejects valid code — the failure mode
+ * that matters here (see the doc's "Constraints & gates").
+ *
+ * Comment-only lines, labels and directives are NOT special-cased: Keystone
+ * counts each of them as a statement, so leaving them out of this count only
+ * ever makes it smaller. String and character literals ARE tracked, because a
+ * ';' inside one (`.ascii "a;b"`) is a single statement to Keystone and would
+ * otherwise be counted as two — a measured false rejection. */
+static size_t count_statements(const char *src, asm_arch_t arch,
+                               asm_syntax_t syntax) {
+    const stmt_rules_t rules = stmt_rules(arch, syntax);
+    size_t n = 0;
+    bool pending = false; /* chunk so far holds a non-blank code character */
+
+    for (const char *p = src; *p != '\0'; p++) {
+        char c = *p;
+
+        /* Literals: separators and comment introducers inside one are ordinary
+         * characters. An unterminated literal swallows the rest of the source,
+         * which only lowers the count — the safe direction. */
+        if (c == '"' || c == '\'') {
+            pending = true;
+            for (p++; *p != '\0' && *p != c; p++)
+                if (*p == '\\' && p[1] != '\0')
+                    p++; /* \" does not close the literal */
+            if (*p == '\0')
+                break;
+            continue;
+        }
+
+        /* Block comment; may span newlines, which then do not separate. */
+        if (c == '/' && p[1] == '*') {
+            for (p += 2; *p != '\0' && !(*p == '*' && p[1] == '/'); p++)
+                ;
+            if (*p == '\0')
+                break;
+            p++; /* land on '/', the loop's p++ steps past it */
+            continue;
+        }
+
+        if ((c == '/' && p[1] == '/') || (c == '#' && rules.hash_is_comment) ||
+            (c == ';' && rules.semi_is_comment)) {
+            while (*p != '\0' && *p != '\n')
+                p++;
+            if (*p == '\0')
+                break;
+            c = '\n'; /* the newline that ended the comment still separates */
+        }
+
+        if (c == '\n' || (c == ';' && !rules.semi_is_comment)) {
+            if (pending)
+                n++;
+            pending = false;
+            continue;
+        }
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\f' && c != '\v')
+            pending = true;
+    }
+    return pending ? n + 1 : n;
+}
+
 /* Last assemble diagnostic for the calling thread, surfaced to bindings through
  * asmtest_asm_last_error(). Thread-local so a multithreaded host's concurrent
  * assembles don't clobber each other's error. */
@@ -130,6 +223,25 @@ bool asmtest_assemble(asm_arch_t arch, asm_syntax_t syntax, const char *source,
         out->ok = false;
         set_last_err(out->err);
         ks_free(enc); /* NULL-safe; nothing allocated on the error path */
+        ks_close(ks);
+        return false;
+    }
+
+    /* ks_asm returning 0 is NOT enough: on a recoverable per-statement error
+     * (bad operand, truncated operand, wrong-dialect operand) Keystone drops
+     * that statement, leaves ks_errno at KS_ERR_OK, and still returns success —
+     * so the caller would get machine code missing an instruction they wrote,
+     * with ok == true. stat_count is the only witness. Fail the whole assemble
+     * rather than hand back a quiet wrong answer. */
+    size_t expected = count_statements(source, arch, syntax);
+    if (stat_count < expected) {
+        snprintf(out->err, sizeof out->err,
+                 "assembler skipped %zu of %zu statements (check the syntax "
+                 "argument)",
+                 expected - stat_count, expected);
+        out->ok = false;
+        set_last_err(out->err);
+        ks_free(enc);
         ks_close(ks);
         return false;
     }

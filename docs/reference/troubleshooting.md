@@ -55,6 +55,21 @@ scripts — on every platform it does not build them itself, so run the scripts
 directly. The build verifies the pinned commit against
 `scripts/third-party-digests.txt`.
 
+**`assembler skipped N of M statements (check the syntax argument)`.** The
+source contains statements the assembler did not assemble, so the whole call
+fails rather than returning machine code missing an instruction you wrote. The
+usual cause is exactly what the message says — **a dialect mismatch**. In-line
+strings default to Intel syntax, so AT&T text passed without naming a syntax
+(`assemble("movq $42, %rax\nret")` in any binding) hits this; name the dialect
+(`ASM_SYNTAX_ATT` / `ASM_SYNTAX_GAS`, or the binding's equivalent) and it
+assembles. The other causes are a typo'd operand in one statement, an
+ARM-style `#` immediate on an x86 guest, and a truncated operand
+(`mov rax,`) — in each case only the offending statement was dropped, and the
+count in the message tells you how many. Before this check existed such a
+source returned success with the statement quietly missing, so a suite that
+asserted on the short code passed; a suite that starts failing here was
+asserting on code it never wrote.
+
 ## Emulator tier (Unicorn)
 
 **`make emu-test` fails to link (`-lunicorn`).** Install libunicorn with `make

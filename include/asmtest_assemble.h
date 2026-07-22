@@ -67,12 +67,27 @@ typedef struct {
     char err[160];     /* human-readable error on failure ("" on ok)    */
 } asm_result_t;
 
+/* Note on `stat_count`: it counts *statements*, not instructions, and the two
+ * differ — a label, a directive and a comment-only line each count as a
+ * statement while emitting no instruction, so stat_count >= the instruction
+ * count for any source that carries them. Do not read it as "instructions
+ * assembled". */
+
 /*
  * Assemble `source` (statements separated by ';' or newline) for `arch` at load
  * address `addr` — pass the address the bytes will run at (e.g. EMU_CODE_BASE)
  * so PC-relative and branch targets resolve correctly. `syntax` applies to
  * x86 only. Fills *out and returns out->ok. Always release *out (whether it
  * succeeded or not) with asmtest_asm_free.
+ *
+ * Contract: all or nothing. Every statement in `source` is assembled, or the
+ * call fails — there is no partial output. This matters because the underlying
+ * Keystone engine reports success after silently DROPPING a statement it could
+ * only partially parse (a bad, truncated or wrong-dialect operand), which would
+ * otherwise hand back machine code missing an instruction the caller wrote. A
+ * source that trips this fails with "assembler skipped N of M statements"; the
+ * usual cause is a dialect mismatch, so check the `syntax` argument first —
+ * AT&T text assembled under the ASM_SYNTAX_INTEL default is the common case.
  */
 bool asmtest_assemble(asm_arch_t arch, asm_syntax_t syntax, const char *source,
                       uint64_t addr, asm_result_t *out);
