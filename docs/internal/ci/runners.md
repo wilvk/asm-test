@@ -234,7 +234,7 @@ recorded form of each hardware gate.
 | Lane | Runner tarball SHA-256 (verified on box) | Box (SoC / kernel) | Registered | `HW_RUNNER_*` | Live-lane last green |
 |---|---|---|---|---|---|
 | amd-zen | `4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf` (v2.335.1, verified on box 2026-07-22 == GitHub's published digest) | Ryzen 9 9950X (Zen 5, `amd_lbr_v2` present) | ☐ (ephemeral one-shot; de-registered after the proof run) | `0` | ✅ [run 29897214772](https://github.com/wilvk/asm-test/actions/runs/29897214772) — 2026-07-22 |
-| intel-pt | _(record at registration)_ | MacBookPro15,2 / Core i7-8559U (Coffee Lake), Ubuntu 26.04 `7.0.0-28-generic`, **bare metal** (no `hypervisor` flag), `intel_pt` type=10 `nr_addr_filters=2`, `perf_event_paranoid=4` | ☐ (box proven, runner not yet registered) | `0` | — (lane ready; needs registration) |
+| intel-pt | `4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf` (v2.335.1, verified on box 2026-07-23 == GitHub's published digest) | MacBookPro15,2 / Core i7-8559U (Coffee Lake), kernel `7.1.4-1-t2-noble`, **bare metal** (no `hypervisor` flag), `intel_pt` type=10 `nr_addr_filters=2`, `perf_event_paranoid=2` | ☐ (ephemeral one-shot; de-registered after the proof run) | `0` | ✅ [run 29997961188](https://github.com/wilvk/asm-test/actions/runs/29997961188) — 2026-07-23 |
 | coresight | _(record)_ | _(AArch64 ETM/ETE + sink)_ | ☐ | `0` | — |
 | tart | _(record for osx-arm64)_ | _(Apple Silicon)_ | ☐ | `0` | — |
 | kvm | _(record)_ | _(bare-metal `/dev/kvm`)_ | ☐ | `0` | — |
@@ -274,13 +274,33 @@ recorded form of each hardware gate.
 > answer stays visible in the log rather than only here. Full record:
 > [intel-hardware-validation.md](../intel-hardware-validation.md) "Recorded runs".
 >
-> **What remains for this lane is registration, not engineering:** register a
+> ~~**What remains for this lane is registration, not engineering:** register a
 > `v2.335.1` runner on that box with `--labels intel-pt` (verify the tarball
 > SHA-256 on the box per the flow above), set `HW_RUNNER_INTEL_PT=1`, dispatch
 > `hw.yml`, approve the `hw-runners` environment, confirm green, then power down
-> per the same rule as amd-zen. The **nightly** half of T5's Done-when needs a
-> STANDING runner (JIT/ephemeral loop) — the same deferred deployment choice the
-> amd-zen row records.
+> per the same rule as amd-zen.~~ **DONE 2026-07-23 — the CI lane ran green live**
+> ([run 29997961188](https://github.com/wilvk/asm-test/actions/runs/29997961188)):
+> a `v2.335.1` runner (tarball SHA-256 re-verified on this box == GitHub's
+> published digest, same linux-x64 value the amd-zen row records) was registered
+> `--ephemeral --labels intel-pt` on the i7-8559U box, `HW_RUNNER_INTEL_PT`
+> flipped to `1`, `gh workflow run hw.yml` dispatched, and `hwtrace-pt-baremetal`
+> executed on the `intel-pt` runner: `make docker-hwtrace-privileged` →
+> **`# 649 passed, 0 failed`** with the PT tier live (`ok 157-167` — self-JIT'd
+> routine under PT capture, TNT follow both walks, 4 KiB AUX truncation,
+> SET_FILTER accepted `object-relative`, anon-region decode-time fallback;
+> `# pt nr_addr_filters: 2`), then the fail-not-skip step
+> `make docker-hwtrace-pt-live` (`ASMTEST_REQUIRE_PT=1`) → **`1..644`,
+> `# 644 passed, 0 failed`**, with the in-container PMU node printed at the top
+> of the log. The Zen and CoreSight jobs skipped on their `0` variables, as
+> designed. One-shot ephemeral: the runner de-registered itself after the job and
+> `HW_RUNNER_INTEL_PT` was reset to `0` per the power-down rule — so the row above
+> shows `☐ (ephemeral one-shot)`. **Observed settings note:** the `hw-runners`
+> environment currently has **no protection rules**, so the dispatch proceeded
+> without an approval pause — the required-reviewer checklist item above remains
+> unticked (an admin choice: adding it would also pause every unattended nightly
+> run for approval). The **nightly** half of T5's Done-when still needs a STANDING
+> runner (JIT/ephemeral loop) — the same deferred deployment choice the amd-zen
+> row records.
 
 ## Hardware & credential gates (recorded, per CLAUDE.md)
 

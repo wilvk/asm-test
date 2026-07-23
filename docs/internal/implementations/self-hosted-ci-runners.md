@@ -495,17 +495,31 @@ sentence to name all three hardware lanes as allowed-to-be-absent.
 >   is recorded in the runbook, and the make target prints the node on every run
 >   so it stays visible in the log rather than only in a doc.
 >
-> **What is left is registration, not engineering**: a runner on that box with
+> ~~**What is left is registration, not engineering**: a runner on that box with
 > `--labels intel-pt`, `HW_RUNNER_INTEL_PT=1`, dispatch, approve, confirm green,
-> power down — the exact flow the `amd-zen` lane already went through. The
-> *nightly* half of the first bullet additionally needs a STANDING runner, the
-> same deferred deployment choice recorded for amd-zen.
+> power down — the exact flow the `amd-zen` lane already went through.~~
+> **Registration DONE 2026-07-23, on the i7-8559U PT box itself:** ephemeral
+> `v2.335.1` runner (tarball SHA-256 verified on box == GitHub's published
+> digest), `--labels intel-pt`, `HW_RUNNER_INTEL_PT=1`, `gh workflow run hw.yml`
+> → [run 29997961188](https://github.com/wilvk/asm-test/actions/runs/29997961188)
+> **GREEN**: `hwtrace-pt-baremetal` ran both steps live on the `intel-pt` runner
+> (`docker-hwtrace-privileged` `# 649 passed, 0 failed` with PT live `ok 157-167`;
+> require-mode `docker-hwtrace-pt-live` `1..644`, `# 644 passed, 0 failed`), Zen +
+> CoreSight skipped on their `0` variables. Runner de-registered after the one
+> job, variable reset to `0` (power-down rule) — full record in the
+> [runbook status table](../ci/runners.md). One settings observation recorded
+> there: the `hw-runners` environment has no protection rules yet, so no approval
+> pause occurred. The *nightly* half of the first bullet still needs a STANDING
+> runner, the same deferred deployment choice recorded for amd-zen.
 
 **Done when.**
 
 - `hwtrace-pt-baremetal` green on real PT silicon via dispatch AND schedule.
-  **Job landed and guarded-off green; the live run needs the box registered
-  (operator step, ~10 min) and the nightly needs a standing runner.**
+  **Dispatch half MET 2026-07-23** —
+  [run 29997961188](https://github.com/wilvk/asm-test/actions/runs/29997961188)
+  green on the registered `intel-pt` runner (see the dated note above); the
+  schedule/nightly half needs a standing runner (deferred deployment choice, as
+  for amd-zen).
 - ~~The in-container `intel_pt` visibility answer is recorded in
   `docs/internal/ci/runners.md`~~ — **done** (visible; `CAP_PERFMON`, no
   `--privileged`, no paranoid change), and re-printed by the make target each run.

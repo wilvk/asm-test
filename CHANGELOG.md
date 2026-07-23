@@ -8,6 +8,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Self-hosted Intel PT CI lane first green run (self-hosted-ci-runners.md
+  T5).** `hw.yml`'s `hwtrace-pt-baremetal` executed live for the first time
+  ([run 29997961188](https://github.com/wilvk/asm-test/actions/runs/29997961188),
+  2026-07-23) on an ephemeral pinned `v2.335.1` runner registered
+  `--labels intel-pt` on the bare-metal i7-8559U PT box: the broad
+  hardware-capture tier under `CAP_PERFMON` (`# 649 passed, 0 failed`, PT tier
+  live) plus the fail-not-skip `make docker-hwtrace-pt-live`
+  (`ASMTEST_REQUIRE_PT=1`, `1..644`, `# 644 passed, 0 failed`). One-shot
+  ephemeral per the power-down rule (runner de-registered, `HW_RUNNER_INTEL_PT`
+  back to `0`); unattended nightly coverage still needs a standing runner. See
+  `docs/internal/ci/runners.md`.
 - **macOS clean-room Track D lane validated green — first shakedown complete
   (macos-cleanroom-lanes.md T6).** `make docker-osx-bindings` now runs a vanilla
   **x86-64 macOS 13.7.8 (Ventura)** guest under KVM on a bare-metal Linux host,

@@ -64,6 +64,22 @@ its own, but it runs cleanly inside the `asmtest-hwtrace` image with
 The checklist above is a reusable template — leave its boxes blank. Record each
 observed run here (host, date, the values each item asks for), newest first.
 
+### 2026-07-23 — Intel Core i7-8559U, first CI-lane run (`hw.yml` `hwtrace-pt-baremetal`)
+
+Same box and kernel as the entry below, but this time **not a by-hand run**: the
+[self-hosted-ci-runners.md](implementations/self-hosted-ci-runners.md) T5 lane
+executed via a registered ephemeral `intel-pt` runner —
+[run 29997961188](https://github.com/wilvk/asm-test/actions/runs/29997961188),
+dispatched at `main` `ac3b521`. `make docker-hwtrace-privileged` →
+`# 649 passed, 0 failed` (PT live `ok 157-167`, `# pt live: address-filter form
+accepted = object-relative`, `# pt nr_addr_filters: 2`), then the fail-not-skip
+`make docker-hwtrace-pt-live` (`ASMTEST_REQUIRE_PT=1`) → `1..644`,
+`# 644 passed, 0 failed`, PMU node printed in-log. Registration/power-down
+record: [ci/runners.md](ci/runners.md) status table. The "until one exists a
+maintainer runs this by hand" caveat at the top of this page is now half-retired:
+the lane exists and is proven; unattended nightly coverage still needs a
+standing runner.
+
 ### 2026-07-23 — Intel Core i7-8559U, independent validating agent (post-concurrency-fix ✅ run)
 
 Same physical box as the 2026-07-21 entry, now on kernel `7.1.4-1-t2-noble`,
