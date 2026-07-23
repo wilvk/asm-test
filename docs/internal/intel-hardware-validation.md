@@ -50,14 +50,66 @@ its own, but it runs cleanly inside the `asmtest-hwtrace` image with
       value trace **byte-identical to the emulator L0 (zero single-steps)**.
 - [ ] Sanity: the same host, plain `docker-hwtrace` (no caps) still self-skips PT
       cleanly and stays green (no regression to the non-PT path).
-- [ ] Gated / not run: `.NET` managed compose PT prongs (T5/T11) — the
-      `asmtest-dotnet` image ships no libipt, so its PT decode is not built; record
-      as gated until the dotnet image carries `libipt-dev`.
+- [ ] `.NET` managed compose PT prongs (T5/T10/T11): the `asmtest-dotnet` image
+      carries `libipt-dev` (since `4cf5d17`), so run
+      `docker run --rm --cap-add=PERFMON -e DOTNET_CLI_TELEMETRY_OPTOUT=1 -e
+      DOTNET_NOLOGO=1 asmtest-dotnet make hwtrace-dotnet-test` ≥5× → every run
+      PASS with `AsmTrace(IntelPt): armed on Intel PT silicon` and
+      `ambient: >=2 stitched slices captured` (a capture, not a self-skip), plus
+      `make docker-hwtrace-dotnet-ambient-stress` → `1..N`, 0 `not ok`, the
+      ambient set captured live on every iteration.
 
 ## Recorded runs
 
 The checklist above is a reusable template — leave its boxes blank. Record each
 observed run here (host, date, the values each item asks for), newest first.
+
+### 2026-07-23 — Intel Core i7-8559U, independent validating agent (post-concurrency-fix ✅ run)
+
+Same physical box as the 2026-07-21 entry, now on kernel `7.1.4-1-t2-noble`,
+`perf_event_paranoid=2`, `intel_pt` PMU `type=10`, `nr_addr_filters=2`, bare
+metal (no `hypervisor` flag), Docker via `--cap-add=PERFMON`. Validated at clean
+`main` `4cf5d17` (the code-image use-after-free fix,
+[dotnet-managed-pt-concurrency-plan.md](plans/dotnet-managed-pt-concurrency-plan.md))
+by an agent independent of that fix's implementer — this run stamps
+[intel-pt-whole-window-substrate.md](implementations/intel-pt-whole-window-substrate.md)
+and [managed-wholewindow-compose.md](implementations/managed-wholewindow-compose.md)
+`✅`, closing the 2026-07-21 entry's recorded blocker (the managed
+multi-threaded live-PT race). All runs exit 0, 0 `not ok`:
+
+- **`make docker-hwtrace-pt-live`** ×3 → `1..644`, **`# 644 passed, 0 failed`**
+  every run, ZERO PT skips (the only `# SKIP`s are AMD/MSR/stealth-helper
+  gates). In-container PMU visible (`type` reads 10). `# pt live: address-filter
+  form accepted = object-relative`, `# pt nr_addr_filters: 2`; taken/not-taken
+  TNT walks, the 4 KiB-ring truncation signal, capture-side file filter and the
+  anon-region decode-time fallback all asserted live.
+- **`.NET` live PT suite** — `docker run --rm --cap-add=PERFMON … asmtest-dotnet
+  make hwtrace-dotnet-test` ×5 → **5/5 PASS**, `1..229`, 0 `not ok`, **zero
+  crashes** (pre-fix this SIGSEGV'd 7/7). Every run: `ok AsmTrace(IntelPt):
+  armed on Intel PT silicon — captured 867041 instructions` (T4 inline ctor,
+  window EXACT) and `ok ambient: >=2 stitched slices captured (3)` — the T10
+  per-tid hop capture + T11 ambient chain genuinely live, not self-skipping.
+- **`make docker-hwtrace-dotnet-ambient-stress`** → `1..576`, 0 `not ok`,
+  exit 0; the concurrent ambient/stitched set captured **live on 25/25
+  iterations** (zero ambient skips).
+- **`docker run --rm --cap-add=PERFMON --security-opt seccomp=unconfined
+  asmtest-dataflow-attach make dataflow-pt-live`** ×3 → `1..29`, **`# all 29
+  checks passed`** each; `live(20,22)`/`live(200,1)` foreign-pid captures ran,
+  `PT-decoded path == single-step oracle path`, F5 replay byte-identical to the
+  emulator L0 (zero single-steps).
+- **Sanity (no caps):** `make docker-hwtrace` green (C `# 638 passed, 0
+  failed`, python 26 passed/1 skipped) with PT self-skipping cleanly; plain
+  `make docker-hwtrace-dotnet` `1..229`, 0 `not ok`, the PT prong self-skipping
+  on **permission** (`perf_event capture not permitted (lower
+  perf_event_paranoid or grant CAP_PERFMON)`), not a missing lib — the
+  libipt-in-image contract holds unprivileged lanes harmless.
+- **Hygiene:** `make docker-fmt-check` + `make docker-docs` clean; host-side
+  `make check-bindings-parity` **OK — 142 tier symbols × 10 bindings** (run on
+  the host, per the recorded dubious-ownership gotcha).
+- **Honest residue (recorded, not hidden):** on this box `MethodsObserved` is 0
+  consistently, so the `unwarmed/PT compose: >=1 method JIT'd inside the window`
+  check self-skips every run (the capture itself is asserted live); forcing a
+  guaranteed in-window JIT remains the concurrency plan's recorded follow-up.
 
 ### 2026-07-21 — Intel Core i7-8559U (Coffee Lake, Family 6), validating agent
 

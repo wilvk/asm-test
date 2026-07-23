@@ -404,6 +404,23 @@ captures, PT-decoded path == single-step oracle).
 > exercised live (`ambient: >=2 stitched slices captured (3)` every iteration), which is
 > what those rows were waiting on.
 
+**VALIDATED ✅ 2026-07-23 (independent validating agent, same day, different agent than
+the implementer).** Re-ran the table above on this i7-8559U PT box at clean `main`
+`4cf5d17`: `make docker-hwtrace-pt-live` ×3 (`1..644`, 0 failed, zero PT skips),
+`make hwtrace-dotnet-test` under `--cap-add=PERFMON` ×5 (**5/5 PASS**, `1..229`,
+0 `not ok`, 0 crashes; inline ctor armed + `ambient: >=2 stitched slices captured (3)`
+every run), `make docker-hwtrace-dotnet-ambient-stress` (`1..576`, 25/25 iterations
+captured live), `dataflow-pt-live` ×3 (`1..29`), plain `docker-hwtrace` /
+`docker-hwtrace-dotnet` green with the honest permission self-skip, `docker-fmt-check`
+/ `docker-docs` / host `check-bindings-parity` (142×10) clean. Both README rows
+([intel-pt-whole-window-substrate](../implementations/intel-pt-whole-window-substrate.md),
+[managed-wholewindow-compose](../implementations/managed-wholewindow-compose.md)) are
+stamped `✅`; the run is appended to
+[intel-hardware-validation.md](../intel-hardware-validation.md) (2026-07-23 entry).
+T5's Done-when is fully met; the one recorded residue is T4's honest note above
+(`MethodsObserved==0` on this box → the in-window-JIT premise self-skips; forcing a
+guaranteed in-window JIT is the remaining optional follow-up).
+
 ## Task order & gates
 
 `T1 → (T2 | T3) → T4 → T5`. T1 is the fork: symbolizing the core decides whether
