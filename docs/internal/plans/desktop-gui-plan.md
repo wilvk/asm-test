@@ -22,6 +22,11 @@
 > file as phases land, the way [post-v1-expansion-plan.md](post-v1-expansion-plan.md)
 > tracks its tracks; archive it when done, per the
 > [archive rule](../README.md).
+>
+> **Pointer (2026-07-24):** the implementation-ready breakdown of this plan —
+> nine junior-implementable briefs, 63 tasks, with the binding build decisions
+> (the GUI ships under `desktop/`, integrated via `mk/desktop.mk`) — lives in
+> [docs/internal/gui/](../gui/README.md).
 
 ## Summary
 
