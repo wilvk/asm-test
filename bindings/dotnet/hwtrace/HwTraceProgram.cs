@@ -1426,10 +1426,18 @@ static class HwTraceProgram
             return;
         }
         long r = 0;
+        bool observed = false;
         AsmTrace ww;
         using (ww = new AsmTrace(HwBackend.IntelPt, byMethod: true))
         {
             r = UnwarmedPtPath(20000);
+            // dotnet-pt-inwindow-jit-premise T1: the first call above COMPILED UnwarmedPtPath
+            // inside the window (the method-load event is emitted at JIT time, before the body
+            // runs) — only the EventPipe DELIVERY to the map races the close, and a native-speed
+            // PT window loses that race every time (MethodsObserved==0 on every i7-8559U run).
+            // Hold the window open until the delivery lands, the property the slow single-step
+            // sibling gets for free, so the in-window-JIT premise is covered deterministically.
+            observed = ww.WaitMethodObserved("UnwarmedPtPath", timeoutMs: 2000);
         }
         Check(r == 90000, $"unwarmed/PT compose: UnwarmedPtPath(20000) == 90000 (got {r})");
         if (!ww.Armed)
@@ -1439,16 +1447,16 @@ static class HwTraceProgram
             Console.WriteLine($"# SKIP unwarmed/PT compose: {ww.SkipReason}");
             return;
         }
-        // Never flake on JIT timing (the compose doc's rule). Unlike the in-process sibling —
-        // which arms EFLAGS.TF around the very first call, so the first-JIT is guaranteed to
-        // land inside the window — this is a PT hardware ring: whether the runtime got round
-        // to compiling UnwarmedPtPath before the window closed is a scheduling outcome, not a
-        // property under test. Zero in-window methods leaves nothing to assert against (and
-        // would drag the InstructionsIn check down with it), so self-skip instead of failing.
-        if (ww.MethodsObserved < 1)
+        // Never flake on JIT timing (the compose doc's rule). With the bounded in-window wait
+        // above, the only way to land here with an empty map is a genuine EventPipe delivery
+        // stall past the 2 s bound — still a scheduling outcome, not a property under test, so
+        // it stays a named self-skip (and leaves the InstructionsIn check nothing to resolve
+        // against), never a `not ok`.
+        if (!observed && ww.MethodsObserved < 1)
         {
-            Console.WriteLine("# SKIP unwarmed/PT compose: no method JIT'd inside the window this "
-                              + "run (tiering timing, not a defect) — nothing to resolve against");
+            Console.WriteLine("# SKIP unwarmed/PT compose: UnwarmedPtPath's JIT event was not "
+                              + "delivered within the bounded in-window wait (EventPipe delivery "
+                              + "stall, not a defect) — nothing to resolve against");
             return;
         }
         Check(ww.MethodsObserved >= 1,

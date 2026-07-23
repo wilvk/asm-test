@@ -87,6 +87,22 @@ SKIP) stably across ≥3 consecutive runs, plus one
 **Done when.** The premise line is `ok` (never SKIP, never `not ok`) on ≥3
 consecutive PT-box suite runs, and every non-PT lane is byte-identically green.
 
+> **Landed 2026-07-23, measured on the i7-8559U PT box (the implementing
+> agent).** `AsmTrace.WaitMethodObserved(nameSubstring, timeoutMs=2000)` +
+> the in-window wait in the PT prong. Privileged suite
+> (`docker run --cap-add=PERFMON … make hwtrace-dotnet-test`): **3 consecutive
+> fully-captured runs, exit 0, `1..231`, 231 ok / 0 `not ok` each**, the
+> premise line `ok … >=1 method JIT'd inside the window (got 1)` every run
+> (was: SKIP on every run this box had ever done) — the suite grew 229→231
+> under caps because the two prong checks now number instead of skipping. The
+> resolve check reports `320032 insns, truncated=True` — the wait's captured
+> instructions fill the AUX ring, and the check's trace-or-truncated contract
+> asserts on the resolved 320 k. Plain `docker-hwtrace-only-dotnet` `1..229`
+> exit 0 (prong self-skips at `Available`); `docker-hwtrace-dotnet9` `1..229`
+> (PT skip on **permission**, not a missing lib); ambient stress `1..576`, 25
+> iterations, exit 0; `docker-fmt-check` + `docker-docs` clean. Marked `☑` —
+> `✅` is an independent validating agent's stamp, per the README role split.
+
 ## Constraints & gates
 
 - **Hardware gate (validation only):** the live leg needs the bare-metal Intel

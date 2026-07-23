@@ -352,6 +352,13 @@ runtime got round to compiling before a hardware ring closed.
 > "self-skip … when the runtime does not JIT a method inside the window this run", but
 > if a future host wants that premise actually covered, the other half of the plan's own
 > option — "or force a guaranteed in-window JIT" — is the remaining work.
+>
+> **Closed 2026-07-23 by
+> [dotnet-pt-inwindow-jit-premise.md](../implementations/dotnet-pt-inwindow-jit-premise.md)
+> T1** (a later-addition implementation doc): the JIT was in-window all along —
+> only the EventPipe *delivery* raced the close — so the check now holds the
+> window open (bounded `AsmTrace.WaitMethodObserved`) until the map observes
+> `UnwarmedPtPath`, and the premise asserts deterministically on this box.
 
 ### T5 — Re-enable libipt in the dotnet image + validate + flip statuses  (S, depends on T4; gate: the PT box)
 

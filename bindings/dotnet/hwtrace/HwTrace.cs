@@ -2174,6 +2174,32 @@ namespace Asmtest
             return n;
         }
 
+        /// <summary>dotnet-pt-inwindow-jit-premise T1: bounded IN-WINDOW wait for the live
+        /// JIT map to observe a method whose name contains <paramref name="nameSubstring"/>.
+        /// A method first-called inside a window is COMPILED inside it (the runtime emits the
+        /// method-load event at JIT time, before the body runs), but the event reaches the
+        /// map on the runtime's EventPipe dispatch thread asynchronously — a native-speed PT
+        /// window closes sub-millisecond after the call returns, ahead of that delivery, so
+        /// the close-time <see cref="MethodsObserved"/> snapshot undercounts. Call this
+        /// INSIDE the scope, after the call under test, to hold the window open until the
+        /// delivery lands — the property a slow single-step window gets for free. Returns
+        /// true once observed; false on an unarmed or mapless scope, or when
+        /// <paramref name="timeoutMs"/> expires (a genuine delivery stall — callers keep
+        /// their honest self-skip for that arm). Deliberately NOT wired into Dispose:
+        /// closes must never block, and "wait for ≥1 method" is wrong for a window that
+        /// JITs nothing.</summary>
+        public bool WaitMethodObserved(string nameSubstring, int timeoutMs = 2000)
+        {
+            if (!Armed || _map == null) return false;
+            long deadline = Environment.TickCount64 + timeoutMs;
+            while (_map.CountFor(nameSubstring) == 0)
+            {
+                if (Environment.TickCount64 >= deadline) return false;
+                Thread.Sleep(1);
+            }
+            return true;
+        }
+
         /// <summary>
         /// §Z0/§Z1 — the aspirational EMPTY-ctor form: <c>using (new AsmTrace()) { HotPath(data); }</c>.
         /// No <see cref="NativeCode"/>, no <c>[base,len)</c>; arms a region-free WHOLE-WINDOW

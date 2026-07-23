@@ -1871,6 +1871,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **.NET: the `unwarmed/PT compose` in-window-JIT premise check no longer
+  permanently self-skips on PT silicon (dotnet-pt-inwindow-jit-premise.md
+  T1).** On the only host class where the Intel PT whole-window ctor arms, the
+  `>=1 method JIT'd inside the window` check took its timing self-skip on
+  every run (`MethodsObserved == 0` consistently on the i7-8559U — the
+  dotnet-managed-pt-concurrency-plan T4 residue): the fixture's first-call JIT
+  is compiled inside the window, but the method-load event reaches the
+  `JitMethodMap` on the EventPipe dispatch thread asynchronously, and a
+  native-speed PT window closes sub-millisecond after the call — losing the
+  delivery race the slow single-step sibling wins for free. New
+  `AsmTrace.WaitMethodObserved(nameSubstring, timeoutMs)` polls the live map's
+  thread-safe `CountFor` so the test holds the window open (2 s bound) until
+  the delivery lands; the premise now asserts deterministically, the self-skip
+  arm survives only for a genuine delivery stall (never-flake rule kept), and
+  the close-time `trackBytes` image now contains the fresh method so the
+  versioned decode resolves it directly. No C-core change, no new tier symbol.
 - **macOS (Intel) native build correctness (fifth pass): the hwtrace suite
   failed to compile at the new MSR-rung commit-decision seam**
   (`amd-review-followup-2` T4, landed from the Zen box the same day).
