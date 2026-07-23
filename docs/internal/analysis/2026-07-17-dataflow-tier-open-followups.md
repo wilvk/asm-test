@@ -6,7 +6,7 @@ on 2026-07-18 via [dataflow-bindings-slice-codeimage.md](../implementations/data
 T1–T4 (commits `84d5bae`, `5cd22a5`, `9be3f0c`, `d8bf20d`/`db835c7`) — all ten bindings now share
 the def-use/slice surface.** *This header previously read "Items 4 and 5 remain OPEN", which was
 doubly stale (item 4's own section already said LANDED 2026-07-18); that staleness was the
-[2026-07-21 repo review](../reviews/2026-07-21-repo-review.md) §0 discrepancy — this doc was the
+[2026-07-21 repo review](../archive/reviews/2026-07-21-repo-review.md) §0 discrepancy — this doc was the
 stale side, the implementation brief is authoritative.*
 None was a regression; each was surfaced (not introduced) while landing the batch, and each was
 recorded here rather than fixed inline, because fixing them inside the diff that found them would

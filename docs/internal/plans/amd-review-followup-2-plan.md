@@ -96,7 +96,7 @@ Five separate documents assert things the current code contradicts. Each is a
 pure doc edit; group them.
 
 > **Note (2026-07-21).** The
-> [2026-07-21 whole-repo review](../reviews/2026-07-21-repo-review.md) folds its
+> [2026-07-21 whole-repo review](../archive/reviews/2026-07-21-repo-review.md) folds its
 > doc-drift findings **D1/D2/D3** into this T2. **D2** in particular reshapes
 > **T2(d)**: the review wants
 > [docs/amd_tracing_review.md](../analysis/2026-07-09-amd-tracing-review-f1-f47.md) **moved under

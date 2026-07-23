@@ -1,7 +1,7 @@
 # Managed-runtime whole-window: live compose, safe managed-arm routing, and ambient PT stitching — implementation
 
 > **Sources.** Actioned from
-> [scoped-tracing-zeroconfig-plan.md](../plans/scoped-tracing-zeroconfig-plan.md)
+> [scoped-tracing-zeroconfig-plan.md](../archive/plans/scoped-tracing-zeroconfig-plan.md)
 > (§Z1.1 routing note, §Z3 live half, §Z4 escalation) and
 > [zen2-singlestep-trace-plan.md](../archive/plans/zen2-singlestep-trace-plan.md) (§W2/§D3
 > stepper, W3 block-step). Written 2026-07-17. If this doc and a source disagree,

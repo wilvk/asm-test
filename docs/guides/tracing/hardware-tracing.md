@@ -305,7 +305,7 @@ zero-config whole-window scope drops even that: no `NativeCode`, no `[base, len)
 just *"trace whatever the calling thread runs inside this block"*. It is the
 aspirational `using (new AsmTrace())` form, and it works today on any x86-64 Linux
 host with zero setup. The full design is in the internal plan,
-[scoped-tracing-zeroconfig-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/scoped-tracing-zeroconfig-plan.md).
+[scoped-tracing-zeroconfig-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/scoped-tracing-zeroconfig-plan.md).
 
 The C surface is three calls:
 

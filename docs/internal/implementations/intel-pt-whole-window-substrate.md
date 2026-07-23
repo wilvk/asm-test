@@ -1,7 +1,7 @@
 # Intel PT whole-window capture substrate: STRONG tier ladder, inline ctor, and live smoke — implementation
 
 > **Sources.** Actioned from
-> [scoped-tracing-zeroconfig-plan.md](../plans/scoped-tracing-zeroconfig-plan.md)
+> [scoped-tracing-zeroconfig-plan.md](../archive/plans/scoped-tracing-zeroconfig-plan.md)
 > (§Z1.2 ZC-STRONG, §Z2 ZC-Z2-LIVE),
 > [asmtrace-inline-using-plan.md](../archive/plans/asmtrace-inline-using-plan.md) (R2), and
 > [hardware-trace-plan.md](../plans/hardware-trace-plan.md) (Phase 1 PT capture,
@@ -370,7 +370,7 @@ the full existing suite stays green (`make docker-hwtrace`); (b)
 `asmtest_hwtrace_window_image()` returns NULL when no PT window is armed. The
 live end-to-end proof is T5 — say so in the test's `# SKIP` line. This split
 (synthetic decode in CI, capture on silicon) is the plan's own posture
-([scoped-tracing-zeroconfig-plan.md](../plans/scoped-tracing-zeroconfig-plan.md)
+([scoped-tracing-zeroconfig-plan.md](../archive/plans/scoped-tracing-zeroconfig-plan.md)
 §Z2 "Build-gate honesty").
 
 **Docs.** Append a `### Changed` bullet under `## [Unreleased]` in
@@ -679,7 +679,7 @@ live-validated (record the validation host once run), unprivileged AUX sizing
 note (perf tool convention: 128 KiB unprivileged vs 4 MiB privileged — a
 tool default, not a kernel cap; the tier's 64 KiB default AUX ring is safely
 under it). Update the per-phase status blocks in
-[scoped-tracing-zeroconfig-plan.md](../plans/scoped-tracing-zeroconfig-plan.md)
+[scoped-tracing-zeroconfig-plan.md](../archive/plans/scoped-tracing-zeroconfig-plan.md)
 (§Z1 STRONG, §Z2 live half) and
 [hardware-trace-plan.md](../plans/hardware-trace-plan.md) once the smoke has
 actually run on silicon — not before (verify-before-declaring-done).

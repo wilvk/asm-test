@@ -1,7 +1,7 @@
 # Cover the unwarmed/PT in-window-JIT premise (stop the permanent self-skip) — implementation
 
 > **Source.** Later addition (2026-07-23): found by
-> [dotnet-managed-pt-concurrency-plan.md](../plans/dotnet-managed-pt-concurrency-plan.md)
+> [dotnet-managed-pt-concurrency-plan.md](../archive/plans/dotnet-managed-pt-concurrency-plan.md)
 > T4's validation on the bare-metal Intel PT box (Core i7-8559U) — the plan's
 > own honest note records that `MethodsObserved == 0` there **consistently**,
 > so the `unwarmed/PT compose: >=1 method JIT'd inside the window` premise

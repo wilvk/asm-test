@@ -1,7 +1,7 @@
 # examples/dotnet — scoped tracing, live
 
 Runnable .NET demos of the scoped-trace facility from the
-[zero-config plan](../../docs/internal/plans/scoped-tracing-zeroconfig-plan.md) (§Z0/§Z1),
+[zero-config plan](../../docs/internal/archive/plans/scoped-tracing-zeroconfig-plan.md) (§Z0/§Z1),
 one project per report. Most run on the portable **in-process single-step** WEAK tier (any
 x86-64 Linux, no privilege); others use the **out-of-process** ptrace stepper
 (`localscope_oop*`, `crashproof-showdown`, crash-proof, needs ptrace) and the **AMD LBR**
@@ -199,7 +199,7 @@ Honest limits: this is the single-step WEAK tier, so it also single-steps the JI
 compiling the cold method (the ~977k "native runtime" instructions) — intrusive and
 slow. It needs no launch knob and no Intel PT, but the non-intrusive, clean path is
 the **STRONG** whole-window PT tier (forward-look here). See
-[docs/internal/plans/scoped-tracing-zeroconfig-plan.md](../../docs/internal/plans/scoped-tracing-zeroconfig-plan.md)
+[docs/internal/plans/scoped-tracing-zeroconfig-plan.md](../../docs/internal/archive/plans/scoped-tracing-zeroconfig-plan.md)
 §Z3 and the managed plan's §D0.1.
 
 ## rundown — naming WARM + R2R BCL methods too (§D0.2, observed output)
@@ -639,7 +639,7 @@ recorder or W^X patching is unavailable.
 
 ## New capability & workflow examples
 
-These land the [example-ideation follow-through](../../docs/internal/plans/dotnet-example-ideation-plan.md):
+These land the [example-ideation follow-through](../../docs/internal/archive/plans/dotnet-example-ideation-plan.md):
 the tracing capabilities the table above didn't yet demonstrate, plus the real-world workflows a
 developer reaches for tracing to do.
 

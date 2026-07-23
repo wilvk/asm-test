@@ -86,7 +86,7 @@ struct asmtest_codeimage {
      * SAME image on thread-pool threads. Both track() and refresh() realloc those
      * arrays, so an unlocked bytes_at() walk was a use-after-free — a ~100%
      * reproducible SIGSEGV in asmtest_pt_read_codeimage on a live PT box (see
-     * docs/internal/plans/dotnet-managed-pt-concurrency-plan.md T1/T2).
+     * docs/internal/archive/plans/dotnet-managed-pt-concurrency-plan.md T1/T2).
      *
      * Held ONLY across array mutation and lookup, never across a decode: the
      * per-version byte buffers are individually malloc'd and freed just in

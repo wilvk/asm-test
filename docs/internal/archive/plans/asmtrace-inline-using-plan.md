@@ -23,7 +23,7 @@ work for EVERY trace form, IN ADDITION to the delegate factories (`AsmTrace.Wind
 > PT hardware the ctor still self-skips with a `SkipReason` that names the PT availability
 > gate. The sole residual is NOT hardware: stable **.NET multi-threaded live-PT validation**
 > is a managed-concurrency race owned by
-> [dotnet-managed-pt-concurrency-plan.md](../../plans/dotnet-managed-pt-concurrency-plan.md).
+> [dotnet-managed-pt-concurrency-plan.md](dotnet-managed-pt-concurrency-plan.md).
 
 ## The general requirement + the two backend classes
 
@@ -93,7 +93,7 @@ instructions", PT window EXACT) — PT is indeed the *ideal* inline backend (har
 start/stop, exact, near-native). Off PT hardware the ctor self-skips with a `SkipReason` that
 names the PT availability gate. The one residual on the .NET leg is NOT hardware: the managed
 multi-threaded live-PT concurrency race, owned by
-[dotnet-managed-pt-concurrency-plan.md](../../plans/dotnet-managed-pt-concurrency-plan.md).
+[dotnet-managed-pt-concurrency-plan.md](dotnet-managed-pt-concurrency-plan.md).
 
 **R3 — SingleStep via the unified ctor (LANDED).** Make `new
 AsmTrace(HwBackend.SingleStep)` forward to the existing whole-window arming (extract it into a

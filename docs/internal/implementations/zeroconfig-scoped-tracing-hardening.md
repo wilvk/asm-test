@@ -1,7 +1,7 @@
 # Zero-config scoped tracing: in-process guards, hygiene assertions, and doc-tail — implementation
 
 > **Sources.** Actioned from
-> [scoped-tracing-zeroconfig-plan.md](../plans/scoped-tracing-zeroconfig-plan.md)
+> [scoped-tracing-zeroconfig-plan.md](../archive/plans/scoped-tracing-zeroconfig-plan.md)
 > (items ZC-SS-GUARDS, ZC-HYGIENE, ZC-DOCS; especially the §Z1.1 correction of
 > 2026-07-16 and §Z5.2/§Z5.4) and
 > [call-descent-plan.md](../archive/plans/call-descent-plan.md) (the §L3
@@ -542,7 +542,7 @@ how the PT decode is validated without silicon.
    zero-config section at
    [docs/scoped-tracing-implementation.md:122](../scoped-tracing-implementation.md);
    this is a **published** page, so link the internal plan via its GitHub blob
-   URL (`https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/scoped-tracing-zeroconfig-plan.md`),
+   URL (`https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/scoped-tracing-zeroconfig-plan.md`),
    exactly as that page already does — never a relative link into
    `docs/internal/`.
 2. Content: the C surface (`asmtest_hwtrace_begin_window` / `_end_window` /

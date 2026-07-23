@@ -52,7 +52,7 @@ this review is self-contained, not to re-open them:
 
 - **.NET managed multi-threaded live-Intel-PT concurrency race** (NULL-deref
   SIGSEGV, non-deterministic) — owned by
-  [plans/dotnet-managed-pt-concurrency-plan.md](../../plans/dotnet-managed-pt-concurrency-plan.md)
+  [plans/dotnet-managed-pt-concurrency-plan.md](../plans/dotnet-managed-pt-concurrency-plan.md)
   (authored 2026-07-21, NOT STARTED). `libipt-dev` is deliberately reverted out
   of the dotnet image so no racy privileged lane ships.
 - **Documentation drift after the Zen 2 → Zen 5 + PT-validation change**

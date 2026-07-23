@@ -2,7 +2,7 @@
 
 The one remaining blocker after Intel PT was validated on real silicon (commits
 `c7b4ef7`, `2d01a7f`; recorded in
-[intel-hardware-validation.md](../intel-hardware-validation.md)). The
+[intel-hardware-validation.md](../../intel-hardware-validation.md)). The
 single-threaded PT paths — whole-window self-capture (`hwtrace-pt-live` 631/631)
 and foreign-pid attach (`dataflow-pt-live` 29/29) — are green and stable on the
 i7-8559U box. The **.NET managed multi-threaded live-PT suite is not**: once the
@@ -22,12 +22,21 @@ no racy privileged lane ships).
 > consequently RE-ADDED to `DOCKER_APT_dotnet` (T5), with the privileged lane green
 > ×5 and the unprivileged lane still green (PT self-skips on permission, not on a
 > missing lib). The affected doc rows —
-> [intel-pt-whole-window-substrate](../implementations/intel-pt-whole-window-substrate.md)
+> [intel-pt-whole-window-substrate](../../implementations/intel-pt-whole-window-substrate.md)
 > T4 (.NET inline `IntelPt` ctor) and
-> [managed-wholewindow-compose](../implementations/managed-wholewindow-compose.md)
+> [managed-wholewindow-compose](../../implementations/managed-wholewindow-compose.md)
 > T5/T10/T11 — are no longer blocked on this plan; they move to `☑` here and are
 > left for an independent **validating** agent to stamp `✅`, per the implementations
 > README's implementer/validator split.
+
+> **ARCHIVED 2026-07-23.** The validation the note above left open happened the same
+> day: an independent validating agent re-ran the T5 table on this i7-8559U PT box at
+> clean main `4cf5d17` and stamped both affected rows **✅** (see the VALIDATED note in
+> T5 and [intel-hardware-validation.md](../../intel-hardware-validation.md)). The one
+> recorded residue — T4's honest `MethodsObserved==0` note — is closed by
+> [dotnet-pt-inwindow-jit-premise.md](../../implementations/dotnet-pt-inwindow-jit-premise.md)
+> T1 (2026-07-23), which owns it now. Nothing in this plan remains open, so it moves to
+> `archive/plans/` under the done⇒archive rule.
 
 ---
 
@@ -55,7 +64,7 @@ Observed across runs (all with the SAME image + flags — non-deterministic):
 - Another run completed all 227 checks but flaked one timing-sensitive compose
   check: `not ok unwarmed/PT compose: >=1 method JIT'd inside the window (got 0)`.
 - A gdb pass (`handle SIGSEGV nostop pass` / `handle SIGABRT stop`) caught the
-  abort with the **main thread mid `ss_arm_tf`** ([ss_backend.c:353](../../../src/ss_backend.c#L353))
+  abort with the **main thread mid `ss_arm_tf`** ([ss_backend.c:353](../../../../src/ss_backend.c#L353))
   reached via `asmtest_hwtrace_begin("add2")` → `asmtest_ss_begin` — i.e. a
   single-step TF window was armed on a managed thread while other threads ran
   concurrent hop work. (gdb shifts .NET signal timing, so treat this as a lead,
@@ -84,16 +93,16 @@ on non-Intel or virtualized hosts (a real hardware gate).
 The concurrency lives in three layers; the fix depends on which one owns the NULL
 deref (P0 decides):
 
-1. **The process-global single-step handler** ([src/ss_backend.c](../../../src/ss_backend.c)).
+1. **The process-global single-step handler** ([src/ss_backend.c](../../../../src/ss_backend.c)).
    The SIGTRAP handler is installed once on the arm-refcount `0->1` transition and
    restored on `1->0`, under `g_ss_lock`, saving `g_old_sa`
-   ([ss_backend.c:535-565](../../../src/ss_backend.c#L535)). `ss_on_sigtrap`
-   ([ss_backend.c:369](../../../src/ss_backend.c#L369)) runs lock-free on each
+   ([ss_backend.c:535-565](../../../../src/ss_backend.c#L535)). `ss_on_sigtrap`
+   ([ss_backend.c:369](../../../../src/ss_backend.c#L369)) runs lock-free on each
    `#DB`, reading `g_armed`, per-thread `tls_depth`/`tls_frames`, the lock-free
    deny table (`g_deny`/`g_deny_len`), the `g_ww_alarm_fired` watchdog flag, and
    writing `f->stream[f->stream_len++]`. Candidate races: (a) the SIGALRM
    window-watchdog save/restore (`g_ww_old_sa`/`g_ww_old_it`,
-   [ss_backend.c:325-347](../../../src/ss_backend.c#L325)) is process-global but
+   [ss_backend.c:325-347](../../../../src/ss_backend.c#L325)) is process-global but
    armed/disarmed per-window — two managed threads opening/closing windows
    concurrently can interleave the `sigaction(SIGALRM)` save/restore and leave a
    stale handler; (b) `f->stream`/the frame's trace buffer freed (trace `Dispose`
@@ -108,7 +117,7 @@ deref (P0 decides):
    (pure hardware, zero single-step) on managed threads, never arming an
    in-process TF window on a thread the runtime owns.
 
-3. **The PT hop / codeimage sharing** ([src/hwtrace.c](../../../src/hwtrace.c)
+3. **The PT hop / codeimage sharing** ([src/hwtrace.c](../../../../src/hwtrace.c)
    `pt_hop_open`/`pt_hop_close`, and `asmtest_codeimage_*`). If multiple ambient
    hops open per-tid PT captures concurrently and share a codeimage or the single
    process-global PT arm, a NULL/torn `img` or ctx at decode is possible. Verify
@@ -187,16 +196,16 @@ T10/T11 ambient path uses it from two threads at once:
 
 - **Writer:** the `JitMethodMap` EventPipe `MethodLoadVerbose` callback fires on a
   runtime listener thread and calls `asmtest_codeimage_track()`
-  ([HwTrace.cs:4394](../../../bindings/dotnet/hwtrace/HwTrace.cs#L4394)) — *outside*
+  ([HwTrace.cs:4394](../../../../bindings/dotnet/hwtrace/HwTrace.cs#L4394)) — *outside*
   the `lock (_lock)` that guards `_methods`. `track` does
-  `realloc(img->regions, …)` ([codeimage.c:391](../../../src/codeimage.c#L391)) and,
+  `realloc(img->regions, …)` ([codeimage.c:391](../../../../src/codeimage.c#L391)) and,
   via `ci_region_add_version`, `realloc(r->vers, …)`
-  ([codeimage.c:208](../../../src/codeimage.c#L208)), then publishes with
+  ([codeimage.c:208](../../../../src/codeimage.c#L208)), then publishes with
   `img->nreg++` / `r->nver++` *after* filling the slot.
 - **Readers:** every ambient hop close decodes against that same image —
   `hop_close` → `asmtest_pt_decode_window` → libipt → `read_recorder` →
   `asmtest_pt_read_codeimage` → `asmtest_codeimage_bytes_at`, which walks
-  `img->regions[i]` and `r->vers[v]` ([codeimage.c:462-471](../../../src/codeimage.c#L462)).
+  `img->regions[i]` and `r->vers[v]` ([codeimage.c:462-471](../../../../src/codeimage.c#L462)).
 
 So a `realloc` on the JIT thread frees the array a decoding pool thread is
 walking → use-after-free → `SIGSEGV`. It surfaces ONLY with libipt present
@@ -229,7 +238,7 @@ without changing the public contract or holding a lock across a decode.
 process-global SIGTRAP/SIGALRM state the plan listed under layer 1 turned out NOT to be
 involved (nothing TF-steps in this path).
 
-1. **C: `asmtest_codeimage_t` is now internally synchronized** ([src/codeimage.c](../../../src/codeimage.c)).
+1. **C: `asmtest_codeimage_t` is now internally synchronized** ([src/codeimage.c](../../../../src/codeimage.c)).
    A `pthread_mutex_t lock` guards the two growable arrays (`regions`, each region's
    `vers`) plus `seq`/`nreg`/`nver`. Taken at the four public entry points — `track`,
    `refresh`, `bytes_at`, `now` — with the existing bodies factored into
@@ -245,7 +254,7 @@ involved (nothing TF-steps in this path).
    (`src/ss_backend.c`, the SIGTRAP TU, calls none of them). The non-Linux `#else` stubs
    are a separate branch that never touches the struct, so macOS is unaffected.
 2. **.NET: the ambient hop lifetime is now ordered against close-out**
-   ([HwTrace.cs](../../../bindings/dotnet/hwtrace/HwTrace.cs), `AsmAmbientStitchedTrace`).
+   ([HwTrace.cs](../../../../bindings/dotnet/hwtrace/HwTrace.cs), `AsmAmbientStitchedTrace`).
    The C lock protects a *live* image, not a *freed* one, and the handler fires on pool
    threads the flow is still leaving — so two windows remained: an attach that read
    `_completed == false` could publish a hop *after* `Complete()`'s drain had passed it
@@ -338,7 +347,7 @@ survived until a repetition lane existed. Lane now green ×3, `1..576`, 0 `not o
 self-skips with an honest reason instead of asserting when `MethodsObserved == 0`
 (and returns, since the dependent `InstructionsIn` check has nothing to resolve
 against). The in-process sibling at
-[HwTraceProgram.cs:1221](../../../bindings/dotnet/hwtrace/HwTraceProgram.cs#L1221)
+[HwTraceProgram.cs:1221](../../../../bindings/dotnet/hwtrace/HwTraceProgram.cs#L1221)
 deliberately **keeps** its hard assert — it arms EFLAGS.TF around the very first call,
 so the first-JIT is guaranteed in-window; only the PT variant depends on whether the
 runtime got round to compiling before a hardware ring closed.
@@ -354,7 +363,7 @@ runtime got round to compiling before a hardware ring closed.
 > option — "or force a guaranteed in-window JIT" — is the remaining work.
 >
 > **Closed 2026-07-23 by
-> [dotnet-pt-inwindow-jit-premise.md](../implementations/dotnet-pt-inwindow-jit-premise.md)
+> [dotnet-pt-inwindow-jit-premise.md](../../implementations/dotnet-pt-inwindow-jit-premise.md)
 > T1** (a later-addition implementation doc): the JIT was in-window all along —
 > only the EventPipe *delivery* raced the close — so the check now holds the
 > window open (bounded `AsmTrace.WaitMethodObserved`) until the map observes
@@ -362,21 +371,21 @@ runtime got round to compiling before a hardware ring closed.
 
 ### T5 — Re-enable libipt in the dotnet image + validate + flip statuses  (S, depends on T4; gate: the PT box)
 
-- Re-add `libipt-dev` to `DOCKER_APT_dotnet` ([mk/docker.mk](../../../mk/docker.mk));
+- Re-add `libipt-dev` to `DOCKER_APT_dotnet` ([mk/docker.mk](../../../../mk/docker.mk));
   confirm the PLAIN (no-CAP_PERFMON) `docker-hwtrace-dotnet` stays green (PT prong
   self-skips on permission, not on a missing lib) and the CI lanes are unaffected.
 - On the PT box run `make hwtrace-dotnet-test` under `--cap-add=PERFMON` ≥5×
   green, and the managed-compose PT prongs (T5/T11) live.
-- Flip [intel-pt-whole-window-substrate](../implementations/intel-pt-whole-window-substrate.md)
+- Flip [intel-pt-whole-window-substrate](../../implementations/intel-pt-whole-window-substrate.md)
   to `✅` (its C substrate is already validated; this closes T4's .NET inline arm)
-  and [managed-wholewindow-compose](../implementations/managed-wholewindow-compose.md)
+  and [managed-wholewindow-compose](../../implementations/managed-wholewindow-compose.md)
   T5/T10/T11 to `✅`; append the run to
-  [intel-hardware-validation.md](../intel-hardware-validation.md); CHANGELOG entry.
+  [intel-hardware-validation.md](../../intel-hardware-validation.md); CHANGELOG entry.
 - **Done when** those rows are `✅` and the dotnet image carries libipt with a
   stable privileged lane.
 
 **DONE 2026-07-23 (implementation + measurement).** `libipt-dev` is back in
-`DOCKER_APT_dotnet` ([mk/docker.mk](../../../mk/docker.mk)).
+`DOCKER_APT_dotnet` ([mk/docker.mk](../../../../mk/docker.mk)).
 
 *Measured on the i7-8559U box, all green:*
 
@@ -405,8 +414,8 @@ captures, PT-decoded path == single-step oracle).
 > done by the *implementing* agent, so the affected rows are moved to `☑` (code landed +
 > measured here), not `✅`. An independent agent should re-run the table above on a PT
 > box and stamp `✅` on
-> [intel-pt-whole-window-substrate](../implementations/intel-pt-whole-window-substrate.md)
-> T4 and [managed-wholewindow-compose](../implementations/managed-wholewindow-compose.md)
+> [intel-pt-whole-window-substrate](../../implementations/intel-pt-whole-window-substrate.md)
+> T4 and [managed-wholewindow-compose](../../implementations/managed-wholewindow-compose.md)
 > T5/T10/T11. Note T10's per-tid capture and T11's full ambient chain are now genuinely
 > exercised live (`ambient: >=2 stitched slices captured (3)` every iteration), which is
 > what those rows were waiting on.
@@ -420,10 +429,10 @@ every run), `make docker-hwtrace-dotnet-ambient-stress` (`1..576`, 25/25 iterati
 captured live), `dataflow-pt-live` ×3 (`1..29`), plain `docker-hwtrace` /
 `docker-hwtrace-dotnet` green with the honest permission self-skip, `docker-fmt-check`
 / `docker-docs` / host `check-bindings-parity` (142×10) clean. Both README rows
-([intel-pt-whole-window-substrate](../implementations/intel-pt-whole-window-substrate.md),
-[managed-wholewindow-compose](../implementations/managed-wholewindow-compose.md)) are
+([intel-pt-whole-window-substrate](../../implementations/intel-pt-whole-window-substrate.md),
+[managed-wholewindow-compose](../../implementations/managed-wholewindow-compose.md)) are
 stamped `✅`; the run is appended to
-[intel-hardware-validation.md](../intel-hardware-validation.md) (2026-07-23 entry).
+[intel-hardware-validation.md](../../intel-hardware-validation.md) (2026-07-23 entry).
 T5's Done-when is fully met; the one recorded residue is T4's honest note above
 (`MethodsObserved==0` on this box → the in-window-JIT premise self-skips; forcing a
 guaranteed in-window JIT is the remaining optional follow-up).
@@ -439,9 +448,9 @@ installable/available here, so this is not a hardware gate, only work not yet do
 ## References
 
 - Landed PT decode fix: commits `c7b4ef7` (`fix(pt): …`), `2d01a7f` (`docs(pt): …`).
-- Evidence + revert record: [intel-hardware-validation.md](../intel-hardware-validation.md).
-- Single-step backend: [src/ss_backend.c](../../../src/ss_backend.c)
+- Evidence + revert record: [intel-hardware-validation.md](../../intel-hardware-validation.md).
+- Single-step backend: [src/ss_backend.c](../../../../src/ss_backend.c)
   (`ss_on_sigtrap` 369, arm/disarm 535/708, watchdog 325).
-- PT hop / whole-window: [src/hwtrace.c](../../../src/hwtrace.c),
-  [src/pt_backend.c](../../../src/pt_backend.c).
-- Managed compose hazards: [managed-wholewindow-compose.md](../implementations/managed-wholewindow-compose.md).
+- PT hop / whole-window: [src/hwtrace.c](../../../../src/hwtrace.c),
+  [src/pt_backend.c](../../../../src/pt_backend.c).
+- Managed compose hazards: [managed-wholewindow-compose.md](../../implementations/managed-wholewindow-compose.md).

@@ -115,7 +115,7 @@ Linux, no hardware.
 
 The aspirational `using (new AsmTrace())` — no `NativeCode`, no `[base,len)` — now works
 end-to-end on any x86-64 Linux via the single-step **WEAK** tier, per
-[scoped-tracing-zeroconfig-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/plans/scoped-tracing-zeroconfig-plan.md).
+[scoped-tracing-zeroconfig-plan.md](https://github.com/wilvk/asm-test/blob/main/docs/internal/archive/plans/scoped-tracing-zeroconfig-plan.md).
 
 - **§Z0 region-free arm surface (DONE).** New C entry points
   `asmtest_hwtrace_begin_window` / `_end_window` / `_render_window`

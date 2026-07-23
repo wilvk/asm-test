@@ -86,7 +86,7 @@ Same physical box as the 2026-07-21 entry, now on kernel `7.1.4-1-t2-noble`,
 `perf_event_paranoid=2`, `intel_pt` PMU `type=10`, `nr_addr_filters=2`, bare
 metal (no `hypervisor` flag), Docker via `--cap-add=PERFMON`. Validated at clean
 `main` `4cf5d17` (the code-image use-after-free fix,
-[dotnet-managed-pt-concurrency-plan.md](plans/dotnet-managed-pt-concurrency-plan.md))
+[dotnet-managed-pt-concurrency-plan.md](archive/plans/dotnet-managed-pt-concurrency-plan.md))
 by an agent independent of that fix's implementer — this run stamps
 [intel-pt-whole-window-substrate.md](implementations/intel-pt-whole-window-substrate.md)
 and [managed-wholewindow-compose.md](implementations/managed-wholewindow-compose.md)
