@@ -19,7 +19,7 @@ native, real-CPU tiers:
 | [Scoped tracing](scoped-tracing.md) | any hardware backend, cross-language | *import + scope* over a region → the assembly that executed, rendered on close | x86-64 Linux/macOS (single-step) |
 | [Data-flow tracing](data-flow.md) | emulator / ptrace / DynamoRIO producers, cross-language | operand **values** → def-use graph → forward/backward **slices**; managed method-identity + GC-move canonicalization | x86-64 Linux |
 | [SDE future-ISA lane](sde-testing.md) | Intel SDE emulation under `sde64 -future` | full register/flag/memory/ABI assertions on emulated ISA (APX / AVX10.2 / AMX / AVX-512-on-AVX2) | any x86-64 Linux |
-| [asmspy CLI](asmspy.md) | out-of-process ptrace (attach) + IBS-Op sampling | interactive TUI + headless: a running process's live syscalls-with-data, a function's live assembly (heat counts), whole-process call graph (JSON/DOT export) / call tree / instruction stream, the process/thread topology, and statistical hot edges sampled out of band (safe on a live JIT); processes sortable by pid / CPU activity / string-scan density | x86-64 Linux |
+| [asmspy CLI](asmspy.md) | out-of-process ptrace (attach) + IBS-Op sampling | interactive TUI + headless: a running process's live syscalls-with-data, a function's live assembly (heat counts), whole-process call graph (JSON/DOT export) / call tree / instruction stream, the process/thread topology, and statistical hot edges sampled out of band (safe on a live JIT); processes sortable by pid / CPU activity / string-scan density | x86-64 + AArch64 Linux (IBS hot-edge sampling: AMD Zen x86-64 only) |
 
 The AMD LBR backend's reach knobs — window sizing, `lbr_period`,
 `branch_filter`, the deterministic boundary snapshot, and the privilege lanes

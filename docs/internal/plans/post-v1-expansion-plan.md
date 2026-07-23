@@ -512,6 +512,8 @@ instruction text, no host crash.
   [DESIGN.md](../../../DESIGN.md) §1 and a WASM guest would be novel, but both are
   diminishing-returns vs. effort — reconsider only on concrete demand, as
   [expansion-plan.md](../archive/plans/expansion-plan.md) already records.
-- A GUI/TUI front-end (TAP + JUnit already integrate with standard tooling).
+- ~~A GUI/TUI front-end (TAP + JUnit already integrate with standard tooling).~~
+  *(Superseded 2026-07-23: the asmspy ncurses TUI shipped and a desktop GUI now
+  has its own plan — [desktop-gui-plan.md](desktop-gui-plan.md).)*
 - Rewriting the C + asm core in another language (wrapping it is the bindings story).
 - Tier 3 bindings (porting the runner/discovery into another language).

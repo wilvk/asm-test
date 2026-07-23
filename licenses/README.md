@@ -2,8 +2,9 @@
 
 Verbatim license texts for the native dependencies this repo's build/test scripts
 fetch from **pinned upstream releases**. Most are bundled into the published
-packages; Pin is the one test-lane-only exception (see its row and the paragraph
-below).
+packages; the test-lane-only exceptions — never bundled, never linked into a
+shipped package — are the Pin kits (both versions), Intel SDE, and libdft64
+(see their rows and the paragraph below).
 
 | File | Component | Version | SPDX |
 |---|---|---|---|
@@ -83,7 +84,7 @@ package — so it too is recorded here for provenance and not collected by
 [pin-libdft-taint-oracle.md](../docs/internal/implementations/pin-libdft-taint-oracle.md#constraints--gates).
 
 [scripts/collect-licenses.sh](../scripts/collect-licenses.sh) copies the shipped-package
-rows above (all but Pin) into each package's `THIRD-PARTY-LICENSES/` — emitting the
+rows above (not the test-lane-only rows: Pin, SDE, libdft64) into each package's `THIRD-PARTY-LICENSES/` — emitting the
 native-trace tier entries only when the
 matching lib is actually staged into the slot — (a build-time capture from
 `$PREFIX/share/licenses/<dep>-<ver>/` augments them with the exact-version text when

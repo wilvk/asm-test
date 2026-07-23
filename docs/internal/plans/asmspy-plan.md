@@ -1,7 +1,7 @@
 # asm-test — asmspy (interactive process tracer): roadmap
 
 > **Context (2026-07-12).** `asmspy` is the ncurses + headless out-of-process tracer in
-> [cli/](../../../cli/): attach to any running Linux/x86-64 process and watch its syscalls,
+> [cli/](../../../cli/): attach to any running Linux x86-64 or AArch64 process and watch its syscalls,
 > a function's assembly + call-graph, a whole-process instruction stream, an aggregated
 > call graph, a live call tree, or the process/thread topology — all out of band via the
 > ptrace attach seam. User guide: [docs/guides/tracing/asmspy.md](../../guides/tracing/asmspy.md).
