@@ -25,6 +25,7 @@
 #include "asmtest_codeimage.h"
 #include "asmtest_grow.h" /* asmtest_grow / _pow2 — overflow-checked pool growth (S6) */
 
+#include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -77,6 +78,21 @@ struct asmtest_codeimage {
     uint64_t seq;        /* last sequence assigned (0 = nothing recorded yet) */
     ci_region_t *regions;
     size_t nreg, cap_reg;
+
+    /* Guards the two GROWABLE arrays (`regions`, and each region's `vers`) plus
+     * `seq`/`nreg`/`nver` against a concurrent writer. Load-bearing: the .NET
+     * ambient producer (managed-wholewindow-compose T10/T11) tracks JIT'd methods
+     * from the EventPipe listener thread while per-tid PT hops decode against the
+     * SAME image on thread-pool threads. Both track() and refresh() realloc those
+     * arrays, so an unlocked bytes_at() walk was a use-after-free — a ~100%
+     * reproducible SIGSEGV in asmtest_pt_read_codeimage on a live PT box (see
+     * docs/internal/plans/dotnet-managed-pt-concurrency-plan.md T1/T2).
+     *
+     * Held ONLY across array mutation and lookup, never across a decode: the
+     * per-version byte buffers are individually malloc'd and freed just in
+     * asmtest_codeimage_free, so bytes_at's borrowed pointer stays valid after
+     * the unlock exactly as the header promises. */
+    pthread_mutex_t lock;
 
 #if defined(ASMTEST_HAVE_LIBBPF)
     struct ci_bpf *bpf; /* opaque eBPF detector state (lazily allocated) */
@@ -316,6 +332,10 @@ asmtest_codeimage_t *asmtest_codeimage_new(pid_t pid) {
     asmtest_codeimage_t *img = (asmtest_codeimage_t *)calloc(1, sizeof *img);
     if (img == NULL)
         return NULL;
+    if (pthread_mutex_init(&img->lock, NULL) != 0) {
+        free(img);
+        return NULL;
+    }
     img->pid = (pid == 0) ? getpid() : pid;
     img->page_size = sysconf(_SC_PAGESIZE);
     if (img->page_size <= 0)
@@ -337,6 +357,9 @@ void asmtest_codeimage_free(asmtest_codeimage_t *img) {
         free(img->regions[i].vers);
     }
     free(img->regions);
+    /* Caller-owned lifetime: free() must not race a track/bytes_at (the handle is
+     * gone afterwards), so the lock is destroyed, not taken, here. */
+    pthread_mutex_destroy(&img->lock);
     free(img);
 }
 
@@ -375,13 +398,9 @@ static int ci_scan_range(asmtest_codeimage_t *img, size_t lo, size_t hi) {
     return new_versions;
 }
 
-int asmtest_codeimage_track(asmtest_codeimage_t *img, const void *base,
-                            size_t len) {
-    if (img == NULL || base == NULL || len == 0)
-        return ASMTEST_CI_EINVAL;
-    if (!asmtest_codeimage_available())
-        return ASMTEST_CI_EUNAVAIL;
-
+/* Caller MUST hold img->lock (it grows regions/vers). */
+static int ci_track_locked(asmtest_codeimage_t *img, const void *base,
+                           size_t len) {
     if (img->nreg == img->cap_reg &&
         !asmtest_grow((void **)&img->regions, &img->cap_reg, img->nreg + 1,
                       sizeof *img->regions))
@@ -422,9 +441,20 @@ int asmtest_codeimage_track(asmtest_codeimage_t *img, const void *base,
     return ci_arm(img);
 }
 
-int asmtest_codeimage_refresh(asmtest_codeimage_t *img) {
-    if (img == NULL)
+int asmtest_codeimage_track(asmtest_codeimage_t *img, const void *base,
+                            size_t len) {
+    if (img == NULL || base == NULL || len == 0)
         return ASMTEST_CI_EINVAL;
+    if (!asmtest_codeimage_available())
+        return ASMTEST_CI_EUNAVAIL;
+    pthread_mutex_lock(&img->lock);
+    int rc = ci_track_locked(img, base, len);
+    pthread_mutex_unlock(&img->lock);
+    return rc;
+}
+
+/* Caller MUST hold img->lock (ci_scan_range appends versions). */
+static int ci_refresh_locked(asmtest_codeimage_t *img) {
     if (img->nreg == 0)
         return 0;
 
@@ -440,15 +470,34 @@ int asmtest_codeimage_refresh(asmtest_codeimage_t *img) {
     return new_versions;
 }
 
-uint64_t asmtest_codeimage_now(const asmtest_codeimage_t *img) {
-    return img ? img->seq : 0;
+int asmtest_codeimage_refresh(asmtest_codeimage_t *img) {
+    if (img == NULL)
+        return ASMTEST_CI_EINVAL;
+    pthread_mutex_lock(&img->lock);
+    int rc = ci_refresh_locked(img);
+    pthread_mutex_unlock(&img->lock);
+    return rc;
 }
 
-int asmtest_codeimage_bytes_at(const asmtest_codeimage_t *img, const void *addr,
-                               uint64_t when, const uint8_t **out,
-                               size_t *out_len) {
-    if (img == NULL || addr == NULL)
-        return ASMTEST_CI_EINVAL;
+/* The lock is logically mutable: the query entry points take a const handle but
+ * must still serialize against a concurrent track()/refresh() realloc. */
+static pthread_mutex_t *ci_lock_of(const asmtest_codeimage_t *img) {
+    return &((asmtest_codeimage_t *)(uintptr_t)img)->lock;
+}
+
+uint64_t asmtest_codeimage_now(const asmtest_codeimage_t *img) {
+    if (img == NULL)
+        return 0;
+    pthread_mutex_lock(ci_lock_of(img));
+    uint64_t seq = img->seq;
+    pthread_mutex_unlock(ci_lock_of(img));
+    return seq;
+}
+
+/* Caller MUST hold img->lock (it walks regions/vers). */
+static int ci_bytes_at_locked(const asmtest_codeimage_t *img, const void *addr,
+                              uint64_t when, const uint8_t **out,
+                              size_t *out_len) {
     uint64_t a = (uint64_t)(uintptr_t)addr;
 
     for (size_t i = 0; i < img->nreg; i++) {
@@ -475,6 +524,22 @@ int asmtest_codeimage_bytes_at(const asmtest_codeimage_t *img, const void *addr,
         return ASMTEST_CI_OK;
     }
     return ASMTEST_CI_ENOENT; /* addr not in any tracked region */
+}
+
+int asmtest_codeimage_bytes_at(const asmtest_codeimage_t *img, const void *addr,
+                               uint64_t when, const uint8_t **out,
+                               size_t *out_len) {
+    if (img == NULL || addr == NULL)
+        return ASMTEST_CI_EINVAL;
+    /* The lookup WALK is what races a concurrent realloc, so it alone is guarded.
+     * *out borrows a per-version byte buffer, which outlives the unlock (it is
+     * freed only by asmtest_codeimage_free) — so the header's "valid until
+     * asmtest_codeimage_free" contract is unchanged, and no caller holds this
+     * lock across its decode. */
+    pthread_mutex_lock(ci_lock_of(img));
+    int rc = ci_bytes_at_locked(img, addr, when, out, out_len);
+    pthread_mutex_unlock(ci_lock_of(img));
+    return rc;
 }
 
 int asmtest_codeimage_read_live(const asmtest_codeimage_t *img, uint64_t addr,

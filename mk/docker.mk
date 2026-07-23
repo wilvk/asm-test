@@ -243,7 +243,7 @@ DOCKER_APT_node   := nodejs npm
 # java-jitdump lane). It is a userspace JVMTI agent, so a kernel-version-mismatched
 # package still works in the container; the other java lanes simply ignore it.
 DOCKER_APT_java   := openjdk-25-jdk-headless linux-tools-generic
-DOCKER_APT_dotnet := dotnet-sdk-8.0
+DOCKER_APT_dotnet := dotnet-sdk-8.0 libipt-dev
 DOCKER_APT_ruby   := ruby
 DOCKER_APT_lua    := luajit
 DOCKER_APT_go     := golang-go
@@ -947,6 +947,17 @@ docker-hwtrace-dotnet-unwarmed: docker-dotnet
 docker-hwtrace-dotnet-stress: docker-dotnet
 	$(DOCKER) run --rm $(_docker_plat) $(DOCKER_RUNENV_dotnet) asmtest-dotnet \
 	  make hwtrace-dotnet-stress
+
+# dotnet-managed-pt-concurrency-plan T4 — concurrent ambient/stitched regression lane.
+# --cap-add=PERFMON is what gives it teeth: it grants the per-tid PT opens the ambient
+# producer needs on a bare-metal Intel PT host (bypassing perf_event_paranoid), so the
+# hop decodes actually run against the live code-image the JIT thread is writing. Without
+# PT the ambient half self-skips and the lane still passes — green either way, red only
+# on a real regression of the T2 use-after-free fix.
+.PHONY: docker-hwtrace-dotnet-ambient-stress
+docker-hwtrace-dotnet-ambient-stress: docker-dotnet
+	$(DOCKER) run --rm $(_docker_plat) --cap-add=PERFMON $(DOCKER_RUNENV_dotnet) asmtest-dotnet \
+	  make hwtrace-dotnet-ambient-stress
 
 # libasmtest_emu is the superset and Dockerfile.bindings-base now carries Keystone
 # + Capstone, so each per-language image exercises the in-line-assembler AND

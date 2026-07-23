@@ -2985,6 +2985,21 @@ hwtrace-dotnet-stress: shared-hwtrace
 	@echo "== hwtrace-dotnet-stress (tiering worker UNPINNED) =="
 	$(hwtrace_env) ASMTEST_METHOD_STRESS=60 $(DOTNET) run --project bindings/dotnet/hwtrace/hwtrace.csproj
 
+# dotnet-managed-pt-concurrency-plan T4 — the CONCURRENT ambient/stitched regression lane.
+# Loops the T10/T11/T12 set (per-tid PT hops opened from the AsyncLocal handler on pool
+# threads, decoded against the JIT map's code-image while the EventPipe thread writes it)
+# N times in one process. Guards the T2 fix: that pairing was an unsynchronized
+# use-after-free on the code-image, a ~100%-reproducible SIGSEGV on a live Intel PT box and
+# invisible everywhere else, so this lane only has teeth WITH libipt on PT silicon
+# (--cap-add=PERFMON). Off PT the ambient half self-skips and it still runs green as a
+# cheap stub-twin loop — never a false red. Keeps the worker pinned (hwtrace_dotnet_env).
+AMBIENT_STRESS_N ?= 25
+.PHONY: hwtrace-dotnet-ambient-stress
+hwtrace-dotnet-ambient-stress: shared-hwtrace
+	@echo "== hwtrace-dotnet-ambient-stress (concurrent ambient/stitched set x$(AMBIENT_STRESS_N)) =="
+	$(hwtrace_env) $(hwtrace_dotnet_env) ASMTEST_AMBIENT_STRESS=$(AMBIENT_STRESS_N) \
+	  $(DOTNET) run --project bindings/dotnet/hwtrace/hwtrace.csproj
+
 # Forward-runtime drift check: the same self-test on .NET 9. The images carry only
 # dotnet-sdk-8.0, so install net9 user-local via the official dotnet-install script
 # into a scratch dir, flip the TFM in a scratch COPY of the project (the tree is

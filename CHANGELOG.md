@@ -2114,6 +2114,44 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   unless both engines find their planted crash). The Go conformance test used the
   exact `uintptr→unsafe.Pointer` round-trip `HwNativeCode.Ptr()` exists to avoid;
   `go vet ./...` is clean again.
+- **The shared code-image is now thread-safe — a use-after-free that crashed the .NET
+  managed multi-threaded live-PT suite ~100% of the time on real Intel PT silicon
+  (dotnet-managed-pt-concurrency-plan.md T1/T2/T4).** With `libipt` present on a
+  bare-metal Intel PT box, `make hwtrace-dotnet-test` under `--cap-add=PERFMON`
+  `SIGSEGV`'d on 7 of 7 runs, always just past the stitched-trace block and always on a
+  different thread. `eu-stack` on the `createdump` cores (gdb cannot unwind them, and
+  gdb cannot run this suite at all — it *is* `SIGTRAP`/`EFLAGS.TF`) put the fault in
+  **asm-test's own code**, not CoreCLR: `asmtest_pt_read_codeimage` ← `pt_insn_next`
+  ← `asmtest_pt_decode_window` ← `asmtest_hwtrace_pt_hop_close`. Cause:
+  `asmtest_codeimage_t` had **no synchronization at all**, while the §Z4 ambient
+  producer uses it from two threads at once — the `JitMethodMap` EventPipe callback
+  calls `asmtest_codeimage_track()` (which `realloc`s `img->regions`, and `r->vers` via
+  `ci_region_add_version`) on the runtime's listener thread, while every per-tid PT hop
+  close decodes against that same image on thread-pool threads, walking those very
+  arrays in `asmtest_codeimage_bytes_at()`. A `realloc` therefore freed an array a
+  decoder was mid-walk on. Fixed by guarding the region/version arrays with a mutex
+  held across the lookup and the append only — never across a decode — which leaves the
+  header's "borrowed bytes valid until `asmtest_codeimage_free`" contract intact
+  (per-version byte buffers are separately allocated and freed only at image teardown).
+  A second, narrower lifetime race is fixed alongside it in the .NET binding: the
+  ambient handler fires on pool threads the flow is still *leaving*, so a hop could be
+  published after `Complete()`'s drain, or be inside `CloseHop` — reading the map's
+  code-image — while `Dispose()` freed it. `AsmAmbientStitchedTrace` now makes the
+  `_completed` check atomic with the `_openHops` add/remove and waits in-flight closes
+  out before freeing (bounded; it leaks rather than frees under a stalled hop). The
+  ambient live half now runs green on PT silicon (`ambient: >=2 stitched slices
+  captured`) instead of crashing. New `hwtrace-dotnet-ambient-stress` /
+  `docker-hwtrace-dotnet-ambient-stress` lane loops the concurrent set (default 25×) as
+  the regression guard, and the timing-dependent `unwarmed/PT compose: >=1 method JIT'd
+  inside the window` check now self-skips instead of flaking to `not ok` when the
+  runtime happens not to compile inside the PT window. That stress lane immediately
+  surfaced a **third, pre-existing** defect in the same producer — confirmed present on
+  unmodified `main` by re-running the lane against the untouched producer:
+  `Complete()` snapshotted `_parked` while a detach-driven `CloseHop` on a pool thread
+  was still enqueuing its slice, so a hop that was both opened *and* closed could be
+  dropped from the stitch (`ambient twin: every attached hop stitched (4 vs 5 opened)`).
+  `Complete()` now waits in-flight closes out before the snapshot. Invisible in a single
+  pass, which is why it survived until a repetition lane existed.
 
 - **Intel PT whole-window & foreign-pid decode now works on real silicon — the tier
   had never once run on a live Intel PT box until now (intel-pt-whole-window-substrate.md

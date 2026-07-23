@@ -5801,6 +5801,19 @@ namespace Asmtest
         bool _completed;
         bool _disposed;
 
+        // The close-out gate. `_completed` alone cannot order the ambient handler against
+        // Complete/Dispose: the handler fires on pool threads the flow may still be leaving
+        // AFTER the `using` closed, so (a) an attach that read `_completed == false` could
+        // publish a hop into _openHops after Complete's drain had already passed it, and
+        // (b) a detach could be inside CloseHop — reading _map's code-image — while Dispose
+        // freed that image underneath it. Both are use-after-free (the C-side codeimage lock
+        // guards a LIVE image, not a freed one). _gate makes the `_completed`-check and the
+        // _openHops add/remove atomic with each other; _inFlight counts hop closes currently
+        // touching _map/_parked so Dispose can wait them out before freeing either.
+        readonly object _gate = new object();
+        int _inFlight;
+        int _opening;   // attaches past the _completed check but not yet parked in _openHops
+
         /// <summary>Honest self-skip reason when the ambient producer could not run ("" when it ran).</summary>
         public string SkipReason { get; private set; } = "";
         /// <summary>Merged per-slice disassembly in seq order (empty until <see cref="Complete"/>).</summary>
@@ -5854,22 +5867,44 @@ namespace Asmtest
 
         void OnThreadAttach()
         {
-            if (_completed) return;
+            if (_completed) return;                            // fast path; re-checked under _gate
             int tid = HwNative.asmtest_ss_self_tid();
             // One PT event per tid: if a slice is already open on THIS thread for this op,
             // keep it (resumed execution rides the same slice). A given tid runs on one
             // thread at a time, so this check-then-open needs no lock.
             if (_openHops.ContainsKey(tid)) return;
-            IntPtr ctx = _capture.Open(tid);
-            if (ctx == IntPtr.Zero) return;                    // open failed -> this hop uninstrumented
-            uint seq = unchecked((uint)(Interlocked.Increment(ref _seq) - 1));
-            _openHops[tid] = new OpenHop { Ctx = ctx, Seq = seq, Tid = tid };
+            // RESERVE under the gate before opening anything. Opening first and discarding
+            // the loser afterwards would break the producer's own invariant that every
+            // opened hop is stitched (the T12 twin asserts exactly that, and caught it):
+            // the capture would have recorded an attach that never produces a slice. So the
+            // `_completed` re-check happens BEFORE Open, and `_opening` holds Complete's
+            // drain back until this reservation has landed in _openHops.
+            lock (_gate)
+            {
+                if (_completed) return;                        // closed out: never open at all
+                _opening++;
+            }
+            try
+            {
+                IntPtr ctx = _capture.Open(tid);               // slow (perf_event_open) — off the gate
+                if (ctx == IntPtr.Zero) return;                // open failed -> this hop uninstrumented
+                uint seq = unchecked((uint)(Interlocked.Increment(ref _seq) - 1));
+                lock (_gate) { _openHops[tid] = new OpenHop { Ctx = ctx, Seq = seq, Tid = tid }; }
+            }
+            finally { lock (_gate) { _opening--; Monitor.PulseAll(_gate); } }
         }
 
         void OnThreadDetach()
         {
             int tid = HwNative.asmtest_ss_self_tid();
-            if (_openHops.TryRemove(tid, out OpenHop h)) CloseHop(h);
+            OpenHop h;
+            lock (_gate)
+            {
+                if (!_openHops.TryRemove(tid, out h)) return;  // Complete already took it
+                _inFlight++;                                   // hold _map/_parked open
+            }
+            try { CloseHop(h); }
+            finally { lock (_gate) { _inFlight--; Monitor.PulseAll(_gate); } }
         }
 
         // Decode-at-disable this hop against the version live in the window, then park its
@@ -5902,14 +5937,50 @@ namespace Asmtest
         /// <see cref="Truncated"/>. Idempotent; clears the ambient scope for this context.</summary>
         public void Complete()
         {
-            if (_completed) return;
-            _completed = true;
             // Close every hop still open — the closing thread's, plus any that never detached
-            // (a thread the flow left without a reset). TryRemove makes the take-and-close
-            // atomic against a detach racing Complete, so no hop is closed (or parked) twice.
-            foreach (var kv in _openHops)
-                if (_openHops.TryRemove(kv.Key, out OpenHop h)) CloseHop(h);
+            // (a thread the flow left without a reset). Taking them under _gate (with
+            // `_completed` set in the SAME critical section) makes the drain atomic against
+            // both a detach racing Complete and an attach racing it, so no hop is closed
+            // twice and none is published after the drain. The closes themselves run OFF the
+            // gate — CloseHop decodes, which must never block the ambient handler.
+            var take = new List<OpenHop>();
+            lock (_gate)
+            {
+                if (_completed) return;
+                _completed = true;
+                // Setting _completed stops NEW attaches; these are the ones already past that
+                // check and still opening. Wait for them to land so the drain below sees every
+                // hop that was ever opened — otherwise one arrives after the drain and is never
+                // stitched. Bounded, so a wedged perf_event_open cannot hang Complete.
+                long deadline = Environment.TickCount64 + 5000;
+                while (_opening > 0)
+                {
+                    int left = (int)(deadline - Environment.TickCount64);
+                    if (left <= 0 || !Monitor.Wait(_gate, left)) break;
+                }
+                foreach (var kv in _openHops)
+                    if (_openHops.TryRemove(kv.Key, out OpenHop h)) take.Add(h);
+                _inFlight += take.Count;
+            }
+            try { foreach (var h in take) CloseHop(h); }
+            finally { lock (_gate) { _inFlight -= take.Count; Monitor.PulseAll(_gate); } }
             if (_scope != null) _current.Value = null; // ThreadContextChanged==false -> no detach fires
+
+            // A detach on a pool thread can be inside CloseHop right now, about to enqueue its
+            // slice. Snapshotting _parked without waiting drops that slice from the stitch even
+            // though the hop was opened AND closed — a pre-existing defect this plan's new
+            // ambient-stress lane exposed (the T12 twin's "every attached hop stitched" went
+            // 4 vs 5 under repetition, reproduced against the unmodified upstream producer).
+            // Bounded, like the other waits: a stalled hop must not hang Complete.
+            lock (_gate)
+            {
+                long dl = Environment.TickCount64 + 5000;
+                while (_inFlight > 0)
+                {
+                    int left = (int)(dl - Environment.TickCount64);
+                    if (left <= 0 || !Monitor.Wait(_gate, left)) break;
+                }
+            }
 
             var parked = _parked.ToArray();
             System.Array.Sort(parked, (a, b) => a.Seq.CompareTo(b.Seq));
@@ -5953,6 +6024,21 @@ namespace Asmtest
             if (_disposed) return;
             _disposed = true;
             if (!_completed) Complete();
+            // A detach on a pool thread the flow is still leaving can be inside CloseHop right
+            // now, decoding against _map's code-image and enqueuing onto _parked. Freeing
+            // either underneath it is a use-after-free, so wait the in-flight closes out
+            // first. Bounded: on timeout we LEAK rather than free — a stalled hop must never
+            // turn a teardown into a crash.
+            lock (_gate)
+            {
+                long deadline = Environment.TickCount64 + 5000;
+                while (_inFlight > 0)
+                {
+                    int left = (int)(deadline - Environment.TickCount64);
+                    if (left <= 0 || !Monitor.Wait(_gate, left)) break;
+                }
+                if (_inFlight > 0) return; // still busy: leak the image/traces, never free under it
+            }
             if (_map != null) _map.Dispose();
             if (!HwNative.LibAvailable) return;
             foreach (var p in _parked)

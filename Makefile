@@ -133,6 +133,7 @@ help:
 	@echo '  dataflow-pt-live  F5 live foreign-pid PT replay vs single-step oracle (gated: bare-metal Intel PT; ASMTEST_REQUIRE_PT=1 fails rather than skips)'
 	@echo '  hwtrace-bindings-test  per-language hardware-trace wrapper tests (all bindings)'
 	@echo '  hwtrace-dotnet-unwarmed  live whole-window compose set (method JIT in-window, mid-window re-tier; also docker-)'
+	@echo '  hwtrace-dotnet-ambient-stress  loop the concurrent ambient/stitched PT-hop set (AMBIENT_STRESS_N=25; also docker-, which adds --cap-add=PERFMON)'
 	@echo '  hwtrace-dotnet-example  the .NET scoped-tracing demos (examples/dotnet; also docker-)'
 	@echo '  dev-dotnet      interactive container shell for the .NET examples'
 	@echo ''
