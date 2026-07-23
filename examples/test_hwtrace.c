@@ -48,6 +48,11 @@
                          RIP/RAX from its SIGSEGV handler */
 #endif
 
+/* MSR-rung commit-decision seam (defined in trace_auto.c; src/trace_auto.h).
+ * Pure and defined on every host, so declared outside the perf_event block —
+ * test_msr_commit_decision pins it everywhere, including macOS. */
+int asmtest_trace_auto_msr_commits(int rc, int truncated, int nonempty);
+
 /* AMD branch-stack decoder declarations + perf_event are x86-64-only. */
 #if defined(__linux__) && defined(__x86_64__)
 #include <linux/perf_event.h>
@@ -87,8 +92,6 @@ void asmtest_amd_ring_parse_decode(uint8_t *buf, size_t span, size_t dsz,
                                    asmtest_trace_t *trace);
 int asmtest_amd_has_cpu_flag(const char *flag);
 int asmtest_amd_flags_have(const char *line, const char *flag);
-/* MSR-rung commit-decision seam (defined in trace_auto.c; src/trace_auto.h). */
-int asmtest_trace_auto_msr_commits(int rc, int truncated, int nonempty);
 /* §E5 AutoFDO block-frequency reweighting of the survey endpoints + the survey entry
  * that drives it (internal, defined in hwtrace.c; not in the public header). */
 size_t asmtest_amd_block_weight_sample(const struct perf_branch_entry *e,

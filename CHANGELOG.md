@@ -1860,6 +1860,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **macOS (Intel) native build correctness (fifth pass): the hwtrace suite
+  failed to compile at the new MSR-rung commit-decision seam**
+  (`amd-review-followup-2` T4, landed from the Zen box the same day).
+  `examples/test_hwtrace.c` hand-declared `asmtest_trace_auto_msr_commits`
+  inside the `#if defined(__linux__) && defined(__x86_64__)` perf_event
+  declaration block, but `test_msr_commit_decision` — deliberately pure, the
+  test that "pins the decision itself everywhere" — calls it unconditionally,
+  so `make WERROR=1 hwtrace-test` on macOS died on an implicit-declaration
+  error. The seam is defined unconditionally in `src/trace_auto.c` and links on
+  Darwin; the prototype now sits above the Linux-only block. Verified on the
+  macOS 14.8.7 / Intel host: `make WERROR=1 hwtrace-test` 149 passed 0 failed
+  (suite grew 145→149 with the four new seam checks now running on macOS too).
+  The rest of the pass was clean at the same tree — `WERROR=1 test`/`check`
+  (57/57), `asm-test` 16/16 (the new statement-drop guard green under the
+  host's Keystone 0.9.2), the cpp 58 / ruby 57 / python 15+12-skip hwtrace
+  binding lanes, `WERROR=1 dataflow-test` build + honest self-skip, the
+  `make cli` OS-gate self-skip intact after the asmspy T2/T7 wave, and
+  `mach-stepper-test` 25/25.
+
 - **The in-line assembler no longer returns machine code with a statement
   silently missing (assemble-silent-statement-drop.md T1-T3).** Keystone drops
   a statement it can only partially parse — a bad, truncated or wrong-dialect
