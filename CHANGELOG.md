@@ -8,6 +8,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Standing self-hosted Intel PT runner — unattended nightly coverage
+  (self-hosted-ci-runners.md T5).** New
+  `scripts/runner-jit-loop.sh <owner/repo> <lane> <runner-dir>`: the runbook's
+  production JIT/ephemeral loop as a script — mint a fresh JIT config, run
+  exactly one job, re-register (60 s backoff on mint failure) — deployed on the
+  bare-metal i7-8559U PT box as a systemd user unit with linger,
+  `HW_RUNNER_INTEL_PT` left at `1` so the nightly `hw.yml` schedule runs
+  unattended. Re-registration proven by two consecutive green dispatches on
+  freshly minted ephemeral runner identities
+  ([run 29999081537](https://github.com/wilvk/asm-test/actions/runs/29999081537),
+  [run 29999251602](https://github.com/wilvk/asm-test/actions/runs/29999251602)).
+  The runbook (`docs/internal/ci/runners.md`) gains the unit template, the
+  deployment record, and the standing form's recorded posture tradeoffs; the
+  remaining `HW_RUNNER_CORESIGHT`/`_MACOS_TART`/`_KVM` variables now exist at
+  `0` per the settings checklist.
 - **Self-hosted Intel PT CI lane first green run (self-hosted-ci-runners.md
   T5).** `hw.yml`'s `hwtrace-pt-baremetal` executed live for the first time
   ([run 29997961188](https://github.com/wilvk/asm-test/actions/runs/29997961188),

@@ -509,17 +509,38 @@ sentence to name all three hardware lanes as allowed-to-be-absent.
 > job, variable reset to `0` (power-down rule) — full record in the
 > [runbook status table](../ci/runners.md). One settings observation recorded
 > there: the `hw-runners` environment has no protection rules yet, so no approval
-> pause occurred. The *nightly* half of the first bullet still needs a STANDING
-> runner, the same deferred deployment choice recorded for amd-zen.
+> pause occurred. ~~The *nightly* half of the first bullet still needs a STANDING
+> runner, the same deferred deployment choice recorded for amd-zen.~~
+>
+> **STANDING runner deployed 2026-07-23 (from the i7-8559U box itself):** the
+> deferred deployment choice is resolved for this lane — new
+> [`scripts/runner-jit-loop.sh`](../../../scripts/runner-jit-loop.sh) (mint a
+> fresh JIT config → run exactly one job → re-register, 60 s mint backoff) wrapped
+> in a `gha-runner-intel-pt` systemd **user** unit with linger, per the runbook's
+> production-loop section; `HW_RUNNER_INTEL_PT` stays `1`. Proven end to end by
+> two consecutive dispatches, each executed by a freshly minted ephemeral runner
+> identity: [run 29999081537](https://github.com/wilvk/asm-test/actions/runs/29999081537)
+> and [run 29999251602](https://github.com/wilvk/asm-test/actions/runs/29999251602),
+> both green with the PT lane live (`# 649 passed, 0 failed` privileged;
+> `1..644` require-mode) — the loop's re-registration is what the second run
+> proves. The runbook records the standing form's two posture deviations
+> (admin-capable `gh` credential standing on the box for the mint; loop runs as
+> the primary user, no passwordless sudo for a dedicated account). What remains
+> for the first Done-when bullet is pure observation: the first `0 5 * * *`
+> **scheduled** run landing green (confirm after 05:00 UTC via
+> `gh run list --workflow=hw.yml`, record in the runbook status table).
 
 **Done when.**
 
 - `hwtrace-pt-baremetal` green on real PT silicon via dispatch AND schedule.
   **Dispatch half MET 2026-07-23** —
   [run 29997961188](https://github.com/wilvk/asm-test/actions/runs/29997961188)
-  green on the registered `intel-pt` runner (see the dated note above); the
+  green on the registered `intel-pt` runner (see the dated note above); ~~the
   schedule/nightly half needs a standing runner (deferred deployment choice, as
-  for amd-zen).
+  for amd-zen)~~ **standing runner DEPLOYED 2026-07-23** (JIT/ephemeral loop,
+  re-registration proven by consecutive green dispatches 29999081537 +
+  29999251602; see the dated note above) — the schedule half closes on the
+  first green `0 5 * * *` run, an observation now, not engineering.
 - ~~The in-container `intel_pt` visibility answer is recorded in
   `docs/internal/ci/runners.md`~~ — **done** (visible; `CAP_PERFMON`, no
   `--privileged`, no paranoid change), and re-printed by the make target each run.

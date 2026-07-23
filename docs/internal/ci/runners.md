@@ -111,6 +111,44 @@ unit (Linux) or launchd plist (macOS) that restarts on exit — that IS the
 ephemeral autoscaling loop GitHub recommends (autoscale only with ephemeral,
 never persistent, runners).
 
+The loop is scripted:
+[`scripts/runner-jit-loop.sh`](../../../scripts/runner-jit-loop.sh)
+`<owner/repo> <lane-label> <runner-dir>` mints a JIT config per iteration
+(unique runner name each cycle), runs exactly one job, and re-registers — with
+a 60 s backoff on mint failure. Deploy it as a systemd **user** unit plus
+`loginctl enable-linger` so it survives logout (template below; adjust paths);
+`systemctl --user stop` + resetting the lane's `HW_RUNNER_*` variable is the
+power-down flow. Stopping while a runner is idle can leave a stale runner
+record; GitHub reaps offline ephemeral runners, so no manual cleanup is needed.
+
+```ini
+# ~/.config/systemd/user/gha-runner-<lane>.service
+[Unit]
+Description=GitHub Actions standing ephemeral runner loop (<lane> lane)
+After=network-online.target
+
+[Service]
+ExecStart=<repo>/scripts/runner-jit-loop.sh <owner>/asm-test <lane> <runner-dir>
+Restart=always
+RestartSec=30
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target
+```
+
+> **Recorded posture deviations of the standing form** (vs. the one-shot
+> registration the table's earlier rows used): the mint step needs `gh`
+> authenticated with repo-admin **standing on the box** — bounded by `hw.yml`
+> having no `pull_request` trigger and the owner-actor guard, so only
+> owner-initiated `main` code ever runs here, but it is a credential the
+> "dedicated, no-credentials box" rule says a runner box should not hold. And
+> on a box with no passwordless sudo the unit runs as the **primary user**,
+> not a dedicated `runner` account (the docker-group root-equivalence caveat
+> above applies either way). Both are accepted, recorded tradeoffs for
+> unattended nightly coverage on a dev box; a purpose-built CI box should
+> still follow the dedicated-user flow.
+
 > Caveat carried from the research: the REST docs page omits the run command; the
 > `--jitconfig` flag name is confirmed in the runner source
 > (`actions/runner` `src/Runner.Common/Constants.cs`), not the REST page.
@@ -182,10 +220,12 @@ a `hw.yml` invariant.
 - [ ] Settings → Environments → create **`hw-runners`** with the maintainer as a
       **required reviewer** (up to 6 allowed; one approval suffices) and a
       **deployment-branch policy of `main`**.
-- [ ] Settings → Secrets and variables → Actions → **Variables** → create all
+- [x] Settings → Secrets and variables → Actions → **Variables** → create all
       five, each set to **`0`**:
       `HW_RUNNER_AMD_ZEN`, `HW_RUNNER_INTEL_PT`, `HW_RUNNER_CORESIGHT`,
-      `HW_RUNNER_MACOS_TART`, `HW_RUNNER_KVM`.
+      `HW_RUNNER_MACOS_TART`, `HW_RUNNER_KVM`. *(Done 2026-07-23 — all five
+      exist; `HW_RUNNER_INTEL_PT` deliberately sits at `1` while its standing
+      runner is live, per the operator status table.)*
 
 Operator rule (records the power-cycle contract): **power a box down ⇒ set its
 `HW_RUNNER_*` variable back to `0`**, so the next scheduled run skips the lane
@@ -234,7 +274,7 @@ recorded form of each hardware gate.
 | Lane | Runner tarball SHA-256 (verified on box) | Box (SoC / kernel) | Registered | `HW_RUNNER_*` | Live-lane last green |
 |---|---|---|---|---|---|
 | amd-zen | `4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf` (v2.335.1, verified on box 2026-07-22 == GitHub's published digest) | Ryzen 9 9950X (Zen 5, `amd_lbr_v2` present) | ☐ (ephemeral one-shot; de-registered after the proof run) | `0` | ✅ [run 29897214772](https://github.com/wilvk/asm-test/actions/runs/29897214772) — 2026-07-22 |
-| intel-pt | `4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf` (v2.335.1, verified on box 2026-07-23 == GitHub's published digest) | MacBookPro15,2 / Core i7-8559U (Coffee Lake), kernel `7.1.4-1-t2-noble`, **bare metal** (no `hypervisor` flag), `intel_pt` type=10 `nr_addr_filters=2`, `perf_event_paranoid=2` | ☐ (ephemeral one-shot; de-registered after the proof run) | `0` | ✅ [run 29997961188](https://github.com/wilvk/asm-test/actions/runs/29997961188) — 2026-07-23 |
+| intel-pt | `4ef2f25285f0ae4477f1fe1e346db76d2f3ebf03824e2ddd1973a2819bf6c8cf` (v2.335.1, verified on box 2026-07-23 == GitHub's published digest) | MacBookPro15,2 / Core i7-8559U (Coffee Lake), kernel `7.1.4-1-t2-noble`, **bare metal** (no `hypervisor` flag), `intel_pt` type=10 `nr_addr_filters=2`, `perf_event_paranoid=2` | ☑ **STANDING** (JIT/ephemeral loop: `gha-runner-intel-pt` systemd user unit + linger on the box, deployed 2026-07-23) | `1` (left on for the nightly) | ✅ dispatches [29999081537](https://github.com/wilvk/asm-test/actions/runs/29999081537) + [29999251602](https://github.com/wilvk/asm-test/actions/runs/29999251602) — 2026-07-23, consecutive runs on freshly-minted ephemeral runners (re-registration loop proven); first `0 5 * * *` nightly pending |
 | coresight | _(record)_ | _(AArch64 ETM/ETE + sink)_ | ☐ | `0` | — |
 | tart | _(record for osx-arm64)_ | _(Apple Silicon)_ | ☐ | `0` | — |
 | kvm | _(record)_ | _(bare-metal `/dev/kvm`)_ | ☐ | `0` | — |
@@ -298,9 +338,24 @@ recorded form of each hardware gate.
 > environment currently has **no protection rules**, so the dispatch proceeded
 > without an approval pause — the required-reviewer checklist item above remains
 > unticked (an admin choice: adding it would also pause every unattended nightly
-> run for approval). The **nightly** half of T5's Done-when still needs a STANDING
+> run for approval). ~~The **nightly** half of T5's Done-when still needs a STANDING
 > runner (JIT/ephemeral loop) — the same deferred deployment choice the amd-zen
-> row records.
+> row records.~~ **STANDING runner deployed 2026-07-23, from the box itself:**
+> `scripts/runner-jit-loop.sh` under the `gha-runner-intel-pt` systemd user unit
+> (linger on), `HW_RUNNER_INTEL_PT` left at `1`. The loop is proven end to end by
+> two **consecutive** dispatches, each picked up by a freshly JIT-minted ephemeral
+> runner that de-registered after its one job:
+> [run 29999081537](https://github.com/wilvk/asm-test/actions/runs/29999081537)
+> (`hwtrace-pt-baremetal` green — `# 649 passed, 0 failed` privileged tier,
+> `1..644` / `# 644 passed, 0 failed` require-mode PT, Zen + CoreSight skipped on
+> their `0` variables) then
+> [run 29999251602](https://github.com/wilvk/asm-test/actions/runs/29999251602)
+> (green again on the loop's next runner identity). Also applied while there: the
+> three missing lane variables (`HW_RUNNER_CORESIGHT`/`_MACOS_TART`/`_KVM`)
+> created at `0`, completing that checklist bullet. Remaining observation, not
+> engineering: the first `0 5 * * *` **scheduled** run landing green closes T5's
+> "dispatch AND schedule" Done-when bullet — confirm with
+> `gh run list --workflow=hw.yml` after 05:00 UTC and record it here.
 
 ## Hardware & credential gates (recorded, per CLAUDE.md)
 
