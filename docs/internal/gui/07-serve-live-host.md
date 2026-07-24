@@ -22,13 +22,24 @@
 
 Every live Observer feature stands on one seam: the asmspy engines already fire
 typed sinks on a dedicated tracer thread; `--serve` swaps 01's NDJSON
-serializers in for the ncurses sinks and adds a control channel. Per **D9**,
-the desktop app **never links the ptrace engines** — the capture host is the
-`asmspy` binary itself, spawned as a subprocess locally or reached over ssh.
-That gives one code path for local and remote capture, keeps every hard-won
-engine guarantee (two-phase detach, own-`int3` delivery, JIT map refresh,
-one-tracer-thread rule) inside the binary that already tests them, and lets
-even the render-only viewer host live sessions.
+serializers in for the ncurses sinks and adds a control channel.
+
+Two structural moves make that clean. **First (T0),** the engine —
+`asmspy_engine.c` plus the `/proc`/ELF resolver and the pure view-model headers
+— is **extracted into a linkable library, `libasmspy`**, mirroring how every
+other tier already ships (`libasmtest_dataflow` / `_emu`); today it is compiled
+straight into the binary with no public header. **Second (T2),** `--serve`
+becomes a **thin wrapper** over that library. Per **D9** the desktop app still
+**never links** it — the capture host is the `asmspy` binary spawned as a
+subprocess (locally or over ssh). So extraction is a *packaging* change, not a
+*boundary* change: it keeps every hard-won guarantee (two-phase detach,
+own-`int3` delivery, JIT map refresh, one-tracer-thread rule) inside the tested
+code — now with its own ABI and independent tests — while the subprocess seam
+still gives one code path for local and remote capture, cross-platform reach
+(macOS/Windows can only ever subprocess-over-ssh), and a render-only viewer that
+hosts live sessions without linking any engine. Extraction is deliberately *not*
+re-implementation: the plan's constraint 6 rejected *re-writing* attach
+elsewhere, which this does not do.
 
 ## What already exists (verified 2026-07-24)
 
@@ -62,12 +73,91 @@ even the render-only viewer host live sessions.
   only IBS sampling and the sw-clock survey coexist with a ptrace view.
 - **No serve mode exists** — no `--serve` in
   [cli/asmspy.c](../../../cli/asmspy.c); greenfield.
+- **No library target for the engine (the T0 gap)** — `asmspy_engine.o` +
+  `asmspy_proc.o` are linked straight into the binary as `ASMSPY_OBJS`
+  ([mk/cli.mk:58](../../../mk/cli.mk#L58)), which notes the producer "ships no
+  public header … on purpose"; the engine is deeply Linux-only (~473 ptrace /
+  `user_regs` refs, [mk/cli.mk:84](../../../mk/cli.mk#L84)). Every *other* tier
+  already ships a shared library via the `shlib_*` helpers
+  ([Makefile:251–263](../../../Makefile#L251)) + a `shared-<tier>` target — e.g.
+  `shared-dataflow` ([mk/dataflow.mk:132–138](../../../mk/dataflow.mk#L132)) —
+  the exact precedent T0 mirrors. The sink typedefs (`asmspy_*_sink`,
+  [cli/asmspy.h:210](../../../cli/asmspy.h#L210) onward) are already the
+  library's callback boundary.
 - **Smoke pattern + victims** — [cli/cli_smoke.sh](../../../cli/cli_smoke.sh)
   builds and drives victims (`auto_victim` start/kill flow at
   [:379–382](../../../cli/cli_smoke.sh#L379)); `spy_victim.c`, `auto_victim.c`
   et al. live in [cli/](../../../cli/).
 
 ## Tasks
+
+### T0 — Extract `libasmspy` (the engine as a linkable library)  (M, depends on: none)
+
+**Goal.** Turn the asmspy engine
+([cli/asmspy_engine.c](../../../cli/asmspy_engine.c)) + the `/proc`/ELF resolver
+([cli/asmspy_proc.c](../../../cli/asmspy_proc.c)) + the pure view-model headers
+into a real library — **`libasmspy`** (a static `.a` the CLI and tests link,
+plus a shared `.so` mirroring `libasmtest_dataflow`) with **one clean public
+header** — so `--serve` (T2) and any future consumer link the *tested* engine
+instead of re-declaring or re-implementing it, and the engine gains its own ABI
+and a standalone test. This is a **move, not a rewrite**: the engine functions,
+sinks, and the one-tracer-thread contract are byte-for-byte the existing code.
+The desktop app still never links it (D9) — T0 is packaging.
+
+**Steps.**
+1. **Header split.** [cli/asmspy.h](../../../cli/asmspy.h) today mixes the engine
+   API with CLI/TUI-only declarations. Carve out `cli/libasmspy.h` (**new**)
+   carrying *only* the engine surface — the `asmspy_*_sink` typedefs, the
+   `asmspy_engine_*` signatures, `asmspy_tree_filter_t`, `asmspy_strerror`, the
+   skip-code enum, and the resolver/`psym`/`jitmap` API from `asmspy_proc` — and
+   leave the CLI/TUI bits in `asmspy.h`, which now `#include`s the public header.
+   The dependency-free, unit-tested view-model headers
+   ([asmspy_logview.h](../../../cli/asmspy_logview.h),
+   [asmspy_treefilter.h](../../../cli/asmspy_treefilter.h),
+   [asmspy_dataview.h](../../../cli/asmspy_dataview.h),
+   [asmspy_autoregion.h](../../../cli/asmspy_autoregion.h)) join the public
+   surface. **Note the known coupling:** `asmspy_graphsort.h` `#include`s
+   `asmspy.h` and uses file-scope qsort latches — 03-T4 (**new — 03**) lifts
+   that; until it lands, graphsort stays CLI-side, out of the library.
+2. **Static + shared targets** in [mk/cli.mk](../../../mk/cli.mk) (or a new
+   `mk/asmspy-lib.mk` `include`d beside it), mirroring the `shared-dataflow`
+   block ([mk/dataflow.mk:132–138](../../../mk/dataflow.mk#L132)) and the
+   `shlib_*` helpers ([Makefile:251–263](../../../Makefile#L251)) exactly:
+   - `$(BUILD)/libasmspy.a` = `ar rcs` over `asmspy_engine.o` + `asmspy_proc.o`
+     (the current `ASMSPY_OBJS` minus `asmspy.o`).
+   - `shared-asmspy: $(call shlib_dev,libasmspy)` built from `pic/` objects via
+     `$(call shlib_real,libasmspy)` / `$(call shlib_ldflags,libasmspy)`.
+     **Linux-only** — the engine's ~473 ptrace refs mean the `.so` self-skips
+     off-Linux with a printed reason, like the other Linux-only tiers.
+3. **Relink the CLI:** `asmspy` (TUI + headless) links `libasmspy.a` in place of
+   the loose objects; the victims and TUI stay in `cli/`. Behaviour is
+   unchanged, so **every existing cli test passes untouched**
+   ([cli/cli_smoke.sh](../../../cli/cli_smoke.sh), `test_symtab`, `test_jitdump`,
+   the view-model tests).
+4. **Standalone smoke** `cli/test_libasmspy.c` (**new**): links *only*
+   `libasmspy.h` + `libasmspy.a` and drives one engine against `spy_victim` —
+   proving the library is self-contained (no hidden dependency on `asmspy.c`).
+   Mirror the existing `test_symtab` link rule
+   ([mk/cli.mk:353](../../../mk/cli.mk#L353)).
+
+**Code.** No logic change — the diff is header partitioning + build rules. If any
+symbol must move out of `asmspy.c` to satisfy the link (a helper the engine
+calls), move it into `asmspy_engine.c`/`asmspy_proc.c`, never duplicate it.
+
+**Tests.** Existing `make cli-test` green and unchanged; the new `test_libasmspy`
+links against the public header + `.a` only and passes; `make shared-asmspy`
+produces the `.so` on Linux (x86-64 **and** arm64) and self-skips elsewhere.
+
+**Docs.** A "libasmspy" note in
+[docs/guides/tracing/asmspy.md](../../guides/tracing/asmspy.md) (the engine is
+now a linkable tier, like the emulator/dataflow libs) + CHANGELOG `Added`.
+
+**Done when.**
+- `make cli-test` is green with **no behaviour change** (a pure repackaging).
+- `test_libasmspy` links against *only* `cli/libasmspy.h` + `libasmspy.a`.
+- `make shared-asmspy` builds the `.so` on Linux and self-skips off-Linux.
+- Nothing in `desktop/` links `libasmspy` (grep the desktop build — D9 preserved:
+  the desktop app reaches the engine only through the `--serve` subprocess).
 
 ### T1 — Serve protocol spec  (S, depends on: 01)
 
@@ -103,20 +193,24 @@ itself.
 (one fixture added to its unit tests); 01's owner sign-off recorded in the
 section header comment.
 
-### T2 — `--serve` loop in `cli/asmspy.c`  (M, depends on: T1; 01's T3 writer TU)
+### T2 — `--serve` as a thin wrapper over `libasmspy`  (M, depends on: T0, T1; 01's writer TU)
 
 **Goal.** `asmspy --serve[=<socket>]` — read commands, run **one engine
-session at a time** on a dedicated tracer thread, stream 01's events.
+session at a time** on a dedicated tracer thread, stream 01's events. The serve
+loop is a **thin wrapper**: it links `libasmspy` (T0) and drives its public
+engine API; it embeds no engine logic of its own.
 
 **Steps.**
 1. Add the flag to the dispatch in `main` (beside the other subcommands) and a
-   `cmd_serve` function.
+   `cmd_serve` function, in `cli/asmspy.c` — which now links `libasmspy.a`
+   (T0), so `cmd_serve` calls the engines through `cli/libasmspy.h` exactly like
+   the TUI does.
 2. Session start: validate the budget (T4 rules) and flag matrix (tid XOR
    follow; auto XOR tid; module/sampler only with auto — mirror the existing
    refusals in the arg parsing), then `pthread_create` a tracer thread that
-   calls the one engine for the mode with the NDJSON sinks from 01's writer TU
-   (**new — 01**) as `sink`/`ctx`, exactly as `run_live_view` structures it
-   ([cli/asmspy.c:2714](../../../cli/asmspy.c#L2714)).
+   calls the one `libasmspy` engine for the mode with the NDJSON sinks from 01's
+   writer TU (**new — 01**) as `sink`/`ctx`, exactly as `run_live_view`
+   structures it ([cli/asmspy.c:2714](../../../cli/asmspy.c#L2714)).
 3. Stop/quit: set the session's `atomic_bool`, then loop
    `pthread_kill(th, SIGALRM)` + timed-join, copying the teardown at
    [:3372–3373](../../../cli/asmspy.c#L3372) — never bypass the engine's
@@ -246,9 +340,13 @@ survives; the refusal case fires.
 
 ## Task order & parallelism
 
-T1 → {T2, T3 (against fake-serve)} in parallel → T4 → T5; T6 follows T2.
-Critical path: T1 → T2 → T6. 08's views consume T3's sessions; nothing in 08
-blocks T1–T6.
+T0 (extract `libasmspy`) and T1 (protocol spec) are independent and start
+immediately; T2 (the `--serve` wrapper) needs both. Then T3 (against fake-serve)
+in parallel → T4 → T5; T6 follows T2. Critical path: T0 → T2 → T6. 08's views
+consume T3's sessions; nothing in 08 blocks T0–T6. **T0 is worth landing on its
+own** even before the GUI — it makes the engine an independently testable,
+reusable library (a future binding surface), and turns `--serve` into a wrapper
+instead of a second copy of the engine's drive loop.
 
 ## Constraints & gates
 
