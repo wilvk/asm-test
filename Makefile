@@ -184,6 +184,8 @@ help:
 	@echo 'Docker (Linux CI lanes):'
 	@echo '  docker-test docker-ci      example/self-test matrix in a container'
 	@echo '  docker-riscv64             native rv64 host tier under qemu binfmt (make binfmt-riscv64 first on Linux)'
+	@echo '  binfmt-arm64               register the pinned qemu-user aarch64 emulator (once per Linux host),'
+	@echo '                             so DOCKER_PLATFORM=linux/arm64 lanes run on an x86-64 box'
 	@echo '  docker-bindings            build + run every language image'
 	@echo '  docker-<lang>              one language image (e.g. docker-rust)'
 	@echo '  docker-drtrace             DynamoRIO native-trace tier (C + Python) in a container'

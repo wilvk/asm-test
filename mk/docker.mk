@@ -52,9 +52,19 @@ docker-test: docker-build
 
 # Enable the pinned qemu-user riscv64 emulator once per Linux host (Docker
 # Desktop ships it already, so this is a no-op there). Idempotent.
-.PHONY: binfmt-riscv64 docker-riscv64
+.PHONY: binfmt-riscv64 binfmt-arm64 docker-riscv64
 binfmt-riscv64:
 	$(DOCKER) run --privileged --rm $(BINFMT_IMAGE) --install riscv64
+
+# The arm64 twin, same pinned image, same one-off-per-host contract. Needed by
+# every `DOCKER_PLATFORM=linux/arm64` lane (docker-cli, docker-test, ...) on an
+# x86-64 Linux host: without a registered handler the aarch64 image's first RUN
+# dies with "exec /bin/sh: exec format error", which reads like a broken
+# Dockerfile rather than a missing host capability. Docker Desktop ships the
+# emulators already, so this is a no-op there. Idempotent; reversible with
+# `--uninstall arm64`.
+binfmt-arm64:
+	$(DOCKER) run --privileged --rm $(BINFMT_IMAGE) --install arm64
 
 # Build the linux/riscv64 image (env only — no optional engines) and run the
 # core example suites + framework self-tests in it under qemu-user binfmt on any
