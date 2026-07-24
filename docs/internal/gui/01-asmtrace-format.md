@@ -171,7 +171,10 @@ are fields, not renderer discipline.
 **Steps.**
 1. In [scripts/gen-manifest.c](../../../scripts/gen-manifest.c), after the `vec256_t` block
    ([:79](../../../scripts/gen-manifest.c#L79)), add the mirror block (below).
-2. `make manifest`; commit the regenerated `asmtest_abi.json` with the source change.
+2. `make manifest` and verify the new row. **Corrected while implementing (2026-07-24):** this
+   step originally said to commit the regenerated `asmtest_abi.json` — the file is
+   **generated, not committed** ([.gitignore:26](../../../.gitignore#L26)), so the source change
+   is the whole commit.
 
 **Code.**
 ```c
@@ -189,7 +192,7 @@ any(s['name']=='vec512_t' and s['size']==64 for s in m['asmtest_abi']['structs']
 **Docs.** The schema doc's descriptor section cites the row.
 
 **Done when.**
-- The python one-liner passes; `git diff` shows only the new block + the regenerated JSON.
+- The python one-liner passes; `git diff` shows only the new block (the JSON is gitignored).
 
 ### T3 — Shared NDJSON writer TU (`asmtrace_emit`)  (M, depends on: T1)
 

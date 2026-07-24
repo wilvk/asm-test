@@ -55,7 +55,8 @@ $(BUILD)/%.o: cli/%.c cli/asmspy.h cli/asmspy_graphsort.h \
 
 $(BUILD)/asmspy_engine.o: $(BUILD)/asmspy_syscall_names.inc
 
-ASMSPY_OBJS := $(BUILD)/asmspy.o $(BUILD)/asmspy_proc.o $(BUILD)/asmspy_engine.o
+ASMSPY_OBJS := $(BUILD)/asmspy.o $(BUILD)/asmspy_proc.o $(BUILD)/asmspy_engine.o \
+               $(BUILD)/asmtrace_ndjson.o
 
 # --dataflow (Increment 6) links the scoped-ptrace L0 VALUE producer
 # (dataflow_ptrace.o) plus its pure L0 sink / L1 def-use / L2 slicer (dataflow.o)
@@ -302,6 +303,16 @@ $(BUILD)/test_view: cli/test_view.c cli/asmspy_dataview.h $(BUILD)/dataflow.o \
                     include/asmtest_valtrace.h | $(BUILD)
 	$(CC) $(CFLAGS) -Icli -o $@ cli/test_view.c $(BUILD)/dataflow.o
 
+# test_asmtrace — headless unit test for the .asmtrace NDJSON writer
+# (cli/asmtrace_ndjson.h) plus the reader-level honesty checks: the schema doc's
+# own embedded example is extracted and parsed here, so the written contract
+# (docs/internal/gui/asmtrace-schema.md) cannot drift from the writer silently.
+# Links ONLY the writer object — no ptrace, no ncurses, no Capstone — so it runs
+# on every host the smoke does.
+$(BUILD)/test_asmtrace: cli/test_asmtrace.c cli/asmtrace_ndjson.h \
+                        $(BUILD)/asmtrace_ndjson.o | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -o $@ cli/test_asmtrace.c $(BUILD)/asmtrace_ndjson.o
+
 # test_graphsort — headless unit test for the call-graph sort comparator
 # (cli/asmspy_graphsort.h, shared by --graph --sort=... and TUI mode 4).
 $(BUILD)/test_graphsort: cli/test_graphsort.c cli/asmspy_graphsort.h \
@@ -389,7 +400,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_arch $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
            $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/test_autoregion \
-           $(BUILD)/test_ghash \
+           $(BUILD)/test_ghash $(BUILD)/test_asmtrace \
            $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
            $(BUILD)/fork_victim $(BUILD)/clone_victim \
            $(BUILD)/sock_victim $(BUILD)/longjmp_victim \

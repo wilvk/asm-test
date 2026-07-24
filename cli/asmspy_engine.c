@@ -142,11 +142,26 @@ static size_t apf(char *b, size_t cap, size_t o, const char *fmt, ...) {
     return o > cap - 1 ? cap - 1 : o;
 }
 
+/* THE REDACTION SEAM (docs/internal/gui/asmtrace-schema.md, `syscall` kind).
+ *
+ * Three helpers below print target CONTENT — buffer bytes (ap_data), path
+ * arguments (ap_cstr), and sockaddrs (ap_sockaddr) — and one aggregates them
+ * (ap_iovec). Each takes a `redact` flag: with it set they emit a PLACEHOLDER
+ * and read no target memory at all, while every structural part of the line
+ * (syscall name, fds, flag words, counts, return value) renders identically.
+ * format_syscall therefore produces the payload-free line by running the SAME
+ * code path with redact=1 — not by post-processing a full line, which could
+ * only ever be a guess about where content ended. */
+#define REDACT_PATH     "<path>"
+#define REDACT_SOCKADDR "<sockaddr>"
+
 /* append a C-escaped quoted view of up to `n` bytes at target `addr`. */
 static size_t ap_data(char *b, size_t cap, size_t o, pid_t pid, uint64_t addr,
-                      uint32_t n) {
+                      uint32_t n, int redact) {
     uint32_t want = n > DUMP_CAP ? DUMP_CAP : n;
     unsigned char tmp[DUMP_CAP];
+    if (redact)
+        return apf(b, cap, o, "<%lu bytes>", (unsigned long)n);
     if (want && rd(pid, addr, tmp, want) != 0)
         want = 0;
     o = apf(b, cap, o, "\"");
@@ -169,9 +184,12 @@ static size_t ap_data(char *b, size_t cap, size_t o, pid_t pid, uint64_t addr,
     return o;
 }
 
-static size_t ap_cstr(char *b, size_t cap, size_t o, pid_t pid, uint64_t addr) {
+static size_t ap_cstr(char *b, size_t cap, size_t o, pid_t pid, uint64_t addr,
+                      int redact) {
     char tmp[DUMP_CAP + 1];
     struct iovec l = {tmp, DUMP_CAP};
+    if (redact)
+        return apf(b, cap, o, "\"" REDACT_PATH "\"");
     struct iovec r = {(void *)(uintptr_t)addr, DUMP_CAP};
     ssize_t got = process_vm_readv(pid, &l, 1, &r, 1, 0);
     if (got < 0)
@@ -552,9 +570,15 @@ static int fd_endpoint(pid_t pid, const char *tgt, char *out, size_t cap) {
     return 0; /* netlink/packet/… — keep the raw socket:[ino] */
 }
 
-static size_t ap_fd(char *b, size_t cap, size_t o, pid_t pid, long long fd) {
+static size_t ap_fd(char *b, size_t cap, size_t o, pid_t pid, long long fd,
+                    int redact) {
     o = apf(b, cap, o, "fd=%lld", fd);
-    if (fd < 0)
+    /* The fd NUMBER is structure; what it points at is CONTENT — a file path,
+     * a peer address, a socket path. MEASURED while implementing the redaction
+     * seam: without this, a payload-free `writev` line still carried
+     * fd=3</tmp/secret.txt>, i.e. the exact string the split exists to hold
+     * back. The suffix goes; the fd stays. */
+    if (fd < 0 || redact)
         return o;
     char link[64];
     snprintf(link, sizeof link, "/proc/%d/fd/%lld", (int)pid, fd);
@@ -1122,12 +1146,15 @@ static size_t ap_sigset(char *b, size_t cap, size_t o, pid_t pid,
 /* An iovec is a VECTOR of buffers — the datum a reader wants is the bytes, not
  * the array's address. `cnt` comes from the syscall's next argument. */
 static size_t ap_iovec(char *b, size_t cap, size_t o, pid_t pid, uint64_t addr,
-                       long long cnt) {
+                       long long cnt, int redact) {
     if (!addr)
         return apf(b, cap, o, "NULL");
     if (cnt < 0 || cnt > 8) /* bound the work; a huge iovcnt is not a reason to
                              * read megabytes out of the target per line */
         cnt = cnt < 0 ? 0 : 8;
+    if (redact) /* the buffer LENGTHS live in the target too, so a redacted
+                 * iovec reports only how many buffers there were */
+        return apf(b, cap, o, "[<%lld buffers>]", cnt);
     o = apf(b, cap, o, "[");
     for (long long i = 0; i < cnt; i++) {
         struct {
@@ -1137,7 +1164,7 @@ static size_t ap_iovec(char *b, size_t cap, size_t o, pid_t pid, uint64_t addr,
             break;
         if (i)
             o = apf(b, cap, o, ", ");
-        o = ap_data(b, cap, o, pid, iv.base, (uint32_t)iv.len);
+        o = ap_data(b, cap, o, pid, iv.base, (uint32_t)iv.len, 0);
     }
     return apf(b, cap, o, "]");
 }
@@ -1180,9 +1207,11 @@ static const char *af_name(int fam) {
  * a guessed name. The tracee is x86-64 like the tracer (i386 is refused at
  * attach), so the host's <netinet/in.h>/<sys/un.h> layouts ARE the target's. */
 static size_t ap_sockaddr(char *b, size_t cap, size_t o, pid_t pid,
-                          uint64_t addr, long long len) {
+                          uint64_t addr, long long len, int redact) {
     if (!addr)
         return apf(b, cap, o, "NULL");
+    if (redact) /* a peer address IS content: an IP, a port, a socket path */
+        return apf(b, cap, o, REDACT_SOCKADDR);
     struct sockaddr_storage ss;
     memset(&ss, 0, sizeof ss);
     size_t n = len < 0 ? 0 : (size_t)len;
@@ -1540,18 +1569,19 @@ static size_t ap_statxbuf(char *b, size_t cap, size_t o, pid_t pid,
 /* Render one argument of class `cl` (`ret` is the syscall's return value — OUT
  * classes decode only on success; every other class ignores it). */
 static size_t ap_arg(char *b, size_t cap, size_t o, pid_t pid, int cl,
-                     const struct user_regs_struct *e, int i, long ret) {
+                     const struct user_regs_struct *e, int i, long ret,
+                     int redact) {
     unsigned long long v = scarg(e, i);
     switch (cl) {
     case A_FD:
         /* through (int): an fd is an int, and the ABI leaves the register's top
          * half undefined — so mmap's -1 arrives as 0xffffffff and renders as
          * fd=4294967295 (MEASURED) unless it is sign-extended back first. */
-        return ap_fd(b, cap, o, pid, (long long)(int)v);
+        return ap_fd(b, cap, o, pid, (long long)(int)v, redact);
     case A_DIRFD:
         return ap_dirfd(b, cap, o, (long long)v);
     case A_PATH:
-        return ap_cstr(b, cap, o, pid, v);
+        return ap_cstr(b, cap, o, pid, v, redact);
     case A_INT:
         return apf(b, cap, o, "%d", (int)v);
     case A_SIZE:
@@ -1582,7 +1612,7 @@ static size_t ap_arg(char *b, size_t cap, size_t o, pid_t pid, int cl,
             return apf(b, cap, o, "%d", (int)v);
         }
     case A_IOVEC:
-        return ap_iovec(b, cap, o, pid, v, (long long)scarg(e, i + 1));
+        return ap_iovec(b, cap, o, pid, v, (long long)scarg(e, i + 1), redact);
     case A_TIMESPEC:
         return ap_timespec(b, cap, o, pid, v);
     case A_WHENCE:
@@ -1603,7 +1633,8 @@ static size_t ap_arg(char *b, size_t cap, size_t o, pid_t pid, int cl,
         return apf(b, cap, o, "%d", (int)v);
     }
     case A_SOCKADDR: /* IN: the byte length is the NEXT register (addrlen) */
-        return ap_sockaddr(b, cap, o, pid, v, (long long)scarg(e, i + 1));
+        return ap_sockaddr(b, cap, o, pid, v, (long long)scarg(e, i + 1),
+                           redact);
     case A_SOCKADDR_OUT: {
         /* OUT: the addr is valid only on success, and its byte length lives
          * BEHIND the next arg (a socklen_t*). A failed call, a NULL length
@@ -1612,7 +1643,7 @@ static size_t ap_arg(char *b, size_t cap, size_t o, pid_t pid, int cl,
         socklen_t sl = 0;
         if (ret < 0 || plen == 0 || rd(pid, plen, &sl, sizeof sl) != 0)
             return apf(b, cap, o, "0x%llx", v);
-        return ap_sockaddr(b, cap, o, pid, v, (long long)sl);
+        return ap_sockaddr(b, cap, o, pid, v, (long long)sl, redact);
     }
     case A_IOCTLREQ:
         return ap_ioctlreq(b, cap, o, v);
@@ -1668,36 +1699,47 @@ static int oflags_create(unsigned long long fl) {
     return c;
 }
 
+/* Render one syscall.
+ *
+ * `redact` selects the PAYLOAD-FREE rendering (the redaction seam above): the
+ * line keeps its name, fds, flag words, counts and return value, but every
+ * decoded buffer / path / sockaddr becomes a placeholder and no target content
+ * is read. `sout` (the separated string-payload channel) may be NULL, which it
+ * always is on a redacted pass — a redacted rendering has no payload channel by
+ * construction, not by a caller remembering to drop it. */
 static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
                            pid_t pid, long nr, const struct user_regs_struct *e,
-                           long ret) {
+                           long ret, int redact) {
     size_t o = 0;
-    sout[0] = '\0';
+    if (sout && scap)
+        sout[0] = '\0';
     switch (nr) {
     case SYS_write:
         o = apf(b, cap, o, "write(");
-        o = ap_fd(b, cap, o, pid, (long long)scarg(e, 0));
+        o = ap_fd(b, cap, o, pid, (long long)scarg(e, 0), redact);
         o = apf(b, cap, o, ", ");
-        o = ap_data(b, cap, o, pid, scarg(e, 1), (uint32_t)scarg(e, 2));
+        o = ap_data(b, cap, o, pid, scarg(e, 1), (uint32_t)scarg(e, 2), redact);
         o = apf(b, cap, o, ", %llu) = %ld", (unsigned long long)scarg(e, 2),
                 ret);
-        decode_data(pid, scarg(e, 1), (uint32_t)scarg(e, 2), sout, scap);
+        if (sout)
+            decode_data(pid, scarg(e, 1), (uint32_t)scarg(e, 2), sout, scap);
         break;
     case SYS_read:
         o = apf(b, cap, o, "read(");
-        o = ap_fd(b, cap, o, pid, (long long)scarg(e, 0));
+        o = ap_fd(b, cap, o, pid, (long long)scarg(e, 0), redact);
         o = apf(b, cap, o, ", %llu) = ", (unsigned long long)scarg(e, 2));
         if (ret > 0) {
-            o = ap_data(b, cap, o, pid, scarg(e, 1), (uint32_t)ret);
+            o = ap_data(b, cap, o, pid, scarg(e, 1), (uint32_t)ret, redact);
             o = apf(b, cap, o, " [%ld]", ret);
-            decode_data(pid, scarg(e, 1), (uint32_t)ret, sout, scap);
+            if (sout)
+                decode_data(pid, scarg(e, 1), (uint32_t)ret, sout, scap);
         } else {
             o = apf(b, cap, o, "%ld", ret);
         }
         break;
     case SYS_close:
         o = apf(b, cap, o, "close(");
-        o = ap_fd(b, cap, o, pid, (long long)scarg(e, 0));
+        o = ap_fd(b, cap, o, pid, (long long)scarg(e, 0), redact);
         o = apf(b, cap, o, ") = %ld", ret);
         break;
     default: {
@@ -1722,9 +1764,9 @@ static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
             for (int i = 0; i < n; i++) {
                 if (i)
                     o = apf(b, cap, o, ", ");
-                o = ap_arg(b, cap, o, pid, sh.c[i], e, i, ret);
+                o = ap_arg(b, cap, o, pid, sh.c[i], e, i, ret, redact);
                 /* the string pane shows this call's primary datum */
-                if (sh.c[i] == A_PATH && !sout[0])
+                if (sh.c[i] == A_PATH && sout && !sout[0])
                     decode_cstr(pid, scarg(e, i), sout, scap);
             }
             o = apf(b, cap, o, ") = %ld", ret);
@@ -1734,17 +1776,19 @@ static void format_syscall(char *b, size_t cap, char *sout, size_t scap,
         /* UNKNOWN shape. The path tables still name the datum that matters. */
         path_kind_t pk = nm ? path_kind(nr) : PATH_NONE;
         if (pk == PATH_RDI) {
-            o = ap_cstr(b, cap, o, pid, scarg(e, 0));
+            o = ap_cstr(b, cap, o, pid, scarg(e, 0), redact);
             o = apf(b, cap, o, ", 0x%llx, 0x%llx",
                     (unsigned long long)scarg(e, 1),
                     (unsigned long long)scarg(e, 2));
-            decode_cstr(pid, scarg(e, 0), sout, scap);
+            if (sout)
+                decode_cstr(pid, scarg(e, 0), sout, scap);
         } else if (pk == PATH_AT_RSI) {
             o = ap_dirfd(b, cap, o, (long long)scarg(e, 0));
             o = apf(b, cap, o, ", ");
-            o = ap_cstr(b, cap, o, pid, scarg(e, 1));
+            o = ap_cstr(b, cap, o, pid, scarg(e, 1), redact);
             o = apf(b, cap, o, ", 0x%llx", (unsigned long long)scarg(e, 2));
-            decode_cstr(pid, scarg(e, 1), sout, scap);
+            if (sout)
+                decode_cstr(pid, scarg(e, 1), sout, scap);
         } else {
             o = apf(b, cap, o, "0x%llx, 0x%llx, 0x%llx",
                     (unsigned long long)scarg(e, 0),
@@ -2762,7 +2806,8 @@ int asmspy_engine_syscalls(pid_t pid, int follow, long max, atomic_bool *stop,
                     ts->at_entry = 0;
                 } else if (ts->ent_nr >=
                            0) { /* skip an exit we saw no entry for */
-                    char line[1024], sdata[512], out[1088];
+                    char line[1024], pf[1024], sdata[512], out[1088];
+                    char pfout[1088];
                     /* Decode via this task's OWN thread-group leader (shared mm
                      * + fd table). Threads of one process all share the target's,
                      * but a FOLLOWED CHILD has its own address space AND its own
@@ -2770,16 +2815,25 @@ int asmspy_engine_syscalls(pid_t pid, int follow, long max, atomic_bool *stop,
                      * read the parent's strings and resolve the parent's fds,
                      * silently reporting the wrong path for the right syscall.
                      * The per-thread label is added below, not in the decoder. */
-                    format_syscall(line, sizeof line, sdata, sizeof sdata,
-                                   thr_tgid(&tab, tid, pid), ts->ent_nr,
-                                   &ts->entry, (long)asmspy_reg_ret(&regs));
-                    const char *emit = line;
+                    pid_t dpid = thr_tgid(&tab, tid, pid);
+                    long sret = (long)asmspy_reg_ret(&regs);
+                    format_syscall(line, sizeof line, sdata, sizeof sdata, dpid,
+                                   ts->ent_nr, &ts->entry, sret, 0);
+                    /* The payload-free twin: the SAME renderer with the content
+                     * helpers placeholdered, which is why the two lines cannot
+                     * disagree about anything structural. Cheap — a redacted
+                     * pass reads no target memory. */
+                    format_syscall(pf, sizeof pf, NULL, 0, dpid, ts->ent_nr,
+                                   &ts->entry, sret, 1);
+                    const char *emit = line, *emit_pf = pf;
                     if (multi) {
                         snprintf(out, sizeof out, "[%d] %s", (int)tid, line);
+                        snprintf(pfout, sizeof pfout, "[%d] %s", (int)tid, pf);
                         emit = out;
+                        emit_pf = pfout;
                     }
                     if (sink)
-                        sink(ctx, emit, sdata[0] ? sdata : NULL);
+                        sink(ctx, emit, emit_pf, sdata[0] ? sdata : NULL);
                     ts->at_entry = 1;
                     ts->ent_nr = -1;
                     done++;

@@ -82,6 +82,12 @@ int main(void) {
     FIELD(vec256_t, f64);
     end_struct();
 
+    BEGIN(vec512_t); /* AVX-512 wide-vector capture (asm_call_capture_vec512) */
+    FIELD(vec512_t, u8);
+    FIELD(vec512_t, u64);
+    FIELD(vec512_t, f64);
+    end_struct();
+
     BEGIN(svec_t); /* SVE scalable-vector container: fixed 256-byte (VLmax)
                       box; live bytes = asmtest_sve_vl() at runtime */
     FIELD(svec_t, u8);

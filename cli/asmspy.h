@@ -205,10 +205,20 @@ const asmspy_sym_t *asmspy_resolve(const asmspy_symtab_t *syms,
 /* stop / target exit).                                                 */
 /* ------------------------------------------------------------------ */
 
-/* One decoded syscall: `line` is the full strace-ish line; `str` is just the
- * decoded string payload it carried (a path or a read/write buffer), or NULL. */
+/* One decoded syscall, in three separable channels:
+ *   `line`    — the full strace-ish line, decoded buffers/paths/sockaddrs
+ *               EMBEDDED (what --log prints).
+ *   `pf_line` — the same line rendered PAYLOAD-FREE: identical syscall name,
+ *               fds, flag words, counts and return value, but every piece of
+ *               target CONTENT replaced by a placeholder (<path>, <sockaddr>,
+ *               <N bytes>). Never NULL.
+ *   `str`     — just the decoded string payload the call carried (a path or a
+ *               read/write buffer), or NULL.
+ * The split is what lets a recording separate structure from content, so a
+ * reader can default-redact the payload without also losing the call
+ * (docs/internal/gui/asmtrace-schema.md, the `syscall` kind). */
 typedef void (*asmspy_syscall_sink)(void *ctx, const char *line,
-                                    const char *str);
+                                    const char *pf_line, const char *str);
 
 /* Attach to `pid` and ALL its threads (PTRACE_SEIZE every task, follow threads
  * it later spawns via PTRACE_O_TRACECLONE), stream their syscalls with decoded

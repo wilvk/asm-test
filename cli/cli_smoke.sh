@@ -25,6 +25,8 @@ echo "--- test_jitdump (binary jitdump reader + JIT resolve chain) ---"
 "$BUILD/test_jitdump" || fail "test_jitdump"
 echo "--- test_view (data-flow view: annotation + def-use split + L2 slice) ---"
 "$BUILD/test_view" || fail "test_view"
+echo "--- test_asmtrace (.asmtrace writer envelope + the schema doc's example) ---"
+"$BUILD/test_asmtrace" || fail "test_asmtrace"
 echo "--- test_treefilter (call-tree depth cap / symbol focus / module filter) ---"
 "$BUILD/test_treefilter" || fail "test_treefilter"
 echo "--- test_symtab (symbol reverse lookup: gaps, zero-size, boundaries) ---"
@@ -1703,6 +1705,64 @@ ad_has ', 4) = 0' "its A_SIZE arg"
 ad_has 'getppid() = ' "a second arity-ZERO shape"
 ad_has 'clock_nanosleep(0, 0, {0.002000000}' "the 4-arg clock_nanosleep shape"
 echo "  breadth: readv contents, dup2, ftruncate, getppid, clock_nanosleep pinned"
+
+# ---- .asmtrace: --json is a RECORDING, and its syscall lines are payload-free
+#      (docs/internal/gui/asmtrace-schema.md, the `syscall` kind).
+# The same victim, the same calls — but now asserted through the recording, so
+# the redaction split is measured against KNOWN payload strings rather than
+# inspected by eye. This is the honesty gate of the format: `line` must keep
+# every structural field and carry NONE of the content; `payload` carries the
+# content, separately, where a reader can default-redact it.
+echo "--- asmspy --log --json (.asmtrace recording + payload-free lines) ---"
+"$BUILD/argdecode_victim" 2>/dev/null &
+SGPID=$!
+sleep 2
+set +e
+timeout 90 "$ASM" --log "$SGPID" 400 --json >"$BUILD/argdecode.asmtrace" 2>/dev/null; rc=$?
+set -e
+[ "$rc" -eq 124 ] && fail "--log --json on argdecode_victim hung"
+kill -9 "$SGPID" 2>/dev/null || true
+wait "$SGPID" 2>/dev/null || true
+SGPID=""
+rm -f /tmp/asmspy_argdecode.txt
+
+head -1 "$BUILD/argdecode.asmtrace" | grep -q '"asmtrace":1' \
+    || fail "--json: line 1 is not an asmtrace header"
+head -1 "$BUILD/argdecode.asmtrace" | grep -q '"backend":"ptrace-syscalls"' \
+    || fail "--json: header carries no ptrace-syscalls provenance"
+tail -1 "$BUILD/argdecode.asmtrace" | grep -q '"k":"end"' \
+    || fail "--json: the recording has no end event (torn)"
+grep -q '"k":"syscall"' "$BUILD/argdecode.asmtrace" \
+    || fail "--json: no syscall events recorded"
+
+# The structure survives: name, flag words, octal mode, counts, return value.
+grep -q 'openat(AT_FDCWD, \\"<path>\\", O_WRONLY|O_CREAT|O_TRUNC, 0644) = 3' \
+    "$BUILD/argdecode.asmtrace" \
+    || fail "--json: a payload-free openat lost its flags/mode/return"
+
+# THE gate: every known payload string the victim writes must appear ONLY in a
+# "payload" field, never in a "line". A grep over the whole file would pass on
+# the payload alone, so the line fields are extracted first.
+# The line field ends at the UNESCAPED closing quote, which is either the start
+# of ,"payload": or the end of the object — a plain s/".*// would cut at the
+# first \" (a quoted path placeholder) and silently weaken every check below.
+sed -n 's/.*"line":"//p' "$BUILD/argdecode.asmtrace" \
+    | sed 's/","payload":".*//; s/"}$//' >"$BUILD/argdecode.lines"
+for secret in 'iovec-one' 'iovec-two' '/tmp/asmspy_argdecode.txt' \
+              '/nonexistent-asmspy'; do
+    grep -qF "$secret" "$BUILD/argdecode.lines" \
+        && fail "--json: payload string '$secret' leaked into a payload-free line"
+done
+# ... and the placeholders that replaced them are really there.
+grep -qF '<path>' "$BUILD/argdecode.lines" \
+    || fail "--json: no <path> placeholder in any payload-free line"
+grep -qE '<[0-9]+ (bytes|buffers)>' "$BUILD/argdecode.lines" \
+    || fail "--json: no <N bytes>/<N buffers> placeholder in any payload-free line"
+# ... while the payload CHANNEL still carries the content (redaction is a
+# reader's default, not a loss at record time).
+grep -q '"payload":"/tmp/asmspy_argdecode.txt"' "$BUILD/argdecode.asmtrace" \
+    || fail "--json: the decoded path is missing from the payload channel"
+echo "  --json recording: header+end intact; structure kept, content split into payload"
 
 echo "--- asmspy --log fd->endpoint (socket:[inode] -> real endpoint) ---"
 "$BUILD/sock_victim" 2>"$BUILD/sock_victim.log" &

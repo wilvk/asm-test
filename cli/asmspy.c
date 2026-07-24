@@ -43,6 +43,116 @@
 #include "asmspy_graphsort.h" /* gsort_t + gnode_cmp (unit-tested separately) */
 #include "asmspy_logview.h"
 #include "asmtest_ibs.h" /* --sample: out-of-band statistical hot-edge capture */
+#include "asmtrace_ndjson.h" /* --record / --json: the .asmtrace NDJSON writer */
+
+/* ================================================================== */
+/* .asmtrace recording plumbing, shared by every headless subcommand   */
+/*                                                                     */
+/* A run can record to a FILE (--record=<path>) and/or to STDOUT       */
+/* (--json). Both are the SAME format, and rec_emit* builds one body    */
+/* string and hands it to both writers, so "the file and the stream     */
+/* agree" is true by construction rather than by two call sites         */
+/* staying in step. Contract: docs/internal/gui/asmtrace-schema.md.     */
+/*                                                                     */
+/* THREADING: record sinks run on the engine's tracer thread, wrapping  */
+/* the print sinks they tee — one engine, one sink thread, one file, so */
+/* no lock is needed and the two-phase detach machinery is untouched    */
+/* (the ptrace per-thread rule, cli/asmspy.h).                          */
+/* ================================================================== */
+typedef struct {
+    asmtrace_writer_t file; /* --record=<path>                          */
+    asmtrace_writer_t out;  /* --json (stdout)                          */
+    int have_file, have_out;
+} rec_t;
+
+/* Is anything being recorded? (Sinks tee only when this is true.) */
+static int rec_on(const rec_t *r) { return r && (r->have_file || r->have_out); }
+
+/* The traced process's command line, for the header's `cmd` (provenance: what
+ * was actually being watched). Best-effort — an unreadable /proc gives "". */
+static void proc_cmdline(pid_t pid, char *out, size_t cap) {
+    char path[64];
+    FILE *f;
+    size_t n = 0;
+    out[0] = '\0';
+    snprintf(path, sizeof path, "/proc/%d/cmdline", (int)pid);
+    f = fopen(path, "r");
+    if (!f)
+        return;
+    n = fread(out, 1, cap - 1, f);
+    fclose(f);
+    if (n && out[n - 1] == '\0')
+        n--; /* the argv terminator is not a separator */
+    for (size_t i = 0; i < n; i++)
+        if (out[i] == '\0')
+            out[i] = ' ';
+    out[n] = '\0';
+}
+
+/* Open the requested recording channels and write the header to each. Returns
+ * 0, or -1 when a --record path could not be opened (the caller must fail: a
+ * recording the user ASKED for and did not get is not a detail). */
+static int rec_open(rec_t *r, const char *path, int json, const char *backend,
+                    int exact, const char *trust, pid_t pid) {
+    asmtrace_prov_t prov = {backend, exact, trust, 0, NULL, 0};
+    char cmd[256];
+    memset(r, 0, sizeof *r);
+    proc_cmdline(pid, cmd, sizeof cmd);
+    if (path) {
+        if (asmtrace_open(&r->file, path, 0) != 0) {
+            fprintf(stderr, "--record: cannot write %s: %s\n", path,
+                    strerror(errno));
+            return -1;
+        }
+        r->have_file = 1;
+        asmtrace_header(&r->file, "asmspy", &prov, (long)pid,
+                        cmd[0] ? cmd : NULL);
+    }
+    if (json) {
+        asmtrace_open_file(&r->out, stdout, 0);
+        r->have_out = 1;
+        asmtrace_header(&r->out, "asmspy", &prov, (long)pid,
+                        cmd[0] ? cmd : NULL);
+    }
+    return 0;
+}
+
+static void rec_emit(rec_t *r, const char *kind, const char *body) {
+    if (!r)
+        return;
+    if (r->have_file)
+        asmtrace_emit(&r->file, kind, body);
+    if (r->have_out) {
+        asmtrace_emit(&r->out, kind, body);
+        fflush(stdout); /* a live stream must be readable as it is produced */
+    }
+}
+
+static void rec_emitf(rec_t *r, const char *kind, const char *fmt, ...) {
+    char body[16384];
+    va_list ap;
+    if (!rec_on(r))
+        return;
+    va_start(ap, fmt);
+    vsnprintf(body, sizeof body, fmt, ap);
+    va_end(ap);
+    rec_emit(r, kind, body);
+}
+
+/* Close with the measured drop counters and, when the run SKIPPED, the skip
+ * code + its measured reason: a skipped run still produces a closed, honest
+ * recording rather than an empty file. */
+static void rec_close(rec_t *r, unsigned long long lost, int throttled,
+                      int skip_code, const char *skip_reason) {
+    asmtrace_prov_t skip = {NULL, 1, "exact", skip_code, skip_reason, 0};
+    if (!r)
+        return;
+    if (r->have_file)
+        asmtrace_close(&r->file, lost, throttled, &skip);
+    if (r->have_out)
+        asmtrace_close(&r->out, lost, throttled, &skip);
+    r->have_file = r->have_out = 0;
+}
 
 /* ================================================================== */
 /* Interrupt-to-detach: SIGINT/SIGTERM/SIGHUP must run the engines'    */
@@ -793,16 +903,43 @@ static int cmd_syms(pid_t pid, const char *filter) {
     return 0;
 }
 
-static void log_print_sink(void *ctx, const char *line, const char *str) {
-    (void)ctx;
-    (void)str; /* the full line already embeds the decoded string */
-    printf("%s\n", line);
-    fflush(stdout);
+/* --log tee: print the full human line (unless stdout carries the NDJSON) and
+ * record the PAYLOAD-FREE line plus, separately, the decoded payload — the
+ * split that lets a reader default-redact content without losing the call. */
+typedef struct {
+    rec_t *r;
+    int echo; /* 0 when stdout IS the recording (--json) */
+} log_rec_ctx;
+
+static void log_print_sink(void *ctx, const char *line, const char *pf_line,
+                           const char *str) {
+    log_rec_ctx *c = ctx;
+    char eline[8192], epay[4096];
+    if (!c || c->echo) {
+        printf("%s\n", line); /* the full line already embeds the string */
+        fflush(stdout);
+    }
+    if (!c || !rec_on(c->r))
+        return;
+    asmtrace_escape(eline, sizeof eline, pf_line);
+    if (str && *str) {
+        asmtrace_escape(epay, sizeof epay, str);
+        rec_emitf(c->r, "syscall", "\"line\":\"%s\",\"payload\":\"%s\"", eline,
+                  epay);
+    } else {
+        rec_emitf(c->r, "syscall", "\"line\":\"%s\"", eline);
+    }
 }
 
-static int cmd_log(pid_t pid, int follow, long n) {
-    int rc = asmspy_engine_syscalls(pid, follow, n, &g_sigstop, log_print_sink,
-                                    NULL);
+static int cmd_log(pid_t pid, int follow, long n, int json,
+                   const char *record) {
+    rec_t rec;
+    log_rec_ctx c = {&rec, !json};
+    int rc;
+    if (rec_open(&rec, record, json, "ptrace-syscalls", 1, "exact", pid) != 0)
+        return 1;
+    rc = asmspy_engine_syscalls(pid, follow, n, &g_sigstop, log_print_sink, &c);
+    rec_close(&rec, 0, 0, rc > 0 ? rc : 0, NULL);
     if (rc != 0) {
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
@@ -812,18 +949,38 @@ static int cmd_log(pid_t pid, int follow, long n) {
     return 0;
 }
 
+typedef struct {
+    rec_t *r;
+    int echo;
+} stream_rec_ctx;
+
 static void stream_print_sink(void *ctx, const char *line) {
-    (void)ctx;
-    printf("%s\n", line);
-    fflush(stdout);
+    stream_rec_ctx *c = ctx;
+    char esc[8192];
+    if (!c || c->echo) {
+        printf("%s\n", line);
+        fflush(stdout);
+    }
+    if (!c || !rec_on(c->r))
+        return;
+    /* The engine hands the front-end a formatted line only (asmspy.h), so v1
+     * records the text honestly instead of inventing fields it never measured. */
+    asmtrace_escape(esc, sizeof esc, line);
+    rec_emitf(c->r, "stream", "\"text\":\"%s\"", esc);
 }
 
-static int cmd_stream(pid_t pid, pid_t tid, int follow, long n) {
+static int cmd_stream(pid_t pid, pid_t tid, int follow, long n, int json,
+                      const char *record) {
     asmspy_symtab_t t;
+    rec_t rec;
+    stream_rec_ctx c = {&rec, !json};
+    if (rec_open(&rec, record, json, "ptrace-stream", 1, "exact", pid) != 0)
+        return 1;
     asmspy_symtab_load(pid, &t); /* best-effort; raw addresses if empty */
     int rc = asmspy_engine_stream(pid, tid, follow, n, &g_sigstop, &t,
-                                  stream_print_sink, NULL);
+                                  stream_print_sink, &c);
     asmspy_symtab_free(&t);
+    rec_close(&rec, 0, 0, rc > 0 ? rc : 0, NULL);
     if (rc != 0) {
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
@@ -2523,8 +2680,11 @@ typedef struct {
     int mode; /* 0 syscalls, 1 region, 2 instruction stream, 3 call graph */
 } live_t;
 
-static void live_syscall_sink(void *ctx, const char *line, const char *str) {
+static void live_syscall_sink(void *ctx, const char *line, const char *pf_line,
+                              const char *str) {
     live_t *L = ctx;
+    (void)
+        pf_line; /* the TUI shows the full line; the split matters at record */
     pthread_mutex_lock(&L->mu);
     log_push(&L->log, line);
     if (str && *str)
@@ -5223,7 +5383,8 @@ static int usage(const char *argv0) {
         "  %s --list [active|scan]    list processes (active=recent CPU; "
         "scan=string-rich memory)\n"
         "  %s --syms   <pid> [filter] list resolved function symbols\n"
-        "  %s --log    <pid> [n] [--follow]  stream n syscalls with data\n"
+        "  %s --log    <pid> [n] [--follow] [--json] [--record=<f>]  stream n "
+        "syscalls with data\n"
         "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n] [--tid=<t>]  live samples "
         "of a function/region (any thread)\n"
         "  %s --dataflow <pid> <sym|0xADDR[:LEN]|--auto> [--json] [--tid=<t>] "
@@ -5235,8 +5396,8 @@ static int usage(const char *argv0) {
         "residency is not entry evidence) — --sampler= forces one of the two, "
         "--module=<m> scopes the pick, and --auto cannot be combined with "
         "--tid\n"
-        "  %s --stream <pid> [n] [--tid=<t>] [--follow]  stream n "
-        "instructions live (function + asm)\n"
+        "  %s --stream <pid> [n] [--tid=<t>] [--follow] [--json] "
+        "[--record=<f>]  stream n instructions live (function + asm)\n"
         "  %s --graph  <pid> [n] [--sort=invocations|fanout|functions-called] "
         "[--json|--dot] [--tid=<t>] [--follow]  whole-process call graph over "
         "n "
@@ -5262,6 +5423,13 @@ static int usage(const char *argv0) {
         "[--json]  hardware DATA watchpoint: who touches a field + the value, "
         "at "
         "native speed (x86-64)\n"
+        "\n"
+        "--record=<f> writes a .asmtrace NDJSON recording of the run (every\n"
+        "headless mode); --json streams that SAME format to stdout instead of\n"
+        "the human text, so `--log <pid> --json > x.asmtrace` IS a recording.\n"
+        "A run that SKIPS still records: the file closes with the measured\n"
+        "reason. Syscall recordings split the payload out of the line, so a\n"
+        "reader can redact content without losing the call.\n"
         "\n"
         "A negative n runs until the target exits or you interrupt (Ctrl-C).\n"
         "Note: the single-step views deliver a target's OWN int3 breakpoints\n"
@@ -5308,14 +5476,20 @@ int main(int argc, char **argv) {
         if (parse_pid(argv[2], &pid) != 0)
             return bad_arg("pid", argv[2]);
         n = 20;
-        int follow = 0;
-        for (int i = 3; i < argc; i++) { /* [n] and --follow in any order */
+        int follow = 0, json = 0;
+        const char *record = NULL;
+        for (int i = 3; i < argc;
+             i++) { /* [n], --follow, --json, --record= any order */
             if (strcmp(argv[i], "--follow") == 0)
                 follow = 1;
+            else if (strcmp(argv[i], "--json") == 0)
+                json = 1;
+            else if (strncmp(argv[i], "--record=", 9) == 0)
+                record = argv[i] + 9;
             else if (parse_count(argv[i], &n) != 0)
                 return bad_arg("count", argv[i]);
         }
-        return cmd_log(pid, follow, n);
+        return cmd_log(pid, follow, n, json, record);
     }
     if (strcmp(argv[1], "--trace") == 0 && argc >= 4) {
         if (parse_pid(argv[2], &pid) != 0)
@@ -5404,13 +5578,19 @@ int main(int argc, char **argv) {
             return bad_arg("pid", argv[2]);
         n = 20;
         pid_t tid = 0;
-        int follow = 0;
-        for (int i = 3; i < argc; i++) { /* [n], --tid=, --follow, any order */
+        int follow = 0, json = 0;
+        const char *record = NULL;
+        for (int i = 3; i < argc; i++) { /* [n], --tid=, --follow, --json,
+                                          * --record=, any order */
             if (strncmp(argv[i], "--tid=", 6) == 0) {
                 if (parse_pid(argv[i] + 6, &tid) != 0)
                     return bad_arg("tid", argv[i] + 6);
             } else if (strcmp(argv[i], "--follow") == 0) {
                 follow = 1;
+            } else if (strcmp(argv[i], "--json") == 0) {
+                json = 1;
+            } else if (strncmp(argv[i], "--record=", 9) == 0) {
+                record = argv[i] + 9;
             } else if (parse_count(argv[i], &n) != 0) {
                 return bad_arg("count", argv[i]);
             }
@@ -5420,7 +5600,7 @@ int main(int argc, char **argv) {
             return bad_arg("combination (--tid pins ONE task; --follow adds "
                            "child processes)",
                            "--tid with --follow");
-        return cmd_stream(pid, tid, follow, n);
+        return cmd_stream(pid, tid, follow, n, json, record);
     }
     if (strcmp(argv[1], "--tree") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)
