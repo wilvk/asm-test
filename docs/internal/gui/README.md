@@ -1,11 +1,11 @@
 # Desktop GUI implementation documents — index
 
 This directory holds the **implementation-ready specifications** for
-[desktop-gui-plan.md](../plans/desktop-gui-plan.md): nine self-contained
-briefs, each for one coherent task set, written so a junior developer can
-clone the repo, open exactly one document, and implement it end to end
-(code + tests + docs) with no other context. Format and rules follow
-[../implementations/](../implementations/README.md) — read
+[desktop-gui-plan.md](../plans/desktop-gui-plan.md): ten self-contained
+briefs (nine core + one growth-rung companion), each for one coherent task set,
+written so a junior developer can clone the repo, open exactly one document, and
+implement it end to end (code + tests + docs) with no other context. Format and
+rules follow [../implementations/](../implementations/README.md) — read
 [\_conventions.md](../implementations/_conventions.md) once before starting.
 
 > **Provenance.** Generated 2026-07-23/24 from the GUI plan (itself
@@ -73,14 +73,22 @@ land (legend as in [../implementations/README.md](../implementations/README.md):
 | [07-serve-live-host.md](07-serve-live-host.md) | `--serve`, session host, budget patch-bay, Inspect door | 6 | 01, 03 | ☐ 0/6 |
 | [08-observer-views.md](08-observer-views.md) | live views: syscalls, watch, topo, hot edges, tree filters, codeimage, PT slice | 8 | 07, 04, 01 | ☐ 0/8 |
 | [09-teaching-producers.md](09-teaching-producers.md) | per-step register ring, scrubber, ABI x-ray, blame socket | 5 | 01, 03, 04, 06 | ☐ 0/5 |
+| [10-spacetime-3d-overview.md](10-spacetime-3d-overview.md) | 3D memory-terrain + execution-trajectory overview surface (**growth-rung companion**) | 7 | 01, 03, 04, 07, 08 | ☐ 0/7 |
 
-63 tasks across 9 docs. Suggested start order: 01 and 03 in parallel (03's
+70 tasks across 10 docs. Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
-09 (09-T1 — the emulator ring — is engine-only and can start any time).
+09 (09-T1 — the emulator ring — is engine-only and can start any time). **Doc 10
+is a growth-rung companion, not scheduled against Phase 1–4** — it consumes the
+core docs' feeds and blocks nothing; start it only after 04/07/08 land, and only
+its coarse rung is buildable before the Wave-1 `mem[]` stream.
 
 ## Plan phase mapping
 
 Phase 1 = 01 + 02(T1–T4); Phase 2 = 03 + 04 + 05 + 06 + 02(T5–T6);
 Phase 3 = 07 + 08 (+ the schema freeze checkpoint); Phase 4 = 09.
+Doc 10 (the 3D overview) is a **growth-rung companion** outside the Phase 1–4
+mapping — it reunifies the plan's killed Terrane + Observatory as an overview
+surface, is gated on the Wave-1 `mem[]` stream for its rich rung, and is
+prioritized only on demand from the RE/security and perf personas.
 The plan's standing expansion-intake table stays in the plan; each wave item
 lands as a new brief here in the same format.

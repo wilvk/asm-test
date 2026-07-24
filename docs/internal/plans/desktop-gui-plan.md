@@ -24,9 +24,15 @@
 > [archive rule](../README.md).
 >
 > **Pointer (2026-07-24):** the implementation-ready breakdown of this plan —
-> nine junior-implementable briefs, 63 tasks, with the binding build decisions
-> (the GUI ships under `desktop/`, integrated via `mk/desktop.mk`) — lives in
-> [docs/internal/gui/](../gui/README.md).
+> ten briefs (nine core + one growth-rung companion), 70 tasks, with the binding
+> build decisions (the GUI ships under `desktop/`, integrated via
+> `mk/desktop.mk`) — lives in [docs/internal/gui/](../gui/README.md). The
+> companion, [10-spacetime-3d-overview.md](../gui/10-spacetime-3d-overview.md),
+> reunifies the killed [Terrane and Observatory](#flagship-interaction-concept-the-loom)
+> concepts as a **3D overview surface** (memory terrain + execution
+> trajectories, "3D to find, 2D to read") — an orientation view you drill *out
+> of* into the 2D reading views, gated on the Wave-1 `mem[]` stream for its rich
+> rung.
 
 ## Summary
 
