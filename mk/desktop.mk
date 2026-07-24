@@ -176,7 +176,8 @@ define DESKTOP_GUIDE
 	@false
 endef
 
-.PHONY: desktop desktop-render desktop-test desktop-fmt desktop-fmt-check docker-desktop
+.PHONY: desktop desktop-render desktop-test desktop-fmt desktop-fmt-check \
+        docker-desktop desktop-setup desktop-setup-render
 
 $(BUILD)/asmtest-desktop: $(DESKTOP_APP_OBJ) $(DESKTOP_ENGINE_OBJ)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) \
@@ -200,6 +201,53 @@ else
 desktop-render:
 	$(call DESKTOP_GUIDE,asmtest-viewer (render-only),$(DESKTOP_MISSING))
 endif
+
+# --- desktop-setup: bare host -> a GUI you can launch, in one command ---------
+# The gates above (DESKTOP_MISSING / DESKTOP_ENGINE_MISSING) are $(shell) probes
+# that make expands while READING this file, so their answers are fixed before
+# any recipe runs. A setup target that installed the deps and then merely
+# *depended* on `desktop` would still be judged against the pre-install probe and
+# print the guidance text it just made obsolete. The build is therefore a
+# RECURSIVE $(MAKE) — a second make process, which re-runs the probes against the
+# host as it now is. This is the one place in this file that needs a sub-make.
+#
+# Every step is idempotent and self-skipping, so re-running on a set-up host is a
+# plain incremental build: install-deps.sh skips what pkg-config already finds,
+# and build-capstone.sh / build-keystone.sh exit early when their engine is
+# installed. The two source builds are not optional extras — on every Linux
+# package manager capstone and keystone have no distro package (see
+# install-deps.sh's capstone_pkg/keystone_pkg comment), so a target that only ran
+# the package manager would leave `make desktop` still gated.
+#
+# The pinned imgui + nlohmann/json sources need no step here: they are ordinary
+# prerequisites of every desktop object (the fetch rules at the top of this file),
+# so the sub-make fetches them on demand.
+desktop-setup:
+	@echo "== 1/3  host packages (glfw + GL + engines + build tools) =="
+	sh scripts/install-deps.sh --desktop
+	@echo "== 2/3  pinned engine source builds (skip if already installed) =="
+	sh scripts/build-capstone.sh
+	sh scripts/build-keystone.sh
+	@echo "== 3/3  build both binaries (imgui/json fetched on demand) =="
+	$(MAKE) desktop desktop-render
+	@echo ""
+	@echo "desktop setup complete — run it with:"
+	@echo "    $(BUILD)/asmtest-desktop     # full app"
+	@echo "    $(BUILD)/asmtest-viewer      # render-only viewer"
+	@echo "Both open a window, so they need a display (DISPLAY / WAYLAND_DISPLAY)."
+	@echo "Open a recording from the home screen's Learn door — the committed"
+	@echo "corpus is in tests/golden-asmtrace/. Verify headlessly: make desktop-test"
+
+# The viewer half alone: app backends, no engines, no source builds — so it works
+# on a host where the GPL engines are unwanted (D4) and finishes far quicker.
+desktop-setup-render:
+	@echo "== 1/2  host packages (glfw + GL) =="
+	sh scripts/install-deps.sh --desktop-render
+	@echo "== 2/2  build the render-only viewer =="
+	$(MAKE) desktop-render
+	@echo ""
+	@echo "viewer setup complete — run it with:"
+	@echo "    $(BUILD)/asmtest-viewer      # needs a display; engine-free"
 
 # desktop-test: the null-backend headless tests. No GLFW, no GL, no engines — the
 # gate above never applies here (a test that could only self-skip is not a test,

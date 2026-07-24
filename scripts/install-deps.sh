@@ -10,12 +10,13 @@
 #   nasm         NASM backend      make ASM_SYNTAX=nasm ...
 #   pkg-config   install/consume   make install ; pkg-config asmtest
 #   unicorn      emulator tier     make emu-test
+#   glfw + GL    desktop GUI       make desktop / make desktop-render
 #   clang-tidy   static analysis   make tidy
 #   valgrind     routine memcheck  make valgrind   (Linux/x86-64)
 #
 # Usage:
-#   scripts/install-deps.sh [--all] [--nasm] [--emu] [--pkgconfig] [--tidy]
-#                           [--valgrind] [--dry-run] [--help]
+#   scripts/install-deps.sh [--all] [--nasm] [--emu] [--desktop] [--pkgconfig]
+#                           [--tidy] [--valgrind] [--dry-run] [--help]
 #
 # With no selection flag it installs everything above (a full dev setup).
 # Detects (in order): apt-get, dnf, yum, pacman, zypper, apk, brew. On Linux it
@@ -33,10 +34,13 @@ $prog — install asm-test's optional build dependencies cross-platform.
 Usage: scripts/install-deps.sh [options]
 
 Selection (default: all of them):
-  --all          nasm + pkg-config + unicorn + capstone + keystone + patchelf + clang-tidy + clang-format + valgrind
+  --all          nasm + pkg-config + unicorn + capstone + keystone + patchelf + glfw + GL + buildtools + clang-tidy + clang-format + valgrind
   --nasm         NASM backend          (make ASM_SYNTAX=nasm ...)
   --emu          emulator tier         (make emu-test) — unicorn + capstone + pkg-config
   --asm          full emu lib + bindings (make shared-emu / <lang>-test) — keystone + capstone + unicorn + pkg-config + patchelf
+  --desktop      desktop GUI, full app (make desktop) — glfw + GL + unicorn + capstone + keystone + pkg-config + buildtools
+  --desktop-render  render-only viewer (make desktop-render) — glfw + GL + pkg-config, no engines
+  --buildtools   git + cmake — what scripts/build-capstone.sh and build-keystone.sh need to run
   --pkgconfig    install/consume lib   (make install ; pkg-config asmtest)
   --patchelf     dlopen packaging      (make package-libs) — rpath-patch vendored deps (Linux)
   --tidy         static analysis       (make tidy)
@@ -57,6 +61,9 @@ want_unicorn=0
 want_capstone=0
 want_keystone=0
 want_patchelf=0
+want_glfw=0
+want_gl=0
+want_buildtools=0
 want_tidy=0
 want_format=0
 want_valgrind=0
@@ -65,10 +72,18 @@ selected=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --all)        want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_capstone=1; want_keystone=1; want_patchelf=1; want_tidy=1; want_format=1; want_valgrind=1; selected=1 ;;
+        --all)        want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_capstone=1; want_keystone=1; want_patchelf=1; want_glfw=1; want_gl=1; want_buildtools=1; want_tidy=1; want_format=1; want_valgrind=1; selected=1 ;;
         --nasm)       want_nasm=1; selected=1 ;;
         --emu)        want_unicorn=1; want_capstone=1; want_pkgconfig=1; selected=1 ;;
         --asm)        want_keystone=1; want_capstone=1; want_unicorn=1; want_pkgconfig=1; want_patchelf=1; selected=1 ;;
+        # The full app links the Author-tier engines (mk/desktop.mk D4), so
+        # --desktop is --emu + keystone + the app backends; the render-only
+        # viewer links none of them and needs the backends alone. It pulls in
+        # --buildtools because on every Linux manager capstone and keystone are
+        # source-built, and `make desktop-setup` runs those builds for you.
+        --desktop)    want_glfw=1; want_gl=1; want_unicorn=1; want_capstone=1; want_keystone=1; want_pkgconfig=1; want_buildtools=1; selected=1 ;;
+        --desktop-render) want_glfw=1; want_gl=1; want_pkgconfig=1; selected=1 ;;
+        --buildtools) want_buildtools=1; selected=1 ;;
         --pkgconfig|--pkg-config) want_pkgconfig=1; selected=1 ;;
         --patchelf)   want_patchelf=1; selected=1 ;;
         --tidy)       want_tidy=1; selected=1 ;;
@@ -83,7 +98,7 @@ done
 
 # No selection flag => full dev setup.
 if [ "$selected" -eq 0 ]; then
-    want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_capstone=1; want_keystone=1; want_patchelf=1; want_tidy=1; want_format=1; want_valgrind=1
+    want_nasm=1; want_pkgconfig=1; want_unicorn=1; want_capstone=1; want_keystone=1; want_patchelf=1; want_glfw=1; want_gl=1; want_buildtools=1; want_tidy=1; want_format=1; want_valgrind=1
 fi
 
 # Detect the package manager. Native Linux managers take precedence over a
@@ -111,6 +126,12 @@ fi
 # packaged widely, the optional tiers pin a specific source release (the way
 # Keystone must) so a published package vendors a known, version-matched binary +
 # license. Where it's empty, --emu/--asm point at scripts/build-capstone.sh.
+#
+# glfw_pkg / gl_pkg are the desktop app backends (Dockerfile.desktop installs the
+# apt pair). Unlike the engines these are plain distro packages everywhere — ImGui
+# talks to whatever GLFW/GL the system ships, so there is nothing to pin. gl_pkg is
+# empty on brew because macOS's OpenGL is a system framework in the Xcode command
+# line tools, not a package.
 case "$PM" in
     apt-get) nasm_pkg=nasm; pkgconfig_pkg=pkg-config; unicorn_pkg=libunicorn-dev;  capstone_pkg=;  keystone_pkg=; patchelf_pkg=patchelf; tidy_pkg=clang-tidy;        valgrind_pkg=valgrind ;;
     dnf|yum) nasm_pkg=nasm; pkgconfig_pkg=pkgconf-pkg-config; unicorn_pkg=unicorn-devel; capstone_pkg=; keystone_pkg=; patchelf_pkg=patchelf; tidy_pkg=clang-tools-extra; valgrind_pkg=valgrind ;;
@@ -132,10 +153,29 @@ case "$PM" in
     brew)    format_pkg=clang-format ;;
 esac
 
+# The desktop GUI's app backends: GLFW + an OpenGL implementation (Mesa on Linux).
+case "$PM" in
+    apt-get) glfw_pkg=libglfw3-dev;  gl_pkg=libgl1-mesa-dev ;;
+    dnf|yum) glfw_pkg=glfw-devel;    gl_pkg=mesa-libGL-devel ;;
+    pacman)  glfw_pkg=glfw;          gl_pkg=mesa ;;
+    zypper)  glfw_pkg=glfw-devel;    gl_pkg=Mesa-libGL-devel ;;
+    apk)     glfw_pkg=glfw-dev;      gl_pkg=mesa-dev ;;
+    brew)    glfw_pkg=glfw;          gl_pkg= ;;
+esac
+
+# git + cmake: what the pinned source builds (build-capstone.sh, build-keystone.sh)
+# need in order to run. Same name on every manager except apt's cmake, which is
+# also plain `cmake`.
+git_pkg=git
+cmake_pkg=cmake
+
 have() { command -v "$1" >/dev/null 2>&1; }
 have_unicorn() { have pkg-config && pkg-config --exists unicorn 2>/dev/null; }
 have_capstone() { have pkg-config && pkg-config --exists capstone 2>/dev/null; }
 have_keystone() { have pkg-config && pkg-config --exists keystone 2>/dev/null; }
+# mk/desktop.mk gates on exactly these two probes, so detect them the same way.
+have_glfw() { have pkg-config && pkg-config --exists glfw3 2>/dev/null; }
+have_gl() { have pkg-config && pkg-config --exists gl 2>/dev/null; }
 
 pkgs=""
 add() { pkgs="$pkgs $1"; }
@@ -162,6 +202,16 @@ skip() { echo "$prog: $1 already present, skipping"; }
     if have patchelf; then skip patchelf
     elif [ -z "$patchelf_pkg" ]; then echo "$prog: patchelf not needed on $PM (macOS vendors deps via install_name_tool); skipping"
     else add "$patchelf_pkg"; fi
+}
+[ "$want_glfw" -eq 1 ]      && { have_glfw && skip glfw || add "$glfw_pkg"; }
+[ "$want_gl" -eq 1 ]        && {
+    if [ -z "$gl_pkg" ]; then echo "$prog: OpenGL ships with the Xcode command line tools on $PM (skipping)"
+    elif have_gl; then skip "OpenGL (gl.pc)"
+    else add "$gl_pkg"; fi
+}
+[ "$want_buildtools" -eq 1 ] && {
+    have git && skip git || add "$git_pkg"
+    have cmake && skip cmake || add "$cmake_pkg"
 }
 [ "$want_tidy" -eq 1 ]      && { have clang-tidy && skip clang-tidy || add "$tidy_pkg"; }
 [ "$want_format" -eq 1 ]    && { have clang-format && skip clang-format || add "$format_pkg"; }

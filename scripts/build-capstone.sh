@@ -55,7 +55,12 @@ cd "$work/capstone/build"
 # pkg-config flags the tree uses) aborts at load with "no LC_RPATH's found".
 # Bake the absolute install-name directory instead — the way Homebrew ships
 # dylibs — so plain links work. A no-op on non-Apple platforms.
-cmake -DCMAKE_BUILD_TYPE=Release \
+#
+# $(tp_cmake_compat) is intentionally unquoted: it expands to one argument on a
+# cmake >= 3.31 (whose 4.x releases reject this pinned tree's
+# cmake_minimum_required) and to nothing at all on older ones.
+cmake $(tp_cmake_compat) \
+      -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_SHARED_LIBS=ON \
       -DCAPSTONE_BUILD_TESTS=OFF \
       -DCAPSTONE_BUILD_CSTOOL=OFF \

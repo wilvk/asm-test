@@ -8,6 +8,33 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`make desktop-setup` — one command from a bare host to a runnable GUI.**
+  Nothing bootstrapped the desktop app: `make deps` covered the engines but knew
+  nothing about GLFW or GL, so the app backends were reachable only by copying
+  the apt line out of the dependency-gate's guidance text. The new target runs
+  `install-deps.sh --desktop`, then the pinned Capstone and Keystone source
+  builds — not optional extras, since **no Linux package manager ships either
+  engine**, so a package-manager-only setup would leave `make desktop` still
+  gated — and finally builds both binaries. `make desktop-setup-render` does the
+  viewer half: app backends only, no engines, no source builds (D4).
+
+  The build step is a **recursive `$(MAKE)`**, which is load-bearing rather than
+  stylistic: `DESKTOP_MISSING`/`DESKTOP_ENGINE_MISSING` are `$(shell pkg-config)`
+  probes expanded when make *reads* `mk/desktop.mk`, so a setup target that
+  installed the dependencies and then merely *depended* on `desktop` would be
+  judged against the pre-install answers and print the guidance text it had just
+  made obsolete. Every step is idempotent, so re-running on a set-up host is a
+  plain incremental build.
+
+- **`install-deps.sh` learned the dependencies it was missing:** `--desktop`
+  (glfw + GL + unicorn + capstone + keystone + pkg-config + buildtools),
+  `--desktop-render` (the app backends alone), and `--buildtools` (git + cmake —
+  what the pinned source builds need in order to run, which nothing previously
+  installed even though `--asm`/`--emu` both point at them). Package names cover
+  apt/dnf/yum/pacman/zypper/apk/brew; `gl_pkg` is empty on brew because macOS
+  OpenGL is an Xcode framework, not a package. `--all` and the no-flag default
+  pick up the new dependencies; `--emu`/`--asm`/`--nasm`/`--tidy` are unchanged.
+
 - **Desktop replay views — trace canvas, operand timeline, slice explorer,
   recording diff, deep links (desktop GUI plan, Phase 2;
   docs/internal/gui/04-replay-views.md).** The desktop app now renders what a
@@ -1979,6 +2006,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   43 → 49.
 
 ### Fixed
+
+- **The pinned Keystone and Capstone source builds no longer fail on a modern
+  CMake or GCC.** Keystone 0.9.2 (Feb 2019) is upstream's newest release, so
+  there is no version to move to; on a CMake 4 / GCC 15 host it failed three
+  separate ways, each hiding the next. (1) Both engines declare a
+  `cmake_minimum_required()` below 3.5, whose compatibility CMake 4.0 removed —
+  configure aborted before doing anything. New `tp_cmake_compat` in
+  `lib-thirdparty.sh` supplies `CMAKE_POLICY_VERSION_MINIMUM=3.5`, emitted only
+  for cmake >= 3.31 where the variable exists, and used by **both** build
+  scripts. (2) Two of Keystone's CMakeLists set `cmake_policy(SET CMP0051 OLD)`,
+  which no flag can re-enable — CMake 4 removed OLD outright — so they are
+  patched to NEW; the policy only governs whether generator expressions appear
+  in a target's `SOURCES` property, which Keystone's build never reads.
+  (3) Keystone's bundled LLVM fork predates GCC 13's stricter header
+  transitivity and uses `intptr_t` without including `<cstdint>`, now supplied
+  by `-include cstdint` in the C++ flags alone.
+
+  The patches are applied **after** the `git rev-parse HEAD` assertion against
+  the recorded commit, which is what keeps the B5 pin meaningful: integrity is
+  still proven against unmodified upstream, and every subsequent change is
+  visible in the build script rather than baked into a vendored tarball. `sed`
+  writes through a temp file rather than using `sed -i`, whose in-place spelling
+  differs between GNU and BSD/macOS sed.
 
 - **.NET: the `unwarmed/PT compose` in-window-JIT premise check no longer
   permanently self-skips on PT silicon (dotnet-pt-inwindow-jit-premise.md

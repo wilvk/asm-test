@@ -44,12 +44,49 @@ if [ "$got" != "$commit" ]; then
     exit 1
 fi
 
+# --- make the pinned tree configurable by a modern CMake ---------------------
+# Keystone 0.9.2 (Feb 2019) is upstream's newest release, so there is no version
+# to move to; the fix has to happen here. Both edits are applied AFTER the commit
+# assertion above, which is what keeps the B5 pin meaningful: integrity is proven
+# against unmodified upstream first, and every change we then make is visible in
+# this file rather than baked into a vendored tarball.
+#
+# Two CMakeLists set `cmake_policy(SET CMP0051 OLD)`. CMake 4 removed OLD for
+# that policy outright — unlike the minimum-version check, NO flag re-enables it,
+# so configure fails hard. CMP0051 NEW only means generator expressions appear in
+# a target's SOURCES property; keystone's build never reads SOURCES, so the
+# switch is inert for this tree. sed writes through a temp file rather than using
+# `sed -i`, whose in-place spelling differs between GNU and BSD/macOS sed.
+for f in CMakeLists.txt llvm/CMakeLists.txt; do
+    [ -f "$work/keystone/$f" ] || continue
+    if grep -q 'cmake_policy(SET CMP0051 OLD)' "$work/keystone/$f"; then
+        sed 's/cmake_policy(SET CMP0051 OLD)/cmake_policy(SET CMP0051 NEW)/' \
+            "$work/keystone/$f" > "$work/keystone/$f.tmp"
+        mv "$work/keystone/$f.tmp" "$work/keystone/$f"
+        echo "$prog: patched $f — CMP0051 OLD -> NEW (CMake 4 removed OLD)"
+    fi
+done
+
 mkdir -p "$work/keystone/build"
 cd "$work/keystone/build"
-cmake -DCMAKE_BUILD_TYPE=Release \
+
+# Keystone bundles an LLVM fork that predates GCC 13's stricter header
+# transitivity: llvm/include/llvm/ADT/STLExtras.h uses intptr_t without including
+# <cstdint>, which used to arrive indirectly and no longer does (GCC 13+ fails
+# with "'intptr_t' has not been declared"). Force-including the header supplies
+# it without touching the sources; it is a standard C++11 header, so this is a
+# no-op on the older toolchains that compiled the tree unaided.
+KS_CXXFLAGS="-include cstdint ${CXXFLAGS:-}"
+
+# $(tp_cmake_compat) is intentionally unquoted: it expands to one argument on a
+# cmake >= 3.31 (whose 4.x releases reject this pinned tree's
+# cmake_minimum_required) and to nothing at all on older ones.
+cmake $(tp_cmake_compat) \
+      -DCMAKE_BUILD_TYPE=Release \
       -DBUILD_SHARED_LIBS=ON \
       -DLLVM_TARGETS_TO_BUILD="AArch64;ARM;X86" \
       -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+      -DCMAKE_CXX_FLAGS="$KS_CXXFLAGS" \
       ..
 make "-j$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"
 $SUDO make install

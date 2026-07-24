@@ -25,13 +25,32 @@ bundled into any desktop artifact.
 
 ## Building
 
-Use the Docker lane where possible (no host deps needed):
+From a bare host, one command installs everything and builds both binaries:
+
+```
+make desktop-setup          # host packages -> pinned engine source builds -> build
+make desktop-setup-render   # the viewer alone: app backends, no engines
+```
+
+It runs [`scripts/install-deps.sh --desktop`](../scripts/install-deps.sh) (GLFW +
+GL + unicorn + pkg-config + git/cmake), then the pinned
+[Capstone](../scripts/build-capstone.sh) and [Keystone](../scripts/build-keystone.sh)
+source builds — neither has a distro package, so the package manager alone would
+leave `make desktop` still gated — and finally builds the two binaries through a
+**recursive `$(MAKE)`**: the dependency gates are `$(shell)` probes expanded when
+make *reads* [`mk/desktop.mk`](../mk/desktop.mk), so only a second make process
+sees the deps that were just installed. Every step is idempotent, so re-running
+on a set-up host is a plain incremental build.
+
+To build only, in a container (no host deps needed):
 
 ```
 make docker-desktop     # build both binaries + run the headless tests in a container
 ```
 
-On a host with the toolchain installed:
+The container has no display, so that lane never *runs* the GUI — it builds both
+binaries and runs the headless tests. Individual targets, on a host that already
+has the toolchain:
 
 ```
 make desktop            # build build/asmtest-desktop (needs GLFW/GL + the engines)
@@ -42,6 +61,23 @@ make desktop-test       # headless null-backend tests (only a C++17 compiler)
 When a dependency is missing, `desktop` / `desktop-render` print the apt line and
 the `make docker-desktop` pointer and fail — never a raw compiler error.
 `desktop-test` needs no display, no GL and no engines, so it runs anywhere.
+
+## Running
+
+Both binaries take no arguments ([`src/main.cpp`](src/main.cpp)) and open a
+window, so they need a display (`DISPLAY` or `WAYLAND_DISPLAY`):
+
+```
+./build/asmtest-desktop     # full app
+./build/asmtest-viewer      # render-only viewer
+```
+
+Recordings are opened from inside: the home screen's **Learn** door opens the
+recording dialog, which takes a path to an `.asmtrace` file — a `Workspace::open`
+error renders verbatim there, never as a silent no-op. The committed corpus lives
+in [`tests/golden-asmtrace/`](../tests/golden-asmtrace/), and every headless
+asmspy mode writes one with `--record=<f>`. The key map is the table under
+[The replay views](#the-replay-views) below.
 
 Formatting: `make desktop-fmt` reformats `desktop/**` with the repo
 [`.clang-format`](../.clang-format); `make desktop-fmt-check` reports drift and is

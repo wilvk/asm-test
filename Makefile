@@ -146,6 +146,8 @@ help:
 	@echo '                  a skipped run still records, carrying the measured reason.'
 	@echo ''
 	@echo 'Desktop GUI (ImGui shell + .asmtrace viewer; docs/internal/gui/):'
+	@echo '  desktop-setup   one command: install every host dep, then build both binaries'
+	@echo '  desktop-setup-render  the same for the viewer alone (app backends, no engines)'
 	@echo '  desktop         build build/asmtest-desktop (full app; links the engines, GPL-2.0 whole)'
 	@echo '  desktop-render  build build/asmtest-viewer (render-only; engine-free, permissive)'
 	@echo '  desktop-test    headless null-backend tests (any host with a C++17 compiler; make docker-desktop)'

@@ -16,6 +16,38 @@ tp_digest() {
     ' "$TP_MANIFEST" 2>/dev/null
 }
 
+# tp_cmake_compat — echo the extra cmake argument a MODERN cmake needs in order
+# to configure our pinned engine sources, or nothing.
+#
+# Capstone 5.0.1 and Keystone 0.9.2 both declare a cmake_minimum_required() below
+# 3.5. CMake 4.0 REMOVED compatibility with those, so a stock cmake >= 4 refuses
+# to configure either one:
+#
+#   CMake Error at CMakeLists.txt:4 (cmake_minimum_required):
+#     Compatibility with CMake < 3.5 has been removed from CMake.
+#
+# Bumping the engines' own CMakeLists is not available to us: both are pinned to
+# an immutable upstream commit (B5) and verified against it before configure, so
+# editing the tree would defeat the check that makes the build trustworthy. The
+# supported escape hatch is CMAKE_POLICY_VERSION_MINIMUM, which tells cmake to
+# configure as though the project had asked for 3.5 — it changes only policy
+# defaults, not the pinned sources.
+#
+# Emitted only for cmake >= 3.31, where the variable was introduced; on older
+# cmake it is both unnecessary and unrecognised (a "manually-specified variables
+# were not used" warning we would rather not print).
+tp_cmake_compat() {
+    _tp_ver=$(cmake --version 2>/dev/null | sed -n '1s/.*version \([0-9][0-9.]*\).*/\1/p')
+    [ -n "${_tp_ver:-}" ] || return 0
+    _tp_maj=${_tp_ver%%.*}
+    _tp_rest=${_tp_ver#*.}
+    _tp_min=${_tp_rest%%.*}
+    case "$_tp_min" in *[!0-9]*|'') _tp_min=0 ;; esac
+    if [ "$_tp_maj" -gt 3 ] || { [ "$_tp_maj" -eq 3 ] && [ "$_tp_min" -ge 31 ]; }; then
+        echo "-DCMAKE_POLICY_VERSION_MINIMUM=3.5"
+    fi
+}
+
 # tp_sha256 <file> — print the file's raw SHA-256 hex, portably (Linux/macOS).
 tp_sha256() {
     if command -v sha256sum >/dev/null 2>&1; then
