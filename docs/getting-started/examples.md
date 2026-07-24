@@ -437,8 +437,7 @@ TEST(dsp, qmul_q15_matches_model) {
 Ships as [`examples/qmul.s`](https://github.com/wilvk/asm-test/blob/main/examples/qmul.s)
 + `test_qmul.c`; run `./build/test_qmul`.
 
-*Crypto — constant-time equality, proven branch-free* (illustrative — the
-constant-time proof needs the emulator, and the routine under test is yours).
+*Crypto — constant-time equality, proven branch-free.*
 Correctness is the easy half; the property that matters is that **no basic block
 depends on the secret**.
 Because the emulator's coverage *unions* across runs, feed inputs that differ at
@@ -465,6 +464,19 @@ TEST(crypto, ct_eq_has_no_secret_dependent_branch) {
     ASSERT_EQ(tr.blocks_len, baseline);     /* coverage didn't grow -> no branch on the data */
 }
 ```
+
+Ships as [`examples/ct_eq.s`](https://github.com/wilvk/asm-test/blob/main/examples/ct_eq.s)
++ `test_ct_eq.c`; run `make ct-eq-test` (needs libunicorn, or use
+`make docker-emu`). The shipped suite carries a **negative control**,
+`leaky_eq` — the naive early-exit compare — and asserts its union *does* grow.
+Without it, "the block set never grew" would also pass for a routine that never
+ran.
+
+The oracle's boundary is worth stating: a block-coverage union proves nothing
+about **control flow** depending on the secret. It says nothing about
+data-dependent *addressing* — a table lookup indexed by a secret keeps one block
+set and still leaks through the cache. Address-level verdicts need a per-access
+memory stream, which this tier does not yet record.
 
 ### Compiler / runtime / libc authors
 

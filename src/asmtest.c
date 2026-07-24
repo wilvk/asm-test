@@ -21,6 +21,15 @@
 #define MAP_ANONYMOUS MAP_ANON
 #endif
 
+/* mkdir, spelled for both worlds (--record-dir arms the directory at start). */
+#if defined(_WIN32)
+#include <direct.h>
+#define ASMTEST_MKDIR(p) _mkdir(p)
+#else
+#include <sys/stat.h>
+#define ASMTEST_MKDIR(p) mkdir((p), 0777)
+#endif
+
 /* siglongjmp return codes for the per-test jump buffer. */
 enum { JMP_FAIL = 1, JMP_SKIP = 2 };
 
@@ -46,6 +55,47 @@ static volatile int asmtest_in_test = 0;
 static char asmtest_msg[1024];
 static const char *asmtest_loc_file;
 static int asmtest_loc_line;
+
+/* ------------------------------------------------------------------ */
+/* Record mode (--record-dir)                                          */
+/*                                                                     */
+/* The runner links no engine and records nothing itself. It ARMS a    */
+/* directory, names the current test's recording, and carries whatever  */
+/* a producer noted into the failure report. Everything here is per-    */
+/* process state; under the default forked model the note is made in    */
+/* the CHILD and travels back over the same pipe as the message, so a   */
+/* recording noted by a test that then CRASHES still reaches the report */
+/* (crash/timeout fill the same globals — src/asmtest.c's reaper).      */
+/* ------------------------------------------------------------------ */
+static char asmtest_record_dir[512]; /* "" = not armed                 */
+static char asmtest_record_cur[256]; /* the current test's path, or "" */
+static char asmtest_note_path[256];  /* what a producer noted, or ""   */
+static long asmtest_note_step = -1;
+
+const char *asmtest_record_path(void) {
+    return asmtest_record_cur[0] ? asmtest_record_cur : NULL;
+}
+
+void asmtest_note_recording(const char *path, long step) {
+    snprintf(asmtest_note_path, sizeof asmtest_note_path, "%s",
+             path ? path : "");
+    asmtest_note_step = step;
+}
+
+/* Called at the top of every test: name this test's recording (when armed) and
+ * CLEAR any previous note. The clear is what keeps --no-fork honest — in-process
+ * runs share these globals, and a stale note would attribute one test's
+ * recording to the next test's failure. */
+static void asmtest_record_begin(const char *suite, const char *name) {
+    asmtest_note_path[0] = '\0';
+    asmtest_note_step = -1;
+    if (!asmtest_record_dir[0]) {
+        asmtest_record_cur[0] = '\0';
+        return;
+    }
+    snprintf(asmtest_record_cur, sizeof asmtest_record_cur, "%s/%s.%s.asmtrace",
+             asmtest_record_dir, suite, name);
+}
 
 /* Per-test wall-clock timeout, enforced via alarm() (0 disables). Set from
  * --timeout / ASMTEST_TIMEOUT before the run; read by the SIGALRM handler. */
@@ -1137,6 +1187,7 @@ static void run_hooks(const char *suite, int kind) {
 #if !defined(_WIN32)
 static int run_one(asmtest_case_t *tc) {
     asmtest_in_test = 1;
+    asmtest_record_begin(tc->suite, tc->name);
     if (asmtest_timeout_secs > 0)
         alarm((unsigned)asmtest_timeout_secs);
 
@@ -1211,6 +1262,7 @@ static void win32_set_reason_msg(int reason) {
  * disarmed it) so a fault or hang in teardown is folded into the outcome. */
 static int run_one(asmtest_case_t *tc) {
     asmtest_in_test = 1;
+    asmtest_record_begin(tc->suite, tc->name);
     unsigned timeout_ms =
         asmtest_timeout_secs > 0 ? (unsigned)asmtest_timeout_secs * 1000u : 0;
     asmtest_win32_test_begin(timeout_ms);
@@ -1279,14 +1331,20 @@ typedef struct {
     char file[256];
     char msg[sizeof asmtest_msg];
     double secs;
+    char rec_path[256]; /* a producer's noted recording ("" = none)      */
+    long rec_step;      /* the failing step in it (-1 = unknown)         */
 } test_result_t;
 
-/* The subset of a result a forked child ships back over its pipe. */
+/* The subset of a result a forked child ships back over its pipe. Extending it
+ * is safe: the pipe is same-binary, parent and child are the same build, and
+ * the record is written and read as one fixed-size struct. */
 typedef struct {
     int outcome;
     int line;
     char file[256];
     char msg[sizeof asmtest_msg];
+    char rec_path[256];
+    long rec_step;
 } wire_result_t;
 
 /* Snapshot the globals left by run_one into a wire record. */
@@ -1297,6 +1355,8 @@ static void capture_wire(wire_result_t *w, int outcome) {
     snprintf(w->file, sizeof w->file, "%s",
              asmtest_loc_file ? asmtest_loc_file : "");
     snprintf(w->msg, sizeof w->msg, "%s", asmtest_msg);
+    snprintf(w->rec_path, sizeof w->rec_path, "%s", asmtest_note_path);
+    w->rec_step = asmtest_note_step;
 }
 
 static void apply_wire(test_result_t *res, const wire_result_t *w) {
@@ -1304,6 +1364,8 @@ static void apply_wire(test_result_t *res, const wire_result_t *w) {
     res->line = w->line;
     snprintf(res->file, sizeof res->file, "%s", w->file);
     snprintf(res->msg, sizeof res->msg, "%s", w->msg);
+    snprintf(res->rec_path, sizeof res->rec_path, "%s", w->rec_path);
+    res->rec_step = w->rec_step;
 }
 
 #if !defined(_WIN32) /* fork/pipe result plumbing — POSIX isolation path */
@@ -1416,6 +1478,11 @@ static void apply_isolated(test_result_t *res, asmtest_win32_run_t verdict,
     res->outcome = ST_FAIL;
     res->line = 0;
     snprintf(res->file, sizeof res->file, "(child)");
+    /* No wire record came back, so nothing is known about a recording. Zero it
+     * rather than leaving whatever the struct held: a synthesized crash verdict
+     * must not name a file it did not hear about. */
+    res->rec_path[0] = '\0';
+    res->rec_step = -1;
     if (verdict == ASMTEST_W32_TIMEOUT)
         snprintf(res->msg, sizeof res->msg, "timed out after %d s (killed)",
                  asmtest_timeout_secs);
@@ -1510,6 +1577,13 @@ static void reap_child(test_result_t *res, size_t got, const wire_result_t *w,
     res->outcome = ST_FAIL;
     res->line = 0;
     snprintf(res->file, sizeof res->file, "(child)");
+    /* The child died before reporting, so nothing is known about a recording.
+     * Zero it rather than leaving whatever the struct held: a synthesized crash
+     * verdict must not name a file it did not hear about. (A test that noted a
+     * recording and THEN crashed does reach here with a full wire record — the
+     * note travels in the same payload as the message.) */
+    res->rec_path[0] = '\0';
+    res->rec_step = -1;
     if (WIFSIGNALED(status)) {
         int sig = WTERMSIG(status);
         if (sig == SIGALRM)
@@ -1743,6 +1817,15 @@ static void print_tap_result(int num, const test_result_t *r,
                r->name);
         printf("  %s---%s\n", p->dim, p->rst);
         printf("  at:  %s:%d\n", r->file, r->line);
+        /* Record mode (--record-dir): additive YAML keys, so every existing
+         * substring pin in tests/expect.sh stays green. A suite with no
+         * producer glue noted nothing and emits neither key — the honest
+         * degrade, not a `recording: (none)` line nobody can open. */
+        if (r->rec_path[0]) {
+            printf("  recording: %s\n", r->rec_path);
+            if (r->rec_step >= 0)
+                printf("  step: %ld\n", r->rec_step);
+        }
         /* Block scalar (`|`): assertion messages routinely contain `): ` and
          * other glyphs that are illegal in a YAML plain scalar (PyYAML rejects
          * even the single-line case). Emit each line indented under the key. */
@@ -1780,11 +1863,12 @@ typedef struct {
     int bench;       /* run benchmarks instead of tests */
     long bench_reps; /* fixed inner reps; 0 = auto-calibrate */
     int bench_json;  /* --bench-format=json: machine-readable bench output */
-    int fail_if_no_tests; /* exit nonzero when the selection is empty */
-    int color;            /* 0 auto, 1 always, 2 never (--color=) */
-    int fail_fast;        /* stop at the first failing test (forces serial) */
-    long repeat;          /* run the selection N times (default 1) */
-    int shard_k, shard_n; /* --shard=K/N slice; shard_n = 0 disables */
+    int fail_if_no_tests;   /* exit nonzero when the selection is empty */
+    int color;              /* 0 auto, 1 always, 2 never (--color=) */
+    int fail_fast;          /* stop at the first failing test (forces serial) */
+    long repeat;            /* run the selection N times (default 1) */
+    int shard_k, shard_n;   /* --shard=K/N slice; shard_n = 0 disables */
+    const char *record_dir; /* --record-dir=DIR; NULL = not armed */
 } options_t;
 
 enum { COLOR_AUTO = 0, COLOR_ALWAYS = 1, COLOR_NEVER = 2 };
@@ -1819,6 +1903,12 @@ static void usage(const char *prog) {
         "  -jN, --jobs=N        run up to N tests concurrently (implies fork;\n"
         "                       default 1 = serial). Output stays in order.\n"
         "  --format=tap|junit   output format (default tap)\n"
+        "  --record-dir=DIR     arm per-test .asmtrace recording into DIR "
+        "(also\n"
+        "                       ASMTEST_RECORD_DIR). A failing test's report "
+        "then\n"
+        "                       names its recording; suites with no producer\n"
+        "                       glue accept the flag and record nothing.\n"
         "  --color=auto|always|never  colorize (default auto; honors "
         "NO_COLOR)\n"
         "  --fail-if-no-tests   exit nonzero if the selection is empty (e.g. a "
@@ -1987,6 +2077,15 @@ static void render_junit(const test_result_t *results, int n,
                     r->file); /* a path with &/< must be escaped */
                 printf(":%d&#10;", r->line);
                 xml_print_escaped(r->msg);
+                /* Appended to the element TEXT, never as a new attribute: the
+                 * JUnit schema CI tools parse has no slot for one, and an
+                 * unknown attribute is how a report stops being ingestible. */
+                if (r->rec_path[0]) {
+                    printf("&#10;recording: ");
+                    xml_print_escaped(r->rec_path);
+                    if (r->rec_step >= 0)
+                        printf("&#10;step: %ld", r->rec_step);
+                }
                 printf("</%s>\n    ", tag);
             } else if (r->outcome == ST_SKIP) {
                 printf("\n      <skipped message=\"");
@@ -2327,6 +2426,10 @@ int main(int argc, char **argv) {
                 fprintf(stderr, "unknown --format: %s\n", v);
                 return 2;
             }
+        } else if (opt_prefix(a, "--record-dir=", &v)) {
+            opt.record_dir = v;
+        } else if (strcmp(a, "--record-dir") == 0 && ai + 1 < argc) {
+            opt.record_dir = argv[++ai];
         } else if (strcmp(a, "--fail-if-no-tests") == 0) {
             opt.fail_if_no_tests = 1;
         } else if (strcmp(a, "--fail-fast") == 0) {
@@ -2353,6 +2456,28 @@ int main(int argc, char **argv) {
             fprintf(stderr, "unknown option: %s\n", a);
             usage(argv[0]);
             return 2;
+        }
+    }
+
+    /* Record-dir precedence: --record-dir, else ASMTEST_RECORD_DIR, else off —
+     * the ASMTEST_TIMEOUT idiom just below. Creating the directory is a HARD
+     * failure when it cannot be done: a run that was asked to record and
+     * silently recorded nothing is the exact failure this flag exists to
+     * prevent. */
+    {
+        const char *dir = opt.record_dir;
+        if (dir == NULL) {
+            const char *e = getenv("ASMTEST_RECORD_DIR");
+            if (e != NULL && *e)
+                dir = e;
+        }
+        if (dir != NULL && *dir) {
+            if (ASMTEST_MKDIR(dir) != 0 && errno != EEXIST) {
+                fprintf(stderr, "--record-dir: cannot create %s: %s\n", dir,
+                        strerror(errno));
+                return 2;
+            }
+            snprintf(asmtest_record_dir, sizeof asmtest_record_dir, "%s", dir);
         }
     }
 

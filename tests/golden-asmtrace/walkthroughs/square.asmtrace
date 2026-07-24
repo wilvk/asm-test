@@ -1,0 +1,12 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"k":"note","text":"square(2) — the quickstart routine, and its first failure"}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov rax, rdi"}
+{"k":"trace","basis":"rel","kind":"insn","off":3,"disasm":"imul rax, rdi"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":3,"truncated":false}
+{"k":"regstate","desc":"emu_x86_regs_t@x86_64/sysv","values":{"rax":4,"rbx":0,"rcx":0,"rdx":0,"rsi":0,"rdi":2}}
+{"k":"note","text":"SysV: the argument arrives in rdi, the answer must end in rax. Nothing in the routine says so — the calling convention does, and every assertion in this framework is ultimately about it.","step":0,"stop":true,"title":"the ABI is the contract"}
+{"k":"note","text":"rax = rax * rdi. Two reads of the same argument, which is what makes this a square rather than a product of two inputs.","step":1,"stop":true,"title":"the multiply"}
+{"k":"note","text":"ret pops the return address. rax holds the answer; everything else is the caller's business.","step":2,"stop":true,"title":"return"}
+{"k":"note","text":"The quickstart asks you to edit the assertion to expect 5 and re-run, so you see what a failure looks like before you need to read one in anger. This is that failure.","stop":true,"title":"now break it","expected":"5","got":"4"}
+{"k":"end","events":10,"truncated":false,"drops":{"lost":0,"throttled":false}}

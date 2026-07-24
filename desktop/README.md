@@ -116,6 +116,12 @@ desktop/
       workspace.{h,cpp} the SET of open recordings (plan D3)
       streams.{h,cpp}   Recording -> typed view streams (trace / dataflow /
                         survey), decoded once at open
+    walkthrough.{h,cpp} the Learn door's player model: a recording's ordered
+                        `stop:true` notes -> stops + navigation (pure)
+    capview.{h,cpp}     the capability panel's view-model: the library's own
+                        status strings, verbatim; probes nothing itself
+    author_vm.{h,cpp}   the Author door's model: the assembler diagnostic
+                        passthrough, the fault-card mapping, the arch gate
     nav.{h,cpp}         the deep-link router: `asmtrace-link:v=...&rec=...`
                         parse/format + view dispatch (plan D4's spine)
     analysis/
@@ -126,6 +132,22 @@ desktop/
     data/
       features_data.*   asmfeatures / box-record / bench-report readers
       perf_history.*    the append-only perf-history.jsonl reader + box scan
+    loom/
+      fabric.{h,cpp}    the spacetime fabric: lanes, worldline spans, hops,
+                        knots, reads — engine-free, in BOTH binaries
+      feed.{h,cpp}      the replay feeder (a decoded Recording -> the C structs
+                        the builder consumes) + the live/fork passthrough
+      fabric_plan.*     the pure draw plan: zoom collapse, byte rows, and every
+                        honesty prim (torn edge, fade-out, born-untraced, badge)
+      lineage.*         selection = lineage: generation walk, biography, and the
+                        window-bounded zeroization audit
+      annex.*           the lane inspector's cross-feed join — corroboration,
+                        never contradiction (a two-enumerator verdict)
+      take_view.*       the fork UX: shared-prefix alignment, patient zero, the
+                        three-way dim/hot/neutral verdict, dashed tails
+      forks.{h,cpp}     one-fact takes via the C library — the ONLY loom TU that
+                        links the engines, so full app only (D4)
+      fabric_imgui.cpp  the thin ImGui half (paints prims; draws the panel)
     views/
       canvas.*          per-offset heat, block gutter, basis refusal
       timeline.*        per-step values via cli/asmspy_dataview.h's grammar
@@ -136,6 +158,11 @@ desktop/
     ui/
       shell.{h,cpp}     the home screen (three doors), open dialog, and tab strip
                         — backend-free ImGui draws the null backend can drive
+      doors.h           the three doors' shared state structs
+      learn_door.cpp    the walkthrough card list + player (both binaries)
+      author_door.cpp   assemble -> run -> fault card (full app only)
+      capability_panel.cpp  what this host can do and why not (probes in the
+                        app; shows the recording's provenance in the viewer)
   test/
     test_null_render.cpp   ImGui builds + renders headlessly (example_null)
     test_recording.cpp     the loader's reject rules + honesty accounting (D7)
@@ -152,6 +179,22 @@ desktop/
     test_diff_view.cpp     panel rows, deep links that parse back
     test_data_readers.cpp  the three envelopes + a torn append-only line
     test_completeness_view.cpp  the cell rule + verbatim skip_reason goldens
+    test_walkthrough.cpp   stop ordering, anchors, the beyond-window refusal
+    test_capview.cpp       the two UI laws, on synthetic status data
+    test_author_vm.cpp     the diagnostic passthrough + fault-card mapping
+    gen_walkthroughs.c     the walkthrough generator (C; make asmtrace-walkthroughs)
+    test_loom_fabric.cpp   the fabric model (links fabric.o and NOTHING else)
+    test_loom_plan.cpp     zoom semantics: ribbon collapse, byte rows, chips
+    test_loom_chrome.cpp   every honesty string, asserted VERBATIM (D7)
+    test_loom_lineage.cpp  selection, generations, biography, zeroization audit
+    test_loom_parity.cpp   the generation walk's closure vs the real C slicer
+                           (links dataflow.o — the second D4 test-half exception)
+    test_loom_annex.cpp    the place join and the two-verdict law
+    test_loom_takeview.cpp the fork verdict truth table, on hand-built pairs
+    test_loom_golden.cpp   the four committed golden looms, replayed end to end
+    test_loom_draw.cpp     the painter + the panel under the null backend
+    test_loom_forks.cpp    the fork ENGINE — full build only (unicorn+keystone),
+                           run by `make docker-desktop`
     fixtures/              hand-authored .asmtrace + features/perf-history JSON
     expected/              byte-compared view dumps (UPDATE_GOLDEN=1 rewrites)
     golden/                byte-compared completeness renders
@@ -288,3 +331,155 @@ narrative order, never re-sorted. It never runs a sweep itself: it shows a
 committed box record or an `asmfeatures` output you point it at, because a view
 that silently probed would be reporting on a different machine than the box row
 it is drawn under.
+
+## The Loom
+
+[`src/loom/`](src/loom/) is the Phase-2 flagship: a recorded run as a
+**spacetime fabric** — horizontal is trace step, vertical is location lanes, and
+every value is a worldline you can select, walk, audit and fork.
+
+The model is engine-free and lives in both binaries. A fabric is built from what
+a producer already yields — an `asmtest_valtrace_t` (per-step operand values)
+and its last-writer def-use graph — into four things:
+
+- **lanes**, in a fixed deck order taken from the producer's own tables (the
+  SysV argument registers, then the rest of `df_zero_gp`'s order, then rsp/rip/
+  eflags), with memory coalesced into **bands** on first touch;
+- **spans** — one per write record, ending at the next write that overlaps it;
+- **hops** — the def-use edges resolved onto those worldlines;
+- **knots** — the steps that both read and write, where worldlines cross.
+
+Five refusals are structural rather than cosmetic, and each is a test:
+
+- **A statistical producer can never appear as fabric.** `loom_fabric_build`
+  returns `false` with a reason and *no partial fabric*: a sample cannot say
+  what a value was at a step. Statistical feeds reach the **lane annex** and
+  stop there.
+- **A value the producer never captured stays hollow** — outline, no chip. The
+  route is known, the value is not, and the two must not look alike.
+- **A worldline still live at the last recorded step gets a fade-out**, never a
+  death cap. The fabric knows nothing overwrote it; it does not know the value
+  ended.
+- **A worldline whose first record is a read is born of untraced state** and
+  carries a glyph saying its provenance starts at instrumentation.
+- **The zeroization audit is bounded by the traced window and says so** in its
+  own title: "clear" means *not overwritten within the traced window*, and
+  untraced state and post-trace writes are invisible to it.
+
+The **lane annex** joins what companion recordings in the workspace saw about
+the same place — watch hits and taint hits by bytes, source-map rows and IBS
+survey edges by code range. Its verdict enum has exactly **two** enumerators,
+`corroborates` and `unconfirmed`, and a test with a `default`-less switch keeps
+it that way: a statistical feed's silence proves nothing, and two exact
+producers with different windows will honestly disagree without either being
+wrong. Nothing the annex prints ever says "contradicts".
+
+**Forks** are the counterfactual: change exactly one fact — an entry argument or
+the routine's source — re-run from entry, weave the result beside the base.
+Alignment is shared-prefix over per-step `insn_off` (04's
+`dt_first_divergence`, so the Loom and the diff view can never place patient
+zero differently), and the per-step verdict has three states: `dim` (dependence
+without consequence), `hot` (a captured difference), and `neutral` whenever
+either side never captured the value — equality of unknown values is never
+claimed. An argument edit that changes no offsets says "aligned end-to-end"
+rather than inventing a patient zero. `forks.cpp` is the only file here that
+links the engines, so it compiles into the full app alone (D4), and every take
+is bracketed by `emu_snapshot`/`emu_restore` because mapped memory deliberately
+persists across `emu_call_*` — without the bracket take N would inherit take
+N−1's dirt and the verdicts would depend on click order.
+
+The four committed golden looms live in
+[`tests/golden-asmtrace/`](../tests/golden-asmtrace/) (`loom-df-chain`,
+`loom-sum-via-rbx`, `loom-truncated`, `loom-fork-demo`) and are regenerated by
+`make asmtrace-golden`; `loom-df-chain` and `loom-sum-via-rbx` are the Learn
+door's fabric walkthroughs.
+
+**One doc-vs-code correction.** 05's draw plan specifies a truncation banner
+reading "trace truncated: N of M steps recorded". The shipped v1 schema carries
+no dataflow step **total** — the `end` footer has a truncated flag and nothing
+else — so a replayed recording usually cannot supply M. Printing "6 of 6" would
+claim the run ended where the buffer did, so the banner names the gap instead
+("this feed did not record the total") and only prints the N-of-M form when a
+feed really supplies both. A header total is a Phase-3-freeze item.
+
+## The three doors
+
+### Learn
+
+`src/ui/learn_door.cpp` lists the recordings in `$ASMTRACE_LEARN_DIR` (default:
+[`tests/golden-asmtrace/walkthroughs/`](../tests/golden-asmtrace/walkthroughs/))
+and plays them. A walkthrough is **not** a document beside a recording — it IS
+a recording, with ordered `stop:true` notes in it, so the player is a reader of
+the same format every other view reads and a story cannot drift away from the
+run it narrates.
+
+The ladder is the one the docs already define:
+
+| Walkthrough | Story |
+|---|---|
+| `square.asmtrace` | the quickstart routine, and the §5 "now break it" failure (expected 5, got 4) |
+| `demo-fail.asmtrace` | why is rax wrong — `imax_wrong`'s inverted `cmovg`, framed expected `rax=4` / got `rax=3` |
+| `ct_eq.asmtrace` | the capstone: three secret-differing inputs, a coverage union that does not grow, and the leaky control that does |
+| `square-truncated.asmtrace` | the D7 dishonesty fixture — the same run recorded with the window cut short |
+
+Regenerate with `make asmtrace-walkthroughs` **inside `make docker-desktop`**
+(the pinned Keystone is what makes assembly reproducible). The target writes the
+recordings, then writes a second copy to a temp directory and `cmp`s them, so a
+non-deterministic generator fails at regeneration rather than in a future diff.
+
+The truncated fixture earns its place: its last anchored stop points at a step
+the recording does not contain, and the player must render *"stop is beyond the
+recorded window"* and refuse to navigate. Silently clamping to the last recorded
+step would show a reader one instruction while narrating another.
+
+### Author (full app only)
+
+Type assembly, pick an arch and dialect, run it on the emulator, see faults as
+**data**. Three rules, all pinned by `test_author_vm`:
+
+- **The assembler's diagnostic survives verbatim.** `asm_result_t.err` already
+  names the common trap ("assembler skipped N of M statements (check the syntax
+  argument)" — AT&T text under the Intel default). Rewriting it into "assembly
+  failed" would delete the one sentence that says what to do. The source box is
+  never cleared.
+- **A fault is a card**: kind, address, the faulting instruction where Capstone
+  is linked (bare offsets otherwise, D10), and the register file — under
+  *"the emulator turned this into data; on real hardware this would have been a
+  crash"*.
+- **v1 runs the x86-64 guest only**, and the arch row says so. The other three
+  assemble and show their bytes with the limit labelled, rather than a greyed
+  button with no reason.
+
+`desktop-render` shows a static tile naming the boundary
+(*"Author mode requires the full (GPL-2.0) build"*) and links neither Keystone
+nor Unicorn.
+
+### This host — the capability panel
+
+One panel rendering what this machine can do and *why not*, straight from the
+library's status APIs. **The GUI never re-probes**: it calls
+`asmtest_trace_resolve`, `asmtest_hwtrace_status` and the IBS reason functions
+once at open (and on an explicit Refresh) and renders exactly what they said.
+
+Two UI laws, both asserted in `test_capview` against synthetic data — which is
+what lets a container with no PT, no LBR and no AMD silicon test them:
+
+1. **A greyed row always shows its machine reason, verbatim** — plus the stage
+   name and `perf_event_paranoid`, because "the PMU is absent" and "perf refused
+   us" need different remedies. The IBS row carries **both** of its reasons,
+   labelled `substrate:` and `last capture:`; they answer different questions and
+   are never collapsed.
+2. **Never auto-fall back across the native→virtual line.** A `[ ] native only`
+   toggle re-resolves under `ASMTEST_TRACE_NATIVE_ONLY`; when the cascade comes
+   back empty the panel says the library returns EUNAVAIL rather than silently
+   downgrading, and offers the crossing as an explicit choice.
+
+**A D9 note, stated rather than glossed.** D9 says the desktop app never links
+the ptrace *engines*, and the capability cascade's objects include
+`ptrace_backend.o`. The distinction the panel relies on is capture vs **query**:
+nothing in the app calls a capture entry point — the Observer's capture host is
+still the `asmspy --serve` subprocess — and what is linked is the availability
+cascade a panel that "never re-probes" has to be able to ask. A panel shipped
+without it would have to invent its own probes, which is exactly what D2 exists
+to prevent. The render-only viewer links none of it and shows the **loaded
+recording's** provenance instead, saying so.

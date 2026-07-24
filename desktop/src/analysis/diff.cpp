@@ -116,33 +116,40 @@ bool dt_diff_build(const Streams &a, const Streams &b, dt_diff &out,
     }
 
     // --- shared-prefix alignment -----------------------------------------
-    const auto &ia = a.trace.insns;
-    const auto &ib = b.trace.insns;
+    out.div = dt_first_divergence(a.trace.insns, b.trace.insns, a.truncated,
+                                  b.truncated);
+    return true;
+}
+
+dt_divergence dt_first_divergence(const std::vector<uint64_t> &ia,
+                                  const std::vector<uint64_t> &ib,
+                                  bool a_truncated, bool b_truncated) {
+    dt_divergence div;
     size_t n = std::min(ia.size(), ib.size());
     size_t i = 0;
     for (; i < n && ia[i] == ib[i]; i++)
         ;
     if (i < n) {
-        out.div.diverged = true;
-        out.div.step = static_cast<uint32_t>(i);
-        out.div.off_a = ia[i];
-        out.div.off_b = ib[i];
+        div.diverged = true;
+        div.step = static_cast<uint32_t>(i);
+        div.off_a = ia[i];
+        div.off_b = ib[i];
     } else if (ia.size() != ib.size()) {
         // One stream ends where the other continues. That IS a divergence —
         // unless the shorter side was truncated, in which case what we know is
         // only that the recording stopped, not that execution did.
         bool short_a = ia.size() < ib.size();
-        bool short_side_truncated = short_a ? a.truncated : b.truncated;
+        bool short_side_truncated = short_a ? a_truncated : b_truncated;
         if (!short_side_truncated) {
-            out.div.diverged = true;
-            out.div.step = static_cast<uint32_t>(n);
-            out.div.off_a = short_a ? 0 : ia[n];
-            out.div.off_b = short_a ? ib[n] : 0;
+            div.diverged = true;
+            div.step = static_cast<uint32_t>(n);
+            div.off_a = short_a ? 0 : ia[n];
+            div.off_b = short_a ? ib[n] : 0;
         }
     }
     // The verdict is bounded whenever either side stopped short of the truth.
-    out.div.bounded = a.truncated || b.truncated;
-    return true;
+    div.bounded = a_truncated || b_truncated;
+    return div;
 }
 
 std::string dt_diff_dump(const dt_diff &d) {

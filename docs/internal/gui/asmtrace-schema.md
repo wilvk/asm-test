@@ -274,6 +274,15 @@ already emits, so a features report *is* a recording. `complete`,
 `off`/`step`/`stop` are optional. Ordered `stop:true` notes are what turn a
 recording into a **walkthrough**: a reader plays to each stop in file order.
 
+A stop may additionally carry `title`, `expected` and `got` — all optional,
+omitted when absent, and meaningful only alongside `stop:true`
+([06-doors-and-learning.md](06-doors-and-learning.md), which owns them). `text`
+stays the body. The expected/got pair is what lets the Learn door frame a
+failure as *this is what should have happened, and this is what did* without a
+player inventing the comparison; a reader that does not know the fields ignores
+them like any other unknown key. Field order for a stop:
+`text`, `off`, `step`, `stop`, `title`, `expected`, `got`.
+
 ### `stitch` — a per-tid PT slice set
 
 ```json
@@ -314,6 +323,7 @@ is no v1 producer. A reader ignores them like any unknown kind (see
 | `blame` | attribution of a value to a source location | [09-teaching-producers.md](09-teaching-producers.md) |
 | `fuzzstats` | corpus/coverage counters from a fuzz run | expansion wave |
 | `taint` | taint labels propagated through a step | expansion wave |
+| `srcmap` | one source line-map row `{off,value,kind,file,col}`, mirroring [`asmtest_srcmap_entry_t`](../../../include/asmtest_trace.h#L177) | [05-loom-day-one.md](05-loom-day-one.md) |
 | `take` | take/edit provenance (the Loom fork mechanic) | [05-loom-day-one.md](05-loom-day-one.md) |
 | `codeimage` | captured code bytes at a version | [08-observer-views.md](08-observer-views.md) |
 | `session` / `cmd` / `err` | live-session lifecycle (serve-only) | [07-serve-live-host.md](07-serve-live-host.md) |

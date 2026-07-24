@@ -59,7 +59,7 @@ FRAMEWORK_OBJS := $(BUILD)/asmtest.o $(BUILD)/capture.o
 # target groups (bench, usecases, the optional emulator / trace tiers).
 SUITE_EXCLUDES := test_robust test_failure_demo test_bench \
                   test_bittricks test_vm \
-                  test_emu test_emu_usecases test_asm \
+                  test_emu test_emu_usecases test_asm test_ct_eq \
                   test_drtrace test_hwtrace test_codeimage test_branchsnap \
                   test_branchtile test_ibs \
                   test_dataflow test_operands test_dataflow_emu \
@@ -112,6 +112,7 @@ help:
 	@echo 'Optional tiers (need libunicorn / libkeystone):'
 	@echo '  emu-test        Unicorn-backed emulator suite'
 	@echo '  asm-test        in-line assembler (Keystone) suite'
+	@echo '  ct-eq-test      constant-time equality: block-coverage union vs a leaky control'
 	@echo '  usecases-emu    emulator-as-sandbox / cross-ISA suite'
 	@echo '  fuzz-libfuzzer  libFuzzer harness over the emulator coverage seam (needs clang -fsanitize=fuzzer)'
 	@echo '  fuzz-afl        AFL++ native forkserver + aflpp_driver harnesses (needs afl-clang-fast)'
@@ -908,6 +909,50 @@ $(BUILD)/test_emu: $(FRAMEWORK_OBJS) $(BUILD)/add.o $(BUILD)/mem.o \
 .PHONY: emu-test
 emu-test: $(BUILD)/test_emu
 	$(BUILD)/test_emu
+
+# Record-mode producer glue (docs/internal/gui/06-doors-and-learning.md T7).
+# It links the shared .asmtrace writer, so ONLY suites that already link the emu
+# tier add it — $(FRAMEWORK_OBJS) stays engine-free, which is the whole scoping
+# mechanism: everywhere else --record-dir is accepted and records nothing.
+$(BUILD)/asmtrace_rec.o: src/asmtrace_rec.c include/asmtest_rec.h \
+                         cli/asmtrace_ndjson.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -c $< -o $@
+
+# The constant-time equality suite (docs/internal/gui/06-doors-and-learning.md
+# T1). It links the emu tier — the CT proof is a block-coverage UNION across
+# secret-differing inputs, which only the emulator's accumulating trace can
+# take — so the Makefile:332 pattern rule cannot serve it and it carries an
+# explicit link rule beside test_emu's. It is also record mode's first adopter
+# (T7), so it links the writer + the glue.
+$(BUILD)/test_ct_eq: $(FRAMEWORK_OBJS) $(BUILD)/ct_eq.o $(BUILD)/emu.o \
+                     $(BUILD)/trace.o $(BUILD)/disasm.o \
+                     $(BUILD)/asmtrace_rec.o $(BUILD)/asmtrace_ndjson.o \
+                     $(BUILD)/test_ct_eq.o
+	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) -o $@
+
+.PHONY: ct-eq-test
+ct-eq-test: $(BUILD)/test_ct_eq
+	$(BUILD)/test_ct_eq
+	@# Record mode, end to end (T7): the same suite under --record-dir must
+	@# leave a real .asmtrace behind. An empty directory here means the flag was
+	@# accepted and quietly did nothing, which is the failure the flag exists to
+	@# prevent.
+	@rm -rf $(BUILD)/rec && mkdir -p $(BUILD)/rec
+	$(BUILD)/test_ct_eq --record-dir=$(BUILD)/rec --filter='ct_eq.*' >/dev/null
+	@f=$(BUILD)/rec/ct_eq.no_secret_dependent_branch.asmtrace; \
+	 if [ ! -s "$$f" ]; then \
+	   echo "ct-eq-test: --record-dir produced no recording at $$f"; exit 1; fi; \
+	 head -1 "$$f" | grep -q '"asmtrace":1' || { \
+	   echo "ct-eq-test: $$f has no v1 header"; exit 1; }; \
+	 tail -1 "$$f" | grep -q '"k":"end"' || { \
+	   echo "ct-eq-test: $$f is TORN (no end footer)"; exit 1; }; \
+	 echo "ct-eq-test: --record-dir wrote $$(ls $(BUILD)/rec | wc -l) recording(s)"
+	@# ...and it ROUND-TRIPS through a reader. A file that only the writer can
+	@# parse is not a recording, it is a log.
+	@$(MAKE) --no-print-directory $(BUILD)/asmtrace_export >/dev/null
+	@$(BUILD)/asmtrace_export --lcov \
+	   $(BUILD)/rec/ct_eq.no_secret_dependent_branch.asmtrace >/dev/null \
+	 && echo "ct-eq-test: the recording round-trips through asmtrace_export"
 
 # --- Optional in-line assembler (Phase: Keystone; requires libkeystone) -----
 # `make asm-test` assembles routines from strings (asmtest_assemble) and runs

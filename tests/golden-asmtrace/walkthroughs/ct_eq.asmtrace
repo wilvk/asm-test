@@ -1,0 +1,421 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"k":"note","text":"ct_eq: three secret-differing inputs into one accumulating trace — the coverage union is the constant-time oracle"}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"xor eax, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":2,"disasm":"xor ecx, ecx"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"cmp eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":33,"disasm":"sbb eax, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"neg eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":37,"disasm":"cdqe"}
+{"k":"trace","basis":"rel","kind":"insn","off":39,"disasm":"ret"}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"xor eax, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":2,"disasm":"xor ecx, ecx"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"cmp eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":33,"disasm":"sbb eax, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"neg eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":37,"disasm":"cdqe"}
+{"k":"trace","basis":"rel","kind":"insn","off":39,"disasm":"ret"}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"xor eax, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":2,"disasm":"xor ecx, ecx"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"movzx r8d, byte ptr [rdi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"movzx r9d, byte ptr [rsi + rcx]"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"xor r8d, r9d"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"or eax, r8d"}
+{"k":"trace","basis":"rel","kind":"insn","off":25,"disasm":"inc rcx"}
+{"k":"trace","basis":"rel","kind":"insn","off":28,"disasm":"jmp 0x100004"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"cmp rcx, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"jge 0x10001e"}
+{"k":"trace","basis":"rel","kind":"insn","off":30,"disasm":"cmp eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":33,"disasm":"sbb eax, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":35,"disasm":"neg eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":37,"disasm":"cdqe"}
+{"k":"trace","basis":"rel","kind":"insn","off":39,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0,9,4,30],"blocks_total":102,"insns_total":411,"truncated":false}
+{"k":"regstate","desc":"emu_x86_regs_t@x86_64/sysv","values":{"rax":0,"rbx":0,"rcx":16,"rdx":16,"rsi":3145984,"rdi":3145728}}
+{"k":"note","text":"acc = 0, then acc |= a[i] ^ b[i] for every byte. Equal bytes contribute zero; a difference sets a bit and can never be cleared. No byte's value changes what the code does next — only what acc holds.","step":0,"stop":true,"title":"XOR-accumulate, never compare"}
+{"k":"note","text":"cmp rcx, rdx compares the index against n. n is public — it is the buffer size, not the secret — so branching on it leaks nothing about the contents.","step":2,"stop":true,"title":"the loop branch depends on the PUBLIC length"}
+{"k":"note","text":"cmp $1, acc sets the carry flag iff acc == 0; sbb acc, acc turns that into 0 or -1; neg makes it 1 or 0. A conditional jump here would be a branch on the secret, which is exactly what the routine exists to avoid.","stop":true,"title":"the branchless collapse"}
+{"k":"note","text":"This recording is the union of three runs: equal, differing at the first byte, and differing at the last. The block set after run 1 is the same block set after runs 2 and 3 — no basic block depended on the secret.","stop":true,"title":"the coverage union does not grow","expected":"4 blocks","got":"4 blocks"}
+{"k":"note","text":"leaky_eq — the naive early-exit compare — run over the same three inputs DOES add a block, at its early-exit offset. That is a constant-time violation, and it is what proves the check above is measuring something.","stop":true,"title":"and the control shows the assertion has teeth","expected":"5 blocks","got":"6 blocks (+1 at the early exit)"}
+{"k":"end","events":419,"truncated":false,"drops":{"lost":0,"throttled":false}}

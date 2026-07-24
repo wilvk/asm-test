@@ -72,6 +72,9 @@ $$(BUILD)/desktop/$(1)/vw/%.o:  desktop/src/views/%.cpp | $$(IMGUI_HOME)/imgui.c
 $$(BUILD)/desktop/$(1)/da/%.o:  desktop/src/data/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) -c $$< -o $$@
+$$(BUILD)/desktop/$(1)/lo/%.o:  desktop/src/loom/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
+	@mkdir -p $$(@D)
+	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) -c $$< -o $$@
 $$(BUILD)/desktop/$(1)/t/%.o:   desktop/test/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) $$(DESKTOP_TEST_EXTRA) -c $$< -o $$@
@@ -85,6 +88,14 @@ $(eval $(call desktop_rules,test,))
 $(BUILD)/desktop/test/t/test_recording.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_shell.o:     DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_golden.o:    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
+$(BUILD)/desktop/test/t/test_loom_golden.o \
+$(BUILD)/desktop/test/t/test_loom_draw.o: DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
+$(BUILD)/desktop/test/t/test_walkthrough.o: \
+    DESKTOP_TEST_EXTRA = -DASMTEST_WALKTHROUGH_DIR='"$(WALKTHROUGH_DIR)"'
+# learn_door.cpp's compiled-in default walkthrough directory, in all three trees.
+$(BUILD)/desktop/app/ui/learn_door.o $(BUILD)/desktop/render/ui/learn_door.o \
+$(BUILD)/desktop/test/ui/learn_door.o: \
+    DESKTOP_CXXFLAGS += -DASMTEST_WALKTHROUGH_DIR='"$(WALKTHROUGH_DIR)"'
 
 # --- object lists ------------------------------------------------------------
 # Every view is split in two (04-replay-views.md: "a pure view-model builder + a
@@ -96,6 +107,19 @@ $(BUILD)/desktop/test/t/test_golden.o:    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_
 DESKTOP_VIEW_PURE := canvas timeline slice_view diff_view
 DESKTOP_VIEW_DRAW := canvas_draw timeline_draw slice_view_draw diff_view_draw \
                      completeness
+
+# loom/ — the Loom fabric (05-loom-day-one.md). Every TU here except forks.cpp
+# is pure and engine-free, which is what lets asmtest-viewer weave a recording
+# with zero engine deps (D4); forks.cpp is full-build-only and linked separately.
+DESKTOP_LOOM_PURE := fabric feed fabric_plan lineage annex take_view
+DESKTOP_LOOM_DRAW := fabric_imgui
+# forks.cpp calls asmtest_assemble / emu_* / asmtest_dataflow_emu_run, so it is
+# GPL-side and compiles ONLY into the full app (D4/D7/D9). asmtest-viewer never
+# sees this TU, which is what keeps its `ldd` free of unicorn/keystone/capstone.
+DESKTOP_LOOM_APP  := forks
+
+# The Learn door's bundled walkthroughs (06-doors-and-learning.md T2-T4).
+WALKTHROUGH_DIR := tests/golden-asmtrace/walkthroughs
 
 # asmtest-desktop / asmtest-viewer: imgui core + glfw/opengl3 backends + src/
 # (vm_compat + main + nav) + doc/ + analysis/ + data/ + views/ + ui/. The app
@@ -113,8 +137,15 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/da/perf_history.o \
   $(DESKTOP_VIEW_PURE:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/$(1)/vw/%.o) \
-  $(BUILD)/desktop/$(1)/ui/shell.o
-DESKTOP_APP_OBJ    := $(call desktop_app_objs,app)
+  $(DESKTOP_LOOM_PURE:%=$(BUILD)/desktop/$(1)/lo/%.o) \
+  $(DESKTOP_LOOM_DRAW:%=$(BUILD)/desktop/$(1)/lo/%.o) \
+  $(BUILD)/desktop/$(1)/src/walkthrough.o $(BUILD)/desktop/$(1)/src/capview.o \
+  $(BUILD)/desktop/$(1)/src/author_vm.o \
+  $(BUILD)/desktop/$(1)/ui/author_door.o \
+  $(BUILD)/desktop/$(1)/ui/shell.o $(BUILD)/desktop/$(1)/ui/learn_door.o \
+  $(BUILD)/desktop/$(1)/ui/capability_panel.o
+DESKTOP_APP_OBJ    := $(call desktop_app_objs,app) \
+                      $(DESKTOP_LOOM_APP:%=$(BUILD)/desktop/app/lo/%.o)
 DESKTOP_RENDER_OBJ := $(call desktop_app_objs,render)
 # The Author-tier engine objects (emu/assemble link unicorn/keystone, disasm
 # links capstone) — they carry the GPL engine linkage that makes the app GPL-2.0
@@ -123,8 +154,26 @@ DESKTOP_RENDER_OBJ := $(call desktop_app_objs,render)
 # deliberately NOT here — asmtest.o is the test-runner and defines its own main()
 # (src/asmtest.c), which would collide with the desktop's main.cpp; the desktop
 # is not a test binary and needs no runner.
+# dataflow_operands.o + dataflow_emu.o join the set with the Loom's fork engine
+# (05-loom-day-one.md T5): forks.cpp re-runs the emulator L0 value producer, and
+# that producer is the operand enumerator plus the Unicorn driver.
 DESKTOP_ENGINE_OBJ := $(BUILD)/emu.o $(BUILD)/trace.o \
-                      $(BUILD)/disasm.o $(BUILD)/assemble.o $(BUILD)/dataflow.o
+                      $(BUILD)/disasm.o $(BUILD)/assemble.o \
+                      $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                      $(BUILD)/dataflow_emu.o
+
+# The capability panel (06-doors-and-learning.md T6) reads the library's own
+# status APIs — asmtest_trace_resolve / asmtest_hwtrace_status / the IBS reasons
+# — so the full app links the native-trace tier's objects.
+#
+# D9 NOTE, stated rather than glossed. D9 says the desktop app never links the
+# ptrace ENGINES, and $(HWTRACE_OBJS) contains ptrace_backend.o. The distinction
+# the panel relies on is capture vs QUERY: nothing in the app calls a capture
+# entry point (the Observer's capture host is still the `asmspy --serve`
+# subprocess), and what is linked here is the availability cascade a panel that
+# "never re-probes" must be able to ask. A panel that shipped without it would
+# have to invent its own probes, which is the outcome D2 exists to prevent.
+DESKTOP_CAP_OBJ := $(HWTRACE_OBJS)
 
 # test-tree shared objects (no backends, no main, no engines).
 DESKTOP_TEST_IG  := $(addprefix $(BUILD)/desktop/test/ig/,$(addsuffix .o,$(DESKTOP_IMGUI_CORE)))
@@ -138,6 +187,7 @@ DESKTOP_TEST_VW  := $(DESKTOP_VIEW_PURE:%=$(BUILD)/desktop/test/vw/%.o) \
                     $(BUILD)/desktop/test/src/nav.o
 DESKTOP_TEST_DA  := $(BUILD)/desktop/test/da/features_data.o \
                     $(BUILD)/desktop/test/da/perf_history.o
+DESKTOP_TEST_LOOM := $(DESKTOP_LOOM_PURE:%=$(BUILD)/desktop/test/lo/%.o)
 
 # --- missing-dependency probes (mirror mk/cli.mk:32-38) -----------------------
 # The render-only viewer + the full app need GLFW/GL; only the full app needs the
@@ -161,6 +211,14 @@ endif
 ifneq ($(shell pkg-config --exists capstone 2>/dev/null && echo ok),ok)
 DESKTOP_ENGINE_MISSING += libcapstone-dev
 endif
+# Keystone IS probed after all — by header presence, since its kit ships no
+# reliable pkg-config. The Loom's fork engine (05-loom-day-one.md T5) is the
+# first desktop TU to call asmtest_assemble, and a host with unicorn+capstone
+# but no keystone (a `make deps` that ran without --asm) would otherwise reach a
+# raw linker error instead of the guidance recipe below.
+ifeq ($(shell ls /usr/include/keystone/keystone.h /usr/local/include/keystone/keystone.h 2>/dev/null | head -1),)
+DESKTOP_ENGINE_MISSING += libkeystone-dev
+endif
 
 # Guidance recipe (mirrors mk/cli.mk:100-110): print the apt line + the docker
 # lane, then fail — so a bare host never sees a raw header/link error.
@@ -179,9 +237,18 @@ endef
 .PHONY: desktop desktop-render desktop-test desktop-fmt desktop-fmt-check \
         docker-desktop desktop-setup desktop-setup-render
 
-$(BUILD)/asmtest-desktop: $(DESKTOP_APP_OBJ) $(DESKTOP_ENGINE_OBJ)
+$(BUILD)/desktop/app/ui/capability_panel.o: \
+    DESKTOP_CXXFLAGS += -DASMTEST_DESKTOP_CAN_PROBE=1
+# The Author door's two engine calls compile in for the APP tree only; the
+# viewer and the headless tests get the static licence tile instead (D4).
+$(BUILD)/desktop/app/ui/author_door.o: \
+    DESKTOP_CXXFLAGS += -DASMTEST_DESKTOP_CAN_AUTHOR=1
+
+$(BUILD)/asmtest-desktop: $(DESKTOP_APP_OBJ) $(DESKTOP_ENGINE_OBJ) \
+                          $(DESKTOP_CAP_OBJ)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) \
-	  $(CAPSTONE_LIBS) $(GLFW_LIBS) $(GL_LIBS) -o $@
+	  $(CAPSTONE_LIBS) $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(LINK_LIBBPF) \
+	  $(GLFW_LIBS) $(GL_LIBS) -ldl -lpthread -o $@
 	@echo "built $@ — the full app (GPL-2.0 as a whole; links the engines)"
 
 $(BUILD)/asmtest-viewer: $(DESKTOP_RENDER_OBJ)
@@ -262,7 +329,94 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_diff_view \
                  $(BUILD)/desktop_test_data_readers \
                  $(BUILD)/desktop_test_completeness_view \
-                 $(BUILD)/desktop_test_slice_diff
+                 $(BUILD)/desktop_test_slice_diff \
+                 $(BUILD)/desktop_test_loom_fabric \
+                 $(BUILD)/desktop_test_loom_plan \
+                 $(BUILD)/desktop_test_loom_chrome \
+                 $(BUILD)/desktop_test_loom_draw \
+                 $(BUILD)/desktop_test_loom_lineage \
+                 $(BUILD)/desktop_test_loom_parity \
+                 $(BUILD)/desktop_test_loom_annex \
+                 $(BUILD)/desktop_test_loom_takeview \
+                 $(BUILD)/desktop_test_loom_golden \
+                 $(BUILD)/desktop_test_walkthrough \
+                 $(BUILD)/desktop_test_capview \
+                 $(BUILD)/desktop_test_author_vm
+
+# The fabric model links fabric.o and NOTHING else — that link line is the proof
+# that asmtest-viewer can weave a recording with zero engine deps (D4), the same
+# argument $(BUILD)/desktop_test_slice makes for the client-side closure.
+$(BUILD)/desktop_test_loom_fabric: $(BUILD)/desktop/test/t/test_loom_fabric.o \
+    $(BUILD)/desktop/test/lo/fabric.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop_test_loom_plan: $(BUILD)/desktop/test/t/test_loom_plan.o \
+    $(BUILD)/desktop/test/lo/fabric.o $(BUILD)/desktop/test/lo/fabric_plan.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop_test_loom_chrome: $(BUILD)/desktop/test/t/test_loom_chrome.o \
+    $(BUILD)/desktop/test/lo/fabric.o $(BUILD)/desktop/test/lo/fabric_plan.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop_test_loom_lineage: \
+    $(BUILD)/desktop/test/t/test_loom_lineage.o \
+    $(BUILD)/desktop/test/lo/fabric.o $(BUILD)/desktop/test/lo/lineage.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The SECOND binary here that links an engine object (build/dataflow.o, the pure
+# L0/L1/L2 sink with no Capstone or Unicorn undefined symbols), for the same
+# reason $(BUILD)/desktop_test_slice_diff does: the Loom's generation walk adds
+# BFS depth to the closure relation, and a check that the depth did not change
+# WHICH steps are reached is only worth anything against the real slicer.
+$(BUILD)/desktop_test_loom_parity: \
+    $(BUILD)/desktop/test/t/test_loom_parity.o \
+    $(BUILD)/desktop/test/lo/fabric.o $(BUILD)/desktop/test/lo/lineage.o \
+    $(BUILD)/dataflow.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop_test_loom_annex: $(BUILD)/desktop/test/t/test_loom_annex.o \
+    $(BUILD)/desktop/test/lo/fabric.o $(BUILD)/desktop/test/lo/annex.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop_test_loom_takeview: \
+    $(BUILD)/desktop/test/t/test_loom_takeview.o \
+    $(BUILD)/desktop/test/lo/fabric.o $(BUILD)/desktop/test/lo/fabric_plan.o \
+    $(BUILD)/desktop/test/lo/take_view.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop_test_loom_golden: \
+    $(BUILD)/desktop/test/t/test_loom_golden.o \
+    $(DESKTOP_TEST_LOOM) $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_AN)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# fabric_imgui.o now also carries draw_loom (the panel), so the painter smoke
+# links the whole loom half plus the doc model it reads from — still no GL, no
+# GLFW and no engines.
+$(BUILD)/desktop_test_walkthrough: \
+    $(BUILD)/desktop/test/t/test_walkthrough.o \
+    $(BUILD)/desktop/test/src/walkthrough.o $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# capview.o links NOTHING: it is a pure function of the status data a caller
+# already probed, which is what makes the panel's two UI laws assertable on a
+# container with no PT, no LBR and no AMD silicon.
+$(BUILD)/desktop_test_capview: $(BUILD)/desktop/test/t/test_capview.o \
+    $(BUILD)/desktop/test/src/capview.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# author_vm.o links NOTHING either: it maps engine STRUCTS, never calls engine
+# functions, so the Author door's three rules are pinned without Keystone or
+# Unicorn on the host.
+$(BUILD)/desktop_test_author_vm: $(BUILD)/desktop/test/t/test_author_vm.o \
+    $(BUILD)/desktop/test/src/author_vm.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop_test_loom_draw: $(BUILD)/desktop/test/t/test_loom_draw.o \
+    $(DESKTOP_TEST_LOOM) $(BUILD)/desktop/test/lo/fabric_imgui.o \
+    $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The differential slice-parity test is the ONE binary here that links an engine
 # object — build/dataflow.o, the pure L0/L1/L2 sink, which has no Capstone or
@@ -320,9 +474,17 @@ $(BUILD)/desktop_test_recording: $(BUILD)/desktop/test/t/test_recording.o $(DESK
 # shell.o now draws the replay views, so the shell test links the pure builders,
 # their draw halves and the data readers. It still needs no GL and no engines:
 # ImGui's null backend renders every one of those paths.
-DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o $(DESKTOP_TEST_DOC) \
+DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
+    $(BUILD)/desktop/test/ui/learn_door.o \
+    $(BUILD)/desktop/test/ui/capability_panel.o \
+    $(BUILD)/desktop/test/src/walkthrough.o \
+    $(BUILD)/desktop/test/src/capview.o \
+    $(BUILD)/desktop/test/src/author_vm.o \
+    $(BUILD)/desktop/test/ui/author_door.o $(DESKTOP_TEST_DOC) \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_DA) \
-    $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/test/vw/%.o) $(DESKTOP_TEST_IG)
+    $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
+    $(DESKTOP_TEST_LOOM) \
+    $(DESKTOP_LOOM_DRAW:%=$(BUILD)/desktop/test/lo/%.o) $(DESKTOP_TEST_IG)
 
 $(BUILD)/desktop_test_shell: $(BUILD)/desktop/test/t/test_shell.o \
     $(DESKTOP_TEST_SHELL_OBJ) $(BUILD)/desktop/test/src/vm_compat.o
@@ -332,8 +494,64 @@ $(BUILD)/desktop_test_golden: $(BUILD)/desktop/test/t/test_golden.o \
     $(DESKTOP_TEST_SHELL_OBJ)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# The FULL-BUILD half of desktop-test: the Loom's fork engine (05 T5/T7) is the
+# one desktop TU that links the engines, so its test needs unicorn + keystone.
+# This is a host-capability gate, NOT a self-skip lane: `make docker-desktop`
+# installs all three and runs it every time (CLAUDE.md — a test that can only
+# ever self-skip is not a test), and the gate below prints why on a bare host.
+DESKTOP_ENGINE_TESTS := $(BUILD)/desktop_test_loom_forks
+
+$(BUILD)/desktop_test_loom_forks: $(BUILD)/desktop/test/t/test_loom_forks.o \
+    $(BUILD)/desktop/test/lo/fabric.o $(BUILD)/desktop/test/lo/fabric_plan.o \
+    $(BUILD)/desktop/test/lo/take_view.o $(BUILD)/desktop/test/lo/forks.o \
+    $(BUILD)/desktop/test/an/diff.o $(BUILD)/desktop/test/an/slice.o \
+    $(DESKTOP_TEST_DOC) \
+    $(BUILD)/emu.o $(BUILD)/trace.o $(BUILD)/disasm.o $(BUILD)/assemble.o \
+    $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o $(BUILD)/dataflow_emu.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) \
+	  $(CAPSTONE_LIBS) -o $@
+
+ifeq ($(strip $(DESKTOP_ENGINE_MISSING)),)
+desktop-test: $(DESKTOP_ENGINE_TESTS)
+DESKTOP_ALL_TESTS  = $(DESKTOP_TESTS) $(DESKTOP_ENGINE_TESTS)
+DESKTOP_ENGINE_SAY = :
+else
+DESKTOP_ALL_TESTS  = $(DESKTOP_TESTS)
+DESKTOP_ENGINE_SAY = echo "desktop-test: the full-build fork tests need:$(DESKTOP_ENGINE_MISSING) — not built here; 'make docker-desktop' installs them and runs them"
+endif
+
 desktop-test: $(DESKTOP_TESTS)
-	@for t in $(DESKTOP_TESTS); do echo "== $$t =="; $$t || exit 1; done
+	@$(DESKTOP_ENGINE_SAY)
+	@for t in $(DESKTOP_ALL_TESTS); do echo "== $$t =="; $$t || exit 1; done
+
+# ---------------------------------------------------------------------------
+# gen_walkthroughs — the Learn door's bundled walkthroughs, as recordings
+# (docs/internal/gui/06-doors-and-learning.md T2/T3).
+#
+# A C tool (not C++): it drives the assembler + emulator + the shared .asmtrace
+# writer, exactly like tools/asmtrace_record.c does for the golden corpus, and
+# for the same reason — one writer TU owns field order for the whole tree.
+$(BUILD)/gen_walkthroughs.o: desktop/test/gen_walkthroughs.c                              cli/asmtrace_ndjson.h include/asmtest_assemble.h                              include/asmtest_emu.h | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -c $< -o $@
+
+$(BUILD)/gen_walkthroughs: $(BUILD)/gen_walkthroughs.o                            $(BUILD)/asmtrace_ndjson.o $(BUILD)/assemble.o                            $(BUILD)/emu.o $(BUILD)/trace.o $(BUILD)/disasm.o
+	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) $(CAPSTONE_LIBS) -o $@
+
+.PHONY: asmtrace-walkthroughs
+ifeq ($(strip $(DESKTOP_ENGINE_MISSING)),)
+asmtrace-walkthroughs: $(BUILD)/gen_walkthroughs
+	@mkdir -p $(WALKTHROUGH_DIR)
+	$(BUILD)/gen_walkthroughs $(WALKTHROUGH_DIR)
+	@# Byte-stability gate (D6): write a SECOND copy to a temp dir and compare.
+	@# A generator that is not deterministic makes every future diff of these
+	@# files unreadable, so the check runs on every regeneration, not in CI only.
+	@tmp=$$(mktemp -d) && $(BUILD)/gen_walkthroughs $$tmp >/dev/null && 	  for f in $(WALKTHROUGH_DIR)/*.asmtrace; do 	    b=$$(basename $$f); 	    cmp -s $$f $$tmp/$$b || { 	      echo "asmtrace-walkthroughs: $$b is NOT byte-stable across two runs"; 	      diff $$f $$tmp/$$b | head -10; rm -rf $$tmp; exit 1; }; 	  done; rm -rf $$tmp; 	  echo "asmtrace-walkthroughs: $$(ls $(WALKTHROUGH_DIR)/*.asmtrace | wc -l) recording(s), byte-stable"
+else
+asmtrace-walkthroughs:
+	@echo "# SKIP $@: the walkthrough generator needs$(DESKTOP_ENGINE_MISSING)"
+	@echo "#   (it assembles its own sources and runs them). The committed"
+	@echo "#   recordings are authoritative; regenerate with make docker-desktop."
+endif
 
 # D8: desktop/ C++ uses the repo .clang-format (Language: Cpp). The check is
 # `-`-prefixed (informational, never gates); desktop/ stays out of FMT_SOURCES.

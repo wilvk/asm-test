@@ -70,6 +70,20 @@ struct dt_diff {
     bool a_truncated = false, b_truncated = false;
 };
 
+// The shared-prefix rule, on its own. `dt_diff_build` calls it over two
+// recordings' instruction streams; 05's Loom calls it over two FABRICS'
+// per-step `insn_off` arrays to place patient zero. One implementation, so the
+// diff view and the Loom can never place the first divergence differently over
+// the same two runs.
+//
+// The truncation flags matter only for the ends-early case: when one stream
+// simply stops, that is a divergence — unless the shorter side was truncated,
+// in which case all that is known is that the RECORDING stopped, not that
+// execution did.
+dt_divergence dt_first_divergence(const std::vector<uint64_t> &a,
+                                  const std::vector<uint64_t> &b,
+                                  bool a_truncated, bool b_truncated);
+
 // Align two recordings. Returns false with `out.err` set (and everything else
 // empty) on a refused pair.
 bool dt_diff_build(const Streams &a, const Streams &b, dt_diff &out,

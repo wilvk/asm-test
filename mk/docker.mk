@@ -79,8 +79,11 @@ docker-riscv64:
 docker-nasm: docker-build
 	$(_docker_run) sh -c 'make ASM_SYNTAX=nasm test && make ASM_SYNTAX=nasm check'
 
+# emu-test AND ct-eq-test: the constant-time suite links the same tier and its
+# CT proof is the emulator's accumulating block union
+# (docs/internal/gui/06-doors-and-learning.md T1).
 docker-emu: docker-build
-	$(_docker_run) make emu-test
+	$(_docker_run) sh -c 'make emu-test ct-eq-test'
 
 docker-asm: docker-build
 	$(_docker_run) make asm-test

@@ -6,6 +6,28 @@
 > doc and a source disagree, this doc wins (sources may be stale); if the CODE and this doc
 > disagree, re-verify before implementing.
 >
+> **Implemented 2026-07-24 (7/7). Four claims lost to the code and were fixed in
+> place:**
+> 1. **T1's replay feeder.** The doc says 02's reader "materializes … back into
+>    an `asmtest_valtrace_t` + `asmtest_defuse_t`". 02 shipped a decoded
+>    `DataflowStream` (`desktop/src/doc/streams.h`) instead — honest about what
+>    the SCHEMA carries rather than about what the C struct holds. The
+>    materialization therefore lives on the consumer side, in
+>    `desktop/src/loom/feed.cpp`.
+> 2. **T2's truncation banner.** "trace truncated: N of M steps recorded" needs
+>    an M the v1 schema does not carry: the `end` footer has a truncated flag
+>    and no dataflow step total. Printing "6 of 6" would claim the run ended
+>    where the buffer did, so the banner names the gap when the total is
+>    unknown and prints the exact N-of-M form only when a feed supplies both.
+>    A header total is a Phase-3-freeze item for 01, like 04's routine identity.
+> 3. **T3's audit signature.** `std::vector<uint32_t> *lit_lanes` cannot carry
+>    the hollow flag the same task requires two sentences later; `loom_audit`
+>    returns `loom_lit_t` rows and `loom_audit_lanes` keeps the plain-index form.
+> 4. **T4's `srcmap` entries** had no event kind at all. One **reserved**
+>    registry row was appended to [asmtrace-schema.md](asmtrace-schema.md)
+>    (claimed by this doc, fields not frozen — the same shape as the `take` row
+>    that was already there), and the annex reads it defensively.
+>
 > Siblings (D11): [03-desktop-shell.md](03-desktop-shell.md) owns `desktop/` scaffolding,
 > `mk/desktop.mk` (`desktop`, `desktop-render`, `desktop-test`, `docker-desktop`), the ImGui
 > shell, the **Workspace** document model and the headless null-backend test harness;

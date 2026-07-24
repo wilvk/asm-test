@@ -71,8 +71,8 @@ land (legend as in [../implementations/README.md](../implementations/README.md):
 | [02-exporters-and-readers.md](02-exporters-and-readers.md) | speedscope/Perfetto exporters, completeness readers | 6 | 01 (03 for T5–T6) | ✅ 6/6 |
 | [03-desktop-shell.md](03-desktop-shell.md) | desktop/ skeleton, deps, mk/desktop.mk, document model | 8 | 01 (corpus, for T7) | ✅ 8/8 |
 | [04-replay-views.md](04-replay-views.md) | canvas, operand timeline, slice explorer, diff, deep links | 8 | 01, 03 | ✅ 8/8 |
-| [05-loom-day-one.md](05-loom-day-one.md) | the Loom fabric, lineage, lane annex, forks | 7 | 02 (reader), 03, 04 | ☐ 0/7 |
-| [06-doors-and-learning.md](06-doors-and-learning.md) | Learn/Author doors, ct_eq, capability panel, runner record mode | 7 | 01–04 | ☐ 0/7 |
+| [05-loom-day-one.md](05-loom-day-one.md) | the Loom fabric, lineage, lane annex, forks | 7 | 02 (reader), 03, 04 | ✅ 7/7 |
+| [06-doors-and-learning.md](06-doors-and-learning.md) | Learn/Author doors, ct_eq, capability panel, runner record mode | 7 | 01–04 | ✅ 7/7 |
 | [07-serve-live-host.md](07-serve-live-host.md) | extract `libasmspy`, `--serve` wrapper, session host, budget patch-bay, Inspect door | 7 | 01, 03 | ☐ 0/7 |
 | [08-observer-views.md](08-observer-views.md) | live views: syscalls, watch, topo, hot edges, tree filters, codeimage, PT slice | 8 | 07, 04, 01 | ☐ 0/8 |
 | [09-teaching-producers.md](09-teaching-producers.md) | per-step register ring, scrubber, ABI x-ray, blame socket | 5 | 01, 03, 04, 06 | ☐ 0/5 |
@@ -81,8 +81,7 @@ land (legend as in [../implementations/README.md](../implementations/README.md):
 71 tasks across 10 docs. Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
 09 (09-T1 — the emulator ring — is engine-only and can start any time).
-**01, 02, 03 and 04 have landed (2026-07-24); 05/06/07 are next and can run in
-parallel.**
+**01–06 have landed (2026-07-24); 07 is next, then 08, then 09.**
 **07-T0 (extract `libasmspy`) is engine-only and can start immediately** —
 it repackages the asmspy engine as a linkable library so `--serve` wraps it
 rather than re-embedding it, and is worth landing independently of the GUI. **Doc 10

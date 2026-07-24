@@ -1,0 +1,13 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"k":"note","text":"imax_wrong(3, 4) — why is rax wrong? (`make demo-fail`'s story)"}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov rax, rdi"}
+{"k":"trace","basis":"rel","kind":"insn","off":3,"disasm":"cmp rdi, rsi"}
+{"k":"trace","basis":"rel","kind":"insn","off":6,"disasm":"cmovg rax, rsi"}
+{"k":"trace","basis":"rel","kind":"insn","off":10,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":4,"truncated":false}
+{"k":"regstate","desc":"emu_x86_regs_t@x86_64/sysv","values":{"rax":3,"rbx":0,"rcx":0,"rdx":0,"rsi":4,"rdi":3}}
+{"k":"note","text":"imax(3, 4) should return 4. The routine begins by moving the FIRST argument into the return register — reasonable so far.","step":0,"stop":true,"title":"rax starts as a"}
+{"k":"note","text":"cmp rdi, rsi computes rdi - rsi and throws the result away, keeping only the flags. 3 - 4 is negative, so SF != OF and `greater` is false.","step":1,"stop":true,"title":"the compare sets the flags"}
+{"k":"note","text":"cmovg moves when the compare said GREATER — so when a > b it overwrites the larger value with the smaller one. The author wanted cmovl (or wanted the operands the other way round).","step":2,"stop":true,"title":"the predicate is inverted","expected":"rax=4","got":"rax=3"}
+{"k":"note","text":"In the GUI a failing test deep-links to exactly this step: the recording is the evidence, and the step is where the wrong value was made.","step":3,"stop":true,"title":"this is the failure `make demo-fail` reports"}
+{"k":"end","events":11,"truncated":false,"drops":{"lost":0,"throttled":false}}

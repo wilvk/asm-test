@@ -1,0 +1,18 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"k":"note","text":"fork_demo(3) under the deterministic emulator L0 producer"}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov rdx, rdi"}
+{"k":"trace","basis":"rel","kind":"insn","off":3,"disasm":"shr rdx, 0x3f"}
+{"k":"trace","basis":"rel","kind":"insn","off":7,"disasm":"mov rax, rdi"}
+{"k":"trace","basis":"rel","kind":"insn","off":10,"disasm":"cmp rax, 0xa"}
+{"k":"trace","basis":"rel","kind":"insn","off":14,"disasm":"jle 0x100013"}
+{"k":"trace","basis":"rel","kind":"insn","off":19,"disasm":"ret"}
+{"k":"df_step","step":0,"off":0,"disasm":"mov rdx, rdi","ops":[{"space":"reg","reg":39,"size":0,"write":false,"value_valid":true,"value":3},{"space":"reg","reg":40,"size":0,"write":true,"value_valid":true,"value":3}]}
+{"k":"df_step","step":1,"off":3,"disasm":"shr rdx, 0x3f","ops":[{"space":"reg","reg":40,"size":0,"write":false,"value_valid":true,"value":3},{"space":"reg","reg":25,"size":0,"write":true,"value_valid":true,"value":70},{"space":"reg","reg":40,"size":0,"write":true,"value_valid":true,"value":0}]}
+{"k":"df_step","step":2,"off":7,"disasm":"mov rax, rdi","ops":[{"space":"reg","reg":39,"size":0,"write":false,"value_valid":true,"value":3},{"space":"reg","reg":35,"size":0,"write":true,"value_valid":true,"value":3}]}
+{"k":"df_step","step":3,"off":10,"disasm":"cmp rax, 0xa","ops":[{"space":"reg","reg":35,"size":0,"write":false,"value_valid":true,"value":3},{"space":"reg","reg":25,"size":0,"write":true,"value_valid":true,"value":151}]}
+{"k":"df_step","step":4,"off":14,"disasm":"jle 0x100013","ops":[{"space":"reg","reg":25,"size":0,"write":false,"value_valid":true,"value":151}]}
+{"k":"df_step","step":5,"off":19,"disasm":"ret","ops":[{"space":"reg","reg":44,"size":0,"write":false,"value_valid":true,"value":2162680},{"space":"reg","reg":44,"size":0,"write":true,"value_valid":true,"value":2162688},{"space":"abs","reg":0,"base":0,"index":0,"scale":0,"disp":0,"addr":2162680,"size":8,"write":false,"value_valid":true,"value":15728640}]}
+{"k":"df_edge","from":0,"to":1,"loc":{"space":"reg","reg":40,"size":0,"write":false,"value_valid":true,"value":3}}
+{"k":"df_edge","from":2,"to":3,"loc":{"space":"reg","reg":35,"size":0,"write":false,"value_valid":true,"value":3}}
+{"k":"df_edge","from":3,"to":4,"loc":{"space":"reg","reg":25,"size":0,"write":false,"value_valid":true,"value":151}}
+{"k":"end","events":16,"truncated":false,"drops":{"lost":0,"throttled":false}}

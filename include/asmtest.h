@@ -653,6 +653,27 @@ static inline uint64_t asmtest_cycle_counter(void) {
     return v;
 #endif
 }
+/* ------------------------------------------------------------------ */
+/* Record mode (--record-dir): a failing test as a deep link            */
+/*                                                                     */
+/* The runner does not record anything itself — it has no engine. It    */
+/* ARMS recording (a directory + the current test's identity) and       */
+/* carries whatever a producer wrote into the failure report, so a red  */
+/* test in CI names a `.asmtrace` file and a step inside it. A suite    */
+/* with no producer glue accepts --record-dir, writes nothing, and      */
+/* emits no `recording:` key — the honest degrade.                      */
+/* ------------------------------------------------------------------ */
+
+/* Non-NULL iff --record-dir (or ASMTEST_RECORD_DIR) is armed AND a test is
+ * running: "<dir>/<suite>.<name>.asmtrace" for the CURRENT test. The pointer is
+ * valid until the next test starts. */
+const char *asmtest_record_path(void);
+
+/* A producer declares "this test wrote this recording; the failing step is
+ * `step` (-1 = unknown)". The note is cleared at the top of every test, which
+ * matters under --no-fork where the globals outlive a test. */
+void asmtest_note_recording(const char *path, long step);
+
 void asmtest_fail(const char *file, int line, const char *fmt, ...)
     __attribute__((noreturn, format(printf, 3, 4)));
 void asmtest_skip(const char *reason) __attribute__((noreturn));

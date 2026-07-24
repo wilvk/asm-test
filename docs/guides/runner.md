@@ -34,9 +34,65 @@ robustness model.
 | `--repeat=N` | Run the selection `N` times — with `--shuffle`/`--seed`, the flake-hunting loop |
 | `--shard=K/N` | Run the `K`-th of `N` round-robin slices (1-based) — split one suite across CI jobs with no test lost or duplicated |
 | `--fail-if-no-tests` | Exit nonzero when the selection is empty (e.g. a typo'd `--filter`) |
+| `--record-dir=DIR` | Arm per-test `.asmtrace` recording into `DIR` (also `ASMTEST_RECORD_DIR`) — see [Record mode](#record-mode) |
 | `--bench` | Run `BENCH` cases instead of tests — see [Benchmarks](benchmarks.md) |
 | `--bench-format=text\|json` | Benchmark output: human text (default) or machine-readable JSON — see [Benchmarks](benchmarks.md) |
 | `--help`, `-h` | Print the usage summary and exit |
+
+(sec-record-mode)=
+
+## Record mode
+
+`--record-dir=DIR` (or `ASMTEST_RECORD_DIR`) arms recording: while it is set,
+every test has a *recording path* of its own —
+`<DIR>/<suite>.<name>.asmtrace` — and a failing test's report names whatever a
+producer actually wrote there.
+
+```console
+$ ./build/test_ct_eq --record-dir=build/rec
+...
+not ok 2 - ct_eq.no_secret_dependent_branch
+  ---
+  at:  examples/test_ct_eq.c:142
+  msg: |
+    ASSERT_EQ(after, baseline): 5 != 4
+  recording: build/rec/ct_eq.no_secret_dependent_branch.asmtrace
+  ...
+```
+
+The `recording:` (and, when a producer supplies one, `step:`) keys are
+**additive** YAML in the TAP failure block, and are appended to the `<failure>`
+/ `<error>` element *text* in JUnit — never as new attributes, so an existing
+report parser keeps working.
+
+Three properties are deliberate:
+
+- **The runner records nothing itself.** It links no engine. It arms a
+  directory and carries a producer's note; a suite that already links the
+  emulator tier calls `asmtest_rec_emu()`
+  ([`include/asmtest_rec.h`](https://github.com/wilvk/asm-test/blob/main/include/asmtest_rec.h))
+  and that is what writes the file. A suite with **no** producer glue accepts
+  `--record-dir`, writes nothing, and emits **no** `recording:` key — the
+  honest degrade, not a `recording: (none)` line nobody can open.
+- **A directory that cannot be created is a hard failure** (exit 2). A run that
+  was asked to record and silently recorded nothing is the exact outcome this
+  flag exists to prevent.
+- **A recording noted by a test that then crashes still reaches the report.**
+  The note travels back over the same pipe as the failure message, so it
+  survives a crash or a timeout. When the child dies *before* reporting, the
+  synthesized verdict names no recording at all — the runner never guesses.
+
+Two producer entry points make this work, both declared in `asmtest.h`:
+
+```c
+/* Non-NULL iff recording is armed AND a test is running. */
+const char *asmtest_record_path(void);
+/* "this test wrote this recording; the failing step is `step` (-1 = unknown)". */
+void asmtest_note_recording(const char *path, long step);
+```
+
+The step id is `-1` in v1: "this test wrote this file", not "this step is to
+blame". A viewer opens the last step when a failure carries no id.
 
 ## Isolation and robustness
 

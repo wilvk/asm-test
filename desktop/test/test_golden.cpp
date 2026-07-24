@@ -83,9 +83,19 @@ int main() {
     ShellState s;
     for (const std::string &f : flat) {
         Recording r = open_and_check(f);
-        // The honest, generated corpus is complete and clean.
-        check(f + " honest", !r.truncated(),
-              "a flat golden should not be torn/truncated");
+        // The generated corpus is complete and clean — EXCEPT the fixtures whose
+        // whole purpose is to be incomplete, which are named for it. Those are
+        // generated too (05-loom-day-one.md T7 records df_chain with a
+        // four-record operand buffer): a hand-edited truncation fixture would
+        // prove nothing about what a producer actually writes when a buffer
+        // fills. The name is not a licence to be broken — a `*-truncated`
+        // golden that is NOT truncated fails here just as loudly.
+        bool claims_truncation =
+            f.find("-truncated.asmtrace") != std::string::npos;
+        check(f + " honest", r.truncated() == claims_truncation,
+              claims_truncation
+                  ? "a golden named -truncated must actually be truncated"
+                  : "a flat golden should not be torn/truncated");
         std::string err;
         s.ws.open(f, err);
     }

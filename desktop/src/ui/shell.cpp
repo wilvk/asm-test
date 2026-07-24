@@ -123,28 +123,32 @@ static void draw_doors(ShellState &s) {
     ImGui::TextUnformatted("asmtest desktop — choose a door");
     ImGui::Spacing();
 
-    if (ImGui::Button("Learn")) {
+    if (ImGui::Button("Learn"))
+        s.show_learn = true;
+    ImGui::SameLine();
+    ImGui::TextDisabled("play a bundled walkthrough — no deps, no root");
+
+    if (ImGui::Button("Open a recording...")) {
         s.open_dialog = true;
         s.open_error.clear();
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("open a .asmtrace recording to replay");
+    ImGui::TextDisabled("replay a .asmtrace you already have");
 
+    if (ImGui::Button("Author"))
+        s.show_author = true;
+    ImGui::SameLine();
+    ImGui::TextDisabled("type assembly, run it, see faults as data");
 #ifdef ASMTEST_DESKTOP_RENDER_ONLY
     ImGui::BeginDisabled();
-    ImGui::Button("Author");
-    ImGui::SameLine();
     ImGui::Button("Inspect");
     ImGui::EndDisabled();
     ImGui::TextUnformatted(kEngineDoorReason);
 #else
-    if (ImGui::Button("Author"))
-        s.door_tabs.push_back("Author");
-    ImGui::SameLine();
     if (ImGui::Button("Inspect"))
         s.door_tabs.push_back("Inspect");
-    ImGui::TextDisabled(
-        "Author/Inspect open an empty tab (views land in docs 06/08)");
+    ImGui::TextDisabled("Inspect opens an empty tab (the live views land in "
+                        "doc 08)");
 #endif
     ImGui::Spacing();
     if (ImGui::Button("Keyboard bindings"))
@@ -240,9 +244,25 @@ static void draw_recording_tab(ShellState &s, const Recording &r) {
                     draw_diff_view(dt_diff_view_build(*a, *b));
                 ImGui::EndTabItem();
             }
+            if (ImGui::BeginTabItem("Loom")) {
+                // The Phase-2 flagship: the recording as a spacetime fabric.
+                // It weaves from the SAME decoded streams the other views use,
+                // and refuses — with its reason on screen and no partial
+                // drawing — for a recording whose producer was statistical or
+                // carried no per-step values.
+                draw_loom(s.loom, *a, s.ws, s.active_tab);
+                ImGui::EndTabItem();
+            }
         }
         if (ImGui::BeginTabItem("Backends")) {
             draw_completeness(s.completeness, s.repo_root);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("This host")) {
+            // What THIS machine can do and why not, straight from the
+            // library's status APIs (06 T6). The render-only viewer shows the
+            // loaded recording's provenance instead and says so.
+            draw_capability_panel(s.caps, &r);
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
@@ -287,6 +307,34 @@ void draw_shell(ShellState &s) {
         if (ImGui::BeginTabItem("Home")) {
             s.active_tab = -1;
             draw_doors(s);
+            ImGui::EndTabItem();
+        }
+
+        // The Learn door: bundled walkthroughs, in BOTH binaries (it reads
+        // recordings and links no engine — D4).
+        // The Author door: full app only, and the render-only build says why
+        // rather than hiding the tab (D4's split has to be legible).
+        if (s.show_author && ImGui::BeginTabItem("Author", &s.show_author)) {
+            draw_author_door(s.author);
+            ImGui::EndTabItem();
+        }
+
+        if (s.show_learn && ImGui::BeginTabItem("Learn", &s.show_learn)) {
+            draw_learn_door(s.learn, [&s](const std::string &path, long step) {
+                // Route through 04's router rather than reaching into the
+                // views: a stop and a pasted deep link must land identically.
+                std::string err;
+                if (shell_open(s, path, err) < 0 && !err.empty())
+                    s.status = err;
+                dt_link l;
+                l.rec = recording_id(path);
+                l.view = dt_view::timeline;
+                if (step >= 0)
+                    l.step = static_cast<uint32_t>(step);
+                shell_wire_nav(s);
+                if (!dt_nav_go(s.nav, l))
+                    s.status = s.nav.last_error;
+            });
             ImGui::EndTabItem();
         }
 

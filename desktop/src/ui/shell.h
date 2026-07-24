@@ -11,7 +11,9 @@
 
 #include "doc/streams.h"
 #include "doc/workspace.h"
+#include "loom/loom_draw.h"
 #include "nav.h"
+#include "ui/doors.h"
 #include "views/completeness.h"
 
 namespace asmdesk {
@@ -40,8 +42,19 @@ struct ShellState {
     bool cone_active = false;
     dt_nav_table nav;
     bool show_help = false;
+    bool show_learn = false;
+    bool show_author = false;
     std::string status; // the status bar: nav refusals land here verbatim
     CompletenessState completeness;
+    // The Loom's per-tab state (05-loom-day-one.md). Woven once per recording,
+    // not per frame.
+    LoomState loom;
+    // The Learn door's card list + player (06-doors-and-learning.md T4).
+    LearnState learn;
+    // The capability panel (06-doors-and-learning.md T6).
+    CapState caps;
+    // The Author door (06-doors-and-learning.md T5); full build only.
+    AuthorState author;
     std::string repo_root = ".";
 };
 

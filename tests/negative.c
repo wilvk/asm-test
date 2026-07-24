@@ -224,3 +224,18 @@ TEST(neg, fref_model_mismatch) {
  * escape `< & > "` — the escaping was never validated (xmllint ran only on the
  * all-passing suite). tests/expect.sh xmllint-checks this suite's JUnit. */
 TEST(neg, xml_special_chars) { ASSERT_STREQ("a<b&c>d", "w\"x'y"); }
+
+/* Record mode (docs/internal/gui/06-doors-and-learning.md T7): a producer noted
+ * a recording and a step, then the test failed. The runner must carry BOTH into
+ * the TAP and JUnit failure reports. Deliberately ENGINE-FREE — nothing here
+ * links an emulator, so the plumbing is tested even where no producer exists,
+ * and the path is a fiction (nothing opens it) because what is under test is
+ * the report, not the file. */
+TEST(neg, records_a_recording) {
+    asmtest_note_recording("fake.asmtrace", 7);
+    ASSERT_EQ(1, 2);
+}
+
+/* A test that notes NOTHING must emit no `recording:` key at all — the honest
+ * degrade for every suite with no producer glue. */
+TEST(neg, records_nothing) { ASSERT_EQ(3, 4); }

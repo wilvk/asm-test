@@ -16,6 +16,33 @@
 > frame, `mk/desktop.mk`, `Dockerfile.desktop`),
 > [04-replay-views.md](04-replay-views.md) (replay views + deep-link router).
 
+> **Implemented 2026-07-24 (7/7). Five claims lost to the code and were fixed in
+> place:**
+> 1. **T1's data page** at `0x00200000` is the emulator's own STACK base
+>    (`src/emu.c:15`), so `emu_map` refuses it. The suite maps `0x00300000`.
+> 2. **T2's stop fields.** 01's `note` kind carries only `text`/`off`/`step`/
+>    `stop` — there was no `title`/`expected`/`got`. Three optional fields were
+>    appended to that kind in [asmtrace-schema.md](asmtrace-schema.md) (owned
+>    here, omitted when absent, ignored by any reader that predates them).
+> 3. **T3's assembly** cannot use GNU as's numeric local labels (`jge 2f` /
+>    `jmp 1b`): the pinned Keystone rejects them outright
+>    ("KS_ERR_ASM_LABEL_INVALID"). The generator uses named labels — the same
+>    jumps to the same places, a different label spelling — and says so.
+> 4. **T4/T5/T6's test files** are `.cpp`, not `.c`: the view-models they drive
+>    are C++17 headers.
+> 5. **T6 vs D9.** The capability cascade's objects include `ptrace_backend.o`,
+>    which D9's "the desktop app never links the ptrace engines" appears to
+>    forbid. The distinction taken is capture vs QUERY — nothing in the app
+>    calls a capture entry point, and a panel that "never re-probes" must be
+>    able to ask the availability cascade. Recorded here rather than glossed;
+>    the render-only viewer links none of it.
+>
+> One measured note worth keeping: the loud-drop guarantee catches statements
+> the assembler **skips**, not text it accepts and reads differently than the
+> author meant. `mov rax, [` assembles cleanly under the pinned Keystone (3
+> statements, 14 bytes) — a fixture that conflated the two would be testing a
+> promise nothing makes.
+
 ## Why this work exists
 
 The GUI's first-run promise is "no blank IDE". The **Learn door** plays

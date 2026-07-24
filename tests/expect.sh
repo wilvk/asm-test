@@ -295,6 +295,65 @@ fi
 expect_exit "--shard=3/2 exits 2" 2 "$POS" --shard=3/2
 expect_exit "--repeat=0 exits 2"  2 "$POS" --repeat=0
 
+# ---- record mode: a failing test carries its recording into the report ----
+# (docs/internal/gui/06-doors-and-learning.md T7). Engine-free: neg.records_a_
+# recording calls asmtest_note_recording() directly, so this pins the RUNNER's
+# plumbing on every host, with or without a producer.
+expect_fail_msg "TAP failure carries recording:" "recording: fake.asmtrace" \
+    "$NEG" --filter=neg.records_a_recording
+expect_fail_msg "TAP failure carries step:" "step: 7" \
+    "$NEG" --filter=neg.records_a_recording
+expect_fail_msg "JUnit failure carries recording:" "recording: fake.asmtrace" \
+    "$NEG" --filter=neg.records_a_recording --format=junit
+expect_fail_msg "JUnit failure carries step:" "step: 7" \
+    "$NEG" --filter=neg.records_a_recording --format=junit
+
+# A test that noted nothing emits NO recording key — not `recording: (none)`.
+run "$NEG" --filter=neg.records_nothing
+case $out in
+*"recording:"*) bad "a test with no producer emits no recording: key" \
+    "a recording: key appeared for a test that noted nothing" ;;
+*) ok "a test with no producer emits no recording: key" ;;
+esac
+
+# The note is CLEARED per test: without the clear, --no-fork would attribute one
+# test's recording to the next test's failure (the globals outlive a test).
+run "$NEG" --no-fork --filter='neg.records_*'
+if printf '%s\n' "$out" | grep -c "recording: fake.asmtrace" | grep -qx 1; then
+    ok "--no-fork clears the note between tests"
+else
+    bad "--no-fork clears the note between tests" \
+        "expected exactly one recording: line across both tests"
+fi
+
+# --record-dir is accepted by a suite with no producer, records nothing, and
+# says nothing. A hard failure only when the directory cannot be made.
+rec_dir=${TMPDIR:-/tmp}/asmtest-expect-rec.$$
+rm -rf "$rec_dir"
+run "$POS" --record-dir="$rec_dir"
+if [ "$rc" -eq 0 ] && [ -d "$rec_dir" ] && [ -z "$(ls -A "$rec_dir")" ]; then
+    ok "--record-dir on a producer-less suite: accepted, records nothing"
+else
+    bad "--record-dir on a producer-less suite: accepted, records nothing" \
+        "exit $rc, dir contents: $(ls -A "$rec_dir" 2>&1)"
+fi
+rm -rf "$rec_dir"
+
+# An unmakeable --record-dir is a HARD failure (exit 2), never a silent
+# no-recording run — the whole point of the flag.
+expect_exit "--record-dir that cannot be created exits 2" 2 \
+    "$POS" --record-dir=/proc/self/cmdline/nope
+
+# ASMTEST_RECORD_DIR is the env fallback (the ASMTEST_TIMEOUT precedence idiom).
+rec_dir=${TMPDIR:-/tmp}/asmtest-expect-env.$$
+rm -rf "$rec_dir"
+if ASMTEST_RECORD_DIR="$rec_dir" "$POS" >/dev/null 2>&1 && [ -d "$rec_dir" ]; then
+    ok "ASMTEST_RECORD_DIR arms recording"
+else
+    bad "ASMTEST_RECORD_DIR arms recording" "no directory at $rec_dir"
+fi
+rm -rf "$rec_dir"
+
 # Unknown option exits 2; --help exits 0.
 expect_exit "unknown option exits 2" 2 "$POS" --bogus-option
 expect_exit "--help exits 0"         0 "$POS" --help
