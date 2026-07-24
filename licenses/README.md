@@ -19,6 +19,8 @@ shipped package — are the Pin kits (both versions), Intel SDE, and libdft64
 | `intel-sde-10.8.0/` | Intel SDE (test-lane oracle) — **test-lane only, never bundled**: the future/absent-ISA emulator, fetched and digest-verified at build/test time for `docker-sde`/`sde-test`, never linked into a shipped package | 10.8.0 ([fetch-sde.sh](../scripts/fetch-sde.sh)) | LicenseRef-Intel-Simplified-Software-License |
 | `Pin-3.20-98437-gf02b61307.txt` / `-third-party.txt` | Intel Pin (libdft64 differential-oracle test lane) — **test/oracle-only, never bundled**: fetched + digest-verified at build/test time for `docker-taint-oracle`, never linked into a shipped package. The 3.20 kit is libdft64's only tested pin | 3.20-98437-gf02b61307 ([fetch-pin.sh](../scripts/fetch-pin.sh)) | LicenseRef-Intel-EULA-SDP-2018 |
 | `libdft64.txt` | libdft64 (AngoraFuzzer fork) — the independently-implemented byte-level taint engine the DR taint client is cross-validated against — **test/oracle-only, never bundled**: fetched + git-commit-pinned for `docker-taint-oracle`, never linked into `libasmtest`/any binding | 20804d5 ([fetch-libdft.sh](../scripts/fetch-libdft.sh)) | BSD-3-Clause (Columbia libdft) |
+| `DearImGui-LICENSE.txt` | Dear ImGui (desktop GUI toolkit) — **bundled**: fetched + digest-verified, compiled into both desktop binaries | 1.91.9 ([fetch-imgui.sh](../scripts/fetch-imgui.sh)) | MIT |
+| `nlohmann-json-LICENSE.MIT` | nlohmann/json (`.asmtrace` reader) — **bundled**: single header fetched + digest-verified, compiled into both desktop binaries | 3.11.3 ([fetch-json.sh](../scripts/fetch-json.sh)) | MIT |
 
 The DynamoRIO text is captured on first fetch by
 [fetch-dynamorio.sh](../scripts/fetch-dynamorio.sh) (the pinned tarball's own

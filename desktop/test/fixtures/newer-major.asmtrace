@@ -1,0 +1,3 @@
+{"asmtrace":99,"container":"ndjson","producer":{"name":"future","version":"9.9"},"provenance":{"backend":"future","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"k":"note","text":"a v99 stream a v1 reader must refuse BY NAME, not best-effort"}
+{"k":"end","events":1,"truncated":false,"drops":{"lost":0,"throttled":false}}

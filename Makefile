@@ -145,6 +145,11 @@ help:
 	@echo '                  recording (--log/--stream also take --json to stream it to stdout);'
 	@echo '                  a skipped run still records, carrying the measured reason.'
 	@echo ''
+	@echo 'Desktop GUI (ImGui shell + .asmtrace viewer; docs/internal/gui/):'
+	@echo '  desktop         build build/asmtest-desktop (full app; links the engines, GPL-2.0 whole)'
+	@echo '  desktop-render  build build/asmtest-viewer (render-only; engine-free, permissive)'
+	@echo '  desktop-test    headless null-backend tests (any host with a C++17 compiler; make docker-desktop)'
+	@echo ''
 	@echo 'Packaging & install:'
 	@echo '  lib             build the static libasmtest.a'
 	@echo '  shared          build the core shared lib'
@@ -188,6 +193,7 @@ help:
 	@echo '                             so DOCKER_PLATFORM=linux/arm64 lanes run on an x86-64 box'
 	@echo '  docker-bindings            build + run every language image'
 	@echo '  docker-<lang>              one language image (e.g. docker-rust)'
+	@echo '  docker-desktop             desktop GUI image: build both binaries + run the null-backend tests'
 	@echo '  docker-drtrace             DynamoRIO native-trace tier (C + Python) in a container'
 	@echo '  docker-drtrace-bindings    DynamoRIO native-trace wrapper tests for every language'
 	@echo '  docker-sde                 Intel SDE future/absent-ISA lane (APX/AVX-512-on-AVX2 under sde64 -future; x86-64)'
@@ -937,6 +943,7 @@ include mk/dataflow.mk      # data-flow tracing: L0 value trace / L1 def-use / L
 include mk/fuzz.mk           # libFuzzer/AFL external-engine coverage shim (Track E)
 include mk/bench.mk          # cross-system performance + feature benchmarking
 include mk/cli.mk            # asmspy: ncurses front-end over the tracer
+include mk/desktop.mk        # desktop GUI: ImGui shell + .asmtrace viewer
 include mk/bindings.mk       # conformance corpus + language bindings + packaging
 include mk/docs.mk           # Sphinx / Read the Docs
 include mk/sde.mk            # Intel SDE future/absent-ISA lane (APX/AVX-512-on-AVX2)

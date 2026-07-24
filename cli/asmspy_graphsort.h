@@ -23,26 +23,34 @@ typedef enum {
     GSORT_FANOUT = 1,      /* most distinct callees (functions called) first */
 } gsort_t;
 
-/* qsort comparator; the active key is set through this file-scope selector
- * right before each qsort (all callers are single-threaded at the sort point —
- * qsort's context-less comparator forces the file-scope latch). */
-static gsort_t graph_sort_key = GSORT_INVOCATIONS;
-static int gnode_cmp(const void *a, const void *b) {
-    const asmspy_gnode_t *x = a, *y = b;
-    unsigned long long kx =
-        graph_sort_key == GSORT_FANOUT ? x->fanout : x->invocations;
-    unsigned long long ky =
-        graph_sort_key == GSORT_FANOUT ? y->fanout : y->invocations;
+/* Context-explicit core: a pure total order over two rows under an EXPLICIT key,
+ * safe to call from any thread. Concurrent consumers — the GUI's multi-panel
+ * call graph views (docs/internal/gui/03-desktop-shell.md) — call this directly
+ * (e.g. std::sort + a lambda), never the latch below. */
+static inline int gnode_cmp_key(const asmspy_gnode_t *x,
+                                const asmspy_gnode_t *y, gsort_t key) {
+    unsigned long long kx = key == GSORT_FANOUT ? x->fanout : x->invocations;
+    unsigned long long ky = key == GSORT_FANOUT ? y->fanout : y->invocations;
     if (kx != ky)
         return kx < ky ? 1 : -1; /* descending */
     /* tie-break on the OTHER metric, then name, so the order is stable */
-    unsigned long long tx =
-        graph_sort_key == GSORT_FANOUT ? x->invocations : x->fanout;
-    unsigned long long ty =
-        graph_sort_key == GSORT_FANOUT ? y->invocations : y->fanout;
+    unsigned long long tx = key == GSORT_FANOUT ? x->invocations : x->fanout;
+    unsigned long long ty = key == GSORT_FANOUT ? y->invocations : y->fanout;
     if (tx != ty)
         return tx < ty ? 1 : -1;
     return strcmp(x->name, y->name);
+}
+
+/* qsort(3) adapter over the file-scope latch: the active key is set through this
+ * selector right before each qsort. SINGLE-THREADED call sites only (the TUI) —
+ * qsort's context-less comparator forces the latch; concurrent consumers (GUI
+ * panels) must use gnode_cmp_key instead. The explicit casts also make this
+ * header valid C++ (an implicit const void* -> const T* conversion is a C-only
+ * allowance), so the desktop can reuse it through vm_compat.cpp. */
+static gsort_t graph_sort_key = GSORT_INVOCATIONS;
+static int gnode_cmp(const void *a, const void *b) {
+    return gnode_cmp_key((const asmspy_gnode_t *)a,
+                         (const asmspy_gnode_t *)b, graph_sort_key);
 }
 
 #endif /* ASMSPY_GRAPHSORT_H */

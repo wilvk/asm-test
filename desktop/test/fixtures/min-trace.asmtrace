@@ -1,0 +1,4 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov eax, edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":2}
+{"k":"end","events":2,"truncated":false,"drops":{"lost":0,"throttled":false}}

@@ -1,0 +1,3 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-syscalls","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_RDONLY) = 3"}
+{"k":"syscall","line":"read(fd=3

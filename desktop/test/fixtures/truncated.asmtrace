@@ -1,0 +1,4 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-region","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"coverage","basis":"rel","blocks":[0,12],"blocks_total":7,"insns_total":99,"truncated":true}
+{"k":"end","events":2,"truncated":true,"drops":{"lost":0,"throttled":false}}

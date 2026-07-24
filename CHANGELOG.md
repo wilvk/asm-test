@@ -8,6 +8,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Desktop GUI skeleton — a Dear ImGui shell over the `.asmtrace` document
+  model (desktop GUI plan, Phase 2; docs/internal/gui/03-desktop-shell.md).**
+  New `desktop/` tree building two binaries: `asmtest-desktop`, the full app,
+  which links the Author-tier engines and so is GPL-2.0 as a whole; and
+  `asmtest-viewer`, a render-only viewer with zero engine dependencies that stays
+  permissively distributable. Dear ImGui 1.91.9 and nlohmann/json 3.11.3 are
+  fetched pinned + digest-verified the way the native engines are
+  (`scripts/fetch-imgui.sh`, `scripts/fetch-json.sh`), and `mk/desktop.mk` adds
+  `make desktop` / `desktop-render` / `desktop-test` plus the `docker-desktop`
+  lane. The `.asmtrace` loader groups events by kind, enforces the schema's
+  forward-compat and honesty rules (a stream with no provenance is refused, a
+  newer major is refused by name, and truncation / drops / redaction / a torn
+  file each survive into the model), and the headless `desktop-test` drives ImGui
+  through its null backend — no display, no GL, no engines — so it runs on any
+  host with a C++17 compiler and opens every committed golden recording.
+
 - **`.asmtrace` recordings — one NDJSON format for every headless asmspy mode
   (desktop GUI plan, Phase 1).** `--record=<file>` on `--log --trace --dataflow
   --stream --graph --tree --procs --sample --watch` writes a `.asmtrace`

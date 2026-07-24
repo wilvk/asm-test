@@ -122,11 +122,14 @@ GLFW_LIBS ?= $(shell pkg-config --libs glfw3 2>/dev/null || echo -lglfw)
 GL_LIBS   ?= -lGL
 
 # desktop        -> $(BUILD)/asmtest-desktop: imgui core + glfw/opengl3
-#   backends + doc/ + ui/ + vm_compat + Author-tier objects ($(FRAMEWORK_OBJS)
-#   $(BUILD)/emu.o $(BUILD)/trace.o $(BUILD)/disasm.o $(BUILD)/assemble.o
-#   $(BUILD)/dataflow.o — Makefile:882-886 precedent), linked with
-#   $(UNICORN_LIBS) $(KEYSTONE_LIBS) $(CAPSTONE_LIBS) $(GLFW_LIBS) $(GL_LIBS).
-#   GPL-2.0 as a whole (D4).
+#   backends + doc/ + ui/ + vm_compat + Author-tier objects ($(BUILD)/emu.o
+#   $(BUILD)/trace.o $(BUILD)/disasm.o $(BUILD)/assemble.o $(BUILD)/dataflow.o —
+#   Makefile:882-886 precedent), linked with $(UNICORN_LIBS) $(KEYSTONE_LIBS)
+#   $(CAPSTONE_LIBS) $(GLFW_LIBS) $(GL_LIBS). GPL-2.0 as a whole (D4).
+#   NOTE (verified by linking): $(FRAMEWORK_OBJS) is NOT linked — asmtest.o is the
+#   test-runner and defines its own main() (src/asmtest.c:2234), which collides
+#   with the desktop's main.cpp. The five engine objects above are self-contained
+#   and carry the GPL engine linkage on their own.
 # desktop-render -> $(BUILD)/asmtest-viewer: same ui/doc/vm_compat sources with
 #   -DASMTEST_DESKTOP_RENDER_ONLY=1; links ONLY imgui + backends + $(GLFW_LIBS)
 #   $(GL_LIBS). ZERO engine objects or libs on the link line.
@@ -156,16 +159,30 @@ docker-desktop: docker-bindings-base
 
 **Goal.** The document model every view consumes: `.asmtrace` NDJSON → `Recording` (events grouped by kind + mandatory provenance), a `Workspace` set of them (plan D3: every view accepts one or two), forward-compat + honesty rules enforced.
 
+> **Schema reconciliation (code wins, done in this change).** An earlier draft of
+> this task assumed a `"kind"` event field, a `provenance.truncated`/`drops`
+> shape, and a "torn tail = unparseable final line while truncated" rule. The
+> **shipped 01 schema/writer** (verified against
+> [asmtrace-schema.md](asmtrace-schema.md) and `tests/golden-asmtrace/`) instead
+> uses: the event-kind field is **`"k"`**; the header carries a top-level
+> **`producer` `{name,version}`** plus a mandatory **`provenance`
+> `{backend,exact,trust,redacted?}`** (no `truncated`/`drops`); **truncation and
+> drops ride on the `end` footer**; and **a recording with no `end` event is
+> TORN**. The loader below and `recording.h`/`.cpp` implement the shipped schema;
+> this is the reconciliation the README's "code wins, fix the doc in the same
+> change" rule requires.
+
 **Steps.**
-1. Create `desktop/src/doc/recording.h`/`.cpp` and `workspace.h`/`.cpp` (Code). Field names follow [asmtrace-schema.md](asmtrace-schema.md) (owned by 01) — re-verify at implementation time; 01 wins on names, this doc wins on loader behavior.
+1. Create `desktop/src/doc/recording.h`/`.cpp` and `workspace.h`/`.cpp` (Code). Field names follow [asmtrace-schema.md](asmtrace-schema.md) (owned by 01) — 01 wins on names, this doc wins on loader behavior.
 2. Loader rules, exactly:
    - Line 1 must parse as a JSON object with integer `"asmtrace"`; else error.
-   - `"asmtrace" > 1` → error naming both majors (reject newer major).
-   - Header must contain a `"provenance"` object → else error (D7: a stream without provenance is not a recording).
-   - Every event line must be a JSON object with string `"kind"` → else error with line number. Exception: an unparseable **final** line while `provenance.truncated` is true is kept as `torn_tail = true` (the honesty chrome's torn edge), never silently dropped.
-   - Unknown kinds load fine: grouped under their kind string in `by_kind`, counted in `unknown_kinds` (registry list from 01). Unknown fields stay in `Event::body`, ignored. Never an error (forward compat).
-   - D10: `trace`/`dataflow` events MAY carry a `"disasm"` string; pass it through untouched — absence is normal (views degrade to offsets).
-3. Commit hand-written fixtures under `desktop/test/fixtures/`, one per rule: `min-trace.asmtrace` (valid; one event with `disasm`, one without), `truncated.asmtrace`, `dropped.asmtrace` (`drops > 0`), `redacted.asmtrace` (syscall events, payload absent, `"redacted": true`), `unknown-kind.asmtrace`, `newer-major.asmtrace` (`{"asmtrace": 99, …}`), `missing-provenance.asmtrace`, `torn-tail.asmtrace` (truncated + cut final line).
+   - `"asmtrace" > 1` → error naming both majors (reject newer major, by name).
+   - Header must contain a `"provenance"` object → else error (D7: a stream without provenance is not a recording). Within it, `"exact"` is mandatory and **must not be defaulted** (schema) → a missing/non-bool `exact` is a reject. `backend`/`trust`/`redacted` are read leniently; the top-level `producer` and `arch` are read when present.
+   - Every event line must be a JSON object with string **`"k"`** → else error with line number. Exception: an unparseable **final** line (EOF with no trailing newline — a producer that died mid-write) is kept as `torn = true`, never silently dropped; an unparseable **non-final** line is a hard error.
+   - The `end` footer (`"k":"end"`) is lifted into the honesty fields, not stored in `by_kind`: `end.truncated` → `end_truncated`, `end.drops.{lost,throttled}` → `drops_*`, `end.events` → `declared_events` (a self-check). **No `end` event seen ⇒ `torn = true`** (schema: a file without an `end` is TORN).
+   - Unknown kinds load fine: grouped under their kind string in `by_kind`, counted in `unknown_kinds` (the v1 registry is the 16 kinds incl. `end`; the schema's *reserved* kinds are unknown to a v1 reader too). Unknown fields stay in `Event::body`, ignored. Never an error (forward compat).
+   - D10: `trace`/`dataflow` events MAY carry a `"disasm"` string; it rides untouched in `Event::body` — absence is normal (views degrade to offsets).
+3. Commit hand-written fixtures under `desktop/test/fixtures/`, one per rule: `min-trace.asmtrace` (valid; one `trace` with `disasm`, one without), `truncated.asmtrace` (`end.truncated:true` + a truncated `coverage`), `dropped.asmtrace` (statistical `survey` + `end.drops.lost>0`/`throttled`), `redacted.asmtrace` (syscall events, no `payload` field, `provenance.redacted:true`), `unknown-kind.asmtrace` (an out-of-registry `k` **and** a known kind with an extra field), `newer-major.asmtrace` (`{"asmtrace": 99, …}`), `missing-provenance.asmtrace`, `torn-tail.asmtrace` (valid lines then a cut final line, no trailing newline).
 4. Create `desktop/test/test_recording.cpp` in the [test_view.c](../../../cli/test_view.c#L23) style (failures counter, `check_*` helpers, `PASS` line); wire into `desktop-test`.
 
 **Code.**
@@ -174,26 +191,37 @@ docker-desktop: docker-bindings-base
 // desktop/src/doc/recording.h  (namespace asmdesk; all new)
 inline constexpr int kAsmtraceMajor = 1;
 
-struct Provenance {          // mandatory on every stream (plan D1)
-    std::string producer;    // e.g. "asmspy --trace", "emu_call_traced"
-    std::string backend;     // e.g. "emulator", "ptrace", "pt-replay"
-    bool exact = true;       // exact vs statistical
-    bool truncated = false;
-    uint64_t drops = 0;      // summed loss accounting
-    nlohmann::json raw;      // full object, for provenance chrome / annex
+struct Producer { std::string name, version; };   // header's top-level producer
+struct Provenance {              // mandatory on every stream (schema Provenance)
+    std::string backend;         // measured producer id, e.g. "ptrace-syscalls"
+    bool exact = true;           // true=every event observed; false=a sample
+    std::string trust;           // "exact"|"statistical"|"weak"|"strong"
+    bool redacted = false;       // payload withheld at RECORD time
+    nlohmann::json raw;          // full object, for provenance chrome / annex
 };
 struct Event {
-    std::string kind;        // registry kind (asmtrace-schema.md)
-    nlohmann::json body;     // whole line; views decode lazily (D10 disasm rides here)
+    std::string kind;            // the schema "k" selector
+    nlohmann::json body;         // whole line; views decode lazily (D10 disasm rides here)
 };
 struct Recording {
     int version = 0;
+    Producer producer;
     Provenance provenance;
-    std::map<std::string, std::vector<Event>> by_kind;
+    std::string arch;
+    std::map<std::string, std::vector<Event>> by_kind;   // never holds `end`
     uint64_t unknown_kinds = 0;  // events kept but not in the v1 registry
-    bool torn_tail = false;      // cut final line; tolerated only if truncated
+    // honesty facts off the `end` footer (or its absence):
+    bool has_end = false;
+    uint64_t declared_events = 0;  // footer's own count (a self-check)
+    bool end_truncated = false;
+    uint64_t drops_lost = 0;
+    bool drops_throttled = false;
+    bool torn = false;             // no `end` event -> TORN
     std::string path;
-    bool truncated() const { return provenance.truncated || torn_tail; }
+    bool truncated() const { return end_truncated || torn; }
+    bool dropped() const { return drops_lost > 0 || drops_throttled; }
+    bool statistical() const { return !provenance.exact; }
+    uint64_t event_count() const;  // sum of by_kind sizes
 };
 // Empty optional + err (with line number) on the reject rules; else success.
 std::optional<Recording> load_recording(std::istream &in, std::string &err);
@@ -209,7 +237,7 @@ struct Workspace {
 };
 ```
 
-**Tests.** `test_recording.cpp` cases, one per rule: `load_minimal_groups_by_kind`, `disasm_optional_passthrough`, `reject_newer_major`, `reject_missing_provenance`, `reject_kindless_event`, `unknown_kind_kept_and_counted`, `unknown_field_ignored`, `truncation_surfaces_on_recording`, `drops_surface`, `redacted_flag_survives`, `torn_tail_only_when_truncated` (the same cut line in a non-truncated stream is an error), `workspace_opens_a_set`. Fixture dir via a compile define set by the make rule.
+**Tests.** `test_recording.cpp` cases, one per rule: `load_minimal_groups_by_kind`, `disasm_optional_passthrough`, `reject_newer_major` (names the major), `reject_missing_provenance`, `reject_missing_exact` (never defaulted), `reject_kindless_event` (with line number), `reject_unparseable_midline` (a cut MIDDLE line errors), `unknown_kind_kept_and_counted`, `unknown_field_ignored`, `truncation_surfaces_on_recording`, `drops_surface`, `redacted_flag_survives`, `torn_tail_kept` (cut final line ⇒ `torn`, load succeeds), `torn_missing_end` (no footer ⇒ `torn`), `declared_events_matches_count`, `workspace_opens_a_set`. Fixture dir via a compile define set by the make rule.
 
 **Docs.** Header comments; the fixtures are self-documenting.
 

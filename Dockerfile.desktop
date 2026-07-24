@@ -1,0 +1,21 @@
+# Dockerfile.desktop — the desktop GUI (desktop/): a Dear ImGui shell over the
+# .asmtrace document model, built as two binaries (full app + render-only
+# viewer). Built on the bindings base (C/C++ toolchain + libunicorn and
+# pinned-source Keystone/Capstone — the full app links them, D4), adding the GLFW
+# + OpenGL3 app-backend dev packages the desktop targets need.
+#
+# The CMD builds BOTH binaries (proving the app links the engines and the viewer
+# does not) and runs the headless null-backend tests. It does NOT run the app or
+# viewer — those need a display; the container has none, and desktop-test needs
+# no display or GL at all.
+#
+# Version pin: the distro packages, resolved against this image's pinned Ubuntu
+# base — same discipline as Dockerfile.cli's libipt-dev / libncurses-dev.
+ARG BASE_IMAGE=asmtest-bindings-base
+FROM ${BASE_IMAGE}
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends libglfw3-dev libgl1-mesa-dev \
+ && rm -rf /var/lib/apt/lists/*
+COPY . .
+CMD sh -c 'make desktop desktop-render desktop-test'

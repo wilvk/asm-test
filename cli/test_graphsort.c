@@ -57,6 +57,32 @@ static void check_cmp(const char *what, gsort_t key, asmspy_gnode_t a,
     }
 }
 
+/* Assert the context-explicit CORE directly, with NO latch assignment — this is
+ * the entry the GUI's concurrent panels use, so it must be correct without the
+ * file-scope selector ever being touched. Checks the sign of cmp(a,b) and
+ * antisymmetry, AND that the qsort adapter (latch = key) agrees with the core on
+ * the same pair. */
+static void check_cmp_key(const char *what, gsort_t key, asmspy_gnode_t a,
+                          asmspy_gnode_t b, int want_sign) {
+    int ab = gnode_cmp_key(&a, &b, key);
+    int ba = gnode_cmp_key(&b, &a, key);
+    int sab = ab < 0 ? -1 : ab > 0 ? 1 : 0;
+    int sba = ba < 0 ? -1 : ba > 0 ? 1 : 0;
+    if (sab != want_sign || sba != -want_sign) {
+        fprintf(stderr,
+                "FAIL %s: cmp_key(a,b)=%d cmp_key(b,a)=%d, want signs %d/%d\n",
+                what, ab, ba, want_sign, -want_sign);
+        failures++;
+    }
+    /* adapter (single-thread latch) must equal the core on the same pair */
+    graph_sort_key = key;
+    if (gnode_cmp(&a, &b) != ab) {
+        fprintf(stderr, "FAIL %s: adapter disagrees with core (%d vs %d)\n", what,
+                gnode_cmp(&a, &b), ab);
+        failures++;
+    }
+}
+
 int main(void) {
     /* --sort=invocations: descending by invocations, regardless of fanout */
     {
@@ -112,6 +138,19 @@ int main(void) {
               1); /* less fanout sorts LAST under the fanout key */
     check_cmp("cmp/tie-name", GSORT_INVOCATIONS, node("aaa", 5, 5),
               node("bbb", 5, 5), -1); /* full tie: name ascending */
+
+    /* context-explicit core (the GUI entry): correct with NO latch touched, for
+     * both keys, and in agreement with the qsort adapter */
+    check_cmp_key("key/inv", GSORT_INVOCATIONS, node("a", 9, 0), node("b", 3, 9),
+                  -1); /* more invocations sorts FIRST (descending) */
+    check_cmp_key("key/fanout", GSORT_FANOUT, node("a", 9, 1), node("b", 0, 2),
+                  1); /* less fanout sorts LAST under the fanout key */
+    check_cmp_key("key/tie->other", GSORT_INVOCATIONS, node("a", 5, 8),
+                  node("b", 5, 1), -1); /* tie on inv -> more fanout first */
+    check_cmp_key("key/full-tie->name", GSORT_FANOUT, node("aaa", 5, 5),
+                  node("bbb", 5, 5), -1); /* full tie: name ascending */
+    check_cmp_key("key/equal", GSORT_INVOCATIONS, node("same", 3, 3),
+                  node("same", 3, 3), 0);
 
     if (failures) {
         fprintf(stderr, "test_graphsort: %d FAILURE(S)\n", failures);

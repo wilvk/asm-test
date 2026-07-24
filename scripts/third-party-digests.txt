@@ -59,3 +59,9 @@ tarball-sha256  libipt      2.0.6  sha256:631f4ebc81e12c0493288af3cc307b0de5b65f
 # (mk/docker.mk BINFMT_IMAGE). Pinned to the multi-arch index digest of the
 # tonistiigi/binfmt:qemu-v10.2.3 tag; no fetch script consumes this line.
 image-digest    tonistiigi-binfmt  qemu-v10.2.3  sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+# imgui + nlohmann-json: the desktop GUI (docs/internal/gui/03-desktop-shell.md).
+# Both MIT, both compiled INTO the desktop binaries (bundled). Self-hashed at pin
+# time (GitHub source-archive tarball / release asset; same as the unicorn row
+# above). Added BY HAND — refresh-thirdparty-digests.sh does not know these rows.
+tarball-sha256  imgui          1.91.9  sha256:3872a5f90df78fced023c1945f4466b654fd74573370b77b17742149763a7a7c
+tarball-sha256  nlohmann-json  3.11.3  sha256:9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6
