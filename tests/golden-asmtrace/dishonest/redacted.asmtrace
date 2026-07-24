@@ -1,0 +1,7 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-syscalls","exact":true,"trust":"exact","redacted":true},"arch":"x86_64"}
+{"k":"note","text":"FIXTURE: a recording made with redaction ON. Every syscall line is the payload-free rendering and NO payload field exists anywhere in the file — the content was withheld at RECORD time, so no reader-side 'reveal' can produce it. A viewer must say the payload is absent, not that it is hidden."}
+{"k":"syscall","line":"openat(AT_FDCWD, \"<path>\", O_RDONLY) = 3"}
+{"k":"syscall","line":"read(fd=3, 4096) = <120 bytes> [120]"}
+{"k":"syscall","line":"connect(fd=4, <sockaddr>, 16) = 0"}
+{"k":"syscall","line":"writev(fd=3, [<2 buffers>], 2) = 18"}
+{"k":"end","events":5,"truncated":false,"drops":{"lost":0,"throttled":false}}

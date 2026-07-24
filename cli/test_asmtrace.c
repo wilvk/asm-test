@@ -540,6 +540,85 @@ static void test_schema_example(void) {
           "example lost a documented kind");
 }
 
+/* ---- fixture.* — the committed dishonesty corpus (D7) ---- */
+
+/* Where the hand-authored fixtures live, relative to the repo root (the smoke's
+ * working directory). Overridable so the test is runnable from anywhere. */
+static void fixture_path(char *out, size_t cap, const char *name) {
+    const char *dir = getenv("ASMTRACE_FIXTURE_DIR");
+    snprintf(out, cap, "%s/%s.asmtrace",
+             dir ? dir : "tests/golden-asmtrace/dishonest", name);
+}
+
+/* Each fixture encodes ONE way a recording can be less than it looks, and each
+ * check asserts the fact SURVIVES the reader — which is the half of the honesty
+ * discipline that lives here. (The banner / provenance-chrome / redaction-reveal
+ * RENDERER assertions replay these same files from the desktop docs.) */
+static void test_fixtures(void) {
+    char path[600];
+    recording_t r;
+
+    fixture_path(path, sizeof path, "truncated");
+    if (!read_recording(path, &r)) {
+        check("fixture.truncated_present", 0, path);
+    } else {
+        check("fixture.truncated_flag_surfaces", r.end_truncated == 1,
+              "the end event's truncated flag did not survive the reader");
+        check("fixture.truncated_wellformed", r.malformed == 0 && r.header_ok,
+              NULL);
+        check("fixture.truncated_is_closed", !r.torn,
+              "a truncated recording is still a CLOSED one");
+        check("fixture.truncated_has_coverage", has_kind(&r, "coverage"),
+              "no coverage event to carry blocks_total > len(blocks)");
+    }
+
+    fixture_path(path, sizeof path, "dropped");
+    if (!read_recording(path, &r)) {
+        check("fixture.dropped_present", 0, path);
+    } else {
+        check_ll("fixture.dropped_counts_surface", r.lost, 12345);
+        check("fixture.dropped_throttled_surfaces", r.throttled == 1, NULL);
+        check("fixture.dropped_is_statistical", r.prov_exact == 0,
+              "a sampled survey must never record exact:true");
+        check("fixture.dropped_has_survey", has_kind(&r, "survey"), NULL);
+    }
+
+    fixture_path(path, sizeof path, "redacted");
+    if (!read_recording(path, &r)) {
+        check("fixture.redacted_present", 0, path);
+    } else {
+        check("fixture.redacted_flag_surfaces", r.prov_redacted == 1,
+              "the header did not declare the recording redacted");
+        check("fixture.redacted_has_syscalls", has_kind(&r, "syscall"), NULL);
+        /* The point of the fixture: the content is not in the file AT ALL, so
+         * no reader-side reveal can produce it. A grep is the honest check. */
+        {
+            FILE *f = fopen(path, "r");
+            char line[MAX_LINE];
+            int payloads = 0;
+            if (f) {
+                while (fgets(line, sizeof line, f))
+                    if (strstr(line, "\"payload\""))
+                        payloads++;
+                fclose(f);
+            }
+            check("fixture.redacted_has_no_payload", payloads == 0,
+                  "a redacted recording still carries a payload field");
+        }
+    }
+
+    fixture_path(path, sizeof path, "torn");
+    if (!read_recording(path, &r)) {
+        check("fixture.torn_present", 0, path);
+    } else {
+        check("fixture.torn_detected", r.torn == 1,
+              "a recording with no end event was not reported torn");
+        check("fixture.torn_keeps_events", r.nevents > 0,
+              "a torn recording still carries the events it did write");
+        check("fixture.torn_header_intact", r.header_ok, NULL);
+    }
+}
+
 int main(void) {
     const char *tmp = getenv("TMPDIR");
     char tmpl[512];
@@ -558,6 +637,7 @@ int main(void) {
     test_skip_is_a_recording();
     test_torn_without_close();
     test_schema_example();
+    test_fixtures();
 
     if (failures) {
         fprintf(stderr, "test_asmtrace: %d FAILURE(S) (kept %s)\n", failures,

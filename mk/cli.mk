@@ -374,6 +374,77 @@ $(BUILD)/test_jitdump: cli/test_jitdump.c $(BUILD)/asmspy_proc.o \
 	$(CC) $(CFLAGS) -Icli -pthread cli/test_jitdump.c $(BUILD)/asmspy_proc.o \
 	  -lstdc++ -o $@
 
+# ---------------------------------------------------------------------------
+# asmtrace_record — the Author-mode conformance-corpus recorder + the golden
+# corpus targets (docs/internal/gui/01-asmtrace-format.md T6/T7).
+#
+# It runs corpus routines under the DETERMINISTIC emulator L0 value producer and
+# writes one .asmtrace per routine, so the committed corpus is a byte-comparable
+# fixture every reader/exporter/viewer test replays. It links the writer TU that
+# asmspy links — one owner of field order — plus the pure L0/L1 sink, the
+# Capstone operand enumerator, the emulator producer, and the corpus routine
+# objects (the test_dataflow_emu link shape, mk/dataflow.mk).
+$(BUILD)/corpus_routines.o: bindings/conformance/corpus_routines.c \
+                            $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/asmtrace_record.o: tools/asmtrace_record.c cli/asmtrace_ndjson.h \
+                            include/asmtest_valtrace.h include/asmtest_emu.h \
+                            $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -c $< -o $@
+
+# The routine objects carry the corpus's assembly (add.o: add_signed;
+# flags.o: set_carry/clear_carry/sum_via_rbx/clobbers_rbx; args.o: sum3) and
+# the rest satisfy corpus_routines.c's other externs.
+ASMTRACE_ROUTINE_OBJS := $(BUILD)/add.o $(BUILD)/args.o $(BUILD)/flags.o \
+                         $(BUILD)/fp.o $(BUILD)/simd.o $(BUILD)/structs.o \
+                         $(BUILD)/fault.o $(BUILD)/corpus_routines.o
+
+$(BUILD)/asmtrace_record: $(BUILD)/asmtrace_record.o \
+                          $(BUILD)/asmtrace_ndjson.o $(BUILD)/dataflow.o \
+                          $(BUILD)/dataflow_operands.o $(BUILD)/dataflow_emu.o \
+                          $(BUILD)/emu.o $(BUILD)/trace.o $(BUILD)/disasm.o \
+                          $(ASMTRACE_ROUTINE_OBJS)
+	$(CC) $(CFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) -o $@
+
+# The golden corpus is x86-64-only (the corpus routines are HOST-ARCH assembly,
+# the same gate the conformance emulator leg carries) and needs libunicorn for
+# the producer. libunicorn/Capstone are installable and present in the lane
+# image, so their absence points at the container rather than self-skipping the
+# feature; the architecture is a REAL gate (CLAUDE.md) and is recorded as one.
+ASMTRACE_GOLDEN_DIR := tests/golden-asmtrace
+ASMTRACE_GOLDEN_OK := $(and $(filter x86_64,$(CLI_ARCH)),$(DF_HAVE_UNICORN))
+
+.PHONY: asmtrace-golden asmtrace-golden-check
+ifneq ($(ASMTRACE_GOLDEN_OK),)
+asmtrace-golden: $(BUILD)/asmtrace_record
+	@mkdir -p $(ASMTRACE_GOLDEN_DIR)
+	$(BUILD)/asmtrace_record $(ASMTRACE_GOLDEN_DIR)
+	@echo "regenerated $(ASMTRACE_GOLDEN_DIR)/*.asmtrace — commit them from the"
+	@echo "docker-cli image only (host Capstone 4.x renders different disasm text)"
+
+# Regenerate into a temp dir and diff: a field-order or value change fails here
+# as a byte diff instead of passing quietly. Compares only the flat generated
+# files — dishonest/ is hand-authored and never regenerated.
+asmtrace-golden-check: $(BUILD)/asmtrace_record
+	@tmp=$$(mktemp -d) && $(BUILD)/asmtrace_record $$tmp >/dev/null && \
+	  for f in $$tmp/*.asmtrace; do \
+	    b=$$(basename $$f); \
+	    cmp -s $$f $(ASMTRACE_GOLDEN_DIR)/$$b || { \
+	      echo "asmtrace-golden-check: $$b differs from the committed golden"; \
+	      diff $(ASMTRACE_GOLDEN_DIR)/$$b $$f | head -20; \
+	      rm -rf $$tmp; exit 1; }; \
+	  done; \
+	  n=$$(ls $$tmp/*.asmtrace | wc -l); rm -rf $$tmp; \
+	  echo "asmtrace-golden-check: $$n recordings byte-identical to the corpus"
+else
+asmtrace-golden asmtrace-golden-check:
+	@echo "# SKIP $@: the golden .asmtrace corpus is generated from HOST-ARCH corpus"
+	@echo "#   assembly under the emulator L0 producer — it needs an x86-64 host"
+	@echo "#   (this host is $(CLI_ARCH))$(if $(DF_HAVE_UNICORN),, and libunicorn, which docker-cli has)."
+	@echo "#   The committed corpus is authoritative; regenerate it with make docker-cli."
+endif
+
 .PHONY: cli-smoke
 ifneq ($(UNAME_S),Linux)
 # Same OS gate as `cli` above: asmspy is a Linux-only ptrace/proc tracer and its
@@ -409,6 +480,8 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
 	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"
+	@echo "--- asmtrace-golden-check (the committed .asmtrace corpus is byte-stable) ---"
+	@$(MAKE) --no-print-directory asmtrace-golden-check
 	BUILD=$(BUILD) ASMSPY_HAVE_M32='$(CLI_M32_PROBE)' sh cli/cli_smoke.sh
 endif
 

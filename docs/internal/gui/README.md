@@ -64,7 +64,7 @@ land (legend as in [../implementations/README.md](../implementations/README.md):
 
 | Doc | Area | Tasks | Depends on | Status |
 |---|---|---|---|---|
-| [01-asmtrace-format.md](01-asmtrace-format.md) | `.asmtrace` schema, record modes, golden corpus | 8 | — | ◐ 4/8 (T5 wip) |
+| [01-asmtrace-format.md](01-asmtrace-format.md) | `.asmtrace` schema, record modes, golden corpus | 8 | — | ✅ 8/8 |
 | [02-exporters-and-readers.md](02-exporters-and-readers.md) | speedscope/Perfetto exporters, completeness readers | 6 | 01 (03 for T5–T6) | ☐ 0/6 |
 | [03-desktop-shell.md](03-desktop-shell.md) | desktop/ skeleton, deps, mk/desktop.mk, document model | 8 | 01 (corpus, for T7) | ☐ 0/8 |
 | [04-replay-views.md](04-replay-views.md) | canvas, operand timeline, slice explorer, diff, deep links | 8 | 01, 03 | ☐ 0/8 |

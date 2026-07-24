@@ -93,11 +93,13 @@ FKPID=""
 CLPID=""
 IVPID=""
 SKPID=""
+RVPID=""
+RWPID=""
 LJPID=""
 SGPID=""
 GSPID=""
 EVPID=""
-trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} ${SGPID:+"$SGPID"} ${GSPID:+"$GSPID"} ${EVPID:+"$EVPID"} ${AJPID:+"$AJPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${AJPID:+"/tmp/perf-$AJPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" "$BUILD/gstop.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
+trap 'kill "$AVPID" ${WVPID:+"$WVPID"} ${SVPID:+"$SVPID"} ${TVPID:+"$TVPID"} ${DVPID:+"$DVPID"} ${CVPID:+"$CVPID"} ${JVPID:+"$JVPID"} ${UPID:+"$UPID"} ${IPID:+"$IPID"} ${YPID:+"$YPID"} ${MVPID:+"$MVPID"} ${HWPID:+"$HWPID"} ${DLPID:+"$DLPID"} ${EXPID:+"$EXPID"} ${FKPID:+"$FKPID"} ${CLPID:+"$CLPID"} ${IVPID:+"$IVPID"} ${SKPID:+"$SKPID"} ${LJPID:+"$LJPID"} ${SGPID:+"$SGPID"} ${GSPID:+"$GSPID"} ${EVPID:+"$EVPID"} ${AJPID:+"$AJPID"} ${RVPID:+"$RVPID"} ${RWPID:+"$RWPID"} 2>/dev/null || true; rm -f ${JVPID:+"/tmp/perf-$JVPID.map"} ${AJPID:+"/tmp/perf-$AJPID.map"} ${UPID:+"$BUILD/jit-$UPID.dump"} "$BUILD/int3_swallow.log" "$BUILD/tid_victim.log" "$BUILD/watch_victim.log" "$BUILD/gstop.log" "$BUILD/watch_rec.log" 2>/dev/null || true; rm -f /tmp/asmspy_fork_parent.txt /tmp/asmspy_fork_child.txt /tmp/asmspy_sock_victim.sock "$BUILD/sock_victim.log" 2>/dev/null || true; rm -rf "$BUILD/debuglink_t" 2>/dev/null || true' EXIT INT TERM
 sleep 1
 
 echo "--- asmspy --syms $AVPID hotfn ---"
@@ -2631,5 +2633,113 @@ nsw=$(grep -c SWALLOWED "$SWLOG" 2>/dev/null || true)
 echo "  app int3 delivered (SWALLOWED=${nsw:-0}; <10 tolerates the tracer-kill detach-race)"
 kill "$IPID" 2>/dev/null || true
 rm -f "$SWLOG"
+
+# ---------------------------------------------------------------------------
+# .asmtrace RECORD MODE across the headless subcommands
+# (docs/internal/gui/01-asmtrace-format.md T5)
+# ---------------------------------------------------------------------------
+# Every headless mode can write a recording. The assertion per mode is the same
+# three facts, because they are the ones that make a file USABLE: a v1 header,
+# at least one event of that mode's own kind, and a closing `end` — a file
+# without an end event is TORN and a reader must say so, so a mode that produced
+# one here would be shipping torn recordings.
+echo "--- asmspy --record=<f> (.asmtrace recordings per headless mode) ---"
+RECDIR="$BUILD/asmtrace-rec"
+rm -rf "$RECDIR"; mkdir -p "$RECDIR"
+
+# Assert a recording is well-formed and carries `kind`. A mode that SKIPPED
+# (hardware/permission gate) is accepted only when the end event names the skip
+# — which is the point of "a skip is a recording", not a loophole.
+rec_ok() {
+    f="$RECDIR/$1.asmtrace"; kind="$2"
+    [ -s "$f" ] || fail "--record $1: no recording written"
+    head -1 "$f" | grep -q '"asmtrace":1' \
+        || fail "--record $1: line 1 is not an asmtrace header"
+    tail -1 "$f" | grep -q '"k":"end"' \
+        || fail "--record $1: no end event — the recording is TORN"
+    if grep -q "\"k\":\"$kind\"" "$f"; then
+        echo "  $1 -> $kind events + clean end"
+    elif tail -1 "$f" | grep -q '"skip"'; then
+        echo "  $1 -> SKIP recorded with its measured reason (a skip is a recording)"
+    else
+        fail "--record $1: no \"$kind\" events and no skip in the end event"
+    fi
+}
+
+"$BUILD/spy_victim" >/dev/null 2>&1 &
+RVPID=$!
+sleep 1
+kill -0 "$RVPID" 2>/dev/null || fail "spy_victim did not start for the record smoke"
+
+timeout 60 "$ASM" --log "$RVPID" 10 --record="$RECDIR/log.asmtrace" >/dev/null 2>&1 || true
+rec_ok log syscall
+timeout 60 "$ASM" --stream "$RVPID" 20 --record="$RECDIR/stream.asmtrace" >/dev/null 2>&1 || true
+rec_ok stream stream
+timeout 60 "$ASM" --trace "$RVPID" work 1 --record="$RECDIR/trace.asmtrace" >/dev/null 2>&1 || true
+rec_ok trace trace
+grep -q '"k":"coverage"' "$RECDIR/trace.asmtrace" \
+    || tail -1 "$RECDIR/trace.asmtrace" | grep -q '"skip"' \
+    || fail "--record trace: an invocation recorded no coverage event"
+timeout 60 "$ASM" --tree "$RVPID" 20 --record="$RECDIR/tree.asmtrace" >/dev/null 2>&1 || true
+rec_ok tree call
+timeout 60 "$ASM" --graph "$RVPID" 20 --record="$RECDIR/graph.asmtrace" >/dev/null 2>&1 || true
+rec_ok graph graph
+timeout 60 "$ASM" --procs "$RVPID" 40 --record="$RECDIR/procs.asmtrace" >/dev/null 2>&1 || true
+rec_ok procs topo
+# --sample is AMD IBS-Op HARDWARE: off an AMD host (and under Docker's default
+# seccomp, which blocks perf_event_open) this records the SKIP, and that is the
+# assertion — the gate must be visible IN the file, not absent from it.
+timeout 60 "$ASM" --sample "$RVPID" 100 --record="$RECDIR/sample.asmtrace" >/dev/null 2>&1 || true
+rec_ok sample survey
+timeout 90 "$ASM" --dataflow "$RVPID" work --record="$RECDIR/dataflow.asmtrace" >/dev/null 2>&1 || true
+rec_ok dataflow df_step
+
+# --watch needs a real DATA address (a function entry is not length-aligned, and
+# an unaligned address is refused before any capture — an argument error, which
+# must NOT leave a recording behind). watch_victim publishes an aligned global,
+# so this exercises the engine rather than the argument check. Where debug-
+# register arming is refused, this records the skip like --sample.
+"$BUILD/watch_victim" 2>"$BUILD/watch_rec.log" &
+RWPID=$!
+sleep 1
+RWADDR=$(sed -n 's/.*watch_target=\(0x[0-9a-fA-F]*\).*/\1/p' "$BUILD/watch_rec.log" | head -1)
+if [ -n "$RWADDR" ]; then
+    timeout 60 "$ASM" --watch "$RWPID" "$RWADDR" 3 --record="$RECDIR/watch.asmtrace" \
+        >/dev/null 2>&1 || true
+    rec_ok watch watch
+else
+    fail "watch_victim did not report its watch_target address"
+fi
+kill -9 "$RWPID" 2>/dev/null || true
+wait "$RWPID" 2>/dev/null || true
+RWPID=""
+rm -f "$BUILD/watch_rec.log"
+
+# --record and --json COMPOSE: the same events reach the file and stdout.
+timeout 60 "$ASM" --log "$RVPID" 8 --json --record="$RECDIR/both.asmtrace" \
+    >"$RECDIR/both.stdout" 2>/dev/null || true
+[ -s "$RECDIR/both.stdout" ] || fail "--record with --json: stdout carried no recording"
+fe=$(grep -c '"k":"syscall"' "$RECDIR/both.asmtrace" || true)
+se=$(grep -c '"k":"syscall"' "$RECDIR/both.stdout" || true)
+[ "$fe" = "$se" ] \
+    || fail "--record + --json disagree: $fe syscall events in the file, $se on stdout"
+echo "  --record and --json compose ($fe syscall events in both)"
+
+# The live writer shares the golden writer's field-order stability: two runs of
+# the same mode differ only in the HEADER (ts/pid), never in how an event is
+# spelled. Compared after dropping line 1 — with the same victim and the same
+# bounded work, the trace bodies are the same bytes.
+timeout 60 "$ASM" --trace "$RVPID" work 1 --record="$RECDIR/stab_a.asmtrace" >/dev/null 2>&1 || true
+timeout 60 "$ASM" --trace "$RVPID" work 1 --record="$RECDIR/stab_b.asmtrace" >/dev/null 2>&1 || true
+tail -n +2 "$RECDIR/stab_a.asmtrace" >"$RECDIR/stab_a.body"
+tail -n +2 "$RECDIR/stab_b.asmtrace" >"$RECDIR/stab_b.body"
+cmp -s "$RECDIR/stab_a.body" "$RECDIR/stab_b.body" \
+    || { diff "$RECDIR/stab_a.body" "$RECDIR/stab_b.body" | head -10; \
+         fail "two --trace recordings of the same region differ below the header"; }
+echo "  two --trace recordings are byte-identical below the header (field order is stable)"
+
+kill -9 "$RVPID" 2>/dev/null || true
+wait "$RVPID" 2>/dev/null || true
+RVPID=""
 
 echo "cli-smoke: PASS"

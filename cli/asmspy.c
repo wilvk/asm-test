@@ -139,6 +139,14 @@ static void rec_emitf(rec_t *r, const char *kind, const char *fmt, ...) {
     rec_emit(r, kind, body);
 }
 
+/* Mark every open channel truncated — a sink saw the engine drop something. */
+static void rec_truncated(rec_t *r) {
+    if (!r)
+        return;
+    r->file.truncated = 1;
+    r->out.truncated = 1;
+}
+
 /* Close with the measured drop counters and, when the run SKIPPED, the skip
  * code + its measured reason: a skipped run still produces a closed, honest
  * recording rather than an empty file. */
@@ -990,12 +998,27 @@ static int cmd_stream(pid_t pid, pid_t tid, int follow, long n, int json,
     return 0;
 }
 
+/* --tree tee: the pre-rendered line to stdout, the STRUCTURED entry to the
+ * recording (a reader must not have to re-parse indentation to get a depth).
+ * name/module are transient in the sink, so they are escaped and copied here. */
+static void tree_record(rec_t *r, const asmspy_tree_call_t *call) {
+    char en[4 * 128], em[4 * 64];
+    if (!rec_on(r) || !call)
+        return;
+    asmtrace_escape(en, sizeof en, call->name ? call->name : "");
+    asmtrace_escape(em, sizeof em, call->module ? call->module : "");
+    rec_emitf(r, "call",
+              "\"tid\":%d,\"depth\":%d,\"addr\":%llu,\"name\":\"%s\","
+              "\"module\":\"%s\"",
+              (int)call->tid, call->depth, (unsigned long long)call->addr, en,
+              em);
+}
+
 static void tree_print_sink(void *ctx, const char *line,
                             const asmspy_tree_call_t *call) {
-    (void)ctx;
-    (void)call; /* headless text: the pre-rendered line is the whole output */
     printf("%s\n", line);
     fflush(stdout);
+    tree_record(ctx, call);
 }
 
 /* One retained call-tree entry for the --json/--dot exporters (the sink's
@@ -1011,17 +1034,21 @@ typedef struct {
 typedef struct {
     tree_rec *v;
     size_t n, cap;
+    rec_t *r; /* --record/--json tee (NULL = not recording) */
 } tree_capture;
 
 static void tree_capture_sink(void *ctx, const char *line,
                               const asmspy_tree_call_t *call) {
     (void)line;
     tree_capture *tc = ctx;
+    tree_record(tc->r, call);
     if (tc->n == tc->cap) {
         size_t nc = tc->cap ? tc->cap * 2 : 256;
         tree_rec *nv = realloc(tc->v, nc * sizeof *nv);
-        if (!nv)
-            return; /* OOM: drop this entry, keep what we have */
+        if (!nv) {
+            rec_truncated(tc->r); /* OOM drop: honest in the recording too */
+            return;               /* keep what we have */
+        }
         tc->v = nv;
         tc->cap = nc;
     }
@@ -1151,15 +1178,23 @@ static void tree_export_json(const tree_capture *tc, pid_t pid) {
 }
 
 static int cmd_tree(pid_t pid, pid_t tid, int follow, long n,
-                    const asmspy_tree_filter_t *filter, int json, int dot) {
+                    const asmspy_tree_filter_t *filter, int json, int dot,
+                    const char *record) {
     asmspy_symtab_t t;
+    rec_t rec;
     asmspy_symtab_load(pid, &t); /* best-effort; raw addrs if empty */
     tree_capture tc = {0};
     int export = json || dot;
+    if (rec_open(&rec, record, 0, "ptrace-tree", 1, "exact", pid) != 0) {
+        asmspy_symtab_free(&t);
+        return 1;
+    }
+    tc.r = &rec;
     int rc = asmspy_engine_tree(pid, tid, follow, n, &g_sigstop, &t, filter,
                                 export ? tree_capture_sink : tree_print_sink,
-                                export ? &tc : NULL);
+                                export ? (void *)&tc : (void *)&rec);
     asmspy_symtab_free(&t);
+    rec_close(&rec, 0, 0, rc > 0 ? rc : 0, NULL);
     if (rc != 0) {
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
@@ -1182,15 +1217,64 @@ static void graph_capture_sink(void *ctx, const asmspy_gnode_t *nodes,
                     ne); /* keep only the latest snapshot */
 }
 
+/* One `graph` event: the whole call graph as observed at detach. The engine
+ * streams snapshots as the graph grows and each is the WHOLE graph so far, so
+ * recording every one would just repeat a prefix — the final snapshot is the
+ * measurement. Edges are keyed by entry ADDRESS, not node index, so a consumer
+ * may sort/filter the node array without invalidating them. */
+static void graph_record(rec_t *r, const graph_snap *s) {
+    char body[262144];
+    size_t o = 0;
+    if (!rec_on(r))
+        return;
+    size_t i = 0;
+    o = (size_t)snprintf(body, sizeof body, "\"nodes\":[");
+    for (; i < s->n && o + 512 < sizeof body; i++) {
+        char en[4 * sizeof s->v[i].name], em[4 * sizeof s->v[i].module];
+        asmtrace_escape(en, sizeof en, s->v[i].name);
+        asmtrace_escape(em, sizeof em, s->v[i].module);
+        o += (size_t)snprintf(
+            body + o, sizeof body - o,
+            "%s{\"addr\":%llu,\"name\":\"%s\",\"module\":\"%s\","
+            "\"kind\":\"%s\",\"invocations\":%llu,\"out_calls\":%llu,"
+            "\"fanout\":%u}",
+            i ? "," : "", (unsigned long long)s->v[i].addr, en, em,
+            gnode_kind(&s->v[i]), s->v[i].invocations, s->v[i].out_calls,
+            s->v[i].fanout);
+    }
+    size_t nn = i;
+    o += (size_t)snprintf(body + o, sizeof body - o, "],\"edges\":[");
+    for (i = 0; i < s->ne && o + 128 < sizeof body; i++)
+        o += (size_t)snprintf(
+            body + o, sizeof body - o,
+            "%s{\"from\":%llu,\"to\":%llu,\"count\":%llu}", i ? "," : "",
+            (unsigned long long)s->e[i].caller_addr,
+            (unsigned long long)s->e[i].callee_addr, s->e[i].count);
+    snprintf(body + o, sizeof body - o, "]");
+    /* A graph that did not fit the line is a PARTIAL graph, and must say so
+     * rather than present a prefix as the whole call graph. */
+    if (nn < s->n || i < s->ne)
+        rec_truncated(r);
+    rec_emit(r, "graph", body);
+}
+
 static int cmd_graph(pid_t pid, pid_t tid, int follow, long n, gsort_t sort,
-                     int json, int dot) {
+                     int json, int dot, const char *record) {
     asmspy_symtab_t t;
+    rec_t rec;
     asmspy_symtab_load(pid,
                        &t); /* best-effort; raw addrs (all internal) if empty */
     graph_snap snap = {0};
+    if (rec_open(&rec, record, 0, "ptrace-graph", 1, "exact", pid) != 0) {
+        asmspy_symtab_free(&t);
+        return 1;
+    }
     int rc = asmspy_engine_graph(pid, tid, follow, n, &g_sigstop, &t,
                                  graph_capture_sink, &snap);
     asmspy_symtab_free(&t);
+    if (rc == 0)
+        graph_record(&rec, &snap);
+    rec_close(&rec, 0, 0, rc > 0 ? rc : 0, NULL);
     if (rc != 0) {
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
@@ -1354,11 +1438,54 @@ static void sample_format_row(char *buf, size_t cap,
              e->to, tag);
 }
 
-static int cmd_sample(pid_t pid, long ms, int json) {
+/* One `survey` event: the whole hot-edge histogram of the ONE sample window
+ * (the engine's headless one-window contract). ALWAYS exact:false — a survey
+ * proves an edge was SEEN, never that one was not taken — and it carries its
+ * own drop record, so a survey that lost samples says so. */
+static void survey_record(rec_t *r, const sample_snap *s) {
+    char body[262144];
+    size_t o = 0;
+    if (!rec_on(r))
+        return;
+    o = (size_t)snprintf(body, sizeof body,
+                         "\"sampler\":\"ibs-op\",\"edges\":[");
+    size_t i = 0;
+    for (; i < s->n && o + 1024 < sizeof body; i++) {
+        const asmspy_sample_edge_t *e = &s->v[i];
+        char ef[4 * sizeof e->from], et[4 * sizeof e->to];
+        asmtrace_escape(ef, sizeof ef, e->from);
+        asmtrace_escape(et, sizeof et, e->to);
+        o += (size_t)snprintf(
+            body + o, sizeof body - o,
+            "%s{\"from_addr\":%llu,\"to_addr\":%llu,\"from\":\"%s\","
+            "\"to\":\"%s\",\"count\":%llu,\"mispred\":%u,\"is_return\":%u}",
+            i ? "," : "", (unsigned long long)e->from_addr,
+            (unsigned long long)e->to_addr, ef, et, e->count, e->mispred,
+            e->is_return);
+    }
+    snprintf(body + o, sizeof body - o,
+             "],\"samples\":%llu,\"branch_samples\":%llu,\"lost\":%llu,"
+             "\"throttled\":%s",
+             (unsigned long long)s->samples,
+             (unsigned long long)s->branch_samples, (unsigned long long)s->lost,
+             s->throttled ? "true" : "false");
+    if (i < s->n) /* an edge dropped for line size joins the drop record */
+        rec_truncated(r);
+    rec_emit(r, "survey", body);
+}
+
+static int cmd_sample(pid_t pid, long ms, int json, const char *record) {
+    rec_t rec;
+    /* The recording is opened BEFORE the availability gate so a skipped run
+     * still produces a closed, honest file: "IBS is absent here" is a
+     * measurement, and an empty file would be the one thing it must not be. */
+    if (rec_open(&rec, record, 0, "ibs-op", 0, "statistical", pid) != 0)
+        return 1;
     if (!asmtest_ibs_available()) {
         /* Clean self-skip (exit 0), like examples/ibs_probe.c — the whole lane is
          * AMD-IBS-only, so on any other host --sample is simply unavailable. */
         printf("# SKIP --sample: %s\n", asmtest_ibs_skip_reason());
+        rec_close(&rec, 0, 0, ASMSPY_SAMPLE_UNAVAIL, asmtest_ibs_skip_reason());
         return 0;
     }
     asmspy_symtab_t t;
@@ -1385,6 +1512,8 @@ static int cmd_sample(pid_t pid, long ms, int json) {
          * reason on exactly the host where the reason matters (AMD + IBS present
          * + perf locked down). _unavail_reason reports the real perf errno. */
         printf("# SKIP --sample: %s\n", asmtest_ibs_unavail_reason());
+        rec_close(&rec, 0, 0, ASMSPY_SAMPLE_UNAVAIL,
+                  asmtest_ibs_unavail_reason());
         free(snap.v);
         return 0;
     }
@@ -1392,9 +1521,12 @@ static int cmd_sample(pid_t pid, long ms, int json) {
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
         fprintf(stderr, "sample failed: %s\n", e);
+        rec_close(&rec, snap.lost, snap.throttled, 0, NULL);
         free(snap.v);
         return 1;
     }
+    survey_record(&rec, &snap);
+    rec_close(&rec, snap.lost, snap.throttled, 0, NULL);
 
     if (json) { /* machine-readable: statistical edges + honest provenance */
         printf("{\"pid\":%d,\"mode\":\"ibs-op\",\"samples\":%llu,"
@@ -1531,11 +1663,48 @@ static void procs_export_dot(const asmspy_task_t *t, size_t n) {
     printf("}\n");
 }
 
-static int cmd_procs(pid_t pid, long n, asmspy_count_t mode, int json,
-                     int dot) {
+/* One `topo` event at detach: the flat TASK list the engine observed. The
+ * forest the human view draws is derivable from tgid+ppid, so recording a
+ * rendered tree instead would throw information away. `mode` names what `inv`
+ * counts — a bare number that silently switches meaning is exactly what a
+ * recording must not contain. */
+static void topo_record(rec_t *r, const topo_snap *s, asmspy_count_t mode) {
+    char body[262144];
+    size_t o = 0;
+    if (!rec_on(r))
+        return;
+    o = (size_t)snprintf(body, sizeof body, "\"mode\":\"%s\",\"tasks\":[",
+                         mode == ASMSPY_COUNT_CALLS ? "calls" : "syscalls");
+    size_t i = 0;
+    for (; i < s->n && o + 512 < sizeof body; i++) {
+        char ec[4 * sizeof s->v[i].comm], ee[4 * sizeof s->v[i].exe];
+        asmtrace_escape(ec, sizeof ec, s->v[i].comm);
+        asmtrace_escape(ee, sizeof ee, s->v[i].exe);
+        o += (size_t)snprintf(
+            body + o, sizeof body - o,
+            "%s{\"tid\":%d,\"tgid\":%d,\"ppid\":%d,\"leader\":%s,"
+            "\"comm\":\"%s\",\"exe\":\"%s\",\"inv\":%llu}",
+            i ? "," : "", (int)s->v[i].tid, (int)s->v[i].tgid,
+            (int)s->v[i].ppid, s->v[i].is_leader ? "true" : "false", ec, ee,
+            s->v[i].inv);
+    }
+    snprintf(body + o, sizeof body - o, "]");
+    if (i < s->n) /* tasks dropped for line size are still dropped tasks */
+        rec_truncated(r);
+    rec_emit(r, "topo", body);
+}
+
+static int cmd_procs(pid_t pid, long n, asmspy_count_t mode, int json, int dot,
+                     const char *record) {
     topo_snap snap = {0};
+    rec_t rec;
+    if (rec_open(&rec, record, 0, "ptrace-procs", 1, "exact", pid) != 0)
+        return 1;
     int rc =
         asmspy_engine_procs(pid, n, &g_sigstop, mode, topo_capture_sink, &snap);
+    if (rc == 0)
+        topo_record(&rec, &snap, mode);
+    rec_close(&rec, 0, 0, rc > 0 ? rc : 0, NULL);
     if (rc != 0) {
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
@@ -1564,11 +1733,22 @@ static int cmd_procs(pid_t pid, long n, asmspy_count_t mode, int json,
     return 0;
 }
 
+/* --trace tee: print the human sample, then record the invocation as `trace`
+ * events + one `coverage`. The region engine fills asmtest_trace_t with offsets
+ * RELATIVE to the registered routine, hence basis "rel" (the whole-window scope
+ * fills the same struct with absolute addresses — which is why `basis` is
+ * mandatory and a reader may never default it). */
+typedef struct {
+    const asmspy_symtab_t *syms;
+    rec_t *r;
+} region_rec_ctx;
+
 static void region_print_sink(void *ctx, unsigned sample_no, long result,
                               const asmtest_trace_t *tr,
                               const asmtest_descent_t *desc,
                               const uint8_t *code, size_t len, uint64_t base) {
-    const asmspy_symtab_t *syms = ctx;
+    const region_rec_ctx *rc = ctx;
+    const asmspy_symtab_t *syms = rc->syms;
     char header[256];
     svec dis = {0}, fn = {0};
     region_render(header, sizeof header, &dis, &fn, sample_no, result, tr, desc,
@@ -1584,6 +1764,51 @@ static void region_print_sink(void *ctx, unsigned sample_no, long result,
     fflush(stdout);
     svec_free(&dis);
     svec_free(&fn);
+
+    if (!rec_on(rc->r))
+        return;
+    for (size_t i = 0; i < tr->insns_len; i++) {
+        char d[160] = "", esc[4 * 160];
+        if (code && asmtest_disas_available()) /* D10: offline disasm */
+            asmtest_disas(ASMSPY_HOST_ARCH, code, len, base, tr->insns[i], d,
+                          sizeof d);
+        if (d[0]) {
+            asmtrace_escape(esc, sizeof esc, d);
+            rec_emitf(rc->r, "trace",
+                      "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu,"
+                      "\"disasm\":\"%s\"",
+                      (unsigned long long)tr->insns[i], esc);
+        } else {
+            rec_emitf(rc->r, "trace",
+                      "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu",
+                      (unsigned long long)tr->insns[i]);
+        }
+    }
+    {
+        char body[8192];
+        size_t o = (size_t)snprintf(body, sizeof body,
+                                    "\"basis\":\"rel\",\"blocks\":[");
+        size_t i = 0;
+        for (; i < tr->blocks_len && o + 32 < sizeof body; i++)
+            o += (size_t)snprintf(body + o, sizeof body - o, "%s%llu",
+                                  i ? "," : "",
+                                  (unsigned long long)tr->blocks[i]);
+        /* A block dropped because the LINE would not fit is still a dropped
+         * block: say so rather than emit a short array that reads complete. */
+        if (i < tr->blocks_len)
+            rec_truncated(rc->r);
+        snprintf(body + o, sizeof body - o,
+                 "],\"blocks_total\":%llu,\"insns_total\":%llu,"
+                 "\"truncated\":%s",
+                 (unsigned long long)tr->blocks_total,
+                 (unsigned long long)tr->insns_total,
+                 tr->truncated ? "true" : "false");
+        rec_emit(rc->r, "coverage", body);
+    }
+    /* The engine's own overflow flag propagates to the recording's footer: a
+     * capture that dropped entries must say so in BOTH places. */
+    if (tr->truncated)
+        rec_truncated(rc->r);
 }
 
 /* Resolve a region argument to (base,len). Four forms:
@@ -1629,8 +1854,11 @@ static int resolve_region(const asmspy_symtab_t *t, const char *arg,
     return 0;
 }
 
-static int cmd_trace(pid_t pid, const char *sym, pid_t only_tid, long n) {
+static int cmd_trace(pid_t pid, const char *sym, pid_t only_tid, long n,
+                     const char *record) {
     asmspy_symtab_t t;
+    rec_t rec;
+    region_rec_ctx rctx = {&t, &rec};
     if (asmspy_symtab_load(pid, &t) < 0) {
         fprintf(stderr, "cannot read symbols for pid %d\n", (int)pid);
         return 1;
@@ -1648,8 +1876,18 @@ static int cmd_trace(pid_t pid, const char *sym, pid_t only_tid, long n) {
     }
     fprintf(stderr, "tracing %s @ 0x%llx (%zu bytes) in pid %d\n", sym,
             (unsigned long long)base, len, (int)pid);
+    if (rec_open(&rec, record, 0, "ptrace-region", 1, "exact", pid) != 0) {
+        asmspy_symtab_free(&t);
+        return 1;
+    }
     int rc = asmspy_engine_region(pid, only_tid, base, len, n, &g_sigstop,
-                                  region_print_sink, &t);
+                                  region_print_sink, &rctx);
+    /* A skip is a recording: the file closes carrying the measured reason
+     * rather than being left empty or torn. */
+    rec_close(&rec, 0, 0, rc > 0 ? rc : 0,
+              rc == ASMSPY_REGION_NEVER_RAN
+                  ? "region never seen executing in the sample window"
+                  : NULL);
     if (rc == ASMTEST_PTRACE_ETRACE && only_tid) {
         /* --tid arms a per-thread HARDWARE breakpoint, so an unarmable entry
          * here is usually the host refusing a debug-register slot rather than
@@ -1761,6 +1999,7 @@ typedef struct {
     unsigned long count; /* hits seen (drives the 0-hit skip + JSON commas) */
     watch_row *rows;     /* --json: buffered hits (text mode prints live)   */
     size_t n, cap;
+    rec_t *r; /* --record tee (NULL = not recording) */
 } watch_ctx;
 
 /* "who touched it" location string: "func+0xoff [module]" or a bare "0x..". */
@@ -1779,6 +2018,33 @@ static const char *watch_dir_word(int is_write) {
 static void watch_sink(void *ctx, const asmspy_watch_hit_t *h) {
     watch_ctx *w = ctx;
     w->count = h->hit_no;
+
+    if (rec_on(w->r)) {
+        /* is_write stays the engine's 1/0/-1 tri-state: "could not decode the
+         * faulting instruction" is a real outcome and must not collapse into
+         * either direction. func/module are omitted when unresolved. */
+        char ef[4 * 128], em[4 * 64], body[1024];
+        size_t o;
+        asmtrace_escape(ef, sizeof ef, h->func ? h->func : "");
+        asmtrace_escape(em, sizeof em, h->module ? h->module : "");
+        o = (size_t)snprintf(
+            body, sizeof body,
+            "\"hit_no\":%lu,\"tid\":%d,\"pc\":%llu,\"addr\":%llu,"
+            "\"is_write\":%d,\"value_ok\":%s,\"value_len\":%u,\"value\":%llu",
+            h->hit_no, (int)h->tid, (unsigned long long)h->pc,
+            (unsigned long long)h->addr, h->is_write,
+            h->value_ok ? "true" : "false", h->value_len,
+            (unsigned long long)h->value);
+        if (h->func)
+            o += (size_t)snprintf(body + o, sizeof body - o, ",\"func\":\"%s\"",
+                                  ef);
+        if (h->module)
+            o += (size_t)snprintf(body + o, sizeof body - o,
+                                  ",\"module\":\"%s\"", em);
+        snprintf(body + o, sizeof body - o, ",\"off\":%llu",
+                 (unsigned long long)h->off);
+        rec_emit(w->r, "watch", body);
+    }
 
     if (!w->json) { /* text: print live for immediate feedback */
         char loc[208];
@@ -1856,8 +2122,9 @@ static void watch_emit_json(pid_t pid, uint64_t addr, int len, int rw,
 }
 
 static int cmd_watch(pid_t pid, const char *loc, int rw, int len, long n,
-                     int json) {
+                     int json, const char *record) {
     asmspy_symtab_t t;
+    rec_t rec;
     asmspy_symtab_load(pid, &t); /* best-effort; raw addresses still work */
     uint64_t addr = 0;
     if (resolve_watch_addr(&t, loc, &addr) != 0) {
@@ -1886,6 +2153,14 @@ static int cmd_watch(pid_t pid, const char *loc, int rw, int len, long n,
 
     watch_ctx w = {0};
     w.json = json;
+    /* Opened before the arm so a REFUSED arm still records: "this host has no
+     * usable debug register" is the measurement, and a hardware gate must be
+     * visible in the file rather than absent from it. */
+    if (rec_open(&rec, record, 0, "hwdebug-watch", 1, "exact", pid) != 0) {
+        asmspy_symtab_free(&t);
+        return 1;
+    }
+    w.r = &rec;
     int rc = asmspy_engine_watch(pid, addr, rw, len, n, &g_sigstop, &t,
                                  watch_sink, &w);
     asmspy_symtab_free(&t);
@@ -1904,6 +2179,8 @@ static int cmd_watch(pid_t pid, const char *loc, int rw, int len, long n,
         else
             printf("# SKIP --watch: hardware data watchpoint unavailable "
                    "(no data-watchpoint engine on this architecture)\n");
+        rec_close(&rec, 0, 0, ASMSPY_WATCH_UNAVAIL,
+                  why ? why : "no data-watchpoint engine on this architecture");
         free(w.rows);
         return 0;
     }
@@ -1911,9 +2188,11 @@ static int cmd_watch(pid_t pid, const char *loc, int rw, int len, long n,
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
         fprintf(stderr, "watch failed: %s\n", e);
+        rec_close(&rec, 0, 0, 0, NULL);
         free(w.rows);
         return 1;
     }
+    rec_close(&rec, 0, 0, 0, NULL);
 
     if (json)
         watch_emit_json(pid, addr, len, rw, &w);
@@ -1936,7 +2215,42 @@ typedef struct {
     pid_t pid;
     const char *func;
     int json;
+    rec_t *r; /* --record tee (NULL = not recording) */
 } dataflow_ctx;
+
+/* Record one captured invocation as `df_step` + `df_edge` events, mirroring the
+ * render sink's walk over the L0 record stream. The BODY builders live in the
+ * writer TU (asmtrace_ndjson.h) so a live recording and a golden one spell an
+ * operand identically. */
+static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
+                            const asmtest_defuse_t *g, const uint8_t *code,
+                            size_t len, uint64_t base) {
+    size_t nsteps = vt->steps_len, nrecs = vt->recs_len, cur = 0;
+    char body[65536];
+    if (!rec_on(r))
+        return;
+    for (size_t s = 0; s < nsteps; s++) {
+        char dis[160] = "";
+        size_t first;
+        if (code && asmtest_disas_available()) /* D10 */
+            asmtest_disas(ASMSPY_HOST_ARCH, code, len, base, vt->insn_off[s],
+                          dis, sizeof dis);
+        while (cur < nrecs && vt->recs[cur].step < s)
+            cur++; /* defensive: records are appended grouped in step order */
+        first = cur;
+        while (cur < nrecs && vt->recs[cur].step == s)
+            cur++;
+        asmtrace_df_step_body(body, sizeof body, (unsigned)s, vt->insn_off[s],
+                              dis, &vt->recs[first], cur - first);
+        rec_emit(r, "df_step", body);
+    }
+    for (size_t i = 0; g && i < g->n; i++) {
+        asmtrace_df_edge_body(body, sizeof body, &g->edges[i]);
+        rec_emit(r, "df_edge", body);
+    }
+    if (vt->truncated)
+        rec_truncated(r);
+}
 
 /* --dataflow JSON schema (documented alongside the --graph / --sample / --tree
  * JSON; stdout only, one object, so it pipes to jq). One captured invocation:
@@ -1965,6 +2279,8 @@ static void dataflow_render_sink(void *ctx, long result,
                                  size_t len, uint64_t base) {
     const dataflow_ctx *dc = ctx;
     size_t nsteps = vt->steps_len, nrecs = vt->recs_len;
+
+    dataflow_record(dc->r, vt, g, code, len, base);
 
     if (dc->json) {
         char ef[256];
@@ -2333,8 +2649,9 @@ static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
 
 static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                         int json, int auto_region, const char *module,
-                        sampler_mode_t sampler) {
+                        sampler_mode_t sampler, const char *record) {
     asmspy_symtab_t t;
+    rec_t rec;
     if (asmspy_symtab_load(pid, &t) < 0) {
         fprintf(stderr, "cannot read symbols for pid %d\n", (int)pid);
         return 1;
@@ -2380,6 +2697,14 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         asmspy_symtab_free(&t);
         return 1;
     }
+    /* Opened only once a region is RESOLVED: an unresolvable symbol or a failed
+     * --auto pick is an argument/selection failure, not a measurement, so it
+     * must not leave a torn recording behind. Everything past this point IS a
+     * measurement, including the skips. */
+    if (rec_open(&rec, record, 0, "ptrace-dataflow", 1, "exact", pid) != 0) {
+        asmspy_symtab_free(&t);
+        return 1;
+    }
     char fname[160];
     int rc;
     int attempt = 0;
@@ -2392,7 +2717,7 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         const char *rname =
             s ? s->name
               : (auto_region ? (autoname[0] ? autoname : "?") : region);
-        dataflow_ctx dc = {pid, rname, json};
+        dataflow_ctx dc = {pid, rname, json, &rec};
         /* status to STDERR so --json stdout stays a single clean object */
         fprintf(stderr,
                 "data-flow capture of %s @ 0x%llx (%zu bytes) in pid %d%s\n",
@@ -2430,6 +2755,7 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
         fprintf(stderr, "# SKIP --dataflow: %s\n", e);
+        rec_close(&rec, 0, 0, ASMSPY_DATAFLOW_UNAVAIL, e);
         return 0;
     }
     if (rc == ASMSPY_REGION_NEVER_RAN) {
@@ -2457,14 +2783,18 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                     "  while the code path is active (ASMTEST_DF_ENTRY_WAIT_MS "
                     "lengthens the wait)\n",
                     fname, (int)pid, w && *w ? w : "10000");
+        rec_close(&rec, 0, 0, ASMSPY_REGION_NEVER_RAN,
+                  "region not seen entering within the entry wait");
         return 1;
     }
     if (rc != 0) {
         char e[128];
         asmspy_strerror(rc, e, sizeof e);
         fprintf(stderr, "data-flow capture failed: %s\n", e);
+        rec_close(&rec, 0, 0, 0, NULL);
         return 1;
     }
+    rec_close(&rec, 0, 0, 0, NULL);
     return 0;
 }
 
@@ -5496,15 +5826,18 @@ int main(int argc, char **argv) {
             return bad_arg("pid", argv[2]);
         n = 3;
         pid_t tid = 0;
-        for (int i = 4; i < argc; i++) { /* [n] and --tid= in any order */
+        const char *record = NULL;
+        for (int i = 4; i < argc; i++) { /* [n], --tid=, --record= any order */
             if (strncmp(argv[i], "--tid=", 6) == 0) {
                 if (parse_pid(argv[i] + 6, &tid) != 0)
                     return bad_arg("tid", argv[i] + 6);
+            } else if (strncmp(argv[i], "--record=", 9) == 0) {
+                record = argv[i] + 9;
             } else if (parse_count(argv[i], &n) != 0) {
                 return bad_arg("count", argv[i]);
             }
         }
-        return cmd_trace(pid, argv[3], tid, n);
+        return cmd_trace(pid, argv[3], tid, n, record);
     }
     if (strcmp(argv[1], "--dataflow") == 0 && argc >= 4) {
         if (parse_pid(argv[2], &pid) != 0)
@@ -5520,11 +5853,14 @@ int main(int argc, char **argv) {
          * bare-symbol form into bad_arg. */
         int auto_region = (strcmp(argv[3], "--auto") == 0);
         sampler_mode_t sampler = SAMPLER_AUTO;
+        const char *record = NULL;
         for (int i = 4; i < argc; i++) { /* [--json] [--tid=N] [--max=N]
-                                          * [--module=M] [--sampler=S], any
-                                          * order */
+                                          * [--module=M] [--sampler=S]
+                                          * [--record=F], any order */
             if (strcmp(argv[i], "--json") == 0)
                 json = 1;
+            else if (strncmp(argv[i], "--record=", 9) == 0)
+                record = argv[i] + 9;
             else if (strncmp(argv[i], "--tid=", 6) == 0) {
                 if (parse_pid(argv[i] + 6, &tid) != 0)
                     return bad_arg("tid", argv[i] + 6);
@@ -5571,7 +5907,7 @@ int main(int argc, char **argv) {
                            "nothing)",
                            argv[3]);
         return cmd_dataflow(pid, argv[3], tid, max, json, auto_region, module,
-                            sampler);
+                            sampler, record);
     }
     if (strcmp(argv[1], "--stream") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)
@@ -5608,9 +5944,11 @@ int main(int argc, char **argv) {
         n = 40;
         pid_t tid = 0;
         int json = 0, dot = 0, follow = 0;
+        const char *record = NULL;
         asmspy_tree_filter_t filt = {0};
         for (int i = 3; i < argc;
-             i++) { /* [n], --json/--dot, --tid=, --depth=/--focus=/--module= */
+             i++) { /* [n], --json/--dot, --tid=, --depth=/--focus=/--module=,
+                     * --record= */
             if (strncmp(argv[i], "--tid=", 6) == 0) {
                 if (parse_pid(argv[i] + 6, &tid) != 0)
                     return bad_arg("tid", argv[i] + 6);
@@ -5636,6 +5974,8 @@ int main(int argc, char **argv) {
                 json = 1;
             } else if (strcmp(argv[i], "--dot") == 0) {
                 dot = 1;
+            } else if (strncmp(argv[i], "--record=", 9) == 0) {
+                record = argv[i] + 9;
             } else if (parse_count(argv[i], &n) != 0) {
                 return bad_arg("count", argv[i]);
             }
@@ -5644,7 +5984,7 @@ int main(int argc, char **argv) {
             return bad_arg("combination (--tid pins ONE task; --follow adds "
                            "child processes)",
                            "--tid with --follow");
-        return cmd_tree(pid, tid, follow, n, &filt, json, dot);
+        return cmd_tree(pid, tid, follow, n, &filt, json, dot, record);
     }
     if (strcmp(argv[1], "--procs") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)
@@ -5652,8 +5992,9 @@ int main(int argc, char **argv) {
         n = 200; /* invocations to count before reporting; negative = until exit */
         asmspy_count_t mode = ASMSPY_COUNT_SYSCALLS;
         int json = 0, dot = 0;
+        const char *record = NULL;
         for (int i = 3; i < argc;
-             i++) { /* [n], --count=, --json/--dot, any order */
+             i++) { /* [n], --count=, --json/--dot, --record=, any order */
             if (strncmp(argv[i], "--count=", 8) == 0) {
                 const char *v = argv[i] + 8;
                 if (strcmp(v, "syscalls") == 0)
@@ -5666,11 +6007,13 @@ int main(int argc, char **argv) {
                 json = 1;
             } else if (strcmp(argv[i], "--dot") == 0) {
                 dot = 1;
+            } else if (strncmp(argv[i], "--record=", 9) == 0) {
+                record = argv[i] + 9;
             } else if (parse_count(argv[i], &n) != 0) {
                 return bad_arg("count", argv[i]);
             }
         }
-        return cmd_procs(pid, n, mode, json, dot);
+        return cmd_procs(pid, n, mode, json, dot, record);
     }
     if (strcmp(argv[1], "--graph") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)
@@ -5679,8 +6022,9 @@ int main(int argc, char **argv) {
         gsort_t sort = GSORT_INVOCATIONS;
         int json = 0, dot = 0, follow = 0;
         pid_t tid = 0;
+        const char *record = NULL;
         for (int i = 3; i < argc;
-             i++) { /* [n], --sort=, --json/--dot, --tid= */
+             i++) { /* [n], --sort=, --json/--dot, --tid=, --record= */
             if (strncmp(argv[i], "--sort=", 7) == 0) {
                 const char *v = argv[i] + 7;
                 if (strcmp(v, "invocations") == 0)
@@ -5705,6 +6049,8 @@ int main(int argc, char **argv) {
                     return bad_arg("tid", argv[i] + 6);
             } else if (strcmp(argv[i], "--follow") == 0) {
                 follow = 1;
+            } else if (strncmp(argv[i], "--record=", 9) == 0) {
+                record = argv[i] + 9;
             } else if (parse_count(argv[i], &n) != 0) {
                 return bad_arg("count", argv[i]);
             }
@@ -5713,29 +6059,34 @@ int main(int argc, char **argv) {
             return bad_arg("combination (--tid pins ONE task; --follow adds "
                            "child processes)",
                            "--tid with --follow");
-        return cmd_graph(pid, tid, follow, n, sort, json, dot);
+        return cmd_graph(pid, tid, follow, n, sort, json, dot, record);
     }
     if (strcmp(argv[1], "--sample") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)
             return bad_arg("pid", argv[2]);
         long ms = 300; /* sample window in milliseconds */
         int json = 0;
-        for (int i = 3; i < argc; i++) { /* [ms] and --json in any order */
+        const char *record = NULL;
+        for (int i = 3; i < argc;
+             i++) { /* [ms], --json, --record= in any order */
             if (strcmp(argv[i], "--json") == 0)
                 json = 1;
+            else if (strncmp(argv[i], "--record=", 9) == 0)
+                record = argv[i] + 9;
             else if (parse_count(argv[i], &ms) != 0 || ms <= 0)
                 return bad_arg("milliseconds (positive)", argv[i]);
         }
-        return cmd_sample(pid, ms, json);
+        return cmd_sample(pid, ms, json, record);
     }
     if (strcmp(argv[1], "--watch") == 0 && argc >= 4) {
         if (parse_pid(argv[2], &pid) != 0)
             return bad_arg("pid", argv[2]);
         const char *loc = argv[3];
         int rw = 0, len = 8, json = 0;
+        const char *record = NULL;
         n = 20; /* default hit budget; a negative n runs until stop / exit */
         for (int i = 4; i < argc;
-             i++) { /* [n], --rw, --len=1|2|4|8, --json in any order */
+             i++) { /* [n], --rw, --len=1|2|4|8, --json, --record=, any order */
             if (strcmp(argv[i], "--rw") == 0) {
                 rw = 1;
             } else if (strcmp(argv[i], "--json") == 0) {
@@ -5746,11 +6097,13 @@ int main(int argc, char **argv) {
                     (l != 1 && l != 2 && l != 4 && l != 8))
                     return bad_arg("len (want 1, 2, 4, or 8)", argv[i] + 6);
                 len = (int)l;
+            } else if (strncmp(argv[i], "--record=", 9) == 0) {
+                record = argv[i] + 9;
             } else if (parse_count(argv[i], &n) != 0) {
                 return bad_arg("watch option", argv[i]);
             }
         }
-        return cmd_watch(pid, loc, rw, len, n, json);
+        return cmd_watch(pid, loc, rw, len, n, json, record);
     }
     return usage(argv[0]);
 }

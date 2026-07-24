@@ -144,6 +144,99 @@ int asmtrace_emitf(asmtrace_writer_t *w, const char *kind, const char *fmt,
     return w->err ? -1 : 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Data-flow body builders (field order lives HERE and nowhere else)    */
+/* ------------------------------------------------------------------ */
+
+/* bounded append; returns the new length, never past cap-1. */
+static size_t bp(char *b, size_t cap, size_t o, const char *fmt, ...) {
+    va_list ap;
+    int k;
+    if (o + 1 >= cap)
+        return cap ? cap - 1 : 0;
+    va_start(ap, fmt);
+    k = vsnprintf(b + o, cap - o, fmt, ap);
+    va_end(ap);
+    if (k < 0)
+        return o;
+    o += (size_t)k;
+    return o > cap - 1 ? cap - 1 : o;
+}
+
+/* The at_loc_kind_t enum as the schema's token: a reader must never have to
+ * know this project's enum NUMBERING to tell an absolute address from a
+ * routine-relative one. */
+static const char *loc_space(at_loc_kind_t k) {
+    switch (k) {
+    case AT_LOC_REG:
+        return "reg";
+    case AT_LOC_MEM_ABS:
+        return "abs";
+    case AT_LOC_MEM_OFF:
+        return "off";
+    default:
+        return "reg";
+    }
+}
+
+/* One operand record: space, [memory addressing terms], size, write,
+ * value_valid, [wide], [value]. Memory terms are omitted for a register and
+ * `value` is omitted when it was not captured (or spilled wide) — "not
+ * measured" must not render as a zero. */
+static size_t op_body(char *b, size_t cap, size_t o, const at_val_rec_t *r) {
+    o = bp(b, cap, o, "{\"space\":\"%s\"", loc_space(r->kind));
+    if (r->kind == AT_LOC_REG) {
+        o = bp(b, cap, o, ",\"reg\":%u", r->reg);
+    } else {
+        o = bp(b, cap, o,
+               ",\"reg\":%u,\"base\":%u,\"index\":%u,\"scale\":%d,"
+               "\"disp\":%lld,\"addr\":%llu",
+               r->reg, r->base, r->index, r->scale, (long long)r->disp,
+               (unsigned long long)r->addr);
+    }
+    o = bp(b, cap, o, ",\"size\":%u,\"write\":%s,\"value_valid\":%s", r->size,
+           r->is_write ? "true" : "false", r->value_valid ? "true" : "false");
+    if (r->wide)
+        o = bp(b, cap, o, ",\"wide\":true");
+    else if (r->value_valid)
+        o = bp(b, cap, o, ",\"value\":%llu", (unsigned long long)r->value);
+    return bp(b, cap, o, "}");
+}
+
+size_t asmtrace_df_step_body(char *dst, size_t cap, unsigned step, uint64_t off,
+                             const char *disasm, const at_val_rec_t *recs,
+                             size_t n) {
+    size_t o = 0;
+    if (!dst || !cap)
+        return 0;
+    dst[0] = '\0';
+    o = bp(dst, cap, o, "\"step\":%u,\"off\":%llu", step,
+           (unsigned long long)off);
+    if (disasm && *disasm) {
+        char esc[512];
+        asmtrace_escape(esc, sizeof esc, disasm);
+        o = bp(dst, cap, o, ",\"disasm\":\"%s\"", esc);
+    }
+    o = bp(dst, cap, o, ",\"ops\":[");
+    for (size_t i = 0; i < n; i++) {
+        if (i)
+            o = bp(dst, cap, o, ",");
+        o = op_body(dst, cap, o, &recs[i]);
+    }
+    return bp(dst, cap, o, "]");
+}
+
+size_t asmtrace_df_edge_body(char *dst, size_t cap,
+                             const asmtest_defuse_edge_t *e) {
+    size_t o = 0;
+    if (!dst || !cap)
+        return 0;
+    dst[0] = '\0';
+    o = bp(dst, cap, o, "\"from\":%u,\"to\":%u,\"loc\":", e->from_step,
+           e->to_step);
+    return op_body(dst, cap, o, &e->loc);
+}
+
 int asmtrace_close(asmtrace_writer_t *w, unsigned long long lost, int throttled,
                    const asmtrace_prov_t *skip_update) {
     char esc[512];

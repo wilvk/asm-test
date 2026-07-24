@@ -27,7 +27,10 @@ to renderer discipline:
   whether it is exact. A reader can always answer "how do you know?".
 - **Dishonesty is a field, not an omission.** Truncation, drops, throttling,
   redaction and a torn (unterminated) file are all *representable* and therefore
-  *testable* — see [`tests/golden-asmtrace/dishonest/`](../../../tests/golden-asmtrace/).
+  *testable* — see
+  [`tests/golden-asmtrace/`](../../../tests/golden-asmtrace/README.md), whose
+  four hand-authored `dishonest/` fixtures each carry a `note` event stating
+  what a reader must conclude from them.
 
 ## Envelope
 

@@ -267,12 +267,25 @@ sockaddr contents — and NDJSON output for the two text-only streaming modes (v
 today: their sinks just `printf` the line, see the What-exists citations).
 
 **Steps.**
-1. Extend [`format_syscall`](../../../cli/asmspy_engine.c#L1671) with a second output buffer —
-   `format_syscall(char *b, size_t cap, char *pf, size_t pfcap, char *sout, size_t scap, ...)`.
-   `pf` is the payload-free rendering: the helpers that print *content* — `ap_data` (buffer
-   bytes), path arguments, [`ap_sockaddr`](../../../cli/asmspy_engine.c#L1182) — write
-   placeholders (`<N bytes>`, `<path>`, `<sockaddr>`) into `pf`, while `b` keeps today's full
-   text; syscall name, fds, flag words, counts, and return value stay identical in both.
+1. Extend [`format_syscall`](../../../cli/asmspy_engine.c#L1671) so it can also produce the
+   payload-free rendering: the helpers that print *content* — `ap_data` (buffer bytes), path
+   arguments, [`ap_sockaddr`](../../../cli/asmspy_engine.c#L1182) — emit placeholders
+   (`<N bytes>`, `<path>`, `<sockaddr>`) instead, while syscall name, fds, flag words, counts and
+   return value stay identical in both renderings.
+
+   > **Implemented differently, on purpose (2026-07-24).** This step originally specified a second
+   > output buffer threaded through every helper —
+   > `format_syscall(char *b, size_t cap, char *pf, size_t pfcap, ...)`. What landed instead is a
+   > `redact` FLAG on `format_syscall` and on the four content helpers, with the one call site
+   > running the renderer **twice**. Same contract, three advantages: the two lines cannot
+   > disagree about anything structural (it is literally the same code path), no helper gains a
+   > second buffer to keep in step, and a redacted pass reads **no target memory at all** — so it
+   > is nearly free, and cannot leak through a helper that forgot to write to `pf`.
+   >
+   > Also **measured while implementing**: `ap_fd` renders an fd like `strace -y`, as
+   > `fd=3</tmp/secret.txt>`. The payload-free line therefore still carried a path — the exact
+   > string the split exists to withhold. `ap_fd` takes the flag too: the fd NUMBER is structure,
+   > the link target is content. `ap_iovec` likewise (it dumps buffer contents).
 2. Widen the sink typedef ([cli/asmspy.h:210](../../../cli/asmspy.h#L210)) to `(void *ctx, const
    char *line, const char *pf_line, const char *str)`. Exactly two implementations update:
    [`log_print_sink`](../../../cli/asmspy.c#L796) and the TUI's
@@ -328,6 +341,11 @@ existing print/JSON sinks — the Phase-1 acceptance line.
    unchanged.
 5. Update [`usage`](../../../cli/asmspy.c#L5218) and add a `--record` note to the cli lines of
    [`make help`](../../../Makefile#L91).
+
+   > **Corrected while implementing (2026-07-24):** `make help` had **no cli lines at all** —
+   > `cli` / `cli-smoke` / `docker-cli-ibs` were user-visible targets missing from the hand-
+   > maintained list. The note therefore landed as a new "asmspy" help section rather than an
+   > amendment to lines that did not exist.
 
 **Code.** Tee-context shape, one per mode (`--trace` shown): `typedef struct { const
 asmspy_symtab_t *syms; asmtrace_writer_t *w; } region_rec_ctx;` — `region_record_sink` calls
@@ -410,8 +428,10 @@ int main(int argc, char **argv); /* argv[1] = output directory */
 **Steps.**
 1. Run `make asmtrace-golden` in the `docker-cli` image; commit the output (flat, one file per
    routine: `add_signed.asmtrace`, ...).
-2. Hand-author `tests/golden-asmtrace/dishonest/` (committed, never regenerated; each header's
-   `"note"` names its purpose): `truncated.asmtrace` (`end` has `"truncated":true`; `coverage`
+2. Hand-author `tests/golden-asmtrace/dishonest/` (committed, never regenerated; each file's
+   first event is a `note` naming its purpose and what a reader must conclude — a `note` EVENT,
+   not a header field, since the schema already has that kind and a new header field would be
+   one more thing every reader must know): `truncated.asmtrace` (`end` has `"truncated":true`; `coverage`
    shows `blocks_total` > `len(blocks)`), `dropped.asmtrace` (`survey` with
    `"lost":12345,"throttled":true`, `exact:false`), `redacted.asmtrace` (`syscall` events with
    placeholder lines, **no** `payload` field, `"redacted":true`), `torn.asmtrace` (no `end`).

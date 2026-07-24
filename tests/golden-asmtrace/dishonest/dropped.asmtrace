@@ -1,0 +1,4 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ibs-op","exact":false,"trust":"statistical"},"arch":"x86_64"}
+{"k":"note","text":"FIXTURE: a STATISTICAL survey that dropped samples and was throttled by the kernel. exact is false, 12345 samples were lost, and throttled is true. A reader must never merge these edges into an exact kind, and must surface the drops: an edge here was SEEN, and an edge absent here was not thereby NOT TAKEN."}
+{"k":"survey","sampler":"ibs-op","edges":[{"from_addr":4198710,"to_addr":4198800,"from":"work+0x12 [victim]","to":"helper","count":812,"mispred":3,"is_return":0},{"from_addr":4198800,"to_addr":4198710,"from":"helper+0x2c [victim]","to":"work","count":807,"mispred":0,"is_return":1}],"samples":10442,"branch_samples":9001,"lost":12345,"throttled":true}
+{"k":"end","events":2,"truncated":false,"drops":{"lost":12345,"throttled":true}}

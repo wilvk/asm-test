@@ -8,6 +8,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`.asmtrace` recordings — one NDJSON format for every headless asmspy mode
+  (desktop GUI plan, Phase 1).** `--record=<file>` on `--log --trace --dataflow
+  --stream --graph --tree --procs --sample --watch` writes a `.asmtrace`
+  recording beside the existing text/JSON output, and `--json` on `--log` /
+  `--stream` streams that same format to stdout — so `asmspy --log <pid> --json
+  > x.asmtrace` *is* a recording. Every stream carries mandatory provenance
+  (which backend, exact vs statistical, the measured skip reason), and
+  truncation, drops, throttling and redaction are fields rather than renderer
+  discipline: a run that SKIPS still produces a closed recording naming the
+  gate, and a producer killed mid-record leaves a visibly torn file. Syscall
+  recordings split the line from its payload — the recorded line keeps the
+  syscall name, fds, flag words, counts and return value while every decoded
+  buffer, path, sockaddr and fd-backing path becomes a placeholder — so a reader
+  can default-redact content without losing the call. The draft schema is
+  `docs/internal/gui/asmtrace-schema.md`; `make asmtrace-golden` regenerates the
+  committed `tests/golden-asmtrace/` corpus (deterministic emulator L0
+  recordings, plus hand-authored truncated/dropped/redacted/torn fixtures) and
+  `make asmtrace-golden-check` gates it byte-for-byte. `vec512_t` joins the
+  `asmtest_abi.json` manifest, closing the named-descriptor precondition for
+  AVX-512 register state.
+
 - **Standing self-hosted Intel PT runner — unattended nightly coverage
   (self-hosted-ci-runners.md T5).** New
   `scripts/runner-jit-loop.sh <owner/repo> <lane> <runner-dir>`: the runbook's

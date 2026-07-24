@@ -1,0 +1,6 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-region","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"k":"note","text":"FIXTURE: a capture whose buffers FILLED. The coverage event's blocks_total (7) exceeds the blocks it recorded (2), and the end event's truncated flag is set. A reader must present this as an incomplete capture, never as 'the routine has 2 blocks'."}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"mov eax, edi"}
+{"k":"coverage","basis":"rel","blocks":[0,12],"blocks_total":7,"insns_total":99,"truncated":true}
+{"k":"end","events":4,"truncated":true,"drops":{"lost":0,"throttled":false}}

@@ -21,6 +21,8 @@
 #include <stdarg.h>
 #include <stdio.h>
 
+#include "asmtest_valtrace.h" /* at_val_rec_t / asmtest_defuse_edge_t (pure) */
+
 /* Mandatory provenance: which backend produced this stream and how much it can
  * be trusted. Every string is BORROWED (valid for the header/close call only).
  * A statistical stream must set exact = 0 and trust = "statistical"; a reader
@@ -75,6 +77,29 @@ int asmtrace_emitf(asmtrace_writer_t *w, const char *kind, const char *fmt, ...)
  * (lowercase hex), everything else verbatim. Truncates rather than overflows;
  * always NUL-terminates. A NULL `src` yields "". */
 void asmtrace_escape(char *dst, size_t cap, const char *src);
+
+/* ------------------------------------------------------------------ */
+/* Body builders for the data-flow kinds                               */
+/*                                                                     */
+/* These format a BODY (no wrapper, no leading comma) rather than       */
+/* emitting, so a caller teeing several writers hands the identical     */
+/* string to each. They live here because operand field order must have */
+/* ONE owner: asmspy's --dataflow record sink and the Author-mode       */
+/* corpus recorder both go through them, so a golden recording and a    */
+/* live one cannot spell the same operand differently.                  */
+/* ------------------------------------------------------------------ */
+
+/* {"step":N,"off":N,"disasm":"..."?,"ops":[...]} — `recs[0..n)` must be
+ * exactly this step's operand records. `disasm` may be NULL/"" (D10: a
+ * producer without Capstone omits the field and readers degrade to offsets).
+ * Returns the body length written (truncated to fit `cap`). */
+size_t asmtrace_df_step_body(char *dst, size_t cap, unsigned step, uint64_t off,
+                             const char *disasm, const at_val_rec_t *recs,
+                             size_t n);
+
+/* {"from":N,"to":N,"loc":{...}} for one last-writer def-use edge. */
+size_t asmtrace_df_edge_body(char *dst, size_t cap,
+                             const asmtest_defuse_edge_t *e);
 
 /* Write the `end` footer (events / truncated / drops, plus `skip` when
  * `skip_update` carries a non-zero skip_code), flush, and fclose when the
