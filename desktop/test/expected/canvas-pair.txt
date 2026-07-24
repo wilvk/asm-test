@@ -1,0 +1,10 @@
+basis=rel
+rows=7
+divergence step=3 off=0x6
+0x0|1/1|BC|ab|mov eax, edi
+0x2|1/1|--|--|test eax, eax
+0x4|1/1|--|--|jle 0x14
+0x6|1/0|BC|a-|add eax, 1
+0x9|1/0|--|--|ret
+0x14|0/1|--|-b|xor eax, eax
+0x16|0/1|--|--|ret

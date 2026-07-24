@@ -5,10 +5,14 @@
 #ifndef ASMDESK_UI_SHELL_H
 #define ASMDESK_UI_SHELL_H
 
+#include <optional>
 #include <string>
 #include <vector>
 
+#include "doc/streams.h"
 #include "doc/workspace.h"
+#include "nav.h"
+#include "views/completeness.h"
 
 namespace asmdesk {
 
@@ -21,7 +25,38 @@ struct ShellState {
     // Author/Inspect open an empty placeholder tab in the full app (behaviour
     // lands in docs 06/08); disabled with a reason in the render-only viewer.
     std::vector<std::string> door_tabs;
+
+    // --- the replay views (04-replay-views.md) ---------------------------
+    // Decoded once per open recording, parallel to ws.recordings: the builders
+    // are pure functions of these, so nothing below re-parses JSON per frame.
+    std::vector<Streams> streams;
+    // Plan D3: every view takes one OR two recordings. `b_index` is the
+    // attached B side (the `d` binding), -1 for none.
+    int b_index = -1;
+    dt_view view = dt_view::canvas;
+    std::optional<uint32_t> selected_step;
+    std::optional<uint64_t> selected_off;
+    // The lit cones, when a slice is active; cleared by `c`.
+    bool cone_active = false;
+    dt_nav_table nav;
+    bool show_help = false;
+    std::string status; // the status bar: nav refusals land here verbatim
+    CompletenessState completeness;
+    std::string repo_root = ".";
 };
+
+// Open a recording AND decode its streams, keeping ShellState::streams parallel
+// to Workspace::recordings. Returns the new index, or -1 with `err` set.
+int shell_open(ShellState &s, const std::string &path, std::string &err);
+void shell_close(ShellState &s, size_t idx);
+
+// Register every view with the router and point it at the open set. Idempotent:
+// safe to call again after the workspace changes.
+void shell_wire_nav(ShellState &s);
+
+// The A / B streams for the active tab; B is null when nothing is attached.
+const Streams *shell_a(const ShellState &s);
+const Streams *shell_b(const ShellState &s);
 
 // Draw one frame of the shell. Backend-free: only ImGui immediate-mode calls, so
 // a null ImGui context (no GLFW/GL) drives it in tests.

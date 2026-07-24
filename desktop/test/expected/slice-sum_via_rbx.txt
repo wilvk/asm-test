@@ -1,0 +1,13 @@
+selected=4
+nodes=6 edges=5
+  0@0 [back] 0x0  push rbx
+  1@1 [dimmed] 0x1  mov rbx, rdi
+  2@2 [dimmed] 0x4  add rbx, rsi
+  3@3 [dimmed] 0x7  mov rax, rbx
+  4@4 [both] 0xa  pop rbx
+  5@5 [fwd] 0xb  ret
+  0->4 lane=0 loc=reg#44
+  0->4 lane=1 loc=[0x20fff0]
+  1->2 lane=2 loc=reg#37
+  2->3 lane=3 loc=reg#37
+  4->5 lane=2 loc=reg#44

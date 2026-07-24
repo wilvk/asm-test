@@ -1,0 +1,16 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"k":"note","text":"FIXTURE: a three-iteration counted loop, region-relative. The loop body (offsets 12/15/18) is recorded three times, so per-offset heat is 3 there and 1 on the prologue/epilogue; the coverage event names the two distinct blocks."}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov ecx, 3"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"xor eax, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"add eax, ecx"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"dec ecx"}
+{"k":"trace","basis":"rel","kind":"insn","off":18,"disasm":"jnz 12"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"add eax, ecx"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"dec ecx"}
+{"k":"trace","basis":"rel","kind":"insn","off":18,"disasm":"jnz 12"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"add eax, ecx"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"dec ecx"}
+{"k":"trace","basis":"rel","kind":"insn","off":18,"disasm":"jnz 12"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0,12,20],"blocks_total":3,"insns_total":12,"truncated":false}
+{"k":"end","events":14,"truncated":false,"drops":{"lost":0,"throttled":false}}

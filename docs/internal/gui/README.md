@@ -14,7 +14,10 @@ rules follow [../implementations/](../implementations/README.md) — read
 > through independent factual + implementability review during authoring;
 > 07–09 were authored against the same charters with the citations verified
 > inline. If a claim disagrees with the code when you implement, the code
-> wins — re-verify, then fix the doc in the same change.
+> wins — re-verify, then fix the doc in the same change. (Docs 02, 03 and 04
+> each carry a dated banner recording exactly which of their claims lost to the
+> code; 04's fourth correction — **the v1 schema has no routine-identity
+> field** — is an open Phase-3-freeze item for 01, not a settled one.)
 
 ## Binding shared decisions (D1–D11)
 
@@ -65,9 +68,9 @@ land (legend as in [../implementations/README.md](../implementations/README.md):
 | Doc | Area | Tasks | Depends on | Status |
 |---|---|---|---|---|
 | [01-asmtrace-format.md](01-asmtrace-format.md) | `.asmtrace` schema, record modes, golden corpus | 8 | — | ✅ 8/8 |
-| [02-exporters-and-readers.md](02-exporters-and-readers.md) | speedscope/Perfetto exporters, completeness readers | 6 | 01 (03 for T5–T6) | ☐ 0/6 |
+| [02-exporters-and-readers.md](02-exporters-and-readers.md) | speedscope/Perfetto exporters, completeness readers | 6 | 01 (03 for T5–T6) | ✅ 6/6 |
 | [03-desktop-shell.md](03-desktop-shell.md) | desktop/ skeleton, deps, mk/desktop.mk, document model | 8 | 01 (corpus, for T7) | ✅ 8/8 |
-| [04-replay-views.md](04-replay-views.md) | canvas, operand timeline, slice explorer, diff, deep links | 8 | 01, 03 | ☐ 0/8 |
+| [04-replay-views.md](04-replay-views.md) | canvas, operand timeline, slice explorer, diff, deep links | 8 | 01, 03 | ✅ 8/8 |
 | [05-loom-day-one.md](05-loom-day-one.md) | the Loom fabric, lineage, lane annex, forks | 7 | 02 (reader), 03, 04 | ☐ 0/7 |
 | [06-doors-and-learning.md](06-doors-and-learning.md) | Learn/Author doors, ct_eq, capability panel, runner record mode | 7 | 01–04 | ☐ 0/7 |
 | [07-serve-live-host.md](07-serve-live-host.md) | extract `libasmspy`, `--serve` wrapper, session host, budget patch-bay, Inspect door | 7 | 01, 03 | ☐ 0/7 |
@@ -78,6 +81,8 @@ land (legend as in [../implementations/README.md](../implementations/README.md):
 71 tasks across 10 docs. Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
 09 (09-T1 — the emulator ring — is engine-only and can start any time).
+**01, 02, 03 and 04 have landed (2026-07-24); 05/06/07 are next and can run in
+parallel.**
 **07-T0 (extract `libasmspy`) is engine-only and can start immediately** —
 it repackages the asmspy engine as a linkable library so `--serve` wraps it
 rather than re-embedding it, and is worth landing independently of the GUI. **Doc 10

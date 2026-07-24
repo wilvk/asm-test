@@ -1,0 +1,10 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-region","exact":true,"trust":"exact"},"arch":"x86_64","pid":4242}
+{"k":"note","text":"FIXTURE (diff pair, side A): the SAME routine as pair-b, run with an argument that takes the taken-branch arm. The two share a three-instruction prefix and part company at step 3 — the diff's patient zero."}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov eax, edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":2,"disasm":"test eax, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"jle 0x14"}
+{"k":"trace","basis":"rel","kind":"insn","off":6,"disasm":"add eax, 1"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0,6],"blocks_total":2,"insns_total":5,"truncated":false}
+{"k":"survey","sampler":"ibs-op","edges":[{"from_addr":4,"to_addr":6,"from":"f+0x4","to":"f+0x6","count":40,"mispred":1,"is_return":0}],"samples":100,"branch_samples":90,"lost":0,"throttled":false}
+{"k":"end","events":8,"truncated":false,"drops":{"lost":0,"throttled":false}}

@@ -374,6 +374,31 @@ nicety:
   than guess.
 - **A missing `end` is torn**, and is reported as such.
 
+## Known v1 gaps — the freeze checklist
+
+Appended by consumers as they hit them; each is a decision the Phase-3 freeze
+has to make explicitly rather than inherit.
+
+- **No routine identity.** The Envelope names the producer, the provenance, the
+  arch and (outside deterministic mode) the pid and cmd — but nothing that says
+  *which code this is*. A consumer that compares two recordings therefore
+  cannot verify they are of the same routine: `dt_diff_build`
+  ([04-replay-views.md](04-replay-views.md) T6) checks basis and arch, and
+  states in every diff that routine identity is the reader's assertion rather
+  than a finding. A `code` header object (`{"name":str,"sha256":str,"len":int}`)
+  would close it; the corpus recorder already copies a fixed 64-byte window and
+  could hash it. Raised 2026-07-24 by 04.
+- **No block starts from the L0 producer.** `coverage` is defined and the
+  region tiers write it, but the emulator L0 value producer measures executed
+  *steps* and has no block information, so the generated corpus carries `trace`
+  and `df_step` events and no `coverage`. Block starts cannot be recovered from
+  an offset stream without instruction lengths, so the recorder emits none
+  rather than guessing. Raised 2026-07-24 by 04.
+- **The wide side buffer is not serialised.** `df_step.ops[]` marks a >8-byte
+  value `"wide":true` and omits `value` (see `df_step` above). A reader renders
+  it as `[wide]` and cannot show the bytes. Documented as a v1 limit at
+  authoring time; listed here so the freeze either closes it or confirms it.
+
 ## Example
 
 A complete, minimal recording — the reference a reader is tested against

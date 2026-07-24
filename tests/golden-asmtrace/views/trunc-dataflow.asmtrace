@@ -1,0 +1,10 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-region","exact":true,"trust":"exact"},"arch":"x86_64","pid":4242}
+{"k":"note","text":"FIXTURE (dishonesty): the operand-record buffer filled mid-run. Steps 0, 1 and 4 carry df_step events; steps 2 and 3 were dropped, so their rows are BLANK rather than shown at offset 0, and the cones computed over the surviving edges are LOWER BOUNDS. The end footer declares the truncation and the lost count."}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov rax, rdi"}
+{"k":"trace","basis":"rel","kind":"insn","off":3,"disasm":"add rax, rsi"}
+{"k":"df_step","step":0,"off":0,"disasm":"mov rax, rdi","ops":[{"space":"reg","reg":39,"size":8,"write":false,"value_valid":true,"value":40},{"space":"reg","reg":35,"size":8,"write":true,"value_valid":true,"value":40}]}
+{"k":"df_step","step":1,"off":3,"disasm":"add rax, rsi","ops":[{"space":"reg","reg":35,"size":8,"write":false,"value_valid":true,"value":40},{"space":"reg","reg":35,"size":8,"write":true,"value_valid":false},{"space":"abs","reg":0,"addr":6295624,"size":32,"write":true,"value_valid":false,"wide":true}]}
+{"k":"df_step","step":4,"off":18,"disasm":"ret","ops":[{"space":"reg","reg":35,"size":8,"write":false,"value_valid":true,"value":42}]}
+{"k":"df_edge","from":0,"to":1,"loc":{"space":"reg","reg":35,"size":8,"write":false,"value_valid":true,"value":40}}
+{"k":"df_edge","from":1,"to":4,"loc":{"space":"reg","reg":35,"size":8,"write":false,"value_valid":true,"value":42}}
+{"k":"end","events":7,"truncated":true,"drops":{"lost":12,"throttled":true}}

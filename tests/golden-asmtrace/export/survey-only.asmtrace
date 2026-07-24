@@ -1,0 +1,4 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ibs-op","exact":false,"trust":"statistical"},"arch":"x86_64","pid":4242}
+{"k":"note","text":"FIXTURE (dishonesty): a hot-edge SURVEY. Every edge is evidence an edge was seen, never that one was not taken, and a sampled edge set is not a call stack. Every mode of the exporter must refuse this by name rather than render fabricated stacks."}
+{"k":"survey","sampler":"ibs-op","edges":[{"from_addr":4198710,"to_addr":4198800,"from":"main+0x12 [spy_victim]","to":"work","count":812,"mispred":3,"is_return":0},{"from_addr":4198800,"to_addr":4198900,"from":"work+0x8 [spy_victim]","to":"helper","count":404,"mispred":0,"is_return":0}],"samples":10442,"branch_samples":9001,"lost":0,"throttled":false}
+{"k":"end","events":2,"truncated":false,"drops":{"lost":0,"throttled":false}}

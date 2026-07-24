@@ -8,6 +8,14 @@
 > doc and a source disagree, this doc wins (sources may be stale); if the CODE
 > and this doc disagree, re-verify before implementing.
 >
+> **Implemented 2026-07-24 (T1–T6).** Three corrections were made where this
+> doc disagreed with the shipped code, and the code won (see *Schema
+> reconciliation* below): the event-kind selector is `"k"`, not `"ev"`;
+> call-tree events are kind **`call`** with an integer `addr`, not `tree`; and
+> the address basis is `"rel"` / `"abs"`, not `"region"`. Truncation and drops
+> ride the `end` footer (a missing footer means TORN), not a `provenance`
+> event. The fixture and expected-output names below are the ones that shipped.
+>
 > Read [\_conventions.md](../implementations/_conventions.md) first; the
 > doc-set shared decisions (D1–D11) live in this directory's README and bind
 > every task. Siblings: [01-asmtrace-format.md](01-asmtrace-format.md)
@@ -103,7 +111,9 @@ in, speedscope evented profile out — startable before any sibling lands.
 
 **Steps.**
 1. Create `tools/asmtrace_export.c` (single TU, C11, libc only — no engine
-   objects, no Capstone, no JSON library; builds on any host).
+   objects, no Capstone, no JSON library; builds on any host). **C11 means it:
+   `getline` and `strdup` are POSIX, not C11, so the TU carries a four-line
+   line reader and an `xstrdup` rather than a feature-test macro.**
 2. Line reader: line 1 is the header; require `"asmtrace":1` (newer major →
    exit 2 + reason; unknown header fields ignored). Detect the zstd magic
    `28 B5 2F FD` at byte 0 and refuse: "compressed container: not supported by
@@ -111,8 +121,9 @@ in, speedscope evented profile out — startable before any sibling lands.
 3. Minimal flat-JSON field scanner for event lines: extract known
    string/int/bool fields by key; **skip unknown fields structurally** (track
    brace/bracket depth + in-string state honoring `\"`); unescape `\"` `\\`
-   `\n` `\t` `\/`, fail loudly on others (producers use the
-   [`json_str`](../../../tools/asmfeatures.c#L47) minimal-escape idiom);
+   `\n` `\t` `\/` `\b` `\f` `\r` and `\uXXXX` (the writer escapes control
+   bytes that way — schema *Determinism rules* 4), fail loudly on anything
+   else;
    ignore unknown `"ev"` kinds (D1 forward-compat rule).
 4. Speedscope backend over tree events (algorithm below).
 5. Create `mk/desktop.mk` **if 03 has not landed yet** (shared per D3;
@@ -131,19 +142,24 @@ asmtrace_export --dot-tree   [--out=FILE]   REC.asmtrace                (T3)
 exit 0 = wrote output; 1 = I/O or parse error; 2 = honest refusal
 ```
 
-Consumed input subset — the binding minimal contract with
-[01-asmtrace-format.md](01-asmtrace-format.md)'s draft (per plan D1; tree
-field names match the shipped `--tree --json` exporter). If 01 landed first
-with different names, **follow 01 and update this doc + T4's fixtures**:
+Consumed input subset — **as shipped**, reconciled against 01's schema
+([asmtrace-schema.md](asmtrace-schema.md)), which landed first and therefore
+wins. The event-kind selector is `"k"`; call-tree entries are kind `call` with
+an **integer** `addr`; `basis` is `"rel"` or `"abs"`; and truncation/drops ride
+the `end` footer rather than a separate provenance event:
 
 ```
-{"asmtrace":1, "producer":{...}, ...}                                  # line 1
-{"ev":"tree","tid":7,"depth":0,"addr":"0x401000","name":"main","module":"exe"}
-{"ev":"trace","off":18,"basis":"region"}       # optional "disasm":"…" (D10)
-{"ev":"coverage","blocks":[0,12,18],"basis":"region"}
-{"ev":"survey", ...}                           # statistical — NEVER a stack
-{"ev":"provenance","stream":"tree","truncated":true,"lost":0, ...}
+{"asmtrace":1,"container":"ndjson","producer":{...},"provenance":{...},"arch":"x86_64","pid":4242}
+{"k":"call","tid":4242,"depth":0,"addr":4198710,"name":"main","module":"exe"}
+{"k":"trace","basis":"rel","kind":"insn","off":18,"disasm":"…"}   # disasm optional (D10)
+{"k":"coverage","basis":"rel","blocks":[0,12,18],"blocks_total":5,"insns_total":37,"truncated":false}
+{"k":"survey", ...}                            # statistical — NEVER a stack
+{"k":"end","events":37,"truncated":false,"drops":{"lost":0,"throttled":false}}
 ```
+
+A recording with **no `end` line is TORN** and is treated as incomplete
+everywhere the footer's `truncated` would be. `basis` is mandatory and is never
+defaulted: an event without one is a parse error, not a guess.
 
 Speedscope output — exactly the file-format fields (one profile per tid;
 frames deduped by `name + " [" + module + "]"`):
@@ -239,7 +255,7 @@ DOT graph — so "capture in CI, run genhtml / dot later" needs no re-run.
    **byte-identically** the [src/trace.c:229–237](../../../src/trace.c#L229)
    record: `TN:`, `SF:<--name or "routine">`, `DA:<offset-decimal>,1`
    ascending, `LF:<n>`, `LH:<n>`, `end_of_record`. Refuse (exit 2) if
-   `region`- and `abs`-basis events are mixed — different bases must never
+   `rel`- and `abs`-basis events are mixed — different bases must never
    merge into one SF record (the plan's named attribution failure mode).
 2. `--dot-tree`: re-implement [`tree_export_dot`](../../../cli/asmspy.c#L895)'s
    aggregation over recorded tree events — same per-thread shadow stack
@@ -274,16 +290,22 @@ exporter mode and refusal, wired as `make asmtrace-export-test`.
 
 **Steps.**
 1. Create `tests/golden-asmtrace/export/` (new; the parent dir is D6's golden
-   corpus, owned by 01 — this subdir is **hand-authored, never regenerated**;
-   01's `asmtrace-golden` target must skip `export/`, and a 3-line
-   `export/README.md` says so). Fixtures: `tree-small.asmtrace` (two tids;
-   multi-frame depth jump-down; re-based jump-up), `tree-truncated.asmtrace`
-   (`truncated:true, lost:3` provenance — a D7 dishonesty fixture),
-   `trace-heat.asmtrace` (loop: repeated trace offsets + one coverage event),
+   corpus, owned by 01 — this subdir is **hand-authored, never regenerated**.
+   01's `asmtrace-golden` already writes only flat `*.asmtrace` files into the
+   parent and `asmtrace-golden-check` compares only those, so no change to
+   those targets is needed; `export/README.md` records that.) Fixtures as
+   shipped: `tree-small.asmtrace` (two tids; multi-frame depth jump-down;
+   re-based jump-up), `tree-truncated.asmtrace` (`end` footer with
+   `truncated:true, lost:3` — a D7 dishonesty fixture), `trace-heat.asmtrace`
+   (loop: repeated trace offsets + one coverage event),
+   `trace-truncated.asmtrace` (the lcov stderr-warning path),
    `survey-only.asmtrace`, `mixed-basis.asmtrace`, `future-major.asmtrace`
-   (`{"asmtrace":2}`); beside them, expected outputs
+   (`{"asmtrace":2}`), `zstd-container.asmtrace` (the reserved compressed
+   container, by magic), `unknown-kind.asmtrace` (an unknown kind AND an
+   unknown nested field on a known one); beside them, the expected outputs
    `tree-small.{speedscope.json,chrome.json,dot}`,
-   `trace-heat.{chrome.json,info}`, `tree-truncated.speedscope.json`.
+   `trace-heat.{chrome.json,info}`, `tree-truncated.{speedscope.json,dot}`,
+   `trace-truncated.info`, `unknown-kind.speedscope.json`.
 2. Add `scripts/test-asmtrace-export.sh` (POSIX sh, `set -eu`): per mode, run
    the exporter, validate with `python3 -m json.tool` (python3 is on every CI
    leg — [scripts/bench-report.sh:13–14](../../../scripts/bench-report.sh#L13)),
@@ -473,10 +495,13 @@ chrome rather than re-deriving the cell rule.
 - **No self-skips**: every test here runs headless with cc + python3
   (exporter) or the 03 toolchain — per [CLAUDE.md](../../../CLAUDE.md) there
   is no hardware or credential gate, so no lane may skip.
-- **Schema reconciliation**: 01 owns the `.asmtrace` registry; T1's subset is
-  the binding minimum. Any 01 rename lands with the matching fixture +
-  this-doc update in one change; until the Phase-3 freeze expect additive
-  change only (unknown-kind/field tolerance is mandatory).
+- **Schema reconciliation** (**settled 2026-07-24**): 01 landed first, so its
+  shipped schema is binding and this doc was corrected to match — `"k"` not
+  `"ev"`, kind `call` not `tree`, integer `addr` not a hex string, basis
+  `"rel"`/`"abs"` not `"region"`, truncation on the `end` footer with a missing
+  footer meaning TORN. Any future 01 rename lands with the matching fixture +
+  this-doc update in one change; until the Phase-3 freeze expect additive change
+  only (unknown-kind/field tolerance is mandatory).
 - **`mk/desktop.mk` is shared property** (D3): additive rules only; whichever
   of 02/03 lands first creates it + the include after
   [Makefile:929](../../../Makefile#L929); both add help echo lines at

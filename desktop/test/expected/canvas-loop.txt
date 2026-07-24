@@ -1,0 +1,8 @@
+basis=rel
+rows=6
+0x0|1|BC|mov ecx, 3
+0x5|1|--|xor eax, eax
+0xc|3|BC|add eax, ecx
+0xf|3|--|dec ecx
+0x12|3|--|jnz 12
+0x14|1|--|ret

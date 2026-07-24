@@ -1,0 +1,5 @@
+basis=rel
+rows=3
+0x0|1|--|mov rax, rdi
+0x3|1|--|add rax, rsi
+0x6|1|--|ret

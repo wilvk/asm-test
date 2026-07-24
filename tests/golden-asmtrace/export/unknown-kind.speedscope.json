@@ -1,0 +1,7 @@
+{"$schema": "https://www.speedscope.app/file-format-schema.json",
+ "name": "unknown-kind.asmtrace", "exporter": "asmtrace_export", "activeProfileIndex": 0,
+ "shared": {"frames": [{"name": "main [spy_victim]"}, {"name": "work [spy_victim]"}]},
+ "profiles": [
+  {"type": "evented", "name": "tid 4242", "unit": "none", "startValue": 0, "endValue": 2,
+   "events": [{"type": "O", "frame": 0, "at": 0}, {"type": "O", "frame": 1, "at": 1}, {"type": "C", "frame": 1, "at": 2}, {"type": "C", "frame": 0, "at": 2}]}
+ ]}

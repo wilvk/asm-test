@@ -1,0 +1,4 @@
+{"features":[
+{"tier":"emulator","backend":"guest","arch":"x86_64","scope":"guest","available":true,"skip_reason":"","fidelity":"virtual-exact","complete":true,"trace_insns":4,"insns_truth":null,"future_key":{"nested":[1,2,3]},"another":"ignored"},
+{"tier":"disasm","backend":"capstone","arch":"x86_64","scope":"n/a","available":true,"skip_reason":"","fidelity":"n/a","complete":null,"trace_insns":null,"insns_truth":null,"note":"Capstone 5.0.1"}
+],"unknown_envelope_key":42}

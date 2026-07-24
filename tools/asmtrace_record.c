@@ -3,7 +3,8 @@
  *
  * Runs each routine of the cross-language conformance corpus under the
  * DETERMINISTIC emulator L0 value producer and writes one `.asmtrace`
- * recording per routine: `df_step` (per executed step, with its operand
+ * recording per routine: `trace` (the ordered executed-instruction stream, the
+ * trace canvas's input), `df_step` (per executed step, with its operand
  * read/write values and — where Capstone is linked — its disassembly, D10)
  * plus `df_edge` (the L1 last-writer def-use graph).
  *
@@ -119,6 +120,39 @@ static int record_one(const char *dir, const rec_routine_t *r) {
 
     nsteps = vt->steps_len;
     nrecs = vt->recs_len;
+
+    /* The ordered executed-instruction stream, as `trace` events. This is the
+     * SAME measurement the df_step events carry (vt->insn_off[]), written in
+     * the kind the trace canvas reads — so the golden corpus feeds the viewer's
+     * heat map with real recorded data rather than a hand-authored imitation.
+     *
+     * basis is "rel": the producer maps the routine's 64-byte window at a fixed
+     * base and these offsets are relative to its entry (the asmtest_trace_t
+     * contract, include/asmtest_trace.h:41).
+     *
+     * There is deliberately NO `coverage` event. The L0 value producer records
+     * executed STEPS, not basic blocks, and block starts cannot be recovered
+     * from an offset stream without instruction lengths — reconstructing them
+     * would be a guess wearing a measurement's clothes. A producer that
+     * measures blocks writes the kind; this one does not, so it stays silent. */
+    for (size_t s = 0; s < nsteps; s++) {
+        char dis[160] = "";
+        if (emu_disas_available())
+            emu_disas(EMU_ARCH_X86_64, code, sizeof code, REC_CODE_BASE,
+                      vt->insn_off[s], dis, sizeof dis);
+        if (dis[0]) {
+            asmtrace_escape(body, sizeof body, dis);
+            asmtrace_emitf(&w, "trace",
+                           "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu,"
+                           "\"disasm\":\"%s\"",
+                           (unsigned long long)vt->insn_off[s], body);
+        } else {
+            asmtrace_emitf(&w, "trace",
+                           "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu",
+                           (unsigned long long)vt->insn_off[s]);
+        }
+    }
+
     for (size_t s = 0; s < nsteps; s++) {
         char dis[160] = "";
         size_t first;

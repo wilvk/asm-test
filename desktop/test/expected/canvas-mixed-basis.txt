@@ -1,0 +1,3 @@
+basis=rel
+REFUSED: mixed address bases: "rel" and "abs" events in one stream — region-relative offsets and absolute addresses cannot share one axis; re-record, or open the streams separately
+rows=0

@@ -1,0 +1,7 @@
+dishonest-fixture — Fixture CPU — Fixture 1.0 — 0badbed 2026-07-24T00:00:00Z
+4 rows, 3 available, 3 measured, 1 complete, 1 truncated
+TIER         BACKEND     ARCH    SCOPE         COMPLETENESS      STATUS
+emulator     guest       x86_64  guest         4/4 complete      ok
+native-hw    lbr         x86_64  routine       16/242 TRUNCATED  ok  [counted loop, trip 100]
+hwtrace      intel-pt    x86_64  whole-window  —                 Intel PT is an Intel feature; this host is AuthenticAMD. perf_event_paranoid is 4, which would also refuse the AUX mapping even on Intel silicon; and libipt is not linked into this build.
+native-auto  escalating  x86_64  routine       242 insns         ok

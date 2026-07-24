@@ -1,0 +1,5 @@
+identity: checked: address basis (rel) and arch (x86_64). NOT checked: that both recordings are of the same routine — the v1 .asmtrace header carries no routine identity, so that is the reader's assertion, not this build's finding.
+truncated: a=no b=no
+coverage: both=0 only_a=0 only_b=0
+  heat 0x9 a=0 b=1
+divergence: step=3 a=0x0 b=0x9

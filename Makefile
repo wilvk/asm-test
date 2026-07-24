@@ -149,6 +149,8 @@ help:
 	@echo '  desktop         build build/asmtest-desktop (full app; links the engines, GPL-2.0 whole)'
 	@echo '  desktop-render  build build/asmtest-viewer (render-only; engine-free, permissive)'
 	@echo '  desktop-test    headless null-backend tests (any host with a C++17 compiler; make docker-desktop)'
+	@echo '  asmtrace-export      build build/asmtrace_export (.asmtrace -> speedscope/Perfetto/lcov/DOT)'
+	@echo '  asmtrace-export-test byte-exact exporter goldens + the honest-refusal suite'
 	@echo ''
 	@echo 'Packaging & install:'
 	@echo '  lib             build the static libasmtest.a'

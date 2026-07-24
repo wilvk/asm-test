@@ -1,0 +1,11 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-tree","exact":true,"trust":"exact"},"arch":"x86_64","pid":4242}
+{"k":"note","text":"FIXTURE: two threads of --tree call entries. tid 4242 nests three deep then returns two frames at once (a multi-frame depth jump-down); tid 4243 opens at depth 2 with no depth 0/1 above it, which is what --focus re-basing produces."}
+{"k":"call","tid":4242,"depth":0,"addr":4198710,"name":"main","module":"spy_victim"}
+{"k":"call","tid":4242,"depth":1,"addr":4198800,"name":"work","module":"spy_victim"}
+{"k":"call","tid":4242,"depth":2,"addr":4198900,"name":"helper","module":"spy_victim"}
+{"k":"call","tid":4242,"depth":1,"addr":4198950,"name":"finish","module":"spy_victim"}
+{"k":"call","tid":4242,"depth":2,"addr":4198900,"name":"helper","module":"spy_victim"}
+{"k":"call","tid":4243,"depth":2,"addr":4199000,"name":"thread_body","module":"spy_victim"}
+{"k":"call","tid":4243,"depth":3,"addr":4199100,"name":"memcpy","module":"libc.so.6"}
+{"k":"call","tid":4243,"depth":3,"addr":4199200,"name":"?","module":"?"}
+{"k":"end","events":9,"truncated":false,"drops":{"lost":0,"throttled":false}}

@@ -1,0 +1,7 @@
+{"$schema": "https://www.speedscope.app/file-format-schema.json",
+ "name": "tree-truncated.asmtrace", "exporter": "asmtrace_export", "activeProfileIndex": 0,
+ "shared": {"frames": [{"name": "main [spy_victim]"}, {"name": "work [spy_victim]"}, {"name": "helper [spy_victim]"}]},
+ "profiles": [
+  {"type": "evented", "name": "tid 4242 (truncated)", "unit": "none", "startValue": 0, "endValue": 3,
+   "events": [{"type": "O", "frame": 0, "at": 0}, {"type": "O", "frame": 1, "at": 1}, {"type": "O", "frame": 2, "at": 2}, {"type": "C", "frame": 2, "at": 3}, {"type": "C", "frame": 1, "at": 3}, {"type": "C", "frame": 0, "at": 3}]}
+ ]}

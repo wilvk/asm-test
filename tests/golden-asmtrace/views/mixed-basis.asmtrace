@@ -1,0 +1,6 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-region","exact":true,"trust":"exact"},"arch":"x86_64","pid":4242}
+{"k":"note","text":"FIXTURE (dishonesty): one region-relative event and one absolute one in the same stream. Invalid by intent — no producer emits it — and hand-authored so the canvas's refusal has a test. Offsets in the two bases name different places, so a canvas that stacked them would be confidently wrong at every row; the only honest output is no rows at all."}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":1,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"abs","kind":"insn","off":4198710,"disasm":"mov rax, rdi"}
+{"k":"end","events":4,"truncated":false,"drops":{"lost":0,"throttled":false}}

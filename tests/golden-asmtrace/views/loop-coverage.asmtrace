@@ -1,0 +1,16 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-region","exact":true,"trust":"exact"},"arch":"x86_64","pid":4242}
+{"k":"note","text":"FIXTURE: a two-block routine with a three-iteration loop, recorded with BOTH a trace stream and a coverage event. Heat is 3 on the loop body and 1 elsewhere; the gutter marks the two block starts (0 and 12) and NOT every executed instruction, because coverage is what the producer measured and it is block-granular."}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov ecx, 3"}
+{"k":"trace","basis":"rel","kind":"insn","off":5,"disasm":"xor eax, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"add eax, ecx"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"dec ecx"}
+{"k":"trace","basis":"rel","kind":"insn","off":18,"disasm":"jnz 12"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"add eax, ecx"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"dec ecx"}
+{"k":"trace","basis":"rel","kind":"insn","off":18,"disasm":"jnz 12"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"add eax, ecx"}
+{"k":"trace","basis":"rel","kind":"insn","off":15,"disasm":"dec ecx"}
+{"k":"trace","basis":"rel","kind":"insn","off":18,"disasm":"jnz 12"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0,12],"blocks_total":2,"insns_total":12,"truncated":false}
+{"k":"end","events":14,"truncated":false,"drops":{"lost":0,"throttled":false}}

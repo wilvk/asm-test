@@ -1,0 +1,10 @@
+digraph asmspy {
+  rankdir=LR;
+  node [shape=box, style=filled, fontname=monospace, fontsize=10];
+  "0x401136" [label="main\n[spy_victim] entered=1", fillcolor="#e8f0ff"];
+  "0x401190" [label="work\n[spy_victim] entered=1", fillcolor="#e8f0ff"];
+  "0x4011f4" [label="helper\n[spy_victim] entered=1", fillcolor="#e8f0ff"];
+  "0x401136" -> "0x401190" [label="1"];
+  "0x401190" -> "0x4011f4" [label="1"];
+}
+# truncated recording: truncated — buffers filled; lost=3 — this graph is a LOWER BOUND

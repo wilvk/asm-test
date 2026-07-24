@@ -1,0 +1,3 @@
+A=pair-a.asmtrace B=mixed-basis.asmtrace
+REFUSED: one of these recordings cannot be placed on an axis at all: mixed address bases: "rel" and "abs" events in one stream — region-relative offsets and absolute addresses cannot share one axis; re-record, or open the streams separately
+note|exact|these recordings cannot be compared: one of these recordings cannot be placed on an axis at all: mixed address bases: "rel" and "abs" events in one stream — region-relative offsets and absolute addresses cannot share one axis; re-record, or open the streams separately

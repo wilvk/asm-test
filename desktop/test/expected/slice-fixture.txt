@@ -1,0 +1,13 @@
+selected=4
+nodes=6 edges=5
+  0@0 [back] 0x0  insn0
+  1@1 [back] 0x4  insn1
+  2@2 [back] 0x8  insn2
+  3@3 [back] 0xc  insn3
+  4@4 [both] 0x10  insn4
+  5@5 [fwd] 0x14  insn5
+  0->2 lane=0 loc=reg#35
+  1->2 lane=1 loc=reg#36
+  2->4 lane=2 loc=reg#37
+  3->4 lane=0 loc=reg#38
+  4->5 lane=1 loc=reg#39

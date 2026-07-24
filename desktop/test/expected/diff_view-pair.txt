@@ -1,0 +1,13 @@
+A=pair-a.asmtrace B=pair-b.asmtrace
+header|exact|A = pair-a.asmtrace  B = pair-b.asmtrace
+note|exact|checked: address basis (rel) and arch (x86_64). NOT checked: that both recordings are of the same routine — the v1 .asmtrace header carries no routine identity, so that is the reader's assertion, not this build's finding.
+coverage|exact|blocks: both=1  A-only=1  B-only=1
+coverage|exact|A-only block 0x6  -> asmtrace-link:v=canvas&rec=pair-a.asmtrace&rec_b=pair-b.asmtrace&off=0x6
+coverage|exact|B-only block 0x14  -> asmtrace-link:v=canvas&rec=pair-b.asmtrace&rec_b=pair-a.asmtrace&off=0x14
+heat|exact|heat 0x6: A=1 B=0  -> asmtrace-link:v=canvas&rec=pair-a.asmtrace&rec_b=pair-b.asmtrace&off=0x6
+heat|exact|heat 0x9: A=1 B=0  -> asmtrace-link:v=canvas&rec=pair-a.asmtrace&rec_b=pair-b.asmtrace&off=0x9
+heat|exact|heat 0x14: A=0 B=1  -> asmtrace-link:v=canvas&rec=pair-a.asmtrace&rec_b=pair-b.asmtrace&off=0x14
+heat|exact|heat 0x16: A=0 B=1  -> asmtrace-link:v=canvas&rec=pair-a.asmtrace&rec_b=pair-b.asmtrace&off=0x16
+edge|statistical|edge 0x4->0x6: A=40 B=0
+edge|statistical|edge 0x4->0x14: A=0 B=37
+divergence|exact|PATIENT ZERO at step 3: A 0x6 add eax, 1  |  B 0x14 xor eax, eax  -> asmtrace-link:v=timeline&rec=pair-a.asmtrace&rec_b=pair-b.asmtrace&step=3&off=0x6

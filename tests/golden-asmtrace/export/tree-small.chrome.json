@@ -1,0 +1,20 @@
+{"traceEvents": [
+  {"name": "main [spy_victim]", "cat": "tree", "ph": "B", "ts": 0, "pid": 4242, "tid": 4242, "args": {"addr": "0x401136", "depth": 0}},
+  {"name": "work [spy_victim]", "cat": "tree", "ph": "B", "ts": 1, "pid": 4242, "tid": 4242, "args": {"addr": "0x401190", "depth": 1}},
+  {"name": "helper [spy_victim]", "cat": "tree", "ph": "B", "ts": 2, "pid": 4242, "tid": 4242, "args": {"addr": "0x4011f4", "depth": 2}},
+  {"name": "helper [spy_victim]", "cat": "tree", "ph": "E", "ts": 3, "pid": 4242, "tid": 4242},
+  {"name": "work [spy_victim]", "cat": "tree", "ph": "E", "ts": 3, "pid": 4242, "tid": 4242},
+  {"name": "finish [spy_victim]", "cat": "tree", "ph": "B", "ts": 3, "pid": 4242, "tid": 4242, "args": {"addr": "0x401226", "depth": 1}},
+  {"name": "helper [spy_victim]", "cat": "tree", "ph": "B", "ts": 4, "pid": 4242, "tid": 4242, "args": {"addr": "0x4011f4", "depth": 2}},
+  {"name": "helper [spy_victim]", "cat": "tree", "ph": "E", "ts": 5, "pid": 4242, "tid": 4242},
+  {"name": "finish [spy_victim]", "cat": "tree", "ph": "E", "ts": 5, "pid": 4242, "tid": 4242},
+  {"name": "main [spy_victim]", "cat": "tree", "ph": "E", "ts": 5, "pid": 4242, "tid": 4242},
+  {"name": "thread_body [spy_victim]", "cat": "tree", "ph": "B", "ts": 0, "pid": 4242, "tid": 4243, "args": {"addr": "0x401258", "depth": 2}},
+  {"name": "memcpy [libc.so.6]", "cat": "tree", "ph": "B", "ts": 1, "pid": 4242, "tid": 4243, "args": {"addr": "0x4012bc", "depth": 3}},
+  {"name": "memcpy [libc.so.6]", "cat": "tree", "ph": "E", "ts": 2, "pid": 4242, "tid": 4243},
+  {"name": "? [?]", "cat": "tree", "ph": "B", "ts": 2, "pid": 4242, "tid": 4243, "args": {"addr": "0x401320", "depth": 3}},
+  {"name": "? [?]", "cat": "tree", "ph": "E", "ts": 3, "pid": 4242, "tid": 4243},
+  {"name": "thread_body [spy_victim]", "cat": "tree", "ph": "E", "ts": 3, "pid": 4242, "tid": 4243}
+ ],
+ "displayTimeUnit": "ms",
+ "otherData": {"ts_unit": "event ordinal — the producers record no timestamps", "truncated": false, "lost": 0, "heat_offsets_dropped": 0}}

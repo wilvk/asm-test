@@ -1,0 +1,3 @@
+{"timestamp": "2026-07-11T10:26:34Z", "commit": "d3e0315", "os": "linux", "arch": "x86_64", "unit": "cyc", "virtualized": false, "native": [{"name": "arith.add_signed", "median": 12.7, "unit": "cyc"}]}
+{"timestamp": "2026-07-12T10:26:34Z", "commit": "abc1234", "os": "linux", "arch": "x86_64", "unit": "cyc", "virtualized": false, "native": [{"name": "arith.add_signed", "median": 12.4, "unit": "cyc"}]}
+{"timestamp":"2026-07-13T10:26:34Z","commit":"fee1dea","os":"lin

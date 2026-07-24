@@ -1,0 +1,6 @@
+{"schema":"asmtest-bench-report/v1",
+"system":{"box_id":"fixture-box","os":"linux","os_version":"Fixture 1.0","arch":"x86_64","cpu":"Fixture CPU","uarch":"fixture","vendor":"FixtureVendor","cc":"cc (fixture) 1.0","virtualized":true,"asmtest_version":"1.1.0","commit":"deadbee","timestamp":"2026-07-24T00:00:00Z"},
+"performance":{"native":[{"name":"arith.add_signed","median":12.5,"unit":"cyc"}]},
+"features":[
+{"tier":"emulator","backend":"guest","arch":"x86_64","scope":"guest","available":true,"skip_reason":"","fidelity":"virtual-exact","complete":true,"trace_insns":4,"insns_truth":null}
+]}

@@ -1,0 +1,10 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-region","exact":true,"trust":"exact"},"arch":"x86_64","pid":4242}
+{"k":"note","text":"FIXTURE (diff pair, side B): the same routine as pair-a with the other argument, so the branch at step 2 falls the other way. Everything before step 3 is byte-identical; from step 3 on the two runs are executing different code and must never be rendered as agreement."}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov eax, edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":2,"disasm":"test eax, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"jle 0x14"}
+{"k":"trace","basis":"rel","kind":"insn","off":20,"disasm":"xor eax, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":22,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0,20],"blocks_total":2,"insns_total":5,"truncated":false}
+{"k":"survey","sampler":"ibs-op","edges":[{"from_addr":4,"to_addr":20,"from":"f+0x4","to":"f+0x14","count":37,"mispred":0,"is_return":0}],"samples":100,"branch_samples":88,"lost":0,"throttled":false}
+{"k":"end","events":8,"truncated":false,"drops":{"lost":0,"throttled":false}}

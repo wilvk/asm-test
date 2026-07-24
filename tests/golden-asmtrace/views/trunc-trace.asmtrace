@@ -1,0 +1,8 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-region","exact":true,"trust":"exact"},"arch":"x86_64","pid":4242}
+{"k":"note","text":"FIXTURE (dishonesty): the trace buffer filled. Four instructions are recorded of the 93 that executed, and two blocks of the five that were entered — blocks_total > len(blocks) is the honest truncation signal. The canvas must carry a loud, non-collapsible banner naming both numbers: a heat map over 4% of a run looks exactly like one over all of it."}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":1,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"sub rsp, 0x20"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"call 0x40"}
+{"k":"coverage","basis":"rel","blocks":[0,64],"blocks_total":5,"insns_total":93,"truncated":true}
+{"k":"end","events":5,"truncated":true,"drops":{"lost":0,"throttled":false}}

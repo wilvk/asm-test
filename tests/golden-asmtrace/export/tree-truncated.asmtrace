@@ -1,0 +1,6 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-tree","exact":true,"trust":"exact"},"arch":"x86_64","pid":4242}
+{"k":"note","text":"FIXTURE (dishonesty): the capture buffer filled and samples were lost. Every export must say so — the speedscope profile names carry \" (truncated)\", the Chrome otherData carries truncated/lost, the DOT gets a trailer, lcov warns on stderr. A profile that renders these stacks as a complete call tree is lying."}
+{"k":"call","tid":4242,"depth":0,"addr":4198710,"name":"main","module":"spy_victim"}
+{"k":"call","tid":4242,"depth":1,"addr":4198800,"name":"work","module":"spy_victim"}
+{"k":"call","tid":4242,"depth":2,"addr":4198900,"name":"helper","module":"spy_victim"}
+{"k":"end","events":4,"truncated":true,"drops":{"lost":3,"throttled":false}}

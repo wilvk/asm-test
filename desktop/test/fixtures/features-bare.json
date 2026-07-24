@@ -1,0 +1,5 @@
+{"features":[
+{"tier":"emulator","backend":"guest","arch":"x86_64","scope":"guest","available":true,"skip_reason":"","fidelity":"virtual-exact","complete":true,"trace_insns":4,"insns_truth":null},
+{"tier":"native-hw","backend":"lbr","arch":"x86_64","scope":"routine","available":true,"skip_reason":"","fidelity":"native","complete":false,"trace_insns":16,"insns_truth":242,"note":"loop trip 100"},
+{"tier":"hwtrace","backend":"coresight","arch":"x86_64","scope":"routine","available":false,"skip_reason":"ARM CoreSight is an AArch64 feature; this host is x86_64","fidelity":"n/a","complete":null,"trace_insns":null,"insns_truth":null}
+]}

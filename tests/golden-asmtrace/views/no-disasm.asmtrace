@@ -1,0 +1,11 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-region","exact":true,"trust":"exact"},"arch":"x86_64","pid":4242}
+{"k":"note","text":"FIXTURE (D10 absence): the producer had no Capstone, so no trace event carries a disasm string. The canvas must degrade to bare offsets and SAY so, never error and never invent instruction text."}
+{"k":"trace","basis":"rel","kind":"insn","off":0}
+{"k":"trace","basis":"rel","kind":"insn","off":3}
+{"k":"trace","basis":"rel","kind":"insn","off":6}
+{"k":"trace","basis":"rel","kind":"insn","off":3}
+{"k":"coverage","basis":"rel","blocks":[0,3],"blocks_total":2,"insns_total":4,"truncated":false}
+{"k":"df_step","step":0,"off":0,"ops":[{"space":"reg","reg":35,"size":8,"write":true,"value_valid":true,"value":7}]}
+{"k":"df_step","step":1,"off":3,"ops":[{"space":"reg","reg":35,"size":8,"write":false,"value_valid":true,"value":7}]}
+{"k":"df_edge","from":0,"to":1,"loc":{"space":"reg","reg":35,"size":8,"write":false,"value_valid":true,"value":7}}
+{"k":"end","events":9,"truncated":false,"drops":{"lost":0,"throttled":false}}

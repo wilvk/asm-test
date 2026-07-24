@@ -8,6 +8,63 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Desktop replay views — trace canvas, operand timeline, slice explorer,
+  recording diff, deep links (desktop GUI plan, Phase 2;
+  docs/internal/gui/04-replay-views.md).** The desktop app now renders what a
+  recording contains rather than just its summary: per-offset heat with a
+  block-granular coverage gutter, the per-step operand-value timeline, the
+  def-use slice explorer (click a step; see everything that produced the value
+  and everything it affects), and a two-recording diff. Slicing is computed
+  **client-side from recorded `df_edge` events**, so the engine-free
+  `asmtest-viewer` slices with no engine linked — and `test_slice_diff` pins the
+  viewer's closure to `src/dataflow.c`'s slicer over 200 pseudo-random graphs,
+  so a divergence between the GUI's answer and the TUI's fails the build. The
+  slice layout is layered by step index and fully deterministic, never
+  force-directed. Value annotations call the TUI's own
+  `cli/asmspy_dataview.h` helpers, so both frontends speak one dialect.
+  Every position is addressable as `asmtrace-link:v=slice&rec=...&step=4`,
+  round-trip byte-stable, and every view and keyboard binding routes through
+  one router. Honesty is enforced structurally: a recording mixing
+  region-relative and absolute events draws **no rows** (a placard instead), a
+  truncated recording carries a non-collapsible banner naming how much is
+  missing, cones over a truncated stream are labelled lower bounds, a dropped
+  step renders as *unknown* rather than as offset 0, statistical hot-edge data
+  is never merged into exact heat, a refused diff produces a reason instead of
+  plausible numbers, and a diff bounded by truncation says "no divergence
+  observed within the recorded window" — never "identical". `make
+  desktop-test` grew ten binaries covering all of it.
+- **Backend-completeness panel and its data readers
+  (docs/internal/gui/02-exporters-and-readers.md T5/T6).** New
+  `desktop/src/data/` readers for the three shapes the existing producers emit
+  (a live `asmfeatures` sweep, a committed `benchmarks/boxes/<box>/` record, a
+  full `asmtest-bench-report/v1`) plus each box's append-only
+  `perf-history.jsonl`, whose torn final line is counted rather than fatal.
+  "Not measured" survives as `std::nullopt` through both spellings the
+  producers use (JSON `null` and an omitted key) and renders as an em dash,
+  never as `0`. The panel shows tier x backend x arch with `skip_reason`
+  rendered **verbatim** and truncation (`trace_insns < insns_truth`, or
+  `complete:false`) made loud — both pinned by byte-compared golden renders.
+- **`asmtrace_record` now emits `trace` events**, so the golden corpus feeds
+  the trace canvas with real recorded data. It deliberately emits no `coverage`
+  event: the L0 value producer measures executed steps, not basic blocks, and
+  block starts cannot be recovered from an offset stream without instruction
+  lengths.
+- **`.asmtrace` exporters — recordings open in speedscope, Perfetto, genhtml
+  and Graphviz (desktop GUI plan, Phase 1; docs/internal/gui/02-exporters-and-readers.md).**
+  New `tools/asmtrace_export.c` (`make asmtrace-export`) reads a recording and
+  writes a speedscope evented profile (`--speedscope`), Chrome Trace Event JSON
+  for Perfetto (`--chrome`), a block-offset lcov record (`--lcov`) or the
+  `--tree` call graph as Graphviz DOT (`--dot-tree`) — so a capture made in CI
+  or a container can be rendered later, anywhere, without re-running the traced
+  program. One TU, libc only: no engine objects, no Capstone, no JSON library.
+  Honesty is enforced rather than documented: statistical `survey` events are
+  never exported as stacks (exit 2, naming the reason), truncation and dropped
+  samples surface in every mode, the time axis is labelled as the event ordinal
+  it is — no producer records timestamps — and a mixed address basis, a newer
+  format major or a compressed container is refused **by name** instead of
+  best-efforted. `make asmtrace-export-test` byte-compares every mode against
+  committed expected files and pins each refusal by exit code *and* by the
+  reason it prints.
 - **Desktop GUI skeleton — a Dear ImGui shell over the `.asmtrace` document
   model (desktop GUI plan, Phase 2; docs/internal/gui/03-desktop-shell.md).**
   New `desktop/` tree building two binaries: `asmtest-desktop`, the full app,

@@ -7,6 +7,27 @@
 > Written 2026-07-23. If this doc and a source disagree, this doc wins (sources may be
 > stale); if the CODE and this doc disagree, re-verify before implementing.
 >
+> **Implemented 2026-07-24 (T1–T8).** Four corrections were made where this doc
+> disagreed with the shipped code, and the code won:
+>
+> 1. **`basis` is `"rel"` / `"abs"`**, not `"region"` / `"abs"`
+>    ([asmtrace-schema.md](asmtrace-schema.md)).
+> 2. **`dt_recording` is 03's `asmdesk::Recording`**, which keeps events as raw
+>    JSON grouped by kind — right for a loader, not for a view. The decode this
+>    doc's "what dt_recording must expose" list describes shipped as an additive
+>    `desktop/src/doc/streams.{h,cpp}` (`asmdesk::Streams`); `recording.h` was
+>    not touched. Every builder below takes `const Streams &`.
+> 3. **The `.asmtrace` reader is 03's, not 02's.** 03 shipped `load_recording`
+>    before this doc's dependency list was written.
+> 4. **There is no routine-identity field in the v1 schema.** T6's stated
+>    precondition ("metadata code-bytes hash must match") has nothing to check:
+>    the Envelope carries `producer`, `provenance`, `arch`, `pid`, `cmd` and no
+>    code hash. `dt_diff_build` therefore checks what the format *does* carry
+>    (address basis, arch, the presence of a comparable stream) and states the
+>    gap in `dt_diff::identity_note`, which the diff panel renders as a
+>    first-class row. Adding a header identity field is a Phase-3-freeze item
+>    for 01. Silently pretending to have checked was the one option not taken.
+>
 > Set decisions D1–D11 in [README.md](README.md) bind this doc. Siblings consumed:
 > [01-asmtrace-format.md](01-asmtrace-format.md) (schema + golden corpus),
 > [02-exporters-and-readers.md](02-exporters-and-readers.md) (the `.asmtrace` reader),
@@ -80,12 +101,14 @@ under `desktop/src/` + `desktop/test/` (set D1).
   [`read_fault`](../../../bindings/conformance/corpus_routines.c#L55), …).
 
 **New symbols from siblings (do not invent — verify against the sibling before coding):**
-`dt_recording`, `dt_app`, the headless harness, and the `desktop` / `desktop-render` /
-`desktop-test` / `docker-desktop` targets are 03's; the `.asmtrace` reader filling
-`dt_recording` is 02's; event field names (`kind`, `basis` = `"region"`|`"abs"`, `off`,
-`step`, `disasm`, `truncated`, provenance/drop counters) plus `make asmtrace-golden` and
-`tests/golden-asmtrace/` are 01's ([asmtrace-schema.md](asmtrace-schema.md)). This doc
-needs `dt_recording` to expose: the trace stream (ordered insn offsets, deduped block set,
+the headless harness and the `desktop` / `desktop-render` / `desktop-test` /
+`docker-desktop` targets are 03's, **as is the `.asmtrace` reader**
+(`asmdesk::Recording`, `load_recording`); event field names (`"k"`, `basis` =
+`"rel"`|`"abs"`, `off`, `step`, `disasm`, the `end` footer's `truncated` and
+`drops`) plus `make asmtrace-golden` and `tests/golden-asmtrace/` are 01's
+([asmtrace-schema.md](asmtrace-schema.md)). What this doc needed on top of
+`Recording` is a typed decode, which shipped as `asmdesk::Streams`
+(`desktop/src/doc/streams.h`) exposing: the trace stream (ordered insn offsets, deduped block set,
 `basis`, `truncated`, totals), the dataflow stream (per-step `insn_off`, flattened
 `at_val_rec_t`-shaped records, defuse edges, truncation), optional per-offset `disasm`
 (D10), hot-edge survey entries (statistical provenance), and the metadata header (routine
@@ -100,7 +123,8 @@ edges, semantics identical to `asmtest_slice_backward`/`_forward`, zero engine d
 
 **Steps.**
 1. Create `desktop/src/analysis/slice.h` + `slice.cpp` (C++17, standard library only — not
-   even `asmtest_valtrace.h`, so the fixture tests need no repo headers).
+   even `asmtest_valtrace.h`, so the fixture tests need no repo headers). **Shipped in
+   namespace `asmdesk`**, like the rest of `desktop/src/`.
 2. Implement the closure rule below over a prebuilt adjacency list (O(V+E) per query; the
    C slicer rescans edges, O(V·E) — same result; the difference matters at PT scale).
 3. Add the two test binaries below and wire them into `mk/desktop.mk`'s `desktop-test`
@@ -135,8 +159,12 @@ fixed point. Report ascending, deduplicated. A valid origin with no edges yields
 `{0,1,2}`; forward(1) = `{1,2,4,5}`; forward(5) = `{5}`; backward(0) = `{0}`;
 forward(6) = backward(7) = `{}`; an edge with `to_step = 9 ≥ nsteps` is ignored;
 `contains()` agrees with membership. `desktop/test/test_slice_diff.cpp` (links
-`$(BUILD)/dataflow.o` — **full-app test half only**): fill an `asmtest_defuse_t` by hand
-for the fixture plus 200 pseudo-random graphs from a fixed seed (≤64 steps, ≤256 edges);
+`$(BUILD)/dataflow.o` — **test half only**; it rides `desktop-test`
+unconditionally because `dataflow.o` has no Capstone or Unicorn undefined
+symbols and so builds with `cc` alone, and a parity check that could self-skip
+would pin nothing): fill an `asmtest_defuse_t` by hand for the fixture plus 200
+pseudo-random graphs from a fixed **LCG** seed (not `<random>`, whose engines
+are implementation-defined across standard libraries) (≤64 steps, ≤256 edges);
 for every step assert `dt_slice_forward/backward` equals the C
 [`_forward_seed`/`_backward_seed`](../../../include/asmtest_valtrace.h#L218) results and
 `dt_slice::contains` equals [`asmtest_slice_contains`](../../../src/dataflow.c#L743).
@@ -158,6 +186,10 @@ D4's spine; it exists before the views so they register with it.
 2. Parse/format the textual form (golden tests, the `y` copy-link action, 06's failure
    events): `asmtrace-link:v=<canvas|timeline|slice|diff>&rec=<id>[&rec_b=<id>][&step=<u32>][&off=<hex>]`.
    Unknown keys ignored (the schema's forward-compat rule); missing `v` or `rec` fails.
+   `rec` is a recording's **basename** (`recording_id`) — the schema carries no
+   recording id, and a basename is reproducible from a shell. Values are
+   percent-encoded, because a filename containing `&` or `=` would otherwise
+   parse back as a different link.
 3. Views register one handler per `dt_view`; `dt_nav_go` switches the shell view (03's
    API) then invokes the handler. Every keyboard binding routes through `dt_nav_go` — no
    view-private navigation state.
@@ -212,10 +244,10 @@ banner; hard refusal to mix basis tags.
    block-granular — never imply per-instruction coverage the data does not carry);
    `disasm` = recorded string or `""` (bare offset, dimmed — absence degrades, never
    errors).
-3. Basis rule: record the first `basis` seen; any event with a different basis sets
-   `basis_error` and the renderer draws a full-pane refusal placard ("mixed address
-   bases: region-relative and absolute events in one canvas — re-record or open the
-   streams separately"), **no rows**. Mixed bases mis-attribute every row; refusal is the
+3. Basis rule: record the first `basis` seen; any event with a different basis (or an
+   event carrying none at all, which the schema forbids defaulting) sets `basis_error`
+   and the renderer draws a full-pane refusal placard ("mixed address bases: `rel` and
+   `abs` events in one stream — …re-record, or open the streams separately"), **no rows**. Mixed bases mis-attribute every row; refusal is the
    only honest output.
 4. Truncation banner: when `truncated` is set or `insns_total` exceeds recorded events, a
    top banner (warning color, never collapsible): "TRUNCATED: heat computed over N of M
@@ -376,9 +408,12 @@ patient-zero mechanism** — [05-loom-day-one.md](05-loom-day-one.md) consumes
 
 **Steps.**
 1. Create `desktop/src/analysis/diff.h` + `diff.cpp` (pure over two `dt_recording`s).
-2. Preconditions (refuse with a reason, never a garbage diff): same routine identity
-   (metadata code-bytes hash must match; name informational — per 01's header), same
-   `basis` tag, both have a trace stream. On mismatch: `err` set, empty diff, `false`.
+2. Preconditions (refuse with a reason, never a garbage diff): same `basis` tag, same
+   `arch`, both have a trace or coverage stream. On mismatch: `err` set, empty diff,
+   `false`. **Routine identity cannot be checked in v1** — the schema Envelope carries no
+   code-bytes hash — so instead of assuming it, every diff carries `identity_note`
+   stating exactly what was and was not verified, and the panel renders it as a row. A
+   header identity field is a Phase-3-freeze item for 01.
 3. Coverage: `only_a` / `only_b` / `both` over the deduped block sets. Heat delta: per
    distinct offset, `(count_a, count_b)` from the ordered insn streams; report offsets
    where they differ, plus block starts. Hot-edge delta: join survey edges on `(from,to)`,
@@ -461,12 +496,16 @@ states) and a timeline post-divergence dump showing the dashed treatment.
 fixture; all view tests riding `desktop-test`; changelog.
 
 **Steps.**
-1. Extend 01's corpus generator (`make asmtrace-golden`) with the fixtures these views
-   need **if 01 has not already shipped them**: `trunc-trace` (`truncated` +
-   `insns_total >` recorded), `trunc-dataflow` (dropped operand records), `mixed-basis`
-   (hand-authored NDJSON with one region + one abs trace event — invalid by intent,
-   excluded from round-trip tests; hand-authoring is valid per the plan's D1),
-   `no-disasm` (D10 absence), and the same-routine diff pair. Coordinate names with 01.
+1. **As shipped**, in two parts. The generator (`tools/asmtrace_record.c`) grew `trace`
+   events, so the committed corpus now feeds the canvas with REAL recorded data. It
+   deliberately emits **no `coverage` event**: the L0 value producer measures executed
+   *steps*, not basic blocks, and block starts are not recoverable from an offset stream
+   without instruction lengths — reconstructing them would be a guess wearing a
+   measurement's clothes. Everything a clean deterministic run cannot produce is
+   hand-authored under `tests/golden-asmtrace/views/` (a never-regenerated sibling of
+   `dishonest/` and `export/`, with its own README): `loop-coverage` (heat > 1 + a real
+   coverage event), `trunc-trace`, `trunc-dataflow`, `mixed-basis`, `no-disasm`, and the
+   `pair-a`/`pair-b` diff pair.
 2. Confirm every T3–T7 test consumes fixtures from `tests/golden-asmtrace/` only, so
    `make asmtrace-golden && git diff --exit-code tests/golden-asmtrace` stays the one
    regeneration gate (D6). Re-verify the render-only/full split: nothing in T1–T7 links

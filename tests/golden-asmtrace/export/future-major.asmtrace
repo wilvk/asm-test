@@ -1,0 +1,3 @@
+{"asmtrace":2,"container":"ndjson","producer":{"name":"asmspy","version":"9.9.9"},"provenance":{"backend":"ptrace-tree","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"k":"call","tid":1,"depth":0,"addr":4198710,"name":"main","module":"exe"}
+{"k":"end","events":1,"truncated":false,"drops":{"lost":0,"throttled":false}}

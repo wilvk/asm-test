@@ -1,0 +1,6 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-tree","exact":true,"trust":"exact"},"arch":"x86_64","pid":4242}
+{"k":"note","text":"FIXTURE: a future kind (\"mem\", a reserved registry row with no v1 producer) and an unknown FIELD on a known kind. Both are ignored, and the export of the known events is unaffected — the schema's forward-compatibility rule."}
+{"k":"call","tid":4242,"depth":0,"addr":4198710,"name":"main","module":"spy_victim","future_field":{"nested":[1,2,{"deep":"}not a brace"}]}}
+{"k":"mem","step":0,"ea":6295624,"size":8,"rw":"w"}
+{"k":"call","tid":4242,"depth":1,"addr":4198800,"name":"work","module":"spy_victim"}
+{"k":"end","events":4,"truncated":false,"drops":{"lost":0,"throttled":false}}

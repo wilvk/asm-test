@@ -1,0 +1,7 @@
+banner=TRUNCATED: annotations computed over 3 of 5 steps, 6 operand records; 2 step(s) have no df_step event and are shown blank, not as offset 0; lost=12; throttled
+rows=5
+0|0x0|mov rax, rdi|->0x28|0/1
+1|0x3|add rax, rsi|[0x601048]<-[wide]|1/1
+2|(unknown)|(no df_step event — this step was dropped)||0/0
+3|(unknown)|(no df_step event — this step was dropped)||0/0
+4|0x12|ret||1/0

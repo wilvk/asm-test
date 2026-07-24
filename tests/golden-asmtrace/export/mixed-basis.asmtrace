@@ -1,0 +1,5 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-region","exact":true,"trust":"exact"},"arch":"x86_64","pid":4242}
+{"k":"note","text":"FIXTURE (dishonesty): one region-relative trace event and one absolute one in the same stream. No producer emits this; it is hand-authored so the refusal has a test. Merging the two bases into one coverage record mis-attributes every line of it, so --lcov must refuse by name rather than emit a plausible-looking record."}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"push rbp"}
+{"k":"trace","basis":"abs","kind":"insn","off":4198710,"disasm":"mov rax, rdi"}
+{"k":"end","events":3,"truncated":false,"drops":{"lost":0,"throttled":false}}

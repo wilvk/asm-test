@@ -1,0 +1,8 @@
+banner=cones incomplete: trace truncated — every cone here is a LOWER BOUND on what actually produced or consumed the value, not the whole story (2 step(s) carry no df_step event)
+selected=1
+nodes=3 edges=2
+  0@0 [back] 0x0  mov rax, rdi
+  1@1 [both] 0x3  add rax, rsi
+  4@2 [fwd] 0x12  ret
+  0->1 lane=0 loc=reg#35
+  1->4 lane=1 loc=reg#35

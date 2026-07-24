@@ -7,6 +7,9 @@
 
 #include "imgui.h"
 
+#include "analysis/slice.h"
+#include "views/views_draw.h"
+
 namespace asmdesk {
 
 // The verbatim greyed-out-shows-why reason (plan D2): an engine door disabled in
@@ -33,6 +36,78 @@ const char *shell_banner(const Recording &r) {
             buf += " (throttled)";
     }
     return buf.c_str();
+}
+
+int shell_open(ShellState &s, const std::string &path, std::string &err) {
+    int idx = s.ws.open(path, err);
+    if (idx < 0)
+        return -1;
+    // Decode once, at open. Every builder below is a pure function of Streams,
+    // so no view re-parses JSON per frame.
+    s.streams.resize(s.ws.recordings.size());
+    s.streams[static_cast<size_t>(idx)] =
+        decode_streams(s.ws.recordings[static_cast<size_t>(idx)]);
+    shell_wire_nav(s);
+    return idx;
+}
+
+void shell_close(ShellState &s, size_t idx) {
+    if (idx >= s.ws.recordings.size())
+        return;
+    s.ws.close(idx);
+    if (idx < s.streams.size())
+        s.streams.erase(s.streams.begin() + static_cast<long>(idx));
+    if (s.b_index == static_cast<int>(idx))
+        s.b_index = -1;
+    else if (s.b_index > static_cast<int>(idx))
+        s.b_index--;
+    shell_wire_nav(s);
+}
+
+const Streams *shell_a(const ShellState &s) {
+    if (s.active_tab < 0 || s.active_tab >= static_cast<int>(s.streams.size()))
+        return nullptr;
+    return &s.streams[static_cast<size_t>(s.active_tab)];
+}
+
+const Streams *shell_b(const ShellState &s) {
+    if (s.b_index < 0 || s.b_index >= static_cast<int>(s.streams.size()))
+        return nullptr;
+    if (s.b_index == s.active_tab)
+        return nullptr; // a recording is never diffed against itself
+    return &s.streams[static_cast<size_t>(s.b_index)];
+}
+
+// Find an open recording by its deep-link id (its basename).
+static int index_of_id(const ShellState &s, const std::string &id) {
+    for (size_t i = 0; i < s.streams.size(); i++)
+        if (s.streams[i].id == id)
+            return static_cast<int>(i);
+    return -1;
+}
+
+void shell_wire_nav(ShellState &s) {
+    s.nav.have_recording = [&s](const std::string &id) {
+        return index_of_id(s, id) >= 0;
+    };
+    // One handler per view. They only move the SELECTION — plan D4: no view
+    // keeps its own navigation state, so a link and a keypress land identically.
+    auto go = [&s](dt_view v) {
+        return [&s, v](const dt_link &l) {
+            s.view = v;
+            int a = index_of_id(s, l.rec);
+            if (a >= 0)
+                s.active_tab = a;
+            s.b_index = l.rec_b.empty() ? -1 : index_of_id(s, l.rec_b);
+            s.selected_step = l.step;
+            s.selected_off = l.off;
+            if (l.step)
+                s.cone_active = true;
+        };
+    };
+    for (dt_view v :
+         {dt_view::canvas, dt_view::timeline, dt_view::slice, dt_view::diff})
+        dt_nav_register(s.nav, v, go(v));
 }
 
 static std::string base_name(const std::string &path) {
@@ -71,6 +146,9 @@ static void draw_doors(ShellState &s) {
     ImGui::TextDisabled(
         "Author/Inspect open an empty tab (views land in docs 06/08)");
 #endif
+    ImGui::Spacing();
+    if (ImGui::Button("Keyboard bindings"))
+        s.show_help = !s.show_help;
 }
 
 // A recording's summary pane: provenance chrome + the honesty banner + per-kind
@@ -110,6 +188,71 @@ static void draw_summary(const Recording &r) {
                     (unsigned long long)r.unknown_kinds);
 }
 
+// One open recording's pane: the summary chrome (03), then the replay views
+// over it (04). Each builder is called fresh per frame from the decoded streams
+// — they are pure and cheap at corpus scale; the threshold at which that stops
+// being true is the worker-thread hand-off 04 describes, which lands with the
+// first PT-scale recording.
+static void draw_recording_tab(ShellState &s, const Recording &r) {
+    if (ImGui::BeginTabBar("views")) {
+        if (ImGui::BeginTabItem("Summary")) {
+            draw_summary(r);
+            ImGui::EndTabItem();
+        }
+        const Streams *a = shell_a(s);
+        const Streams *b = shell_b(s);
+        if (a != nullptr) {
+            if (ImGui::BeginTabItem("Canvas")) {
+                s.view = dt_view::canvas;
+                draw_canvas(b ? dt_canvas_build2(*a, *b) : dt_canvas_build(*a));
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Timeline")) {
+                s.view = dt_view::timeline;
+                dt_slice cone;
+                if (s.cone_active && s.selected_step)
+                    cone = dt_slice_backward(a->df.edges, a->df.nsteps,
+                                             *s.selected_step);
+                const dt_slice *lit = s.cone_active ? &cone : nullptr;
+                draw_timeline(b ? dt_timeline_build2(*a, *b, lit)
+                                : dt_timeline_build(*a, lit));
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Slice")) {
+                s.view = dt_view::slice;
+                draw_slice_view(dt_slice_view_build(*a, s.selected_step));
+                if (b != nullptr)
+                    // Never a fake merged graph: the two-recording slice needs
+                    // the Wave-2 state-diff producer, and until it exists this
+                    // says so instead of inventing one.
+                    ImGui::TextDisabled(
+                        "showing A only — slice diff lands with the "
+                        "state-diff producer (Wave 2)");
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Diff")) {
+                s.view = dt_view::diff;
+                if (b == nullptr)
+                    ImGui::TextDisabled(
+                        "attach a second recording (press d) to "
+                        "compare");
+                else
+                    draw_diff_view(dt_diff_view_build(*a, *b));
+                ImGui::EndTabItem();
+            }
+        }
+        if (ImGui::BeginTabItem("Backends")) {
+            draw_completeness(s.completeness, s.repo_root);
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    if (!s.status.empty()) {
+        ImGui::Separator();
+        ImGui::TextWrapped("%s", s.status.c_str());
+    }
+}
+
 // The recording-open dialog: a text field + Open/Cancel. A Workspace::open error
 // renders verbatim in the dialog — never a silent no-op.
 static void draw_open_dialog(ShellState &s) {
@@ -118,7 +261,7 @@ static void draw_open_dialog(ShellState &s) {
     ImGui::InputText("##open_path", s.open_path, sizeof s.open_path);
     if (ImGui::Button("Open")) {
         std::string err;
-        int idx = s.ws.open(s.open_path, err);
+        int idx = shell_open(s, s.open_path, err);
         if (idx < 0) {
             s.open_error = err;
         } else {
@@ -158,14 +301,14 @@ void draw_shell(ShellState &s) {
             bool keep_open = true;
             if (ImGui::BeginTabItem(title.c_str(), &keep_open)) {
                 s.active_tab = static_cast<int>(i);
-                draw_summary(r);
+                draw_recording_tab(s, r);
                 ImGui::EndTabItem();
             }
             if (!keep_open)
                 to_close = static_cast<int>(i);
         }
         if (to_close >= 0)
-            s.ws.close(static_cast<size_t>(to_close));
+            shell_close(s, static_cast<size_t>(to_close));
 
         // Placeholder door tabs (full app only; empty until docs 06/08).
         for (size_t i = 0; i < s.door_tabs.size(); ++i) {
@@ -182,6 +325,11 @@ void draw_shell(ShellState &s) {
 
     if (s.open_dialog)
         draw_open_dialog(s);
+    if (s.show_help) {
+        ImGui::Begin("Keyboard bindings", &s.show_help);
+        draw_bindings_help();
+        ImGui::End();
+    }
 }
 
 } // namespace asmdesk

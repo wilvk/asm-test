@@ -1,0 +1,7 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-region","exact":true,"trust":"exact"},"arch":"x86_64","pid":4242}
+{"k":"note","text":"FIXTURE (dishonesty): a region trace whose buffer filled — coverage names 2 of the 5 blocks that were actually seen (blocks_total > len(blocks)). The lcov record this produces is a LOWER BOUND on the executed blocks, and --lcov must say so on stderr; the format itself has no comment syntax, so the record stays pristine for genhtml."}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"push rbp"}
+{"k":"trace","basis":"rel","kind":"insn","off":1,"disasm":"mov rbp, rsp"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"call 0x40"}
+{"k":"coverage","basis":"rel","blocks":[0,64],"blocks_total":5,"insns_total":93,"truncated":true}
+{"k":"end","events":5,"truncated":true,"drops":{"lost":0,"throttled":false}}

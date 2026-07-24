@@ -1,0 +1,16 @@
+{"traceEvents": [
+  {"name": "heat", "cat": "trace", "ph": "C", "ts": 0, "pid": 1, "args": {"0x0": 1}},
+  {"name": "heat", "cat": "trace", "ph": "C", "ts": 1, "pid": 1, "args": {"0x5": 1}},
+  {"name": "heat", "cat": "trace", "ph": "C", "ts": 2, "pid": 1, "args": {"0xc": 1}},
+  {"name": "heat", "cat": "trace", "ph": "C", "ts": 3, "pid": 1, "args": {"0xf": 1}},
+  {"name": "heat", "cat": "trace", "ph": "C", "ts": 4, "pid": 1, "args": {"0x12": 1}},
+  {"name": "heat", "cat": "trace", "ph": "C", "ts": 5, "pid": 1, "args": {"0xc": 2}},
+  {"name": "heat", "cat": "trace", "ph": "C", "ts": 6, "pid": 1, "args": {"0xf": 2}},
+  {"name": "heat", "cat": "trace", "ph": "C", "ts": 7, "pid": 1, "args": {"0x12": 2}},
+  {"name": "heat", "cat": "trace", "ph": "C", "ts": 8, "pid": 1, "args": {"0xc": 3}},
+  {"name": "heat", "cat": "trace", "ph": "C", "ts": 9, "pid": 1, "args": {"0xf": 3}},
+  {"name": "heat", "cat": "trace", "ph": "C", "ts": 10, "pid": 1, "args": {"0x12": 3}},
+  {"name": "heat", "cat": "trace", "ph": "C", "ts": 11, "pid": 1, "args": {"0x14": 1}}
+ ],
+ "displayTimeUnit": "ms",
+ "otherData": {"ts_unit": "event ordinal — the producers record no timestamps", "truncated": false, "lost": 0, "heat_offsets_dropped": 0}}

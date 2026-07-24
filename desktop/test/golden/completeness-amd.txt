@@ -1,0 +1,30 @@
+amd-linux-x86_64-9e05f0f2 — AMD Ryzen 9 4900HS with Radeon Graphics — Ubuntu 24.04.3 LTS / 6.14.3-061403-generic — d3e0315 2026-07-11T10:26:40Z
+27 rows, 23 available, 21 measured, 21 complete, 0 truncated
+TIER         BACKEND      ARCH     SCOPE  COMPLETENESS      STATUS
+emulator     guest        x86_64   guest  4 insns complete  ok
+emulator     guest        win64    guest  4 insns complete  ok
+emulator     guest        arm64    guest  3 insns complete  ok
+emulator     guest        riscv64  guest  3 insns complete  ok
+emulator     guest        arm32    guest  3 insns complete  ok
+native-hw    single_step  x86_64   host   4/4 complete      ok  [math.add3]
+native-auto  single_step  x86_64   host   4/4 complete      ok  [math.add3]
+native-hw    single_step  x86_64   host   14/14 complete    ok  [loop.sum_to_4]
+native-auto  single_step  x86_64   host   14/14 complete    ok  [loop.sum_to_4]
+native-hw    single_step  x86_64   host   50/50 complete    ok  [loop.sum_to_16]
+native-auto  single_step  x86_64   host   50/50 complete    ok  [loop.sum_to_16]
+native-hw    single_step  x86_64   host   194/194 complete  ok  [loop.sum_to_64]
+native-auto  single_step  x86_64   host   194/194 complete  ok  [loop.sum_to_64]
+native-hw    single_step  x86_64   host   602/602 complete  ok  [loop.sum_to_200]
+native-auto  single_step  x86_64   host   602/602 complete  ok  [loop.sum_to_200]
+native-hw    single_step  x86_64   host   36/36 complete    ok  [recurse.tri_4]
+native-auto  single_step  x86_64   host   36/36 complete    ok  [recurse.tri_4]
+native-hw    single_step  x86_64   host   132/132 complete  ok  [recurse.tri_16]
+native-auto  single_step  x86_64   host   132/132 complete  ok  [recurse.tri_16]
+native-hw    single_step  x86_64   host   260/260 complete  ok  [recurse.tri_32]
+native-auto  single_step  x86_64   host   260/260 complete  ok  [recurse.tri_32]
+hwtrace      intel_pt     host     host   —                 built without libipt
+hwtrace      amd_lbr      host     host   —                 no AMD branch records (needs Zen 3 BRS / Zen 4 LbrExtV2)
+hwtrace      single_step  host     host   —                 ok
+hwtrace      coresight    host     host   —                 built without OpenCSD
+dynamorio    dynamorio    host     host   —                 no libdynamorio resolved: set ASMTEST_DR_LIB or DYNAMORIO_HOME, or bundle it (a bare libdynamorio.so on the loader path is still tried at init)
+disasm       capstone     host     host   —                 ok
