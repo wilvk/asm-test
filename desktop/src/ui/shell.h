@@ -44,6 +44,7 @@ struct ShellState {
     bool show_help = false;
     bool show_learn = false;
     bool show_author = false;
+    bool show_inspect = false;
     std::string status; // the status bar: nav refusals land here verbatim
     CompletenessState completeness;
     // The Loom's per-tab state (05-loom-day-one.md). Woven once per recording,
@@ -55,6 +56,9 @@ struct ShellState {
     CapState caps;
     // The Author door (06-doors-and-learning.md T5); full build only.
     AuthorState author;
+    // The Inspect door (07-serve-live-host.md T4/T5). In BOTH binaries: it
+    // links no engine and captures through the `asmspy --serve` subprocess.
+    InspectState inspect;
     std::string repo_root = ".";
 };
 

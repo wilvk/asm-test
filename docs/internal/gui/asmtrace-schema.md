@@ -87,14 +87,14 @@ Rules:
   (a `survey` edge is evidence an edge was *seen*, never that one was *not
   taken*).
 - `skip.code` is the positive engine code, not an errno:
-  [`ASMSPY_REGION_NEVER_RAN`](../../../cli/asmspy.h#L236) 1,
-  [`ASMSPY_SAMPLE_UNAVAIL`](../../../cli/asmspy.h#L524) 2,
-  [`ASMSPY_DATAFLOW_UNAVAIL`](../../../cli/asmspy.h#L286) 3,
-  [`ASMSPY_WATCH_UNAVAIL`](../../../cli/asmspy.h#L555) 4,
-  [`ASMSPY_ETRACEE_I386`](../../../cli/asmspy.h#L562) 5. `reason` comes from the
+  [`ASMSPY_REGION_NEVER_RAN`](../../../cli/libasmspy.h#L271) 1,
+  [`ASMSPY_SAMPLE_UNAVAIL`](../../../cli/libasmspy.h#L559) 2,
+  [`ASMSPY_DATAFLOW_UNAVAIL`](../../../cli/libasmspy.h#L321) 3,
+  [`ASMSPY_WATCH_UNAVAIL`](../../../cli/libasmspy.h#L590) 4,
+  [`ASMSPY_ETRACEE_I386`](../../../cli/libasmspy.h#L597) 5. `reason` comes from the
   measuring source — [`asmtest_ibs_unavail_reason`](../../../include/asmtest_ibs.h#L137),
-  [`asmspy_hwdebug_reason`](../../../cli/asmspy.h#L611),
-  [`asmspy_strerror`](../../../cli/asmspy.h#L618) — never a guess.
+  [`asmspy_hwdebug_reason`](../../../cli/libasmspy.h#L646),
+  [`asmspy_strerror`](../../../cli/libasmspy.h#L653) — never a guess.
 - **A skip is a recording.** A run that skipped still writes a header and a
   clean `end`; the `end` carries the skip. An empty file is a *bug*; a
   skip-carrying file is *data*.
@@ -162,7 +162,7 @@ re-derive.
 ```
 
 The `--stream` engine hands the front-end a formatted line only
-([`asmspy_stream_sink`](../../../cli/asmspy.h#L336)), so v1 records the text
+([`asmspy_stream_sink`](../../../cli/libasmspy.h#L371)), so v1 records the text
 honestly rather than inventing fields it did not measure. Structuring the line
 is engine work, out of scope here.
 
@@ -172,7 +172,7 @@ is engine work, out of scope here.
 {"k":"call","tid":4242,"depth":2,"addr":4198710,"name":"helper","module":"spy_victim"}
 ```
 
-Fields mirror [`asmspy_tree_call_t`](../../../cli/asmspy.h#L413). `name`/`module`
+Fields mirror [`asmspy_tree_call_t`](../../../cli/libasmspy.h#L448). `name`/`module`
 are transient in the sink and MUST be copied by the writer.
 
 ### `graph` — whole-process call-graph snapshot
@@ -181,10 +181,10 @@ are transient in the sink and MUST be copied by the writer.
 {"k":"graph","nodes":[{"addr":4198710,"name":"work","module":"spy_victim","kind":"internal","invocations":3,"out_calls":6,"fanout":2}],"edges":[{"from":4198710,"to":4198800,"count":6}]}
 ```
 
-Node fields mirror [`asmspy_gnode_t`](../../../cli/asmspy.h#L365) plus the
+Node fields mirror [`asmspy_gnode_t`](../../../cli/libasmspy.h#L400) plus the
 machine-readable class token `kind` (`internal` \| `external` \| `jit` \|
 `unknown`) the JSON exporter already computes; edge fields mirror
-[`asmspy_gedge_t`](../../../cli/asmspy.h#L374), keyed by entry **address** (not
+[`asmspy_gedge_t`](../../../cli/libasmspy.h#L409), keyed by entry **address** (not
 node index) so a consumer may sort/filter nodes without invalidating edges. One
 snapshot is written at detach.
 
@@ -194,7 +194,7 @@ snapshot is written at detach.
 {"k":"topo","mode":"syscalls","tasks":[{"tid":4242,"tgid":4242,"ppid":4200,"leader":true,"comm":"victim","exe":"spy_victim","inv":91}]}
 ```
 
-Task fields mirror [`asmspy_task_t`](../../../cli/asmspy.h#L470); `mode` is what
+Task fields mirror [`asmspy_task_t`](../../../cli/libasmspy.h#L505); `mode` is what
 `inv` counts (`"syscalls"` \| `"calls"`).
 
 ### `survey` — statistical hot-edge histogram
@@ -203,7 +203,7 @@ Task fields mirror [`asmspy_task_t`](../../../cli/asmspy.h#L470); `mode` is what
 {"k":"survey","sampler":"ibs-op","edges":[{"from_addr":4198710,"to_addr":4198800,"from":"work+0x12 [victim]","to":"helper","count":812,"mispred":3,"is_return":0}],"samples":10442,"branch_samples":9001,"lost":0,"throttled":false}
 ```
 
-Edge fields mirror [`asmspy_sample_edge_t`](../../../cli/asmspy.h#L509); the
+Edge fields mirror [`asmspy_sample_edge_t`](../../../cli/libasmspy.h#L544); the
 four trailing counters are the sink's honesty channel. **Always `exact:false`.**
 `lost`/`throttled` are the drop record: a survey that dropped samples says so.
 
@@ -213,7 +213,7 @@ four trailing counters are the sink's honesty channel. **Always `exact:false`.**
 {"k":"watch","hit_no":1,"tid":4242,"pc":4198750,"addr":6295624,"is_write":1,"value_ok":true,"value_len":4,"value":42,"func":"work","module":"watch_victim","off":18}
 ```
 
-Fields mirror [`asmspy_watch_hit_t`](../../../cli/asmspy.h#L585). `is_write` is
+Fields mirror [`asmspy_watch_hit_t`](../../../cli/libasmspy.h#L620). `is_write` is
 `1` write / `0` read / `-1` undecodable — the third value is a real measurement
 outcome and MUST NOT be collapsed into either other. `func`/`module` are omitted
 when unresolved.
@@ -326,7 +326,10 @@ is no v1 producer. A reader ignores them like any unknown kind (see
 | `srcmap` | one source line-map row `{off,value,kind,file,col}`, mirroring [`asmtest_srcmap_entry_t`](../../../include/asmtest_trace.h#L177) | [05-loom-day-one.md](05-loom-day-one.md) |
 | `take` | take/edit provenance (the Loom fork mechanic) | [05-loom-day-one.md](05-loom-day-one.md) |
 | `codeimage` | captured code bytes at a version | [08-observer-views.md](08-observer-views.md) |
-| `session` / `cmd` / `err` | live-session lifecycle (serve-only) | [07-serve-live-host.md](07-serve-live-host.md) |
+
+`session` / `cmd` / `err` were reserved here for 07 and are now **defined** — see
+*Serve protocol* below. They are **serve-only**: they appear on a live control
+stream, never inside a `.asmtrace` file written by `--record`.
 
 Adding a kind is a **new registry row under the ignore-unknown-kinds rule** —
 never a new envelope major.
@@ -425,3 +428,218 @@ A complete, minimal recording — the reference a reader is tested against
 {"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":3,"truncated":false}
 {"k":"end","events":7,"truncated":false,"drops":{"lost":0,"throttled":false}}
 ```
+
+## Serve protocol
+
+> **Owned by [07-serve-live-host.md](07-serve-live-host.md)** (T1), appended
+> under this file's D5 append-only rule; the envelope, provenance and event
+> kinds above are unchanged and remain 01's. **01 owner sign-off: the serve
+> protocol adds no field to any existing kind and no new envelope major — it
+> defines the three kinds already reserved for 07 in the registry above and
+> otherwise only *carries* v1 events. Recorded 2026-07-24.**
+
+`asmspy --serve` turns the recording format into a **live session**: instead of
+writing one mode's events to a file, it reads commands and streams the events of
+whichever mode is running. There is no second wire format — a serve stream is the
+same NDJSON, and slicing one session out of it yields a valid `.asmtrace` file.
+
+### Transport
+
+Commands and events are both NDJSON, one object per line.
+
+| Form | Commands in | Events out |
+|---|---|---|
+| `asmspy --serve` | stdin | stdout |
+| `asmspy --serve=<path>` | the `unix(7)` `SOCK_STREAM` connection | the same connection |
+
+The socket is **filesystem-permissioned and unauthenticated by design** — that
+is the whole security model, plus `ssh <host> asmspy --serve` as the remote
+transport. **One client at a time.** EOF on the command channel means `quit`.
+
+### The control channel
+
+```json
+{"cmd":"start","mode":"log","pid":4242,"follow":false,"max":200}
+{"cmd":"pause","on":true}
+{"cmd":"stop"}
+{"cmd":"quit"}
+```
+
+| Command | Meaning |
+|---|---|
+| `start` | Begin ONE engine session (see the mode table). Refused with `err` while another session is running. |
+| `pause` | `{"on":true}` suspends **emission**, not tracing; `{"on":false}` resumes. Events produced while paused are **counted and reported**, never silently dropped (see below). |
+| `stop` | End the running session. This is a **full detach** — one engine run per `start`, no engine reuse and no attached-idle state. |
+| `quit` | `stop` if running, then exit. |
+
+Modes and their parameters — each row is one `libasmspy` engine, and the
+parameter list is exactly that engine's signature
+([`cli/libasmspy.h`](../../../cli/libasmspy.h)):
+
+| `mode` | Engine | Parameters | Emits |
+|---|---|---|---|
+| `log` | `asmspy_engine_syscalls` | `follow`, `max` | `syscall` |
+| `stream` | `asmspy_engine_stream` | `tid`, `follow`, `max` | `stream` |
+| `trace` | `asmspy_engine_region` | `tid`, `base`, `len`, `max` | `trace`, `coverage` |
+| `dataflow` | `asmspy_engine_dataflow` | `tid`, `base`, `len`, `max` | `df_step`, `df_edge` |
+| `tree` | `asmspy_engine_tree` | `tid`, `follow`, `max`, `depth`, `focus`, `module` | `call` |
+| `graph` | `asmspy_engine_graph` | `tid`, `follow`, `max` | `graph` |
+| `procs` | `asmspy_engine_procs` | `max`, `count` (`"syscalls"`\|`"calls"`) | `topo` |
+| `sample` | `asmspy_engine_sample` | `ms` | `survey` |
+| `watch` | `asmspy_engine_watch` | `addr`, `len`, `rw`, `max` | `watch` |
+| `auto` | the `--auto` selection, then `asmspy_engine_dataflow` | `module`, `sampler` (`"ibs"`\|`"sw"`\|`"auto"`), `max` | `df_step`, `df_edge` |
+
+Omitted parameters take the subcommand default. **Unknown modes, unknown
+parameters and out-of-range values are refused with `err`, never coerced** —
+`atoi("nginx")` is `0`, and a `pid` of 0 is not a diagnosis.
+
+### Refusals — the flag matrix, verbatim from the CLI
+
+The serve loop makes the *same* refusals the argument parser makes, for the same
+reasons, so the two front ends cannot disagree about what is legal:
+
+- **`tid` with `follow`** — `tid` pins ONE task, `follow` adds child processes.
+- **`tid` on `mode:"auto"`** — the IBS sampler carries no tid, so it physically
+  cannot attribute an entry to a thread; pinning to a thread that may never
+  enter the picked region is a hang generator, not a preference.
+- **`tid` on `mode:"log"`, `"procs"`, `"sample"` or `"watch"`** — those engines
+  take no `only_tid` parameter. (The syscalls engine gaining one is a separate
+  plan work-item, not this protocol's to anticipate.)
+- **`module` or `sampler` without `mode:"auto"`** — both scope the *automatic*
+  pick; on a named region they would be no-ops that read like filters.
+- **`depth` < 1** — `depth:0` asks for a tree with no levels. Omit the parameter
+  for unlimited.
+- **A second `start` while a session runs** — the budget rule (D6): one ptrace
+  jack per target tree.
+
+### Lifecycle events
+
+Three serve-only kinds, claimed in *Reserved kinds* above and defined here.
+
+#### `session` — a state transition
+
+```json
+{"k":"session","state":"started","mode":"log","pid":4242,"params":{"follow":false,"max":200}}
+{"k":"session","state":"stopped","mode":"log","events":200,"reason":"max"}
+{"k":"session","state":"skip","mode":"sample","skip":{"code":2,"reason":"IBS-Op is an AMD feature; this host is GenuineIntel"}}
+{"k":"session","state":"pick","mode":"auto","pick":{"sampler":"sw-clock","evidence":"residency","func":"event_loop","base":94207306414080,"len":320,"weight":41,"attempt":1,"of":3}}
+```
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `state` | str | yes | `"started"` \| `"pick"` \| `"stopped"` \| `"skip"`. |
+| `mode` | str | yes | The mode this transition concerns. |
+| `pid` | int | on `started` | The attached pid. |
+| `params` | obj | on `started` | The **effective** parameters, echoed after defaulting — so a client never has to guess what its omissions became. |
+| `events` | int | on `stopped` | Event lines this session emitted. |
+| `reason` | str | on `stopped` | `"max"` \| `"stop"` \| `"exit"` \| `"quit"` — why the engine returned. |
+| `paused_dropped` | int | no | Events produced while paused and therefore **not emitted**. Present whenever non-zero. |
+| `skip` | obj | on `skip` | `{"code":int,"reason":str}` — the **positive** engine skip code and `asmspy_strerror`'s (or the measuring source's) text, verbatim. |
+
+`state:"skip"` is a *successful* session that had nothing to report — the same
+distinction the `end` footer's `skip` makes. It is never an error, and a client
+that renders it as one is wrong.
+
+#### `session` `state:"pick"` — what `mode:"auto"` chose, and on what evidence
+
+`mode:"auto"` picks a region to capture instead of being told one, so it must
+say **what it picked and how good the evidence was**. One `pick` event is
+emitted per candidate attempted, between `started` and the terminal event.
+
+| `pick` field | Type | Meaning |
+|---|---|---|
+| `sampler` | str | `"ibs-op"` or `"sw-clock"` — which sampler actually ran, after `"auto"` resolved. |
+| `evidence` | str | `"entry"` or `"residency"` — **the load-bearing field**, see below. |
+| `func` | str | The chosen function's name (or `"0x…"`). |
+| `base` / `len` | u64 | The region handed to the capture engine. |
+| `weight` | u64 | Entry samples (`entry`) or residency samples (`residency`). |
+| `sites` | u32 | Distinct call sites observed arriving (`entry` only). |
+| `attempt` / `of` | int | 1-based candidate index and how many are ranked. |
+
+**`evidence` is not a synonym for `sampler`, and a client must not treat it as
+decoration.** The capture engine arms a breakpoint at the region's *entry* and
+waits for a thread to arrive, so the only evidence of the right *type* is a
+direct observation of that same event — an IBS-Op branch whose target is a
+symbol's start. That is `"entry"`.
+
+`"residency"` is the portable fallback: a software-clock PC histogram says a
+function was *executing*, which is a different claim. A function entered once
+and never re-entered is the top residency winner and an entry breakpoint there
+can never fire again — the rule's known failure shape. So a client showing a
+`residency` pick **must label it as weaker evidence**, and successive `pick`
+events with rising `attempt` are the server walking the ranked candidates after
+a `REGION_NEVER_RAN`, which is an honest refusal about *that candidate* and not
+a fact about the target.
+
+#### `err` — a refused command
+
+```json
+{"k":"err","reason":"--tid pins ONE task; --follow adds child processes — drop one","cmd":"start"}
+```
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `reason` | str | yes | Human text naming the rule that refused it. |
+| `cmd` | str | no | The `cmd` that was refused, when it parsed far enough to know. |
+
+An `err` **never** ends a running session and never exits the loop: the client
+is expected to correct and retry.
+
+#### `cmd` — the accepted-command echo
+
+```json
+{"k":"cmd","cmd":"start","mode":"log"}
+```
+
+Emitted for each command the server **accepted**, so a captured serve stream
+states what was asked for and not merely what came back. A refused command
+produces `err` instead, never both.
+
+### The two protocol laws
+
+1. **A session's events are exactly `--record`'s events.** Between a
+   `state:"started"` event and the terminal `session` event, the server emits
+   the mode's own **provenance header line**, then that mode's record-mode
+   events through the *same* serializers
+   ([`cli/asmtrace_ndjson.c`](../../../cli/asmtrace_ndjson.c)), then the `end`
+   footer. There is no serve-specific event body anywhere. A client that
+   extracts `[header … end]` **and drops the three serve-only kinds** therefore
+   holds a **valid `.asmtrace` recording**, and the golden-corpus readers parse
+   it with no serve awareness at all.
+
+   Two consequences worth stating rather than discovering:
+
+   - A serve stream is **not itself** a `.asmtrace` file. It is a sequence of
+     them, bracketed by lifecycle events. Header lines carry `asmtrace`; every
+     other line carries `k`.
+   - **The slice must be filtered.** `session` brackets a session from
+     *outside* the `[header … end]` range, but `cmd` and `err` are emitted the
+     moment they happen — which can be *during* a session, so they land inside
+     that range. They are not recording events and the `end` footer's `events`
+     count does **not** include them. A client that slices without filtering
+     will therefore see more lines than the footer declares and must not read
+     that as a corrupt recording: it is a control stream, correctly reporting
+     both things. Drop `session`/`cmd`/`err`, and `end.events` matches exactly.
+
+2. **Sorting and filtering are client-side.** The server streams; the client
+   ranks, sorts, redacts and hides. The one exception is the **tree filter**
+   (`depth`/`focus`/`module`), which is engine-side by design — it bounds what
+   the engine *emits* while still tracking every call and return, so the surviving
+   lines' depths stay true. Nothing else may migrate server-side: a server that
+   sorted would be deciding what the operator is allowed to see.
+
+### Honesty rules specific to serve
+
+- **A pause is a recorded gap.** Events produced while `pause` is on are not
+  emitted, so the session's `end` is marked `truncated` and the terminal
+  `session` event carries `paused_dropped`. A gap the client asked for is still
+  a gap, and the recording says so.
+- **A torn session is a torn recording.** If the server dies or the pipe breaks
+  mid-session, the last session has no `end` — which the reader already reports
+  as torn (*Compatibility rules*). No `atexit` rescue, for the same reason 01
+  has none.
+- **Payloads are separated, not withheld.** Serve emits the same
+  payload-separated `syscall` events record mode does, with
+  `"redacted":false` stated honestly in the header. Redaction is a **renderer**
+  duty ([08-observer-views.md](08-observer-views.md)); the wire never pretends
+  content was withheld when it was not.

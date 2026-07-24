@@ -31,8 +31,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h> /* strcasecmp — the symbol picker's name sort */
+#include <strings.h>    /* strcasecmp — the symbol picker's name sort */
+#include <sys/socket.h> /* --serve=<path>: the unix(7) control socket */
 #include <sys/uio.h> /* process_vm_readv — read a function's bytes to disassemble */
+#include <sys/un.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -61,8 +63,18 @@
 /* ================================================================== */
 typedef struct {
     asmtrace_writer_t file; /* --record=<path>                          */
-    asmtrace_writer_t out;  /* --json (stdout)                          */
+    asmtrace_writer_t out;  /* --json (stdout) / --serve (the client)   */
     int have_file, have_out;
+    /* --serve only (NULL/0 in record mode, which is single-threaded and
+     * ungated). `mu` serialises this rec_t's lines against the serve loop's OWN
+     * lifecycle lines, which the COMMAND thread writes to the same stream while
+     * the tracer thread is emitting — without it a refusal could land inside an
+     * event. `paused` gates emission: a paused session keeps tracing but stops
+     * writing, and the events it swallows are COUNTED and the recording marked
+     * truncated, because a gap the client asked for is still a gap. */
+    pthread_mutex_t *mu;
+    volatile int paused;
+    unsigned long long paused_dropped;
 } rec_t;
 
 /* Is anything being recorded? (Sinks tee only when this is true.) */
@@ -92,8 +104,14 @@ static void proc_cmdline(pid_t pid, char *out, size_t cap) {
 /* Open the requested recording channels and write the header to each. Returns
  * 0, or -1 when a --record path could not be opened (the caller must fail: a
  * recording the user ASKED for and did not get is not a detail). */
-static int rec_open(rec_t *r, const char *path, int json, const char *backend,
-                    int exact, const char *trust, pid_t pid) {
+/* `stream` is the NDJSON output channel: stdout for --json, the client
+ * connection for --serve, NULL for neither. It is a FILE* rather than a flag
+ * because --serve=<socket> writes the very same bytes to a different fd, and a
+ * second copy of the header/emit plumbing is exactly what one-writer-TU exists
+ * to prevent. */
+static int rec_open(rec_t *r, const char *path, FILE *stream,
+                    const char *backend, int exact, const char *trust,
+                    pid_t pid) {
     asmtrace_prov_t prov = {backend, exact, trust, 0, NULL, 0};
     char cmd[256];
     memset(r, 0, sizeof *r);
@@ -108,8 +126,8 @@ static int rec_open(rec_t *r, const char *path, int json, const char *backend,
         asmtrace_header(&r->file, "asmspy", &prov, (long)pid,
                         cmd[0] ? cmd : NULL);
     }
-    if (json) {
-        asmtrace_open_file(&r->out, stdout, 0);
+    if (stream) {
+        asmtrace_open_file(&r->out, stream, 0);
         r->have_out = 1;
         asmtrace_header(&r->out, "asmspy", &prov, (long)pid,
                         cmd[0] ? cmd : NULL);
@@ -120,12 +138,26 @@ static int rec_open(rec_t *r, const char *path, int json, const char *backend,
 static void rec_emit(rec_t *r, const char *kind, const char *body) {
     if (!r)
         return;
-    if (r->have_file)
-        asmtrace_emit(&r->file, kind, body);
-    if (r->have_out) {
-        asmtrace_emit(&r->out, kind, body);
-        fflush(stdout); /* a live stream must be readable as it is produced */
+    if (r->mu)
+        pthread_mutex_lock(r->mu);
+    if (r->paused) {
+        /* Tracing continues; emission does not. Count it and mark the
+         * recording truncated — a client-requested gap is still a gap, and the
+         * `end` footer must not claim a complete stream. */
+        r->paused_dropped++;
+        r->file.truncated = 1;
+        r->out.truncated = 1;
+    } else {
+        if (r->have_file)
+            asmtrace_emit(&r->file, kind, body);
+        if (r->have_out) {
+            asmtrace_emit(&r->out, kind, body);
+            /* a live stream must be readable as it is produced */
+            fflush(r->out.f);
+        }
     }
+    if (r->mu)
+        pthread_mutex_unlock(r->mu);
 }
 
 static void rec_emitf(rec_t *r, const char *kind, const char *fmt, ...) {
@@ -944,7 +976,8 @@ static int cmd_log(pid_t pid, int follow, long n, int json,
     rec_t rec;
     log_rec_ctx c = {&rec, !json};
     int rc;
-    if (rec_open(&rec, record, json, "ptrace-syscalls", 1, "exact", pid) != 0)
+    if (rec_open(&rec, record, json ? stdout : NULL, "ptrace-syscalls", 1,
+                 "exact", pid) != 0)
         return 1;
     rc = asmspy_engine_syscalls(pid, follow, n, &g_sigstop, log_print_sink, &c);
     rec_close(&rec, 0, 0, rc > 0 ? rc : 0, NULL);
@@ -982,7 +1015,8 @@ static int cmd_stream(pid_t pid, pid_t tid, int follow, long n, int json,
     asmspy_symtab_t t;
     rec_t rec;
     stream_rec_ctx c = {&rec, !json};
-    if (rec_open(&rec, record, json, "ptrace-stream", 1, "exact", pid) != 0)
+    if (rec_open(&rec, record, json ? stdout : NULL, "ptrace-stream", 1,
+                 "exact", pid) != 0)
         return 1;
     asmspy_symtab_load(pid, &t); /* best-effort; raw addresses if empty */
     int rc = asmspy_engine_stream(pid, tid, follow, n, &g_sigstop, &t,
@@ -1185,7 +1219,7 @@ static int cmd_tree(pid_t pid, pid_t tid, int follow, long n,
     asmspy_symtab_load(pid, &t); /* best-effort; raw addrs if empty */
     tree_capture tc = {0};
     int export = json || dot;
-    if (rec_open(&rec, record, 0, "ptrace-tree", 1, "exact", pid) != 0) {
+    if (rec_open(&rec, record, NULL, "ptrace-tree", 1, "exact", pid) != 0) {
         asmspy_symtab_free(&t);
         return 1;
     }
@@ -1265,7 +1299,7 @@ static int cmd_graph(pid_t pid, pid_t tid, int follow, long n, gsort_t sort,
     asmspy_symtab_load(pid,
                        &t); /* best-effort; raw addrs (all internal) if empty */
     graph_snap snap = {0};
-    if (rec_open(&rec, record, 0, "ptrace-graph", 1, "exact", pid) != 0) {
+    if (rec_open(&rec, record, NULL, "ptrace-graph", 1, "exact", pid) != 0) {
         asmspy_symtab_free(&t);
         return 1;
     }
@@ -1479,7 +1513,7 @@ static int cmd_sample(pid_t pid, long ms, int json, const char *record) {
     /* The recording is opened BEFORE the availability gate so a skipped run
      * still produces a closed, honest file: "IBS is absent here" is a
      * measurement, and an empty file would be the one thing it must not be. */
-    if (rec_open(&rec, record, 0, "ibs-op", 0, "statistical", pid) != 0)
+    if (rec_open(&rec, record, NULL, "ibs-op", 0, "statistical", pid) != 0)
         return 1;
     if (!asmtest_ibs_available()) {
         /* Clean self-skip (exit 0), like examples/ibs_probe.c — the whole lane is
@@ -1698,7 +1732,7 @@ static int cmd_procs(pid_t pid, long n, asmspy_count_t mode, int json, int dot,
                      const char *record) {
     topo_snap snap = {0};
     rec_t rec;
-    if (rec_open(&rec, record, 0, "ptrace-procs", 1, "exact", pid) != 0)
+    if (rec_open(&rec, record, NULL, "ptrace-procs", 1, "exact", pid) != 0)
         return 1;
     int rc =
         asmspy_engine_procs(pid, n, &g_sigstop, mode, topo_capture_sink, &snap);
@@ -1743,6 +1777,58 @@ typedef struct {
     rec_t *r;
 } region_rec_ctx;
 
+/* The `trace` + `coverage` events of one captured invocation. Split out of the
+ * print sink so --serve emits the identical bytes without also rendering the
+ * human view — one owner of field order, the same reason tree_record /
+ * graph_record / topo_record exist. */
+static void region_record(rec_t *r, const asmtest_trace_t *tr,
+                          const uint8_t *code, size_t len, uint64_t base) {
+    if (!rec_on(r))
+        return;
+    for (size_t i = 0; i < tr->insns_len; i++) {
+        char d[160] = "", esc[4 * 160];
+        if (code && asmtest_disas_available()) /* D10: offline disasm */
+            asmtest_disas(ASMSPY_HOST_ARCH, code, len, base, tr->insns[i], d,
+                          sizeof d);
+        if (d[0]) {
+            asmtrace_escape(esc, sizeof esc, d);
+            rec_emitf(r, "trace",
+                      "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu,"
+                      "\"disasm\":\"%s\"",
+                      (unsigned long long)tr->insns[i], esc);
+        } else {
+            rec_emitf(r, "trace",
+                      "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu",
+                      (unsigned long long)tr->insns[i]);
+        }
+    }
+    {
+        char body[8192];
+        size_t o = (size_t)snprintf(body, sizeof body,
+                                    "\"basis\":\"rel\",\"blocks\":[");
+        size_t i = 0;
+        for (; i < tr->blocks_len && o + 32 < sizeof body; i++)
+            o += (size_t)snprintf(body + o, sizeof body - o, "%s%llu",
+                                  i ? "," : "",
+                                  (unsigned long long)tr->blocks[i]);
+        /* A block dropped because the LINE would not fit is still a dropped
+         * block: say so rather than emit a short array that reads complete. */
+        if (i < tr->blocks_len)
+            rec_truncated(r);
+        snprintf(body + o, sizeof body - o,
+                 "],\"blocks_total\":%llu,\"insns_total\":%llu,"
+                 "\"truncated\":%s",
+                 (unsigned long long)tr->blocks_total,
+                 (unsigned long long)tr->insns_total,
+                 tr->truncated ? "true" : "false");
+        rec_emit(r, "coverage", body);
+    }
+    /* The engine's own overflow flag propagates to the recording's footer: a
+     * capture that dropped entries must say so in BOTH places. */
+    if (tr->truncated)
+        rec_truncated(r);
+}
+
 static void region_print_sink(void *ctx, unsigned sample_no, long result,
                               const asmtest_trace_t *tr,
                               const asmtest_descent_t *desc,
@@ -1764,51 +1850,7 @@ static void region_print_sink(void *ctx, unsigned sample_no, long result,
     fflush(stdout);
     svec_free(&dis);
     svec_free(&fn);
-
-    if (!rec_on(rc->r))
-        return;
-    for (size_t i = 0; i < tr->insns_len; i++) {
-        char d[160] = "", esc[4 * 160];
-        if (code && asmtest_disas_available()) /* D10: offline disasm */
-            asmtest_disas(ASMSPY_HOST_ARCH, code, len, base, tr->insns[i], d,
-                          sizeof d);
-        if (d[0]) {
-            asmtrace_escape(esc, sizeof esc, d);
-            rec_emitf(rc->r, "trace",
-                      "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu,"
-                      "\"disasm\":\"%s\"",
-                      (unsigned long long)tr->insns[i], esc);
-        } else {
-            rec_emitf(rc->r, "trace",
-                      "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu",
-                      (unsigned long long)tr->insns[i]);
-        }
-    }
-    {
-        char body[8192];
-        size_t o = (size_t)snprintf(body, sizeof body,
-                                    "\"basis\":\"rel\",\"blocks\":[");
-        size_t i = 0;
-        for (; i < tr->blocks_len && o + 32 < sizeof body; i++)
-            o += (size_t)snprintf(body + o, sizeof body - o, "%s%llu",
-                                  i ? "," : "",
-                                  (unsigned long long)tr->blocks[i]);
-        /* A block dropped because the LINE would not fit is still a dropped
-         * block: say so rather than emit a short array that reads complete. */
-        if (i < tr->blocks_len)
-            rec_truncated(rc->r);
-        snprintf(body + o, sizeof body - o,
-                 "],\"blocks_total\":%llu,\"insns_total\":%llu,"
-                 "\"truncated\":%s",
-                 (unsigned long long)tr->blocks_total,
-                 (unsigned long long)tr->insns_total,
-                 tr->truncated ? "true" : "false");
-        rec_emit(rc->r, "coverage", body);
-    }
-    /* The engine's own overflow flag propagates to the recording's footer: a
-     * capture that dropped entries must say so in BOTH places. */
-    if (tr->truncated)
-        rec_truncated(rc->r);
+    region_record(rc->r, tr, code, len, base);
 }
 
 /* Resolve a region argument to (base,len). Four forms:
@@ -1876,7 +1918,7 @@ static int cmd_trace(pid_t pid, const char *sym, pid_t only_tid, long n,
     }
     fprintf(stderr, "tracing %s @ 0x%llx (%zu bytes) in pid %d\n", sym,
             (unsigned long long)base, len, (int)pid);
-    if (rec_open(&rec, record, 0, "ptrace-region", 1, "exact", pid) != 0) {
+    if (rec_open(&rec, record, NULL, "ptrace-region", 1, "exact", pid) != 0) {
         asmspy_symtab_free(&t);
         return 1;
     }
@@ -2015,36 +2057,42 @@ static const char *watch_dir_word(int is_write) {
     return is_write == 1 ? "write" : (is_write == 0 ? "read " : "  ?  ");
 }
 
+/* One `watch` event. Split out of the print sink for the same reason
+ * region_record is: --serve records the identical bytes with no human view. */
+static void watch_record(rec_t *r, const asmspy_watch_hit_t *h) {
+    /* is_write stays the engine's 1/0/-1 tri-state: "could not decode the
+     * faulting instruction" is a real outcome and must not collapse into
+     * either direction. func/module are omitted when unresolved. */
+    char ef[4 * 128], em[4 * 64], body[1024];
+    size_t o;
+    if (!rec_on(r))
+        return;
+    asmtrace_escape(ef, sizeof ef, h->func ? h->func : "");
+    asmtrace_escape(em, sizeof em, h->module ? h->module : "");
+    o = (size_t)snprintf(
+        body, sizeof body,
+        "\"hit_no\":%lu,\"tid\":%d,\"pc\":%llu,\"addr\":%llu,"
+        "\"is_write\":%d,\"value_ok\":%s,\"value_len\":%u,\"value\":%llu",
+        h->hit_no, (int)h->tid, (unsigned long long)h->pc,
+        (unsigned long long)h->addr, h->is_write,
+        h->value_ok ? "true" : "false", h->value_len,
+        (unsigned long long)h->value);
+    if (h->func)
+        o +=
+            (size_t)snprintf(body + o, sizeof body - o, ",\"func\":\"%s\"", ef);
+    if (h->module)
+        o += (size_t)snprintf(body + o, sizeof body - o, ",\"module\":\"%s\"",
+                              em);
+    snprintf(body + o, sizeof body - o, ",\"off\":%llu",
+             (unsigned long long)h->off);
+    rec_emit(r, "watch", body);
+}
+
 static void watch_sink(void *ctx, const asmspy_watch_hit_t *h) {
     watch_ctx *w = ctx;
     w->count = h->hit_no;
 
-    if (rec_on(w->r)) {
-        /* is_write stays the engine's 1/0/-1 tri-state: "could not decode the
-         * faulting instruction" is a real outcome and must not collapse into
-         * either direction. func/module are omitted when unresolved. */
-        char ef[4 * 128], em[4 * 64], body[1024];
-        size_t o;
-        asmtrace_escape(ef, sizeof ef, h->func ? h->func : "");
-        asmtrace_escape(em, sizeof em, h->module ? h->module : "");
-        o = (size_t)snprintf(
-            body, sizeof body,
-            "\"hit_no\":%lu,\"tid\":%d,\"pc\":%llu,\"addr\":%llu,"
-            "\"is_write\":%d,\"value_ok\":%s,\"value_len\":%u,\"value\":%llu",
-            h->hit_no, (int)h->tid, (unsigned long long)h->pc,
-            (unsigned long long)h->addr, h->is_write,
-            h->value_ok ? "true" : "false", h->value_len,
-            (unsigned long long)h->value);
-        if (h->func)
-            o += (size_t)snprintf(body + o, sizeof body - o, ",\"func\":\"%s\"",
-                                  ef);
-        if (h->module)
-            o += (size_t)snprintf(body + o, sizeof body - o,
-                                  ",\"module\":\"%s\"", em);
-        snprintf(body + o, sizeof body - o, ",\"off\":%llu",
-                 (unsigned long long)h->off);
-        rec_emit(w->r, "watch", body);
-    }
+    watch_record(w->r, h);
 
     if (!w->json) { /* text: print live for immediate feedback */
         char loc[208];
@@ -2156,7 +2204,7 @@ static int cmd_watch(pid_t pid, const char *loc, int rw, int len, long n,
     /* Opened before the arm so a REFUSED arm still records: "this host has no
      * usable debug register" is the measurement, and a hardware gate must be
      * visible in the file rather than absent from it. */
-    if (rec_open(&rec, record, 0, "hwdebug-watch", 1, "exact", pid) != 0) {
+    if (rec_open(&rec, record, NULL, "hwdebug-watch", 1, "exact", pid) != 0) {
         asmspy_symtab_free(&t);
         return 1;
     }
@@ -2701,7 +2749,7 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
      * --auto pick is an argument/selection failure, not a measurement, so it
      * must not leave a torn recording behind. Everything past this point IS a
      * measurement, including the skips. */
-    if (rec_open(&rec, record, 0, "ptrace-dataflow", 1, "exact", pid) != 0) {
+    if (rec_open(&rec, record, NULL, "ptrace-dataflow", 1, "exact", pid) != 0) {
         asmspy_symtab_free(&t);
         return 1;
     }
@@ -2795,6 +2843,1201 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         return 1;
     }
     rec_close(&rec, 0, 0, 0, NULL);
+    return 0;
+}
+
+/* No-op SIGALRM handler for a TRACER THREAD: the owner's
+ * pthread_kill(SIGALRM) then interrupts a blocked waitpid (EINTR, no
+ * SA_RESTART) — a run-to re-CONTs a now-running tracee, gets ESRCH, and returns
+ * cleanly (the target is DETACHed and survives) — instead of the default action
+ * killing asmspy. Mirrors the engine's own arm_quit_wake, which the SINGLE-SHOT
+ * engines (unlike the streaming ones) do not arm.
+ *
+ * Shared by the TUI's data-flow view and by --serve, which drives every engine
+ * and so cannot rely on any one of them arming it. The owner must BLOCK SIGALRM
+ * on its own thread, or the wake can be delivered to the wrong one. */
+static void tracer_on_alarm(int s) { (void)s; }
+static void tracer_arm_alarm(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = tracer_on_alarm; /* sa_flags = 0 -> EINTR, no SA_RESTART */
+    sigaction(SIGALRM, &sa, NULL);
+    sigset_t set;
+    sigemptyset(&set);
+    sigaddset(&set, SIGALRM);
+    pthread_sigmask(SIG_UNBLOCK, &set, NULL);
+}
+
+/* ================================================================== */
+/* --serve: the live-session control loop                              */
+/* (docs/internal/gui/07-serve-live-host.md T2; protocol spec:         */
+/*  docs/internal/gui/asmtrace-schema.md, "Serve protocol")            */
+/*                                                                     */
+/* This is a THIN WRAPPER and nothing else. It reads NDJSON commands,   */
+/* runs ONE libasmspy engine at a time on a dedicated tracer thread,    */
+/* and streams that mode's ordinary record-mode events through the      */
+/* SAME sinks and the SAME writer TU `--record` uses. There is no       */
+/* engine logic here, no second copy of a drive loop, and no            */
+/* serve-specific event body: everything between a session's `started`  */
+/* and terminal lifecycle event is bytes some cmd_* already knows how   */
+/* to produce.                                                          */
+/*                                                                     */
+/* THREADING. Two threads touch the client stream: the COMMAND thread   */
+/* (this loop) writes lifecycle lines, the TRACER thread writes events. */
+/* rec_t::mu serialises them, so a refusal can never land inside an     */
+/* event line. Everything ptrace stays on the tracer thread — the       */
+/* per-thread rule (cli/libasmspy.h) — and a session ends only through  */
+/* the engine's own two-phase detach: stop flag, SIGALRM to unblock a   */
+/* pending waitpid, join. Never a cancel, never a kill.                 */
+/* ================================================================== */
+
+typedef enum {
+    SM_NONE = 0,
+    SM_LOG,
+    SM_STREAM,
+    SM_TRACE,
+    SM_DATAFLOW,
+    SM_TREE,
+    SM_GRAPH,
+    SM_PROCS,
+    SM_SAMPLE,
+    SM_WATCH,
+    SM_AUTO,
+} serve_mode_t;
+
+static const struct {
+    const char *name;
+    serve_mode_t mode;
+    const char *backend; /* the recording's measured provenance backend */
+    int exact;
+    const char *trust;
+} SERVE_MODES[] = {
+    {"log", SM_LOG, "ptrace-syscalls", 1, "exact"},
+    {"stream", SM_STREAM, "ptrace-stream", 1, "exact"},
+    {"trace", SM_TRACE, "ptrace-region", 1, "exact"},
+    {"dataflow", SM_DATAFLOW, "ptrace-dataflow", 1, "exact"},
+    {"tree", SM_TREE, "ptrace-tree", 1, "exact"},
+    {"graph", SM_GRAPH, "ptrace-graph", 1, "exact"},
+    {"procs", SM_PROCS, "ptrace-procs", 1, "exact"},
+    {"sample", SM_SAMPLE, "ibs-op", 0, "statistical"},
+    {"watch", SM_WATCH, "hwdebug-watch", 1, "exact"},
+    {"auto", SM_AUTO, "ptrace-dataflow", 1, "exact"},
+};
+#define SERVE_NMODES ((int)(sizeof SERVE_MODES / sizeof SERVE_MODES[0]))
+
+/* The effective parameters of one session — every field is one engine
+ * parameter, defaulted here and echoed back in the `started` event so a client
+ * never has to guess what its omissions became. */
+typedef struct {
+    serve_mode_t mode;
+    pid_t pid, tid;
+    int follow;
+    long max;
+    long ms;
+    uint64_t base;
+    size_t len;
+    uint64_t addr;
+    int wlen, rw;
+    asmspy_count_t count;
+    int depth;
+    char focus[128], module[128];
+    sampler_mode_t sampler;
+    char func[160]; /* mode trace/dataflow: a symbol instead of base/len */
+} serve_params_t;
+
+typedef struct {
+    serve_params_t p;
+    atomic_bool stop;
+    pthread_t th;
+    atomic_int running; /* 1 while the tracer thread is live            */
+    int joinable;       /* a thread exists and has not been joined yet  */
+    FILE *out;          /* the client's event stream                    */
+    pthread_mutex_t mu; /* serialises lifecycle lines against events    */
+    rec_t rec;
+    asmspy_symtab_t syms;
+    int have_syms;
+    unsigned long long events; /* this session's emitted event count     */
+    int rc;                    /* the engine's return                    */
+    char autoname[160];        /* mode auto: what the picker chose        */
+    /* A measured reason no lookup could produce. mode "auto" needs it: when
+     * its SAMPLER self-skips, the thing that is unavailable is the sampler,
+     * and only the sampler knows why — reporting the capture engine's generic
+     * text there would name the wrong subsystem. */
+    char skip_note[320];
+} serve_session_t;
+
+/* ---- record-only sinks --------------------------------------------- */
+/* Every one of these hands the engine's transient snapshot straight to the
+ * SAME *_record helper --record uses, so a serve session and a recorded run
+ * cannot spell the same event differently. The snapshot "views" below point
+ * INTO the engine's arrays and are never copied or freed: the record helpers
+ * only read, and the arrays are valid for the duration of the sink call —
+ * which is exactly the engine's documented contract. log/stream need no sink
+ * here at all: theirs already take an `echo` flag, and echo=0 is record-only.
+ */
+
+static void serve_tree_sink(void *ctx, const char *line,
+                            const asmspy_tree_call_t *call) {
+    serve_session_t *s = ctx;
+    (void)
+        line; /* the pre-rendered text is the TUI's; the record is structured */
+    tree_record(&s->rec, call);
+}
+
+static void serve_graph_sink(void *ctx, const asmspy_gnode_t *nodes, size_t nn,
+                             const asmspy_gedge_t *edges, size_t ne) {
+    serve_session_t *s = ctx;
+    graph_snap view;
+    memset(&view, 0, sizeof view);
+    view.v = (asmspy_gnode_t *)nodes;
+    view.n = nn;
+    view.e = (asmspy_gedge_t *)edges;
+    view.ne = ne;
+    /* A live session emits EVERY snapshot as it arrives — that is what makes it
+     * live. (Headless --graph keeps only the last: for a file, the final
+     * snapshot IS the measurement, and the earlier ones are its prefixes.) */
+    graph_record(&s->rec, &view);
+}
+
+static void serve_topo_sink(void *ctx, const asmspy_task_t *tasks, size_t n) {
+    serve_session_t *s = ctx;
+    topo_snap view;
+    memset(&view, 0, sizeof view);
+    view.v = (asmspy_task_t *)tasks;
+    view.n = n;
+    topo_record(&s->rec, &view, s->p.count);
+}
+
+static void serve_sample_sink(void *ctx, const asmspy_sample_edge_t *edges,
+                              size_t n, uint64_t samples,
+                              uint64_t branch_samples, uint64_t lost,
+                              int throttled) {
+    serve_session_t *s = ctx;
+    sample_snap view;
+    memset(&view, 0, sizeof view);
+    view.v = (asmspy_sample_edge_t *)edges;
+    view.n = n;
+    view.samples = samples;
+    view.branch_samples = branch_samples;
+    view.lost = lost;
+    view.throttled = throttled;
+    survey_record(&s->rec, &view);
+}
+
+static void serve_watch_sink(void *ctx, const asmspy_watch_hit_t *h) {
+    serve_session_t *s = ctx;
+    watch_record(&s->rec, h);
+}
+
+static void serve_region_sink(void *ctx, unsigned sample_no, long result,
+                              const asmtest_trace_t *tr,
+                              const asmtest_descent_t *desc,
+                              const uint8_t *code, size_t len, uint64_t base) {
+    serve_session_t *s = ctx;
+    (void)sample_no;
+    (void)result;
+    (void)desc;
+    region_record(&s->rec, tr, code, len, base);
+}
+
+static void serve_dataflow_sink(void *ctx, long result,
+                                const asmtest_valtrace_t *vt,
+                                const asmtest_defuse_t *g, const uint8_t *code,
+                                size_t len, uint64_t base) {
+    serve_session_t *s = ctx;
+    (void)result;
+    dataflow_record(&s->rec, vt, g, code, len, base);
+}
+
+/* ---- a minimal JSON reader for the control channel ------------------ */
+/* No new dependency (the C side stays dependency-free, 07's constraint). It
+ * reads flat command objects only, which is all the protocol defines — but it
+ * tracks string and nesting state rather than blindly strstr'ing for a key, so
+ * a key name appearing INSIDE a string value cannot be mistaken for the key. */
+
+/* Pointer to the value of top-level key `key` in `s`, or NULL. */
+static const char *sj_find(const char *s, const char *key) {
+    size_t klen = strlen(key);
+    int depth = 0;
+    const char *p = s;
+    while (*p) {
+        if (*p == '{' || *p == '[') {
+            depth++;
+            p++;
+            continue;
+        }
+        if (*p == '}' || *p == ']') {
+            depth--;
+            p++;
+            continue;
+        }
+        if (*p != '"') {
+            p++;
+            continue;
+        }
+        /* a quoted token: read it, then decide whether it is a KEY */
+        const char *ks = ++p;
+        while (*p && *p != '"') {
+            if (*p == '\\' && p[1])
+                p++;
+            p++;
+        }
+        size_t tlen = (size_t)(p - ks);
+        if (*p == '"')
+            p++;
+        const char *q = p;
+        while (*q == ' ' || *q == '\t')
+            q++;
+        if (*q != ':')
+            continue; /* a string VALUE, not a key */
+        q++;
+        while (*q == ' ' || *q == '\t')
+            q++;
+        if (depth == 1 && tlen == klen && strncmp(ks, key, klen) == 0)
+            return q;
+        p = q; /* skip past the colon; the value is scanned as normal */
+    }
+    return NULL;
+}
+
+/* Copy the JSON string at `v` into buf (unescaping \" \\ \/ \n \r \t).
+ * Returns 0, or -1 if `v` is not a string. */
+static int sj_str(const char *v, char *buf, size_t cap) {
+    size_t o = 0;
+    if (!v || *v != '"')
+        return -1;
+    v++;
+    while (*v && *v != '"') {
+        char c = *v++;
+        if (c == '\\' && *v) {
+            char e = *v++;
+            c = e == 'n'   ? '\n'
+                : e == 't' ? '\t'
+                : e == 'r' ? '\r'
+                           : e; /* " \ / */
+        }
+        if (o + 1 < cap)
+            buf[o++] = c;
+    }
+    if (cap)
+        buf[o < cap ? o : cap - 1] = '\0';
+    return 0;
+}
+
+/* Read an integer parameter. Accepts a JSON number, and ALSO a string — which
+ * is how a human writes an address ("0x7f...") without converting it to
+ * decimal first; strtoull base 0 covers both spellings. Returns 0/-1. */
+static int sj_u64(const char *v, unsigned long long *out) {
+    char buf[64];
+    char *end = NULL;
+    unsigned long long n;
+    if (!v)
+        return -1;
+    if (*v == '"') {
+        if (sj_str(v, buf, sizeof buf) != 0)
+            return -1;
+        n = strtoull(buf, &end, 0);
+        if (end == buf || *end)
+            return -1;
+        *out = n;
+        return 0;
+    }
+    if (*v != '-' && !isdigit((unsigned char)*v))
+        return -1;
+    n = strtoull(v, &end, 10);
+    if (end == v)
+        return -1;
+    *out = n;
+    return 0;
+}
+
+static int sj_i64(const char *v, long long *out) {
+    char *end = NULL;
+    long long n;
+    if (!v)
+        return -1;
+    if (*v == '"') {
+        char buf[64];
+        if (sj_str(v, buf, sizeof buf) != 0)
+            return -1;
+        n = strtoll(buf, &end, 0);
+        if (end == buf || *end)
+            return -1;
+        *out = n;
+        return 0;
+    }
+    n = strtoll(v, &end, 10);
+    if (end == v)
+        return -1;
+    *out = n;
+    return 0;
+}
+
+/* JSON booleans only — a bool is a fact, and coercing "yes"/1/"" into one is
+ * the sort of quiet guess this protocol refuses to make. Returns 0/-1. */
+static int sj_bool(const char *v, int *out) {
+    if (!v)
+        return -1;
+    if (strncmp(v, "true", 4) == 0) {
+        *out = 1;
+        return 0;
+    }
+    if (strncmp(v, "false", 5) == 0) {
+        *out = 0;
+        return 0;
+    }
+    return -1;
+}
+
+/* ---- lifecycle emission ------------------------------------------- */
+
+/* One lifecycle line on the client stream, under the same mutex the event
+ * sinks take — so a refusal can never be spliced into an event. */
+static void serve_emitf(serve_session_t *s, const char *kind, const char *fmt,
+                        ...) {
+    char body[4096];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(body, sizeof body, fmt, ap);
+    va_end(ap);
+    pthread_mutex_lock(&s->mu);
+    fprintf(s->out, "{\"k\":\"%s\"%s%s}\n", kind, body[0] ? "," : "", body);
+    fflush(s->out);
+    pthread_mutex_unlock(&s->mu);
+}
+
+/* A refused command. Never ends a running session and never exits the loop —
+ * the client is expected to correct and retry. */
+static void serve_err(serve_session_t *s, const char *cmd, const char *reason) {
+    char er[1024], ec[64];
+    asmtrace_escape(er, sizeof er, reason);
+    asmtrace_escape(ec, sizeof ec, cmd ? cmd : "");
+    if (cmd && *cmd)
+        serve_emitf(s, "err", "\"reason\":\"%s\",\"cmd\":\"%s\"", er, ec);
+    else
+        serve_emitf(s, "err", "\"reason\":\"%s\"", er);
+}
+
+/* The skip `reason` for a positive engine code, from the MEASURING SOURCE
+ * rather than the generic vocabulary (asmtrace-schema.md: "`reason` comes from
+ * the measuring source ... never a guess"). Only the source that actually
+ * probed knows whether IBS is absent, present-but-perf-blocked, or a debug
+ * register was refused for permission vs there being no slots — and those send
+ * an operator to three different places. Mirrors what cmd_sample / cmd_watch
+ * already do for --record. */
+static void serve_skip_reason(const serve_session_t *s, int rc, char *buf,
+                              size_t cap) {
+    serve_mode_t mode = s->p.mode;
+    const char *measured = NULL;
+    if (s->skip_note[0]) { /* a reason the session measured for itself */
+        snprintf(buf, cap, "%s", s->skip_note);
+        return;
+    }
+    if (rc == ASMSPY_SAMPLE_UNAVAIL && mode == SM_SAMPLE) {
+        /* _skip_reason answers the DETECT chain; once that passed, only
+         * _unavail_reason carries the real perf errno (and _skip_reason is ""
+         * by construction) — so prefer whichever actually said something. */
+        measured = asmtest_ibs_unavail_reason();
+        if (!measured || !*measured)
+            measured = asmtest_ibs_skip_reason();
+    } else if (rc == ASMSPY_WATCH_UNAVAIL && mode == SM_WATCH) {
+        measured = asmspy_hwdebug_reason();
+    }
+    if (measured && *measured) {
+        snprintf(buf, cap, "%s", measured);
+        return;
+    }
+    asmspy_strerror(rc, buf, cap);
+}
+
+/* One `session state:"pick"` event: what mode "auto" chose and on what
+ * EVIDENCE. `evidence` is the load-bearing field, not decoration — the capture
+ * engine waits at the region's ENTRY, so only an observed entry arrival is
+ * evidence of the right type. Residency says a function was EXECUTING, which is
+ * a different claim and a weaker one; the client is required to label it as
+ * such (asmtrace-schema.md, Serve protocol). */
+static void serve_emit_pick(serve_session_t *s, const char *sampler,
+                            const char *evidence, const char *func,
+                            uint64_t base, size_t len,
+                            unsigned long long weight, unsigned sites,
+                            int attempt, int of) {
+    char ef[4 * 160];
+    asmtrace_escape(ef, sizeof ef, func ? func : "?");
+    serve_emitf(s, "session",
+                "\"state\":\"pick\",\"mode\":\"auto\",\"pick\":{"
+                "\"sampler\":\"%s\",\"evidence\":\"%s\",\"func\":\"%s\","
+                "\"base\":%llu,\"len\":%llu,\"weight\":%llu,\"sites\":%u,"
+                "\"attempt\":%d,\"of\":%d}",
+                sampler, evidence, ef, (unsigned long long)base,
+                (unsigned long long)len, weight, sites, attempt, of);
+}
+
+static const char *serve_mode_name(serve_mode_t m) {
+    for (int i = 0; i < SERVE_NMODES; i++)
+        if (SERVE_MODES[i].mode == m)
+            return SERVE_MODES[i].name;
+    return "?";
+}
+
+/* The `started` event's params echo: the EFFECTIVE parameters, after
+ * defaulting, so the client can see what its omissions became. */
+static size_t serve_params_json(char *dst, size_t cap,
+                                const serve_params_t *p) {
+    char ef[4 * 128], em[4 * 128];
+    size_t o = 0;
+    asmtrace_escape(ef, sizeof ef, p->focus);
+    asmtrace_escape(em, sizeof em, p->module);
+    switch (p->mode) {
+    case SM_LOG:
+        o = (size_t)snprintf(dst, cap, "{\"follow\":%s,\"max\":%ld}",
+                             p->follow ? "true" : "false", p->max);
+        break;
+    case SM_STREAM:
+    case SM_GRAPH:
+        o = (size_t)snprintf(dst, cap, "{\"tid\":%d,\"follow\":%s,\"max\":%ld}",
+                             (int)p->tid, p->follow ? "true" : "false", p->max);
+        break;
+    case SM_TREE:
+        o = (size_t)snprintf(
+            dst, cap,
+            "{\"tid\":%d,\"follow\":%s,\"max\":%ld,\"depth\":%d,"
+            "\"focus\":\"%s\",\"module\":\"%s\"}",
+            (int)p->tid, p->follow ? "true" : "false", p->max, p->depth, ef,
+            em);
+        break;
+    case SM_TRACE:
+    case SM_DATAFLOW:
+        o = (size_t)snprintf(
+            dst, cap, "{\"tid\":%d,\"base\":%llu,\"len\":%llu,\"max\":%ld}",
+            (int)p->tid, (unsigned long long)p->base,
+            (unsigned long long)p->len, p->max);
+        break;
+    case SM_PROCS:
+        o = (size_t)snprintf(dst, cap, "{\"max\":%ld,\"count\":\"%s\"}", p->max,
+                             p->count == ASMSPY_COUNT_CALLS ? "calls"
+                                                            : "syscalls");
+        break;
+    case SM_SAMPLE:
+        o = (size_t)snprintf(dst, cap, "{\"ms\":%ld}", p->ms);
+        break;
+    case SM_WATCH:
+        o = (size_t)snprintf(
+            dst, cap, "{\"addr\":%llu,\"len\":%d,\"rw\":%d,\"max\":%ld}",
+            (unsigned long long)p->addr, p->wlen, p->rw, p->max);
+        break;
+    case SM_AUTO:
+        o = (size_t)snprintf(dst, cap,
+                             "{\"max\":%ld,\"module\":\"%s\",\"sampler\":"
+                             "\"%s\"}",
+                             p->max, em,
+                             p->sampler == SAMPLER_IBS
+                                 ? "ibs"
+                                 : (p->sampler == SAMPLER_SW ? "sw" : "auto"));
+        break;
+    default:
+        o = (size_t)snprintf(dst, cap, "{}");
+        break;
+    }
+    return o;
+}
+
+/* ---- the tracer thread --------------------------------------------- */
+
+/* Run the ONE engine this session selected, with the same sinks --record
+ * drives, and leave the result in s->rc. Every branch is "call the engine";
+ * that is the whole point of T0.
+ *
+ * `--auto` is the exception that proves it: it runs the EXISTING selection
+ * (auto_pick / auto_pick_sw) and then calls the dataflow engine, so a serve
+ * client gets the identical pick — including the sw-clock candidate walk on
+ * NEVER_RAN and the weaker-evidence labelling the front door already carries. */
+static void serve_run_engine(serve_session_t *s) {
+    serve_params_t *p = &s->p;
+    rec_t *r = &s->rec;
+
+    switch (p->mode) {
+    case SM_LOG: {
+        log_rec_ctx c = {r, 0}; /* echo=0: the stream IS the recording */
+        s->rc = asmspy_engine_syscalls(p->pid, p->follow, p->max, &s->stop,
+                                       log_print_sink, &c);
+        break;
+    }
+    case SM_STREAM: {
+        stream_rec_ctx c = {r, 0};
+        s->rc = asmspy_engine_stream(p->pid, p->tid, p->follow, p->max,
+                                     &s->stop, &s->syms, stream_print_sink, &c);
+        break;
+    }
+    case SM_TREE: {
+        asmspy_tree_filter_t f = {0};
+        f.max_depth = p->depth;
+        f.focus = p->focus[0] ? p->focus : NULL;
+        f.module = p->module[0] ? p->module : NULL;
+        s->rc = asmspy_engine_tree(p->pid, p->tid, p->follow, p->max, &s->stop,
+                                   &s->syms, &f, serve_tree_sink, s);
+        break;
+    }
+    case SM_GRAPH:
+        s->rc = asmspy_engine_graph(p->pid, p->tid, p->follow, p->max, &s->stop,
+                                    &s->syms, serve_graph_sink, s);
+        break;
+    case SM_PROCS:
+        s->rc = asmspy_engine_procs(p->pid, p->max, &s->stop, p->count,
+                                    serve_topo_sink, s);
+        break;
+    case SM_SAMPLE:
+        s->rc = asmspy_engine_sample(p->pid, (unsigned)p->ms, &s->stop,
+                                     &s->syms, NULL, serve_sample_sink, s);
+        break;
+    case SM_WATCH:
+        s->rc = asmspy_engine_watch(p->pid, p->addr, p->rw, p->wlen, p->max,
+                                    &s->stop, &s->syms, serve_watch_sink, s);
+        break;
+    case SM_TRACE:
+        s->rc = asmspy_engine_region(p->pid, p->tid, p->base, p->len, p->max,
+                                     &s->stop, serve_region_sink, s);
+        break;
+    case SM_DATAFLOW:
+        s->rc = asmspy_engine_dataflow(p->pid, p->tid, p->base, p->len, p->max,
+                                       &s->stop, serve_dataflow_sink, s);
+        break;
+    case SM_AUTO: {
+        /* The sw path hands back RANKED candidates and the walk below tries
+         * them on NEVER_RAN, exactly as cmd_dataflow does: a residency winner
+         * that never re-enters is the rule's known failure shape, not a fact
+         * about the target, and each refusal is reported honestly on the way. */
+        auto_cand_copy cands[AUTO_SW_TRIES];
+        int ncand = 0, attempt = 0;
+        int use_sw = p->sampler == SAMPLER_SW ||
+                     (p->sampler == SAMPLER_AUTO && !asmtest_ibs_available());
+        const char *mod = p->module[0] ? p->module : NULL;
+        if (use_sw) {
+            ncand = auto_pick_sw(p->pid, &s->syms, mod, cands, AUTO_SW_TRIES);
+            if (ncand <= 0) {
+                /* <0 = the SAMPLER self-skipped (perf refused); 0 = it ran and
+                 * nothing qualified. Two different facts about two different
+                 * subsystems, so they must not share a code or a reason. */
+                s->rc =
+                    ncand < 0 ? ASMSPY_SAMPLE_UNAVAIL : ASMSPY_REGION_NEVER_RAN;
+                snprintf(s->skip_note, sizeof s->skip_note, "%s",
+                         ncand < 0 ? asmtest_swclock_unavail_reason()
+                                   : "the software-clock survey ran but no "
+                                     "function qualified as a region (nothing "
+                                     "was observed executing in a sized "
+                                     "symbol during the window)");
+                break;
+            }
+            p->base = cands[0].base;
+            p->len = cands[0].len;
+            snprintf(s->autoname, sizeof s->autoname, "%s", cands[0].name);
+            serve_emit_pick(s, "sw-clock", "residency", s->autoname, p->base,
+                            p->len, cands[0].weight, cands[0].sites, 1, ncand);
+        } else {
+            size_t alen = 0;
+            int arc = auto_pick(p->pid, &s->syms, mod, &p->base, &alen,
+                                s->autoname, sizeof s->autoname);
+            if (arc != 0) {
+                s->rc =
+                    arc < 0 ? ASMSPY_SAMPLE_UNAVAIL : ASMSPY_REGION_NEVER_RAN;
+                snprintf(s->skip_note, sizeof s->skip_note, "%s",
+                         arc < 0 ? asmtest_ibs_unavail_reason()
+                                 : "IBS-Op sampled the window but observed no "
+                                   "function being ENTERED (residency is not "
+                                   "entry evidence, so nothing was ranked)");
+                break;
+            }
+            p->len = alen;
+            /* The IBS path ranks ENTRY EDGES, so the evidence is of the right
+             * type: something was observed ARRIVING here. auto_pick keeps no
+             * per-candidate weight for the caller, so those fields are 0 —
+             * a client reads the "entry" label, not the counts. */
+            serve_emit_pick(s, "ibs-op", "entry", s->autoname, p->base, p->len,
+                            0, 0, 1, 1);
+        }
+        for (;;) {
+            s->rc = asmspy_engine_dataflow(p->pid, 0, p->base, p->len, p->max,
+                                           &s->stop, serve_dataflow_sink, s);
+            if (s->rc == ASMSPY_REGION_NEVER_RAN && attempt + 1 < ncand) {
+                /* NEVER_RAN is the bounded entry wait saying this CANDIDATE was
+                 * not seen entering — a residency winner that never re-enters
+                 * is the rule's known failure shape, not a fact about the
+                 * target. Walk to the next ranked one, and say so on the wire
+                 * so the client can show the refusal rather than a silent
+                 * substitution. */
+                attempt++;
+                p->base = cands[attempt].base;
+                p->len = cands[attempt].len;
+                snprintf(s->autoname, sizeof s->autoname, "%s",
+                         cands[attempt].name);
+                serve_emit_pick(s, "sw-clock", "residency", s->autoname,
+                                p->base, p->len, cands[attempt].weight,
+                                cands[attempt].sites, attempt + 1, ncand);
+                continue;
+            }
+            break;
+        }
+        break;
+    }
+    default:
+        s->rc = 0;
+        break;
+    }
+}
+
+static void *serve_tracer(void *arg) {
+    serve_session_t *s = arg;
+    const char *backend = "ptrace-syscalls";
+    int exact = 1;
+    const char *trust = "exact";
+    char skiptext[256] = "";
+
+    /* This thread owns the quit-wake: serve_stop's pthread_kill(SIGALRM) must
+     * INTERRUPT a blocked waitpid here, not kill the process. The command
+     * thread blocks SIGALRM so the wake can only land on this one. */
+    tracer_arm_alarm();
+
+    for (int i = 0; i < SERVE_NMODES; i++)
+        if (SERVE_MODES[i].mode == s->p.mode) {
+            backend = SERVE_MODES[i].backend;
+            exact = SERVE_MODES[i].exact;
+            trust = SERVE_MODES[i].trust;
+        }
+
+    /* The session's own provenance header — protocol law 1: the client can
+     * slice [header .. end] out of the stream and hold a valid recording. */
+    pthread_mutex_lock(&s->mu);
+    rec_open(&s->rec, NULL, s->out, backend, exact, trust, s->p.pid);
+    fflush(s->out);
+    pthread_mutex_unlock(&s->mu);
+    s->rec.mu = &s->mu;
+
+    /* Symbols name the addresses in stream/tree/graph/watch/sample; best
+     * effort, exactly as the headless subcommands treat them. */
+    memset(&s->syms, 0, sizeof s->syms);
+    if (asmspy_symtab_load(s->p.pid, &s->syms) == 0)
+        s->have_syms = 1;
+
+    serve_run_engine(s);
+
+    if (s->have_syms)
+        asmspy_symtab_free(&s->syms);
+
+    /* The `end` footer carries the skip when the engine reported one, so the
+     * sliced-out recording is closed and honest even for a session that had
+     * nothing to report. */
+    if (s->rc > 0)
+        serve_skip_reason(s, s->rc, skiptext, sizeof skiptext);
+    s->events = s->rec.out.events;
+    {
+        unsigned long long dropped = s->rec.paused_dropped;
+        pthread_mutex_lock(&s->mu);
+        s->rec.mu = NULL; /* we already hold it */
+        rec_close(&s->rec, dropped, 0, s->rc > 0 ? s->rc : 0,
+                  skiptext[0] ? skiptext : NULL);
+        fflush(s->out);
+        pthread_mutex_unlock(&s->mu);
+    }
+    atomic_store(&s->running, 0);
+    return NULL;
+}
+
+/* ---- session lifecycle --------------------------------------------- */
+
+/* End the running session THROUGH THE ENGINE'S OWN TEARDOWN: set the stop
+ * flag, then repeatedly SIGALRM the tracer thread to unblock a pending
+ * waitpid, and join. This is copied from the TUI's live-view teardown and is
+ * the only supported way out of a session — a cancel or a kill would leave a
+ * planted int3 in the target's text and the target would later die on it. */
+static void serve_stop(serve_session_t *s, const char *reason) {
+    char sk[512], mode[32];
+    if (!s->joinable)
+        return;
+    atomic_store(&s->stop, 1);
+    for (int i = 0; i < 200 && atomic_load(&s->running); i++) {
+        pthread_kill(s->th, SIGALRM);
+        struct timespec ts = {0, 10 * 1000 * 1000}; /* 10ms */
+        nanosleep(&ts, NULL);
+    }
+    pthread_join(s->th, NULL);
+    s->joinable = 0;
+
+    snprintf(mode, sizeof mode, "%s", serve_mode_name(s->p.mode));
+    if (s->rc > 0) {
+        /* A POSITIVE code is a successful session with nothing to report —
+         * never an error, and a client that renders it as one is wrong. */
+        char txt[256], esc[4 * 256];
+        serve_skip_reason(s, s->rc, txt, sizeof txt);
+        asmtrace_escape(esc, sizeof esc, txt);
+        serve_emitf(s, "session",
+                    "\"state\":\"skip\",\"mode\":\"%s\",\"skip\":{\"code\":%d,"
+                    "\"reason\":\"%s\"}",
+                    mode, s->rc, esc);
+    } else if (s->rc < 0) {
+        asmspy_strerror(s->rc, sk, sizeof sk);
+        serve_err(s, "start", sk);
+        serve_emitf(s, "session",
+                    "\"state\":\"stopped\",\"mode\":\"%s\",\"events\":%llu,"
+                    "\"reason\":\"exit\"",
+                    mode, s->events);
+    } else {
+        unsigned long long dropped = s->rec.paused_dropped;
+        if (dropped)
+            serve_emitf(s, "session",
+                        "\"state\":\"stopped\",\"mode\":\"%s\",\"events\":%llu,"
+                        "\"reason\":\"%s\",\"paused_dropped\":%llu",
+                        mode, s->events, reason, dropped);
+        else
+            serve_emitf(s, "session",
+                        "\"state\":\"stopped\",\"mode\":\"%s\",\"events\":%llu,"
+                        "\"reason\":\"%s\"",
+                        mode, s->events, reason);
+    }
+    s->p.mode = SM_NONE;
+}
+
+/* Reap a session whose engine finished on its own (it hit `max`, or the target
+ * exited) so the next `start` sees a free jack. */
+static void serve_reap(serve_session_t *s) {
+    if (s->joinable && !atomic_load(&s->running))
+        serve_stop(s, "max");
+}
+
+/* Parse + validate a `start`. Returns 0, or -1 with *why set to the rule that
+ * refused it. Every refusal below is one the ARGUMENT PARSER already makes:
+ * the two front ends must not disagree about what is legal. */
+static int serve_parse_start(const char *line, serve_params_t *p,
+                             const char **why) {
+    char mode[32] = "";
+    const char *v;
+    long long n;
+    unsigned long long u;
+    int i, b;
+    int has_tid = 0, has_follow = 0;
+
+    memset(p, 0, sizeof *p);
+    p->max = -1; /* until stop / target exit, the engines' own convention */
+    p->ms = 200;
+    p->rw = 0;
+    p->wlen = 8;
+    p->count = ASMSPY_COUNT_SYSCALLS;
+    p->sampler = SAMPLER_AUTO;
+
+    if (sj_str(sj_find(line, "mode"), mode, sizeof mode) != 0) {
+        *why = "start needs a string \"mode\"";
+        return -1;
+    }
+    p->mode = SM_NONE;
+    for (i = 0; i < SERVE_NMODES; i++)
+        if (strcmp(mode, SERVE_MODES[i].name) == 0)
+            p->mode = SERVE_MODES[i].mode;
+    if (p->mode == SM_NONE) {
+        *why = "unknown mode (log|stream|trace|dataflow|tree|graph|procs|"
+               "sample|watch|auto)";
+        return -1;
+    }
+    if (sj_i64(sj_find(line, "pid"), &n) != 0 || n <= 0) {
+        *why = "start needs a positive integer \"pid\"";
+        return -1;
+    }
+    p->pid = (pid_t)n;
+
+    if ((v = sj_find(line, "tid")) != NULL) {
+        if (sj_i64(v, &n) != 0 || n <= 0) {
+            *why = "\"tid\" must be a positive integer";
+            return -1;
+        }
+        p->tid = (pid_t)n;
+        has_tid = 1;
+    }
+    if ((v = sj_find(line, "follow")) != NULL) {
+        if (sj_bool(v, &b) != 0) {
+            *why = "\"follow\" must be true or false";
+            return -1;
+        }
+        p->follow = b;
+        has_follow = b;
+    }
+    if ((v = sj_find(line, "max")) != NULL) {
+        if (sj_i64(v, &n) != 0) {
+            *why = "\"max\" must be an integer";
+            return -1;
+        }
+        p->max = (long)n;
+    }
+    if ((v = sj_find(line, "ms")) != NULL) {
+        if (sj_i64(v, &n) != 0 || n <= 0) {
+            *why = "\"ms\" must be a positive integer";
+            return -1;
+        }
+        p->ms = (long)n;
+    }
+    if ((v = sj_find(line, "count")) != NULL) {
+        char c[16];
+        if (sj_str(v, c, sizeof c) != 0 ||
+            (strcmp(c, "syscalls") != 0 && strcmp(c, "calls") != 0)) {
+            *why = "\"count\" must be \"syscalls\" or \"calls\"";
+            return -1;
+        }
+        p->count = strcmp(c, "calls") == 0 ? ASMSPY_COUNT_CALLS
+                                           : ASMSPY_COUNT_SYSCALLS;
+    }
+    if ((v = sj_find(line, "depth")) != NULL) {
+        /* depth 0 asks for a tree with no levels, which can only ever print
+         * nothing; omitting the parameter is how you ask for unlimited. */
+        if (sj_i64(v, &n) != 0 || n < 1 || n > 1000) {
+            *why = "\"depth\" must be 1..1000 (omit it for unlimited)";
+            return -1;
+        }
+        p->depth = (int)n;
+    }
+    if ((v = sj_find(line, "focus")) != NULL &&
+        sj_str(v, p->focus, sizeof p->focus) != 0) {
+        *why = "\"focus\" must be a string";
+        return -1;
+    }
+    if ((v = sj_find(line, "module")) != NULL &&
+        sj_str(v, p->module, sizeof p->module) != 0) {
+        *why = "\"module\" must be a string";
+        return -1;
+    }
+    if ((v = sj_find(line, "func")) != NULL &&
+        sj_str(v, p->func, sizeof p->func) != 0) {
+        *why = "\"func\" must be a string";
+        return -1;
+    }
+    if ((v = sj_find(line, "base")) != NULL) {
+        if (sj_u64(v, &u) != 0) {
+            *why = "\"base\" must be an integer or a 0x string";
+            return -1;
+        }
+        p->base = u;
+    }
+    if ((v = sj_find(line, "len")) != NULL) {
+        if (sj_u64(v, &u) != 0 || u == 0) {
+            *why = "\"len\" must be a positive integer or a 0x string";
+            return -1;
+        }
+        p->len = (size_t)u;
+    }
+    if ((v = sj_find(line, "addr")) != NULL) {
+        if (sj_u64(v, &u) != 0) {
+            *why = "\"addr\" must be an integer or a 0x string";
+            return -1;
+        }
+        p->addr = u;
+    }
+    if ((v = sj_find(line, "rw")) != NULL) {
+        if (sj_i64(v, &n) != 0 || (n != 0 && n != 1)) {
+            *why = "\"rw\" must be 0 (writes) or 1 (reads and writes)";
+            return -1;
+        }
+        p->rw = (int)n;
+    }
+    if ((v = sj_find(line, "sampler")) != NULL) {
+        char c[16];
+        if (sj_str(v, c, sizeof c) != 0) {
+            *why = "\"sampler\" must be a string";
+            return -1;
+        }
+        if (strcmp(c, "ibs") == 0)
+            p->sampler = SAMPLER_IBS;
+        else if (strcmp(c, "sw") == 0)
+            p->sampler = SAMPLER_SW;
+        else if (strcmp(c, "auto") == 0)
+            p->sampler = SAMPLER_AUTO;
+        else {
+            *why = "\"sampler\" must be \"ibs\", \"sw\" or \"auto\"";
+            return -1;
+        }
+    }
+
+    /* ---- the flag matrix, verbatim from the argument parser ---------- */
+    if (has_tid && has_follow) {
+        *why = "\"tid\" pins ONE task; \"follow\" adds child processes — "
+               "drop one";
+        return -1;
+    }
+    if (has_tid && p->mode == SM_AUTO) {
+        /* The sampler carries no tid (asmspy_sample_edge_t has none and the IBS
+         * record path drops it), so it physically cannot attribute an entry to
+         * a thread. auto+tid could only pin the capture to a thread that may
+         * never enter the picked region: a hang generator. */
+        *why = "\"tid\" with mode \"auto\" (the sampler cannot attribute an "
+               "entry to a thread; drop one)";
+        return -1;
+    }
+    if (has_tid && (p->mode == SM_LOG || p->mode == SM_PROCS ||
+                    p->mode == SM_SAMPLE || p->mode == SM_WATCH)) {
+        *why = "this mode's engine takes no \"tid\" (log/procs/sample/watch "
+               "are whole-process by construction)";
+        return -1;
+    }
+    if (p->module[0] && p->mode != SM_AUTO && p->mode != SM_TREE) {
+        *why = "\"module\" without mode \"auto\" (it scopes the automatic "
+               "pick; a named region needs no filter)";
+        return -1;
+    }
+    if (p->sampler != SAMPLER_AUTO && p->mode != SM_AUTO) {
+        *why = "\"sampler\" without mode \"auto\" (it selects the automatic "
+               "pick's sampler; a named region samples nothing)";
+        return -1;
+    }
+    if (p->mode == SM_WATCH) {
+        if (!p->addr) {
+            *why = "mode \"watch\" needs \"addr\"";
+            return -1;
+        }
+        if ((v = sj_find(line, "len")) != NULL)
+            p->wlen = (int)p->len;
+        if (p->wlen != 1 && p->wlen != 2 && p->wlen != 4 && p->wlen != 8) {
+            *why = "\"len\" must be 1, 2, 4 or 8 for mode \"watch\"";
+            return -1;
+        }
+        if (p->addr % (uint64_t)p->wlen) {
+            *why = "\"addr\" must be \"len\"-aligned (an x86 hardware rule)";
+            return -1;
+        }
+    }
+    return 0;
+}
+
+/* Resolve mode trace/dataflow's region: either an explicit base+len, or a
+ * symbol name looked up in the target's symtab. Returns 0/-1. */
+static int serve_resolve_region(serve_params_t *p, const char **why) {
+    asmspy_symtab_t t;
+    int ok = 0;
+    if (p->base && p->len)
+        return 0;
+    if (!p->func[0]) {
+        *why = "this mode needs either \"base\"+\"len\" or a \"func\" name";
+        return -1;
+    }
+    if (asmspy_symtab_load(p->pid, &t) != 0) {
+        *why = "cannot read the target's symbols to resolve \"func\"";
+        return -1;
+    }
+    {
+        const asmspy_sym_t *s = asmspy_symtab_by_name(&t, p->func);
+        if (s && s->size) {
+            p->base = s->addr;
+            p->len = (size_t)s->size;
+            ok = 1;
+        }
+    }
+    asmspy_symtab_free(&t);
+    if (!ok) {
+        *why = "\"func\" did not resolve to a SIZED function symbol in the "
+               "target";
+        return -1;
+    }
+    return 0;
+}
+
+/* ---- the command loop ---------------------------------------------- */
+
+static int serve_loop(FILE *in, FILE *out) {
+    serve_session_t s;
+    char line[8192];
+    sigset_t block;
+
+    memset(&s, 0, sizeof s);
+    s.out = out;
+    pthread_mutex_init(&s.mu, NULL);
+    atomic_init(&s.running, 0);
+    atomic_init(&s.stop, 0);
+
+    /* Keep SIGALRM off THIS thread so the tracer alone owns the quit-wake —
+     * the same discipline every live view in the TUI follows. */
+    sigemptyset(&block);
+    sigaddset(&block, SIGALRM);
+    pthread_sigmask(SIG_BLOCK, &block, NULL);
+
+    while (fgets(line, sizeof line, in)) {
+        char cmd[32] = "";
+        const char *why = NULL;
+        serve_reap(&s); /* a self-finished session frees its jack */
+
+        if (sj_str(sj_find(line, "cmd"), cmd, sizeof cmd) != 0) {
+            serve_err(&s, "", "every command needs a string \"cmd\"");
+            continue;
+        }
+
+        if (strcmp(cmd, "quit") == 0) {
+            serve_emitf(&s, "cmd", "\"cmd\":\"quit\"");
+            break;
+        }
+        if (strcmp(cmd, "stop") == 0) {
+            if (!s.joinable) {
+                serve_err(&s, "stop", "no session is running");
+                continue;
+            }
+            serve_emitf(&s, "cmd", "\"cmd\":\"stop\"");
+            serve_stop(&s, "stop");
+            continue;
+        }
+        if (strcmp(cmd, "pause") == 0) {
+            int on;
+            if (sj_bool(sj_find(line, "on"), &on) != 0) {
+                serve_err(&s, "pause", "\"pause\" needs \"on\": true|false");
+                continue;
+            }
+            if (!s.joinable) {
+                serve_err(&s, "pause", "no session is running");
+                continue;
+            }
+            s.rec.paused = on;
+            serve_emitf(&s, "cmd", "\"cmd\":\"pause\",\"on\":%s",
+                        on ? "true" : "false");
+            continue;
+        }
+        if (strcmp(cmd, "start") != 0) {
+            serve_err(&s, cmd, "unknown command (start|pause|stop|quit)");
+            continue;
+        }
+
+        /* ---- start ---- */
+        if (s.joinable) {
+            /* D6, the concurrency budget: one ptrace jack per target tree.
+             * The desktop client blocks this first (its patch bay), so this
+             * refusal is the backstop rather than the normal path. */
+            serve_err(&s, "start",
+                      "a session is already running — one ptrace jack per "
+                      "target (send \"stop\" first)");
+            continue;
+        }
+        if (serve_parse_start(line, &s.p, &why) != 0) {
+            serve_err(&s, "start", why);
+            continue;
+        }
+        if ((s.p.mode == SM_TRACE || s.p.mode == SM_DATAFLOW) &&
+            serve_resolve_region(&s.p, &why) != 0) {
+            serve_err(&s, "start", why);
+            continue;
+        }
+        /* Refuse a target we cannot decode rather than decode it wrong: an
+         * i386 tracee's orig_rax indexes a COMPLETELY different syscall table,
+         * so every name would be confidently wrong. Pre-attach, by design. */
+        if (asmspy_elf_class(s.p.pid) == 32) {
+            char e[256];
+            asmspy_strerror(ASMSPY_ETRACEE_I386, e, sizeof e);
+            serve_emitf(&s, "cmd", "\"cmd\":\"start\",\"mode\":\"%s\"",
+                        serve_mode_name(s.p.mode));
+            {
+                char esc[4 * 256];
+                asmtrace_escape(esc, sizeof esc, e);
+                serve_emitf(&s, "session",
+                            "\"state\":\"skip\",\"mode\":\"%s\",\"skip\":{"
+                            "\"code\":%d,\"reason\":\"%s\"}",
+                            serve_mode_name(s.p.mode), ASMSPY_ETRACEE_I386,
+                            esc);
+            }
+            s.p.mode = SM_NONE;
+            continue;
+        }
+
+        {
+            char params[2048];
+            serve_params_json(params, sizeof params, &s.p);
+            serve_emitf(&s, "cmd", "\"cmd\":\"start\",\"mode\":\"%s\"",
+                        serve_mode_name(s.p.mode));
+            serve_emitf(&s, "session",
+                        "\"state\":\"started\",\"mode\":\"%s\",\"pid\":%d,"
+                        "\"params\":%s",
+                        serve_mode_name(s.p.mode), (int)s.p.pid, params);
+        }
+        atomic_store(&s.stop, 0);
+        atomic_store(&s.running, 1);
+        s.rc = 0;
+        s.events = 0;
+        s.autoname[0] = '\0';
+        s.skip_note[0] = '\0';
+        if (pthread_create(&s.th, NULL, serve_tracer, &s) != 0) {
+            atomic_store(&s.running, 0);
+            serve_err(&s, "start", "could not create the tracer thread");
+            s.p.mode = SM_NONE;
+            continue;
+        }
+        s.joinable = 1;
+    }
+
+    /* EOF is "no more commands", NOT "abandon the session". A client that
+     * pipes one `start` in and closes stdin still wants the events it asked
+     * for, so a BOUNDED session (max > 0) is allowed to finish on its own; an
+     * unbounded one runs until Ctrl-C, exactly as `--log <pid>` with no n does.
+     * g_sigstop is the same interrupt flag every headless mode polls. */
+    while (s.joinable && atomic_load(&s.running) && !g_sigstop) {
+        struct timespec ts = {0, 20 * 1000 * 1000}; /* 20ms */
+        nanosleep(&ts, NULL);
+    }
+    /* Then stop through the engine's own teardown so the target SURVIVES —
+     * the property that makes this a tracer and not a debugger. */
+    serve_stop(&s, atomic_load(&s.running) ? "quit" : "max");
+    pthread_mutex_destroy(&s.mu);
+    return 0;
+}
+
+/* --serve[=<path>]. Default is stdin/stdout; with a path, a unix(7)
+ * SOCK_STREAM listener taking ONE client at a time. No TLS and no auth by
+ * design: the socket is filesystem-permissioned, and ssh is the remote
+ * transport (the desktop spawns `ssh <host> asmspy --serve`). */
+static int cmd_serve(const char *sockpath) {
+    struct sockaddr_un sa;
+    int lfd, cfd;
+    FILE *in, *out;
+
+    /* SIGALRM is how a session's teardown unblocks a tracer thread parked in
+     * waitpid; it must interrupt rather than kill. SIGPIPE off so a client
+     * that hangs up mid-stream leaves a TORN recording (which the reader
+     * reports) instead of killing us before the detach runs. */
+    signal(SIGPIPE, SIG_IGN);
+
+    if (!sockpath) {
+        setvbuf(stdout, NULL, _IOLBF, 0);
+        return serve_loop(stdin, stdout);
+    }
+
+    if (strlen(sockpath) >= sizeof sa.sun_path) {
+        fprintf(stderr, "--serve: socket path too long (max %zu)\n",
+                sizeof sa.sun_path - 1);
+        return 2;
+    }
+    lfd = socket(AF_UNIX, SOCK_STREAM, 0);
+    if (lfd < 0) {
+        fprintf(stderr, "--serve: socket: %s\n", strerror(errno));
+        return 1;
+    }
+    memset(&sa, 0, sizeof sa);
+    sa.sun_family = AF_UNIX;
+    snprintf(sa.sun_path, sizeof sa.sun_path, "%s", sockpath);
+    unlink(sockpath); /* a stale socket from a previous run is not a conflict */
+    if (bind(lfd, (struct sockaddr *)&sa, sizeof sa) != 0 ||
+        listen(lfd, 1) != 0) {
+        fprintf(stderr, "--serve: bind/listen %s: %s\n", sockpath,
+                strerror(errno));
+        close(lfd);
+        return 1;
+    }
+    fprintf(stderr, "asmspy --serve listening on %s\n", sockpath);
+    cfd = accept(lfd, NULL, NULL);
+    if (cfd < 0) {
+        fprintf(stderr, "--serve: accept: %s\n", strerror(errno));
+        close(lfd);
+        unlink(sockpath);
+        return 1;
+    }
+    close(lfd);
+    unlink(sockpath);
+    in = fdopen(cfd, "r");
+    out = fdopen(dup(cfd), "w");
+    if (!in || !out) {
+        fprintf(stderr, "--serve: fdopen: %s\n", strerror(errno));
+        close(cfd);
+        return 1;
+    }
+    setvbuf(out, NULL, _IOLBF, 0);
+    serve_loop(in, out);
+    fclose(in);
+    fclose(out);
     return 0;
 }
 
@@ -4220,24 +5463,6 @@ typedef struct {
     long max;
 } dfview_t;
 
-/* No-op SIGALRM handler for the data-flow tracer thread: the UI's
- * pthread_kill(SIGALRM) then interrupts a blocked waitpid inside the producer
- * (EINTR, no SA_RESTART) — its run-to re-CONTs a now-running tracee, gets ESRCH,
- * and returns cleanly (the target is DETACHed and survives) — instead of the
- * default action killing asmspy. Mirrors the engine's own arm_quit_wake, which
- * the single-shot data-flow engine (unlike the streaming ones) does not arm. */
-static void df_on_alarm(int s) { (void)s; }
-static void df_arm_alarm(void) {
-    struct sigaction sa;
-    memset(&sa, 0, sizeof sa);
-    sa.sa_handler = df_on_alarm; /* sa_flags = 0 -> EINTR, no SA_RESTART */
-    sigaction(SIGALRM, &sa, NULL);
-    sigset_t set;
-    sigemptyset(&set);
-    sigaddset(&set, SIGALRM);
-    pthread_sigmask(SIG_UNBLOCK, &set, NULL);
-}
-
 static void dfview_sink(void *ctx, long result, const asmtest_valtrace_t *vt,
                         const asmtest_defuse_t *g, const uint8_t *code,
                         size_t len, uint64_t base) {
@@ -4262,7 +5487,7 @@ static void dfview_sink(void *ctx, long result, const asmtest_valtrace_t *vt,
 
 static void *dfview_tracer(void *arg) {
     dfview_t *V = arg;
-    df_arm_alarm(); /* make the engine's blocked waitpid quit-interruptible */
+    tracer_arm_alarm(); /* make the engine's blocked waitpid quit-interruptible */
     int rc = asmspy_engine_dataflow(V->pid, V->tid, V->rbase, V->rlen, V->max,
                                     &V->stop, dfview_sink, V);
     pthread_mutex_lock(&V->mu);
@@ -5753,6 +6978,15 @@ static int usage(const char *argv0) {
         "[--json]  hardware DATA watchpoint: who touches a field + the value, "
         "at "
         "native speed (x86-64)\n"
+        "  %s --serve[=<socket>]            live-session control loop: read\n"
+        "NDJSON commands on stdin (or a unix socket), run ONE engine at a "
+        "time\n"
+        "and stream its .asmtrace events back. The capture host for the "
+        "desktop\n"
+        "GUI, locally or over ssh. Protocol:\n"
+        "docs/internal/gui/asmtrace-schema.md\n"
+        "      echo '{\"cmd\":\"start\",\"mode\":\"log\",\"pid\":1234}' | %s "
+        "--serve\n"
         "\n"
         "--record=<f> writes a .asmtrace NDJSON recording of the run (every\n"
         "headless mode); --json streams that SAME format to stdout instead of\n"
@@ -5769,7 +7003,7 @@ static int usage(const char *argv0) {
         "debugger) may never reach a fixed n in batch mode; interrupt with "
         "Ctrl-C.\n",
         argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0, argv0,
-        argv0, argv0);
+        argv0, argv0, argv0, argv0);
     return 2;
 }
 
@@ -5782,6 +7016,16 @@ int main(int argc, char **argv) {
      * and a region/dataflow trace has a planted 0xcc to unplant — so Ctrl-C
      * must end the engine loop (each polls g_sigstop), not kill the tracer. */
     install_stop_handlers();
+    /* --serve[=<path>]: the live-session control loop. Placed FIRST because it
+     * is the only mode that takes no pid on the command line — the client sends
+     * one per session (docs/internal/gui/asmtrace-schema.md, Serve protocol). */
+    if (strcmp(argv[1], "--serve") == 0)
+        return cmd_serve(NULL);
+    if (strncmp(argv[1], "--serve=", 8) == 0) {
+        if (!argv[1][8])
+            return bad_arg("socket path", argv[1]);
+        return cmd_serve(argv[1] + 8);
+    }
     if (strcmp(argv[1], "--list") == 0) {
         asmspy_sort_t s = ASMSPY_SORT_PID;
         if (argc >= 3) {

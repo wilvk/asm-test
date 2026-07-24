@@ -46,7 +46,7 @@ $(BUILD)/asmspy_syscall_names.inc: cli/gen-syscall-names.sh | $(BUILD)
 
 # cli/ sources compile like examples/, but with -pthread (a dedicated tracer
 # thread owns the ptrace loop while the ncurses UI thread stays responsive).
-$(BUILD)/%.o: cli/%.c cli/asmspy.h cli/asmspy_graphsort.h \
+$(BUILD)/%.o: cli/%.c cli/libasmspy.h cli/asmspy.h cli/asmspy_graphsort.h \
               cli/asmspy_dataview.h cli/asmspy_treefilter.h \
               cli/asmspy_autoregion.h cli/asmspy_arch.h \
               include/asmtest_ptrace.h \
@@ -55,8 +55,9 @@ $(BUILD)/%.o: cli/%.c cli/asmspy.h cli/asmspy_graphsort.h \
 
 $(BUILD)/asmspy_engine.o: $(BUILD)/asmspy_syscall_names.inc
 
-ASMSPY_OBJS := $(BUILD)/asmspy.o $(BUILD)/asmspy_proc.o $(BUILD)/asmspy_engine.o \
-               $(BUILD)/asmtrace_ndjson.o
+# asmspy.o is the FRONT END (main, the headless subcommands, the ncurses TUI);
+# the engine it drives is libasmspy below, not a loose object here.
+ASMSPY_OBJS := $(BUILD)/asmspy.o $(BUILD)/asmtrace_ndjson.o
 
 # --dataflow (Increment 6) links the scoped-ptrace L0 VALUE producer
 # (dataflow_ptrace.o) plus its pure L0 sink / L1 def-use / L2 slicer (dataflow.o)
@@ -67,11 +68,80 @@ ASMSPY_OBJS := $(BUILD)/asmspy.o $(BUILD)/asmspy_proc.o $(BUILD)/asmspy_engine.o
 ASMSPY_DATAFLOW_OBJS := $(BUILD)/dataflow_ptrace.o $(BUILD)/dataflow.o \
                         $(BUILD)/dataflow_operands.o
 
+# --- libasmspy: the tracer engine as a linkable library (07 T0) --------------
+# The engine (asmspy_engine.o) + the /proc/ELF/JIT resolver (asmspy_proc.o) used
+# to be loose objects compiled straight into the binary with no public header,
+# which is why anything else that wanted them — `--serve`, a future binding —
+# would have had to re-declare or re-implement them. They are now a library with
+# ONE public header (cli/libasmspy.h), mirroring how every other tier already
+# ships (libasmtest_dataflow / _emu / _hwtrace): a static .a the CLI and its
+# tests link, plus a shared .so.
+#
+# This is PACKAGING, not a boundary change. The desktop GUI still never links it
+# (D9) — it reaches the engines only through the `asmspy --serve` subprocess.
+ASMSPY_LIB_OBJS := $(BUILD)/asmspy_engine.o $(BUILD)/asmspy_proc.o
+ASMSPY_LIB      := $(BUILD)/libasmspy.a
+
+$(ASMSPY_LIB): $(ASMSPY_LIB_OBJS)
+	$(AR) rcs $@ $^
+
+# What a libasmspy consumer must ALSO link: the framework tier objects the engine
+# calls into (the hwtrace attach/step seam + disasm, and the data-flow producer
+# behind --dataflow). Named once here so the CLI, test_libasmspy and any future
+# consumer cannot drift into different sets. NOT part of the .a — an archive of
+# another tier's objects would duplicate them in every binary that links both.
+ASMSPY_LIB_DEPS := $(HWTRACE_OBJS) $(ASMSPY_DATAFLOW_OBJS)
 # -lstdc++ supplies __cxa_demangle (Itanium C++ ABI demangler) for the ELF symbol
-# resolver (cli/asmspy_proc.c); asmspy is otherwise pure C.
-$(BUILD)/asmspy: $(HWTRACE_OBJS) $(ASMSPY_OBJS) $(ASMSPY_DATAFLOW_OBJS)
-	$(CC) $(CFLAGS) -pthread $^ $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) \
-	  $(LINK_LIBBPF) -ldl $(NCURSES_LIBS) -lstdc++ -o $@
+# resolver (cli/asmspy_proc.c); the library is otherwise pure C — note NO ncurses,
+# which is the front end's dependency, not the engine's.
+ASMSPY_LIB_LIBS := $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(CAPSTONE_LIBS) \
+                   $(LINK_LIBBPF) -ldl -lstdc++
+
+# The .a goes LAST: plain .o are linked unconditionally, so the archive is what
+# gets searched for the engine symbols asmspy.o references, and it in turn finds
+# its own tier symbols in the objects already on the line.
+$(BUILD)/asmspy: $(ASMSPY_LIB_DEPS) $(ASMSPY_OBJS) $(ASMSPY_LIB)
+	$(CC) $(CFLAGS) -pthread $^ $(ASMSPY_LIB_LIBS) $(NCURSES_LIBS) -o $@
+
+# The shared build. PIC objects live beside every other tier's in $(BUILD)/pic/;
+# the .so bundles the hwtrace + data-flow tiers it calls into (as
+# libasmtest_dataflow bundles pic/codeimage.o) so it resolves standalone.
+$(BUILD)/pic/asmspy_engine.o: cli/asmspy_engine.c cli/libasmspy.h \
+                              cli/asmspy_arch.h $(BUILD)/asmspy_syscall_names.inc \
+                              $(BUILD)/.build-flags | $(BUILD)/pic
+	$(CC) $(CFLAGS) -I$(BUILD) -pthread -fPIC -c $< -o $@
+$(BUILD)/pic/asmspy_proc.o: cli/asmspy_proc.c cli/libasmspy.h \
+                            $(BUILD)/.build-flags | $(BUILD)/pic
+	$(CC) $(CFLAGS) -I$(BUILD) -pthread -fPIC -c $< -o $@
+
+ASMSPY_SHLIB_OBJS := $(BUILD)/pic/asmspy_engine.o $(BUILD)/pic/asmspy_proc.o \
+    $(patsubst $(BUILD)/%,$(BUILD)/pic/%,$(NATIVE_TRACE_OBJS)) \
+    $(BUILD)/pic/disasm.o $(BUILD)/pic/trace.o \
+    $(BUILD)/pic/dataflow.o $(BUILD)/pic/dataflow_operands.o \
+    $(BUILD)/pic/dataflow_ptrace.o
+
+.PHONY: shared-asmspy
+# Linux + x86-64/AArch64 only, for exactly the reasons `cli` is: the engine
+# carries ~473 ptrace / user_regs references and has no body for another OS or
+# architecture. That is a REAL gate (CLAUDE.md — nothing to install), so it self
+# -skips with the measured reason rather than dumping compiler errors.
+ifneq ($(UNAME_S),Linux)
+shared-asmspy:
+	@echo "# SKIP shared-asmspy: libasmspy is a Linux-only out-of-process tracer engine (ptrace / process_vm_readv / /proc); this host is $(UNAME_S)."
+	@echo "#   Nothing to install — this is an OS gate, not a missing dependency."
+else ifeq ($(filter $(CLI_ARCH),$(CLI_ARCH_SUPPORTED)),)
+shared-asmspy:
+	@echo "# SKIP shared-asmspy: libasmspy supports Linux x86-64 and AArch64; this host is $(CLI_ARCH)."
+	@echo "#   Its register/single-step/detach reads (cli/asmspy_arch.h) have no body here."
+else
+shared-asmspy: $(call shlib_dev,libasmspy)
+endif
+$(call shlib_real,libasmspy): $(ASMSPY_SHLIB_OBJS)
+	$(CC) $(CFLAGS) $(call shlib_ldflags,libasmspy) -pthread $^ \
+	  $(ASMSPY_LIB_LIBS) -o $@
+$(call shlib_dev,libasmspy): $(call shlib_real,libasmspy)
+	ln -sf $(notdir $<) $(call shlib_compat,libasmspy)
+	ln -sf $(notdir $(call shlib_compat,libasmspy)) $@
 
 # asmspy is a Linux-only out-of-process tracer: its reads use ptrace(2),
 # process_vm_readv(2), personality(2), /proc, <linux/futex.h>, <sys/user.h> and the
@@ -366,6 +436,17 @@ $(BUILD)/test_symtab: cli/test_symtab.c $(BUILD)/asmspy_proc.o cli/asmspy.h \
 	$(CC) $(CFLAGS) -Icli -pthread cli/test_symtab.c $(BUILD)/asmspy_proc.o \
 	  -lstdc++ -o $@
 
+# test_libasmspy — the standalone proof that libasmspy is a LIBRARY (07 T0).
+# Its LINK LINE is the test: libasmspy.a + the tier objects the engine calls
+# into, and NOT $(BUILD)/asmspy.o, and NOT $(NCURSES_LIBS). A hidden dependency
+# on the CLI front end, or a TUI dependency leaking into the engine, fails here
+# and nowhere else. Its SOURCE includes only cli/libasmspy.h, so a declaration
+# left behind in asmspy.h fails to compile here for the same reason.
+$(BUILD)/test_libasmspy: cli/test_libasmspy.c cli/libasmspy.h \
+                         $(ASMSPY_LIB) $(ASMSPY_LIB_DEPS) | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -pthread cli/test_libasmspy.c $(ASMSPY_LIB_DEPS) \
+	  $(ASMSPY_LIB) $(ASMSPY_LIB_LIBS) -o $@
+
 # test_jitdump — unit test for the binary jitdump reader + the two-tier JIT
 # resolve chain. Links the resolver TU (asmspy_proc.o) directly; -lstdc++
 # supplies its __cxa_demangle just like the asmspy link line.
@@ -471,7 +552,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_arch $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
            $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/test_autoregion \
-           $(BUILD)/test_ghash $(BUILD)/test_asmtrace \
+           $(BUILD)/test_ghash $(BUILD)/test_asmtrace $(BUILD)/test_libasmspy \
            $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
            $(BUILD)/fork_victim $(BUILD)/clone_victim \
            $(BUILD)/sock_victim $(BUILD)/longjmp_victim \

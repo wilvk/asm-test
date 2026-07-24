@@ -102,6 +102,57 @@ int main() {
               r.by_kind["note"][0].body.contains("surprise"),
               "unknown field should be preserved in body");
     }
+    // serve_lifecycle_kinds_are_known (07-serve-live-host.md T1)
+    // One session's slice of a --serve stream. The point of the fixture is that
+    // the three lifecycle kinds are DEFINED, not reserved: a client reading a
+    // live session must not report its own bracketing as unreadable noise.
+    {
+        Recording r = must_load("serve", "serve-session.asmtrace");
+        check("serve/unknown-kinds-zero", r.unknown_kinds == 0,
+              "session/cmd/err must be KNOWN kinds, not unknown ones");
+        check("serve/session-events", r.by_kind["session"].size() == 3,
+              "expected 3 session events");
+        check("serve/cmd-echo", r.by_kind["cmd"].size() == 2,
+              "expected the accepted-command echoes (start + stop)");
+        check("serve/err-kept", r.by_kind["err"].size() == 1,
+              "expected the refusal event");
+        // The mode's own events ride between the lifecycle lines untouched —
+        // protocol law 1: a session's events ARE record mode's events.
+        check("serve/mode-events", r.by_kind["syscall"].size() == 2,
+              "the log mode's syscall events should load normally");
+        check("serve/payload-split",
+              r.by_kind["syscall"][0].body.value("line", "").find("<path>") !=
+                  std::string::npos,
+              "the payload-free line must survive the split");
+        // A refusal does not end a session, and a skip is a SUCCESS with
+        // nothing to report — neither may read as a load failure.
+        check("serve/err-reason",
+              !r.by_kind["err"][0].body.value("reason", "").empty(),
+              "err must name the rule that refused the command");
+        check("serve/skip-code",
+              r.by_kind["session"][2].body["skip"].value("code", 0) == 2,
+              "the skip event must carry the positive engine code");
+        check("serve/not-torn", !r.torn, "the session slice closed cleanly");
+        // THE client rule (protocol law 1): the `end` footer counts RECORDING
+        // events, and cmd/err are control lines that land mid-session — so a
+        // client reconciles the footer only AFTER dropping the serve-only
+        // kinds. Checking it unfiltered would check the wrong contract and
+        // would read a healthy stream as a corrupt recording.
+        {
+            uint64_t recorded = 0;
+            for (const auto &kv : r.by_kind)
+                if (kv.first != "session" && kv.first != "cmd" &&
+                    kv.first != "err" && kv.first != "note")
+                    recorded += kv.second.size();
+            check("serve/footer-reconciles", recorded == r.declared_events,
+                  "end.events must equal the non-control event count");
+            // ...and the control lines really are inside the slice, or the
+            // check above is vacuous.
+            check("serve/control-lines-inside",
+                  r.by_kind.count("err") == 1 && r.by_kind.count("cmd") == 1,
+                  "the fixture must carry control lines inside the slice");
+        }
+    }
     // truncation_surfaces_on_recording
     {
         Recording r = must_load("truncated", "truncated.asmtrace");

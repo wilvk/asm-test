@@ -101,6 +101,16 @@ void asmspy_strerror(int rc, char *buf, size_t buflen) {
             "debug-register "
             "arming refused: permission / seccomp / qemu)";
         break;
+    case ASMSPY_SAMPLE_UNAVAIL:
+        /* This case was MISSING, so a caller that rendered this positive skip
+         * generically got the default below — "attach failed", which is both
+         * wrong (nothing was attached; the sampler is out of band) and the
+         * exact confidently-wrong-answer the skip codes exist to prevent.
+         * The MEASURED reason still comes from asmtest_ibs_unavail_reason();
+         * this is the vocabulary word, not a substitute for it. */
+        m = "AMD IBS-Op sampling unavailable (not an AMD IBS host, or perf "
+            "refused the open)";
+        break;
     case ASMTEST_PTRACE_EINVAL:
         m = "invalid argument";
         break;

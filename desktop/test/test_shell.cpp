@@ -74,6 +74,11 @@ int main() {
     check("smoke/opened", s.ws.recordings.size() == 6, "all six should open");
     s.open_dialog = true;            // exercise the open-dialog draw path
     s.door_tabs.push_back("Author"); // exercise a placeholder door tab
+    // The Inspect door (07 T4/T5) draws in BOTH binaries, so its whole path —
+    // the /proc list, the patch bay's budget decision, the live status — runs
+    // headlessly here with no serve host connected. That "not connected yet"
+    // state is the one every user sees first and the easiest to leave broken.
+    s.show_inspect = true;
 
     for (int frame = 0; frame < 3; frame++) {
         io.DisplaySize = ImVec2(1280, 720);

@@ -15,7 +15,11 @@
 
 #include <string.h>
 
-#include "asmspy.h"
+/* asmspy_gnode_t is an ENGINE type, so this reaches for the engine's public
+ * header (libasmspy.h) rather than the CLI front-end's asmspy.h. Graphsort
+ * itself stays CLI-side, out of the library's own header set, because of the
+ * file-scope qsort latch below. */
+#include "libasmspy.h"
 
 /* How to rank the whole-process call graph. */
 typedef enum {

@@ -15,12 +15,19 @@ using nlohmann::json;
 
 // The v1 registry (asmtrace-schema.md "Event kinds (v1)"), incl. the `end`
 // footer. A `k` outside this set loads but counts as unknown (forward compat);
-// the schema's reserved kinds (mem, blame, codeimage, session, …) are unknown to
-// a v1 reader too, which is exactly why they are NOT listed here.
-static const std::array<const char *, 16> kKnownKinds = {
+// the schema's still-RESERVED kinds (mem, fpenv, blame, codeimage, …) are
+// unknown to a v1 reader, which is exactly why they are NOT listed here.
+//
+// session/cmd/err are the exception: they were reserved for 07 and are now
+// DEFINED (asmtrace-schema.md "Serve protocol"), so a live session's lifecycle
+// lines are known kinds rather than unknown-kind noise. They are serve-only —
+// no `--record` file contains them — but the loader is the one that reads a
+// serve stream too, and a client that counted every lifecycle line as "unknown"
+// would report a healthy session as a partly-unreadable one.
+static const std::array<const char *, 19> kKnownKinds = {
     {"trace", "coverage", "syscall", "stream", "call", "graph", "topo",
      "survey", "watch", "df_step", "df_edge", "regstate", "result", "note",
-     "stitch", "end"}};
+     "stitch", "end", "session", "cmd", "err"}};
 
 bool is_known_kind(const std::string &kind) {
     for (const char *k : kKnownKinds)

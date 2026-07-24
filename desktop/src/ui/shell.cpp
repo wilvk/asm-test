@@ -139,17 +139,15 @@ static void draw_doors(ShellState &s) {
         s.show_author = true;
     ImGui::SameLine();
     ImGui::TextDisabled("type assembly, run it, see faults as data");
-#ifdef ASMTEST_DESKTOP_RENDER_ONLY
-    ImGui::BeginDisabled();
-    ImGui::Button("Inspect");
-    ImGui::EndDisabled();
-    ImGui::TextUnformatted(kEngineDoorReason);
-#else
+    // Inspect is in BOTH binaries — the one door where D9 pays off visibly.
+    // It links no engine: it reads /proc itself and captures by spawning
+    // `asmspy --serve` as a subprocess, so the render-only viewer hosts live
+    // sessions with its `ldd` still free of every tracer.
     if (ImGui::Button("Inspect"))
-        s.door_tabs.push_back("Inspect");
-    ImGui::TextDisabled("Inspect opens an empty tab (the live views land in "
-                        "doc 08)");
-#endif
+        s.show_inspect = true;
+    ImGui::SameLine();
+    ImGui::TextDisabled("attach to a running process — see why not when you "
+                        "cannot");
     ImGui::Spacing();
     if (ImGui::Button("Keyboard bindings"))
         s.show_help = !s.show_help;
@@ -316,6 +314,11 @@ void draw_shell(ShellState &s) {
         // rather than hiding the tab (D4's split has to be legible).
         if (s.show_author && ImGui::BeginTabItem("Author", &s.show_author)) {
             draw_author_door(s.author);
+            ImGui::EndTabItem();
+        }
+
+        if (s.show_inspect && ImGui::BeginTabItem("Inspect", &s.show_inspect)) {
+            draw_inspect_door(s.inspect);
             ImGui::EndTabItem();
         }
 

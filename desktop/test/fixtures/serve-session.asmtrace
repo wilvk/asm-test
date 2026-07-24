@@ -1,0 +1,11 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-syscalls","exact":true,"trust":"exact","redacted":false},"arch":"x86_64","pid":4242,"cmd":"./spy_victim"}
+{"k":"note","text":"one session sliced out of a --serve stream. The `session` lines bracket it from OUTSIDE the header..end range; `cmd` and `err` are emitted when they happen, so they land INSIDE it. The end footer counts RECORDING events only (the 2 syscalls) — a client reconciles it after dropping the serve-only kinds (asmtrace-schema.md, Serve protocol, law 1)."}
+{"k":"cmd","cmd":"start","mode":"log"}
+{"k":"session","state":"started","mode":"log","pid":4242,"params":{"follow":false,"max":-1}}
+{"k":"syscall","line":"openat(AT_FDCWD, <path>, O_RDONLY) = 3","payload":"/etc/passwd"}
+{"k":"syscall","line":"write(1, <14 bytes>, 14) = 14","payload":"hello, world\n"}
+{"k":"err","reason":"a session is already running — one ptrace jack per target (send \"stop\" first)","cmd":"start"}
+{"k":"cmd","cmd":"stop"}
+{"k":"session","state":"stopped","mode":"log","events":2,"reason":"stop"}
+{"k":"session","state":"skip","mode":"sample","skip":{"code":2,"reason":"IBS-Op is an AMD feature; this host is GenuineIntel"}}
+{"k":"end","events":2,"truncated":false,"drops":{"lost":0,"throttled":false}}

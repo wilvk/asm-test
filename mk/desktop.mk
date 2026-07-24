@@ -75,6 +75,9 @@ $$(BUILD)/desktop/$(1)/da/%.o:  desktop/src/data/%.cpp | $$(IMGUI_HOME)/imgui.cp
 $$(BUILD)/desktop/$(1)/lo/%.o:  desktop/src/loom/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) -c $$< -o $$@
+$$(BUILD)/desktop/$(1)/lv/%.o:  desktop/src/live/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
+	@mkdir -p $$(@D)
+	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) -c $$< -o $$@
 $$(BUILD)/desktop/$(1)/t/%.o:   desktop/test/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) $$(DESKTOP_TEST_EXTRA) -c $$< -o $$@
@@ -88,6 +91,8 @@ $(eval $(call desktop_rules,test,))
 $(BUILD)/desktop/test/t/test_recording.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_shell.o:     DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_golden.o:    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
+$(BUILD)/desktop/test/t/test_live_session.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
+$(BUILD)/desktop/test/t/test_inspect.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_loom_golden.o \
 $(BUILD)/desktop/test/t/test_loom_draw.o: DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
 $(BUILD)/desktop/test/t/test_walkthrough.o: \
@@ -118,6 +123,11 @@ DESKTOP_LOOM_DRAW := fabric_imgui
 # sees this TU, which is what keeps its `ldd` free of unicorn/keystone/capstone.
 DESKTOP_LOOM_APP  := forks
 
+# live/ — the capture host (07-serve-live-host.md T3/T4). It spawns
+# `asmspy --serve` and speaks its protocol; it links NO engine, which is what
+# lets asmtest-viewer host live sessions while staying engine-free (D4/D9).
+DESKTOP_LIVE := session budget inspect
+
 # The Learn door's bundled walkthroughs (06-doors-and-learning.md T2-T4).
 WALKTHROUGH_DIR := tests/golden-asmtrace/walkthroughs
 
@@ -143,7 +153,9 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/src/author_vm.o \
   $(BUILD)/desktop/$(1)/ui/author_door.o \
   $(BUILD)/desktop/$(1)/ui/shell.o $(BUILD)/desktop/$(1)/ui/learn_door.o \
-  $(BUILD)/desktop/$(1)/ui/capability_panel.o
+  $(BUILD)/desktop/$(1)/ui/capability_panel.o \
+  $(BUILD)/desktop/$(1)/ui/inspect_door.o \
+  $(DESKTOP_LIVE:%=$(BUILD)/desktop/$(1)/lv/%.o)
 DESKTOP_APP_OBJ    := $(call desktop_app_objs,app) \
                       $(DESKTOP_LOOM_APP:%=$(BUILD)/desktop/app/lo/%.o)
 DESKTOP_RENDER_OBJ := $(call desktop_app_objs,render)
@@ -188,6 +200,7 @@ DESKTOP_TEST_VW  := $(DESKTOP_VIEW_PURE:%=$(BUILD)/desktop/test/vw/%.o) \
 DESKTOP_TEST_DA  := $(BUILD)/desktop/test/da/features_data.o \
                     $(BUILD)/desktop/test/da/perf_history.o
 DESKTOP_TEST_LOOM := $(DESKTOP_LOOM_PURE:%=$(BUILD)/desktop/test/lo/%.o)
+DESKTOP_TEST_LIVE := $(DESKTOP_LIVE:%=$(BUILD)/desktop/test/lv/%.o)
 
 # --- missing-dependency probes (mirror mk/cli.mk:32-38) -----------------------
 # The render-only viewer + the full app need GLFW/GL; only the full app needs the
@@ -341,7 +354,10 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_loom_golden \
                  $(BUILD)/desktop_test_walkthrough \
                  $(BUILD)/desktop_test_capview \
-                 $(BUILD)/desktop_test_author_vm
+                 $(BUILD)/desktop_test_author_vm \
+                 $(BUILD)/desktop_test_live_session \
+                 $(BUILD)/desktop_test_budget \
+                 $(BUILD)/desktop_test_inspect
 
 # The fabric model links fabric.o and NOTHING else — that link line is the proof
 # that asmtest-viewer can weave a recording with zero engine deps (D4), the same
@@ -413,6 +429,29 @@ $(BUILD)/desktop_test_author_vm: $(BUILD)/desktop/test/t/test_author_vm.o \
     $(BUILD)/desktop/test/src/author_vm.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# The live capture host links session.o + the doc model and NOTHING else — no
+# ImGui, no GL, no engines. That link line is the standing proof that hosting a
+# live session costs the render-only viewer no engine dependency (D9): the
+# capture host is the `asmspy --serve` SUBPROCESS, not a linked tracer.
+$(BUILD)/desktop_test_live_session: \
+    $(BUILD)/desktop/test/t/test_live_session.o \
+    $(BUILD)/desktop/test/lv/session.o $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# budget.o is a pure decision table — it links nothing at all, which is what
+# makes every mode-pair assertable on a host with no target to attach to.
+$(BUILD)/desktop_test_budget: $(BUILD)/desktop/test/t/test_budget.o \
+    $(BUILD)/desktop/test/lv/budget.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The Inspect door's two decisions. Links inspect.o + session.o + the doc model
+# — still no ImGui, no GL, no engines: reading /proc and labelling evidence are
+# things the VIEWER does, which is why the door works with no tracer linked.
+$(BUILD)/desktop_test_inspect: $(BUILD)/desktop/test/t/test_inspect.o \
+    $(BUILD)/desktop/test/lv/inspect.o $(BUILD)/desktop/test/lv/session.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 $(BUILD)/desktop_test_loom_draw: $(BUILD)/desktop/test/t/test_loom_draw.o \
     $(DESKTOP_TEST_LOOM) $(BUILD)/desktop/test/lo/fabric_imgui.o \
     $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_IG)
@@ -477,6 +516,8 @@ $(BUILD)/desktop_test_recording: $(BUILD)/desktop/test/t/test_recording.o $(DESK
 DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/ui/learn_door.o \
     $(BUILD)/desktop/test/ui/capability_panel.o \
+    $(BUILD)/desktop/test/ui/inspect_door.o \
+    $(DESKTOP_TEST_LIVE) \
     $(BUILD)/desktop/test/src/walkthrough.o \
     $(BUILD)/desktop/test/src/capview.o \
     $(BUILD)/desktop/test/src/author_vm.o \

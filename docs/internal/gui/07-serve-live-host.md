@@ -9,6 +9,46 @@
 > disagree, this doc wins (sources may be stale); if the CODE and this doc
 > disagree, re-verify before implementing.
 >
+> **Implemented 2026-07-24 (T0–T6). Corrections this doc lost to the code, in
+> the sibling docs' format — the code won each time and this doc was fixed in
+> the same change:**
+>
+> 1. **`make cli-test` does not exist.** T0's Tests/Done-when named it; the cli
+>    target is **`make cli-smoke`** (mk/cli.mk), which is what the new
+>    `test_libasmspy` and the T6 serve section were wired into.
+> 2. **The `--auto` evidence label cannot ride in the `started` event's params
+>    echo** (T5 step 2). `started` is emitted before the tracer thread runs, and
+>    which sampler AUTO resolves to — and therefore what grade of evidence the
+>    pick carries — is not known until the picker has run. The protocol
+>    therefore gained a fourth lifecycle state, **`session state:"pick"`**, one
+>    per candidate attempted; the `NEVER_RAN` walk is successive `pick` events,
+>    which is what T5 already expected ("successive `session` events").
+> 3. **A session's slice must be FILTERED to be a valid recording** (T1 law 1).
+>    `session` brackets a session from outside the `[header … end]` range, but
+>    `cmd`/`err` are emitted when they happen and so land *inside* it, while the
+>    `end` footer counts recording events only. Slicing without dropping the
+>    three serve-only kinds yields more lines than the footer declares — which
+>    is not corruption, and a reader must not treat it as such. Stated
+>    normatively in the schema, and asserted both in `cli-smoke` and in the
+>    desktop loader test.
+> 4. **`asmspy_strerror` had no case for `ASMSPY_SAMPLE_UNAVAIL`** — a real
+>    defect this work surfaced rather than a doc error. That positive skip code
+>    fell through to the default `"attach failed"`, which is wrong twice over
+>    (the IBS sampler is out of band and attaches nothing). Fixed in
+>    `asmspy_engine.c`; serve additionally sources every skip `reason` from the
+>    **measuring** source, as the schema requires.
+> 5. **Inspect is in BOTH binaries, not the full app only.** 03's shell had it
+>    disabled in `desktop-render` beside Author. Author links Keystone/Unicorn
+>    and must be; Inspect links *nothing* — it reads `/proc` itself and captures
+>    through the `asmspy --serve` subprocess — so gating it would have hidden
+>    exactly the property D9 exists to buy.
+> 6. **03's loader is whole-stream, not incremental.** T3's "feed events into
+>    03's NDJSON loader line-by-line" describes an API `load_recording` does not
+>    have. `LiveSession::feed_line` is a state machine mirroring its per-line
+>    rules, and it reuses `load_recording` verbatim for the *header's* reject
+>    rules so a newer major / missing provenance is refused identically on the
+>    wire and in a file.
+>
 > Read [\_conventions.md](../implementations/_conventions.md) first; shared
 > decisions D1–D11 live in this directory's README. Siblings:
 > [01-asmtrace-format.md](01-asmtrace-format.md) (the `asmtrace_emit` writer TU
@@ -144,7 +184,7 @@ The desktop app still never links it (D9) — T0 is packaging.
 symbol must move out of `asmspy.c` to satisfy the link (a helper the engine
 calls), move it into `asmspy_engine.c`/`asmspy_proc.c`, never duplicate it.
 
-**Tests.** Existing `make cli-test` green and unchanged; the new `test_libasmspy`
+**Tests.** Existing `make cli-smoke` green and unchanged; the new `test_libasmspy`
 links against the public header + `.a` only and passes; `make shared-asmspy`
 produces the `.so` on Linux (x86-64 **and** arm64) and self-skips elsewhere.
 
@@ -153,7 +193,7 @@ produces the `.so` on Linux (x86-64 **and** arm64) and self-skips elsewhere.
 now a linkable tier, like the emulator/dataflow libs) + CHANGELOG `Added`.
 
 **Done when.**
-- `make cli-test` is green with **no behaviour change** (a pure repackaging).
+- `make cli-smoke` is green with **no behaviour change** (a pure repackaging).
 - `test_libasmspy` links against *only* `cli/libasmspy.h` + `libasmspy.a`.
 - `make shared-asmspy` builds the `.so` on Linux and self-skips off-Linux.
 - Nothing in `desktop/` links `libasmspy` (grep the desktop build — D9 preserved:
@@ -332,10 +372,10 @@ victim, well-formed events, clean detach.
 2. Assert: every line parses as JSON with a known `"k"`; a `session` event
    brackets each mode; the victim is still alive after quit (`kill -0`); a
    second concurrent `start` was refused with `err`.
-3. Wire into the existing cli test target so `make cli-test` (and the docker
+3. Wire into the existing cli test target so `make cli-smoke` (and the docker
    lane) runs it.
 
-**Done when.** `make cli-test` green with the serve section; the victim
+**Done when.** `make cli-smoke` green with the serve section; the victim
 survives; the refusal case fires.
 
 ## Task order & parallelism

@@ -13,6 +13,9 @@
 #include "author_vm.h"
 #include "capview.h"
 #include "doc/recording.h"
+#include "live/budget.h"
+#include "live/inspect.h"
+#include "live/session.h"
 #include "walkthrough.h"
 
 namespace asmdesk {
@@ -88,6 +91,51 @@ void cap_probe(CapState &s);
 // `loaded` is used only by the render-only build, which shows the RECORDING's
 // provenance in place of a host probe.
 void draw_capability_panel(CapState &s, const Recording *loaded);
+
+// --- the Inspect door (07-serve-live-host.md T4/T5) ------------------------
+// The live front door: pick a process, see WHY NOT when you cannot, and land on
+// a hot function via `--auto` with honest evidence labels.
+//
+// It is in BOTH binaries, and that is the point of D9 rather than an oversight:
+// the door links no engine at all. It reads /proc itself to list processes, and
+// it captures by spawning `asmspy --serve` as a subprocess — so the
+// render-only viewer hosts live sessions while its `ldd` stays engine-free.
+struct InspectState {
+    LiveSession session;
+    bool host_started = false;
+    std::string host_error;
+    // The asmspy the host will spawn; blank = resolve $PATH then ./build.
+    char asmspy_path[512] = {0};
+    char ssh_host[256] = {0};
+
+    std::vector<ProcRow> rows;
+    bool scanned = false;
+    long selected_pid = 0;
+
+    // What the client believes is live on this target, for the patch bay. The
+    // serve loop refuses a second concurrent start too, but the budget is
+    // decided HERE so the UI can render an occupied jack and offer a swap
+    // rather than firing a command that comes back as an error.
+    std::vector<LiveMode> active;
+    LiveMode want = LiveMode::Log;
+    // Set when a start was blocked: the swap the user may confirm. A swap
+    // stops someone else's capture, so it is never silent.
+    bool swap_pending = false;
+    LiveMode swap_blocker = LiveMode::Log;
+    std::string swap_reason;
+};
+
+// Rescan /proc into `s.rows` (also called once on first draw).
+void inspect_scan(InspectState &s);
+// Start the serve host if it is not up. Records the failure in `host_error`.
+void inspect_connect(InspectState &s);
+// Ask to start `s.want` on `s.selected_pid`, honouring the budget. Returns
+// false and arms `swap_pending` when the jack is occupied.
+bool inspect_request_start(InspectState &s);
+// Confirm the armed swap: stop the holder, then start what was refused.
+void inspect_confirm_swap(InspectState &s);
+
+void draw_inspect_door(InspectState &s);
 
 } // namespace asmdesk
 #endif // ASMDESK_UI_DOORS_H

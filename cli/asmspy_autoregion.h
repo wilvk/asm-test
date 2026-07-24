@@ -61,6 +61,13 @@
 #include <stdint.h>
 #include <string.h>
 
+/* asmspy_sample_edge_t / asmspy_sym_t / asmspy_symtab_t — the IBS edges this
+ * ranks and the symtab it ranks them against. Included rather than assumed: as
+ * a public header (libasmspy.h's preamble) this must compile on its own, and it
+ * used to compile only when the includer had pulled the engine header in FIRST
+ * — an ordering dependency the desktop's vm_compat.cpp had to pin by hand. */
+#include "libasmspy.h"
+
 /* One ranked candidate region: a function whose ENTRY was observed being branched
  * to. `addr`/`size` are what the data-flow engine takes as (base, len). */
 typedef struct {

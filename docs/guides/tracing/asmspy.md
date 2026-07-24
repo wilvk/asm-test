@@ -584,6 +584,90 @@ asmspy is glue over primitives documented elsewhere; the interesting parts:
   table powers both the symbol picker (forward, by name) and every view's
   reverse lookup (by address).
 
+## `libasmspy` — the engine as a linkable tier
+
+Everything under *How it works* above is a **library**, not private CLI code.
+The attach seam, the thread-following engines, the two-phase detach, the
+resolvers — all of it lives in `libasmspy`, behind one public header:
+
+```c
+#include "libasmspy.h"          /* cli/libasmspy.h */
+```
+
+```sh
+make cli             # builds build/libasmspy.a (the CLI links it)
+make shared-asmspy   # builds build/libasmspy.so — Linux x86-64 / AArch64 only
+```
+
+That makes the tracer a tier like the others (`libasmtest_emu`,
+`libasmtest_dataflow`, `libasmtest_hwtrace`): the `asmspy` binary is simply its
+first consumer, and its ncurses TUI is a *front end* over the same API you can
+call. Every engine has the same shape —
+
+```
+int asmspy_engine_<view>(pid, [only_tid], [follow], max/ms,
+                         atomic_bool *stop, [syms/jit/filter],
+                         <typed sink>, void *ctx);
+```
+
+— returning `0` on a clean detach, a **negative** `ASMTEST_PTRACE_*` code on an
+attach failure, and a **positive** typed skip code when the tracer worked but
+had nothing to report (`ASMSPY_REGION_NEVER_RAN`, `ASMSPY_SAMPLE_UNAVAIL`,
+`ASMSPY_DATAFLOW_UNAVAIL`, `ASMSPY_WATCH_UNAVAIL`, `ASMSPY_ETRACEE_I386`).
+`asmspy_strerror` renders any of them. That three-way split is the point: "the
+region never ran" is a fact about the *target*, and it must never be reported in
+the same channel as "the tracer could not attach".
+
+Two rules a consumer inherits, both non-negotiable:
+
+- **One tracer thread.** `ptrace` is per-thread, so every engine call runs
+  start-to-finish on the thread that attached. Run it on a dedicated thread; do
+  not touch `ptrace` from your UI thread.
+- **Stop via the flag, never by killing the thread.** Set the `atomic_bool
+  *stop` and `pthread_kill(th, SIGALRM)` to unblock its `waitpid`, then join.
+  The engine returns through its own two-phase detach — the thing that keeps a
+  JIT target alive. Bypassing it is never correct.
+
+`libasmspy` is **Linux-only**, on x86-64 and AArch64; a 32-bit tracee is refused
+at attach rather than decoded against the wrong syscall table. The desktop GUI
+does *not* link it — it hosts capture by spawning `asmspy` as a subprocess, so
+the viewer stays engine-free and remote capture is the same code path as local.
+
+## `--serve` — asmspy as a capture host
+
+`asmspy --serve` turns the tracer inside out: instead of one subcommand writing
+one mode's events, it reads **NDJSON commands** and streams back the events of
+whichever mode is running.
+
+```sh
+# one bounded session, straight through a pipe
+printf '{"cmd":"start","mode":"log","pid":%d,"max":20}\n' "$PID" | asmspy --serve
+
+# a unix socket instead of stdin/stdout (one client at a time)
+asmspy --serve=/tmp/asmspy.sock
+```
+
+Commands are `start` / `pause` / `stop` / `quit`; a `start` names one `mode`
+(`log`, `stream`, `trace`, `dataflow`, `tree`, `graph`, `procs`, `sample`,
+`watch`, `auto`) and that engine's parameters. **One session runs at a time** —
+a second `start` is refused with an `err` naming the rule, because a target has
+one ptrace jack. The full protocol — every parameter, every refusal, and the two
+protocol laws — is the *Serve protocol* section of
+`docs/internal/gui/asmtrace-schema.md` in the source tree.
+
+The important property: **the events are exactly `--record`'s events**. A
+session emits its own provenance header, its mode's ordinary `.asmtrace` events
+through the same writer, then the `end` footer — so slicing one session out of
+the stream (and dropping the `session`/`cmd`/`err` control lines) gives a valid
+recording that any reader in this tree already understands. There is no separate
+"live" format to keep in step.
+
+This is what the desktop GUI uses to capture: it spawns `asmspy --serve` as a
+subprocess, locally or as `ssh <host> asmspy --serve`, so remote capture is the
+same code path as local and the viewer itself links no tracer. Ending a session
+always runs the engines' two-phase detach — the target survives, and EOF on the
+command channel lets a bounded session finish before quitting.
+
 ## Permissions
 
 Attaching to a process you did not start needs the usual `ptrace` rights — the

@@ -8,6 +8,74 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`asmspy --serve[=<socket>]` — the live-session control loop**
+  (docs/internal/gui/07-serve-live-host.md T1/T2/T6). asmspy can now be driven
+  as a **capture host** rather than a one-shot command: it reads NDJSON
+  commands (`start` / `pause` / `stop` / `quit`) on stdin or a `unix(7)` socket
+  and streams back the events of whichever engine is running. This is how the
+  desktop GUI captures — it spawns `asmspy --serve` as a subprocess, locally or
+  via `ssh <host> asmspy --serve`, so remote capture is the same code path as
+  local and the viewer links no tracer at all.
+
+  It is a **thin wrapper over `libasmspy`**, and deliberately so: every mode
+  drives one engine through the public header with the *same* sinks and the
+  *same* writer TU `--record` uses. There is no serve-specific event body
+  anywhere, so **a session's events are exactly a recording's events** — slice
+  `[header … end]` out of the stream, drop the control lines, and any reader in
+  this tree parses it. The protocol is specified normatively (*Serve protocol*
+  in docs/internal/gui/asmtrace-schema.md) rather than defined by the C code,
+  including the three lifecycle kinds (`session` / `cmd` / `err`) that were
+  reserved in the kind registry and are now defined.
+
+  Two properties carry over rather than being re-argued. **One session at a
+  time**, because a target has one ptrace jack: a second `start` is refused
+  with an `err` naming the rule. And **a session only ever ends through the
+  engines' two-phase detach** — stop flag, `SIGALRM` to unblock a pending
+  `waitpid`, join — so the target survives, which `make cli-smoke` now asserts
+  end to end (start log → stop → start stream → quit, victim alive after). The
+  flag matrix is the argument parser's, verbatim, so the two front ends cannot
+  disagree about what is legal.
+
+  Honesty is preserved where it would have been easiest to lose: `pause`
+  suspends emission but not tracing, so the events it swallows are **counted**,
+  the recording is marked `truncated`, and the terminal event carries
+  `paused_dropped`. And a skip reports the **measuring source's** reason —
+  which surfaced a real defect: `asmspy_strerror` had no case for
+  `ASMSPY_SAMPLE_UNAVAIL`, so that positive skip code rendered as the default
+  `"attach failed"` — wrong twice over, since the IBS sampler is out of band and
+  attaches nothing. Fixed.
+
+- **`libasmspy` — the asmspy tracer engine is now a linkable library**
+  (docs/internal/gui/07-serve-live-host.md T0). The ptrace engines
+  (`cli/asmspy_engine.c`) and the `/proc`/ELF/JIT resolvers
+  (`cli/asmspy_proc.c`) were loose objects compiled straight into the `asmspy`
+  binary with **no public header**, so anything else that wanted them — the
+  forthcoming `--serve` control loop, a future language binding — would have had
+  to re-declare or re-implement them. They now ship as `build/libasmspy.a` plus
+  `make shared-asmspy` (`build/libasmspy.so`), behind one public header
+  `cli/libasmspy.h`, exactly as every other tier already ships
+  (`libasmtest_emu` / `_dataflow` / `_hwtrace`).
+
+  This is **packaging, not a rewrite**: the engines, sinks, and the
+  one-tracer-thread / two-phase-detach contracts are byte-for-byte the code that
+  was already there, and `cli/asmspy.h` now includes the public header and
+  re-exports it, so every existing includer compiles unchanged. `cli/asmspy.h`
+  keeps only the front end's own entry point.
+
+  What the split buys is a boundary that can be **tested**: the new
+  `cli/test_libasmspy.c` includes *only* `libasmspy.h` and links *only*
+  `libasmspy.a` plus the framework tier objects — **not** `asmspy.o` and **not**
+  ncurses — then attaches to a live victim, streams syscalls through a real
+  sink, detaches and asserts the target survived. A hidden dependency on the CLI
+  front end, or a TUI dependency leaking into the engine, now fails there and
+  nowhere else. It runs in `make cli-smoke`.
+
+  `cli/asmspy_autoregion.h` became self-contained in the same change (it used
+  `asmspy_sample_edge_t` without including anything that declared it, forcing
+  consumers to pin an include *order* by hand — `desktop/src/vm_compat.cpp` had
+  that pinned against clang-format). The desktop still links nothing of this
+  (D9): it reaches the engines only through the `asmspy --serve` subprocess.
+
 - **`make desktop-setup` — one command from a bare host to a runnable GUI.**
   Nothing bootstrapped the desktop app: `make deps` covered the engines but knew
   nothing about GLFW or GL, so the app backends were reachable only by copying

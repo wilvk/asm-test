@@ -132,6 +132,15 @@ desktop/
     data/
       features_data.*   asmfeatures / box-record / bench-report readers
       perf_history.*    the append-only perf-history.jsonl reader + box scan
+    live/
+      session.{h,cpp}   the capture HOST: spawn `asmspy --serve` (locally or
+                        over ssh) and turn its stream into growing Recordings.
+                        Links no engine — the tracer is the subprocess (D9)
+      budget.{h,cpp}    the D6 concurrency budget as a pure decision table:
+                        one ptrace jack per target, sample is out of band
+      inspect.{h,cpp}   the Inspect door's two decisions: attachability (WHY a
+                        target cannot be traced, and what would fix it) and the
+                        `--auto` evidence labels (entry vs residency)
     loom/
       fabric.{h,cpp}    the spacetime fabric: lanes, worldline spans, hops,
                         knots, reads — engine-free, in BOTH binaries
@@ -402,7 +411,7 @@ claim the run ended where the buffer did, so the banner names the gap instead
 ("this feed did not record the total") and only prints the N-of-M form when a
 feed really supplies both. A header total is a Phase-3-freeze item.
 
-## The three doors
+## The four doors
 
 ### Learn
 
@@ -483,3 +492,107 @@ cascade a panel that "never re-probes" has to be able to ask. A panel shipped
 without it would have to invent its own probes, which is exactly what D2 exists
 to prevent. The render-only viewer links none of it and shows the **loaded
 recording's** provenance instead, saying so.
+
+## Live sessions — the Inspect door
+
+`src/live/` is how the desktop captures, and the shape of it is the whole
+design: **the GUI never links a tracer**. It spawns `asmspy --serve` as a
+subprocess and speaks the NDJSON control protocol over its pipes
+([`docs/internal/gui/asmtrace-schema.md`](../docs/internal/gui/asmtrace-schema.md),
+*Serve protocol*). Locally that is `asmspy --serve`; remotely it is
+`ssh <host> asmspy --serve` — **the same code path**, which is why remote
+capture needed no second implementation and why macOS/Windows can host a session
+against a Linux target at all.
+
+The payoff is visible in the license split: **Inspect is in both binaries**.
+`asmtest-viewer` lists processes, attaches, and streams a live session while its
+`ldd` stays free of every engine, because reading `/proc` and framing NDJSON are
+things a viewer can do and tracing is not (D4/D9).
+
+### What a session is
+
+A session's events **are** a recording's events. Between the `session started`
+and the terminal lifecycle event, the host emits that mode's own provenance
+header, its ordinary `.asmtrace` events, and an `end` footer — so a live capture
+is a `Recording` like any other and every view already reads it. `LiveSession`
+holds a growing one and hands back completed ones.
+
+Three honesty rules ride in `session.cpp` rather than in the UI:
+
+- **A host that dies mid-session leaves a TORN recording.** Not an error dialog,
+  not a discarded buffer: what arrived is kept, and the recording says it is
+  incomplete. `fake_serve.sh`'s `torn` mode reproduces it on demand.
+- **A malformed line is counted, never fatal.** A live host is not a file; one
+  bad line must not discard a session, and pretending it parsed would be worse.
+- **A skip is a success.** `state:"skip"` means the tracer worked and had
+  nothing to report, so it lives in its own field and renders in its own colour.
+  Showing it as an error is the single most common way this fact gets
+  misreported.
+
+### The patch bay — one ptrace jack per target
+
+`budget.h` is a pure table, and `test_budget` walks **all 100 mode pairs**. The
+rule it encodes is a fact about the kernel, not a policy: a tracee has exactly
+one tracer, and every ptrace view SEIZEs either all of the target's threads or
+(for `procs`, which follows forks) its whole descendant **tree**. `sample` is
+the one free slot — AMD IBS-Op reads out of band, attaches nothing, and can run
+alongside anything.
+
+So an occupied jack renders *"paused — another live view holds the tracer"*
+naming the holder and what it is doing, and starting a second view offers an
+explicit **swap** — never a silent one, because a swap stops someone else's
+capture. The serve loop refuses a concurrent `start` too, but that refusal is a
+backstop: the point of deciding client-side is that the user sees an occupied
+jack instead of pulling a lever that returns an error.
+
+### Seeing why not
+
+Every process row carries a verdict *and its reason*, in the row — not a toast,
+not an error the user has to provoke by trying. `attach_verdict` is pure and
+`test_inspect` checks every combination, including the ones no single host can
+produce, because the failure mode here is not a crash: it is telling someone to
+raise a Yama `ptrace_scope` when the real problem is that **no privilege can
+help**.
+
+The facts are ordered by which one dominates:
+
+| Fact | Verdict | Why it comes first |
+|---|---|---|
+| our own pid / a kernel thread | No | nothing to trace |
+| a 32-bit (i386) tracee | No | asmspy decodes against the x86-64 syscall table — it would produce confident nonsense. **No capability fixes this** (`ASMSPY_ETRACEE_I386`) |
+| already traced | No | a tracee has exactly one tracer; the remedy is stopping the other one |
+| `CAP_SYS_PTRACE` held | Yes | it overrides uid **and** `ptrace_scope`, so testing it later would report a uid problem that does not apply |
+| `ptrace_scope=3` | No | one-way: it cannot be lowered without a reboot, so offering any other remedy would be a lie |
+| `ptrace_scope=2` | No | capability-only |
+| different uid | No | remedy: that user, or the capability |
+| `ptrace_scope=1` | **Unknown** | it permits a descendant or a `PR_SET_PTRACER` opt-in, and whether the target opted in is *not readable from outside* — an honest Unknown beats a confident Yes that fails at attach |
+| same uid, scope 0 or Yama absent | Yes | |
+
+### The `--auto` front door, and its evidence
+
+`mode:"auto"` picks a hot region instead of making you name one, and it reports
+**what it picked and how good the evidence was**. That distinction is
+load-bearing, not chrome:
+
+- **`entry`** — an AMD IBS-Op branch whose target is a function's start. This is
+  a direct observation of the event the capture waits for.
+- **`residency`** — the portable software-clock fallback. A PC histogram says a
+  function was *executing*, which is a **different claim**. A function entered
+  once and never re-entered is the top residency winner, and the capture's entry
+  breakpoint would never fire on it.
+
+So a residency pick is labelled *"WEAKER EVIDENCE — residency, not entry"*
+together with that consequence, and when the server walks past a candidate that
+was never seen entering, each `pick` event surfaces with a note saying the
+refusal is about *that candidate* and **not a fact about the target**. A silent
+substitution would be the front door claiming a measurement it never made.
+
+### Testing it without a tracer
+
+`desktop/test/fixtures/fake_serve.sh` speaks the protocol and emits canned
+events, so `test_live_session` and `test_inspect` run on any machine: no ptrace,
+no permissions, no victim, no AMD silicon. That is not a compromise — it is what
+lets the awkward shapes (a refusal mid-session, a skip, a torn stream, a
+never-ran candidate walk) be tested *on demand* rather than by luck. The real
+`asmspy --serve` is covered end to end on the other side of the seam, by the
+serve section of `make cli-smoke`.
