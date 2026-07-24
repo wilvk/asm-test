@@ -49,8 +49,8 @@ static inline int gnode_cmp_key(const asmspy_gnode_t *x,
  * allowance), so the desktop can reuse it through vm_compat.cpp. */
 static gsort_t graph_sort_key = GSORT_INVOCATIONS;
 static int gnode_cmp(const void *a, const void *b) {
-    return gnode_cmp_key((const asmspy_gnode_t *)a,
-                         (const asmspy_gnode_t *)b, graph_sort_key);
+    return gnode_cmp_key((const asmspy_gnode_t *)a, (const asmspy_gnode_t *)b,
+                         graph_sort_key);
 }
 
 #endif /* ASMSPY_GRAPHSORT_H */

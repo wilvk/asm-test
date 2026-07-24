@@ -77,8 +77,8 @@ static void check_cmp_key(const char *what, gsort_t key, asmspy_gnode_t a,
     /* adapter (single-thread latch) must equal the core on the same pair */
     graph_sort_key = key;
     if (gnode_cmp(&a, &b) != ab) {
-        fprintf(stderr, "FAIL %s: adapter disagrees with core (%d vs %d)\n", what,
-                gnode_cmp(&a, &b), ab);
+        fprintf(stderr, "FAIL %s: adapter disagrees with core (%d vs %d)\n",
+                what, gnode_cmp(&a, &b), ab);
         failures++;
     }
 }
@@ -141,7 +141,8 @@ int main(void) {
 
     /* context-explicit core (the GUI entry): correct with NO latch touched, for
      * both keys, and in agreement with the qsort adapter */
-    check_cmp_key("key/inv", GSORT_INVOCATIONS, node("a", 9, 0), node("b", 3, 9),
+    check_cmp_key("key/inv", GSORT_INVOCATIONS, node("a", 9, 0),
+                  node("b", 3, 9),
                   -1); /* more invocations sorts FIRST (descending) */
     check_cmp_key("key/fanout", GSORT_FANOUT, node("a", 9, 1), node("b", 0, 2),
                   1); /* less fanout sorts LAST under the fanout key */
