@@ -66,9 +66,11 @@ and ties each growth rung to a named planned item.
 ### What survives unchanged
 
 - **Protocol before renderings.** `.asmtrace` (NDJSON events + metadata header)
-  first; `--serve` is "the same events, live". Verified still greenfield: no
-  `.asmtrace`, `--serve`, or JSON mode for `--log`/`--stream` exists in
-  [cli/asmspy.c](../../../cli/asmspy.c) at HEAD.
+  first; `--serve` is "the same events, live". *(Was "verified still greenfield"
+  when this plan was written; as of 2026-07-24 the `.asmtrace` writer,
+  `--record` on every headless mode, and JSON mode for `--log`/`--stream` have
+  **landed** — [01-asmtrace-format.md](../gui/01-asmtrace-format.md). `--serve`
+  is still greenfield: [07-serve-live-host.md](../gui/07-serve-live-host.md).)*
 - **Dear ImGui + C ABI (Tracy model), not a webview.** The packaging manifests
   independently confirm it: of the ten bindings, **only Python ships the def-use/
   slice *wrapper module* in a published artifact** ([bindings/python/asmtest/dataflow.py](../../../bindings/python/asmtest/dataflow.py)
@@ -556,7 +558,14 @@ same events.
 
 ## Phasing
 
-1. **Phase 1 — the contract.** `.asmtrace` v1 schema doc + NDJSON serializer
+1. **Phase 1 — the contract.** *(Status 2026-07-24: the recording half is
+   **done** — [01-asmtrace-format.md](../gui/01-asmtrace-format.md) landed the
+   draft schema, the writer TU, `--record` on every headless mode, `--json` for
+   `--log`/`--stream`, the `vec512_t` row, and the committed golden corpus with
+   its dishonesty fixtures. What remains of this phase is the reader/exporter
+   half: [02-exporters-and-readers.md](../gui/02-exporters-and-readers.md)
+   T1–T4.)*
+   `.asmtrace` v1 schema doc + NDJSON serializer
    sinks + record modes in [cli/asmspy.c](../../../cli/asmspy.c); JSON modes for
    `--log`/`--stream`; state descriptors (+ `vec512_t` manifest addition);
    speedscope + Perfetto exporters; readers for features/bench artifacts.
@@ -611,16 +620,16 @@ same events.
 
 | Item | Where | Size |
 |---|---|---|
-| `.asmtrace` NDJSON serializers per sink + record mode | [cli/asmspy.c](../../../cli/asmspy.c) (beside the ncurses sinks) | small |
-| JSON mode for `--log`/`--stream` | [cli/asmspy.c](../../../cli/asmspy.c) | small |
+| ~~`.asmtrace` NDJSON serializers per sink + record mode~~ **DONE** (01-T3/T5) | [cli/asmtrace_ndjson.c](../../../cli/asmtrace_ndjson.c) + [cli/asmspy.c](../../../cli/asmspy.c) | small |
+| ~~JSON mode for `--log`/`--stream`~~ **DONE** (01-T4) | [cli/asmspy.c](../../../cli/asmspy.c) | small |
 | `--serve` control loop over stdout/unix socket | [cli/asmspy.c](../../../cli/asmspy.c) | small |
 | speedscope / Perfetto exporters | new tool or `cli/` | small |
-| `vec512_t` manifest row (descriptor precondition) | [scripts/gen-manifest.c](../../../scripts/gen-manifest.c) | small |
+| ~~`vec512_t` manifest row (descriptor precondition)~~ **DONE** (01-T2) | [scripts/gen-manifest.c](../../../scripts/gen-manifest.c) | small |
 | Ship `ct_eq` as a real example | `examples/` | small |
 | Darwin build of `libasmtest_dataflow` | `mk/dataflow.mk` + binding platform maps | small–medium |
 | Per-step register-capture ring (opt-in) | [src/emu.c](../../../src/emu.c) (`UC_HOOK_CODE`) | small–medium |
 | graphsort comparator-context lift (or serialized sorts) | [cli/asmspy_graphsort.h](../../../cli/asmspy_graphsort.h) | small |
-| Payload-free `format_syscall` line variant (the redaction gate) | [cli/asmspy.c](../../../cli/asmspy.c) / engine formatter | small |
+| ~~Payload-free `format_syscall` line variant (the redaction gate)~~ **DONE** (01-T4; the fd-backing path had to be redacted too) | [cli/asmspy_engine.c](../../../cli/asmspy_engine.c) | small |
 | Runner record mode: per-test `.asmtrace` + failure events carrying recording path + step id | [src/asmtest.c](../../../src/asmtest.c) (riding the emulator/valtrace tiers the tests drive) | medium |
 | Walkthrough content for the Learn ladder (authoring, not code) | golden-recording corpus | small–medium |
 | *(opportunistic)* arm64-guest emulator L0 value producer | `src/dataflow_emu.c` guest seam | medium, demand-gated |
