@@ -1,0 +1,2 @@
+no code image: PAGEMAP_SCAN ioctl not supported and /proc/self/clear_refs soft-dirty is unavailable on this kernel (needs Linux 6.7 or soft-dirty support)
+versions=0 spans=0 recorded_disasm=1

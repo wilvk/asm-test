@@ -1,0 +1,20 @@
+banner=TRUNCATED recording — buffers filled; rows below are a prefix of what happened
+chrome=ptrace-region / exact
+crawl=single-step capture: the target CRAWLS inside this region while a snapshot is taken (it runs at native speed everywhere else, and resumes fully on detach)
+invocations=3 selected=0 basis=rel
+  #1 insns=5/5 blocks=2/2
+    0x0  endbr64
+    0x4  mov eax, edi
+    0x6  test eax, eax
+    0x8  je 0x18
+    0x18  ret
+  #2 insns=6/9 blocks=3/4 TRUNCATED
+    0x0  endbr64
+    0x4  mov eax, edi
+    0x6  test eax, eax
+    0x8  je 0x18
+    0xa  add eax, esi
+    0x18  ret
+  #3 insns=2/0 blocks=0/0 OPEN (no coverage footer — the capture stopped here)
+    0x0  endbr64
+    0x4  mov eax, edi

@@ -1,0 +1,8 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-syscalls","exact":true,"trust":"exact","redacted":false},"arch":"x86_64","pid":4242,"cmd":"./spy_victim"}
+{"k":"session","state":"started","mode":"log","pid":4242,"params":{"follow":true,"max":-1}}
+{"k":"syscall","line":"openat(AT_FDCWD, <path>, O_RDONLY) = 3","payload":"/etc/shadow"}
+{"k":"syscall","line":"read(3</path>, <8 bytes>, 4096) = 8","payload":"hunter2!"}
+{"k":"syscall","line":"close(3) = 0"}
+{"k":"syscall","line":"write(1, <13 bytes>, 13) = 13","payload":"hello, world!","tid":4243}
+{"k":"session","state":"stopped","mode":"log","events":4,"reason":"stop"}
+{"k":"end","events":4,"truncated":false,"drops":{"lost":0,"throttled":false}}

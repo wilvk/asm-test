@@ -27,7 +27,23 @@
 
 namespace asmdesk {
 
-enum class dt_view { canvas, timeline, slice, diff };
+// The four replay views (04), then the live Observer views (08). A link names
+// one of these by the enum's own spelling; an older build that does not know a
+// name refuses the link WITH the name in the message rather than landing
+// somewhere arbitrary.
+enum class dt_view {
+    canvas,
+    timeline,
+    slice,
+    diff,
+    syscalls,
+    watch,
+    topo,
+    hotedges,
+    tree,
+    region,
+    disasm,
+};
 
 struct dt_link {
     std::string rec;   // recording id (its basename — doc/streams.h)
@@ -35,11 +51,19 @@ struct dt_link {
     dt_view view = dt_view::canvas;
     std::optional<uint32_t> step; // a dataflow step index
     std::optional<uint64_t> off;  // a code offset, in the recording's basis
+    // A process, for the live views (08-T3's topology drill-in): a session
+    // covers a whole descendant TREE, so "which process" is a real coordinate
+    // there in a way it never is for a single-routine replay. Appended LAST in
+    // the textual form, so every link written before it stays byte-identical.
+    std::optional<long> pid;
 };
 
-// v=<canvas|timeline|slice|diff>; the spelling is the enum's name, both ways.
+// v=<canvas|timeline|slice|diff|syscalls|watch|topo|hotedges|tree|region|disasm>;
+// the spelling is the enum's name, both ways.
 const char *dt_view_name(dt_view v);
 bool dt_view_parse(std::string_view s, dt_view &out);
+// Every view, for exhaustive iteration (registration, and the round-trip test).
+const std::vector<dt_view> &dt_all_views();
 
 // Parse the textual form. False + a human-readable `err` on anything that is
 // not a navigable link; never throws, never partially fills `out`.

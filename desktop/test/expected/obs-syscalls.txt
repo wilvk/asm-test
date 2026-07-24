@@ -1,0 +1,7 @@
+chrome=ptrace-syscalls / exact
+record_redacted=no reveal_all=no follow=yes
+rows=4
+  0 openat(AT_FDCWD, <path>, O_RDONLY) = 3 | payload=••• hidden (11 bytes)
+  1 read(3</path>, <8 bytes>, 4096) = 8 | payload=••• hidden (8 bytes)
+  2 close(3) = 0 | payload=(no payload)
+  3 [tid 4243] write(1, <13 bytes>, 13) = 13 | payload=••• hidden (13 bytes)

@@ -331,6 +331,11 @@ is no v1 producer. A reader ignores them like any unknown kind (see
 *Serve protocol* below. They are **serve-only**: they appear on a live control
 stream, never inside a `.asmtrace` file written by `--record`.
 
+`codeimage` was reserved here for 08 and is now **defined** — see *`codeimage` —
+captured code bytes at a version* at the end of this file. Unlike the three
+above it is an ordinary **recording** event: it rides inside the `[header … end]`
+range and the footer counts it.
+
 Adding a kind is a **new registry row under the ignore-unknown-kinds rule** —
 never a new envelope major.
 
@@ -643,3 +648,53 @@ produces `err` instead, never both.
   `"redacted":false` stated honestly in the header. Redaction is a **renderer**
   duty ([08-observer-views.md](08-observer-views.md)); the wire never pretends
   content was withheld when it was not.
+
+## `codeimage` — captured code bytes at a version
+
+> **Owned by [08-observer-views.md](08-observer-views.md)** (T7), appended under
+> this file's D5 append-only rule. It **defines the kind already reserved for 08
+> in *Reserved kinds* above** and adds no field to any existing kind and no new
+> envelope major. **01 owner sign-off: recorded 2026-07-24.**
+
+```json
+{"k":"codeimage","base":4198400,"len":16,"version":1,"when":3,"bytes":"f30f1efa554889e5"}
+```
+
+A tracked code region's bytes **as they were at a moment**, so a trace of
+self-modifying or JIT-compiled code can be disassembled against the bytes that
+were live when it ran — not against whatever is at that address by the time
+someone looks.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `base` | u64 | yes | Start address of the snapshotted span (absolute, in the target). |
+| `len` | u64 | yes | Its length in bytes. `bytes` is exactly `2 * len` hex characters. |
+| `version` | u64 | yes | 0-based version index for that span: 0 is the `track()` snapshot, each later one a `refresh()` that found the pages changed. |
+| `when` | u64 | yes | The **logical timestamp** the version was recorded at — [`asmtest_codeimage_now`](../../../include/asmtest_codeimage.h#L102)'s monotonic capture sequence, the same clock a trace position is stamped against. |
+| `bytes` | str | yes | Lowercase hex, two characters per byte, no separators. |
+
+Mirrors [`asmtest_codeimage_bytes_at`](../../../include/asmtest_codeimage.h#L110)
+on the wire, and the **resolution rule is the same one**, stated normatively
+because a reader that gets it wrong is silently wrong:
+
+- To disassemble address `a` at trace time `t`, take the version whose span
+  contains `a` with the **greatest `when` ≤ `t`** — never the newest version,
+  and never the first.
+- If no version satisfies that, the bytes at `a` are **unknown**. Not zero, not
+  the nearest later version: a JIT address is reused, and showing the *next*
+  method's bytes for the *previous* method's trace is precisely the failure this
+  kind exists to prevent.
+- A reader **never re-reads live memory** to fill the gap. For a replayed
+  recording the process is long gone; for a live one the bytes at that address
+  have already been established as the wrong ones.
+
+**Producer.** `asmspy --serve` emits `codeimage` events for a region-scoped
+session (`mode:"trace"` / `"dataflow"` / `"auto"`) when
+[`asmtest_codeimage_available()`](../../../include/asmtest_codeimage.h#L72) is
+true: version 0 before the engine attaches, then one per refresh as invocations
+are captured. When the recorder is unavailable the session emits a `note`
+carrying the **measured** skip reason
+([`asmtest_codeimage_skip_reason`](../../../include/asmtest_codeimage.h#L76) —
+the soft-dirty / `PAGEMAP_SCAN` gate, Linux ≥ 6.7) and captures without it. A
+recording with no `codeimage` events is therefore normal, and means the viewer
+falls back to the recorded `disasm` strings (D10) or to bare offsets.

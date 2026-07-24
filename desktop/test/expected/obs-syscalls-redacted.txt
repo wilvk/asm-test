@@ -1,0 +1,6 @@
+banner=TRUNCATED recording — buffers filled; rows below are a prefix of what happened; dropped 3 event(s)
+chrome=ptrace-syscalls / exact
+record_redacted=yes reveal_all=no follow=no
+rows=2
+  0 openat(AT_FDCWD, <path>, O_RDONLY) = 3 | payload=(redacted at record time — not in this recording)
+  1 read(3, <8 bytes>, 4096) = 8 | payload=(redacted at record time — not in this recording)

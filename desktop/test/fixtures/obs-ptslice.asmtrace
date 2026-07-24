@@ -1,0 +1,5 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-region","exact":true,"trust":"exact","window":{"base":4198400,"len":9}},"arch":"x86_64","pid":4242}
+{"k":"note","text":"a PT capture: the path was recorded by hardware (zero single-steps of the target) and decoded against code image version 0. The VALUES are not in this file — they are reconstructed by replaying the path (08-observer-views.md T8)."}
+{"k":"codeimage","base":4198400,"len":9,"version":0,"when":1,"bytes":"f30f1efa89f801f0c3"}
+{"k":"stitch","tid":4242,"slices":[{"version":0,"offs":[0,4,6,8]}]}
+{"k":"end","events":2,"truncated":false,"drops":{"lost":0,"throttled":false}}

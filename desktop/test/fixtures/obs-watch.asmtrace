@@ -1,0 +1,7 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"hwdebug-watch","exact":true,"trust":"exact"},"arch":"x86_64","pid":5150}
+{"k":"session","state":"started","mode":"watch","pid":5150,"params":{"addr":6295624,"len":4,"rw":1,"max":-1}}
+{"k":"watch","hit_no":1,"tid":5150,"pc":4198750,"addr":6295624,"is_write":1,"value_ok":true,"value_len":4,"value":42,"func":"work","module":"watch_victim","off":18}
+{"k":"watch","hit_no":2,"tid":5151,"pc":4198800,"addr":6295624,"is_write":0,"value_ok":true,"value_len":4,"value":42,"func":"reader","module":"watch_victim","off":6}
+{"k":"watch","hit_no":3,"tid":5151,"pc":4198900,"addr":6295624,"is_write":-1,"value_ok":false,"value_len":0}
+{"k":"session","state":"stopped","mode":"watch","events":3,"reason":"stop"}
+{"k":"end","events":3,"truncated":false,"drops":{"lost":0,"throttled":false}}

@@ -1,0 +1,3 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ibs-op","exact":false,"trust":"statistical","window":{"base":4198400,"len":4096}},"arch":"x86_64","pid":4242}
+{"k":"survey","sampler":"ibs-op","edges":[{"from_addr":4198900,"to_addr":4198710,"from":"leaf","to":"work+0x12 [victim]","count":40,"mispred":1,"is_return":1},{"from_addr":4198800,"to_addr":4198900,"from":"helper","to":"leaf","count":812,"mispred":0,"is_return":0},{"from_addr":4198710,"to_addr":4198800,"from":"work+0x12 [victim]","to":"helper","count":812,"mispred":3,"is_return":0}],"samples":10442,"branch_samples":9001,"lost":17,"throttled":true}
+{"k":"end","events":1,"truncated":false,"drops":{"lost":17,"throttled":true}}

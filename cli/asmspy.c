@@ -44,6 +44,7 @@
 #include "asmspy_dataview.h" /* --dataflow value annotation + slice/def-use logic */
 #include "asmspy_graphsort.h" /* gsort_t + gnode_cmp (unit-tested separately) */
 #include "asmspy_logview.h"
+#include "asmtest_codeimage.h" /* --serve: JIT-safe bytes for a region session */
 #include "asmtest_ibs.h" /* --sample: out-of-band statistical hot-edge capture */
 #include "asmtrace_ndjson.h" /* --record / --json: the .asmtrace NDJSON writer */
 
@@ -2959,6 +2960,15 @@ typedef struct {
     unsigned long long events; /* this session's emitted event count     */
     int rc;                    /* the engine's return                    */
     char autoname[160];        /* mode auto: what the picker chose        */
+    /* --- codeimage: the region's bytes AS OF each capture (08 T7) ----- */
+    asmtest_codeimage_t *img;      /* NULL when unavailable or not a region   */
+    unsigned long long ci_version; /* the next `codeimage` event's version */
+    /* The last bytes EMITTED, to suppress a version that says nothing. See
+     * serve_codeimage_emit: the region engine's own entry int3 dirties the
+     * page, so "the pages changed" is true after every invocation even for a
+     * region that never changes. */
+    uint8_t *ci_last;
+    size_t ci_last_len;
     /* A measured reason no lookup could produce. mode "auto" needs it: when
      * its SAMPLER self-skips, the thing that is unavailable is the sampler,
      * and only the sampler knows why — reporting the capture engine's generic
@@ -3029,6 +3039,130 @@ static void serve_watch_sink(void *ctx, const asmspy_watch_hit_t *h) {
     watch_record(&s->rec, h);
 }
 
+/* ---- codeimage: JIT-safe bytes for a region session (08 T7) --------- */
+/* A JIT patches, frees and REUSES code addresses, so bytes read after the fact
+ * are not the bytes that ran. asmtest_codeimage.h already solves that on the
+ * producer side (a timestamped code-image timeline — the userspace equivalent of
+ * PERF_RECORD_TEXT_POKE); this carries its versions onto the wire as `codeimage`
+ * events (asmtrace-schema.md), so a client can disassemble a step against the
+ * bytes live AT THAT STEP instead of re-reading a process that has moved on.
+ *
+ * Cheap when nothing changed: a refresh is one ioctl per tracked span and reads
+ * nothing unless a page was written. Everything here runs on the tracer thread,
+ * and none of it is a ptrace operation — the recorder reads memory and scans
+ * pagemap, which is why it can ride alongside the engine's own attach. */
+#define SERVE_CI_MAX_BYTES 4096
+
+/* One `codeimage` event for the CURRENT state of the tracked span. */
+static void serve_codeimage_emit(serve_session_t *s) {
+    const uint8_t *p = NULL;
+    size_t n = 0, i;
+    uint64_t when;
+    char hexbuf[2 * SERVE_CI_MAX_BYTES + 1];
+    static const char *HEX = "0123456789abcdef";
+    if (!s->img)
+        return;
+    when = asmtest_codeimage_now(s->img);
+    if (asmtest_codeimage_bytes_at(s->img, (const void *)(uintptr_t)s->p.base,
+                                   when, &p, &n) != ASMTEST_CI_OK ||
+        !p || !n)
+        return;
+    if (n > s->p.len)
+        n = s->p.len;
+    if (n > SERVE_CI_MAX_BYTES) {
+        /* A span larger than one line can carry: emit the prefix with the
+         * length it actually contains (the schema requires bytes == 2*len) and
+         * mark the recording truncated, rather than emit a short array that
+         * reads complete. */
+        n = SERVE_CI_MAX_BYTES;
+        rec_truncated(&s->rec);
+    }
+    /* MEASURED, and the reason this check exists: the region engine arms an
+     * int3 at the region's entry and removes it again, and that write dirties
+     * the page. So the change detector reports "these pages were written" after
+     * every single invocation — of the TRACER's doing, not the target's. The
+     * timeline is about BYTES, so a snapshot identical to the last one emitted
+     * is not a new version; emitting it anyway would attribute our own
+     * perturbation to the target and bury a real JIT patch in the noise. */
+    if (s->ci_last && s->ci_last_len == n && memcmp(s->ci_last, p, n) == 0)
+        return;
+    {
+        uint8_t *keep = realloc(s->ci_last, n ? n : 1);
+        if (keep) {
+            memcpy(keep, p, n);
+            s->ci_last = keep;
+            s->ci_last_len = n;
+        }
+    }
+    for (i = 0; i < n; i++) {
+        hexbuf[2 * i] = HEX[p[i] >> 4];
+        hexbuf[2 * i + 1] = HEX[p[i] & 0xF];
+    }
+    hexbuf[2 * n] = '\0';
+    rec_emitf(&s->rec, "codeimage",
+              "\"base\":%llu,\"len\":%llu,\"version\":%llu,\"when\":%llu,"
+              "\"bytes\":\"%s\"",
+              (unsigned long long)s->p.base, (unsigned long long)n,
+              s->ci_version, (unsigned long long)when, hexbuf);
+    s->ci_version++;
+}
+
+/* Track the session's region and emit version 0. Called once, before the engine
+ * attaches — for mode "auto", after the pick has chosen the region. */
+static void serve_codeimage_arm(serve_session_t *s) {
+    char why[320], esc[4 * 320];
+    int rc;
+    if (s->img || !s->p.base || !s->p.len)
+        return;
+    if (!asmtest_codeimage_available()) {
+        /* The gate is a MEASURED fact (soft-dirty / PAGEMAP_SCAN, Linux >= 6.7)
+         * and the capture proceeds without it — so the recording says why it has
+         * no code image rather than leaving a reader to guess whether anyone
+         * tried. */
+        asmtest_codeimage_skip_reason(why, sizeof why);
+        asmtrace_escape(esc, sizeof esc, why);
+        rec_emitf(&s->rec, "note", "\"text\":\"codeimage unavailable: %s\"",
+                  esc);
+        return;
+    }
+    s->img = asmtest_codeimage_new(s->p.pid);
+    if (!s->img)
+        return;
+    rc = asmtest_codeimage_track(s->img, (const void *)(uintptr_t)s->p.base,
+                                 s->p.len);
+    if (rc != ASMTEST_CI_OK) {
+        snprintf(why, sizeof why,
+                 "codeimage unavailable: tracking 0x%llx+%llu returned status "
+                 "%d (the region is not readable in this target)",
+                 (unsigned long long)s->p.base, (unsigned long long)s->p.len,
+                 rc);
+        asmtrace_escape(esc, sizeof esc, why);
+        rec_emitf(&s->rec, "note", "\"text\":\"%s\"", esc);
+        asmtest_codeimage_free(s->img);
+        s->img = NULL;
+        return;
+    }
+    serve_codeimage_emit(s);
+}
+
+/* Re-scan after an invocation was captured: a version is emitted only when the
+ * pages actually changed, so a static region costs one ioctl and one line. */
+static void serve_codeimage_refresh(serve_session_t *s) {
+    if (s->img && asmtest_codeimage_refresh(s->img) > 0)
+        serve_codeimage_emit(s);
+}
+
+static void serve_codeimage_close(serve_session_t *s) {
+    if (s->img) {
+        serve_codeimage_refresh(s);
+        asmtest_codeimage_free(s->img);
+        s->img = NULL;
+    }
+    free(s->ci_last);
+    s->ci_last = NULL;
+    s->ci_last_len = 0;
+}
+
 static void serve_region_sink(void *ctx, unsigned sample_no, long result,
                               const asmtest_trace_t *tr,
                               const asmtest_descent_t *desc,
@@ -3038,6 +3172,9 @@ static void serve_region_sink(void *ctx, unsigned sample_no, long result,
     (void)result;
     (void)desc;
     region_record(&s->rec, tr, code, len, base);
+    /* AFTER the invocation's events: a version emitted before them would date
+     * the new bytes to a capture that ran against the old ones. */
+    serve_codeimage_refresh(s);
 }
 
 static void serve_dataflow_sink(void *ctx, long result,
@@ -3047,6 +3184,7 @@ static void serve_dataflow_sink(void *ctx, long result,
     serve_session_t *s = ctx;
     (void)result;
     dataflow_record(&s->rec, vt, g, code, len, base);
+    serve_codeimage_refresh(s);
 }
 
 /* ---- a minimal JSON reader for the control channel ------------------ */
@@ -3394,10 +3532,12 @@ static void serve_run_engine(serve_session_t *s) {
                                     &s->stop, &s->syms, serve_watch_sink, s);
         break;
     case SM_TRACE:
+        serve_codeimage_arm(s);
         s->rc = asmspy_engine_region(p->pid, p->tid, p->base, p->len, p->max,
                                      &s->stop, serve_region_sink, s);
         break;
     case SM_DATAFLOW:
+        serve_codeimage_arm(s);
         s->rc = asmspy_engine_dataflow(p->pid, p->tid, p->base, p->len, p->max,
                                        &s->stop, serve_dataflow_sink, s);
         break;
@@ -3455,6 +3595,12 @@ static void serve_run_engine(serve_session_t *s) {
                             0, 0, 1, 1);
         }
         for (;;) {
+            /* The region is only known once the picker has run, so the code
+             * image is armed here rather than before the engine — and re-armed
+             * for each walked candidate, since they are different regions. */
+            serve_codeimage_close(s);
+            s->ci_version = 0;
+            serve_codeimage_arm(s);
             s->rc = asmspy_engine_dataflow(p->pid, 0, p->base, p->len, p->max,
                                            &s->stop, serve_dataflow_sink, s);
             if (s->rc == ASMSPY_REGION_NEVER_RAN && attempt + 1 < ncand) {
@@ -3518,6 +3664,11 @@ static void *serve_tracer(void *arg) {
         s->have_syms = 1;
 
     serve_run_engine(s);
+
+    /* One last scan: code patched after the final invocation is still part of
+     * this region's history, and this is the last moment the target is there to
+     * ask. Frees the timeline either way.  */
+    serve_codeimage_close(s);
 
     if (s->have_syms)
         asmspy_symtab_free(&s->syms);
@@ -3951,6 +4102,10 @@ static int serve_loop(FILE *in, FILE *out) {
         s.events = 0;
         s.autoname[0] = '\0';
         s.skip_note[0] = '\0';
+        /* `version` is 0-based PER SESSION's tracked span (schema): a second
+         * region session numbers its own snapshots from 0 again, because it is
+         * a different recording with its own header and footer. */
+        s.ci_version = 0;
         if (pthread_create(&s.th, NULL, serve_tracer, &s) != 0) {
             atomic_store(&s.running, 0);
             serve_err(&s, "start", "could not create the tracer thread");

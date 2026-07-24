@@ -61,6 +61,24 @@ inline asmdesk::Streams load(const std::string &relpath) {
     return asmdesk::decode_streams(*rec);
 }
 
+#ifdef ASMTEST_FIXTURE_DIR
+// Load a fixture as a RECORDING rather than decoded streams. The live Observer
+// views (08-observer-views.md) build straight off the document model, because
+// the kinds they read — syscall, watch, topo, call, codeimage — are not part of
+// 04's Streams decode and inventing a second decode for them would put the same
+// fields in two places.
+inline asmdesk::Recording load_fixture(const std::string &relpath) {
+    std::string path = std::string(ASMTEST_FIXTURE_DIR) + "/" + relpath;
+    std::string err;
+    auto rec = asmdesk::load_recording_file(path, err);
+    if (!rec) {
+        fail("load " + relpath, err);
+        return asmdesk::Recording{};
+    }
+    return *rec;
+}
+#endif
+
 // Byte-compare `got` against desktop/test/expected/<name>. UPDATE_GOLDEN=1
 // rewrites it — review the diff, the dump IS the contract.
 inline void golden(const std::string &name, const std::string &got) {

@@ -21,6 +21,7 @@
 #include <time.h>
 
 #include "live/session.h"
+#include "views/tree.h"
 
 #ifndef ASMTEST_FIXTURE_DIR
 #error "ASMTEST_FIXTURE_DIR must be defined by the build (mk/desktop.mk)"
@@ -272,6 +273,52 @@ static void test_process_path() {
             !s.recordings().empty() &&
                 s.recordings()[0].by_kind.count("stream") == 1,
             "what DID arrive is still kept — torn means incomplete, not void");
+    }
+    {
+        // The TREE FILTER ROUND TRIP (08-observer-views.md T5): the client
+        // builds the start command, the host echoes the EFFECTIVE parameters,
+        // and the view reads them back off the wire. The point is that the
+        // filter the UI shows as running is the server's answer, not the
+        // client's own request replayed to itself.
+        LiveSession s;
+        LiveSession::Spec spec;
+        spec.asmspy_path = fake;
+        std::string err;
+        if (!s.start(spec, err)) {
+            check("proc/tree-start", false, "could not spawn: " + err);
+            return;
+        }
+        TreeFilter f;
+        f.depth = 3;
+        f.focus = "work";
+        f.module = "spy_victim";
+        check("proc/tree-filter-legal", obs_tree_filter_error(f).empty(),
+              "this filter is legal and must not be refused client-side");
+        s.send(obs_tree_start_command(f, 4242));
+        bool ok = pump_until(
+            s, [](const LiveSession &x) { return x.recordings().size() == 1; });
+        check("proc/tree-session", ok, "the tree session should complete");
+        if (!s.recordings().empty()) {
+            // A live host keeps the lifecycle OUT of the recording (it is not a
+            // recording event), so the view is handed it separately — the same
+            // views, over the same facts, from either source.
+            ObsLifecycle lc;
+            for (const LiveNote &n : s.notes())
+                if (n.kind == "session")
+                    lc.sessions.push_back(n.body);
+            TreeView v = obs_tree_build(s.recordings()[0], &lc);
+            check("proc/tree-rows", v.rows.size() == 2,
+                  "both call events should have arrived");
+            check("proc/tree-echo", v.have_effective,
+                  "the started event's params echo must reach the view");
+            check("proc/tree-depth", v.effective.depth == 3,
+                  "depth should round-trip through the session");
+            check("proc/tree-focus", v.effective.focus == "work",
+                  "focus should round-trip through the session");
+            check("proc/tree-module", v.effective.module == "spy_victim",
+                  "module should round-trip through the session");
+        }
+        s.shutdown();
     }
     {
         // A host that cannot be executed is Failed, and says so — distinct from

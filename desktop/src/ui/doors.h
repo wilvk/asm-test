@@ -15,7 +15,9 @@
 #include "doc/recording.h"
 #include "live/budget.h"
 #include "live/inspect.h"
+#include "live/ptslice.h"
 #include "live/session.h"
+#include "views/observer_draw.h"
 #include "walkthrough.h"
 
 namespace asmdesk {
@@ -123,6 +125,21 @@ struct InspectState {
     bool swap_pending = false;
     LiveMode swap_blocker = LiveMode::Log;
     std::string swap_reason;
+
+    // The live Observer deck (08-observer-views.md) over this session's
+    // recording. It is the SAME deck the replay tabs draw, rebuilt as the
+    // recording grows — which is what makes "every view renders identically
+    // from a recording" a build-enforced fact rather than an aspiration.
+    ObserverState observer;
+    uint64_t observed_events = 0; // the deck was built at this event count
+    size_t observed_recordings = 0;
+
+    // The PT-replay slice (08-observer-views.md T8). Held across frames because
+    // running it is an explicit action: replaying a path costs real work, and a
+    // view that re-ran it every frame would be charging for a picture nobody
+    // asked to refresh.
+    PtSliceResult ptslice;
+    bool ptslice_ran = false;
 };
 
 // Rescan /proc into `s.rows` (also called once on first draw).

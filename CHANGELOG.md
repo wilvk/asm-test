@@ -8,6 +8,61 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The live Observer views — seven of them, plus a `codeimage` kind and a
+  PT-replay slice** (docs/internal/gui/08-observer-views.md T1–T8). The desktop
+  now renders what a live `asmspy --serve` session produces: the **syscall
+  stream** (payloads redacted by default, revealed per row, session-wide reveal
+  behind a second confirmation), the **watchpoint timeline**, the **process
+  topology**, the statistical **hot-edge table**, the **call tree with the
+  engine-side filter panel** the TUI never exposed, the region trace as discrete
+  **invocation snapshots**, and a **disassembly pane that resolves bytes as of
+  trace time**.
+
+  The load-bearing property is that these are not "live views" at all: each is a
+  pure function of the recording document model, so the Inspect door and a
+  replayed `.asmtrace` tab draw the same deck from the same code — which is how
+  an AMD IBS survey, an arm64 watchpoint refusal and a JIT code image are all
+  asserted in CI on hardware that has none of them.
+
+  Each view carries the honesty rule that view can most easily lose. Redaction
+  distinguishes *hidden here* from *withheld at record time* (and revealing
+  cannot conjure bytes that are not in the file). A watchpoint's direction has
+  **three** values, the third being "the trap fired and the instruction did not
+  decode", and a value that was never read back is never rendered as `0`. A
+  refused watchpoint arm is a **successful session with nothing to report**,
+  carrying `asmspy_hwdebug_reason()`'s measured string verbatim. The topology
+  view states that the `procs` engine holds the ptrace jack for the whole
+  **descendant tree**, and never shows `inv` without saying whether it counts
+  syscalls or calls. Hot edges are **edges, not stacks** — there is no flame
+  graph, because nothing in an IBS sample observed a call stack — and IBS entry
+  evidence is labelled differently from software-clock residency. The region
+  view **pages** between invocations and never scrubs, because between two
+  invocations the target ran unobserved for an unknown time.
+
+- **`codeimage` — captured code bytes at a version** (schema; produced by
+  `asmspy --serve`). A JIT patches, frees and reuses code addresses, so bytes
+  read after the fact are not the bytes that ran. A region-scoped serve session
+  now tracks its region through `asmtest_codeimage` and streams versioned
+  snapshots, and the desktop resolves an address at trace time `t` to the
+  version with the greatest `when` ≤ `t` — never the newest, and **unknown**
+  rather than the next one along, since that would be the succeeding method's
+  code. Where the recorder is unavailable (soft-dirty / `PAGEMAP_SCAN`, Linux
+  ≥ 6.7) the session emits the **measured** reason as a `note` and captures
+  without it; the pane then falls back to the recorded `disasm` strings and
+  labels them as the weaker source. `make cli-smoke` asserts the events are
+  well-formed, that the tracer's own entry `int3` never appears in them, and
+  that a static region does not accumulate byte-identical versions.
+
+- **The PT-replay def-use slice** (08 T8). On a PT host a value slice can be
+  produced with **zero single-steps of the target**: the hardware records the
+  path, and the F5 producer replays it through the emulator against the recorded
+  code image to reconstruct the values. The result is an ordinary def-use stream,
+  so the existing slice explorer and Loom draw it unchanged. Capture is
+  hardware-gated with the library's own reason; **replay is not** — a path
+  decoded at capture time (`stitch`) and the bytes it was decoded against
+  (`codeimage`) replay anywhere Unicorn and Capstone are present, which is what
+  `desktop-test` exercises on hosts with no Intel PT.
+
 - **`asmspy --serve[=<socket>]` — the live-session control loop**
   (docs/internal/gui/07-serve-live-host.md T1/T2/T6). asmspy can now be driven
   as a **capture host** rather than a one-shot command: it reads NDJSON

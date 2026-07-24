@@ -141,6 +141,9 @@ desktop/
       inspect.{h,cpp}   the Inspect door's two decisions: attachability (WHY a
                         target cannot be traced, and what would fix it) and the
                         `--auto` evidence labels (entry vs residency)
+      ptslice.{h,cpp}   the PT-replay slice: the gate (capture needs PT silicon,
+                        REPLAY does not), the stitch+codeimage input assembly,
+                        and the one place the PT producer is re-declared
     loom/
       fabric.{h,cpp}    the spacetime fabric: lanes, worldline spans, hops,
                         knots, reads — engine-free, in BOTH binaries
@@ -163,6 +166,16 @@ desktop/
       slice_view.*      the layered def-use DAG + cones
       diff_view.*       the A/B summary panel, every row a deep link
       completeness*     the tier x backend capability table
+      observer.*        what every LIVE view shows first: provenance chrome,
+                        the honesty banner, and the session skip (verbatim)
+      syscalls.*        the syscall stream — payloads redacted BY DEFAULT
+      watch.*           the watchpoint timeline (3-valued direction, a value
+                        that was never read back, the refused-arm reason)
+      topo.*            processes as cards, `inv` never shown without its unit
+      hotedges.*        the statistical edge table — edges, never a flame graph
+      tree.*            the call tree + the engine-side filter panel
+      region.*          the region trace as discrete invocations (never a scrub)
+      disasm.*          bytes-as-of-trace-time, off the codeimage timeline
       *_draw.cpp        the thin ImGui half of each view (draws only)
     ui/
       shell.{h,cpp}     the home screen (three doors), open dialog, and tab strip
@@ -204,6 +217,16 @@ desktop/
     test_loom_draw.cpp     the painter + the panel under the null backend
     test_loom_forks.cpp    the fork ENGINE — full build only (unicorn+keystone),
                            run by `make docker-desktop`
+    test_obs_syscalls.cpp  default-redaction, per-row reveal, the two absences
+    test_obs_watch.cpp     the three directions + the verbatim refused-arm
+    test_obs_topo.cpp      cards, the tree-wide jack, the drill-in link
+    test_obs_hotedges.cpp  ranking, the always-on chrome, evidence grades
+    test_obs_tree.cpp      the filter refusals + what goes on the wire
+    test_obs_region.cpp    the invocation split, incl. one cut off mid-flight
+    test_obs_disasm.cpp    bytes at a TIME: the historical version, or unknown
+    test_obs_ptslice.cpp   the PT gate + input assembly, with NO producer linked
+    test_obs_draw.cpp      the deck under the null backend, refusal paths included
+    test_ptslice_run.cpp   the replay itself — needs unicorn+capstone, not PT
     fixtures/              hand-authored .asmtrace + features/perf-history JSON
     expected/              byte-compared view dumps (UPDATE_GOLDEN=1 rewrites)
     golden/                byte-compared completeness renders
@@ -596,3 +619,107 @@ lets the awkward shapes (a refusal mid-session, a skip, a torn stream, a
 never-ran candidate walk) be tested *on demand* rather than by luck. The real
 `asmspy --serve` is covered end to end on the other side of the seam, by the
 serve section of `make cli-smoke`.
+
+## The live Observer views
+
+Seven views over a live session — and over any recording of one, which is the
+same statement twice: they are built from the document model, so the Inspect
+door and a replayed `.asmtrace` tab draw the *same* deck from the *same* code.
+That is what makes every rule below testable on a machine with no target to
+attach to, no AMD silicon and no Intel PT.
+
+**Syscalls.** The schema splits each syscall in two — a payload-free `line`
+(with `<path>` / `<N bytes>` placeholders) and the decoded content in a separate
+`payload`. So the payload column is **redacted by default**, revealed per row,
+and the session-wide reveal takes a second confirmation that names what it is
+about to put on screen. The two ways a payload can be missing never read alike:
+*hidden by this renderer* and *withheld at record time* (`provenance.redacted` —
+the bytes are not in the file at all, and revealing cannot conjure them). There
+is deliberately no tid filter: the syscalls engine takes no `only_tid`, so a
+filter here would hide rows rather than narrow the capture, and the view says so
+where the control would have been.
+
+**Watchpoint timeline.** `is_write` has **three** values — write, read, and
+*undecodable* (the trap fired, the faulting instruction did not decode) — and
+the third keeps its own word, because collapsing it into either other one
+invents a measurement. `value_ok` is separate from `value`: a value that was
+never read back renders as *"(not read back)"*, never as `0`. A refused arm is
+**not an error**: it is a successful session that had nothing to report, and its
+reason is `asmspy_hwdebug_reason()`'s string verbatim — the arm64 class of host
+that advertises debug slots and then refuses to reserve one says exactly that,
+because "watchpoint unavailable" would send an operator to the wrong place.
+
+**Topology.** Tasks fold into one card per process, ordered by pid (an ordering
+that moves while you read it is one you cannot point at). Two facts ride along:
+the `procs` engine SEIZEs the whole **descendant tree**, so the ptrace jack is
+held for every process below — stated up front rather than discovered as an
+unexplained refusal elsewhere — and `inv` counts *syscalls* or *calls* depending
+on the mode, so the number is never shown without its unit. Drill-in is a deep
+link through the router, so "show me this process" is pasteable.
+
+**Hot edges.** IBS-Op samples are retired **branches**: a from-address and a
+to-address. Nothing in them observed a call stack, so there is no flame graph
+here and there will not be one — frames would be inferred ancestry drawn in the
+same ink as measurement. The provenance chrome (`samples`, `branch_samples`,
+`lost`, `throttled`, sampler, window) is always visible, and the ranking is
+deterministic so two screenshots can be compared. The evidence grade is stated,
+not implied: an IBS-Op edge is a **direct observation** of control arriving
+somewhere; a software-clock survey is **residency**, which says a function was
+*executing* — a weaker and different claim. A survey is `exact:false` by
+construction, so a recording claiming otherwise is reported as a producer defect
+and still rendered as statistical.
+
+**Call tree + filter panel.** The day-one place the GUI exceeds the TUI, at zero
+engine cost: `asmspy_tree_filter_t` (depth / focus / module) has always existed
+and the TUI passes NULL. The filter is **engine-side by design** — it bounds
+what the engine *emits* while it keeps tracking every call and return, so the
+depths on the surviving lines stay true. The panel refuses the combinations the
+protocol refuses, in the protocol's own words (`"tid" pins ONE task; "follow"
+adds child processes — drop one`), so nobody learns a rule by having a command
+bounce. What the view shows as *running* is the server's `started` params echo,
+never the client's own request replayed back to itself.
+
+**Invocations.** A region capture is not a continuous timeline: the engine waits
+at the region's entry, records one invocation, and waits again — and between
+them the target ran unobserved for an unknown time. So this pages between
+numbered snapshots and **never scrubs**, and each snapshot renders through 04's
+canvas. The split is read from the stream's order (a `coverage` event closes the
+invocation before it), so a capture cut off mid-invocation is kept and marked
+*open* rather than shown as a short run. Two warnings ride with it because they
+are properties of the capture: the single-step **crawl**, and — when the
+recording carries `codeimage` versions — the steer to the out-of-band IBS survey
+for JIT code.
+
+**Disassembly, as of a time.** A JIT patches, frees and reuses code addresses,
+so bytes read after the fact are not the bytes that ran. The `codeimage` event
+carries the producer's timestamped versions into the recording, and this pane
+resolves an address at trace time `t` to the version with the **greatest `when`
+≤ t** — never the newest, never the next one along. Where no version qualifies,
+the bytes are **unknown**: showing the succeeding method's code for the
+preceding method's trace is exactly the failure the mechanism exists to prevent.
+It never re-reads live memory. Absent a code image it falls back to the recorded
+`disasm` strings (D10) and **labels the row as the weaker source**.
+
+### The PT-replay slice (full app)
+
+On a PT host a def-use slice can be captured with **zero single-steps of the
+target**: Intel PT records the control-flow path in hardware, and the F5
+producer replays that path through the emulator against the recorded code image
+to reconstruct the operand values the hardware never captured. The result is an
+ordinary def-use stream, so the slice explorer and the Loom draw it unchanged.
+
+Two things are worth being precise about. First, the **two grades of evidence in
+one view**: the path is measured, the values are reconstructed, and the
+disclosure says both. Second, **the gate has two levels** — *capture* needs PT
+silicon (self-skipping with the library's measured reason), while *replay* needs
+only Unicorn and Capstone, because the path was decoded when it was captured and
+recorded as `stitch` beside the `codeimage` bytes it was decoded against. That
+is why `test_ptslice_run` replays a recorded slice on hosts with no Intel PT at
+all, instead of the whole feature living behind hardware nobody in CI has.
+
+The producer ships **no public header, on purpose** (a value-trace producer is a
+tier, not part of the shared sink API), so `ptslice.cpp` re-declares its entry
+points exactly as the tier's own smoke drivers do — in one place, with the
+layout self-check asserted at init, and a mismatch **refuses to run** rather than
+reporting telemetry it cannot trust. Promoting that surface to a public header is
+a library decision this work does not make.

@@ -1,0 +1,9 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-tree","exact":true,"trust":"exact"},"arch":"x86_64","pid":4242}
+{"k":"session","state":"started","mode":"tree","pid":4242,"params":{"tid":0,"follow":true,"max":-1,"depth":3,"focus":"work","module":"spy_victim"}}
+{"k":"call","tid":4242,"depth":0,"addr":4198710,"name":"work","module":"spy_victim"}
+{"k":"call","tid":4242,"depth":1,"addr":4198800,"name":"helper","module":"spy_victim"}
+{"k":"call","tid":4242,"depth":2,"addr":4198900,"name":"leaf","module":"spy_victim"}
+{"k":"call","tid":4243,"depth":0,"addr":4198710,"name":"work","module":"spy_victim"}
+{"k":"call","tid":4243,"depth":1,"addr":139637976269829,"name":"0x7f0102030405","module":"jit"}
+{"k":"session","state":"stopped","mode":"tree","events":5,"reason":"max"}
+{"k":"end","events":5,"truncated":false,"drops":{"lost":0,"throttled":false}}

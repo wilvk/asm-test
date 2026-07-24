@@ -1,0 +1,4 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"hwdebug-watch","exact":true,"trust":"exact","skip":{"code":3,"reason":"host reports 4 breakpoint slots but refused to reserve one: No space left on device"}},"arch":"aarch64","pid":5150}
+{"k":"session","state":"started","mode":"watch","pid":5150,"params":{"addr":6295624,"len":4,"rw":0,"max":-1}}
+{"k":"session","state":"skip","mode":"watch","skip":{"code":3,"reason":"host reports 4 breakpoint slots but refused to reserve one: No space left on device"}}
+{"k":"end","events":0,"truncated":false,"drops":{"lost":0,"throttled":false},"skip":{"code":3,"reason":"host reports 4 breakpoint slots but refused to reserve one: No space left on device"}}

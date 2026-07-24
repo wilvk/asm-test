@@ -2874,4 +2874,75 @@ kill -9 "$SRVPID" 2>/dev/null || true
 wait "$SRVPID" 2>/dev/null || true
 SRVPID=""
 
+# ---------------------------------------------------------------------------
+# --serve + codeimage: JIT-safe bytes for a region session
+# (08-observer-views.md T7; schema: "`codeimage` — captured code bytes at a
+# version")
+# ---------------------------------------------------------------------------
+# A region session tracks its region's bytes through asmtest_codeimage and
+# streams `codeimage` versions, so a client can disassemble a step against the
+# bytes that were live AT THAT STEP rather than re-reading a process that has
+# since patched, freed or reused the address.
+#
+# This is NOT a self-skipping block. The recorder's availability is a kernel
+# fact (soft-dirty / PAGEMAP_SCAN, Linux >= 6.7) and either answer is a testable
+# outcome: versions on the wire, or a `note` carrying the MEASURED reason there
+# are none. What is asserted is that the producer says one of the two — silence
+# is the only failure, because silence is indistinguishable from nobody trying.
+echo "--- asmspy --serve + codeimage (versioned bytes for a region) ---"
+"$BUILD/auto_victim" 2>/dev/null &
+CIPID=$!
+sleep 1
+kill -0 "$CIPID" 2>/dev/null || fail "codeimage: auto_victim did not start"
+CI_OUT="$RECDIR/serve_codeimage.ndjson"
+set +e
+{
+    printf '{"cmd":"start","mode":"trace","pid":%d,"func":"entered_often","max":3}\n' "$CIPID"
+    sleep 4
+    printf '{"cmd":"quit"}\n'
+    sleep 1
+} | timeout 90 "$ASM" --serve >"$CI_OUT" 2>/dev/null
+circ=$?
+set -e
+[ "$circ" -eq 124 ] && fail "--serve (codeimage): hung"
+[ "$circ" -eq 0 ] || fail "--serve (codeimage): exited $circ"
+kill -0 "$CIPID" 2>/dev/null \
+    || fail "--serve (codeimage): the victim did not survive the session"
+
+nci=$(grep -c '"k":"codeimage"' "$CI_OUT" || true)
+ncinote=$(grep '"k":"note"' "$CI_OUT" | grep -c 'codeimage unavailable' || true)
+if [ "$nci" -gt 0 ]; then
+    # Field order and the bytes/len invariant are the schema's, and a reader
+    # resolving bytes at a time depends on both.
+    grep '"k":"codeimage"' "$CI_OUT" \
+        | grep -qE '^\{"k":"codeimage","base":[0-9]+,"len":[0-9]+,"version":[0-9]+,"when":[0-9]+,"bytes":"[0-9a-f]*"\}$' \
+        || fail "codeimage: an event does not match the schema's field order"
+    cilen=$(grep -m1 '"k":"codeimage"' "$CI_OUT" | sed 's/.*"len":\([0-9]*\).*/\1/')
+    cihex=$(grep -m1 '"k":"codeimage"' "$CI_OUT" | sed 's/.*"bytes":"\([0-9a-f]*\)".*/\1/')
+    [ "${#cihex}" = "$((cilen * 2))" ] \
+        || fail "codeimage: len=$cilen but bytes carries ${#cihex} hex chars"
+    # The entry int3 the region engine arms is REMOVED before the sink runs, so
+    # a recorded version must never contain the tracer's own breakpoint at the
+    # region's first byte — that would be the capture recording its own
+    # perturbation as the target's code.
+    case "$cihex" in
+    cc*) fail "codeimage: the recorded bytes start with the tracer's own int3" ;;
+    esac
+    # A static region changes once (version 0) and then does not: the change
+    # detector reports the tracer's own int3 write as a page change, and a
+    # producer that emitted a version per invocation would bury a real JIT patch
+    # in that noise.
+    [ "$nci" -le 2 ] \
+        || fail "codeimage: $nci versions for a STATIC region — byte-identical snapshots are not new versions"
+    echo "  $nci codeimage version(s), well-formed, no tracer int3 in the bytes"
+elif [ "$ncinote" -gt 0 ]; then
+    grep '"k":"note"' "$CI_OUT" | grep 'codeimage unavailable' | head -1 | sed 's/^/  /'
+    echo "  (no code image on this host — the MEASURED reason is on the wire, which is the contract)"
+else
+    fail "codeimage: the session emitted neither a codeimage version nor a note saying why not"
+fi
+
+kill -9 "$CIPID" 2>/dev/null || true
+wait "$CIPID" 2>/dev/null || true
+
 echo "cli-smoke: PASS"

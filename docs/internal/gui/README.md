@@ -74,17 +74,21 @@ land (legend as in [../implementations/README.md](../implementations/README.md):
 | [05-loom-day-one.md](05-loom-day-one.md) | the Loom fabric, lineage, lane annex, forks | 7 | 02 (reader), 03, 04 | ✅ 7/7 |
 | [06-doors-and-learning.md](06-doors-and-learning.md) | Learn/Author doors, ct_eq, capability panel, runner record mode | 7 | 01–04 | ✅ 7/7 |
 | [07-serve-live-host.md](07-serve-live-host.md) | extract `libasmspy`, `--serve` wrapper, session host, budget patch-bay, Inspect door | 7 | 01, 03 | ✅ 7/7 |
-| [08-observer-views.md](08-observer-views.md) | live views: syscalls, watch, topo, hot edges, tree filters, codeimage, PT slice | 8 | 07, 04, 01 | ☐ 0/8 |
+| [08-observer-views.md](08-observer-views.md) | live views: syscalls, watch, topo, hot edges, tree filters, codeimage, PT slice | 8 | 07, 04, 01 | ✅ 8/8 |
 | [09-teaching-producers.md](09-teaching-producers.md) | per-step register ring, scrubber, ABI x-ray, blame socket | 5 | 01, 03, 04, 06 | ☐ 0/5 |
 | [10-spacetime-3d-overview.md](10-spacetime-3d-overview.md) | 3D memory-terrain + execution-trajectory overview surface (**growth-rung companion**) | 7 | 01, 03, 04, 07, 08 | ☐ 0/7 |
 
 71 tasks across 10 docs. Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
 09 (09-T1 — the emulator ring — is engine-only and can start any time).
-**01–07 have landed (2026-07-24); 08 is next, then 09.** 07 shipped
-`libasmspy` (the tracer engine as a linkable tier), `asmspy --serve` and its
-normative protocol, and the desktop's live capture host — so 08's views have
-sessions to consume and a fake-serve fixture to develop against. **Doc 10
+**01–08 have landed (2026-07-24); 09 is next.** 07 shipped `libasmspy` (the
+tracer engine as a linkable tier), `asmspy --serve` and its normative protocol,
+and the desktop's live capture host; 08 shipped the seven live views over those
+sessions, the `codeimage` kind (defined in the schema, produced by `--serve`,
+consumed by a bytes-as-of-trace-time pane) and the PT-replay slice. One schema
+consequence worth carrying into the Phase-3 freeze: `codeimage` is the first
+reserved kind to be **defined**, and it pairs with `stitch` by version — a
+decoded PT path is only meaningful against the bytes it was decoded against. **Doc 10
 is a growth-rung companion, not scheduled against Phase 1–4** — it consumes the
 core docs' feeds and blocks nothing; start it only after 04/07/08 land, and only
 its coarse rung is buildable before the Wave-1 `mem[]` stream.

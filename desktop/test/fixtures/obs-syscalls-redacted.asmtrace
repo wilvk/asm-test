@@ -1,0 +1,4 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-syscalls","exact":true,"trust":"exact","redacted":true},"arch":"x86_64","pid":4242}
+{"k":"syscall","line":"openat(AT_FDCWD, <path>, O_RDONLY) = 3"}
+{"k":"syscall","line":"read(3, <8 bytes>, 4096) = 8"}
+{"k":"end","events":2,"truncated":true,"drops":{"lost":3,"throttled":false}}

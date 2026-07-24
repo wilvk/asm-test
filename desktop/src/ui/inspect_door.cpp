@@ -9,6 +9,7 @@
 #include "imgui.h"
 
 #include "ui/doors.h"
+#include "views/views_draw.h"
 
 namespace asmdesk {
 
@@ -185,6 +186,101 @@ void draw_patch_bay(InspectState &s) {
     }
 }
 
+// The live views over whatever this session has produced: the recording still
+// growing, or the last completed one. Rebuilt only when the event count moves —
+// the builders are pure and cheap, but per-frame work on a live stream is how a
+// UI starts costing the thing it is watching.
+void draw_live_views(InspectState &s) {
+    const Recording *live = s.session.growing();
+    const std::vector<Recording> &done = s.session.recordings();
+    if (live == nullptr && !done.empty())
+        live = &done.back();
+    if (live == nullptr) {
+        ImGui::TextDisabled(
+            "no capture yet — start a mode above and its view appears here");
+        return;
+    }
+    uint64_t n = live->event_count();
+    if (!s.observer.built || n != s.observed_events ||
+        done.size() != s.observed_recordings) {
+        // The lifecycle a live host keeps OUTSIDE the recording (07-T3): the
+        // views need the `started` params echo and the skip, and a live session
+        // is the one place they are not inline.
+        std::vector<nlohmann::json> bodies;
+        for (const LiveNote &note : s.session.notes())
+            bodies.push_back(note.body);
+        ObsLifecycle lc = observer_lifecycle_from(bodies);
+        observer_build(s.observer, *live, &lc);
+        s.observed_events = n;
+        s.observed_recordings = done.size();
+    }
+    // The tree filter's Start button hands back a command; sending it is the
+    // door's job, not the view's.
+    if (!s.observer.tree.rows.empty() || s.want == LiveMode::Tree) {
+        std::string cmd =
+            draw_obs_tree(s.observer.tree, s.observer, s.selected_pid);
+        if (!cmd.empty()) {
+            s.session.send(cmd);
+            s.active.clear();
+            s.active.push_back(LiveMode::Tree);
+        }
+        ImGui::Separator();
+    }
+    draw_observer(s.observer, *live, "live-session", nullptr);
+}
+
+// The PT-replay slice: a def-use slice with ZERO single-steps of the target.
+// The gate has two levels and the UI must not blur them — capture needs PT
+// silicon, replay needs only the emulator — so a host without PT still gets a
+// working button for a path somebody else's box recorded.
+void draw_pt_slice(InspectState &s) {
+    ImGui::SeparatorText("PT slice — zero single-steps of the target");
+    ImGui::TextWrapped("%s", ptslice_disclosure());
+    PtSliceGate g = ptslice_gate(ptslice_facts());
+    if (!g.reason.empty())
+        // VERBATIM, and it is the library's own sentence: "unavailable" alone
+        // cannot tell a user whether to change a sysctl or buy a CPU.
+        ImGui::TextColored(kMaybe, "%s", g.reason.c_str());
+    if (!g.can_capture)
+        ImGui::TextDisabled("live PT capture is unavailable here; a RECORDED "
+                            "path still replays");
+
+    const Recording *live = s.session.growing();
+    const std::vector<Recording> &done = s.session.recordings();
+    if (live == nullptr && !done.empty())
+        live = &done.back();
+    if (live == nullptr)
+        return;
+
+    ImGui::BeginDisabled(!g.can_replay);
+    if (ImGui::Button("Replay this session's PT path")) {
+        s.ptslice = ptslice_run(ptslice_input_from(*live));
+        s.ptslice_ran = true;
+    }
+    ImGui::EndDisabled();
+    if (!s.ptslice_ran)
+        return;
+    if (!s.ptslice.reason.empty())
+        ImGui::TextColored(s.ptslice.ok ? kMaybe : kBad, "%s",
+                           s.ptslice.reason.c_str());
+    if (!s.ptslice.ok)
+        return;
+    ImGui::Text("%llu step(s) replayed over a %llu-offset path",
+                (unsigned long long)s.ptslice.steps,
+                (unsigned long long)s.ptslice.path_len);
+    if (s.ptslice.diverged)
+        ImGui::TextColored(kBad,
+                           "the replay DIVERGED from the recorded path at step "
+                           "%llu — everything after it is not this run",
+                           (unsigned long long)s.ptslice.diverged_at);
+    // No new rendering: the same slice explorer a replayed recording gets.
+    Streams st;
+    st.df = s.ptslice.df;
+    st.truncated = s.ptslice.truncated;
+    st.backend = "pt-replay";
+    draw_slice_view(dt_slice_view_build(st, std::nullopt));
+}
+
 } // namespace
 
 void draw_inspect_door(InspectState &s) {
@@ -211,6 +307,9 @@ void draw_inspect_door(InspectState &s) {
     } else {
         draw_patch_bay(s);
         draw_status(s);
+        ImGui::SeparatorText("live views");
+        draw_live_views(s);
+        draw_pt_slice(s);
     }
 
     ImGui::SeparatorText("processes");

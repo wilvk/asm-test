@@ -1,0 +1,6 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-region","exact":true,"trust":"exact","window":{"base":4198400,"len":8}},"arch":"x86_64","pid":4242}
+{"k":"note","text":"codeimage unavailable: PAGEMAP_SCAN ioctl not supported and /proc/self/clear_refs soft-dirty is unavailable on this kernel (needs Linux 6.7 or soft-dirty support)"}
+{"k":"trace","basis":"abs","kind":"insn","off":4198400,"disasm":"endbr64"}
+{"k":"trace","basis":"abs","kind":"insn","off":4198404}
+{"k":"coverage","basis":"abs","blocks":[4198400],"blocks_total":1,"insns_total":2,"truncated":false}
+{"k":"end","events":4,"truncated":false,"drops":{"lost":0,"throttled":false}}

@@ -1,0 +1,8 @@
+chrome=ptrace-tree / exact
+effective: depth=3 focus=work module=spy_victim tid=0 follow=yes
+rows=5 tids=2
+  -> work [spy_victim] tid=4242 depth=0
+    -> helper [spy_victim] tid=4242 depth=1
+      -> leaf [spy_victim] tid=4242 depth=2
+  -> work [spy_victim] tid=4243 depth=0
+    -> 0x7f0102030405 [jit] tid=4243 depth=1

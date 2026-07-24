@@ -1,0 +1,4 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"sw-clock","exact":false,"trust":"statistical"},"arch":"aarch64","pid":4242}
+{"k":"session","state":"started","mode":"sample","pid":4242,"params":{"ms":200}}
+{"k":"survey","sampler":"sw-clock","edges":[{"from_addr":4198710,"to_addr":4198710,"from":"grind_forever","to":"grind_forever","count":97,"mispred":0,"is_return":0},{"from_addr":4198900,"to_addr":4198900,"from":"entered_often","to":"entered_often","count":41,"mispred":0,"is_return":0}],"samples":138,"branch_samples":0,"lost":0,"throttled":false}
+{"k":"end","events":1,"truncated":false,"drops":{"lost":0,"throttled":false}}

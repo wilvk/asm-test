@@ -1,0 +1,12 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-region","exact":true,"trust":"exact","window":{"base":4198400,"len":8}},"arch":"x86_64","pid":4242}
+{"k":"session","state":"started","mode":"trace","pid":4242,"params":{"tid":0,"base":4198400,"len":8,"max":-1}}
+{"k":"codeimage","base":4198400,"len":8,"version":0,"when":1,"bytes":"f30f1efa554889e5"}
+{"k":"trace","basis":"abs","kind":"insn","off":4198400,"disasm":"endbr64"}
+{"k":"trace","basis":"abs","kind":"insn","off":4198404,"disasm":"push rbp"}
+{"k":"coverage","basis":"abs","blocks":[4198400],"blocks_total":1,"insns_total":2,"truncated":false}
+{"k":"codeimage","base":4198400,"len":8,"version":1,"when":3,"bytes":"f30f1efa90909090"}
+{"k":"trace","basis":"abs","kind":"insn","off":4198400,"disasm":"endbr64"}
+{"k":"trace","basis":"abs","kind":"insn","off":4198404,"disasm":"nop"}
+{"k":"coverage","basis":"abs","blocks":[4198400],"blocks_total":1,"insns_total":2,"truncated":false}
+{"k":"session","state":"stopped","mode":"trace","events":6,"reason":"stop"}
+{"k":"end","events":6,"truncated":false,"drops":{"lost":0,"throttled":false}}

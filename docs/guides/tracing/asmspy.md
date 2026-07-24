@@ -668,6 +668,28 @@ same code path as local and the viewer itself links no tracer. Ending a session
 always runs the engines' two-phase detach — the target survives, and EOF on the
 command channel lets a bounded session finish before quitting.
 
+### JIT-safe bytes: the `codeimage` events
+
+A region session (`mode` `trace`, `dataflow` or `auto`) additionally streams
+**`codeimage`** events: the region's bytes, snapshotted with a logical
+timestamp, and re-snapshotted whenever the pages actually change.
+
+That exists because reading a JIT's code after the fact answers the wrong
+question. The address may have been patched, freed, or *reused by a different
+method* — so a disassembly of the trace against bytes read later can look
+perfectly plausible and describe code that never ran. Each event carries
+`base`, `len`, `version`, `when` and the `bytes`, and a consumer resolves an
+address at trace time `t` to the version with the greatest `when` ≤ `t`.
+
+Two behaviours worth knowing. A snapshot that is **byte-identical** to the last
+one is not emitted: the region engine arms and removes its own entry
+breakpoint, and that write marks the page dirty, so a per-refresh emission would
+report the tracer's own perturbation as the target's. And where the kernel
+cannot report page changes (soft-dirty / `PAGEMAP_SCAN`, **Linux ≥ 6.7**) the
+session emits the measured reason as a `note` and captures anyway — a recording
+with no `codeimage` events is normal, and readers fall back to the recorded
+`disasm` strings.
+
 ## Permissions
 
 Attaching to a process you did not start needs the usual `ptrace` rights — the

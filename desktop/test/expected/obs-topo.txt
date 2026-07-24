@@ -1,0 +1,8 @@
+chrome=ptrace-procs / exact
+jack=the topology engine SEIZEs the whole descendant tree, so while this view is live the ptrace jack is held for EVERY process below — not just the one you started from
+snapshots=2 cards=2 counting=syscalls
+  spy_victim (4200) <- 1 — 2 threads, 131 syscalls
+    tid 4200 victim (leader) inv=91
+    tid 4243 worker inv=40
+  dash (4301) <- 4200 — 1 thread, 7 syscalls
+    tid 4301 sh (leader) inv=7

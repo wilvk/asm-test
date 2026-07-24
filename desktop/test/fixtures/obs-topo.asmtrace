@@ -1,0 +1,6 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-procs","exact":true,"trust":"exact"},"arch":"x86_64","pid":4200}
+{"k":"session","state":"started","mode":"procs","pid":4200,"params":{"max":-1,"count":"syscalls"}}
+{"k":"topo","mode":"syscalls","tasks":[{"tid":4200,"tgid":4200,"ppid":1,"leader":true,"comm":"victim","exe":"spy_victim","inv":12}]}
+{"k":"topo","mode":"syscalls","tasks":[{"tid":4243,"tgid":4200,"ppid":1,"leader":false,"comm":"worker","inv":40},{"tid":4200,"tgid":4200,"ppid":1,"leader":true,"comm":"victim","exe":"spy_victim","inv":91},{"tid":4301,"tgid":4301,"ppid":4200,"leader":true,"comm":"sh","exe":"dash","inv":7}]}
+{"k":"session","state":"stopped","mode":"procs","events":2,"reason":"stop"}
+{"k":"end","events":2,"truncated":false,"drops":{"lost":0,"throttled":false}}

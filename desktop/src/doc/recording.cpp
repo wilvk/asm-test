@@ -24,10 +24,15 @@ using nlohmann::json;
 // no `--record` file contains them — but the loader is the one that reads a
 // serve stream too, and a client that counted every lifecycle line as "unknown"
 // would report a healthy session as a partly-unreadable one.
-static const std::array<const char *, 19> kKnownKinds = {
-    {"trace", "coverage", "syscall", "stream", "call", "graph", "topo",
-     "survey", "watch", "df_step", "df_edge", "regstate", "result", "note",
-     "stitch", "end", "session", "cmd", "err"}};
+//
+// `codeimage` joined them for the same reason (asmtrace-schema.md, "`codeimage`
+// — captured code bytes at a version", owned by 08): it is now a DEFINED kind
+// with a producer, and unlike the serve-only three it is an ordinary recording
+// event that the `end` footer counts.
+static const std::array<const char *, 20> kKnownKinds = {
+    {"trace",  "coverage", "syscall", "stream",  "call",     "graph",    "topo",
+     "survey", "watch",    "df_step", "df_edge", "regstate", "result",   "note",
+     "stitch", "end",      "session", "cmd",     "err",      "codeimage"}};
 
 bool is_known_kind(const std::string &kind) {
     for (const char *k : kKnownKinds)
@@ -161,7 +166,7 @@ std::optional<Recording> load_recording(std::istream &in, std::string &err) {
             continue; // the footer is not stored in by_kind
         }
 
-        rec.by_kind[k].push_back(Event{k, std::move(ev)});
+        rec.by_kind[k].push_back(Event{k, std::move(ev), rec.next_seq++});
         if (!is_known_kind(k))
             rec.unknown_kinds++;
     }

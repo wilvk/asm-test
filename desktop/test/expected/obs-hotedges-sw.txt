@@ -1,0 +1,5 @@
+STATISTICAL — software-clock residency — WEAKER EVIDENCE: it says a function was executing, not that it was entered, so a hot row here can be something entered once and never re-entered
+sampler=sw-clock samples=138 branch_samples=0 lost=0 throttled=no window=(whole process)
+snapshots=1 edges=2
+  #1 grind_forever -> grind_forever count=97 mispred=0 ret=0
+  #2 entered_often -> entered_often count=41 mispred=0 ret=0

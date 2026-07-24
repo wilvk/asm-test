@@ -1,0 +1,19 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-region","exact":true,"trust":"exact","window":{"base":4198710,"len":64}},"arch":"x86_64","pid":4242}
+{"k":"session","state":"started","mode":"trace","pid":4242,"params":{"tid":0,"base":4198710,"len":64,"max":-1}}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"mov eax, edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":6,"disasm":"test eax, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"je 0x18"}
+{"k":"trace","basis":"rel","kind":"insn","off":24,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0,24],"blocks_total":2,"insns_total":5,"truncated":false}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"mov eax, edi"}
+{"k":"trace","basis":"rel","kind":"insn","off":6,"disasm":"test eax, eax"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"je 0x18"}
+{"k":"trace","basis":"rel","kind":"insn","off":10,"disasm":"add eax, esi"}
+{"k":"trace","basis":"rel","kind":"insn","off":24,"disasm":"ret"}
+{"k":"coverage","basis":"rel","blocks":[0,10,24],"blocks_total":4,"insns_total":9,"truncated":true}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"endbr64"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"mov eax, edi"}
+{"k":"session","state":"stopped","mode":"trace","events":15,"reason":"stop"}
+{"k":"end","events":15,"truncated":true,"drops":{"lost":0,"throttled":false}}

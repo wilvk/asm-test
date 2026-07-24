@@ -1,0 +1,7 @@
+banner=dropped 17 event(s) (the kernel throttled the sample rate)
+STATISTICAL — IBS-Op retired-branch edges — a DIRECT observation of control arriving here, which is the same event a capture waits for
+sampler=ibs-op samples=10442 branch_samples=9001 lost=17 throttled=yes window=0x401000+4096
+snapshots=1 edges=3
+  #1 work+0x12 [victim] -> helper count=812 mispred=3 ret=0
+  #2 helper -> leaf count=812 mispred=0 ret=0
+  #3 leaf -> work+0x12 [victim] count=40 mispred=1 ret=1

@@ -113,6 +113,13 @@ DESKTOP_VIEW_PURE := canvas timeline slice_view diff_view
 DESKTOP_VIEW_DRAW := canvas_draw timeline_draw slice_view_draw diff_view_draw \
                      completeness
 
+# The live Observer views (08-observer-views.md). Same split, same rule: every
+# one of these builds from the Recording document model with no ImGui, no I/O
+# and no engine, which is what lets each be asserted on a host with nothing to
+# attach to — and is why a live view and a replayed one cannot drift apart.
+DESKTOP_OBS_PURE := observer syscalls watch topo hotedges tree region disasm
+DESKTOP_OBS_DRAW := observer_draw
+
 # loom/ — the Loom fabric (05-loom-day-one.md). Every TU here except forks.cpp
 # is pure and engine-free, which is what lets asmtest-viewer weave a recording
 # with zero engine deps (D4); forks.cpp is full-build-only and linked separately.
@@ -126,7 +133,7 @@ DESKTOP_LOOM_APP  := forks
 # live/ — the capture host (07-serve-live-host.md T3/T4). It spawns
 # `asmspy --serve` and speaks its protocol; it links NO engine, which is what
 # lets asmtest-viewer host live sessions while staying engine-free (D4/D9).
-DESKTOP_LIVE := session budget inspect
+DESKTOP_LIVE := session budget inspect ptslice
 
 # The Learn door's bundled walkthroughs (06-doors-and-learning.md T2-T4).
 WALKTHROUGH_DIR := tests/golden-asmtrace/walkthroughs
@@ -147,6 +154,8 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/da/perf_history.o \
   $(DESKTOP_VIEW_PURE:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/$(1)/vw/%.o) \
+  $(DESKTOP_OBS_PURE:%=$(BUILD)/desktop/$(1)/vw/%.o) \
+  $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(DESKTOP_LOOM_PURE:%=$(BUILD)/desktop/$(1)/lo/%.o) \
   $(DESKTOP_LOOM_DRAW:%=$(BUILD)/desktop/$(1)/lo/%.o) \
   $(BUILD)/desktop/$(1)/src/walkthrough.o $(BUILD)/desktop/$(1)/src/capview.o \
@@ -169,10 +178,16 @@ DESKTOP_RENDER_OBJ := $(call desktop_app_objs,render)
 # dataflow_operands.o + dataflow_emu.o join the set with the Loom's fork engine
 # (05-loom-day-one.md T5): forks.cpp re-runs the emulator L0 value producer, and
 # that producer is the operand enumerator plus the Unicorn driver.
+#
+# dataflow_pt.o + dataflow_blockstep.o join for the PT-replay slice
+# (08-observer-views.md T8): the app replays a RECORDED PT path through the
+# emulator, which needs the producer and the purity/replayability gates it
+# reuses — but no PT silicon, because the path was decoded when it was captured.
 DESKTOP_ENGINE_OBJ := $(BUILD)/emu.o $(BUILD)/trace.o \
                       $(BUILD)/disasm.o $(BUILD)/assemble.o \
                       $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
-                      $(BUILD)/dataflow_emu.o
+                      $(BUILD)/dataflow_emu.o $(BUILD)/dataflow_blockstep.o \
+                      $(BUILD)/dataflow_pt.o
 
 # The capability panel (06-doors-and-learning.md T6) reads the library's own
 # status APIs — asmtest_trace_resolve / asmtest_hwtrace_status / the IBS reasons
@@ -197,6 +212,8 @@ DESKTOP_TEST_DOC := $(BUILD)/desktop/test/doc/recording.o \
 DESKTOP_TEST_AN  := $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/an/diff.o
 DESKTOP_TEST_VW  := $(DESKTOP_VIEW_PURE:%=$(BUILD)/desktop/test/vw/%.o) \
                     $(BUILD)/desktop/test/src/nav.o
+# The Observer builders, for the shell/golden binaries that draw them.
+DESKTOP_TEST_OBS := $(DESKTOP_OBS_PURE:%=$(BUILD)/desktop/test/vw/%.o)
 DESKTOP_TEST_DA  := $(BUILD)/desktop/test/da/features_data.o \
                     $(BUILD)/desktop/test/da/perf_history.o
 DESKTOP_TEST_LOOM := $(DESKTOP_LOOM_PURE:%=$(BUILD)/desktop/test/lo/%.o)
@@ -217,13 +234,19 @@ GL_LIBS   ?= -lGL
 # reliable pkg-config, so it is not probed separately — the trio is installed
 # together (make deps / the bindings base), so unicorn+capstone presence implies
 # it, and KEYSTONE_LIBS falls back to -lkeystone.
-DESKTOP_ENGINE_MISSING :=
+# REPLAY vs the full trio. The PT-replay slice (08-observer-views.md T8) needs
+# Unicorn + Capstone and NOT Keystone: it replays a recorded path, it assembles
+# nothing. Gating it on the whole trio would have made it self-skip on a host
+# with two of the three — and a test that skips where it could have run is not a
+# gate, it is an absence (CLAUDE.md).
+DESKTOP_REPLAY_MISSING :=
 ifneq ($(shell pkg-config --exists unicorn 2>/dev/null && echo ok),ok)
-DESKTOP_ENGINE_MISSING += libunicorn-dev
+DESKTOP_REPLAY_MISSING += libunicorn-dev
 endif
 ifneq ($(shell pkg-config --exists capstone 2>/dev/null && echo ok),ok)
-DESKTOP_ENGINE_MISSING += libcapstone-dev
+DESKTOP_REPLAY_MISSING += libcapstone-dev
 endif
+DESKTOP_ENGINE_MISSING := $(DESKTOP_REPLAY_MISSING)
 # Keystone IS probed after all — by header presence, since its kit ships no
 # reliable pkg-config. The Loom's fork engine (05-loom-day-one.md T5) is the
 # first desktop TU to call asmtest_assemble, and a host with unicorn+capstone
@@ -252,6 +275,15 @@ endef
 
 $(BUILD)/desktop/app/ui/capability_panel.o: \
     DESKTOP_CXXFLAGS += -DASMTEST_DESKTOP_CAN_PROBE=1
+# The PT-replay slice (08-observer-views.md T8) is full-app only, twice over:
+# it links the PT replay producer (ASMTEST_DESKTOP_HAVE_PT_REPLAY) and it asks
+# the library's hwtrace status why live capture is unavailable
+# (ASMTEST_DESKTOP_CAN_PROBE). The render tree compiles the SAME TU without
+# either, so the viewer still explains itself — D4 kept, and the explanation
+# blames the build rather than the host.
+$(BUILD)/desktop/app/lv/ptslice.o: \
+    DESKTOP_CXXFLAGS += -DASMTEST_DESKTOP_HAVE_PT_REPLAY=1 \
+                        -DASMTEST_DESKTOP_CAN_PROBE=1
 # The Author door's two engine calls compile in for the APP tree only; the
 # viewer and the headless tests get the static licence tile instead (D4).
 $(BUILD)/desktop/app/ui/author_door.o: \
@@ -357,7 +389,16 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_author_vm \
                  $(BUILD)/desktop_test_live_session \
                  $(BUILD)/desktop_test_budget \
-                 $(BUILD)/desktop_test_inspect
+                 $(BUILD)/desktop_test_inspect \
+                 $(BUILD)/desktop_test_obs_syscalls \
+                 $(BUILD)/desktop_test_obs_watch \
+                 $(BUILD)/desktop_test_obs_topo \
+                 $(BUILD)/desktop_test_obs_hotedges \
+                 $(BUILD)/desktop_test_obs_tree \
+                 $(BUILD)/desktop_test_obs_region \
+                 $(BUILD)/desktop_test_obs_disasm \
+                 $(BUILD)/desktop_test_obs_ptslice \
+                 $(BUILD)/desktop_test_obs_draw
 
 # The fabric model links fabric.o and NOTHING else — that link line is the proof
 # that asmtest-viewer can weave a recording with zero engine deps (D4), the same
@@ -435,13 +476,81 @@ $(BUILD)/desktop_test_author_vm: $(BUILD)/desktop/test/t/test_author_vm.o \
 # capture host is the `asmspy --serve` SUBPROCESS, not a linked tracer.
 $(BUILD)/desktop_test_live_session: \
     $(BUILD)/desktop/test/t/test_live_session.o \
-    $(BUILD)/desktop/test/lv/session.o $(DESKTOP_TEST_DOC)
+    $(BUILD)/desktop/test/lv/session.o $(BUILD)/desktop/test/vw/tree.o \
+    $(BUILD)/desktop/test/vw/observer.o $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # budget.o is a pure decision table — it links nothing at all, which is what
 # makes every mode-pair assertable on a host with no target to attach to.
 $(BUILD)/desktop_test_budget: $(BUILD)/desktop/test/t/test_budget.o \
     $(BUILD)/desktop/test/lv/budget.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# --- the live Observer views (08-observer-views.md) --------------------------
+# Every one of these links its own builder + observer.o + the doc model, and
+# NOTHING else: no ImGui, no GL, no engine, and no live session object. That
+# link line is the doc's central claim made mechanical — each view renders
+# identically from a recording, which is how CI tests views of hardware it does
+# not have (an AMD IBS survey, an arm64 watchpoint refusal, a JIT code image).
+$(BUILD)/desktop_test_obs_syscalls: \
+    $(BUILD)/desktop/test/t/test_obs_syscalls.o \
+    $(BUILD)/desktop/test/vw/syscalls.o $(BUILD)/desktop/test/vw/observer.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop_test_obs_watch: $(BUILD)/desktop/test/t/test_obs_watch.o \
+    $(BUILD)/desktop/test/vw/watch.o $(BUILD)/desktop/test/vw/observer.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# topo additionally links nav.o: its drill-in is a deep LINK through 04's
+# router, not a direct call into another view, so the link's round trip is part
+# of what this test pins.
+$(BUILD)/desktop_test_obs_topo: $(BUILD)/desktop/test/t/test_obs_topo.o \
+    $(BUILD)/desktop/test/vw/topo.o $(BUILD)/desktop/test/vw/observer.o \
+    $(BUILD)/desktop/test/src/nav.o $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop_test_obs_hotedges: \
+    $(BUILD)/desktop/test/t/test_obs_hotedges.o \
+    $(BUILD)/desktop/test/vw/hotedges.o $(BUILD)/desktop/test/vw/observer.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop_test_obs_tree: $(BUILD)/desktop/test/t/test_obs_tree.o \
+    $(BUILD)/desktop/test/vw/tree.o $(BUILD)/desktop/test/vw/observer.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop_test_obs_region: $(BUILD)/desktop/test/t/test_obs_region.o \
+    $(BUILD)/desktop/test/vw/region.o $(BUILD)/desktop/test/vw/observer.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+$(BUILD)/desktop_test_obs_disasm: $(BUILD)/desktop/test/t/test_obs_disasm.o \
+    $(BUILD)/desktop/test/vw/disasm.o $(BUILD)/desktop/test/vw/observer.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The DRAW half of the Observer deck, under ImGui's null backend: the model
+# tests assert what each view decides, this one asserts the deck draws it —
+# including the refusal paths (a revealed payload, a refused arm, an illegal
+# filter, an invocation with no footer, a missing code image), which are exactly
+# the ones a happy-path smoke never reaches. No GL, no GLFW, no engines.
+$(BUILD)/desktop_test_obs_draw: $(BUILD)/desktop/test/t/test_obs_draw.o \
+    $(DESKTOP_TEST_OBS) \
+    $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
+    $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) \
+    $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
+    $(DESKTOP_TEST_DA) $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The PT slice's GATE and input assembly, in a build with NO producer — which is
+# the render-only viewer's situation exactly, and the one where the explanation
+# has to be right. The replay itself is desktop_test_ptslice_run below.
+$(BUILD)/desktop_test_obs_ptslice: $(BUILD)/desktop/test/t/test_obs_ptslice.o \
+    $(BUILD)/desktop/test/lv/ptslice.o $(BUILD)/desktop/test/vw/disasm.o \
+    $(BUILD)/desktop/test/vw/observer.o $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The Inspect door's two decisions. Links inspect.o + session.o + the doc model
@@ -524,6 +633,8 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/ui/author_door.o $(DESKTOP_TEST_DOC) \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_DA) \
     $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
+    $(DESKTOP_TEST_OBS) \
+    $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
     $(DESKTOP_TEST_LOOM) \
     $(DESKTOP_LOOM_DRAW:%=$(BUILD)/desktop/test/lo/%.o) $(DESKTOP_TEST_IG)
 
@@ -541,6 +652,38 @@ $(BUILD)/desktop_test_golden: $(BUILD)/desktop/test/t/test_golden.o \
 # installs all three and runs it every time (CLAUDE.md — a test that can only
 # ever self-skip is not a test), and the gate below prints why on a bare host.
 DESKTOP_ENGINE_TESTS := $(BUILD)/desktop_test_loom_forks
+# ...and the REPLAY half, which needs only Unicorn + Capstone (no assembler), so
+# it runs on strictly more hosts than the fork tests do.
+DESKTOP_REPLAY_TESTS := $(BUILD)/desktop_test_ptslice_run
+
+# The PT-replay slice, actually replayed (08-observer-views.md T8). A FOURTH
+# object of ptslice.cpp, compiled with the producer defines — the app tree's
+# object carries the same flags but lives in a binary with a main() of its own.
+#
+# Worth stating why this is not a hardware-gated lane: CAPTURING a PT path needs
+# PT silicon, REPLAYING one does not. The path is decoded at capture time and
+# recorded (`stitch`), the bytes with it (`codeimage`), so everything after the
+# capture runs anywhere the full app builds — and the honest half of "a live
+# slice with zero single-steps" gets tested on hosts with no Intel PT at all.
+# The object sits one level deeper than its tree name suggests (testpt/lv/)
+# because the -MMD dependency include at the foot of this file globs
+# $(BUILD)/desktop/*/*/*.d — an object outside that shape would silently stop
+# tracking its headers, which is exactly the kind of staleness a hand-written
+# rule invites.
+$(BUILD)/desktop/testpt/lv/ptslice.o: desktop/src/live/ptslice.cpp \
+    | $(IMGUI_HOME)/imgui.cpp $(JSON_HOME)/nlohmann/json.hpp
+	@mkdir -p $(@D)
+	$(CXX) $(DESKTOP_CXXFLAGS) -DASMTEST_DESKTOP_HAVE_PT_REPLAY=1 \
+	  -DASMTEST_DESKTOP_CAN_PROBE=1 -c $< -o $@
+
+$(BUILD)/desktop_test_ptslice_run: $(BUILD)/desktop/test/t/test_ptslice_run.o \
+    $(BUILD)/desktop/testpt/lv/ptslice.o $(BUILD)/desktop/test/vw/disasm.o \
+    $(BUILD)/desktop/test/vw/observer.o $(BUILD)/desktop/test/an/slice.o \
+    $(DESKTOP_TEST_DOC) \
+    $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o $(BUILD)/dataflow_emu.o \
+    $(BUILD)/dataflow_blockstep.o $(BUILD)/dataflow_pt.o $(DESKTOP_CAP_OBJ)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) \
+	  $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(LINK_LIBBPF) -ldl -lpthread -o $@
 
 $(BUILD)/desktop_test_loom_forks: $(BUILD)/desktop/test/t/test_loom_forks.o \
     $(BUILD)/desktop/test/lo/fabric.o $(BUILD)/desktop/test/lo/fabric_plan.o \
@@ -552,17 +695,30 @@ $(BUILD)/desktop_test_loom_forks: $(BUILD)/desktop/test/t/test_loom_forks.o \
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) \
 	  $(CAPSTONE_LIBS) -o $@
 
+DESKTOP_ALL_TESTS  = $(DESKTOP_TESTS)
+DESKTOP_ENGINE_SAY = :
+DESKTOP_REPLAY_SAY = :
+
+# The two gates are separate because their dependencies are (see
+# DESKTOP_REPLAY_MISSING above): a host with Unicorn + Capstone runs the PT
+# replay even where the assembler is absent.
+ifeq ($(strip $(DESKTOP_REPLAY_MISSING)),)
+desktop-test: $(DESKTOP_REPLAY_TESTS)
+DESKTOP_ALL_TESTS += $(DESKTOP_REPLAY_TESTS)
+else
+DESKTOP_REPLAY_SAY = echo "desktop-test: the PT-replay slice test needs:$(DESKTOP_REPLAY_MISSING) — not built here; 'make docker-desktop' installs them and runs it"
+endif
+
 ifeq ($(strip $(DESKTOP_ENGINE_MISSING)),)
 desktop-test: $(DESKTOP_ENGINE_TESTS)
-DESKTOP_ALL_TESTS  = $(DESKTOP_TESTS) $(DESKTOP_ENGINE_TESTS)
-DESKTOP_ENGINE_SAY = :
+DESKTOP_ALL_TESTS += $(DESKTOP_ENGINE_TESTS)
 else
-DESKTOP_ALL_TESTS  = $(DESKTOP_TESTS)
 DESKTOP_ENGINE_SAY = echo "desktop-test: the full-build fork tests need:$(DESKTOP_ENGINE_MISSING) — not built here; 'make docker-desktop' installs them and runs them"
 endif
 
 desktop-test: $(DESKTOP_TESTS)
 	@$(DESKTOP_ENGINE_SAY)
+	@$(DESKTOP_REPLAY_SAY)
 	@for t in $(DESKTOP_ALL_TESTS); do echo "== $$t =="; $$t || exit 1; done
 
 # ---------------------------------------------------------------------------
@@ -645,3 +801,21 @@ $(BUILD)/desktop/test/t/test_completeness_view.o: \
     DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"' \
                          -DASMTEST_GOLDEN_DIR='"desktop/test/golden"' \
                          -DASMTEST_REPO_ROOT='"."'
+
+# The Observer views read hand-written LIVE-capture fixtures (syscall payloads,
+# an arm64 watchpoint refusal, an IBS survey, a JIT code image): none of those
+# can come from the deterministic golden corpus, because none of them can be
+# produced by an emulator on a machine that has no such hardware.
+$(BUILD)/desktop/test/t/test_obs_syscalls.o \
+$(BUILD)/desktop/test/t/test_obs_watch.o \
+$(BUILD)/desktop/test/t/test_obs_topo.o \
+$(BUILD)/desktop/test/t/test_obs_hotedges.o \
+$(BUILD)/desktop/test/t/test_obs_tree.o \
+$(BUILD)/desktop/test/t/test_obs_region.o \
+$(BUILD)/desktop/test/t/test_obs_disasm.o \
+$(BUILD)/desktop/test/t/test_obs_ptslice.o \
+$(BUILD)/desktop/test/t/test_obs_draw.o \
+$(BUILD)/desktop/test/t/test_ptslice_run.o: \
+    DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"' \
+                         -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"' \
+                         -DASMTEST_EXPECTED_DIR='"desktop/test/expected"'

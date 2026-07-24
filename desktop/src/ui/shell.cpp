@@ -47,6 +47,13 @@ int shell_open(ShellState &s, const std::string &path, std::string &err) {
     s.streams.resize(s.ws.recordings.size());
     s.streams[static_cast<size_t>(idx)] =
         decode_streams(s.ws.recordings[static_cast<size_t>(idx)]);
+    // The Observer deck (08) is built from the Recording rather than the
+    // decoded Streams: its kinds (syscall, watch, topo, call, codeimage) are
+    // not 04's, and a second decode of the same fields would be a second place
+    // for them to be wrong.
+    s.observers.resize(s.ws.recordings.size());
+    observer_build(s.observers[static_cast<size_t>(idx)],
+                   s.ws.recordings[static_cast<size_t>(idx)]);
     shell_wire_nav(s);
     return idx;
 }
@@ -57,6 +64,8 @@ void shell_close(ShellState &s, size_t idx) {
     s.ws.close(idx);
     if (idx < s.streams.size())
         s.streams.erase(s.streams.begin() + static_cast<long>(idx));
+    if (idx < s.observers.size())
+        s.observers.erase(s.observers.begin() + static_cast<long>(idx));
     if (s.b_index == static_cast<int>(idx))
         s.b_index = -1;
     else if (s.b_index > static_cast<int>(idx))
@@ -105,8 +114,9 @@ void shell_wire_nav(ShellState &s) {
                 s.cone_active = true;
         };
     };
-    for (dt_view v :
-         {dt_view::canvas, dt_view::timeline, dt_view::slice, dt_view::diff})
+    // Every view, replay (04) and live (08) alike: a link naming an Observer
+    // view must land, or the topology drill-in would be a dead end.
+    for (dt_view v : dt_all_views())
         dt_nav_register(s.nav, v, go(v));
 }
 
@@ -240,6 +250,19 @@ static void draw_recording_tab(ShellState &s, const Recording &r) {
                         "compare");
                 else
                     draw_diff_view(dt_diff_view_build(*a, *b));
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Observer")) {
+                // The live views (08), over a recording. They are the SAME
+                // code that renders a live session in the Inspect door — which
+                // is how every one of them is testable without hardware.
+                size_t i = static_cast<size_t>(s.active_tab);
+                if (i < s.observers.size())
+                    draw_observer(s.observers[i], r, a->id,
+                                  [&s](const dt_link &l) {
+                                      if (!dt_nav_go(s.nav, l))
+                                          s.status = s.nav.last_error;
+                                  });
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Loom")) {

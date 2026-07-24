@@ -49,9 +49,17 @@ struct Provenance {
 // One event line. `kind` is the schema "k" selector; `body` is the whole line so
 // views decode fields lazily (D10: an optional "disasm" string rides in body
 // untouched — absent is normal, and a view degrades to offsets).
+//
+// `seq` is its position in the STREAM, counted across every kind. by_kind is the
+// right shape for a loader and the wrong one for the handful of facts that live
+// in the interleaving: a region capture writes [trace…][coverage] per invocation
+// (08-observer-views.md T6), so "which invocation was this instruction in" is
+// answerable only in file order. Storing the ordinal keeps that answerable
+// without a second, order-preserving copy of every event.
 struct Event {
     std::string kind;
     nlohmann::json body;
+    uint64_t seq = 0;
 };
 
 // A loaded recording. by_kind holds every event EXCEPT the `end` footer, whose
@@ -64,6 +72,7 @@ struct Recording {
 
     std::map<std::string, std::vector<Event>> by_kind;
     uint64_t unknown_kinds = 0; // events kept but outside the v1 kind registry
+    uint64_t next_seq = 0;      // the stream position the next event will take
 
     // Honesty facts, off the `end` footer (schema `end`) or its absence.
     bool has_end = false;

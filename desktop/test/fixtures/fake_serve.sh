@@ -38,6 +38,26 @@ while IFS= read -r line; do
         emit '{"k":"err","reason":"a session is already running — one ptrace jack per target (send \"stop\" first)","cmd":"start"}'
         emit '{"k":"syscall","line":"write(1, <14 bytes>, 14) = 14","payload":"hello, world\n"}'
         ;;
+    *'"mode":"tree"'*)
+        # The FILTER ECHO (08-observer-views.md T5). The real serve loop replies
+        # with the EFFECTIVE parameters — what the engine ran with after
+        # defaulting — and a client must read those rather than assume its
+        # request round-tripped. So this host parses the filter back out of the
+        # command and echoes it, which is what makes the round trip testable
+        # without a tracer: a client that quietly displayed its own request
+        # would pass a test the server never answered.
+        depth=$(printf '%s' "$line" | sed -n 's/.*"depth":\([0-9]*\).*/\1/p')
+        focus=$(printf '%s' "$line" | sed -n 's/.*"focus":"\([^"]*\)".*/\1/p')
+        module=$(printf '%s' "$line" | sed -n 's/.*"module":"\([^"]*\)".*/\1/p')
+        [ -n "$depth" ] || depth=0
+        emit '{"k":"cmd","cmd":"start","mode":"tree"}'
+        emit "{\"k\":\"session\",\"state\":\"started\",\"mode\":\"tree\",\"pid\":4242,\"params\":{\"tid\":0,\"follow\":false,\"max\":-1,\"depth\":$depth,\"focus\":\"$focus\",\"module\":\"$module\"}}"
+        emit '{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ptrace-tree","exact":true,"trust":"exact"},"arch":"x86_64","pid":4242}'
+        emit '{"k":"call","tid":4242,"depth":0,"addr":4198710,"name":"work","module":"spy_victim"}'
+        emit '{"k":"call","tid":4242,"depth":1,"addr":4198800,"name":"helper","module":"spy_victim"}'
+        emit '{"k":"end","events":2,"truncated":false,"drops":{"lost":0,"throttled":false}}'
+        emit '{"k":"session","state":"stopped","mode":"tree","events":2,"reason":"stop"}'
+        ;;
     *'"mode":"sample"'*)
         # A skip: the session RAN and had nothing to report. Note it still
         # produces a closed, honest recording — an empty file would be the bug.

@@ -8,6 +8,43 @@
 > 2026-07-24. If this doc and a source disagree, this doc wins (sources may be
 > stale); if the CODE and this doc disagree, re-verify before implementing.
 >
+> **Implemented 2026-07-24 (T1–T8). Corrections this doc lost to the code, in
+> the sibling docs' format — the code won each time and this doc was fixed in
+> the same change:**
+>
+> 1. **`Recording` could not answer "which invocation was this in".** T6's
+>    snapshots are delimited by the producer's `[trace…][coverage]` ORDER, and
+>    03's loader groups events *by kind*, which throws that order away. Splitting
+>    on anything else (say "a new invocation starts at offset 0") silently merges
+>    two invocations of a routine whose first block runs twice. `Event` therefore
+>    gained a `seq` — its position in the stream — filled identically by the file
+>    loader and by the live host, so a replayed file and a live session split the
+>    same way.
+> 2. **A live session's lifecycle is NOT in its recording.** T1/T2/T5 read the
+>    `started` params echo and the skip, and 07-T3 deliberately keeps
+>    `session`/`cmd`/`err` *out* of the growing Recording (they are not recording
+>    events; the footer does not count them) while the file loader — which cannot
+>    tell them apart — keeps them in `by_kind`. Both are right, so the builders
+>    take an explicit `ObsLifecycle` source and default to the recording's own.
+> 3. **The tracer's own int3 dirties the page.** T7's "emit `codeimage` events on
+>    refresh" produced one version per invocation for a region that never
+>    changed: the region engine arms and removes an entry breakpoint, and that
+>    write sets the soft-dirty bit. A byte-identical snapshot is not a new
+>    version — emitting it anyway attributes the capture's own perturbation to
+>    the target and buries a real JIT patch in the noise. Suppressed, and
+>    asserted in `cli-smoke`.
+> 4. **T8's gate was one level too coarse.** "Full build only; self-skips
+>    everywhere PT is absent" is right about CAPTURE and wrong about REPLAY:
+>    replaying a recorded path needs Unicorn + Capstone and no PT silicon at all,
+>    because the path was decoded at capture time (`stitch`) and the bytes
+>    recorded with it (`codeimage`). So the desktop test replays a recorded slice
+>    on hosts with no Intel PT, and `mk/desktop.mk` gained a second, narrower gate
+>    (`DESKTOP_REPLAY_MISSING`) rather than hiding the test behind Keystone too.
+> 5. **04's router could not name a process.** T3's drill-in is "a deep link to
+>    the per-process view", and `dt_link` had no `pid` and no Observer view names.
+>    Both added — `pid` last in the textual form, so every link written before it
+>    stays byte-identical.
+>
 > Read [\_conventions.md](../implementations/_conventions.md) first; shared
 > decisions D1–D11 live in this directory's README. Siblings:
 > [07-serve-live-host.md](07-serve-live-host.md) (sessions these views
@@ -67,7 +104,10 @@ is how its tests run without hardware.
   a GUI-reachable surface is a scoped decision, not an oversight (T8).
 - **01 reserved no `codeimage` kind** — its reserved list is
   `mem, fpenv, statediff, blame, fuzzstats, taint, take`; this doc adds the
-  kind (T7, schema append per 01's append-only rule).
+  kind (T7, schema append per 01's append-only rule). **Landed**: the kind is
+  now *defined* in [asmtrace-schema.md](asmtrace-schema.md) (the section at the
+  end of that file), produced by `asmspy --serve` for region sessions, and it is
+  the first reserved kind to gain a producer.
 
 ## Tasks
 

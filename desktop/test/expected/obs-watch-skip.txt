@@ -1,0 +1,4 @@
+chrome=hwdebug-watch / exact
+armed: addr=0x601048 len=4 rw=0 max=-1
+REFUSED (3): host reports 4 breakpoint slots but refused to reserve one: No space left on device
+hits=0

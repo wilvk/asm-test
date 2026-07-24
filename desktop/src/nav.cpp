@@ -82,38 +82,48 @@ bool parse_u64(const std::string &s, uint64_t &out) {
 
 } // namespace
 
+namespace {
+// ONE table for the name mapping, both directions, so a view added to the enum
+// cannot end up formattable but not parseable (or the reverse).
+struct view_name {
+    dt_view view;
+    const char *name;
+};
+const view_name kViewNames[] = {
+    {dt_view::canvas, "canvas"},     {dt_view::timeline, "timeline"},
+    {dt_view::slice, "slice"},       {dt_view::diff, "diff"},
+    {dt_view::syscalls, "syscalls"}, {dt_view::watch, "watch"},
+    {dt_view::topo, "topo"},         {dt_view::hotedges, "hotedges"},
+    {dt_view::tree, "tree"},         {dt_view::region, "region"},
+    {dt_view::disasm, "disasm"},
+};
+} // namespace
+
 const char *dt_view_name(dt_view v) {
-    switch (v) {
-    case dt_view::canvas:
-        return "canvas";
-    case dt_view::timeline:
-        return "timeline";
-    case dt_view::slice:
-        return "slice";
-    case dt_view::diff:
-        return "diff";
-    }
+    for (const view_name &n : kViewNames)
+        if (n.view == v)
+            return n.name;
     return "canvas";
 }
 
 bool dt_view_parse(std::string_view s, dt_view &out) {
-    if (s == "canvas") {
-        out = dt_view::canvas;
-        return true;
-    }
-    if (s == "timeline") {
-        out = dt_view::timeline;
-        return true;
-    }
-    if (s == "slice") {
-        out = dt_view::slice;
-        return true;
-    }
-    if (s == "diff") {
-        out = dt_view::diff;
-        return true;
+    for (const view_name &n : kViewNames) {
+        if (s == n.name) {
+            out = n.view;
+            return true;
+        }
     }
     return false;
+}
+
+const std::vector<dt_view> &dt_all_views() {
+    static const std::vector<dt_view> all = [] {
+        std::vector<dt_view> v;
+        for (const view_name &n : kViewNames)
+            v.push_back(n.view);
+        return v;
+    }();
+    return all;
 }
 
 bool dt_nav_parse(std::string_view s, dt_link &out, std::string &err) {
@@ -148,8 +158,11 @@ bool dt_nav_parse(std::string_view s, dt_link &out, std::string &err) {
         }
         if (key == "v") {
             if (!dt_view_parse(value, link.view)) {
-                err = "unknown view \"" + value +
-                      "\" (expected canvas, timeline, slice or diff)";
+                err = "unknown view \"" + value + "\" (expected one of: ";
+                for (size_t i = 0; i < dt_all_views().size(); i++)
+                    err += std::string(i ? ", " : "") +
+                           dt_view_name(dt_all_views()[i]);
+                err += ")";
                 return false;
             }
             have_view = true;
@@ -172,6 +185,15 @@ bool dt_nav_parse(std::string_view s, dt_link &out, std::string &err) {
                 return false;
             }
             link.off = v;
+        } else if (key == "pid") {
+            uint64_t v = 0;
+            if (!parse_u64(value, v) || v == 0 || v > 0x7FFFFFFFull) {
+                // 0 is not a pid, and a link that quietly meant "no process"
+                // would drill into whatever happened to be selected.
+                err = "pid \"" + value + "\" is not a process id";
+                return false;
+            }
+            link.pid = static_cast<long>(v);
         }
         // else: an unknown key, IGNORED — a link from a newer build still
         // navigates here, to the extent this build understands it.
@@ -206,6 +228,12 @@ std::string dt_nav_format(const dt_link &link) {
         std::snprintf(buf, sizeof buf, "0x%llx",
                       static_cast<unsigned long long>(*link.off));
         s += "&off=";
+        s += buf;
+    }
+    if (link.pid) {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "%ld", *link.pid);
+        s += "&pid=";
         s += buf;
     }
     return s;

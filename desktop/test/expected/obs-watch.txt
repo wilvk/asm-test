@@ -1,0 +1,6 @@
+chrome=hwdebug-watch / exact
+armed: addr=0x601048 len=4 rw=1 max=-1
+hits=3
+  #1 tid=5150 write @0x601048 from work+0x12 [watch_victim] value=0x0000002a (4B)
+  #2 tid=5151 read @0x601048 from reader+0x6 [watch_victim] value=0x0000002a (4B)
+  #3 tid=5151 undecodable @0x601048 from 0x4011f4 value=(not read back)

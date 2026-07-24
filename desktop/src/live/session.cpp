@@ -397,7 +397,10 @@ void LiveSession::feed_line(const std::string &line) {
         close_current(/*torn=*/false);
         return;
     }
-    cur_.by_kind[k].push_back(Event{k, j});
+    // The stream position, counted the same way the file loader counts it — a
+    // live session and a replayed file must agree about event ORDER, which is
+    // what the region view's invocation split reads (08-observer-views.md T6).
+    cur_.by_kind[k].push_back(Event{k, j, cur_.next_seq++});
     if (!is_known_kind(k))
         cur_.unknown_kinds++;
 }

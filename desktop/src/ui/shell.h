@@ -15,6 +15,7 @@
 #include "nav.h"
 #include "ui/doors.h"
 #include "views/completeness.h"
+#include "views/observer_draw.h"
 
 namespace asmdesk {
 
@@ -59,6 +60,11 @@ struct ShellState {
     // The Inspect door (07-serve-live-host.md T4/T5). In BOTH binaries: it
     // links no engine and captures through the `asmspy --serve` subprocess.
     InspectState inspect;
+    // The live Observer views (08-observer-views.md), one deck per open
+    // recording — parallel to ws.recordings, exactly like `streams`. A live
+    // session's recording and a replayed file feed the SAME deck, which is the
+    // property the whole doc is built on.
+    std::vector<ObserverState> observers;
     std::string repo_root = ".";
 };
 
