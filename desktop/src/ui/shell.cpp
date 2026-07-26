@@ -103,7 +103,14 @@ void shell_wire_nav(ShellState &s) {
     // keeps its own navigation state, so a link and a keypress land identically.
     auto go = [&s](dt_view v) {
         return [&s, v](const dt_link &l) {
-            s.view = v;
+            // `blame` (09-T5) is not a view of its own: it is the failure-
+            // attribution entry point, resolved HERE onto the slice explorer at
+            // the failure step. The rest of this handler already does exactly
+            // what blame needs — select the recording, land on `step`, and (via
+            // the `if (l.step)` below) light the backward cone that answers
+            // "what produced this wrong value". Reusing the slice explorer is the
+            // whole point: no new heavy view ships for the Wave-2 producer.
+            s.view = (v == dt_view::blame) ? dt_view::slice : v;
             int a = index_of_id(s, l.rec);
             if (a >= 0)
                 s.active_tab = a;

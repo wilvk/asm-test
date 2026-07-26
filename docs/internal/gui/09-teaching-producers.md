@@ -175,6 +175,19 @@ that the register deltas visibly show.
 
 ### T5 — Blame intake socket  (S, depends on: 04)
 
+> **Implemented 2026-07-26 (T5 only; T1–T4 not started).** The blame deep-link
+> intake socket landed: `desktop/src/nav.{h,cpp}` gained a distinct `blame`
+> target (NOT an alias for `v=slice`, so a blame link is greppable as one and the
+> resolution can later grow a Loom thread without the producer changing), which
+> the shell (`shell_wire_nav`, `desktop/src/ui/shell.cpp`) resolves onto the
+> slice explorer at the failure step with the backward cone pre-selected — no new
+> heavy view. Byte-stable round-trip and the ignore-unknown-keys/append-last
+> discipline are preserved (no new `dt_link` field was needed). Fixture
+> `desktop/test/fixtures/blame-attribution.asmtrace` carries a schema-unfrozen
+> `blame`-kind attachment; `test_nav` pins the router half and `test_shell` the
+> end-to-end open. No producer work (Wave 2), and both tests are marked to be
+> re-pointed at the real producer when it lands.
+
 **Goal.** Zero UI work left when Wave 2's backward-slice blame producer lands:
 the deep-link plumbing exists and is tested against a hand-authored fixture.
 

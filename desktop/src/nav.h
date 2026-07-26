@@ -27,10 +27,10 @@
 
 namespace asmdesk {
 
-// The four replay views (04), then the live Observer views (08). A link names
-// one of these by the enum's own spelling; an older build that does not know a
-// name refuses the link WITH the name in the message rather than landing
-// somewhere arbitrary.
+// The four replay views (04), then the live Observer views (08), then the blame
+// intake target (09). A link names one of these by the enum's own spelling; an
+// older build that does not know a name refuses the link WITH the name in the
+// message rather than landing somewhere arbitrary.
 enum class dt_view {
     canvas,
     timeline,
@@ -43,6 +43,16 @@ enum class dt_view {
     tree,
     region,
     disasm,
+    // NOT a view of its own: the failure-attribution ENTRY POINT (09-T5). The
+    // Wave-2 backward-slice blame producer will emit `v=blame&rec=…&step=…`; the
+    // shell resolves it onto the SLICE explorer at the failure step with the
+    // backward cone ("what produced this wrong value") pre-selected — no new
+    // heavy view. Kept a distinct target, not an alias for `v=slice`, so the
+    // producer has a stable, greppable socket AND the resolution can later grow
+    // (a Loom thread, the specific failing def) without the producer's link
+    // format changing. Appended LAST so every link written before it stays
+    // byte-identical, exactly as `pid` was on dt_link.
+    blame,
 };
 
 struct dt_link {
@@ -58,8 +68,8 @@ struct dt_link {
     std::optional<long> pid;
 };
 
-// v=<canvas|timeline|slice|diff|syscalls|watch|topo|hotedges|tree|region|disasm>;
-// the spelling is the enum's name, both ways.
+// v=<canvas|timeline|slice|diff|syscalls|watch|topo|hotedges|tree|region|disasm
+//   |blame>; the spelling is the enum's name, both ways.
 const char *dt_view_name(dt_view v);
 bool dt_view_parse(std::string_view s, dt_view &out);
 // Every view, for exhaustive iteration (registration, and the round-trip test).

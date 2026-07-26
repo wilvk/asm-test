@@ -189,6 +189,73 @@ int main() {
         check("the old handler did not", canvas_hits == 1, "both ran");
     }
 
+    // --- 09-T5: the blame intake target ------------------------------------
+    // Wave-2's backward-slice blame producer does not exist yet, so this pins
+    // the ROUTER half of the socket: a blame link is the failure-attribution
+    // entry point, v=blame&rec=<fail>&step=<failing step>. RE-POINT this at a
+    // produced recording when the producer lands. (The shell resolves the target
+    // onto the slice explorer with the backward cone lit — asserted end to end
+    // over the hand-authored fixture in test_shell.)
+    {
+        dt_link l;
+        std::string err;
+        check("a blame link parses",
+              dt_nav_parse("asmtrace-link:v=blame&rec=fail.asmtrace&step=3", l,
+                           err),
+              err);
+        check("it names the blame target", l.view == dt_view::blame,
+              "a blame link must resolve to the blame target");
+        check("it carries the failure step", l.step.value_or(0) == 3,
+              "the step is the slice origin the producer names");
+        eq("rec of the blame link", l.rec, "fail.asmtrace");
+
+        // Byte-stable round-trip, exactly like every other target — a blame link
+        // is something a failing test pastes into its output.
+        eq("blame link round-trips byte-stable", dt_nav_format(l),
+           "asmtrace-link:v=blame&rec=fail.asmtrace&step=3");
+        dt_link l2;
+        check("re-parse of the formatted blame link",
+              dt_nav_parse(dt_nav_format(l), l2, err), err);
+        eq("and re-formats identically", dt_nav_format(l2), dt_nav_format(l));
+
+        // Distinct from a plain slice link: same coordinate, different v= token,
+        // so a blame deep link is greppable as one rather than an anonymous
+        // slice link.
+        dt_link slice_l = l;
+        slice_l.view = dt_view::slice;
+        check("blame is not just a slice link",
+              dt_nav_format(slice_l) != dt_nav_format(l),
+              "the v= token must distinguish the blame entry point");
+
+        // Forward-compat holds on the blame target too: an unknown key from a
+        // newer producer is ignored and the known fields still arrive.
+        dt_link l3;
+        check("an unknown key on a blame link is ignored",
+              dt_nav_parse(
+                  "asmtrace-link:v=blame&rec=fail.asmtrace&step=3&def=eax", l3,
+                  err),
+              err);
+        check("the step survived the unknown key", l3.step.value_or(0) == 3,
+              "step was lost");
+
+        // It ROUTES: a registered blame handler receives the link with its rec
+        // and step, refusing loudly (like every target) when the recording is
+        // not open.
+        dt_nav_table t;
+        t.have_recording = [](const std::string &id) {
+            return id == "fail.asmtrace";
+        };
+        uint32_t got_step = 0;
+        int hits = 0;
+        dt_nav_register(t, dt_view::blame, [&](const dt_link &link) {
+            hits++;
+            got_step = link.step.value_or(0);
+        });
+        check("a blame link navigates", dt_nav_go(t, l), t.last_error);
+        check("the blame handler ran", hits == 1, "it did not");
+        check("with the failure step", got_step == 3, "step was not passed");
+    }
+
     // --- the bindings table is data, so help and behaviour cannot drift -----
     {
         check("there are keyboard bindings", !dt_nav_bindings().empty(),

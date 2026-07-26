@@ -10,6 +10,7 @@
 
 #include "doc/recording.h"
 #include "ui/shell.h"
+#include "views/slice_view.h" // 09-T5: assert the blame link's backward cone
 
 #ifndef ASMTEST_FIXTURE_DIR
 #error "ASMTEST_FIXTURE_DIR must be defined by the build (mk/desktop.mk)"
@@ -102,6 +103,59 @@ int main() {
     }
 
     ImGui::DestroyContext();
+
+    // --- 09-T5: the blame deep-link intake socket, end to end ---------------
+    // A blame link (v=blame&rec=…&step=N) is the failure-attribution entry
+    // point. There is no Wave-2 blame PRODUCER yet, so this drives a hand-
+    // authored fixture carrying a `blame`-kind attachment: routing the link must
+    // open the SLICE explorer at the failure step with the backward cone ("what
+    // produced this wrong value") pre-selected. RE-POINT `rec`/`step` at a
+    // produced recording when the Wave-2 backward-slice blame producer lands.
+    {
+        ShellState bs;
+        std::string err;
+        int idx = shell_open(bs, fx("blame-attribution.asmtrace"), err);
+        check("blame/opened", idx >= 0, err.c_str());
+
+        dt_link l;
+        l.view = dt_view::blame;
+        l.rec = "blame-attribution.asmtrace";
+        l.step = 3; // the failing step named by the fixture's blame event
+
+        check("blame/navigates", dt_nav_go(bs.nav, l),
+              bs.nav.last_error.c_str());
+        check("blame/opens the slice explorer", bs.view == dt_view::slice,
+              "blame must resolve onto the slice explorer, not a view of its "
+              "own");
+        check("blame/lands on the failure step",
+              bs.selected_step.value_or(999) == 3, "wrong step");
+        check("blame/lights the cone", bs.cone_active,
+              "the backward cone must be active at the failure step");
+
+        // The backward cone is actually pre-selected: the producers of the wrong
+        // value light `back`, the failure itself `both`, and the unrelated ebx
+        // chain stays `dimmed`. This is the whole "zero UI work left for Wave 2"
+        // claim, asserted over the real slice builder.
+        const Streams *a = shell_a(bs);
+        check("blame/active stream decoded", a != nullptr, "no active stream");
+        if (a != nullptr) {
+            dt_slice_view v = dt_slice_view_build(*a, bs.selected_step);
+            auto style = [&](uint32_t step) {
+                for (const dt_slice_node &n : v.nodes)
+                    if (n.step == step)
+                        return n.style;
+                return dt_cone::none;
+            };
+            check("blame/failure step is the cone origin",
+                  style(3) == dt_cone::both, "the failure is in both cones");
+            check("blame/its producers light the backward cone",
+                  style(0) == dt_cone::back && style(2) == dt_cone::back,
+                  "steps 0 and 2 produced the failing value");
+            check("blame/unrelated steps stay dimmed",
+                  style(1) == dt_cone::dimmed && style(4) == dt_cone::dimmed,
+                  "the ebx chain neither produced nor consumed the value");
+        }
+    }
 
     if (failures) {
         std::fprintf(stderr, "test_shell: %d FAILURE(S)\n", failures);

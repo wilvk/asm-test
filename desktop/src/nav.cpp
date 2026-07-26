@@ -95,7 +95,7 @@ const view_name kViewNames[] = {
     {dt_view::syscalls, "syscalls"}, {dt_view::watch, "watch"},
     {dt_view::topo, "topo"},         {dt_view::hotedges, "hotedges"},
     {dt_view::tree, "tree"},         {dt_view::region, "region"},
-    {dt_view::disasm, "disasm"},
+    {dt_view::disasm, "disasm"},     {dt_view::blame, "blame"},
 };
 } // namespace
 
