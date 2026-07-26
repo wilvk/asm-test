@@ -351,6 +351,288 @@ static int record_one(const char *dir, const rec_routine_t *r) {
                         r->nargs, 65536, steps_cap);
 }
 
+/* ------------------------------------------------------------------ */
+/* The ABI x-ray's paired goldens (09-teaching-producers.md T4)        */
+/*                                                                     */
+/* The classroom flagship records the SAME corpus routine twice — once  */
+/* through emu_call_traced (System V) and once through                  */
+/* emu_call_win64_traced (Microsoft x64) — each under the T1 per-step   */
+/* register ring, so the two recordings are a step-aligned PAIR whose    */
+/* register files diverge exactly where the two conventions marshal      */
+/* arguments differently. The desktop ABI x-ray view (abixray.cpp) locks  */
+/* one playhead across both and an authored walkthrough (the `note` stops */
+/* below, carried in the SysV/reference leg) narrates the contrast the     */
+/* register deltas show. Unlike the corpus loop these run emu_call_*_traced */
+/* (not the L0 value producer), so a pair carries `trace` + `regstate` +   */
+/* `note` stops — the ABI x-ray reads exactly those; no df_step/coverage   */
+/* is written, because the marshalling story needs neither.                */
+/* ------------------------------------------------------------------ */
+
+/* One ordered walkthrough stop (06-doors-and-learning.md `note` model). A
+ * step_anchor < 0 is UNANCHORED — a remark about the call as a whole rather
+ * than one instruction; the x-ray leaves the playhead where the last anchored
+ * stop put it. */
+typedef struct {
+    long step_anchor;
+    const char *title;
+    const char *body;
+} abi_stop_t;
+
+/* make_pair(a, b) -> struct pair{long a, b} (examples/structs.s): a 16-byte
+ * aggregate, the eightbyte-classification contrast made visible in the register
+ * files. SysV splits it into two INTEGER eightbytes (rdi:rsi inbound, rax:rdx on
+ * return); Win64 has no eightbyte split and returns anything over 8 bytes by a
+ * hidden pointer, shifting its integer args one register later. */
+static const abi_stop_t MAKE_PAIR_STOPS[] = {
+    {0, "arguments arrive in different registers",
+     "make_pair(a=7, b=11) returns a 16-byte struct {long a; long b}. System V "
+     "places the first two integer arguments in rdi and rsi; Microsoft x64 "
+     "places them in rcx and rdx. Before a single instruction runs the "
+     "register "
+     "files already disagree: a0 -> rdi (SysV) vs rcx (Win64), a1 -> rsi vs "
+     "rdx."},
+    {1, "the first eightbyte is staged",
+     "movq rdi, rax stages the struct's first 8-byte chunk into the return "
+     "register. Under SysV rdi held a, so rax becomes 7; under Win64 rdi is a "
+     "nonvolatile register the caller never loaded, so rax becomes 0 — the "
+     "same "
+     "instruction, a different input, because each convention chose a "
+     "different "
+     "argument register."},
+    {2, "the second eightbyte, and how each ABI returns the struct",
+     "movq rsi, rdx stages the second chunk. SysV classifies the 16-byte "
+     "return "
+     "as two INTEGER eightbytes and hands it back in the pair rax:rdx, so "
+     "rax:rdx = (a, b) IS the returned struct. Win64 classifies any aggregate "
+     "larger than 8 bytes as MEMORY and returns it through a hidden pointer "
+     "the "
+     "caller passes in rcx — which is why its integer arguments start one "
+     "register later, in rdx."},
+    {-1, "eightbyte classification, side by side",
+     "The System V AMD64 ABI splits an aggregate into 8-byte 'eightbytes' and "
+     "classifies each INTEGER, SSE or MEMORY; two INTEGER eightbytes ride in "
+     "rdi:rsi inbound and rax:rdx on return. Microsoft x64 has no eightbyte "
+     "split — anything that is not 1, 2, 4 or 8 bytes is passed and returned "
+     "by "
+     "reference. The register deltas above are that one rule, made "
+     "mechanical."},
+};
+
+/* sum3(a, b, c) (examples/args.s): three integer args, register-only under both
+ * ABIs and straight-line — the fundamental a0 -> rdi vs rcx contrast, the
+ * rsi/rdi callee-saved role reversal, and where each convention's stack spill
+ * would begin. */
+static const abi_stop_t SUM3_STOPS[] = {
+    {0, "a0 -> rdi (SysV) vs rcx (Win64)",
+     "sum3(11, 22, 33) takes three integer arguments. System V assigns them to "
+     "rdi, rsi, rdx (its integer sequence is rdi, rsi, rdx, rcx, r8, r9); "
+     "Microsoft x64 assigns them to rcx, rdx, r8 (its sequence is rcx, rdx, "
+     "r8, "
+     "r9). Same three values, six different registers — the entry state shows "
+     "a0 "
+     "in rdi on the left and in rcx on the right."},
+    {1, "rsi and rdi swap roles",
+     "The routine adds rsi into the accumulator. Under SysV rsi is the second "
+     "argument (22); under Win64 rsi is CALLEE-SAVED (nonvolatile) and never "
+     "an "
+     "argument, so it is 0 here. rsi and rdi are argument registers in System "
+     "V "
+     "but callee-saved in Microsoft x64 — the single commonest source of "
+     "cross-ABI corruption."},
+    {2, "the third add",
+     "adds rdx. SysV's THIRD argument lives in rdx (33); Win64's SECOND "
+     "argument "
+     "also lives in rdx (22), because its integer sequence is rcx, rdx, r8, "
+     "r9. "
+     "The two accumulators diverge accordingly."},
+    {-1, "where the stack would begin",
+     "Neither convention has spilled to memory. System V passes its first six "
+     "integer arguments in registers and the seventh onward at 8(%rsp), "
+     "16(%rsp), ...; Microsoft x64 passes its first four in registers and the "
+     "fifth onward on the stack ABOVE a 32-byte shadow area the caller always "
+     "reserves. sum3's three args fit in registers under both — a seventh SysV "
+     "or fifth Win64 argument would take the first stack slot."},
+};
+
+typedef struct {
+    const char *routine; /* corpus routine name */
+    long args[6];
+    int nargs;
+    size_t cap;             /* per-step ring cap (>= steps: a pair keeps all) */
+    const char *sysv_intro; /* the SysV leg's leading note = the x-ray title  */
+    const char
+        *win64_intro; /* the Win64 leg's standalone identity note       */
+    const abi_stop_t
+        *stops; /* authored into the SysV (reference) leg only    */
+    int nstops;
+} abi_xray_t;
+
+static const abi_xray_t ABI_XRAYS[] = {
+    {"make_pair",
+     {7, 11, 0, 0, 0, 0},
+     2,
+     8,
+     "make_pair(7, 11) — the same call marshalled two ways: System V (left) "
+     "returns the 16-byte struct in rax:rdx, Microsoft x64 (right) returns it "
+     "by a hidden pointer. Step the walkthrough to watch the register files "
+     "diverge.",
+     "make_pair(7, 11) under Microsoft x64 (Win64)",
+     MAKE_PAIR_STOPS,
+     (int)(sizeof MAKE_PAIR_STOPS / sizeof MAKE_PAIR_STOPS[0])},
+    {"sum3",
+     {11, 22, 33, 0, 0, 0},
+     3,
+     8,
+     "sum3(11, 22, 33) — the same call marshalled two ways: System V (left) "
+     "reads rdi, rsi, rdx; Microsoft x64 (right) reads rcx, rdx, r8. Step the "
+     "walkthrough to watch a0 land in a different register on each side.",
+     "sum3(11, 22, 33) under Microsoft x64 (Win64)",
+     SUM3_STOPS,
+     (int)(sizeof SUM3_STOPS / sizeof SUM3_STOPS[0])},
+};
+#define N_ABI_XRAYS ((int)(sizeof ABI_XRAYS / sizeof ABI_XRAYS[0]))
+
+/* Emit one walkthrough stop as the schema's `note` kind, fields in canonical
+ * order (text, step, stop, title) with absent ones omitted — the same spelling
+ * gen_walkthroughs.c uses, so a stop reads identically whichever tool wrote it. */
+static void emit_abi_stop(asmtrace_writer_t *w, const abi_stop_t *s) {
+    char body[4096], esc[2048];
+    size_t n;
+    asmtrace_escape(esc, sizeof esc, s->body);
+    n = (size_t)snprintf(body, sizeof body, "\"text\":\"%s\"", esc);
+    if (s->step_anchor >= 0)
+        n += (size_t)snprintf(body + n, sizeof body - n, ",\"step\":%ld",
+                              s->step_anchor);
+    n += (size_t)snprintf(body + n, sizeof body - n, ",\"stop\":true");
+    if (s->title != NULL) {
+        asmtrace_escape(esc, sizeof esc, s->title);
+        snprintf(body + n, sizeof body - n, ",\"title\":\"%s\"", esc);
+    }
+    asmtrace_emit(w, "note", body);
+}
+
+/* Record one leg of an ABI x-ray pair: run `code` under the per-step register
+ * ring, through the System V or Microsoft x64 convention, and write
+ * <dir>/<out>.asmtrace as `note` (intro) + `trace` + `regstate` [+ `note`
+ * stops]. Both legs run the SAME bytes; only the convention — hence the
+ * argument-register placement, hence the register files — differs. The ring cap
+ * holds every step, so a pair is never truncated. Returns 0 / -1. */
+static int record_abi_leg(const char *dir, const char *out, const char *intro,
+                          const uint8_t *code, size_t code_len,
+                          const long *args, int nargs, size_t cap, int win64,
+                          const abi_stop_t *stops, int nstops) {
+    asmtrace_prov_t prov = {"emu-l0", 1, "exact", 0, NULL, 0};
+    asmtrace_writer_t w;
+    emu_trace_t tr;
+    emu_result_t res;
+    uint64_t insns[256], blocks[64];
+    char path[1024], body[8192];
+    emu_t *e;
+    size_t nsteps, held, i;
+
+    e = emu_open();
+    if (e == NULL) {
+        fprintf(stderr, "asmtrace_record: emu_open failed for %s\n", out);
+        return -1;
+    }
+    if (!emu_step_capture(e, cap)) {
+        /* x86-64-guest only, exactly the corpus loop's gate: a host without the
+         * emulator cannot produce the golden, so fail loudly rather than commit
+         * a regstate-free pair that would silently defeat the x-ray. */
+        fprintf(stderr, "asmtrace_record: step ring unavailable for %s\n", out);
+        emu_close(e);
+        return -1;
+    }
+
+    memset(&tr, 0, sizeof tr);
+    tr.insns = insns;
+    tr.insns_cap = sizeof insns / sizeof insns[0];
+    tr.blocks = blocks;
+    tr.blocks_cap = sizeof blocks / sizeof blocks[0];
+    memset(&res, 0, sizeof res);
+    if (win64)
+        emu_call_win64_traced(e, code, code_len, args, nargs, 0, &res, &tr);
+    else
+        emu_call_traced(e, code, code_len, args, nargs, 0, &res, &tr);
+
+    snprintf(path, sizeof path, "%s/%s.asmtrace", dir, out);
+    if (asmtrace_open(&w, path, 1 /* deterministic */) != 0) {
+        fprintf(stderr, "asmtrace_record: cannot write %s\n", path);
+        emu_close(e);
+        return -1;
+    }
+    asmtrace_header(&w, "asmtrace_record", &prov, 0, NULL);
+
+    asmtrace_escape(body, sizeof body, intro);
+    asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
+
+    /* The ordered executed-instruction stream (basis "rel", offsets from
+     * EMU_CODE_BASE) — the same `trace` kind the corpus loop writes, so the
+     * walkthrough player counts steps from it identically. */
+    nsteps = tr.insns_len;
+    for (i = 0; i < nsteps; i++) {
+        char dis[160] = "";
+        if (emu_disas_available())
+            emu_disas(EMU_ARCH_X86_64, code, code_len, EMU_CODE_BASE, insns[i],
+                      dis, sizeof dis);
+        if (dis[0]) {
+            asmtrace_escape(body, sizeof body, dis);
+            asmtrace_emitf(&w, "trace",
+                           "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu,"
+                           "\"disasm\":\"%s\"",
+                           (unsigned long long)insns[i], body);
+        } else {
+            asmtrace_emitf(&w, "trace",
+                           "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu",
+                           (unsigned long long)insns[i]);
+        }
+    }
+
+    /* One `regstate` per held pre-state (oldest first) — the per-step register
+     * file the x-ray's two scrubber panes replay. The cap holds every step, so
+     * there is no eviction and no truncation. */
+    held = emu_step_count(e);
+    for (i = 0; i < held; i++) {
+        emu_x86_regs_t regs;
+        if (emu_step_at(e, i, NULL, &regs))
+            emit_regstate(&w, &regs);
+    }
+
+    /* Stops last, so file order IS ordinal order — the player's contract. The
+     * reference (SysV) leg carries them; the Win64 leg is pure paired data. */
+    for (i = 0; i < (size_t)nstops; i++)
+        emit_abi_stop(&w, &stops[i]);
+
+    asmtrace_close(&w, 0, 0, NULL);
+    emu_close(e);
+    printf("  %-28s %zu step(s), %zu regstate(s), %d stop(s)  [%s]\n", out,
+           nsteps, held, nstops, win64 ? "Win64" : "SysV");
+    return 0;
+}
+
+/* Record both legs of one ABI x-ray pair from a corpus routine's window. */
+static int record_abi_pair(const char *dir, const abi_xray_t *x) {
+    uint8_t code[REC_WINDOW];
+    char out[128];
+    const void *fn = asmtest_corpus_routine(x->routine);
+    int rc = 0;
+    if (!fn) {
+        fprintf(stderr, "asmtrace_record: no corpus routine '%s'\n",
+                x->routine);
+        return -1;
+    }
+    memcpy(code, fn, sizeof code);
+    snprintf(out, sizeof out, "abixray-%s-sysv", x->routine);
+    if (record_abi_leg(dir, out, x->sysv_intro, code, sizeof code, x->args,
+                       x->nargs, x->cap, 0, x->stops, x->nstops) != 0)
+        rc = -1;
+    snprintf(out, sizeof out, "abixray-%s-win64", x->routine);
+    if (record_abi_leg(dir, out, x->win64_intro, code, sizeof code, x->args,
+                       x->nargs, x->cap, 1, NULL, 0) != 0)
+        rc = -1;
+    return rc;
+}
+
 int main(int argc, char **argv) {
     const char *dir = "tests/golden-asmtrace";
     int failed = 0;
@@ -424,6 +706,15 @@ int main(int argc, char **argv) {
                 failed++;
         }
     }
+
+    /* The ABI x-ray's paired SysV/Win64 goldens (09-teaching-producers.md T4).
+     * Independent of --steps: each pair bakes its own ring cap, so `make
+     * asmtrace-golden` (no flag) emits them exactly as it does add_signed's
+     * worked example. */
+    for (int i = 0; i < N_ABI_XRAYS; i++)
+        if (record_abi_pair(dir, &ABI_XRAYS[i]) != 0)
+            failed++;
+
     if (failed) {
         fprintf(stderr, "asmtrace_record: %d routine(s) failed\n", failed);
         return 1;

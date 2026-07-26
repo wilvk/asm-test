@@ -1,0 +1,11 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"k":"note","text":"sum3(11, 22, 33) under Microsoft x64 (Win64)"}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov rax, rdi"}
+{"k":"trace","basis":"rel","kind":"insn","off":3,"disasm":"add rax, rsi"}
+{"k":"trace","basis":"rel","kind":"insn","off":6,"disasm":"add rax, rdx"}
+{"k":"trace","basis":"rel","kind":"insn","off":9,"disasm":"ret"}
+{"k":"regstate","desc":"emu_x86_regs_t@x86_64/sysv","values":{"rax":0,"rbx":0,"rcx":11,"rdx":22,"rsi":0,"rdi":0,"rbp":0,"rsp":2162648,"r8":33,"r9":0,"r10":0,"r11":0,"r12":0,"r13":0,"r14":0,"r15":0,"rip":1048576,"rflags":2}}
+{"k":"regstate","desc":"emu_x86_regs_t@x86_64/sysv","values":{"rax":0,"rbx":0,"rcx":11,"rdx":22,"rsi":0,"rdi":0,"rbp":0,"rsp":2162648,"r8":33,"r9":0,"r10":0,"r11":0,"r12":0,"r13":0,"r14":0,"r15":0,"rip":1048579,"rflags":2}}
+{"k":"regstate","desc":"emu_x86_regs_t@x86_64/sysv","values":{"rax":0,"rbx":0,"rcx":11,"rdx":22,"rsi":0,"rdi":0,"rbp":0,"rsp":2162648,"r8":33,"r9":0,"r10":0,"r11":0,"r12":0,"r13":0,"r14":0,"r15":0,"rip":1048582,"rflags":70}}
+{"k":"regstate","desc":"emu_x86_regs_t@x86_64/sysv","values":{"rax":22,"rbx":0,"rcx":11,"rdx":22,"rsi":0,"rdi":0,"rbp":0,"rsp":2162648,"r8":33,"r9":0,"r10":0,"r11":0,"r12":0,"r13":0,"r14":0,"r15":0,"rip":1048585,"rflags":2}}
+{"k":"end","events":9,"truncated":false,"drops":{"lost":0,"throttled":false}}

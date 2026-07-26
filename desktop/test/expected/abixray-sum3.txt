@@ -1,0 +1,100 @@
+abixray System V (SysV) | Microsoft x64 (Win64)
+desc=emu_x86_regs_t@x86_64/sysv
+title=sum3(11, 22, 33) — the same call marshalled two ways: System V (left) reads rdi, rsi, rdx; Microsoft x64 (right) reads rcx, rdx, r8. Step the walkthrough to watch a0 land in a different register on each side.
+steps: total=4 aligned=yes
+stop 1/4 ordinal=1 step=0 title="a0 -> rdi (SysV) vs rcx (Win64)"
+playhead=0
+  rax sysv=0x0 win64=0x0
+  rbx sysv=0x0 win64=0x0
+  rcx sysv=0x0 win64=0xb DIFF
+  rdx sysv=0x21 win64=0x16 DIFF
+  rsi sysv=0x16 win64=0x0 DIFF
+  rdi sysv=0xb win64=0x0 DIFF
+  rbp sysv=0x0 win64=0x0
+  rsp sysv=0x20fff8 win64=0x20ffd8 DIFF
+  r8 sysv=0x0 win64=0x21 DIFF
+  r9 sysv=0x0 win64=0x0
+  r10 sysv=0x0 win64=0x0
+  r11 sysv=0x0 win64=0x0
+  r12 sysv=0x0 win64=0x0
+  r13 sysv=0x0 win64=0x0
+  r14 sysv=0x0 win64=0x0
+  r15 sysv=0x0 win64=0x0
+  rip sysv=0x100000 win64=0x100000
+  rflags sysv=0x2 win64=0x2
+differ(6): rcx rdx rsi rdi rsp r8
+abixray System V (SysV) | Microsoft x64 (Win64)
+desc=emu_x86_regs_t@x86_64/sysv
+title=sum3(11, 22, 33) — the same call marshalled two ways: System V (left) reads rdi, rsi, rdx; Microsoft x64 (right) reads rcx, rdx, r8. Step the walkthrough to watch a0 land in a different register on each side.
+steps: total=4 aligned=yes
+stop 2/4 ordinal=2 step=1 title="rsi and rdi swap roles"
+playhead=1
+  rax sysv=0xb win64=0x0 DIFF S*
+  rbx sysv=0x0 win64=0x0
+  rcx sysv=0x0 win64=0xb DIFF
+  rdx sysv=0x21 win64=0x16 DIFF
+  rsi sysv=0x16 win64=0x0 DIFF
+  rdi sysv=0xb win64=0x0 DIFF
+  rbp sysv=0x0 win64=0x0
+  rsp sysv=0x20fff8 win64=0x20ffd8 DIFF
+  r8 sysv=0x0 win64=0x21 DIFF
+  r9 sysv=0x0 win64=0x0
+  r10 sysv=0x0 win64=0x0
+  r11 sysv=0x0 win64=0x0
+  r12 sysv=0x0 win64=0x0
+  r13 sysv=0x0 win64=0x0
+  r14 sysv=0x0 win64=0x0
+  r15 sysv=0x0 win64=0x0
+  rip sysv=0x100003 win64=0x100003 S* W*
+  rflags sysv=0x2 win64=0x2
+differ(7): rax rcx rdx rsi rdi rsp r8
+abixray System V (SysV) | Microsoft x64 (Win64)
+desc=emu_x86_regs_t@x86_64/sysv
+title=sum3(11, 22, 33) — the same call marshalled two ways: System V (left) reads rdi, rsi, rdx; Microsoft x64 (right) reads rcx, rdx, r8. Step the walkthrough to watch a0 land in a different register on each side.
+steps: total=4 aligned=yes
+stop 3/4 ordinal=3 step=2 title="the third add"
+playhead=2
+  rax sysv=0x21 win64=0x0 DIFF S*
+  rbx sysv=0x0 win64=0x0
+  rcx sysv=0x0 win64=0xb DIFF
+  rdx sysv=0x21 win64=0x16 DIFF
+  rsi sysv=0x16 win64=0x0 DIFF
+  rdi sysv=0xb win64=0x0 DIFF
+  rbp sysv=0x0 win64=0x0
+  rsp sysv=0x20fff8 win64=0x20ffd8 DIFF
+  r8 sysv=0x0 win64=0x21 DIFF
+  r9 sysv=0x0 win64=0x0
+  r10 sysv=0x0 win64=0x0
+  r11 sysv=0x0 win64=0x0
+  r12 sysv=0x0 win64=0x0
+  r13 sysv=0x0 win64=0x0
+  r14 sysv=0x0 win64=0x0
+  r15 sysv=0x0 win64=0x0
+  rip sysv=0x100006 win64=0x100006 S* W*
+  rflags sysv=0x16 win64=0x46 DIFF S* W*
+differ(8): rax rcx rdx rsi rdi rsp r8 rflags
+abixray System V (SysV) | Microsoft x64 (Win64)
+desc=emu_x86_regs_t@x86_64/sysv
+title=sum3(11, 22, 33) — the same call marshalled two ways: System V (left) reads rdi, rsi, rdx; Microsoft x64 (right) reads rcx, rdx, r8. Step the walkthrough to watch a0 land in a different register on each side.
+steps: total=4 aligned=yes
+stop 4/4 ordinal=4 unanchored title="where the stack would begin"
+playhead=2
+  rax sysv=0x21 win64=0x0 DIFF S*
+  rbx sysv=0x0 win64=0x0
+  rcx sysv=0x0 win64=0xb DIFF
+  rdx sysv=0x21 win64=0x16 DIFF
+  rsi sysv=0x16 win64=0x0 DIFF
+  rdi sysv=0xb win64=0x0 DIFF
+  rbp sysv=0x0 win64=0x0
+  rsp sysv=0x20fff8 win64=0x20ffd8 DIFF
+  r8 sysv=0x0 win64=0x21 DIFF
+  r9 sysv=0x0 win64=0x0
+  r10 sysv=0x0 win64=0x0
+  r11 sysv=0x0 win64=0x0
+  r12 sysv=0x0 win64=0x0
+  r13 sysv=0x0 win64=0x0
+  r14 sysv=0x0 win64=0x0
+  r15 sysv=0x0 win64=0x0
+  rip sysv=0x100006 win64=0x100006 S* W*
+  rflags sysv=0x16 win64=0x46 DIFF S* W*
+differ(8): rax rcx rdx rsi rdi rsp r8 rflags

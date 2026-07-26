@@ -14,6 +14,7 @@
 #include "views/scrubber.h"
 #include "views/slice_view.h"
 #include "views/timeline.h"
+#include "walkthrough.h"
 
 namespace asmdesk {
 
@@ -30,6 +31,14 @@ void draw_timeline(const dt_timeline &t);
 // and the `[` / `]` step keys (04's bindings). Returns the (possibly changed)
 // playhead so the shell can persist it.
 uint64_t draw_scrubber(const StepIndex &idx, uint64_t playhead);
+
+// The ABI x-ray (09-teaching-producers.md T4). Two register scrubbers — the
+// SysV and Win64 halves of a paired recording — LOCKED to one playhead, with an
+// authored walkthrough (`walk`, decoded from the SysV leg) driving it. `walk`
+// and `playhead` are caller-owned: the rail's prev/next stop moves both, and the
+// slider and `[` / `]` keys move the playhead directly. Both are mutated in place.
+void draw_abixray(const StepIndex &sysv, const StepIndex &win64, wt_model &walk,
+                  uint64_t &playhead);
 void draw_slice_view(const dt_slice_view &v);
 void draw_diff_view(const dt_diff_view &v);
 

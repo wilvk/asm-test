@@ -169,6 +169,7 @@ desktop_app_objs = \
   $(DESKTOP_VIEW_PURE:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(BUILD)/desktop/$(1)/vw/scrubber.o $(BUILD)/desktop/$(1)/vw/scrubber_draw.o \
+  $(BUILD)/desktop/$(1)/vw/abixray.o $(BUILD)/desktop/$(1)/vw/abixray_draw.o \
   $(DESKTOP_OBS_PURE:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(DESKTOP_LOOM_PURE:%=$(BUILD)/desktop/$(1)/lo/%.o) \
@@ -469,6 +470,8 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_timeline \
                  $(BUILD)/desktop_test_scrubber \
                  $(BUILD)/desktop_test_scrubber_draw \
+                 $(BUILD)/desktop_test_abixray \
+                 $(BUILD)/desktop_test_abixray_draw \
                  $(BUILD)/desktop_test_slice_view \
                  $(BUILD)/desktop_test_diff_view \
                  $(BUILD)/desktop_test_data_readers \
@@ -775,6 +778,31 @@ $(BUILD)/desktop_test_scrubber_draw: \
     $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# The ABI x-ray (09-teaching-producers.md T4). The PURE builder links abixray.o
+# + the two scrubbers it composes (scrubber.o + the shared stepindex.o) +
+# walkthrough.o (the rail it is driven by) + the doc model, and NOTHING else — no
+# ImGui, no engine: the same engine-free closure proof test_scrubber makes, now
+# for the locked two-pane x-ray (D4).
+$(BUILD)/desktop_test_abixray: $(BUILD)/desktop/test/t/test_abixray.o \
+    $(BUILD)/desktop/test/vw/abixray.o $(BUILD)/desktop/test/vw/scrubber.o \
+    $(BUILD)/desktop/test/an/stepindex.o \
+    $(BUILD)/desktop/test/src/walkthrough.o $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The x-ray's DRAW half under ImGui's null backend — the same split the scrubber
+# uses (test_scrubber_draw): the model test asserts what the x-ray decides, this
+# one asserts the two-pane deck draws it, including the refusal paths (unaligned
+# panes, a producer-absent pane, a torn pane). canvas_draw.o carries the shared
+# draw_banner placard those paths raise. No GL, no GLFW, no engines.
+$(BUILD)/desktop_test_abixray_draw: \
+    $(BUILD)/desktop/test/t/test_abixray_draw.o \
+    $(BUILD)/desktop/test/vw/abixray_draw.o $(BUILD)/desktop/test/vw/abixray.o \
+    $(BUILD)/desktop/test/vw/scrubber.o $(BUILD)/desktop/test/an/stepindex.o \
+    $(BUILD)/desktop/test/src/walkthrough.o \
+    $(BUILD)/desktop/test/vw/canvas_draw.o \
+    $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 $(BUILD)/desktop_test_diff_view: $(BUILD)/desktop/test/t/test_diff_view.o \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
@@ -985,6 +1013,8 @@ $(BUILD)/desktop/test/t/test_canvas.o \
 $(BUILD)/desktop/test/t/test_timeline.o \
 $(BUILD)/desktop/test/t/test_scrubber.o \
 $(BUILD)/desktop/test/t/test_scrubber_draw.o \
+$(BUILD)/desktop/test/t/test_abixray.o \
+$(BUILD)/desktop/test/t/test_abixray_draw.o \
 $(BUILD)/desktop/test/t/test_slice_view.o \
 $(BUILD)/desktop/test/t/test_diff.o \
 $(BUILD)/desktop/test/t/test_diff_view.o: \

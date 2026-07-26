@@ -180,7 +180,26 @@ dishonesty fixture shows the tear.
 no-producer message; the Loom's now-column (05) can read the same index
 (export the tiny lookup as `desktop/src/analysis/stepindex.h`, shared).
 
-### T4 — ABI x-ray  (M, depends on: T2, T3; 06)
+### T4 — ABI x-ray  (M, depends on: T2, T3; 06)  ✓
+
+> **Implemented 2026-07-26.** `tools/asmtrace_record.c` grew a **Win64 recording
+> path**: it now records the same corpus routine twice — once through
+> `emu_call_traced` (SysV) and once through `emu_call_win64_traced` (Win64), each
+> under the T1 step ring — into paired goldens `abixray-make_pair-{sysv,win64}`
+> (the struct-return eightbyte contrast) and `abixray-sum3-{sysv,win64}` (the
+> a0→rdi/rcx int-arg contrast), carrying `trace` + `regstate` + the authored
+> walkthrough `note` stops (in the SysV/reference leg). `desktop/src/views/
+> abixray.{h,cpp}` + `abixray_draw.cpp` (**new**) composes the T3 scrubber builder
+> over both legs at ONE locked playhead, driven by the 06 walkthrough player, and
+> adds the **cross-pane register diff** (the SysV-vs-Win64 marshalling contrast,
+> made mechanical). Honest (D7): a producer-absent pane refuses and names
+> `--steps`; unaligned lengths cannot share a playhead; a dropped step renders
+> UNKNOWN per pane; a stop past the window is refused, not clamped. `test_abixray`
+> (builder: locked panes, stop navigation, cross-pane deltas, both refusals) and
+> `test_abixray_draw` (the ImGui half under the null backend) pass; the four
+> paired goldens are byte-stable across two `asmtrace-golden-check` runs and the
+> existing corpus is untouched; both binaries link and the viewer stays
+> engine-free (D4). **09 is now 5/5 — doc complete.**
 
 **Goal.** The classroom flagship: an animated, walkthrough-driven view of one
 call's argument marshalling — SysV vs Win64 side by side — corpus-seeded and

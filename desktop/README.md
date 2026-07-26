@@ -167,6 +167,8 @@ desktop/
       timeline.*        per-step values via cli/asmspy_dataview.h's grammar
       scrubber.*        the register time-travel scrubber: full register file at
                         a step, per-step diff-highlight, the torn edge (D7)
+      abixray.*         the ABI x-ray: two scrubbers (SysV | Win64) LOCKED to one
+                        playhead, a walkthrough rail, the cross-pane register diff
       slice_view.*      the layered def-use DAG + cones
       diff_view.*       the A/B summary panel, every row a deep link
       completeness*     the tier x backend capability table
@@ -204,6 +206,9 @@ desktop/
     test_scrubber.cpp      the register scrubber's builder: seek, diff-highlight,
                            the torn edge, and the producer-absent message
     test_scrubber_draw.cpp the scrubber's ImGui half under the null backend
+    test_abixray.cpp       the ABI x-ray's builder: locked panes, stop navigation,
+                           the SysV-vs-Win64 cross-pane deltas, the two refusals
+    test_abixray_draw.cpp  the x-ray's ImGui half under the null backend
     test_slice_view.cpp    cone styles, deterministic lanes, generation walk
     test_diff_view.cpp     panel rows, deep links that parse back
     test_data_readers.cpp  the three envelopes + a torn append-only line
@@ -301,6 +306,26 @@ the "re-run with a larger `max_insns`" fallback is deliberately **not** offered
 torn region included. `test_scrubber.cpp` pins seek, diff-highlight, the tear
 and the absent message; `test_scrubber_draw.cpp` draws every one under the null
 backend.
+
+**ABI x-ray.** The classroom flagship: one call's argument marshalling under
+**System V and Microsoft x64, side by side**. The two panes ARE two register
+scrubbers — [`abixray.*`](src/views/abixray.cpp) composes the scrubber builder
+over the SysV and Win64 halves of a **paired** recording
+(`abixray-<routine>-{sysv,win64}`, recorded by `asmtrace_record` through
+`emu_call_traced` and `emu_call_win64_traced`) at **one locked playhead**, and an
+authored walkthrough (06's `note` stops, carried in the SysV/reference leg)
+**drives** that playhead: advancing a stop seeks **both** panes together. The
+per-step register deltas do the animation — no bespoke graphics. What the x-ray
+adds over two loose scrubbers is the **cross-pane contrast**: at each step it
+marks the registers whose SysV and Win64 values disagree, so *a0 → rdi (SysV) vs
+rcx (Win64)*, the callee-saved rsi/rdi role reversal, and struct-return eightbyte
+classification become the register diff, made mechanical. Honest (D7): a pane
+with no `regstate` producer refuses and names `--steps`; two runs of different
+lengths are **not aligned** and the banner says they cannot share a playhead; a
+dropped step renders *UNKNOWN* per pane; a stop past the recorded window is
+refused, never clamped. `test_abixray.cpp` pins the locked panes, stop
+navigation and the cross-pane deltas over the `make_pair` (struct) and `sum3`
+(int-arg) pairs; `test_abixray_draw.cpp` draws each shape under the null backend.
 
 **Slice explorer.** Click a step: the backward cone is everything that produced
 the value there, the forward cone everything it goes on to affect. Both are

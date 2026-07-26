@@ -1,0 +1,100 @@
+abixray System V (SysV) | Microsoft x64 (Win64)
+desc=emu_x86_regs_t@x86_64/sysv
+title=make_pair(7, 11) — the same call marshalled two ways: System V (left) returns the 16-byte struct in rax:rdx, Microsoft x64 (right) returns it by a hidden pointer. Step the walkthrough to watch the register files diverge.
+steps: total=3 aligned=yes
+stop 1/4 ordinal=1 step=0 title="arguments arrive in different registers"
+playhead=0
+  rax sysv=0x0 win64=0x0
+  rbx sysv=0x0 win64=0x0
+  rcx sysv=0x0 win64=0x7 DIFF
+  rdx sysv=0x0 win64=0xb DIFF
+  rsi sysv=0xb win64=0x0 DIFF
+  rdi sysv=0x7 win64=0x0 DIFF
+  rbp sysv=0x0 win64=0x0
+  rsp sysv=0x20fff8 win64=0x20ffd8 DIFF
+  r8 sysv=0x0 win64=0x0
+  r9 sysv=0x0 win64=0x0
+  r10 sysv=0x0 win64=0x0
+  r11 sysv=0x0 win64=0x0
+  r12 sysv=0x0 win64=0x0
+  r13 sysv=0x0 win64=0x0
+  r14 sysv=0x0 win64=0x0
+  r15 sysv=0x0 win64=0x0
+  rip sysv=0x100000 win64=0x100000
+  rflags sysv=0x2 win64=0x2
+differ(5): rcx rdx rsi rdi rsp
+abixray System V (SysV) | Microsoft x64 (Win64)
+desc=emu_x86_regs_t@x86_64/sysv
+title=make_pair(7, 11) — the same call marshalled two ways: System V (left) returns the 16-byte struct in rax:rdx, Microsoft x64 (right) returns it by a hidden pointer. Step the walkthrough to watch the register files diverge.
+steps: total=3 aligned=yes
+stop 2/4 ordinal=2 step=1 title="the first eightbyte is staged"
+playhead=1
+  rax sysv=0x7 win64=0x0 DIFF S*
+  rbx sysv=0x0 win64=0x0
+  rcx sysv=0x0 win64=0x7 DIFF
+  rdx sysv=0x0 win64=0xb DIFF
+  rsi sysv=0xb win64=0x0 DIFF
+  rdi sysv=0x7 win64=0x0 DIFF
+  rbp sysv=0x0 win64=0x0
+  rsp sysv=0x20fff8 win64=0x20ffd8 DIFF
+  r8 sysv=0x0 win64=0x0
+  r9 sysv=0x0 win64=0x0
+  r10 sysv=0x0 win64=0x0
+  r11 sysv=0x0 win64=0x0
+  r12 sysv=0x0 win64=0x0
+  r13 sysv=0x0 win64=0x0
+  r14 sysv=0x0 win64=0x0
+  r15 sysv=0x0 win64=0x0
+  rip sysv=0x100003 win64=0x100003 S* W*
+  rflags sysv=0x2 win64=0x2
+differ(6): rax rcx rdx rsi rdi rsp
+abixray System V (SysV) | Microsoft x64 (Win64)
+desc=emu_x86_regs_t@x86_64/sysv
+title=make_pair(7, 11) — the same call marshalled two ways: System V (left) returns the 16-byte struct in rax:rdx, Microsoft x64 (right) returns it by a hidden pointer. Step the walkthrough to watch the register files diverge.
+steps: total=3 aligned=yes
+stop 3/4 ordinal=3 step=2 title="the second eightbyte, and how each ABI returns the struct"
+playhead=2
+  rax sysv=0x7 win64=0x0 DIFF
+  rbx sysv=0x0 win64=0x0
+  rcx sysv=0x0 win64=0x7 DIFF
+  rdx sysv=0xb win64=0x0 DIFF S* W*
+  rsi sysv=0xb win64=0x0 DIFF
+  rdi sysv=0x7 win64=0x0 DIFF
+  rbp sysv=0x0 win64=0x0
+  rsp sysv=0x20fff8 win64=0x20ffd8 DIFF
+  r8 sysv=0x0 win64=0x0
+  r9 sysv=0x0 win64=0x0
+  r10 sysv=0x0 win64=0x0
+  r11 sysv=0x0 win64=0x0
+  r12 sysv=0x0 win64=0x0
+  r13 sysv=0x0 win64=0x0
+  r14 sysv=0x0 win64=0x0
+  r15 sysv=0x0 win64=0x0
+  rip sysv=0x100006 win64=0x100006 S* W*
+  rflags sysv=0x2 win64=0x2
+differ(6): rax rcx rdx rsi rdi rsp
+abixray System V (SysV) | Microsoft x64 (Win64)
+desc=emu_x86_regs_t@x86_64/sysv
+title=make_pair(7, 11) — the same call marshalled two ways: System V (left) returns the 16-byte struct in rax:rdx, Microsoft x64 (right) returns it by a hidden pointer. Step the walkthrough to watch the register files diverge.
+steps: total=3 aligned=yes
+stop 4/4 ordinal=4 unanchored title="eightbyte classification, side by side"
+playhead=2
+  rax sysv=0x7 win64=0x0 DIFF
+  rbx sysv=0x0 win64=0x0
+  rcx sysv=0x0 win64=0x7 DIFF
+  rdx sysv=0xb win64=0x0 DIFF S* W*
+  rsi sysv=0xb win64=0x0 DIFF
+  rdi sysv=0x7 win64=0x0 DIFF
+  rbp sysv=0x0 win64=0x0
+  rsp sysv=0x20fff8 win64=0x20ffd8 DIFF
+  r8 sysv=0x0 win64=0x0
+  r9 sysv=0x0 win64=0x0
+  r10 sysv=0x0 win64=0x0
+  r11 sysv=0x0 win64=0x0
+  r12 sysv=0x0 win64=0x0
+  r13 sysv=0x0 win64=0x0
+  r14 sysv=0x0 win64=0x0
+  r15 sysv=0x0 win64=0x0
+  rip sysv=0x100006 win64=0x100006 S* W*
+  rflags sysv=0x2 win64=0x2
+differ(6): rax rcx rdx rsi rdi rsp

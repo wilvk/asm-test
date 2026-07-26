@@ -8,6 +8,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **ABI x-ray in the desktop GUI — SysV vs Win64 argument marshalling, side by
+  side** (docs/internal/gui/09-teaching-producers.md T4). The classroom
+  flagship: two register scrubbers (System V | Microsoft x64) LOCKED to one
+  playhead, driven by an authored walkthrough (06's `note` stops). `asmtrace_record`
+  grew a Win64 recording path — it now records the same corpus routine twice, once
+  through `emu_call_traced` and once through `emu_call_win64_traced`, into paired
+  goldens (`abixray-make_pair-{sysv,win64}`, `abixray-sum3-{sysv,win64}`) that carry
+  `trace` + per-step `regstate` + the walkthrough stops. Advancing a stop seeks both
+  panes together; the per-step register deltas do the animation, and a **cross-pane
+  diff** marks the registers whose SysV and Win64 values disagree — so *a0 → rdi
+  (SysV) vs rcx (Win64)*, the callee-saved rsi/rdi role reversal and struct-return
+  eightbyte classification are the register diff, made mechanical. Honest (D7):
+  a pane with no `regstate` producer refuses and names `--steps`, two runs of
+  different lengths are flagged **not aligned** (they cannot share a playhead), a
+  dropped step renders *UNKNOWN* per pane, and a stop past the recorded window is
+  refused not clamped. Builds into both binaries and stays engine-free (D4);
+  covered by `test_abixray` (builder) and `test_abixray_draw` (the ImGui half).
 - **Register time-travel scrubber in the desktop GUI**
   (docs/internal/gui/09-teaching-producers.md T3). A playhead over a recording's
   steps showing the full register file at each step, seeked O(1) through a new
