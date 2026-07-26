@@ -81,6 +81,17 @@ size_t loom_plan(const loom_fabric_t &f, const loom_view_t &v,
 // Deterministic dump — the golden surface for the plan tests.
 std::string loom_plan_dump(const std::vector<loom_prim_t> &prims);
 
+// The horizontal pan+zoom window, in steps. `loom_view_step_window` reads the
+// camera's current visible window [lo, hi] (= step0 .. step0 + steps_per_px*px_w);
+// `loom_view_set_step_window` writes a new window back into the camera, panning
+// via step0 and zooming via steps_per_px so [lo, hi] fills px_w. These are the
+// pure half of the ImZoomSlider pan control (14-quick-wins.md T5): the draw feeds
+// the slider from the first and applies its result through the second, so the
+// `step0` field the model always carried but nothing ever set is finally written
+// — and the mapping is unit-testable without an ImGui context (D4).
+void loom_view_step_window(const loom_view_t &v, double *lo, double *hi);
+void loom_view_set_step_window(loom_view_t &v, double lo, double hi);
+
 // --- the copy strings, in one place -----------------------------------------
 // They are asserted verbatim by test_loom_chrome.cpp. A view that reworded one
 // of these would be rewording a measurement claim, so the words live here and

@@ -166,6 +166,46 @@ int main() {
         check("a selection keeps spans inside it undimmed", kept_something, "");
     }
 
+    // --- ImZoomSlider pan window <-> camera mapping (14-quick-wins.md T5) -----
+    // The pure half of the pan control: the draw feeds the slider from
+    // loom_view_step_window and applies its result via loom_view_set_step_window,
+    // finally writing step0 (the field the model carried but nothing ever set).
+    {
+        loom_view_t v;
+        v.px_w = 400;
+        v.step0 = 0;
+        v.steps_per_px = 1.0;
+        double lo = -1, hi = -1;
+        loom_view_step_window(v, &lo, &hi);
+        check("window reads step0..step0+spp*px_w", lo == 0.0 && hi == 400.0,
+              "got [" + std::to_string(lo) + "," + std::to_string(hi) + "]");
+
+        // Pan to [100, 300]: step0 moves to 100, and the 200-step span across
+        // 400px is 0.5 steps/px.
+        loom_view_set_step_window(v, 100, 300);
+        check("pan writes step0 (was never written before)", v.step0 == 100.0,
+              "step0=" + std::to_string(v.step0));
+        check("zoom writes steps_per_px", v.steps_per_px == 0.5,
+              "spp=" + std::to_string(v.steps_per_px));
+
+        // Round-trips: reading the window back gives what we set.
+        loom_view_step_window(v, &lo, &hi);
+        check("window round-trips", lo == 100.0 && hi == 300.0,
+              "got [" + std::to_string(lo) + "," + std::to_string(hi) + "]");
+
+        // Degenerate inputs are clamped, never producing a zero-width window or a
+        // negative step0 (which would divide the plan into nonsense).
+        loom_view_set_step_window(v, 50, 50);
+        check("zero-width window is widened to >=1 step", v.steps_per_px > 0.0,
+              "spp=" + std::to_string(v.steps_per_px));
+        loom_view_set_step_window(v, -10, 20);
+        check("negative lower is clamped to 0", v.step0 == 0.0,
+              "step0=" + std::to_string(v.step0));
+        loom_view_set_step_window(v, 300, 100); // reversed
+        check("reversed window is normalized", v.step0 == 100.0,
+              "step0=" + std::to_string(v.step0));
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d loom plan check(s) failed\n", failures);
         return 1;

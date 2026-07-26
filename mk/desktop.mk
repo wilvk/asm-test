@@ -33,7 +33,8 @@ LINMATH_HOME    ?= $(BUILD)/linmath/$(LINMATH_VERSION)
 DESKTOP_CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -g -MMD -MP \
   -Icli -Iinclude -Idesktop/src -I$(IMGUI_HOME) -I$(IMGUI_HOME)/backends \
   -I$(JSON_HOME) -I$(LINMATH_HOME) \
-  -DIMGUI_USER_CONFIG='"imconfig_user.h"'
+  -DIMGUI_USER_CONFIG='"imconfig_user.h"' \
+  $(DESKTOP_ADDON_INCLUDES)
 
 # --- pinned, digest-verified third-party sources (D2) ------------------------
 # One fetch-imgui.sh run extracts ALL of imgui's TUs at once, so they are a
@@ -54,6 +55,31 @@ $(JSON_HOME)/nlohmann/json.hpp: scripts/fetch-json.sh scripts/third-party-digest
 	sh scripts/fetch-json.sh >/dev/null
 $(LINMATH_HOME)/linmath.h: scripts/fetch-linmath.sh scripts/third-party-digests.txt
 	sh scripts/fetch-linmath.sh >/dev/null
+
+# --- vendored Dear ImGui addons (12-addon-supply-chain.md) --------------------
+# Pattern per addon: a home var, a fetch rule (thin wrapper -> fetch-addon.sh),
+# an -I appended to DESKTOP_ADDON_INCLUDES (so every desktop TU can #include it —
+# headers are cheap), the header as an ORDER-ONLY prereq on the specific user
+# objects (so a clean tree fetches it before those compile), and — for an
+# imgui_internal.h dependent — an ADDON_PROBE_FLAGS line so the repin gate
+# rebuilds it. These three accumulators accrue across addons; the compile-check
+# target (below) uses ADDON_PROBE_FLAGS/DEPS, DESKTOP_CXXFLAGS uses INCLUDES.
+DESKTOP_ADDON_INCLUDES :=
+ADDON_PROBE_FLAGS :=
+ADDON_PROBE_DEPS :=
+
+# ImZoomSlider (14 T5): one header from the ImGuizmo repo; uses imgui_internal.h.
+IMZOOM_VERSION ?= dc25afb98bc3ebe00dfc9a23ba7235fead2ccb1d
+IMZOOM_HOME    ?= $(BUILD)/addons/imzoomslider-$(IMZOOM_VERSION)
+$(IMZOOM_HOME)/ImZoomSlider.h: scripts/fetch-imzoomslider.sh scripts/third-party-digests.txt
+	sh scripts/fetch-imzoomslider.sh >/dev/null
+DESKTOP_ADDON_INCLUDES += -I$(IMZOOM_HOME)
+ADDON_PROBE_FLAGS += -DASMDESK_HAVE_IMZOOMSLIDER -I$(IMZOOM_HOME)
+ADDON_PROBE_DEPS  += $(IMZOOM_HOME)/ImZoomSlider.h
+# fabric_imgui.cpp (the Loom draw half, all three trees) is the ImZoomSlider user.
+$(BUILD)/desktop/app/lo/fabric_imgui.o \
+$(BUILD)/desktop/render/lo/fabric_imgui.o \
+$(BUILD)/desktop/test/lo/fabric_imgui.o: | $(IMZOOM_HOME)/ImZoomSlider.h
 
 # --- source basenames --------------------------------------------------------
 DESKTOP_IMGUI_CORE := imgui imgui_draw imgui_tables imgui_widgets
@@ -413,8 +439,7 @@ addon-fetch-test:
 # internal-header addon lands, where the probe still validates imgui_internal.h
 # itself against the pin. Order-only dep on the grouped imgui fetch so a clean
 # tree fetches imgui first.
-ADDON_PROBE_FLAGS ?=
-desktop-addon-compile-check: | $(IMGUI_HOME)/imgui.cpp
+desktop-addon-compile-check: | $(IMGUI_HOME)/imgui.cpp $(ADDON_PROBE_DEPS)
 	$(CXX) $(DESKTOP_CXXFLAGS) $(ADDON_PROBE_FLAGS) -fsyntax-only \
 	  desktop/test/addon_compile_probe.cpp
 	@echo "desktop-addon-compile-check: OK (imgui $(IMGUI_VERSION); probe compiles with desktop flags)"

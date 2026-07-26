@@ -1,5 +1,8 @@
 // fabric_imgui.cpp — the ImGui painter for the Loom's draw plan. Draws only.
+#define IMGUI_DEFINE_MATH_OPERATORS // ImZoomSlider (14 T5): ImRect/ImMin/operators
 #include "imgui.h"
+#include "imgui_internal.h"
+#include "ImZoomSlider.h"
 
 #include "loom/loom_draw.h"
 #include "ui/theme.h"
@@ -173,14 +176,27 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self) {
 
     ImGui::BeginChild("loom-fabric", ImVec2(0, 0), false);
     // Zoom + scrub live in the panel; the plan is a pure function of them.
-    float spp = static_cast<float>(L.cam.steps_per_px);
-    if (spp <= 0)
-        spp = 0.05f;
-    ImGui::SetNextItemWidth(200);
-    if (ImGui::SliderFloat("steps/px", &spp, 0.005f, 8.0f, "%.3f",
-                           ImGuiSliderFlags_Logarithmic))
-        L.cam.steps_per_px = spp;
-    ImGui::SameLine();
+    // A windowed pan+zoom over the whole step range: drag the middle to PAN
+    // (writes step0 — the field the model carried but nothing ever set), drag an
+    // edge to ZOOM (writes steps_per_px). Its label is a fixed internal
+    // "ImZoomSlider", so PushID keeps it from colliding with other instances
+    // (14-quick-wins.md T5). The window<->camera math is the pure, tested half.
+    {
+        double wlo, whi;
+        loom_view_step_window(L.cam, &wlo, &whi);
+        const float fmax = static_cast<float>(f.steps ? f.steps : 1);
+        float flo = static_cast<float>(wlo);
+        float fhi = static_cast<float>(whi);
+        if (flo < 0)
+            flo = 0;
+        if (fhi > fmax || fhi <= flo)
+            fhi = fmax; // clamp / first-frame default = whole range
+        ImGui::TextDisabled("step window");
+        ImGui::PushID("loom-hzoom");
+        if (ImZoomSlider::ImZoomSlider(0.0f, fmax, flo, fhi))
+            loom_view_set_step_window(L.cam, flo, fhi);
+        ImGui::PopID();
+    }
     int ph = static_cast<int>(L.playhead);
     ImGui::SetNextItemWidth(200);
     if (ImGui::SliderInt("playhead", &ph, 0,

@@ -6,6 +6,26 @@
 
 namespace asmdesk {
 
+void loom_view_step_window(const loom_view_t &v, double *lo, double *hi) {
+    *lo = v.step0;
+    *hi = v.step0 + v.steps_per_px * static_cast<double>(v.px_w);
+}
+
+void loom_view_set_step_window(loom_view_t &v, double lo, double hi) {
+    if (hi < lo)
+        std::swap(lo, hi);
+    if (lo < 0)
+        lo = 0;
+    double span = hi - lo;
+    if (span < 1.0)
+        span = 1.0; // never a zero-width window (would divide by px into 0 spp)
+    v.step0 = lo;
+    if (v.px_w >= 1.0f)
+        v.steps_per_px = span / static_cast<double>(v.px_w);
+    if (v.steps_per_px <= 0.0)
+        v.steps_per_px = 1.0;
+}
+
 const char *const kLoomFadeOutText = "alive at trace end";
 const char *const kLoomBornUntracedText =
     "born of untraced state — provenance starts at instrumentation";

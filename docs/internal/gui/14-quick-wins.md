@@ -210,6 +210,23 @@ pins the as-of-trace-time read.
 
 ### T5 — ImZoomSlider: the Loom/timeline pan+zoom control  (S, depends on: 12; 05, 04)
 
+> **Implemented 2026-07-27 (Loom pan) — green.** ImZoomSlider vendored via
+> `scripts/fetch-imzoomslider.sh` (commit `dc25afb9`, MIT; digest pinned; license
+> captured) and wired into the Loom (`loom/fabric_imgui.cpp`) as a windowed
+> pan+zoom over the whole step range — dragging the middle **writes `step0`** (the
+> field `fabric_plan.h` always carried but nothing ever set), an edge writes
+> `steps_per_px`. The window↔camera math is a pure, tested pair
+> (`loom_view_step_window` / `loom_view_set_step_window` in `fabric_plan.cpp`;
+> `test_loom_plan` covers pan, zoom, round-trip, and the degenerate clamps). This
+> also **established the reusable addon Makefile pattern** (12 T2/T3):
+> `DESKTOP_ADDON_INCLUDES` / `ADDON_PROBE_FLAGS` / `ADDON_PROBE_DEPS` accumulators
+> + a fetch rule + an order-only prereq on the user object + a digest row + a
+> license row + the compile-probe entry. The include recipe
+> (`IMGUI_DEFINE_MATH_OPERATORS`, `imgui.h`, `imgui_internal.h`, `ImZoomSlider.h`
+> + `PushID`) is verified on the docking pin. **Remaining T5 scope**: the timeline
+> windowing + the hotedges/diff overview strip reuse the same helper — a small
+> follow-on, not yet wired.
+
 **Goal.** Give the Loom the pan interaction its model already carries but nothing
 mutates (`fabric_plan.h:64–67`), and give the timeline a windowed view into a
 long trace's step range. One 245-line self-contained header (doc 11 #9).

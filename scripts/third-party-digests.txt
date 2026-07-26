@@ -79,3 +79,8 @@ tarball-sha256  nlohmann-json  3.11.3  sha256:9bea4c8066ef4a1c206b2be5a36302f892
 # single-file scheme as the nlohmann-json row above). Added BY HAND —
 # refresh-thirdparty-digests.sh does not know this row.
 tarball-sha256  linmath        26211bb  sha256:e5ea6c6da3d78d4afa40d987770331837b98247ed5799b11a5e09e9abe84f311
+# --- Dear ImGui addons (gui 12-addon-supply-chain.md; fetched by fetch-<name>.sh
+# -> fetch-addon.sh, all bundled MIT/zlib, self-hashed at pin time). Added BY
+# HAND and CARRIED THROUGH refresh-thirdparty-digests.sh (keyed on name+version).
+# ImZoomSlider (14 T5): one 245-line header from the ImGuizmo repo (MIT), no tag.
+tarball-sha256  imzoomslider   dc25afb98bc3ebe00dfc9a23ba7235fead2ccb1d  sha256:c94e3542f060f2235f1130d3320d16d4c2428c7181201b2779f0e4b3d91a03a3
