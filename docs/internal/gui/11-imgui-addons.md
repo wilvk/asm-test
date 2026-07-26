@@ -6,6 +6,13 @@
 > [Governance](#governance-amend-d2-first)). Written 2026-07-26 against HEAD
 > `4f11065` (survey started at `5779f93`).
 >
+> **Progress (2026-07-26).** Track G is done — D2 now carries the
+> addon-admission rule ([README.md](README.md), "D2 — pinned deps"). The two
+> no-dependency Track Q quick wins landed with it: the shared honesty-chrome
+> palette (`desktop/src/ui/theme.h`, #6) and the diff "go" routing fix (#7).
+> The remaining tracks (foundations F1–F4, the fetch-based addons) now have
+> implementation briefs (docs 12–17); no addon code is written yet.
+>
 > **Provenance.** Produced by a 29-agent research pass: six readers over docs
 > 01–10 and the full `desktop/src` tree, twelve independent researchers over
 > the addon ecosystem (primary sources only), one synthesis, and ten
@@ -61,6 +68,14 @@ demand side of this doc; each recommendation cites the ones it closes.
   (`views/diff_view_draw.cpp:39-43`). One-line fix, not an addon.
 
 ## Governance: amend D2 first
+
+> **Amended 2026-07-26.** D2 now carries this addon-admission rule verbatim —
+> see [README.md](README.md) ("D2 — pinned deps", Amended clause). Track G is
+> done; the addon tracks below are now cut into implementation briefs
+> ([12-addon-supply-chain.md](12-addon-supply-chain.md) through
+> [17-interaction-testing-and-editor.md](17-interaction-testing-and-editor.md)).
+> The two in-tree quick wins that add no dependency (the shared honesty-chrome
+> palette and the diff "go" routing fix) landed with the amendment.
 
 D2 (doc 03 / README: "no third-party dep beyond pinned ImGui +
 nlohmann/json") blocks everything below. Amend it with an **addon admission
@@ -385,12 +400,17 @@ pin time.
    for live/torn sessions where no total honestly exists. Optionally one
    subtle imspinner style for "attached-but-no-events stall vs dead UI".
 5. **ImGuiFileDialog** (#5) — one TU, replaces both bare path fields.
-6. **Shared theme/palette header** (in-tree, no addon) — consolidate the warn
-   color drifted across 5 TUs; optionally author a classroom light/dark pair
-   with the zero-dependency ImThemes design tool.
-7. **Fix `views/diff_view_draw.cpp:39-43`** — the "go" button calls
-   `SetClipboardText` instead of `dt_nav_go`. A bug the survey caught; fix it
-   while touching the file.
+6. ✅ **Shared theme/palette header** (in-tree, no addon) — **landed
+   2026-07-26** as `desktop/src/ui/theme.h`: the caution/refusal colours are one
+   source (`dt_warn_col`/`dt_refuse_col` + their ImU32 forms), consolidating the
+   amber that had drifted to three values across `canvas_draw`, `fabric_imgui`,
+   `hud`, `completeness`, and `observer_draw`. `test_obs_draw` pins the invariant
+   the Loom's draw-list form depends on. (A classroom light/dark pair via
+   ImThemes stays optional and unstarted.)
+7. ✅ **Fix `views/diff_view_draw.cpp`** — **landed 2026-07-26**. The "go" button
+   now parses its row's canonical link and routes the `dt_link` through the
+   shell's `dt_nav_go` seam (the same path the Observer deck uses), instead of
+   `SetClipboardText`. `draw_diff_view` grew the `go` callback param to reach it.
 
 ## Deliberate skips (all verified negative results — do not re-litigate)
 
