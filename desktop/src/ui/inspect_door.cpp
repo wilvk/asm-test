@@ -3,12 +3,14 @@
 // pure modules (live/inspect.h for attachability + evidence, live/budget.h for
 // the jack), which test_inspect and test_budget drive headlessly. This file is
 // the drawing and the wiring, and holds no rule of its own.
+#include <cfloat>
 #include <cstdio>
 #include <cstring>
 
 #include "imgui.h"
 
 #include "ui/doors.h"
+#include "ui/progress.h"
 #include "views/views_draw.h"
 
 namespace asmdesk {
@@ -145,9 +147,18 @@ void draw_status(InspectState &s) {
     }
 
     size_t nrec = s.session.recordings().size();
-    if (const Recording *g = s.session.growing())
+    if (const Recording *g = s.session.growing()) {
         ImGui::Text("capturing: %llu event(s) so far",
                     (unsigned long long)g->event_count());
+        // A growing live recording is unbounded — no `end` footer, no honest
+        // total — so an INDETERMINATE bar (14 T3): a percentage here would be a
+        // fabricated total. The decision is the pure progress_mode(); a bounded
+        // budget would flip it to determinate, which is why it is not hard-coded.
+        if (progress_mode(true, /*has_total=*/false, 0) ==
+            ProgressMode::Indeterminate)
+            ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(),
+                               ImVec2(-FLT_MIN, 0), "streaming");
+    }
     if (nrec)
         ImGui::Text("%zu completed recording(s) this session", nrec);
     for (const Recording &r : s.session.recordings())

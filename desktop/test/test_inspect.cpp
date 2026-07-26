@@ -24,6 +24,7 @@
 
 #include "live/inspect.h"
 #include "live/session.h"
+#include "ui/progress.h"
 
 #ifndef ASMTEST_FIXTURE_DIR
 #error "ASMTEST_FIXTURE_DIR must be defined by the build (mk/desktop.mk)"
@@ -395,10 +396,36 @@ static void test_front_door() {
     }
 }
 
+// The honest progress decision (14 T3): a real fraction ONLY with an honest
+// total; torn / unbounded gets the indeterminate bar, never a fabricated %.
+static void test_progress() {
+    check("prog/idle-hidden",
+          progress_mode(false, true, 100) == ProgressMode::Hidden,
+          "nothing in flight -> no bar");
+    check("prog/unbounded-indeterminate",
+          progress_mode(true, false, 0) == ProgressMode::Indeterminate,
+          "an unbounded live session has no honest total");
+    check("prog/torn-indeterminate",
+          progress_mode(true, false, 500) == ProgressMode::Indeterminate,
+          "a torn recording (has_total=false) is never a percentage");
+    check("prog/footered-determinate",
+          progress_mode(true, true, 200) == ProgressMode::Determinate,
+          "an end footer gives an honest total");
+    check("prog/zero-total-not-determinate",
+          progress_mode(true, true, 0) == ProgressMode::Indeterminate,
+          "has_total but total==0 cannot form a fraction");
+    check("prog/fraction", progress_fraction(50, 200) == 0.25f, "50/200");
+    check("prog/fraction-clamped-high", progress_fraction(300, 200) == 1.0f,
+          "over-100% is clamped, never shown");
+    check("prog/fraction-zero-total", progress_fraction(5, 0) == 0.0f,
+          "no divide-by-zero");
+}
+
 int main(void) {
     test_attach();
     test_evidence();
     test_front_door();
+    test_progress();
     if (failures) {
         std::fprintf(stderr, "test_inspect: %d FAILURE(S)\n", failures);
         return 1;

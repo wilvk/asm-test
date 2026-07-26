@@ -139,6 +139,17 @@ placards (D7 unchanged).
 
 ### T3 — Progress bars for loads and live sessions  (S, depends on: none)
 
+> **Implemented 2026-07-27 — green.** `desktop/src/ui/progress.h` (pure,
+> header-only) makes the honest decision: `progress_mode(active, has_total,
+> total)` returns Determinate **only** when an honest total exists (an `end`
+> footer / a bounded budget), else Indeterminate — a torn recording or an
+> unbounded live session never gets a fabricated percentage. `inspect_door.cpp`'s
+> live status draws the built-in **indeterminate** `ImGui::ProgressBar` (negative
+> fraction) while a growing recording streams (no `end` footer yet, so no honest
+> total). `test_inspect` covers the decision table + the clamped fraction. No
+> fetch (built into 1.91.9). The determinate file-load bar is a natural extension
+> of the same helper once loads report incremental progress.
+
 **Goal.** Honest progress feedback using **built-in `ImGui::ProgressBar`** (in
 1.91.9 already; zero fetch): **determinate** for file loads that have an `end`
 footer (a real total exists), **indeterminate** for live/torn sessions where no
