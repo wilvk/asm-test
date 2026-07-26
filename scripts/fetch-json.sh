@@ -26,10 +26,16 @@ hdr="$home/nlohmann/json.hpp"
 
 log() { echo "fetch-json: $*" >&2; }
 
-if [ ! -e "$hdr" ]; then
+mkdir -p "$home/nlohmann"
+# Same locking discipline as fetch-imgui.sh, and for the same reason: these two
+# are siblings and a reader should not have to check which one is safe under a
+# parallel make. Only one target depends on this header today, so the lock is
+# belt-and-braces here — but the per-pid scratch path is not, and the pair must
+# not diverge.
+if [ ! -e "$hdr" ] && tp_fetch_lock "$home/.fetch.lock" "$hdr"; then
+    trap 'rm -rf "$home/.fetch.lock" "$home/.json.$$.hpp"' EXIT INT TERM
     log "fetching nlohmann/json $JSON_VERSION"
-    mkdir -p "$home/nlohmann"
-    tmp="$home/.json.hpp"
+    tmp="$home/.json.$$.hpp"
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL "$JSON_URL" -o "$tmp"
     else
@@ -52,6 +58,8 @@ if [ ! -e "$hdr" ]; then
     log "verified nlohmann/json $JSON_VERSION ($got)"
     mv "$tmp" "$hdr"
     log "installed $hdr"
+    rmdir "$home/.fetch.lock" 2>/dev/null || :
+    trap - EXIT INT TERM
 else
     log "reusing cached $hdr"
 fi

@@ -21,10 +21,17 @@ home="$IMGUI_CACHE/imgui-$IMGUI_VERSION"
 
 log() { echo "fetch-imgui: $*" >&2; }
 
-if [ ! -e "$home/imgui.cpp" ]; then
+mkdir -p "$IMGUI_CACHE"
+# Concurrency: on GNU make < 4.3 (Apple's /usr/bin/make is 3.81) mk/desktop.mk's
+# grouped `&:` rule degrades to six independent targets, so `make -j` runs six of
+# this script at once. tp_fetch_lock makes exactly one of them fetch while the
+# rest wait and then reuse the result — see the helper for the full story. The
+# scratch paths below are per-pid as well, so even a lock-free fallback path
+# cannot have two writers on one file.
+if [ ! -e "$home/imgui.cpp" ] && tp_fetch_lock "$IMGUI_CACHE/.fetch.lock" "$home/imgui.cpp"; then
+    trap 'rm -rf "$IMGUI_CACHE/.fetch.lock" "$IMGUI_CACHE/.imgui.$$.tar.gz" "$IMGUI_CACHE/.stage.$$"' EXIT INT TERM
     log "fetching Dear ImGui $IMGUI_VERSION"
-    mkdir -p "$IMGUI_CACHE"
-    tmp="$IMGUI_CACHE/.imgui.tar.gz"
+    tmp="$IMGUI_CACHE/.imgui.$$.tar.gz"
     if command -v curl >/dev/null 2>&1; then
         curl -fsSL "$IMGUI_URL" -o "$tmp"
     else
@@ -46,12 +53,20 @@ if [ ! -e "$home/imgui.cpp" ]; then
         rm -f "$tmp"; exit 1
     fi
     log "verified Dear ImGui $IMGUI_VERSION ($got)"
-    rm -rf "$home"
-    ( cd "$IMGUI_CACHE" && tar -xzf "$tmp" )
+    # Extract into a private staging dir and PUBLISH with one rename, so a
+    # reader (a compile that raced ahead) never sees a half-populated $home.
+    stage="$IMGUI_CACHE/.stage.$$"
+    rm -rf "$stage"; mkdir -p "$stage"
+    ( cd "$stage" && tar -xzf "$tmp" )
     # The tarball's top dir is imgui-<ver>; normalize if it differs.
-    [ -d "$home" ] || { d=$(cd "$IMGUI_CACHE" && ls -d imgui-*/ 2>/dev/null | head -1); [ -n "$d" ] && mv "$IMGUI_CACHE/$d" "$home"; }
-    rm -f "$tmp"
+    src="$stage/imgui-$IMGUI_VERSION"
+    [ -d "$src" ] || { d=$(cd "$stage" && ls -d imgui-*/ 2>/dev/null | head -1); [ -n "$d" ] && src="$stage/${d%/}"; }
+    rm -rf "$home"
+    mv "$src" "$home"
+    rm -rf "$tmp" "$stage"
     log "extracted to $home"
+    rmdir "$IMGUI_CACHE/.fetch.lock" 2>/dev/null || :
+    trap - EXIT INT TERM
 else
     log "reusing cached $home"
 fi
