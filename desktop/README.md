@@ -844,6 +844,19 @@ engine-free layers, four of them pure and headless: the
 [GL scene](#the-3d-scene--camera-terrain-mesh-trajectory-tubes-picking) and the
 [live-observer overlay](#live-observer-overlay--n-trajectories-convergence-marks).
 
+**Where it lives.** It is a per-recording **3D overview** tab in the shell. The
+shell weaves the pure `space/` models once per recording (a `SceneView`), draws
+the HUD and resolves picks itself — all engine- and GL-free — and reaches the GL
+scene only through an abstract `SceneHost` (`ui/scene_host.h`) that `main.cpp`
+injects (`ui/gl_scene_host.cpp`); the scene renders to an offscreen texture the
+shell blits with `ImGui::Image`. Because the GL touch is entirely behind that
+one pointer, `ui/shell.o` links no GL and the render-only viewer hosts the scene
+too (engine-free, D4). A recording with `codeimage` regions (a scene golden, or a
+live Inspect capture) shows the plane; a `codeimage`-less replay says so and still
+reads its provenance, trajectory and legend. In a headless run (no GL context)
+the pane draws the models, HUD and a placard where the viewport would be — the
+same path `test_shell` drives.
+
 **The one rule: 3D to find, 2D to read.** 3D is tolerable for overview, gestalt
 and anomaly-spotting, where you read approximate shape and occlusion is
 acceptable; it is bad at precise per-item reading — which value, same thread or

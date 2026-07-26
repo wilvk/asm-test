@@ -94,14 +94,24 @@ playhead persisted per recording), and the ABI x-ray as an `ABI x-ray` tab that
 locks the active recording (the SysV leg) against the attached B (the Win64 leg,
 the `d` binding), reusing the Diff tab's A/B mechanism; both degrade to their own
 honesty placards (absent producer, unaligned pair, torn ring) exactly as their
-standalone draws do, and `test_shell` pins the wiring end to end. **One
-integration item remains deliberately outstanding:** the doc-10 3D overview is
-built engine-free into both binaries and its FBO smoke really runs (surfaceless
-EGL + software Mesa, natively and in `make docker-desktop`), but it is **not yet
-hosted in a visible shell pane** — that surfacing needs a GL render-to-texture
-host threaded from `main.cpp` (a no-op under the null test backend) plus camera /
-HUD interaction, a larger increment than the two backend-free 2D views, and is
-the next integration step. 07 shipped `libasmspy` (the
+standalone draws do, and `test_shell` pins the wiring end to end. **Integration
+surfacing pass 2, 2026-07-26:** the doc-10 3D overview is now **hosted in a
+visible shell pane** too — a per-recording `3D overview` tab. Because `draw_shell`
+links no GL (that is what keeps the null test backend and the render-only viewer's
+engine-free closure), it reaches the GL scene only through an abstract
+`SceneHost` (`ui/scene_host.h`): `main.cpp` builds a real render-to-texture host
+(`ui/gl_scene_host.cpp`, an offscreen FBO around the doc-10 `scene3d::Scene`) and
+points `ShellState::scene_host` at it, while the null test backend leaves it null
+and the pane weaves its pure `space/` models, draws the HUD, and shows a placard
+where the viewport would be. The pane blits the scene with `ImGui::Image`, orbits
+/ dollies the camera on drag / wheel, re-slices the terrain on a playhead move,
+and routes every click OUT through 04's deep-link router (3D to find, 2D to read).
+A codeimage-less recording takes an honest "no address-space regions" placard
+rather than an empty plane; `test_shell` drives the pane under the null backend
+(models woven, HUD drawn, placard shown, vectors parallel across a close) and the
+GL scene itself stays pinned by `test_scene_fbo` and `test_drillin`. **All ten
+docs and both teaching-view integration passes have now landed.** 07 shipped
+`libasmspy` (the
 tracer engine as a linkable tier), `asmspy --serve` and its normative protocol,
 and the desktop's live capture host; 08 shipped the seven live views over those
 sessions, the `codeimage` kind (defined in the schema, produced by `--serve`,

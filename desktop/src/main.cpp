@@ -6,6 +6,7 @@
 // frames this loop drives. Stock Dear ImGui GLFW + OpenGL3 example shape
 // (03-desktop-shell.md T6).
 #include <cstdio>
+#include <memory>
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -13,6 +14,7 @@
 
 #include <GLFW/glfw3.h> // drags in the system OpenGL headers
 
+#include "ui/gl_scene_host.h"
 #include "ui/shell.h"
 
 static void glfw_error(int code, const char *desc) {
@@ -69,6 +71,15 @@ int main() {
 
     asmdesk::ShellState state;
 
+    // The 3D-overview GL host (10-spacetime-3d-overview.md — the integration
+    // surfacing pass): a render-to-texture bridge the backend-free shell reaches
+    // through ShellState::scene_host. Built here, where the GL context is current,
+    // and reset BEFORE the context is torn down so the scene's GL objects free
+    // while it still exists. Links no engine, so it is in the viewer too (D4).
+    std::unique_ptr<asmdesk::SceneHost> scene_host = asmdesk::make_gl_scene_host();
+    scene_host->init();
+    state.scene_host = scene_host.get();
+
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
@@ -87,6 +98,12 @@ int main() {
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window);
     }
+
+    // Free the scene's GL objects while the context is still current, then the
+    // backends and window.
+    state.scene_host = nullptr;
+    scene_host->shutdown();
+    scene_host.reset();
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();

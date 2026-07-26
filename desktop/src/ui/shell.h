@@ -14,12 +14,38 @@
 #include "doc/workspace.h"
 #include "loom/loom_draw.h"
 #include "nav.h"
+#include "scene3d/camera.h"
+#include "scene3d/hud.h"
+#include "space/converge.h"
+#include "space/terrain.h"
+#include "space/trajectory.h"
 #include "ui/doors.h"
+#include "ui/scene_host.h"
 #include "views/completeness.h"
 #include "views/observer_draw.h"
 #include "walkthrough.h"
 
 namespace asmdesk {
+
+// The 3D spacetime overview's per-recording state (10-spacetime-3d-overview.md —
+// the integration surfacing pass). The pure, engine-free space/ models are built
+// LAZILY on first view of the recording's 3D tab (a recording whose overview is
+// never opened pays nothing), then cached; `cam` + `hud` are the tab's interactive
+// state, persisted per recording so switching tabs holds each view's camera and
+// playhead. The GL scene itself is drawn by ShellState::scene_host — absent under
+// the null test backend, where this state and the HUD are the whole pane.
+struct SceneView {
+    bool built = false;      // the models below are woven for this recording
+    bool has_regions = false; // codeimage/maps placed at least one region
+    space::TerrainModel terr;
+    space::TrajectorySet traj;
+    space::ConvergenceSet conv;
+    space::Terrain slice;          // the cached terrain slice for `slice_t`
+    uint64_t slice_t = UINT64_MAX; // the t `slice` was cut at (invalid => none)
+    scene3d::Camera cam;
+    scene3d::HudState hud;
+    bool nav_dragging = false; // a left-drag is orbiting (suppresses the pick)
+};
 
 struct ShellState {
     Workspace ws;
@@ -88,6 +114,17 @@ struct ShellState {
     wt_model abixray_walk;
     uint64_t abixray_playhead = 0;
 
+    // The 3D spacetime overview (10-spacetime-3d-overview.md), surfaced as a
+    // per-recording tab. `scenes` is parallel to ws.recordings exactly like
+    // `streams` / `observers` / `stepidx`; each slot is woven lazily on first
+    // view. `scene_host` is the GL render-to-texture bridge threaded in from
+    // main.cpp (ui/gl_scene_host.cpp); it is null under the null test backend and
+    // in any run with no GL context, and the pane then draws its models + HUD +
+    // a placard where the viewport would be. draw_shell links no GL — the scene
+    // is reached ONLY through this abstract pointer.
+    std::vector<SceneView> scenes;
+    SceneHost *scene_host = nullptr;
+
     // A pending cross-door jump: a capture the Inspect door just saved and asked
     // to open in the Loom (07-serve-live-host.md). `want_open_tab` is the
     // recording index whose outer tab to select; `want_loom` forces its Loom
@@ -113,6 +150,16 @@ const Streams *shell_b(const ShellState &s);
 // Draw one frame of the shell. Backend-free: only ImGui immediate-mode calls, so
 // a null ImGui context (no GLFW/GL) drives it in tests.
 void draw_shell(ShellState &s);
+
+// The 3D spacetime overview pane for the active recording (10-spacetime-3d-
+// overview.md — the integration surfacing pass). Weaves the pure space/ models
+// once, draws the HUD, re-slices the terrain on a playhead move, and — when
+// s.scene_host is present — blits the GL scene and routes a pick OUT to a flat 2D
+// view through 04's router (3D to find, 2D to read). Backend-free itself: the GL
+// touch is entirely behind s.scene_host, so the null backend drives the model +
+// HUD + placard path. Public so test_shell can drive it without forcing the tab
+// selection. Call inside an ImGui window, with s.active_tab set to the recording.
+void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a);
 
 // The truncation/drops/torn banner for a recording — PURE: nullptr when the
 // recording is clean, else a human-readable line (e.g.

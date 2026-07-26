@@ -25,9 +25,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `desktop/test/test_shell.cpp` pins the wiring end to end: the seek index is
   built and `present()` for a `regstate` recording, a `make_pair` pair feeds a
   present and aligned x-ray through the very calls the tab makes, and the
-  per-recording parallel vectors survive a close. The doc-10 3D overview remains
-  the one view not yet hosted in a shell pane (it needs a GL render-to-texture
-  host); its FBO smoke continues to run headlessly.
+  per-recording parallel vectors survive a close.
+- **The 3D spacetime overview is now hosted in a visible shell pane**
+  (docs/internal/gui/10-spacetime-3d-overview.md — the integration surfacing
+  pass). It is a per-recording **3D overview** tab. The GL boundary is a new
+  abstract `SceneHost` (`desktop/src/ui/scene_host.h`): the shell weaves the
+  pure, engine-free `space/` models once per recording (a `SceneView`), draws the
+  HUD (`draw_scene_hud`) and resolves picks (`resolve_pick`) itself — all GL-free,
+  so `ui/shell.o` stays out of the viewer's engine closure and the null backend
+  drives the whole model + HUD + placard path — and reaches the GL scene only
+  through `ShellState::scene_host`. `main.cpp` injects the one concrete host
+  (`ui/gl_scene_host.cpp`: a `scene3d::Scene` over an offscreen RGBA8+depth FBO
+  whose colour texture the shell blits with `ImGui::Image`, re-uploading the
+  terrain/trajectory only when the recording or playhead changes); the headless
+  tests inject none and the pane shows a placard where the viewport would be. A
+  left-drag orbits, the wheel dollies, and a click that did not drag picks →
+  `decode_pick` → `resolve_pick` → 04's deep-link router (3D to find, 2D to
+  read). Because the scene links no engine it ships in the render-only viewer
+  too (D4). `desktop/test/test_shell.cpp` drives `draw_scene_overview` under the
+  null backend (models woven, code regions placed, terrain heat, the exact
+  trajectory, the terrain slice tracking the HUD playhead, and the honest
+  no-regions placard for a `codeimage`-less recording); the GL scene stays pinned
+  by the `test_scene_fbo` smoke and the pick router by `test_drillin`. This
+  completes the deliberately-outstanding integration item — all ten GUI docs'
+  views are now surfaced in the shell.
 - **Golden scenes and a CI-runnable GL lane for the 3D spacetime overview**
   (docs/internal/gui/10-spacetime-3d-overview.md T7 — the view is now complete).
   Three committed scenes pin the whole stack end to end. Two are **generated** by

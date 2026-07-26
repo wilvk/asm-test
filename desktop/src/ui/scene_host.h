@@ -1,0 +1,72 @@
+// scene_host.h — the GL render-to-texture bridge for the 3D spacetime overview
+// pane (docs/internal/gui/10-spacetime-3d-overview.md — the integration surfacing
+// pass). draw_shell is backend-free: it links NO GL and is driven by ImGui's null
+// backend in tests, which is what keeps ui/shell.o out of asmtest-viewer's engine
+// closure AND drivable headlessly. So the shell reaches the GL scene ONLY through
+// this abstract host: main.cpp injects a real one (ui/gl_scene_host.cpp, over a
+// live scene3d::Scene), and the null test backend leaves ShellState::scene_host
+// null — the pane then weaves its pure space/ models and draws the HUD, and shows
+// a placard where the GL viewport would be. The interface names only the pure
+// space/ models, the pure camera, and an ImTextureID; it pulls in no GL header, so
+// including it costs a backend-free TU nothing.
+#ifndef ASMDESK_UI_SCENE_HOST_H
+#define ASMDESK_UI_SCENE_HOST_H
+
+#include <cstdint>
+
+#include "imgui.h" // ImTextureID
+
+#include "scene3d/camera.h" // Camera (pure math)
+#include "scene3d/scene.h"  // SceneLayers (a POD; no GL pulled in by the header)
+#include "space/converge.h"
+#include "space/terrain.h"
+#include "space/trajectory.h"
+
+namespace asmdesk {
+
+// Everything the GL host needs to render one frame of the 3D overview. The shell
+// builds the pure, engine-free space/ models and hands POINTERS to them; the host
+// owns only GL (an offscreen colour framebuffer + a scene3d::Scene). `key`
+// identifies the uploaded model set (a hash of the recording id) and `slice_t` the
+// playhead the terrain was cut at, so the host re-uploads the terrain/trajectory
+// only when the recording or the playhead changes, not every frame.
+struct SceneFrame {
+    const space::TerrainModel *terr = nullptr;
+    const space::TrajectorySet *traj = nullptr;
+    const space::ConvergenceSet *conv = nullptr;
+    const space::Terrain *slice = nullptr; // the terrain slice [0, t] to display
+    uint64_t key = 0;                      // recording identity
+    uint64_t slice_t = 0;                  // the t `slice` was cut at
+    scene3d::Camera cam;
+    scene3d::SceneLayers layers;
+    int fbw = 0, fbh = 0; // desired offscreen size, in pixels
+};
+
+// The abstract GL host. main.cpp constructs one (make_gl_scene_host), calls init()
+// once with a current GL context, and points ShellState::scene_host at it. Every
+// method that touches GL requires the caller's context to be current — which the
+// shell's draw runs under in main.cpp's frame loop.
+class SceneHost {
+  public:
+    virtual ~SceneHost() = default;
+
+    // Build the GL scene (shaders, FBOs). Context must be current. Idempotent.
+    virtual void init() = 0;
+    // Release GL objects. Call before the GL context is torn down.
+    virtual void shutdown() = 0;
+
+    virtual bool ready() const = 0;        // shaders built, FBO complete
+    virtual const char *error() const = 0; // why not, when !ready()
+
+    // Render `f` into the offscreen texture and return its ImGui id (0 on failure
+    // / not ready). The host re-uploads the models keyed on (f.key, f.slice_t).
+    virtual ImTextureID render(const SceneFrame &f) = 0;
+
+    // Read the pick id under a texture-local pixel (origin TOP-left), reusing the
+    // geometry uploaded by the most recent render(). 0 == background / none.
+    virtual uint32_t pick(const scene3d::Camera &cam, int fbw, int fbh, int x,
+                          int y) = 0;
+};
+
+} // namespace asmdesk
+#endif // ASMDESK_UI_SCENE_HOST_H

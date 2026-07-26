@@ -61,13 +61,17 @@ $$(BUILD)/desktop/$(1)/ig/%.o:  $$(IMGUI_HOME)/%.cpp
 $$(BUILD)/desktop/$(1)/igb/%.o: $$(IMGUI_HOME)/backends/%.cpp
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) -c $$< -o $$@
-$$(BUILD)/desktop/$(1)/src/%.o: desktop/src/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
+# src/, ui/ and t/ list linmath.h as an order-only prereq too: ui/shell.h now
+# transitively includes scene3d/camera.h -> linmath.h (the 3D-overview pane), so
+# main.o, shell.o, gl_scene_host.o and the shell/golden tests need the pinned
+# header fetched before they compile on a clean tree.
+$$(BUILD)/desktop/$(1)/src/%.o: desktop/src/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp $$(LINMATH_HOME)/linmath.h
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) -c $$< -o $$@
 $$(BUILD)/desktop/$(1)/doc/%.o: desktop/src/doc/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) -c $$< -o $$@
-$$(BUILD)/desktop/$(1)/ui/%.o:  desktop/src/ui/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
+$$(BUILD)/desktop/$(1)/ui/%.o:  desktop/src/ui/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp $$(LINMATH_HOME)/linmath.h
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) -c $$< -o $$@
 $$(BUILD)/desktop/$(1)/an/%.o:  desktop/src/analysis/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
@@ -91,7 +95,7 @@ $$(BUILD)/desktop/$(1)/sp/%.o:  desktop/src/space/%.cpp | $$(IMGUI_HOME)/imgui.c
 $$(BUILD)/desktop/$(1)/s3/%.o:  desktop/src/scene3d/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp $$(LINMATH_HOME)/linmath.h
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) -c $$< -o $$@
-$$(BUILD)/desktop/$(1)/t/%.o:   desktop/test/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
+$$(BUILD)/desktop/$(1)/t/%.o:   desktop/test/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp $$(LINMATH_HOME)/linmath.h
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) $$(DESKTOP_TEST_EXTRA) -c $$< -o $$@
 endef
@@ -194,6 +198,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/ui/shell.o $(BUILD)/desktop/$(1)/ui/learn_door.o \
   $(BUILD)/desktop/$(1)/ui/capability_panel.o \
   $(BUILD)/desktop/$(1)/ui/inspect_door.o \
+  $(BUILD)/desktop/$(1)/ui/gl_scene_host.o \
   $(DESKTOP_LIVE:%=$(BUILD)/desktop/$(1)/lv/%.o) \
   $(BUILD)/desktop/$(1)/sp/projection.o $(BUILD)/desktop/$(1)/sp/terrain.o \
   $(BUILD)/desktop/$(1)/sp/trajectory.o $(BUILD)/desktop/$(1)/sp/converge.o \
@@ -886,7 +891,13 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(DESKTOP_TEST_OBS) \
     $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
     $(DESKTOP_TEST_LOOM) \
-    $(DESKTOP_LOOM_DRAW:%=$(BUILD)/desktop/test/lo/%.o) $(DESKTOP_TEST_IG)
+    $(DESKTOP_LOOM_DRAW:%=$(BUILD)/desktop/test/lo/%.o) \
+    $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/sp/terrain.o \
+    $(BUILD)/desktop/test/sp/trajectory.o \
+    $(BUILD)/desktop/test/sp/converge.o \
+    $(BUILD)/desktop/test/s3/hud.o \
+    $(BUILD)/desktop/test/s3/pick.o $(DESKTOP_TEST_IG)
 
 $(BUILD)/desktop_test_shell: $(BUILD)/desktop/test/t/test_shell.o \
     $(DESKTOP_TEST_SHELL_OBJ) $(BUILD)/desktop/test/src/vm_compat.o

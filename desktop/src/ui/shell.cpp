@@ -3,11 +3,16 @@
 // path in tests (03-desktop-shell.md T6).
 #include "ui/shell.h"
 
+#include <functional>
 #include <string>
+#include <utility>
 
 #include "imgui.h"
 
 #include "analysis/slice.h"
+#include "scene3d/hud.h"
+#include "scene3d/pick.h"
+#include "space/projection.h"
 #include "views/abixray.h"
 #include "views/views_draw.h"
 
@@ -65,6 +70,12 @@ int shell_open(ShellState &s, const std::string &path, std::string &err) {
         build_step_index(s.ws.recordings[static_cast<size_t>(idx)]);
     s.scrubber_playhead.resize(s.ws.recordings.size());
     s.scrubber_playhead[static_cast<size_t>(idx)] = 0;
+    // The 3D overview's per-recording state (doc 10), parallel to the workspace.
+    // The models are woven lazily on first view, so a fresh (unbuilt) slot is all
+    // that is reserved here; assigned rather than left to resize's fill so a reused
+    // index starts clean.
+    s.scenes.resize(s.ws.recordings.size());
+    s.scenes[static_cast<size_t>(idx)] = SceneView{};
     shell_wire_nav(s);
     return idx;
 }
@@ -82,6 +93,8 @@ void shell_close(ShellState &s, size_t idx) {
     if (idx < s.scrubber_playhead.size())
         s.scrubber_playhead.erase(s.scrubber_playhead.begin() +
                                   static_cast<long>(idx));
+    if (idx < s.scenes.size())
+        s.scenes.erase(s.scenes.begin() + static_cast<long>(idx));
     if (s.b_index == static_cast<int>(idx))
         s.b_index = -1;
     else if (s.b_index > static_cast<int>(idx))
@@ -223,6 +236,132 @@ static void draw_summary(const Recording &r) {
                     (unsigned long long)r.unknown_kinds);
 }
 
+void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
+    size_t i = static_cast<size_t>(s.active_tab);
+    if (s.active_tab < 0 || i >= s.scenes.size())
+        return;
+    SceneView &sv = s.scenes[i];
+
+    // Weave the pure, engine-free models once per recording (lazy — a recording
+    // whose 3D tab is never opened pays nothing). The coarse rung's plane comes
+    // from the recording's `codeimage` code regions (08-T7); a replay file with
+    // none yields an empty plane, which the pane SAYS rather than drawing a void.
+    if (!sv.built) {
+        std::vector<space::Region> regs = space::regions_from_codeimage(r);
+        sv.has_regions = !regs.empty();
+        sv.terr =
+            space::build_terrain(space::build_projection(std::move(regs)), r);
+        sv.traj = space::build_trajectories(r);
+        sv.conv = space::detect_convergences(sv.traj, sv.terr.proj);
+        sv.hud.nsteps = sv.terr.nsteps;
+        sv.hud.t = sv.terr.nsteps; // show the whole trace by default
+        sv.built = true;
+    }
+
+    // The HUD (its own window): provenance chips, playhead, layer toggles, camera
+    // presets, region legend. Pure ImGui — drawn even under the null backend. It
+    // reports the user's intent back through sv.hud; we apply it here (04's rule:
+    // the view keeps no state the model does not).
+    sv.hud.nsteps = sv.terr.nsteps;
+    scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
+    if (sv.hud.req_reset_view)
+        sv.cam.reset();
+    if (sv.hud.req_top_down)
+        sv.cam.top_down();
+    sv.hud.req_reset_view = sv.hud.req_top_down = false;
+
+    // Re-slice the terrain when the playhead moved (or on first build). O(touched
+    // cells), far under frame budget for a golden recording (T2 step 3).
+    if (sv.slice_t != sv.hud.t) {
+        sv.slice = sv.terr.slice(sv.hud.t);
+        sv.slice_t = sv.hud.t;
+    }
+    sv.hud.playhead_moved = false;
+
+    // No plane to draw without regions — say so, never a blank void.
+    if (!sv.has_regions) {
+        ImGui::TextUnformatted(
+            "no address-space regions in this recording — the 3D overview needs "
+            "codeimage events (or a live maps snapshot) to place the plane. The "
+            "provenance, trajectory and legend above still read.");
+        return;
+    }
+
+    // The GL scene is drawn by the host threaded in from main.cpp. It is absent
+    // under the null test backend (and any run with no GL context): the models +
+    // HUD above are the whole pane there, with this placard in place of the
+    // viewport. draw_shell links no GL — every GL touch is behind this pointer.
+    if (s.scene_host == nullptr) {
+        ImGui::TextDisabled(
+            "3D viewport unavailable — no GL context in this build/run "
+            "(headless test, or a viewer with no display). The scene's models, "
+            "provenance and legend above are fully woven.");
+        return;
+    }
+    if (!s.scene_host->ready()) {
+        ImGui::TextDisabled("3D scene did not initialise: %s",
+                            s.scene_host->error());
+        return;
+    }
+
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    int fbw = static_cast<int>(avail.x);
+    int fbh = static_cast<int>(avail.y);
+    if (fbw < 16)
+        fbw = 16;
+    if (fbh < 16)
+        fbh = 16;
+
+    SceneFrame f;
+    f.terr = &sv.terr;
+    f.traj = &sv.traj;
+    f.conv = &sv.conv;
+    f.slice = &sv.slice;
+    f.key = std::hash<std::string>{}(a.id);
+    f.slice_t = sv.slice_t;
+    f.cam = sv.cam;
+    f.layers = sv.hud.layers;
+    f.fbw = fbw;
+    f.fbh = fbh;
+
+    ImTextureID tex = s.scene_host->render(f);
+    if (!tex) {
+        ImGui::TextDisabled("3D scene produced no frame on this driver");
+        return;
+    }
+    // GL renders bottom-left origin; flip V so the image reads upright in ImGui.
+    ImGui::Image(tex, ImVec2(static_cast<float>(fbw), static_cast<float>(fbh)),
+                 ImVec2(0, 1), ImVec2(1, 0));
+
+    // Camera + pick, only while the pointer is over the viewport. A left-drag
+    // orbits; the wheel dollies; a click that did NOT drag is a pick — read the
+    // id under the cursor and drill OUT to the flat 2D view through 04's router
+    // (3D to find, 2D to read).
+    if (ImGui::IsItemHovered()) {
+        ImGuiIO &io = ImGui::GetIO();
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            sv.nav_dragging = false;
+        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3.0f)) {
+            sv.nav_dragging = true;
+            sv.cam.orbit(-io.MouseDelta.x * 0.008f, -io.MouseDelta.y * 0.008f);
+        }
+        if (io.MouseWheel != 0.0f)
+            sv.cam.dolly(io.MouseWheel > 0.0f ? 1.0f / 1.1f : 1.1f);
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !sv.nav_dragging) {
+            ImVec2 origin = ImGui::GetItemRectMin();
+            int px = static_cast<int>(io.MousePos.x - origin.x);
+            int py = static_cast<int>(io.MousePos.y - origin.y);
+            if (px >= 0 && py >= 0 && px < fbw && py < fbh) {
+                uint32_t id = s.scene_host->pick(sv.cam, fbw, fbh, px, py);
+                scene3d::Pick pk = scene3d::decode_pick(id, sv.terr.w);
+                auto link = scene3d::resolve_pick(sv.terr, sv.traj, a.id, pk);
+                if (link && !dt_nav_go(s.nav, *link))
+                    s.status = s.nav.last_error;
+            }
+        }
+    }
+}
+
 // One open recording's pane: the summary chrome (03), then the replay views
 // over it (04). Each builder is called fresh per frame from the decoded streams
 // — they are pure and cheap at corpus scale; the threshold at which that stops
@@ -339,6 +478,15 @@ static void draw_recording_tab(ShellState &s, const Recording &r) {
                         draw_abixray(s.stepidx[ai], s.stepidx[bi],
                                      s.abixray_walk, s.abixray_playhead);
                 }
+                ImGui::EndTabItem();
+            }
+            // The 3D spacetime overview (doc 10), surfaced. The pure space/ models
+            // weave engine-free; the scene itself needs a live GL context, drawn
+            // by s.scene_host (threaded from main.cpp, null under the null test
+            // backend — the pane then shows the models + HUD + a placard). Every
+            // pick drills OUT to a flat 2D view through 04's router.
+            if (ImGui::BeginTabItem("3D overview")) {
+                draw_scene_overview(s, r, *a);
                 ImGui::EndTabItem();
             }
         }

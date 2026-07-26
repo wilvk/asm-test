@@ -252,6 +252,97 @@ int main() {
         ImGui::DestroyContext();
     }
 
+    // --- doc 10: the surfaced 3D-overview pane is WIRED ---------------------
+    // The GL scene (test_scene_fbo) and the pick router (test_drillin) are pinned
+    // elsewhere; this pins the SHELL wiring that feeds the pane: shell_open keeps
+    // the per-recording SceneView vector parallel to the workspace, and
+    // draw_scene_overview weaves the pure engine-free models (projection +
+    // terrain + trajectory) and draws the HUD under the null backend with NO GL
+    // host attached — the exact path a headless run and the render-only viewer
+    // take. A golden scene recording (codeimage + abs trace) builds real regions;
+    // a codeimage-less recording takes the honest "no regions" placard.
+    {
+        ImGui::CreateContext();
+        ImGuiIO &io3 = ImGui::GetIO();
+        io3.IniFilename = nullptr;
+        unsigned char *p3 = nullptr;
+        int w3 = 0, h3 = 0;
+        io3.Fonts->GetTexDataAsRGBA32(&p3, &w3, &h3);
+        io3.DisplaySize = ImVec2(1280, 720);
+        io3.DeltaTime = 1.0f / 60.0f;
+
+        ShellState s3;
+        check("scene/no host by default", s3.scene_host == nullptr,
+              "the null backend must leave scene_host null");
+        std::string err;
+        int igs = shell_open(s3, gd("scene-abs-loop.asmtrace"), err);
+        check("scene/golden opened", igs >= 0, err.c_str());
+        int imt = shell_open(s3, fx("min-trace.asmtrace"), err);
+        check("scene/min-trace opened", imt >= 0, err.c_str());
+
+        // Parallel to the workspace, like every other per-recording vector.
+        check("scene/scenes parallel", s3.scenes.size() == s3.ws.recordings.size(),
+              "the SceneView vector must be parallel to the workspace");
+
+        // Drive the pane for the golden scene (codeimage + abs trace): the models
+        // weave and the HUD draws, all with no GL host — the placard stands in for
+        // the viewport, nothing crashes.
+        if (igs >= 0) {
+            s3.active_tab = igs;
+            const Streams *a = shell_a(s3);
+            check("scene/golden stream decoded", a != nullptr, "no stream");
+            ImGui::NewFrame();
+            ImGui::Begin("t3");
+            if (a != nullptr)
+                draw_scene_overview(s3, s3.ws.recordings[static_cast<size_t>(igs)],
+                                    *a);
+            ImGui::End();
+            ImGui::Render();
+
+            const SceneView &sv = s3.scenes[static_cast<size_t>(igs)];
+            check("scene/models woven", sv.built, "the pane must build the models");
+            check("scene/regions placed", sv.has_regions,
+                  "a codeimage recording must place code regions on the plane");
+            check("scene/terrain sized", sv.terr.w > 0 && sv.terr.h > 0,
+                  "the terrain plane must be sized");
+            check("scene/abs terrain has heat", !sv.terr.code.empty(),
+                  "the abs trace must populate code cells");
+            check("scene/exact trajectory", !sv.traj.refused() &&
+                                                !sv.traj.trajectories.empty() &&
+                                                sv.traj.basis == "abs",
+                  "an abs recording must weave one exact trajectory");
+            check("scene/slice cut at the playhead", sv.slice_t == sv.hud.t,
+                  "the terrain slice must track the HUD playhead");
+        }
+
+        // The codeimage-less recording takes the "no regions" placard path
+        // without weaving a plane — and still without a crash under the null
+        // backend.
+        if (imt >= 0) {
+            s3.active_tab = imt;
+            const Streams *a = shell_a(s3);
+            ImGui::NewFrame();
+            ImGui::Begin("t3b");
+            if (a != nullptr)
+                draw_scene_overview(s3, s3.ws.recordings[static_cast<size_t>(imt)],
+                                    *a);
+            ImGui::End();
+            ImGui::Render();
+            const SceneView &sv = s3.scenes[static_cast<size_t>(imt)];
+            check("scene/no-regions is honest", sv.built && !sv.has_regions,
+                  "a codeimage-less recording must take the no-regions placard");
+        }
+
+        // Closing keeps the SceneView vector parallel — a stale slice would drive
+        // the wrong recording's plane.
+        shell_close(s3, static_cast<size_t>(igs));
+        check("scene/close keeps scenes parallel",
+              s3.scenes.size() == s3.ws.recordings.size(),
+              "shell_close must erase the SceneView slot too");
+
+        ImGui::DestroyContext();
+    }
+
     if (failures) {
         std::fprintf(stderr, "test_shell: %d FAILURE(S)\n", failures);
         return 1;

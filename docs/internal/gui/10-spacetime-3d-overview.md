@@ -498,6 +498,25 @@ GL): each pickable kind resolves to the expected router call; the TORN and
 > target). **Not done here:** hosting the scene in a visible shell pane — the
 > scene has no `ui/` host yet, and this task's scope was fixtures, the lane and
 > the docs.
+>
+> **Integration surfacing pass (2026-07-26): the pane is now hosted.** The
+> overview is a per-recording **3D overview** tab. `draw_shell` links no GL (the
+> property that keeps the null test backend and the render-only viewer's
+> engine-free closure), so it reaches the scene only through an abstract
+> `SceneHost` (`desktop/src/ui/scene_host.h`): `main.cpp` builds a real
+> render-to-texture host (`desktop/src/ui/gl_scene_host.cpp` — an offscreen
+> RGBA8+depth FBO around this doc's `scene3d::Scene`) and points
+> `ShellState::scene_host` at it, and the null test backend leaves it null. The
+> pane (`draw_scene_overview`, `ui/shell.cpp`) weaves the pure `space/` models
+> once per recording (lazily, cached parallel to the workspace), draws the HUD
+> (`draw_scene_hud`) every frame — even headless — re-slices the terrain on a
+> playhead move (T2's `slice(t)`), and, when a host is present, blits the scene
+> with `ImGui::Image`, orbits/dollies the camera on drag/wheel, and routes every
+> click through `resolve_pick` → 04's router (T6, 3D to find 2D to read). A
+> codeimage-less recording takes an honest "no address-space regions" placard
+> rather than an empty plane. `test_shell` pins the null-backend path (models
+> woven, HUD drawn, placard shown, the `SceneView` vector parallel across a
+> close); the GL scene stays pinned by `test_scene_fbo` + `test_drillin`.
 
 **Goal.** Deterministic fixtures, a CI-runnable GL smoke, and the user/internal
 docs.
