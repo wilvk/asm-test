@@ -8,6 +8,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Opt-in per-step register-capture ring in the emulator**
+  (docs/internal/gui/09-teaching-producers.md T1). `emu_step_capture(e, cap)`
+  arms one more `UC_HOOK_CODE` on the x86-64 guest that snapshots the full
+  `emu_x86_regs_t` **before every executed instruction** into a bounded,
+  caller-sized ring — the per-step producer a register time-travel scrubber and
+  the ABI x-ray replay from. It is drop-accounted (when a run exceeds `cap` the
+  earliest entries are evicted and `emu_step_dropped()` counts them, so a torn
+  timeline is honest data, not a silent gap), read back with
+  `emu_step_count()` / `emu_step_at()`, and never armed by default: the arming is
+  handle-level, persists across `emu_call_*` until `emu_step_capture_clear()`,
+  and survives `emu_snapshot` / `emu_restore` (the Track F arming discipline).
+
 - **The live Observer views — seven of them, plus a `codeimage` kind and a
   PT-replay slice** (docs/internal/gui/08-observer-views.md T1–T8). The desktop
   now renders what a live `asmspy --serve` session produces: the **syscall

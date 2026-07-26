@@ -832,6 +832,108 @@ TEST(emu, snapshot_makes_sweeps_history_independent) {
     emu_snapshot_free(s);
 }
 
+/* ---- Per-step register-capture ring (Track F, gui 09 T1) -----------------
+ * The opt-in per-step producer: a bounded ring of the full register file taken
+ * BEFORE each executed instruction. Hand-assembled x86-64, host-independent.
+ *   mov eax,1 ; mov ebx,2 ; mov ecx,3 ; ret  — four instructions; the 3rd
+ * (index 2) writes rcx, so a register the instruction wrote visibly changes
+ * between the pre-state of step 2 and the pre-state of step 3. */
+static const uint8_t FOUR_STEPS[] = {
+    0xb8, 0x01, 0x00, 0x00, 0x00, /* mov eax, 1 */
+    0xbb, 0x02, 0x00, 0x00, 0x00, /* mov ebx, 2 */
+    0xb9, 0x03, 0x00, 0x00, 0x00, /* mov ecx, 3 */
+    0xc3,                         /* ret        */
+};
+
+TEST(emu, step_capture_records_prestates) {
+    emu_result_t r;
+    long noargs[1] = {0};
+
+    ASSERT_TRUE(emu_step_capture(E, 8)); /* cap 8 comfortably holds 4 steps */
+    emu_call(E, FOUR_STEPS, sizeof FOUR_STEPS, noargs, 0, 0, &r);
+    ASSERT_NO_FAULT(&r);
+
+    /* Every executed instruction (including the ret) captured a pre-state; the
+     * ring never overflowed, so nothing was dropped. */
+    ASSERT_UEQ(emu_step_count(E), 4);
+    ASSERT_UEQ(emu_step_dropped(E), 0);
+
+    /* Entry 0 is the state BEFORE the first instruction: step index 0, rip at the
+     * routine entry, and the registers still at the per-call deterministic zero. */
+    uint64_t si = ~0ULL;
+    emu_x86_regs_t s0;
+    ASSERT_TRUE(emu_step_at(E, 0, &si, &s0));
+    ASSERT_UEQ(si, 0);
+    ASSERT_UEQ(s0.rip, EMU_CODE_BASE); /* entry offset 0 from the load base */
+    ASSERT_UEQ(s0.rax, 0);
+
+    /* rcx is written by insn 2 (mov ecx,3): its pre-state at step 2 is still 0,
+     * and at step 3 (after insn 2 ran) it is 3 — the written register differs
+     * between the two captured pre-states. */
+    emu_x86_regs_t s2, s3;
+    ASSERT_TRUE(emu_step_at(E, 2, &si, &s2));
+    ASSERT_UEQ(si, 2);
+    ASSERT_UEQ(s2.rcx, 0);
+    ASSERT_TRUE(emu_step_at(E, 3, &si, &s3));
+    ASSERT_UEQ(si, 3);
+    ASSERT_UEQ(s3.rcx, 3);
+    ASSERT_UNE(s2.rcx, s3.rcx);
+
+    /* An out-of-range entry is refused (and leaves the out-params untouched). */
+    ASSERT_FALSE(emu_step_at(E, 4, &si, &s3));
+
+    /* Disarm frees the ring and zeros the counters. */
+    emu_step_capture_clear(E);
+    ASSERT_UEQ(emu_step_count(E), 0);
+}
+
+TEST(emu, step_capture_drops_oldest_and_counts) {
+    emu_result_t r;
+    long noargs[1] = {0};
+
+    ASSERT_TRUE(emu_step_capture(E, 2)); /* cap 2 over 4 steps -> 2 evicted */
+    emu_call(E, FOUR_STEPS, sizeof FOUR_STEPS, noargs, 0, 0, &r);
+    ASSERT_NO_FAULT(&r);
+
+    ASSERT_UEQ(emu_step_count(E), 2);   /* only the two newest survive */
+    ASSERT_UEQ(emu_step_dropped(E), 2); /* the earliest two were dropped */
+
+    /* The survivors are the LAST two steps (2 then 3), oldest-held first — the
+     * eviction is honest data, not a silent truncation. */
+    uint64_t si = ~0ULL;
+    emu_x86_regs_t s;
+    ASSERT_TRUE(emu_step_at(E, 0, &si, &s));
+    ASSERT_UEQ(si, 2);    /* pre-state of step 2 */
+    ASSERT_UEQ(s.rcx, 0); /* mov ecx,3 has not run yet */
+    ASSERT_TRUE(emu_step_at(E, 1, &si, &s));
+    ASSERT_UEQ(si, 3);    /* pre-state of step 3 */
+    ASSERT_UEQ(s.rcx, 3); /* it ran between step 2 and step 3 */
+
+    emu_step_capture_clear(E);
+}
+
+TEST(emu, step_capture_arming_survives_snapshot_restore) {
+    /* The arming is handle-level state that snapshot/restore deliberately leave
+     * untouched (the Track F arming-survives-restore discipline), so a run after
+     * a restore still captures every pre-state into the ring. */
+    ASSERT_TRUE(emu_step_capture(E, 8));
+
+    emu_snapshot_t *s = emu_snapshot(E);
+    ASSERT_TRUE(s != NULL);
+    ASSERT_TRUE(emu_restore(E, s));
+
+    emu_result_t r;
+    long noargs[1] = {0};
+    emu_call(E, FOUR_STEPS, sizeof FOUR_STEPS, noargs, 0, 0, &r);
+    ASSERT_NO_FAULT(&r);
+    ASSERT_UEQ(emu_step_count(E),
+               4); /* still armed and capturing after restore */
+    ASSERT_UEQ(emu_step_dropped(E), 0);
+
+    emu_snapshot_free(s);
+    emu_step_capture_clear(E);
+}
+
 /* -------------------------------------------------------------------------
  * AArch64 guest: raw machine code run on whatever host this is (Unicorn
  * emulates AArch64 even on an x86-64 host). Bytes assembled from:

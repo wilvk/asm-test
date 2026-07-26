@@ -582,6 +582,34 @@ bool emu_set_reg(emu_t *e, const char *name, uint64_t value);
 void emu_clear_regs(emu_t *e);
 
 /* ------------------------------------------------------------------ */
+/* Opt-in per-step register capture (x86-64 guest, Track F)            */
+/*                                                                     */
+/* Where the guards above assert a property mid-run, this RECORDS the  */
+/* whole register file at every step — the per-step producer the       */
+/* teaching scrubber and ABI x-ray replay from.                        */
+/* ------------------------------------------------------------------ */
+
+/* Opt-in per-step register capture (x86-64 guest). Arms a UC_HOOK_CODE that
+ * snapshots the full emu_x86_regs_t BEFORE each executed instruction into a
+ * caller-sized ring. The ARMING persists across emu_call_* until cleared, and
+ * emu_snapshot / emu_restore deliberately do NOT clear it (Track F
+ * arming-survives-restore discipline); each run resets the ring and captures
+ * afresh. Memory cost = cap * sizeof(emu_x86_regs_t). When more than `cap` steps
+ * execute in a run, the EARLIEST entries are dropped and dropped_steps counts
+ * them — truncation is data, never silent. Never armed by default; x86-64 guest
+ * only (the other guests have no emu_t handle, mirroring the guards' scoping). */
+bool emu_step_capture(emu_t *e, size_t cap); /* arm (realloc ok)     */
+void emu_step_capture_clear(emu_t *e);       /* disarm + free        */
+size_t emu_step_count(const emu_t *e);       /* entries held         */
+uint64_t emu_step_dropped(const emu_t *e);   /* steps evicted        */
+/* Entry i (0 = oldest held): the register file BEFORE step_index's insn. Copies
+ * it into *out and the absolute step number (dropped_steps + i) into
+ * *step_index; either out-param may be NULL. Returns false for i >=
+ * emu_step_count (out-params untouched). */
+bool emu_step_at(const emu_t *e, size_t i, uint64_t *step_index,
+                 emu_x86_regs_t *out);
+
+/* ------------------------------------------------------------------ */
 /* Snapshot / restore (x86-64 guest)                                   */
 /* ------------------------------------------------------------------ */
 

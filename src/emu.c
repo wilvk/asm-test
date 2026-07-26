@@ -38,6 +38,21 @@ typedef struct {
     emu_reg_guard_t *out;
 } reg_guard_ctx_t;
 
+/* An opt-in per-step register ring armed on the handle (emu_step_capture): a
+ * bounded buffer of full register snapshots taken BEFORE each executed
+ * instruction. head + count index a drop-oldest ring of `cap` entries; a run
+ * executing more than `cap` steps overwrites the earliest and `dropped` counts
+ * them. Each run resets head/count/dropped and captures afresh; the arming
+ * (buf + cap) persists across emu_call_* until emu_step_capture_clear. */
+typedef struct {
+    bool armed;
+    emu_x86_regs_t *buf; /* cap entries, handle-owned (NULL == disarmed)    */
+    size_t cap;          /* ring capacity in entries                        */
+    size_t head;         /* index of the oldest held entry                  */
+    size_t count;        /* entries currently held (<= cap)                 */
+    uint64_t dropped;    /* earliest entries evicted in the last run        */
+} step_ring_t;
+
 /* Registers preloaded on the handle (emu_set_reg): applied at the start of every
  * call, after the deterministic zero and before the call convention writes rsp
  * and the argument registers (so an arg or the frame pointer is never clobbered
@@ -50,8 +65,9 @@ typedef struct {
 
 struct emu {
     uc_engine *uc;
-    watch_ctx_t watch;   /* mid-execution memory-write guard (emu_watch_*)  */
-    reg_guard_ctx_t reg; /* mid-execution register invariant (emu_guard_*) */
+    watch_ctx_t watch;     /* mid-execution memory-write guard (emu_watch_*)  */
+    reg_guard_ctx_t reg;   /* mid-execution register invariant (emu_guard_*) */
+    step_ring_t step_ring; /* opt-in per-step register capture (emu_step_*) */
     emu_preload_t preload[EMU_MAX_PRELOAD];
     int npreload;
     long *fuzz_corpus; /* last emu_fuzz_cover1's kept inputs, handle-owned */
@@ -241,6 +257,7 @@ void emu_close(emu_t *e) {
         return;
     uc_close(e->uc);
     free(e->fuzz_corpus);
+    free(e->step_ring.buf);
     free(e);
 }
 
@@ -309,6 +326,30 @@ static void read_all_regs(uc_engine *uc, emu_x86_regs_t *r) {
     uc_reg_read(uc, UC_X86_REG_EFLAGS, &r->rflags);
     for (int i = 0; i < 16; i++) /* xmm0..15 are consecutive enum values */
         uc_reg_read(uc, UC_X86_REG_XMM0 + i, r->xmm[i].u8);
+}
+
+/* UC_HOOK_CODE companion (emu_step_capture): captures the full register file
+ * BEFORE each executed instruction into the handle's bounded ring, evicting and
+ * counting the earliest entry once the ring is full. Reads the SAME register set
+ * as read_all_regs (the result read-back), so a captured pre-state and the final
+ * result are byte-for-byte the same shape. */
+static void on_code_step(uc_engine *uc, uint64_t address, uint32_t size,
+                         void *user) {
+    (void)address;
+    (void)size;
+    step_ring_t *sr = (step_ring_t *)user;
+    if (sr->buf == NULL || sr->cap == 0)
+        return;
+    size_t pos;
+    if (sr->count < sr->cap) {
+        pos = (sr->head + sr->count) % sr->cap;
+        sr->count++;
+    } else {
+        pos = sr->head; /* full: overwrite the oldest, advance head */
+        sr->head = (sr->head + 1) % sr->cap;
+        sr->dropped++;
+    }
+    read_all_regs(uc, &sr->buf[pos]);
 }
 
 /* Shared System V setup: copy the routine in, plant the sentinel return address
@@ -399,6 +440,16 @@ static bool emu_x86_run(emu_t *e, uint64_t max_insns, emu_result_t *out,
         uc_hook_add(uc, &hguard, UC_HOOK_BLOCK, (void *)on_block_guard, &e->reg,
                     1, 0);
     }
+    /* Opt-in per-step register ring (emu_step_capture): one more UC_HOOK_CODE,
+     * reset to empty for this run before it captures each pre-instruction state. */
+    uc_hook hstep = 0;
+    if (e->step_ring.armed && e->step_ring.buf != NULL) {
+        e->step_ring.head = 0;
+        e->step_ring.count = 0;
+        e->step_ring.dropped = 0;
+        uc_hook_add(uc, &hstep, UC_HOOK_CODE, (void *)on_code_step,
+                    &e->step_ring, 1, 0);
+    }
 
     uc_err err =
         uc_emu_start(uc, EMU_CODE_BASE, EMU_RET_MAGIC, 0, (size_t)max_insns);
@@ -413,6 +464,8 @@ static bool emu_x86_run(emu_t *e, uint64_t max_insns, emu_result_t *out,
         uc_hook_del(uc, hread);
     if (hguard)
         uc_hook_del(uc, hguard);
+    if (hstep)
+        uc_hook_del(uc, hstep);
 
     out->uc_err = (int)err;
     out->faulted = fr.faulted;
@@ -731,6 +784,64 @@ bool emu_set_reg(emu_t *e, const char *name, uint64_t value) {
 void emu_clear_regs(emu_t *e) {
     if (e != NULL)
         e->npreload = 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Opt-in per-step register capture (emu_step_*)                       */
+/* ------------------------------------------------------------------ */
+
+/* Arm (or re-arm) the per-step ring to hold up to `cap` pre-instruction register
+ * snapshots on this handle. A re-arm frees any previous ring and allocates a
+ * fresh one of the new cap (so a second emu_step_capture re-arms with a new cap).
+ * Returns false on a NULL handle, a zero cap, or allocation failure. */
+bool emu_step_capture(emu_t *e, size_t cap) {
+    if (e == NULL || cap == 0)
+        return false;
+    emu_x86_regs_t *buf = (emu_x86_regs_t *)calloc(cap, sizeof *buf);
+    if (buf == NULL)
+        return false;
+    free(e->step_ring.buf); /* drop any previously armed ring */
+    e->step_ring.armed = true;
+    e->step_ring.buf = buf;
+    e->step_ring.cap = cap;
+    e->step_ring.head = 0;
+    e->step_ring.count = 0;
+    e->step_ring.dropped = 0;
+    return true;
+}
+
+/* Disarm the ring and free its buffer (no-op if never armed). */
+void emu_step_capture_clear(emu_t *e) {
+    if (e == NULL)
+        return;
+    free(e->step_ring.buf);
+    e->step_ring.buf = NULL;
+    e->step_ring.armed = false;
+    e->step_ring.cap = 0;
+    e->step_ring.head = 0;
+    e->step_ring.count = 0;
+    e->step_ring.dropped = 0;
+}
+
+size_t emu_step_count(const emu_t *e) {
+    return e != NULL ? e->step_ring.count : 0;
+}
+
+uint64_t emu_step_dropped(const emu_t *e) {
+    return e != NULL ? e->step_ring.dropped : 0;
+}
+
+bool emu_step_at(const emu_t *e, size_t i, uint64_t *step_index,
+                 emu_x86_regs_t *out) {
+    if (e == NULL || i >= e->step_ring.count)
+        return false;
+    /* Held entries are the contiguous most-recent steps, so the absolute step
+     * number of entry i is dropped_steps + i (the earliest evicted count). */
+    if (step_index != NULL)
+        *step_index = e->step_ring.dropped + (uint64_t)i;
+    if (out != NULL)
+        *out = e->step_ring.buf[(e->step_ring.head + i) % e->step_ring.cap];
+    return true;
 }
 
 /* ------------------------------------------------------------------ */

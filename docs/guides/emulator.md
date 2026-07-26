@@ -322,6 +322,45 @@ ASSERT_REG_INVARIANT(&g);         // names the value seen + the block offset on 
 single-step path) to stop after N instructions, then inspect `out->regs` with
 `ASSERT_EMU_REG_EQ` — a condition asserted at instruction N.
 
+### Per-step register capture
+
+Where the guards above assert one property mid-run, `emu_step_capture` **records
+the whole register file at every step** — the opt-in producer a step-by-step
+register scrubber replays from. It arms one more `UC_HOOK_CODE` that snapshots
+the full `emu_x86_regs_t` **before each executed instruction** into a
+caller-sized ring:
+
+```c
+emu_step_capture(e, 64);              // arm: hold up to 64 pre-step snapshots
+emu_call(e, fn, len, args, n, 0, &r); // run; every step is captured
+
+for (size_t i = 0; i < emu_step_count(e); i++) {
+    uint64_t step;                    // absolute step number of this entry
+    emu_x86_regs_t regs;              // the register file BEFORE that step's insn
+    emu_step_at(e, i, &step, &regs);
+    // ... regs.rip is the instruction, regs.rax/... its input state
+}
+emu_step_capture_clear(e);            // disarm + free
+```
+
+The ring is **bounded and drop-accounted**: when a run executes more than `cap`
+steps, the **earliest** entries are evicted and `emu_step_dropped(e)` counts them
+— truncation is data, never a silent gap. Entry `i` (0 = oldest held) reports its
+absolute step number as `dropped + i`, so a consumer can tell a torn timeline
+from a complete one.
+
+Like the guards, the arming is **handle-level and opt-in** (never on by default):
+it persists across `emu_call_*` until `emu_step_capture_clear`, and
+`emu_snapshot` / `emu_restore` deliberately leave it untouched — but each run
+resets the ring and captures afresh. A second `emu_step_capture` re-arms with a
+new cap. Memory cost is `cap * sizeof(emu_x86_regs_t)`. x86-64 guest.
+
+| Function | Purpose |
+|---|---|
+| `emu_step_capture(e, cap)` / `emu_step_capture_clear(e)` | arm a `cap`-entry ring / disarm + free |
+| `emu_step_count(e)` / `emu_step_dropped(e)` | entries held / earliest entries evicted |
+| `emu_step_at(e, i, &step, &regs)` | copy held entry `i` (its step number + register file) |
+
 ## Coverage-guided fuzzing & mutation testing
 
 The emulator records the exact signal a coverage-guided fuzzer consumes
