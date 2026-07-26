@@ -117,6 +117,38 @@ static const uint8_t LOOM_FORK_DEMO[] = {
     0xc3,                   /* 0x13 ret           */
 };
 
+/* ------------------------------------------------------------------ */
+/* The 3D spacetime overview's golden SCENES                            */
+/* (docs/internal/gui/10-spacetime-3d-overview.md T7)                   */
+/*                                                                      */
+/* A BYTE LITERAL for the same reason the Loom's fixtures are: the whole */
+/* point of a scene golden is that its terrain is hand-checkable — you   */
+/* can count the loop's iterations off the listing and predict which     */
+/* cell is hot — so the listing lives beside the bytes.                  */
+/* ------------------------------------------------------------------ */
+
+/* scene_hot_loop(n)  [rdi=n] — the smallest honest source of HEAT. The
+ * three-instruction loop body runs n times while the prologue and epilogue run
+ * once each, so the terrain has a hot cell over cold ones rather than a uniform
+ * plane. With n = 3 the executed stream is 13 steps and offset 0x06 is hit 3
+ * times — countable off this listing:
+ *   0x00  mov rax, rdi     ; 48 89 f8
+ *   0x03  xor rcx, rcx     ; 48 31 c9
+ *   0x06  add rcx, rax     ; 48 01 c1   <- the loop body: the hot cell
+ *   0x09  dec rax          ; 48 ff c8
+ *   0x0c  jne 0x06         ; 75 f8      (rel8 = 0x06 - 0x0e = -8)
+ *   0x0e  mov rax, rcx     ; 48 89 c8
+ *   0x11  ret              ; c3                                              */
+static const uint8_t SCENE_HOT_LOOP[] = {
+    0x48, 0x89, 0xf8, /* 0x00 mov rax, rdi */
+    0x48, 0x31, 0xc9, /* 0x03 xor rcx, rcx */
+    0x48, 0x01, 0xc1, /* 0x06 add rcx, rax */
+    0x48, 0xff, 0xc8, /* 0x09 dec rax      */
+    0x75, 0xf8,       /* 0x0c jne 0x06     */
+    0x48, 0x89, 0xc8, /* 0x0e mov rax, rcx */
+    0xc3,             /* 0x11 ret          */
+};
+
 /* One per-step register snapshot as a `regstate` event, by descriptor
  * reference (schema: `desc` names a state descriptor, never a bare inline
  * register list). The `values` object carries the full x86-64 INTEGER file —
@@ -349,6 +381,137 @@ static int record_one(const char *dir, const rec_routine_t *r) {
     memcpy(code, fn, sizeof code);
     return record_bytes(dir, r->name, r->name, code, sizeof code, r->args,
                         r->nargs, 65536, steps_cap);
+}
+
+/* Record one 3D-overview golden SCENE (10-spacetime-3d-overview.md T7): the
+ * SAME emulator L0 run record_bytes makes, written in the only two kinds the
+ * scene consumes — `codeimage` (the region that becomes terrain) and
+ * ABSOLUTE-basis `trace` (the PC trajectory) — and nothing else. No df_step /
+ * df_edge / regstate: a scene golden that carried them would be pinning the
+ * value producer's field order twice, which the corpus loop already does.
+ *
+ * The basis is honestly "abs". The producer maps the routine window at
+ * REC_CODE_BASE (src/dataflow_emu.c), so REC_CODE_BASE + insn_off IS the
+ * address the guest executed — not a rebasing invented at write time. The
+ * corpus loop writes the same measurement region-relative because the trace
+ * canvas reads offsets from a routine entry; the overview needs true addresses
+ * to place a cell on the address-space plane, which is why this second spelling
+ * exists rather than a reader guessing one from the other.
+ *
+ * `codeimage` carries the bytes the producer actually mapped, at version 0 and
+ * when 0 — one snapshot, no churn: this scene is not a JIT fixture.
+ *
+ * trace_cap > 0 caps how many of the executed steps the recording HOLDS — a
+ * filled trace buffer, exactly the append-until-full discipline
+ * include/asmtest_trace.h documents. The writer then flips `truncated` and the
+ * footer's drops.lost carries the steps that did not fit, so every touched
+ * terrain cell is flagged TORN (a floor, never an erasure). Generated, never
+ * hand-edited, for the loom-truncated reason: a truncation fixture nobody can
+ * produce is a fixture nobody can trust.
+ *
+ * Returns 0 on success, -1 on a setup/write failure. */
+static int record_scene_abs(const char *dir, const char *out, const char *label,
+                            const uint8_t *code, size_t code_len,
+                            const long *args, int nargs, size_t trace_cap) {
+    asmtrace_prov_t prov = {"emu-l0", 1, "exact", 0, NULL, 0};
+    asmtrace_writer_t w;
+    asmtest_valtrace_t *vt = NULL;
+    char path[1024], body[65536], text[1024];
+    char hexbytes[2 * REC_WINDOW + 1];
+    size_t nsteps, kept, s;
+    unsigned long long lost = 0;
+    int rc;
+
+    if (code_len > REC_WINDOW) {
+        fprintf(stderr, "asmtrace_record: scene %s exceeds the %d-byte window\n",
+                out, REC_WINDOW);
+        return -1;
+    }
+    vt = asmtest_valtrace_new(4096, 65536, 4096);
+    if (!vt) {
+        fprintf(stderr, "asmtrace_record: out of memory\n");
+        return -1;
+    }
+    rc = asmtest_dataflow_emu_run(code, code_len, args, nargs, 0, vt);
+    if (rc < 0) {
+        fprintf(stderr, "asmtrace_record: emulator producer failed for %s\n",
+                out);
+        asmtest_valtrace_free(vt);
+        return -1;
+    }
+    nsteps = vt->steps_len;
+    kept = (trace_cap && trace_cap < nsteps) ? trace_cap : nsteps;
+    lost = (unsigned long long)(nsteps - kept);
+
+    snprintf(path, sizeof path, "%s/%s.asmtrace", dir, out);
+    if (asmtrace_open(&w, path, 1 /* deterministic */) != 0) {
+        fprintf(stderr, "asmtrace_record: cannot write %s\n", path);
+        asmtest_valtrace_free(vt);
+        return -1;
+    }
+    asmtrace_header(&w, "asmtrace_record", &prov, 0, NULL);
+
+    /* A note that explains the scene without a sidecar: which routine, why the
+     * basis is absolute, and — when capped — exactly what was lost. */
+    {
+        int o = snprintf(text, sizeof text,
+                         "3D-overview golden scene: %s(", label);
+        for (int i = 0; i < nargs; i++)
+            o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
+                          i ? ", " : "", args[i]);
+        o += snprintf(text + o, sizeof text - (size_t)o,
+                      ") under the deterministic emulator L0 producer, written "
+                      "as `codeimage` + ABSOLUTE-basis `trace`. The producer "
+                      "maps the routine window at 0x%lx, so each `off` is the "
+                      "address the guest executed; the loop body's repeats are "
+                      "the terrain's heat.",
+                      REC_CODE_BASE);
+        if (lost)
+            snprintf(text + o, sizeof text - (size_t)o,
+                     " The trace buffer holds %zu of the %zu executed steps: "
+                     "the footer's truncated + drops.lost say so, and every "
+                     "touched terrain cell is TORN — a floor, not an erasure.",
+                     kept, nsteps);
+        asmtrace_escape(body, sizeof body, text);
+        asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
+    }
+
+    for (s = 0; s < code_len; s++)
+        snprintf(hexbytes + 2 * s, 3, "%02x", code[s]);
+    hexbytes[2 * code_len] = '\0';
+    asmtrace_emitf(&w, "codeimage",
+                   "\"base\":%llu,\"len\":%llu,\"version\":0,\"when\":0,"
+                   "\"bytes\":\"%s\"",
+                   (unsigned long long)REC_CODE_BASE,
+                   (unsigned long long)code_len, hexbytes);
+
+    for (s = 0; s < kept; s++) {
+        char dis[160] = "";
+        unsigned long long addr =
+            (unsigned long long)REC_CODE_BASE + vt->insn_off[s];
+        if (emu_disas_available())
+            emu_disas(EMU_ARCH_X86_64, code, code_len, REC_CODE_BASE,
+                      vt->insn_off[s], dis, sizeof dis);
+        if (dis[0]) {
+            asmtrace_escape(body, sizeof body, dis);
+            asmtrace_emitf(&w, "trace",
+                           "\"basis\":\"abs\",\"kind\":\"insn\",\"off\":%llu,"
+                           "\"disasm\":\"%s\"",
+                           addr, body);
+        } else {
+            asmtrace_emitf(&w, "trace",
+                           "\"basis\":\"abs\",\"kind\":\"insn\",\"off\":%llu",
+                           addr);
+        }
+    }
+
+    if (lost)
+        w.truncated = 1;
+    asmtrace_close(&w, lost, 0, NULL);
+    asmtest_valtrace_free(vt);
+    printf("  %-28s %zu of %zu step(s) held, 1 codeimage%s\n", out, kept,
+           nsteps, lost ? "  [TRUNCATED]" : "");
+    return 0;
 }
 
 /* ------------------------------------------------------------------ */
@@ -705,6 +868,26 @@ int main(int argc, char **argv) {
                              rbx_args, 2, 65536, 2) != 0)
                 failed++;
         }
+    }
+
+    /* The 3D spacetime overview's two golden SCENES
+     * (10-spacetime-3d-overview.md T7): the coarse rung's happy path and its
+     * torn twin, both from the SAME bytes so the only difference between them
+     * is the truncation the second one declares. */
+    {
+        static const long scene_args[1] = {3};
+        if (record_scene_abs(dir, "scene-abs-loop", "scene_hot_loop",
+                             SCENE_HOT_LOOP, sizeof SCENE_HOT_LOOP, scene_args,
+                             1, 0) != 0)
+            failed++;
+        /* Cap 6 of the 13 executed steps: the held prefix still covers three
+         * distinct cells and hits the loop body twice, so the torn scene is a
+         * real terrain with real heat that happens to be a lower bound — not a
+         * degenerate one-cell file whose TORN flag is all there is to see. */
+        if (record_scene_abs(dir, "scene-abs-loop-truncated", "scene_hot_loop",
+                             SCENE_HOT_LOOP, sizeof SCENE_HOT_LOOP, scene_args,
+                             1, 6) != 0)
+            failed++;
     }
 
     /* The ABI x-ray's paired SysV/Win64 goldens (09-teaching-producers.md T4).

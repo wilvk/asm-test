@@ -1,0 +1,10 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"k":"note","text":"3D-overview golden scene: scene_hot_loop(3) under the deterministic emulator L0 producer, written as `codeimage` + ABSOLUTE-basis `trace`. The producer maps the routine window at 0x100000, so each `off` is the address the guest executed; the loop body's repeats are the terrain's heat. The trace buffer holds 6 of the 13 executed steps: the footer's truncated + drops.lost say so, and every touched terrain cell is TORN — a floor, not an erasure."}
+{"k":"codeimage","base":1048576,"len":18,"version":0,"when":0,"bytes":"4889f84831c94801c148ffc875f84889c8c3"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048576,"disasm":"mov rax, rdi"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048579,"disasm":"xor rcx, rcx"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048582,"disasm":"add rcx, rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048585,"disasm":"dec rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048588,"disasm":"jne 0x100006"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048582,"disasm":"add rcx, rax"}
+{"k":"end","events":8,"truncated":true,"drops":{"lost":7,"throttled":false}}
