@@ -146,6 +146,10 @@ struct InspectState {
 void inspect_scan(InspectState &s);
 // Start the serve host if it is not up. Records the failure in `host_error`.
 void inspect_connect(InspectState &s);
+// Tear the serve host down and forget the session, returning to the Connect
+// form. The typed asmspy path / ssh host and the /proc scan survive — only the
+// beliefs that a live host made true are cleared. No-op if none is up.
+void inspect_disconnect(InspectState &s);
 // Ask to start `s.want` on `s.selected_pid`, honouring the budget. Returns
 // false and arms `swap_pending` when the jack is occupied.
 bool inspect_request_start(InspectState &s);

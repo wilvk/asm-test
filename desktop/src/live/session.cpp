@@ -239,6 +239,20 @@ void LiveSession::shutdown() {
     reap(true);
 }
 
+void LiveSession::reset() {
+    // The fds are the caller's responsibility — shutdown() closed them and set
+    // them to -1. reset() only wipes the accumulated wire state; leaving
+    // rfd_/wfd_/child_ untouched is deliberate, because clearing an fd that was
+    // still open would leak it rather than close it.
+    st_ = LiveStatus{};
+    done_.clear();
+    notes_.clear();
+    cur_ = Recording{};
+    open_ = false;
+    malformed_ = 0;
+    inbuf_.clear();
+}
+
 void LiveSession::reap(bool blocking) {
     if (child_ < 0)
         return;

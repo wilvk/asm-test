@@ -183,6 +183,60 @@ static void test_state_machine() {
                   s.recordings()[1].by_kind.count("syscall") == 0,
               "events must not bleed between sessions");
     }
+    {
+        // reset() (Disconnect): a session with real state is returned to its
+        // just-constructed shape, and a reconnect that reuses the object does
+        // NOT carry the old recording, notes, or malformed count into the new
+        // session. This is the difference between a clean Connect and one still
+        // showing the last host's capture.
+        LiveSession s;
+        s.feed_line("garbage-not-json"); // bumps malformed_
+        s.feed_line(
+            R"({"k":"session","state":"started","mode":"log","pid":4242,"params":{}})");
+        s.feed_line(kHeader);
+        s.feed_line(R"({"k":"syscall","line":"openat(...) = 3"})");
+        s.feed_line(
+            R"({"k":"end","events":1,"truncated":false,"drops":{"lost":0,"throttled":false}})");
+        s.feed_line(
+            R"({"k":"session","state":"stopped","mode":"log","events":1,"reason":"stop"})");
+        check("reset/pre",
+              s.recordings().size() == 1 && s.malformed_lines() == 1,
+              "the session should have one recording and one malformed line "
+              "before reset");
+
+        s.reset();
+        check("reset/no-recordings", s.recordings().empty(),
+              "reset must drop every completed recording");
+        check("reset/no-notes", s.notes().empty(),
+              "reset must drop every lifecycle note");
+        check("reset/no-growing", s.growing() == nullptr,
+              "reset must leave no recording open");
+        check("reset/no-malformed", s.malformed_lines() == 0,
+              "reset must zero the malformed counter");
+        check("reset/idle", s.status().state == LiveState::Idle,
+              "a reset session is Idle, as if just constructed");
+        check("reset/no-pid", s.status().pid == 0 && s.status().mode.empty(),
+              "reset must forget the last session's pid and mode");
+
+        // A fresh session over the reset object stands alone.
+        s.feed_line(
+            R"({"k":"session","state":"started","mode":"stream","pid":77,"params":{}})");
+        s.feed_line(kHeader);
+        s.feed_line(R"({"k":"stream","text":"b"})");
+        s.feed_line(
+            R"({"k":"end","events":1,"truncated":false,"drops":{"lost":0,"throttled":false}})");
+        s.feed_line(
+            R"({"k":"session","state":"stopped","mode":"stream","events":1,"reason":"stop"})");
+        check(
+            "reset/reconnect-one", s.recordings().size() == 1,
+            "the post-reset session is the only recording — the pre-reset one "
+            "did not survive");
+        check("reset/reconnect-clean",
+              s.recordings().size() == 1 &&
+                  s.recordings()[0].by_kind.count("syscall") == 0 &&
+                  s.recordings()[0].by_kind.count("stream") == 1,
+              "the new recording carries only its own events");
+    }
 }
 
 // ---------------------------------------------------------------------------

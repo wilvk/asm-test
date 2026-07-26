@@ -108,6 +108,14 @@ class LiveSession {
     // `quit`, then reap. Safe to call twice.
     void shutdown();
 
+    // Drop every recording, note, and counter, returning the session to its
+    // just-constructed state. Precondition: the host is down — call shutdown()
+    // first. reset() deliberately does not touch the pipes, so calling it with
+    // a host still up would orphan an fd; it clears only the accumulated wire
+    // state. This is what makes a Disconnect -> Connect a genuinely fresh
+    // session rather than one still haunted by the previous host's recordings.
+    void reset();
+
     const LiveStatus &status() const { return st_; }
     // Completed recordings, oldest first — one per finished mode session.
     const std::vector<Recording> &recordings() const { return done_; }

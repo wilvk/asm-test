@@ -29,6 +29,30 @@ void inspect_connect(InspectState &s) {
     s.host_error = s.host_started ? std::string() : err;
 }
 
+void inspect_disconnect(InspectState &s) {
+    if (!s.host_started)
+        return;
+    // shutdown() drains the host's exit cleanly — a capture in flight gets its
+    // terminal event and footer, so it lands as a complete recording rather
+    // than torn — then reaps. reset() drops that recording and every note with
+    // it: a reconnect is a NEW session, and a deck still showing the last
+    // host's capture would be attributing it to a host that is gone.
+    s.session.shutdown();
+    s.session.reset();
+    s.host_started = false;
+    s.host_error.clear();
+    // The beliefs that only held while a host was up: the jack contents, an
+    // armed swap, and the observer/PT-slice built over the last session. The
+    // /proc scan (rows/selected_pid) and the typed asmspy path / ssh host
+    // survive — reconnecting to the same target must not mean re-entering it.
+    s.active.clear();
+    s.swap_pending = false;
+    s.observer.built = false;
+    s.observed_events = 0;
+    s.observed_recordings = 0;
+    s.ptslice_ran = false;
+}
+
 bool inspect_request_start(InspectState &s) {
     s.swap_pending = false;
     BudgetDecision d = budget_can_start(s.want, s.active);
@@ -305,6 +329,13 @@ void draw_inspect_door(InspectState &s) {
         if (!s.host_error.empty())
             ImGui::TextColored(kBad, "%s", s.host_error.c_str());
     } else {
+        // The way back to the Connect form. Without it host_started latches for
+        // the life of the process, and re-entering connection details (a
+        // different asmspy, a different ssh host) means relaunching the app.
+        if (ImGui::Button("Disconnect"))
+            inspect_disconnect(s);
+        ImGui::SameLine();
+        ImGui::TextDisabled("stop the serve host and return to Connect");
         draw_patch_bay(s);
         draw_status(s);
         ImGui::SeparatorText("live views");
