@@ -144,6 +144,19 @@ CodeBytes obs_disasm_bytes_at(const DisasmView &v, uint64_t addr,
     return out;
 }
 
+uint8_t obs_disasm_byte_at(const DisasmView &v, uint64_t addr, uint64_t when,
+                           bool *known) {
+    CodeBytes b = obs_disasm_bytes_at(v, addr, when);
+    if (b.found && b.len > 0) {
+        if (known)
+            *known = true;
+        return b.data[0];
+    }
+    if (known)
+        *known = false;
+    return 0;
+}
+
 std::vector<DisasmRow> obs_disasm_rows(const DisasmView &v,
                                        const std::vector<uint64_t> &addrs,
                                        uint64_t when, size_t bytes_per_row) {

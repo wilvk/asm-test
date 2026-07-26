@@ -95,7 +95,13 @@ capture_license() {
     _lic="$root/licenses/$ADDON_LICENSE_DEST"
     [ -f "$_lic" ] && return 0
     log "capturing license -> licenses/$ADDON_LICENSE_DEST"
-    download "$ADDON_LICENSE_URL" "$_lic"
+    if ! download "$ADDON_LICENSE_URL" "$_lic"; then
+        rm -f "$_lic"
+        log "ERROR: could not fetch the license from $ADDON_LICENSE_URL"
+        log "       (fix ADDON_LICENSE_URL in the wrapper, or commit the text by"
+        log "        hand as licenses/$ADDON_LICENSE_DEST — D2 requires a capture)"
+        exit 1
+    fi
 }
 
 # ── FILES MODE ──────────────────────────────────────────────────────────────

@@ -2,10 +2,13 @@
 // Drawing only: every rule this renders was decided in a model TU.
 #include "views/observer_draw.h"
 
+#include <algorithm>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 
 #include "imgui.h"
+#include "imgui_memory_editor.h" // interactive codeimage byte view (14 T4)
 
 #include "ui/theme.h"
 #include "views/canvas.h"
@@ -336,6 +339,33 @@ void draw_obs_region(RegionView &v) {
 }
 
 // --- T7 ---------------------------------------------------------------------
+namespace {
+// user_data for the codeimage byte editor's read/color callbacks (14 T4). The
+// editor iterates a 0-based buffer offset; the absolute address is base + off.
+struct CodeMemCtx {
+    const DisasmView *v;
+    uint64_t when;
+    uint64_t base;
+};
+ImU8 codeimage_read(const ImU8 *, size_t off, void *ud) {
+    const CodeMemCtx *c = static_cast<const CodeMemCtx *>(ud);
+    bool known = false;
+    return obs_disasm_byte_at(*c->v, c->base + off, c->when, &known);
+}
+ImU32 codeimage_bg(const ImU8 *, size_t off, void *ud) {
+    const CodeMemCtx *c = static_cast<const CodeMemCtx *>(ud);
+    uint64_t a = c->base + off;
+    bool known = false, klatest = false;
+    uint8_t asof = obs_disasm_byte_at(*c->v, a, c->when, &known);
+    if (!known)
+        return IM_COL32(120, 40, 40, 110); // UNKNOWN as of this time — never faked
+    uint8_t latest = obs_disasm_byte_at(*c->v, a, 0, &klatest);
+    if (klatest && latest != asof)
+        return IM_COL32(200, 150, 40, 90); // differs from latest (JIT churn)
+    return 0;
+}
+} // namespace
+
 void draw_obs_disasm(const DisasmView &v, ObserverState &s) {
     chrome_line(v.chrome);
     if (!v.unavailable_reason.empty())
@@ -384,6 +414,42 @@ void draw_obs_disasm(const DisasmView &v, ObserverState &s) {
         ImGui::TextDisabled("%s", r.source.c_str());
     }
     ImGui::EndTable();
+
+    // Interactive byte view over the codeimage, as of the same logical time
+    // (14-quick-wins.md T4). ReadFn resolves each byte through obs_disasm_byte_at
+    // (greatest `when` <= this); ReadOnly honours never-re-read-live-memory in
+    // replay; BgColorFn tints UNKNOWN bytes (dim red — never a fabricated value)
+    // and bytes that differ from the latest version (amber — a JIT reused the
+    // address). The pane below shows only pre-formatted hex; this is the addon.
+    if (!v.versions.empty()) {
+        uint64_t lo = UINT64_MAX, hi = 0;
+        for (const CodeVersion &c : v.versions) {
+            lo = std::min(lo, c.base);
+            hi = std::max(hi, c.base + c.len);
+        }
+        size_t span = lo <= hi ? static_cast<size_t>(hi - lo) : 0;
+        const size_t kCap = 64 * 1024; // bound a pathologically sparse span
+        bool capped = span > kCap;
+        if (capped)
+            span = kCap;
+        if (span > 0) {
+            ImGui::SeparatorText("Bytes (as of trace time)");
+            if (capped)
+                ImGui::TextColored(
+                    kWarn, "showing the first %zu bytes of the codeimage span",
+                    span);
+            static MemoryEditor ed;
+            static CodeMemCtx ctx;
+            ed.ReadOnly = true; // replay never re-reads live memory
+            ctx.v = &v;
+            ctx.when = s.disasm_when;
+            ctx.base = lo;
+            ed.ReadFn = codeimage_read;
+            ed.BgColorFn = codeimage_bg;
+            ed.UserData = &ctx;
+            ed.DrawContents(&ctx, span, static_cast<size_t>(lo));
+        }
+    }
 }
 
 void draw_observer(ObserverState &s, const Recording &r,

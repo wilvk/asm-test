@@ -81,6 +81,17 @@ $(BUILD)/desktop/app/lo/fabric_imgui.o \
 $(BUILD)/desktop/render/lo/fabric_imgui.o \
 $(BUILD)/desktop/test/lo/fabric_imgui.o: | $(IMZOOM_HOME)/ImZoomSlider.h
 
+# imgui_memory_editor (14 T4): one header from imgui_club, PUBLIC API only — no
+# imgui_internal.h, so NOT in the compile-probe. Used by observer_draw.cpp.
+IMMEMEDIT_VERSION ?= a436e793fe44a2c8e827bfcbf138fcbe11940476
+IMMEMEDIT_HOME    ?= $(BUILD)/addons/imgui_club-$(IMMEMEDIT_VERSION)
+$(IMMEMEDIT_HOME)/imgui_memory_editor.h: scripts/fetch-imguimemedit.sh scripts/third-party-digests.txt
+	sh scripts/fetch-imguimemedit.sh >/dev/null
+DESKTOP_ADDON_INCLUDES += -I$(IMMEMEDIT_HOME)
+$(BUILD)/desktop/app/vw/observer_draw.o \
+$(BUILD)/desktop/render/vw/observer_draw.o \
+$(BUILD)/desktop/test/vw/observer_draw.o: | $(IMMEMEDIT_HOME)/imgui_memory_editor.h
+
 # --- source basenames --------------------------------------------------------
 DESKTOP_IMGUI_CORE := imgui imgui_draw imgui_tables imgui_widgets
 DESKTOP_IMGUI_BACK := imgui_impl_glfw imgui_impl_opengl3
@@ -439,9 +450,11 @@ addon-fetch-test:
 # internal-header addon lands, where the probe still validates imgui_internal.h
 # itself against the pin. Order-only dep on the grouped imgui fetch so a clean
 # tree fetches imgui first.
+# filter-out -MMD -MP: a -fsyntax-only check with no -o would otherwise litter a
+# stray depfile in the repo root.
 desktop-addon-compile-check: | $(IMGUI_HOME)/imgui.cpp $(ADDON_PROBE_DEPS)
-	$(CXX) $(DESKTOP_CXXFLAGS) $(ADDON_PROBE_FLAGS) -fsyntax-only \
-	  desktop/test/addon_compile_probe.cpp
+	$(CXX) $(filter-out -MMD -MP,$(DESKTOP_CXXFLAGS)) $(ADDON_PROBE_FLAGS) \
+	  -fsyntax-only desktop/test/addon_compile_probe.cpp
 	@echo "desktop-addon-compile-check: OK (imgui $(IMGUI_VERSION); probe compiles with desktop flags)"
 
 $(BUILD)/desktop/app/ui/capability_panel.o: \

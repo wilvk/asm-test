@@ -61,6 +61,24 @@ int main() {
     CodeBytes tail = obs_disasm_bytes_at(v, kBase + 7, 0);
     vt::eq("tail length is clamped to the span", tail.len, size_t{1});
 
+    // --- obs_disasm_byte_at: the memory editor's ReadFn (14 T4) --------------
+    // The single-byte form the interactive byte view resolves each cell with. It
+    // agrees with the run form, contrasts across versions (JIT churn), and — the
+    // honesty point — reports UNKNOWN rather than fabricating a byte.
+    bool known = false;
+    vt::eq("byte_at resolves the historical version",
+           obs_disasm_byte_at(v, kBase + 4, 2, &known), uint8_t{0x55});
+    vt::check("...and is known", known, "a covered byte reported unknown");
+    vt::eq("byte_at contrasts across the refresh (JIT churn)",
+           obs_disasm_byte_at(v, kBase + 4, 3, &known), uint8_t{0x90});
+    vt::check("...still known", known, "");
+    obs_disasm_byte_at(late, kBase, 2, &known);
+    vt::check("an UNKNOWN byte is reported, never faked", !known,
+              "the byte view would have shown a fabricated value");
+    obs_disasm_byte_at(v, 0xdeadbeef, 0, &known);
+    vt::check("an untracked byte is reported unknown", !known,
+              "an address in no region reported a byte");
+
     // --- rows: byte source vs the D10 fallback, never blurred ---------------
     std::vector<uint64_t> addrs = {kBase, kBase + 4};
     std::vector<DisasmRow> rows = obs_disasm_rows(v, addrs, 2, 4);

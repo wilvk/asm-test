@@ -171,6 +171,18 @@ mode decision is unit-tested.
 
 ### T4 — imgui_memory_editor (imgui_club) over the codeimage bytes  (S, depends on: 12; 08)
 
+> **Implemented 2026-07-27 — green.** `imgui_memory_editor.h` vendored via
+> `scripts/fetch-imguimemedit.sh` (imgui_club commit `a436e793`, MIT, **public
+> API only — no `imgui_internal.h`, so not in the compile-probe**). A pure
+> single-byte resolver `obs_disasm_byte_at` (in `views/disasm.cpp`) wraps
+> `obs_disasm_bytes_at`; `views/observer_draw.cpp`'s Disassembly pane now hosts a
+> `MemoryEditor` whose `ReadFn` resolves each cell as-of-trace-time, `ReadOnly`
+> honours never-re-read-live-memory in replay, and `BgColorFn` tints **UNKNOWN**
+> bytes dim-red (never a fabricated value) and bytes that differ from the latest
+> version amber (JIT churn). `test_obs_disasm` covers the resolver: historical vs
+> refreshed byte (0x55→0x90), and the two UNKNOWN cases (pre-earliest gap,
+> untracked address). The span is bounded (64 KB cap, with an honest placard).
+
 **Goal.** Byte-level interaction on the codeimage/region bytes — the cheapest
 strong upgrade (doc 11 #4, confirmed outright). `region.cpp` today shows bytes
 as static hex; this makes them navigable and diffable.

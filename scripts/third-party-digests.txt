@@ -84,3 +84,5 @@ tarball-sha256  linmath        26211bb  sha256:e5ea6c6da3d78d4afa40d987770331837
 # HAND and CARRIED THROUGH refresh-thirdparty-digests.sh (keyed on name+version).
 # ImZoomSlider (14 T5): one 245-line header from the ImGuizmo repo (MIT), no tag.
 tarball-sha256  imzoomslider   dc25afb98bc3ebe00dfc9a23ba7235fead2ccb1d  sha256:c94e3542f060f2235f1130d3320d16d4c2428c7181201b2779f0e4b3d91a03a3
+# imgui_club / imgui_memory_editor.h (14 T4): one 836-line header (MIT), no tag.
+tarball-sha256  imgui_club     a436e793fe44a2c8e827bfcbf138fcbe11940476  sha256:b0e5a116f3cfe4d220ee014f18d100208e999f25a5184475f360f3dfe5f0bb93
