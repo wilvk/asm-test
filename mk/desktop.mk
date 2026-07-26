@@ -102,7 +102,12 @@ $(eval $(call desktop_rules,test,))
 # The test fixtures + golden corpus reach their tests through compile defines, so
 # the tests need no argv wiring (and run identically host + docker).
 $(BUILD)/desktop/test/t/test_recording.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
-$(BUILD)/desktop/test/t/test_shell.o:     DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
+# test_shell reads BOTH trees: the honesty fixtures (banners, the render smoke)
+# and the golden corpus, for the regstate recording + the ABI x-ray pair that
+# exercise the two surfaced doc-09 tabs (Scrubber / ABI x-ray) end to end.
+$(BUILD)/desktop/test/t/test_shell.o: \
+    DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"' \
+                         -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
 $(BUILD)/desktop/test/t/test_golden.o:    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
 $(BUILD)/desktop/test/t/test_live_session.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_inspect.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
@@ -872,7 +877,12 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/src/author_vm.o \
     $(BUILD)/desktop/test/ui/author_door.o $(DESKTOP_TEST_DOC) \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_DA) \
+    $(BUILD)/desktop/test/an/stepindex.o \
     $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
+    $(BUILD)/desktop/test/vw/scrubber.o \
+    $(BUILD)/desktop/test/vw/scrubber_draw.o \
+    $(BUILD)/desktop/test/vw/abixray.o \
+    $(BUILD)/desktop/test/vw/abixray_draw.o \
     $(DESKTOP_TEST_OBS) \
     $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
     $(DESKTOP_TEST_LOOM) \

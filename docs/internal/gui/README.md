@@ -86,12 +86,21 @@ doc 09 — register ring (T1), regstate recorder (T2), scrubber (T3), ABI x-ray
 (T4), blame socket (T5) — and all of doc 10 — Hilbert projection (T1), terrain
 builder (T2), trajectory builder (T3), GL scene (T4), live-observer overlay
 (T5), drill-in + honesty invariants (T6), golden scenes + gated GL lane + docs
-(T7). **One integration item is deliberately outstanding:** the 09/10 views
-build engine-free into both binaries and are unit/golden-tested (the 3D scene's
-FBO smoke really runs, under surfaceless EGL + software Mesa, natively and in
-`make docker-desktop`), but the scrubber, ABI x-ray and 3D overview are **not
-yet hosted in a visible shell pane** — that surfacing is a later integration
-pass, matching how the sibling replay/observer views staged. 07 shipped `libasmspy` (the
+(T7). **Integration surfacing pass, 2026-07-26:** the two doc-09 teaching views
+are now **hosted in visible shell panes** — the register scrubber as a
+per-recording `Scrubber` tab (its `regstate` seek index built at open, its
+playhead persisted per recording), and the ABI x-ray as an `ABI x-ray` tab that
+locks the active recording (the SysV leg) against the attached B (the Win64 leg,
+the `d` binding), reusing the Diff tab's A/B mechanism; both degrade to their own
+honesty placards (absent producer, unaligned pair, torn ring) exactly as their
+standalone draws do, and `test_shell` pins the wiring end to end. **One
+integration item remains deliberately outstanding:** the doc-10 3D overview is
+built engine-free into both binaries and its FBO smoke really runs (surfaceless
+EGL + software Mesa, natively and in `make docker-desktop`), but it is **not yet
+hosted in a visible shell pane** — that surfacing needs a GL render-to-texture
+host threaded from `main.cpp` (a no-op under the null test backend) plus camera /
+HUD interaction, a larger increment than the two backend-free 2D views, and is
+the next integration step. 07 shipped `libasmspy` (the
 tracer engine as a linkable tier), `asmspy --serve` and its normative protocol,
 and the desktop's live capture host; 08 shipped the seven live views over those
 sessions, the `codeimage` kind (defined in the schema, produced by `--serve`,

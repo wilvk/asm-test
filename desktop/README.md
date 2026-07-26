@@ -305,7 +305,9 @@ the "re-run with a larger `max_insns`" fallback is deliberately **not** offered
 (the plan's honest-limits stance). `[` / `]` walk one step (04's bindings), the
 torn region included. `test_scrubber.cpp` pins seek, diff-highlight, the tear
 and the absent message; `test_scrubber_draw.cpp` draws every one under the null
-backend.
+backend. In the shell it is the per-recording **Scrubber** tab: its seek index is
+built once when the recording opens and its playhead is kept per recording, so
+switching tabs holds each recording's place.
 
 **ABI x-ray.** The classroom flagship: one call's argument marshalling under
 **System V and Microsoft x64, side by side**. The two panes ARE two register
@@ -326,6 +328,11 @@ dropped step renders *UNKNOWN* per pane; a stop past the recorded window is
 refused, never clamped. `test_abixray.cpp` pins the locked panes, stop
 navigation and the cross-pane deltas over the `make_pair` (struct) and `sum3`
 (int-arg) pairs; `test_abixray_draw.cpp` draws each shape under the null backend.
+In the shell it is the **ABI x-ray** tab: open the SysV leg, then attach its Win64
+leg as the B recording (the `d` binding, the same one Diff uses) and the two panes
+lock; with no B attached the tab shows an "attach the Win64 leg" placard, the same
+shape Diff shows when it has no second recording. `test_shell.cpp` pins that the
+pair feeds a present, aligned x-ray through the very calls the tab makes.
 
 **Slice explorer.** Click a step: the backward cone is everything that produced
 the value there, the forward cone everything it goes on to affect. Both are

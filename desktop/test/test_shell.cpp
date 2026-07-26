@@ -10,10 +10,15 @@
 
 #include "doc/recording.h"
 #include "ui/shell.h"
+#include "views/abixray.h"    // 09-T4: the surfaced ABI x-ray tab's model
 #include "views/slice_view.h" // 09-T5: assert the blame link's backward cone
+#include "walkthrough.h"
 
 #ifndef ASMTEST_FIXTURE_DIR
 #error "ASMTEST_FIXTURE_DIR must be defined by the build (mk/desktop.mk)"
+#endif
+#ifndef ASMTEST_GOLDEN_DIR
+#error "ASMTEST_GOLDEN_DIR must be defined by the build (mk/desktop.mk)"
 #endif
 
 using namespace asmdesk;
@@ -27,6 +32,9 @@ static void check(const char *what, bool cond, const char *why) {
 }
 static std::string fx(const char *name) {
     return std::string(ASMTEST_FIXTURE_DIR) + "/" + name;
+}
+static std::string gd(const char *name) {
+    return std::string(ASMTEST_GOLDEN_DIR) + "/" + name;
 }
 
 // shell_banner over a single fixture that must load.
@@ -155,6 +163,93 @@ int main() {
                   style(1) == dt_cone::dimmed && style(4) == dt_cone::dimmed,
                   "the ebx chain neither produced nor consumed the value");
         }
+    }
+
+    // --- 09-T3/T4: the surfaced Scrubber + ABI x-ray tabs are WIRED ---------
+    // The draw halves are covered by test_scrubber_draw / test_abixray_draw;
+    // this pins the SHELL wiring that feeds them: shell_open builds the regstate
+    // seek index parallel to the workspace, the playhead vector stays in step,
+    // and the A/B pair the ABI x-ray tab reads produces an aligned, present
+    // x-ray through the very same calls the tab makes.
+    {
+        ImGui::CreateContext();
+        ImGuiIO &io2 = ImGui::GetIO();
+        io2.IniFilename = nullptr;
+        unsigned char *p2 = nullptr;
+        int w2 = 0, h2 = 0;
+        io2.Fonts->GetTexDataAsRGBA32(&p2, &w2, &h2);
+
+        ShellState s2;
+        std::string err;
+        // The SysV leg (active) + its Win64 leg (the B attachment the x-ray reads).
+        int isv = shell_open(s2, gd("abixray-make_pair-sysv.asmtrace"), err);
+        check("wire/sysv opened", isv >= 0, err.c_str());
+        int iw64 = shell_open(s2, gd("abixray-make_pair-win64.asmtrace"), err);
+        check("wire/win64 opened", iw64 >= 0, err.c_str());
+        // A plain regstate recording, for the standalone scrubber tab.
+        int ias = shell_open(s2, gd("add_signed.asmtrace"), err);
+        check("wire/regstate opened", ias >= 0, err.c_str());
+
+        // The parallel-vector invariant every per-recording view relies on.
+        size_t n = s2.ws.recordings.size();
+        check("wire/stepidx parallel", s2.stepidx.size() == n,
+              "stepidx must be parallel to the workspace");
+        check("wire/playhead parallel", s2.scrubber_playhead.size() == n,
+              "the scrubber playhead vector must be parallel to the workspace");
+
+        // The scrubber's producer is PRESENT for a regstate recording — the tab
+        // shows the deck, not the absent placard.
+        if (ias >= 0 && static_cast<size_t>(ias) < s2.stepidx.size())
+            check("wire/scrubber present",
+                  s2.stepidx[static_cast<size_t>(ias)].present(),
+                  "add_signed carries a regstate ring");
+
+        // The ABI x-ray tab's exact feed: SysV index (active) locked against the
+        // Win64 index (B) at the walkthrough's playhead. A make_pair pair is
+        // step-aligned and present — the tab draws the two locked panes, not a
+        // refusal banner.
+        if (isv >= 0 && iw64 >= 0) {
+            wt_model walk =
+                wt_build(s2.ws.recordings[static_cast<size_t>(isv)]);
+            uint64_t ph = dt_abixray_playhead(walk);
+            dt_abixray x = dt_abixray_seek(
+                s2.stepidx[static_cast<size_t>(isv)],
+                s2.stepidx[static_cast<size_t>(iw64)], walk, ph);
+            check("wire/abixray present", x.present,
+                  "both legs carry a regstate producer");
+            check("wire/abixray aligned", x.aligned,
+                  "the SysV and Win64 legs of a pair share one step space");
+        }
+
+        // Drive the shell over this workspace (SysV active, Win64 attached as B):
+        // every tab BUTTON — Scrubber and ABI x-ray included — is emitted each
+        // frame, so the tab strip must not crash with the pair loaded.
+        s2.active_tab = isv;
+        s2.b_index = iw64;
+        for (int frame = 0; frame < 3; frame++) {
+            io2.DisplaySize = ImVec2(1280, 720);
+            io2.DeltaTime = 1.0f / 60.0f;
+            ImGui::NewFrame();
+            draw_shell(s2);
+            ImGui::Render();
+            if (ImGui::GetDrawData() == nullptr) {
+                std::fprintf(stderr, "FAIL wire/frame %d: null draw data\n",
+                             frame);
+                failures++;
+            }
+        }
+
+        // Closing a recording keeps every parallel vector aligned to the
+        // workspace — a stale stepidx would seek the wrong recording's registers.
+        shell_close(s2, static_cast<size_t>(isv));
+        check("wire/close keeps stepidx parallel",
+              s2.stepidx.size() == s2.ws.recordings.size(),
+              "shell_close must erase the stepidx slot too");
+        check("wire/close keeps playhead parallel",
+              s2.scrubber_playhead.size() == s2.ws.recordings.size(),
+              "shell_close must erase the playhead slot too");
+
+        ImGui::DestroyContext();
     }
 
     if (failures) {

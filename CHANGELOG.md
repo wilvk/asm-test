@@ -8,6 +8,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The register scrubber and the ABI x-ray are now hosted in visible shell
+  panes** (docs/internal/gui/09-teaching-producers.md T3/T4 — the integration
+  surfacing pass). The register time-travel scrubber is a per-recording
+  **Scrubber** tab: its `regstate` seek index (`analysis/stepindex.h`) is built
+  once when the recording opens, parallel to the workspace like the decoded
+  streams and Observer decks, and its playhead is persisted per recording so
+  switching tabs holds each recording's place. The **ABI x-ray** is a tab that
+  locks the active recording (the SysV leg) against the attached B (the Win64
+  leg, the `d` binding) — reusing the Diff tab's A/B mechanism — with the
+  walkthrough rail rebuilt only when the pair changes; no B attached shows an
+  "attach the Win64 leg" placard, the same shape Diff shows with no second
+  recording. Both degrade to their own honesty placards (absent producer,
+  unaligned pair, torn ring) exactly as their standalone draws do. Both views
+  are backend-free, so they ship in the render-only viewer too, and
+  `desktop/test/test_shell.cpp` pins the wiring end to end: the seek index is
+  built and `present()` for a `regstate` recording, a `make_pair` pair feeds a
+  present and aligned x-ray through the very calls the tab makes, and the
+  per-recording parallel vectors survive a close. The doc-10 3D overview remains
+  the one view not yet hosted in a shell pane (it needs a GL render-to-texture
+  host); its FBO smoke continues to run headlessly.
 - **Golden scenes and a CI-runnable GL lane for the 3D spacetime overview**
   (docs/internal/gui/10-spacetime-3d-overview.md T7 — the view is now complete).
   Three committed scenes pin the whole stack end to end. Two are **generated** by

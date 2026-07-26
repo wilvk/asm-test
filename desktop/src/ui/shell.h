@@ -9,6 +9,7 @@
 #include <string>
 #include <vector>
 
+#include "analysis/stepindex.h"
 #include "doc/streams.h"
 #include "doc/workspace.h"
 #include "loom/loom_draw.h"
@@ -16,6 +17,7 @@
 #include "ui/doors.h"
 #include "views/completeness.h"
 #include "views/observer_draw.h"
+#include "walkthrough.h"
 
 namespace asmdesk {
 
@@ -66,6 +68,25 @@ struct ShellState {
     // property the whole doc is built on.
     std::vector<ObserverState> observers;
     std::string repo_root = ".";
+
+    // The register time-travel scrubber (09-teaching-producers.md T3), surfaced
+    // as a per-recording tab. `stepidx` is the O(1) regstate seek index, built
+    // once at open and parallel to ws.recordings exactly like `streams` /
+    // `observers`; a recording with no ring yields an absent index and the tab
+    // shows the producer placard. `scrubber_playhead` is that tab's cursor, one
+    // per recording so switching tabs keeps each recording's place.
+    std::vector<StepIndex> stepidx;
+    std::vector<uint64_t> scrubber_playhead;
+
+    // The ABI x-ray (09-teaching-producers.md T4), surfaced as a tab that locks
+    // the active recording (the SysV leg) against the attached B (the Win64 leg,
+    // the `d` binding) — the same A/B mechanism the Diff tab uses. The rail
+    // MUTATES `abixray_walk` (stop navigation), so it must persist across frames;
+    // `abixray_key` is the pair it was built for (`A_id\x1fB_id`), rebuilt only
+    // when the pair changes. `abixray_playhead` is the single locked playhead.
+    std::string abixray_key;
+    wt_model abixray_walk;
+    uint64_t abixray_playhead = 0;
 
     // A pending cross-door jump: a capture the Inspect door just saved and asked
     // to open in the Loom (07-serve-live-host.md). `want_open_tab` is the

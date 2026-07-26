@@ -8,6 +8,7 @@
 #include "imgui.h"
 
 #include "analysis/slice.h"
+#include "views/abixray.h"
 #include "views/views_draw.h"
 
 namespace asmdesk {
@@ -54,6 +55,16 @@ int shell_open(ShellState &s, const std::string &path, std::string &err) {
     s.observers.resize(s.ws.recordings.size());
     observer_build(s.observers[static_cast<size_t>(idx)],
                    s.ws.recordings[static_cast<size_t>(idx)]);
+    // The register scrubber's O(1) seek index (09-T3), one per recording. Built
+    // once here — it reads only `regstate` events, so a recording without the
+    // ring yields an absent index (the normal case) and the tab says so. The
+    // playhead starts at 0; a fresh slot for a reopened index must reset, so it
+    // is assigned rather than left to resize's fill.
+    s.stepidx.resize(s.ws.recordings.size());
+    s.stepidx[static_cast<size_t>(idx)] =
+        build_step_index(s.ws.recordings[static_cast<size_t>(idx)]);
+    s.scrubber_playhead.resize(s.ws.recordings.size());
+    s.scrubber_playhead[static_cast<size_t>(idx)] = 0;
     shell_wire_nav(s);
     return idx;
 }
@@ -66,6 +77,11 @@ void shell_close(ShellState &s, size_t idx) {
         s.streams.erase(s.streams.begin() + static_cast<long>(idx));
     if (idx < s.observers.size())
         s.observers.erase(s.observers.begin() + static_cast<long>(idx));
+    if (idx < s.stepidx.size())
+        s.stepidx.erase(s.stepidx.begin() + static_cast<long>(idx));
+    if (idx < s.scrubber_playhead.size())
+        s.scrubber_playhead.erase(s.scrubber_playhead.begin() +
+                                  static_cast<long>(idx));
     if (s.b_index == static_cast<int>(idx))
         s.b_index = -1;
     else if (s.b_index > static_cast<int>(idx))
@@ -282,6 +298,47 @@ static void draw_recording_tab(ShellState &s, const Recording &r) {
                 // drawing — for a recording whose producer was statistical or
                 // carried no per-step values.
                 draw_loom(s.loom, *a, s.ws, s.active_tab);
+                ImGui::EndTabItem();
+            }
+            // The register time-travel scrubber (09-T3), surfaced. Over this
+            // recording's `regstate` ring; an absent producer draws its own
+            // placard (never a register file of zeros), exactly as the standalone
+            // draw does. The playhead is the caller's — the slider and `[` / `]`
+            // keys move it, and draw_scrubber returns the moved value to persist.
+            if (ImGui::BeginTabItem("Scrubber")) {
+                size_t i = static_cast<size_t>(s.active_tab);
+                if (i < s.stepidx.size())
+                    s.scrubber_playhead[i] =
+                        draw_scrubber(s.stepidx[i], s.scrubber_playhead[i]);
+                ImGui::EndTabItem();
+            }
+            // The ABI x-ray (09-T4), surfaced. It locks TWO scrubber panes to one
+            // playhead — the active recording is the SysV leg, the attached B
+            // (press `d`) the Win64 leg — reusing the Diff tab's A/B mechanism.
+            // With no B attached it shows the same "attach a second recording"
+            // placard shape; the view's own honesty banners handle an unaligned
+            // pair or an absent per-pane producer.
+            if (ImGui::BeginTabItem("ABI x-ray")) {
+                if (b == nullptr) {
+                    ImGui::TextDisabled(
+                        "attach the Win64 leg (press d) — the ABI x-ray locks "
+                        "this recording (the SysV leg) against it");
+                } else {
+                    size_t ai = static_cast<size_t>(s.active_tab);
+                    size_t bi = static_cast<size_t>(s.b_index);
+                    // The rail MUTATES the walk (stop navigation), so it persists
+                    // across frames; rebuild only when the pair changes.
+                    std::string key = a->id + "\x1f" + b->id;
+                    if (s.abixray_key != key) {
+                        s.abixray_key = key;
+                        s.abixray_walk = wt_build(s.ws.recordings[ai]);
+                        s.abixray_playhead =
+                            dt_abixray_playhead(s.abixray_walk);
+                    }
+                    if (ai < s.stepidx.size() && bi < s.stepidx.size())
+                        draw_abixray(s.stepidx[ai], s.stepidx[bi],
+                                     s.abixray_walk, s.abixray_playhead);
+                }
                 ImGui::EndTabItem();
             }
         }

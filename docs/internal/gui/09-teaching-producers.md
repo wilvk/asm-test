@@ -160,8 +160,14 @@ dishonesty fixture carries the drop count.
 > deep-links the docs (the re-run-with-larger-`max_insns` fallback is NOT
 > offered). `test_scrubber` (builder: seek, diff-highlight, tear, absent message,
 > goldens over `add_signed` / `regstate-truncated` / `sum_via_rbx`) and
-> `test_scrubber_draw` (the ImGui half under the null backend) both pass. T4 not
-> started.
+> `test_scrubber_draw` (the ImGui half under the null backend) both pass.
+>
+> **Surfaced 2026-07-26 (integration pass).** The scrubber is now hosted as a
+> per-recording `Scrubber` tab in the shell (`desktop/src/ui/shell.cpp`): its
+> `StepIndex` is built once at open, parallel to the workspace like `streams` /
+> `observers`, and its playhead is persisted per recording so switching tabs
+> keeps each recording's place. `test_shell` pins the wiring (index built and
+> `present()` for a `regstate` recording; the parallel vectors survive a close).
 
 **Goal.** `desktop/src/views/scrubber.cpp` (**new**): a playhead over a
 recording's steps showing the **full register file at that step**, O(1) per
@@ -200,6 +206,16 @@ no-producer message; the Loom's now-column (05) can read the same index
 > paired goldens are byte-stable across two `asmtrace-golden-check` runs and the
 > existing corpus is untouched; both binaries link and the viewer stays
 > engine-free (D4). **09 is now 5/5 — doc complete.**
+>
+> **Surfaced 2026-07-26 (integration pass).** The x-ray is now hosted as an
+> `ABI x-ray` tab in the shell (`desktop/src/ui/shell.cpp`): the active recording
+> is the SysV leg and the attached B (the `d` binding) the Win64 leg — the same
+> A/B mechanism the Diff tab uses — with the walkthrough rebuilt only when the
+> pair changes (the rail MUTATES it, so it persists across frames). No B attached
+> shows an "attach the Win64 leg" placard, the same shape the Diff tab shows; the
+> view's own banners handle an unaligned pair or an absent per-pane producer.
+> `test_shell` pins that a `make_pair` pair feeds a present, aligned x-ray through
+> the very calls the tab makes.
 
 **Goal.** The classroom flagship: an animated, walkthrough-driven view of one
 call's argument marshalling — SysV vs Win64 side by side — corpus-seeded and
