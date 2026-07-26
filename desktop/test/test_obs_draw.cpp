@@ -14,6 +14,7 @@
 
 #include "imgui.h"
 
+#include "ui/theme.h"
 #include "views/observer_draw.h"
 
 #ifndef ASMTEST_FIXTURE_DIR
@@ -65,6 +66,21 @@ int main() {
     unsigned char *px = nullptr;
     int w = 0, h = 0;
     io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
+
+    // The honesty-chrome palette these banners draw with is the shared one
+    // (ui/theme.h) after it had drifted to three ambers across five draw TUs
+    // (11-imgui-addons.md quick win #6). The load-bearing invariant: the ImU32
+    // form the Loom fabric paints with must pack, byte-for-byte, from the same
+    // floats every TextColored banner uses — so warn can never look like one
+    // colour in a 2D pane and another in the Loom.
+    check("warn amber is canonical",
+          dt_warn_u32() == IM_COL32(242, 191, 64, 255),
+          "the shared warn colour drifted from the byte value the Loom draws");
+    check("refuse red is canonical",
+          dt_refuse_u32() == IM_COL32(242, 115, 102, 255),
+          "the shared refusal colour drifted");
+    check("warn and refusal are distinct", dt_warn_u32() != dt_refuse_u32(),
+          "caution and refusal must never render the same");
 
     const char *fixtures[] = {
         "obs-syscalls.asmtrace",  "obs-syscalls-redacted.asmtrace",

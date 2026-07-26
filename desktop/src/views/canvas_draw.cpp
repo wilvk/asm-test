@@ -1,14 +1,15 @@
 // canvas_draw.cpp — the ImGui half of the trace canvas. Draws only.
 #include "imgui.h"
 
+#include "ui/theme.h"
 #include "views/views_draw.h"
 
 namespace asmdesk {
 
-// Warn / refusal colours, kept in one place so every honesty placard in the app
-// looks the same and none of them can be mistaken for ordinary chrome.
-static const ImVec4 kWarn(0.95f, 0.75f, 0.25f, 1.0f);
-static const ImVec4 kRefuse(0.95f, 0.45f, 0.40f, 1.0f);
+// Warn / refusal colours from the shared honesty-chrome palette (ui/theme.h) so
+// every placard in the app looks the same and none can be mistaken for chrome.
+static const ImVec4 kWarn = dt_warn_col();
+static const ImVec4 kRefuse = dt_refuse_col();
 
 void draw_banner(const char *text, bool refusal) {
     if (text == nullptr || *text == '\0')

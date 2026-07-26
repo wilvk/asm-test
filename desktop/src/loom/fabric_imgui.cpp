@@ -2,15 +2,17 @@
 #include "imgui.h"
 
 #include "loom/loom_draw.h"
+#include "ui/theme.h"
 
 namespace asmdesk {
 
 namespace {
 
 // Every honesty prim shares the warn colour with the rest of the app's placards
-// (views/canvas_draw.cpp), so a torn edge cannot be mistaken for ordinary
-// chrome and ordinary chrome cannot be mistaken for a warning.
-constexpr ImU32 kWarn = IM_COL32(242, 191, 64, 255);
+// via the shared palette (ui/theme.h), so a torn edge cannot be mistaken for
+// ordinary chrome and ordinary chrome cannot be mistaken for a warning. The
+// draw-list ImU32 form packs from the same floats every TextColored banner uses.
+const ImU32 kWarn = dt_warn_u32();
 constexpr ImU32 kSpan = IM_COL32(90, 150, 220, 220);
 constexpr ImU32 kSpanDim = IM_COL32(90, 150, 220, 60);
 constexpr ImU32 kHollow = IM_COL32(150, 150, 160, 200);

@@ -7,14 +7,18 @@
 #include "imgui.h"
 
 #include "space/projection.h"
+#include "ui/theme.h"
 
 namespace asmdesk::scene3d {
 
 namespace {
 
 const ImVec4 kOk{0.55f, 0.85f, 0.55f, 1.0f};
-const ImVec4 kWarn{1.0f, 0.75f, 0.30f, 1.0f};
-const ImVec4 kBad{1.0f, 0.45f, 0.45f, 1.0f};
+// Warn / refusal are the shared honesty-chrome colours (ui/theme.h) — the HUD
+// had drifted its own amber and red; a "TRUNCATED / TORN" chip must read the
+// same here as in every 2D banner.
+const ImVec4 kWarn = dt_warn_col();
+const ImVec4 kBad = dt_refuse_col();
 const ImVec4 kDim{0.65f, 0.65f, 0.70f, 1.0f};
 
 // A small pill of coloured text; chips sit on one line separated by a bullet.

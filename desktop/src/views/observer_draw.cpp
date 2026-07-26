@@ -7,6 +7,7 @@
 
 #include "imgui.h"
 
+#include "ui/theme.h"
 #include "views/canvas.h"
 #include "views/views_draw.h"
 
@@ -14,8 +15,11 @@ namespace asmdesk {
 
 namespace {
 
-const ImVec4 kWarn(0.90f, 0.78f, 0.35f, 1.0f);
-const ImVec4 kBad(0.90f, 0.45f, 0.40f, 1.0f);
+// Warn / refusal from the shared honesty-chrome palette (ui/theme.h). The
+// Observer deck had drifted its own amber and red; a redaction or skip banner
+// must read the same here as in every replay banner.
+const ImVec4 kWarn = dt_warn_col();
+const ImVec4 kBad = dt_refuse_col();
 const ImVec4 kDim(0.65f, 0.65f, 0.65f, 1.0f);
 
 void chrome_line(const ObsChrome &c) {

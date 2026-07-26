@@ -10,13 +10,16 @@
 
 #include "imgui.h"
 
+#include "ui/theme.h"
 #include "views/completeness.h"
 #include "views/views_draw.h"
 
 namespace asmdesk {
 
 namespace {
-const ImVec4 kWarnCell(0.95f, 0.75f, 0.25f, 1.0f);
+// The shared honesty-chrome amber (ui/theme.h); a warn cell here reads the same
+// as every banner elsewhere.
+const ImVec4 kWarnCell = dt_warn_col();
 } // namespace
 
 void draw_completeness(CompletenessState &s, const std::string &repo_root) {
