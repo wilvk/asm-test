@@ -723,3 +723,37 @@ points exactly as the tier's own smoke drivers do — in one place, with the
 layout self-check asserted at init, and a mismatch **refuses to run** rather than
 reporting telemetry it cannot trust. Promoting that surface to a public header is
 a library decision this work does not make.
+
+## Projection — the address-space plane
+
+The 3D spacetime overview
+([10-spacetime-3d-overview.md](../docs/internal/gui/10-spacetime-3d-overview.md))
+lays code and data on a horizontal plane and threads execution up through it over
+time. Its first, purely geometric layer lives in `desktop/src/space/` and needs
+no GL: `types.h` is the shared data model (`Region`, `Projection`, `TrajPoint`,
+`Terrain`) and `projection.{h,cpp}` maps an address to a cell on that plane and
+back. It links no engine and no ImGui, so it compiles into **both** binaries and
+the null test harness — the same D4 closure the replay slicer keeps.
+
+A raw 64-bit address axis is almost all empty: a program's few megabytes of code,
+stack and heap sit gigabytes apart, so plotting them by absolute address wastes
+the whole plane on gaps. `build_projection` therefore **compacts** first — it
+sorts the regions by base and packs each into a contiguous slot of a domain
+`[0, sum(len))`, so memory neighbours stay neighbours but the gaps vanish. The
+compacted domain is then folded onto the plane by a **Hilbert curve** (the
+standard public-domain `d2xy`/`xy2d`, no dependency), whose defining property is
+locality: two bytes one apart land in the same or a 4-neighbour cell, so a
+working set reads as a compact blob rather than being scattered by a row-major
+scan. The plane is sized `order = ceil(log4(sum(len)))` clamped to `[6, 12]` — a
+64×64 up to 4096×4096 grid; a compacted domain larger than the ceiling is scaled
+down onto it so the Hilbert index is always in range.
+
+`project(addr) -> (u,v)` binary-searches the region containing the address, adds
+its compacted offset, and folds through `d2xy`; `unproject(u,v)` is the exact
+inverse used for picking, resolving a clicked cell back to a region and address
+(and refusing a padding cell that holds no byte). `region_style(kind)` carries a
+colour and legend name per region kind for the HUD. `test_projection` (under
+`make desktop-test`, no display) pins the contract: `project∘unproject` is exact
+for 10k random addresses across three regions, neighbouring bytes stay within one
+cell, an unmapped address is refused, and every plane cell holds exactly one
+compacted byte or is padding.

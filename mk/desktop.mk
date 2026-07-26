@@ -78,6 +78,9 @@ $$(BUILD)/desktop/$(1)/lo/%.o:  desktop/src/loom/%.cpp | $$(IMGUI_HOME)/imgui.cp
 $$(BUILD)/desktop/$(1)/lv/%.o:  desktop/src/live/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) -c $$< -o $$@
+$$(BUILD)/desktop/$(1)/sp/%.o:  desktop/src/space/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
+	@mkdir -p $$(@D)
+	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) -c $$< -o $$@
 $$(BUILD)/desktop/$(1)/t/%.o:   desktop/test/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) $$(DESKTOP_TEST_EXTRA) -c $$< -o $$@
@@ -164,7 +167,8 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/ui/shell.o $(BUILD)/desktop/$(1)/ui/learn_door.o \
   $(BUILD)/desktop/$(1)/ui/capability_panel.o \
   $(BUILD)/desktop/$(1)/ui/inspect_door.o \
-  $(DESKTOP_LIVE:%=$(BUILD)/desktop/$(1)/lv/%.o)
+  $(DESKTOP_LIVE:%=$(BUILD)/desktop/$(1)/lv/%.o) \
+  $(BUILD)/desktop/$(1)/sp/projection.o
 DESKTOP_APP_OBJ    := $(call desktop_app_objs,app) \
                       $(DESKTOP_LOOM_APP:%=$(BUILD)/desktop/app/lo/%.o)
 DESKTOP_RENDER_OBJ := $(call desktop_app_objs,render)
@@ -368,6 +372,7 @@ desktop-setup-render:
 DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_shell $(BUILD)/desktop_test_golden \
                  $(BUILD)/desktop_test_slice $(BUILD)/desktop_test_nav \
+                 $(BUILD)/desktop_test_projection \
                  $(BUILD)/desktop_test_diff $(BUILD)/desktop_test_canvas \
                  $(BUILD)/desktop_test_timeline \
                  $(BUILD)/desktop_test_slice_view \
@@ -578,6 +583,13 @@ $(BUILD)/desktop_test_slice_diff: $(BUILD)/desktop/test/t/test_slice_diff.o \
 
 $(BUILD)/desktop_test_slice: $(BUILD)/desktop/test/t/test_slice.o \
     $(BUILD)/desktop/test/an/slice.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The projection (10-spacetime-3d-overview.md T1) links space/projection.o and
+# NOTHING else — the same engine-free closure proof test_slice makes above, now
+# for the address-space terrain plane.
+$(BUILD)/desktop_test_projection: $(BUILD)/desktop/test/t/test_projection.o \
+    $(BUILD)/desktop/test/sp/projection.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 $(BUILD)/desktop_test_nav: $(BUILD)/desktop/test/t/test_nav.o \
