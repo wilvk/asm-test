@@ -62,7 +62,12 @@ image-digest    tonistiigi-binfmt  qemu-v10.2.3  sha256:400a4873b838d1b89194d982
 # imgui + nlohmann-json: the desktop GUI (docs/internal/gui/03-desktop-shell.md).
 # Both MIT, both compiled INTO the desktop binaries (bundled). Self-hashed at pin
 # time (GitHub source-archive tarball / release asset; same as the unicorn row
-# above). Added BY HAND — refresh-thirdparty-digests.sh does not know these rows.
+# above). Added BY HAND — refresh-thirdparty-digests.sh does not compute these,
+# but now CARRIES THEM THROUGH a full rewrite (it used to drop them).
+# imgui is pinned to the DOCKING branch (v1.91.9b-docking) — same version, adds
+# dockable panes (gui 13-foundation-moves.md F1). The `b` hotfix fixes asserts
+# when loading .ini table settings, reachable once layout persistence lands.
+tarball-sha256  imgui          1.91.9b-docking  sha256:466fdef9b18de15f0bb6e288e3d00ffa3d82200ec458ce5e4f724a161d9528a5
 tarball-sha256  imgui          1.91.9  sha256:3872a5f90df78fced023c1945f4466b654fd74573370b77b17742149763a7a7c
 tarball-sha256  nlohmann-json  3.11.3  sha256:9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6
 # linmath.h: the desktop GUI's 3D spacetime overview camera math (gui 10-T4,

@@ -61,6 +61,19 @@ gates *how* F3 is built.
 
 ### T1 — Repin ImGui to the docking branch (`v1.91.9b-docking`)  (S, depends on: 12)
 
+> **Implemented 2026-07-27 — green (45/45 suites).** Digest independently
+> re-verified (`466fdef9…528a5`, matches doc 11) and pinned; `IMGUI_VERSION`
+> flipped. **Two code-won-over-doc corrections** the "exactly two lines" estimate
+> missed: (1) `mk/desktop.mk`'s grouped fetch rule ran `sh scripts/fetch-imgui.sh`
+> **without passing the version**, and the script defaults to plain `1.91.9` on
+> its own — so `IMGUI_HOME` pointed at the docking dir while the fetch wrote the
+> vanilla dir; fixed to `IMGUI_VERSION=$(IMGUI_VERSION) sh …`. (2) A **host**
+> pin-switch needs `rm -rf build/desktop` first: GitHub tarballs preserve the
+> upstream 2025 mtime, so incremental make saw the new docking `imgui.cpp` as
+> older than the object built earlier from vanilla and kept a stale `imgui.o`
+> (which links against the pre-docking `CollapseButton` layout). Docker is immune
+> (empty `build/`). Nothing docks yet — T2 (layout manager) is separate.
+
 **Goal.** Swap vanilla `1.91.9` for the **docking branch hotfix
 `v1.91.9b-docking`**, same version, so panes become dockable/tearable. This is
 the two-line switch; the layout *manager* is T2.
@@ -271,6 +284,22 @@ freetype; Codicons render inline in scrubber/observer/patch-bay labels;
 build note; three license captures landed; the font test passes headless.
 
 ### T5 — F4: decide the 1.92.x bump timing (a written decision)  (S, depends on: none)
+
+> **Decision 2026-07-27 — DEFER the 1.92.x bump; stay on `v1.91.9b-docking`.**
+> Rationale: (1) every addon brief is already written and pinned for 1.91.x — the
+> two 1.92-sensitive ones ship at compatible pins (TextSelect **v1.1.6 + utfcpp**,
+> ICTE **master + a compile-verified 2-line `#if IMGUI_VERSION_NUM >= 19200`
+> guard**) and FileDialog **v0.6.8** works via its own `< 19201` guard, so nothing
+> we want is *blocked* by staying. (2) The docking parity pin (T1) is landed and
+> green across the full suite. (3) F3 fonts on 1.91.x (glyph-ranges + atlas
+> rebuild) is well-understood and bounded; the dynamic-font savings 1.92 offers do
+> not outweigh re-verifying ~10 addon pins right now. **Revisit triggers** (any
+> one flips the decision): an addon we decide we want becomes 1.92-only with no
+> 1.91-compatible pin; we take on serious HiDPI/dynamic-DPI work; or upstream
+> abandons the docking-branch parity tag. On a bump, move `imgui_test_engine`'s
+> tag (doc 17) in the same commit and re-run `desktop-addon-compile-check`.
+> Consequence for **T4**: build the **1.91.x glyph-ranges/atlas** font path, not
+> the 1.92 dynamic-font path.
 
 **Goal.** A recorded decision — *bump to 1.92.x now, or stay on 1.91.9(b) for
 now* — made **before** T4 builds elaborate font/DPI infrastructure, because the

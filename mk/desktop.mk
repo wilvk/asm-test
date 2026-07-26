@@ -11,7 +11,11 @@
 # Included BEFORE mk/bindings.mk (Makefile), so $(CXX)/$(CLANG_FORMAT) are
 # referenced lazily (recipes only, never :=). Additive rules only.
 
-IMGUI_VERSION ?= 1.91.9
+# Docking branch (13-foundation-moves.md F1): same 1.91.9, adds dockable/tearable
+# panes + layout persistence. The `b` hotfix fixes .ini table-load asserts that
+# become reachable exactly when persistence lands. Digest pinned in
+# scripts/third-party-digests.txt; the switch is this one line + that row.
+IMGUI_VERSION ?= 1.91.9b-docking
 IMGUI_HOME    ?= $(BUILD)/imgui/imgui-$(IMGUI_VERSION)
 JSON_VERSION  ?= 3.11.3
 JSON_HOME     ?= $(BUILD)/nlohmann-json/$(JSON_VERSION)
@@ -24,9 +28,12 @@ LINMATH_HOME    ?= $(BUILD)/linmath/$(LINMATH_VERSION)
 # -MMD -MP: per-object header deps so an incremental build stays correct across
 # the many desktop/ and imgui headers. Recursive (=), never := (CXX is set by
 # mk/bindings.mk, which loads after this file).
+# -DIMGUI_USER_CONFIG (F2): inject desktop/src/imconfig_user.h into every imgui +
+# addon TU (32-bit ImDrawIdx) without touching the digest-pinned tarball.
 DESKTOP_CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -g -MMD -MP \
   -Icli -Iinclude -Idesktop/src -I$(IMGUI_HOME) -I$(IMGUI_HOME)/backends \
-  -I$(JSON_HOME) -I$(LINMATH_HOME)
+  -I$(JSON_HOME) -I$(LINMATH_HOME) \
+  -DIMGUI_USER_CONFIG='"imconfig_user.h"'
 
 # --- pinned, digest-verified third-party sources (D2) ------------------------
 # One fetch-imgui.sh run extracts ALL of imgui's TUs at once, so they are a
@@ -37,8 +44,12 @@ IMGUI_SRCS := $(IMGUI_HOME)/imgui.cpp $(IMGUI_HOME)/imgui_draw.cpp \
   $(IMGUI_HOME)/imgui_tables.cpp $(IMGUI_HOME)/imgui_widgets.cpp \
   $(IMGUI_HOME)/backends/imgui_impl_glfw.cpp \
   $(IMGUI_HOME)/backends/imgui_impl_opengl3.cpp
+# Pass IMGUI_VERSION through: fetch-imgui.sh defaults to plain 1.91.9 on its own,
+# so the docking pin (F1) only takes effect if make hands the version to the
+# script — otherwise IMGUI_HOME points at imgui-<docking> while the fetch writes
+# imgui-1.91.9 and every compile fails "no such file".
 $(IMGUI_SRCS) &: scripts/fetch-imgui.sh scripts/third-party-digests.txt
-	sh scripts/fetch-imgui.sh >/dev/null
+	IMGUI_VERSION=$(IMGUI_VERSION) sh scripts/fetch-imgui.sh >/dev/null
 $(JSON_HOME)/nlohmann/json.hpp: scripts/fetch-json.sh scripts/third-party-digests.txt
 	sh scripts/fetch-json.sh >/dev/null
 $(LINMATH_HOME)/linmath.h: scripts/fetch-linmath.sh scripts/third-party-digests.txt
