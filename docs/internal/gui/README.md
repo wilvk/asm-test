@@ -76,19 +76,22 @@ land (legend as in [../implementations/README.md](../implementations/README.md):
 | [07-serve-live-host.md](07-serve-live-host.md) | extract `libasmspy`, `--serve` wrapper, session host, budget patch-bay, Inspect door | 7 | 01, 03 | ✅ 7/7 |
 | [08-observer-views.md](08-observer-views.md) | live views: syscalls, watch, topo, hot edges, tree filters, codeimage, PT slice | 8 | 07, 04, 01 | ✅ 8/8 |
 | [09-teaching-producers.md](09-teaching-producers.md) | per-step register ring, scrubber, ABI x-ray, blame socket | 5 | 01, 03, 04, 06 | ☑ 5/5 |
-| [10-spacetime-3d-overview.md](10-spacetime-3d-overview.md) | 3D memory-terrain + execution-trajectory overview surface (**growth-rung companion**) | 7 | 01, 03, 04, 07, 08 | ◐ 6/7 |
+| [10-spacetime-3d-overview.md](10-spacetime-3d-overview.md) | 3D memory-terrain + execution-trajectory overview surface (**growth-rung companion**) | 7 | 01, 03, 04, 07, 08 | ☑ 7/7 |
 
 71 tasks across 10 docs. Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
 09 (09-T1 — the emulator ring — is engine-only and can start any time).
-**01–08 have landed (2026-07-24); 2026-07-26 landed all of doc 09 — register
-ring (T1), regstate recorder (T2), scrubber (T3), ABI x-ray (T4), blame socket
-(T5) — plus doc 10's T1–T6 (Hilbert projection, terrain builder, trajectory
-builder, GL scene, live-observer overlay, drill-in + honesty invariants). So doc
-09 is complete (5/5) and doc 10 is at 6/7.** The only remaining doc-10 task is
-10-T7 (golden scenes, the gated GL lane, and docs). The 09/10 views build engine-free and are unit/golden-tested, but are not
-yet wired into a running-app route — that surfacing is a later integration pass
-(matching the sibling replay/observer views' staging). 07 shipped `libasmspy` (the
+**All ten docs have landed.** 01–08 landed 2026-07-24; 2026-07-26 landed all of
+doc 09 — register ring (T1), regstate recorder (T2), scrubber (T3), ABI x-ray
+(T4), blame socket (T5) — and all of doc 10 — Hilbert projection (T1), terrain
+builder (T2), trajectory builder (T3), GL scene (T4), live-observer overlay
+(T5), drill-in + honesty invariants (T6), golden scenes + gated GL lane + docs
+(T7). **One integration item is deliberately outstanding:** the 09/10 views
+build engine-free into both binaries and are unit/golden-tested (the 3D scene's
+FBO smoke really runs, under surfaceless EGL + software Mesa, natively and in
+`make docker-desktop`), but the scrubber, ABI x-ray and 3D overview are **not
+yet hosted in a visible shell pane** — that surfacing is a later integration
+pass, matching how the sibling replay/observer views staged. 07 shipped `libasmspy` (the
 tracer engine as a linkable tier), `asmspy --serve` and its normative protocol,
 and the desktop's live capture host; 08 shipped the seven live views over those
 sessions, the `codeimage` kind (defined in the schema, produced by `--serve`,
