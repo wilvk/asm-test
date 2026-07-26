@@ -108,6 +108,13 @@ $(BUILD)/desktop/test/t/test_live_session.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXT
 $(BUILD)/desktop/test/t/test_inspect.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_converge.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_drillin.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
+# The 3D-scene FBO smoke reads BOTH trees (10-spacetime-3d-overview.md T7): the
+# two GENERATED golden scenes (and the hand-authored rich-`mem` one under
+# scenes/) from the corpus, and the reused obs-survey-ibs fixture for the
+# statistical scene — rather than a second survey fixture saying the same thing.
+$(BUILD)/desktop/test/t/test_scene_fbo.o: \
+    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"' \
+                         -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_loom_golden.o \
 $(BUILD)/desktop/test/t/test_loom_draw.o: DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
 $(BUILD)/desktop/test/t/test_walkthrough.o: \

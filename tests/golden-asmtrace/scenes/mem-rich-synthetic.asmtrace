@@ -1,0 +1,22 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"synthetic-fixture","version":"0"},"provenance":{"backend":"synthetic-fixture","exact":true,"trust":"weak"},"arch":"x86_64"}
+{"k":"note","text":"FIXTURE (SYNTHETIC, SCHEMA-UNFROZEN): the RICH twin of scene-abs-loop.asmtrace. Its header, codeimage and 13 trace events are copied verbatim from that generated golden; the four `mem` events below are HAND-AUTHORED and measure nothing. `mem` is a RESERVED registry row in docs/internal/gui/asmtrace-schema.md with NO v1 producer, so no recorder can emit this file — the {step,ea,size,rw} shape is the one 10-spacetime-3d-overview.md PROPOSES and it is NOT FROZEN. When the Wave-1 memory stream lands, replace this file with a recorded one rather than freezing the schema around it."}
+{"k":"note","text":"INERT-BUT-PRESENT: every `ea` here lies at 0x200000, outside every `codeimage` region, so under the coarse-rung projection the shipping view builds (regions_from_codeimage alone) these accesses map to no region and the terrain gains NO data cell — the rich rung's gate stays closed until a producer, and a maps snapshot for the data half, land. A caller that supplies the data region explicitly (as 07's /proc/pid/maps snapshot will) opens the path; desktop/test/test_drillin.cpp exercises that opt-in side."}
+{"k":"codeimage","base":1048576,"len":18,"version":0,"when":0,"bytes":"4889f84831c94801c148ffc875f84889c8c3"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048576,"disasm":"mov rax, rdi"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048579,"disasm":"xor rcx, rcx"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048582,"disasm":"add rcx, rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048585,"disasm":"dec rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048588,"disasm":"jne 0x100006"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048582,"disasm":"add rcx, rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048585,"disasm":"dec rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048588,"disasm":"jne 0x100006"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048582,"disasm":"add rcx, rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048585,"disasm":"dec rax"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048588,"disasm":"jne 0x100006"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048590,"disasm":"mov rax, rcx"}
+{"k":"trace","basis":"abs","kind":"insn","off":1048593,"disasm":"ret"}
+{"k":"mem","step":2,"ea":2097152,"size":8,"rw":"r"}
+{"k":"mem","step":5,"ea":2097152,"size":8,"rw":"w"}
+{"k":"mem","step":8,"ea":2097216,"size":8,"rw":"r"}
+{"k":"mem","step":11,"ea":2097216,"size":8,"rw":"w"}
+{"k":"end","events":20,"truncated":false,"drops":{"lost":0,"throttled":false}}

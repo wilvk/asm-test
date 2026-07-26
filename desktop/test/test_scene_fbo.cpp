@@ -1,14 +1,28 @@
 // test_scene_fbo.cpp — the gated GL smoke of the 3D scene (docs/internal/gui/
-// 10-spacetime-3d-overview.md T4). Two halves:
+// 10-spacetime-3d-overview.md T4, extended by T7). Two halves:
 //
 //   1. PURE (always runs, even with no GL): the colour-ID pick scheme decode and
-//      its resolution to a 04 deep-link (pick.h). This is the "a pick reaches the
-//      router" contract, asserted with no context at all.
+//      its resolution to a 04 deep-link (pick.h), plus the MODEL facts of the
+//      three committed golden scenes (T7) — basis, heat, TORN, STAT isolation,
+//      and the closed rich-`mem` gate. Asserted with no context at all.
 //   2. GL SMOKE (self-skips with a printed reason where no GL is reachable):
-//      build a scene from a hand-authored abs+codeimage recording, render the
-//      terrain + trajectory to offscreen framebuffers, glReadPixels and assert
-//      (a) a hot cell is brighter than a cold cell, (b) a TORN fixture paints red
-//      in its region, (c) the pick FBO returns the right id for a known cell.
+//      build scenes, render terrain + trajectories to offscreen framebuffers,
+//      glReadPixels and assert (a) a hot cell is brighter than a cold cell,
+//      (b) a TORN fixture paints red in its region, (c) the pick FBO returns the
+//      right id for a known cell, (d) a convergence arc draws and toggles, and
+//      — from the T7 GOLDEN SCENES — (e) the abs scene's coarse terrain AND its
+//      exact trajectory both put pixels on screen, (f) the truncated scene's
+//      cells paint the torn gash, (g) a survey-only scene renders its
+//      STATISTICAL layer and *nothing* on the exact layer (isolation, at the
+//      pixel level), (h) the synthetic rich-`mem` scene is INERT — it renders
+//      pixel-identically to its coarse twin, the rich rung drawing nothing.
+//
+// The three golden scenes (T7): `scene-abs-loop` and `scene-abs-loop-truncated`
+// are GENERATED into tests/golden-asmtrace/ by `make asmtrace-golden`
+// (tools/asmtrace_record.c); the rich `mem` one is hand-authored under
+// tests/golden-asmtrace/scenes/ because `mem` has no producer; the statistical
+// one REUSES the committed desktop/test/fixtures/obs-survey-ibs.asmtrace rather
+// than adding a second survey fixture that would say the same thing.
 //
 // The offscreen context is created with EGL surfaceless + software Mesa
 // (LIBGL_ALWAYS_SOFTWARE=1 in the lane), so the smoke runs in a container with NO
@@ -32,6 +46,13 @@
 #include "space/terrain.h"
 #include "space/trajectory.h"
 
+#ifndef ASMTEST_GOLDEN_DIR
+#error "ASMTEST_GOLDEN_DIR must be defined by the build (mk/desktop.mk)"
+#endif
+#ifndef ASMTEST_FIXTURE_DIR
+#error "ASMTEST_FIXTURE_DIR must be defined by the build (mk/desktop.mk)"
+#endif
+
 using namespace asmdesk;
 using namespace asmdesk::scene3d;
 
@@ -54,6 +75,47 @@ static Recording load(const std::string &ndjson) {
     }
     return *rec;
 }
+
+// Load a committed recording from disk (the T7 golden scenes + the reused
+// survey fixture). A missing file is a FAILURE, never a skip: these are
+// committed (D6), so absence is a broken checkout.
+static Recording load_path(const char *dir, const char *name) {
+    std::string path = std::string(dir) + "/" + name;
+    std::string err;
+    auto rec = load_recording_file(path, err);
+    if (!rec) {
+        std::fprintf(stderr, "FAIL load %s: %s\n", path.c_str(), err.c_str());
+        failures++;
+        return Recording{};
+    }
+    return *rec;
+}
+
+// The three models the scene is built from, for one recording. `extra` carries
+// the regions a maps snapshot (07) would add where a fixture has no codeimage —
+// a survey names its sampling window in `provenance`, not as a code region.
+struct SceneModel {
+    Recording rec;
+    space::TerrainModel terr;
+    space::TrajectorySet traj;
+};
+static SceneModel build_scene(Recording rec,
+                              std::vector<space::Region> extra = {}) {
+    SceneModel m;
+    std::vector<space::Region> regs = space::regions_from_codeimage(rec);
+    for (const space::Region &r : extra)
+        regs.push_back(r);
+    m.terr = space::build_terrain(space::build_projection(regs), rec);
+    m.traj = space::build_trajectories(rec);
+    m.rec = std::move(rec);
+    return m;
+}
+
+// The scene_hot_loop window the two generated scenes record (the producer maps
+// it at REC_CODE_BASE, tools/asmtrace_record.c) — the addresses this file
+// predicts heat at, read straight off the listing in that generator.
+static const uint64_t kLoopBase = 0x00100000ull; // mov rax, rdi  (executed 1x)
+static const uint64_t kLoopBody = 0x00100006ull; // add rcx, rax  (executed 3x)
 
 static const char *kHdrExact =
     "{\"asmtrace\":1,\"container\":\"ndjson\",\"producer\":{\"name\":\"test\","
@@ -163,6 +225,140 @@ static void pure_pick_checks() {
     }
 }
 
+// The sampling window an ibs-op survey names in its provenance — the region a
+// maps snapshot supplies for a fixture that carries no codeimage (the same
+// window test_drillin uses, from obs-survey-ibs's provenance.window).
+static space::Region survey_window() {
+    space::Region r;
+    r.base = 4198400;
+    r.len = 4096;
+    r.kind = space::Region::Data;
+    return r;
+}
+
+// ---- the three T7 golden scenes: their MODEL facts (no GL) ------------------
+// Asserted in the pure half so a host with no GL still proves the scenes build
+// what the doc says they build; the GL half below then proves they RENDER it.
+static void pure_scene_checks() {
+    // (A) the coarse rung's happy path: abs basis, real heat, one exact tube.
+    {
+        SceneModel m = build_scene(
+            load_path(ASMTEST_GOLDEN_DIR, "scene-abs-loop.asmtrace"));
+        check("golden abs scene: basis is absolute", m.terr.basis == "abs",
+              m.terr.basis.c_str());
+        check("golden abs scene: not torn", !m.terr.torn, "torn");
+        check("golden abs scene: seven distinct code cells",
+              m.terr.code.size() == 7, "wrong cell count");
+        check("golden abs scene: 13 trace steps", m.terr.nsteps == 13,
+              "wrong step count");
+        // Heat is countable off the generator's listing: the loop body ran 3x,
+        // the prologue once.
+        uint32_t hot = cell_of(m.terr.proj, m.terr.w, kLoopBody);
+        uint32_t cold = cell_of(m.terr.proj, m.terr.w, kLoopBase);
+        uint32_t hot_heat = 0, cold_heat = 0;
+        for (const auto &cc : m.terr.code) {
+            if (cc.cell == hot)
+                hot_heat = cc.full_heat;
+            if (cc.cell == cold)
+                cold_heat = cc.full_heat;
+        }
+        check("golden abs scene: the loop body is hot (3)", hot_heat == 3,
+              "wrong hot heat");
+        check("golden abs scene: the prologue is cold (1)", cold_heat == 1,
+              "wrong cold heat");
+        check("golden abs scene: exactly one trajectory",
+              m.traj.trajectories.size() == 1, "wrong trajectory count");
+        if (m.traj.trajectories.size() == 1) {
+            const space::Trajectory &tr = m.traj.trajectories[0];
+            check("golden abs scene: the trajectory is EXACT (no flags)",
+                  tr.flags == 0, "relative or statistical");
+            check("golden abs scene: 13 PC vertices", tr.points.size() == 13,
+                  "wrong vertex count");
+        }
+        // The rich rung is absent here, and says so rather than going flat.
+        check("golden abs scene: the mem gate is closed", !m.terr.mem_present,
+              "mem present");
+        check("golden abs scene: the coarse chip is set",
+              !m.terr.mem_note.empty(), "no coarse note");
+    }
+
+    // (B) the torn twin: the SAME bytes, fewer steps held, every cell a floor.
+    {
+        SceneModel m = build_scene(
+            load_path(ASMTEST_GOLDEN_DIR, "scene-abs-loop-truncated.asmtrace"));
+        check("golden torn scene: the recording declares truncation",
+              m.rec.truncated(), "not truncated");
+        check("golden torn scene: the footer counts the dropped steps",
+              m.rec.dropped(), "no drops");
+        check("golden torn scene: the terrain is torn", m.terr.torn,
+              "torn flag not set");
+        check("golden torn scene: only the held prefix is placed (6 steps)",
+              m.terr.nsteps == 6, "wrong step count");
+        space::Terrain full = m.terr.full();
+        size_t populated = 0, torn_cells = 0;
+        for (size_t i = 0; i < full.height.size(); i++) {
+            if (full.height[i] <= 0.0f)
+                continue;
+            populated++;
+            if ((full.flags[i] & space::TF_TORN) != 0u)
+                torn_cells++;
+        }
+        check("golden torn scene: cells are populated", populated > 0,
+              "an empty terrain");
+        check("golden torn scene: EVERY populated cell is TORN",
+              populated == torn_cells, "a populated cell escaped the tear");
+        check("golden torn scene: no statistical layer leaked in",
+              !m.terr.has_stat, "a STAT layer in an exact recording");
+    }
+
+    // (C) the statistical scene (reused fixture): STAT layer, empty exact one.
+    {
+        SceneModel m = build_scene(
+            load_path(ASMTEST_FIXTURE_DIR, "obs-survey-ibs.asmtrace"),
+            {survey_window()});
+        check("golden stat scene: exact:false provenance", m.rec.statistical(),
+              "a survey must be exact:false");
+        check("golden stat scene: a separate STAT layer exists",
+              m.terr.has_stat, "no stat layer");
+        check("golden stat scene: the EXACT terrain is empty (isolation)",
+              m.terr.code.empty(), "an exact cell in a survey");
+        size_t stat_cells = 0;
+        for (uint32_t f : m.terr.stat.flags)
+            if ((f & space::TF_STAT) != 0u)
+                stat_cells++;
+        check("golden stat scene: the residency cells are flagged STAT",
+              stat_cells > 0, "no STAT cells");
+        size_t exact_tubes = 0;
+        for (const space::Trajectory &tr : m.traj.trajectories)
+            if ((tr.flags & space::TRAJ_STATISTICAL) == 0)
+                exact_tubes++;
+        check("golden stat scene: NO exact trajectory tube", exact_tubes == 0,
+              "an exact path leaked out of a survey");
+    }
+
+    // (D) the synthetic rich-`mem` scene: present, and INERT.
+    {
+        SceneModel coarse = build_scene(
+            load_path(ASMTEST_GOLDEN_DIR, "scene-abs-loop.asmtrace"));
+        SceneModel m = build_scene(load_path(ASMTEST_GOLDEN_DIR "/scenes",
+                                             "mem-rich-synthetic.asmtrace"));
+        check("synthetic mem scene: the kind IS present", m.terr.mem_present,
+              "no mem events");
+        check("synthetic mem scene: the trajectory saw the stream too",
+              m.traj.mem_present, "trajectory mem gate closed");
+        // Inert: with the coarse-rung projection (code regions only) the
+        // accesses map to no region, so the rich rung adds NO data cell — the
+        // gate stays closed until a producer, and a data region, land.
+        check("synthetic mem scene: the rich rung adds no data cell",
+              m.terr.data.empty(), "a data cell without a data region");
+        // And the code half is its coarse twin's, cell for cell.
+        check("synthetic mem scene: the coarse half is unchanged",
+              m.terr.code.size() == coarse.terr.code.size() &&
+                  m.terr.nsteps == coarse.terr.nsteps,
+              "the mem lines perturbed the coarse terrain");
+    }
+}
+
 // ---- the GL half ------------------------------------------------------------
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -266,9 +462,60 @@ static float lum(const unsigned char *p) {
     return 0.299f * p[0] + 0.587f * p[1] + 0.114f * p[2];
 }
 
+// Render one frame of the currently-uploaded scene into `cf` and read it back.
+static std::vector<unsigned char> capture(Scene &scene, const Camera &cam,
+                                          const ColorFbo &cf,
+                                          const SceneLayers &layers) {
+    glBindFramebuffer(GL_FRAMEBUFFER, cf.fbo);
+    glViewport(0, 0, cf.w, cf.h);
+    glClearColor(0.02f, 0.02f, 0.03f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    scene.render(cam, cf.w, cf.h, layers);
+    std::vector<unsigned char> px(static_cast<size_t>(cf.w) * cf.h * 4);
+    glReadBuffer(GL_COLOR_ATTACHMENT0);
+    glReadPixels(0, 0, cf.w, cf.h, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return px;
+}
+
+// How many pixels two frames disagree on — the layer-toggle metric: a layer that
+// draws something changes pixels when it is switched off, and one that draws
+// nothing changes none.
+static size_t pixels_differ(const std::vector<unsigned char> &a,
+                            const std::vector<unsigned char> &b) {
+    size_t n = 0;
+    if (a.size() != b.size())
+        return a.size() + b.size();
+    for (size_t i = 0; i < a.size(); i += 4)
+        if (a[i] != b[i] || a[i + 1] != b[i + 1] || a[i + 2] != b[i + 2])
+            n++;
+    return n;
+}
+
+// Upload one scene model (terrain slice + trajectories), clearing any
+// convergence arcs a previous case left behind.
+static void upload(Scene &scene, const SceneModel &m, const space::Terrain &t) {
+    scene.nsteps = static_cast<uint32_t>(m.terr.nsteps);
+    scene.set_terrain(t);
+    scene.set_trajectories(m.traj, m.terr.proj);
+    scene.set_convergences(space::ConvergenceSet{}, m.terr.proj);
+}
+
+// The first screen pixel carrying `id` in the pick buffer, or -1.
+static int pixel_of_id(Scene &scene, const Camera &cam, int W, int H,
+                       uint32_t id) {
+    std::vector<uint32_t> ids;
+    scene.render_pick_buffer(cam, W, H, ids);
+    for (size_t i = 0; i < ids.size(); i++)
+        if (ids[i] == id)
+            return static_cast<int>(i);
+    return -1;
+}
+
 int main() {
     // ===== 1. the pure half — always runs ====================================
     pure_pick_checks();
+    pure_scene_checks();
 
     // ===== 2. the GL smoke — self-skips where no GL is reachable =============
     EGLDisplay dpy = EGL_NO_DISPLAY;
@@ -441,6 +688,142 @@ int main() {
               "no arc pixels");
         check("convergence arc turns off with its layer", without == 0,
               "arc still visible with its layer off");
+    }
+
+    // ===== 3. the T7 GOLDEN SCENES, rendered ================================
+    // The pure half above asserted what each scene MODELS; these assert that the
+    // scene puts it on screen — coarse terrain and an exact tube for the abs
+    // scene, the torn gash for its truncated twin, a statistical layer with
+    // nothing exact beside it, and a rich-`mem` scene that draws nothing extra.
+    //
+    // Rendered through the camera's TOP-DOWN preset into a LARGER framebuffer
+    // than the cases above, and deliberately so: a golden scene's live region is
+    // 18 bytes wide on a 64x64 plane, so at 160x160 in the three-quarter view a
+    // cell is barely a pixel and the plane's far corner disappears behind its
+    // neighbour. The top-down preset is the view the doc prescribes for reading
+    // a cell ("3D to find, 2D to read" — camera.h's honest 2D-ish fallback), so
+    // asserting the recorded heat through it is the honest measurement, and it
+    // exercises the preset as a side effect.
+    const int GW = 384, GH = 384;
+    ColorFbo gcf;
+    Camera gcam;
+    gcam.top_down();
+    if (!gcf.create(GW, GH)) {
+        skip("golden-scene framebuffer incomplete on this driver");
+        scene.shutdown();
+        eglMakeCurrent(dpy, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
+        eglDestroyContext(dpy, ctx);
+        eglTerminate(dpy);
+        return failures ? 1 : 0;
+    }
+
+    // --- (e) the abs scene: coarse terrain AND a trajectory both render -----
+    std::vector<unsigned char> abs_frame;
+    {
+        SceneModel m = build_scene(
+            load_path(ASMTEST_GOLDEN_DIR, "scene-abs-loop.asmtrace"));
+        upload(scene, m, m.terr.full());
+        const uint32_t n = m.terr.w;
+
+        SceneLayers all;
+        abs_frame = capture(scene, gcam, gcf, all);
+
+        // The terrain renders, and renders the recorded heat: the loop body's
+        // cell is brighter than the prologue's.
+        uint32_t hot = cell_of(m.terr.proj, n, kLoopBody);
+        uint32_t cold = cell_of(m.terr.proj, n, kLoopBase);
+        int hot_px = pixel_of_id(scene, gcam, GW, GH, pick_id_cell(hot));
+        int cold_px = pixel_of_id(scene, gcam, GW, GH, pick_id_cell(cold));
+        check("golden abs scene: the hot cell is on screen", hot_px >= 0,
+              "hot cell not rendered");
+        check("golden abs scene: the cold cell is on screen", cold_px >= 0,
+              "cold cell not rendered");
+        if (hot_px >= 0 && cold_px >= 0)
+            check("golden abs scene: the loop body renders brighter",
+                  lum(&abs_frame[hot_px * 4]) >
+                      lum(&abs_frame[cold_px * 4]) + 8.0f,
+                  "hot not brighter");
+
+        // The exact trajectory draws: switching its layer off changes pixels.
+        SceneLayers no_exact;
+        no_exact.exact = false;
+        std::vector<unsigned char> without =
+            capture(scene, gcam, gcf, no_exact);
+        check("golden abs scene: the exact trajectory puts pixels on screen",
+              pixels_differ(abs_frame, without) > 0,
+              "the exact layer toggle changed nothing — no tube was drawn");
+        // Nothing statistical exists here, so its toggle must be a no-op.
+        SceneLayers no_stat;
+        no_stat.statistical = false;
+        check("golden abs scene: no statistical mark to hide",
+              pixels_differ(abs_frame, capture(scene, gcam, gcf, no_stat)) == 0,
+              "a statistical mark in an exact recording");
+    }
+
+    // --- (f) the truncated twin: the torn gash renders ----------------------
+    {
+        SceneModel m = build_scene(
+            load_path(ASMTEST_GOLDEN_DIR, "scene-abs-loop-truncated.asmtrace"));
+        upload(scene, m, m.terr.full());
+        const uint32_t n = m.terr.w;
+        std::vector<unsigned char> px =
+            capture(scene, gcam, gcf, SceneLayers{});
+
+        uint32_t torn = cell_of(m.terr.proj, n, kLoopBody);
+        int tpx = pixel_of_id(scene, gcam, GW, GH, pick_id_cell(torn));
+        check("golden torn scene: the torn cell is on screen", tpx >= 0,
+              "torn cell not rendered");
+        if (tpx >= 0) {
+            const unsigned char *p = &px[tpx * 4];
+            check("golden torn scene: the cell paints the red gash",
+                  p[0] > p[1] + 40 && p[0] > p[2] + 40, "not a red gash");
+        }
+    }
+
+    // --- (g) the statistical scene: a STAT layer, and nothing exact ---------
+    // Isolation asserted at the PIXEL level: turning the EXACT layer off changes
+    // no pixel (there is no exact tube to hide), while turning the STATISTICAL
+    // layer off does — so what is on screen is the sampled layer and only that.
+    {
+        SceneModel m = build_scene(
+            load_path(ASMTEST_FIXTURE_DIR, "obs-survey-ibs.asmtrace"),
+            {survey_window()});
+        upload(scene, m, m.terr.stat); // the SEPARATE statistical terrain
+        std::vector<unsigned char> px =
+            capture(scene, gcam, gcf, SceneLayers{});
+
+        SceneLayers no_stat;
+        no_stat.statistical = false;
+        SceneLayers no_exact;
+        no_exact.exact = false;
+        check("golden stat scene: the statistical layer puts pixels on screen",
+              pixels_differ(px, capture(scene, gcam, gcf, no_stat)) > 0,
+              "the statistical toggle changed nothing");
+        check("golden stat scene: there is NOTHING on the exact layer",
+              pixels_differ(px, capture(scene, gcam, gcf, no_exact)) == 0,
+              "a sampled residency rendered as an exact tube");
+    }
+
+    // --- (h) the synthetic rich-`mem` scene: present, and inert -------------
+    // It is the abs scene plus hand-authored `mem` lines, so with the coarse-rung
+    // projection it must render PIXEL-IDENTICALLY to that scene: the rich rung
+    // draws nothing until a producer (and a data region) land, and it certainly
+    // never invents a data plane.
+    {
+        SceneModel m = build_scene(load_path(ASMTEST_GOLDEN_DIR "/scenes",
+                                             "mem-rich-synthetic.asmtrace"));
+        upload(scene, m, m.terr.full());
+        std::vector<unsigned char> px =
+            capture(scene, gcam, gcf, SceneLayers{});
+        check("synthetic mem scene: renders identically to its coarse twin",
+              pixels_differ(abs_frame, px) == 0,
+              "the inert rich rung changed the picture");
+
+        SceneLayers no_marks;
+        no_marks.access_marks = false;
+        check("synthetic mem scene: no access-mark spur is drawn",
+              pixels_differ(px, capture(scene, gcam, gcf, no_marks)) == 0,
+              "a spur to a data cell that no region holds");
     }
 
     scene.shutdown();

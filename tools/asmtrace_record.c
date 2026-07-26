@@ -423,8 +423,9 @@ static int record_scene_abs(const char *dir, const char *out, const char *label,
     int rc;
 
     if (code_len > REC_WINDOW) {
-        fprintf(stderr, "asmtrace_record: scene %s exceeds the %d-byte window\n",
-                out, REC_WINDOW);
+        fprintf(stderr,
+                "asmtrace_record: scene %s exceeds the %d-byte window\n", out,
+                REC_WINDOW);
         return -1;
     }
     vt = asmtest_valtrace_new(4096, 65536, 4096);
@@ -454,8 +455,8 @@ static int record_scene_abs(const char *dir, const char *out, const char *label,
     /* A note that explains the scene without a sidecar: which routine, why the
      * basis is absolute, and — when capped — exactly what was lost. */
     {
-        int o = snprintf(text, sizeof text,
-                         "3D-overview golden scene: %s(", label);
+        int o =
+            snprintf(text, sizeof text, "3D-overview golden scene: %s(", label);
         for (int i = 0; i < nargs; i++)
             o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
                           i ? ", " : "", args[i]);
