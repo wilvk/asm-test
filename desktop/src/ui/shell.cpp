@@ -272,7 +272,10 @@ static void draw_recording_tab(ShellState &s, const Recording &r) {
                                   });
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem("Loom")) {
+            ImGuiTabItemFlags loom_flags = 0;
+            if (s.want_loom)
+                loom_flags |= ImGuiTabItemFlags_SetSelected;
+            if (ImGui::BeginTabItem("Loom", nullptr, loom_flags)) {
                 // The Phase-2 flagship: the recording as a spacetime fabric.
                 // It weaves from the SAME decoded streams the other views use,
                 // and refuses — with its reason on screen and no partial
@@ -361,6 +364,24 @@ void draw_shell(ShellState &s) {
             ImGui::EndTabItem();
         }
 
+        // A capture the Inspect door just saved wants to open in the Loom. The
+        // door cannot reach the Workspace, so it posts the path here and the
+        // shell opens it exactly as the recording-open dialog would, then jumps
+        // the tab strip to it (want_open_tab) and to its Loom (want_loom).
+        if (!s.inspect.open_request.empty()) {
+            std::string path = s.inspect.open_request;
+            s.inspect.open_request.clear();
+            std::string err;
+            int idx = shell_open(s, path, err);
+            if (idx < 0) {
+                s.status = err.empty() ? ("could not open " + path) : err;
+            } else {
+                s.want_open_tab = idx;
+                s.want_loom = true;
+                s.show_inspect = false; // we are leaving the door for the Loom
+            }
+        }
+
         if (s.show_learn && ImGui::BeginTabItem("Learn", &s.show_learn)) {
             draw_learn_door(s.learn, [&s](const std::string &path, long step) {
                 // Route through 04's router rather than reaching into the
@@ -389,7 +410,10 @@ void draw_shell(ShellState &s) {
             std::string title =
                 base_name(r.path) + "###rec" + std::to_string(i);
             bool keep_open = true;
-            if (ImGui::BeginTabItem(title.c_str(), &keep_open)) {
+            ImGuiTabItemFlags tf = 0;
+            if (s.want_open_tab == static_cast<int>(i))
+                tf |= ImGuiTabItemFlags_SetSelected;
+            if (ImGui::BeginTabItem(title.c_str(), &keep_open, tf)) {
                 s.active_tab = static_cast<int>(i);
                 draw_recording_tab(s, r);
                 ImGui::EndTabItem();
@@ -397,6 +421,11 @@ void draw_shell(ShellState &s) {
             if (!keep_open)
                 to_close = static_cast<int>(i);
         }
+        // Consumed: the SetSelected flags above take effect this same frame (a
+        // forced outer tab renders its inner tab strip in the same pass), so the
+        // jump is complete and the flags must not persist into the next frame.
+        s.want_open_tab = -1;
+        s.want_loom = false;
         if (to_close >= 0)
             shell_close(s, static_cast<size_t>(to_close));
 

@@ -255,6 +255,67 @@ int main() {
               "close should shrink");
     }
 
+    // save_roundtrip: recording_to_asmtrace is the inverse of the loader for
+    // everything the model keeps — the Inspect door's save-to-disk (07 T4/T5).
+    {
+        Recording r = must_load("roundtrip/load", "min-trace.asmtrace");
+        std::string text = recording_to_asmtrace(r);
+        std::istringstream in(text);
+        std::string err;
+        auto r2 = load_recording(in, err);
+        check("roundtrip/reload", r2.has_value(),
+              std::string("re-load failed: ") + err);
+        if (r2) {
+            check("roundtrip/version", r2->version == r.version,
+                  "version drift");
+            check("roundtrip/backend",
+                  r2->provenance.backend == r.provenance.backend,
+                  "backend drift");
+            check("roundtrip/exact",
+                  r2->provenance.exact == r.provenance.exact, "exact drift");
+            check("roundtrip/producer", r2->producer.name == r.producer.name,
+                  "producer drift");
+            check("roundtrip/arch", r2->arch == r.arch, "arch drift");
+            check("roundtrip/count", r2->event_count() == r.event_count(),
+                  "event count drift");
+            check("roundtrip/end", r2->has_end == r.has_end && !r2->torn,
+                  "footer/torn drift");
+            check("roundtrip/clean", !r2->truncated() && !r2->dropped(),
+                  "a clean recording must round-trip clean");
+        }
+    }
+    // truncation survives the round-trip: the `end` footer's truncated flag is
+    // re-emitted, so a dishonest-but-honest-about-it recording stays that way.
+    {
+        Recording r = must_load("roundtrip-trunc/load", "truncated.asmtrace");
+        std::string text = recording_to_asmtrace(r);
+        std::istringstream in(text);
+        std::string err;
+        auto r2 = load_recording(in, err);
+        check("roundtrip-trunc/reload", r2.has_value(), err);
+        if (r2)
+            check("roundtrip-trunc/truncated",
+                  r2->truncated() == r.truncated(),
+                  "truncation must survive a round-trip");
+    }
+    // save_recording_file writes a file the loader reads back to an equal set.
+    {
+        Recording r = must_load("savefile/load", "min-trace.asmtrace");
+        std::string err;
+        const std::string tmp = "desktop_save_roundtrip.tmp.asmtrace";
+        bool ok = save_recording_file(r, tmp, err);
+        check("savefile/ok", ok, std::string("save failed: ") + err);
+        if (ok) {
+            auto r2 = load_recording_file(tmp, err);
+            check("savefile/reload", r2.has_value(),
+                  std::string("reload failed: ") + err);
+            if (r2)
+                check("savefile/count", r2->event_count() == r.event_count(),
+                      "event count drift through a file");
+        }
+        std::remove(tmp.c_str());
+    }
+
     if (failures) {
         std::fprintf(stderr, "test_recording: %d FAILURE(S)\n", failures);
         return 1;

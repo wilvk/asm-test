@@ -140,6 +140,20 @@ struct InspectState {
     // asked to refresh.
     PtSliceResult ptslice;
     bool ptslice_ran = false;
+
+    // Save this session's capture to a .asmtrace file — the one thing the live
+    // host does not do on its own, because the desktop keeps recordings in
+    // memory rather than on disk. `save_path` is the target; `saved_path` (set
+    // on a successful save) is what "Open in Loom" hands back to the shell.
+    char save_path[1024] = "capture.asmtrace";
+    std::string save_status; // last save result, shown verbatim
+    bool saved_ok = false;   // a save succeeded -> offer "Open in Loom"
+    std::string saved_path;  // the file the last successful save wrote
+    bool saved_statistical = false; // the saved capture was non-exact (no Loom)
+    // A cross-door request: a path the shell should open into the Workspace and
+    // show in the Loom. draw_shell consumes and clears it — the door cannot
+    // reach ShellState, and should not. Empty = nothing pending.
+    std::string open_request;
 };
 
 // Rescan /proc into `s.rows` (also called once on first draw).

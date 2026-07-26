@@ -253,6 +253,60 @@ void draw_live_views(InspectState &s) {
     draw_observer(s.observer, *live, "live-session", nullptr);
 }
 
+// Save this session's capture to a .asmtrace file, and offer to open the saved
+// file in the Loom. The live host keeps recordings in memory; this is the one
+// action that puts one on disk — in the same NDJSON a `--record` run would have
+// written. Saving the growing recording is allowed but writes a partial (torn)
+// file, so the growing case says so. "Open in Loom" cannot reach the Workspace
+// from here, so it posts a request the shell fulfils (s.open_request).
+void draw_save_capture(InspectState &s) {
+    ImGui::SeparatorText("save capture");
+    const Recording *live = s.session.growing();
+    const std::vector<Recording> &done = s.session.recordings();
+    const bool growing = live != nullptr;
+    if (live == nullptr && !done.empty())
+        live = &done.back();
+    if (live == nullptr) {
+        ImGui::TextDisabled(
+            "nothing captured yet — start a mode to record one");
+        return;
+    }
+    ImGui::InputText("path##save", s.save_path, sizeof s.save_path);
+    if (growing)
+        ImGui::TextColored(kMaybe,
+                           "the capture is still running — saving now writes a "
+                           "partial (torn) recording; Stop first for a "
+                           "complete one");
+    if (ImGui::Button("Save .asmtrace")) {
+        std::string err;
+        if (save_recording_file(*live, s.save_path, err)) {
+            s.saved_ok = true;
+            s.saved_path = s.save_path;
+            s.saved_statistical = live->statistical();
+            s.save_status = "saved " +
+                            std::to_string(live->event_count()) +
+                            " event(s) to " + s.saved_path;
+        } else {
+            s.saved_ok = false;
+            s.save_status = err;
+        }
+    }
+    if (!s.save_status.empty())
+        ImGui::TextColored(s.saved_ok ? kGood : kBad, "%s",
+                           s.save_status.c_str());
+    // Offer the Loom only for a saved file the Loom can actually weave: an
+    // exact recording with per-step values. A statistical or trace-only capture
+    // would open and immediately show the Loom's refusal, so say why here
+    // instead of sending the user to a dead end.
+    if (s.saved_ok) {
+        if (s.saved_statistical)
+            ImGui::TextDisabled("(a statistical capture cannot be woven into a "
+                                "Loom — it needs exact per-step values)");
+        else if (ImGui::Button("Open in Loom"))
+            s.open_request = s.saved_path;
+    }
+}
+
 // The PT-replay slice: a def-use slice with ZERO single-steps of the target.
 // The gate has two levels and the UI must not blur them — capture needs PT
 // silicon, replay needs only the emulator — so a host without PT still gets a
@@ -340,6 +394,7 @@ void draw_inspect_door(InspectState &s) {
         draw_status(s);
         ImGui::SeparatorText("live views");
         draw_live_views(s);
+        draw_save_capture(s);
         draw_pt_slice(s);
     }
 

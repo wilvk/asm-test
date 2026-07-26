@@ -108,5 +108,24 @@ std::optional<Recording> load_recording(std::istream &in, std::string &err);
 std::optional<Recording> load_recording_file(const std::string &path,
                                              std::string &err);
 
+// Serialize a Recording back to .asmtrace NDJSON text — the inverse of
+// load_recording for everything the model keeps: the header (asmtrace major,
+// producer, the whole `provenance` object, arch), every event in stream (`seq`)
+// order, and — only when the recording actually carried one — the `end` footer.
+// A torn recording is written WITHOUT a footer, so it reloads torn rather than
+// presenting an incomplete capture as complete. Not byte-identical to the
+// original wire text (JSON key order is normalized, and header fields the model
+// does not decode — a live serve header's pid/cmd/ts — are dropped), but
+// semantically faithful: the result reloads to an equal Recording. This is what
+// lets the Inspect door put an in-memory live capture on disk (07-serve-live-
+// host.md): the desktop keeps recordings in memory, and a `--record` run would
+// have written this same NDJSON.
+std::string recording_to_asmtrace(const Recording &rec);
+
+// Write recording_to_asmtrace(rec) to `path`. Returns true, or false with a
+// human-readable `err` (the path and the reason) on an open/write failure.
+bool save_recording_file(const Recording &rec, const std::string &path,
+                         std::string &err);
+
 } // namespace asmdesk
 #endif // ASMDESK_DOC_RECORDING_H

@@ -25,6 +25,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   dropped step renders *UNKNOWN* per pane, and a stop past the recorded window is
   refused not clamped. Builds into both binaries and stays engine-free (D4);
   covered by `test_abixray` (builder) and `test_abixray_draw` (the ImGui half).
+- **Save a live capture to a `.asmtrace` file from the Inspect door — and open
+  it in the Loom** (docs/internal/gui/07-serve-live-host.md). The live host kept
+  its recordings in memory only; the Inspect door now has a **save capture**
+  section that writes the growing (or last completed) recording to disk in the
+  same NDJSON a `--record` run produces, via a new model-native serializer
+  `recording_to_asmtrace` / `save_recording_file` (`desktop/src/doc/recording.h`)
+  that round-trips through the loader: header, every event in stream order, and
+  the `end` footer only when the recording had one — so a torn capture reloads
+  torn and a truncated one stays truncated. A saved exact recording offers an
+  **Open in Loom** button that loads the file into the Workspace and jumps the
+  tab strip to its Loom (a statistical capture says why it cannot be woven
+  instead of sending the user to the Loom's refusal). Covered by new
+  `test_recording` round-trip cases (string and file, clean and truncated).
 - **Register time-travel scrubber in the desktop GUI**
   (docs/internal/gui/09-teaching-producers.md T3). A playhead over a recording's
   steps showing the full register file at each step, seeked O(1) through a new

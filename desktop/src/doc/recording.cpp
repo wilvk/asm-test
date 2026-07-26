@@ -5,7 +5,10 @@
 // rather than being silently smoothed away.
 #include "doc/recording.h"
 
+#include <algorithm>
 #include <array>
+#include <cerrno>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 
@@ -190,6 +193,89 @@ std::optional<Recording> load_recording_file(const std::string &path,
     if (rec)
         rec->path = path;
     return rec;
+}
+
+std::string recording_to_asmtrace(const Recording &rec) {
+    json header;
+    header["asmtrace"] = rec.version ? rec.version : kAsmtraceMajor;
+    if (!rec.producer.name.empty() || !rec.producer.version.empty()) {
+        json p;
+        p["name"] = rec.producer.name;
+        if (!rec.producer.version.empty())
+            p["version"] = rec.producer.version;
+        header["producer"] = p;
+    }
+    // The whole provenance object survives the load in Provenance::raw, so a
+    // save re-emits it verbatim rather than reconstructing the mandatory fields
+    // and silently dropping the optional ones. The decoded fields are the
+    // fallback for a Recording built without a raw prov (never from the loader).
+    if (rec.provenance.raw.is_object()) {
+        header["provenance"] = rec.provenance.raw;
+    } else {
+        json pr;
+        pr["backend"] = rec.provenance.backend;
+        pr["exact"] = rec.provenance.exact;
+        pr["trust"] = rec.provenance.trust;
+        if (rec.provenance.redacted)
+            pr["redacted"] = true;
+        header["provenance"] = pr;
+    }
+    if (!rec.arch.empty())
+        header["arch"] = rec.arch;
+
+    std::string out = header.dump();
+    out += '\n';
+
+    // by_kind groups events by kind; `seq` is what restores the wire ORDER the
+    // region view's invocation split depends on. Flatten and sort by it.
+    std::vector<const Event *> evs;
+    evs.reserve(rec.event_count());
+    for (const auto &kv : rec.by_kind)
+        for (const Event &e : kv.second)
+            evs.push_back(&e);
+    std::sort(evs.begin(), evs.end(),
+              [](const Event *a, const Event *b) { return a->seq < b->seq; });
+    for (const Event *e : evs) {
+        out += e->body.dump();
+        out += '\n';
+    }
+
+    // The footer, only when the recording had one. A torn recording is written
+    // without an `end`, which is exactly what makes it reload torn instead of
+    // presenting an incomplete capture as complete.
+    if (rec.has_end) {
+        json end;
+        end["k"] = "end";
+        end["events"] = rec.event_count();
+        if (rec.end_truncated)
+            end["truncated"] = true;
+        if (rec.drops_lost || rec.drops_throttled) {
+            json d;
+            d["lost"] = rec.drops_lost;
+            d["throttled"] = rec.drops_throttled;
+            end["drops"] = d;
+        }
+        out += end.dump();
+        out += '\n';
+    }
+    return out;
+}
+
+bool save_recording_file(const Recording &rec, const std::string &path,
+                         std::string &err) {
+    err.clear();
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out) {
+        err = "cannot open " + path + " for writing: " + std::strerror(errno);
+        return false;
+    }
+    out << recording_to_asmtrace(rec);
+    out.flush();
+    if (!out) {
+        err = "write failed to " + path + ": " + std::strerror(errno);
+        return false;
+    }
+    return true;
 }
 
 } // namespace asmdesk

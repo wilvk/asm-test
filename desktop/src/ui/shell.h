@@ -66,6 +66,14 @@ struct ShellState {
     // property the whole doc is built on.
     std::vector<ObserverState> observers;
     std::string repo_root = ".";
+
+    // A pending cross-door jump: a capture the Inspect door just saved and asked
+    // to open in the Loom (07-serve-live-host.md). `want_open_tab` is the
+    // recording index whose outer tab to select; `want_loom` forces its Loom
+    // inner tab. Both are set when draw_shell consumes InspectState::open_request
+    // and cleared the same frame after the tab strip applies them.
+    int want_open_tab = -1;
+    bool want_loom = false;
 };
 
 // Open a recording AND decode its streams, keeping ShellState::streams parallel
