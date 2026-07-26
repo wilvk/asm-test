@@ -168,7 +168,8 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/ui/capability_panel.o \
   $(BUILD)/desktop/$(1)/ui/inspect_door.o \
   $(DESKTOP_LIVE:%=$(BUILD)/desktop/$(1)/lv/%.o) \
-  $(BUILD)/desktop/$(1)/sp/projection.o $(BUILD)/desktop/$(1)/sp/trajectory.o
+  $(BUILD)/desktop/$(1)/sp/projection.o $(BUILD)/desktop/$(1)/sp/terrain.o \
+  $(BUILD)/desktop/$(1)/sp/trajectory.o
 DESKTOP_APP_OBJ    := $(call desktop_app_objs,app) \
                       $(DESKTOP_LOOM_APP:%=$(BUILD)/desktop/app/lo/%.o)
 DESKTOP_RENDER_OBJ := $(call desktop_app_objs,render)
@@ -373,6 +374,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_shell $(BUILD)/desktop_test_golden \
                  $(BUILD)/desktop_test_slice $(BUILD)/desktop_test_nav \
                  $(BUILD)/desktop_test_projection \
+                 $(BUILD)/desktop_test_terrain \
                  $(BUILD)/desktop_test_trajectory \
                  $(BUILD)/desktop_test_diff $(BUILD)/desktop_test_canvas \
                  $(BUILD)/desktop_test_timeline \
@@ -591,6 +593,16 @@ $(BUILD)/desktop_test_slice: $(BUILD)/desktop/test/t/test_slice.o \
 # for the address-space terrain plane.
 $(BUILD)/desktop_test_projection: $(BUILD)/desktop/test/t/test_projection.o \
     $(BUILD)/desktop/test/sp/projection.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The terrain (10-spacetime-3d-overview.md T2) links space/terrain.o +
+# space/projection.o + the trace canvas builder it REUSES for per-offset heat
+# (04-T3) + the document model, and NOTHING else — the same engine-free closure
+# proof test_projection makes for the plane, now for the density over it (D4).
+$(BUILD)/desktop_test_terrain: $(BUILD)/desktop/test/t/test_terrain.o \
+    $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The trajectory builder (10-spacetime-3d-overview.md T3) links space/trajectory.o

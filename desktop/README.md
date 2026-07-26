@@ -799,3 +799,41 @@ fixture sets `TRAJ_RELATIVE_BASIS`; a mixed (and an absent-basis) fixture is
 refused with a diagnostic and no trajectories; a `survey` fixture is all
 `Statistical` with no exact path leaking in; and the per-tid and gated-`mem`
 paths build the trajectories they should.
+
+## Terrain — density height field over time
+
+`space/terrain.{h,cpp}` raises that flat plane into a landscape: `build_terrain`
+turns a recording into a `TerrainModel` whose `slice(t)` is the `Terrain` (a
+per-cell height field, log-scaled) for the time slice `[0, t]`. Like the
+projection it links no GL, no ImGui and no engine, so it ships in **both**
+binaries and the null test harness (D4). It is built **once** into a per-cell
+prefix structure so scrubbing the playhead — a fresh `slice(t)` each frame — is a
+binary search per touched cell, not an event re-scan, and stays far under the
+16 ms budget on a golden-sized recording.
+
+The **coarse rung** (buildable today) is code density: a cell's height is
+`log1p` of the execution count of the offsets that project into it, and that
+count is *reused* from the trace canvas (`views/canvas.h`, 04-T3) rather than
+recomputed — the terrain owns no second heat model. `codeimage` events place and
+label the code regions (`regions_from_codeimage`) and carry their version, so a
+region whose version changes within `[0, t]` flags its cells `CHURN` (the JIT
+churn signal). The **rich rung** (per-access data density) is gated at runtime on
+the Wave-1 `mem` stream: with the proposed shape `{"k":"mem","step","ea","size",
+"rw"}` each access adds its `size` to its data cell and tints it read/write;
+**absent the stream** — which is always, until a producer lands — the data cells
+stay flat and `mem_note` says `coarse: no per-access memory stream`, never a
+silent zero.
+
+Two honesty rules ride along and are tested. **Statistical is kept separate:** a
+`survey`'s sampled residency is written to a *distinct* `Terrain` (`stat`) with
+every populated cell flagged `STAT`, and the exact `slice()` never merges it — a
+sampled density must not render as an exact one. **Truncation floors, never
+erases:** a truncated or torn recording (or one with dropped events) flags every
+populated cell `TORN`, marking its height a lower bound rather than dropping it.
+Mixed address bases refuse the whole exact terrain, exactly as the canvas refuses
+its rows. `test_terrain` (under `make desktop-test`, no display) pins all of it:
+three offsets in two regions give the expected non-zero cells and reproduce the
+canvas heat, a truncated fixture sets `TORN`, a `survey`-only fixture produces a
+`STAT` layer over an *empty* exact layer (the isolation invariant), a synthetic
+`mem` fixture exercises the gated rich rung, and a re-versioned `codeimage` sets
+`CHURN` only once the slice reaches the change.
