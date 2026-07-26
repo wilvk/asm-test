@@ -495,9 +495,9 @@ GL): each pickable kind resolves to the expected router call; the TORN and
 > [Dockerfile.desktop](../../../Dockerfile.desktop) already carries
 > `libgl1-mesa-dri` + `libegl1-mesa-dev` + `LIBGL_ALWAYS_SOFTWARE=1` from T4.
 > `mk/desktop.mk` gained only the smoke's two compile defines (additive, no new
-> target). **Not done here:** hosting the scene in a visible shell pane — the
-> scene has no `ui/` host yet, and this task's scope was fixtures, the lane and
-> the docs.
+> target). **Not done in T7** (its scope was the fixtures, the lane and the docs):
+> hosting the scene in a visible shell pane — the scene had no `ui/` host yet.
+> That is the follow-on surfacing pass, recorded next.
 >
 > **Integration surfacing pass (2026-07-26): the pane is now hosted.** The
 > overview is a per-recording **3D overview** tab. `draw_shell` links no GL (the
