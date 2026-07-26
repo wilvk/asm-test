@@ -1,0 +1,60 @@
+desc=emu_x86_regs_t@x86_64/sysv
+steps: total=6 held=[4..5] dropped=4
+banner=TORN: 4 step(s) dropped before the first held step — the ring evicted them; the register file at steps 0..3 is UNKNOWN, not zero
+playhead=0 TORN (this step was dropped — register file UNKNOWN)
+desc=emu_x86_regs_t@x86_64/sysv
+steps: total=6 held=[4..5] dropped=4
+banner=TORN: 4 step(s) dropped before the first held step — the ring evicted them; the register file at steps 0..3 is UNKNOWN, not zero
+playhead=1 TORN (this step was dropped — register file UNKNOWN)
+desc=emu_x86_regs_t@x86_64/sysv
+steps: total=6 held=[4..5] dropped=4
+banner=TORN: 4 step(s) dropped before the first held step — the ring evicted them; the register file at steps 0..3 is UNKNOWN, not zero
+playhead=2 TORN (this step was dropped — register file UNKNOWN)
+desc=emu_x86_regs_t@x86_64/sysv
+steps: total=6 held=[4..5] dropped=4
+banner=TORN: 4 step(s) dropped before the first held step — the ring evicted them; the register file at steps 0..3 is UNKNOWN, not zero
+playhead=3 TORN (this step was dropped — register file UNKNOWN)
+desc=emu_x86_regs_t@x86_64/sysv
+steps: total=6 held=[4..5] dropped=4
+banner=TORN: 4 step(s) dropped before the first held step — the ring evicted them; the register file at steps 0..3 is UNKNOWN, not zero
+playhead=4 (no previous held step — baseline absent)
+  rax=0x5
+  rbx=0x5
+  rcx=0x0
+  rdx=0x0
+  rsi=0x3
+  rdi=0x2
+  rbp=0x0
+  rsp=0x20fff0
+  r8=0x0
+  r9=0x0
+  r10=0x0
+  r11=0x0
+  r12=0x0
+  r13=0x0
+  r14=0x0
+  r15=0x0
+  rip=0x10000a
+  rflags=0x6
+desc=emu_x86_regs_t@x86_64/sysv
+steps: total=6 held=[4..5] dropped=4
+banner=TORN: 4 step(s) dropped before the first held step — the ring evicted them; the register file at steps 0..3 is UNKNOWN, not zero
+playhead=5 (diff vs previous held step)
+  rax=0x5
+  rbx=0x0 *
+  rcx=0x0
+  rdx=0x0
+  rsi=0x3
+  rdi=0x2
+  rbp=0x0
+  rsp=0x20fff8 *
+  r8=0x0
+  r9=0x0
+  r10=0x0
+  r11=0x0
+  r12=0x0
+  r13=0x0
+  r14=0x0
+  r15=0x0
+  rip=0x10000b *
+  rflags=0x6

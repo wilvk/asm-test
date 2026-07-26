@@ -129,6 +129,8 @@ desktop/
                         semantics pinned to src/dataflow.c's slicer
       diff.{h,cpp}      two-recording alignment: coverage / heat / hot-edge
                         deltas and the first divergence (plan D3)
+      stepindex.{h,cpp} O(1) seek from a step to its `regstate` register file;
+                        the shared index the scrubber AND the Loom now-column read
     data/
       features_data.*   asmfeatures / box-record / bench-report readers
       perf_history.*    the append-only perf-history.jsonl reader + box scan
@@ -163,6 +165,8 @@ desktop/
     views/
       canvas.*          per-offset heat, block gutter, basis refusal
       timeline.*        per-step values via cli/asmspy_dataview.h's grammar
+      scrubber.*        the register time-travel scrubber: full register file at
+                        a step, per-step diff-highlight, the torn edge (D7)
       slice_view.*      the layered def-use DAG + cones
       diff_view.*       the A/B summary panel, every row a deep link
       completeness*     the tier x backend capability table
@@ -197,6 +201,9 @@ desktop/
     test_diff.cpp          alignment, refusals, and the bounded-verdict rule
     test_canvas.cpp        heat, gutter, basis refusal, truncation banner
     test_timeline.cpp      annotation literals shared with the TUI
+    test_scrubber.cpp      the register scrubber's builder: seek, diff-highlight,
+                           the torn edge, and the producer-absent message
+    test_scrubber_draw.cpp the scrubber's ImGui half under the null backend
     test_slice_view.cpp    cone styles, deterministic lanes, generation walk
     test_diff_view.cpp     panel rows, deep links that parse back
     test_data_readers.cpp  the three envelopes + a torn append-only line
@@ -276,6 +283,24 @@ view of the recording's own vectors — so the two frontends cannot drift into
 different dialects of `->0x2a`. `test_timeline.cpp` pins two annotation strings
 as literals to keep it that way. A step index no `df_step` event covered is
 rendered as **unknown**, never as an instruction at offset 0.
+
+**Register time-travel scrubber.** A playhead over a recording's steps showing
+the **full register file at that step**, seeked O(1) through the shared
+`regstate` index ([`analysis/stepindex.h`](src/analysis/stepindex.h) — the same
+lookup the Loom's now-column reads). Each register is diffed against the
+**previous held step** and the ones that changed are highlighted, so the eye
+lands on what the instruction did rather than on the sixteen it left alone. The
+producer is the opt-in per-step ring (`asmtrace_record --steps=<cap>`); when it
+**dropped** a prefix of steps (the `regstate-truncated` corpus fixture) the
+scrubber renders that region as a **torn edge** — seeking into it shows
+*UNKNOWN*, never a register file of zeros, and the first held step carries no
+diff baseline because its true predecessor was evicted (D7). A recording with
+**no** `regstate` events states the producer is absent and deep-links the docs;
+the "re-run with a larger `max_insns`" fallback is deliberately **not** offered
+(the plan's honest-limits stance). `[` / `]` walk one step (04's bindings), the
+torn region included. `test_scrubber.cpp` pins seek, diff-highlight, the tear
+and the absent message; `test_scrubber_draw.cpp` draws every one under the null
+backend.
 
 **Slice explorer.** Click a step: the backward cone is everything that produced
 the value there, the forward cone everything it goes on to affect. Both are

@@ -1,0 +1,3 @@
+no-producer
+message=no per-step register capture in this recording — the regstate producer was not run (record with asmtrace_record --steps=<cap>). Re-running with a larger max_insns to synthesise one is not a day-one feature.
+docs=docs/internal/gui/09-teaching-producers.md

@@ -144,7 +144,24 @@ eviction must render as truncation (D7).
 loader accepts `regstate` (it already must — 01 defined the kind); the
 dishonesty fixture carries the drop count.
 
-### T3 — Register time-travel scrubber  (M, depends on: T2; 03, 04)
+### T3 — Register time-travel scrubber  (M, depends on: T2; 03, 04)  ✓
+
+> **Implemented 2026-07-26.** `desktop/src/analysis/stepindex.{h,cpp}` (**new**,
+> shared) indexes a recording's `regstate` events by step → O(1) seek to the
+> register file BEFORE that step, with the ring's drop count offsetting the first
+> held step (held events are `[dropped, dropped+count)`); it is engine- and
+> ImGui-free so 05's now-column reads the same lookup. `desktop/src/views/
+> scrubber.{h,cpp}` + `scrubber_draw.cpp` (**new**) is the playhead: the full
+> register file at a step, per-step diff-highlight (each register vs the previous
+> HELD step), a playhead slider + `[`/`]` step keys (04's bindings). D7 honesty:
+> a dropped prefix renders as a TORN region (seeking in shows UNKNOWN, never
+> zero, and the first held step carries no diff baseline — its predecessor was
+> evicted), and a no-`regstate` recording states the producer is absent and
+> deep-links the docs (the re-run-with-larger-`max_insns` fallback is NOT
+> offered). `test_scrubber` (builder: seek, diff-highlight, tear, absent message,
+> goldens over `add_signed` / `regstate-truncated` / `sum_via_rbx`) and
+> `test_scrubber_draw` (the ImGui half under the null backend) both pass. T4 not
+> started.
 
 **Goal.** `desktop/src/views/scrubber.cpp` (**new**): a playhead over a
 recording's steps showing the **full register file at that step**, O(1) per

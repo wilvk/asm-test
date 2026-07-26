@@ -153,10 +153,12 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/doc/recording.o $(BUILD)/desktop/$(1)/doc/workspace.o \
   $(BUILD)/desktop/$(1)/doc/streams.o \
   $(BUILD)/desktop/$(1)/an/slice.o $(BUILD)/desktop/$(1)/an/diff.o \
+  $(BUILD)/desktop/$(1)/an/stepindex.o \
   $(BUILD)/desktop/$(1)/da/features_data.o \
   $(BUILD)/desktop/$(1)/da/perf_history.o \
   $(DESKTOP_VIEW_PURE:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/$(1)/vw/%.o) \
+  $(BUILD)/desktop/$(1)/vw/scrubber.o $(BUILD)/desktop/$(1)/vw/scrubber_draw.o \
   $(DESKTOP_OBS_PURE:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(DESKTOP_LOOM_PURE:%=$(BUILD)/desktop/$(1)/lo/%.o) \
@@ -378,6 +380,8 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_trajectory \
                  $(BUILD)/desktop_test_diff $(BUILD)/desktop_test_canvas \
                  $(BUILD)/desktop_test_timeline \
+                 $(BUILD)/desktop_test_scrubber \
+                 $(BUILD)/desktop_test_scrubber_draw \
                  $(BUILD)/desktop_test_slice_view \
                  $(BUILD)/desktop_test_diff_view \
                  $(BUILD)/desktop_test_data_readers \
@@ -635,6 +639,31 @@ $(BUILD)/desktop_test_slice_view: $(BUILD)/desktop/test/t/test_slice_view.o \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# The register time-travel scrubber (09-teaching-producers.md T3). The PURE
+# builder links scrubber.o + stepindex.o + the doc model and NOTHING else — no
+# ImGui, no engine — the same engine-free closure proof test_timeline makes, now
+# for the register deck. stepindex.o is the shared index (05's now-column reads
+# the same one), which is why it links here rather than into a view group.
+$(BUILD)/desktop_test_scrubber: $(BUILD)/desktop/test/t/test_scrubber.o \
+    $(BUILD)/desktop/test/vw/scrubber.o $(BUILD)/desktop/test/an/stepindex.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The scrubber's DRAW half under ImGui's null backend — the same split the
+# Observer deck's draw smoke uses (test_obs_draw): the model test asserts what
+# the scrubber decides, this one asserts the deck draws it, including the torn
+# placard and the producer-absent message. No GL, no GLFW, no engines.
+# canvas_draw.o carries the shared draw_banner placard (the refusal/truncation
+# banner the torn-edge and producer-absent paths raise); it links here for that
+# one symbol, no canvas model builder needed.
+$(BUILD)/desktop_test_scrubber_draw: \
+    $(BUILD)/desktop/test/t/test_scrubber_draw.o \
+    $(BUILD)/desktop/test/vw/scrubber_draw.o \
+    $(BUILD)/desktop/test/vw/scrubber.o $(BUILD)/desktop/test/an/stepindex.o \
+    $(BUILD)/desktop/test/vw/canvas_draw.o \
+    $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 $(BUILD)/desktop_test_diff_view: $(BUILD)/desktop/test/t/test_diff_view.o \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
@@ -825,6 +854,8 @@ desktop-test: asmtrace-export-test
 # defines, so no argv wiring and identical behaviour host + docker).
 $(BUILD)/desktop/test/t/test_canvas.o \
 $(BUILD)/desktop/test/t/test_timeline.o \
+$(BUILD)/desktop/test/t/test_scrubber.o \
+$(BUILD)/desktop/test/t/test_scrubber_draw.o \
 $(BUILD)/desktop/test/t/test_slice_view.o \
 $(BUILD)/desktop/test/t/test_diff.o \
 $(BUILD)/desktop/test/t/test_diff_view.o: \

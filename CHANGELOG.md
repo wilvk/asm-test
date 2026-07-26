@@ -8,6 +8,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Register time-travel scrubber in the desktop GUI**
+  (docs/internal/gui/09-teaching-producers.md T3). A playhead over a recording's
+  steps showing the full register file at each step, seeked O(1) through a new
+  shared `regstate` index (`desktop/src/analysis/stepindex.h`, which the Loom's
+  now-column reads too). Registers that changed vs the previous held step are
+  highlighted. Honest about the ring's limits (D7): when the producer dropped a
+  prefix of steps the scrubber renders that region as a **torn edge** — seeking
+  into it shows *UNKNOWN*, never zeros — and a recording with no `regstate`
+  events states the producer is absent and deep-links the docs (the
+  re-run-with-larger-`max_insns` fallback is deliberately not offered). Builds
+  into both binaries and stays engine-free (D4); covered by `test_scrubber`
+  (builder: seek, diff-highlight, tear, absent message) and `test_scrubber_draw`
+  (the ImGui half under the null backend).
 - **Opt-in per-step register-capture ring in the emulator**
   (docs/internal/gui/09-teaching-producers.md T1). `emu_step_capture(e, cap)`
   arms one more `UC_HOOK_CODE` on the x86-64 guest that snapshots the full

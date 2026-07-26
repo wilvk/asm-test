@@ -11,6 +11,7 @@
 
 #include "views/canvas.h"
 #include "views/diff_view.h"
+#include "views/scrubber.h"
 #include "views/slice_view.h"
 #include "views/timeline.h"
 
@@ -23,6 +24,12 @@ void draw_banner(const char *text, bool refusal);
 
 void draw_canvas(const dt_canvas &c);
 void draw_timeline(const dt_timeline &t);
+
+// The register time-travel scrubber (09-teaching-producers.md T3). `idx` is the
+// shared step index; `playhead` is owned by the caller and moved by the slider
+// and the `[` / `]` step keys (04's bindings). Returns the (possibly changed)
+// playhead so the shell can persist it.
+uint64_t draw_scrubber(const StepIndex &idx, uint64_t playhead);
 void draw_slice_view(const dt_slice_view &v);
 void draw_diff_view(const dt_diff_view &v);
 
