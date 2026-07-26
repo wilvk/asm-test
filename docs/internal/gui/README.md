@@ -31,6 +31,30 @@ Every doc conforms to these; they are stated once here.
   under `licenses/`); nlohmann/json single header the same way. App backends:
   GLFW + OpenGL3 (`libglfw3-dev` in `Dockerfile.desktop`); headless tests use
   the ImGui `example_null` pattern.
+
+  **Amended 2026-07-26 (addon-admission rule, from [11-imgui-addons.md](11-imgui-addons.md)).**
+  D2 no longer means "no dep beyond imgui + nlohmann/json"; it means every new
+  third-party UI dep clears this bar, so the tree stays permissively licensed,
+  reproducible, and honest — no ad-hoc exceptions:
+  1. **License.** MIT/zlib/BSD-class only, captured under `licenses/` the way
+     Capstone/DearImGui/DynamoRIO already are. The one standing carve-out is
+     `imgui_test_engine` (its own Test-Engine-License): fetch-at-build,
+     test builds only, never vendored.
+  2. **Pin + digest.** A pinned tarball with a SHA-256 row in
+     `scripts/third-party-digests.txt`, fetched by a `fetch-<name>.sh` that
+     follows `scripts/fetch-imgui.sh` (release tags where they exist,
+     commit-sha tarballs where they don't).
+  3. **Compile-check gate.** Any addon that includes `imgui_internal.h` is
+     rebuilt on every imgui repin before it lands — wired into the fetch path.
+  4. **View-model purity preserved.** Addons are draw-half chassis only; the
+     pure models and their golden-text surfaces stay the source of truth (D7).
+  5. **Honesty is a selection filter.** Nothing that renders survey data as
+     stacks, imposes force-directed layout, or hides refusals is admissible.
+
+  Implementation briefs for the addons themselves are cut from doc 11's tracks
+  under this rule; the in-tree quick wins that add no dependency (the shared
+  honesty-chrome palette `desktop/src/ui/theme.h`, the diff "go" routing fix)
+  need only D7/D4, not a new dep, and have already landed.
 - **D3 — Makefile.** A new `mk/desktop.mk`, included from the top-level
   Makefile right after `mk/cli.mk`, owns `desktop`, `desktop-render`,
   `desktop-test`, `docker-desktop` (rule mirrors `mk/cli.mk`'s docker rule);
@@ -77,9 +101,39 @@ land (legend as in [../implementations/README.md](../implementations/README.md):
 | [08-observer-views.md](08-observer-views.md) | live views: syscalls, watch, topo, hot edges, tree filters, codeimage, PT slice | 8 | 07, 04, 01 | ✅ 8/8 |
 | [09-teaching-producers.md](09-teaching-producers.md) | per-step register ring, scrubber, ABI x-ray, blame socket | 5 | 01, 03, 04, 06 | ☑ 5/5 |
 | [10-spacetime-3d-overview.md](10-spacetime-3d-overview.md) | 3D memory-terrain + execution-trajectory overview surface (**growth-rung companion**) | 7 | 01, 03, 04, 07, 08 | ☑ 7/7 |
-| [11-imgui-addons.md](11-imgui-addons.md) | Dear ImGui addon research + adoption plan (**research/planning doc, not a brief** — implementation gated on amending D2) | — | 01–10 (survey) | planning |
+| [11-imgui-addons.md](11-imgui-addons.md) | Dear ImGui addon research + adoption plan (**research/planning doc, not a brief**) — D2 amended (addon-admission rule, above); Track G + 2 no-dep quick wins landed | — | 01–10 (survey) | planning · G done |
 
-71 tasks across 10 docs. Suggested start order: 01 and 03 in parallel (03's
+### Addon-adoption family (docs 12–17) — implementation briefs cut from doc 11
+
+These six briefs are the implementation-ready form of
+[11-imgui-addons.md](11-imgui-addons.md), one per track in that doc's
+*Sequencing* block, each written so a junior developer can open exactly one and
+implement it end to end. **Every one is gated on
+[12-addon-supply-chain.md](12-addon-supply-chain.md)**, which amends D2 with the
+addon-admission rule (above) and builds the shared fetch/pin/license/compile
+scaffolding — land 12 first, then the rest parallelise as the *Depends on* column
+shows. Status reflects committed `main`; the D2 amendment (12-T1) and the two
+no-dependency quick wins (14-T1 diff-fix, 14-T2 `theme.h`) are already in flight
+per the doc-11 row above.
+
+| Doc | Area | Tasks | Depends on | Status |
+|---|---|---|---|---|
+| [12-addon-supply-chain.md](12-addon-supply-chain.md) | amend D2 (addon-admission rule); reusable `fetch-addon.sh` + digest/license conventions; imgui-repin compile-gate (**Track G — blocks all**) | 3 | 03 | ◐ (T1 landing) |
+| [13-foundation-moves.md](13-foundation-moves.md) | F1 docking repin (`v1.91.9b-docking`) + in-tree layout manager; F2 32-bit `ImDrawIdx`; F3 freetype + JetBrains Mono + Codicons; F4 the 1.92 bump decision (**Track F**) | 5 | 12; 04, 09, 10 | ☐ 0/5 |
+| [14-quick-wins.md](14-quick-wins.md) | diff "go" bug fix; shared theme header; ProgressBar; imgui_memory_editor; ImZoomSlider; ImGuiTextSelect (v1.1.6+utfcpp); ImGuiFileDialog (v0.6.8) (**Track Q**) | 7 | 12 (T4–T7); 04/05/08 | ◐ (T1–T2 landing) |
+| [15-plotting-and-graph-nav.md](15-plotting-and-graph-nav.md) | ImPlot v1.0 chassis (perf_history/hotedges/timeline/watch); imgui_canvas de-risk; imgui-node-editor for topo/tree | 3 | 12, 13 (F1/F2) | ☐ 0/3 |
+| [16-live-feedback-and-filtering.md](16-live-feedback-and-filtering.md) | ImGuiNotify toasts (live-session events); ImSearch client-side filtering (**both ∅-unverified in doc 11 — compile-check at pin**) | 2 | 12; 13 F3 (Notify) | ☐ 0/2 |
+| [17-interaction-testing-and-editor.md](17-interaction-testing-and-editor.md) | imgui_test_engine (interaction tests + keymap enforcement, test-lane-only); goossens ImGuiColorTextEdit + TextDiff (Author editor, disasm gutter, side-by-side diff) (**Bigger bets**) | 2 | 12 | ☐ 0/2 |
+
+22 tasks across docs 12–17. Sequencing (doc 11's tracks): **12 (Track G) first**,
+then Track Q (14) and Track F (13) in parallel, then the plotting/graph chassis
+(15) and feedback/filtering (16) on the foundations, with the bigger bets (17)
+independent of each other at any time after 12. Every addon lands with its
+`fetch-<name>.sh` wrapper, a `scripts/third-party-digests.txt` row, a `licenses/`
+capture, and — for the `imgui_internal.h` dependents — an entry in the doc-12
+compile-probe.
+
+71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
 09 (09-T1 — the emulator ring — is engine-only and can start any time).
 **All ten docs have landed.** 01–08 landed 2026-07-24; 2026-07-26 landed all of
