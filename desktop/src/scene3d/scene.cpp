@@ -336,6 +336,80 @@ void Scene::set_trajectories(const space::TrajectorySet &ts,
     }
 }
 
+void Scene::free_conv() {
+    if (conv_arcs_.vbo)
+        glDeleteBuffers(1, &conv_arcs_.vbo);
+    if (conv_arcs_.vao)
+        glDeleteVertexArrays(1, &conv_arcs_.vao);
+    conv_arcs_ = Line{};
+}
+
+void Scene::set_convergences(const space::ConvergenceSet &cs,
+                             const space::Projection &proj) {
+    // Independent of the trajectory buffers (set_trajectories does NOT touch this),
+    // so uploading the growing paths each frame does not wipe the arcs. Arc vertices
+    // are baked world-space positions, so they stay valid across a path re-upload.
+    free_conv();
+    const float scale =
+        time_scale > 0.0f ? time_scale : (nsteps > 0 ? 0.6f / nsteps : 0.02f);
+
+    std::vector<float>
+        segs; // GL_LINES pairs: each arc tessellated into segments
+    for (const space::ConvergenceMark &m : cs.marks) {
+        float ua = 0, va = 0, ub = 0, vb = 0;
+        if (!proj.project(m.addr_a, &ua, &va) ||
+            !proj.project(m.addr_b, &ub, &vb))
+            continue; // an unplaced endpoint draws no arc (honest: no false line)
+        const float ya = static_cast<float>(m.t_a) * scale;
+        const float yb = static_cast<float>(m.t_b) * scale;
+        // A quadratic-bezier bow: the control point sits above the higher endpoint
+        // so the arc lifts clear of the terrain and reads as a cross-thread link,
+        // not another trajectory line. The lift grows with the chord so distant
+        // threads arc higher.
+        const float dx = ub - ua, dz = vb - va;
+        const float chord = std::sqrt(dx * dx + dz * dz);
+        const float lift = 0.12f + 0.45f * chord;
+        const float cx = 0.5f * (ua + ub);
+        const float cy = std::max(ya, yb) + lift;
+        const float cz = 0.5f * (va + vb);
+        const int kSteps = 16;
+        float px = ua, py = ya, pz = va;
+        for (int k = 1; k <= kSteps; k++) {
+            float s = static_cast<float>(k) / kSteps;
+            float o = 1.0f - s;
+            // B(s) = o^2 P0 + 2 o s C + s^2 P2
+            float qx = o * o * ua + 2 * o * s * cx + s * s * ub;
+            float qy = o * o * ya + 2 * o * s * cy + s * s * yb;
+            float qz = o * o * va + 2 * o * s * cz + s * s * vb;
+            segs.insert(segs.end(), {px, py, pz, qx, qy, qz});
+            px = qx;
+            py = qy;
+            pz = qz;
+        }
+    }
+    if (segs.empty())
+        return;
+
+    Line &l = conv_arcs_;
+    // A bright magenta distinct from every tid colour and from the torn-red gash and
+    // the lavender access spur — the "two threads on the same line" hint reads at a
+    // glance and cannot be mistaken for a path.
+    l.color[0] = 1.0f;
+    l.color[1] = 0.25f;
+    l.color[2] = 0.85f;
+    l.color[3] = 0.95f;
+    l.count = static_cast<int>(segs.size() / 3);
+    glGenVertexArrays(1, &l.vao);
+    glGenBuffers(1, &l.vbo);
+    glBindVertexArray(l.vao);
+    glBindBuffer(GL_ARRAY_BUFFER, l.vbo);
+    glBufferData(GL_ARRAY_BUFFER, segs.size() * sizeof(float), segs.data(),
+                 GL_STATIC_DRAW);
+    glEnableVertexAttribArray(kAttrPos);
+    glVertexAttribPointer(kAttrPos, 3, GL_FLOAT, GL_FALSE, 0, nullptr);
+    glBindVertexArray(0);
+}
+
 void Scene::draw_terrain_common(unsigned prog, const float mvp[16]) {
     glUseProgram(prog);
     glActiveTexture(GL_TEXTURE0);
@@ -395,6 +469,15 @@ void Scene::render(const Camera &cam, int fbw, int fbh,
         glLineWidth(1.0f);
         glBindVertexArray(access_spurs_.vao);
         glDrawArrays(GL_LINES, 0, access_spurs_.count);
+    }
+    // Convergence arcs last, so the hint rides over the paths it links. Solid (never
+    // stippled — a stipple is the statistical mark) and thick, so it pops.
+    if (layers.convergence && conv_arcs_.count) {
+        glUniform4fv(uColor, 1, conv_arcs_.color);
+        glUniform1i(uStipple, 0);
+        glLineWidth(3.0f);
+        glBindVertexArray(conv_arcs_.vao);
+        glDrawArrays(GL_LINES, 0, conv_arcs_.count);
     }
     glBindVertexArray(0);
     glDisable(GL_BLEND);
@@ -491,6 +574,7 @@ void Scene::render_pick_buffer(const Camera &cam, int fbw, int fbh,
 
 void Scene::shutdown() {
     free_traj();
+    free_conv();
     if (vbo_cell_)
         glDeleteBuffers(1, &vbo_cell_);
     if (ibo_grid_)

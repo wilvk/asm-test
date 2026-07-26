@@ -27,6 +27,7 @@
 #include "scene3d/camera.h"
 #include "scene3d/pick.h"
 #include "scene3d/scene.h"
+#include "space/converge.h"
 #include "space/projection.h"
 #include "space/terrain.h"
 #include "space/trajectory.h"
@@ -67,6 +68,27 @@ static std::string ndjson_hotcold() {
     for (int i = 0; i < 5; i++)
         nd += "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194304}\n"; // hot
     nd += "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194368}\n";     // cold
+    nd += "{\"k\":\"end\",\"events\":7,\"truncated\":false}\n";
+    return nd;
+}
+
+// A two-thread abs recording (10-T5): tid 1 and tid 2 both touch 0x401200, so the
+// completed stream carries exactly one cross-thread convergence — the arc smoke.
+static std::string ndjson_threads() {
+    std::string nd = kHdrExact;
+    nd += "{\"k\":\"codeimage\",\"base\":4198400,\"len\":4096,\"version\":0}\n";
+    nd +=
+        "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4198400,\"tid\":1}\n"; // 0x401000
+    nd +=
+        "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4198416,\"tid\":2}\n"; // 0x401010
+    nd +=
+        "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4198464,\"tid\":1}\n"; // 0x401040
+    nd +=
+        "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4198912,\"tid\":2}\n"; // 0x401200 shared
+    nd +=
+        "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4198912,\"tid\":1}\n"; // 0x401200 shared
+    nd +=
+        "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4198528,\"tid\":2}\n"; // 0x401080
     nd += "{\"k\":\"end\",\"events\":7,\"truncated\":false}\n";
     return nd;
 }
@@ -370,6 +392,54 @@ int main() {
             check("torn cell is red (r dominates g and b)",
                   p[0] > p[1] + 40 && p[0] > p[2] + 40, "not a red gash");
         }
+    }
+
+    // --- (d) convergence arcs: a bright cross-thread arc renders, and toggles -
+    // The live overlay's hint (10-T5): two tids sharing a cell draw a bright magenta
+    // arc distinct from every tid colour and the torn-red gash. Rendered offscreen,
+    // it is the only magenta on screen — so counting magenta pixels asserts both
+    // that the arc draws and that its layer toggle turns it off.
+    {
+        Recording rec = load(ndjson_threads());
+        space::TerrainModel terr = space::build_terrain(
+            space::build_projection(space::regions_from_codeimage(rec)), rec);
+        space::TrajectorySet traj = space::build_trajectories(rec);
+        space::ConvergenceSet conv =
+            space::detect_convergences(traj, terr.proj);
+        check("threads recording has one convergence", conv.marks.size() == 1,
+              "wrong convergence count");
+        scene.nsteps = static_cast<uint32_t>(terr.nsteps);
+        scene.set_terrain(terr.full());
+        scene.set_trajectories(traj, terr.proj);
+        scene.set_convergences(conv, terr.proj);
+
+        auto count_magenta = [&](const SceneLayers &layers) {
+            glBindFramebuffer(GL_FRAMEBUFFER, cf.fbo);
+            glViewport(0, 0, W, H);
+            glClearColor(0.02f, 0.02f, 0.03f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            scene.render(cam, W, H, layers);
+            std::vector<unsigned char> px(static_cast<size_t>(W) * H * 4);
+            glReadBuffer(GL_COLOR_ATTACHMENT0);
+            glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            int n = 0;
+            for (size_t i = 0; i < px.size(); i += 4) {
+                const unsigned char *p = &px[i];
+                if (p[0] > 178 && p[2] > 153 && p[1] < 127)
+                    n++; // bright magenta = the arc, nothing else in the palette
+            }
+            return n;
+        };
+        SceneLayers on; // convergence = true by default
+        SceneLayers off;
+        off.convergence = false;
+        int with = count_magenta(on);
+        int without = count_magenta(off);
+        check("convergence arc renders (bright magenta present)", with > 0,
+              "no arc pixels");
+        check("convergence arc turns off with its layer", without == 0,
+              "arc still visible with its layer off");
     }
 
     scene.shutdown();

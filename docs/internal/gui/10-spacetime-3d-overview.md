@@ -378,7 +378,25 @@ Camera math tested purely in `test_camera.cpp` under the null harness.
 `Dockerfile.desktop`); a manual `./build/desktop-render <golden>.asmtrace` shows
 the terrain + trajectory and a click opens the 2D view at that step.
 
-### T5 — Live-observer overlay: N trajectories, convergence marks  (M, depends on: T4, 07)
+### T5 — Live-observer overlay: N trajectories, convergence marks  (M, depends on: T4, 07)  ✅ DONE
+
+> Landed. The convergence detector is `desktop/src/space/converge.{h,cpp}`
+> (pure/headless, engine- and GL-free): `detect_convergences(TrajectorySet,
+> Projection, ConvergeParams)` emits one `ConvergenceMark` per `(tid_a, tid_b,
+> cell)` when two different tids place a PC vertex in the same projection cell
+> within a sliding step window (default 64), keeping the closest crossing —
+> explicitly a **hint** (`ConvergenceSet::kHint`), and skipping `TRAJ_STATISTICAL`
+> / `TRAJ_RELATIVE_BASIS` paths so a shared cell is never a false address-space
+> claim. The incremental feed re-runs T3's `build_trajectories` on the
+> `LiveSession`'s growing recording each frame (each tid one coloured trajectory);
+> the overlay consumes the session the app already owns and opens no second ptrace
+> (D6/D9). The scene (`scene3d/scene.{h,cpp}`) gained `set_convergences` +
+> `SceneLayers.convergence`, drawing each mark as a bright magenta arc over the
+> per-tid paths. Tested by `test_converge` (detector one-mark/no-mark/window/honesty
+> + the fake-serve growth case, `fixtures/fake_serve_threads.sh`) and an arc case in
+> `test_scene_fbo`. **Out of scope, recorded in Constraints:** affinity/core-NUMA
+> placement — threads are coloured, not core-placed (no scheduling feed in-repo).
+> T6 (drill-in honesty) and T7 (golden scenes, docs) remain.
 
 **Goal.** Stream a [07](07-serve-live-host.md) `LiveSession` into the scene as
 per-tid trajectories over the shared terrain, growing in real time, with

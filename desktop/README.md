@@ -984,3 +984,43 @@ renders to an FBO and reads back that a hot cell is brighter than a cold one, a
 `TORN` fixture paints red, and the pick FBO returns the right id for a known cell
 centre. Its pure half (the id decode + router resolution) runs even where GL is
 absent, and a host with no GL device self-skips the GL smoke with a printed reason.
+
+## Live-observer overlay — N trajectories, convergence marks
+
+The same scene becomes a *live observer* when a [07](../docs/internal/gui/07-serve-live-host.md)
+`LiveSession` feeds it: each thread is one coloured `Trajectory` growing over the
+shared terrain in real time, and where two threads touch the same locality a bright
+arc marks it. There is no new capture path — the overlay **consumes the session the
+app already owns** (`LiveSession::growing()` / `recordings()`) and opens no ptrace
+of its own (D6/D9). The feed is incremental by re-running T3's `build_trajectories`
+on the growing recording each frame: as the session appends `trace` events the
+per-tid trajectories lengthen, and the terrain re-slices from `codeimage` + `survey`
+residency as those arrive. An **absolute-basis** live trace (PT) is a real
+address-space path; a **single-step** live trace is region-relative, so it stays
+`TRAJ_RELATIVE_BASIS`-**labelled** and is never projected as a true path.
+
+**Convergence marks (a hint).** `space/converge.{h,cpp}` (pure, engine- and
+GL-free like the rest of `space/`) is the detector: when two *different* tids place
+a PC vertex in the **same projection cell** within a sliding **step window**
+(`ConvergeParams::window`, default 64 — `|t_a − t_b| ≤ window`), it emits one
+`ConvergenceMark` per `(tid_a, tid_b, cell)` — the closest crossing, so two threads
+that dwell in one cell make *one* hint, not a flood. It is **always a hint**, never
+a proof: per-tid step indices are not a global clock, so a convergence shows
+co-location, not ordering or a proven race — the label rides in the data
+(`ConvergenceSet::kHint` / `label()`). Only exact, address-placed paths take part;
+a `TRAJ_STATISTICAL` residency layer and a `TRAJ_RELATIVE_BASIS` path are skipped
+by flag, because a "shared cell" over a sampled or region-relative path would be a
+false address-space claim. The scene draws each mark as a bright **magenta arc**
+bowing above the plane between the two vertices — distinct from every per-tid colour
+and the torn-red gash, and toggled by its own `SceneLayers.convergence` layer.
+
+**What is deliberately absent.** Threads are placed by **colour, not by physical
+core / NUMA node**: the repo has no scheduling feed, so a spatial core arrangement
+would be invented rather than measured. The affinity layer is gated on that feed
+exactly as the rich `mem` rung is gated on the Wave-1 memory stream — recorded here,
+not faked. `test_converge` (under `make desktop-test`, no display) pins the detector
+— two synthetic paths that touch a shared cell make exactly one mark, disjoint ones
+make none, the window bounds it, and a labelled (rel/statistical) path never
+converges — and drives the incremental feed against `fixtures/fake_serve_threads.sh`
+(the 07 fake-serve pattern), asserting the per-tid trajectories grow as the two-thread
+stream arrives; the arc rendering is covered by an extra case in `test_scene_fbo`.

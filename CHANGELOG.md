@@ -8,6 +8,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Live-observer overlay for the 3D spacetime scene — N per-thread trajectories
+  and cross-thread convergence hints** (docs/internal/gui/10-spacetime-3d-overview.md
+  T5). A live 07 `LiveSession` now feeds
+  the 3D overview: each thread is one coloured trajectory growing over the shared
+  terrain in real time, fed incrementally by re-running the trajectory builder on
+  the session's growing recording — no second capture path, the overlay consumes
+  the session the app already owns and opens no ptrace of its own (D6/D9). A new
+  engine- and GL-free detector `desktop/src/space/converge.{h,cpp}` surfaces where
+  two threads meet: when two different tids place a PC vertex in the **same
+  projection cell** within a sliding **step window**, it emits one convergence mark
+  per thread-pair-and-cell (the closest crossing), which the scene draws as a bright
+  **magenta arc** bowing above the plane on its own toggleable layer. It is
+  explicitly a **hint**, never a proof — per-thread step indices are not a global
+  clock, so it shows co-location, not a proven race or ordering — and a statistical
+  or region-relative (single-step) path never converges, because a shared cell over
+  a sampled or unplaced path would be a false address-space claim. Threads are placed
+  by **colour, not by physical core/NUMA** (the repo has no scheduling feed — the
+  affinity layer stays gated, recorded not faked). Builds into both binaries and
+  stays engine-free (D4); covered by `test_converge` (the detector + the incremental
+  feed against a two-thread fake-serve fixture) and an added arc case in
+  `test_scene_fbo`.
 - **ABI x-ray in the desktop GUI — SysV vs Win64 argument marshalling, side by
   side** (docs/internal/gui/09-teaching-producers.md T4). The classroom
   flagship: two register scrubbers (System V | Microsoft x64) LOCKED to one

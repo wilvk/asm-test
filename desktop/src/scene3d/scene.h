@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "scene3d/camera.h"
+#include "space/converge.h"
 #include "space/projection.h"
 #include "space/terrain.h"
 #include "space/trajectory.h"
@@ -31,6 +32,8 @@ struct SceneLayers {
     bool exact = true;        // opaque exact trajectories
     bool statistical = true;  // stippled/translucent statistical residency
     bool access_marks = true; // spurs from a PC vertex to its data cell
+    bool convergence =
+        true; // bright cross-thread convergence arcs (a hint, T5)
 };
 
 class Scene {
@@ -59,6 +62,13 @@ class Scene {
     void set_terrain(const space::Terrain &t);
     // Upload the trajectories, projecting each PC vertex through `proj`.
     void set_trajectories(const space::TrajectorySet &ts,
+                          const space::Projection &proj);
+    // Upload the live-overlay convergence marks (T5): each becomes a bright arc
+    // bowing above the plane between the two converging vertices (a HINT — the
+    // renderer draws it in its own distinct colour, never as a trajectory tube).
+    // Managed independently of set_trajectories, so re-uploading the paths does
+    // not wipe the arcs; pass an empty set to clear them.
+    void set_convergences(const space::ConvergenceSet &cs,
                           const space::Projection &proj);
 
     // Draw the lit scene into the currently-bound framebuffer (viewport fbw*fbh).
@@ -99,6 +109,8 @@ class Scene {
     };
     std::vector<Line> traj_lines_;
     Line access_spurs_; // all spurs in one GL_LINES buffer
+    Line
+        conv_arcs_; // all convergence arcs, tessellated into one GL_LINES buffer
 
     unsigned vao_pts_ = 0, vbo_pts_pos_ = 0, vbo_pts_id_ = 0;
     int pts_count_ = 0;
@@ -109,6 +121,7 @@ class Scene {
     void build_grid(uint32_t n);
     void ensure_pick_fbo(int w, int h);
     void free_traj();
+    void free_conv();
     void draw_terrain_common(unsigned prog, const float mvp[16]);
     // Render the id pass into the internal pick FBO (leaves it bound); returns the
     // previously-bound draw framebuffer so the caller can restore it after reading.

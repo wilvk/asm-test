@@ -106,6 +106,7 @@ $(BUILD)/desktop/test/t/test_shell.o:     DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE
 $(BUILD)/desktop/test/t/test_golden.o:    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
 $(BUILD)/desktop/test/t/test_live_session.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_inspect.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
+$(BUILD)/desktop/test/t/test_converge.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_loom_golden.o \
 $(BUILD)/desktop/test/t/test_loom_draw.o: DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
 $(BUILD)/desktop/test/t/test_walkthrough.o: \
@@ -182,7 +183,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/ui/inspect_door.o \
   $(DESKTOP_LIVE:%=$(BUILD)/desktop/$(1)/lv/%.o) \
   $(BUILD)/desktop/$(1)/sp/projection.o $(BUILD)/desktop/$(1)/sp/terrain.o \
-  $(BUILD)/desktop/$(1)/sp/trajectory.o \
+  $(BUILD)/desktop/$(1)/sp/trajectory.o $(BUILD)/desktop/$(1)/sp/converge.o \
   $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/pick.o \
   $(BUILD)/desktop/$(1)/s3/hud.o
 DESKTOP_APP_OBJ    := $(call desktop_app_objs,app) \
@@ -465,6 +466,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_projection \
                  $(BUILD)/desktop_test_terrain \
                  $(BUILD)/desktop_test_trajectory \
+                 $(BUILD)/desktop_test_converge \
                  $(BUILD)/desktop_test_camera \
                  $(BUILD)/desktop_test_diff $(BUILD)/desktop_test_canvas \
                  $(BUILD)/desktop_test_timeline \
@@ -708,6 +710,18 @@ $(BUILD)/desktop_test_trajectory: $(BUILD)/desktop/test/t/test_trajectory.o \
     $(BUILD)/desktop/test/doc/recording.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# The convergence detector + the incremental live feed (10-spacetime-3d-overview.md
+# T5) links space/converge.o + trajectory.o + projection.o (it places PC vertices
+# on the plane) + the live capture host session.o + the doc model — and NOTHING
+# else: no ImGui, no GL, no engine. session.o is the `asmspy --serve` SUBPROCESS
+# host (D9), so even the fake-serve growth case stays engine-free — the same closure
+# proof test_trajectory and test_live_session both make.
+$(BUILD)/desktop_test_converge: $(BUILD)/desktop/test/t/test_converge.o \
+    $(BUILD)/desktop/test/sp/converge.o $(BUILD)/desktop/test/sp/trajectory.o \
+    $(BUILD)/desktop/test/sp/projection.o $(BUILD)/desktop/test/lv/session.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 # The orbit camera (10-spacetime-3d-overview.md T4 step 4) is pure header-only
 # math over the pinned linmath.h, so its test links NOTHING but its own object —
 # the engine- AND GL-free closure proof for the camera. Runs on any host (no GL),
@@ -726,7 +740,7 @@ $(BUILD)/desktop_test_camera: $(BUILD)/desktop/test/t/test_camera.o
 $(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
     $(BUILD)/desktop/test/s3/scene.o $(BUILD)/desktop/test/s3/pick.o \
     $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
-    $(BUILD)/desktop/test/sp/trajectory.o \
+    $(BUILD)/desktop/test/sp/trajectory.o $(BUILD)/desktop/test/sp/converge.o \
     $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
     $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
     $(DESKTOP_TEST_DOC)
