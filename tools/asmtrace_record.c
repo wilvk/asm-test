@@ -8,14 +8,24 @@
  * read/write values and — where Capstone is linked — its disassembly, D10)
  * plus `df_edge` (the L1 last-writer def-use graph).
  *
+ * With `--steps=<cap>` (default 0 = off) it ALSO re-runs each routine under the
+ * emu_t per-step register ring (09-teaching-producers.md T2) and emits one
+ * `regstate` event per held pre-state — the full x86-64 register file BEFORE
+ * each instruction, by descriptor reference (`emu_x86_regs_t@x86_64/sysv`), the
+ * per-step producer the teaching scrubber and ABI x-ray replay from. When more
+ * steps run than the ring holds, the earliest are evicted and the footer says
+ * so (`truncated` + `drops.lost`): an over-cap deck is honest data, never a
+ * silent short one.
+ *
  * Deterministic by construction, which is what makes the output a GOLDEN
  * corpus rather than a sample: asmtest_dataflow_emu_run zeroes the guest GP
- * file and maps at fixed bases, the argument table below is fixed, and the
- * writer runs in deterministic mode (no ts/pid/cmd). Regenerating must be
- * byte-identical — see `make asmtrace-golden-check`.
+ * file and maps at fixed bases, emu_call likewise zeroes the register file and
+ * bases the stack, the argument table below is fixed, and the writer runs in
+ * deterministic mode (no ts/pid/cmd). Regenerating must be byte-identical — see
+ * `make asmtrace-golden-check`.
  *
  * Contract: docs/internal/gui/asmtrace-schema.md.
- * Usage: asmtrace_record <output-directory>
+ * Usage: asmtrace_record [--steps=<cap>] <output-directory>
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -44,19 +54,29 @@ void *asmtest_corpus_routine(const char *name);
  * 64-byte window from its entry (bindings/conformance/conformance.c). */
 #define REC_WINDOW 64
 
+/* --steps=<cap>: the default per-step register-ring cap for the corpus loop
+ * (0 = off, the golden default). Set once from argv; a routine's own steps_cap
+ * below applies when this is 0, so `make asmtrace-golden` (no flag) still emits
+ * the one worked example while an explicit --steps=N arms the whole corpus. */
+static size_t g_steps_cap = 0;
+
 /* Fixed routines and arguments. INTEGER-ARG routines only — the emulator L0
  * producer marshals integer arguments (rdi/rsi/rdx/rcx/r8/r9); widening the
- * corpus to FP/vector routines needs a producer change, not a table entry. */
+ * corpus to FP/vector routines needs a producer change, not a table entry.
+ * `steps_cap` is the per-step register-ring cap baked into the golden for that
+ * routine (0 = no regstate); add_signed carries the worked example so the
+ * committed corpus exercises the `regstate` kind without --steps. */
 typedef struct {
     const char *name;
     long args[3];
     int nargs;
+    size_t steps_cap;
 } rec_routine_t;
 
 static const rec_routine_t ROUTINES[] = {
-    {"add_signed", {40, 2, 0}, 2},   {"sum_via_rbx", {40, 2, 0}, 2},
-    {"clobbers_rbx", {40, 2, 0}, 2}, {"sum3", {1, 2, 3}, 3},
-    {"set_carry", {0, 0, 0}, 0},     {"clear_carry", {0, 0, 0}, 0},
+    {"add_signed", {40, 2, 0}, 2, 8},   {"sum_via_rbx", {40, 2, 0}, 2, 0},
+    {"clobbers_rbx", {40, 2, 0}, 2, 0}, {"sum3", {1, 2, 3}, 3, 0},
+    {"set_carry", {0, 0, 0}, 0, 0},     {"clear_carry", {0, 0, 0}, 0, 0},
 };
 #define N_ROUTINES ((int)(sizeof ROUTINES / sizeof ROUTINES[0]))
 
@@ -97,23 +117,91 @@ static const uint8_t LOOM_FORK_DEMO[] = {
     0xc3,                   /* 0x13 ret           */
 };
 
+/* One per-step register snapshot as a `regstate` event, by descriptor
+ * reference (schema: `desc` names a state descriptor, never a bare inline
+ * register list). The `values` object carries the full x86-64 INTEGER file —
+ * the 16 GP registers plus rip and rflags, in emu_x86_regs_t declaration order,
+ * each a decimal u64. The 128-bit XMM file is a documented v1 omission: a wide
+ * value is not a bare JSON integer (exactly the df_step `wide` limit), and the
+ * descriptor mechanism absorbs an FP/vector deck later. See the descriptor
+ * entry appended to docs/internal/gui/asmtrace-schema.md. */
+static void emit_regstate(asmtrace_writer_t *w, const emu_x86_regs_t *r) {
+    char body[512];
+    snprintf(body, sizeof body,
+             "\"desc\":\"emu_x86_regs_t@x86_64/sysv\",\"values\":{"
+             "\"rax\":%llu,\"rbx\":%llu,\"rcx\":%llu,\"rdx\":%llu,"
+             "\"rsi\":%llu,\"rdi\":%llu,\"rbp\":%llu,\"rsp\":%llu,"
+             "\"r8\":%llu,\"r9\":%llu,\"r10\":%llu,\"r11\":%llu,"
+             "\"r12\":%llu,\"r13\":%llu,\"r14\":%llu,\"r15\":%llu,"
+             "\"rip\":%llu,\"rflags\":%llu}",
+             (unsigned long long)r->rax, (unsigned long long)r->rbx,
+             (unsigned long long)r->rcx, (unsigned long long)r->rdx,
+             (unsigned long long)r->rsi, (unsigned long long)r->rdi,
+             (unsigned long long)r->rbp, (unsigned long long)r->rsp,
+             (unsigned long long)r->r8, (unsigned long long)r->r9,
+             (unsigned long long)r->r10, (unsigned long long)r->r11,
+             (unsigned long long)r->r12, (unsigned long long)r->r13,
+             (unsigned long long)r->r14, (unsigned long long)r->r15,
+             (unsigned long long)r->rip, (unsigned long long)r->rflags);
+    asmtrace_emit(w, "regstate", body);
+}
+
+/* Per-step register ring (09-teaching-producers.md T2). When steps_cap > 0,
+ * re-run the SAME bytes under the emu_t handle with an armed capture ring and
+ * emit one `regstate` event per held pre-state (oldest first). Returns the
+ * number of earliest steps the ring EVICTED (emu_step_dropped): the caller
+ * folds a non-zero count into the footer as truncation, so an over-cap run is
+ * honest data — the held deck is steps [dropped, dropped+count) and the footer
+ * says how many fell off the front. The ring is x86-64-guest only, exactly the
+ * corpus's own arch gate; where emu_step_capture cannot arm (non-x86-64 or an
+ * allocation failure) nothing is written and 0 is returned. */
+static uint64_t emit_regstates(asmtrace_writer_t *w, const uint8_t *code,
+                               size_t code_len, const long *args, int nargs,
+                               size_t steps_cap) {
+    emu_t *e;
+    emu_result_t res;
+    uint64_t dropped = 0;
+    if (steps_cap == 0)
+        return 0;
+    e = emu_open();
+    if (e == NULL)
+        return 0;
+    if (emu_step_capture(e, steps_cap)) {
+        size_t held, i;
+        memset(&res, 0, sizeof res);
+        emu_call(e, code, code_len, args, nargs, 0, &res);
+        held = emu_step_count(e);
+        for (i = 0; i < held; i++) {
+            emu_x86_regs_t regs;
+            if (emu_step_at(e, i, NULL, &regs))
+                emit_regstate(w, &regs);
+        }
+        dropped = emu_step_dropped(e);
+    }
+    emu_close(e);
+    return dropped;
+}
+
 /*
  * Record `code[0..code_len)` under the producer and write <dir>/<out>.asmtrace.
  * `label` is what the recording's `note` calls the routine; `recs_cap` bounds
  * the operand buffer (a SMALL cap is how the truncated loom fixture is made —
  * the producer then flips `truncated` and the footer says so, which is a D7
- * dishonesty fixture rather than a hand-edited file).
+ * dishonesty fixture rather than a hand-edited file). `steps_cap` arms the
+ * per-step register ring (0 = no regstate); a small cap over a longer routine
+ * is how the register-ring truncation fixture is made, the same way.
  * Returns 0 on success, -1 on a setup/write failure.
  */
 static int record_bytes(const char *dir, const char *out, const char *label,
                         const uint8_t *code, size_t code_len, const long *args,
-                        int nargs, size_t recs_cap) {
+                        int nargs, size_t recs_cap, size_t steps_cap) {
     asmtrace_prov_t prov = {"emu-l0", 1, "exact", 0, NULL, 0};
     asmtrace_writer_t w;
     asmtest_valtrace_t *vt = NULL;
     asmtest_defuse_t *g = NULL;
     char path[1024], body[65536];
     size_t nsteps, nrecs, cur = 0;
+    uint64_t step_dropped = 0;
     int rc;
 
     vt = asmtest_valtrace_new(4096, recs_cap, 4096);
@@ -210,7 +298,11 @@ static int record_bytes(const char *dir, const char *out, const char *label,
         asmtrace_df_edge_body(body, sizeof body, &g->edges[i]);
         asmtrace_emit(&w, "df_edge", body);
     }
-    if (vt->truncated)
+
+    /* Per-step register states from the ring (T2), after the value stream.
+     * A non-zero eviction count is truncation just like a full recs buffer. */
+    step_dropped = emit_regstates(&w, code, code_len, args, nargs, steps_cap);
+    if (vt->truncated || step_dropped > 0)
         w.truncated = 1;
 
     /* rc == 1 means the guest faulted or errored: a PARTIAL trace was still
@@ -223,25 +315,32 @@ static int record_bytes(const char *dir, const char *out, const char *label,
                                 1,
                                 "guest faulted or errored; trace is partial",
                                 0};
-        asmtrace_close(&w, 0, 0, &skip);
+        asmtrace_close(&w, step_dropped, 0, &skip);
     } else {
-        asmtrace_close(&w, 0, 0, NULL);
+        asmtrace_close(&w, step_dropped, 0, NULL);
     }
 
     {
         size_t nedges = g ? g->n : (size_t)0; /* read BEFORE the free */
-        int trunc = vt->truncated;
+        int trunc = vt->truncated || step_dropped > 0;
         asmtest_defuse_free(g);
         asmtest_valtrace_free(vt);
-        printf("  %-20s %zu steps, %zu records, %zu def-use edges%s\n", out,
-               nsteps, nrecs, nedges, trunc ? "  [TRUNCATED]" : "");
+        printf("  %-20s %zu steps, %zu records, %zu def-use edges", out, nsteps,
+               nrecs, nedges);
+        if (steps_cap > 0)
+            printf(", regstate cap %zu (dropped %llu)", steps_cap,
+                   (unsigned long long)step_dropped);
+        printf("%s\n", trunc ? "  [TRUNCATED]" : "");
     }
     return 0;
 }
 
-/* Record one CORPUS routine (host-arch assembly, captured as a fixed window). */
+/* Record one CORPUS routine (host-arch assembly, captured as a fixed window).
+ * An explicit --steps=N (g_steps_cap) arms the whole corpus; otherwise the
+ * routine's own baked-in steps_cap applies (add_signed's worked example). */
 static int record_one(const char *dir, const rec_routine_t *r) {
     uint8_t code[REC_WINDOW];
+    size_t steps_cap = g_steps_cap ? g_steps_cap : r->steps_cap;
     const void *fn = asmtest_corpus_routine(r->name);
     if (!fn) {
         fprintf(stderr, "asmtrace_record: no corpus routine '%s'\n", r->name);
@@ -249,12 +348,21 @@ static int record_one(const char *dir, const rec_routine_t *r) {
     }
     memcpy(code, fn, sizeof code);
     return record_bytes(dir, r->name, r->name, code, sizeof code, r->args,
-                        r->nargs, 65536);
+                        r->nargs, 65536, steps_cap);
 }
 
 int main(int argc, char **argv) {
-    const char *dir = argc >= 2 ? argv[1] : "tests/golden-asmtrace";
+    const char *dir = "tests/golden-asmtrace";
     int failed = 0;
+    /* argv: [--steps=<cap>] [<output-directory>], in any order. --steps default
+     * stays 0 (off) so the golden target — which passes no flag — emits regstate
+     * only for the routines that bake it in (T2's worked example + fixture). */
+    for (int i = 1; i < argc; i++) {
+        if (strncmp(argv[i], "--steps=", 8) == 0)
+            g_steps_cap = (size_t)strtoul(argv[i] + 8, NULL, 10);
+        else
+            dir = argv[i];
+    }
     if (!emu_disas_available())
         fprintf(
             stderr,
@@ -275,18 +383,18 @@ int main(int argc, char **argv) {
         const void *fn;
 
         if (record_bytes(dir, "loom-df-chain", "df_chain", LOOM_DF_CHAIN,
-                         sizeof LOOM_DF_CHAIN, df_args, 2, 65536) != 0)
+                         sizeof LOOM_DF_CHAIN, df_args, 2, 65536, 0) != 0)
             failed++;
         /* The D7 dishonesty fixture: a four-record operand buffer fills mid-run,
          * the producer flips `truncated`, and the footer declares it. Generated,
          * never hand-edited — a fixture nobody can produce is a fixture nobody
          * can trust. */
         if (record_bytes(dir, "loom-truncated", "df_chain (recs_cap = 4)",
-                         LOOM_DF_CHAIN, sizeof LOOM_DF_CHAIN, df_args, 2,
-                         4) != 0)
+                         LOOM_DF_CHAIN, sizeof LOOM_DF_CHAIN, df_args, 2, 4,
+                         0) != 0)
             failed++;
         if (record_bytes(dir, "loom-fork-demo", "fork_demo", LOOM_FORK_DEMO,
-                         sizeof LOOM_FORK_DEMO, fork_args, 1, 65536) != 0)
+                         sizeof LOOM_FORK_DEMO, fork_args, 1, 65536, 0) != 0)
             failed++;
         /* Walkthrough #2: a callee-save spill (a stack band), an EFLAGS knot and
          * a restore — examples/flags.s:45. HOST-ROUTINE bytes, so this entry is
@@ -299,7 +407,20 @@ int main(int argc, char **argv) {
         } else {
             memcpy(rbx, fn, sizeof rbx);
             if (record_bytes(dir, "loom-sum-via-rbx", "sum_via_rbx", rbx,
-                             sizeof rbx, rbx_args, 2, 65536) != 0)
+                             sizeof rbx, rbx_args, 2, 65536, 0) != 0)
+                failed++;
+            /* The T2 register-ring dishonesty fixture (09-teaching-producers.md):
+             * the SAME sum_via_rbx bytes with a TWO-entry step ring, so it holds
+             * only the last two pre-states and evicts the rest. The operand
+             * buffer is UNcapped (65536), so this truncation is the register
+             * ring's alone — the footer's `truncated` flips and `drops.lost`
+             * carries the evicted count, exactly the D7 honesty loom-truncated
+             * shows for operands. The name ends in `-truncated` because the
+             * golden corpus test (desktop/test/test_golden.cpp) requires a flat
+             * golden to be truncated IFF so named. Generated, never hand-edited. */
+            if (record_bytes(dir, "regstate-truncated",
+                             "sum_via_rbx (steps_cap = 2)", rbx, sizeof rbx,
+                             rbx_args, 2, 65536, 2) != 0)
                 failed++;
         }
     }

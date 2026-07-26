@@ -698,3 +698,57 @@ carrying the **measured** skip reason
 the soft-dirty / `PAGEMAP_SCAN` gate, Linux ≥ 6.7) and captures without it. A
 recording with no `codeimage` events is therefore normal, and means the viewer
 falls back to the recorded `disasm` strings (D10) or to bare offsets.
+
+## `regstate` descriptor — `emu_x86_regs_t@x86_64/sysv`
+
+> **Owned by [09-teaching-producers.md](09-teaching-producers.md)** (T2),
+> appended under this file's D5 append-only rule. It gives the `regstate` kind
+> (defined above under *Event kinds*) its first concrete state descriptor — the
+> field list a viewer renders the deck from — and **adds no field to any existing
+> kind and no new envelope major.** The kind, the `{"desc","values"}` shape and
+> the descriptor-reference rule are unchanged and remain 01's.
+
+The per-step register ring
+([include/asmtest_emu.h](../../../include/asmtest_emu.h#L601) — `emu_step_capture`)
+is the first `regstate` producer: `asmtrace_record --steps=<cap>`
+([tools/asmtrace_record.c](../../../tools/asmtrace_record.c)) arms it, and after
+the run emits one `regstate` event per held pre-state, referencing this
+descriptor.
+
+**Descriptor id.** `emu_x86_regs_t@x86_64/sysv` — the `emu_x86_regs_t` struct row
+of [`asmtest_abi.json`](../../../scripts/gen-manifest.c#L120) (arch `x86_64`, abi
+`sysv`), the full x86-64 emulator register file
+([include/asmtest_emu.h:62](../../../include/asmtest_emu.h#L62)).
+
+**`values` fields.** The 16 general-purpose registers plus `rip` and `rflags`,
+in `emu_x86_regs_t` **declaration order**, each a decimal `u64`:
+
+```
+rax rbx rcx rdx rsi rdi rbp rsp r8 r9 r10 r11 r12 r13 r14 r15 rip rflags
+```
+
+```json
+{"k":"regstate","desc":"emu_x86_regs_t@x86_64/sysv","values":{"rax":42,"rbx":0,"rcx":0,"rdx":0,"rsi":2,"rdi":40,"rbp":0,"rsp":2162680,"r8":0,"r9":0,"r10":0,"r11":0,"r12":0,"r13":0,"r14":0,"r15":0,"rip":1048582,"rflags":2}}
+```
+
+- The 128-bit **XMM file is a documented v1 omission** — a wide value is not a
+  bare JSON integer (exactly the `df_step` `wide` limit above), and no MXCSR is
+  captured; the descriptor mechanism absorbs an FP/vector deck later. The struct
+  row in the manifest still names `xmm`, so a future wide-register producer can
+  extend `values` without a new descriptor id.
+- A producer **MAY emit a subset** of these fields — a reader renders the fields
+  present in `values` by name and shows the rest as unrecorded, per the
+  ignore-unknown / render-what-is-present rules. The `desktop/test`
+  walkthrough fixtures ([tests/golden-asmtrace/walkthroughs/](../../../tests/golden-asmtrace/walkthroughs/))
+  carry a single end-state `regstate` with only `rax rbx rcx rdx rsi rdi`; the
+  ring producer carries the full file above, per step.
+
+**Order, dropping and truncation (D7).** The ring producer emits held pre-states
+**oldest first**. The full register file is snapshotted BEFORE each instruction;
+when more steps run than the ring holds, the **earliest** entries are evicted, so
+the held events are steps `[dropped, dropped + count)`. The `end` footer then
+carries the truncation honestly: `"truncated":true` and the evicted count in
+`drops.lost`, so a reader offsets the first held step by `drops.lost` and renders
+the missing prefix as a torn edge — never as step 0. A recording with no
+`regstate` events simply had the ring disarmed (`--steps` defaults to 0), the
+normal case.

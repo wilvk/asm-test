@@ -114,6 +114,22 @@ second `emu_step_capture` re-arms with a new cap.
 
 ### T2 — `regstate` events from the ring  (S, depends on: T1; 01)
 
+> **Implemented 2026-07-26.** `tools/asmtrace_record.c` grew `--steps=<cap>`
+> (default 0 = off): it re-runs each routine under the T1 ring (`emu_call` +
+> `emu_step_capture`) and emits one `regstate` event per held pre-state — the
+> full x86-64 integer file (16 GP + `rip` + `rflags`, XMM a documented v1
+> omission) by descriptor reference `emu_x86_regs_t@x86_64/sysv`. Eviction is
+> honest: the `end` footer flips `truncated` and carries the evicted count in
+> `drops.lost`, so held events are steps `[dropped, dropped+count)`. The golden
+> `add_signed.asmtrace` now carries the worked example (baked cap 8, no
+> eviction, `--steps`-independent so `make asmtrace-golden` emits it) and a new
+> generated `regstate-truncated.asmtrace` (sum_via_rbx, cap 2 over 6 steps →
+> `drops.lost:4`) is the D7 register-ring dishonesty fixture. The concrete
+> descriptor field list is appended to
+> [asmtrace-schema.md](asmtrace-schema.md). Byte-stable across two
+> `asmtrace-golden-check` runs; 03's loader already lists `regstate`
+> (`desktop/src/doc/recording.cpp`). T3/T4 not started.
+
 **Goal.** Recordings gain per-step register states: `tools/asmtrace_record.c`
 (01's tool) grows `--steps=<cap>`, emitting one `regstate` event per held
 entry with the descriptor reference (`"emu_x86_regs_t@x86_64/sysv"`) and a
