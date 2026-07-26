@@ -77,6 +77,7 @@ land (legend as in [../implementations/README.md](../implementations/README.md):
 | [08-observer-views.md](08-observer-views.md) | live views: syscalls, watch, topo, hot edges, tree filters, codeimage, PT slice | 8 | 07, 04, 01 | ✅ 8/8 |
 | [09-teaching-producers.md](09-teaching-producers.md) | per-step register ring, scrubber, ABI x-ray, blame socket | 5 | 01, 03, 04, 06 | ☑ 5/5 |
 | [10-spacetime-3d-overview.md](10-spacetime-3d-overview.md) | 3D memory-terrain + execution-trajectory overview surface (**growth-rung companion**) | 7 | 01, 03, 04, 07, 08 | ☑ 7/7 |
+| [11-imgui-addons.md](11-imgui-addons.md) | Dear ImGui addon research + adoption plan (**research/planning doc, not a brief** — implementation gated on amending D2) | — | 01–10 (survey) | planning |
 
 71 tasks across 10 docs. Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
