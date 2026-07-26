@@ -796,12 +796,59 @@ int main() {
         no_stat.statistical = false;
         SceneLayers no_exact;
         no_exact.exact = false;
+        std::vector<unsigned char> off_px = capture(scene, gcam, gcf, no_stat);
         check("golden stat scene: the statistical layer puts pixels on screen",
-              pixels_differ(px, capture(scene, gcam, gcf, no_stat)) > 0,
+              pixels_differ(px, off_px) > 0,
               "the statistical toggle changed nothing");
         check("golden stat scene: there is NOTHING on the exact layer",
               pixels_differ(px, capture(scene, gcam, gcf, no_exact)) == 0,
               "a sampled residency rendered as an exact tube");
+
+        // The two checks above only say WHICH TOGGLE owns those pixels. They do
+        // not say the sampled mark LOOKS sampled — and that is the honesty
+        // invariant (scene.h "opaque exact tubes vs stippled statistical
+        // residency"; terrain.h "a sampled residency ... must never render as
+        // [an exact density]"; the doc's "different marks — solid tube vs
+        // translucent stipple"). Without the two below, deleting the shader's
+        // stipple `discard` and raising the line alpha to 1.0 makes a survey
+        // render pixel-identically to an exact tube with the whole suite still
+        // green. So look at the marked pixels themselves, the way (d) reads the
+        // arc's colour rather than merely toggling it.
+        std::vector<size_t> marked; // pixel indices the statistical layer drew
+        for (size_t i = 0, p = 0; i < px.size(); i += 4, p++)
+            if (px[i] != off_px[i] || px[i + 1] != off_px[i + 1] ||
+                px[i + 2] != off_px[i + 2])
+                marked.push_back(p);
+
+        // STIPPLED: the shader discards a band of `(x+y) mod 8`, so the drawn
+        // pixels leave whole diagonal phases EMPTY. A solid line fills all eight
+        // roughly evenly. Counting empty phases (rather than testing one exact
+        // phase) keeps this independent of the pattern's offset and period.
+        int phase[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+        for (size_t p : marked)
+            phase[((p % static_cast<size_t>(GW)) +
+                   (p / static_cast<size_t>(GW))) %
+                  8]++;
+        int empty_phases = 0;
+        for (int k = 0; k < 8; k++)
+            if (phase[k] == 0)
+                empty_phases++;
+        check("golden stat scene: the sampled mark is STIPPLED, not solid",
+              !marked.empty() && empty_phases >= 3,
+              "the residency filled every diagonal phase — it drew as a solid "
+              "tube, which is exactly what an exact path draws");
+
+        // TRANSLUCENT: the line blends at alpha < 1 over a dark background, so
+        // no marked pixel reaches the raw per-tid palette brightness an exact
+        // tube paints (palette entry 0 is {0.95,0.85,0.25} -> red 242).
+        int brightest = 0;
+        for (size_t p : marked)
+            if (px[p * 4] > brightest)
+                brightest = px[p * 4];
+        check("golden stat scene: the sampled mark is TRANSLUCENT, not opaque",
+              !marked.empty() && brightest < 200,
+              "a residency pixel reached full palette brightness — it drew as "
+              "an opaque exact tube");
     }
 
     // --- (h) the synthetic rich-`mem` scene: present, and inert -------------

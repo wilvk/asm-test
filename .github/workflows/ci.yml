@@ -1734,6 +1734,72 @@ jobs:
       - name: Run clang-tidy
         run: make tidy
 
+  # The desktop GUI tier (docs/internal/gui/). Until this lane existed the whole
+  # tier — ~50 headless test binaries, the .asmtrace document model, the replay /
+  # Loom / observer views and the 3D spacetime overview — was built and run only
+  # on a developer's box: `make test` expands to examples/test_*.c, so nothing in
+  # CI compiled desktop/. Two consequences this job closes, both found by an
+  # adversarial review of 10-T7:
+  #
+  #   1. The scene's GL smoke (test_scene_fbo) renders offscreen through
+  #      surfaceless EGL on software Mesa and reads real pixels back, so it is a
+  #      REAL test — but only where libgl1-mesa-dri + libegl1-mesa-dev are
+  #      installed. Per CLAUDE.md the fix for that is to install them where the
+  #      work runs, not to let the lane self-skip; they are apt packages here
+  #      exactly as in Dockerfile.desktop.
+  #   2. `asmtrace-golden-check` (the .asmtrace corpus's byte-stability gate)
+  #      needs libunicorn to build the recorder, so on the `cli` runner — which
+  #      has no unicorn — it takes the SKIP branch and the committed goldens are
+  #      never actually compared. With unicorn present here it ARMS, so a change
+  #      that perturbs a recording's bytes fails the run.
+  #
+  # LIBGL_ALWAYS_SOFTWARE pins llvmpipe so the smoke never depends on a GPU.
+  desktop:
+    name: desktop (GUI tier + .asmtrace golden gate)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      LIBGL_ALWAYS_SOFTWARE: 1
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install the desktop app backends, software Mesa, and the engines
+        # libglfw3-dev + libgl1-mesa-dev: the app-backend build deps.
+        # libgl1-mesa-dri + libegl1-mesa-dev: llvmpipe + EGL, so the offscreen
+        # FBO smoke RUNS headlessly instead of self-skipping.
+        # libunicorn-dev + libcapstone-dev: the Author-tier engines, and what
+        # arms the golden byte-stability gate below.
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends \
+            pkg-config libglfw3-dev libgl1-mesa-dev libgl1-mesa-dri \
+            libegl1-mesa-dev libunicorn-dev libcapstone-dev
+
+      - name: Headless desktop tests (null ImGui backend + the GL FBO smoke)
+        run: make WERROR=1 desktop-test
+
+      - name: Prove the GL smoke really ran (it must not self-skip on this lane)
+        # A lane that silently degraded to the self-skip path would report green
+        # while rendering nothing — the exact failure mode CLAUDE.md calls out.
+        # pipefail matters: without it `tee` would swallow a failing test's exit
+        # code and this step would pass while the smoke was red.
+        run: |
+          set -eo pipefail
+          ./build/desktop_test_scene_fbo | tee /tmp/fbo.log
+          grep -q "GL smoke ran" /tmp/fbo.log \
+            || { echo "::error::the scene FBO smoke self-skipped — no GL on this runner"; exit 1; }
+
+      - name: .asmtrace golden corpus is byte-stable (gate armed by libunicorn)
+        run: |
+          set -eo pipefail
+          make asmtrace-golden-check | tee /tmp/golden.log
+          if grep -qi "skip" /tmp/golden.log; then
+            echo "::error::asmtrace-golden-check self-skipped — the gate is not armed"
+            exit 1
+          fi
+
+      - name: Both binaries link (full app + the engine-free viewer)
+        run: make WERROR=1 desktop desktop-render
+
   # Quality: clang-format drift (style in .clang-format). A GATE since the
   # one-shot `make fmt` pass (e32a12f) brought the tree clean — new drift now
   # fails the run. Fix with `make fmt` / `make docker-fmt`. Pinned to
