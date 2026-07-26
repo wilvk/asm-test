@@ -9,6 +9,9 @@
 #ifndef ASMDESK_VIEWS_DRAW_H
 #define ASMDESK_VIEWS_DRAW_H
 
+#include <functional>
+
+#include "nav.h"
 #include "views/canvas.h"
 #include "views/diff_view.h"
 #include "views/scrubber.h"
@@ -40,7 +43,13 @@ uint64_t draw_scrubber(const StepIndex &idx, uint64_t playhead);
 void draw_abixray(const StepIndex &sysv, const StepIndex &win64, wt_model &walk,
                   uint64_t &playhead);
 void draw_slice_view(const dt_slice_view &v);
-void draw_diff_view(const dt_diff_view &v);
+// The two-recording summary (04-replay-views.md T7). Every navigable row's "go"
+// button routes its deep link through `go` (the shell's dt_nav_go seam, exactly
+// as the Observer deck does) — NOT the clipboard: a nav button that only copied
+// a link would leave the user where they were, believing they had moved. `go`
+// may be null in a draw-only smoke.
+void draw_diff_view(const dt_diff_view &v,
+                    const std::function<void(const dt_link &)> &go);
 
 // The keyboard-binding help overlay, fed by dt_nav_bindings() so the help and
 // the key map cannot drift apart.

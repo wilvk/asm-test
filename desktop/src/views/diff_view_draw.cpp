@@ -6,7 +6,8 @@
 
 namespace asmdesk {
 
-void draw_diff_view(const dt_diff_view &v) {
+void draw_diff_view(const dt_diff_view &v,
+                    const std::function<void(const dt_link &)> &go) {
     if (!v.refusal.empty()) {
         draw_banner(v.refusal.c_str(), true);
         return;
@@ -36,10 +37,16 @@ void draw_diff_view(const dt_diff_view &v) {
             continue;
         }
         // Every navigable row is a button that goes through the router — no
-        // view-private navigation state (plan D4).
+        // view-private navigation state (plan D4). The row already carries the
+        // canonical textual link (dt_nav_format); parse it back and hand the
+        // dt_link to the shell's go seam, the same path the Observer deck uses.
         ImGui::PushID(&r);
-        if (ImGui::SmallButton("go"))
-            ImGui::SetClipboardText(r.link.c_str());
+        if (ImGui::SmallButton("go") && go) {
+            dt_link l;
+            std::string err;
+            if (dt_nav_parse(r.link, l, err))
+                go(l);
+        }
         ImGui::PopID();
         ImGui::SameLine();
         ImGui::TextWrapped("%s", r.text.c_str());

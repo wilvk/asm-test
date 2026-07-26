@@ -411,7 +411,11 @@ static void draw_recording_tab(ShellState &s, const Recording &r) {
                         "attach a second recording (press d) to "
                         "compare");
                 else
-                    draw_diff_view(dt_diff_view_build(*a, *b));
+                    draw_diff_view(dt_diff_view_build(*a, *b),
+                                   [&s](const dt_link &l) {
+                                       if (!dt_nav_go(s.nav, l))
+                                           s.status = s.nav.last_error;
+                                   });
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Observer")) {
