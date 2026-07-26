@@ -8,6 +8,32 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Golden scenes and a CI-runnable GL lane for the 3D spacetime overview**
+  (docs/internal/gui/10-spacetime-3d-overview.md T7 — the view is now complete).
+  Three committed scenes pin the whole stack end to end. Two are **generated** by
+  `make asmtrace-golden` from one byte literal whose listing sits beside the bytes,
+  so the terrain's heat is countable on paper:
+  `tests/golden-asmtrace/scene-abs-loop.asmtrace` (the coarse rung — `codeimage` +
+  **absolute**-basis `trace` from a 3-iteration loop, giving one hot cell over cold
+  ones: coarse terrain plus one exact trajectory) and
+  `scene-abs-loop-truncated.asmtrace` (the same bytes with the trace buffer holding
+  6 of the 13 executed steps, so the producer flips `truncated`, `drops.lost`
+  counts the rest, and every populated cell is `TF_TORN`) — both byte-stable under
+  `make asmtrace-golden-check`. The third, the **rich `mem`** scene, cannot be
+  generated at all (`mem` is a reserved schema kind with no producer) and is
+  hand-authored under `tests/golden-asmtrace/scenes/`, marked **schema-unfrozen**
+  and deliberately **inert but present**: its accesses fall outside every code
+  region, so the coarse-rung projection gains no data cell and the scene renders
+  pixel-identically to its coarse twin. `desktop/test/test_scene_fbo.cpp` now
+  builds and renders all three under **surfaceless EGL + software Mesa** in the
+  `make docker-desktop` lane, asserting terrain heat and the exact tube for the abs
+  scene, the red gash for the truncated one, and — at the pixel level — that a
+  survey-only scene draws its **statistical** layer and *nothing* on the exact one;
+  the statistical scene reuses the committed `obs-survey-ibs` fixture rather than
+  adding a second survey saying the same thing. Each scene's model facts are
+  asserted in the test's pure half too, so they hold on a host with no GL.
+  `desktop/README.md` gains a **3D spacetime overview** section (controls, the
+  coarse-vs-rich staging, and the "3D to find, 2D to read" rule).
 - **Drill-in router + honesty invariants for the 3D spacetime scene — every pick
   reaches the right 2D view, and truncation/statistical survive it**
   (docs/internal/gui/10-spacetime-3d-overview.md T6). The scene is an *overview*,

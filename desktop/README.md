@@ -819,12 +819,85 @@ layout self-check asserted at init, and a mismatch **refuses to run** rather tha
 reporting telemetry it cannot trust. Promoting that surface to a public header is
 a library decision this work does not make.
 
+## The 3D spacetime overview
+
+Tracing, live observation and memory are three readings of one execution that
+share two axes — **the virtual address space** and **time**. The 3D spacetime
+overview ([10-spacetime-3d-overview.md](../docs/internal/gui/10-spacetime-3d-overview.md))
+draws them as one scene: the address space is a horizontal **plane** (code and
+data placed by address through a locality-preserving Hilbert curve), **time is
+the vertical axis**, **access density is terrain height**, and execution is a
+**trajectory** threading up through the plane. It answers the overview questions
+no list or timeline does — where is the working set, how fragmented is it, does a
+JIT region churn, do two threads share a line — and it is built from five
+engine-free layers, four of them pure and headless: the
+[projection](#projection--the-address-space-plane), the
+[trajectory](#trajectory--the-pc-path-and-its-access-marks), the
+[terrain](#terrain--density-height-field-over-time), the
+[GL scene](#the-3d-scene--camera-terrain-mesh-trajectory-tubes-picking) and the
+[live-observer overlay](#live-observer-overlay--n-trajectories-convergence-marks).
+
+**The one rule: 3D to find, 2D to read.** 3D is tolerable for overview, gestalt
+and anomaly-spotting, where you read approximate shape and occlusion is
+acceptable; it is bad at precise per-item reading — which value, same thread or
+not, exactly which step — which is what every real task ends in. So this surface
+is **strictly an orientation surface**: you navigate it to *find* something, then
+every pick drills *out of* it through 04's deep-link router into the flat 2D view
+that does the reading (canvas, slice explorer, operand timeline, hot edges). If a
+task starts needing precise reading *inside* the 3D view, that is a signal to
+build the 2D view it wants, not to make the scene more legible. The scene is
+never the only place a fact appears: truncation and statistical provenance both
+survive the drill-in, as tested invariants.
+
+**Controls.** The camera (`scene3d/camera.h`, pure math over the pinned
+`linmath.h`) orbits a fixed target — the plane centre — on a sphere:
+
+| Control | Call | Notes |
+|---|---|---|
+| **Orbit** | drag → `orbit(dyaw, dpitch)` | pitch is clamped just shy of the poles (±≈89°), where `look_at` degenerates |
+| **Dolly** | wheel → `dolly(factor)` | multiplicative, clamped to radius `[0.3, 12.0]` |
+| **Reset view** | `reset()` | the default three-quarter view: `yaw 0.7`, `pitch 0.6`, `radius 2.2` |
+| **Top-down (2D-ish)** | `top_down()` | the honest fallback: look straight down, so the scene collapses to the classic memory-map heatmap when depth confuses |
+
+The top-down preset is not a gimmick — it *is* the rule above, expressed as a
+control: when the 3D reading gets hard, flatten it rather than squint. (It is
+also what the golden-scene GL smoke renders through, for exactly that reason.)
+
+**Feed staging is honest, never faked.** The view has two rungs and only ships
+one:
+
+- The **coarse rung** — region terrain from `codeimage`, per-offset heat reused
+  from the trace canvas, an absolute-basis PC trajectory, per-thread activity —
+  is buildable from what the repo records today, and is the shipped target.
+- The **rich rung** — per-access data-address height and per-access spurs — is
+  **gated on the Wave-1 `mem` stream**, a *reserved* schema kind with no
+  producer. Until one lands the data cells stay flat and carry the provenance
+  chip `coarse: no per-access memory stream`; the flat plane is *labelled
+  coarse*, never presented as measured emptiness.
+- The **affinity layer** (threads placed by physical core / NUMA node) is gated
+  on a scheduling feed the repo does not have, so threads are coloured, not
+  core-placed. Recorded as a gap rather than invented.
+
+**Golden scenes.** Three committed scenes pin the whole stack, and are rendered
+end-to-end by `test_scene_fbo` under software Mesa:
+
+| Scene | Origin | What it pins |
+|---|---|---|
+| `tests/golden-asmtrace/scene-abs-loop.asmtrace` | **generated** (`make asmtrace-golden`) | the coarse rung: `codeimage` + absolute-basis `trace` from a 3-iteration loop, so the loop body's cell is hot (heat 3) over cold ones (heat 1) — coarse terrain plus one exact trajectory |
+| `tests/golden-asmtrace/scene-abs-loop-truncated.asmtrace` | **generated**, same bytes | the tear: the trace buffer holds 6 of the 13 executed steps, the footer declares `truncated` + `drops.lost`, and every populated cell is `TF_TORN` |
+| `tests/golden-asmtrace/scenes/mem-rich-synthetic.asmtrace` | hand-authored, **schema-unfrozen** | the rich rung, which no producer can emit — inert but present: its accesses fall outside every code region, so the coarse-rung projection gains no data cell and the scene renders pixel-identically to its coarse twin |
+
+The statistical scene (`TF_STAT` isolation) reuses the committed
+`desktop/test/fixtures/obs-survey-ibs.asmtrace` rather than adding a second
+survey fixture. The two generated scenes come from one byte literal in
+`tools/asmtrace_record.c` whose listing sits beside the bytes, so the terrain's
+heat is countable on paper; `make asmtrace-golden-check` regenerates and byte-
+compares them, so a change to a field's spelling fails as a diff instead of
+passing quietly.
+
 ## Projection — the address-space plane
 
-The 3D spacetime overview
-([10-spacetime-3d-overview.md](../docs/internal/gui/10-spacetime-3d-overview.md))
-lays code and data on a horizontal plane and threads execution up through it over
-time. Its first, purely geometric layer lives in `desktop/src/space/` and needs
+Its first, purely geometric layer lives in `desktop/src/space/` and needs
 no GL: `types.h` is the shared data model (`Region`, `Projection`, `TrajPoint`,
 `Terrain`) and `projection.{h,cpp}` maps an address to a cell on that plane and
 back. It links no engine and no ImGui, so it compiles into **both** binaries and
@@ -989,9 +1062,19 @@ target to screen centre. `test_scene_fbo` is a gated GL smoke: it brings up a
 **surfaceless EGL** context on software Mesa (no X server — the docker-desktop lane
 sets `LIBGL_ALWAYS_SOFTWARE=1`), builds a scene from a hand-authored recording,
 renders to an FBO and reads back that a hot cell is brighter than a cold one, a
-`TORN` fixture paints red, and the pick FBO returns the right id for a known cell
-centre. Its pure half (the id decode + router resolution) runs even where GL is
-absent, and a host with no GL device self-skips the GL smoke with a printed reason.
+`TORN` fixture paints red, the pick FBO returns the right id for a known cell
+centre, and a convergence arc draws and vanishes with its layer. It then renders
+the three **golden scenes** above through the top-down preset and asserts each one
+puts on screen what it models: the abs scene's recorded heat *and* its exact tube
+(switching the exact layer off changes pixels; switching the statistical layer off
+changes none, because there is nothing sampled here), the truncated twin's red
+gash, the survey scene's statistical layer with **nothing at all on the exact
+layer** — isolation asserted at the pixel level — and the synthetic `mem` scene
+rendering pixel-identically to its coarse twin, which is what "inert but present"
+means when you can see it. Its pure half (the id decode + router resolution, and
+every scene's model facts) runs even where GL is absent, and a host with no GL
+device self-skips the GL smoke with a printed reason. `make docker-desktop`
+installs software Mesa + EGL and runs the whole thing.
 
 ## Live-observer overlay — N trajectories, convergence marks
 
