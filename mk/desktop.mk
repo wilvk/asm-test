@@ -107,6 +107,7 @@ $(BUILD)/desktop/test/t/test_golden.o:    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_
 $(BUILD)/desktop/test/t/test_live_session.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_inspect.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_converge.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
+$(BUILD)/desktop/test/t/test_drillin.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_loom_golden.o \
 $(BUILD)/desktop/test/t/test_loom_draw.o: DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
 $(BUILD)/desktop/test/t/test_walkthrough.o: \
@@ -467,6 +468,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_terrain \
                  $(BUILD)/desktop_test_trajectory \
                  $(BUILD)/desktop_test_converge \
+                 $(BUILD)/desktop_test_drillin \
                  $(BUILD)/desktop_test_camera \
                  $(BUILD)/desktop_test_diff $(BUILD)/desktop_test_canvas \
                  $(BUILD)/desktop_test_timeline \
@@ -708,6 +710,21 @@ $(BUILD)/desktop_test_terrain: $(BUILD)/desktop/test/t/test_terrain.o \
 $(BUILD)/desktop_test_trajectory: $(BUILD)/desktop/test/t/test_trajectory.o \
     $(BUILD)/desktop/test/sp/trajectory.o $(BUILD)/desktop/test/sp/projection.o \
     $(BUILD)/desktop/test/doc/recording.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The drill-in router + the two honesty invariants (10-spacetime-3d-overview.md T6)
+# links the GL-free pick resolver (scene3d/pick.o) + the space/ models it routes
+# from (terrain + projection + trajectory) + nav.o (04's deep-link router the pick
+# lands in) + the trace canvas builder (it reads the truncation banner the torn
+# drill-in must carry, 04-T3) + the doc model — and NOTHING else: no ImGui, no GL,
+# no engine. The same engine-free closure proof test_projection makes, now for the
+# pick path that reaches 04's router (D4). diff.o/slice.o ride canvas.o's closure.
+$(BUILD)/desktop_test_drillin: $(BUILD)/desktop/test/t/test_drillin.o \
+    $(BUILD)/desktop/test/s3/pick.o $(BUILD)/desktop/test/sp/terrain.o \
+    $(BUILD)/desktop/test/sp/projection.o $(BUILD)/desktop/test/sp/trajectory.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
+    $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The convergence detector + the incremental live feed (10-spacetime-3d-overview.md

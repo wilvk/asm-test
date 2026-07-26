@@ -8,6 +8,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Drill-in router + honesty invariants for the 3D spacetime scene — every pick
+  reaches the right 2D view, and truncation/statistical survive it**
+  (docs/internal/gui/10-spacetime-3d-overview.md T6). The scene is an *overview*,
+  not a reading surface: `scene3d/pick.h`'s `resolve_pick` (pure, GL-free) now
+  routes every pickable kind through 04's deep-link router to the flat 2D view that
+  actually reads it — an exact **code cell** → the trace **canvas** at that offset
+  (or the codeimage-versioned **disasm** pane, 08-T7, when the region **churned**);
+  a **data cell** (rich `mem` rung) → the **slice** explorer at the step whose
+  access last hit it; an exact **PC vertex** → the operand **timeline** at that
+  step. Two honesty invariants are pinned as tested behaviour: **truncation survives
+  the drill-in** — opening a `TF_TORN` cell lands on a 2D view that still carries
+  04/08's truncation banner, so the 3D tear is never the only signal; and
+  **statistical is never exact** — a survey-only recording draws no exact trajectory
+  tube, its statistical provenance is surfaced, and a statistical pick (a `TF_STAT`
+  cell or a `TRAJ_STATISTICAL` vertex) opens the **hot-edge** view (08-T4), *never*
+  the exact slice explorer. New `desktop/test/test_drillin.cpp` (headless, no GL)
+  asserts each pickable-kind mapping and both invariants against the `truncated`
+  and `obs-survey-{ibs,sw}` fixtures; builds into both binaries and stays
+  engine-free (D4).
 - **Live-observer overlay for the 3D spacetime scene — N per-thread trajectories
   and cross-thread convergence hints** (docs/internal/gui/10-spacetime-3d-overview.md
   T5). A live 07 `LiveSession` now feeds

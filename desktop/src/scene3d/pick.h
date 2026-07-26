@@ -42,17 +42,32 @@ Pick decode_pick(uint32_t id, uint32_t n);
 // resolve_pick() replays to turn a vertex index back into a (tid, step): every
 // PC vertex (is_access == false) of every trajectory, in trajectory-then-point
 // order. Access-mark spurs are not independently pickable (they drill to the same
-// step as their PC vertex), so they are skipped here.
+// step as their PC vertex), so they are skipped here. `statistical` carries the
+// owning trajectory's TRAJ_STATISTICAL flag so the resolver can route a sampled
+// residency vertex to the hot-edge view rather than an exact reader (the T6
+// "statistical is never exact" invariant), with no second trajectory scan.
 struct PickVertex {
     int32_t tid;
     uint64_t t;
+    bool statistical = false;
 };
 std::vector<PickVertex> pick_vertex_order(const space::TrajectorySet &traj);
 
-// Resolve a decoded pick to a 04 deep-link, or nullopt for None / an id past the
-// live geometry. The two mappings the drill-in (T6) rests on:
-//   Cell   -> the code offset under that plane cell, on the trace canvas;
-//   Vertex -> the (recording, step) of that PC vertex, on the slice explorer.
+// Resolve a decoded pick to a 04 deep-link, or nullopt for None / a padding cell /
+// an id past the live geometry. Every pickable kind routes to the flat 2D view
+// that actually reads it ("3D to find, 2D to read", T6), with the two honesty
+// invariants folded in — statistical never opens an exact reader, and a churned
+// region opens the version-aware disasm pane rather than a plain canvas:
+//   Cell, exact code, not churned -> the trace CANVAS at the code offset;
+//   Cell, exact code, churned     -> the codeimage-versioned DISASM pane (08-T7)
+//                                    at the code offset (its bytes differ by trace
+//                                    time; only disasm resolves "which version");
+//   Cell, data access (rich `mem`)-> the SLICE explorer at the step whose access
+//                                    last hit that data cell;
+//   Cell, statistical-only (TF_STAT, no exact content) -> the HOT-EDGE view
+//                                    (08-T4), NEVER the exact slice explorer;
+//   Vertex, exact PC              -> the Loom / operand TIMELINE at that step;
+//   Vertex, statistical residency -> the HOT-EDGE view (08-T4), never timeline.
 std::optional<dt_link> resolve_pick(const space::TerrainModel &terr,
                                     const space::TrajectorySet &traj,
                                     const std::string &rec, const Pick &p);

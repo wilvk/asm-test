@@ -430,7 +430,22 @@ against a two-thread victim (`threads_victim`, [cli/](../../../cli/)) shows two
 trajectories and a convergence arc; detach leaves the target untouched (07's
 guarantee).
 
-### T6 — Drill-in + honesty guarantees  (S, depends on: T4, T5; 04)
+### T6 — Drill-in + honesty guarantees  (S, depends on: T4, T5; 04)  ✅ DONE
+
+> Landed. `scene3d/pick.{h,cpp}`'s `resolve_pick` (pure/GL-free) now routes every
+> pickable kind through 04's router: an exact **code cell** → the trace `canvas` at
+> the offset, or the codeimage-versioned `disasm` pane (08-T7) when its region
+> **churned**; a **data cell** (rich `mem` rung) → the `slice` explorer at the step
+> whose access last hit it; an exact **PC vertex** → the operand `timeline` at that
+> step. The two honesty invariants are pinned by `desktop/test/test_drillin.cpp`
+> (headless, no GL): **truncation survives** — a `TF_TORN` cell's 2D target still
+> carries 04/08's truncation banner (asserted via `truncated.asmtrace` → the
+> drilled-in canvas is `truncated` with a banner); **statistical is never exact** —
+> `obs-survey-{ibs,sw}.asmtrace` yield no exact tube, set the statistical provenance
+> flag, and every statistical pick (a `TF_STAT` cell / `TRAJ_STATISTICAL` vertex)
+> opens `hotedges` (08-T4), never `slice`/`canvas`/`timeline`. The vertex mapping was
+> moved slice→`timeline` per this task (the FBO smoke's pure check updated to match).
+> T7 (golden scenes + shell wiring of a visible view) remains.
 
 **Goal.** Enforce "3D to find, 2D to read" and the two honesty invariants as
 tested behaviour.

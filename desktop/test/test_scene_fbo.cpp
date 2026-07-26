@@ -148,17 +148,18 @@ static void pure_pick_checks() {
               "wrong rec");
     }
 
-    // a trajectory-vertex id -> Vertex -> a slice deep-link at that step.
+    // a trajectory-vertex id -> Vertex -> a timeline deep-link at that step (an
+    // exact PC vertex reads on the Loom / operand timeline; T6).
     if (!traj.trajectories.empty()) {
         uint32_t vid = pick_id_vertex(n, 0);
         Pick pv = decode_pick(vid, n);
         check("vertex id decodes to Vertex",
               pv.kind == Pick::Vertex && pv.vertex == 0, "wrong vertex");
         auto vl = resolve_pick(terr, traj, "rec.asmtrace", pv);
-        check("vertex resolves to a slice link",
-              vl.has_value() && vl->view == dt_view::slice &&
+        check("vertex resolves to a timeline link",
+              vl.has_value() && vl->view == dt_view::timeline &&
                   vl->step.has_value(),
-              "no slice link");
+              "no timeline link");
     }
 }
 

@@ -969,10 +969,18 @@ is always labelled, never mistaken for measured emptiness.
 **Picking → the 2D views (3D to find, 2D to read).** A second pass renders each
 pickable — every terrain cell, every trajectory vertex — as a unique id into an
 offscreen `R32UI` framebuffer; a click `glReadPixels` the 1×1 under the cursor and
-resolves the id to a **04 deep-link** (`pick.h`'s `resolve_pick`): a terrain cell →
-the trace **canvas** at that code offset, a trajectory vertex → the **slice**
-explorer at that step. The scene calls `dt_nav_go` with that link — every pick
-leaves the 3D overview for the flat 2D view that actually reads.
+resolves the id to a **04 deep-link** (`pick.h`'s `resolve_pick`), then calls
+`dt_nav_go` with it. Every pickable kind routes to the flat 2D view that actually
+reads it (T6): an exact **code cell** → the trace **canvas** at that code offset,
+or the **disasm** pane (08-T7) if that region **churned** (its bytes differ by
+trace time — only the codeimage-versioned pane resolves *which version*); a **data
+cell** (rich `mem` rung) → the **slice** explorer at the step whose access last hit
+it; an exact **PC vertex** → the operand **timeline** at that step. Two honesty
+invariants ride the drill-in and are pinned by `test_drillin` (no GL): **truncation
+survives** — a `TORN` cell's 2D target still carries 04/08's truncation banner, so
+the 3D tear is never the only signal; and **statistical is never exact** — a survey
+(`TF_STAT` cell / `TRAJ_STATISTICAL` vertex) opens the **hot-edge** view (08-T4),
+*never* the exact slice explorer, and a survey-only recording draws no exact tube.
 
 **Tested two ways.** `test_camera` (under `make desktop-test`, no display) pins the
 camera math: the eye rides the orbit sphere, orbit/dolly clamp, the presets land,

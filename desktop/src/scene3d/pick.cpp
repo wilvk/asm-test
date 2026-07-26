@@ -23,10 +23,12 @@ Pick decode_pick(uint32_t id, uint32_t n) {
 
 std::vector<PickVertex> pick_vertex_order(const space::TrajectorySet &traj) {
     std::vector<PickVertex> out;
-    for (const space::Trajectory &tr : traj.trajectories)
+    for (const space::Trajectory &tr : traj.trajectories) {
+        const bool st = (tr.flags & space::TRAJ_STATISTICAL) != 0;
         for (const space::TrajPoint &pt : tr.points)
             if (!pt.is_access)
-                out.push_back({tr.tid, pt.t});
+                out.push_back({tr.tid, pt.t, st});
+    }
     return out;
 }
 
@@ -40,38 +42,100 @@ std::optional<dt_link> resolve_pick(const space::TerrainModel &terr,
         const uint32_t n = terr.w;
         if (n == 0)
             return std::nullopt;
-        uint32_t x = p.cell % n, y = p.cell / n;
+        const uint32_t x = p.cell % n, y = p.cell / n;
         if (y >= n)
             return std::nullopt;
-        // Cell centre -> the address it holds. unproject mirrors terrain.cpp's
-        // own (x+0.5)/n rounding, so a pick lands on the same region T2 placed.
-        float u = (x + 0.5f) / static_cast<float>(n);
-        float v = (y + 0.5f) / static_cast<float>(n);
+
+        // The region + address under the cell centre. unproject mirrors
+        // terrain.cpp's own (x+0.5)/n rounding, so a pick lands on the same region
+        // T2 placed; r == nullptr means a padding cell beyond the compacted domain.
+        const float u = (x + 0.5f) / static_cast<float>(n);
+        const float v = (y + 0.5f) / static_cast<float>(n);
         uint64_t addr = 0;
         const space::Region *r = nullptr;
-        if (!terr.proj.unproject(u, v, &addr, &r) || !r)
-            return std::nullopt; // a padding cell beyond the compacted domain
+        const bool have_region = terr.proj.unproject(u, v, &addr, &r) && r;
+
+        // Is there EXACT content here? An exact code hit or a `mem` data access.
+        // A cell holds at most one region byte (regions are non-overlapping in the
+        // compacted domain), so code and data are mutually exclusive.
+        const space::TerrainModel::CodeCell *code = nullptr;
+        for (const space::TerrainModel::CodeCell &cc : terr.code)
+            if (cc.cell == p.cell) {
+                code = &cc;
+                break;
+            }
+        const space::TerrainModel::DataCell *data = nullptr;
+        if (!code)
+            for (const space::TerrainModel::DataCell &dc : terr.data)
+                if (dc.cell == p.cell) {
+                    data = &dc;
+                    break;
+                }
 
         dt_link link;
         link.rec = rec;
-        link.view = dt_view::canvas; // 3D to find, 2D to read: open the canvas
-        // The recording's basis is region-relative (offsets from the region base
-        // — the golden corpus and codeimage bases both are), so the canvas offset
-        // is addr - base. An abs recording's region base is the codeimage base,
-        // which makes this the same offset the canvas already keys on.
+
+        // Exact code: the trace canvas at the offset, UNLESS the region churned
+        // within the recording — then the codeimage-versioned disasm pane (08-T7),
+        // because the bytes at that offset differ by trace time and only disasm
+        // resolves "which version at time t". The offset is addr - base: the
+        // recording's basis is region-relative (offsets from the region base; an
+        // abs recording's region base is the codeimage base), the same key the
+        // canvas and the disasm pane already use.
+        if (code) {
+            if (!have_region)
+                return std::nullopt; // a lit code cell must map to a region
+            const bool churned = code->churn_step != UINT64_MAX;
+            link.view = churned ? dt_view::disasm : dt_view::canvas;
+            link.off = addr - r->base;
+            return link;
+        }
+
+        // A data access (rich `mem` rung) -> the slice explorer at the step whose
+        // access LAST hit this cell (`steps` is ascending; back() is most recent):
+        // the dataflow reader for "what touched this address".
+        if (data && !data->steps.empty()) {
+            link.view = dt_view::slice;
+            link.step = static_cast<uint32_t>(data->steps.back());
+            return link;
+        }
+
+        // No exact content. A statistical-only cell (survey residency, TF_STAT) ->
+        // the hot-edge view (08-T4), NEVER the exact slice explorer: a sampled
+        // residency is not an exact density and must not open an exact reader (the
+        // "statistical is never exact" invariant).
+        if (terr.has_stat && p.cell < terr.stat.flags.size() &&
+            (terr.stat.flags[p.cell] & space::TF_STAT)) {
+            link.view = dt_view::hotedges;
+            return link;
+        }
+
+        // A bare region cell with neither exact nor statistical content: open the
+        // canvas at its offset. A cell mapping to no region at all is padding.
+        if (!have_region)
+            return std::nullopt;
+        link.view = dt_view::canvas;
         link.off = addr - r->base;
         return link;
     }
 
-    // Kind::Vertex: replay the canonical PC-vertex order to recover its step.
+    // Kind::Vertex: replay the canonical PC-vertex order to recover its (step,
+    // fidelity). A statistical residency vertex -> the hot-edge view (08-T4), never
+    // the exact operand timeline; an exact PC vertex -> the operand timeline at that
+    // step.
     std::vector<PickVertex> order = pick_vertex_order(traj);
     if (p.vertex >= order.size())
         return std::nullopt;
+    const PickVertex &pv = order[p.vertex];
     dt_link link;
     link.rec = rec;
+    if (pv.statistical) {
+        link.view = dt_view::hotedges;
+        return link;
+    }
     link.view =
-        dt_view::slice; // a trajectory vertex reads on the slice explorer
-    link.step = static_cast<uint32_t>(order[p.vertex].t);
+        dt_view::timeline; // the Loom / operand timeline reads this vertex
+    link.step = static_cast<uint32_t>(pv.t);
     return link;
 }
 
