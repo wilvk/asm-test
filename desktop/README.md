@@ -620,6 +620,51 @@ never-ran candidate walk) be tested *on demand* rather than by luck. The real
 `asmspy --serve` is covered end to end on the other side of the seam, by the
 serve section of `make cli-smoke`.
 
+### Troubleshooting a live session
+
+The **session state line** is the first thing to read, and its four values point
+at different problems:
+
+| State | Means | What to do |
+|---|---|---|
+| **idle** | host up, no capture running | pick an attachable row and a jack, then Start |
+| **running** | a capture is in progress | the Observer deck fills as events arrive |
+| **FAILED** | the host could **not be started** | it names why (e.g. no `asmspy` found, or exec failed) |
+| **ended** | the `asmspy --serve` **subprocess exited** | see below — this is *not* a permission problem |
+
+The distinction that trips people up: **a permission refusal does not end the
+host.** A target you cannot attach to (Yama, uid, an existing tracer) leaves the
+host **idle** and surfaces a red `refused: …` line — the host is alive and
+waiting. So **`ended` + *"no capture yet"* means the host process itself died**,
+not that a `ptrace` was denied.
+
+The overwhelmingly common cause is a **stale or missing `build/asmspy`**. Connect
+resolves the host by spawning `asmspy` (on `$PATH`, then `./build/asmspy`) with
+`--serve`; a binary built *before* the serve loop existed does not recognise
+`--serve`, prints its usage banner to stdout, and exits `0`. The desktop reads
+those non-JSON lines (they show as *"N unparseable line(s) from the host"*), sees
+the child exit → **ended**, and never gets a header → **no capture yet**. Fix it:
+
+```
+make cli                                   # rebuild build/asmspy with the serve loop
+printf '{"cmd":"quit"}\n' | ./build/asmspy --serve
+# a serve-capable binary echoes:  {"k":"cmd","cmd":"quit"}
+# a stale one prints the usage banner instead
+```
+
+Then **Disconnect and reconnect** — the next Connect spawns the freshly built
+binary, so you do not need to relaunch the desktop.
+
+Once the host is **idle**, seeing a **Stream** or **Graph** is: pick a row whose
+attach column is green **attachable**, select the mode's jack, and **Start**; the
+Observer deck renders as events land. Both are *exact-ptrace* modes, so an
+un-attachable target yields a `refused:` line (host stays idle) rather than a
+capture — consult the verdict table above. On a `ptrace_scope=1` host, an
+arbitrary same-uid process reads as **Unknown** until you make it attachable:
+lower the scope (`echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope`), grant
+the capability (`sudo setcap cap_sys_ptrace+ep ./build/asmspy`), or pick a target
+that opted in via `PR_SET_PTRACER`.
+
 ## The live Observer views
 
 Seven views over a live session — and over any recording of one, which is the
