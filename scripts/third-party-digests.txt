@@ -65,3 +65,12 @@ image-digest    tonistiigi-binfmt  qemu-v10.2.3  sha256:400a4873b838d1b89194d982
 # above). Added BY HAND — refresh-thirdparty-digests.sh does not know these rows.
 tarball-sha256  imgui          1.91.9  sha256:3872a5f90df78fced023c1945f4466b654fd74573370b77b17742149763a7a7c
 tarball-sha256  nlohmann-json  3.11.3  sha256:9bea4c8066ef4a1c206b2be5a36302f8926f7fdc6087af5d20b417d0cf103ea6
+# linmath.h: the desktop GUI's 3D spacetime overview camera math (gui 10-T4,
+# desktop/src/scene3d/). WTFPL (permissive), a single header compiled INTO the
+# desktop binaries. linmath.h ships NO tagged releases, so the pin is a commit:
+# the "version" token below is that commit's short form and the fetch script
+# (fetch-linmath.sh) resolves the full commit for the raw-file URL. The digest is
+# the SHA-256 of the single header at that commit (self-hashed at pin time, same
+# single-file scheme as the nlohmann-json row above). Added BY HAND —
+# refresh-thirdparty-digests.sh does not know this row.
+tarball-sha256  linmath        26211bb  sha256:e5ea6c6da3d78d4afa40d987770331837b98247ed5799b11a5e09e9abe84f311

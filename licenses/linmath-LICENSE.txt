@@ -1,0 +1,23 @@
+linmath.h — a lean single-header column-major vector/matrix math library, used by
+the desktop GUI's 3D spacetime overview (desktop/src/scene3d/, gui 10-T4) for its
+mat4x4_perspective / mat4x4_look_at / mat4x4_mul camera math. Vendored at the
+pinned commit recorded in scripts/third-party-digests.txt (name "linmath").
+
+Upstream: https://github.com/datenwolf/linmath.h
+
+The library is released under the WTFPL (Do What The Fuck You Want To Public
+License) Version 2, reproduced verbatim below from the upstream LICENCE file.
+
+            DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
+                    Version 2, December 2004
+
+ Copyright (C) 2013 Wolfgang 'datenwolf' Draxinger <code@datenwolf.net>
+
+ Everyone is permitted to copy and distribute verbatim or modified
+ copies of this license document, and changing it is allowed as long
+ as the name is changed.
+
+            DO WHAT THE FUCK YOU WANT TO PUBLIC LICENSE
+   TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
+
+  0. You just DO WHAT THE FUCK YOU WANT TO.

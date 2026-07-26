@@ -21,6 +21,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   into both binaries and stays engine-free (D4); covered by `test_scrubber`
   (builder: seek, diff-highlight, tear, absent message) and `test_scrubber_draw`
   (the ImGui half under the null backend).
+- **The 3D spacetime overview's GL scene — camera, terrain mesh, trajectory
+  tubes, colour-ID picking** (docs/internal/gui/10-spacetime-3d-overview.md T4).
+  The desktop now draws the address-space projection, a terrain slice and the
+  execution trajectories as a 3D scene under the ImGui HUD, in the same GL context
+  the shell already stands up. A `2^order × 2^order` grid VBO is displaced by a
+  per-cell height texture and coloured by a flags texture (a `TORN` tear is a red
+  gash, statistical residency is dimmed, JIT churn is tinted); exact paths draw as
+  opaque lines while statistical residency is translucent and stippled and is
+  never joined into an exact tube. An orbit camera (drag to orbit, wheel to dolly,
+  a "reset view" and an honest "top-down 2D-ish" preset) frames it, and every pick
+  — resolved through an offscreen `R32UI` colour-ID framebuffer — leaves the 3D
+  overview for the flat 2D view that reads it: a terrain cell opens the trace
+  canvas at that code offset, a trajectory vertex the slice explorer at that step
+  (**3D to find, 2D to read**). The scene links **no engine** — only OpenGL and
+  the pure `space/` models — so it ships in the render-only `asmtest-viewer` as in
+  the full app; the ImGui HUD and the pick/router logic are separate TUs that link
+  no GL. Camera math is pinned by `test_camera` (no display), and the terrain +
+  picking by `test_scene_fbo`, a gated GL smoke that renders offscreen via
+  surfaceless EGL on software Mesa. The math comes from a newly pinned single
+  header, `linmath.h` (WTFPL), fetched and digest-verified like imgui/json.
 - **Opt-in per-step register-capture ring in the emulator**
   (docs/internal/gui/09-teaching-producers.md T1). `emu_step_capture(e, cap)`
   arms one more `UC_HOOK_CODE` on the x86-64 guest that snapshots the full

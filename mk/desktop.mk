@@ -15,13 +15,18 @@ IMGUI_VERSION ?= 1.91.9
 IMGUI_HOME    ?= $(BUILD)/imgui/imgui-$(IMGUI_VERSION)
 JSON_VERSION  ?= 3.11.3
 JSON_HOME     ?= $(BUILD)/nlohmann-json/$(JSON_VERSION)
+# linmath.h: the 3D spacetime overview's camera math (10-spacetime-3d-overview.md
+# T4, desktop/src/scene3d/). A pinned single header (commit short-token; the fetch
+# script resolves the full commit) — see scripts/fetch-linmath.sh.
+LINMATH_VERSION ?= 26211bb
+LINMATH_HOME    ?= $(BUILD)/linmath/$(LINMATH_VERSION)
 
 # -MMD -MP: per-object header deps so an incremental build stays correct across
 # the many desktop/ and imgui headers. Recursive (=), never := (CXX is set by
 # mk/bindings.mk, which loads after this file).
 DESKTOP_CXXFLAGS = -std=c++17 -Wall -Wextra -O2 -g -MMD -MP \
   -Icli -Iinclude -Idesktop/src -I$(IMGUI_HOME) -I$(IMGUI_HOME)/backends \
-  -I$(JSON_HOME)
+  -I$(JSON_HOME) -I$(LINMATH_HOME)
 
 # --- pinned, digest-verified third-party sources (D2) ------------------------
 # One fetch-imgui.sh run extracts ALL of imgui's TUs at once, so they are a
@@ -36,6 +41,8 @@ $(IMGUI_SRCS) &: scripts/fetch-imgui.sh scripts/third-party-digests.txt
 	sh scripts/fetch-imgui.sh >/dev/null
 $(JSON_HOME)/nlohmann/json.hpp: scripts/fetch-json.sh scripts/third-party-digests.txt
 	sh scripts/fetch-json.sh >/dev/null
+$(LINMATH_HOME)/linmath.h: scripts/fetch-linmath.sh scripts/third-party-digests.txt
+	sh scripts/fetch-linmath.sh >/dev/null
 
 # --- source basenames --------------------------------------------------------
 DESKTOP_IMGUI_CORE := imgui imgui_draw imgui_tables imgui_widgets
@@ -79,6 +86,9 @@ $$(BUILD)/desktop/$(1)/lv/%.o:  desktop/src/live/%.cpp | $$(IMGUI_HOME)/imgui.cp
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) -c $$< -o $$@
 $$(BUILD)/desktop/$(1)/sp/%.o:  desktop/src/space/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
+	@mkdir -p $$(@D)
+	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) -c $$< -o $$@
+$$(BUILD)/desktop/$(1)/s3/%.o:  desktop/src/scene3d/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp $$(LINMATH_HOME)/linmath.h
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) -c $$< -o $$@
 $$(BUILD)/desktop/$(1)/t/%.o:   desktop/test/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$(JSON_HOME)/nlohmann/json.hpp
@@ -171,7 +181,9 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/ui/inspect_door.o \
   $(DESKTOP_LIVE:%=$(BUILD)/desktop/$(1)/lv/%.o) \
   $(BUILD)/desktop/$(1)/sp/projection.o $(BUILD)/desktop/$(1)/sp/terrain.o \
-  $(BUILD)/desktop/$(1)/sp/trajectory.o
+  $(BUILD)/desktop/$(1)/sp/trajectory.o \
+  $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/pick.o \
+  $(BUILD)/desktop/$(1)/s3/hud.o
 DESKTOP_APP_OBJ    := $(call desktop_app_objs,app) \
                       $(DESKTOP_LOOM_APP:%=$(BUILD)/desktop/app/lo/%.o)
 DESKTOP_RENDER_OBJ := $(call desktop_app_objs,render)
@@ -236,6 +248,22 @@ DESKTOP_MISSING += libglfw3-dev
 endif
 GLFW_LIBS ?= $(shell pkg-config --libs glfw3 2>/dev/null || echo -lglfw)
 GL_LIBS   ?= -lGL
+EGL_LIBS  ?= -lEGL
+
+# The 3D-scene FBO smoke (10-spacetime-3d-overview.md T4) renders offscreen via
+# EGL surfaceless + software Mesa, so it needs the EGL + GL 3.x headers (the app
+# already links -lGL; the smoke adds -lEGL). Absence -> the smoke is not built and
+# desktop-test prints why (the binary would ALSO self-skip at runtime on a host
+# with the headers but no GL device — a machine with no GL at all still runs the
+# pure camera test). Header-probed like keystone: glext.h and EGL/egl.h ship in
+# libgl1-mesa-dev / libegl1-mesa-dev, which have no reliable pkg-config here.
+DESKTOP_GL_MISSING :=
+ifeq ($(shell ls /usr/include/GL/glext.h /usr/local/include/GL/glext.h 2>/dev/null | head -1),)
+DESKTOP_GL_MISSING += libgl1-mesa-dev
+endif
+ifeq ($(shell ls /usr/include/EGL/egl.h /usr/local/include/EGL/egl.h 2>/dev/null | head -1),)
+DESKTOP_GL_MISSING += libegl1-mesa-dev
+endif
 
 # The full app links unicorn/keystone/capstone (D4). Keystone's kit ships no
 # reliable pkg-config, so it is not probed separately — the trio is installed
@@ -378,6 +406,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_projection \
                  $(BUILD)/desktop_test_terrain \
                  $(BUILD)/desktop_test_trajectory \
+                 $(BUILD)/desktop_test_camera \
                  $(BUILD)/desktop_test_diff $(BUILD)/desktop_test_canvas \
                  $(BUILD)/desktop_test_timeline \
                  $(BUILD)/desktop_test_scrubber \
@@ -618,6 +647,30 @@ $(BUILD)/desktop_test_trajectory: $(BUILD)/desktop/test/t/test_trajectory.o \
     $(BUILD)/desktop/test/doc/recording.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# The orbit camera (10-spacetime-3d-overview.md T4 step 4) is pure header-only
+# math over the pinned linmath.h, so its test links NOTHING but its own object —
+# the engine- AND GL-free closure proof for the camera. Runs on any host (no GL),
+# so it rides DESKTOP_TESTS unconditionally. The linmath fetch is an order-only
+# prereq (like imgui/json), so a clean tree fetches it on demand.
+$(BUILD)/desktop/test/t/test_camera.o \
+$(BUILD)/desktop/test/t/test_scene_fbo.o: | $(LINMATH_HOME)/linmath.h
+$(BUILD)/desktop_test_camera: $(BUILD)/desktop/test/t/test_camera.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The GL FBO smoke (T4): scene.o + pick.o + the pure space/ + doc model it renders
+# from, linked with EGL + GL for the surfaceless offscreen context. GATED on the
+# GL/EGL headers (DESKTOP_GL_MISSING) — built and run under docker-desktop (which
+# installs software Mesa + EGL), skipped-with-a-reason on a bare host. Nothing in
+# desktop/src/ but scene.o links GL, so asmtest-viewer stays engine-free (D4).
+$(BUILD)/desktop_test_scene_fbo: $(BUILD)/desktop/test/t/test_scene_fbo.o \
+    $(BUILD)/desktop/test/s3/scene.o $(BUILD)/desktop/test/s3/pick.o \
+    $(BUILD)/desktop/test/sp/terrain.o $(BUILD)/desktop/test/sp/projection.o \
+    $(BUILD)/desktop/test/sp/trajectory.o \
+    $(BUILD)/desktop/test/vw/canvas.o $(BUILD)/desktop/test/an/diff.o \
+    $(BUILD)/desktop/test/an/slice.o $(BUILD)/desktop/test/src/nav.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(EGL_LIBS) $(GL_LIBS) -o $@
+
 $(BUILD)/desktop_test_nav: $(BUILD)/desktop/test/t/test_nav.o \
     $(BUILD)/desktop/test/src/nav.o $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
@@ -761,6 +814,19 @@ $(BUILD)/desktop_test_loom_forks: $(BUILD)/desktop/test/t/test_loom_forks.o \
 DESKTOP_ALL_TESTS  = $(DESKTOP_TESTS)
 DESKTOP_ENGINE_SAY = :
 DESKTOP_REPLAY_SAY = :
+DESKTOP_GL_SAY     = :
+# The 3D-scene FBO smoke rides desktop-test where the GL/EGL headers exist (the
+# docker-desktop lane installs them). This is NOT a self-skip-only lane: the smoke
+# renders and reads back real pixels under software Mesa there (CLAUDE.md — a test
+# that can only ever self-skip is not a test). On a bare host without the headers
+# it is not built and the reason is printed; the pure camera test still runs.
+DESKTOP_GL_TESTS := $(BUILD)/desktop_test_scene_fbo
+ifeq ($(strip $(DESKTOP_GL_MISSING)),)
+desktop-test: $(DESKTOP_GL_TESTS)
+DESKTOP_ALL_TESTS += $(DESKTOP_GL_TESTS)
+else
+DESKTOP_GL_SAY = echo "desktop-test: the 3D-scene FBO smoke needs:$(DESKTOP_GL_MISSING) — not built here; 'make docker-desktop' installs software Mesa + EGL and runs it"
+endif
 
 # The two gates are separate because their dependencies are (see
 # DESKTOP_REPLAY_MISSING above): a host with Unicorn + Capstone runs the PT
@@ -782,6 +848,7 @@ endif
 desktop-test: $(DESKTOP_TESTS)
 	@$(DESKTOP_ENGINE_SAY)
 	@$(DESKTOP_REPLAY_SAY)
+	@$(DESKTOP_GL_SAY)
 	@for t in $(DESKTOP_ALL_TESTS); do echo "== $$t =="; $$t || exit 1; done
 
 # ---------------------------------------------------------------------------

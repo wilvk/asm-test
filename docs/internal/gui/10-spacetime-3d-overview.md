@@ -277,7 +277,15 @@ fixture is refused with a diagnostic; a `survey` fixture is all `Statistical`.
 **Done when.** all four cases pass headlessly; the builder is engine-free and in
 both binaries.
 
-### T4 — The GL scene: camera, terrain mesh, trajectory tubes, picking  (L → split; depends on: T1–T3, 03)
+### T4 — The GL scene: camera, terrain mesh, trajectory tubes, picking  (L → split; depends on: T1–T3, 03)  ✅ DONE
+
+> Landed in `desktop/src/scene3d/` (`camera.h`, `scene.{h,cpp}`, `pick.{h,cpp}`,
+> `hud.{h,cpp}`, `shaders/embedded.h`). Math dep: pinned `linmath.h` (WTFPL,
+> `scripts/fetch-linmath.sh`). Tested by `test_camera` (pure, no display) and
+> `test_scene_fbo` (gated GL smoke via surfaceless EGL on software Mesa). Picking
+> resolves to 04's router (`pick.h::resolve_pick` → `dt_nav_go`). Ships engine-free
+> in `asmtest-viewer` (D4). T5–T7 remain: live overlay, drill-in honesty tests,
+> golden scenes + shell wiring of a visible view.
 
 > Intermediate difficulty (GL/shaders) — the one non-junior task; the pure
 > layers above and the wiring below are junior-friendly. Split across the four

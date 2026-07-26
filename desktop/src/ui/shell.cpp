@@ -329,7 +329,16 @@ static void draw_open_dialog(ShellState &s) {
 }
 
 void draw_shell(ShellState &s) {
-    ImGui::Begin("asmtest");
+    // Pin the shell to the whole viewport. Without this the "asmtest" window is a
+    // floating panel that ImGui auto-fits to a tiny default size on the first
+    // frame (and, with IniFilename disabled in main.cpp, never remembers a
+    // resize) — so the app reads as "starts very small" inside the OS frame.
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::Begin("asmtest", nullptr,
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
 
     if (ImGui::BeginTabBar("main", ImGuiTabBarFlags_AutoSelectNewTabs)) {
         if (ImGui::BeginTabItem("Home")) {

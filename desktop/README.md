@@ -907,3 +907,55 @@ canvas heat, a truncated fixture sets `TORN`, a `survey`-only fixture produces a
 `STAT` layer over an *empty* exact layer (the isolation invariant), a synthetic
 `mem` fixture exercises the gated rich rung, and a re-versioned `codeimage` sets
 `CHURN` only once the slice reaches the change.
+
+## The 3D scene — camera, terrain mesh, trajectory tubes, picking
+
+`scene3d/` is the one GL layer in `desktop/`: it draws the projection + a terrain
+slice + the trajectories as a 3D scene under the ImGui HUD, in the same GL context
+03 stands up (no new windowing). Like the pure layers above it links **no engine**
+— only OpenGL and the `space/` models — so it ships in `asmtest-viewer`, the
+render-only permissive binary, exactly as in the full app (D4). The scene is split
+so each half is testable on its own: `scene.{h,cpp}` is the GL (mesh, textures,
+draw passes, the offscreen pick framebuffer) and links no ImGui; `hud.{h,cpp}` is
+the ImGui HUD and links no GL; `pick.{h,cpp}` is the colour-ID scheme and its
+resolution to a link, and links neither; `camera.h` is pure orbit math over the
+pinned `linmath.h`. The GLSL lives in `scene3d/shaders/embedded.h` as string
+literals — the scene loads no shader file at runtime.
+
+**Terrain mesh.** A `2^order × 2^order` grid VBO is displaced in the vertex shader
+by a per-cell height sampled from an `R32F` texture (heights normalised to `[0,1]`
+so a hot cell reads brighter than a cold one), and coloured by a `usampler2D`
+`R32UI` flags texture: `TORN` paints a red gash, `STAT` dims the statistical
+layer, `CHURN` tints JIT churn. **Trajectory tubes.** Each `Trajectory` is a line
+strip at world `(u, t·scale, v)`; an **exact** path is an opaque line, a
+**statistical** residency is translucent and stippled and is *never* joined into
+an exact tube (the honesty invariant, enforced structurally), and access-mark
+spurs are short lines from a PC vertex to its data cell — per-tid colour throughout.
+
+**Orbit camera + HUD.** `camera.h` builds `mat4x4_perspective`/`_look_at` from
+spherical `(yaw, pitch, radius)` about the plane centre; a drag orbits, the wheel
+dollies, and two presets exist — "reset view" and the honest **"top-down (2D-ish)"**
+that collapses the scene to the classic memory-map heatmap when depth confuses.
+The HUD carries the playhead (scrubs `t` → re-slice the terrain / rebuild the
+trajectory), the layer toggles, the region legend, and the provenance chips
+(coarse-vs-rich, exact-vs-statistical, truncation) — so a coarse or refused plane
+is always labelled, never mistaken for measured emptiness.
+
+**Picking → the 2D views (3D to find, 2D to read).** A second pass renders each
+pickable — every terrain cell, every trajectory vertex — as a unique id into an
+offscreen `R32UI` framebuffer; a click `glReadPixels` the 1×1 under the cursor and
+resolves the id to a **04 deep-link** (`pick.h`'s `resolve_pick`): a terrain cell →
+the trace **canvas** at that code offset, a trajectory vertex → the **slice**
+explorer at that step. The scene calls `dt_nav_go` with that link — every pick
+leaves the 3D overview for the flat 2D view that actually reads.
+
+**Tested two ways.** `test_camera` (under `make desktop-test`, no display) pins the
+camera math: the eye rides the orbit sphere, orbit/dolly clamp, the presets land,
+the view matrix carries the eye to the origin, and the MVP projects the look-at
+target to screen centre. `test_scene_fbo` is a gated GL smoke: it brings up a
+**surfaceless EGL** context on software Mesa (no X server — the docker-desktop lane
+sets `LIBGL_ALWAYS_SOFTWARE=1`), builds a scene from a hand-authored recording,
+renders to an FBO and reads back that a hot cell is brighter than a cold one, a
+`TORN` fixture paints red, and the pick FBO returns the right id for a known cell
+centre. Its pure half (the id decode + router resolution) runs even where GL is
+absent, and a host with no GL device self-skips the GL smoke with a printed reason.

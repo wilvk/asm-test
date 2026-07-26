@@ -14,8 +14,16 @@
 ARG BASE_IMAGE=asmtest-bindings-base
 FROM ${BASE_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive
+# libglfw3-dev + libgl1-mesa-dev: the app-backend build deps (03).
+# libgl1-mesa-dri + libegl1-mesa-dev: software Mesa (llvmpipe) + EGL, so the 3D
+# scene's FBO smoke (10-spacetime-3d-overview.md T4) renders offscreen via EGL
+# surfaceless with NO X server. Version-pinned the same way as Dockerfile.cli's
+# libipt-dev: the distro packages resolved against this image's pinned Ubuntu base.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libglfw3-dev libgl1-mesa-dev \
+ && apt-get install -y --no-install-recommends \
+      libglfw3-dev libgl1-mesa-dev libgl1-mesa-dri libegl1-mesa-dev \
  && rm -rf /var/lib/apt/lists/*
+# Force software rendering for the headless GL smoke (no GPU in CI).
+ENV LIBGL_ALWAYS_SOFTWARE=1
 COPY . .
 CMD sh -c 'make desktop desktop-render desktop-test'
