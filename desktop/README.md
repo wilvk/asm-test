@@ -757,3 +757,45 @@ colour and legend name per region kind for the HUD. `test_projection` (under
 for 10k random addresses across three regions, neighbouring bytes stay within one
 cell, an unmapped address is refused, and every plane cell holds exactly one
 compacted byte or is padding.
+
+## Trajectory — the PC path and its access marks
+
+Over that plane, execution is a **trajectory** threading up through time.
+`trajectory.{h,cpp}` (still in `desktop/src/space/`, still engine- and GL-free)
+turns a recording's events into the ordered `TrajPoint`s the path is drawn from,
+with the same D4 closure — it links into both binaries and the null harness.
+`build_trajectories(recording)` returns a `TrajectorySet`: the exact PC paths
+(one `Trajectory` per tid) plus, kept strictly separate, the statistical
+residency layer.
+
+**PC vertices** come from `trace` events in step order. An `abs`-basis trace is a
+real address-space path — its vertices project directly through the T1 plane. A
+`rel`-basis trace is routine-relative, so the trajectory is flagged
+`TRAJ_RELATIVE_BASIS` and the HUD labels it "routine-relative — not a true
+address-space path"; its offsets are carried verbatim, never dressed up as
+addresses. A trace that **mixes** bases — or omits `basis` on any event — is
+**refused**: the builder sets a `diagnostic` and returns no trajectories at all,
+mirroring the trace canvas's refuse-to-mix-bases rule rather than mis-placing
+every vertex on one axis.
+
+**Statistical is never exact.** `survey` edges (an `ibs-op` / `sw-clock` sample,
+always `exact:false`) become their own `Trajectory`, flagged `TRAJ_STATISTICAL`
+with every point `Statistical` — a distinct object that is never joined into an
+exact tube, so the isolation invariant holds by construction rather than by care.
+
+**Access marks** from `mem` events attach to the PC vertex of their `step` as a
+spur to the data cell (`is_access = true`). The `mem` kind is reserved and has no
+v1 producer, so this rich rung is **gated on the kind being present**: a real
+recording carries none and the path stays inert (`mem_present` false, and the HUD
+shows a "coarse: no per-access memory stream" chip rather than a silent flat
+plane); a synthetic fixture with hand-authored `mem` lines exercises it.
+**Per-tid grouping** falls out of the same code: a replay stream omits `tid` and
+is a single trajectory (`tid = -1`); a live feed that tags events per thread
+(07's session) splits into one path per tid, ready for the live overlay.
+
+`test_trajectory` (under `make desktop-test`, no display) pins the contract: an
+`abs` fixture yields vertices at the projected cells in step order; a `rel`
+fixture sets `TRAJ_RELATIVE_BASIS`; a mixed (and an absent-basis) fixture is
+refused with a diagnostic and no trajectories; a `survey` fixture is all
+`Statistical` with no exact path leaking in; and the per-tid and gated-`mem`
+paths build the trajectories they should.
