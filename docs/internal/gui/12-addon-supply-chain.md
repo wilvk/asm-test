@@ -13,6 +13,18 @@
 > Read [\_conventions.md](../implementations/_conventions.md) first (the
 > version-pinning dependency rule is the spine of this doc); shared decisions
 > D1–D11 live in this directory's [README](README.md).
+>
+> **Implemented 2026-07-27 — doc complete (3/3).** T1 (D2 amendment) landed
+> earlier via the README. T2: `scripts/fetch-addon.sh` (files + tarball modes,
+> reusing `lib-thirdparty.sh`), `scripts/README-addons.md` (the how-to), and
+> `tests/fetch-addon-test.sh` (+ `make addon-fetch-test`) — plus a **carry-through
+> fix to `scripts/refresh-thirdparty-digests.sh`** so a digest regen no longer
+> silently un-pins the hand-added rows (it was already dropping imgui/json/linmath/
+> pin-3.20/libdft64/maven/libipt/binfmt — a latent B5 hazard this surfaced). T3:
+> `desktop/test/addon_compile_probe.cpp` + `make desktop-addon-compile-check`
+> (compiles `imgui_internal.h` with the exact desktop flags at the current pin;
+> each internal-header addon appends `-DASMDESK_HAVE_… -I…` to `ADDON_PROBE_FLAGS`).
+> Both targets pass; both are in `make help`.
 
 ## Why this work exists — read this before any other addon doc
 

@@ -384,7 +384,29 @@ define DESKTOP_GUIDE
 endef
 
 .PHONY: desktop desktop-render desktop-test desktop-fmt desktop-fmt-check \
-        docker-desktop desktop-setup desktop-setup-render
+        docker-desktop desktop-setup desktop-setup-render \
+        addon-fetch-test desktop-addon-compile-check
+
+# --- addon supply chain (12-addon-supply-chain.md) ---------------------------
+# addon-fetch-test: prove scripts/fetch-addon.sh fetches + verifies a pinned
+# artifact and REFUSES an unpinned one, using the already-pinned linmath header
+# as the fixture (network required, like the fetch scripts themselves).
+addon-fetch-test:
+	sh tests/fetch-addon-test.sh
+
+# desktop-addon-compile-check: the imgui-repin gate (T3). Compile the probe with
+# the desktop lane's EXACT flags at the CURRENT imgui pin, so any repin that
+# breaks a vendored imgui_internal.h dependent fails here before it can land.
+# ADDON_PROBE_FLAGS is appended by each addon's adopting task
+# (`-DASMDESK_HAVE_<addon> -I<its build/addons home>`); empty until the first
+# internal-header addon lands, where the probe still validates imgui_internal.h
+# itself against the pin. Order-only dep on the grouped imgui fetch so a clean
+# tree fetches imgui first.
+ADDON_PROBE_FLAGS ?=
+desktop-addon-compile-check: | $(IMGUI_HOME)/imgui.cpp
+	$(CXX) $(DESKTOP_CXXFLAGS) $(ADDON_PROBE_FLAGS) -fsyntax-only \
+	  desktop/test/addon_compile_probe.cpp
+	@echo "desktop-addon-compile-check: OK (imgui $(IMGUI_VERSION); probe compiles with desktop flags)"
 
 $(BUILD)/desktop/app/ui/capability_panel.o: \
     DESKTOP_CXXFLAGS += -DASMTEST_DESKTOP_CAN_PROBE=1

@@ -118,7 +118,7 @@ per the doc-11 row above.
 
 | Doc | Area | Tasks | Depends on | Status |
 |---|---|---|---|---|
-| [12-addon-supply-chain.md](12-addon-supply-chain.md) | amend D2 (addon-admission rule); reusable `fetch-addon.sh` + digest/license conventions; imgui-repin compile-gate (**Track G — blocks all**) | 3 | 03 | ◐ (T1 landing) |
+| [12-addon-supply-chain.md](12-addon-supply-chain.md) | amend D2 (addon-admission rule); reusable `fetch-addon.sh` + digest/license conventions; imgui-repin compile-gate (**Track G — blocks all**) | 3 | 03 | ☑ 3/3 |
 | [13-foundation-moves.md](13-foundation-moves.md) | F1 docking repin (`v1.91.9b-docking`) + in-tree layout manager; F2 32-bit `ImDrawIdx`; F3 freetype + JetBrains Mono + Codicons; F4 the 1.92 bump decision (**Track F**) | 5 | 12; 04, 09, 10 | ☐ 0/5 |
 | [14-quick-wins.md](14-quick-wins.md) | diff "go" bug fix; shared theme header; ProgressBar; imgui_memory_editor; ImZoomSlider; ImGuiTextSelect (v1.1.6+utfcpp); ImGuiFileDialog (v0.6.8) (**Track Q**) | 7 | 12 (T4–T7); 04/05/08 | ◐ (T1–T2 landing) |
 | [15-plotting-and-graph-nav.md](15-plotting-and-graph-nav.md) | ImPlot v1.0 chassis (perf_history/hotedges/timeline/watch); imgui_canvas de-risk; imgui-node-editor for topo/tree | 3 | 12, 13 (F1/F2) | ☐ 0/3 |

@@ -163,6 +163,28 @@ zig_aarch64_sha=$(zig_digest "$zig_ver" aarch64)
     printf 'git-commit      capstone   %s        commit:%s\n' "$cs_ver" "$cs_commit"
     printf 'tarball-sha256  zig-linux-x86_64   %s  %s\n' "$zig_ver" "$zig_x86_64_sha"
     printf 'tarball-sha256  zig-linux-aarch64  %s  %s\n' "$zig_ver" "$zig_aarch64_sha"
+
+    # Carry through every hand-pinned row this script does NOT compute above: the
+    # desktop bundled deps (imgui / nlohmann-json / linmath), the oracle-only pin
+    # 3.20 + libdft64, and any GUI addon pinned by hand per
+    # docs/internal/gui/12-addon-supply-chain.md. A full rewrite must never
+    # SILENTLY un-pin a bundled dependency (B5) — so preserve any prior data row
+    # whose exact <name> <version> pair was not emitted above. Keyed on the pair,
+    # not the name alone, so the two `pin` kits (4.2 managed, 3.20 hand) stay
+    # distinct. Attached prose comments are not carried (re-add if a row needs
+    # one); the trust anchor — the digest — is what must survive.
+    emitted="dynamorio|$dr_ver pin|$pin_ver intel-sde|$sde_ver binutils|$binutils_ver nasm|$nasm_ver unicorn|$unicorn_ver dynamorio-fork|$drfork_ver keystone|$ks_ver capstone|$cs_ver zig-linux-x86_64|$zig_ver zig-linux-aarch64|$zig_ver"
+    awk -v emitted="$emitted" '
+        /^[[:space:]]*#/ || NF < 4 { next }
+        { key=$2 "|" $3
+          n=split(emitted, e, " "); mine=0
+          for (i=1;i<=n;i++) if (e[i]==key) { mine=1; break }
+          if (!mine) rows[++c]=$0 }
+        END { if (c) { print ""
+                       print "# Hand-pinned rows preserved verbatim across refresh (not computed above):"
+                       print "# desktop deps, oracle-only kits, and GUI addons (12-addon-supply-chain.md)."
+                       for (i=1;i<=c;i++) print rows[i] } }
+    ' "$man"
 } >"$man.new"
 mv "$man.new" "$man"
 echo "refresh: wrote $man"
