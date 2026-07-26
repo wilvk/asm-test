@@ -3,9 +3,25 @@
 // under the same context 03 stands up. GL entry points are reached through
 // GL_GLEXT_PROTOTYPES + libGL (the Linux/Mesa spelling — the desktop lane already
 // links -lGL), so no glad/glew/gl3w dependency is added.
+//
+// Darwin spells the same thing differently and there is no GL/ directory to find:
+// the entry points live in the OpenGL framework, which EXPORTS the 3.2 core set
+// directly, so <OpenGL/gl3.h> is both the header and the loader and
+// GL_GLEXT_PROTOTYPES has nothing to do. Every function this file calls is core
+// 3.x (VAOs, FBOs, glBindFragDataLocation, glClearBufferuiv,
+// glVertexAttribIPointer), so the framework covers the set with no extension
+// loader — the same "no glad/glew" property, reached by the platform's own route.
+// gl3.h must not meet the legacy <OpenGL/gl.h> GLFW pulls in; nothing here
+// includes glfw3.h, so the two never share a TU.
+#ifdef __APPLE__
+#define GL_SILENCE_DEPRECATION 1
+#include <OpenGL/gl3.h>
+#include <OpenGL/gl3ext.h>
+#else
 #define GL_GLEXT_PROTOTYPES 1
 #include <GL/gl.h>
 #include <GL/glext.h>
+#endif
 
 #include <algorithm>
 #include <cmath>

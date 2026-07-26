@@ -197,23 +197,40 @@ static void test_attach() {
                     }
     }
 
-    // The real /proc lister runs on this host: it must find us, and must
-    // refuse to attach to us.
+    // The real lister, on whatever host is running this. Two shapes, and which
+    // one applies is a property of the platform, not a thing to skip over: on
+    // Linux the /proc walk must find us and refuse us; on a host with no /proc
+    // the emptiness must come WITH a reason, because an unexplained empty list
+    // is the one output that reads as a measurement it never made.
     {
         std::vector<ProcRow> rows = list_processes();
-        check("list/nonempty", !rows.empty(), "/proc listed no processes");
-        bool found_self = false;
-        for (const ProcRow &r : rows)
-            if (r.pid == (long)::getpid()) {
-                found_self = true;
-                check("list/self-refused", r.verdict.verdict == Attach::No,
-                      "the lister must refuse our own pid");
-            }
-        check("list/found-self", found_self,
-              "the lister did not include this process");
-        for (const ProcRow &r : rows)
-            check("list/all-explained", !r.verdict.why.empty(),
-                  "every row must carry a reason");
+        const char *why_not = local_inspect_unavailable();
+        if (*why_not) {
+            check("list/absence-explained", rows.empty(),
+                  "a host with no local lister must return no rows");
+            // Verbatim-reason law, same as the capability panel's greyed rows:
+            // it has to name what is missing AND where to go instead, or it
+            // sends a reader to fix the wrong thing.
+            const std::string w(why_not);
+            check("list/absence-names-proc", w.find("/proc") != std::string::npos,
+                  "the reason must name what is absent");
+            check("list/absence-offers-remote", w.find("ssh") != std::string::npos,
+                  "the reason must name the path that does work");
+        } else {
+            check("list/nonempty", !rows.empty(), "/proc listed no processes");
+            bool found_self = false;
+            for (const ProcRow &r : rows)
+                if (r.pid == (long)::getpid()) {
+                    found_self = true;
+                    check("list/self-refused", r.verdict.verdict == Attach::No,
+                          "the lister must refuse our own pid");
+                }
+            check("list/found-self", found_self,
+                  "the lister did not include this process");
+            for (const ProcRow &r : rows)
+                check("list/all-explained", !r.verdict.why.empty(),
+                      "every row must carry a reason");
+        }
     }
 }
 

@@ -89,6 +89,16 @@ AttachFacts probe_attach(long pid, int yama_scope, long our_uid, bool have_cap);
 // need a tracer to enumerate processes). Sorted by pid.
 std::vector<ProcRow> list_processes();
 
+// Why LOCAL inspection has no body on this host, or "" where it has one.
+//
+// A /proc-less host makes list_processes() return an empty vector, and an empty
+// process list is indistinguishable from "nothing is running" — which is never
+// true. The caller must therefore be able to tell the two apart, so the absence
+// gets a reason of its own rather than being inferred from a count of zero.
+// Non-empty is not an error state: remote capture (`ssh <host> asmspy --serve`)
+// is the supported path there and is unaffected.
+const char *local_inspect_unavailable();
+
 // ---------------------------------------------------------------------------
 // 2. the --auto front door's evidence
 // ---------------------------------------------------------------------------

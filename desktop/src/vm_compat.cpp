@@ -5,7 +5,11 @@
  *  1. cli/libasmspy.h includes <stdatomic.h>; GCC provides no atomic_bool for
  *     C++ < 23, so the alias below must precede it. Name-level fix only, not an
  *     ABI claim: the desktop never links the engines (D9) and never defines an
- *     atomic_bool object. STILL LOAD-BEARING.
+ *     atomic_bool object. STILL LOAD-BEARING — but libstdc++ ONLY. On libc++
+ *     (clang/macOS) <stdatomic.h> resolves to clang's C header, which typedefs
+ *     atomic_bool as _Atomic(bool) itself; pulling <atomic> in first makes that
+ *     collide with libc++'s own `using atomic_bool = atomic<bool>`, so the fix
+ *     for one toolchain is the bug for the other and the alias is guarded.
  *  2. cli/asmspy_autoregion.h used asmspy_sample_edge_t in its signatures
  *     WITHOUT including the header that declares it, so this file had to pin an
  *     include ORDER by hand. T0 made it self-contained (it now includes
@@ -18,8 +22,11 @@
  * included for their pure inline view models only. Nothing here links the
  * library — the desktop reaches the engines solely through the `asmspy --serve`
  * subprocess (D9). */
+#include <cstddef> /* pulls the stdlib config so _LIBCPP_VERSION is answerable */
+#ifndef _LIBCPP_VERSION
 #include <atomic>
 using std::atomic_bool;
+#endif
 
 #include "asmspy_autoregion.h"
 #include "asmspy_dataview.h"

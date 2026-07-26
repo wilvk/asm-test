@@ -247,7 +247,19 @@ ifneq ($(shell pkg-config --exists glfw3 2>/dev/null && echo ok),ok)
 DESKTOP_MISSING += libglfw3-dev
 endif
 GLFW_LIBS ?= $(shell pkg-config --libs glfw3 2>/dev/null || echo -lglfw)
+# GL is a system FRAMEWORK on Darwin, not a library on a -l path: there is no
+# libGL there, so -lGL is a link error rather than a missing-dep the probe above
+# could have caught. (GLFW itself resolves normally — brew's dylib carries its
+# own Cocoa/IOKit linkage — so only the GL half needs the split.)
+ifeq ($(UNAME_S),Darwin)
+GL_LIBS   ?= -framework OpenGL
+# Quartz, not X11: naming DISPLAY/WAYLAND_DISPLAY in the setup epilogue would
+# send a macOS reader looking for an env var that is never set here.
+DESKTOP_DISPLAY_SAY := — on macOS that is the desktop session you are logged into
+else
 GL_LIBS   ?= -lGL
+DESKTOP_DISPLAY_SAY := (DISPLAY / WAYLAND_DISPLAY)
+endif
 EGL_LIBS  ?= -lEGL
 
 # The 3D-scene FBO smoke (10-spacetime-3d-overview.md T4) renders offscreen via
@@ -257,6 +269,11 @@ EGL_LIBS  ?= -lEGL
 # with the headers but no GL device — a machine with no GL at all still runs the
 # pure camera test). Header-probed like keystone: glext.h and EGL/egl.h ship in
 # libgl1-mesa-dev / libegl1-mesa-dev, which have no reliable pkg-config here.
+#
+# The probe is deliberately NOT given a Darwin branch: macOS ships no EGL at all
+# (and no GL/glext.h — its headers live in the OpenGL framework), so it reports
+# both as missing, which is the true answer. The smoke self-skips there with the
+# same message any GL-less host gets, and the rest of desktop-test still runs.
 DESKTOP_GL_MISSING :=
 ifeq ($(shell ls /usr/include/GL/glext.h /usr/local/include/GL/glext.h 2>/dev/null | head -1),)
 DESKTOP_GL_MISSING += libgl1-mesa-dev
@@ -282,12 +299,53 @@ ifneq ($(shell pkg-config --exists capstone 2>/dev/null && echo ok),ok)
 DESKTOP_REPLAY_MISSING += libcapstone-dev
 endif
 DESKTOP_ENGINE_MISSING := $(DESKTOP_REPLAY_MISSING)
-# Keystone IS probed after all — by header presence, since its kit ships no
-# reliable pkg-config. The Loom's fork engine (05-loom-day-one.md T5) is the
-# first desktop TU to call asmtest_assemble, and a host with unicorn+capstone
-# but no keystone (a `make deps` that ran without --asm) would otherwise reach a
-# raw linker error instead of the guidance recipe below.
-ifeq ($(shell ls /usr/include/keystone/keystone.h /usr/local/include/keystone/keystone.h 2>/dev/null | head -1),)
+
+# ...and a HOST gate on top of the dependency one, kept deliberately separate.
+# src/dataflow_pt.c compiles to a DF_PT_ENOSYS stub off Linux x86-64, and so do
+# the blockstep purity/replayability scanners it reuses (both are guarded on
+# __linux__ && __x86_64__), so off that platform the replay lane would build a
+# binary whose only possible output is "the producer is a stub here" — a test
+# that cannot pass, which is worse than one that says why it did not run. This
+# is the hardware/platform class of gate CLAUDE.md keeps: recorded and
+# self-skipped, not a dependency anyone can install.
+#
+# It is NOT folded into DESKTOP_ENGINE_MISSING above, and the order matters:
+# that variable gates `desktop` itself, and the full app builds and runs fine
+# here. The PT slice is one VIEW inside it, and that view already explains a
+# stub producer at runtime rather than pretending to replay.
+#
+# BOTH halves of the producer's condition are checked. The OS half alone would
+# leave the gate open on aarch64 Linux — which is not hypothetical, because it
+# is exactly what `make docker-desktop` becomes on an Apple Silicon Mac
+# (DOCKER_PLATFORM is empty by default, so the image is linux/arm64): inside the
+# container UNAME_S is Linux, the base supplies unicorn+capstone, the lane opens,
+# and the stub fails the test. Recommending that lane while it cannot pass would
+# be worse than not gating at all. File-local like CLI_ARCH / SDE_ARCH; there is
+# no global UNAME_M.
+DESKTOP_REPLAY_ARCH := $(shell uname -m)
+DESKTOP_REPLAY_HOST_MISSING :=
+ifneq ($(UNAME_S),Linux)
+DESKTOP_REPLAY_HOST_MISSING += a-Linux-host(this-is-$(UNAME_S))
+endif
+ifneq ($(DESKTOP_REPLAY_ARCH),x86_64)
+DESKTOP_REPLAY_HOST_MISSING += an-x86-64-host(this-is-$(DESKTOP_REPLAY_ARCH))
+endif
+# Keystone IS probed after all. The Loom's fork engine (05-loom-day-one.md T5)
+# is the first desktop TU to call asmtest_assemble, and a host with
+# unicorn+capstone but no keystone (a `make deps` that ran without --asm) would
+# otherwise reach a raw linker error instead of the guidance recipe below.
+#
+# pkg-config FIRST, header scan as the fallback. The scan alone hardcodes two
+# prefixes, which is wrong on every Homebrew that is not Intel's: an arm64 Mac
+# puts the header under /opt/homebrew, so the probe reported keystone missing
+# and `make desktop` refused to build a link that would have SUCCEEDED —
+# KEYSTONE_LIBS resolves through pkg-config, and brew's keystone (like the
+# tree's own build-keystone.sh) installs a keystone.pc. Deciding presence the
+# same way build-keystone.sh:19 and install-deps.sh do keeps the three answers
+# from disagreeing; the header scan stays for a kit that really ships no .pc.
+ifeq ($(strip $(shell pkg-config --exists keystone 2>/dev/null && echo ok \
+        || ls /usr/include/keystone/keystone.h \
+              /usr/local/include/keystone/keystone.h 2>/dev/null | head -1)),)
 DESKTOP_ENGINE_MISSING += libkeystone-dev
 endif
 
@@ -381,7 +439,7 @@ desktop-setup:
 	@echo "desktop setup complete — run it with:"
 	@echo "    $(BUILD)/asmtest-desktop     # full app"
 	@echo "    $(BUILD)/asmtest-viewer      # render-only viewer"
-	@echo "Both open a window, so they need a display (DISPLAY / WAYLAND_DISPLAY)."
+	@echo "Both open a window, so they need a display $(DESKTOP_DISPLAY_SAY)."
 	@echo "Open a recording from the home screen's Learn door — the committed"
 	@echo "corpus is in tests/golden-asmtrace/. Verify headlessly: make desktop-test"
 
@@ -831,11 +889,15 @@ endif
 # The two gates are separate because their dependencies are (see
 # DESKTOP_REPLAY_MISSING above): a host with Unicorn + Capstone runs the PT
 # replay even where the assembler is absent.
-ifeq ($(strip $(DESKTOP_REPLAY_MISSING)),)
+ifeq ($(strip $(DESKTOP_REPLAY_MISSING)$(DESKTOP_REPLAY_HOST_MISSING)),)
 desktop-test: $(DESKTOP_REPLAY_TESTS)
 DESKTOP_ALL_TESTS += $(DESKTOP_REPLAY_TESTS)
 else
-DESKTOP_REPLAY_SAY = echo "desktop-test: the PT-replay slice test needs:$(DESKTOP_REPLAY_MISSING) — not built here; 'make docker-desktop' installs them and runs it"
+# The docker lane only satisfies the arch half if the image is x86-64, and on an
+# arm64 host it defaults to the host's own architecture — so name the platform
+# override there rather than send the reader to a lane that fails the same way.
+DESKTOP_REPLAY_DOCKER = $(if $(filter x86_64,$(DESKTOP_REPLAY_ARCH)),make docker-desktop,DOCKER_PLATFORM=linux/amd64 make docker-desktop)
+DESKTOP_REPLAY_SAY = echo "desktop-test: the PT-replay slice test needs:$(DESKTOP_REPLAY_MISSING)$(DESKTOP_REPLAY_HOST_MISSING) — not built here; '$(DESKTOP_REPLAY_DOCKER)' provides them and runs it"
 endif
 
 ifeq ($(strip $(DESKTOP_ENGINE_MISSING)),)

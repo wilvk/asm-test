@@ -344,6 +344,14 @@ void draw_inspect_door(InspectState &s) {
     }
 
     ImGui::SeparatorText("processes");
+    // A host with no /proc lists nothing, and "0 process(es); ptrace_scope=-1"
+    // reads as "nothing running, no restrictions" — two measurements neither of
+    // which was made. State the absence instead, and draw no table: an empty
+    // one would be the same claim in a different shape.
+    if (const char *why = local_inspect_unavailable(); *why) {
+        ImGui::TextWrapped("local inspection unavailable: %s", why);
+        return;
+    }
     if (!s.scanned)
         inspect_scan(s);
     if (ImGui::Button("Rescan"))

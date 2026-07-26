@@ -78,6 +78,13 @@ cd "$work/keystone/build"
 # no-op on the older toolchains that compiled the tree unaided.
 KS_CXXFLAGS="-include cstdint ${CXXFLAGS:-}"
 
+# Darwin: CMake's default gives the dylib an `@rpath/libkeystone.N.dylib` install
+# name, so every consumer linked with a plain `-L$PREFIX/lib -lkeystone` (the
+# flags the tree uses) aborts at load with "no LC_RPATH's found". Bake the
+# absolute install-name directory instead — the way Homebrew ships dylibs — so
+# plain links work. A no-op on non-Apple platforms. Same fix, same reason, as
+# build-capstone.sh; the two source builds must not diverge here.
+#
 # $(tp_cmake_compat) is intentionally unquoted: it expands to one argument on a
 # cmake >= 3.31 (whose 4.x releases reject this pinned tree's
 # cmake_minimum_required) and to nothing at all on older ones.
@@ -86,6 +93,7 @@ cmake $(tp_cmake_compat) \
       -DBUILD_SHARED_LIBS=ON \
       -DLLVM_TARGETS_TO_BUILD="AArch64;ARM;X86" \
       -DCMAKE_INSTALL_PREFIX="$PREFIX" \
+      -DCMAKE_INSTALL_NAME_DIR="$PREFIX/lib" \
       -DCMAKE_CXX_FLAGS="$KS_CXXFLAGS" \
       ..
 make "-j$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)"

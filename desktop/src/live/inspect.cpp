@@ -218,6 +218,22 @@ AttachFacts probe_attach(long pid, int yama_scope, long our_uid,
     return f;
 }
 
+const char *local_inspect_unavailable() {
+#ifdef __linux__
+    return "";
+#else
+    // Not a TODO. The engines this door drives are ptrace(2) + process_vm_readv
+    // + /proc on Linux (libasmspy.h's preamble), so even a perfect macOS/BSD
+    // process lister would enumerate targets that can never be attached — a
+    // table of confident Yes verdicts none of which hold. Saying so is the
+    // honest output; `ssh <linux-host> asmspy --serve` is the path that works.
+    return "local process inspection needs /proc, which this host does not "
+           "have. The tracer engines are Linux-only besides, so a list here "
+           "would offer targets that could never be attached. Capture against "
+           "a Linux host over ssh instead — same code path, same views.";
+#endif
+}
+
 std::vector<ProcRow> list_processes() {
     std::vector<ProcRow> rows;
     const int scope = read_yama_scope();

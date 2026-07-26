@@ -26,11 +26,24 @@ int main() {
         return 1;
     }
 
+#ifdef __APPLE__
+    // macOS ships no compatibility profile above 2.1 and no GLSL 130: asking for
+    // 3.0 there yields a legacy 2.1 context whose shader compile then fails at
+    // RUNTIME, which is why this is a real branch and not a portability nicety.
+    // 3.2 core + GLSL 150 is the only modern context the platform offers, and
+    // core profiles there must be forward-compatible.
+    const char *glsl_version = "#version 150";
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
+#else
     // GL 3.0 + GLSL 130 — the widest desktop baseline the ImGui OpenGL3 backend
     // supports out of the box (its bundled loader needs no glad/glew).
     const char *glsl_version = "#version 130";
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
+#endif
 
 #ifdef ASMTEST_DESKTOP_RENDER_ONLY
     const char *title = "asmtest viewer (render-only)";
