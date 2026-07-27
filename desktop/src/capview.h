@@ -66,6 +66,28 @@ std::vector<cap_row> capview_build(const asmtest_trace_choice_t *cascade,
 // Deterministic dump — the test surface.
 std::string capview_dump(const std::vector<cap_row> &rows);
 
+// --- positives-first framing (18-breach-stops.md T4, F19) -------------------
+// On a common host the panel led with red errno rows, so a learner read
+// catastrophe where Learn and Author need none of it. These layer a positive
+// summary + a remedy on top of the SAME rows — the verbatim machine reason stays
+// as a floor (D7), framing and remedy sit above it. Pure, so test_capview drives
+// them on synthetic data.
+
+// A positive one-line summary of what the host CAN do, composed from the already
+// resolved rows: it leads with the available backends, names the unavailable
+// ones as "details below", and always states the Learn/Author floor
+// (kCapLearnAuthorFloor) — both are engine-light doors that need no capture
+// backend, root, hardware, or attach. Never empty.
+std::string capview_summary(const std::vector<cap_row> &rows);
+
+// The remedy for a greyed row whose machine reason matches a recognised
+// condition — perf_event_paranoid, Yama ptrace_scope, an i386 target, or a
+// missing CAP_SYS_PTRACE — REUSING the inspect_door attach_verdict map for the
+// ptrace family so the two panels give one answer. "" when the reason names no
+// condition this build can turn into a next step (the verbatim reason still
+// stands on its own). Pure; test_capview pins each mapping.
+std::string capview_remedy(const cap_row &r);
+
 const char *cap_stage_name(int stage);
 const char *cap_backend_name(int backend);
 const char *cap_tier_name(int tier);
@@ -76,6 +98,11 @@ extern const char *const kCapNativeOnlyEmpty;
 extern const char *const kCapFidelityLine;
 extern const char *const kCapStatisticalChip;
 extern const char *const kCapViewerNoProbe;
+// The honesty floor the summary always states (T4): Learn and Author work on any
+// host, so a red capture-backend wall never means "the tool does not work here".
+extern const char *const kCapLearnAuthorFloor;
+// The expander the negatives collapse under (T4).
+extern const char *const kCapWhyNotHeader;
 
 } // namespace asmdesk
 #endif // ASMDESK_CAPVIEW_H

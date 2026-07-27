@@ -10,8 +10,10 @@
 // fault card and the arch gate lives in author_vm.h, which test_author_vm pins
 // on every host.
 #include "imgui.h"
-#include "TextEditor.h" // real code editor for the source (17 T2)
+#include "ImGuiFileDialog.h" // confirm-overwrite save dialog, reused from Inspect (T3)
+#include "TextEditor.h"      // real code editor for the source (17 T2)
 
+#include <cstdio>
 #include <cstring>
 
 #include "author_vm.h"
@@ -33,6 +35,15 @@ void author_run(AuthorState &s) {
                      static_cast<asm_syntax_t>(s.syntax), s.source.c_str(),
                      EMU_CODE_BASE, &r);
     s.result = author_from_assemble(&r);
+    // A run produced new, on-disk-nowhere output: mark it dirty so a close cannot
+    // silently lose it (T3). The assembled image is retained for the save path.
+    s.dirty = true;
+    s.saved_ok = false;
+    s.save_status.clear();
+    s.image.clear();
+    s.image_base = EMU_CODE_BASE;
+    if (r.ok && r.bytes != nullptr && r.len > 0)
+        s.image.assign(r.bytes, r.bytes + r.len);
     if (!r.ok) {
         // NEVER clear the source: the user's text is the only copy, and the
         // diagnostic is about a line inside it.
@@ -156,6 +167,8 @@ void draw_author_door(AuthorState &s) {
 
     if (ImGui::Button("Run"))
         author_run(s);
+    ImGui::SameLine();
+    ImGui::TextDisabled(s.dirty ? "unsaved run *" : "no unsaved output");
     ImGui::Separator();
 
     const author_result_t &r = s.result;
@@ -172,6 +185,47 @@ void draw_author_door(AuthorState &s) {
     ImGui::TextWrapped("%s", r.hexdump.c_str());
     if (!r.limit_note.empty())
         draw_banner(r.limit_note.c_str(), false);
+
+    // The save path (T3, F24): reuse the SAME confirm-overwrite ImGuiFileDialog
+    // the Inspect door uses, and materialise the run into a Recording so
+    // save_recording_file applies unchanged. A successful save clears the dirty
+    // flag, so the tab's `*` marker and the close guard both drop.
+    ImGui::SeparatorText("save this authored program");
+    ImGui::InputText("path##authsave", s.save_path, sizeof s.save_path);
+    ImGui::SameLine();
+    if (ImGui::Button("Browse…##authsave")) {
+        IGFD::FileDialogConfig cfg;
+        cfg.path = ".";
+        cfg.fileName = "authored.asmtrace";
+        cfg.flags =
+            ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite;
+        ImGuiFileDialog::Instance()->OpenDialog("dlg_author_save",
+                                                "Save authored recording as…",
+                                                ".asmtrace", cfg);
+    }
+    if (ImGuiFileDialog::Instance()->Display(
+            "dlg_author_save", ImGuiWindowFlags_NoCollapse, ImVec2(520, 360))) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string p = ImGuiFileDialog::Instance()->GetFilePathName();
+            std::snprintf(s.save_path, sizeof s.save_path, "%s", p.c_str());
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
+    if (ImGui::Button("Save .asmtrace##author")) {
+        Recording rec = author_recording(s.result, s.arch, s.image, s.image_base);
+        std::string err;
+        if (save_recording_file(rec, s.save_path, err)) {
+            s.saved_ok = true;
+            s.dirty = false; // on disk now — the close guard can let go
+            s.save_status = std::string("saved to ") + s.save_path;
+        } else {
+            s.saved_ok = false;
+            s.save_status = err;
+        }
+    }
+    if (!s.save_status.empty())
+        ImGui::TextWrapped("%s", s.save_status.c_str());
+
     if (!r.ran)
         return;
 

@@ -8,6 +8,32 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Convention-alignment keyboard shortcuts, honestly advertised**
+  (docs/internal/gui/18-breach-stops.md T1). `Shift+F` fits / frames the current
+  selection, `,`/`.` step to the previous / next sibling, `F10`/`F11` are step /
+  step-back aliases of `j`/`k`, `W`/`S`/`A`/`D` drive camera zoom/pan when a
+  spatial pane (timeline / 3D) holds focus — a labelled context that also keeps
+  `d`'s diff meaning outside it — and `Ctrl+C` copies a deep link (an alias of
+  `y`). The help overlay is now generated from a `wired` flag, so it greys any
+  not-yet-mapped binding "planned" and can never again advertise a dead key as
+  live. Every advertised binding has a passing `desktop-ui-test`.
+- **Back/forward navigation history over the deep-link router**
+  (docs/internal/gui/18-breach-stops.md T6): `Alt+Left`/`Alt+Right` walk a
+  bounded, serialisable stack of `asmtrace-link`s and land identically to a fresh
+  navigation, with a minimal breadcrumb affordance by the status line. A new jump
+  clears the forward branch (browser-history discipline).
+- **A reset-layout keybinding** (`Ctrl+Shift+R`) and a **pre-commit confirm
+  before arming a perturbing single-step capture** (docs/internal/gui/18-breach-
+  stops.md T2/T5): the confirm states the page-dirty / timing cost and, on arm64,
+  the blocking-syscall termination that detach cannot undo; the capture picker now
+  defaults to the least-perturbing substrate the host supports (AMD IBS where
+  available, else the lightest ptrace mode), and arm64 single-step modes are
+  greyed and annotated with the stated hazard.
+- **Author output can be saved, and an unsaved-work marker in the tab title**
+  (docs/internal/gui/18-breach-stops.md T3): an Author run materialises into a
+  Recording and writes to a `.asmtrace` file through the same confirm-overwrite
+  dialog live captures use; a dirty (authored + unsaved) tab shows a trailing `*`.
+
 - **Pan/zoom, fit-graph and selection for the graph views** (docs/internal/gui/15-
   plotting-and-graph-nav.md T3, via imgui-node-editor). The process **topology**,
   the live/replay **call tree** and the frozen **hot-edge** snapshot now draw on a
@@ -2191,6 +2217,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The capability panel leads with what the host *can* do**
+  (docs/internal/gui/18-breach-stops.md T4). It opened with a wall of red errno
+  rows; it now leads with a one-line positive summary (the available backends)
+  and the standing "Learn and Author work here — no root, hardware, or attach
+  needed" floor, and demotes the unavailable backends under an expandable "why
+  can't I capture X?" that keeps every verbatim machine reason and adds the shared
+  `attach_verdict` remedy (paranoid / Yama / i386 / CAP_SYS_PTRACE) where one
+  applies. A bare host no longer reads as "the tool does not work here".
+- **The keyboard-help overlay marks planned-vs-wired bindings**
+  (docs/internal/gui/18-breach-stops.md T1): it is generated from a `wired` flag
+  and greys any not-yet-mapped binding "planned" instead of advertising it as live.
 - **The desktop views are now real dockable panes — the docking layout manager,
   presets and Reset act on visible windows** (docs/internal/gui/19-dockable-panes-keystone.md).
   Before this, the layout manager docked five named windows (`Home`, `Recording`,
@@ -2475,6 +2512,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **"Reset layout" is a real, always-available action with auto-fallback**
+  (docs/internal/gui/18-breach-stops.md T2). It was inert — behind a View menu
+  that only appeared with docking on, acting through phantom windows. It now
+  rebuilds the shipped default from any state, is bound to `Ctrl+Shift+R` (fires
+  with or without the menu bar, in both binaries), and a corrupt or collapsed
+  persisted `build/desktop-imgui.ini` that would leave zero visible panes now
+  auto-falls-back to the default instead of stranding the user in an empty window.
+- **Author output is no longer lost on close** (docs/internal/gui/18-breach-
+  stops.md T3, F24). Closing an Author tab (or a workspace recording) with an
+  unsaved run raised no prompt and simply erased the in-memory entry; a dirty tab
+  now raises a save/discard/cancel guard and cannot be closed with a single silent
+  click.
 - **The pinned Keystone and Capstone source builds no longer fail on a modern
   CMake or GCC.** Keystone 0.9.2 (Feb 2019) is upstream's newest release, so
   there is no version to move to; on a CMake 4 / GCC 15 host it failed three

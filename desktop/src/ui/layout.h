@@ -39,6 +39,21 @@ DockLayout layout_build(ImGuiID dockspace_id, ImVec2 size, LayoutPreset preset);
 // The preset's human name (menu label + the persisted-layout key).
 const char *layout_preset_name(LayoutPreset p);
 
+// Reset to the shipped default (18-breach-stops.md T2, F2). Distinct from
+// layout_build as an INTENT — it is the always-available recovery the keybinding
+// and the auto-fallback call — but it rebuilds the same ReplayInspect default,
+// removing a corrupt/collapsed node and re-splitting. Thin + headless-testable,
+// so test_layout drives it without a display.
+void layout_reset(ImGuiID dockspace_id, ImVec2 size);
+
+// Is ANY of the layout's panes still visible (18-breach-stops.md T2)? A pure
+// predicate over the dock node tree: true when at least one leaf node under
+// `dockspace_id` holds a docked window, false when the tree is absent or every
+// node is empty — the "zero visible panes" strand a corrupt/collapsed persisted
+// `.ini` makes reachable, which the shell auto-falls-back from. Testable on
+// synthetic node state (build a layout with panes vs. remove the node).
+bool layout_any_pane_visible(ImGuiID dockspace_id);
+
 // Whether a dock node already exists for `dockspace_id` (i.e. a layout was
 // persisted / already built). Wraps DockBuilderGetNode so the shell need not
 // include imgui_internal.h itself — the containment the doc-12 gate relies on.

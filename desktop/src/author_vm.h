@@ -25,6 +25,8 @@
 #include <string>
 #include <vector>
 
+#include "doc/recording.h" // author_recording materialises a Recording (T3)
+
 extern "C" {
 #include "asmtest_assemble.h"
 #include "asmtest_emu.h"
@@ -79,6 +81,16 @@ void author_apply_run(author_result_t &out, int arch, const emu_result_t *res,
                       const std::string &disasm, bool capped);
 
 std::string author_dump(const author_result_t &r);
+
+// Materialise an authored run into a Recording (18-breach-stops.md T3, F24), so
+// the SAME save_recording_file + confirm-overwrite dialog the Inspect door uses
+// applies unchanged and Author output stops being ephemeral. The recording
+// carries exact author-emulator provenance and — when `image` is non-empty — the
+// assembled program as a `codeimage` event (the bytes a reader needs to reopen
+// what was authored). Pure struct/JSON assembly, no engine call, so test_author_vm
+// pins the round-trip on any host. `base` is the image's load address (EMU_CODE_BASE).
+Recording author_recording(const author_result_t &r, int arch,
+                           const std::vector<uint8_t> &image, uint64_t base);
 
 // Copy pinned verbatim by test_author_vm.cpp.
 extern const char *const kAuthorFaultCopy;

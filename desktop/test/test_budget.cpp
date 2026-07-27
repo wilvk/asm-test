@@ -154,6 +154,78 @@ int main(void) {
           budget_can_start(log, {sample, watch}).blocker == watch,
           "the named blocker must be the ptrace holder, not the free view");
 
+    // ---- 18-T5: the perturbation gate + least-perturbing default -----------
+    // The pure model behind the pre-commit confirm (F22). mode_uses_ptrace is
+    // what gates whether a Start needs the confirm; mode_perturb_warning is the
+    // consequence sentence; the arm64 clause names the detach-fatal kill hazard;
+    // and the default resolves to the least-perturbing substrate the host has.
+    {
+        LiveMode sample, log, stream, dataflow;
+        mode_from_name("sample", &sample);
+        mode_from_name("log", &log);
+        mode_from_name("stream", &stream);
+        mode_from_name("dataflow", &dataflow);
+
+        // A perturbing (single-step / ptrace) mode needs the confirm; `sample`
+        // (out of band) does not — its warning is empty.
+        check("perturb/sample-no-warning",
+              mode_perturb_warning(sample, "x86_64").empty(),
+              "sample reads out of band — it needs no perturb confirm");
+        for (LiveMode m : modes) {
+            if (!mode_uses_ptrace(m))
+                continue;
+            check("perturb/ptrace-has-warning",
+                  !mode_perturb_warning(m, "x86_64").empty(),
+                  std::string(mode_name(m)) +
+                      " single-steps — it must state the consequence");
+        }
+
+        // The generic (non-arm64) sentence states the page-dirty / timing cost
+        // and steers toward IBS/PT; it does NOT claim the arm64 kill.
+        std::string generic = mode_perturb_warning(dataflow, "x86_64");
+        check("perturb/generic-page-dirty",
+              generic.find("DIRTIES") != std::string::npos &&
+                  generic.find("timing") != std::string::npos,
+              generic);
+        check("perturb/generic-steers-to-ibs-pt",
+              generic.find("IBS/PT") != std::string::npos, generic);
+        check("perturb/generic-no-arm64-claim",
+              generic.find("arm64") == std::string::npos,
+              "the x86 sentence must not claim the arm64 termination hazard");
+
+        // The arm64 sentence names the blocking-syscall termination that detach
+        // cannot undo — the recorded aarch64 detach-fatal hazard. Both spellings.
+        for (const char *arch : {"aarch64", "arm64"}) {
+            std::string a = mode_perturb_warning(stream, arch);
+            check("perturb/arm64-kill",
+                  a.find("TERMINATE") != std::string::npos &&
+                      a.find("detach") != std::string::npos,
+                  std::string(arch) + ": " + a);
+        }
+
+        // The hazard predicate: true only for a ptrace mode ON arm64.
+        check("hazard/ptrace-on-arm64",
+              mode_arm64_blocking_hazard(stream, "aarch64"),
+              "a single-step mode on arm64 carries the blocking-syscall hazard");
+        check("hazard/sample-on-arm64-clear",
+              !mode_arm64_blocking_hazard(sample, "aarch64"),
+              "an out-of-band mode has no single-step hazard");
+        check("hazard/ptrace-on-x86-clear",
+              !mode_arm64_blocking_hazard(stream, "x86_64"),
+              "x86 has a writable trap flag — no detach-fatal hazard");
+
+        // The least-perturbing default: sample where the host has IBS, else the
+        // lightest ptrace mode (log — it does not single-step).
+        check("default/sample-when-available",
+              budget_least_perturbing(true) == sample,
+              "with IBS the default is the out-of-band sampler");
+        check("default/log-otherwise",
+              budget_least_perturbing(false) == log,
+              "without IBS the default is the lightest ptrace mode (log)");
+        check("default/log-does-not-single-step", mode_uses_ptrace(log),
+              "log holds the jack (streams syscalls) but does not single-step");
+    }
+
     if (failures) {
         std::fprintf(stderr, "test_budget: %d FAILURE(S)\n", failures);
         return 1;

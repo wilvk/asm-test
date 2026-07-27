@@ -164,6 +164,14 @@ not redesign:
 
 ### T1 — Honest keymap overlay + convention-alignment keys (T1.1 remainder)  (M, depends on: 12; independent of doc 19)
 
+> **LANDED.** `dt_binding.wired` added (`nav.h`); `dt_nav_bindings()` sets it per
+> row and now carries the convention keys; `draw_bindings_help` greys `!wired`
+> rows "planned". `handle_keymap` wires `Shift+F` fit (`want_fit`, since plain `f`
+> is the forward cone), `,`/`.` sibling step, `F10`/`F11` step aliases, `W/S/A/D`
+> camera under a labelled `wasd_context` (resolves the diff-`d` conflict) and
+> `Ctrl+C` copy-alias of `y`. Engine tests per key in `test_ui.cpp` + the wired-flag
+> pins in `test_nav.cpp`.
+
 **Goal.** Close F1/F18's *remaining* breach now that the keymap core is wired:
 (a) the help overlay must advertise **only wired keys** and grey the rest
 "planned"; (b) land the convention-alignment gestures the review calls for. Every
@@ -228,6 +236,14 @@ handler.
 
 ### T2 — Real, always-available `layout_reset` with auto-fallback (T2.2)  (S, depends on: nothing; references doc 19)
 
+> **LANDED.** `layout_reset` (a thin recovery wrapper over the default rebuild) +
+> the pure `layout_any_pane_visible` predicate in `layout.cpp`. `Ctrl+Shift+R`
+> raises `want_layout_reset`, consumed near the dockspace build where the View-menu
+> Reset now also routes; a zero-visible-pane launch auto-falls-back to the default
+> after a short settle. `test_layout.cpp` pins the predicate (synthetic no-pane vs.
+> Begun) and `layout_reset`; `test_ui.cpp` pins the reset intent. The View menu /
+> presets-as-feature stay doc 19's.
+
 **Goal.** Make F2's inert Reset control **real and always-available in both
 binaries** — with a keybinding and (once T3.1's palette lands, doc 21) a palette
 entry — and add a load-fault / zero-visible-pane auto-fallback to the shipped
@@ -286,6 +302,19 @@ of it is asserted headlessly.
 
 ### T3 — Author output save path + dirty-close guard (T2.6)  (S, depends on: nothing)
 
+> **LANDED.** `Recording.dirty` + a `*` tab marker (both tab loops + the Home
+> list). `shell_request_close` gates a dirty close behind a save/discard/cancel
+> modal (`close_pending`) instead of erasing; the Author door tab has its own guard
+> (`shell_request_author_close`). `author_recording()` (in `author_vm`, pure JSON
+> assembly) materialises a run into a Recording — carrying the assembled image as a
+> `codeimage` event — so the Author door reuses the confirm-overwrite
+> `ImGuiFileDialog` + `save_recording_file`; a save clears dirty.
+> **Choice made (per the brief's step 3):** the explicit save/discard/cancel prompt.
+> Author output stays in `AuthorState` with its own dirty+save+tab-guard rather than
+> being auto-promoted into the Workspace; the workspace-recording dirty/close/title
+> machinery is real and tested for that promotion path. Pinned in `test_shell.cpp`
+> (dirty/close/title, pure model) + `test_author_vm.cpp` (materialise round-trip).
+
 **Goal.** Close F24's data-loss trap: give Author (and any live output) a save
 path by reusing `draw_save_capture`, treat unsaved output as **dirty** so a close
 cannot silently lose it, and mark saved-vs-unsaved in the tab title.
@@ -334,6 +363,14 @@ tab closes cleanly; all asserted headlessly.
 
 ### T4 — Capability panel leads with positives + reuses the remedy map (T4.2)  (S, depends on: nothing)
 
+> **LANDED.** `capview_summary` (positive one-liner over the resolved rows + the
+> Learn/Author floor `kCapLearnAuthorFloor`) leads the panel; the negatives collapse
+> under a `CollapsingHeader` "why can't I capture X?" keeping every verbatim reason;
+> `capview_remedy` reuses `attach_verdict`'s map for the ptrace family (Yama / i386 /
+> CAP) and answers `perf_event_paranoid` directly. `capview.o` now links `inspect.o`;
+> `test_capview.cpp` pins the summary (bare + capable host), each remedy, and that no
+> verbatim reason is dropped.
+
 **Goal.** Fix F19's misleading first impression: lead `capability_panel` with a
 **positive one-line summary** from the same resolvers, demote unavailable backends
 into an expandable "why can't I capture X?" with the verbatim reason collapsed
@@ -381,6 +418,18 @@ no longer reads as "the tool does not work here"; asserted on synthetic data in
 `test_capview`.
 
 ### T5 — Perturbing single-step arm confirm + least-perturbing default (T4.5)  (M, depends on: nothing)
+
+> **LANDED.** `mode_perturb_warning(mode, arch)`, `mode_arm64_blocking_hazard` and
+> `budget_least_perturbing(sample_available)` in `budget.h/.cpp` (pure). The first
+> Start on a `mode_uses_ptrace` mode ARMS a two-step confirm (`perturb_pending` /
+> `inspect_confirm_perturb`, mirroring the swap) stating the page-dirty / timing /
+> arm64-kill consequence; `sample` skips it. The patch bay greys + annotates arm64
+> single-step modes; the picker defaults to the least-perturbing substrate (IBS via
+> the shell's `sample_available`, else `log`). Pure helpers pinned in
+> `test_budget.cpp`. **Drift:** `inspect_request_start` lives in the ImGui-linked
+> `inspect_door.cpp`, which `test_inspect` (ImGui-free) does not link, so the
+> arming state-machine is covered via the pure gate in `test_budget` rather than a
+> new `test_inspect` case.
 
 **Goal.** Close F22: gate arming a perturbing single-step mode on a live target
 behind an inline confirm stating the concrete consequence; default the capture
@@ -436,6 +485,14 @@ least-perturbing supported substrate; arm64 single-step is greyed/annotated with
 the stated hazard; asserted headlessly in `test_budget` + `test_inspect`.
 
 ### T6 — Bounded back/forward history in the router (T3.2)  (S, depends on: nothing)
+
+> **LANDED.** `dt_nav_table` gains `back`/`forward`/`history_cap`; `dt_nav_go`
+> pushes the prior position and clears forward via a shared `dt_nav_dispatch` core
+> (guarding a no-op re-nav), and `dt_nav_back`/`dt_nav_forward` re-dispatch through
+> the same path (loud refusal at the ends / when a recording closed). `Alt+Left`/
+> `Alt+Right` in `handle_keymap` + a minimal breadcrumb by the status line. Pinned
+> in `test_nav.cpp` (history, bound, forward-clear, round-trip) + `test_ui.cpp`
+> (the Alt keys drive the router).
 
 **Goal.** Close F11's one-way spine: give `dt_nav_go` a bounded back/forward
 history stack (`Alt+Left`/`Alt+Right` + a breadcrumb), in the one place navigation

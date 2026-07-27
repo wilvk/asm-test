@@ -32,6 +32,9 @@
 
 namespace asmdesk {
 
+// Defined below draw_shell, used by both shells' status areas (18-T6 breadcrumb).
+static void draw_breadcrumb(ShellState &s);
+
 // The verbatim greyed-out-shows-why reason (plan D2): an engine door disabled in
 // the render-only viewer states, in place, exactly why. [[maybe_unused]] because
 // only the render-only build (-DASMTEST_DESKTOP_RENDER_ONLY) references it.
@@ -113,7 +116,43 @@ void shell_close(ShellState &s, size_t idx) {
         s.b_index = -1;
     else if (s.b_index > static_cast<int>(idx))
         s.b_index--;
+    if (s.close_pending == static_cast<int>(idx))
+        s.close_pending = -1;
+    else if (s.close_pending > static_cast<int>(idx))
+        s.close_pending--;
     shell_wire_nav(s);
+}
+
+// The dirty-close guard (18-breach-stops.md T3, F24): a clean recording closes
+// on the spot; a DIRTY (authored + unsaved) one raises the save/discard/cancel
+// choice instead of erasing, so authored output is never lost to one click.
+void shell_request_close(ShellState &s, size_t idx) {
+    if (idx >= s.ws.recordings.size())
+        return;
+    if (s.ws.recordings[idx].dirty)
+        s.close_pending = static_cast<int>(idx); // raise the guard, do not erase
+    else
+        shell_close(s, idx);
+}
+
+void shell_discard_close(ShellState &s) {
+    if (s.close_pending < 0 ||
+        s.close_pending >= static_cast<int>(s.ws.recordings.size()))
+        return;
+    size_t idx = static_cast<size_t>(s.close_pending);
+    s.close_pending = -1;
+    shell_close(s, idx); // shell_close resets close_pending if it were still set
+}
+
+void shell_cancel_close(ShellState &s) { s.close_pending = -1; }
+
+bool shell_request_author_close(ShellState &s) {
+    if (s.author.dirty) {
+        s.author_close_guard = true; // raise the guard; leave the tab open
+        return false;
+    }
+    s.show_author = false;
+    return true;
 }
 
 const Streams *shell_a(const ShellState &s) {
@@ -636,13 +675,50 @@ static void handle_keymap(ShellState &s) {
     if (ImGui::IsKeyPressed(ImGuiKey_3)) s.want_view = dt_view::slice;
     if (ImGui::IsKeyPressed(ImGuiKey_4)) s.want_view = dt_view::diff;
 
-    // y — copy a deep link to the current position to the clipboard.
-    if (ImGui::IsKeyPressed(ImGuiKey_Y) && s.nav.current)
+    // y / Ctrl+C — copy a deep link to the current position to the clipboard.
+    // Ctrl+C is the convention alias (18-breach-stops.md T1); both are wired.
+    if ((ImGui::IsKeyPressed(ImGuiKey_Y) ||
+         ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_C)) &&
+        s.nav.current)
         ImGui::SetClipboardText(dt_nav_format(*s.nav.current).c_str());
 
     // Ctrl+G — open the go-to-step/offset modal (its InputText owns the text).
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_G))
         s.show_goto = true;
+
+    // Ctrl+Shift+R — reset the panel layout to the default (T2). The intent is
+    // consumed near the dockspace build, so it fires with or without the menu.
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_R))
+        s.want_layout_reset = true;
+
+    // Alt+Left / Alt+Right — walk the router's back/forward history (T6, F11).
+    // They land through the SAME dt_nav_go path a fresh navigation takes, so a
+    // back-jump is indistinguishable from re-clicking the earlier link.
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Alt | ImGuiKey_LeftArrow))
+        if (!dt_nav_back(s.nav))
+            s.status = s.nav.last_error;
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Alt | ImGuiKey_RightArrow))
+        if (!dt_nav_forward(s.nav))
+            s.status = s.nav.last_error;
+
+    // Shift+F — fit / frame the current selection (T1; the Perfetto/Tracy gesture,
+    // on Shift+F because plain `f` already lights the forward cone). Sets a
+    // want_fit intent the active spatial view honours, mirroring want_view.
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Shift | ImGuiKey_F))
+        s.want_fit = true;
+
+    // W/S/A/D — camera zoom/pan, but ONLY when a spatial pane (timeline / 3D)
+    // holds focus (wasd_context, set by the docked shell). This is the labelled
+    // context switch that resolves the D-vs-diff conflict: outside a spatial
+    // pane `d` keeps its diff meaning (below); inside one WASD drives the camera
+    // and `d` does not toggle the diff. The nudges accumulate into testable
+    // state the spatial views read.
+    if (s.wasd_context) {
+        if (ImGui::IsKeyPressed(ImGuiKey_W)) s.wasd_zoom++;
+        if (ImGui::IsKeyPressed(ImGuiKey_S)) s.wasd_zoom--;
+        if (ImGui::IsKeyPressed(ImGuiKey_A)) s.wasd_pan--;
+        if (ImGui::IsKeyPressed(ImGuiKey_D)) s.wasd_pan++;
+    }
 
     // The rest act on the active recording's selection; with none, nothing to do.
     const Streams *a = shell_a(s);
@@ -654,10 +730,15 @@ static void handle_keymap(ShellState &s) {
     const uint32_t cur = s.selected_step.value_or(0);
     const uint32_t kPage = 20;
 
-    // j/k, Down/Up — next / previous step (clamped to the step space).
-    if (ImGui::IsKeyPressed(ImGuiKey_J) || ImGui::IsKeyPressed(ImGuiKey_DownArrow))
+    // j/k, Down/Up — next / previous step (clamped to the step space). F10/F11
+    // are the debugger-muscle-memory aliases, and `,`/`.` step to the previous /
+    // next sibling — in the flat step space the adjacent invocation (18-breach-
+    // stops.md T1). All are pure selection moves.
+    if (ImGui::IsKeyPressed(ImGuiKey_J) || ImGui::IsKeyPressed(ImGuiKey_DownArrow) ||
+        ImGui::IsKeyPressed(ImGuiKey_F10) || ImGui::IsKeyPressed(ImGuiKey_Period))
         s.selected_step = cur < maxstep ? cur + 1 : maxstep;
-    if (ImGui::IsKeyPressed(ImGuiKey_K) || ImGui::IsKeyPressed(ImGuiKey_UpArrow))
+    if (ImGui::IsKeyPressed(ImGuiKey_K) || ImGui::IsKeyPressed(ImGuiKey_UpArrow) ||
+        ImGui::IsKeyPressed(ImGuiKey_F11) || ImGui::IsKeyPressed(ImGuiKey_Comma))
         s.selected_step = cur > 0 ? cur - 1 : 0;
     // PgDn/PgUp — page through the step space.
     if (ImGui::IsKeyPressed(ImGuiKey_PageDown))
@@ -673,13 +754,17 @@ static void handle_keymap(ShellState &s) {
     }
 
     // b / f — light the backward / forward cone from the selection; c — clear.
+    // `f` (no Shift) is the forward cone; Shift+F is fit-selection, handled above,
+    // so the cone must not also fire on the capital letter.
     if (ImGui::IsKeyPressed(ImGuiKey_B)) { s.cone_active = true; s.cone_fwd = false; }
-    if (ImGui::IsKeyPressed(ImGuiKey_F)) { s.cone_active = true; s.cone_fwd = true; }
-    if (ImGui::IsKeyPressed(ImGuiKey_C)) s.cone_active = false;
+    if (ImGui::IsKeyPressed(ImGuiKey_F) && !io.KeyShift) { s.cone_active = true; s.cone_fwd = true; }
+    if (ImGui::IsKeyPressed(ImGuiKey_C) && !io.KeyCtrl) s.cone_active = false;
 
     // d — attach a second recording for the diff (the first OTHER open one), or
-    // detach the one attached. x — swap which is A and which is B.
-    if (ImGui::IsKeyPressed(ImGuiKey_D)) {
+    // detach the one attached. x — swap which is A and which is B. In wasd_context
+    // (a spatial pane holds focus) `d` is camera-pan instead (handled above), so
+    // the diff toggle is suppressed there — the labelled context switch (T1).
+    if (ImGui::IsKeyPressed(ImGuiKey_D) && !s.wasd_context) {
         if (s.b_index >= 0) {
             s.b_index = -1;
         } else {
@@ -816,10 +901,20 @@ static void draw_windowed_shell(ShellState &s, const ImGuiViewport *vp) {
         }
 
         // The Author door: full app only, and the render-only build says why
-        // rather than hiding the tab (D4's split has to be legible).
-        if (s.show_author && ImGui::BeginTabItem("Author", &s.show_author)) {
-            draw_author_door(s.author);
-            ImGui::EndTabItem();
+        // rather than hiding the tab (D4's split has to be legible). Its close is
+        // routed through shell_request_author_close so an unsaved run raises the
+        // save/discard/cancel guard instead of vanishing (T3, F24); the title
+        // carries the `*` marker while dirty.
+        if (s.show_author) {
+            bool author_keep = true;
+            std::string atitle = std::string("Author") +
+                                 (s.author.dirty ? " *" : "") + "###authortab";
+            if (ImGui::BeginTabItem(atitle.c_str(), &author_keep)) {
+                draw_author_door(s.author);
+                ImGui::EndTabItem();
+            }
+            if (!author_keep)
+                shell_request_author_close(s);
         }
 
         if (s.show_inspect && ImGui::BeginTabItem("Inspect", &s.show_inspect)) {
@@ -844,8 +939,11 @@ static void draw_windowed_shell(ShellState &s, const ImGuiViewport *vp) {
         int to_close = -1;
         for (size_t i = 0; i < s.ws.recordings.size(); ++i) {
             const Recording &r = s.ws.recordings[i];
-            std::string title =
-                base_name(r.path) + "###rec" + std::to_string(i);
+            // A dirty (authored + unsaved) recording carries a trailing `*` (T3,
+            // VS-Code style); the ###recN id keeps the tab stable across the
+            // rename so it never reorders or duplicates.
+            std::string title = base_name(r.path) + (r.dirty ? " *" : "") +
+                                "###rec" + std::to_string(i);
             bool keep_open = true;
             ImGuiTabItemFlags tf = 0;
             if (s.want_open_tab == static_cast<int>(i))
@@ -864,8 +962,12 @@ static void draw_windowed_shell(ShellState &s, const ImGuiViewport *vp) {
         s.want_open_tab = -1;
         s.want_loom = false;
         s.want_view.reset(); // the 1/2/3/4 view-switch intent is consumed here too
+        // want_layout_reset is left for the docked path to consume (both binaries
+        // run the docked shell — main.cpp enables docking for the app AND the
+        // viewer; only the null test backend takes this windowed path, where there
+        // is no dockspace to rebuild, so the intent is inert and observable).
         if (to_close >= 0)
-            shell_close(s, static_cast<size_t>(to_close));
+            shell_request_close(s, static_cast<size_t>(to_close)); // T3 dirty guard
 
         // Placeholder door tabs (full app only; empty until docs 06/08).
         for (size_t i = 0; i < s.door_tabs.size(); ++i) {
@@ -878,6 +980,8 @@ static void draw_windowed_shell(ShellState &s, const ImGuiViewport *vp) {
         }
         ImGui::EndTabBar();
     }
+    ImGui::Separator();
+    draw_breadcrumb(s); // T6 back/forward history affordance
     ImGui::End();
 }
 
@@ -906,9 +1010,11 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     // act on the real panes below now — the menu that was inert before this brief.
     if (ImGui::BeginMainMenuBar()) {
         if (ImGui::BeginMenu("View")) {
-            if (ImGui::MenuItem("Reset layout"))
-                layout_build(s.dockspace_id, vp->WorkSize,
-                             LayoutPreset::ReplayInspect);
+            // Reset now routes through the SAME want_layout_reset intent the
+            // Ctrl+Shift+R keybinding raises (T2), so the two cannot diverge and
+            // Reset works even when the menu bar is not shown.
+            if (ImGui::MenuItem("Reset layout", "Ctrl+Shift+R"))
+                s.want_layout_reset = true;
             ImGui::Separator();
             for (LayoutPreset p : {LayoutPreset::ReplayInspect,
                                    LayoutPreset::Author,
@@ -931,6 +1037,25 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
         // already present.
         if (layout_needs_default(s.dockspace_id))
             layout_build(s.dockspace_id, vp->WorkSize, LayoutPreset::ReplayInspect);
+    }
+
+    // T2 (F2): the always-available Reset intent — the keybinding or the menu —
+    // consumed here, where the dockspace id is valid, so it fires with or without
+    // the menu bar. Otherwise, once inited, run the zero-visible-pane auto-
+    // fallback for the first couple of settled frames: a corrupt or collapsed
+    // persisted `build/desktop-imgui.ini` can strand every pane, and rather than
+    // showing an empty window we rebuild the shipped default. The short settle
+    // window is what keeps it from fighting a user mid-drag (it only checks just
+    // after init, not every frame).
+    if (s.want_layout_reset) {
+        s.want_layout_reset = false;
+        s.layout_settle = 0;
+        layout_reset(s.dockspace_id, vp->WorkSize);
+    } else if (s.layout_settle < 2) {
+        s.layout_settle++;
+        if (s.layout_settle == 2 && layout_exists(s.dockspace_id) &&
+            !layout_any_pane_visible(s.dockspace_id))
+            layout_reset(s.dockspace_id, vp->WorkSize);
     }
 
     // A capture the Inspect door just saved may ask to open in the Loom; do it
@@ -957,8 +1082,10 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
         if (s.ws.recordings.empty())
             ImGui::TextDisabled("(none yet — open one from a door above)");
         for (size_t i = 0; i < s.ws.recordings.size(); ++i) {
-            std::string label =
-                base_name(s.ws.recordings[i].path) + "###home" + std::to_string(i);
+            // A dirty (authored + unsaved) recording carries a trailing `*` (T3).
+            std::string label = base_name(s.ws.recordings[i].path) +
+                                (s.ws.recordings[i].dirty ? " *" : "") +
+                                "###home" + std::to_string(i);
             if (ImGui::Selectable(label.c_str(), s.active_tab == static_cast<int>(i)))
                 s.active_tab = static_cast<int>(i);
             ImGui::SameLine();
@@ -973,9 +1100,14 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     // The door screens open as their own dockable windows in the docked layout
     // (the door-chooser redesign, F13, is doc 21 — not here).
     if (s.show_author) {
-        if (ImGui::Begin("Author", &s.show_author))
+        bool author_keep = true;
+        std::string atitle =
+            std::string("Author") + (s.author.dirty ? " *" : "") + "###authorwin";
+        if (ImGui::Begin(atitle.c_str(), &author_keep))
             draw_author_door(s.author);
         ImGui::End();
+        if (!author_keep)
+            shell_request_author_close(s); // T3 dirty guard
     }
     if (s.show_inspect) {
         if (ImGui::Begin("Inspect", &s.show_inspect))
@@ -1050,13 +1182,21 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     ImGui::End();
 
     // --- kPaneTimeline (bottom-left): the operand timeline ---
+    // A spatial pane: while it (or the 3D view inside the recording pane) holds
+    // focus, W/S/A/D drive the camera and `d` does NOT toggle the diff — the
+    // labelled context switch (T1). Recorded as an explicit ShellState field the
+    // keymap reads next frame, not an implicit focus guess.
+    bool spatial_focus = false;
     if (ImGui::Begin(kPaneTimeline)) {
+        if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
+            spatial_focus = true;
         if (a != nullptr)
             body_timeline(s, a, b);
         else
             ImGui::TextDisabled("open a recording to see its operand timeline");
     }
     ImGui::End();
+    s.wasd_context = spatial_focus;
 
     // --- kPaneScrubber (bottom-right): the register scrubber ---
     if (ImGui::Begin(kPaneScrubber)) {
@@ -1095,14 +1235,14 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     }
     ImGui::End();
 
-    // A nav refusal lands verbatim, once, below the reading pane.
-    if (!s.status.empty()) {
-        if (ImGui::Begin(kPaneRecording)) {
-            ImGui::Separator();
+    // The back/forward affordance + a nav refusal land below the reading pane.
+    if (ImGui::Begin(kPaneRecording)) {
+        ImGui::Separator();
+        draw_breadcrumb(s); // T6 back/forward history affordance
+        if (!s.status.empty())
             ImGui::TextWrapped("%s", s.status.c_str());
-        }
-        ImGui::End();
     }
+    ImGui::End();
 
     // Port the keymap view-switch intents to FOCUS (19 T1 step 4): the tabbed
     // views were already SetSelected above; here bring their pane forward, and
@@ -1127,7 +1267,103 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     s.want_loom = false;
     s.want_view.reset();
     if (to_close >= 0)
-        shell_close(s, static_cast<size_t>(to_close));
+        shell_request_close(s, static_cast<size_t>(to_close)); // T3 dirty guard
+}
+
+// The minimal back/forward affordance over the router history (18-breach-stops.md
+// T6, F11): two buttons that walk dt_nav_back/forward, plus a compact current-
+// position label. The persistent wayfinding chrome proper is doc 21; this is the
+// emergency-exit-back gesture only. Called inside an existing window.
+static void draw_breadcrumb(ShellState &s) {
+    ImGui::BeginDisabled(s.nav.back.empty());
+    if (ImGui::SmallButton("< back") && !dt_nav_back(s.nav))
+        s.status = s.nav.last_error;
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered() && !s.nav.back.empty())
+        ImGui::SetTooltip("Alt+Left — back to %s",
+                          dt_nav_format(s.nav.back.back()).c_str());
+    ImGui::SameLine();
+    ImGui::BeginDisabled(s.nav.forward.empty());
+    if (ImGui::SmallButton("forward >") && !dt_nav_forward(s.nav))
+        s.status = s.nav.last_error;
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered() && !s.nav.forward.empty())
+        ImGui::SetTooltip("Alt+Right — forward to %s",
+                          dt_nav_format(s.nav.forward.back()).c_str());
+    if (s.nav.current) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("here: %s", dt_nav_format(*s.nav.current).c_str());
+    }
+}
+
+// Keep the Inspect door's least-perturbing default fed from the capability probe
+// (T5): the picker defaults to `sample` where AMD IBS is available, else the
+// lightest ptrace mode. Under the null test backend caps.rows is empty, so this
+// leaves sample_available false and Log is the default.
+static void shell_sync_inspect_defaults(ShellState &s) {
+    bool ibs = false;
+    for (const cap_row &r : s.caps.rows)
+        if (r.kind == cap_kind::ibs && r.available)
+            ibs = true;
+    s.inspect.sample_available = ibs;
+}
+
+// The dirty-close guards (18-breach-stops.md T3, F24): a workspace recording with
+// unsaved authored output, or the Author door tab, cannot be closed on one click
+// — a save/discard/cancel modal stands in front of the erase.
+static void draw_close_guards(ShellState &s) {
+    if (s.close_pending >= 0)
+        ImGui::OpenPopup("Unsaved recording");
+    if (ImGui::BeginPopupModal("Unsaved recording", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("This recording has unsaved authored output. Closing "
+                           "it now would lose the recording.");
+        if (ImGui::Button("Save") && s.close_pending >= 0 &&
+            s.close_pending < static_cast<int>(s.ws.recordings.size())) {
+            Recording &rec = s.ws.recordings[static_cast<size_t>(s.close_pending)];
+            std::string path = rec.path.empty() ? "authored.asmtrace" : rec.path;
+            std::string err;
+            if (save_recording_file(rec, path, err)) {
+                rec.dirty = false;
+                shell_discard_close(s); // now clean; discard closes it
+            } else {
+                s.status = err;
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Discard")) {
+            shell_discard_close(s);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel")) {
+            shell_cancel_close(s);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
+    if (s.author_close_guard)
+        ImGui::OpenPopup("Unsaved authored run");
+    if (ImGui::BeginPopupModal("Unsaved authored run", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextWrapped("The Author tab has an unsaved run. Save it from the "
+                           "tab, or discard it?");
+        if (ImGui::Button("Discard and close")) {
+            s.show_author = false;
+            s.author.dirty = false;
+            s.author.saved_ok = false;
+            s.author_close_guard = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Keep editing")) {
+            s.author_close_guard = false;
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
 }
 
 void draw_shell(ShellState &s) {
@@ -1136,6 +1372,9 @@ void draw_shell(ShellState &s) {
     // The advertised keyboard bindings, acted on first so a keypress and the
     // matching click land in the same frame (17-T1).
     handle_keymap(s);
+    // Keep the Inspect picker's least-perturbing default in step with the probe
+    // (T5) before any door draws it.
+    shell_sync_inspect_defaults(s);
 
     // Docking (13-foundation-moves.md T2): when enabled (the real app), the shell
     // draws real dockable panes (19). The null test backend leaves it OFF by
@@ -1157,6 +1396,7 @@ void draw_shell(ShellState &s) {
         ImGui::End();
     }
     draw_goto_modal(s); // Ctrl+G (17-T1)
+    draw_close_guards(s); // T3 dirty-close save/discard/cancel
 
     // Live-session toasts (16 T1): raise one per TRANSITION, then remember this
     // frame's feedback state so the next comparison is against it (never

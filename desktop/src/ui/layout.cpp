@@ -38,6 +38,23 @@ bool layout_needs_default(ImGuiID dockspace_id) {
     return node == nullptr || node->IsLeafNode();
 }
 
+namespace {
+// Does this node, or either child, hold a docked window? A leaf carries its
+// docked windows in `Windows`; a split has none of its own but its children do.
+bool node_has_window(const ImGuiDockNode *n) {
+    if (n == nullptr)
+        return false;
+    if (n->Windows.Size > 0)
+        return true;
+    return node_has_window(n->ChildNodes[0]) ||
+           node_has_window(n->ChildNodes[1]);
+}
+} // namespace
+
+bool layout_any_pane_visible(ImGuiID dockspace_id) {
+    return node_has_window(ImGui::DockBuilderGetNode(dockspace_id));
+}
+
 DockLayout layout_build(ImGuiID dockspace_id, ImVec2 size, LayoutPreset preset) {
     DockLayout L;
     L.root = dockspace_id;
@@ -95,6 +112,14 @@ DockLayout layout_build(ImGuiID dockspace_id, ImVec2 size, LayoutPreset preset) 
     }
     ImGui::DockBuilderFinish(dockspace_id);
     return L;
+}
+
+void layout_reset(ImGuiID dockspace_id, ImVec2 size) {
+    // The recovery path: rebuild the shipped default. layout_build already
+    // removes the node and re-splits, which is exactly what recovers a corrupt
+    // or collapsed persisted layout — so Reset is a thin, intent-named wrapper
+    // over it rather than a second, divergent rebuild.
+    layout_build(dockspace_id, size, LayoutPreset::ReplayInspect);
 }
 
 } // namespace asmdesk

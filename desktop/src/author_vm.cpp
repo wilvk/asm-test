@@ -127,4 +127,60 @@ std::string author_dump(const author_result_t &r) {
     return o;
 }
 
+namespace {
+const char *arch_wire_name(int arch) {
+    switch (arch) {
+    case ASM_X86_64:
+        return "x86_64";
+    case ASM_ARM64:
+        return "aarch64";
+    case ASM_RISCV64:
+        return "riscv64";
+    case ASM_ARM32:
+        return "arm";
+    }
+    return "";
+}
+} // namespace
+
+Recording author_recording(const author_result_t &r, int arch,
+                           const std::vector<uint8_t> &image, uint64_t base) {
+    Recording rec;
+    rec.version = kAsmtraceMajor;
+    rec.arch = arch_wire_name(arch);
+    rec.producer.name = "asmtest-author";
+    // The emulator is an exact, isolated guest: the authored run observed every
+    // step. The provenance is honest about the backend a --record author run
+    // would have written.
+    rec.provenance.backend = "author-emulator";
+    rec.provenance.exact = true;
+    rec.provenance.trust = "exact";
+    // The assembled program image, as a `codeimage` event (asmtrace-schema.md),
+    // so reopening the saved file shows the bytes that were authored rather than
+    // an empty recording. Skipped when a run assembled nothing.
+    if (!image.empty()) {
+        static const char *hexd = "0123456789abcdef";
+        std::string bytes;
+        bytes.reserve(image.size() * 2);
+        for (uint8_t b : image) {
+            bytes += hexd[b >> 4];
+            bytes += hexd[b & 0xF];
+        }
+        nlohmann::json ev;
+        ev["k"] = "codeimage";
+        ev["base"] = base;
+        ev["len"] = image.size();
+        ev["version"] = 0;
+        ev["when"] = 0;
+        ev["bytes"] = bytes;
+        rec.by_kind["codeimage"].push_back(Event{"codeimage", ev, rec.next_seq++});
+    }
+    // A complete, closed recording (has_end) so it reloads non-torn — an authored
+    // run that finished is not an interrupted capture.
+    rec.has_end = true;
+    rec.declared_events = rec.event_count();
+    (void)r; // the run's registers/fault are shown live; the image is the payload
+    return rec;
+}
+
 } // namespace asmdesk

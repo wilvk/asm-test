@@ -527,6 +527,72 @@ int main() {
         ImGui::DestroyContext();
     }
 
+    // --- 18-T3: the Author save-guard (dirty / close / title), pure model ---
+    // No ImGui context needed: the guard seams are pure ShellState moves (F24).
+    // A clean recording closes on the spot; a DIRTY (authored + unsaved) one
+    // raises the save/discard/cancel guard instead of erasing; save clears dirty
+    // and it then closes; discard erases; the Author door tab has its own guard.
+    {
+        ShellState cs;
+        std::string err;
+        int i0 = shell_open(cs, fx("min-trace.asmtrace"), err);
+        int i1 = shell_open(cs, fx("dropped.asmtrace"), err);
+        check("t3/opened", i0 >= 0 && i1 >= 0, err.c_str());
+        size_t n = cs.ws.recordings.size();
+
+        // A clean recording closes immediately, no guard.
+        cs.ws.recordings[static_cast<size_t>(i0)].dirty = false;
+        shell_request_close(cs, static_cast<size_t>(i0));
+        check("t3/clean-closes-immediately",
+              cs.ws.recordings.size() == n - 1 && cs.close_pending == -1,
+              "a clean recording must close without a prompt");
+
+        // The remaining recording, marked dirty, must NOT be erased on a close
+        // request — the guard is raised instead.
+        cs.ws.recordings[0].dirty = true;
+        shell_request_close(cs, 0);
+        check("t3/dirty-not-erased", cs.ws.recordings.size() == n - 1,
+              "a dirty close must not silently drop the recording");
+        check("t3/dirty-raises-guard", cs.close_pending == 0,
+              "a dirty close must raise the save/discard/cancel guard");
+
+        // Cancel keeps the recording and drops the guard.
+        shell_cancel_close(cs);
+        check("t3/cancel-keeps", cs.close_pending == -1 &&
+              cs.ws.recordings.size() == n - 1, "cancel must keep it open");
+
+        // A save clears dirty; the same close then completes cleanly.
+        cs.ws.recordings[0].dirty = false; // stand-in for a successful save
+        shell_request_close(cs, 0);
+        check("t3/saved-closes-clean", cs.ws.recordings.size() == n - 2 &&
+              cs.close_pending == -1, "a saved recording closes without a guard");
+
+        // Discard erases a dirty recording after the guard is raised.
+        int j0 = shell_open(cs, fx("min-trace.asmtrace"), err);
+        cs.ws.recordings[static_cast<size_t>(j0)].dirty = true;
+        shell_request_close(cs, static_cast<size_t>(j0));
+        check("t3/discard-guard", cs.close_pending == j0,
+              "a dirty close raises the guard");
+        size_t before = cs.ws.recordings.size();
+        shell_discard_close(cs);
+        check("t3/discard-erases", cs.ws.recordings.size() == before - 1 &&
+              cs.close_pending == -1, "discard must erase the entry");
+
+        // The Author door tab's own guard: a dirty run raises it rather than
+        // closing; a clean tab closes on request.
+        cs.show_author = true;
+        cs.author.dirty = true;
+        bool closed = shell_request_author_close(cs);
+        check("t3/author-dirty-guard",
+              !closed && cs.author_close_guard && cs.show_author,
+              "a dirty Author tab must raise the guard, not close");
+        cs.author_close_guard = false;
+        cs.author.dirty = false;
+        closed = shell_request_author_close(cs);
+        check("t3/author-clean-closes", closed && !cs.show_author,
+              "a clean Author tab closes on request");
+    }
+
     if (failures) {
         std::fprintf(stderr, "test_shell: %d FAILURE(S)\n", failures);
         return 1;

@@ -209,6 +209,132 @@ static void register_keymap_tests(ImGuiTestEngine *engine) {
         ctx->ItemClick("Go to/Cancel");
         ctx->Yield();
     };
+
+    // --- 18-breach-stops.md T1: the convention-alignment keys --------------
+
+    // Shift+F — fit / frame the current selection (want_fit intent). Plain `f`
+    // stays the forward cone (the cones_bfc test above), so this must NOT fire it.
+    t = IM_REGISTER_TEST(engine, "keymap", "fit_shift_f");
+    t->GuiFunc = keymap_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        g_keymap_shell.want_open_tab = 0;
+        g_keymap_shell.want_fit = false;
+        g_keymap_shell.cone_active = false;
+        ctx->Yield();
+        ctx->KeyPress(ImGuiMod_Shift | ImGuiKey_F);
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.want_fit);
+        IM_CHECK(!g_keymap_shell.cone_active); // Shift+F is fit, not the cone
+    };
+
+    // , / . — step to the previous / next sibling (adjacent step).
+    t = IM_REGISTER_TEST(engine, "keymap", "sibling_comma_period");
+    t->GuiFunc = keymap_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        g_keymap_shell.want_open_tab = 0;
+        g_keymap_shell.selected_step = 1u;
+        ctx->Yield();
+        ctx->KeyPress(ImGuiKey_Period);
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.selected_step.value_or(0u) == 2u);
+        ctx->KeyPress(ImGuiKey_Comma);
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.selected_step.value_or(9u) == 1u);
+    };
+
+    // F10 / F11 — step / step back (j / k aliases).
+    t = IM_REGISTER_TEST(engine, "keymap", "step_f10_f11");
+    t->GuiFunc = keymap_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        g_keymap_shell.want_open_tab = 0;
+        g_keymap_shell.selected_step = 1u;
+        ctx->Yield();
+        ctx->KeyPress(ImGuiKey_F10);
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.selected_step.value_or(0u) == 2u);
+        ctx->KeyPress(ImGuiKey_F11);
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.selected_step.value_or(9u) == 1u);
+    };
+
+    // Ctrl+C — copy a deep link, an alias of `y` (and NOT the cone-clear `c`).
+    t = IM_REGISTER_TEST(engine, "keymap", "copy_link_ctrl_c");
+    t->GuiFunc = keymap_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        g_keymap_shell.want_open_tab = 0;
+        g_keymap_shell.cone_active = true;
+        dt_link cur;
+        cur.view = dt_view::slice;
+        cur.rec = "sum_via_rbx.asmtrace";
+        cur.step = 2;
+        g_keymap_shell.nav.current = cur;
+        ImGui::SetClipboardText("");
+        ctx->Yield();
+        ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_C);
+        ctx->Yield();
+        const char *clip = ImGui::GetClipboardText();
+        IM_CHECK(clip != nullptr && std::strlen(clip) > 0);
+        IM_CHECK(g_keymap_shell.cone_active); // Ctrl+C must not clear the cone
+    };
+
+    // W/S/A/D — camera zoom/pan ONLY in a spatial context (wasd_context); there
+    // `d` drives pan and does NOT toggle the diff — the labelled context switch.
+    t = IM_REGISTER_TEST(engine, "keymap", "wasd_camera_context");
+    t->GuiFunc = keymap_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        g_keymap_shell.want_open_tab = 0;
+        g_keymap_shell.wasd_context = true;
+        g_keymap_shell.wasd_zoom = 0;
+        g_keymap_shell.wasd_pan = 0;
+        g_keymap_shell.b_index = -1;
+        ctx->Yield();
+        ctx->KeyPress(ImGuiKey_W);
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.wasd_zoom == 1); // W zoomed
+        ctx->KeyPress(ImGuiKey_D);
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.wasd_pan == 1);   // D panned...
+        IM_CHECK(g_keymap_shell.b_index == -1);   // ...and did NOT toggle the diff
+        // Leave the shared shell as the diff test expects it (camera off).
+        g_keymap_shell.wasd_context = false;
+    };
+
+    // --- 18-breach-stops.md T2: the reset-layout intent --------------------
+    t = IM_REGISTER_TEST(engine, "keymap", "reset_layout_ctrl_shift_r");
+    t->GuiFunc = keymap_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        g_keymap_shell.want_layout_reset = false;
+        ctx->Yield();
+        ctx->KeyPress(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_R);
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.want_layout_reset);
+    };
+
+    // --- 18-breach-stops.md T6: Alt+Left / Alt+Right drive the router ------
+    t = IM_REGISTER_TEST(engine, "keymap", "history_alt_arrows");
+    t->GuiFunc = keymap_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        using namespace asmdesk;
+        g_keymap_shell.want_open_tab = 0;
+        // Build a two-step history through the real router.
+        g_keymap_shell.nav.back.clear();
+        g_keymap_shell.nav.forward.clear();
+        dt_link a;
+        a.rec = "sum_via_rbx.asmtrace";
+        a.view = dt_view::canvas;
+        dt_link b = a;
+        b.view = dt_view::timeline;
+        dt_nav_go(g_keymap_shell.nav, a);
+        dt_nav_go(g_keymap_shell.nav, b); // back=[a], current=b
+        ctx->Yield();
+        ctx->KeyPress(ImGuiMod_Alt | ImGuiKey_LeftArrow);
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.nav.current.has_value());
+        IM_CHECK(dt_nav_format(*g_keymap_shell.nav.current) == dt_nav_format(a));
+        ctx->KeyPress(ImGuiMod_Alt | ImGuiKey_RightArrow);
+        ctx->Yield();
+        IM_CHECK(dt_nav_format(*g_keymap_shell.nav.current) == dt_nav_format(b));
+    };
 }
 
 // The syscall view under test for the reveal-all flow (its reveal state lives

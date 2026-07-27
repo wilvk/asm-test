@@ -249,7 +249,11 @@ void dt_nav_register(dt_nav_table &t, dt_view v, dt_nav_handler h) {
     t.entries.push_back({v, std::move(h)});
 }
 
-bool dt_nav_go(dt_nav_table &t, const dt_link &link) {
+// The router core: validate the link, dispatch to the view handler, set
+// `current`. It records NO history — dt_nav_go layers that on top, and
+// dt_nav_back/forward reuse this so a history walk lands identically to a fresh
+// navigation without re-pushing onto the stacks it is walking.
+static bool dt_nav_dispatch(dt_nav_table &t, const dt_link &link) {
     t.last_error.clear();
     if (t.have_recording && !t.have_recording(link.rec)) {
         t.last_error = "no open recording named \"" + link.rec +
@@ -279,20 +283,77 @@ bool dt_nav_go(dt_nav_table &t, const dt_link &link) {
     return false;
 }
 
+bool dt_nav_go(dt_nav_table &t, const dt_link &link) {
+    std::optional<dt_link> prev = t.current;
+    if (!dt_nav_dispatch(t, link))
+        return false;
+    // Browser-history discipline: a fresh navigation pushes where we WERE onto
+    // `back` and abandons any forward branch. A no-op re-navigation to the same
+    // position is not a history step, so it is not pushed.
+    if (prev && dt_nav_format(*prev) != dt_nav_format(link)) {
+        t.back.push_back(*prev);
+        if (t.history_cap && t.back.size() > t.history_cap)
+            t.back.erase(t.back.begin()); // drop the oldest past the bound
+    }
+    t.forward.clear();
+    return true;
+}
+
+bool dt_nav_back(dt_nav_table &t) {
+    if (t.back.empty()) {
+        t.last_error = "already at the earliest position in the history";
+        return false;
+    }
+    dt_link target = t.back.back();
+    std::optional<dt_link> here = t.current;
+    if (!dt_nav_dispatch(t, target))
+        return false; // the target recording closed; last_error set, stacks kept
+    t.back.pop_back();
+    if (here)
+        t.forward.push_back(*here);
+    return true;
+}
+
+bool dt_nav_forward(dt_nav_table &t) {
+    if (t.forward.empty()) {
+        t.last_error = "already at the latest position in the history";
+        return false;
+    }
+    dt_link target = t.forward.back();
+    std::optional<dt_link> here = t.current;
+    if (!dt_nav_dispatch(t, target))
+        return false;
+    t.forward.pop_back();
+    if (here)
+        t.back.push_back(*here);
+    return true;
+}
+
 const std::vector<dt_binding> &dt_nav_bindings() {
+    // `wired` is the honesty flag (18-breach-stops.md T1): every row here is a
+    // key handle_keymap (shell.cpp) — or a view-local draw, for `[`/`]` — really
+    // acts on, so all are wired:true. A future advertised-but-unmapped gesture
+    // lands as wired:false and the overlay greys it "planned" rather than lying.
     static const std::vector<dt_binding> b = {
-        {"1 / 2 / 3 / 4", "canvas / timeline / slice explorer / diff"},
-        {"j / k, Down / Up", "next / previous row or step"},
-        {"PgDn / PgUp", "page down / up"},
-        {"Ctrl+G", "go to a step or offset"},
-        {"Enter", "open the slice explorer at the selected step"},
-        {"b / f", "light the backward / forward cone from the selection"},
-        {"c", "clear the cones"},
-        {"[ / ]", "walk one dependence generation back / forward"},
-        {"d", "attach or detach a second recording (diff)"},
-        {"x", "swap A and B"},
-        {"n / p", "next / previous divergence"},
-        {"y", "copy a deep link to this position"},
+        {"1 / 2 / 3 / 4", "canvas / timeline / slice explorer / diff", true},
+        {"j / k, Down / Up", "next / previous row or step", true},
+        {"F10 / F11", "step / step back (j / k aliases)", true},
+        {", / .", "step to the previous / next sibling", true},
+        {"PgDn / PgUp", "page down / up", true},
+        {"Ctrl+G", "go to a step or offset", true},
+        {"Enter", "open the slice explorer at the selected step", true},
+        {"F", "fit / frame the current selection (Shift+F)", true},
+        {"b / f", "light the backward / forward cone from the selection", true},
+        {"c", "clear the cones", true},
+        {"[ / ]", "walk one dependence generation back / forward", true},
+        {"W/S, A/D", "camera zoom / pan — timeline / 3D (spatial focus)", true},
+        {"d", "attach or detach a second recording (diff)", true},
+        {"x", "swap A and B", true},
+        {"n / p", "next / previous divergence", true},
+        {"Alt+Left / Alt+Right", "back / forward through the visited history",
+         true},
+        {"y, Ctrl+C", "copy a deep link to this position", true},
+        {"Ctrl+Shift+R", "reset the panel layout to the default", true},
     };
     return b;
 }
