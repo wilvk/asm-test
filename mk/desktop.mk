@@ -49,7 +49,12 @@ IMGUI_SRCS := $(IMGUI_HOME)/imgui.cpp $(IMGUI_HOME)/imgui_draw.cpp \
 # so the docking pin (F1) only takes effect if make hands the version to the
 # script — otherwise IMGUI_HOME points at imgui-<docking> while the fetch writes
 # imgui-1.91.9 and every compile fails "no such file".
-$(IMGUI_SRCS) &: scripts/fetch-imgui.sh scripts/third-party-digests.txt
+# misc/freetype/imgui_freetype.cpp ships INSIDE the imgui tarball, so the same
+# fetch produces it — declare it a grouped output too, or the freetype gate's
+# imgui_freetype.o rule (F3) has "No rule to make target" on a clean tree (it is
+# not in IMGUI_SRCS, which are the always-compiled core/backends). Harmless when
+# freetype is off: present but unused.
+$(IMGUI_SRCS) $(IMGUI_HOME)/misc/freetype/imgui_freetype.cpp &: scripts/fetch-imgui.sh scripts/third-party-digests.txt
 	IMGUI_VERSION=$(IMGUI_VERSION) sh scripts/fetch-imgui.sh >/dev/null
 $(JSON_HOME)/nlohmann/json.hpp: scripts/fetch-json.sh scripts/third-party-digests.txt
 	sh scripts/fetch-json.sh >/dev/null
