@@ -739,6 +739,102 @@ int main() {
               "a vanished recording must surface its load error (D7)");
     }
 
+    // --- 25-live-model-wiring.md T1/T2/T4/T7: the live capture as a workspace
+    // tab. A fed `dataflow` session (exact provenance + df_step, no `end` ->
+    // growing) must be promoted into ws.recordings with its full parallel model,
+    // so view_presence offers the SAME Loom / Slice a replayed file would —
+    // while the Scrubber stays honestly absent (no live regstate producer) and
+    // the ephemeral live tab is never persisted. Pure model: no ImGui context.
+    {
+        static const char *kExactHeader =
+            R"({"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},)"
+            R"("provenance":{"backend":"ptrace-dataflow","exact":true,"trust":"exact"},"arch":"x86_64"})";
+        auto find_view = [](const std::vector<ViewPresence> &vp,
+                            ViewId id) -> const ViewPresence * {
+            for (const ViewPresence &e : vp)
+                if (e.id == id)
+                    return &e;
+            return nullptr;
+        };
+
+        ShellState ls;
+        ls.mode = Mode::Capture; // the live-capture posture (Observer offered)
+        LiveSession &sess = ls.inspect.session;
+        sess.feed_line(R"({"k":"cmd","cmd":"start","mode":"dataflow"})");
+        sess.feed_line(
+            R"({"k":"session","state":"started","mode":"dataflow","pid":1234,"params":{}})");
+        sess.feed_line(kExactHeader);
+
+        // Header only, no df_step yet: the tab exists but Loom is absent — proof
+        // the gate is data-driven, not a live-vs-replay flag.
+        shell_sync_live_tab(ls);
+        check("25/live tab created", ls.live_tab >= 0,
+              "a growing capture must be promoted into ws.recordings");
+        check("25/live is the only tab", ls.ws.recordings.size() == 1,
+              "one live tab, no file tabs");
+        check("25/live tab auto-selected", ls.active_tab == ls.live_tab,
+              "the panes must land on the live capture from Home");
+        {
+            size_t i = static_cast<size_t>(ls.live_tab);
+            auto vp = view_presence(ls.streams[i], ls.observers[i], ls.stepidx[i],
+                                    ls.ws.recordings[i], ls.mode, false);
+            const ViewPresence *loom = find_view(vp, ViewId::Loom);
+            check("25/no df -> Loom absent", loom && !loom->present,
+                  "the Loom needs df_step values it does not have yet");
+        }
+
+        // Feed df_step: the exact-dataflow views must light live, and the
+        // Scrubber must stay absent with its --steps reason (no live regstate).
+        sess.feed_line(
+            R"({"k":"df_step","step":0,"off":0,"disasm":"mov eax, edi","ops":[{"space":"reg","reg":35,"size":4,"write":true,"value_valid":true,"value":40}]})");
+        sess.feed_line(
+            R"({"k":"df_step","step":1,"off":2,"disasm":"add eax, esi","ops":[{"space":"reg","reg":35,"size":4,"write":true,"value_valid":true,"value":42}]})");
+        uint64_t built_before = ls.live_built_events;
+        shell_sync_live_tab(ls);
+        check("25/rebuild on growth", ls.live_built_events != built_before,
+              "growth must move the built-event watermark and re-decode");
+        {
+            size_t i = static_cast<size_t>(ls.live_tab);
+            check("25/df decoded live", ls.streams[i].df.present(),
+                  "the live tab's df stream must decode the fed df_step events");
+            auto vp = view_presence(ls.streams[i], ls.observers[i], ls.stepidx[i],
+                                    ls.ws.recordings[i], ls.mode, false);
+            const ViewPresence *loom = find_view(vp, ViewId::Loom);
+            const ViewPresence *slice = find_view(vp, ViewId::Slice);
+            const ViewPresence *scrub = find_view(vp, ViewId::Scrubber);
+            check("25/Loom live", loom && loom->present,
+                  "an exact dataflow capture must weave a Loom live");
+            check("25/Slice live", slice && slice->present,
+                  "df_step present -> the slice explorer must be offered live");
+            check("25/Scrubber stays absent", scrub && !scrub->present,
+                  "no live regstate producer exists -> Scrubber is replay-only");
+            check("25/Scrubber names --steps",
+                  scrub && scrub->reason.find("--steps") != std::string::npos,
+                  "the absent Scrubber must name its --steps producer verbatim");
+        }
+
+        // T4: the ephemeral, path-less live tab is never written to the store.
+        WorkspaceState wss = shell_capture_workspace(ls);
+        check("25/live tab not persisted", wss.open.empty(),
+              "the path-less live tab must not enter the persisted open set");
+
+        // A completed session freezes the tab; reset() tears it down.
+        sess.feed_line(
+            R"({"k":"end","events":2,"truncated":false,"drops":{"lost":0,"throttled":false}})");
+        sess.feed_line(
+            R"({"k":"session","state":"stopped","mode":"dataflow","events":2,"reason":"stop"})");
+        shell_sync_live_tab(ls);
+        check("25/completed capture kept",
+              ls.live_tab >= 0 && ls.ws.recordings.size() == 1,
+              "a stopped session's last recording stays as a frozen tab");
+        sess.shutdown();
+        sess.reset();
+        shell_sync_live_tab(ls);
+        check("25/teardown on reset",
+              ls.live_tab == -1 && ls.ws.recordings.empty(),
+              "reset() must drop the ephemeral live tab");
+    }
+
     if (failures) {
         std::fprintf(stderr, "test_shell: %d FAILURE(S)\n", failures);
         return 1;

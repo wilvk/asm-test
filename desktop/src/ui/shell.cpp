@@ -130,8 +130,87 @@ void shell_close(ShellState &s, size_t idx) {
         s.close_pending = -1;
     else if (s.close_pending > static_cast<int>(idx))
         s.close_pending--;
+    // The live tab (25) rides the same index shift: cleared if it was the one
+    // erased, decremented if an earlier tab was.
+    if (s.live_tab == static_cast<int>(idx))
+        s.live_tab = -1;
+    else if (s.live_tab > static_cast<int>(idx))
+        s.live_tab--;
     s.ws_dirty = true; // the open set changed — persist it (T3)
     shell_wire_nav(s);
+}
+
+// 25-live-model-wiring.md T1/T2. Keep one workspace tab mirroring the live
+// capture so the docked panes + view_presence render it exactly as a replayed
+// file — the growing recording is not a second code path, it is the same model.
+void shell_sync_live_tab(ShellState &s) {
+    LiveSession &sess = s.inspect.session;
+    const Recording *live = sess.growing();
+    if (live == nullptr && !sess.recordings().empty())
+        live = &sess.recordings().back();
+
+    // No capture (idle / reset): drop any promoted tab and leave.
+    if (live == nullptr) {
+        if (s.live_tab >= 0) {
+            size_t idx = static_cast<size_t>(s.live_tab);
+            bool was_active = (s.active_tab == s.live_tab);
+            if (s.active_tab > s.live_tab)
+                s.active_tab--; // erasing idx shifts later tabs down
+            shell_close(s, idx); // erases every parallel slot + clears live_tab
+            s.live_built_events = 0;
+            s.live_built_recordings = 0;
+            if (was_active)
+                s.active_tab = s.ws.recordings.empty()
+                                   ? -1
+                                   : static_cast<int>(std::min(
+                                         idx, s.ws.recordings.size() - 1));
+        }
+        return;
+    }
+
+    // First sight of a live recording: append the slot + its parallel indices.
+    if (s.live_tab < 0) {
+        s.ws.recordings.push_back(*live);
+        s.live_tab = static_cast<int>(s.ws.recordings.size()) - 1;
+        size_t i = static_cast<size_t>(s.live_tab);
+        s.streams.resize(s.ws.recordings.size());
+        s.observers.resize(s.ws.recordings.size());
+        s.stepidx.resize(s.ws.recordings.size());
+        s.scrubber_playhead.resize(s.ws.recordings.size());
+        s.scenes.resize(s.ws.recordings.size());
+        s.scrubber_playhead[i] = 0;
+        s.scenes[i] = SceneView{};
+        s.live_built_events = ~static_cast<uint64_t>(0); // force the first build
+        s.live_built_recordings = ~static_cast<size_t>(0);
+        // Land the panes on the capture only from Home — never steal a
+        // deliberate file selection.
+        if (s.active_tab < 0)
+            s.active_tab = s.live_tab;
+    }
+
+    // Rebuild only when the capture grew, or a session boundary moved which
+    // recording `live` points at — the same gate draw_live_views uses, so a
+    // static frame re-decodes nothing.
+    uint64_t n = live->event_count();
+    size_t ndone = sess.recordings().size();
+    if (n == s.live_built_events && ndone == s.live_built_recordings)
+        return;
+    size_t i = static_cast<size_t>(s.live_tab);
+    s.ws.recordings[i] = *live; // the r/a-based views (Summary, 3D, observer)
+    s.streams[i] = decode_streams(s.ws.recordings[i]);
+    // A live session keeps its lifecycle OUTSIDE the recording (07-T3); feed it
+    // in so the observer deck reads the started-params + skip the way a file's
+    // inline lifecycle is read.
+    std::vector<nlohmann::json> bodies;
+    for (const LiveNote &note : sess.notes())
+        bodies.push_back(note.body);
+    ObsLifecycle lc = observer_lifecycle_from(bodies);
+    observer_build(s.observers[i], s.ws.recordings[i], &lc);
+    s.stepidx[i] = build_step_index(s.ws.recordings[i]);
+    s.scenes[i] = SceneView{}; // force a lazy 3D re-weave on next view
+    s.live_built_events = n;
+    s.live_built_recordings = ndone;
+    shell_wire_nav(s); // the decoded stream id is now live — point the router at it
 }
 
 // The dirty-close guard (18-breach-stops.md T3, F24): a clean recording closes
@@ -255,11 +334,19 @@ void shell_select_mode(ShellState &s, Mode m) {
 // --- 20 T3: capture / restore the workspace as asmtrace-links -----------------
 WorkspaceState shell_capture_workspace(const ShellState &s) {
     WorkspaceState ws;
-    for (const Recording &r : s.ws.recordings)
-        ws.open.push_back(r.path);
+    // The live tab (25) is ephemeral: it has no file to reopen (an empty path
+    // would fail to restore), so it is never written to the store — a restored
+    // workspace is exactly the file recordings.
+    for (size_t i = 0; i < s.ws.recordings.size(); i++) {
+        if (static_cast<int>(i) == s.live_tab)
+            continue;
+        ws.open.push_back(s.ws.recordings[i].path);
+    }
     if (s.nav.current)
         ws.active = dt_nav_format(*s.nav.current);
     for (size_t i = 0; i < s.streams.size(); i++) {
+        if (static_cast<int>(i) == s.live_tab)
+            continue; // no pane link for the ephemeral live tab
         dt_link l;
         l.rec = s.streams[i].id;
         // Only the active recording carries the live selection; the model keeps
@@ -728,6 +815,23 @@ static std::vector<ViewPresence> shell_view_presence(const ShellState &s,
     return view_presence(*a, obs, si, r, s.mode, shell_b_attachable(s));
 }
 
+// 25 T5: the live-weave banner. While the active tab is the still-growing live
+// capture, the exact-dataflow views (Loom / Slice) carry the graded truth (23):
+// the values are real, but the target is being single-stepped (perturbing) and
+// the recording is not yet complete (torn). A completed capture drops the
+// caveat — it is exact and final, exactly like a replayed file.
+static void shell_live_weave_banner(const ShellState &s) {
+    if (s.live_tab < 0 || s.active_tab != s.live_tab)
+        return;
+    if (s.inspect.session.growing() == nullptr)
+        return;
+    ImGui::PushStyleColor(ImGuiCol_Text, dt_warn_col());
+    ImGui::TextWrapped(
+        "live weave — the target is being single-stepped (perturbing), and this "
+        "recording is still growing (torn).");
+    ImGui::PopStyleColor();
+}
+
 // Draw one present view's body by id. Only ever called for a present entry with
 // a decoded stream (a != nullptr), so the *a dereferences are safe.
 static void draw_view_body(ShellState &s, ViewId id, const Recording &r,
@@ -743,6 +847,7 @@ static void draw_view_body(ShellState &s, ViewId id, const Recording &r,
         body_timeline(s, a, b);
         break;
     case ViewId::Slice:
+        shell_live_weave_banner(s);
         body_slice(s, a, b);
         break;
     case ViewId::Diff:
@@ -752,6 +857,7 @@ static void draw_view_body(ShellState &s, ViewId id, const Recording &r,
         body_observer(s, r, a);
         break;
     case ViewId::Loom:
+        shell_live_weave_banner(s);
         draw_loom(s.loom, *a, s.ws, s.active_tab);
         break;
     case ViewId::Scrubber:
@@ -1526,9 +1632,10 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
 
     // --- kPaneLoom (center, co-docked as a tear-able tab) ---
     if (ImGui::Begin(kPaneLoom)) {
-        if (a != nullptr)
+        if (a != nullptr) {
+            shell_live_weave_banner(s); // 25 T5: perturb+torn caveat on a live weave
             draw_loom(s.loom, *a, s.ws, s.active_tab);
-        else
+        } else
             ImGui::TextDisabled("open a recording to weave its Loom");
     }
     ImGui::End();
@@ -1815,6 +1922,11 @@ void draw_shell(ShellState &s) {
     // Keep the Inspect picker's least-perturbing default in step with the probe
     // (T5) before any door draws it.
     shell_sync_inspect_defaults(s);
+    // Promote the live capture into the workspace so the docked panes render it
+    // (25). Uses the session state last frame's Inspect-door poll() left, so the
+    // live views trail the observer deck by at most one frame — imperceptible,
+    // and it keeps poll() the door's single responsibility.
+    shell_sync_live_tab(s);
     // Keep the honesty-chrome theme flag + the live text-scale in step with the
     // Settings model every frame (20 T5): cheap, and it means a restored setting
     // takes effect without a special apply path.

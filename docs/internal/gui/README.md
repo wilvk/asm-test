@@ -160,6 +160,7 @@ map to the plan and review.
 | [22-selection-and-search.md](22-selection-and-search.md) | 2 | shared brushing-and-linking selection, keyboard islands, global find, app-level undo (F7,F18,F17,F12) | 4 | 19 (panes); 16 (ImSearch); 21 T3 (minimap) | ☐ 0/4 |
 | [23-graded-truth-layer.md](23-graded-truth-layer.md) | 3 | graded 3-tier honesty chrome + schema `severity`, session-end placard, split "paused", progress everywhere (F5,F20,F23,F21) | 4 | 01 (**schema-freeze coordination for T1**); 24 T5.1 (palette); 16 T1; 14 T3 | ✅ 4/4 (T1–T4 landed 2026-07-27) |
 | [24-one-visual-language.md](24-one-visual-language.md) | 3 | semantic palette (extend `theme.h`), CVD-safe + second channel, glossary/term registry, unified filter/time, Loom/3D primer (F3,F14,F15,F16,F4) | 5 | 16 (ImSearch); 15 (ImPlot colormap); T5.1 precedes 23 T1 | ✅ 5/5 (T1–T5 landed 2026-07-27) |
+| [25-live-model-wiring.md](25-live-model-wiring.md) | 4 | promote the growing capture into the workspace model so Loom / Slice / Timeline / 3D go live, not just Observer — closes the 2026-07-27 live-vs-replay audit gap; Scrubber stays honestly replay-only (no live `regstate`) | 7 | 20 T1 (`view_presence`); 07/08 (live host + observer deck) | ◐ T1–T2+T4–T5+T7 landed 2026-07-27; T3/T6 open |
 
 30 tasks across docs 18–24. Sequencing follows the plan's four waves:
 **Wave 0 (doc 18)** stops active breaches and is mostly independent of the

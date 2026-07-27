@@ -189,6 +189,19 @@ struct ShellState {
     std::vector<SceneView> scenes;
     SceneHost *scene_host = nullptr;
 
+    // --- 25-live-model-wiring.md: the live capture as a workspace tab ------
+    // The growing `asmspy --serve` recording, promoted into ws.recordings (with
+    // its parallel streams/observers/stepidx/scenes slots) so the SAME docked
+    // panes + view_presence that a replayed file drives also render a live
+    // session — Loom / Slice / Timeline / 3D go live, not just the Observer
+    // deck. `live_tab` is that entry's index, or -1 when no session is up. The
+    // slot is ephemeral (never persisted) and rebuilt only when the capture
+    // grows: `live_built_events` / `live_built_recordings` gate that rebuild the
+    // way draw_live_views gates its observer, so a static frame costs nothing.
+    int live_tab = -1;
+    uint64_t live_built_events = 0;
+    size_t live_built_recordings = 0;
+
     // A pending cross-door jump: a capture the Inspect door just saved and asked
     // to open in the Loom (07-serve-live-host.md). `want_open_tab` is the
     // recording index whose outer tab to select; `want_loom` forces its Loom
@@ -232,6 +245,15 @@ struct ShellState {
 // to Workspace::recordings. Returns the new index, or -1 with `err` set.
 int shell_open(ShellState &s, const std::string &path, std::string &err);
 void shell_close(ShellState &s, size_t idx);
+
+// 25-live-model-wiring.md T1/T2: keep one workspace tab mirroring the live
+// `asmspy --serve` capture (growing, or the last completed one), so the docked
+// panes + view_presence render a live session the same way a replayed file is
+// rendered. Called once per frame from draw_shell; a no-op when no session is
+// up. Idempotent and headless — test_shell drives it directly over a synthetic
+// fed session. Rebuilds the tab's decoded streams / observer / step index only
+// when the capture's event count moves.
+void shell_sync_live_tab(ShellState &s);
 
 // The dirty-close guard (18-breach-stops.md T3, F24). `shell_request_close` is
 // the seam the tab `✕` drives: it closes a clean recording immediately, but a
