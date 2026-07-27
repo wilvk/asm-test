@@ -31,7 +31,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   T3). A blocked capture can be **queued** as a visible, cancellable chip; it starts
   automatically the moment the jack frees — and only then (never an auto-swap, so
   the one-ptrace-jack invariant is never bypassed).
-
+- **The desktop remembers your workspace, and a Settings pane**
+  (docs/internal/gui/20-workspace-and-settings.md T3/T4/T5). Open recordings, the
+  active view and each pane's selection now restore across launches (persisted as
+  `asmtrace-link`s in `build/desktop-workspace.json` beside the dock `.ini`), with
+  an MRU **recents** list on the home rail and a **File ▸ Open Recent** menu — each
+  entry reopening to its exact prior position — plus **drag-drop** to open a file.
+  A recording whose file has vanished is kept in recents with its load error, never
+  silently dropped. **Named dock perspectives** and **named saved filter presets**
+  persist in the same store. A new **Settings pane** adds a user **text-scale**
+  (0.8×–2.0× via `FontGlobalScale` with a DPI-aware atlas re-bake on content-scale
+  change), a **remembered window size** (retiring the hardcoded 1280×720), and a
+  **light theme** that keeps the honesty-chrome (warn/refuse) contrast — and states
+  honestly that text-scale is the only in-app accessibility lever, because Dear
+  ImGui exposes no OS screen-reader tree.
 - **In-app term registry, per-view "?" caveats, domain-term-first headings, and a
   searchable Terms pane** (docs/internal/gui/24-one-visual-language.md T3). The
   coined GUI lexicon (Loom, fabric, patch-bay, hollow span, born-untraced,
@@ -2290,6 +2303,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   \<target\>" with explicit **Swap** (a named two-step confirm), **Queue** (a
   cancellable chip that starts when the jack frees), and **Cancel**. No path
   auto-swaps without confirmation.
+- **Desktop view tabs are now data-driven, and first run is a task rail**
+  (docs/internal/gui/20-workspace-and-settings.md T1/T2). Only the views a
+  recording can actually fill are shown — a bare-log recording no longer presents
+  empty Loom / ABI-x-ray / 3D / Scrubber tabs; the views it cannot fill collapse
+  into ONE honest **"unavailable views (N)"** affordance that still names each
+  absent view and its verbatim machine reason (D7 — restructured, never removed),
+  and the set is scoped by the active mode. First run replaces the "choose a door"
+  chooser with a **persistent task rail** (Learn how assembly runs / Open a trace /
+  Capture a live process / Author a routine); an empty workspace auto-lands in
+  Learn (the dependency-free path), and the chosen mode drives its dock
+  perspective so the label and the layout agree. Resolves the plan-says-3-doors
+  vs build-renders-4 drift (F13): there are four *task modes*, named as tasks, and
+  the "door" vocabulary is retired.
 - **CVD-safe categorical palette + a second channel on every colour-coded
   distinction** (docs/internal/gui/24-one-visual-language.md T2). Every categorical
   distinction now also carries a NON-colour channel so ~5% of users who cannot

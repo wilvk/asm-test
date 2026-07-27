@@ -347,6 +347,15 @@ static void syscalls_gui(ImGuiTestContext *) {
     ImGui::End();
 }
 
+// The task rail under test (20 T2): its mode + pending_preset live in the shell,
+// so the shell outlives the GuiFunc.
+static asmdesk::ShellState g_rail_shell;
+static void rail_gui(ImGuiTestContext *) {
+    ImGui::Begin("RailHarness", nullptr, ImGuiWindowFlags_NoSavedSettings);
+    asmdesk::draw_home_rail(g_rail_shell);
+    ImGui::End();
+}
+
 // Interaction flow tests (17-T1 step 4): the multi-step confirmations the
 // golden-text tests cannot reach, driven by real clicks. The syscall reveal-all
 // is the sharpest example — a DESTRUCTIVE-feeling action (unredact every
@@ -376,6 +385,26 @@ static void register_flow_tests(ImGuiTestEngine *engine) {
         ctx->ItemClick("Yes, reveal them");
         ctx->Yield();
         IM_CHECK(g_sys.reveal_all);
+    };
+
+    // 20 T2: the rail CTA changes the mode and requests its perspective. An empty
+    // shell auto-lands in Learn; clicking a task sentence sets that mode.
+    t = IM_REGISTER_TEST(engine, "flow", "rail_cta_sets_mode");
+    t->GuiFunc = rail_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        using namespace asmdesk;
+        // ShellState is not copyable (its LiveSession is move-only), so reset only
+        // the fields under test rather than reassigning the whole struct. It is
+        // default-constructed with mode == Learn — the empty-workspace auto-land.
+        g_rail_shell.mode = Mode::Learn;
+        g_rail_shell.pending_preset.reset();
+        ctx->Yield();
+        IM_CHECK_EQ((int)g_rail_shell.mode, (int)Mode::Learn); // auto-land
+        ctx->SetRef("RailHarness");
+        ctx->ItemClick("Author a routine");
+        ctx->Yield();
+        IM_CHECK_EQ((int)g_rail_shell.mode, (int)Mode::Author);
+        IM_CHECK(g_rail_shell.pending_preset.has_value());
     };
 }
 

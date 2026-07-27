@@ -116,6 +116,14 @@ review found missing behind a single-window nested-tab model.
 
 ### T1 — data-driven outer view presence + honest "unavailable views" affordance  (M, depends on: 19)
 
+> **LANDED.** `desktop/src/ui/view_presence.{h,cpp}` is the pure predicate; the
+> non-docked `draw_recording_tab` and the docked `kPaneRecording` tab bar both
+> drive their tab set from it, emitting only present views and collapsing the rest
+> into one "unavailable views (N)" tab that names each absent view + its verbatim
+> reason. A keymap request for an absent view lands on that affordance
+> pre-explained. `door_tabs` is retired (field + render loop + `test_shell` push).
+> Tested by `desktop/test/test_view_presence.cpp` + `test_shell`.
+
 **Goal.** Make the outer/inner view set a pure function of the recording's data
 and the active mode, by lifting `observer_draw.cpp`'s own empties-gating up a
 level: a lean default (Summary / Canvas / Timeline) always; Loom / 3D / PT-slice /
@@ -176,6 +184,14 @@ machine reason; `door_tabs` is gone; `test_view_presence` is green.
 
 ### T2 — task-language entry on a persistent home/nav rail  (M, depends on: 19)
 
+> **LANDED.** `enum class Mode` + `mode_preset`/`mode_cta` live in the shared
+> `desktop/src/ui/mode.h`; `ShellState::mode` defaults to `Learn` (auto-land) and
+> `shell_select_mode` sets the mode + a `pending_preset` seam the docked frame
+> applies. `draw_home_rail` (the persistent task rail — kPaneHome when docked, a
+> left child otherwise) replaces `draw_doors`; the "Home" tab and the "choose a
+> door" vocabulary are gone. F13 reconciled: four *task modes*, named as tasks.
+> Tested by `test_shell` (auto-land + pending_preset) and `test_ui` (CTA click).
+
 **Goal.** Replace the jargon "choose a door" chooser with task-language modes on a
 **persistent** home/nav rail (not a closeable tab): "Learn how assembly runs" /
 "Open a trace I have" / "Capture a live process" / "Author a routine", with
@@ -231,6 +247,15 @@ learner-first; an empty workspace auto-lands in Learn; selecting a mode requests
 perspective; the "door" vocabulary and `draw_doors` are gone.
 
 ### T3 — workspace persistence, recents, File menu + drag-drop  (M, depends on: 19)
+
+> **LANDED.** `desktop/src/doc/workspace_state.{h,cpp}` is the pure
+> serialise/parse (defensive; unknown keys ignored) + `recents_push`.
+> `shell_capture_workspace` / `shell_restore_workspace` round-trip the open set +
+> active position + per-pane selection as `asmtrace-link`s; `main.cpp` loads at
+> startup, saves debounced on change + on clean exit, and registers the GLFW
+> drop callback (manual-smoke). Recents surface on the rail + a File ▸ Open Recent
+> menu; a vanished recording is kept-with-error (D7). Tested by
+> `test_workspace_state` + `test_shell`.
 
 **Goal.** Persist and restore the Workspace across launches — the open recordings,
 the active tab, and each pane's selection, every position an `asmtrace-link` — and
@@ -295,6 +320,14 @@ a vanished recording is kept-with-error, never silently dropped.
 
 ### T4 — named perspectives + named saved filter/query presets  (M, depends on: 19, 03/T3 store)
 
+> **LANDED.** `desktop/src/ui/perspectives.{h,cpp}` encodes a perspective as
+> `preset:<name>` (built-in, re-split via `layout_build`) or `ini:<blob>` (a
+> `SaveIniSettingsToMemory` snapshot), applied by `perspective_apply`; the three
+> built-in presets seed the map and a user "Save perspective" adds a snapshot
+> (View menu). `FilterPreset{name,query}` + `filter_preset_apply` write a query
+> into a view's filter buffer (the "showing N of M" honesty untouched); both live
+> in the T3 store. Tested by `test_perspectives` + `test_workspace_state`.
+
 **Goal.** Once panes are real, let the user name and recall dock *perspectives*
 (the VS Code / Blender / JetBrains workspace model) and name saved
 filter/query presets, so a task-shaped arrangement and a repeated query are both
@@ -344,6 +377,17 @@ preset; both persist in the workspace store; the "showing N of M" honesty is
 untouched; `test_perspectives` is green.
 
 ### T5 — DPI-aware atlas + user text-scale + persisted window size + light theme, in a Settings pane  (L, depends on: 13/F3 fonts)
+
+> **LANDED.** `desktop/src/ui/settings.{h,cpp}` is the pure `Settings` model
+> (text_scale / content_scale / win_w×h / light_theme) + serialise/parse (to
+> `build/desktop-settings.json`) + `settings_apply_text_scale`. `load_fonts` takes
+> `base_px × content_scale` and a `fonts_rebuild_count` seam; `main.cpp` bakes
+> DPI-aware, re-bakes on a content-scale change, opens at the remembered size, and
+> writes the size back on resize. `theme.h` gains a light-theme flag so the
+> warn/refuse chrome keeps contrast in both themes (default dark preserves every
+> 24-family value). A Settings pane hosts the slider/theme toggle + the honest
+> a11y-scope note (no OS screen-reader tree). Tested by `test_settings` +
+> `test_fonts`.
 
 **Goal.** Spend the one accessibility lever fully inside ImGui's control: a
 DPI-aware font atlas that rebuilds on content-scale change, a user text-scale

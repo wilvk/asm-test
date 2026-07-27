@@ -11,15 +11,37 @@
 
 namespace asmdesk {
 
+// The active-theme flag (20-workspace-and-settings.md T5, F6). The honesty chrome
+// (warn/refuse banners) must keep contrast in BOTH themes — the amber/red that
+// reads on the dark WindowBg washes out on a light one (D7: the warn/refuse
+// signal must never wash out). This flag is set once by the Settings pane; it is
+// a function-local static of an inline function, which the standard guarantees is
+// ONE shared instance across every TU, so no new link-line dependency is added.
+// Default false -> the exact dark values below (every 24-family test asserts them
+// unchanged, so the light branch is purely additive).
+inline bool &dt_light_theme_active() {
+    static bool v = false;
+    return v;
+}
+inline void dt_set_light_theme(bool on) { dt_light_theme_active() = on; }
+
 // The amber caution colour: every warning / truncation / statistical banner and
-// every "skipped"/"redacted" placard. The canonical value is the one three of
-// the five sites already used (0.95, 0.75, 0.25) — the byte form (242, 191, 64)
-// the Loom fabric draws with, so dt_warn_u32() below round-trips to it exactly.
-inline ImVec4 dt_warn_col() { return ImVec4(0.95f, 0.75f, 0.25f, 1.0f); }
+// every "skipped"/"redacted" placard. The canonical DARK value is the one three
+// of the five sites already used (0.95, 0.75, 0.25) — the byte form (242, 191,
+// 64) the Loom fabric draws with, so dt_warn_u32() round-trips to it exactly. The
+// LIGHT variant is a deeper amber that clears the contrast bar on a light panel.
+inline ImVec4 dt_warn_col() {
+    return dt_light_theme_active() ? ImVec4(0.72f, 0.46f, 0.0f, 1.0f)
+                                   : ImVec4(0.95f, 0.75f, 0.25f, 1.0f);
+}
 
 // The red refusal colour: a hard refusal placard (a comparison that cannot be
-// made, a basis mismatch, an armed watchpoint the engine declined).
-inline ImVec4 dt_refuse_col() { return ImVec4(0.95f, 0.45f, 0.40f, 1.0f); }
+// made, a basis mismatch, an armed watchpoint the engine declined). The light
+// variant is a deeper red that stays legible on a light background.
+inline ImVec4 dt_refuse_col() {
+    return dt_light_theme_active() ? ImVec4(0.78f, 0.12f, 0.10f, 1.0f)
+                                   : ImVec4(0.95f, 0.45f, 0.40f, 1.0f);
+}
 
 // ---------------------------------------------------------------------------
 // The full SEMANTIC axis (24-one-visual-language.md T1 / F14). Before this, the

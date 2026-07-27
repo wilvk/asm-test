@@ -560,6 +560,10 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/ui/filter.o \
   $(BUILD)/desktop/$(1)/ui/timepos.o \
   $(BUILD)/desktop/$(1)/ui/primer.o \
+  $(BUILD)/desktop/$(1)/ui/view_presence.o \
+  $(BUILD)/desktop/$(1)/ui/settings.o \
+  $(BUILD)/desktop/$(1)/ui/perspectives.o \
+  $(BUILD)/desktop/$(1)/doc/workspace_state.o \
   $(BUILD)/desktop/$(1)/ui/gl_scene_host.o \
   $(DESKTOP_LIVE:%=$(BUILD)/desktop/$(1)/lv/%.o) \
   $(BUILD)/desktop/$(1)/sp/projection.o $(BUILD)/desktop/$(1)/sp/terrain.o \
@@ -612,6 +616,7 @@ DESKTOP_CAP_OBJ := $(HWTRACE_OBJS)
 DESKTOP_TEST_IG  := $(addprefix $(BUILD)/desktop/test/ig/,$(addsuffix .o,$(DESKTOP_IMGUI_CORE)))
 DESKTOP_TEST_DOC := $(BUILD)/desktop/test/doc/recording.o \
                     $(BUILD)/desktop/test/doc/workspace.o \
+                    $(BUILD)/desktop/test/doc/workspace_state.o \
                     $(BUILD)/desktop/test/doc/streams.o
 # The analysis/ + views/ builders under test. They are pure (no ImGui, no I/O)
 # and engine-free, which is what lets the same objects link into asmtest-viewer.
@@ -880,6 +885,10 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_shell $(BUILD)/desktop_test_golden \
                  $(BUILD)/desktop_test_layout \
                  $(BUILD)/desktop_test_fonts \
+                 $(BUILD)/desktop_test_view_presence \
+                 $(BUILD)/desktop_test_workspace_state \
+                 $(BUILD)/desktop_test_settings \
+                 $(BUILD)/desktop_test_perspectives \
                  $(BUILD)/desktop_test_ictedit \
                  $(BUILD)/desktop_test_theme \
                  $(BUILD)/desktop_test_honesty \
@@ -1392,6 +1401,9 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/addon/imsearch.o \
     $(BUILD)/desktop/test/ui/capability_panel.o \
     $(BUILD)/desktop/test/ui/inspect_door.o \
+    $(BUILD)/desktop/test/ui/view_presence.o \
+    $(BUILD)/desktop/test/ui/settings.o \
+    $(BUILD)/desktop/test/ui/perspectives.o \
     $(DESKTOP_TEST_UI_OBJ) \
     $(BUILD)/desktop/test/addon/imguifiledialog.o \
     $(DESKTOP_TEST_LIVE) \
@@ -1423,6 +1435,37 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
 
 $(BUILD)/desktop_test_shell: $(BUILD)/desktop/test/t/test_shell.o \
     $(DESKTOP_TEST_SHELL_OBJ) $(BUILD)/desktop/test/src/vm_compat.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# --- 20-workspace-and-settings.md tests --------------------------------------
+# T1: the data-driven view set. view_presence.o reads observer_has_any (the
+# observer draw TU) + regions_from_codeimage (space/terrain), so it reuses the
+# shell object set — the same engine-free closure the shell test links, plus the
+# fixtures + golden corpus for the min-trace / codeimage cases.
+$(BUILD)/desktop/test/t/test_view_presence.o: \
+    DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"' \
+                         -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
+$(BUILD)/desktop_test_view_presence: \
+    $(BUILD)/desktop/test/t/test_view_presence.o $(DESKTOP_TEST_SHELL_OBJ)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# T3/T4: the persisted workspace store. workspace_state.o links nlohmann/json
+# only — no ImGui, no engine — so the round-trip is a pure model assert.
+$(BUILD)/desktop_test_workspace_state: \
+    $(BUILD)/desktop/test/t/test_workspace_state.o \
+    $(BUILD)/desktop/test/doc/workspace_state.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# T5: the Settings model. settings.o + imgui core (it touches io.FontGlobalScale).
+$(BUILD)/desktop_test_settings: $(BUILD)/desktop/test/t/test_settings.o \
+    $(BUILD)/desktop/test/ui/settings.o $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# T4: named perspectives + filter presets. perspectives.o + layout.o (it applies
+# a preset perspective through layout_build) + imgui core.
+$(BUILD)/desktop_test_perspectives: $(BUILD)/desktop/test/t/test_perspectives.o \
+    $(BUILD)/desktop/test/ui/perspectives.o $(BUILD)/desktop/test/ui/layout.o \
+    $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The ui-test binary (17-T1): the SAME app object set as the shell test, but in

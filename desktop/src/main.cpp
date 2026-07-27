@@ -6,7 +6,10 @@
 // frames this loop drives. Stock Dear ImGui GLFW + OpenGL3 example shape
 // (03-desktop-shell.md T6).
 #include <cstdio>
+#include <fstream>
 #include <memory>
+#include <sstream>
+#include <string>
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -17,13 +20,38 @@
 
 #include <GLFW/glfw3.h> // drags in the system OpenGL headers
 
+#include "doc/workspace_state.h" // persisted workspace store (20 T3)
 #include "ui/gl_scene_host.h"
+#include "ui/settings.h"         // user text-scale / theme / window size (20 T5)
 #include "ui/shell.h"
+#include "ui/theme.h"            // dt_set_light_theme (20 T5)
 #include "views/observer_draw.h" // obs_graph_enable (node-editor canvas, 15 T3)
 
-// The vendored font paths are injected by mk/desktop.mk (DESKTOP_FONT_DEFS);
-// default to empty so a build without them still compiles (load_fonts then
-// degrades to the built-in bitmap font).
+// The persistence stores (20 T3/T5): both live under build/ beside the dock
+// `.ini`, so they are git-ignored and a corrupt/stale one degrades to defaults.
+static const char *kWorkspaceStore = "build/desktop-workspace.json";
+static const char *kSettingsStore = "build/desktop-settings.json";
+
+static std::string read_text_file(const char *path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f)
+        return {};
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+static void write_text_file(const char *path, const std::string &s) {
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (f)
+        f << s;
+}
+
+// A content-scale (DPI) change flags an atlas re-bake; the loop does it where the
+// GL context is current (20 T5). File-scope so the GLFW callback can set it.
+static bool g_fonts_dirty = false;
+
+// The vendored TTF paths (injected by mk/desktop.mk), kept file-scope so the
+// atlas re-bake in the loop can reach them.
 #ifndef ASMTEST_JBM_TTF
 #define ASMTEST_JBM_TTF ""
 #endif
@@ -33,6 +61,38 @@
 #ifndef ASMTEST_FA_TTF
 #define ASMTEST_FA_TTF ""
 #endif
+
+// GLFW callbacks (20 T3/T5). Each reaches ShellState through the window user
+// pointer. Drag-drop and window-size are the two manual-smoke seams the brief
+// notes: they need a real window, add no logic of their own over already-tested
+// targets (shell_open / the Settings model), so nothing testable self-skips.
+static void drop_cb(GLFWwindow *w, int count, const char **paths) {
+    auto *st = static_cast<asmdesk::ShellState *>(glfwGetWindowUserPointer(w));
+    if (!st)
+        return;
+    for (int i = 0; i < count; i++) {
+        std::string err;
+        st->want_open_tab = asmdesk::shell_open(*st, paths[i], err);
+        if (st->want_open_tab < 0 && !err.empty())
+            st->status = err;
+    }
+}
+static void size_cb(GLFWwindow *w, int width, int height) {
+    auto *st = static_cast<asmdesk::ShellState *>(glfwGetWindowUserPointer(w));
+    if (st && width > 0 && height > 0) {
+        st->settings.win_w = width;
+        st->settings.win_h = height;
+        st->settings_dirty = true;
+    }
+}
+static void content_scale_cb(GLFWwindow *w, float xscale, float) {
+    auto *st = static_cast<asmdesk::ShellState *>(glfwGetWindowUserPointer(w));
+    if (st) {
+        st->settings.content_scale = xscale > 0.0f ? xscale : 1.0f;
+        st->settings_dirty = true;
+    }
+    g_fonts_dirty = true;
+}
 
 static void glfw_error(int code, const char *desc) {
     std::fprintf(stderr, "glfw error %d: %s\n", code, desc);
@@ -70,7 +130,14 @@ int main() {
     const char *title = "asmtest desktop";
 #endif
 
-    GLFWwindow *window = glfwCreateWindow(1280, 720, title, nullptr, nullptr);
+    // Load the persisted settings BEFORE the window so it opens at the size the
+    // user left it (20 T5, retiring the hardcoded 1280x720). A corrupt/absent
+    // store degrades to the defaults in the struct.
+    asmdesk::Settings settings;
+    asmdesk::settings_parse(read_text_file(kSettingsStore), settings);
+
+    GLFWwindow *window =
+        glfwCreateWindow(settings.win_w, settings.win_h, title, nullptr, nullptr);
     if (!window) {
         std::fprintf(stderr, "asmtest-desktop: window creation failed\n");
         glfwTerminate();
@@ -78,6 +145,13 @@ int main() {
     }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1); // vsync
+
+    // The GLFW content (DPI) scale of this window drives the atlas bake size, so
+    // a HiDPI display gets a crisp atlas rather than an upscaled 15px one (T5).
+    float xscale = 1.0f, yscale = 1.0f;
+    glfwGetWindowContentScale(window, &xscale, &yscale);
+    if (xscale > 0.0f)
+        settings.content_scale = xscale;
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -100,15 +174,41 @@ int main() {
     // reaches into ImGui internals, so the headless null-backend view tests never
     // enable it (they fall back to the list/table). The real app + viewer do.
     asmdesk::obs_graph_enable(true);
-    // Real monospace font + merged Codicons (13 F3). Paths are compiled in
-    // (ASMTEST_*_TTF); a stripped install degrades honestly to the bitmap font.
+    // Real monospace font + merged Codicons (13 F3), baked DPI-aware at the
+    // window's content scale (20 T5). Paths are compiled in (ASMTEST_*_TTF); a
+    // stripped install degrades honestly to the bitmap font.
     asmdesk::load_fonts(ImGui::GetIO(), ASMTEST_JBM_TTF, ASMTEST_CODICON_TTF,
-                        ASMTEST_FA_TTF);
-    ImGui::StyleColorsDark();
+                        ASMTEST_FA_TTF, 15.0f, settings.content_scale);
+    // The base style + honesty-chrome theme follow the persisted preference (T5).
+    asmdesk::dt_set_light_theme(settings.light_theme);
+    if (settings.light_theme)
+        ImGui::StyleColorsLight();
+    else
+        ImGui::StyleColorsDark();
+    asmdesk::settings_apply_text_scale(settings, ImGui::GetIO());
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
 
     asmdesk::ShellState state;
+    state.settings = settings;
+
+    // Restore the workspace (20 T3): reopen the recordings, replay the active
+    // position + per-pane selection, and bring back recents/perspectives/presets
+    // — a vanished recording is kept in recents with its error (D7). A corrupt
+    // store parses to defaults, so a bad file never strands the app.
+    {
+        asmdesk::WorkspaceState ws;
+        asmdesk::workspace_state_parse(read_text_file(kWorkspaceStore), ws);
+        asmdesk::shell_restore_workspace(state, ws);
+        state.ws_dirty = false; // a restore is not a change to persist back
+    }
+
+    // GLFW callbacks reach ShellState through the user pointer (T3/T5): drag-drop
+    // opens a file, a resize remembers the size, a content-scale change re-bakes.
+    glfwSetWindowUserPointer(window, &state);
+    glfwSetDropCallback(window, drop_cb);
+    glfwSetWindowSizeCallback(window, size_cb);
+    glfwSetWindowContentScaleCallback(window, content_scale_cb);
 
     // The 3D-overview GL host (10-spacetime-3d-overview.md — the integration
     // surfacing pass): a render-to-texture bridge the backend-free shell reaches
@@ -122,6 +222,18 @@ int main() {
 
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
+
+        // A content-scale change (or a user "crisp rebuild") re-bakes the atlas at
+        // the scaled px and recreates the backend texture (20 T5). Done here where
+        // the GL context is current, before NewFrame consumes the atlas.
+        if (g_fonts_dirty) {
+            g_fonts_dirty = false;
+            asmdesk::load_fonts(ImGui::GetIO(), ASMTEST_JBM_TTF,
+                                ASMTEST_CODICON_TTF, ASMTEST_FA_TTF, 15.0f,
+                                state.settings.content_scale);
+            ImGui_ImplOpenGL3_DestroyFontsTexture();
+            ImGui_ImplOpenGL3_CreateFontsTexture();
+        }
 
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
@@ -137,7 +249,30 @@ int main() {
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window);
+
+        // Debounced persistence (20 T3/T5): flush the store only when something
+        // changed (an open/close/save/preset, or a settings edit), not every
+        // frame. The full active-position + per-pane selection is captured on
+        // clean exit below regardless.
+        if (state.ws_dirty) {
+            write_text_file(kWorkspaceStore, asmdesk::workspace_state_serialize(
+                                                 asmdesk::shell_capture_workspace(
+                                                     state)));
+            state.ws_dirty = false;
+        }
+        if (state.settings_dirty) {
+            write_text_file(kSettingsStore,
+                            asmdesk::settings_serialize(state.settings));
+            state.settings_dirty = false;
+        }
     }
+
+    // Clean exit: capture the whole workspace (open set + active position + each
+    // pane's selection as asmtrace-links) and the settings, so the next launch
+    // reopens exactly where this one left off (20 T3/T5).
+    write_text_file(kWorkspaceStore, asmdesk::workspace_state_serialize(
+                                         asmdesk::shell_capture_workspace(state)));
+    write_text_file(kSettingsStore, asmdesk::settings_serialize(state.settings));
 
     // Free the scene's GL objects while the context is still current, then the
     // backends and window.

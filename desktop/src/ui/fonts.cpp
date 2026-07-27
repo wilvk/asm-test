@@ -20,14 +20,26 @@ static bool readable(const char *p) {
     return true;
 }
 
+static unsigned long g_rebuilds = 0;
+
+unsigned long fonts_rebuild_count() { return g_rebuilds; }
+
 bool load_fonts(ImGuiIO &io, const char *jbm_ttf, const char *codicon_ttf,
-                const char *fa_ttf) {
+                const char *fa_ttf, float base_px, float content_scale) {
     // No monospace TTF on disk -> keep the built-in bitmap font (honest degrade).
     if (!readable(jbm_ttf))
         return false;
 
+    // The DPI-aware baked size (T5). Clamp defensively: a nonsensical scale from
+    // a corrupt settings store must never bake a zero- or absurd-px atlas.
+    float px = base_px * content_scale;
+    if (!(px > 4.0f))
+        px = base_px;
+    if (px > 256.0f)
+        px = 256.0f;
+
     io.Fonts->Clear();
-    io.Fonts->AddFontFromFileTTF(jbm_ttf, 15.0f);
+    io.Fonts->AddFontFromFileTTF(jbm_ttf, px);
 
     // Merge each icon range onto the same font so ICON_* macros render inline in
     // labels. Each is optional (absent TTF -> no icons from that set). The range
@@ -37,19 +49,20 @@ bool load_fonts(ImGuiIO &io, const char *jbm_ttf, const char *codicon_ttf,
         ImFontConfig cfg;
         cfg.MergeMode = true;
         cfg.PixelSnapH = true;
-        cfg.GlyphMinAdvanceX = 15.0f; // keep icons monospace-aligned
-        io.Fonts->AddFontFromFileTTF(codicon_ttf, 15.0f, &cfg, ci_range);
+        cfg.GlyphMinAdvanceX = px; // keep icons monospace-aligned
+        io.Fonts->AddFontFromFileTTF(codicon_ttf, px, &cfg, ci_range);
     }
     if (readable(fa_ttf)) { // FontAwesome, for ImGuiNotify toasts (16 T1)
         static const ImWchar fa_range[] = {ICON_MIN_FA, ICON_MAX_FA, 0};
         ImFontConfig cfg;
         cfg.MergeMode = true;
         cfg.PixelSnapH = true;
-        cfg.GlyphMinAdvanceX = 15.0f;
-        io.Fonts->AddFontFromFileTTF(fa_ttf, 15.0f, &cfg, fa_range);
+        cfg.GlyphMinAdvanceX = px;
+        io.Fonts->AddFontFromFileTTF(fa_ttf, px, &cfg, fa_range);
     }
 
     io.Fonts->Build();
+    g_rebuilds++;
     return true;
 }
 
