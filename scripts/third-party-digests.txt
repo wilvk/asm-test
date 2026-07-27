@@ -99,3 +99,6 @@ tarball-sha256  implot         v1.0  sha256:e4a9db64eef7bcc604e2a5ea380af124eb97
 tarball-sha256  imsearch-h     7596ac5  sha256:17c4760320e0adaa566f165eaf07859b7088db683ddec7590bfc073f79c3afaa
 tarball-sha256  imsearch-cpp   7596ac5  sha256:b78e8993509c4c050ce7cdc7aa9ff76f534fdb4b6c195b62099800c9e1f298dd
 tarball-sha256  imsearch-ih    7596ac5  sha256:1fe6dc66e4fabaca3b8601503007dec9f9f73e7a628ec909c447f30b6f7ed721
+# imgui-node-editor (15 T2/T3): graph pan/zoom canvas (MIT). PIN master sha
+# 021aa0ea — v0.9.3 fails on 1.91.9. 4 TUs; imgui_canvas is the T2 de-risk.
+tarball-sha256  imgui-node-editor  021aa0ea  sha256:7b51a14f5e13572b4fe60c9bdba536d7dd164ba8821e1539140f38cd29aaff14
