@@ -19,11 +19,18 @@ ENV DEBIAN_FRONTEND=noninteractive
 # scene's FBO smoke (10-spacetime-3d-overview.md T4) renders offscreen via EGL
 # surfaceless with NO X server. Version-pinned the same way as Dockerfile.cli's
 # libipt-dev: the distro packages resolved against this image's pinned Ubuntu base.
+# libfreetype-dev: the imgui freetype rasteriser (13-foundation-moves.md F3) —
+# the app + viewer build with DESKTOP_FREETYPE=1 below. The fonts themselves load
+# via stb_truetype and need none of this; freetype is the higher-quality path.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libglfw3-dev libgl1-mesa-dev libgl1-mesa-dri libegl1-mesa-dev \
+      libfreetype-dev \
  && rm -rf /var/lib/apt/lists/*
 # Force software rendering for the headless GL smoke (no GPU in CI).
 ENV LIBGL_ALWAYS_SOFTWARE=1
 COPY . .
-CMD sh -c 'make desktop desktop-render desktop-test'
+# DESKTOP_FREETYPE=1: the app + viewer link imgui's freetype rasteriser (F3). The
+# headless desktop-test tree stays stb_truetype-only (no freetype), so it needs
+# no libfreetype at link time — the fonts still load and render there.
+CMD sh -c 'make desktop desktop-render desktop-test DESKTOP_FREETYPE=1'

@@ -166,9 +166,10 @@ void draw_learn_door(LearnState &s,
     ImGui::Separator();
 
     if (!stop->title.empty()) {
-        ImGui::PushFont(nullptr);
+        // (Was PushFont(nullptr) — a placeholder from before any font was loaded.
+        // The default font is now the real JetBrains Mono face (13-F3), so the
+        // title renders on it directly; the no-op push/pop is gone.)
         ImGui::TextWrapped("%s", stop->title.c_str());
-        ImGui::PopFont();
         ImGui::Separator();
     }
     ImGui::TextWrapped("%s", stop->body.c_str());

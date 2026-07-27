@@ -28,6 +28,9 @@ shipped package — are the Pin kits (both versions), Intel SDE, and libdft64
 | `ImGuiFileDialog-LICENSE.txt` | ImGuiFileDialog (pure-ImGui open/save dialogs) — **bundled**: `ImGuiFileDialog.cpp` compiled into the desktop binaries (gui 14-T7) | v0.6.8 ([fetch-imguifiledialog.sh](../scripts/fetch-imguifiledialog.sh)) | MIT |
 | `ImPlot-LICENSE.txt` | ImPlot (plotting chassis; the src×dst hot-edge heatmap) — **bundled**: `implot.cpp`+`implot_items.cpp` compiled into the desktop binaries (gui 15-T1) | v1.0 ([fetch-implot.sh](../scripts/fetch-implot.sh)) | MIT |
 | `ImSearch-LICENSE.txt` | ImSearch (client-side filtering; the Learn-door catalog filter) — **bundled**: `imsearch.cpp` compiled into the desktop binaries (gui 16-T2) | commit 7596ac5 ([fetch-imsearch.sh](../scripts/fetch-imsearch.sh)) | MIT |
+| `JetBrainsMono-OFL.txt` | JetBrains Mono (the desktop UI monospace font) — **bundled**: TTF loaded at runtime by the desktop binaries (gui 13-F3) | v2.304 ([fetch-jetbrainsmono.sh](../scripts/fetch-jetbrainsmono.sh)) | OFL-1.1 |
+| `Codicons-LICENSE.txt` | VS Code Codicons (debugger icon font — step/watch/breakpoint) — **bundled**: TTF loaded at runtime and merged into the desktop font (gui 13-F3) | 0.0.35 ([fetch-codicons.sh](../scripts/fetch-codicons.sh)) | CC-BY-4.0 |
+| `IconFontCppHeaders-LICENSE.txt` | IconFontCppHeaders `IconsCodicons.h` (the `ICON_CI_*` macros + merge range) — **bundled**: header compiled into the desktop binaries (gui 13-F3) | commit 210b5a3 ([fetch-iconfontcppheaders.sh](../scripts/fetch-iconfontcppheaders.sh)) | Zlib |
 
 The DynamoRIO text is captured on first fetch by
 [fetch-dynamorio.sh](../scripts/fetch-dynamorio.sh) (the pinned tarball's own

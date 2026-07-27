@@ -11,6 +11,7 @@
 #include "imgui.h"
 #include "implot.h"   // the plotting chassis context (15 T1)
 #include "imsearch.h" // the client-side filtering context (16 T2)
+#include "ui/fonts.h"  // real monospace font + Codicons (13 F3)
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
@@ -18,6 +19,16 @@
 
 #include "ui/gl_scene_host.h"
 #include "ui/shell.h"
+
+// The vendored font paths are injected by mk/desktop.mk (DESKTOP_FONT_DEFS);
+// default to empty so a build without them still compiles (load_fonts then
+// degrades to the built-in bitmap font).
+#ifndef ASMTEST_JBM_TTF
+#define ASMTEST_JBM_TTF ""
+#endif
+#ifndef ASMTEST_CODICON_TTF
+#define ASMTEST_CODICON_TTF ""
+#endif
 
 static void glfw_error(int code, const char *desc) {
     std::fprintf(stderr, "glfw error %d: %s\n", code, desc);
@@ -80,6 +91,9 @@ int main() {
     // guarded on ImPlot::GetCurrentContext() and degrades to text there.
     ImPlot::CreateContext();
     ImSearch::CreateContext(); // client-side filtering (16 T2), app-only like ImPlot
+    // Real monospace font + merged Codicons (13 F3). Paths are compiled in
+    // (ASMTEST_*_TTF); a stripped install degrades honestly to the bitmap font.
+    asmdesk::load_fonts(ImGui::GetIO(), ASMTEST_JBM_TTF, ASMTEST_CODICON_TTF);
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);

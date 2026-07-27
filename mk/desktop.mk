@@ -164,6 +164,32 @@ $(BUILD)/desktop/%/addon/imsearch.o: $(IMSEARCH_HOME)/imsearch.cpp | $(IMSEARCH_
 	@mkdir -p $(@D)
 	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
 
+# Fonts + icons (13 F3): JetBrains Mono + Codicons TTFs (loaded at RUNTIME by
+# ui/fonts.cpp via stb_truetype — so they work on every lane, no freetype needed)
+# + IconFontCppHeaders' IconsCodicons.h (compile-time, the ICON_CI_* macros +
+# merge range). Freetype itself is a separate, Docker-only rasteriser gate below.
+JBM_VERSION      ?= v2.304
+JBM_HOME         ?= $(BUILD)/addons/jetbrainsmono-$(JBM_VERSION)
+CODICON_VERSION  ?= 0.0.35
+CODICON_HOME     ?= $(BUILD)/addons/codicons-$(CODICON_VERSION)
+ICONFONT_VERSION ?= 210b5a3
+ICONFONT_HOME    ?= $(BUILD)/addons/iconfontcppheaders-$(ICONFONT_VERSION)
+$(JBM_HOME)/JetBrainsMono-Regular.ttf: scripts/fetch-jetbrainsmono.sh scripts/third-party-digests.txt
+	sh scripts/fetch-jetbrainsmono.sh >/dev/null
+$(CODICON_HOME)/codicon.ttf: scripts/fetch-codicons.sh scripts/third-party-digests.txt
+	sh scripts/fetch-codicons.sh >/dev/null
+$(ICONFONT_HOME)/IconsCodicons.h: scripts/fetch-iconfontcppheaders.sh scripts/third-party-digests.txt
+	sh scripts/fetch-iconfontcppheaders.sh >/dev/null
+DESKTOP_ADDON_INCLUDES += -I$(ICONFONT_HOME)
+# The runtime TTF paths, injected as defines into the font loader's users.
+DESKTOP_FONT_DEFS = -DASMTEST_JBM_TTF='"$(JBM_HOME)/JetBrainsMono-Regular.ttf"' \
+                    -DASMTEST_CODICON_TTF='"$(CODICON_HOME)/codicon.ttf"'
+# fonts.cpp #includes IconsCodicons.h; main.o carries the TTF-path defines and
+# calls load_fonts. Both depend on their fetched inputs so a clean tree pulls them.
+$(BUILD)/desktop/app/ui/fonts.o $(BUILD)/desktop/render/ui/fonts.o $(BUILD)/desktop/test/ui/fonts.o: | $(ICONFONT_HOME)/IconsCodicons.h
+$(BUILD)/desktop/app/src/main.o $(BUILD)/desktop/render/src/main.o: DESKTOP_CXXFLAGS += $(DESKTOP_FONT_DEFS)
+$(BUILD)/desktop/app/src/main.o $(BUILD)/desktop/render/src/main.o: | $(JBM_HOME)/JetBrainsMono-Regular.ttf $(CODICON_HOME)/codicon.ttf
+
 # --- source basenames --------------------------------------------------------
 DESKTOP_IMGUI_CORE := imgui imgui_draw imgui_tables imgui_widgets
 DESKTOP_IMGUI_BACK := imgui_impl_glfw imgui_impl_opengl3
@@ -219,9 +245,28 @@ $$(BUILD)/desktop/$(1)/t/%.o:   desktop/test/%.cpp | $$(IMGUI_HOME)/imgui.cpp $$
 	@mkdir -p $$(@D)
 	$$(CXX) $$(DESKTOP_CXXFLAGS) $(2) $$(DESKTOP_TEST_EXTRA) -c $$< -o $$@
 endef
-$(eval $(call desktop_rules,app,))
-$(eval $(call desktop_rules,render,-DASMTEST_DESKTOP_RENDER_ONLY=1))
+# Freetype rasteriser (13-foundation-moves.md F3): OFF by default. The fonts load
+# via stb_truetype regardless; DESKTOP_FREETYPE=1 (the Docker desktop lane, which
+# has libfreetype-dev) links imgui's freetype rasteriser for higher quality. It
+# is scoped to the app + viewer ONLY — the null-backend test tree stays
+# stb_truetype-only, so `make desktop-test` needs no libfreetype on any host.
+DESKTOP_FREETYPE ?= 0
+FREETYPE_CXX  :=
+FREETYPE_LIBS :=
+ifeq ($(DESKTOP_FREETYPE),1)
+  FREETYPE_CXX  := -DIMGUI_ENABLE_FREETYPE $(shell pkg-config --cflags freetype2 2>/dev/null)
+  FREETYPE_LIBS := $(shell pkg-config --libs freetype2 2>/dev/null || echo -lfreetype)
+endif
+$(eval $(call desktop_rules,app,$(FREETYPE_CXX)))
+$(eval $(call desktop_rules,render,-DASMTEST_DESKTOP_RENDER_ONLY=1 $(FREETYPE_CXX)))
 $(eval $(call desktop_rules,test,))
+
+# imgui_freetype.o (from misc/freetype/) — the one extra imgui TU freetype needs,
+# built with the freetype cflags and linked into the app + viewer ONLY (added to
+# their object sets below when DESKTOP_FREETYPE=1).
+$(BUILD)/desktop/app/ig/imgui_freetype.o $(BUILD)/desktop/render/ig/imgui_freetype.o: $(BUILD)/desktop/%/ig/imgui_freetype.o: $(IMGUI_HOME)/misc/freetype/imgui_freetype.cpp | $(IMGUI_HOME)/imgui.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(DESKTOP_CXXFLAGS) $(FREETYPE_CXX) -c $< -o $@
 
 # The test fixtures + golden corpus reach their tests through compile defines, so
 # the tests need no argv wiring (and run identically host + docker).
@@ -319,6 +364,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/src/author_vm.o \
   $(BUILD)/desktop/$(1)/ui/author_door.o \
   $(BUILD)/desktop/$(1)/ui/shell.o $(BUILD)/desktop/$(1)/ui/layout.o \
+  $(BUILD)/desktop/$(1)/ui/fonts.o \
   $(BUILD)/desktop/$(1)/ui/learn_door.o \
   $(BUILD)/desktop/$(1)/addon/imsearch.o \
   $(BUILD)/desktop/$(1)/ui/capability_panel.o \
@@ -332,6 +378,11 @@ desktop_app_objs = \
 DESKTOP_APP_OBJ    := $(call desktop_app_objs,app) \
                       $(DESKTOP_LOOM_APP:%=$(BUILD)/desktop/app/lo/%.o)
 DESKTOP_RENDER_OBJ := $(call desktop_app_objs,render)
+# Freetype rasteriser TU, app + viewer only, when DESKTOP_FREETYPE=1 (F3).
+ifeq ($(DESKTOP_FREETYPE),1)
+DESKTOP_APP_OBJ    += $(BUILD)/desktop/app/ig/imgui_freetype.o
+DESKTOP_RENDER_OBJ += $(BUILD)/desktop/render/ig/imgui_freetype.o
+endif
 # The Author-tier engine objects (emu/assemble link unicorn/keystone, disasm
 # links capstone) — they carry the GPL engine linkage that makes the app GPL-2.0
 # as a whole (D4) and are self-contained (dataflow.o is the pure L0/L1/L2 sink,
@@ -554,11 +605,11 @@ $(BUILD)/asmtest-desktop: $(DESKTOP_APP_OBJ) $(DESKTOP_ENGINE_OBJ) \
                           $(DESKTOP_CAP_OBJ)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) \
 	  $(CAPSTONE_LIBS) $(LIBIPT_LIBS) $(OPENCSD_LIBS) $(LINK_LIBBPF) \
-	  $(GLFW_LIBS) $(GL_LIBS) -ldl -lpthread -o $@
+	  $(GLFW_LIBS) $(GL_LIBS) $(FREETYPE_LIBS) -ldl -lpthread -o $@
 	@echo "built $@ — the full app (GPL-2.0 as a whole; links the engines)"
 
 $(BUILD)/asmtest-viewer: $(DESKTOP_RENDER_OBJ)
-	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(GLFW_LIBS) $(GL_LIBS) -o $@
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(GLFW_LIBS) $(GL_LIBS) $(FREETYPE_LIBS) -o $@
 	@echo "built $@ — the render-only viewer (engine-free; permissively distributable)"
 
 ifeq ($(strip $(DESKTOP_MISSING)$(DESKTOP_ENGINE_MISSING)),)
@@ -629,6 +680,7 @@ desktop-setup-render:
 DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_shell $(BUILD)/desktop_test_golden \
                  $(BUILD)/desktop_test_layout \
+                 $(BUILD)/desktop_test_fonts \
                  $(BUILD)/desktop_test_slice $(BUILD)/desktop_test_nav \
                  $(BUILD)/desktop_test_projection \
                  $(BUILD)/desktop_test_terrain \
@@ -939,6 +991,16 @@ $(BUILD)/desktop_test_nav: $(BUILD)/desktop/test/t/test_nav.o \
 # nothing else — the manager is self-contained (DockBuilder only).
 $(BUILD)/desktop_test_layout: $(BUILD)/desktop/test/t/test_layout.o \
     $(BUILD)/desktop/test/ui/layout.o $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The font loader (13-foundation-moves.md F3): fonts.o + imgui core. Loads the
+# real TTFs via stb_truetype, so it runs on any lane (freetype is a Docker-only
+# rasteriser gate, not needed here). Carries the TTF-path defines + IconsCodicons.h.
+$(BUILD)/desktop/test/t/test_fonts.o: DESKTOP_CXXFLAGS += $(DESKTOP_FONT_DEFS)
+$(BUILD)/desktop/test/t/test_fonts.o: | $(ICONFONT_HOME)/IconsCodicons.h \
+    $(JBM_HOME)/JetBrainsMono-Regular.ttf $(CODICON_HOME)/codicon.ttf
+$(BUILD)/desktop_test_fonts: $(BUILD)/desktop/test/t/test_fonts.o \
+    $(BUILD)/desktop/test/ui/fonts.o $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 $(BUILD)/desktop_test_diff: $(BUILD)/desktop/test/t/test_diff.o \

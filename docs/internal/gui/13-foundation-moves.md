@@ -247,6 +247,25 @@ documented as the null-backend tier.
 
 ### T4 — Real fonts: freetype + JetBrains Mono + Codicons  (M, depends on: T1; F4 decision)
 
+> **Implemented 2026-07-27 — fonts host-verified (52 suites), freetype gated to
+> Docker.** Vendored **JetBrains Mono v2.304** (OFL), **Codicons 0.0.35**
+> (CC-BY-4.0), and **IconFontCppHeaders `IconsCodicons.h`** (`210b5a3`, zlib) via
+> three `fetch-*.sh` wrappers (digests pinned, licenses captured + README rows).
+> **Key realization**: the fonts load via **stb_truetype**, so they need no
+> freetype — `desktop/src/ui/fonts.cpp` (`load_fonts`) loads JetBrains Mono as the
+> default face and merges the Codicons `[ICON_MIN_CI, ICON_MAX_CI]` range, called
+> from `main.cpp` with compiled-in paths (`ASMTEST_*_TTF`). **Graceful**: a
+> missing TTF returns false and keeps the built-in bitmap (honest degrade, tested).
+> `test_fonts` verifies the atlas builds + a Codicons glyph is present + the
+> degrade — all **on the host** (no freetype). The `PushFont(nullptr)` placeholder
+> (`learn_door.cpp`) is gone — the default is now the real face. **Freetype** (the
+> F3 rasteriser) is the only Docker-gated part: `DESKTOP_FREETYPE=1` (set by
+> `Dockerfile.desktop`, which adds `libfreetype-dev`) links imgui's
+> `imgui_freetype` into the **app + viewer only** — the null-backend test tree
+> stays stb-only, so `make desktop-test` needs no libfreetype on any host.
+> Verified: host `desktop-test` + `desktop`/`desktop-render` build green (stb);
+> `make docker-desktop` exercises the freetype path.
+
 **Goal.** Replace the 13 px ProggyClean bitmap with a **freetype-rasterised
 monospace TTF** for all hex/register/disasm surfaces, and **merge a debugger
 icon font** (Codicons: step-into/over, watch, breakpoint) so the
