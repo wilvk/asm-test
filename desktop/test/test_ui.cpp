@@ -21,8 +21,10 @@
 #include "imgui_te_engine.h"
 #include "imgui_te_exporters.h" // ImGuiTestEngineExportFormat_JUnitXml
 
-#include "nav.h"       // dt_view / dt_link — asserted by the keymap tests
-#include "ui/shell.h"  // ShellState, draw_shell, shell_open, shell_a (17-T1)
+#include "nav.h"                 // dt_view / dt_link — asserted by the keymap tests
+#include "ui/shell.h"            // ShellState, draw_shell, shell_open, shell_a (17-T1)
+#include "views/observer_draw.h" // draw_obs_syscalls — the reveal-all flow test
+#include "views/syscalls.h"      // SyscallView / SyscallRow
 
 #ifndef ASMTEST_GOLDEN_DIR
 #error "ASMTEST_GOLDEN_DIR must be defined by the build (mk/desktop.mk)"
@@ -208,11 +210,53 @@ static void register_keymap_tests(ImGuiTestEngine *engine) {
     };
 }
 
-// register_tests — every interaction test hangs off here. T1 seeds it with a
-// harness self-check; the keymap tests (T1 step 5) and the door/flow tests
-// (step 4) extend this same function.
+// The syscall view under test for the reveal-all flow (its reveal state lives
+// in the view, so it persists across frames — must outlive the GuiFunc).
+static asmdesk::SyscallView g_sys;
+static asmdesk::ObserverState g_sys_os;
+static void syscalls_gui(ImGuiTestContext *) {
+    ImGui::Begin("SyscallFlow", nullptr, ImGuiWindowFlags_NoSavedSettings);
+    asmdesk::draw_obs_syscalls(g_sys, g_sys_os);
+    ImGui::End();
+}
+
+// Interaction flow tests (17-T1 step 4): the multi-step confirmations the
+// golden-text tests cannot reach, driven by real clicks. The syscall reveal-all
+// is the sharpest example — a DESTRUCTIVE-feeling action (unredact every
+// payload) deliberately gated behind a two-step arm/confirm (D7), which only a
+// click-driver can exercise end to end.
+static void register_flow_tests(ImGuiTestEngine *engine) {
+    ImGuiTest *t = IM_REGISTER_TEST(engine, "flow", "syscall_reveal_all_two_step");
+    t->GuiFunc = syscalls_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        using namespace asmdesk;
+        // A view with one payload-bearing row, redacted by default.
+        g_sys = SyscallView{};
+        SyscallRow r;
+        r.line = "openat(AT_FDCWD, <path>) = 3";
+        r.has_payload = true;
+        r.payload = "/etc/shadow";
+        g_sys.rows.push_back(r);
+        g_sys.revealed.assign(1, 0);
+        ctx->SetRef("SyscallFlow");
+        ctx->Yield();
+        // First press only ARMS (never reveals on a single click).
+        ctx->ItemClick("Reveal every payload...");
+        ctx->Yield();
+        IM_CHECK(g_sys.reveal_all_armed);
+        IM_CHECK(!g_sys.reveal_all);
+        // The confirm performs it.
+        ctx->ItemClick("Yes, reveal them");
+        ctx->Yield();
+        IM_CHECK(g_sys.reveal_all);
+    };
+}
+
+// register_tests — every interaction test hangs off here: a harness self-check,
+// the keymap enforcement (T1 step 5), and the interaction-flow tests (step 4).
 static void register_tests(ImGuiTestEngine *engine) {
     register_keymap_tests(engine);
+    register_flow_tests(engine);
 
     ImGuiTest *t = IM_REGISTER_TEST(engine, "harness", "button_click");
     t->GuiFunc = [](ImGuiTestContext *) {

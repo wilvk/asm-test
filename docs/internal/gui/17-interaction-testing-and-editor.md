@@ -84,10 +84,24 @@ Two larger, higher-leverage adoptions:
 > (a keypress cannot select an ImGui tab directly). `[`/`]` stay view-local
 > (scrubber/slice/abixray). Two clean-tree ordering hazards the docker build
 > caught and fixed: the engine sources are a grouped (`&:`) fetch output, and
-> `test_ui.o` carries the fetch as an order-only prereq. **Remaining T1 (step
-> 4/6)**: the door/syscall-reveal/patch-bay/scrubber-drag flow tests, and
-> InvisibleButton hit-targets for the hand-rolled Loom/slice draw-list views —
-> a follow-on; the keymap enforcement (the doc's stated "real payoff") is done.
+> `test_ui.o` carries the fetch as an order-only prereq.
+>
+> **Flow tests (step 4): the sharpest one landed 2026-07-27** — the syscall
+> **reveal-all two-step confirm** (`flow/syscall_reveal_all_two_step` in
+> `test_ui.cpp`, driving `draw_obs_syscalls` through real `ItemClick`s): the
+> first click only ARMS, the confirm performs it — a destructive-feeling
+> unredact gated behind two steps (D7), exactly the multi-step interaction the
+> golden tests cannot reach. `make desktop-ui-test` is now 10/10 (8 keymap + the
+> harness self-check + this flow).
+> **Follow-on (does not block the payoff)**: the other listed flows are low
+> unique value for an engine click-test — the door-open buttons are trivial
+> `bool` sets, and the patch-bay swap decision (`inspect_arm_swap`/
+> `inspect_confirm_swap`) and the scrubber step (`dt_scrubber_prev`/`next` plus
+> the `[`/`]` keys) are ALREADY pure-unit-tested in `test_inspect` /
+> `test_scrubber`, so an engine test would only re-cover them. InvisibleButton
+> hit-targets for the hand-rolled Loom/slice draw-list views (step 6) also
+> remain a follow-on. The keymap enforcement — the doc's stated "real payoff" —
+> is done.
 
 **Goal.** Stand up the first-party test engine in a **test-only, fetch-at-build,
 never-vendored** posture, write interaction tests for the untested flows, and —

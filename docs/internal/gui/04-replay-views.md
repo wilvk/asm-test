@@ -395,8 +395,11 @@ fixture asserts the "cones incomplete" banner.
 lower bounds.
 
 **Done when.**
-- `make desktop-test` runs `test_slice_view` green, dumps byte-stable; full app:
-  canvas→timeline→slice click-through works end to end (manual smoke, noted in the PR).
+- `make desktop-test` runs `test_slice_view` green, dumps byte-stable; the
+  canvas→timeline→slice click-through is now an **automated** interaction test —
+  the `1`/`2`/`3`/`4` view-switch keymap tests in `make desktop-ui-test`
+  (imgui_test_engine) drive exactly that path headlessly (17-T1), so it is no
+  longer a manual smoke.
 
 ### T6 — Diff library  (M, depends on: none)
 
@@ -488,7 +491,9 @@ states) and a timeline post-divergence dump showing the dashed treatment.
 
 **Done when.**
 - `make desktop-test` green across `test_diff_view` and the extended T3/T4 golden dumps;
-  opening two same-routine goldens and pressing `d` shows deltas (manual smoke).
+  pressing `d` to attach a second recording (and `x`/`n`/`p` over the pair) is now
+  covered by the `keymap/diff_d_x` and `keymap/divergence_np` interaction tests in
+  `make desktop-ui-test` (17-T1) — no longer a manual smoke.
 
 ### T8 — Dishonesty fixtures + suite consolidation  (S, depends on: T3, T4, T5, T6, T7)
 

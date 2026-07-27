@@ -234,7 +234,10 @@ zoomed-in on the band → byte rows + chips; two identical calls → byte-identi
 N/M; fade-out count == alive-at-end spans; badge iff `isolated_guest`; glyph on entry spans.
 
 **Docs.** none. **Done when.** `make desktop-test` passes plan + chrome tests with the copy
-strings above verbatim; `make desktop-render` builds and opens a fixture (manual smoke).
+strings above verbatim; the shell's interaction layer (keymap, view switching, the
+Loom tab) is now driven headlessly by `make desktop-ui-test` (imgui_test_engine,
+17-T1). The only residual manual step is `make desktop-render` opening a fixture in
+a real window — that needs a display and so cannot be headless.
 
 ### T3 — Selection = lineage, generation walk, biography, zeroization audit  (M, depends on: T1, 04)
 
