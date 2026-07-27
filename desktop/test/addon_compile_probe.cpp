@@ -44,6 +44,9 @@
 #ifdef ASMDESK_HAVE_IMSEARCH
 #include "imsearch.h"
 #endif
+#ifdef ASMDESK_HAVE_ICTEDIT
+#include "TextEditor.h"
+#endif
 
 // A public-API addon (no imgui_internal.h) needs no gate — imgui_memory_editor
 // and ImPlot compile against the stable public API and are proven by the app's

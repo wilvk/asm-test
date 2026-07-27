@@ -32,6 +32,7 @@ shipped package — are the Pin kits (both versions), Intel SDE, and libdft64
 | `Codicons-LICENSE.txt` | VS Code Codicons (debugger icon font — step/watch/breakpoint) — **bundled**: TTF loaded at runtime and merged into the desktop font (gui 13-F3) | 0.0.35 ([fetch-codicons.sh](../scripts/fetch-codicons.sh)) | CC-BY-4.0 |
 | `IconFontCppHeaders-LICENSE.txt` | IconFontCppHeaders `IconsCodicons.h` (the `ICON_CI_*` macros + merge range) — **bundled**: header compiled into the desktop binaries (gui 13-F3) | commit 210b5a3 ([fetch-iconfontcppheaders.sh](../scripts/fetch-iconfontcppheaders.sh)) | Zlib |
 | `imgui-node-editor-LICENSE.txt` | imgui-node-editor — **bundled**: `imgui_canvas.cpp` (slice-explorer pan/zoom, gui 15-T2) compiled into the desktop binaries; the full node editor (15-T3) reuses this pin | master 021aa0ea ([fetch-nodeeditor.sh](../scripts/fetch-nodeeditor.sh)) | MIT |
+| `ImGuiColorTextEdit-LICENSE.txt` | goossens ImGuiColorTextEdit (the Author-door code editor) — **bundled**: `TextEditor.cpp` compiled into the desktop binaries (gui 17-T2), with a 2-line `IMGUI_VERSION_NUM` guard applied by the fetch. (Its bundled `dtl.h`, BSD-3, rides with the deferred `TextDiff.cpp`.) | master f67e5bc ([fetch-ictedit.sh](../scripts/fetch-ictedit.sh)) | MIT |
 
 The DynamoRIO text is captured on first fetch by
 [fetch-dynamorio.sh](../scripts/fetch-dynamorio.sh) (the pinned tarball's own

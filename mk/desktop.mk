@@ -185,6 +185,21 @@ $(BUILD)/desktop/%/addon/imgui_canvas.o: $(NODEEDITOR_HOME)/imgui_canvas.cpp | $
 	@mkdir -p $(@D)
 	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
 
+# goossens ImGuiColorTextEdit (17 T2): the Author-door code editor. ONE compiled
+# TU now (TextEditor.cpp); TextDiff.cpp is the diff-view follow-on (fetched, not
+# built yet). fetch-ictedit.sh applies the verified 2-line 1.92 guard. Uses
+# imgui_internal.h -> compile-probe. Its object rides author_door.o's link sites.
+ICTEDIT_VERSION ?= f67e5bc
+ICTEDIT_HOME    ?= $(BUILD)/addons/ictedit-$(ICTEDIT_VERSION)
+$(ICTEDIT_HOME)/TextEditor.cpp $(ICTEDIT_HOME)/TextEditor.h &: scripts/fetch-ictedit.sh scripts/third-party-digests.txt
+	sh scripts/fetch-ictedit.sh >/dev/null
+DESKTOP_ADDON_INCLUDES += -I$(ICTEDIT_HOME)
+ADDON_PROBE_FLAGS += -DASMDESK_HAVE_ICTEDIT -I$(ICTEDIT_HOME)
+ADDON_PROBE_DEPS  += $(ICTEDIT_HOME)/TextEditor.h
+$(BUILD)/desktop/%/addon/TextEditor.o: $(ICTEDIT_HOME)/TextEditor.cpp | $(ICTEDIT_HOME)/TextEditor.h $(IMGUI_HOME)/imgui.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
+
 # Fonts + icons (13 F3): JetBrains Mono + Codicons TTFs (loaded at RUNTIME by
 # ui/fonts.cpp via stb_truetype — so they work on every lane, no freetype needed)
 # + IconFontCppHeaders' IconsCodicons.h (compile-time, the ICON_CI_* macros +
@@ -223,6 +238,7 @@ $(BUILD)/desktop/app/ui/learn_door.o $(BUILD)/desktop/render/ui/learn_door.o $(B
 $(BUILD)/desktop/app/ui/shell.o $(BUILD)/desktop/render/ui/shell.o $(BUILD)/desktop/test/ui/shell.o: | $(IFD_HOME)/ImGuiFileDialog.h
 $(BUILD)/desktop/app/ui/inspect_door.o $(BUILD)/desktop/render/ui/inspect_door.o $(BUILD)/desktop/test/ui/inspect_door.o: | $(IFD_HOME)/ImGuiFileDialog.h
 $(BUILD)/desktop/app/vw/slice_view_draw.o $(BUILD)/desktop/render/vw/slice_view_draw.o $(BUILD)/desktop/test/vw/slice_view_draw.o: | $(NODEEDITOR_HOME)/imgui_canvas.h
+$(BUILD)/desktop/app/ui/author_door.o $(BUILD)/desktop/render/ui/author_door.o $(BUILD)/desktop/test/ui/author_door.o: | $(ICTEDIT_HOME)/TextEditor.h
 
 # --- source basenames --------------------------------------------------------
 DESKTOP_IMGUI_CORE := imgui imgui_draw imgui_tables imgui_widgets
@@ -398,6 +414,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/src/walkthrough.o $(BUILD)/desktop/$(1)/src/capview.o \
   $(BUILD)/desktop/$(1)/src/author_vm.o \
   $(BUILD)/desktop/$(1)/ui/author_door.o \
+  $(BUILD)/desktop/$(1)/addon/TextEditor.o \
   $(BUILD)/desktop/$(1)/ui/shell.o $(BUILD)/desktop/$(1)/ui/layout.o \
   $(BUILD)/desktop/$(1)/ui/fonts.o \
   $(BUILD)/desktop/$(1)/ui/learn_door.o \
@@ -716,6 +733,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_shell $(BUILD)/desktop_test_golden \
                  $(BUILD)/desktop_test_layout \
                  $(BUILD)/desktop_test_fonts \
+                 $(BUILD)/desktop_test_ictedit \
                  $(BUILD)/desktop_test_slice_view_draw \
                  $(BUILD)/desktop_test_slice $(BUILD)/desktop_test_nav \
                  $(BUILD)/desktop_test_projection \
@@ -1064,6 +1082,13 @@ $(BUILD)/desktop_test_slice_view_draw: $(BUILD)/desktop/test/t/test_slice_view_d
     $(BUILD)/desktop/test/addon/imgui_canvas.o $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# The Author-door code editor (17 T2): TextEditor.o + imgui core. The test needs
+# TextEditor.h fetched (+ the guard applied by fetch-ictedit.sh).
+$(BUILD)/desktop/test/t/test_ictedit.o: | $(ICTEDIT_HOME)/TextEditor.h
+$(BUILD)/desktop_test_ictedit: $(BUILD)/desktop/test/t/test_ictedit.o \
+    $(BUILD)/desktop/test/addon/TextEditor.o $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 # The register time-travel scrubber (09-teaching-producers.md T3). The PURE
 # builder links scrubber.o + stepindex.o + the doc model and NOTHING else — no
 # ImGui, no engine — the same engine-free closure proof test_timeline makes, now
@@ -1146,7 +1171,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/src/walkthrough.o \
     $(BUILD)/desktop/test/src/capview.o \
     $(BUILD)/desktop/test/src/author_vm.o \
-    $(BUILD)/desktop/test/ui/author_door.o $(DESKTOP_TEST_DOC) \
+    $(BUILD)/desktop/test/ui/author_door.o $(BUILD)/desktop/test/addon/TextEditor.o $(DESKTOP_TEST_DOC) \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_DA) \
     $(BUILD)/desktop/test/an/stepindex.o \
     $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \

@@ -10,6 +10,7 @@
 // fault card and the arch gate lives in author_vm.h, which test_author_vm pins
 // on every host.
 #include "imgui.h"
+#include "TextEditor.h" // real code editor for the source (17 T2)
 
 #include <cstring>
 
@@ -126,8 +127,22 @@ void draw_author_door(AuthorState &s) {
         ImGui::TextDisabled("(%s)", arow->note);
     }
 
-    ImGui::InputTextMultiline("##src", s.source.data(), s.source.capacity(),
-                              ImVec2(-1, 200));
+    // A real code editor (17 T2) — replaces InputTextMultiline over
+    // s.source.data()/capacity(), whose fixed capacity silently TRUNCATED a long
+    // source (doors.h). The editor owns the text after the first load; GetText()
+    // returns the full std::string, so nothing is clipped, and undo/redo +
+    // find/replace (Ctrl+F) come for free. (An x86/ARM asm language definition
+    // for syntax highlighting, and error markers anchored to the assembler's
+    // loud-drop line, are follow-ons — the v1 asm_result carries no line, so the
+    // verbatim refusal stays a banner below.)
+    static TextEditor editor;
+    static bool editor_loaded = false;
+    if (!editor_loaded) {
+        editor_loaded = true;
+        editor.SetText(s.source);
+    }
+    editor.Render("##src", ImVec2(-1, 200));
+    s.source = editor.GetText();
     ImGui::SliderInt("integer args", &s.nargs, 0, 6);
     for (int i = 0; i < s.nargs; i++) {
         ImGui::PushID(i);

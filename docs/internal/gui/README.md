@@ -123,7 +123,7 @@ per the doc-11 row above.
 | [14-quick-wins.md](14-quick-wins.md) | diff "go" bug fix; shared theme header; ProgressBar; imgui_memory_editor; ImZoomSlider; ImGuiTextSelect (v1.1.6+utfcpp); ImGuiFileDialog (v0.6.8) (**Track Q**) | 7 | 12 (T4–T7); 04/05/08 | ☑ 7/7 |
 | [15-plotting-and-graph-nav.md](15-plotting-and-graph-nav.md) | ImPlot v1.0 chassis (perf_history/hotedges/timeline/watch); imgui_canvas de-risk; imgui-node-editor for topo/tree | 3 | 12, 13 (F1/F2) | ◐ (T1 plots + T2 canvas) |
 | [16-live-feedback-and-filtering.md](16-live-feedback-and-filtering.md) | ImGuiNotify toasts (live-session events); ImSearch client-side filtering (**both ∅-unverified in doc 11 — compile-check at pin**) | 2 | 12; 13 F3 (Notify) | ◐ (T2 done; T1 needs fonts) |
-| [17-interaction-testing-and-editor.md](17-interaction-testing-and-editor.md) | imgui_test_engine (interaction tests + keymap enforcement, test-lane-only); goossens ImGuiColorTextEdit + TextDiff (Author editor, disasm gutter, side-by-side diff) (**Bigger bets**) | 2 | 12 | ☐ 0/2 |
+| [17-interaction-testing-and-editor.md](17-interaction-testing-and-editor.md) | imgui_test_engine (interaction tests + keymap enforcement, test-lane-only); goossens ImGuiColorTextEdit + TextDiff (Author editor, disasm gutter, side-by-side diff) (**Bigger bets**) | 2 | 12 | ◐ (T2 editor; T1 test-engine pending) |
 
 22 tasks across docs 12–17. Sequencing (doc 11's tracks): **12 (Track G) first**,
 then Track Q (14) and Track F (13) in parallel, then the plotting/graph chassis

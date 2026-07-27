@@ -121,6 +121,24 @@ tag-bump-with-repin rule is documented.
 
 ### T2 — goossens ImGuiColorTextEdit + TextDiff: real editor, disasm gutter, side-by-side diff  (M, depends on: 12)
 
+> **Implemented 2026-07-27 (Author editor) — green (54 host suites + clean-tree
+> checked).** goossens ImGuiColorTextEdit vendored (master `f67e5bc`, MIT +
+> bundled dtl BSD-3) via `scripts/fetch-ictedit.sh`, which **applies the
+> compile-verified 2-line guard** (`#if IMGUI_VERSION_NUM >= 19200` around the
+> `PlatformImeData.WantTextInput`/`.ViewportId` SDL3-IME assignments) — doc-11's
+> mitigation, reproduced: unguarded fails on our 1.91.9 pin, guarded compiles
+> clean (and `TextDiff.cpp` unmodified). In the compile-probe (`imgui_internal.h`).
+> `ui/author_door.cpp` now uses a `TextEditor` (`SetText`/`Render`/`GetText`)
+> instead of `InputTextMultiline` over `s.source.data()/capacity()` — **the fixed
+> 64 KB buffer that silently truncated is gone** (undo/redo + find/replace come
+> free). `test_ictedit` pins the no-truncation win directly (an ~80 KB source
+> round-trips; read-only toggles). `TextEditor.o` rides `author_door.o`'s link
+> sites (app/viewer + shell tests). **Follow-ons** (noted, not blocking): an
+> x86/ARM asm **language definition** (syntax highlight) and **error markers
+> anchored to the loud-drop line** — the v1 `asm_result` carries no line, so the
+> verbatim refusal stays a banner; and `TextDiff` for `diff_view` side-by-side
+> (its `dtl.h` is fetched, not yet compiled).
+
 **Goal.** Replace the Author door's `InputTextMultiline` hack with a real code
 editor, give `disasm` an address/bytes gutter + current-PC highlight, and upgrade
 `diff_view` with side-by-side text — with assembler errors anchored where they

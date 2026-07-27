@@ -102,6 +102,9 @@ tarball-sha256  imsearch-ih    7596ac5  sha256:1fe6dc66e4fabaca3b8601503007dec9f
 # imgui-node-editor (15 T2/T3): graph pan/zoom canvas (MIT). PIN master sha
 # 021aa0ea — v0.9.3 fails on 1.91.9. 4 TUs; imgui_canvas is the T2 de-risk.
 tarball-sha256  imgui-node-editor  021aa0ea  sha256:7b51a14f5e13572b4fe60c9bdba536d7dd164ba8821e1539140f38cd29aaff14
+# goossens ImGuiColorTextEdit + TextDiff (17 T2): real editor (MIT + bundled dtl
+# BSD-3). master f67e5bc; the fetch applies a 2-line #if IMGUI_VERSION_NUM guard.
+tarball-sha256  ictedit        f67e5bc  sha256:3ad1ec369c94730817a4be608c45c417a43f4f4e6bf3eafe4f3e5e55f21389d0
 # Fonts + icons (13 F3): JetBrains Mono (OFL), Codicons (CC-BY-4.0), and the
 # IconFontCppHeaders IconsCodicons.h (zlib). Loaded via stb_truetype (no freetype).
 tarball-sha256  jetbrainsmono      v2.304  sha256:a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f
