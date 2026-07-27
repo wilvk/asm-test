@@ -12,6 +12,8 @@
 #include <functional>
 
 #include "nav.h"
+#include "ui/honesty.h" // HonestyTier — the ONE graded honesty vocabulary (23 T1)
+#include "ui/progress.h" // LongOp — the uniform busy signal (23 T4)
 #include "views/canvas.h"
 #include "views/diff_view.h"
 #include "views/scrubber.h"
@@ -21,10 +23,40 @@
 
 namespace asmdesk {
 
-// A refusal or truncation placard. Both are drawn in the warn colour and
-// neither is collapsible: the whole point is that it cannot be dismissed and
-// then forgotten about while the numbers below it are still wrong.
+// --- the ONE graded honesty-chrome vocabulary (23-graded-truth-layer.md T1) --
+// F5's fix: honesty chrome is now ONE banner form + ONE inline chip + ONE glyph
+// set, graded into three tiers, with MANDATED placement enforced by the API — a
+// banner is a pane-top full-width placard, a chip is an inline stream-header
+// mark. Colours come from doc 24 T5.1's semantic accessors (ui/theme.h); each
+// tier also carries a Codicon glyph + a text token so the tier reads without
+// colour alone (24 T5.2). NONE of this hides a field — it only decides loudness.
+
+// The tier-graded banner (pane-top placard contract). Neutral banners are quiet,
+// caution is amber, integrity is loud red. A caution banner MAY collapse to its
+// chip after first read (the caller passes/owns `collapsed`); an integrity banner
+// NEVER collapses (`collapsed` is ignored for it) — exactly as the refusal path
+// was always non-dismissable. `collapsed` may be null (never collapses).
+void draw_honesty_banner(const char *text, HonestyTier tier,
+                         bool *collapsed = nullptr);
+
+// The quiet inline chip (stream-header contract): a neutral honesty mark that
+// sits on a header row without a banner's weight. A T1 signal (skip, statistical,
+// redacted, coarse, bounded) renders as this, never as an amber banner.
+void draw_honesty_chip(const char *text, HonestyTier tier);
+
+// The legacy two-level placard, kept as a THIN SHIM over the graded banner so the
+// ten existing call sites migrate incrementally: refusal -> integrity (loud, non
+// collapsible), else -> caution (amber). Both are drawn in the graded colours and
+// neither is collapsible here — the whole point is that a wrong-number placard
+// cannot be dismissed and then forgotten.
 void draw_banner(const char *text, bool refusal);
+
+// The uniform busy signal (23-graded-truth-layer.md T4): an elapsed-time +
+// spinner/determinate-bar + Cancel for any op that can exceed a frame. The
+// decision half is pure (ui/progress.h, LongOp); this is the thin draw half. It
+// sets `op.cancel_requested` when the user clicks Cancel; the caller polls it and
+// abandons the op, leaving the last good state (never a half-built model).
+void draw_progress(LongOp &op);
 
 void draw_canvas(const dt_canvas &c);
 void draw_timeline(const dt_timeline &t);

@@ -97,10 +97,22 @@ int main(void) {
                           d.reason.find(mode_name(want)) != std::string::npos,
                       "the refusal must name both the holder and the refused "
                       "mode");
-                check("pair/label",
-                      budget_blocked_label(d).find("holds the tracer") !=
+                // The blocked label reads BLOCKED (not "paused") and names the
+                // holder (23 T3, F23): the bare word "paused" used to name both
+                // this budget block and an operator pause.
+                check("pair/label-blocked",
+                      budget_blocked_label(d).find("BLOCKED") !=
                           std::string::npos,
-                      "the blocked label must say the tracer is held");
+                      "the blocked label must read BLOCKED, never paused");
+                check("pair/label-names-holder",
+                      budget_blocked_label(d).find(mode_name(active)) !=
+                          std::string::npos,
+                      "the blocked label must name the jack holder");
+                check("pair/label-not-paused",
+                      budget_blocked_label(d).find("paused") ==
+                          std::string::npos,
+                      "the blocked label must not say 'paused' — that is the "
+                      "operator-pause state");
             }
         }
     }
@@ -224,6 +236,37 @@ int main(void) {
               "without IBS the default is the lightest ptrace mode (log)");
         check("default/log-does-not-single-step", mode_uses_ptrace(log),
               "log holds the jack (streams syscalls) but does not single-step");
+    }
+
+    // ---- 23-T3: the Queue path fires only on a genuinely free jack ----------
+    // A queued want must NOT start while a ptrace blocker is active, and MUST be
+    // ready the moment the jack frees — never an auto-swap (the one-jack
+    // invariant is never bypassed).
+    {
+        LiveMode watch, log, sample;
+        mode_from_name("watch", &watch);
+        mode_from_name("log", &log);
+        mode_from_name("sample", &sample);
+
+        // Blocked: another ptrace view holds the jack -> the queued want waits.
+        check("queue/not-ready-while-blocked",
+              !budget_queue_ready(log, {watch}),
+              "a queued want must not fire while a ptrace blocker is active");
+        // The blocker stops (active empties) -> the queued want is ready.
+        check("queue/ready-when-free", budget_queue_ready(log, {}),
+              "a queued want is ready the moment the jack frees");
+        // A free-view blocker never blocks the queue (it holds no jack).
+        check("queue/free-blocker-ok", budget_queue_ready(log, {sample}),
+              "an out-of-band view holds no jack, so it never blocks a queue");
+        // The queue-ready predicate is EXACTLY budget_can_start's allow — it can
+        // never bypass the budget (no auto-swap masquerading as a queue).
+        for (LiveMode active : modes)
+            for (LiveMode want : modes)
+                check("queue/matches-budget",
+                      budget_queue_ready(want, {active}) ==
+                          budget_can_start(want, {active}).allowed,
+                      "the queue must fire on exactly the budget's allow — never "
+                      "a hidden swap");
     }
 
     if (failures) {

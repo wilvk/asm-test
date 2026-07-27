@@ -12,7 +12,9 @@
 #include "imgui.h"
 
 #include "ImGuiFileDialog.h" // pure-ImGui save dialog (14 T7)
+#include "live/end_state.h"  // end_cause — the session-end placard (23 T2)
 #include "ui/doors.h"
+#include "ui/honesty.h"  // the graded honesty vocabulary (23 T1)
 #include "ui/progress.h"
 #include "ui/theme.h"
 #include "views/views_draw.h"
@@ -62,6 +64,9 @@ void inspect_disconnect(InspectState &s) {
     // survive — reconnecting to the same target must not mean re-entering it.
     s.active.clear();
     s.swap_pending = false;
+    s.operator_paused = false;
+    s.has_queued = false;
+    s.stream_op = LongOp{};
     s.observer.built = false;
     s.observed_events = 0;
     s.observed_recordings = 0;
@@ -160,19 +165,29 @@ void draw_status(InspectState &s) {
     if (!st.last_err.empty())
         ImGui::TextColored(kBad, "refused: %s", st.last_err.c_str());
     if (st.skip_code) {
-        // NOT an error colour: a skip means the tracer worked and there was
-        // nothing to report, and the measured reason is the whole payload.
-        ImGui::TextColored(kMaybe, "skipped (%d): %s", st.skip_code,
-                           st.skip_reason.c_str());
+        // A skip grades NEUTRAL (schema:98/544): the tracer worked and had
+        // nothing to report, so it is a quiet chip, never an amber banner. The
+        // measured reason is the whole payload and still renders in full (D7).
+        char buf[512];
+        std::snprintf(buf, sizeof buf, "skipped (%d): %s", st.skip_code,
+                      st.skip_reason.c_str());
+        draw_honesty_chip(buf, HonestyTier::Neutral);
     }
-    if (st.paused_dropped)
-        ImGui::TextColored(kMaybe,
-                           "%llu event(s) dropped while paused — this "
-                           "recording is truncated",
-                           (unsigned long long)st.paused_dropped);
-    if (s.session.malformed_lines())
-        ImGui::TextColored(kMaybe, "%llu unparseable line(s) from the host",
-                           (unsigned long long)s.session.malformed_lines());
+    if (st.paused_dropped) {
+        // paused_dropped -> CAUTION (a usable prefix with a recorded gap).
+        char buf[192];
+        std::snprintf(buf, sizeof buf,
+                      "%llu event(s) dropped while paused — this recording is "
+                      "truncated (usable, but incomplete)",
+                      (unsigned long long)st.paused_dropped);
+        draw_honesty_chip(buf, HonestyTier::Caution);
+    }
+    if (s.session.malformed_lines()) {
+        char buf[128];
+        std::snprintf(buf, sizeof buf, "%llu unparseable line(s) from the host",
+                      (unsigned long long)s.session.malformed_lines());
+        draw_honesty_chip(buf, HonestyTier::Caution);
+    }
 
     // What --auto chose, and on what evidence. The weaker label is not
     // optional chrome: without it the door implies it measured something it
@@ -192,22 +207,58 @@ void draw_status(InspectState &s) {
     if (const Recording *g = s.session.growing()) {
         ImGui::Text("capturing: %llu event(s) so far",
                     (unsigned long long)g->event_count());
-        // A growing live recording is unbounded — no `end` footer, no honest
-        // total — so an INDETERMINATE bar (14 T3): a percentage here would be a
-        // fabricated total. The decision is the pure progress_mode(); a bounded
-        // budget would flip it to determinate, which is why it is not hard-coded.
-        if (progress_mode(true, /*has_total=*/false, 0) ==
-            ProgressMode::Indeterminate)
-            ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(),
-                               ImVec2(-FLT_MIN, 0), "streaming");
+        // The uniform busy signal (23 T4): a growing live recording is unbounded
+        // — no `end` footer, no honest total — so the LongOp gets the
+        // INDETERMINATE bar (a percentage would be a fabricated total, 14 T3),
+        // plus elapsed + a Cancel that stops the capture (leaving the last good
+        // recording, never a half-built model). `now`/`started_at` are injected
+        // from ImGui's clock so the pure elapsed() needs no global.
+        s.stream_op.active = true;
+        s.stream_op.has_total = false;
+        s.stream_op.label = "streaming";
+        s.stream_op.now = ImGui::GetTime();
+        if (s.stream_op.started_at == 0.0)
+            s.stream_op.started_at = s.stream_op.now;
+        draw_progress(s.stream_op);
+        if (s.stream_op.cancel_requested) {
+            s.session.send_stop();
+            s.active.clear();
+            s.stream_op.cancel_requested = false;
+        }
+    } else {
+        s.stream_op.active = false;
+        s.stream_op.started_at = 0.0; // re-arm the elapsed clock for the next one
     }
     if (nrec)
         ImGui::Text("%zu completed recording(s) this session", nrec);
+    // Each completed torn recording stays a loud INTEGRITY banner (non-collapsible)
+    // — a torn capture is the one signal that means "do not trust the tail".
     for (const Recording &r : s.session.recordings())
         if (r.torn)
-            ImGui::TextColored(
-                kBad, "TORN recording — the host stopped before "
-                      "writing its footer; this capture is incomplete");
+            draw_honesty_banner("TORN recording — the host stopped before "
+                                "writing its footer; this capture is incomplete",
+                                HonestyTier::Integrity);
+
+    // The persistent, cause-distinguished END-OF-SESSION placard (23 T2, F20).
+    // Co-located with the last events, it fans the single collapsed `Ended` into
+    // its four causes and — for a protocol mismatch — carries the verbatim
+    // one-line fix. It persists across frames (unlike a toast) until the next
+    // Connect/Start. Graded through T1's components: torn/mismatch are integrity,
+    // a clean stop is neutral.
+    if (st.state == LiveState::Ended) {
+        EndCause cause = end_cause(end_facts_of(s.session));
+        ImGui::SeparatorText(end_cause_title(cause));
+        HonestyTier tier = end_cause_is_integrity(cause) ? HonestyTier::Integrity
+                                                         : HonestyTier::Neutral;
+        std::string msg = end_cause_message(cause);
+        draw_honesty_banner(msg.c_str(), tier);
+        std::string fix = end_cause_fix(cause);
+        if (!fix.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, kGood);
+            ImGui::TextWrapped("%s", fix.c_str());
+            ImGui::PopStyleColor();
+        }
+    }
 }
 
 // The patch bay: one jack per target, and what is in it.
@@ -245,9 +296,22 @@ void draw_patch_bay(InspectState &s) {
         s.want = budget_least_perturbing(s.sample_available);
     }
 
+    // The Queue path (23 T3): a queued want starts the MOMENT the jack frees —
+    // never an auto-swap, because budget_queue_ready is true only when the jack is
+    // genuinely free (the blocker stopped/ended). The one-ptrace-jack invariant is
+    // never bypassed. Polled here, before we render the state below.
+    if (s.has_queued && budget_queue_ready(s.queued_want, s.active)) {
+        s.session.send_start(mode_name(s.queued_want), s.selected_pid);
+        s.active.push_back(s.queued_want);
+        s.has_queued = false;
+    }
+
     BudgetDecision d = budget_can_start(s.want, s.active);
+    // BUDGET BLOCK (F23): "BLOCKED — jack held by <session> on <target>" — a
+    // FACT, read BLOCKED not "paused", so it never reads as the operator pause.
     if (!d.allowed) {
-        ImGui::TextColored(kMaybe, "%s", budget_blocked_label(d).c_str());
+        ImGui::TextColored(kMaybe, "%s on pid %ld",
+                           budget_blocked_label(d).c_str(), s.selected_pid);
         ImGui::TextWrapped("%s", d.reason.c_str());
     }
 
@@ -265,13 +329,24 @@ void draw_patch_bay(InspectState &s) {
     if (ImGui::Button("Stop")) {
         s.session.send_stop();
         s.active.clear();
+        s.operator_paused = false;
     }
     ImGui::SameLine();
-    if (ImGui::Button("Pause"))
+    // OPERATOR PAUSE (F23), split from the budget block: this hold's ONLY
+    // recovery is Resume, and the state says so — "PAUSED (you)".
+    if (ImGui::Button("Pause")) {
         s.session.send_pause(true);
+        s.operator_paused = true;
+    }
     ImGui::SameLine();
-    if (ImGui::Button("Resume"))
+    if (ImGui::Button("Resume")) {
         s.session.send_pause(false);
+        s.operator_paused = false;
+    }
+    if (s.operator_paused)
+        ImGui::TextColored(kMaybe,
+                           "PAUSED (you) — emission is suspended (tracing is "
+                           "not); the only recovery is Resume.");
 
     // The perturbation confirm (T5): armed by the first Start on a single-step
     // mode, it states the concrete consequence VERBATIM and only the second
@@ -286,16 +361,55 @@ void draw_patch_bay(InspectState &s) {
             s.perturb_pending = false;
     }
 
+    // The budget block's THREE explicit recoveries (F23): Swap (a named two-step
+    // confirm), Queue (a visible cancellable chip), Cancel. Never an auto-swap.
+    if (!d.allowed) {
+        ImGui::Separator();
+        if (ImGui::Button("Swap")) {
+            // Arm the two-step confirm — it names WHAT detaches. Never silent.
+            s.swap_pending = true;
+            s.swap_blocker = d.blocker;
+            s.swap_reason = d.reason;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Queue")) {
+            s.has_queued = true;
+            s.queued_want = s.want;
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel##block")) {
+            s.swap_pending = false;
+            s.has_queued = false;
+        }
+    }
+
+    // The Swap confirm (two-step): naming exactly what detaches. Never auto-swap.
     if (s.swap_pending) {
         ImGui::Separator();
         ImGui::TextColored(kMaybe,
-                           "the %s view holds the tracer. Swapping STOPS it.",
-                           mode_name(s.swap_blocker));
+                           "Stop the %s capture on pid %ld and start %s?",
+                           mode_name(s.swap_blocker), s.selected_pid,
+                           mode_name(s.want));
         if (ImGui::Button("Stop it and start this one"))
             inspect_confirm_swap(s);
         ImGui::SameLine();
-        if (ImGui::Button("Cancel"))
+        if (ImGui::Button("Cancel##swap"))
             s.swap_pending = false;
+    }
+
+    // The Queue chip: a visible, cancellable record of what will start when the
+    // jack frees, with a one-line note of what Queue does. It disappears when the
+    // queued mode fires (above) or the user cancels it.
+    if (s.has_queued) {
+        char chip[192];
+        std::snprintf(chip, sizeof chip,
+                      "Queued: %s will start automatically when the %s jack "
+                      "frees",
+                      mode_name(s.queued_want), mode_name(d.blocker));
+        draw_honesty_chip(chip, HonestyTier::Neutral);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Cancel queue"))
+            s.has_queued = false;
     }
 }
 

@@ -281,6 +281,11 @@ $(BUILD)/desktop/app/vw/slice_view_draw.o $(BUILD)/desktop/render/vw/slice_view_
 # reused confirm-overwrite save dialog), so the fetch must land before it compiles
 # on a clean tree — same order-only prereq shell.o / inspect_door.o already carry.
 $(BUILD)/desktop/app/ui/author_door.o $(BUILD)/desktop/render/ui/author_door.o $(BUILD)/desktop/test/ui/author_door.o: | $(ICTEDIT_HOME)/TextEditor.h $(IFD_HOME)/ImGuiFileDialog.h
+# canvas_draw.cpp now #includes IconsCodicons.h for the ONE glyph set per honesty
+# tier (23-graded-truth-layer.md T1), so the codicon header fetch must land before
+# it compiles on a clean tree — the same order-only prereq fonts.o carries.
+$(BUILD)/desktop/app/vw/canvas_draw.o $(BUILD)/desktop/render/vw/canvas_draw.o \
+$(BUILD)/desktop/test/vw/canvas_draw.o $(BUILD)/desktop/uitest/vw/canvas_draw.o: | $(ICONFONT_HOME)/IconsCodicons.h
 
 # --- in-app term registry, GENERATED from the ONE glossary (24 T3) -----------
 # scripts/gen-terms.py parses docs/project/glossary.md's {glossary} directive
@@ -447,6 +452,8 @@ $(BUILD)/desktop/test/t/test_golden.o:    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_
 # test_theme's source-lint (24 T1) reads the drift files straight from the tree,
 # so it needs the source root as a compile define (it runs from the repo root).
 $(BUILD)/desktop/test/t/test_theme.o:     DESKTOP_TEST_EXTRA = -DASMTEST_DESKTOP_SRC_DIR='"desktop/src"'
+# test_honesty (23 T1) loads the committed dishonesty fixtures from the corpus.
+$(BUILD)/desktop/test/t/test_honesty.o:   DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
 $(BUILD)/desktop/test/t/test_live_session.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_inspect.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_converge.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
@@ -875,6 +882,8 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_fonts \
                  $(BUILD)/desktop_test_ictedit \
                  $(BUILD)/desktop_test_theme \
+                 $(BUILD)/desktop_test_honesty \
+                 $(BUILD)/desktop_test_progress \
                  $(BUILD)/desktop_test_cvd \
                  $(BUILD)/desktop_test_terms \
                  $(BUILD)/desktop_test_filter \
@@ -1353,6 +1362,19 @@ $(BUILD)/desktop_test_data_readers: \
 
 $(BUILD)/desktop_test_completeness_view: \
     $(BUILD)/desktop/test/t/test_completeness_view.o $(DESKTOP_TEST_DA)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The ONE graded honesty vocabulary (23-graded-truth-layer.md T1): the pure grader
+# against the committed dishonesty fixtures + the graded chrome (banner/chip/glyph)
+# drawing under the null backend. Links canvas_draw.o (the components), the doc
+# model (to load the fixtures) and imgui — no engine, no GL.
+$(BUILD)/desktop_test_honesty: $(BUILD)/desktop/test/t/test_honesty.o \
+    $(BUILD)/desktop/test/vw/canvas_draw.o $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The uniform busy signal + the 3D-scrub degrade decision (23 T4): pure and
+# header-only, so it links NOTHING — the same closure argument test_budget makes.
+$(BUILD)/desktop_test_progress: $(BUILD)/desktop/test/t/test_progress.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 $(BUILD)/desktop_test_null: $(BUILD)/desktop/test/t/test_null_render.o $(DESKTOP_TEST_IG)

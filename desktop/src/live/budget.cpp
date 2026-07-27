@@ -147,8 +147,18 @@ BudgetDecision budget_can_start(LiveMode want,
 std::string budget_blocked_label(const BudgetDecision &d) {
     if (d.allowed)
         return std::string();
-    return std::string("paused — another live view holds the tracer (") +
-           mode_name(d.blocker) + ")";
+    // "BLOCKED — jack held by <session>" (23-graded-truth-layer.md T3, F23): the
+    // word "paused" used to name BOTH this budget preemption and an operator
+    // pause, whose recoveries are disjoint. This reads BLOCKED, never paused; the
+    // caller appends "on <target>" from the selected pid.
+    return std::string("BLOCKED — jack held by ") + mode_name(d.blocker);
+}
+
+bool budget_queue_ready(LiveMode queued, const std::vector<LiveMode> &active) {
+    // A queued want may FIRE only when the jack is genuinely free — never an
+    // auto-swap. This is exactly budget_can_start's allow, named for the intent
+    // so the queue path cannot bypass the one-jack invariant.
+    return budget_can_start(queued, active).allowed;
 }
 
 } // namespace asmdesk

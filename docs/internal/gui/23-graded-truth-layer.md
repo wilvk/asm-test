@@ -1,5 +1,21 @@
 # Wave 3: restructure the truth layer — graded honesty tiers, session-end placard, split paused, progress everywhere — implementation
 
+> **LANDED 2026-07-27 (T1–T4, all four tasks).** T1: the ONE graded honesty
+> vocabulary (`ui/honesty.h` grader + `draw_honesty_banner`/`draw_honesty_chip` +
+> a Codicon glyph per tier) over a **derivable `severity` schema field** landed
+> under doc 01's append-only rule with **01-owner sign-off recorded in
+> `asmtrace-schema.md`** (the Phase-3-freeze checkpoint, D5) — the field is
+> derivable, additive, and gates no truth off (D7); `test_honesty` pins the three
+> tiers against the committed dishonesty fixtures. T2: the persistent,
+> cause-distinguished session-end placard (`live/end_state.h` `end_cause`) with the
+> verbatim protocol-mismatch fix; toasts supplement, never replace. T3: "paused"
+> split into "PAUSED (you) — Resume" vs "BLOCKED — jack held by …" with explicit
+> Swap/Queue/Cancel and no auto-swap. T4: `progress.h` generalised to a `LongOp`
+> (elapsed + Cancel + honest mode) with a degrade-to-coarse 3D scrub. Tests:
+> `test_honesty`, `test_progress`, `test_terrain` (coarse_slice), `test_budget`
+> (queue + BLOCKED label), `test_inspect` (patch-bay split), `test_live_session`
+> (end_cause). All green on the host `make desktop desktop-render desktop-test`.
+
 > **Sources.** Actioned from the UX restructure plan
 > (../plans/desktop-gui-ux-restructure-plan.md) rows **T4.1, T4.3, T4.4, T4.6**
 > and the review findings **F5, F20, F23, F21**
