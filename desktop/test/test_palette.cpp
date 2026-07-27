@@ -68,7 +68,8 @@ int main() {
     {
         std::vector<PaletteEntry> pal = build_palette(s);
         const PaletteEntry *e = find_label(pal, "Show timeline view");
-        check("view-switch entry present", e != nullptr, "one per dt_all_views()");
+        check("view-switch entry present", e != nullptr,
+              "one per outer-tab view (dt_view_has_outer_tab)");
         if (e) {
             ShellState st;
             e->action(st);
@@ -77,6 +78,69 @@ int main() {
                       *st.want_view == dt_view::timeline,
                   "the visible tab actually switches");
         }
+    }
+
+    // --- the View category offers ONLY the outer-tab views (fix 5) ------------
+    // Regression pin for the palette's own invariant (§8): it must never advertise
+    // a "Show X view" command the shell silently drops. The shell honours
+    // `want_view` for exactly the four reading views that own an OUTER tab
+    // (canvas/timeline/slice/diff); the seven Observer-deck sub-views are INNER
+    // tabs with no outer switch, and `blame` is an entry point, not a view — so
+    // none of those eight may appear. Before the fix the loop offered "Show X
+    // view" for all eleven non-blame views, silently no-opping seven of them.
+    {
+        std::vector<PaletteEntry> pal = build_palette(s);
+
+        // The four honoured outer-tab views ARE offered.
+        for (const char *name : {"canvas", "timeline", "slice", "diff"}) {
+            std::string lbl = std::string("Show ") + name + " view";
+            check("outer-tab view offered", find_label(pal, lbl) != nullptr,
+                  "canvas/timeline/slice/diff each own an outer tab the shell "
+                  "switches to");
+        }
+
+        // The seven Observer-deck sub-views (want_view is a silent no-op for them)
+        // are NOT offered — offering them would advertise a switch the shell drops.
+        for (const char *name : {"syscalls", "watch", "topo", "hotedges", "tree",
+                                 "region", "disasm"}) {
+            std::string lbl = std::string("Show ") + name + " view";
+            check("observer sub-view NOT offered", find_label(pal, lbl) == nullptr,
+                  "an inner Observer sub-view has no outer tab, so the palette "
+                  "must not offer a bare want_view for it");
+        }
+        // `blame` is an entry point, never a view; it was never offered and stays
+        // out (dt_view_has_outer_tab is false for it too).
+        check("blame not offered", find_label(pal, "Show blame view") == nullptr,
+              "blame is the failure ENTRY POINT, not a switchable view");
+
+        // Every View-category entry maps to a dt_view that actually owns an outer
+        // tab — the exact gate palette.cpp uses (dt_view_has_outer_tab). Parse the
+        // view name back out of "Show <name> view" and check the gate holds, so a
+        // future view that grows an outer tab (or loses one) keeps this in step.
+        const std::string pre = "Show ", suf = " view";
+        size_t nview = 0;
+        for (const PaletteEntry &e : pal) {
+            if (e.category != PaletteCategory::View)
+                continue;
+            nview++;
+            bool shaped = e.label.rfind(pre, 0) == 0 &&
+                          e.label.size() > pre.size() + suf.size() &&
+                          e.label.compare(e.label.size() - suf.size(), suf.size(),
+                                          suf) == 0;
+            check("View entry is 'Show <name> view'", shaped, e.label.c_str());
+            if (!shaped)
+                continue;
+            std::string vname = e.label.substr(
+                pre.size(), e.label.size() - pre.size() - suf.size());
+            dt_view v;
+            bool parsed = dt_view_parse(vname, v);
+            check("View entry name parses to a dt_view", parsed, vname.c_str());
+            check("every offered View owns an outer tab",
+                  parsed && dt_view_has_outer_tab(v),
+                  "the palette offers a want_view only where the shell honours it");
+        }
+        check("exactly four View entries", nview == 4,
+              "canvas/timeline/slice/diff — no Observer sub-view, no blame");
     }
 
     // --- go-to command == dt_nav_parse, and dispatched moves nav.current ------

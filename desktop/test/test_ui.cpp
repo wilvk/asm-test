@@ -335,6 +335,86 @@ static void register_keymap_tests(ImGuiTestEngine *engine) {
         ctx->Yield();
         IM_CHECK(dt_nav_format(*g_keymap_shell.nav.current) == dt_nav_format(b));
     };
+
+    // --- a96f64a: Ctrl+<letter> chords must NOT leak into plain-letter handlers.
+    // ImGui's IsKeyPressed() ignores modifiers, so before the fix a Ctrl chord
+    // ALSO fired the bare-letter action. Each test drives the REAL handle_keymap
+    // through draw_shell and asserts the plain-letter side effect did NOT fire —
+    // these FAIL on the pre-fix code (they observe the leaked state directly).
+
+    // Fix 1 — Ctrl+F opens the global find, and must NOT light the forward cone
+    // (plain `f`) nor push the spurious cone undo command that leak produced.
+    t = IM_REGISTER_TEST(engine, "keymap", "ctrl_f_no_cone_leak");
+    t->GuiFunc = keymap_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        g_keymap_shell.want_open_tab = 0;
+        g_keymap_shell.selection.step = 0u;
+        g_keymap_shell.cone_active = false;
+        g_keymap_shell.cone_fwd = false;
+        g_keymap_shell.find = asmdesk::FindState{};
+        g_keymap_shell.undo.clear();
+        ctx->Yield();
+        ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_F);
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.find.open);        // Ctrl+F opened find...
+        IM_CHECK(!g_keymap_shell.cone_active);     // ...and did NOT light the cone
+        IM_CHECK(!g_keymap_shell.undo.can_undo()); // ...nor push a cone undo command
+        g_keymap_shell.find.open = false;          // release the find bar's focus
+        ctx->Yield();
+    };
+
+    // Fix 2 — Ctrl+P opens the command palette, and must NOT walk the n/p
+    // divergence of the attached pair (plain `p`). A/B carry real divergences, so a
+    // leaked walk WOULD move selection.off or set status; assert neither happened.
+    t = IM_REGISTER_TEST(engine, "keymap", "ctrl_p_no_divergence_walk");
+    t->GuiFunc = keymap_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        g_keymap_shell.want_open_tab = 1; // pair-a (recording 1) as A
+        g_keymap_shell.b_index = 2;       // pair-b as B
+        g_keymap_shell.selection.off.reset();
+        g_keymap_shell.status.clear();
+        g_keymap_shell.show_palette = false;
+        ctx->Yield();
+        ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_P);
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.show_palette);               // Ctrl+P opened it...
+        IM_CHECK(!g_keymap_shell.selection.off.has_value()); // ...no divergence walk
+        IM_CHECK(g_keymap_shell.status.empty());             // ...and no n/p status
+        // Dismiss the palette through its OWN dispatch/close path (the proven idiom
+        // the command_palette flow test uses), so no modal holds focus into later
+        // tests; then undo the harmless side effect that close command raised.
+        ctx->SetRef("Command palette");
+        ctx->ItemInput("##palettequery");
+        ctx->KeyCharsReplace("Reset panel");
+        ctx->Yield();
+        ctx->ItemClick("Reset panel layout");
+        ctx->Yield();
+        IM_CHECK(!g_keymap_shell.show_palette); // the palette closed
+        g_keymap_shell.want_layout_reset = false;
+        ctx->Yield();
+    };
+
+    // Fix 3 — Ctrl+Y redoes, and must NOT copy a deep link to the clipboard
+    // (plain `y`). A deep link IS available (nav.current), so before the fix
+    // plain-`y` fired and overwrote the clipboard; the fix leaves it untouched.
+    t = IM_REGISTER_TEST(engine, "keymap", "ctrl_y_no_copy_link");
+    t->GuiFunc = keymap_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        g_keymap_shell.want_open_tab = 0;
+        g_keymap_shell.undo.clear(); // empty stack -> Ctrl+Y's redo is a pure no-op
+        dt_link cur;
+        cur.view = dt_view::slice;
+        cur.rec = "sum_via_rbx.asmtrace";
+        cur.step = 2;
+        g_keymap_shell.nav.current = cur;
+        const char *kSentinel = "SENTINEL-not-a-link";
+        ImGui::SetClipboardText(kSentinel);
+        ctx->Yield();
+        ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_Y);
+        ctx->Yield();
+        const char *clip = ImGui::GetClipboardText();
+        IM_CHECK(clip != nullptr && std::strcmp(clip, kSentinel) == 0);
+    };
 }
 
 // The syscall view under test for the reveal-all flow (its reveal state lives

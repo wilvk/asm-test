@@ -918,6 +918,81 @@ int main() {
               "a live 3D re-weave must keep the camera, not reset the orbit");
     }
 
+    // --- fix 6: the syscall-filter undo is recording-SCOPED ------------------
+    // (a96f64a) A Filter UndoCommand carries `filter_rec` (the recording id the
+    // edit was made on); undo_apply restores onto THAT recording by id, never onto
+    // whichever tab is active when Ctrl+Z is pressed. Before the fix undo_apply
+    // wrote to s.observers[active_tab] unconditionally, so a tab switch redirected
+    // the undo to the wrong recording — restoring nothing on A and clobbering B.
+    {
+        ShellState s;
+        std::string err;
+        int a = shell_open(s, gd("sum_via_rbx.asmtrace"), err);
+        int b = shell_open(s, gd("add_signed.asmtrace"), err);
+        check("fix6/opened two", a == 0 && b == 1, err.c_str());
+        check("fix6/observers parallel", s.observers.size() == 2,
+              "each open recording gets its own Observer deck");
+
+        // The edit was made on A: A now shows "openat"; B has its OWN unrelated
+        // filter "read" (so we can tell which deck a stray write lands on).
+        std::snprintf(s.observers[0].syscall_filter,
+                      sizeof s.observers[0].syscall_filter, "%s", "openat");
+        std::snprintf(s.observers[1].syscall_filter,
+                      sizeof s.observers[1].syscall_filter, "%s", "read");
+
+        // The command record_filter_undo would push for that edit: scoped to A by
+        // id, before="" (A's baseline), after="openat".
+        s.active_tab = a;
+        UndoCommand cmd;
+        cmd.kind = UndoCommand::Kind::Filter;
+        cmd.filter_rec = s.streams[static_cast<size_t>(a)].id; // A's id, NOT a tab
+        cmd.filter_before = "";
+        cmd.filter_after = "openat";
+        s.undo.push(std::move(cmd));
+        check("fix6/command carries the recording id",
+              !s.undo.cmds.empty() &&
+                  s.undo.cmds.back().filter_rec == s.streams[0].id,
+              "the Filter command is stamped with recording A's id, not a tab idx");
+
+        // Now switch to B and undo — the exact sequence that used to corrupt B.
+        s.active_tab = b;
+        const UndoCommand *un = s.undo.undo();
+        check("fix6/undo pops the filter command", un != nullptr, "one on the stack");
+        if (un)
+            undo_apply(s, *un, /*redo=*/false);
+        check("fix6/undo restores A by id",
+              std::string(s.observers[0].syscall_filter).empty(),
+              "Ctrl+Z after a tab switch must restore A's filter (to its baseline)");
+        check("fix6/undo leaves B untouched",
+              std::string(s.observers[1].syscall_filter) == "read",
+              "the active tab B's own filter must NOT be clobbered by A's undo");
+
+        // Redo lands back on A too (by id), still not on B.
+        const UndoCommand *re = s.undo.redo();
+        check("fix6/redo replays the filter command", re != nullptr, "redoable");
+        if (re)
+            undo_apply(s, *re, /*redo=*/true);
+        check("fix6/redo re-applies onto A by id",
+              std::string(s.observers[0].syscall_filter) == "openat",
+              "Ctrl+Y after a tab switch must re-apply A's filter onto A");
+        check("fix6/redo still leaves B untouched",
+              std::string(s.observers[1].syscall_filter) == "read",
+              "redo must not touch the active tab B either");
+
+        // A command naming a recording that has since been closed has nowhere to
+        // land: undo_apply skips it rather than clobbering the active tab.
+        UndoCommand gone;
+        gone.kind = UndoCommand::Kind::Filter;
+        gone.filter_rec = "closed-recording.asmtrace"; // not in s.streams
+        gone.filter_before = "";
+        gone.filter_after = "mmap";
+        undo_apply(s, gone, /*redo=*/true);
+        check("fix6/closed recording is a no-op, not a clobber",
+              std::string(s.observers[1].syscall_filter) == "read" &&
+                  std::string(s.observers[0].syscall_filter) == "openat",
+              "an undo for a closed recording must not write to any live tab");
+    }
+
     if (failures) {
         std::fprintf(stderr, "test_shell: %d FAILURE(S)\n", failures);
         return 1;

@@ -116,6 +116,60 @@ int main() {
     check("slice/absent-nothing", !sv2_fabricated,
           "an absent step is not a slice node, never fabricated (D7)");
 
+    // === fix 4: the selection is recording-SCOPED (body_timeline) =============
+    // A brush in recording A must NOT light a coincident index in recording B
+    // after a tab switch. body_timeline gates the projection on
+    // `s.selection.rec == a->id`; before the fix it set `t.selected_step =
+    // s.selection.step` unconditionally, misattributing A's step to whatever
+    // recording was active (a fabricated row — the D7 breach). body_timeline is
+    // static and its projected model is a non-observable local, so this pins the
+    // exact gate the fix added, over TWO real recordings, with the selection set
+    // through the ONE shared writer (Selection::set — the same path the router and
+    // keymap use).
+    {
+        ShellState s2;
+        std::string e2;
+        int ia = shell_open(s2, gd("sum_via_rbx.asmtrace"), e2);
+        int ib = shell_open(s2, gd("add_signed.asmtrace"), e2);
+        check("fix4/opened two", ia == 0 && ib == 1, e2.c_str());
+        const Streams *A = &s2.streams[0];
+        const Streams *B = &s2.streams[1];
+        check("fix4/distinct ids", A->id != B->id, "two recordings, two ids");
+
+        // Brush a real step in A (the shared writer stamps selection.rec = A->id).
+        const uint32_t stepA = A->df.nsteps > 1 ? 1u : 0u;
+        s2.selection.set(A->id, stepA, std::nullopt);
+        check("fix4/brushed in A", s2.selection.rec == A->id,
+              "the shared writer stamps the recording the pick was made in");
+
+        // The exact gate body_timeline computes for a given recording:
+        //   sel_step = (selection.rec == rec->id) ? selection.step : nullopt
+        auto projected = [&](const Streams *rec) -> std::optional<uint32_t> {
+            return s2.selection.rec == rec->id ? s2.selection.step : std::nullopt;
+        };
+
+        // Switch the active tab to B: A's brush does NOT project onto B, and a real
+        // timeline over B carries NO selected row for A's step.
+        s2.active_tab = ib;
+        check("fix4/no cross-recording selection on B", !projected(B).has_value(),
+              "A's brush must not light a row in B after a tab switch (D7)");
+        dt_timeline tB = dt_timeline_build(*B);
+        tB.selected_step = projected(B); // exactly body_timeline's gated projection
+        check("fix4/B timeline marks nothing", !tB.selected_step.has_value(),
+              "the timeline for B marks nothing, never a misattributed row");
+
+        // The SAME selection, read on its OWN recording A, DOES project.
+        s2.active_tab = ia;
+        check("fix4/selection projects on its own recording",
+              projected(A).has_value() && *projected(A) == stepA,
+              "on A (the recording the pick was made in) the brush projects");
+        dt_timeline tA = dt_timeline_build(*A);
+        tA.selected_step = projected(A);
+        check("fix4/A timeline marks the brushed step",
+              tA.selected_step && *tA.selected_step == stepA,
+              "on its own recording the timeline marks the brushed step");
+    }
+
     // === clear brushes nothing everywhere ====================================
     const uint64_t e1 = s.selection.epoch;
     s.selection.clear();
