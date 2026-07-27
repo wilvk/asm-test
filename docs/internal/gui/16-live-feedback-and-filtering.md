@@ -138,9 +138,36 @@ choice is recorded; it compiles on 1.91.9 and is in the compile-probe.
 > **Honesty-safe by choice of target**: the call TREE was deliberately NOT
 > filtered client-side (its `tree.h` warns a client filter makes the surviving
 > depths lie — the engine-side filter stays the tree's narrowing). `imsearch.o`
-> rides the `learn_door.o` link sites. **Remaining T2**: the syscall-name and
-> disasm-routine filters (both tables — need a Selectable/row adapter);
-> follow-on.
+> rides the `learn_door.o` link sites.
+>
+> **T2 completed 2026-07-27 — syscall name filter + the fit boundary.** On the
+> remaining surfaces, ImSearch turned out to be the WRONG tool, and the reason is
+> the same one that excluded the tree: ImSearch's public header states its
+> callbacks "are called in order of relevancy, or maybe not even called at all" —
+> it always re-ranks and may drop, with **no preserve-order mode**. That is fine
+> for an unordered catalog (the Learn door), but it would misrepresent an
+> order-significant list:
+> - **Syscalls** are a time-ordered stream — relevance re-ranking would scramble
+>   execution order, a different claim than "these rows matched". So the syscall
+>   name filter is a plain **order-preserving substring filter**, not ImSearch:
+>   `obs_syscall_filter_indices` (pure, in `views/syscalls.{h,cpp}`, tested in
+>   `test_obs_syscalls`) returns the matching row indices *ascending*; the draw
+>   keeps each row's true `#` and shows "showing N of M", so a filtered view never
+>   implies the hidden rows do not exist (T2 step 3, D7). It matches the
+>   payload-free `line` only, never the reveal-gated payload. This is a NAME
+>   filter, distinct from the tid filter the view still refuses (`syscalls.h` —
+>   that one would imply the engine followed a single thread).
+> - **Disasm** is an address-ordered byte/memory view (`imgui_memory_editor` +
+>   an address/bytes/disassembly table), with no routine-NAME list to narrow, so
+>   the doc's imagined "routine search in the listing" does not map to what the
+>   view is — a category mismatch, not an omission. Its honest narrowing controls
+>   already exist: the "as of logical time" seek and the memory editor's range.
+>
+> Net: ImSearch is applied to the one surface it fits (the Learn catalog); the
+> order-significant lists narrow honestly (syscalls) or already had the right
+> control (disasm); the tree keeps its engine-side filter. The value ImSearch
+> would have added on the ordered lists was a lie about order, so it was not
+> forced there.
 
 **Goal.** Client-side filtering over the existing lists — call-tree, syscall
 names, disasm routine search, the Learn-door catalog — wrapping current

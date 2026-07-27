@@ -89,6 +89,23 @@ std::string obs_syscall_reveal_all_prompt(const SyscallView &v);
 // show in place of the control it is not going to draw.
 const char *obs_syscall_tid_note();
 
+// Client-side name filter (16-live-feedback-and-filtering.md T2): the indices of
+// the rows whose payload-free `line` contains `query` (case-insensitive), IN
+// ORDER. An empty query returns every index. This narrows the DISPLAY only — the
+// model (`rows`) is never touched, and the draw keeps each row's original index
+// and shows "showing N of M", so a filtered view never implies the hidden rows
+// do not exist (D7). It matches only `line` (the name/args), never the
+// reveal-gated `payload`, so filtering can never surface withheld content.
+//
+// Deliberately NOT ImSearch (doc 11/16): ImSearch ranks by relevance and may
+// reorder or drop, which would scramble a syscall stream's execution ORDER — a
+// different claim than "these rows matched". And distinct from the tid filter
+// this view refuses (above): that would imply the engine followed one thread;
+// this only narrows what you read, in order, and says how much it hid. Pure, so
+// it is unit-tested (D4).
+std::vector<size_t> obs_syscall_filter_indices(const SyscallView &v,
+                                               const std::string &query);
+
 // The payload-free lines for the selectable copy view (14-quick-wins.md T6),
 // one per row ("<idx>  <line>"). Payload-free by schema, so safe to copy; the
 // reveal-gated payload is never included. Pure, so it is unit-tested (D4).

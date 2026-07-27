@@ -116,5 +116,54 @@ int main() {
         vt::check("copy lines never leak payload (1)", !leaks(ln, kSecret1), ln);
         vt::check("copy lines never leak payload (2)", !leaks(ln, kSecret2), ln);
     }
+
+    // Client-side name filter (16 T2): order-preserving, case-insensitive, and it
+    // never touches the model. Built by hand so the assertions do not depend on
+    // the fixture's syscall names.
+    SyscallView fv;
+    SyscallRow r0;
+    r0.line = "openat(AT_FDCWD, <path>) = 3";
+    SyscallRow r1;
+    r1.line = "read(3, <64 bytes>) = 64";
+    SyscallRow r2;
+    r2.line = "openat(AT_FDCWD, <path>) = 4";
+    SyscallRow r3;
+    r3.line = "close(3) = 0";
+    fv.rows = {r0, r1, r2, r3};
+
+    std::vector<size_t> all = obs_syscall_filter_indices(fv, "");
+    vt::check("filter: empty query = all rows, in order",
+              all.size() == 4 && all[0] == 0 && all[1] == 1 && all[2] == 2 &&
+                  all[3] == 3,
+              "empty query must restore the full set");
+    std::vector<size_t> op = obs_syscall_filter_indices(fv, "openat");
+    vt::check("filter: narrows to matches, ORIGINAL indices ascending",
+              op.size() == 2 && op[0] == 0 && op[1] == 2,
+              "the two openat rows are #0 and #2, in execution order");
+    std::vector<size_t> up = obs_syscall_filter_indices(fv, "OPENAT");
+    vt::check("filter: case-insensitive", up.size() == 2 && up[0] == 0 &&
+                                              up[1] == 2,
+              "OPENAT must match openat");
+    vt::eq("filter: whitespace-only query = all",
+           obs_syscall_filter_indices(fv, "   ").size(), size_t{4});
+    vt::eq("filter: surrounding whitespace trimmed",
+           obs_syscall_filter_indices(fv, "  close  ").size(), size_t{1});
+    vt::eq("filter: no match = empty",
+           obs_syscall_filter_indices(fv, "mmap").size(), size_t{0});
+    vt::check("filter: model untouched",
+              fv.rows.size() == 4 &&
+                  fv.rows[0].line == "openat(AT_FDCWD, <path>) = 3",
+              "the filter must never mutate the model");
+
+    // The filter matches the payload-FREE `line` only — never the reveal-gated
+    // payload, so filtering can never surface withheld content.
+    SyscallRow rp;
+    rp.line = "write(1, <8 bytes>) = 8";
+    rp.has_payload = true;
+    rp.payload = "topsecret";
+    fv.rows.push_back(rp);
+    vt::eq("filter: matches line only, never payload",
+           obs_syscall_filter_indices(fv, "topsecret").size(), size_t{0});
+
     return vt::report("test_obs_syscalls");
 }

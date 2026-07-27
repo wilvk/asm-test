@@ -1,6 +1,8 @@
 // syscalls.cpp — the pure builder + dump of syscalls.h. No ImGui, no I/O.
 #include "views/syscalls.h"
 
+#include <cctype>
+
 namespace asmdesk {
 
 SyscallView obs_syscalls_build(const Recording &r, const ObsLifecycle *lc) {
@@ -99,6 +101,35 @@ std::vector<std::string> obs_syscall_copy_lines(const SyscallView &v) {
     out.reserve(v.rows.size());
     for (size_t i = 0; i < v.rows.size(); i++)
         out.push_back(std::to_string(i) + "  " + v.rows[i].line);
+    return out;
+}
+
+std::vector<size_t> obs_syscall_filter_indices(const SyscallView &v,
+                                               const std::string &query) {
+    // ASCII-lowercase a copy (the streams are ASCII; no locale games).
+    auto lower = [](std::string s) {
+        for (char &c : s)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return s;
+    };
+    // Trim the query; an empty (or whitespace-only) query is not a filter — it
+    // returns every row, in order, so clearing the box restores the full set.
+    size_t b = query.find_first_not_of(" \t");
+    std::vector<size_t> out;
+    if (b == std::string::npos) {
+        out.reserve(v.rows.size());
+        for (size_t i = 0; i < v.rows.size(); i++)
+            out.push_back(i);
+        return out;
+    }
+    size_t e = query.find_last_not_of(" \t");
+    const std::string q = lower(query.substr(b, e - b + 1));
+    // Case-insensitive substring on the payload-free `line` ONLY — never the
+    // reveal-gated payload. Original indices, ascending: order is preserved so a
+    // filtered syscall stream still reads in execution order.
+    for (size_t i = 0; i < v.rows.size(); i++)
+        if (lower(v.rows[i].line).find(q) != std::string::npos)
+            out.push_back(i);
     return out;
 }
 

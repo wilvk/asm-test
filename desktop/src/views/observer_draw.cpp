@@ -81,7 +81,7 @@ bool observer_has_any(const ObserverState &s) {
 }
 
 // --- T1 ---------------------------------------------------------------------
-void draw_obs_syscalls(SyscallView &v) {
+void draw_obs_syscalls(SyscallView &v, ObserverState &s) {
     chrome_line(v.chrome);
     ImGui::TextDisabled("%s", obs_syscall_tid_note());
     if (v.record_redacted)
@@ -103,6 +103,21 @@ void draw_obs_syscalls(SyscallView &v) {
             v.reveal_all_armed = false;
     }
 
+    // Client-side name filter (16 T2). It narrows the DISPLAY only: the model is
+    // untouched, the "#" column keeps each row's true index, and a "showing N of
+    // M" states exactly how many rows are hidden — so the filter can never read
+    // as "the trace only did these syscalls". Order is preserved (the indices
+    // come back ascending), which is why this is a plain substring filter and
+    // not ImSearch (whose relevance re-ranking would scramble execution order).
+    ImGui::SetNextItemWidth(240);
+    ImGui::InputTextWithHint("##syscall-filter", "filter by name (e.g. openat)",
+                             s.syscall_filter, sizeof s.syscall_filter);
+    const std::vector<size_t> shown = obs_syscall_filter_indices(v, s.syscall_filter);
+    if (s.syscall_filter[0]) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("showing %zu of %zu", shown.size(), v.rows.size());
+    }
+
     if (!ImGui::BeginTable("syscalls", 3,
                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                ImGuiTableFlags_ScrollY))
@@ -111,7 +126,7 @@ void draw_obs_syscalls(SyscallView &v) {
     ImGui::TableSetupColumn("syscall");
     ImGui::TableSetupColumn("payload");
     ImGui::TableHeadersRow();
-    for (size_t i = 0; i < v.rows.size(); i++) {
+    for (size_t i : shown) {
         const SyscallRow &row = v.rows[i];
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
@@ -553,7 +568,7 @@ void draw_observer(ObserverState &s, const Recording &r,
     if (!ImGui::BeginTabBar("observer"))
         return;
     if (!s.syscalls.rows.empty() && ImGui::BeginTabItem("Syscalls")) {
-        draw_obs_syscalls(s.syscalls);
+        draw_obs_syscalls(s.syscalls, s);
         ImGui::EndTabItem();
     }
     if ((!s.watch.hits.empty() || s.watch.skip.present) &&

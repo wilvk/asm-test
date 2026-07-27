@@ -21,6 +21,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tests. ImGuiNotify is vendored (MIT) with a minimal Font Awesome range merged
   into the UI font for its type icons. Bundled in both the full app and the
   render-only viewer.
+- **Client-side filtering for the long lists** (docs/internal/gui/16-live-
+  feedback-and-filtering.md T2). The Learn-door walkthrough catalog narrows as
+  you type (via ImSearch). The syscall stream gains a **name filter** that hides
+  non-matching rows while keeping each row's original number and execution order
+  and showing "showing N of M", so a filtered view never reads as if the trace
+  only made those calls; it matches syscall names only, never the redacted
+  payload. (Filtering is applied only where it can stay honest: the time-ordered
+  syscall stream uses an order-preserving filter rather than a relevance re-rank,
+  and the address-ordered disassembly keeps its existing time/range controls.)
 - **The register scrubber and the ABI x-ray are now hosted in visible shell
   panes** (docs/internal/gui/09-teaching-producers.md T3/T4 — the integration
   surfacing pass). The register time-travel scrubber is a per-recording

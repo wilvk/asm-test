@@ -48,6 +48,12 @@ struct ObserverState {
     // asmtest_codeimage_bytes_at's own convention.
     uint64_t disasm_when = 0;
 
+    // The syscall pane's client-side name filter (16 T2). UI state, not model:
+    // it selects which rows draw_obs_syscalls DRAWS (via obs_syscall_filter_
+    // indices), never mutating SyscallView. Per-deck, so each recording's pane
+    // keeps its own filter.
+    char syscall_filter[96] = {0};
+
     bool built = false;
 };
 
@@ -67,7 +73,7 @@ void observer_build(ObserverState &s, const Recording &r,
 // tabs the capture actually produced rather than a row of empty panes.
 bool observer_has_any(const ObserverState &s);
 
-void draw_obs_syscalls(SyscallView &v);
+void draw_obs_syscalls(SyscallView &v, ObserverState &s);
 void draw_obs_watch(const WatchView &v);
 // `go` routes a drill-in through 04's router; `rec_id` is the link's recording.
 void draw_obs_topo(const TopoView &v, const std::string &rec_id,
