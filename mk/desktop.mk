@@ -169,21 +169,46 @@ $(BUILD)/desktop/%/addon/imsearch.o: $(IMSEARCH_HOME)/imsearch.cpp | $(IMSEARCH_
 	@mkdir -p $(@D)
 	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
 
-# imgui_canvas (15 T2): the standalone pan/zoom canvas from the imgui-node-editor
-# tree (fetched by fetch-nodeeditor.sh, pinned in 53b3b6f), for the slice
-# explorer. One compiled TU; uses imgui_internal.h -> compile-probe. The full
-# node editor (T3) reuses this fetch. The .cpp's header includes (imgui_extra_math
-# .h/.inl) resolve via -I after the fetch produces the tree.
+# imgui_canvas (15 T2) + the full imgui-node-editor (15 T3): the graph pan/zoom
+# canvas from one fetch (fetch-nodeeditor.sh, pinned in 53b3b6f). ONE grouped
+# fetch produces every file, so imgui_canvas.cpp (T2's standalone de-risk) and
+# the node editor's THREE more TUs (T3 — imgui_node_editor.cpp, its api layer,
+# and the bundled crude_json.cpp settings serialiser: the "4 TUs" of the doc,
+# imgui_canvas being the first) all come from the same &: rule — declare them all
+# as grouped outputs or a clean tree would run the fetch once per group. All use
+# imgui_internal.h (via imgui_canvas.h / imgui_node_editor_internal.h) -> the
+# compile-probe. PIN master 021aa0ea: the last release v0.9.3 (2023) FAILS to
+# compile on 1.91.9 (the operator== redefinition); this master sha compiles clean
+# (doc 11, reproduced). observer_draw.cpp includes only the public
+# imgui_node_editor.h; objects ride its link sites like ImPlot. -w: vendored.
 NODEEDITOR_VERSION ?= 021aa0ea
 NODEEDITOR_HOME    ?= $(BUILD)/addons/imgui-node-editor-$(NODEEDITOR_VERSION)
-$(NODEEDITOR_HOME)/imgui_canvas.cpp $(NODEEDITOR_HOME)/imgui_canvas.h &: scripts/fetch-nodeeditor.sh scripts/third-party-digests.txt
+NODEEDITOR_SRCS    := imgui_node_editor imgui_node_editor_api crude_json
+$(NODEEDITOR_HOME)/imgui_canvas.cpp $(NODEEDITOR_HOME)/imgui_canvas.h \
+$(NODEEDITOR_HOME)/imgui_node_editor.cpp $(NODEEDITOR_HOME)/imgui_node_editor_api.cpp \
+$(NODEEDITOR_HOME)/crude_json.cpp $(NODEEDITOR_HOME)/imgui_node_editor.h &: \
+    scripts/fetch-nodeeditor.sh scripts/third-party-digests.txt
 	sh scripts/fetch-nodeeditor.sh >/dev/null
 DESKTOP_ADDON_INCLUDES += -I$(NODEEDITOR_HOME)
-ADDON_PROBE_FLAGS += -DASMDESK_HAVE_IMGUI_CANVAS -I$(NODEEDITOR_HOME)
-ADDON_PROBE_DEPS  += $(NODEEDITOR_HOME)/imgui_canvas.h
+ADDON_PROBE_FLAGS += -DASMDESK_HAVE_IMGUI_CANVAS -DASMDESK_HAVE_IMGUI_NODE_EDITOR -I$(NODEEDITOR_HOME)
+ADDON_PROBE_DEPS  += $(NODEEDITOR_HOME)/imgui_canvas.h $(NODEEDITOR_HOME)/imgui_node_editor.h
 $(BUILD)/desktop/%/addon/imgui_canvas.o: $(NODEEDITOR_HOME)/imgui_canvas.cpp | $(NODEEDITOR_HOME)/imgui_canvas.h $(IMGUI_HOME)/imgui.cpp
 	@mkdir -p $(@D)
 	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
+# The node editor's three TUs, one pattern rule each (the source basename differs
+# so a single %-rule cannot cover them without also matching imgui_canvas above).
+$(BUILD)/desktop/%/addon/imgui_node_editor.o: $(NODEEDITOR_HOME)/imgui_node_editor.cpp | $(NODEEDITOR_HOME)/imgui_node_editor.h $(IMGUI_HOME)/imgui.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
+$(BUILD)/desktop/%/addon/imgui_node_editor_api.o: $(NODEEDITOR_HOME)/imgui_node_editor_api.cpp | $(NODEEDITOR_HOME)/imgui_node_editor.h $(IMGUI_HOME)/imgui.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
+$(BUILD)/desktop/%/addon/crude_json.o: $(NODEEDITOR_HOME)/crude_json.cpp | $(NODEEDITOR_HOME)/imgui_node_editor.h $(IMGUI_HOME)/imgui.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
+DESKTOP_NODEEDITOR_OBJ_app    := $(addprefix $(BUILD)/desktop/app/addon/,$(addsuffix .o,$(NODEEDITOR_SRCS)))
+DESKTOP_NODEEDITOR_OBJ_render := $(addprefix $(BUILD)/desktop/render/addon/,$(addsuffix .o,$(NODEEDITOR_SRCS)))
+DESKTOP_NODEEDITOR_OBJ_test   := $(addprefix $(BUILD)/desktop/test/addon/,$(addsuffix .o,$(NODEEDITOR_SRCS)))
 
 # goossens ImGuiColorTextEdit (17 T2): the Author-door code editor. ONE compiled
 # TU now (TextEditor.cpp); TextDiff.cpp is the diff-view follow-on (fetched, not
@@ -247,7 +272,7 @@ $(BUILD)/desktop/app/src/main.o $(BUILD)/desktop/render/src/main.o: | $(JBM_HOME
 # its fetch as an order-only prereq of the including object (additive to any
 # per-object prereq already declared above).
 $(BUILD)/desktop/app/src/main.o $(BUILD)/desktop/render/src/main.o: | $(IMPLOT_HOME)/implot.h $(IMSEARCH_HOME)/imsearch.h
-$(BUILD)/desktop/app/vw/observer_draw.o $(BUILD)/desktop/render/vw/observer_draw.o $(BUILD)/desktop/test/vw/observer_draw.o: | $(IMPLOT_HOME)/implot.h $(TEXTSELECT_HOME)/textselect.hpp
+$(BUILD)/desktop/app/vw/observer_draw.o $(BUILD)/desktop/render/vw/observer_draw.o $(BUILD)/desktop/test/vw/observer_draw.o: | $(IMPLOT_HOME)/implot.h $(TEXTSELECT_HOME)/textselect.hpp $(NODEEDITOR_HOME)/imgui_node_editor.h
 $(BUILD)/desktop/app/ui/learn_door.o $(BUILD)/desktop/render/ui/learn_door.o $(BUILD)/desktop/test/ui/learn_door.o: | $(IMSEARCH_HOME)/imsearch.h
 $(BUILD)/desktop/app/ui/shell.o $(BUILD)/desktop/render/ui/shell.o $(BUILD)/desktop/test/ui/shell.o: | $(IFD_HOME)/ImGuiFileDialog.h $(IMGUINOTIFY_HOME)/ImGuiNotify.hpp
 $(BUILD)/desktop/app/ui/inspect_door.o $(BUILD)/desktop/render/ui/inspect_door.o $(BUILD)/desktop/test/ui/inspect_door.o: | $(IFD_HOME)/ImGuiFileDialog.h
@@ -430,7 +455,13 @@ DESKTOP_VIEW_DRAW := canvas_draw timeline_draw slice_view_draw diff_view_draw \
 # one of these builds from the Recording document model with no ImGui, no I/O
 # and no engine, which is what lets each be asserted on a host with nothing to
 # attach to — and is why a live view and a replayed one cannot drift apart.
-DESKTOP_OBS_PURE := observer syscalls watch topo hotedges tree region disasm
+# graph_nav (15 T3) is a pure builder like the rest: it turns the topo/tree/
+# hotedges models into a deterministic node-editor layout (positions + edges +
+# the deep link a click routes through) with NO ImGui and NO node-editor, which
+# is what lets its layout be asserted headless — the library never chose a
+# position. It rides the pure list so it links wherever observer_draw.o does.
+DESKTOP_OBS_PURE := observer syscalls watch topo hotedges tree region disasm \
+                    graph_nav
 DESKTOP_OBS_DRAW := observer_draw
 
 # loom/ — the Loom fabric (05-loom-day-one.md). Every TU here except forks.cpp
@@ -474,6 +505,7 @@ desktop_app_objs = \
   $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(BUILD)/desktop/$(1)/addon/textselect.o \
   $(BUILD)/desktop/$(1)/addon/imgui_canvas.o \
+  $(DESKTOP_NODEEDITOR_OBJ_$(1)) \
   $(DESKTOP_IMPLOT_OBJ_$(1)) \
   $(BUILD)/desktop/$(1)/addon/imguifiledialog.o \
   $(DESKTOP_LOOM_PURE:%=$(BUILD)/desktop/$(1)/lo/%.o) \
@@ -953,8 +985,13 @@ $(BUILD)/desktop_test_obs_watch: $(BUILD)/desktop/test/t/test_obs_watch.o \
 # topo additionally links nav.o: its drill-in is a deep LINK through 04's
 # router, not a direct call into another view, so the link's round trip is part
 # of what this test pins.
+# topo additionally links nav.o (the drill-in is a deep LINK through 04's
+# router) and graph_nav.o (15 T3): the graph layout's node positions ARE the
+# app's, not the library's, and this test pins that + the click-routing + the
+# large-fixture cull, all on the pure model (no ImGui, no node-editor).
 $(BUILD)/desktop_test_obs_topo: $(BUILD)/desktop/test/t/test_obs_topo.o \
     $(BUILD)/desktop/test/vw/topo.o $(BUILD)/desktop/test/vw/observer.o \
+    $(BUILD)/desktop/test/vw/graph_nav.o \
     $(BUILD)/desktop/test/src/nav.o $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
@@ -964,9 +1001,14 @@ $(BUILD)/desktop_test_obs_hotedges: \
     $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# tree also links graph_nav.o (15 T3) — the call-tree graph layout — plus nav.o
+# (the click router this test drives) and topo.o (graph_nav's shared drill-in
+# link builder). Still no ImGui, no node-editor: the layout is pure and asserted
+# as the app's own, never the library's.
 $(BUILD)/desktop_test_obs_tree: $(BUILD)/desktop/test/t/test_obs_tree.o \
     $(BUILD)/desktop/test/vw/tree.o $(BUILD)/desktop/test/vw/observer.o \
-    $(DESKTOP_TEST_DOC)
+    $(BUILD)/desktop/test/vw/graph_nav.o $(BUILD)/desktop/test/vw/topo.o \
+    $(BUILD)/desktop/test/src/nav.o $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 $(BUILD)/desktop_test_obs_region: $(BUILD)/desktop/test/t/test_obs_region.o \
@@ -989,6 +1031,7 @@ $(BUILD)/desktop_test_obs_draw: $(BUILD)/desktop/test/t/test_obs_draw.o \
     $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
     $(BUILD)/desktop/test/addon/textselect.o \
     $(BUILD)/desktop/test/addon/imgui_canvas.o \
+    $(DESKTOP_NODEEDITOR_OBJ_test) \
     $(DESKTOP_IMPLOT_OBJ_test) \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) \
     $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
@@ -1265,6 +1308,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
     $(BUILD)/desktop/test/addon/textselect.o \
     $(BUILD)/desktop/test/addon/imgui_canvas.o \
+    $(DESKTOP_NODEEDITOR_OBJ_test) \
     $(DESKTOP_IMPLOT_OBJ_test) \
     $(DESKTOP_TEST_LOOM) \
     $(DESKTOP_LOOM_DRAW:%=$(BUILD)/desktop/test/lo/%.o) \

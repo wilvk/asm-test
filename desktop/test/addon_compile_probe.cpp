@@ -21,7 +21,7 @@
 // announced docking rewrite — is the surface every dependent stands on, so a
 // repin that changed it must fail HERE first.
 
-#define IMGUI_DEFINE_MATH_OPERATORS  // ImZoomSlider et al. need the operators
+#define IMGUI_DEFINE_MATH_OPERATORS // ImZoomSlider et al. need the operators
 #include "imgui.h"
 #include "imgui_internal.h"
 
@@ -37,6 +37,13 @@
 #endif
 #ifdef ASMDESK_HAVE_IMGUI_CANVAS
 #include "imgui_canvas.h"
+#endif
+#ifdef ASMDESK_HAVE_IMGUI_NODE_EDITOR
+// The full node editor's public API (15 T3). Its own imgui_internal.h surface is
+// imgui_canvas.h / imgui_extra_math.h (already guarded above, same repo/pin), so
+// a repin that broke the internal headers fails there; this entry pins that the
+// public header observer_draw.cpp consumes also still compiles at the pin.
+#include "imgui_node_editor.h"
 #endif
 #ifdef ASMDESK_HAVE_IMGUINOTIFY
 #include "ImGuiNotify.hpp"

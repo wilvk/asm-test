@@ -121,12 +121,12 @@ per the doc-11 row above.
 | [12-addon-supply-chain.md](12-addon-supply-chain.md) | amend D2 (addon-admission rule); reusable `fetch-addon.sh` + digest/license conventions; imgui-repin compile-gate (**Track G — blocks all**) | 3 | 03 | ☑ 3/3 |
 | [13-foundation-moves.md](13-foundation-moves.md) | F1 docking repin (`v1.91.9b-docking`) + in-tree layout manager; F2 32-bit `ImDrawIdx`; F3 freetype + JetBrains Mono + Codicons; F4 the 1.92 bump decision (**Track F**) | 5 | 12; 04, 09, 10 | ☑ 5/5 |
 | [14-quick-wins.md](14-quick-wins.md) | diff "go" bug fix; shared theme header; ProgressBar; imgui_memory_editor; ImZoomSlider; ImGuiTextSelect (v1.1.6+utfcpp); ImGuiFileDialog (v0.6.8) (**Track Q**) | 7 | 12 (T4–T7); 04/05/08 | ☑ 7/7 |
-| [15-plotting-and-graph-nav.md](15-plotting-and-graph-nav.md) | ImPlot v1.0 chassis (perf_history/hotedges/timeline/watch); imgui_canvas de-risk; imgui-node-editor for topo/tree | 3 | 12, 13 (F1/F2) | ◐ 2/3 (T1 plots ☑ + T2 canvas ☑; **T3 node-editor topo/tree unstarted**) |
+| [15-plotting-and-graph-nav.md](15-plotting-and-graph-nav.md) | ImPlot v1.0 chassis (perf_history/hotedges/timeline/watch); imgui_canvas de-risk; imgui-node-editor for topo/tree | 3 | 12, 13 (F1/F2) | ✅ 3/3 (T1 plots ☑ + T2 canvas ☑ + T3 node-editor topo/tree/hot-edges ☑) |
 | [16-live-feedback-and-filtering.md](16-live-feedback-and-filtering.md) | ImGuiNotify toasts (live-session events); ImSearch client-side filtering (**both ∅-unverified in doc 11 — compile-check at pin**) | 2 | 12; 13 F3 (Notify) | ✅ 2/2 (T1 toasts `1a9d6d5` + T2 filter `a728d9d`) |
 | [17-interaction-testing-and-editor.md](17-interaction-testing-and-editor.md) | imgui_test_engine (interaction tests + keymap enforcement, test-lane-only); goossens ImGuiColorTextEdit + TextDiff (Author editor, disasm gutter, side-by-side diff) (**Bigger bets**) | 2 | 12 | ✅ 2/2 (T2 editor `fdb5783` + T1 engine/keymap `245ad3f`/`243f092`) |
 
-22 tasks across docs 12–17 — **21 landed; the one open item is 15 T3
-(imgui-node-editor for topo/tree/hotedges pan-zoom + fit-graph).** Sequencing (doc 11's tracks): **12 (Track G) first**,
+22 tasks across docs 12–17 — **all 22 landed** (the last was 15 T3,
+imgui-node-editor for topo/tree/hotedges pan-zoom + fit-graph). Sequencing (doc 11's tracks): **12 (Track G) first**,
 then Track Q (14) and Track F (13) in parallel, then the plotting/graph chassis
 (15) and feedback/filtering (16) on the foundations, with the bigger bets (17)
 independent of each other at any time after 12. Every addon lands with its
@@ -246,6 +246,6 @@ are wiring on shipped substrate, not redesign.
 implementation-ready briefs — **docs 18–24** above, one per wave/theme cluster,
 each tracing every task to its `T<theme>.<n>` recommendation and `F<n>` finding.
 This was a drafting-only pass (no code); the keystone is doc 19 (real dockable
-panes). The single remaining pre-restructure item is **15 T3** (node-editor
-topo/tree). The [asmspy](../plans/asmspy-plan.md) / [desktop-gui](../plans/desktop-gui-plan.md)
+panes). The addon-adoption family (docs 12–17) is now fully landed — **15 T3**
+(node-editor topo/tree/hot-edges) was the last item. The [asmspy](../plans/asmspy-plan.md) / [desktop-gui](../plans/desktop-gui-plan.md)
 product plans are unchanged.

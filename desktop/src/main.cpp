@@ -9,16 +9,17 @@
 #include <memory>
 
 #include "imgui.h"
-#include "implot.h"   // the plotting chassis context (15 T1)
-#include "imsearch.h" // the client-side filtering context (16 T2)
-#include "ui/fonts.h"  // real monospace font + Codicons (13 F3)
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
+#include "implot.h"   // the plotting chassis context (15 T1)
+#include "imsearch.h" // the client-side filtering context (16 T2)
+#include "ui/fonts.h" // real monospace font + Codicons (13 F3)
 
 #include <GLFW/glfw3.h> // drags in the system OpenGL headers
 
 #include "ui/gl_scene_host.h"
 #include "ui/shell.h"
+#include "views/observer_draw.h" // obs_graph_enable (node-editor canvas, 15 T3)
 
 // The vendored font paths are injected by mk/desktop.mk (DESKTOP_FONT_DEFS);
 // default to empty so a build without them still compiles (load_fonts then
@@ -93,7 +94,12 @@ int main() {
     // creates it; the headless view tests create none, so every ImPlot draw is
     // guarded on ImPlot::GetCurrentContext() and degrades to text there.
     ImPlot::CreateContext();
-    ImSearch::CreateContext(); // client-side filtering (16 T2), app-only like ImPlot
+    ImSearch::
+        CreateContext(); // client-side filtering (16 T2), app-only like ImPlot
+    // The graph views' node-editor canvas (15 T3) is app-only too: node-editor
+    // reaches into ImGui internals, so the headless null-backend view tests never
+    // enable it (they fall back to the list/table). The real app + viewer do.
+    asmdesk::obs_graph_enable(true);
     // Real monospace font + merged Codicons (13 F3). Paths are compiled in
     // (ASMTEST_*_TTF); a stripped install degrades honestly to the bitmap font.
     asmdesk::load_fonts(ImGui::GetIO(), ASMTEST_JBM_TTF, ASMTEST_CODICON_TTF,
@@ -109,7 +115,8 @@ int main() {
     // through ShellState::scene_host. Built here, where the GL context is current,
     // and reset BEFORE the context is torn down so the scene's GL objects free
     // while it still exists. Links no engine, so it is in the viewer too (D4).
-    std::unique_ptr<asmdesk::SceneHost> scene_host = asmdesk::make_gl_scene_host();
+    std::unique_ptr<asmdesk::SceneHost> scene_host =
+        asmdesk::make_gl_scene_host();
     scene_host->init();
     state.scene_host = scene_host.get();
 

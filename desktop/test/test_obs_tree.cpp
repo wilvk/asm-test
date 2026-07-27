@@ -6,7 +6,10 @@
 // rather than sent at its default (omitted and `depth:0` are different
 // requests, and only one of them is legal), and the effective parameters come
 // back off the wire rather than being assumed to be what was asked for.
+#include "views/graph_nav.h"
 #include "views/tree.h"
+
+#include <vector>
 
 #include "view_test.h"
 
@@ -79,6 +82,78 @@ int main() {
     nlohmann::json p = obs_tree_start_params(empty);
     vt::check("nothing at its default is sent", p.empty(),
               "an all-default filter must send no parameters at all");
+
+    // --- the node-editor graph layout (15 T3) ------------------------------
+    // Same guardrail as topo: the layout is the app's, fed every frame, and the
+    // settings file is disabled so nothing drifts (docs 04/08).
+    vt::check("node-editor persists no positions",
+              kGraphSettingsFile == nullptr,
+              "a non-null SettingsFile would let node-editor own positions");
+
+    GraphLayout graph = graph_from_tree(v, "obs-tree.asmtrace");
+    vt::eq("one graph node per call", graph.nodes.size(), v.rows.size());
+    // x is the ENGINE's effective depth (re-based under a focus filter, never
+    // recomputed), y is emission order — both the app's, not the library's.
+    vt::eq("node id is the row's 1-based index", graph.nodes[2].id,
+           uint64_t{3});
+    vt::eq("depth-2 call sits at layer 2 (x)", graph.nodes[2].x,
+           2.0f * kGraphColW);
+    vt::eq("third call sits at row 2 (y)", graph.nodes[2].y, 2.0f * kGraphRowH);
+
+    // The parent edge is the nearest preceding shallower row; at least one call
+    // in this fixture is nested, so the tree has structure (never a synthesized
+    // parent — the depths are the engine's).
+    vt::check(
+        "the call tree has parent edges", !graph.edges.empty(),
+        "a nested call tree must produce at least one parent -> child edge");
+
+    // A node with a resolved address links to that address (region view), routed
+    // through 04's dt_nav_go.
+    const GraphNode *linked = nullptr;
+    for (const GraphNode &n : graph.nodes)
+        if (n.has_link) {
+            linked = &n;
+            break;
+        }
+    vt::check("a resolved call is clickable", linked != nullptr,
+              "no call carried an address to navigate to");
+    if (linked) {
+        vt::eq("click routes to the address in the region view",
+               std::string(dt_view_name(linked->link.view)),
+               std::string("region"));
+        vt::check("click carries the code offset", linked->link.off.has_value(),
+                  "a region link with no offset is not a destination");
+        dt_nav_table tbl;
+        bool fired = false;
+        tbl.have_recording = [](const std::string &) { return true; };
+        dt_nav_register(tbl, dt_view::region,
+                        [&](const dt_link &) { fired = true; });
+        vt::check("dt_nav_go accepts the node link",
+                  dt_nav_go(tbl, linked->link), tbl.last_error);
+        vt::check("the router actually fired", fired,
+                  "the node click never reached a handler");
+    }
+
+    // Visible-region culling on a LARGE fixture (doc 11 perf note): a
+    // 10k-routine trace must not emit 10k off-screen nodes.
+    TreeView big;
+    for (int i = 0; i < 10000; i++) {
+        TreeRow r;
+        r.tid = 1;
+        r.depth = i % 8; // eight layers, so a narrow viewport excludes most
+        r.addr = 0x1000 + static_cast<uint64_t>(i);
+        r.name = "f";
+        big.rows.push_back(r);
+    }
+    GraphLayout bg = graph_from_tree(big, "big");
+    vt::eq("a node per routine in the large graph", bg.nodes.size(),
+           size_t{10000});
+    GraphViewport small{0.0f, 0.0f, kGraphColW * 2.0f, kGraphRowH * 5.0f};
+    std::vector<std::size_t> vis = graph_visible(bg, small);
+    vt::check("culling keeps the on-viewport nodes", !vis.empty(),
+              "nodes inside the viewport must survive the cull");
+    vt::check("culling drops the off-viewport nodes", vis.size() < size_t{2500},
+              "a 10k-routine graph must emit only the visible region, not all");
 
     vt::golden("obs-tree.txt", obs_tree_dump(v));
     return vt::report("test_obs_tree");

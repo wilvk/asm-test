@@ -7,17 +7,139 @@
 #include <cstdio>
 #include <cstring>
 #include <string_view>
+#include <unordered_map>
+#include <vector>
 
+#define IMGUI_DEFINE_MATH_OPERATORS // node-editor headers use ImVec2 operators
 #include "imgui.h"
-#include "implot.h"              // src×dst hot-edge heatmap chassis (15 T1)
+#include "imgui_internal.h"
 #include "imgui_memory_editor.h" // interactive codeimage byte view (14 T4)
+#include "imgui_node_editor.h"   // topo/tree/hotedges pan-zoom canvas (15 T3)
+#include "implot.h"              // src×dst hot-edge heatmap chassis (15 T1)
 #include "textselect.hpp"        // select + copy for line panes (14 T6)
 
 #include "ui/theme.h"
 #include "views/canvas.h"
+#include "views/graph_nav.h"
 #include "views/views_draw.h"
 
+namespace ed = ax::NodeEditor;
+
 namespace asmdesk {
+
+// App-only node-editor gate (see observer_draw.h). Default off, so the headless
+// null-backend tests — which never call obs_graph_enable — take the fallback
+// list/table and never touch node-editor. main.cpp turns it on for the app +
+// viewer, exactly as it does for the ImPlot / ImSearch contexts.
+namespace {
+bool g_graph_enabled = false;
+} // namespace
+void obs_graph_enable(bool on) { g_graph_enabled = on; }
+bool obs_graph_enabled() { return g_graph_enabled; }
+
+namespace {
+
+// Draw one deterministic GraphLayout on a node-editor canvas: positions fed
+// EVERY frame (ed::SetNodePosition — the library never owns a position), the
+// settings file disabled (kGraphSettingsFile == nullptr — it never persists or
+// invents one), off-viewport nodes culled before emission, a double-clicked node
+// routed through 04's dt_nav_go, and a "Fit graph" button = NavigateToContent.
+// `ctx` is the caller's persistent per-view editor context (lazily created).
+void draw_graph_canvas(const char *id, const GraphLayout &g,
+                       const std::function<void(const dt_link &)> &go,
+                       ed::EditorContext *&ctx) {
+    if (ctx == nullptr) {
+        ed::Config cfg;
+        // The honesty guardrail: no settings file, so node-editor persists no
+        // dragged position and loads none — the layout is the app's, always.
+        cfg.SettingsFile = kGraphSettingsFile;
+        ctx = ed::CreateEditor(&cfg);
+    }
+    ed::SetCurrentEditor(ctx);
+
+    const bool fit = ImGui::SmallButton("Fit graph");
+    ImGui::SameLine();
+    ImGui::TextDisabled(
+        "drag to pan · wheel to zoom · double-click a node to open it");
+
+    ed::Begin(id, ImVec2(0.0f, 0.0f));
+
+    // The visible canvas rectangle in node coordinates, for culling. Derived
+    // from the editor's own screen->canvas transform so pan/zoom is honoured;
+    // degenerate on a first frame (graph_visible then culls nothing).
+    ImVec2 tl = ed::ScreenToCanvas(ImGui::GetWindowPos());
+    ImVec2 br =
+        ed::ScreenToCanvas(ImGui::GetWindowPos() + ImGui::GetWindowSize());
+    GraphViewport vp;
+    vp.x = tl.x;
+    vp.y = tl.y;
+    vp.w = br.x - tl.x;
+    vp.h = br.y - tl.y;
+    // A small margin so a node straddling the edge is not popped mid-drag.
+    vp.x -= kGraphColW;
+    vp.y -= kGraphRowH;
+    vp.w += 2.0f * kGraphColW;
+    vp.h += 2.0f * kGraphRowH;
+
+    std::vector<std::size_t> vis = graph_visible(g, vp);
+    std::vector<bool> shown(g.nodes.size(), false);
+    for (std::size_t idx : vis) {
+        const GraphNode &n = g.nodes[idx];
+        shown[idx] = true;
+        ed::SetNodePosition(ed::NodeId(n.id), ImVec2(n.x, n.y));
+        ed::BeginNode(ed::NodeId(n.id));
+        ImGui::PushID(static_cast<int>(n.id));
+        // An input + output pin per node so edges have somewhere to land; the
+        // pins are structural, not interactive (no link editing — D4).
+        ed::BeginPin(ed::PinId(n.id * 2), ed::PinKind::Input);
+        ImGui::TextUnformatted(" ");
+        ed::EndPin();
+        ImGui::SameLine();
+        ImGui::TextUnformatted(n.label.c_str());
+        ImGui::SameLine();
+        ed::BeginPin(ed::PinId(n.id * 2 + 1), ed::PinKind::Output);
+        ImGui::TextUnformatted(" ");
+        ed::EndPin();
+        ImGui::PopID();
+        ed::EndNode();
+    }
+    // Edges only between two nodes both emitted this frame — a link to a culled
+    // node references a pin node-editor never saw.
+    std::unordered_map<uint64_t, std::size_t> pos;
+    for (std::size_t i = 0; i < g.nodes.size(); i++)
+        pos[g.nodes[i].id] = i;
+    uint64_t link_id = 1;
+    for (const GraphEdge &e : g.edges) {
+        auto fi = pos.find(e.from_id), ti = pos.find(e.to_id);
+        if (fi == pos.end() || ti == pos.end())
+            continue;
+        if (!shown[fi->second] || !shown[ti->second]) {
+            link_id++;
+            continue;
+        }
+        ed::Link(ed::LinkId(link_id++), ed::PinId(e.from_id * 2 + 1),
+                 ed::PinId(e.to_id * 2));
+    }
+
+    // A double-clicked node navigates — the graph equivalent of the list's
+    // "open this" button, routed through 04's spine (never a private reach).
+    if (go) {
+        ed::NodeId dbl = ed::GetDoubleClickedNode();
+        if (dbl) {
+            auto it = pos.find(dbl.Get());
+            if (it != pos.end() && g.nodes[it->second].has_link)
+                go(g.nodes[it->second].link);
+        }
+    }
+
+    if (fit)
+        ed::NavigateToContent();
+
+    ed::End();
+    ed::SetCurrentEditor(nullptr);
+}
+
+} // namespace
 
 namespace {
 
@@ -112,7 +234,8 @@ void draw_obs_syscalls(SyscallView &v, ObserverState &s) {
     ImGui::SetNextItemWidth(240);
     ImGui::InputTextWithHint("##syscall-filter", "filter by name (e.g. openat)",
                              s.syscall_filter, sizeof s.syscall_filter);
-    const std::vector<size_t> shown = obs_syscall_filter_indices(v, s.syscall_filter);
+    const std::vector<size_t> shown =
+        obs_syscall_filter_indices(v, s.syscall_filter);
     if (s.syscall_filter[0]) {
         ImGui::SameLine();
         ImGui::TextDisabled("showing %zu of %zu", shown.size(), v.rows.size());
@@ -203,9 +326,9 @@ void draw_obs_watch(const WatchView &v) {
         WatchPlot wp = obs_watch_plot(v);
         if (wp.steps.size() >= 2) {
             if (ImPlot::BeginPlot("##watch-value", ImVec2(-1, 180),
-                                  ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText)) {
-                ImPlot::SetupAxes("hit", "value",
-                                  ImPlotAxisFlags_AutoFit,
+                                  ImPlotFlags_NoLegend |
+                                      ImPlotFlags_NoMouseText)) {
+                ImPlot::SetupAxes("hit", "value", ImPlotAxisFlags_AutoFit,
                                   ImPlotAxisFlags_AutoFit);
                 ImPlot::PlotStairs("value", wp.steps.data(), wp.values.data(),
                                    static_cast<int>(wp.steps.size()));
@@ -258,6 +381,16 @@ void draw_obs_topo(const TopoView &v, const std::string &rec_id,
                 v.cards.size(), v.snapshots,
                 v.count_mode.empty() ? "(unstated)" : v.count_mode.c_str());
 
+    // The graph canvas (15 T3): processes as nodes on the app's deterministic
+    // layers (root -> child), pan/zoom + fit-graph + double-click-to-open. Only
+    // the real app enables it (node-editor is app-only, like ImPlot); the
+    // headless deck smoke falls back to the card list below.
+    if (obs_graph_enabled()) {
+        static ed::EditorContext *ctx = nullptr;
+        draw_graph_canvas("topo-graph", graph_from_topo(v, rec_id), go, ctx);
+        return;
+    }
+
     for (const TopoCard &c : v.cards) {
         ImGui::PushID(static_cast<int>(c.tgid));
         ImGui::Separator();
@@ -274,7 +407,8 @@ void draw_obs_topo(const TopoView &v, const std::string &rec_id,
 }
 
 // --- T4 ---------------------------------------------------------------------
-void draw_obs_hotedges(const HotEdgeView &v) {
+void draw_obs_hotedges(const HotEdgeView &v, const std::string &rec_id,
+                       const std::function<void(const dt_link &)> &go) {
     chrome_line(v.chrome);
     // Statistical, said before the numbers rather than under them.
     ImGui::TextColored(kWarn, "STATISTICAL");
@@ -305,15 +439,27 @@ void draw_obs_hotedges(const HotEdgeView &v) {
                 ImPlot::SetupAxes(nullptr, nullptr,
                                   ImPlotAxisFlags_NoDecorations,
                                   ImPlotAxisFlags_NoDecorations);
-                ImPlot::PlotHeatmap("edges", hm.cells.data(),
-                                    static_cast<int>(hm.rows.size()),
-                                    static_cast<int>(hm.cols.size()), 0.0, maxc,
-                                    nullptr);
+                ImPlot::PlotHeatmap(
+                    "edges", hm.cells.data(), static_cast<int>(hm.rows.size()),
+                    static_cast<int>(hm.cols.size()), 0.0, maxc, nullptr);
                 ImPlot::EndPlot();
             }
             ImGui::SameLine();
             ImPlot::ColormapScale("samples", 0.0, maxc, ImVec2(70, 240));
         }
+    }
+
+    // The FROZEN snapshot as a navigable graph (15 T3): branch endpoints as
+    // nodes on the app's deterministic grid, edges from -> to, pan/zoom +
+    // fit-graph. Still a survey of edges — no parent/child/total is synthesized
+    // (doc 08 T4). App-only; the headless smoke and the ranked table below are
+    // unaffected. Drawn between the heatmap and the exact table it complements.
+    if (obs_graph_enabled() && !v.edges.empty()) {
+        ImGui::TextDisabled("frozen snapshot — a graph of the ranked edges "
+                            "(the exact counts are in the table below)");
+        static ed::EditorContext *ctx = nullptr;
+        draw_graph_canvas("hotedges-graph", graph_from_hotedges(v, rec_id), go,
+                          ctx);
     }
 
     if (!ImGui::BeginTable("hotedges", 5,
@@ -346,7 +492,9 @@ void draw_obs_hotedges(const HotEdgeView &v) {
 }
 
 // --- T5 ---------------------------------------------------------------------
-std::string draw_obs_tree(const TreeView &v, ObserverState &s, long pid) {
+std::string draw_obs_tree(const TreeView &v, ObserverState &s, long pid,
+                          const std::string &rec_id,
+                          const std::function<void(const dt_link &)> &go) {
     std::string cmd;
     chrome_line(v.chrome);
     skip_line(v.skip);
@@ -389,6 +537,15 @@ std::string draw_obs_tree(const TreeView &v, ObserverState &s, long pid) {
     }
 
     ImGui::SeparatorText("calls");
+    // The call tree as a graph (15 T3): x = the engine's EFFECTIVE depth (never
+    // recomputed — it is re-based under a focus filter), y = emission order,
+    // parent edges the nearest shallower row. Pan/zoom + fit-graph + click-to-
+    // open. App-only; the headless deck smoke draws the indented list below.
+    if (obs_graph_enabled() && !v.rows.empty()) {
+        static ed::EditorContext *ctx = nullptr;
+        draw_graph_canvas("tree-graph", graph_from_tree(v, rec_id), go, ctx);
+        return cmd;
+    }
     for (const TreeRow &r : v.rows) {
         ImGui::Indent(static_cast<float>(r.depth) * 12.0f);
         ImGui::Text("-> %s [%s]  tid %ld",
@@ -460,7 +617,8 @@ ImU32 codeimage_bg(const ImU8 *, size_t off, void *ud) {
     bool known = false, klatest = false;
     uint8_t asof = obs_disasm_byte_at(*c->v, a, c->when, &known);
     if (!known)
-        return IM_COL32(120, 40, 40, 110); // UNKNOWN as of this time — never faked
+        return IM_COL32(120, 40, 40,
+                        110); // UNKNOWN as of this time — never faked
     uint8_t latest = obs_disasm_byte_at(*c->v, a, 0, &klatest);
     if (klatest && latest != asof)
         return IM_COL32(200, 150, 40, 90); // differs from latest (JIT churn)
@@ -581,11 +739,11 @@ void draw_observer(ObserverState &s, const Recording &r,
         ImGui::EndTabItem();
     }
     if (!s.hotedges.edges.empty() && ImGui::BeginTabItem("Hot edges")) {
-        draw_obs_hotedges(s.hotedges);
+        draw_obs_hotedges(s.hotedges, rec_id, go);
         ImGui::EndTabItem();
     }
     if (!s.tree.rows.empty() && ImGui::BeginTabItem("Tree")) {
-        draw_obs_tree(s.tree, s, 0);
+        draw_obs_tree(s.tree, s, 0, rec_id, go);
         ImGui::EndTabItem();
     }
     if (!s.region.invocations.empty() && ImGui::BeginTabItem("Invocations")) {

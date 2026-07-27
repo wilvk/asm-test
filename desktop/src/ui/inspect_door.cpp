@@ -259,7 +259,8 @@ void draw_live_views(InspectState &s) {
     // door's job, not the view's.
     if (!s.observer.tree.rows.empty() || s.want == LiveMode::Tree) {
         std::string cmd =
-            draw_obs_tree(s.observer.tree, s.observer, s.selected_pid);
+            draw_obs_tree(s.observer.tree, s.observer, s.selected_pid,
+                          "live-session", nullptr);
         if (!cmd.empty()) {
             s.session.send(cmd);
             s.active.clear();
@@ -302,9 +303,8 @@ void draw_save_capture(InspectState &s) {
         ImGuiFileDialog::Instance()->OpenDialog("dlg_save", "Save capture as…",
                                                 ".asmtrace", cfg);
     }
-    if (ImGuiFileDialog::Instance()->Display("dlg_save",
-                                             ImGuiWindowFlags_NoCollapse,
-                                             ImVec2(520, 360))) {
+    if (ImGuiFileDialog::Instance()->Display(
+            "dlg_save", ImGuiWindowFlags_NoCollapse, ImVec2(520, 360))) {
         if (ImGuiFileDialog::Instance()->IsOk()) {
             std::string p = ImGuiFileDialog::Instance()->GetFilePathName();
             std::snprintf(s.save_path, sizeof s.save_path, "%s", p.c_str());
@@ -322,8 +322,7 @@ void draw_save_capture(InspectState &s) {
             s.saved_ok = true;
             s.saved_path = s.save_path;
             s.saved_statistical = live->statistical();
-            s.save_status = "saved " +
-                            std::to_string(live->event_count()) +
+            s.save_status = "saved " + std::to_string(live->event_count()) +
                             " event(s) to " + s.saved_path;
         } else {
             s.saved_ok = false;
