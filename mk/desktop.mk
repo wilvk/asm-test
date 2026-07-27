@@ -84,7 +84,14 @@ ADDON_PROBE_DEPS  += $(IMZOOM_HOME)/ImZoomSlider.h
 # fabric_imgui.cpp (the Loom draw half, all three trees) is the ImZoomSlider user.
 $(BUILD)/desktop/app/lo/fabric_imgui.o \
 $(BUILD)/desktop/render/lo/fabric_imgui.o \
-$(BUILD)/desktop/test/lo/fabric_imgui.o: | $(IMZOOM_HOME)/ImZoomSlider.h
+$(BUILD)/desktop/test/lo/fabric_imgui.o \
+$(BUILD)/desktop/uitest/lo/fabric_imgui.o: | $(IMZOOM_HOME)/ImZoomSlider.h
+# timeline_draw.cpp adopts the same ImZoomSlider as the timeline's window control
+# (21-spine-navigation.md T3, completing 14 T5), in every tree that draws it.
+$(BUILD)/desktop/app/vw/timeline_draw.o \
+$(BUILD)/desktop/render/vw/timeline_draw.o \
+$(BUILD)/desktop/test/vw/timeline_draw.o \
+$(BUILD)/desktop/uitest/vw/timeline_draw.o: | $(IMZOOM_HOME)/ImZoomSlider.h
 
 # imgui_memory_editor (14 T4): one header from imgui_club, PUBLIC API only — no
 # imgui_internal.h, so NOT in the compile-probe. Used by observer_draw.cpp.
@@ -277,6 +284,16 @@ $(BUILD)/desktop/app/ui/learn_door.o $(BUILD)/desktop/render/ui/learn_door.o $(B
 $(BUILD)/desktop/app/ui/shell.o $(BUILD)/desktop/render/ui/shell.o $(BUILD)/desktop/test/ui/shell.o: | $(IFD_HOME)/ImGuiFileDialog.h $(IMGUINOTIFY_HOME)/ImGuiNotify.hpp
 $(BUILD)/desktop/app/ui/inspect_door.o $(BUILD)/desktop/render/ui/inspect_door.o $(BUILD)/desktop/test/ui/inspect_door.o: | $(IFD_HOME)/ImGuiFileDialog.h
 $(BUILD)/desktop/app/vw/slice_view_draw.o $(BUILD)/desktop/render/vw/slice_view_draw.o $(BUILD)/desktop/test/vw/slice_view_draw.o: | $(NODEEDITOR_HOME)/imgui_canvas.h
+# timeline_draw.cpp now #includes implot.h (the overview density strip, 21 T3), in
+# every tree that draws it.
+$(BUILD)/desktop/app/vw/timeline_draw.o $(BUILD)/desktop/render/vw/timeline_draw.o \
+$(BUILD)/desktop/test/vw/timeline_draw.o $(BUILD)/desktop/uitest/vw/timeline_draw.o: | $(IMPLOT_HOME)/implot.h
+# palette.cpp's app-only ImSearch relevance path (21 T1) mirrors terms.o: the
+# macro + the fetch prereq are scoped to app/render, so the test trees compile the
+# plain-list fallback and need no imsearch link for a standalone palette test.
+$(BUILD)/desktop/app/ui/palette.o $(BUILD)/desktop/render/ui/palette.o: \
+    DESKTOP_CXXFLAGS += -DASMDESK_HAVE_IMSEARCH
+$(BUILD)/desktop/app/ui/palette.o $(BUILD)/desktop/render/ui/palette.o: | $(IMSEARCH_HOME)/imsearch.h
 # author_door.cpp now #includes ImGuiFileDialog.h too (18-breach-stops.md T3: the
 # reused confirm-overwrite save dialog), so the fetch must land before it compiles
 # on a clean tree — same order-only prereq shell.o / inspect_door.o already carry.
@@ -533,6 +550,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/da/perf_history.o \
   $(DESKTOP_VIEW_PURE:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/$(1)/vw/%.o) \
+  $(BUILD)/desktop/$(1)/vw/overview.o \
   $(BUILD)/desktop/$(1)/vw/scrubber.o $(BUILD)/desktop/$(1)/vw/scrubber_draw.o \
   $(BUILD)/desktop/$(1)/vw/abixray.o $(BUILD)/desktop/$(1)/vw/abixray_draw.o \
   $(DESKTOP_OBS_PURE:%=$(BUILD)/desktop/$(1)/vw/%.o) \
@@ -549,6 +567,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/ui/author_door.o \
   $(BUILD)/desktop/$(1)/addon/TextEditor.o \
   $(BUILD)/desktop/$(1)/ui/shell.o $(BUILD)/desktop/$(1)/ui/layout.o \
+  $(BUILD)/desktop/$(1)/ui/palette.o $(BUILD)/desktop/$(1)/ui/wayfinding.o \
   $(BUILD)/desktop/$(1)/ui/fonts.o \
   $(BUILD)/desktop/$(1)/ui/learn_door.o \
   $(BUILD)/desktop/$(1)/addon/imsearch.o \
@@ -885,6 +904,9 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_shell $(BUILD)/desktop_test_golden \
                  $(BUILD)/desktop_test_layout \
                  $(BUILD)/desktop_test_fonts \
+                 $(BUILD)/desktop_test_palette \
+                 $(BUILD)/desktop_test_wayfinding \
+                 $(BUILD)/desktop_test_overview \
                  $(BUILD)/desktop_test_view_presence \
                  $(BUILD)/desktop_test_workspace_state \
                  $(BUILD)/desktop_test_settings \
@@ -1102,6 +1124,7 @@ $(BUILD)/desktop_test_obs_draw: $(BUILD)/desktop/test/t/test_obs_draw.o \
     $(DESKTOP_IMPLOT_OBJ_test) \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) \
     $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
+    $(BUILD)/desktop/test/vw/overview.o \
     $(DESKTOP_TEST_UI_OBJ) \
     $(DESKTOP_TEST_DA) $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
@@ -1124,6 +1147,7 @@ $(BUILD)/desktop_test_inspect: $(BUILD)/desktop/test/t/test_inspect.o \
 
 $(BUILD)/desktop_test_loom_draw: $(BUILD)/desktop/test/t/test_loom_draw.o \
     $(DESKTOP_TEST_LOOM) $(BUILD)/desktop/test/lo/fabric_imgui.o \
+    $(BUILD)/desktop/test/vw/overview.o \
     $(DESKTOP_TEST_UI_OBJ) \
     $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
@@ -1397,6 +1421,9 @@ $(BUILD)/desktop_test_recording: $(BUILD)/desktop/test/t/test_recording.o $(DESK
 # ImGui's null backend renders every one of those paths.
 DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/ui/layout.o \
+    $(BUILD)/desktop/test/ui/palette.o \
+    $(BUILD)/desktop/test/ui/wayfinding.o \
+    $(BUILD)/desktop/test/vw/overview.o \
     $(BUILD)/desktop/test/ui/learn_door.o \
     $(BUILD)/desktop/test/addon/imsearch.o \
     $(BUILD)/desktop/test/ui/capability_panel.o \
@@ -1435,6 +1462,38 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
 
 $(BUILD)/desktop_test_shell: $(BUILD)/desktop/test/t/test_shell.o \
     $(DESKTOP_TEST_SHELL_OBJ) $(BUILD)/desktop/test/src/vm_compat.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# --- 21-spine-navigation.md tests --------------------------------------------
+# T1: the command palette. build_palette + palette_parse_goto need a real
+# ShellState (opened recordings, the wired router), so they reuse the shell object
+# set — the same engine-free closure the shell test links, plus the golden corpus
+# for the go-to/dispatch/enumeration assertions.
+$(BUILD)/desktop/test/t/test_palette.o: \
+    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
+$(BUILD)/desktop_test_palette: $(BUILD)/desktop/test/t/test_palette.o \
+    $(DESKTOP_TEST_SHELL_OBJ)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# T2: the persistent wayfinding chrome. disambiguated_label is a pure function of
+# paths (hand-built Workspace, no I/O); breadcrumb_model reads nav.current after a
+# real dt_nav_go jump, so it links the shell set + the corpus.
+$(BUILD)/desktop/test/t/test_wayfinding.o: \
+    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
+$(BUILD)/desktop_test_wayfinding: $(BUILD)/desktop/test/t/test_wayfinding.o \
+    $(DESKTOP_TEST_SHELL_OBJ)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# T3: the overview/minimap model. overview.o is pure; it links the timeline
+# builder (to derive a strip from a REAL recording's rows and pin no-fabrication)
+# + the doc model, and NOTHING else — the same engine-free closure proof
+# test_timeline makes, now for the minimap projection. The fabric case is a hand-
+# built loom_fabric_t, so no loom builder is needed.
+$(BUILD)/desktop/test/t/test_overview.o: \
+    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
+$(BUILD)/desktop_test_overview: $(BUILD)/desktop/test/t/test_overview.o \
+    $(BUILD)/desktop/test/vw/overview.o \
+    $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # --- 20-workspace-and-settings.md tests --------------------------------------

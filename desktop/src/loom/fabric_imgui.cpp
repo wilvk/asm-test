@@ -4,12 +4,16 @@
 #include "imgui_internal.h"
 #include "ImZoomSlider.h"
 
+#include <algorithm>
+
 #include "loom/loom_draw.h"
+#include "nav.h"             // dt_link — the minimap click routes through it (21 T3)
 #include "ui/legend.h"
 #include "ui/primer.h"
 #include "ui/terms.h"
 #include "ui/theme.h"
 #include "ui/timepos.h"
+#include "views/overview.h" // whole-fabric minimap projection (21 T3)
 
 namespace asmdesk {
 
@@ -148,7 +152,8 @@ void draw_loom_plan(const std::vector<loom_prim_t> &prims, std::string *hover) {
 // The panel
 // ---------------------------------------------------------------------------
 
-void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self) {
+void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self,
+               const std::function<void(const dt_link &)> &go) {
     if (!L.built || L.source_id != s.id) {
         L.source_id = s.id;
         L.built = true;
@@ -204,6 +209,58 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self) {
     ImGui::SameLine();
 
     ImGui::BeginChild("loom-fabric", ImVec2(0, 0), false);
+
+    // Whole-fabric overview/minimap (21-spine-navigation.md T3): a compressed
+    // projection of the fabric's OWN steps (overview_from_fabric — no new
+    // structure), so the ImZoomSlider below rides over a visible map of what it
+    // windows rather than an empty track. A click maps x to a step and jumps OUT
+    // through 04's router (dt_nav_go), so a minimap click and a typed go-to land
+    // identically (D4); it also moves the local playhead.
+    {
+        double wlo, whi;
+        loom_view_step_window(L.cam, &wlo, &whi);
+        OverviewStrip strip = overview_from_fabric(f, wlo, whi);
+        ImGui::TextDisabled("overview (whole trace) — click to jump");
+        const float mw = ImGui::GetContentRegionAvail().x;
+        const float mh = 30.0f;
+        const ImVec2 o = ImGui::GetCursorScreenPos();
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(o, ImVec2(o.x + mw, o.y + mh),
+                          IM_COL32(28, 30, 38, 255));
+        if (strip.nsteps > 0 && !strip.buckets.empty()) {
+            uint32_t maxw = 1;
+            for (const OverviewBucket &b : strip.buckets)
+                maxw = std::max(maxw, b.weight);
+            for (const OverviewBucket &b : strip.buckets) {
+                float x = o.x + mw * static_cast<float>(b.step) /
+                                    static_cast<float>(strip.nsteps);
+                float bh =
+                    mh * static_cast<float>(b.weight) / static_cast<float>(maxw);
+                dl->AddRectFilled(ImVec2(x, o.y + mh - bh),
+                                  ImVec2(x + 1.5f, o.y + mh), kSpan);
+            }
+            float vx0 = o.x + mw * static_cast<float>(strip.lo) /
+                                  static_cast<float>(strip.nsteps);
+            float vx1 = o.x + mw * static_cast<float>(strip.hi) /
+                                  static_cast<float>(strip.nsteps);
+            dl->AddRect(ImVec2(vx0, o.y), ImVec2(vx1, o.y + mh), kHop, 0.0f, 0,
+                        1.5f);
+        }
+        ImGui::InvisibleButton("loom-minimap", ImVec2(mw, mh));
+        if (ImGui::IsItemClicked() && strip.nsteps > 0) {
+            float frac = (ImGui::GetIO().MousePos.x - o.x) / (mw > 1 ? mw : 1);
+            uint32_t step = overview_click_step(strip, frac);
+            L.playhead = step;
+            if (go) {
+                dt_link l;
+                l.view = dt_view::timeline;
+                l.rec = s.id;
+                l.step = step;
+                go(l);
+            }
+        }
+    }
+
     // Zoom + scrub live in the panel; the plan is a pure function of them.
     // A windowed pan+zoom over the whole step range: drag the middle to PAN
     // (writes step0 — the field the model carried but nothing ever set), drag an

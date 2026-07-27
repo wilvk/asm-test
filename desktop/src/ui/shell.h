@@ -127,6 +127,18 @@ struct ShellState {
     // via dt_nav_go, so a typed target lands exactly like a clicked link.
     bool show_goto = false;
     char goto_buf[64] = {0};
+    // The `Ctrl+Shift+P` / `Ctrl+P` command palette (21-spine-navigation.md T1):
+    // open flag + its query buffer, beside show_goto/goto_buf. The table
+    // (build_palette) is a pure function of ShellState; every entry dispatches
+    // through this same nav table (or the exact want_view/show_* intent the
+    // keymap uses), so a palette command and a keypress are one at the model.
+    bool show_palette = false;
+    char palette_buf[256] = {0};
+    // The operand timeline's overview/minimap window (21-spine-navigation.md T3),
+    // in step space; the ImZoomSlider pans/zooms it and the strip draws it as the
+    // current viewport. hi <= lo means "whole trace" (the first-frame default) —
+    // a view-local camera, not nav state (D4), exactly like the Loom's cam.
+    double tl_lo = 0, tl_hi = 0;
     dt_nav_table nav;
     bool show_help = false;
     bool show_learn = false;

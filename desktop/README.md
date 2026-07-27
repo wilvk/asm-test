@@ -155,6 +155,38 @@ Formatting: `make desktop-fmt` reformats `desktop/**` with the repo
 [`.clang-format`](../.clang-format); `make desktop-fmt-check` reports drift and is
 informational (desktop/ stays out of the CI-gated format set, D8).
 
+## Command palette, wayfinding and minimap (doc 21)
+
+Three thin layers over the shipped `dt_nav_go` spine surface it to the expert.
+
+**Command palette — `Ctrl+Shift+P` / `Ctrl+P`.** A modal fuzzy finder that makes
+the whole app reachable by typing: switch view, go to a step / offset / pasted
+`asmtrace-link:`, select an open recording, attach to a process, run a
+walkthrough, reset the layout, or jump to a recorded code offset. Every command
+dispatches only through `dt_nav_go` (or the exact `want_view`/`show_*` intent a
+key press uses), and the palette also lists a discoverable hint for **every**
+advertised accelerator — the list is generated from `dt_nav_bindings()`, the same
+table the keyboard-help overlay reads, so it can never advertise a key the app
+does not honour. It filters with a "showing N of M" count and, in the app,
+relevance ranking; under the null test backend it degrades to an unranked list.
+
+**Wayfinding breadcrumb.** A persistent context band — recording ▸ session ▸ view,
+with the active step/selection, client-side filter, and process scope trailing —
+sourced from the router's current position (`nav.current`) and drawn in the outer
+shell (the menu bar when docked, a top strip otherwise) so it is visible from
+every pane. Two same-basename `.asmtrace` files are distinguished (in the band
+and the tab titles) by the shortest parent-dir segment that tells them apart, or a
+short path hash. Nothing navigated yet? It prompts rather than showing a blank
+bar. The back/forward buttons stay their own control below the reading pane.
+
+**Overview / minimap.** The timeline and the Loom each carry an always-visible
+strip drawing the **whole trace** density with the current viewport marked; a
+click jumps through `dt_nav_go`, so a minimap click and a typed go-to land
+identically. The strip is a compressed projection of the recording's own rows and
+**never fabricates structure** — a sparse trace yields a sparse strip (docs 04/08
+layout ban; a test pins it). The timeline's `ImZoomSlider` window control is the
+completed doc-14 T5 "timeline windowing" follow-on.
+
 ## Pinned dependencies
 
 Both are MIT, both are compiled **into** the binaries (bundled), and both are

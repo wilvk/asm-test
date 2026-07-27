@@ -7,6 +7,7 @@
 #ifndef ASMDESK_LOOM_DRAW_H
 #define ASMDESK_LOOM_DRAW_H
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,7 @@
 #include "loom/fabric_plan.h"
 #include "loom/feed.h"
 #include "loom/lineage.h"
+#include "nav.h"        // dt_link — the minimap click routes through 04's router
 #include "ui/primer.h" // first-open primer state (24 T5)
 
 namespace asmdesk {
@@ -45,8 +47,12 @@ struct LoomState {
 
 // Draw the Loom for recording `self` of `ws` (its decoded streams in `s`).
 // Weaves on first sight and on a tab change; a refusal renders as a placard and
-// NOTHING else, because there is no fabric to draw.
-void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self);
+// NOTHING else, because there is no fabric to draw. `go` (21-spine-navigation.md
+// T3) receives the deep link a minimap click resolves to, so the Loom overview
+// jumps through 04's router exactly like every other view; null in a draw-only
+// smoke (the minimap then only moves the local playhead).
+void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self,
+               const std::function<void(const dt_link &)> &go = {});
 
 } // namespace asmdesk
 #endif // ASMDESK_LOOM_DRAW_H

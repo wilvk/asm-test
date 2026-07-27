@@ -28,10 +28,12 @@
 #include "scene3d/pick.h"
 #include "space/projection.h"
 #include "ui/legend.h"        // shared semantic legend (24 T1/T2)
+#include "ui/palette.h"       // command palette over the spine (21 T1)
 #include "ui/perspectives.h"  // named dock perspectives + filter presets (20 T4)
 #include "ui/terms.h"         // domain-term-first headings + Terms pane (24 T3)
 #include "ui/theme.h"         // dt_set_light_theme (20 T5); dt_maybe_col coarse-scrub degrade (23 T4)
 #include "ui/view_presence.h" // data-driven view set + honest absence (20 T1)
+#include "ui/wayfinding.h"    // persistent breadcrumb + disambiguation (21 T2)
 #include "views/abixray.h"
 #include "views/views_draw.h"
 
@@ -686,7 +688,28 @@ static void body_timeline(ShellState &s, const Streams *a, const Streams *b) {
                    : dt_slice_backward(a->df.edges, a->df.nsteps,
                                        *s.selected_step);
     const dt_slice *lit = s.cone_active ? &cone : nullptr;
-    draw_timeline(b ? dt_timeline_build2(*a, *b, lit) : dt_timeline_build(*a, lit));
+    dt_timeline t =
+        b ? dt_timeline_build2(*a, *b, lit) : dt_timeline_build(*a, lit);
+
+    // Always-visible overview/minimap (21-spine-navigation.md T3): the whole-trace
+    // density above the table, with the current viewport (the ImZoomSlider window)
+    // drawn and a click routed OUT through dt_nav_go — a minimap click and a typed
+    // go-to land identically (D4). Completes doc-14 T5's timeline-windowing stub.
+    const uint32_t nsteps = a->df.nsteps;
+    if (s.tl_hi <= s.tl_lo) {
+        s.tl_lo = 0;
+        s.tl_hi = nsteps; // first-frame default: the whole trace
+    }
+    draw_timeline_overview(t, nsteps, &s.tl_lo, &s.tl_hi, [&s, a](uint32_t step) {
+        dt_link l;
+        l.view = dt_view::timeline;
+        l.rec = a->id;
+        l.step = step;
+        if (!dt_nav_go(s.nav, l))
+            s.status = s.nav.last_error;
+    });
+
+    draw_timeline(t);
 }
 static void body_slice(ShellState &s, const Streams *a, const Streams *b) {
     dt_view_header("slice");
@@ -857,8 +880,8 @@ static void draw_view_body(ShellState &s, ViewId id, const Recording &r,
         body_observer(s, r, a);
         break;
     case ViewId::Loom:
-        shell_live_weave_banner(s);
-        draw_loom(s.loom, *a, s.ws, s.active_tab);
+        shell_live_weave_banner(s); // 25 T5: perturb+torn caveat on a live weave
+        draw_loom(s.loom, *a, s.ws, s.active_tab, [&s](const dt_link &l) { if (!dt_nav_go(s.nav, l)) s.status = s.nav.last_error; });
         break;
     case ViewId::Scrubber:
         body_scrubber(s);
@@ -1044,6 +1067,13 @@ static void handle_keymap(ShellState &s) {
     // Ctrl+G — open the go-to-step/offset modal (its InputText owns the text).
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_G))
         s.show_goto = true;
+
+    // Ctrl+Shift+P / Ctrl+P — open the command palette (21-spine-navigation.md
+    // T1). Both chords open it (IsKeyChordPressed matches the exact modifiers, so
+    // the two do not double-fire); the palette's InputText owns its query text.
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_P) ||
+        ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_P))
+        s.show_palette = true;
 
     // Ctrl+O — open the file dialog (the File menu advertises this key, 20 T3).
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_O)) {
@@ -1258,6 +1288,13 @@ static void draw_windowed_shell(ShellState &s, const ImGuiViewport *vp) {
         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
     ImGui::Begin("asmtest", nullptr, shell_flags);
 
+    // Persistent wayfinding chrome (21-spine-navigation.md T2, F9): the "where am
+    // I" band lives in the OUTER window, above the tab strip, so it is visible
+    // from every tab body. It builds ON doc-18's back/forward affordance (drawn
+    // below by draw_breadcrumb), it does not duplicate it.
+    draw_wayfinding_bar(s);
+    ImGui::Separator();
+
     // The persistent task rail (20 T2): a fixed home/nav surface, NOT a closeable
     // `BeginTabItem` in the `main` strip. In the docked app it is the kPaneHome
     // pane; here (no dockspace) it is a left child pinned beside the recording tab
@@ -1311,8 +1348,11 @@ static void draw_windowed_shell(ShellState &s, const ImGuiViewport *vp) {
             // A dirty (authored + unsaved) recording carries a trailing `*` (T3,
             // VS-Code style); the ###recN id keeps the tab stable across the
             // rename so it never reorders or duplicates.
-            std::string title = base_name(r.path) + (r.dirty ? " *" : "") +
-                                "###rec" + std::to_string(i);
+            // 21 T2: disambiguate two same-basename recordings in the tab title,
+            // sharing the breadcrumb's helper so the band and the tabs agree.
+            std::string title = disambiguated_label(s.ws, i) +
+                                (r.dirty ? " *" : "") + "###rec" +
+                                std::to_string(i);
             bool keep_open = true;
             ImGuiTabItemFlags tf = 0;
             if (s.want_open_tab == static_cast<int>(i))
@@ -1439,6 +1479,12 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
         }
         if (ImGui::MenuItem("Settings"))
             s.show_settings = true;
+        // Persistent wayfinding chrome (21-spine-navigation.md T2, F9): the
+        // "where am I" band rides the always-visible menu bar, outside every dock
+        // pane, so it survives tab/pane switches. Read-only; the back/forward
+        // buttons (doc 18) stay their own control below the reading pane.
+        ImGui::Separator();
+        draw_wayfinding_bar(s);
         ImGui::EndMainMenuBar();
     }
 
@@ -1515,7 +1561,7 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
             ImGui::TextDisabled("(none yet — pick a task above)");
         for (size_t i = 0; i < s.ws.recordings.size(); ++i) {
             // A dirty (authored + unsaved) recording carries a trailing `*` (T3).
-            std::string label = base_name(s.ws.recordings[i].path) +
+            std::string label = disambiguated_label(s.ws, i) +
                                 (s.ws.recordings[i].dirty ? " *" : "") +
                                 "###home" + std::to_string(i);
             if (ImGui::Selectable(label.c_str(), s.active_tab == static_cast<int>(i)))
@@ -1634,7 +1680,7 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     if (ImGui::Begin(kPaneLoom)) {
         if (a != nullptr) {
             shell_live_weave_banner(s); // 25 T5: perturb+torn caveat on a live weave
-            draw_loom(s.loom, *a, s.ws, s.active_tab);
+            draw_loom(s.loom, *a, s.ws, s.active_tab, [&s](const dt_link &l) { if (!dt_nav_go(s.nav, l)) s.status = s.nav.last_error; });
         } else
             ImGui::TextDisabled("open a recording to weave its Loom");
     }
@@ -1758,10 +1804,10 @@ static void draw_breadcrumb(ShellState &s) {
     if (ImGui::IsItemHovered() && !s.nav.forward.empty())
         ImGui::SetTooltip("Alt+Right — forward to %s",
                           dt_nav_format(s.nav.forward.back()).c_str());
-    if (s.nav.current) {
-        ImGui::SameLine();
-        ImGui::TextDisabled("here: %s", dt_nav_format(*s.nav.current).c_str());
-    }
+    // The current position is no longer echoed here: the persistent wayfinding
+    // band (21-spine-navigation.md T2) now owns the rich "where am I" breadcrumb,
+    // so this stays the minimal back/forward affordance (doc 18) it always was —
+    // built on, not duplicated.
 }
 
 // Keep the Inspect door's least-perturbing default fed from the capability probe
@@ -1953,6 +1999,7 @@ void draw_shell(ShellState &s) {
         ImGui::End();
     }
     draw_goto_modal(s);   // Ctrl+G (17-T1)
+    draw_palette(s);      // Ctrl+Shift+P / Ctrl+P command palette (21 T1)
     draw_close_guards(s); // T3 dirty-close save/discard/cancel
     draw_settings(s);     // 20 T5 the Settings pane
 
