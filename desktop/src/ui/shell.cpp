@@ -8,6 +8,7 @@
 #include <utility>
 
 #include "imgui.h"
+#include "ImGuiFileDialog.h" // pure-ImGui open dialog (14 T7)
 
 #include "analysis/slice.h"
 #include "scene3d/hud.h"
@@ -516,28 +517,35 @@ static void draw_recording_tab(ShellState &s, const Recording &r) {
 // The recording-open dialog: a text field + Open/Cancel. A Workspace::open error
 // renders verbatim in the dialog — never a silent no-op.
 static void draw_open_dialog(ShellState &s) {
-    ImGui::Begin("Open recording", &s.open_dialog);
-    ImGui::TextUnformatted("path to a .asmtrace recording:");
-    ImGui::InputText("##open_path", s.open_path, sizeof s.open_path);
-    if (ImGui::Button("Open")) {
-        std::string err;
-        int idx = shell_open(s, s.open_path, err);
-        if (idx < 0) {
-            s.open_error = err;
-        } else {
-            s.open_error.clear();
-            s.active_tab = idx;
-            s.open_dialog = false;
+    // Pure-ImGui file picker (14-quick-wins.md T7): identical on Linux, macOS and
+    // inside docker-desktop — no zenity/osascript, which is what keeps the lane
+    // testable. Replaces the bare InputText path field.
+    ImGuiFileDialog *fd = ImGuiFileDialog::Instance();
+    if (!fd->IsOpened("dlg_open")) {
+        IGFD::FileDialogConfig cfg;
+        cfg.path = ".";
+        cfg.flags = ImGuiFileDialogFlags_Modal;
+        fd->OpenDialog("dlg_open", "Open a .asmtrace recording", ".asmtrace",
+                       cfg);
+    }
+    if (fd->Display("dlg_open", ImGuiWindowFlags_NoCollapse, ImVec2(520, 360))) {
+        if (fd->IsOk()) {
+            std::string err;
+            int idx = shell_open(s, fd->GetFilePathName(), err);
+            if (idx < 0)
+                s.open_error = err;
+            else {
+                s.open_error.clear();
+                s.active_tab = idx;
+            }
         }
+        fd->Close();
+        s.open_dialog = false; // done, whether Ok or Cancel
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel"))
-        s.open_dialog = false;
-    if (!s.open_error.empty()) {
-        ImGui::Separator();
-        ImGui::TextWrapped("open failed: %s", s.open_error.c_str());
-    }
-    ImGui::End();
+    // The refusal is first-class: surface it in the status bar (the dialog is
+    // gone by now), never swallowed.
+    if (!s.open_error.empty())
+        s.status = "open failed: " + s.open_error;
 }
 
 void draw_shell(ShellState &s) {

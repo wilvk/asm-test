@@ -338,6 +338,21 @@ excluded; both addons are in the compile-probe/digests/licenses.
 
 ### T7 — ImGuiFileDialog (v0.6.8): pure-ImGui open/save  (S, depends on: 12)
 
+> **Implemented 2026-07-27 — green; Track Q complete (7/7).** ImGuiFileDialog
+> **v0.6.8** vendored (`scripts/fetch-imguifiledialog.sh`, 3 core files only — no
+> stb/dirent), digest pinned, MIT license captured. **Compile-verified on
+> `1.91.9b-docking`**: its own `#if IMGUI_VERSION_NUM < 19201` guard is what makes
+> it build (the doc-11 correction, confirmed). A COMPILED addon whose object rides
+> the `shell.o` / `inspect_door.o` link sites (`desktop_app_objs` +
+> `DESKTOP_TEST_SHELL_OBJ`); it is in the compile-probe (`imgui_internal.h`).
+> `shell.cpp`'s `draw_open_dialog` is now the IGFD picker (filter `.asmtrace`,
+> modal; a refusal surfaces in the status bar, not swallowed), and
+> `inspect_door.cpp`'s save gained a "Browse…" IGFD dialog (confirm-overwrite,
+> default `capture.asmtrace`) that fills the path field. Pure ImGui — no
+> zenity/osascript, so `test_shell`/`test_golden` build+link it on every lane.
+> Interaction testing (the picker's own flow) awaits the test engine (17-T1); the
+> `.asmtrace` side-pane preview is a noted follow-on.
+
 **Goal.** Replace the raw `InputText` path fields with a real open/save dialog
 that behaves identically on Linux, macOS, and inside `docker-desktop` — **no
 zenity/osascript runtime deps** (which is what keeps the lane testable; a lane

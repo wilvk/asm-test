@@ -114,6 +114,21 @@ $(BUILD)/desktop/%/addon/textselect.o: $(TEXTSELECT_HOME)/textselect.cpp | $(TEX
 	@mkdir -p $(@D)
 	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
 
+# ImGuiFileDialog v0.6.8 (14 T7): a COMPILED addon (ImGuiFileDialog.cpp), pure
+# ImGui (no zenity/osascript, so docker-desktop tests it). Uses imgui_internal.h
+# -> compile-probe. Works on 1.91.9 via its own <19201 guard. Its object rides
+# the shell.o / inspect_door.o link sites (the open + save dialogs).
+IFD_VERSION ?= 0.6.8
+IFD_HOME    ?= $(BUILD)/addons/imguifiledialog-$(IFD_VERSION)
+$(IFD_HOME)/ImGuiFileDialog.cpp $(IFD_HOME)/ImGuiFileDialog.h $(IFD_HOME)/ImGuiFileDialogConfig.h &: scripts/fetch-imguifiledialog.sh scripts/third-party-digests.txt
+	sh scripts/fetch-imguifiledialog.sh >/dev/null
+DESKTOP_ADDON_INCLUDES += -I$(IFD_HOME)
+ADDON_PROBE_FLAGS += -DASMDESK_HAVE_IMGUIFILEDIALOG -I$(IFD_HOME)
+ADDON_PROBE_DEPS  += $(IFD_HOME)/ImGuiFileDialog.h
+$(BUILD)/desktop/%/addon/imguifiledialog.o: $(IFD_HOME)/ImGuiFileDialog.cpp | $(IFD_HOME)/ImGuiFileDialog.h $(IFD_HOME)/ImGuiFileDialogConfig.h $(IMGUI_HOME)/imgui.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
+
 # --- source basenames --------------------------------------------------------
 DESKTOP_IMGUI_CORE := imgui imgui_draw imgui_tables imgui_widgets
 DESKTOP_IMGUI_BACK := imgui_impl_glfw imgui_impl_opengl3
@@ -261,6 +276,7 @@ desktop_app_objs = \
   $(DESKTOP_OBS_PURE:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(BUILD)/desktop/$(1)/addon/textselect.o \
+  $(BUILD)/desktop/$(1)/addon/imguifiledialog.o \
   $(DESKTOP_LOOM_PURE:%=$(BUILD)/desktop/$(1)/lo/%.o) \
   $(DESKTOP_LOOM_DRAW:%=$(BUILD)/desktop/$(1)/lo/%.o) \
   $(BUILD)/desktop/$(1)/src/walkthrough.o $(BUILD)/desktop/$(1)/src/capview.o \
@@ -971,6 +987,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/ui/learn_door.o \
     $(BUILD)/desktop/test/ui/capability_panel.o \
     $(BUILD)/desktop/test/ui/inspect_door.o \
+    $(BUILD)/desktop/test/addon/imguifiledialog.o \
     $(DESKTOP_TEST_LIVE) \
     $(BUILD)/desktop/test/src/walkthrough.o \
     $(BUILD)/desktop/test/src/capview.o \

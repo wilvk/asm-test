@@ -9,6 +9,7 @@
 
 #include "imgui.h"
 
+#include "ImGuiFileDialog.h" // pure-ImGui save dialog (14 T7)
 #include "ui/doors.h"
 #include "ui/progress.h"
 #include "views/views_draw.h"
@@ -283,6 +284,28 @@ void draw_save_capture(InspectState &s) {
         return;
     }
     ImGui::InputText("path##save", s.save_path, sizeof s.save_path);
+    ImGui::SameLine();
+    // Pure-ImGui save picker (14-quick-wins.md T7): fills the path field, so the
+    // manual field stays as a fallback / for scripted paths. Confirm-overwrite is
+    // on, and the default name is the stray-safe "capture.asmtrace".
+    if (ImGui::Button("Browse…##save")) {
+        IGFD::FileDialogConfig cfg;
+        cfg.path = ".";
+        cfg.fileName = "capture.asmtrace";
+        cfg.flags =
+            ImGuiFileDialogFlags_Modal | ImGuiFileDialogFlags_ConfirmOverwrite;
+        ImGuiFileDialog::Instance()->OpenDialog("dlg_save", "Save capture as…",
+                                                ".asmtrace", cfg);
+    }
+    if (ImGuiFileDialog::Instance()->Display("dlg_save",
+                                             ImGuiWindowFlags_NoCollapse,
+                                             ImVec2(520, 360))) {
+        if (ImGuiFileDialog::Instance()->IsOk()) {
+            std::string p = ImGuiFileDialog::Instance()->GetFilePathName();
+            std::snprintf(s.save_path, sizeof s.save_path, "%s", p.c_str());
+        }
+        ImGuiFileDialog::Instance()->Close();
+    }
     if (growing)
         ImGui::TextColored(kMaybe,
                            "the capture is still running — saving now writes a "

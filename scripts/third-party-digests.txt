@@ -90,3 +90,6 @@ tarball-sha256  imgui_club     a436e793fe44a2c8e827bfcbf138fcbe11940476  sha256:
 # latest (v1.2.0+ need ImGui 1.92). Release-tag source archive; + its utfcpp dep.
 tarball-sha256  textselect     1.1.6  sha256:41ebb4323697bd2e1bedd3bb52a5abd222e941b9e145896d25741143b31ecec7
 tarball-sha256  utfcpp         4.0.6  sha256:6920a6a5d6a04b9a89b2a89af7132f8acefd46e0c2a7b190350539e9213816c0
+# ImGuiFileDialog v0.6.8 (14 T7): pure-ImGui open/save (MIT). Works on 1.91.9 via
+# its own <19201 version guard. Release-tag source archive; keep the 3 core files.
+tarball-sha256  imguifiledialog  0.6.8  sha256:7aa3fbb0fc7206c5b434246d906f036057a59eb51e28ae36488aa654a667a266
