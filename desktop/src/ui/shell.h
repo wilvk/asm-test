@@ -33,6 +33,7 @@
 #include "ui/undo.h"      // app-level command/undo stack (22 T4)
 #include "views/completeness.h"
 #include "views/observer_draw.h"
+#include "views/timeline.h" // dt_timeline — shell_timeline_model's return type
 #include "walkthrough.h"
 
 #include <map>
@@ -355,6 +356,16 @@ void shell_restore_workspace(ShellState &s, const WorkspaceState &ws);
 // The A / B streams for the active tab; B is null when nothing is attached.
 const Streams *shell_a(const ShellState &s);
 const Streams *shell_b(const ShellState &s);
+
+// Build the operand-timeline model for `a` (with `b` for a diff), projecting the
+// shared selection + the global-find hits — but the selection ONLY when it
+// belongs to `a` (selection.rec == a->id), so a step brushed in another recording
+// never marks a coincident index here (22 T1, D7). Pure and engine-free: `s` is
+// read-only and nothing is drawn, so body_timeline draws what this returns and
+// the null-backend test drives it directly (a true regression seam for the
+// recording-scoping fix).
+dt_timeline shell_timeline_model(const ShellState &s, const Streams *a,
+                                 const Streams *b);
 
 // Draw one frame of the shell. Backend-free: only ImGui immediate-mode calls, so
 // a null ImGui context (no GLFW/GL) drives it in tests.

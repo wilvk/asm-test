@@ -783,7 +783,8 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
 static void body_canvas(ShellState &, const Streams *a, const Streams *b) {
     draw_canvas(b ? dt_canvas_build2(*a, *b) : dt_canvas_build(*a));
 }
-static void body_timeline(ShellState &s, const Streams *a, const Streams *b) {
+dt_timeline shell_timeline_model(const ShellState &s, const Streams *a,
+                                 const Streams *b) {
     // The shared selection projects onto this recording ONLY when it belongs to
     // it (22 T1; selection.rec is the disambiguator). Without this, a step brushed
     // in recording A stays lit on a coincident index in recording B after a tab
@@ -811,6 +812,11 @@ static void body_timeline(ShellState &s, const Streams *a, const Streams *b) {
     for (const FindHit &h : s.find.hits)
         if (h.view == dt_view::timeline && h.step)
             t.find_hits.push_back(*h.step);
+    return t;
+}
+
+static void body_timeline(ShellState &s, const Streams *a, const Streams *b) {
+    dt_timeline t = shell_timeline_model(s, a, b);
 
     // Always-visible overview/minimap (21-spine-navigation.md T3): the whole-trace
     // density above the table, with the current viewport (the ImZoomSlider window)

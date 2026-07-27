@@ -116,16 +116,17 @@ int main() {
     check("slice/absent-nothing", !sv2_fabricated,
           "an absent step is not a slice node, never fabricated (D7)");
 
-    // === fix 4: the selection is recording-SCOPED (body_timeline) =============
+    // === fix 4: the selection is recording-SCOPED (shell_timeline_model) =======
     // A brush in recording A must NOT light a coincident index in recording B
-    // after a tab switch. body_timeline gates the projection on
-    // `s.selection.rec == a->id`; before the fix it set `t.selected_step =
-    // s.selection.step` unconditionally, misattributing A's step to whatever
-    // recording was active (a fabricated row — the D7 breach). body_timeline is
-    // static and its projected model is a non-observable local, so this pins the
-    // exact gate the fix added, over TWO real recordings, with the selection set
-    // through the ONE shared writer (Selection::set — the same path the router and
-    // keymap use).
+    // after a tab switch. shell_timeline_model gates the projection on
+    // `s.selection.rec == a->id`; before the fix body_timeline set
+    // `t.selected_step = s.selection.step` unconditionally, misattributing A's step
+    // to whatever recording was active (a fabricated row — the D7 breach). This is
+    // a TRUE drive-through: it calls the exact `shell_timeline_model` body_timeline
+    // draws, over TWO real recordings, with the selection set through the ONE shared
+    // writer (Selection::set — the same path the router and keymap use). Reverting
+    // the gate inside shell_timeline_model makes `fix4/B timeline marks nothing`
+    // fail.
     {
         ShellState s2;
         std::string e2;
@@ -153,8 +154,9 @@ int main() {
         s2.active_tab = ib;
         check("fix4/no cross-recording selection on B", !projected(B).has_value(),
               "A's brush must not light a row in B after a tab switch (D7)");
-        dt_timeline tB = dt_timeline_build(*B);
-        tB.selected_step = projected(B); // exactly body_timeline's gated projection
+        // Drive the REAL model builder body_timeline uses (not a reconstruction):
+        // B's timeline carries no selected row for A's brush.
+        dt_timeline tB = shell_timeline_model(s2, B, nullptr);
         check("fix4/B timeline marks nothing", !tB.selected_step.has_value(),
               "the timeline for B marks nothing, never a misattributed row");
 
@@ -163,8 +165,7 @@ int main() {
         check("fix4/selection projects on its own recording",
               projected(A).has_value() && *projected(A) == stepA,
               "on A (the recording the pick was made in) the brush projects");
-        dt_timeline tA = dt_timeline_build(*A);
-        tA.selected_step = projected(A);
+        dt_timeline tA = shell_timeline_model(s2, A, nullptr);
         check("fix4/A timeline marks the brushed step",
               tA.selected_step && *tA.selected_step == stepA,
               "on its own recording the timeline marks the brushed step");
