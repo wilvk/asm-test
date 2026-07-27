@@ -65,6 +65,24 @@ int main() {
     check("the built-in bitmap font still builds after the degrade", w > 0);
     ImGui::DestroyContext();
 
+    // 3) DPI-aware bake (20-workspace-and-settings.md T5): baking at a scaled px
+    // rebuilds a non-empty atlas and advances the rebuild counter — the seam the
+    // content-scale change (main.cpp) drives.
+    ImGui::CreateContext();
+    ImGuiIO &io3 = ImGui::GetIO();
+    io3.IniFilename = nullptr;
+    unsigned long before = asmdesk::fonts_rebuild_count();
+    check("load_fonts at 2x content scale builds",
+          asmdesk::load_fonts(io3, ASMTEST_JBM_TTF, ASMTEST_CODICON_TTF,
+                              ASMTEST_FA_TTF, 15.0f, 2.0f));
+    check("a content-scale change rebuilt the atlas",
+          asmdesk::fonts_rebuild_count() > before);
+    unsigned char *p3 = nullptr;
+    int w3 = 0, h3 = 0;
+    io3.Fonts->GetTexDataAsRGBA32(&p3, &w3, &h3);
+    check("the scaled atlas builds non-empty", w3 > 0 && h3 > 0 && p3 != nullptr);
+    ImGui::DestroyContext();
+
     if (fails) {
         std::fprintf(stderr, "test_fonts: %d FAILURE(S)\n", fails);
         return 1;

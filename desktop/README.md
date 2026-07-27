@@ -12,6 +12,35 @@ document model, and the reuse seam onto the asmspy view-model, implemented from
 ([02-exporters-and-readers.md](../docs/internal/gui/02-exporters-and-readers.md)).
 The Loom and the live observer surfaces land in the sibling docs 05–09.
 
+## Workspace, entry rail and Settings (doc 20)
+
+First run is a **persistent task rail** (not a "choose a door" chooser): *Learn
+how assembly runs* / *Open a trace I have* / *Capture a live process* / *Author a
+routine*. An empty workspace auto-lands in **Learn** (the dependency-free path),
+and the chosen mode drives its dock perspective so the label and the layout agree.
+
+The **view tabs are data-driven**: only the views a recording can fill are shown
+(the lean default is Summary / Canvas / Timeline; Loom / 3D / Scrubber / ABI x-ray
+appear only when their backing events or capture are present, scoped by mode). The
+views a recording *cannot* fill collapse into one **"unavailable views (N)"**
+affordance that still names each absent view and its machine reason — the truth is
+graded below the present set, never hidden.
+
+The **workspace persists** across launches in `build/desktop-workspace.json`
+(beside the dock `.ini`, git-ignored): the open recordings, the active view and
+each pane's selection restore as `asmtrace-link`s, and an MRU **recents** list
+appears on the rail and in **File ▸ Open Recent** — each entry reopening to its
+exact prior position. **Drag-drop** opens a file. A recording whose file has
+vanished stays in recents **with its load error**, never silently dropped. Named
+**dock perspectives** and named **filter presets** persist in the same store.
+
+A **Settings** pane (rail or the top menu) offers a user **text-scale** (0.8×–2.0×,
+via `FontGlobalScale` with a DPI-aware atlas re-bake on a content-scale change), a
+remembered **window size** (`build/desktop-settings.json`; the old 1280×720 literal
+is retired), and a **light theme** that keeps the honesty-chrome (warn/refuse)
+contrast. Text-scale is the **only** in-app accessibility lever — Dear ImGui
+exposes no OS screen-reader tree, and the pane says so.
+
 ## Two binaries, one license split
 
 | Binary | What it is | License |

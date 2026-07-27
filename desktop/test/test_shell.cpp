@@ -10,8 +10,10 @@
 #include "imgui_internal.h" // 19: FindWindowByName + ImGuiWindow::{WasActive,DockId}
 
 #include "doc/recording.h"
+#include "doc/workspace_state.h" // 20 T3: capture/restore round-trip
 #include "ui/layout.h" // 19: kPane* names, DockLayout, LayoutPreset, layout_build
 #include "ui/shell.h"
+#include "ui/view_presence.h" // 20 T1: the data-driven view set
 #include "views/abixray.h"    // 09-T4: the surfaced ABI x-ray tab's model
 #include "views/slice_view.h" // 09-T5: assert the blame link's backward cone
 #include "walkthrough.h"
@@ -83,8 +85,8 @@ int main() {
         s.ws.open(fx(f), err); // rejects can't happen for these; ignore err
     }
     check("smoke/opened", s.ws.recordings.size() == 6, "all six should open");
-    s.open_dialog = true;            // exercise the open-dialog draw path
-    s.door_tabs.push_back("Author"); // exercise a placeholder door tab
+    s.open_dialog = true; // exercise the open-dialog draw path
+    s.show_settings = true; // exercise the Settings pane draw path (20 T5)
     // The Inspect door (07 T4/T5) draws in BOTH binaries, so its whole path —
     // the /proc list, the patch bay's budget decision, the live status — runs
     // headlessly here with no serve host connected. That "not connected yet"
@@ -591,6 +593,150 @@ int main() {
         closed = shell_request_author_close(cs);
         check("t3/author-clean-closes", closed && !cs.show_author,
               "a clean Author tab closes on request");
+    }
+
+    // --- 20 T2: auto-land Learn on empty + mode drives pending_preset -------
+    {
+        ShellState es;
+        check("20t2/auto-land-learn", es.mode == Mode::Learn,
+              "an empty workspace must auto-land in Learn (the dependency-free "
+              "path)");
+        check("20t2/no-preset-pending", !es.pending_preset.has_value(),
+              "a fresh ShellState requests no perspective yet");
+        // Selecting each mode sets mode + the matching pending_preset (the seam
+        // the docked frame applies — asserted here, not the DockBuilder tree).
+        shell_select_mode(es, Mode::Author);
+        check("20t2/author-mode", es.mode == Mode::Author, "mode must update");
+        check("20t2/author-preset",
+              es.pending_preset.value_or(LayoutPreset::LiveObserver) ==
+                  LayoutPreset::Author,
+              "Author mode requests the Author perspective");
+        shell_select_mode(es, Mode::Capture);
+        check("20t2/capture-preset",
+              es.pending_preset.value_or(LayoutPreset::Author) ==
+                  LayoutPreset::LiveObserver,
+              "Capture mode requests the LiveObserver perspective");
+        shell_select_mode(es, Mode::Learn);
+        check("20t2/learn-preset",
+              es.pending_preset.value_or(LayoutPreset::LiveObserver) ==
+                  LayoutPreset::ReplayInspect,
+              "Learn mode requests the ReplayInspect perspective");
+    }
+
+    // --- 20 T1: the view set flips with the recording's data ----------------
+    {
+        // min-trace: a bare recording — Summary/Canvas/Timeline present; Loom /
+        // Scrubber / 3D absent, EACH with a non-empty machine reason (D7).
+        ShellState vs;
+        std::string err;
+        int im = shell_open(vs, fx("min-trace.asmtrace"), err);
+        check("20t1/min opened", im >= 0, err.c_str());
+        vs.active_tab = im;
+        const Streams *a = shell_a(vs);
+        check("20t1/min decoded", a != nullptr, "no stream");
+        if (a != nullptr) {
+            const StepIndex &si = vs.stepidx[static_cast<size_t>(im)];
+            const ObserverState &obs = vs.observers[static_cast<size_t>(im)];
+            auto vp = view_presence(*a, obs, si,
+                                    vs.ws.recordings[static_cast<size_t>(im)],
+                                    Mode::Open, /*b_attachable=*/false);
+            auto find = [&](ViewId id) -> const ViewPresence * {
+                for (const ViewPresence &e : vp)
+                    if (e.id == id)
+                        return &e;
+                return nullptr;
+            };
+            check("20t1/summary present", find(ViewId::Summary) &&
+                                              find(ViewId::Summary)->present,
+                  "Summary is always present");
+            check("20t1/canvas present",
+                  find(ViewId::Canvas) && find(ViewId::Canvas)->present,
+                  "Canvas is in the lean default");
+            check("20t1/timeline present",
+                  find(ViewId::Timeline) && find(ViewId::Timeline)->present,
+                  "Timeline is in the lean default");
+            // The reveal-when-present views are absent for a bare recording, and
+            // each names WHY (never an empty "unavailable").
+            for (ViewId id : {ViewId::Loom, ViewId::Scrubber, ViewId::Scene3D}) {
+                const ViewPresence *e = find(id);
+                check("20t1/absent", e && !e->present,
+                      "a reveal view must be absent for a bare recording");
+                check("20t1/absent-named", e && !e->reason.empty(),
+                      "an absent view must carry a non-empty machine reason");
+            }
+            // The affordance count equals the number of absent entries.
+            size_t nabs = view_absent_count(vp);
+            size_t counted = 0;
+            for (const ViewPresence &e : vp)
+                if (!e.present)
+                    counted++;
+            check("20t1/absent-count", nabs == counted && nabs > 0,
+                  "unavailable-views (N) must equal the absent entries");
+        }
+
+        // A codeimage-bearing recording flips 3D to PRESENT (the same gate the
+        // scene pane reads).
+        ShellState cs;
+        int ic = shell_open(cs, gd("scene-abs-loop.asmtrace"), err);
+        check("20t1/codeimage opened", ic >= 0, err.c_str());
+        cs.active_tab = ic;
+        const Streams *ca = shell_a(cs);
+        if (ca != nullptr) {
+            auto vp = view_presence(*ca, cs.observers[static_cast<size_t>(ic)],
+                                    cs.stepidx[static_cast<size_t>(ic)],
+                                    cs.ws.recordings[static_cast<size_t>(ic)],
+                                    Mode::Open, false);
+            bool scene = false;
+            for (const ViewPresence &e : vp)
+                if (e.id == ViewId::Scene3D)
+                    scene = e.present;
+            check("20t1/codeimage flips 3D present", scene,
+                  "a codeimage recording must make the 3D overview present");
+        }
+    }
+
+    // --- 20 T3: the workspace round-trips through capture -> restore ---------
+    {
+        ShellState a;
+        std::string err;
+        int i0 = shell_open(a, fx("min-trace.asmtrace"), err);
+        int i1 = shell_open(a, fx("dropped.asmtrace"), err);
+        check("20t3/opened two", i0 >= 0 && i1 >= 0, err.c_str());
+        a.active_tab = i1;
+        a.selected_step = 2;
+        a.view = dt_view::timeline;
+        // Snapshot to a WorkspaceState, serialise + parse, then restore into a
+        // fresh shell: the same open set and active recording come back.
+        WorkspaceState ws = shell_capture_workspace(a);
+        check("20t3/capture open set", ws.open.size() == 2,
+              "both recordings must be captured");
+        check("20t3/capture recents", ws.recents.size() == 2,
+              "both opens land in recents");
+        std::string json = workspace_state_serialize(ws);
+        WorkspaceState parsed;
+        check("20t3/round-trips", workspace_state_parse(json, parsed),
+              "the serialised store must parse");
+        check("20t3/open set stable", parsed.open == ws.open,
+              "the open set must survive serialise->parse");
+
+        ShellState b;
+        shell_restore_workspace(b, parsed);
+        check("20t3/restore reopens", b.ws.recordings.size() == 2,
+              "restore must reopen both recordings");
+        check("20t3/restore active",
+              b.active_tab == 1 && b.selected_step.value_or(999) == 2,
+              "restore must land on the prior active recording + step");
+
+        // A vanished recording is KEPT in recents with an error, never dropped.
+        WorkspaceState gone;
+        gone.open.push_back(std::string(ASMTEST_FIXTURE_DIR) +
+                            "/does-not-exist.asmtrace");
+        ShellState c;
+        shell_restore_workspace(c, gone);
+        check("20t3/vanished kept in recents", c.recents.size() == 1,
+              "a vanished recording must stay in recents");
+        check("20t3/vanished names the error", !c.status.empty(),
+              "a vanished recording must surface its load error (D7)");
     }
 
     if (failures) {

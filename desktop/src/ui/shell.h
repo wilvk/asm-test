@@ -14,6 +14,7 @@
 #include "analysis/stepindex.h"
 #include "doc/streams.h"
 #include "doc/workspace.h"
+#include "doc/workspace_state.h" // WorkspaceState / FilterPreset / recents (20 T3/T4)
 #include "live/inspect.h" // FeedbackInputs, for the toast-transition tracker (16 T1)
 #include "loom/loom_draw.h"
 #include "nav.h"
@@ -23,11 +24,15 @@
 #include "space/terrain.h"
 #include "space/trajectory.h"
 #include "ui/doors.h"
-#include "ui/primer.h" // first-open primer state (24 T5)
+#include "ui/mode.h"     // task-language modes (20 T2)
+#include "ui/primer.h"   // first-open primer state (24 T5)
 #include "ui/scene_host.h"
+#include "ui/settings.h" // user text-scale / theme / window size (20 T5)
 #include "views/completeness.h"
 #include "views/observer_draw.h"
 #include "walkthrough.h"
+
+#include <map>
 
 namespace asmdesk {
 
@@ -63,9 +68,34 @@ struct ShellState {
     ImGuiID dockspace_id = 0;
     char open_path[1024] = {0}; // its InputText buffer
     std::string open_error;     // last open failure, rendered verbatim
-    // Author/Inspect open an empty placeholder tab in the full app (behaviour
-    // lands in docs 06/08); disabled with a reason in the render-only viewer.
-    std::vector<std::string> door_tabs;
+
+    // --- 20 T2: the task-language entry rail --------------------------------
+    // The active task mode. Defaults to Learn (the dependency-free landing), so
+    // an empty workspace auto-lands there (T2 step 4). Selecting a mode sets
+    // `pending_preset`, the seam the docked frame applies to the dockspace so the
+    // label and the pane arrangement never disagree (test_shell asserts this
+    // field rather than the DockBuilder tree — test_layout covers that).
+    Mode mode = Mode::Learn;
+    std::optional<LayoutPreset> pending_preset;
+
+    // --- 20 T3/T4: the persisted workspace state ----------------------------
+    // The MRU recents (most-recent first), surfaced on the rail and in File ▸
+    // Open Recent; `perspectives` are named dock arrangements and `presets` named
+    // filter/query strings, all round-tripped through the WorkspaceState store.
+    // `ws_dirty` asks main.cpp to flush the store after an open/close.
+    std::vector<std::string> recents;
+    std::map<std::string, std::string> perspectives;
+    std::vector<FilterPreset> presets;
+    bool ws_dirty = false;
+    char persp_name[64] = {0};  // "Save perspective as…" name buffer
+    char preset_name[64] = {0}; // "Save filter preset as…" name buffer
+
+    // --- 20 T5: user display settings ---------------------------------------
+    // The Settings pane's model (text-scale, content/DPI scale, window size,
+    // light theme). `settings_dirty` asks main.cpp to re-bake the atlas / persist.
+    Settings settings;
+    bool show_settings = false;
+    bool settings_dirty = false;
 
     // --- the replay views (04-replay-views.md) ---------------------------
     // Decoded once per open recording, parallel to ws.recordings: the builders
@@ -217,6 +247,24 @@ bool shell_request_author_close(ShellState &s);
 // safe to call again after the workspace changes.
 void shell_wire_nav(ShellState &s);
 
+// --- 20 T2: select a task mode ------------------------------------------------
+// Set `s.mode`, request its dock perspective (`pending_preset`, applied by the
+// docked frame), and open the mode's surface (Learn/Open/Capture/Author). The
+// seam the rail CTAs and the tests both drive — a pure ShellState move, so
+// test_shell asserts the resulting mode + pending_preset without a display.
+void shell_select_mode(ShellState &s, Mode m);
+
+// --- 20 T3: workspace persistence --------------------------------------------
+// Capture the open set, the active position and each recording's per-pane
+// selection as asmtrace-links, plus recents/perspectives/presets — everything
+// build/desktop-workspace.json remembers. Restore replays it: shell_open each
+// path, then dt_nav_go the active position so the workspace lands exactly where
+// it was left (D4). A path that no longer loads is kept in recents WITH its load
+// error routed to s.status (D7 — never silently dropped). Pure model moves, so
+// test_shell/test_workspace_state drive the round trip headless.
+WorkspaceState shell_capture_workspace(const ShellState &s);
+void shell_restore_workspace(ShellState &s, const WorkspaceState &ws);
+
 // The A / B streams for the active tab; B is null when nothing is attached.
 const Streams *shell_a(const ShellState &s);
 const Streams *shell_b(const ShellState &s);
@@ -224,6 +272,11 @@ const Streams *shell_b(const ShellState &s);
 // Draw one frame of the shell. Backend-free: only ImGui immediate-mode calls, so
 // a null ImGui context (no GLFW/GL) drives it in tests.
 void draw_shell(ShellState &s);
+
+// The persistent task-language entry rail (20 T2). Normally drawn inside the
+// shell (kPaneHome / the windowed left child); exposed so the doc-17 interaction
+// lane can drive its CTA clicks directly, as it does draw_obs_syscalls.
+void draw_home_rail(ShellState &s);
 
 // The 3D spacetime overview pane for the active recording (10-spacetime-3d-
 // overview.md — the integration surfacing pass). Weaves the pure space/ models

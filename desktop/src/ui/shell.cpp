@@ -27,8 +27,11 @@
 #include "scene3d/hud.h"
 #include "scene3d/pick.h"
 #include "space/projection.h"
-#include "ui/legend.h" // shared semantic legend (24 T1/T2)
-#include "ui/terms.h"  // domain-term-first headings + Terms pane (24 T3)
+#include "ui/legend.h"        // shared semantic legend (24 T1/T2)
+#include "ui/perspectives.h"  // named dock perspectives + filter presets (20 T4)
+#include "ui/terms.h"         // domain-term-first headings + Terms pane (24 T3)
+#include "ui/theme.h"         // dt_set_light_theme (20 T5)
+#include "ui/view_presence.h" // data-driven view set + honest absence (20 T1)
 #include "views/abixray.h"
 #include "views/views_draw.h"
 
@@ -95,6 +98,11 @@ int shell_open(ShellState &s, const std::string &path, std::string &err) {
     // index starts clean.
     s.scenes.resize(s.ws.recordings.size());
     s.scenes[static_cast<size_t>(idx)] = SceneView{};
+    // Remember it (T3): the MRU recents on the rail + File ▸ Open Recent, and a
+    // change to persist. `path` is stored, not the basename, so a recent reopens
+    // the exact file. main.cpp flushes the store when `ws_dirty` is set.
+    recents_push(s.recents, path);
+    s.ws_dirty = true;
     shell_wire_nav(s);
     return idx;
 }
@@ -122,6 +130,7 @@ void shell_close(ShellState &s, size_t idx) {
         s.close_pending = -1;
     else if (s.close_pending > static_cast<int>(idx))
         s.close_pending--;
+    s.ws_dirty = true; // the open set changed — persist it (T3)
     shell_wire_nav(s);
 }
 
@@ -217,40 +226,160 @@ static std::string base_name(const std::string &path) {
     return b.empty() ? "(unnamed)" : b;
 }
 
-// The three doors on the home screen. Learn opens the open dialog; Author and
-// Inspect are placeholders (behaviour in docs 06/08) — disabled with the reason
-// in the render-only viewer, opening an empty named tab in the full app.
-static void draw_doors(ShellState &s) {
-    ImGui::TextUnformatted("asmtest desktop — choose a door");
-    ImGui::Spacing();
-
-    if (ImGui::Button("Learn"))
+// --- 20 T2: select a task mode (the seam the rail CTAs + the tests drive) -----
+void shell_select_mode(ShellState &s, Mode m) {
+    s.mode = m;
+    s.pending_preset = mode_preset(m); // the docked frame applies it (T2 step 5)
+    switch (m) {
+    case Mode::Learn:
         s.show_learn = true;
-    ImGui::SameLine();
-    ImGui::TextDisabled("play a bundled walkthrough — no deps, no root");
-
-    if (ImGui::Button("Open a recording...")) {
+        break;
+    case Mode::Open:
         s.open_dialog = true;
         s.open_error.clear();
-    }
-    ImGui::SameLine();
-    ImGui::TextDisabled("replay a .asmtrace you already have");
-
-    if (ImGui::Button("Author"))
-        s.show_author = true;
-    ImGui::SameLine();
-    ImGui::TextDisabled("type assembly, run it, see faults as data");
-    // Inspect is in BOTH binaries — the one door where D9 pays off visibly.
-    // It links no engine: it reads /proc itself and captures by spawning
-    // `asmspy --serve` as a subprocess, so the render-only viewer hosts live
-    // sessions with its `ldd` still free of every tracer.
-    if (ImGui::Button("Inspect"))
+        break;
+    case Mode::Capture:
+    case Mode::Inspect:
+        // Inspect is in BOTH binaries — the one door where D9 pays off visibly.
+        // It links no engine: it reads /proc itself and captures by spawning
+        // `asmspy --serve` as a subprocess, so the render-only viewer hosts live
+        // sessions with its `ldd` still free of every tracer.
         s.show_inspect = true;
-    ImGui::SameLine();
-    ImGui::TextDisabled("attach to a running process — see why not when you "
-                        "cannot");
+        break;
+    case Mode::Author:
+        s.show_author = true;
+        break;
+    }
+}
+
+// --- 20 T3: capture / restore the workspace as asmtrace-links -----------------
+WorkspaceState shell_capture_workspace(const ShellState &s) {
+    WorkspaceState ws;
+    for (const Recording &r : s.ws.recordings)
+        ws.open.push_back(r.path);
+    if (s.nav.current)
+        ws.active = dt_nav_format(*s.nav.current);
+    for (size_t i = 0; i < s.streams.size(); i++) {
+        dt_link l;
+        l.rec = s.streams[i].id;
+        // Only the active recording carries the live selection; the model keeps
+        // one selection, so a per-pane link for the others names just the
+        // recording (its position restores to the top).
+        if (static_cast<int>(i) == s.active_tab) {
+            l.view = s.view;
+            l.step = s.selected_step;
+            l.off = s.selected_off;
+        }
+        ws.pane_links.push_back(dt_nav_format(l));
+    }
+    ws.recents = s.recents;
+    ws.perspectives = s.perspectives;
+    ws.presets = s.presets;
+    return ws;
+}
+
+void shell_restore_workspace(ShellState &s, const WorkspaceState &ws) {
+    s.recents = ws.recents;
+    s.perspectives = ws.perspectives;
+    s.presets = ws.presets;
+    for (const std::string &path : ws.open) {
+        std::string err;
+        int idx = shell_open(s, path, err);
+        if (idx < 0) {
+            // A vanished recording is KEPT in recents with its error (D7 — never
+            // silently dropped), so the user sees what went missing.
+            recents_push(s.recents, path);
+            s.status = err.empty() ? ("could not reopen " + path) : err;
+        }
+    }
+    // Replay each recording's per-pane selection, then the active position LAST
+    // so it wins — all through dt_nav_go, so a restore lands exactly like a
+    // pasted link (D4). Best-effort: a link naming a recording that failed to
+    // reopen refuses loudly into last_error and is skipped.
+    for (const std::string &link : ws.pane_links) {
+        dt_link l;
+        std::string perr;
+        if (dt_nav_parse(link, l, perr))
+            dt_nav_go(s.nav, l);
+    }
+    if (!ws.active.empty()) {
+        dt_link l;
+        std::string perr;
+        if (dt_nav_parse(ws.active, l, perr) && !dt_nav_go(s.nav, l))
+            s.status = s.nav.last_error;
+    }
+}
+
+// Open a recent/dropped path from the rail: open it, select it, remember it.
+static void rail_open_path(ShellState &s, const std::string &path) {
+    std::string err;
+    int idx = shell_open(s, path, err);
+    if (idx < 0) {
+        s.status = err.empty() ? ("could not open " + path) : err;
+        recents_push(s.recents, path); // kept-with-error (D7)
+    } else {
+        s.active_tab = idx;
+        s.want_open_tab = idx;
+    }
+}
+
+// --- 20 T2/T3: the persistent task-language entry rail ------------------------
+// Replaces the old "choose a door" chooser (F13). Task SENTENCES, not nouns;
+// learner-first (Learn / Open above Capture / Author); an empty workspace
+// auto-lands in Learn (the default `mode`) and the rail highlights it; and the
+// MRU recents land here so a start never forces recall-and-retype of a path. It
+// is drawn every frame in a fixed home surface (kPaneHome when docked, a left
+// child otherwise) — never a closeable `BeginTabItem` in the `main` strip.
+// Public so the doc-17 interaction lane can drive the CTA clicks directly
+// (test_ui), exactly as it drives draw_obs_syscalls.
+void draw_home_rail(ShellState &s) {
+    ImGui::TextUnformatted("asmtest — pick a task");
     ImGui::Spacing();
-    if (ImGui::Button("Keyboard bindings"))
+
+    const bool empty = s.ws.recordings.empty() && !s.inspect.host_started;
+
+    auto cta = [&](Mode m, const char *caption) {
+        const bool is_active = s.mode == m;
+        if (is_active)
+            ImGui::PushStyleColor(ImGuiCol_Button,
+                                  ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        if (ImGui::Button(mode_cta(m)))
+            shell_select_mode(s, m);
+        if (is_active)
+            ImGui::PopStyleColor();
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", caption);
+    };
+
+    // Learner-first: the two primary CTAs, Author/Capture framed below them.
+    cta(Mode::Learn, "play a bundled walkthrough — no deps, no root");
+    cta(Mode::Open, "replay a .asmtrace you already have");
+    ImGui::Spacing();
+    ImGui::TextDisabled(empty ? "new here? start above — or, when you have "
+                                "something to look at:"
+                              : "or:");
+    cta(Mode::Capture, "attach to a running process — see why not when you "
+                       "cannot");
+    cta(Mode::Author, "type assembly, run it, see faults as data");
+
+    ImGui::Separator();
+    ImGui::TextUnformatted("recent:");
+    if (s.recents.empty())
+        ImGui::TextDisabled("(nothing yet — open a trace and it lands here)");
+    for (size_t i = 0; i < s.recents.size(); ++i) {
+        std::string label =
+            base_name(s.recents[i]) + "###recent" + std::to_string(i);
+        if (ImGui::Selectable(label.c_str()))
+            rail_open_path(s, s.recents[i]);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", s.recents[i].c_str());
+    }
+
+    ImGui::Separator();
+    if (ImGui::SmallButton("Settings"))
+        s.show_settings = true;
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Keyboard bindings"))
         s.show_help = !s.show_help;
 }
 
@@ -559,71 +688,152 @@ static void learn_open(ShellState &s, const std::string &path, long step) {
         s.status = s.nav.last_error;
 }
 
+// --- 20 T1: the data-driven view set -----------------------------------------
+// Is a second recording attachable as B (for Diff / ABI x-ray)? True when one is
+// already attached, or the workspace holds another the `d` binding can grab.
+static bool shell_b_attachable(const ShellState &s) {
+    return s.b_index >= 0 || s.ws.recordings.size() >= 2;
+}
+
+// Compute the presence set for the active recording × the current mode. The
+// per-recording observer deck / regstate index feed the predicate; an unopened
+// (a == nullptr) recording yields an empty set (only Summary is drawn).
+static std::vector<ViewPresence> shell_view_presence(const ShellState &s,
+                                                     const Recording &r,
+                                                     const Streams *a) {
+    if (a == nullptr)
+        return {};
+    static const ObserverState kEmptyObs;
+    static const StepIndex kEmptySi;
+    size_t i = static_cast<size_t>(s.active_tab);
+    const ObserverState &obs =
+        i < s.observers.size() ? s.observers[i] : kEmptyObs;
+    const StepIndex &si = i < s.stepidx.size() ? s.stepidx[i] : kEmptySi;
+    return view_presence(*a, obs, si, r, s.mode, shell_b_attachable(s));
+}
+
+// Draw one present view's body by id. Only ever called for a present entry with
+// a decoded stream (a != nullptr), so the *a dereferences are safe.
+static void draw_view_body(ShellState &s, ViewId id, const Recording &r,
+                           const Streams *a, const Streams *b) {
+    switch (id) {
+    case ViewId::Summary:
+        draw_summary(r);
+        break;
+    case ViewId::Canvas:
+        body_canvas(s, a, b);
+        break;
+    case ViewId::Timeline:
+        body_timeline(s, a, b);
+        break;
+    case ViewId::Slice:
+        body_slice(s, a, b);
+        break;
+    case ViewId::Diff:
+        body_diff(s, a, b);
+        break;
+    case ViewId::Observer:
+        body_observer(s, r, a);
+        break;
+    case ViewId::Loom:
+        draw_loom(s.loom, *a, s.ws, s.active_tab);
+        break;
+    case ViewId::Scrubber:
+        body_scrubber(s);
+        break;
+    case ViewId::AbiXray:
+        body_abixray(s, a, b);
+        break;
+    case ViewId::Scene3D:
+        draw_scene_overview(s, r, *a);
+        break;
+    }
+}
+
+// The ONE honest "unavailable views (N)" affordance body (T1 step 4, D7). It
+// names every absent view and its verbatim machine reason — the truth "this
+// recording cannot fill view X" stays on screen, graded below the present set
+// rather than shown as N empty peer tabs. `focus` is the view a keymap request
+// named while absent, so it is explained FIRST.
+static void draw_unavailable_views(const std::vector<ViewPresence> &vp,
+                                   std::optional<dt_view> focus) {
+    ImGui::TextWrapped(
+        "These views cannot be filled by this recording in this mode. Each "
+        "reason below is the machine's, verbatim — the view is graded here, not "
+        "hidden.");
+    ImGui::Spacing();
+    auto row = [](const ViewPresence &e, bool lead) {
+        ImGui::BulletText("%s%s", e.label, lead ? "  (requested)" : "");
+        ImGui::Indent();
+        ImGui::PushStyleColor(ImGuiCol_Text, dt_warn_col());
+        ImGui::TextWrapped("%s", e.reason.c_str());
+        ImGui::PopStyleColor();
+        ImGui::Unindent();
+    };
+    // The requested-but-absent view first, then the rest in order.
+    if (focus)
+        for (const ViewPresence &e : vp)
+            if (!e.present && e.view && *e.view == *focus)
+                row(e, true);
+    for (const ViewPresence &e : vp)
+        if (!e.present && !(focus && e.view && *e.view == *focus))
+            row(e, false);
+}
+
 // One open recording's pane, NON-DOCKED path (the null backend's default and any
 // build with no dockspace): the summary chrome (03) then the replay views over
-// it (04), as a single-window tab strip. The docked path (draw_docked_shell)
-// distributes these same bodies across real panes instead. Kept intact so a run
-// with no docking does not regress (19 T1 step 2).
+// it (04), as a single-window tab strip — now DATA-DRIVEN (20 T1): only the
+// views this recording × mode can fill are emitted as tabs; the rest collapse
+// into one "unavailable views (N)" affordance. The docked path
+// (draw_docked_shell) distributes these same bodies across real panes instead.
 static void draw_recording_tab(ShellState &s, const Recording &r) {
+    const Streams *a = shell_a(s);
+    const Streams *b = shell_b(s);
+    std::vector<ViewPresence> vp = shell_view_presence(s, r, a);
+
+    // Did a 1/2/3/4 keymap request name a view that is ABSENT? It must land on
+    // the affordance with that view pre-explained, never a silent no-op (T1 s3).
+    std::optional<dt_view> absent_want;
+    if (s.want_view)
+        for (const ViewPresence &e : vp)
+            if (!e.present && e.view && *e.view == *s.want_view)
+                absent_want = *s.want_view;
+
     if (ImGui::BeginTabBar("views")) {
-        if (ImGui::BeginTabItem("Summary")) {
-            draw_summary(r);
-            ImGui::EndTabItem();
-        }
-        const Streams *a = shell_a(s);
-        const Streams *b = shell_b(s);
-        if (a != nullptr) {
-            // The 1/2/3/4 keymap asks a view to select itself via want_view
-            // (handle_keymap); honour it here with SetSelected, exactly as the
-            // Loom tab honours want_loom. want_view is cleared once per frame
-            // after this tab bar (below).
-            auto view_flags = [&s](dt_view v) -> ImGuiTabItemFlags {
-                return s.want_view == v ? ImGuiTabItemFlags_SetSelected : 0;
-            };
-            if (ImGui::BeginTabItem("Canvas", nullptr, view_flags(dt_view::canvas))) {
-                s.view = dt_view::canvas;
-                body_canvas(s, a, b);
+        if (a == nullptr) {
+            if (ImGui::BeginTabItem("Summary")) {
+                draw_summary(r);
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem("Timeline", nullptr, view_flags(dt_view::timeline))) {
-                s.view = dt_view::timeline;
-                body_timeline(s, a, b);
-                ImGui::EndTabItem();
+        } else {
+            for (const ViewPresence &e : vp) {
+                if (!e.present)
+                    continue;
+                ImGuiTabItemFlags fl = 0;
+                if (e.view && s.want_view == e.view)
+                    fl |= ImGuiTabItemFlags_SetSelected;
+                if (e.id == ViewId::Loom && s.want_loom)
+                    fl |= ImGuiTabItemFlags_SetSelected;
+                if (ImGui::BeginTabItem(e.label, nullptr, fl)) {
+                    if (e.view)
+                        s.view = *e.view;
+                    draw_view_body(s, e.id, r, a, b);
+                    ImGui::EndTabItem();
+                }
             }
-            if (ImGui::BeginTabItem("Slice", nullptr, view_flags(dt_view::slice))) {
-                s.view = dt_view::slice;
-                body_slice(s, a, b);
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Diff", nullptr, view_flags(dt_view::diff))) {
-                s.view = dt_view::diff;
-                body_diff(s, a, b);
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Observer")) {
-                body_observer(s, r, a);
-                ImGui::EndTabItem();
-            }
-            ImGuiTabItemFlags loom_flags = 0;
-            if (s.want_loom)
-                loom_flags |= ImGuiTabItemFlags_SetSelected;
-            if (ImGui::BeginTabItem("Loom", nullptr, loom_flags)) {
-                draw_loom(s.loom, *a, s.ws, s.active_tab);
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("Scrubber")) {
-                body_scrubber(s);
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("ABI x-ray")) {
-                body_abixray(s, a, b);
-                ImGui::EndTabItem();
-            }
-            if (ImGui::BeginTabItem("3D overview")) {
-                draw_scene_overview(s, r, *a);
-                ImGui::EndTabItem();
+            size_t nabs = view_absent_count(vp);
+            if (nabs > 0) {
+                std::string label = "unavailable views (" +
+                                    std::to_string(nabs) + ")###unavail";
+                ImGuiTabItemFlags fl =
+                    absent_want ? ImGuiTabItemFlags_SetSelected : 0;
+                if (ImGui::BeginTabItem(label.c_str(), nullptr, fl)) {
+                    draw_unavailable_views(vp, absent_want);
+                    ImGui::EndTabItem();
+                }
             }
         }
+        // App panels, not recording views: always available.
         if (ImGui::BeginTabItem("Backends")) {
             draw_completeness(s.completeness, s.repo_root);
             ImGui::EndTabItem();
@@ -712,6 +922,12 @@ static void handle_keymap(ShellState &s) {
     // Ctrl+G — open the go-to-step/offset modal (its InputText owns the text).
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_G))
         s.show_goto = true;
+
+    // Ctrl+O — open the file dialog (the File menu advertises this key, 20 T3).
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_O)) {
+        s.open_dialog = true;
+        s.open_error.clear();
+    }
 
     // Ctrl+Shift+R — reset the panel layout to the default (T2). The intent is
     // consumed near the dockspace build, so it fires with or without the menu.
@@ -920,13 +1136,17 @@ static void draw_windowed_shell(ShellState &s, const ImGuiViewport *vp) {
         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
     ImGui::Begin("asmtest", nullptr, shell_flags);
 
-    if (ImGui::BeginTabBar("main", ImGuiTabBarFlags_AutoSelectNewTabs)) {
-        if (ImGui::BeginTabItem("Home")) {
-            s.active_tab = -1;
-            draw_doors(s);
-            ImGui::EndTabItem();
-        }
+    // The persistent task rail (20 T2): a fixed home/nav surface, NOT a closeable
+    // `BeginTabItem` in the `main` strip. In the docked app it is the kPaneHome
+    // pane; here (no dockspace) it is a left child pinned beside the recording tab
+    // strip, so it is still drawn every frame and cannot be closed.
+    ImGui::BeginChild("homerail", ImVec2(320.0f, 0.0f), true);
+    draw_home_rail(s);
+    ImGui::EndChild();
+    ImGui::SameLine();
+    ImGui::BeginChild("mainarea");
 
+    if (ImGui::BeginTabBar("main", ImGuiTabBarFlags_AutoSelectNewTabs)) {
         // The Author door: full app only, and the render-only build says why
         // rather than hiding the tab (D4's split has to be legible). Its close is
         // routed through shell_request_author_close so an unsaved run raises the
@@ -996,19 +1216,11 @@ static void draw_windowed_shell(ShellState &s, const ImGuiViewport *vp) {
         if (to_close >= 0)
             shell_request_close(s, static_cast<size_t>(to_close)); // T3 dirty guard
 
-        // Placeholder door tabs (full app only; empty until docs 06/08).
-        for (size_t i = 0; i < s.door_tabs.size(); ++i) {
-            std::string title = s.door_tabs[i] + "###door" + std::to_string(i);
-            if (ImGui::BeginTabItem(title.c_str())) {
-                ImGui::TextDisabled("%s — view lands in a later doc",
-                                    s.door_tabs[i].c_str());
-                ImGui::EndTabItem();
-            }
-        }
         ImGui::EndTabBar();
     }
     ImGui::Separator();
     draw_breadcrumb(s); // T6 back/forward history affordance
+    ImGui::EndChild();   // mainarea
     ImGui::End();
 }
 
@@ -1036,6 +1248,39 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     // strip, and DockSpaceOverViewport then fills the remaining work area. Both
     // act on the real panes below now — the menu that was inert before this brief.
     if (ImGui::BeginMainMenuBar()) {
+        // File (20 T3): Open…, Open Recent ▸ (each reopening to its stored
+        // position), and Reopen last workspace.
+        if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Open…", "Ctrl+O")) {
+                s.open_dialog = true;
+                s.open_error.clear();
+            }
+            if (ImGui::BeginMenu("Open Recent", !s.recents.empty())) {
+                for (size_t i = 0; i < s.recents.size(); ++i) {
+                    std::string item =
+                        base_name(s.recents[i]) + "###mru" + std::to_string(i);
+                    if (ImGui::MenuItem(item.c_str()))
+                        rail_open_path(s, s.recents[i]);
+                }
+                ImGui::EndMenu();
+            }
+            // Reopen last workspace: main.cpp writes the store; here we re-open
+            // whatever recents remember that is not already open, so a session
+            // resumes without retyping paths.
+            if (ImGui::MenuItem("Reopen recent workspace", nullptr, false,
+                                !s.recents.empty())) {
+                std::vector<std::string> want = s.recents;
+                for (auto it = want.rbegin(); it != want.rend(); ++it) {
+                    bool already = false;
+                    for (const Recording &rec : s.ws.recordings)
+                        if (rec.path == *it)
+                            already = true;
+                    if (!already)
+                        rail_open_path(s, *it);
+                }
+            }
+            ImGui::EndMenu();
+        }
         if (ImGui::BeginMenu("View")) {
             // Reset now routes through the SAME want_layout_reset intent the
             // Ctrl+Shift+R keybinding raises (T2), so the two cannot diverge and
@@ -1048,8 +1293,30 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
                                    LayoutPreset::LiveObserver})
                 if (ImGui::MenuItem(layout_preset_name(p)))
                     layout_build(s.dockspace_id, vp->WorkSize, p);
+            // Named perspectives (20 T4): the built-in presets seed the map; a
+            // user perspective is a saved arrangement over the same panes.
+            ImGui::Separator();
+            if (ImGui::BeginMenu("Perspectives")) {
+                for (const auto &kv : s.perspectives)
+                    if (ImGui::MenuItem(kv.first.c_str()))
+                        perspective_apply(kv.second, s.dockspace_id,
+                                          vp->WorkSize);
+                ImGui::Separator();
+                ImGui::InputTextWithHint("##persp", "name…", s.persp_name,
+                                         sizeof s.persp_name);
+                ImGui::SameLine();
+                if (ImGui::SmallButton("Save perspective") &&
+                    s.persp_name[0] != '\0') {
+                    s.perspectives[s.persp_name] = perspective_snapshot();
+                    s.ws_dirty = true;
+                    s.persp_name[0] = '\0';
+                }
+                ImGui::EndMenu();
+            }
             ImGui::EndMenu();
         }
+        if (ImGui::MenuItem("Settings"))
+            s.show_settings = true;
         ImGui::EndMainMenuBar();
     }
 
@@ -1064,6 +1331,14 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
         // already present.
         if (layout_needs_default(s.dockspace_id))
             layout_build(s.dockspace_id, vp->WorkSize, LayoutPreset::ReplayInspect);
+        // Seed the perspective map (20 T4): the three built-in presets are the
+        // starting perspectives; a user "Save perspective" adds an ini snapshot.
+        if (s.perspectives.empty())
+            for (LayoutPreset p : {LayoutPreset::ReplayInspect,
+                                   LayoutPreset::Author,
+                                   LayoutPreset::LiveObserver})
+                s.perspectives[layout_preset_name(p)] =
+                    perspective_preset_value(layout_preset_name(p));
     }
 
     // T2 (F2): the always-available Reset intent — the keybinding or the menu —
@@ -1085,6 +1360,14 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
             layout_reset(s.dockspace_id, vp->WorkSize);
     }
 
+    // Mode drives perspective (20 T2 step 5): selecting a task mode on the rail
+    // sets `pending_preset`; apply it here where the dockspace id is valid, so
+    // the label and the pane arrangement never disagree. Consumed once.
+    if (s.pending_preset) {
+        layout_build(s.dockspace_id, vp->WorkSize, *s.pending_preset);
+        s.pending_preset.reset();
+    }
+
     // A capture the Inspect door just saved may ask to open in the Loom; do it
     // before we resolve the active recording so this frame reflects it.
     handle_inspect_open_request(s);
@@ -1101,13 +1384,13 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     const Streams *b = shell_b(s);
     int to_close = -1;
 
-    // --- kPaneHome (left): the doors + the persistent open-recording list ---
+    // --- kPaneHome (left): the persistent task rail + the open-recording list ---
     if (ImGui::Begin(kPaneHome)) {
-        draw_doors(s);
+        draw_home_rail(s); // 20 T2: the task-language rail replaces the doors
         ImGui::Separator();
         ImGui::TextUnformatted("open recordings:");
         if (s.ws.recordings.empty())
-            ImGui::TextDisabled("(none yet — open one from a door above)");
+            ImGui::TextDisabled("(none yet — pick a task above)");
         for (size_t i = 0; i < s.ws.recordings.size(); ++i) {
             // A dirty (authored + unsaved) recording carries a trailing `*` (T3).
             std::string label = base_name(s.ws.recordings[i].path) +
@@ -1155,34 +1438,69 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
             ImGui::TextDisabled(
                 "open a recording (a door in Home, or the list) to read it here");
         } else if (ImGui::BeginTabBar("recording-views")) {
-            if (ImGui::BeginTabItem("Summary")) {
-                draw_summary(*r);
-                ImGui::EndTabItem();
-            }
-            if (a != nullptr) {
-                // 1/2/3/4 still land: want_view SetSelected here for the tabbed
-                // views, SetWindowFocus for the standalone panes (below).
-                auto vf = [&s](dt_view v) -> ImGuiTabItemFlags {
-                    return s.want_view == v ? ImGuiTabItemFlags_SetSelected : 0;
-                };
-                if (ImGui::BeginTabItem("Canvas", nullptr, vf(dt_view::canvas))) {
-                    s.view = dt_view::canvas;
-                    body_canvas(s, a, b);
+            // Data-driven (20 T1): this centre pane hosts the light reading views;
+            // the timeline, scrubber, Loom, Observer and ABI x-ray are their OWN
+            // docked panes (each with its own placard). Gate the hosted subset on
+            // presence and collapse its absences into one affordance.
+            auto hosts = [](ViewId id) {
+                return id == ViewId::Summary || id == ViewId::Canvas ||
+                       id == ViewId::Slice || id == ViewId::Diff ||
+                       id == ViewId::Scene3D;
+            };
+            if (a == nullptr) {
+                if (ImGui::BeginTabItem("Summary")) {
+                    draw_summary(*r);
                     ImGui::EndTabItem();
                 }
-                if (ImGui::BeginTabItem("Slice", nullptr, vf(dt_view::slice))) {
-                    s.view = dt_view::slice;
-                    body_slice(s, a, b);
-                    ImGui::EndTabItem();
+            } else {
+                std::vector<ViewPresence> vp = shell_view_presence(s, *r, a);
+                std::optional<dt_view> absent_want;
+                if (s.want_view)
+                    for (const ViewPresence &e : vp)
+                        if (hosts(e.id) && !e.present && e.view &&
+                            *e.view == *s.want_view)
+                            absent_want = *s.want_view;
+                size_t nabs = 0;
+                for (const ViewPresence &e : vp) {
+                    if (!hosts(e.id))
+                        continue;
+                    if (!e.present) {
+                        nabs++;
+                        continue;
+                    }
+                    ImGuiTabItemFlags fl =
+                        (e.view && s.want_view == e.view)
+                            ? ImGuiTabItemFlags_SetSelected
+                            : 0;
+                    if (ImGui::BeginTabItem(e.label, nullptr, fl)) {
+                        if (e.view)
+                            s.view = *e.view;
+                        draw_view_body(s, e.id, *r, a, b);
+                        ImGui::EndTabItem();
+                    }
                 }
-                if (ImGui::BeginTabItem("Diff", nullptr, vf(dt_view::diff))) {
-                    s.view = dt_view::diff;
-                    body_diff(s, a, b);
-                    ImGui::EndTabItem();
-                }
-                if (ImGui::BeginTabItem("3D overview")) {
-                    draw_scene_overview(s, *r, *a);
-                    ImGui::EndTabItem();
+                if (nabs > 0) {
+                    std::string label = "unavailable views (" +
+                                        std::to_string(nabs) + ")###unavail_c";
+                    ImGuiTabItemFlags fl =
+                        absent_want ? ImGuiTabItemFlags_SetSelected : 0;
+                    if (ImGui::BeginTabItem(label.c_str(), nullptr, fl)) {
+                        for (const ViewPresence &e : vp)
+                            if (hosts(e.id) && !e.present) {
+                                ImGui::BulletText("%s", e.label);
+                                ImGui::Indent();
+                                ImGui::PushStyleColor(ImGuiCol_Text,
+                                                      dt_warn_col());
+                                ImGui::TextWrapped("%s", e.reason.c_str());
+                                ImGui::PopStyleColor();
+                                ImGui::Unindent();
+                            }
+                        ImGui::TextDisabled(
+                            "(the timeline, scrubber, Loom, Observer and ABI "
+                            "x-ray are their own panes — each shows its own "
+                            "placard when empty)");
+                        ImGui::EndTabItem();
+                    }
                 }
             }
             ImGui::EndTabBar();
@@ -1393,6 +1711,85 @@ static void draw_close_guards(ShellState &s) {
     }
 }
 
+// The Settings pane (20 T5, F6): user text-scale, light theme, remembered window
+// size — and an HONEST statement of the a11y scope (ImGui exposes no OS
+// screen-reader tree). It also hosts the named filter presets (T4). The pure
+// Settings struct is what the tests assert; this only wires the widgets to it.
+static void draw_settings(ShellState &s) {
+    if (!s.show_settings)
+        return;
+    if (ImGui::Begin("Settings", &s.show_settings)) {
+        ImGui::TextUnformatted("Display");
+        ImGui::Separator();
+        float ts = s.settings.text_scale;
+        if (ImGui::SliderFloat("Text scale", &ts, Settings::kTextScaleMin,
+                               Settings::kTextScaleMax, "%.2fx")) {
+            s.settings.text_scale = settings_clamp_text_scale(ts);
+            s.settings_dirty = true;
+        }
+        ImGui::TextDisabled("Live via FontGlobalScale; the atlas re-bakes crisp "
+                            "at the scaled px on a content-scale change.");
+        if (ImGui::Checkbox("Light theme", &s.settings.light_theme)) {
+            dt_set_light_theme(s.settings.light_theme);
+            if (s.settings.light_theme)
+                ImGui::StyleColorsLight();
+            else
+                ImGui::StyleColorsDark();
+            s.settings_dirty = true;
+        }
+        ImGui::Text("Window: %d x %d (remembered on exit)", s.settings.win_w,
+                    s.settings.win_h);
+        ImGui::Text("Content (DPI) scale: %.2fx",
+                    static_cast<double>(s.settings.content_scale));
+
+        ImGui::Separator();
+        ImGui::PushStyleColor(ImGuiCol_Text, dt_warn_col());
+        ImGui::TextWrapped(
+            "Accessibility: text-scale is the ONLY in-app a11y lever — Dear "
+            "ImGui exposes no OS screen-reader tree, so a screen reader cannot "
+            "read these panes. This is a recorded platform limit, not an "
+            "omission.");
+        ImGui::PopStyleColor();
+
+        // Named filter presets (20 T4) over the active recording's syscall
+        // filter. "Showing N of M" honesty stays exactly as the filter renders
+        // it — a preset only writes the query string, it never claims coverage.
+        ImGui::Separator();
+        ImGui::TextUnformatted("Saved filter presets");
+        const bool have_active =
+            s.active_tab >= 0 &&
+            static_cast<size_t>(s.active_tab) < s.observers.size();
+        for (const FilterPreset &p : s.presets) {
+            ImGui::PushID(p.name.c_str());
+            if (ImGui::SmallButton("apply") && have_active) {
+                char *buf = s.observers[static_cast<size_t>(s.active_tab)]
+                                .syscall_filter;
+                filter_preset_apply(
+                    p.query, buf,
+                    sizeof s.observers[static_cast<size_t>(s.active_tab)]
+                        .syscall_filter);
+            }
+            ImGui::SameLine();
+            ImGui::Text("%s = \"%s\"", p.name.c_str(), p.query.c_str());
+            ImGui::PopID();
+        }
+        ImGui::InputTextWithHint("##presetname", "preset name…", s.preset_name,
+                                 sizeof s.preset_name);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Save syscall filter") &&
+            s.preset_name[0] != '\0' && have_active) {
+            FilterPreset p;
+            p.name = s.preset_name;
+            p.query =
+                s.observers[static_cast<size_t>(s.active_tab)].syscall_filter;
+            s.presets.push_back(std::move(p));
+            s.ws_dirty = true;
+            s.preset_name[0] = '\0';
+        }
+    }
+    ImGui::End();
+}
+
 void draw_shell(ShellState &s) {
     const ImGuiViewport *vp = ImGui::GetMainViewport();
 
@@ -1402,6 +1799,11 @@ void draw_shell(ShellState &s) {
     // Keep the Inspect picker's least-perturbing default in step with the probe
     // (T5) before any door draws it.
     shell_sync_inspect_defaults(s);
+    // Keep the honesty-chrome theme flag + the live text-scale in step with the
+    // Settings model every frame (20 T5): cheap, and it means a restored setting
+    // takes effect without a special apply path.
+    dt_set_light_theme(s.settings.light_theme);
+    settings_apply_text_scale(s.settings, ImGui::GetIO());
 
     // Docking (13-foundation-moves.md T2): when enabled (the real app), the shell
     // draws real dockable panes (19). The null test backend leaves it OFF by
@@ -1422,8 +1824,9 @@ void draw_shell(ShellState &s) {
         draw_bindings_help();
         ImGui::End();
     }
-    draw_goto_modal(s); // Ctrl+G (17-T1)
+    draw_goto_modal(s);   // Ctrl+G (17-T1)
     draw_close_guards(s); // T3 dirty-close save/discard/cancel
+    draw_settings(s);     // 20 T5 the Settings pane
 
     // Live-session toasts (16 T1): raise one per TRANSITION, then remember this
     // frame's feedback state so the next comparison is against it (never
