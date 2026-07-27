@@ -277,7 +277,10 @@ $(BUILD)/desktop/app/ui/learn_door.o $(BUILD)/desktop/render/ui/learn_door.o $(B
 $(BUILD)/desktop/app/ui/shell.o $(BUILD)/desktop/render/ui/shell.o $(BUILD)/desktop/test/ui/shell.o: | $(IFD_HOME)/ImGuiFileDialog.h $(IMGUINOTIFY_HOME)/ImGuiNotify.hpp
 $(BUILD)/desktop/app/ui/inspect_door.o $(BUILD)/desktop/render/ui/inspect_door.o $(BUILD)/desktop/test/ui/inspect_door.o: | $(IFD_HOME)/ImGuiFileDialog.h
 $(BUILD)/desktop/app/vw/slice_view_draw.o $(BUILD)/desktop/render/vw/slice_view_draw.o $(BUILD)/desktop/test/vw/slice_view_draw.o: | $(NODEEDITOR_HOME)/imgui_canvas.h
-$(BUILD)/desktop/app/ui/author_door.o $(BUILD)/desktop/render/ui/author_door.o $(BUILD)/desktop/test/ui/author_door.o: | $(ICTEDIT_HOME)/TextEditor.h
+# author_door.cpp now #includes ImGuiFileDialog.h too (18-breach-stops.md T3: the
+# reused confirm-overwrite save dialog), so the fetch must land before it compiles
+# on a clean tree — same order-only prereq shell.o / inspect_door.o already carry.
+$(BUILD)/desktop/app/ui/author_door.o $(BUILD)/desktop/render/ui/author_door.o $(BUILD)/desktop/test/ui/author_door.o: | $(ICTEDIT_HOME)/TextEditor.h $(IFD_HOME)/ImGuiFileDialog.h
 
 # --- in-app term registry, GENERATED from the ONE glossary (24 T3) -----------
 # scripts/gen-terms.py parses docs/project/glossary.md's {glossary} directive
@@ -976,18 +979,23 @@ $(BUILD)/desktop_test_walkthrough: \
     $(BUILD)/desktop/test/src/walkthrough.o $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
-# capview.o links NOTHING: it is a pure function of the status data a caller
-# already probed, which is what makes the panel's two UI laws assertable on a
-# container with no PT, no LBR and no AMD silicon.
+# capview.o is a pure function of the status data a caller already probed, which
+# is what makes the panel's two UI laws assertable on a container with no PT, no
+# LBR and no AMD silicon. It now links lv/inspect.o too (18-breach-stops.md T4):
+# capview_remedy REUSES the inspect_door attach_verdict remedy map so the two
+# panels never give divergent advice. inspect.o references only libc/libstdc++
+# (no engine, no session object), so the pure closure holds.
 $(BUILD)/desktop_test_capview: $(BUILD)/desktop/test/t/test_capview.o \
-    $(BUILD)/desktop/test/src/capview.o
+    $(BUILD)/desktop/test/src/capview.o $(BUILD)/desktop/test/lv/inspect.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
-# author_vm.o links NOTHING either: it maps engine STRUCTS, never calls engine
-# functions, so the Author door's three rules are pinned without Keystone or
-# Unicorn on the host.
+# author_vm.o maps engine STRUCTS, never calls engine functions, so the Author
+# door's rules are pinned without Keystone or Unicorn on the host. It now links
+# doc/recording.o too (18-breach-stops.md T3): author_recording materialises a
+# run into a Recording so the save path reuses save_recording_file — pure JSON
+# assembly, no engine, so the round-trip is testable on any host.
 $(BUILD)/desktop_test_author_vm: $(BUILD)/desktop/test/t/test_author_vm.o \
-    $(BUILD)/desktop/test/src/author_vm.o
+    $(BUILD)/desktop/test/src/author_vm.o $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The live capture host links session.o + the doc model and NOTHING else — no

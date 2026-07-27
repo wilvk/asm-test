@@ -197,6 +197,97 @@ int main() {
               kCapFidelityLine);
     }
 
+    // --- 18-T4: positives-first summary + the remedy map ------------------
+    // (a) A believable bare host (this fixture: PT/CoreSight/LBR/IBS all
+    // unavailable, single-step + emulator available). The summary must LEAD with
+    // what works, state the Learn/Author floor, and demote the negatives.
+    {
+        std::string sum = capview_summary(rows);
+        check("summary/leads-with-can",
+              sum.find("This host:") == 0 &&
+                  sum.find("available") != std::string::npos,
+              sum);
+        check("summary/names-single-step",
+              sum.find("single-step (TF)") != std::string::npos, sum);
+        check("summary/demotes-negatives",
+              sum.find("details below") != std::string::npos, sum);
+        check("summary/states-learn-author-floor",
+              sum.find(kCapLearnAuthorFloor) != std::string::npos, sum);
+    }
+    // (b) A fully capable host still leads with positives, and with nothing
+    // unavailable it does not fabricate a "details below".
+    {
+        asmtest_hwtrace_status_t all_ok[4] = {
+            mk(1, ASMTEST_HW_OK, ASMTEST_HW_STAGE_OK, 0, ""),
+            mk(1, ASMTEST_HW_OK, ASMTEST_HW_STAGE_OK, 0, ""),
+            mk(1, ASMTEST_HW_OK, ASMTEST_HW_STAGE_OK, 0, ""),
+            mk(1, ASMTEST_HW_OK, ASMTEST_HW_STAGE_OK, 0, ""),
+        };
+        auto caps = capview_build(cascade, 3, all_ok, 1, "", "", false);
+        std::string sum = capview_summary(caps);
+        check("summary/capable-leads-positive",
+              sum.find("available") != std::string::npos &&
+                  sum.find("no capture backend") == std::string::npos,
+              sum);
+        check("summary/capable-floor-still-stated",
+              sum.find(kCapLearnAuthorFloor) != std::string::npos, sum);
+    }
+
+    // (c) The remedy map: a recognised reason yields the matching remedy REUSED
+    // from the inspect_door attach_verdict map; an unrecognised one yields none,
+    // and the verbatim reason still stands.
+    {
+        const cap_row *pt = nullptr, *lbr = nullptr, *ss = nullptr;
+        for (const cap_row &r : rows) {
+            if (r.kind != cap_kind::backend)
+                continue;
+            if (r.label == "Intel PT")
+                pt = &r;
+            if (r.label == "AMD LBR")
+                lbr = &r;
+            if (r.label == "single-step (TF)")
+                ss = &r;
+        }
+        check("remedy/paranoid",
+              pt != nullptr &&
+                  capview_remedy(*pt).find("perf_event_paranoid") !=
+                      std::string::npos,
+              "a perf_event_paranoid refusal must offer the sysctl/CAP_PERFMON "
+              "remedy");
+        check("remedy/wrong-vendor-none",
+              lbr != nullptr && capview_remedy(*lbr).empty(),
+              "a wrong-vendor LBR carries a paranoid level but no paranoid "
+              "remedy — lowering the sysctl would not help");
+        check("remedy/available-none",
+              ss != nullptr && capview_remedy(*ss).empty(),
+              "a working backend has nothing to remedy");
+
+        // The ptrace family REUSES attach_verdict, so the capability panel and
+        // the Inspect door give one answer. Synthetic reasons for each.
+        cap_row yama;
+        yama.kind = cap_kind::backend;
+        yama.available = false;
+        yama.reason = "blocked by Yama ptrace_scope=2";
+        check("remedy/yama-reuses-attach-map",
+              capview_remedy(yama).find("CAP_SYS_PTRACE") != std::string::npos,
+              "a ptrace_scope refusal must reuse attach_verdict's CAP remedy");
+
+        cap_row i386;
+        i386.kind = cap_kind::backend;
+        i386.available = false;
+        i386.reason = "the target is a 32-bit (i386) process";
+        check("remedy/i386-reuses-attach-map",
+              capview_remedy(i386).find("64-bit") != std::string::npos,
+              "an i386 refusal must reuse attach_verdict's 64-bit remedy");
+
+        // No verbatim reason is ever dropped: every negative backend row still
+        // carries its machine reason (UI LAW 1 survives the restructure, D7).
+        for (const cap_row &r : rows)
+            if (r.kind == cap_kind::backend && !r.available)
+                check("remedy/verbatim-reason-kept", !r.reason.empty(),
+                      "a demoted negative must keep its verbatim reason");
+    }
+
     // --- determinism ------------------------------------------------------
     check("two builds are byte-identical",
           capview_dump(

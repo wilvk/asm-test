@@ -161,12 +161,57 @@ struct ShellState {
     // and cleared the same frame after the tab strip applies them.
     int want_open_tab = -1;
     bool want_loom = false;
+
+    // --- 18-breach-stops.md T1 (convention-alignment keys) ----------------
+    // `F` fit-selection intent (mirrors want_view): the active spatial view frames
+    // the current selection. `wasd_context` is the labelled context switch that
+    // resolves the W/S/A/D-vs-diff-`d` conflict: WASD means CAMERA only when a
+    // spatial pane (timeline / 3D) holds focus; outside it, `d` keeps its diff
+    // meaning. `wasd_zoom`/`wasd_pan` accumulate the camera nudges the spatial
+    // panes read — an explicit, testable state field, not an implicit focus guess.
+    bool want_fit = false;
+    bool wasd_context = false;
+    int wasd_zoom = 0;
+    int wasd_pan = 0;
+
+    // --- 18-breach-stops.md T2 (real, always-available Reset) -------------
+    // `want_layout_reset` is the keymap/palette intent (Ctrl+Shift+R) consumed
+    // near the dockspace build, so Reset fires with or without the menu bar and
+    // in both binaries. `layout_settle` counts docked frames after init so the
+    // zero-visible-pane auto-fallback runs once the panes have had a frame to
+    // adopt their nodes — never fighting a user who is mid-drag.
+    bool want_layout_reset = false;
+    int layout_settle = 0;
+
+    // --- 18-breach-stops.md T3 (Author save-guard) ------------------------
+    // `close_pending` is the workspace-recording index whose close is awaiting a
+    // save/discard/cancel choice because it is dirty (authored + unsaved); -1 =
+    // none pending. `author_close_guard` is the same guard for the Author door
+    // tab. Both are raised by the shell_request_close* seams so a dirty tab can
+    // never be closed with a single silent click (F24).
+    int close_pending = -1;
+    bool author_close_guard = false;
 };
 
 // Open a recording AND decode its streams, keeping ShellState::streams parallel
 // to Workspace::recordings. Returns the new index, or -1 with `err` set.
 int shell_open(ShellState &s, const std::string &path, std::string &err);
 void shell_close(ShellState &s, size_t idx);
+
+// The dirty-close guard (18-breach-stops.md T3, F24). `shell_request_close` is
+// the seam the tab `✕` drives: it closes a clean recording immediately, but a
+// DIRTY (authored + unsaved) one raises the save/discard/cancel guard
+// (`close_pending`) instead of erasing, so authored output is never lost to a
+// single click. `shell_discard_close` erases the pending entry; `shell_cancel_close`
+// abandons the guard, keeping the recording. Pure model moves, so test_shell
+// drives them headlessly.
+void shell_request_close(ShellState &s, size_t idx);
+void shell_discard_close(ShellState &s);
+void shell_cancel_close(ShellState &s);
+// The Author DOOR TAB's own guard: closing it while its run is unsaved raises
+// `author_close_guard` rather than dropping the recording. Returns true when the
+// tab actually closed (it was clean), false when the guard was raised.
+bool shell_request_author_close(ShellState &s);
 
 // Register every view with the router and point it at the open set. Idempotent:
 // safe to call again after the workspace changes.

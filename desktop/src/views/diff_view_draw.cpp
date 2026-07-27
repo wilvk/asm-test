@@ -58,12 +58,23 @@ void draw_diff_view(const dt_diff_view &v,
 void draw_bindings_help() {
     if (!ImGui::BeginTable("bindings", 2, ImGuiTableFlags_RowBg))
         return;
+    // Generated ENTIRELY from dt_nav_bindings(), so help and behaviour cannot
+    // drift (18-breach-stops.md T1). A wired binding renders normally; an
+    // unwired one is greyed and tagged "planned" — the app's own
+    // greyed-shows-why law, so the overlay never advertises a dead key as live.
     for (const dt_binding &b : dt_nav_bindings()) {
         ImGui::TableNextRow();
+        if (!b.wired)
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.65f, 1));
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(b.keys);
         ImGui::TableNextColumn();
-        ImGui::TextUnformatted(b.what);
+        if (b.wired) {
+            ImGui::TextUnformatted(b.what);
+        } else {
+            ImGui::Text("%s  (planned)", b.what);
+            ImGui::PopStyleColor();
+        }
     }
     ImGui::EndTable();
 }

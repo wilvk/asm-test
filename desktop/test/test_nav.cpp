@@ -267,6 +267,144 @@ int main() {
         }
     }
 
+    // --- 18-T1: the honest keymap overlay's `wired` flag --------------------
+    // The overlay is generated ENTIRELY from this table, greying every !wired
+    // row "planned" — so the advertised==wired invariant is a property of the
+    // data. Today every advertised binding is wired (F1/F18's fix: no dead key
+    // is advertised as live), and the convention keys the review named are
+    // present. A future advertised-but-unmapped gesture must land as wired:false.
+    {
+        bool saw_fit = false, saw_sibling = false, saw_wasd = false,
+             saw_step_aliases = false, saw_history = false, saw_reset = false;
+        for (const dt_binding &b : dt_nav_bindings()) {
+            check("every advertised binding is wired (no dead key)", b.wired,
+                  std::string("row \"") + b.keys + "\" is advertised but not "
+                  "wired — grey it 'planned' or wire it");
+            std::string keys = b.keys;
+            if (keys.find("F") != std::string::npos && keys.find("fit") ==
+                std::string::npos && std::string(b.what).find("fit") !=
+                std::string::npos)
+                saw_fit = true;
+            if (keys == ", / .")
+                saw_sibling = true;
+            if (keys.find("W/S") != std::string::npos)
+                saw_wasd = true;
+            if (keys.find("F10") != std::string::npos)
+                saw_step_aliases = true;
+            if (keys.find("Alt+Left") != std::string::npos)
+                saw_history = true;
+            if (keys.find("Ctrl+Shift+R") != std::string::npos)
+                saw_reset = true;
+        }
+        check("the F fit-selection binding is advertised", saw_fit, "missing");
+        check("the ,/. sibling-step binding is advertised", saw_sibling,
+              "missing");
+        check("the WASD camera binding is advertised", saw_wasd, "missing");
+        check("the F10/F11 step aliases are advertised", saw_step_aliases,
+              "missing");
+        check("the Alt+Left/Right history binding is advertised", saw_history,
+              "missing");
+        check("the Ctrl+Shift+R reset binding is advertised", saw_reset,
+              "missing");
+    }
+
+    // --- 18-T6: bounded back/forward history over the router ----------------
+    {
+        dt_nav_table t;
+        t.have_recording = [](const std::string &) { return true; };
+        for (dt_view v : dt_all_views())
+            dt_nav_register(t, v, [](const dt_link &) {});
+        auto mk = [](const char *rec, dt_view v, uint32_t step) {
+            dt_link l;
+            l.rec = rec;
+            l.view = v;
+            l.step = step;
+            return l;
+        };
+        dt_link a = mk("a.asmtrace", dt_view::canvas, 1);
+        dt_link b = mk("a.asmtrace", dt_view::timeline, 2);
+        dt_link c = mk("a.asmtrace", dt_view::slice, 3);
+
+        check("first go lands", dt_nav_go(t, a), t.last_error);
+        check("first go pushes no back (no prior position)", t.back.empty(),
+              "the first navigation has nothing to go back to");
+        dt_nav_go(t, b);
+        dt_nav_go(t, c);
+        check("back stack grew with each fresh navigation", t.back.size() == 2,
+              "expected [a, b]");
+        check("forward is empty after fresh navigations", t.forward.empty(),
+              "a fresh navigation must not leave a forward branch");
+
+        // A no-op re-navigation to the current position is not a history step.
+        size_t before = t.back.size();
+        dt_nav_go(t, c);
+        check("re-navigating to the current link pushes no history",
+              t.back.size() == before, "a no-op move must not grow the stack");
+
+        check("back walks to the previous position", dt_nav_back(t),
+              t.last_error);
+        check("...and lands there", dt_nav_format(*t.current) ==
+              dt_nav_format(b), "back should land on b");
+        check("back pushed the position we left onto forward",
+              t.forward.size() == 1, "forward should carry c");
+        dt_nav_back(t);
+        check("back again lands on the earliest", dt_nav_format(*t.current) ==
+              dt_nav_format(a), "back should land on a");
+        check("at the earliest, back refuses loudly", !dt_nav_back(t),
+              "an empty back stack must return false");
+        check("...with a reason", !t.last_error.empty(), "no reason given");
+
+        check("forward retraces", dt_nav_forward(t), t.last_error);
+        check("...to b", dt_nav_format(*t.current) == dt_nav_format(b),
+              "forward should land on b");
+
+        // A fresh navigation after a back CLEARS the forward branch.
+        dt_link d = mk("a.asmtrace", dt_view::diff, 4);
+        dt_nav_go(t, d);
+        check("a new navigation clears forward", t.forward.empty(),
+              "the forward branch must not survive a divergent navigation");
+        check("...so forward now refuses", !dt_nav_forward(t),
+              "an empty forward stack must return false");
+
+        // The whole stack is just serialisable links: it round-trips.
+        for (const dt_link &l : t.back) {
+            dt_link rt;
+            std::string err;
+            check("a history link round-trips through format/parse",
+                  dt_nav_parse(dt_nav_format(l), rt, err) &&
+                      dt_nav_format(rt) == dt_nav_format(l),
+                  err);
+        }
+
+        // The bound: a long session drops the oldest rather than growing forever.
+        dt_nav_table t2;
+        t2.have_recording = [](const std::string &) { return true; };
+        for (dt_view v : dt_all_views())
+            dt_nav_register(t2, v, [](const dt_link &) {});
+        t2.history_cap = 3;
+        for (uint32_t i = 0; i < 20; i++)
+            dt_nav_go(t2, mk("a.asmtrace", dt_view::canvas, i));
+        check("the back stack respects its bound", t2.back.size() <= 3,
+              "cap=3 must drop the oldest past the bound; got " +
+                  std::to_string(t2.back.size()));
+
+        // A back-jump to a recording that CLOSED refuses loudly and keeps the
+        // stacks intact (the same discipline dt_nav_go has).
+        dt_nav_table t3;
+        bool open = true;
+        t3.have_recording = [&open](const std::string &) { return open; };
+        dt_nav_register(t3, dt_view::canvas, [](const dt_link &) {});
+        dt_nav_register(t3, dt_view::timeline, [](const dt_link &) {});
+        dt_nav_go(t3, mk("a.asmtrace", dt_view::canvas, 1));
+        dt_nav_go(t3, mk("a.asmtrace", dt_view::timeline, 2));
+        open = false; // the recording is gone
+        size_t back_before = t3.back.size();
+        check("back to a closed recording refuses", !dt_nav_back(t3),
+              "a target that is no longer open must refuse");
+        check("...and keeps the stack intact", t3.back.size() == back_before,
+              "a refused back-jump must not pop the stack");
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d nav check(s) failed\n", failures);
         return 1;

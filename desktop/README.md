@@ -501,19 +501,43 @@ through the router, so a link and a keypress land identically.
 |---|---|
 | `1` `2` `3` `4` | canvas / timeline / slice explorer / diff |
 | `j` `k`, `Down` `Up` | next / previous row or step |
+| `F10` `F11` | step / step back (`j` / `k` aliases) |
+| `,` `.` | step to the previous / next sibling |
 | `PgDn` `PgUp` | page down / up |
 | `Ctrl+G` | go to a step or offset |
 | `Enter` | open the slice explorer at the selected step |
+| `Shift+F` | fit / frame the current selection |
 | `b` `f` | light the backward / forward cone |
 | `c` | clear the cones |
 | `[` `]` | walk one dependence generation back / forward |
-| `d` | attach or detach a second recording (diff) |
+| `W` `S`, `A` `D` | camera zoom / pan — **only** while a spatial pane (timeline / 3D) holds focus |
+| `d` | attach or detach a second recording (diff) — outside a spatial pane |
 | `x` | swap A and B |
 | `n` `p` | next / previous divergence |
-| `y` | copy a deep link to this position |
+| `Alt+Left` `Alt+Right` | back / forward through the visited history |
+| `y`, `Ctrl+C` | copy a deep link to this position |
+| `Ctrl+Shift+R` | reset the panel layout to the default |
 
 The table is `dt_nav_bindings()` in [`src/nav.cpp`](src/nav.cpp) — the help
-overlay and the key map read the same data, so they cannot drift.
+overlay and the key map read the same data, so they cannot drift, and each row
+carries a `wired` flag: the overlay greys any not-yet-mapped binding "planned"
+rather than advertising a dead key as live.
+
+**The `WASD` camera context.** `W`/`S`/`A`/`D` mean camera zoom/pan **only** when
+a spatial pane (the operand timeline or the 3D overview) holds focus — an explicit
+`wasd_context` the shell sets from focus. Outside that context `d` keeps its diff
+attach/detach meaning, so the two never collide.
+
+**Back/forward history.** `dt_nav_go` maintains a bounded stack of the
+serialisable links it visited; `Alt+Left`/`Alt+Right` (and the breadcrumb by the
+status line) walk it, landing identically to a fresh navigation, and a new jump
+clears the forward branch.
+
+**Recovering a broken layout.** `Ctrl+Shift+R` (or **View → Reset layout**)
+rebuilds the shipped default at any time. A corrupt or collapsed persisted
+`build/desktop-imgui.ini` that would otherwise leave zero visible panes now
+**self-heals** — the shell detects the empty state on launch and falls back to the
+default rather than showing an empty window; delete the `.ini` to start clean.
 
 ## The data layer and the backend-completeness panel
 

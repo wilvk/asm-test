@@ -101,20 +101,47 @@ struct dt_nav_table {
     std::string last_error;
     // The most recent successful navigation, for the `y` copy-link action.
     std::optional<dt_link> current;
+
+    // Bounded back/forward history (18-breach-stops.md T6, F11). A successful
+    // dt_nav_go pushes the PREVIOUS `current` onto `back` and clears `forward`
+    // (browser-history discipline); dt_nav_back/forward walk them without
+    // recording new history. Both are plain serialisable dt_links, so the whole
+    // stack round-trips through dt_nav_format/parse and test_nav pins it. `cap`
+    // bounds the depth — a long session drops the oldest rather than growing
+    // unboundedly.
+    std::vector<dt_link> back;
+    std::vector<dt_link> forward;
+    size_t history_cap = 64;
 };
 
 void dt_nav_register(dt_nav_table &t, dt_view v, dt_nav_handler h);
 
 // Navigate. False + `last_error` when the link names a recording that is not
 // open, or a view with no handler — a silent no-op would leave the user
-// looking at the wrong thing believing they had moved.
+// looking at the wrong thing believing they had moved. On success it pushes the
+// prior position onto `back` and clears `forward` (F11's history discipline);
+// a no-op re-navigation to the current link is NOT pushed.
 bool dt_nav_go(dt_nav_table &t, const dt_link &link);
 
+// Walk the history (18-breach-stops.md T6). `dt_nav_back` pops `back`, pushes
+// the current position onto `forward`, and re-dispatches through the same router
+// path so a back-jump lands identically to a fresh navigation; `dt_nav_forward`
+// is the mirror. False + `last_error` at the ends of the stacks, or when the
+// target recording is no longer open (the same loud refusal dt_nav_go gives).
+// Free of the shell type, exactly like dt_nav_go, so test_nav links them.
+bool dt_nav_back(dt_nav_table &t);
+bool dt_nav_forward(dt_nav_table &t);
+
 // The keyboard bindings, as data: rendered in the help overlay AND the single
-// place the app maps keys, so the two cannot drift.
+// place the app maps keys, so the two cannot drift. `wired` is the honesty flag
+// (18-breach-stops.md T1, F1/F18): true for a binding handle_keymap (or a
+// view-local draw) actually acts on, false for one that is advertised as
+// "planned" but not yet mapped. The help overlay greys every !wired row so it
+// can never again advertise a dead key as live.
 struct dt_binding {
     const char *keys;
     const char *what;
+    bool wired = true;
 };
 const std::vector<dt_binding> &dt_nav_bindings();
 

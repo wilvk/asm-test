@@ -5,6 +5,8 @@
 #include <climits>
 #include <cstdio>
 
+#include "live/inspect.h" // attach_verdict — reuse the remedy map (T4, F19)
+
 namespace asmdesk {
 
 const char *const kCapNativeOnlyEmpty =
@@ -16,6 +18,9 @@ const char *const kCapViewerNoProbe =
     "render-only viewer: this shows the LOADED RECORDING's provenance, not "
     "this "
     "host's capabilities — a viewer probes nothing";
+const char *const kCapLearnAuthorFloor =
+    "Learn and Author work here — no root, hardware, or attach needed";
+const char *const kCapWhyNotHeader = "why can't I capture X?";
 
 const char *cap_stage_name(int stage) {
     switch (stage) {
@@ -162,6 +167,71 @@ std::vector<cap_row> capview_build(const asmtest_trace_choice_t *cascade,
         rows.push_back(std::move(r));
     }
     return rows;
+}
+
+std::string capview_summary(const std::vector<cap_row> &rows) {
+    // Lead with what WORKS. An available cascade/backend/ibs/emulator row is a
+    // capability the host has; collect their labels in the order they were built
+    // so the summary reads the same as the deck below it.
+    std::vector<std::string> can, cannot;
+    for (const cap_row &r : rows) {
+        if (r.kind == cap_kind::refusal)
+            continue;
+        (r.available ? can : cannot).push_back(r.label);
+    }
+    std::string s = "This host: ";
+    if (can.empty()) {
+        s += "no capture backend available";
+    } else {
+        for (size_t i = 0; i < can.size(); i++)
+            s += (i ? ", " : "") + can[i];
+        s += " available";
+    }
+    if (!cannot.empty()) {
+        s += "; ";
+        for (size_t i = 0; i < cannot.size(); i++)
+            s += (i ? ", " : "") + cannot[i];
+        s += " unavailable — details below";
+    }
+    s += ". ";
+    s += kCapLearnAuthorFloor;
+    return s;
+}
+
+std::string capview_remedy(const cap_row &r) {
+    if (r.available)
+        return std::string(); // nothing to remedy on a working backend
+    const std::string reason = r.reason;
+    auto has = [&](const char *n) {
+        return reason.find(n) != std::string::npos;
+    };
+
+    // perf_event_paranoid is the most common capability gate, and attach_verdict
+    // (a ptrace-attach map) has no branch for it — so it is answered here, in the
+    // panel's own terms. Recognised from the verbatim reason ONLY: a backend that
+    // merely carries a paranoid LEVEL but fails for another cause (a wrong-vendor
+    // LBR, a wrong-ISA CoreSight) must NOT be told to lower a sysctl that would
+    // not help.
+    if (has("perf_event_paranoid") || has("paranoid"))
+        return "lower /proc/sys/kernel/perf_event_paranoid to <= 2 "
+               "(sysctl kernel.perf_event_paranoid=2), or grant the process "
+               "CAP_PERFMON — the reason above names the exact level";
+
+    // The ptrace family REUSES the inspect_door attach_verdict map, so the two
+    // panels never give divergent advice. Synthesise the AttachFacts the reason
+    // implies and read back its remedy.
+    if (has("i386") || has("32-bit")) {
+        AttachFacts f;
+        f.elf_class = 32;
+        return attach_verdict(f).remedy;
+    }
+    if (has("ptrace_scope=2") || has("ptrace_scope") || has("Yama") ||
+        has("CAP_SYS_PTRACE")) {
+        AttachFacts f;
+        f.yama_scope = 2; // the scope whose remedy is exactly "grant CAP_SYS_PTRACE"
+        return attach_verdict(f).remedy;
+    }
+    return std::string();
 }
 
 std::string capview_dump(const std::vector<cap_row> &rows) {

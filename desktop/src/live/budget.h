@@ -54,6 +54,34 @@ bool mode_uses_ptrace(LiveMode m);
 // show instead of a bare "unavailable". Never empty.
 const char *mode_jack_reason(LiveMode m);
 
+// --- perturbation gate (18-breach-stops.md T5, F22) -------------------------
+// Arming a perturbing single-step mode on a LIVE target dirties the traced page,
+// perturbs its timing, and on arm64 can TERMINATE a target blocked in a syscall
+// with no way for detach to undo it (the recorded aarch64 detach-fatal hazard).
+// So the arm gets a pre-commit confirm stating the concrete consequence — the
+// same two-step posture the syscall reveal-all uses. These are the pure model
+// behind that gate, so test_budget pins them on a host with nothing to attach to.
+
+// The consequence sentence to show before arming `m`. Empty for a non-perturbing
+// (out-of-band) mode — `sample` needs no confirm. `arch` keys the arm64 clause:
+// on aarch64 the sentence names the blocking-syscall termination hazard that
+// detach cannot undo; elsewhere it states the page-dirty / timing cost and
+// steers toward IBS/PT. Never empty for a ptrace mode.
+std::string mode_perturb_warning(LiveMode m, const std::string &arch);
+
+// Does arming `m` against a target on `arch` carry the arm64 blocking-syscall
+// KILL hazard (a single-stepped thread inside a blocking syscall survives DETACH
+// on arm64 and dies ~300ms later, SPSR.SS)? True only for a ptrace mode on
+// aarch64 — the exact case draw_patch_bay greys/annotates.
+bool mode_arm64_blocking_hazard(LiveMode m, const std::string &arch);
+
+// The least-perturbing capture substrate the host supports, for the picker's
+// default (F22): out-of-band `sample` (AMD IBS) where the capability probe
+// reports it available, otherwise the lightest ptrace mode (`log` — it streams
+// syscalls without single-stepping, unlike `stream`/`trace`/`dataflow`). A pure
+// choice over the resolved capability model, so test_budget pins it.
+LiveMode budget_least_perturbing(bool sample_available);
+
 struct BudgetDecision {
     bool allowed = true;
     // Set when !allowed: the mode already holding the jack, and prose naming

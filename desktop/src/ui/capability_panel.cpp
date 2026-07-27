@@ -82,37 +82,62 @@ void draw_capability_panel(CapState &s, const Recording *loaded) {
         cap_probe(s);
     ImGui::SameLine();
     ImGui::TextDisabled("probed once at open; the GUI never re-derives these");
+
+    // Lead with the POSITIVES (T4, F19): a one-line summary of what the host CAN
+    // do, plus the Learn/Author floor, so a bare host no longer reads as "the
+    // tool does not work here". Composed by the pure resolver from the same rows.
+    ImGui::Separator();
+    ImGui::TextWrapped("%s", capview_summary(s.rows).c_str());
     ImGui::Separator();
 
+    // Available backends stay above the fold. The refusal (native-only empty) is
+    // the answer to the panel's own question, so it stays visible too.
     bool drew_line = false;
+    bool any_negative = false;
     for (const cap_row &r : s.rows) {
-        // The rule goes in exactly once, before the first row that crosses it.
+        if (r.kind == cap_kind::refusal) {
+            draw_banner(r.reason.c_str(), true);
+            continue;
+        }
+        if (!r.available) {
+            any_negative = true;
+            continue; // demoted below, under the expander
+        }
         if (r.below_fidelity_line && !drew_line) {
             drew_line = true;
             ImGui::Separator();
             ImGui::TextDisabled("%s", kCapFidelityLine);
         }
-        if (r.kind == cap_kind::refusal) {
-            draw_banner(r.reason.c_str(), true);
-            continue;
-        }
-        if (!r.available)
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.65f, 1));
-        ImGui::Text("%s %s", r.available ? "[ok]  " : "[grey]",
-                    r.label.c_str());
-        if (!r.available)
-            ImGui::PopStyleColor();
+        ImGui::Text("[ok]   %s", r.label.c_str());
         if (!r.chip.empty()) {
             ImGui::SameLine();
             ImGui::TextDisabled("(%s)", r.chip.c_str());
         }
-        // UI LAW 1: the machine reason, VERBATIM and wrapped — never clipped,
-        // never paraphrased. It is what tells a user whether to change a
-        // sysctl, install a package, or buy a different CPU.
-        if (!r.reason.empty()) {
-            ImGui::Indent();
-            ImGui::TextWrapped("%s", r.reason.c_str());
-            ImGui::Unindent();
+    }
+
+    // Demote the negatives under an expander, COLLAPSED by default (T4). The
+    // verbatim machine reason (UI LAW 1) is preserved under each row — this is a
+    // restructure of the honesty chrome, not a removal (D7) — and a recognised
+    // condition also gets the shared attach_verdict remedy as a next step.
+    if (any_negative && ImGui::CollapsingHeader(kCapWhyNotHeader)) {
+        for (const cap_row &r : s.rows) {
+            if (r.kind == cap_kind::refusal || r.available)
+                continue;
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.6f, 0.6f, 0.65f, 1));
+            ImGui::Text("[grey] %s", r.label.c_str());
+            ImGui::PopStyleColor();
+            if (!r.chip.empty()) {
+                ImGui::SameLine();
+                ImGui::TextDisabled("(%s)", r.chip.c_str());
+            }
+            if (!r.reason.empty()) {
+                ImGui::Indent();
+                ImGui::TextWrapped("%s", r.reason.c_str());
+                std::string remedy = capview_remedy(r);
+                if (!remedy.empty())
+                    ImGui::TextDisabled("-> %s", remedy.c_str());
+                ImGui::Unindent();
+            }
         }
     }
 #endif

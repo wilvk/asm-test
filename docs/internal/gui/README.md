@@ -153,7 +153,7 @@ map to the plan and review.
 
 | Doc | Wave | Recommendations (findings) | Tasks | Depends on | Status |
 |---|---|---|---|---|---|
-| [18-breach-stops.md](18-breach-stops.md) | 0 | keymap honesty-remainder + convention keys, real Reset, Author save-guard, capability positives, perturb-confirm, nav back/forward (F1,F18,F2,F24,F19,F22,F11) | 6 | 12 (test-engine, for tests); mostly independent of 19 | ☐ 0/6 |
+| [18-breach-stops.md](18-breach-stops.md) | 0 | keymap honesty-remainder + convention keys, real Reset, Author save-guard, capability positives, perturb-confirm, nav back/forward (F1,F18,F2,F24,F19,F22,F11) | 6 | 12 (test-engine, for tests); mostly independent of 19 | ✅ 6/6 |
 | [19-dockable-panes-keystone.md](19-dockable-panes-keystone.md) | 1 | real `kPane*` panes + flatten 3-deep nesting — **the keystone**, unblocks 20/21/22 (F2,F4,F9) | 3 | 13 F1 (docking, landed); 18 T2.2 alongside | ✅ 3/3 |
 | [20-workspace-and-settings.md](20-workspace-and-settings.md) | 1 | data-driven tabs, task-language entry rail, workspace persistence + recents, perspectives, Settings/DPI/text-scale (F4,F13,F10,F16,F6) | 5 | 19 (panes); 13 F3 (fonts, for Settings) | ☐ 0/5 |
 | [21-spine-navigation.md](21-spine-navigation.md) | 2 | command palette, wayfinding breadcrumb, overview/minimap (F8,F9) | 3 | 19 (panes); 15 + 14 T5 (minimap); 16 (ImSearch) | ☐ 0/3 |

@@ -84,6 +84,13 @@ struct Recording {
 
     std::string path;
 
+    // Authored + unsaved (18-breach-stops.md T3, F24). An Author run materialised
+    // into the Workspace carries no file yet, so closing its tab would lose it
+    // silently. `dirty` marks that: the tab title shows a `*`, and shell_close is
+    // gated behind a save/discard/cancel choice. A successful save clears it. A
+    // recording loaded from a file is never dirty (it already has a copy on disk).
+    bool dirty = false;
+
     // A recording is truncated if the footer says so OR it is torn (incomplete);
     // dropped if the footer's drop record is non-zero; statistical if not exact.
     bool truncated() const { return end_truncated || torn; }

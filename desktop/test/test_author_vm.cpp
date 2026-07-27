@@ -3,9 +3,11 @@
 // Keystone, no Unicorn, no display — so the rules are pinned on every host.
 #include <cstdio>
 #include <cstring>
+#include <sstream>
 #include <string>
 
 #include "author_vm.h"
+#include "doc/recording.h" // author_recording round-trip (T3)
 
 using namespace asmdesk;
 
@@ -163,6 +165,58 @@ int main() {
           std::string(kAuthorRenderOnly) ==
               "Author mode requires the full (GPL-2.0) build",
           kAuthorRenderOnly);
+
+    // --- 18-T3: the run -> Recording materialisation ----------------------
+    // author_recording turns an authored run into a Recording the SAME
+    // save_recording_file writes, so Author output stops being ephemeral. Pure
+    // JSON assembly, so the round-trip is pinned here without Keystone/Unicorn:
+    // the recording carries the authored program image and reloads faithfully.
+    {
+        author_result_t r;
+        r.assembled = true;
+        r.bytes = 4;
+        // mov rax, rdi ; ret  ->  48 89 f8 c3
+        std::vector<uint8_t> image = {0x48, 0x89, 0xf8, 0xc3};
+        Recording rec = author_recording(r, ASM_X86_64, image, 0x100000);
+
+        check("mat/exact-provenance",
+              rec.provenance.exact && rec.provenance.trust == "exact",
+              "an emulator run observed every step — it is exact");
+        check("mat/backend-named",
+              rec.provenance.backend == "author-emulator", rec.provenance.backend);
+        check("mat/arch", rec.arch == "x86_64", rec.arch);
+        check("mat/not-torn", rec.has_end && !rec.torn,
+              "a finished authored run is a complete recording, not torn");
+        check("mat/carries-codeimage", rec.by_kind.count("codeimage") == 1,
+              "the assembled program must ride as a codeimage event");
+
+        // The whole point: it round-trips through the real serializer + loader,
+        // so a saved authored recording reopens as an equal Recording.
+        std::string text = recording_to_asmtrace(rec);
+        std::istringstream in(text);
+        std::string err;
+        auto reloaded = load_recording(in, err);
+        check("mat/reloads", reloaded.has_value(),
+              std::string("the materialised recording must reload: ") + err);
+        if (reloaded) {
+            check("mat/reload-not-torn", !reloaded->torn,
+                  "a materialised authored recording reloads complete");
+            check("mat/reload-keeps-image",
+                  reloaded->by_kind.count("codeimage") == 1,
+                  "the codeimage survives the save/load round-trip");
+            check("mat/reload-arch", reloaded->arch == "x86_64",
+                  reloaded->arch);
+        }
+
+        // An assemble-only run (no image) still materialises a valid recording.
+        Recording empty = author_recording(r, ASM_X86_64, {}, 0x100000);
+        std::string etext = recording_to_asmtrace(empty);
+        std::istringstream ein(etext);
+        std::string eerr;
+        check("mat/imageless-reloads", load_recording(ein, eerr).has_value(),
+              std::string("an imageless authored recording must still reload: ") +
+                  eerr);
+    }
 
     if (failures) {
         std::fprintf(stderr, "%d author-vm check(s) failed\n", failures);

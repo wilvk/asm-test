@@ -85,6 +85,43 @@ bool mode_uses_ptrace(LiveMode m) { return row_for(m)->ptrace; }
 
 const char *mode_jack_reason(LiveMode m) { return row_for(m)->why; }
 
+namespace {
+// aarch64 goes by several spellings on the wire (uname `aarch64`, some
+// producers `arm64`); match either so the kill-hazard clause is not silently
+// dropped on a host that spells it the other way.
+bool is_arm64(const std::string &arch) {
+    return arch == "aarch64" || arch == "arm64" || arch == "aarch64_be";
+}
+} // namespace
+
+std::string mode_perturb_warning(LiveMode m, const std::string &arch) {
+    if (!mode_uses_ptrace(m))
+        return std::string(); // out of band: nothing to perturb, no confirm
+    std::string s = "single-step DIRTIES the traced page (it plants an int3 / "
+                    "sets the trap flag) and PERTURBS the target's timing";
+    if (is_arm64(arch))
+        s += "; on arm64 it can TERMINATE a target blocked in a syscall, and "
+             "detach CANNOT undo it (the thread dies ~300ms after DETACH) — "
+             "prefer IBS/PT if the host supports them";
+    else
+        s += " — prefer the out-of-band IBS/PT samplers where the host supports "
+             "them";
+    s += ". This mode " + std::string(mode_jack_reason(m)) + ".";
+    return s;
+}
+
+bool mode_arm64_blocking_hazard(LiveMode m, const std::string &arch) {
+    return mode_uses_ptrace(m) && is_arm64(arch);
+}
+
+LiveMode budget_least_perturbing(bool sample_available) {
+    // `sample` reads out of band (mode_uses_ptrace==false) and perturbs nothing;
+    // it is the least-perturbing substrate when the host has AMD IBS. Otherwise
+    // the lightest ptrace mode: `log` streams syscalls without single-stepping,
+    // so it dirties no page, unlike `stream`/`trace`/`dataflow`/`tree`/`graph`.
+    return sample_available ? LiveMode::Sample : LiveMode::Log;
+}
+
 BudgetDecision budget_can_start(LiveMode want,
                                 const std::vector<LiveMode> &active) {
     BudgetDecision d;

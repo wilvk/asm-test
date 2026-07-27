@@ -81,6 +81,21 @@ struct AuthorState {
     long args[6] = {2, 0, 0, 0, 0, 0};
     author_result_t result;
     size_t steps = 0;
+
+    // The save path (18-breach-stops.md T3, F24). A run's output lived only here
+    // and vanished on tab close; now it can be written to a real .asmtrace via
+    // the same confirm-overwrite dialog the Inspect door uses. `image`/
+    // `image_base` are the assembled bytes retained from the last run so the
+    // saved recording carries the authored program (a `codeimage` event); `dirty`
+    // marks an unsaved run (the tab title's `*` + the close guard); a successful
+    // save clears it.
+    std::vector<uint8_t> image;
+    uint64_t image_base = 0;
+    bool dirty = false;
+    char save_path[1024] = "authored.asmtrace";
+    std::string save_status;
+    bool saved_ok = false;
+
     AuthorState() {
         source.reserve(64 * 1024);
         source = "mov rax, rdi\nimul rax, rdi\nret\n";
@@ -126,6 +141,26 @@ struct InspectState {
     LiveMode swap_blocker = LiveMode::Log;
     std::string swap_reason;
 
+    // The perturbation gate (18-breach-stops.md T5, F22): arming a single-step
+    // (mode_uses_ptrace) mode dirties the traced page, perturbs timing, and on
+    // arm64 can kill a target blocked in a syscall — so the first Start ARMS a
+    // pre-commit confirm (like swap above and the syscall reveal-all) and only
+    // the second fires. `perturb_reason` is the pure mode_perturb_warning()
+    // sentence; `perturb_confirmed` is the one-shot the confirm sets so the
+    // re-entered inspect_request_start passes the gate. `target_arch` keys the
+    // arm64 clause + the greyed/annotated single-step rows (best-effort from the
+    // host; "" = unknown, still annotated, never a hidden refusal).
+    bool perturb_pending = false;
+    bool perturb_confirmed = false;
+    std::string perturb_reason;
+    std::string target_arch;
+    // The picker defaults to the least-perturbing substrate the host supports
+    // (T5). `sample_available` is set by the shell from the capability probe
+    // (AMD IBS); `want_defaulted` makes the choice a ONE-TIME default so it never
+    // fights a user who then picks a heavier mode on purpose.
+    bool sample_available = false;
+    bool want_defaulted = false;
+
     // The live Observer deck (08-observer-views.md) over this session's
     // recording. It is the SAME deck the replay tabs draw, rebuilt as the
     // recording grows — which is what makes "every view renders identically
@@ -165,8 +200,12 @@ void inspect_connect(InspectState &s);
 // beliefs that a live host made true are cleared. No-op if none is up.
 void inspect_disconnect(InspectState &s);
 // Ask to start `s.want` on `s.selected_pid`, honouring the budget. Returns
-// false and arms `swap_pending` when the jack is occupied.
+// false and arms `perturb_pending` when the mode single-steps (T5), then
+// `swap_pending` when the jack is occupied.
 bool inspect_request_start(InspectState &s);
+// Confirm the armed perturbation: re-run the start with the consequence
+// accepted (T5). The budget/swap gate still applies afterwards.
+void inspect_confirm_perturb(InspectState &s);
 // Confirm the armed swap: stop the holder, then start what was refused.
 void inspect_confirm_swap(InspectState &s);
 

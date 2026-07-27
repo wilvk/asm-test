@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include <sys/utsname.h> // uname — best-effort target arch for the arm64 gate
+
 #include "imgui.h"
 
 #include "ImGuiFileDialog.h" // pure-ImGui save dialog (14 T7)
@@ -20,6 +22,15 @@ namespace asmdesk {
 void inspect_scan(InspectState &s) {
     s.rows = list_processes();
     s.scanned = true;
+    // Best-effort target arch for the arm64 blocking-syscall gate (T5): the
+    // tracee's true ELF arch needs a probe, so v1 uses the host's — the tracer
+    // and target share a machine in the common case, and the annotation is
+    // stated, never a hidden refusal, so an over-broad arm64 warning is safe.
+    if (s.target_arch.empty()) {
+        struct utsname u;
+        if (uname(&u) == 0)
+            s.target_arch = u.machine;
+    }
 }
 
 void inspect_connect(InspectState &s) {
@@ -58,6 +69,19 @@ void inspect_disconnect(InspectState &s) {
 }
 
 bool inspect_request_start(InspectState &s) {
+    // The perturbation gate (T5, F22): a single-stepping mode dirties the traced
+    // page, perturbs timing, and on arm64 can kill a target blocked in a syscall.
+    // The FIRST Start only arms the confirm (like the swap below, and the syscall
+    // reveal-all); only a confirmed start proceeds. `sample` (out of band) skips
+    // the gate. The confirm is one-shot: inspect_confirm_perturb sets the flag,
+    // calls back in, and clears it.
+    if (mode_uses_ptrace(s.want) && !s.perturb_confirmed) {
+        s.perturb_pending = true;
+        s.perturb_reason = mode_perturb_warning(s.want, s.target_arch);
+        return false;
+    }
+    s.perturb_pending = false;
+
     s.swap_pending = false;
     BudgetDecision d = budget_can_start(s.want, s.active);
     if (!d.allowed) {
@@ -72,6 +96,18 @@ bool inspect_request_start(InspectState &s) {
     s.session.send_start(mode_name(s.want), s.selected_pid);
     s.active.push_back(s.want);
     return true;
+}
+
+void inspect_confirm_perturb(InspectState &s) {
+    if (!s.perturb_pending)
+        return;
+    // The user accepted the page-dirty / timing / arm64-kill consequence. Re-run
+    // the start through the SAME path with the one-shot confirm set, so the
+    // budget/swap gate below still applies (a confirmed perturb is not a
+    // confirmed swap).
+    s.perturb_confirmed = true;
+    inspect_request_start(s);
+    s.perturb_confirmed = false;
 }
 
 void inspect_confirm_swap(InspectState &s) {
@@ -178,13 +214,36 @@ void draw_status(InspectState &s) {
 void draw_patch_bay(InspectState &s) {
     ImGui::SeparatorText("patch bay — one ptrace jack per target");
     for (LiveMode m : all_modes()) {
+        // arm64 blocking-syscall hazard (T5): a single-stepped thread inside a
+        // blocking syscall survives DETACH on arm64 and dies ~300ms later
+        // (SPSR.SS), and teardown cannot undo it. Grey (BeginDisabled) the
+        // single-step modes there — never a hidden refusal, always a stated one,
+        // with the reason in the tooltip.
+        const bool hazard = mode_arm64_blocking_hazard(m, s.target_arch);
+        if (hazard)
+            ImGui::BeginDisabled(true);
         if (ImGui::RadioButton(mode_name(m), s.want == m))
             s.want = m;
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", mode_jack_reason(m));
+        if (hazard)
+            ImGui::EndDisabled();
+        if (ImGui::IsItemHovered()) {
+            if (hazard)
+                ImGui::SetTooltip("%s\n\narm64: %s", mode_jack_reason(m),
+                                  mode_perturb_warning(m, s.target_arch).c_str());
+            else
+                ImGui::SetTooltip("%s", mode_jack_reason(m));
+        }
         ImGui::SameLine();
     }
     ImGui::NewLine();
+    // Least-perturbing default (T5): steer the picker off a single-step mode
+    // toward the lightest substrate the host supports. `sample_available` is set
+    // by the shell from the capability probe; false under the null backend, where
+    // Log is already the default.
+    if (!s.want_defaulted) {
+        s.want_defaulted = true;
+        s.want = budget_least_perturbing(s.sample_available);
+    }
 
     BudgetDecision d = budget_can_start(s.want, s.active);
     if (!d.allowed) {
@@ -213,6 +272,19 @@ void draw_patch_bay(InspectState &s) {
     ImGui::SameLine();
     if (ImGui::Button("Resume"))
         s.session.send_pause(false);
+
+    // The perturbation confirm (T5): armed by the first Start on a single-step
+    // mode, it states the concrete consequence VERBATIM and only the second
+    // click fires. Drawn before the swap confirm because it gates first.
+    if (s.perturb_pending) {
+        ImGui::Separator();
+        ImGui::TextColored(kBad, "%s", s.perturb_reason.c_str());
+        if (ImGui::Button("Arm it anyway"))
+            inspect_confirm_perturb(s);
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel##perturb"))
+            s.perturb_pending = false;
+    }
 
     if (s.swap_pending) {
         ImGui::Separator();
