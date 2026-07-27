@@ -8,6 +8,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Pan/zoom, fit-graph and selection for the graph views** (docs/internal/gui/15-
+  plotting-and-graph-nav.md T3, via imgui-node-editor). The process **topology**,
+  the live/replay **call tree** and the frozen **hot-edge** snapshot now draw on a
+  real pan/zoom canvas: drag to pan, wheel to zoom, "Fit graph" frames the whole
+  graph (`NavigateToContent`), and double-clicking a node navigates through the
+  same deep-link router the buttons use (a process's syscalls, a call's or edge's
+  address in the region view). The node **positions are the app's own
+  deterministic layout, fed every frame** — node-editor's settings file is
+  disabled so it can neither persist a dragged position nor invent one on load:
+  **force-directed layout stays banned** (docs 04/08), the honesty guardrail is
+  that the layout lives in a pure, tested builder, never in the drawing library.
+  Large graphs (a 10k-routine trace) cull off-viewport nodes before emitting them.
+  imgui-node-editor is vendored (MIT, master `021aa0ea` — the last release fails to
+  compile on the pinned imgui) with its bundled `crude_json`; its four TUs compile
+  into both desktop binaries and it is in the imgui-repin compile-probe. The layout
+  is a pure model, so the null-backend tests assert node positions, the disabled
+  settings file, click-routing and culling without pixels.
 - **The keyboard shortcuts now all work, and are tested.** The desktop help
   overlay advertised twelve keybindings but only `[`/`]` were wired; the other
   ten are now implemented (docs/internal/gui/17-interaction-testing-and-editor.md

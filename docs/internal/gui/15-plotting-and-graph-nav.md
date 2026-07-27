@@ -173,6 +173,29 @@ router; `imgui_canvas` is in the compile-probe.
 
 ### T3 — imgui-node-editor for topo/tree navigation  (M, depends on: 12, T2; 13 F1)
 
+> **Implemented 2026-07-27 — green (`make desktop-test`; compile-probe OK at
+> `1.91.9b-docking`).** imgui-node-editor vendored at master **`021aa0ea`** (MIT),
+> reusing T2's `scripts/fetch-nodeeditor.sh` fetch/pin/license row — its three
+> further TUs (`imgui_node_editor.cpp`, `imgui_node_editor_api.cpp`, the bundled
+> `crude_json.cpp`; `imgui_canvas.cpp` is the fourth, already built by T2) join the
+> desktop object set beside ImPlot, and the public header is in the doc-12
+> compile-probe (`-DASMDESK_HAVE_IMGUI_NODE_EDITOR`). **The pin is confirmed by
+> integration**: `021aa0ea` compiles clean at the `1.91.9b-docking` pin (the
+> compile-probe and both binaries build), where the last release v0.9.3 does not.
+> The layout is a pure, tested builder (`desktop/src/views/graph_nav.{h,cpp}` — no
+> ImGui, no node-editor): `graph_from_topo` / `graph_from_tree` /
+> `graph_from_hotedges` lay nodes on the app's own deterministic layers, and
+> `graph_visible` culls off-viewport nodes. The draw half (`observer_draw.cpp`)
+> feeds those positions to `ed::SetNodePosition` **every frame** with
+> `config.SettingsFile = nullptr` (`kGraphSettingsFile`), so node-editor never
+> persists or invents a position — **force-directed layout stays banned** (docs
+> 04/08). Node-editor is **app-only**, gated exactly as the ImPlot context is
+> (`obs_graph_enable`, set in `main.cpp`); the headless null-backend deck falls
+> back to the list/table and the objects are linked but never executed there.
+> Double-clicking a node routes through 04's `dt_nav_go`. `test_obs_topo` /
+> `test_obs_tree` pin the layout == the app's positions, `SettingsFile == nullptr`,
+> the click routing, and the 10k-node cull — all on the pure model, no pixels.
+
 **Goal.** A pan/zoom canvas with selection and `NavigateToContent` ("fit graph")
 for the graph views — while keeping the app's **own deterministic layout**
 (force-directed stays banned, docs 04/08).

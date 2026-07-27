@@ -73,15 +73,29 @@ void observer_build(ObserverState &s, const Recording &r,
 // tabs the capture actually produced rather than a row of empty panes.
 bool observer_has_any(const ObserverState &s);
 
+// The graph views (topo / tree / hotedges) draw on a node-editor pan/zoom canvas
+// with selection + fit-graph (15-plotting-and-graph-nav.md T3). Node-editor
+// reaches into ImGui internals and is APP-ONLY, exactly as the ImPlot chassis is
+// (main.cpp creates the context; the headless view tests create none). This flag
+// is the same guard: main.cpp enables it, the null-backend tests leave it off,
+// so those draws fall back to the plain list/table and never enter node-editor.
+void obs_graph_enable(bool on);
+bool obs_graph_enabled();
+
 void draw_obs_syscalls(SyscallView &v, ObserverState &s);
 void draw_obs_watch(const WatchView &v);
-// `go` routes a drill-in through 04's router; `rec_id` is the link's recording.
+// `go` routes a node click / drill-in through 04's router; `rec_id` is the
+// link's recording. topo / hotedges / tree all take it so a clicked graph node
+// navigates rather than reaching into another view (D4).
 void draw_obs_topo(const TopoView &v, const std::string &rec_id,
                    const std::function<void(const dt_link &)> &go);
-void draw_obs_hotedges(const HotEdgeView &v);
+void draw_obs_hotedges(const HotEdgeView &v, const std::string &rec_id,
+                       const std::function<void(const dt_link &)> &go);
 // Returns a `start` command line when the user asks for one, else "". The
 // caller sends it — this file never touches a session.
-std::string draw_obs_tree(const TreeView &v, ObserverState &s, long pid);
+std::string draw_obs_tree(const TreeView &v, ObserverState &s, long pid,
+                          const std::string &rec_id,
+                          const std::function<void(const dt_link &)> &go);
 void draw_obs_region(RegionView &v);
 void draw_obs_disasm(const DisasmView &v, ObserverState &s);
 
