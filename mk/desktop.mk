@@ -282,7 +282,8 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/src/walkthrough.o $(BUILD)/desktop/$(1)/src/capview.o \
   $(BUILD)/desktop/$(1)/src/author_vm.o \
   $(BUILD)/desktop/$(1)/ui/author_door.o \
-  $(BUILD)/desktop/$(1)/ui/shell.o $(BUILD)/desktop/$(1)/ui/learn_door.o \
+  $(BUILD)/desktop/$(1)/ui/shell.o $(BUILD)/desktop/$(1)/ui/layout.o \
+  $(BUILD)/desktop/$(1)/ui/learn_door.o \
   $(BUILD)/desktop/$(1)/ui/capability_panel.o \
   $(BUILD)/desktop/$(1)/ui/inspect_door.o \
   $(BUILD)/desktop/$(1)/ui/gl_scene_host.o \
@@ -590,6 +591,7 @@ desktop-setup-render:
 # keeps the reused asmspy headers C++-clean (03-desktop-shell.md T5).
 DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_shell $(BUILD)/desktop_test_golden \
+                 $(BUILD)/desktop_test_layout \
                  $(BUILD)/desktop_test_slice $(BUILD)/desktop_test_nav \
                  $(BUILD)/desktop_test_projection \
                  $(BUILD)/desktop_test_terrain \
@@ -895,6 +897,12 @@ $(BUILD)/desktop_test_nav: $(BUILD)/desktop/test/t/test_nav.o \
     $(BUILD)/desktop/test/src/nav.o $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# The dock layout manager (13-foundation-moves.md T2): layout.o + imgui core,
+# nothing else — the manager is self-contained (DockBuilder only).
+$(BUILD)/desktop_test_layout: $(BUILD)/desktop/test/t/test_layout.o \
+    $(BUILD)/desktop/test/ui/layout.o $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 $(BUILD)/desktop_test_diff: $(BUILD)/desktop/test/t/test_diff.o \
     $(BUILD)/desktop/test/an/diff.o $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) \
     $(DESKTOP_TEST_DOC)
@@ -984,6 +992,7 @@ $(BUILD)/desktop_test_recording: $(BUILD)/desktop/test/t/test_recording.o $(DESK
 # their draw halves and the data readers. It still needs no GL and no engines:
 # ImGui's null backend renders every one of those paths.
 DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
+    $(BUILD)/desktop/test/ui/layout.o \
     $(BUILD)/desktop/test/ui/learn_door.o \
     $(BUILD)/desktop/test/ui/capability_panel.o \
     $(BUILD)/desktop/test/ui/inspect_door.o \

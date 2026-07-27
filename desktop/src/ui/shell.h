@@ -51,6 +51,7 @@ struct ShellState {
     Workspace ws;
     int active_tab = -1;        // -1 = home (the three doors)
     bool open_dialog = false;   // the recording-open dialog is showing
+    bool layout_inited = false; // the default dock layout was built once (T2)
     char open_path[1024] = {0}; // its InputText buffer
     std::string open_error;     // last open failure, rendered verbatim
     // Author/Inspect open an empty placeholder tab in the full app (behaviour

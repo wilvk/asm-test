@@ -64,7 +64,15 @@ int main() {
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGui::GetIO().IniFilename = nullptr; // no imgui.ini side-effect
+    // Docking (13-foundation-moves.md F1/T2): dockable/tearable panes + a
+    // persisted layout, for the REAL app only. The headless null-backend tests
+    // create their own contexts and deliberately leave both off, so they stay
+    // deterministic and write no file. Multi-viewports stay OFF by design (dead
+    // on Wayland, broken on X11 per the official wiki).
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    // A real ini now persists window/dock layout (the `b` docking hotfix makes
+    // loading table settings safe). Kept under build/ so it is git-ignored.
+    ImGui::GetIO().IniFilename = "build/desktop-imgui.ini";
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);

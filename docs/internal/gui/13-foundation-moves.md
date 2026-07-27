@@ -117,6 +117,24 @@ the branch switch alone changes no behaviour).
 
 ### T2 — In-tree layout manager over `DockBuilder`  (M, depends on: T1; 04, 09, 10)
 
+> **Implemented 2026-07-27 (manager + dockspace host) — green (51 suites).**
+> `desktop/src/ui/layout.{h,cpp}` is the manager and the **only** `imgui_internal.h`
+> consumer in the shell (DockBuilder), as the doc requires — `layout_build` splits
+> a dockspace into left/center/right/bottom regions and docks named panes per
+> `LayoutPreset` (Replay/Inspect · Author · Live observer); `layout_exists`
+> wraps `DockBuilderGetNode` so the shell needs no internal header.
+> `test_layout` drives it headless (DockingEnable on) and pins the split tree.
+> `main.cpp` enables `ConfigFlags_DockingEnable` + a real `build/desktop-imgui.ini`
+> **for the app only** (the null test backends keep their own contexts, docking
+> off, file-free — so `test_shell`/`test_golden` are unchanged). `shell.cpp`
+> hosts a `DockSpaceOverViewport` (passthru central node) + a **View menu**
+> (Reset layout / per-mode presets), all guarded on `DockingEnable`, and builds
+> the shipped default on first run unless a layout was persisted.
+> Multi-viewports stay OFF. **Remaining T2 scope**: converting the existing
+> nested tabs (Scrubber / ABI x-ray / 3D overview / Diff) into the dockable
+> **named windows** the manager targets is the follow-on UX refactor — best
+> landed with the interaction tests from doc 17 so the tab→pane move is pinned.
+
 **Goal.** A ~200-line in-tree wrapper (doc 11's estimate) that turns the shell
 into a real dockspace: a shipped default layout, "reset layout", and per-mode
 presets (Learn/Author/Inspect vs replay vs live observer). It hosts the views

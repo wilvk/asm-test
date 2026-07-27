@@ -2,6 +2,7 @@
 // GLFW, no GL, no engines are touched here, so the null backend renders every
 // path in tests (03-desktop-shell.md T6).
 #include "ui/shell.h"
+#include "ui/layout.h"
 
 #include <functional>
 #include <string>
@@ -549,16 +550,55 @@ static void draw_open_dialog(ShellState &s) {
 }
 
 void draw_shell(ShellState &s) {
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+
+    // Docking (13-foundation-moves.md T2): when enabled (the real app; the null
+    // test backend leaves it OFF, so everything below is skipped and the shell
+    // draws exactly as before), host a full-viewport dockspace with a passthru
+    // central node so panes can be torn out and re-docked, and build the shipped
+    // default layout on first run (unless a layout was already persisted).
+    const bool docking =
+        (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_DockingEnable) != 0;
+    ImGuiID dockspace_id = 0;
+    if (docking) {
+        dockspace_id = ImGui::DockSpaceOverViewport(
+            0, vp, ImGuiDockNodeFlags_PassthruCentralNode);
+        if (!s.layout_inited) {
+            s.layout_inited = true;
+            if (!layout_exists(dockspace_id))
+                layout_build(dockspace_id, vp->WorkSize,
+                             LayoutPreset::ReplayInspect);
+        }
+    }
+
     // Pin the shell to the whole viewport. Without this the "asmtest" window is a
     // floating panel that ImGui auto-fits to a tiny default size on the first
     // frame (and, with IniFilename disabled in main.cpp, never remembers a
     // resize) — so the app reads as "starts very small" inside the OS frame.
-    const ImGuiViewport *vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);
-    ImGui::Begin("asmtest", nullptr,
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar);
+    ImGuiWindowFlags shell_flags = ImGuiWindowFlags_NoMove |
+                                   ImGuiWindowFlags_NoResize |
+                                   ImGuiWindowFlags_NoCollapse |
+                                   ImGuiWindowFlags_NoTitleBar;
+    if (docking)
+        shell_flags |= ImGuiWindowFlags_MenuBar; // the View menu below
+    ImGui::Begin("asmtest", nullptr, shell_flags);
+    if (docking && ImGui::BeginMenuBar()) {
+        if (ImGui::BeginMenu("View")) {
+            if (ImGui::MenuItem("Reset layout"))
+                layout_build(dockspace_id, vp->WorkSize,
+                             LayoutPreset::ReplayInspect);
+            ImGui::Separator();
+            for (LayoutPreset p : {LayoutPreset::ReplayInspect,
+                                   LayoutPreset::Author,
+                                   LayoutPreset::LiveObserver})
+                if (ImGui::MenuItem(layout_preset_name(p)))
+                    layout_build(dockspace_id, vp->WorkSize, p);
+            ImGui::EndMenu();
+        }
+        ImGui::EndMenuBar();
+    }
 
     if (ImGui::BeginTabBar("main", ImGuiTabBarFlags_AutoSelectNewTabs)) {
         if (ImGui::BeginTabItem("Home")) {
