@@ -19,6 +19,7 @@
 #include "ImGuiFileDialog.h" // pure-ImGui open dialog (14 T7)
 
 #include <algorithm> // std::sort/std::swap for the keymap (17 T1)
+#include <cstdio>    // std::snprintf — undo_apply's filter restore (22 T4)
 #include <cstdlib>   // std::strtoul — the go-to modal's step parse (17 T1)
 
 #include "analysis/diff.h"  // dt_diff_build — n/p divergence walk (17 T1)
@@ -315,8 +316,12 @@ void shell_wire_nav(ShellState &s) {
             if (a >= 0)
                 s.active_tab = a;
             s.b_index = l.rec_b.empty() ? -1 : index_of_id(s, l.rec_b);
-            s.selected_step = l.step;
-            s.selected_off = l.off;
+            // The ONE selection writer (22 T1): a deep link brushes the entity in
+            // every pane at once and bumps `epoch`, so a link and a keypress land
+            // identically (D4). Selection is distinct from nav — the router sets
+            // both here (this handler moves the view AND brushes), while a plain
+            // 1/2/3/4 view switch sets only nav.
+            s.selection.set(l.rec, l.step, l.off);
             if (l.step)
                 s.cone_active = true;
         };
@@ -382,8 +387,8 @@ WorkspaceState shell_capture_workspace(const ShellState &s) {
         // recording (its position restores to the top).
         if (static_cast<int>(i) == s.active_tab) {
             l.view = s.view;
-            l.step = s.selected_step;
-            l.off = s.selected_off;
+            l.step = s.selection.step;
+            l.off = s.selection.off;
         }
         ws.pane_links.push_back(dt_nav_format(l));
     }
@@ -535,6 +540,50 @@ static void draw_summary(const Recording &r) {
                     (unsigned long long)r.unknown_kinds);
 }
 
+// The Tab-reachable 3D viewport hit-target (22-selection-and-search.md T2, F18):
+// a focusable InvisibleButton the size of the viewport region. It exists in EVERY
+// branch below — including the null-backend placard paths (no GL, no Image) — so a
+// keyboard-only analyst can Tab into the 3D pane and, when it holds focus, drive
+// the pure Camera with no GL. That is exactly what makes the keyboard camera
+// headlessly testable (CLAUDE.md: a lane that could only self-skip is not a test).
+// Returns whether the target holds focus this frame.
+static bool scene_viewport_target(ImVec2 size) {
+    if (size.x < 16.0f)
+        size.x = 16.0f;
+    if (size.y < 16.0f)
+        size.y = 16.0f;
+    ImGui::InvisibleButton("3d-viewport", size);
+    return ImGui::IsItemFocused();
+}
+
+// Apply the keyboard camera (22 T2): arrows orbit, +/=/- dolly, R resets, T is the
+// honest top-down 2D-ish fallback. Routed through the SAME Camera methods the
+// mouse drag uses (scene3d::camera_key), so keyboard and mouse are one code path.
+// Guarded on WantTextInput exactly as handle_keymap is.
+static void scene_apply_camera_keys(scene3d::Camera &cam) {
+    using scene3d::CamKey;
+    if (ImGui::GetIO().WantTextInput)
+        return;
+    if (ImGui::IsKeyPressed(ImGuiKey_LeftArrow))
+        scene3d::camera_key(cam, CamKey::OrbitLeft);
+    if (ImGui::IsKeyPressed(ImGuiKey_RightArrow))
+        scene3d::camera_key(cam, CamKey::OrbitRight);
+    if (ImGui::IsKeyPressed(ImGuiKey_UpArrow))
+        scene3d::camera_key(cam, CamKey::OrbitUp);
+    if (ImGui::IsKeyPressed(ImGuiKey_DownArrow))
+        scene3d::camera_key(cam, CamKey::OrbitDown);
+    if (ImGui::IsKeyPressed(ImGuiKey_Equal) ||
+        ImGui::IsKeyPressed(ImGuiKey_KeypadAdd))
+        scene3d::camera_key(cam, CamKey::DollyIn);
+    if (ImGui::IsKeyPressed(ImGuiKey_Minus) ||
+        ImGui::IsKeyPressed(ImGuiKey_KeypadSubtract))
+        scene3d::camera_key(cam, CamKey::DollyOut);
+    if (ImGui::IsKeyPressed(ImGuiKey_R) && !ImGui::GetIO().KeyCtrl)
+        scene3d::camera_key(cam, CamKey::Reset);
+    if (ImGui::IsKeyPressed(ImGuiKey_T))
+        scene3d::camera_key(cam, CamKey::TopDown);
+}
+
 void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     size_t i = static_cast<size_t>(s.active_tab);
     if (s.active_tab < 0 || i >= s.scenes.size())
@@ -585,6 +634,15 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         sv.cam.top_down();
     sv.hud.req_reset_view = sv.hud.req_top_down = false;
 
+    // 22 T2 (F18): the keyboard camera acts when the HUD (reported above) or the 3D
+    // viewport holds focus. The viewport target is drawn in the branches below —
+    // after these keys apply — so its focus is read from LAST frame (persisted in
+    // sv.viewport_focus). s.cam_focus lets handle_keymap defer the arrow keys to
+    // the camera next frame, exactly as wasd_context defers WASD.
+    s.cam_focus = sv.hud.kbd_focus || sv.viewport_focus;
+    if (s.cam_focus)
+        scene_apply_camera_keys(sv.cam);
+
     // Re-slice the terrain when the playhead moved (or on first build). O(touched
     // cells), far under frame budget for a golden recording (T2 step 3) — but a
     // pathologically large terrain can exceed it, and a synchronous full slice
@@ -615,6 +673,9 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             "no address-space regions in this recording — the 3D overview needs "
             "codeimage events (or a live maps snapshot) to place the plane. The "
             "provenance, trajectory and legend above still read.");
+        // The keyboard viewport target still exists (22 T2), so a keyboard-only
+        // analyst can Tab in and orbit the camera even with no plane to draw.
+        sv.viewport_focus = scene_viewport_target(ImGui::GetContentRegionAvail());
         return;
     }
 
@@ -627,11 +688,16 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             "3D viewport unavailable — no GL context in this build/run "
             "(headless test, or a viewer with no display). The scene's models, "
             "provenance and legend above are fully woven.");
+        // The Tab-reachable focus target + keyboard camera exist here too (22 T2):
+        // this is precisely the null-backend path, where moving the pure Camera
+        // with no GL is what makes the keyboard camera headlessly testable.
+        sv.viewport_focus = scene_viewport_target(ImGui::GetContentRegionAvail());
         return;
     }
     if (!s.scene_host->ready()) {
         ImGui::TextDisabled("3D scene did not initialise: %s",
                             s.scene_host->error());
+        sv.viewport_focus = scene_viewport_target(ImGui::GetContentRegionAvail());
         return;
     }
 
@@ -658,17 +724,30 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     ImTextureID tex = s.scene_host->render(f);
     if (!tex) {
         ImGui::TextDisabled("3D scene produced no frame on this driver");
+        sv.viewport_focus = scene_viewport_target(ImGui::GetContentRegionAvail());
         return;
     }
+    // The viewport is ONE focusable hit-target (22 T2): the InvisibleButton is
+    // both the Tab-reach focus target (a keyboard-only analyst can reach it) and
+    // the mouse hit-target for orbit/dolly/pick; the GL texture is drawn over it.
     // GL renders bottom-left origin; flip V so the image reads upright in ImGui.
-    ImGui::Image(tex, ImVec2(static_cast<float>(fbw), static_cast<float>(fbh)),
-                 ImVec2(0, 1), ImVec2(1, 0));
+    ImVec2 vp_origin = ImGui::GetCursorScreenPos();
+    ImGui::InvisibleButton(
+        "3d-viewport",
+        ImVec2(static_cast<float>(fbw), static_cast<float>(fbh)));
+    sv.viewport_focus = ImGui::IsItemFocused();
+    const bool vp_hover = ImGui::IsItemHovered();
+    ImGui::GetWindowDrawList()->AddImage(
+        tex, vp_origin,
+        ImVec2(vp_origin.x + static_cast<float>(fbw),
+               vp_origin.y + static_cast<float>(fbh)),
+        ImVec2(0, 1), ImVec2(1, 0));
 
     // Camera + pick, only while the pointer is over the viewport. A left-drag
     // orbits; the wheel dollies; a click that did NOT drag is a pick — read the
     // id under the cursor and drill OUT to the flat 2D view through 04's router
     // (3D to find, 2D to read).
-    if (ImGui::IsItemHovered()) {
+    if (vp_hover) {
         ImGuiIO &io = ImGui::GetIO();
         if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
             sv.nav_dragging = false;
@@ -706,16 +785,26 @@ static void body_canvas(ShellState &, const Streams *a, const Streams *b) {
 }
 static void body_timeline(ShellState &s, const Streams *a, const Streams *b) {
     dt_slice cone;
-    if (s.cone_active && s.selected_step)
+    if (s.cone_active && s.selection.step)
         // `b` lights the backward cone (what produced the selection), `f` the
-        // forward cone (what it feeds) — s.cone_fwd (17-T1).
-        cone = s.cone_fwd
-                   ? dt_slice_forward(a->df.edges, a->df.nsteps, *s.selected_step)
-                   : dt_slice_backward(a->df.edges, a->df.nsteps,
-                                       *s.selected_step);
+        // forward cone (what it feeds) — s.cone_fwd (17-T1). The cone is a derived
+        // highlight OF the shared selection (22 T1), not a second selection.
+        cone = s.cone_fwd ? dt_slice_forward(a->df.edges, a->df.nsteps,
+                                             *s.selection.step)
+                          : dt_slice_backward(a->df.edges, a->df.nsteps,
+                                              *s.selection.step);
     const dt_slice *lit = s.cone_active ? &cone : nullptr;
     dt_timeline t =
         b ? dt_timeline_build2(*a, *b, lit) : dt_timeline_build(*a, lit);
+    // Project the shared selection into the model so the timeline marks the SAME
+    // entity the other panes brush (22 T1). A step absent from this stream simply
+    // does not match a row — "nothing selected" here, never a fabricated row (D7).
+    t.selected_step = s.selection.step;
+    // Highlight-all for the global find (22 T3): mark every timeline hit. Find
+    // MARKS, never hides — the hit set is drawn as emphasis and every row stays.
+    for (const FindHit &h : s.find.hits)
+        if (h.view == dt_view::timeline && h.step)
+            t.find_hits.push_back(*h.step);
 
     // Always-visible overview/minimap (21-spine-navigation.md T3): the whole-trace
     // density above the table, with the current viewport (the ImZoomSlider window)
@@ -739,7 +828,7 @@ static void body_timeline(ShellState &s, const Streams *a, const Streams *b) {
 }
 static void body_slice(ShellState &s, const Streams *a, const Streams *b) {
     dt_view_header("slice");
-    draw_slice_view(dt_slice_view_build(*a, s.selected_step));
+    draw_slice_view(dt_slice_view_build(*a, s.selection.step));
     if (b != nullptr)
         // Never a fake merged graph: the two-recording slice needs the Wave-2
         // state-diff producer, and until it exists this says so.
@@ -918,7 +1007,10 @@ static void draw_view_body(ShellState &s, ViewId id, const Recording &r,
         break;
     case ViewId::Loom:
         shell_live_weave_banner(s); // 25 T5: perturb+torn caveat on a live weave
-        draw_loom(s.loom, *a, s.ws, s.active_tab, [&s](const dt_link &l) { if (!dt_nav_go(s.nav, l)) s.status = s.nav.last_error; });
+        draw_loom(
+            s.loom, *a, s.ws, s.active_tab,
+            [&s](const dt_link &l) { if (!dt_nav_go(s.nav, l)) s.status = s.nav.last_error; },
+            &s.selection, &s.undo);
         break;
     case ViewId::Scrubber:
         body_scrubber(s);
@@ -1112,6 +1204,29 @@ static void handle_keymap(ShellState &s) {
         ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_P))
         s.show_palette = true;
 
+    // Ctrl+F — open the global find (22 T3, F17): highlight-all across the
+    // timeline (+ minimap seam), match count and aggregate cost, Enter/Shift+Enter
+    // cycling. IsKeyChordPressed mirrors Ctrl+G; the find bar owns the query text.
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_F)) {
+        s.find.open = true;
+        s.find.focus_query = true;
+    }
+
+    // Ctrl+Z / Ctrl+Y (and Ctrl+Shift+Z) — the app-level undo/redo (22 T4, F12)
+    // over reversible view-model state (filter / cone / selection / take set).
+    // DISTINCT from the Author editor's own text undo: this whole function returns
+    // early on io.WantTextInput, so while the editor holds focus these never fire
+    // and its Ctrl+Z stays its own. The two undos own disjoint state.
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Z) && !io.KeyShift) {
+        if (const UndoCommand *c = s.undo.undo())
+            undo_apply(s, *c, /*redo=*/false);
+    }
+    if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_Y) ||
+        ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_Z)) {
+        if (const UndoCommand *c = s.undo.redo())
+            undo_apply(s, *c, /*redo=*/true);
+    }
+
     // Ctrl+O — open the file dialog (the File menu advertises this key, 20 T3).
     if (ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_O)) {
         s.open_dialog = true;
@@ -1159,24 +1274,32 @@ static void handle_keymap(ShellState &s) {
     // The step space is the dataflow's — the same one the slice/cone index, so a
     // stepped selection lands on a node the slice explorer can actually show.
     const uint32_t maxstep = a->df.nsteps > 0 ? a->df.nsteps - 1 : 0;
-    const uint32_t cur = s.selected_step.value_or(0);
+    const uint32_t cur = s.selection.step.value_or(0);
     const uint32_t kPage = 20;
+    // Snapshot the shared selection (22 T1): any step/off move below bumps the
+    // epoch ONCE at the end, so every pane's projection notices the brush moved.
+    const auto sel_step0 = s.selection.step;
+    const auto sel_off0 = s.selection.off;
 
     // j/k, Down/Up — next / previous step (clamped to the step space). F10/F11
     // are the debugger-muscle-memory aliases, and `,`/`.` step to the previous /
     // next sibling — in the flat step space the adjacent invocation (18-breach-
-    // stops.md T1). All are pure selection moves.
-    if (ImGui::IsKeyPressed(ImGuiKey_J) || ImGui::IsKeyPressed(ImGuiKey_DownArrow) ||
-        ImGui::IsKeyPressed(ImGuiKey_F10) || ImGui::IsKeyPressed(ImGuiKey_Period))
-        s.selected_step = cur < maxstep ? cur + 1 : maxstep;
-    if (ImGui::IsKeyPressed(ImGuiKey_K) || ImGui::IsKeyPressed(ImGuiKey_UpArrow) ||
-        ImGui::IsKeyPressed(ImGuiKey_F11) || ImGui::IsKeyPressed(ImGuiKey_Comma))
-        s.selected_step = cur > 0 ? cur - 1 : 0;
+    // stops.md T1). All are pure selection moves. The ARROWS defer to the 3D
+    // camera when a 3D pane holds focus (22 T2, s.cam_focus): there Up/Down orbit
+    // instead of stepping, exactly as WASD defers via wasd_context.
+    if (ImGui::IsKeyPressed(ImGuiKey_J) || ImGui::IsKeyPressed(ImGuiKey_F10) ||
+        ImGui::IsKeyPressed(ImGuiKey_Period) ||
+        (!s.cam_focus && ImGui::IsKeyPressed(ImGuiKey_DownArrow)))
+        s.selection.step = cur < maxstep ? cur + 1 : maxstep;
+    if (ImGui::IsKeyPressed(ImGuiKey_K) || ImGui::IsKeyPressed(ImGuiKey_F11) ||
+        ImGui::IsKeyPressed(ImGuiKey_Comma) ||
+        (!s.cam_focus && ImGui::IsKeyPressed(ImGuiKey_UpArrow)))
+        s.selection.step = cur > 0 ? cur - 1 : 0;
     // PgDn/PgUp — page through the step space.
     if (ImGui::IsKeyPressed(ImGuiKey_PageDown))
-        s.selected_step = cur + kPage <= maxstep ? cur + kPage : maxstep;
+        s.selection.step = cur + kPage <= maxstep ? cur + kPage : maxstep;
     if (ImGui::IsKeyPressed(ImGuiKey_PageUp))
-        s.selected_step = cur > kPage ? cur - kPage : 0;
+        s.selection.step = cur > kPage ? cur - kPage : 0;
 
     // Enter — open the slice explorer at the selected step, cone lit.
     if (ImGui::IsKeyPressed(ImGuiKey_Enter) ||
@@ -1187,10 +1310,24 @@ static void handle_keymap(ShellState &s) {
 
     // b / f — light the backward / forward cone from the selection; c — clear.
     // `f` (no Shift) is the forward cone; Shift+F is fit-selection, handled above,
-    // so the cone must not also fire on the capital letter.
-    if (ImGui::IsKeyPressed(ImGuiKey_B)) { s.cone_active = true; s.cone_fwd = false; }
-    if (ImGui::IsKeyPressed(ImGuiKey_F) && !io.KeyShift) { s.cone_active = true; s.cone_fwd = true; }
-    if (ImGui::IsKeyPressed(ImGuiKey_C) && !io.KeyCtrl) s.cone_active = false;
+    // so the cone must not also fire on the capital letter. Each cone CHANGE is a
+    // reversible undo Command (22 T4): the cone is a derived highlight of the
+    // selection, so Ctrl+Z restores the exact prior cone state.
+    {
+        const bool cone_a0 = s.cone_active, cone_f0 = s.cone_fwd;
+        if (ImGui::IsKeyPressed(ImGuiKey_B)) { s.cone_active = true; s.cone_fwd = false; }
+        if (ImGui::IsKeyPressed(ImGuiKey_F) && !io.KeyShift) { s.cone_active = true; s.cone_fwd = true; }
+        if (ImGui::IsKeyPressed(ImGuiKey_C) && !io.KeyCtrl) s.cone_active = false;
+        if (s.cone_active != cone_a0 || s.cone_fwd != cone_f0) {
+            UndoCommand cmd;
+            cmd.kind = UndoCommand::Kind::Cone;
+            cmd.cone_active_before = cone_a0;
+            cmd.cone_fwd_before = cone_f0;
+            cmd.cone_active_after = s.cone_active;
+            cmd.cone_fwd_after = s.cone_fwd;
+            s.undo.push(std::move(cmd));
+        }
+    }
 
     // d — attach a second recording for the diff (the first OTHER open one), or
     // detach the one attached. x — swap which is A and which is B. In wasd_context
@@ -1232,7 +1369,7 @@ static void handle_keymap(ShellState &s) {
                     offs.push_back(hd.off);
                 std::sort(offs.begin(), offs.end());
                 const uint64_t curoff =
-                    s.selected_off.value_or(fwd ? 0 : UINT64_MAX);
+                    s.selection.off.value_or(fwd ? 0 : UINT64_MAX);
                 std::optional<uint64_t> tgt;
                 if (fwd) {
                     for (uint64_t o : offs)
@@ -1242,7 +1379,7 @@ static void handle_keymap(ShellState &s) {
                         if (*it < curoff) { tgt = *it; break; }
                 }
                 if (tgt)
-                    s.selected_off = *tgt;
+                    s.selection.off = *tgt;
                 else
                     s.status = fwd ? "n: at the last divergence"
                                    : "p: at the first divergence";
@@ -1252,6 +1389,15 @@ static void handle_keymap(ShellState &s) {
                                : derr;
             }
         }
+    }
+
+    // 22 T1: if any step/off move above changed the brushed entity, bump the
+    // shared selection's epoch ONCE and stamp the active recording, so every
+    // pane's projection notices the same brush moved (cross-highlight, not
+    // cross-navigate — only the active pane scrolls).
+    if (s.selection.step != sel_step0 || s.selection.off != sel_off0) {
+        s.selection.rec = a->id;
+        ++s.selection.epoch;
     }
 }
 
@@ -1717,7 +1863,10 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     if (ImGui::Begin(kPaneLoom)) {
         if (a != nullptr) {
             shell_live_weave_banner(s); // 25 T5: perturb+torn caveat on a live weave
-            draw_loom(s.loom, *a, s.ws, s.active_tab, [&s](const dt_link &l) { if (!dt_nav_go(s.nav, l)) s.status = s.nav.last_error; });
+            draw_loom(
+                s.loom, *a, s.ws, s.active_tab,
+                [&s](const dt_link &l) { if (!dt_nav_go(s.nav, l)) s.status = s.nav.last_error; },
+                &s.selection, &s.undo);
         } else
             ImGui::TextDisabled("open a recording to weave its Loom");
     }
@@ -1996,12 +2145,135 @@ static void draw_settings(ShellState &s) {
     ImGui::End();
 }
 
+// --- 22 T4: apply an undo Command onto the shell ------------------------------
+// Restores the before-value on undo (Ctrl+Z) and the after-value on redo
+// (Ctrl+Y). Touches ONLY the reversible view-model fields (filter / cone /
+// selection / take set) — never the Author editor's own text buffer, which owns a
+// disjoint undo (doc 17 T2). Pure model move, so test_undo drives it headlessly.
+void undo_apply(ShellState &s, const UndoCommand &c, bool redo) {
+    switch (c.kind) {
+    case UndoCommand::Kind::Cone:
+        s.cone_active = redo ? c.cone_active_after : c.cone_active_before;
+        s.cone_fwd = redo ? c.cone_fwd_after : c.cone_fwd_before;
+        break;
+    case UndoCommand::Kind::Filter: {
+        const std::string &val = redo ? c.filter_after : c.filter_before;
+        if (s.active_tab >= 0 &&
+            static_cast<size_t>(s.active_tab) < s.observers.size()) {
+            auto &obs = s.observers[static_cast<size_t>(s.active_tab)];
+            std::snprintf(obs.syscall_filter, sizeof obs.syscall_filter, "%s",
+                          val.c_str());
+        }
+        s.undo_filter_seen = val; // the detector must not re-record this move
+        break;
+    }
+    case UndoCommand::Kind::TakeSet:
+        s.loom.takes = redo ? c.takes_after : c.takes_before;
+        break;
+    case UndoCommand::Kind::Selection:
+        s.selection = redo ? c.sel_after : c.sel_before;
+        ++s.selection.epoch;
+        break;
+    }
+}
+
+// Coalesce a settled syscall-filter edit into ONE reversible Command (22 T4). It
+// records nothing while the field is still being typed (io.WantTextInput) and
+// nothing on a recording switch (it re-baselines instead), so Ctrl+Z reverses a
+// whole filter change rather than one keystroke at a time.
+static void record_filter_undo(ShellState &s) {
+    if (s.active_tab < 0 ||
+        static_cast<size_t>(s.active_tab) >= s.observers.size()) {
+        s.undo_filter_tab = -1;
+        return;
+    }
+    const std::string cur =
+        s.observers[static_cast<size_t>(s.active_tab)].syscall_filter;
+    if (s.undo_filter_tab != s.active_tab) {
+        s.undo_filter_tab = s.active_tab; // adopt this recording's filter baseline
+        s.undo_filter_seen = cur;
+        return;
+    }
+    if (ImGui::GetIO().WantTextInput || cur == s.undo_filter_seen)
+        return;
+    UndoCommand cmd;
+    cmd.kind = UndoCommand::Kind::Filter;
+    cmd.filter_before = s.undo_filter_seen;
+    cmd.filter_after = cur;
+    s.undo.push(std::move(cmd));
+    s.undo_filter_seen = cur;
+}
+
+// --- 22 T3: the global find bar (Ctrl+F) --------------------------------------
+// Search-as-measurement (F17): highlight EVERY hit (the timeline paints them; find
+// never hides a row — the honesty distinction from a filter, D7), report the match
+// COUNT and the aggregate COST, and cycle with Enter / Shift+Enter. Cycling drives
+// dt_nav_go — the ONE spine — never the undo stack (T4's boundary).
+static void draw_find_bar(ShellState &s) {
+    if (!s.find.open)
+        return;
+    const Streams *a = shell_a(s);
+    if (a == nullptr) {
+        s.find.open = false; // nothing to search without an active recording
+        return;
+    }
+    if (ImGui::Begin("Find", &s.find.open)) {
+        if (s.find.focus_query) {
+            ImGui::SetKeyboardFocusHere();
+            s.find.focus_query = false;
+        }
+        ImGui::SetNextItemWidth(320.0f);
+        const bool enter = ImGui::InputTextWithHint(
+            "##findq", "find mnemonic / address / symbol (measures, never hides)",
+            s.find.query, sizeof s.find.query,
+            ImGuiInputTextFlags_EnterReturnsTrue);
+        // Recompute on a query change only — cheap, but not per frame.
+        if (s.find.last_query != std::string(s.find.query)) {
+            const ObserverState *obs =
+                (s.active_tab >= 0 &&
+                 static_cast<size_t>(s.active_tab) < s.observers.size())
+                    ? &s.observers[static_cast<size_t>(s.active_tab)]
+                    : nullptr;
+            find_run(s.find, *a, obs);
+        }
+        // The measurement, always shown: how many, and at what aggregate cost
+        // (summed hot-edge samples + step counts) — a find that MEASURES.
+        ImGui::SameLine();
+        ImGui::TextDisabled("%zu match%s · cost %llu", s.find.hits.size(),
+                            s.find.hits.size() == 1 ? "" : "es",
+                            (unsigned long long)s.find.total_cost);
+        const bool shift = ImGui::GetIO().KeyShift;
+        const bool next = ImGui::Button("Next") || (enter && !shift);
+        ImGui::SameLine();
+        const bool prev = ImGui::Button("Prev") || (enter && shift);
+        if ((next || prev) && !s.find.hits.empty()) {
+            if (const FindHit *h = find_cycle(s.find, next))
+                if (!dt_nav_go(s.nav, find_hit_link(*h, a->id)))
+                    s.status = s.nav.last_error;
+        }
+        if (s.find.active >= 0 &&
+            static_cast<size_t>(s.find.active) < s.find.hits.size())
+            ImGui::TextDisabled(
+                "match %d/%zu: %s", s.find.active + 1, s.find.hits.size(),
+                s.find.hits[static_cast<size_t>(s.find.active)].label.c_str());
+        // Minimap seam (doc 21 T3): when the timeline overview/minimap lands, paint
+        // s.find.hits there as ticks — a clean seam, not a hard dependency, since
+        // the timeline already highlights every hit (body_timeline).
+    }
+    ImGui::End();
+}
+
 void draw_shell(ShellState &s) {
     const ImGuiViewport *vp = ImGui::GetMainViewport();
 
     // The advertised keyboard bindings, acted on first so a keypress and the
     // matching click land in the same frame (17-T1).
     handle_keymap(s);
+    // 22 T2: recompute the 3D-camera focus fresh each frame — the 3D pane sets it
+    // true below when its HUD/viewport holds focus, and it must fall back to false
+    // when that pane is not even drawn (so arrows resume stepping the selection).
+    // handle_keymap already consumed last frame's value above.
+    s.cam_focus = false;
     // Keep the Inspect picker's least-perturbing default in step with the probe
     // (T5) before any door draws it.
     shell_sync_inspect_defaults(s);
@@ -2039,6 +2311,10 @@ void draw_shell(ShellState &s) {
     draw_palette(s);      // Ctrl+Shift+P / Ctrl+P command palette (21 T1)
     draw_close_guards(s); // T3 dirty-close save/discard/cancel
     draw_settings(s);     // 20 T5 the Settings pane
+    draw_find_bar(s);     // 22 T3 the global find (Ctrl+F)
+    // 22 T4: coalesce a settled syscall-filter edit into one reversible Command,
+    // AFTER the shell drew (and the user may have edited) the filter this frame.
+    record_filter_undo(s);
 
     // Live-session toasts (16 T1): raise one per TRANSITION, then remember this
     // frame's feedback state so the next comparison is against it (never

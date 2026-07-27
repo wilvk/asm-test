@@ -3,6 +3,7 @@
 #include "views/observer_draw.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -410,7 +411,8 @@ void draw_obs_topo(const TopoView &v, const std::string &rec_id,
 }
 
 // --- T4 ---------------------------------------------------------------------
-void draw_obs_hotedges(const HotEdgeView &v, const std::string &rec_id,
+void draw_obs_hotedges(const HotEdgeView &v, ObserverState &s,
+                       const std::string &rec_id,
                        const std::function<void(const dt_link &)> &go) {
     // Domain-term-first heading + "?" caveat: "hot-edges are edge counts, not a
     // call stack" (24 T3).
@@ -475,6 +477,30 @@ void draw_obs_hotedges(const HotEdgeView &v, const std::string &rec_id,
                           ctx);
     }
 
+    // Client-side type-to-narrow the DISPLAYED edges (22 T3 step 4): honesty-safe
+    // because it narrows the display only and says "showing N of M" — every model
+    // row stays (D7). Matches the from/to labels, in rank order. Deliberately NOT
+    // the call tree, which stays engine-filtered so surviving depths never lie.
+    auto he_lower = [](std::string x) {
+        std::transform(x.begin(), x.end(), x.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        return x;
+    };
+    ImGui::SetNextItemWidth(220);
+    ImGui::InputTextWithHint("##hotedges-filter",
+                             "filter by from/to (e.g. malloc)", s.hotedges_filter,
+                             sizeof s.hotedges_filter);
+    const bool he_filtering = s.hotedges_filter[0] != '\0';
+    const std::string he_q = he_filtering ? he_lower(s.hotedges_filter) : "";
+    if (he_filtering) {
+        size_t shown = 0;
+        for (const HotEdge &e : v.edges)
+            if (he_lower(e.from + " " + e.to).find(he_q) != std::string::npos)
+                shown++;
+        ImGui::SameLine();
+        ImGui::TextDisabled("showing %zu of %zu", shown, v.edges.size());
+    }
+
     if (!ImGui::BeginTable("hotedges", 5,
                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                ImGuiTableFlags_ScrollY |
@@ -509,6 +535,9 @@ void draw_obs_hotedges(const HotEdgeView &v, const std::string &rec_id,
     }
     for (int oi : order) {
         const HotEdge &e = v.edges[static_cast<size_t>(oi)];
+        if (he_filtering &&
+            he_lower(e.from + " " + e.to).find(he_q) == std::string::npos)
+            continue; // narrowed out of the DISPLAY only — the model row stays
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::Text("%d", e.rank);
@@ -693,6 +722,30 @@ void draw_obs_disasm(const DisasmView &v, ObserverState &s) {
         for (const CodeVersion &c : v.versions)
             addrs.push_back(c.base);
 
+    // Client-side type-to-narrow the DISPLAYED rows (22 T3 step 4): honesty-safe —
+    // narrows the display only, says "showing N of M", every row stays (D7).
+    // Matches the address / recorded text. Not the tree (which stays engine-side).
+    auto da_lower = [](std::string x) {
+        std::transform(x.begin(), x.end(), x.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        return x;
+    };
+    ImGui::SetNextItemWidth(220);
+    ImGui::InputTextWithHint("##disasm-filter", "filter by address / mnemonic",
+                             s.disasm_filter, sizeof s.disasm_filter);
+    const bool da_filtering = s.disasm_filter[0] != '\0';
+    const std::string da_q = da_filtering ? da_lower(s.disasm_filter) : "";
+    std::vector<DisasmRow> rows = obs_disasm_rows(v, addrs, s.disasm_when, 8);
+    if (da_filtering) {
+        size_t shown = 0;
+        for (const DisasmRow &r : rows)
+            if (da_lower(hexs(r.addr) + " " + r.text).find(da_q) !=
+                std::string::npos)
+                shown++;
+        ImGui::SameLine();
+        ImGui::TextDisabled("showing %zu of %zu", shown, rows.size());
+    }
+
     if (!ImGui::BeginTable("disasm", 4,
                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                ImGuiTableFlags_ScrollY))
@@ -702,7 +755,10 @@ void draw_obs_disasm(const DisasmView &v, ObserverState &s) {
     ImGui::TableSetupColumn("disassembly");
     ImGui::TableSetupColumn("source");
     ImGui::TableHeadersRow();
-    for (const DisasmRow &r : obs_disasm_rows(v, addrs, s.disasm_when, 8)) {
+    for (const DisasmRow &r : rows) {
+        if (da_filtering &&
+            da_lower(hexs(r.addr) + " " + r.text).find(da_q) == std::string::npos)
+            continue; // narrowed out of the DISPLAY only — the row still exists
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::TextUnformatted(hexs(r.addr).c_str());
@@ -782,7 +838,7 @@ void draw_observer(ObserverState &s, const Recording &r,
         ImGui::EndTabItem();
     }
     if (!s.hotedges.edges.empty() && ImGui::BeginTabItem("Hot edges")) {
-        draw_obs_hotedges(s.hotedges, rec_id, go);
+        draw_obs_hotedges(s.hotedges, s, rec_id, go);
         ImGui::EndTabItem();
     }
     if (!s.tree.rows.empty() && ImGui::BeginTabItem("Tree")) {

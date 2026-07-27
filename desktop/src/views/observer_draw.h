@@ -54,6 +54,15 @@ struct ObserverState {
     // keeps its own filter.
     char syscall_filter[96] = {0};
 
+    // Client-side type-to-narrow filters for the hot-edges + disasm lists
+    // (22-selection-and-search.md T3 step 4): they narrow the DISPLAY only (each
+    // draw keeps every model row and shows "showing N of M"), so a filtered list
+    // never implies the hidden rows do not exist (D7) — the same honesty-safe
+    // idiom as the syscall filter. Deliberately NOT added to the call TREE, which
+    // stays engine-filtered so surviving depths never lie (tree.h, D7).
+    char hotedges_filter[96] = {0};
+    char disasm_filter[96] = {0};
+
     bool built = false;
 };
 
@@ -89,7 +98,8 @@ void draw_obs_watch(const WatchView &v);
 // navigates rather than reaching into another view (D4).
 void draw_obs_topo(const TopoView &v, const std::string &rec_id,
                    const std::function<void(const dt_link &)> &go);
-void draw_obs_hotedges(const HotEdgeView &v, const std::string &rec_id,
+void draw_obs_hotedges(const HotEdgeView &v, ObserverState &s,
+                       const std::string &rec_id,
                        const std::function<void(const dt_link &)> &go);
 // Returns a `start` command line when the user asks for one, else "". The
 // caller sends it — this file never touches a session.

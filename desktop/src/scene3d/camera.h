@@ -104,5 +104,58 @@ struct Camera {
     }
 };
 
+// A keyboard camera nudge (22-selection-and-search.md T2, F18). ImGui exposes no
+// OS screen-reader tree, so keyboard operability is the ONLY accessibility
+// substitute — yet the 3D HUD had no keyboard camera even designed. These are the
+// intents a focused 3D pane maps its keys onto; `camera_key` applies each through
+// the SAME orbit/dolly/reset/top_down the mouse drag uses, so keyboard and mouse
+// are one code path and the top-down fallback stays the honest "3D to find, 2D to
+// read" collapse. Pure — no ImGui — so test_camera drives it and the HUD only
+// maps ImGuiKey -> CamKey.
+enum class CamKey {
+    OrbitLeft,
+    OrbitRight,
+    OrbitUp,
+    OrbitDown,
+    DollyIn,
+    DollyOut,
+    Reset,
+    TopDown,
+};
+
+inline void camera_key(Camera &c, CamKey k) {
+    // One orbit step ~ a comfortable arrow-key nudge; one dolly step matches the
+    // mouse wheel's multiplicative notch (draw_scene_overview: 1/1.1 in, 1.1 out).
+    constexpr float kOrbitStep = 0.12f;
+    constexpr float kDollyIn = 1.0f / 1.1f;
+    constexpr float kDollyOut = 1.1f;
+    switch (k) {
+    case CamKey::OrbitLeft:
+        c.orbit(-kOrbitStep, 0.0f);
+        break;
+    case CamKey::OrbitRight:
+        c.orbit(+kOrbitStep, 0.0f);
+        break;
+    case CamKey::OrbitUp:
+        c.orbit(0.0f, +kOrbitStep);
+        break;
+    case CamKey::OrbitDown:
+        c.orbit(0.0f, -kOrbitStep);
+        break;
+    case CamKey::DollyIn:
+        c.dolly(kDollyIn);
+        break;
+    case CamKey::DollyOut:
+        c.dolly(kDollyOut);
+        break;
+    case CamKey::Reset:
+        c.reset();
+        break;
+    case CamKey::TopDown:
+        c.top_down();
+        break;
+    }
+}
+
 } // namespace asmdesk::scene3d
 #endif // ASMDESK_SCENE3D_CAMERA_H

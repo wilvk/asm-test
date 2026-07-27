@@ -34,6 +34,40 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   click and a typed go-to land identically. Completes the doc-14 T5 overview-strip
   / timeline-windowing follow-on (the `ImZoomSlider` now drives a real timeline
   window). No new dependency (ImPlot, ImZoomSlider already vendored).
+- **Keyboard camera for the 3D overview, Tab-focusable panes and 3D viewport, and
+  keyboard-operable slice cones** (docs/internal/gui/22-selection-and-search.md T2,
+  F18). The 3D spacetime overview was a mouse-only island; because Dear ImGui
+  exposes no OS screen-reader tree, keyboard operability is the only accessibility
+  substitute. Arrows now orbit, `+`/`-` (and `=`) dolly, `R` resets and `T` is the
+  honest top-down 2D-ish fallback — routed through the SAME `Camera` methods the
+  mouse drag uses (a pure `camera_key`), so keyboard and mouse are one code path.
+  The 3D viewport gains a Tab-reachable focus target that exists even under the
+  null backend (no GL), which is what makes the keyboard camera headlessly testable;
+  the arrow keys defer to the camera only when a 3D pane holds focus. The slice
+  cones (`b`/`f`/`Enter`) were already keyboard-operable.
+- **Global find (`Ctrl+F`): highlight-all, match count, aggregate cost, and
+  Enter/Shift+Enter cycling; type-to-narrow extended to disasm and hot-edges**
+  (docs/internal/gui/22-selection-and-search.md T3, F17). Find is a *measurement*,
+  not just a jump: it highlights EVERY hit in the timeline (with a clean seam for
+  the doc-21 minimap), reports the match count AND the aggregate cost (summed
+  hot-edge samples across sites — "this symbol retires N samples across M sites"),
+  and cycles matches through the ONE navigation spine. It searches the timeline,
+  disasm, order-preserving syscall stream and hot-edges in stream order (never
+  relevance-ranked), and never hides a row. The doc-16 client-side "showing N of M"
+  narrowing now also covers the disasm and hot-edges lists. The call **tree** is
+  deliberately untouched — it stays engine-filtered, so surviving depths never lie
+  (D7).
+- **App-level undo/redo (`Ctrl+Z`/`Ctrl+Y`) over filter / cone / selection /
+  take-set state — distinct from the Author editor's text undo; the Loom takes
+  gutter gains per-take remove and clear-forks** (docs/internal/gui/22-selection-
+  and-search.md T4, F12). Applying an aggressive filter, lighting the wrong cone or
+  forking exploratory Loom takes is now reversible: an app-level command stack
+  reverses and replays those view-model changes, deliberately DISJOINT from the
+  Author editor's own text undo (both guard on text-input focus and own separate
+  state) and from the router's back/forward history. The Loom takes gutter — which
+  held no take set before — now accumulates forks with a working per-take **remove**
+  and a **clear forks** action, both reversible; clearing removes a whole take node
+  with its loud refusal intact, never silently dropping a failure (D7).
 - **Derivable `severity` honesty-chrome tier in the `.asmtrace` schema**
   (docs/internal/gui/23-graded-truth-layer.md T1). An optional `provenance.severity`
   string (`neutral | caution | integrity`) names the tier a reader renders a
@@ -2301,6 +2335,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Selection is now one shared brushing-and-linking model — a pick in any pane
+  cross-highlights the same entity in detail/disasm/Loom/3D at once**
+  (docs/internal/gui/22-selection-and-search.md T1, F7). Every view used to hold
+  its own selection, so an analyst re-found the same address by hand in each pane.
+  Selection is now ONE Workspace/shell-level entity (`{rec, step, offset, lane}`
+  plus a bumped `epoch`), held distinctly from navigation (`nav.current` points a
+  view; the selection brushes an entity): a pick in any pane — the timeline, the
+  slice explorer, the Loom, a 3D drill — cross-highlights that same entity in every
+  pane it appears in, and only there. A pane that cannot show the entity shows
+  *nothing selected* rather than a fabricated row (D7), and cross-highlighting
+  brushes in place without yanking every pane's viewport.
 - **Honesty chrome is now a graded 3-tier system over a derivable `severity`
   field** (docs/internal/gui/23-graded-truth-layer.md T1, F5). The proliferating
   honesty forms — a redaction placard, a statistical chip, a coarse chip, a

@@ -7,6 +7,7 @@
 #ifndef ASMDESK_LOOM_DRAW_H
 #define ASMDESK_LOOM_DRAW_H
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -15,8 +16,11 @@
 #include "loom/fabric_plan.h"
 #include "loom/feed.h"
 #include "loom/lineage.h"
-#include "nav.h"        // dt_link — the minimap click routes through 04's router
-#include "ui/primer.h" // first-open primer state (24 T5)
+#include "loom/take_view.h" // loom_take_node_t + the takes-gutter accumulator (22 T4)
+#include "nav.h"            // dt_link — the minimap click routes through 04's router
+#include "ui/primer.h"      // first-open primer state (24 T5)
+#include "ui/selection.h"   // the shared brushing-and-linking selection (22 T1)
+#include "ui/undo.h"        // app-level undo stack, for the takes gutter (22 T4)
 
 namespace asmdesk {
 
@@ -43,16 +47,49 @@ struct LoomState {
     uint32_t playhead = 0; // the audit scrubs this
     bool audit = false;
     dt_primer_state primer; // the first-open primer (24 T5), per recording
+
+    // The persistent takes gutter's accumulator (22 T4, F12). LoomState held no
+    // take set before this — F12's "the gutter accumulates forks with no
+    // remove/clear" was describing doc 05:393-408's design that was never wired.
+    // A full build appends each loom_take_run result here; the render-only viewer
+    // shows recorded takes but assembles none. Per-take remove + clear-forks are
+    // reversible undo Commands (each keeps its `err`/`disclosure` verbatim, so a
+    // clear never quietly drops a take's loud refusal — D7).
+    std::vector<loom_take_node_t> takes;
 };
+
+// The Loom camera's selection dim, DERIVED from the ONE shared selection (22 T1).
+// A Loom click lights the worldline (L.sel.steps); a brush from another pane
+// (shared->step) dims to that step; nothing selected dims to nothing. Pure, so the
+// selection test asserts it as model state (D4) with no ImGui context.
+inline std::vector<uint32_t> loom_shared_dim(const LoomState &L,
+                                             const Selection *shared) {
+    if (L.has_selection)
+        return L.sel.steps; // the Loom's own picked worldline
+    if (shared != nullptr && shared->step)
+        return {*shared->step}; // brushed from another pane — highlight in place
+    return {};                  // nothing selected -> no dim
+}
 
 // Draw the Loom for recording `self` of `ws` (its decoded streams in `s`).
 // Weaves on first sight and on a tab change; a refusal renders as a placard and
 // NOTHING else, because there is no fabric to draw. `go` (21-spine-navigation.md
 // T3) receives the deep link a minimap click resolves to, so the Loom overview
 // jumps through 04's router exactly like every other view; null in a draw-only
-// smoke (the minimap then only moves the local playhead).
+// smoke (the minimap then only moves the local playhead). `shared` is the ONE
+// shared selection (22 T1): a Loom click writes it (cross-highlighting timeline/
+// slice/3D) and the fabric dim reads it (loom_shared_dim). `undo` records the
+// takes gutter's remove/clear as reversible Commands (22 T4). All may be null (a
+// standalone draw with no shell), leaving the Loom's own behaviour unchanged.
 void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self,
-               const std::function<void(const dt_link &)> &go = {});
+               const std::function<void(const dt_link &)> &go = {},
+               Selection *shared = nullptr, UndoStack *undo = nullptr);
+
+// The persistent takes gutter (22 T4): each accumulated take with a per-node
+// [remove] and a gutter-level [clear forks], both reversible via `undo`. Public
+// so the interaction lane drives its buttons directly (test_ui), exactly as it
+// drives draw_obs_syscalls. Call inside an ImGui window.
+void draw_loom_takes_gutter(LoomState &L, UndoStack *undo);
 
 } // namespace asmdesk
 #endif // ASMDESK_LOOM_DRAW_H

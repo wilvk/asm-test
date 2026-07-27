@@ -30,6 +30,13 @@ struct HudState {
     // buttons); the caller applies them to its Camera and need not clear them.
     bool req_reset_view = false;
     bool req_top_down = false;
+
+    // Set true by draw_scene_hud when the HUD window holds keyboard focus this
+    // frame (22-selection-and-search.md T2, F18). The caller ORs it with the 3D
+    // viewport's focus to decide whether the arrow/dolly/reset camera keys act, so
+    // a keyboard-only analyst can orbit the scene from either the HUD or the
+    // viewport — the accessibility substitute for ImGui's absent screen-reader tree.
+    bool kbd_focus = false;
 };
 
 // Draw the HUD for the current ImGui frame. `terr`/`traj` supply the provenance

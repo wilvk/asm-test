@@ -1,5 +1,25 @@
 # Wave 2: operate the spine — shared selection, keyboard islands, global find, app-level undo — implementation
 
+> **LANDED 2026-07-27 (T1–T4, all four tasks).** T1: selection is now ONE shared
+> brushing-and-linking model on `ShellState::selection` (`{rec, step, off, lane}` +
+> a bumped `epoch`, `ui/selection.h`), distinct from `nav.current`; the router's
+> `go()` and the keymap step/cone keys write it, and the timeline / slice / Loom
+> models read its projection, so a pick in any pane cross-highlights the same entity
+> everywhere it appears (and a pane that cannot show it says nothing, never a
+> fabricated row). T2: a keyboard camera on the 3D HUD/viewport (`camera_key` in
+> `scene3d/camera.h`, routed through the same `Camera` the mouse uses), a
+> Tab-reachable viewport target that exists under the null backend, and `cam_focus`
+> so the arrows defer to the camera only when a 3D pane holds focus. T3: a global
+> find (`Ctrl+F`, `ui/find.h`) that highlights all, reports count + aggregate cost,
+> cycles Enter/Shift+Enter through the router, extends the doc-16 narrowing to
+> disasm + hot-edges, and leaves the call tree engine-filtered. T4: an app-level
+> undo stack (`Ctrl+Z`/`Ctrl+Y`, `ui/undo.h`) over filter / cone / selection / take
+> state, disjoint from the Author editor's text undo, plus the Loom takes-gutter
+> accumulator (`LoomState::takes`) with reversible per-take remove + clear-forks.
+> Tests: `test_selection`, `test_find`, `test_undo`, `test_loom_gutter`,
+> `test_camera` (keyboard mapping), and `test_ui` sections (find / undo-cone /
+> camera / gutter). The **CODE won** over the drift notes below where they differ.
+
 > **Sources.** Actioned from the UX restructure plan
 > (../plans/desktop-gui-ux-restructure-plan.md) rows **T1.2, T1.3, T1.4, T1.5**
 > (Theme 1, "Make the spine operable"; Wave 2) and the review findings **F7, F18,

@@ -25,8 +25,10 @@
 #ifndef ASMDESK_LOOM_TAKE_VIEW_H
 #define ASMDESK_LOOM_TAKE_VIEW_H
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "analysis/diff.h"
@@ -91,6 +93,33 @@ void loom_take_plan(const loom_take_view_t &v, const loom_view_t &cam,
                     std::vector<loom_prim_t> *out);
 
 std::string loom_take_dump(const loom_take_view_t &v);
+
+// --- the takes gutter accumulator (22-selection-and-search.md T4, F12) -------
+// The persistent multi-take gutter (doc 05:393-408's design) that F12 says
+// "accumulates forks with no remove/clear" — except LoomState held no take set
+// today, so T4 BUILDS the accumulator together with its remove/clear. Each drawn
+// take is one loom_take_node_t (the pure view model above); a full build appends
+// a loom_take_run result, the render-only viewer shows recorded takes but
+// assembles none. These are pure list edits so the gutter's remove/clear are
+// unit-tested with no ImGui (test_loom_gutter), and each is a reversible undo
+// Command (ui/undo.h): Ctrl+Z restores a removed take, refusal (`err`) and all.
+inline void loom_takes_add(std::vector<loom_take_node_t> &takes,
+                           loom_take_node_t node) {
+    takes.push_back(std::move(node));
+}
+// Remove ONE node by index — the whole node, its `disclosure`/`err`/`fault`
+// verbatim intact, so a per-take remove never quietly drops a take's loud refusal
+// (D7). Out-of-range is a no-op.
+inline void loom_takes_remove(std::vector<loom_take_node_t> &takes,
+                              std::size_t idx) {
+    if (idx < takes.size())
+        takes.erase(takes.begin() + static_cast<std::ptrdiff_t>(idx));
+}
+// "Clear forks" — empties the whole set. Reversible (the removed set is the undo
+// Command's before-value), so clearing forks is safe exploration, not a cliff.
+inline void loom_takes_clear(std::vector<loom_take_node_t> &takes) {
+    takes.clear();
+}
 
 // Copy pinned by test_loom_forks.cpp.
 extern const char *const kLoomAlignedEndToEnd;

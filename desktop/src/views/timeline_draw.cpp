@@ -123,6 +123,23 @@ void draw_timeline(const dt_timeline &t) {
                 "the two recordings diverge here; rows below are A only");
         }
         ImGui::TableNextRow();
+        // 22 T1: the brushed entity is cross-highlighted in place (the same entity
+        // the other panes brush). 22 T3: every global-find hit is MARKED — find
+        // measures, never hides, so the row stays and is merely lit. Selection wins
+        // over a find tint when a row is both.
+        const bool is_sel = t.selected_step && *t.selected_step == r.step;
+        bool is_hit = false;
+        for (uint32_t h : t.find_hits)
+            if (h == r.step) {
+                is_hit = true;
+                break;
+            }
+        if (is_sel)
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                                   ImGui::GetColorU32(ImGuiCol_Header));
+        else if (is_hit)
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0,
+                                   IM_COL32(120, 100, 0, 90));
         const bool dim = r.style == dt_rowstyle::dimmed || r.missing;
         if (dim)
             ImGui::BeginDisabled();

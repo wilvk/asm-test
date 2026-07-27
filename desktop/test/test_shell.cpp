@@ -150,7 +150,7 @@ int main() {
               "blame must resolve onto the slice explorer, not a view of its "
               "own");
         check("blame/lands on the failure step",
-              bs.selected_step.value_or(999) == 3, "wrong step");
+              bs.selection.step.value_or(999) == 3, "wrong step");
         check("blame/lights the cone", bs.cone_active,
               "the backward cone must be active at the failure step");
 
@@ -161,7 +161,7 @@ int main() {
         const Streams *a = shell_a(bs);
         check("blame/active stream decoded", a != nullptr, "no active stream");
         if (a != nullptr) {
-            dt_slice_view v = dt_slice_view_build(*a, bs.selected_step);
+            dt_slice_view v = dt_slice_view_build(*a, bs.selection.step);
             auto style = [&](uint32_t step) {
                 for (const dt_slice_node &n : v.nodes)
                     if (n.step == step)
@@ -713,7 +713,7 @@ int main() {
         int i1 = shell_open(a, fx("dropped.asmtrace"), err);
         check("20t3/opened two", i0 >= 0 && i1 >= 0, err.c_str());
         a.active_tab = i1;
-        a.selected_step = 2;
+        a.selection.step = 2;
         a.view = dt_view::timeline;
         // Snapshot to a WorkspaceState, serialise + parse, then restore into a
         // fresh shell: the same open set and active recording come back.
@@ -734,7 +734,7 @@ int main() {
         check("20t3/restore reopens", b.ws.recordings.size() == 2,
               "restore must reopen both recordings");
         check("20t3/restore active",
-              b.active_tab == 1 && b.selected_step.value_or(999) == 2,
+              b.active_tab == 1 && b.selection.step.value_or(999) == 2,
               "restore must land on the prior active recording + step");
 
         // A vanished recording is KEPT in recents with an error, never dropped.

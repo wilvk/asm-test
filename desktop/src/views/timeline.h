@@ -49,7 +49,14 @@ struct dt_timeline {
     std::vector<dt_timeline_row> rows; // step order
     bool truncated = false;
     std::string banner;
+    // The ONE shared selection, projected in by the caller (22 T1): the row for
+    // this step is the brushed entity, cross-highlighted here in place. Absent when
+    // the selection's step is not in this stream — "nothing selected", not a
+    // fabricated row (D7).
     std::optional<uint32_t> selected_step;
+    // Global-find hits in this stream (22 T3): the draw MARKS every one — find
+    // measures, it never hides, so no row is removed and there is no "N of M".
+    std::vector<uint32_t> find_hits;
     std::optional<uint32_t> div_step; // T7: where A and B stop agreeing
     bool two_up = false;
 };
