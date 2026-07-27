@@ -12,6 +12,7 @@
 #include "ImGuiFileDialog.h" // pure-ImGui save dialog (14 T7)
 #include "ui/doors.h"
 #include "ui/progress.h"
+#include "ui/theme.h"
 #include "views/views_draw.h"
 
 namespace asmdesk {
@@ -88,9 +89,13 @@ void inspect_confirm_swap(InspectState &s) {
 
 namespace {
 
-const ImVec4 kGood(0.45f, 0.80f, 0.45f, 1.0f);
-const ImVec4 kBad(0.90f, 0.45f, 0.40f, 1.0f);
-const ImVec4 kMaybe(0.90f, 0.78f, 0.35f, 1.0f);
+// The verdict axis, from the shared palette (ui/theme.h T1). kBad now equals the
+// app's ONE refusal red (was 0.90 here, 0.95 in the placards — the F14 split is
+// gone); good/maybe are the shared accessors too, so every "attachable / NOT /
+// maybe" reads the same colour it does in any other pane.
+const ImVec4 kGood = dt_good_col();
+const ImVec4 kBad = dt_bad_col();
+const ImVec4 kMaybe = dt_maybe_col();
 
 const char *verdict_word(Attach a) {
     return a == Attach::Yes ? "attachable"

@@ -2174,6 +2174,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **One semantic colour palette in the desktop's `theme.h`**
+  (docs/internal/gui/24-one-visual-language.md T1). The good / bad / maybe /
+  changed / cone (back·fwd·both·off) / selected / statistical axis was being
+  re-invented inline in every draw file — three barely-distinguishable yellows
+  meant three different things and two reds both meant "refused". They now live
+  in one place as named accessors (`dt_good_col` … `dt_statistical_col`, each
+  with a paired `_u32`), each documenting its ONE meaning, so a colour can no
+  longer drift its meaning between panes; `dt_bad_col()` is now literally
+  `dt_refuse_col()` (the 0.90-vs-0.95 refuse-red split is gone). Every per-pane
+  colour literal at the drift sites — the Inspect verdicts, the scrubber /
+  ABI-x-ray "changed" highlight, the slice cone hues, the 3D-HUD chips, and the
+  Loom refusal placard — is deleted and routed through the accessors. A shared
+  `ui/legend` component renders the palette (with a non-colour second-channel
+  token beside each swatch) so a legend can never disagree with what a view
+  draws; the slice explorer uses it. The honesty chrome (D7) is unchanged — the
+  refuse red and caution amber keep their meaning; `statistical` is merely
+  *named* so a later graded-honesty change can move it off the amber without
+  touching a call site. Header-only and engine-free, so it links into the full
+  app, the render-only viewer, and the null test backend alike.
+
 - **AMD manual pre-release validation shrunk to the runner-uncoverable residue
   (self-hosted-ci-runners.md T4).** `docs/internal/amd-hardware-validation.md`
   was the "one validation step that cannot run in CI"; now that the self-hosted

@@ -13,13 +13,13 @@ namespace asmdesk::scene3d {
 
 namespace {
 
-const ImVec4 kOk{0.55f, 0.85f, 0.55f, 1.0f};
-// Warn / refusal are the shared honesty-chrome colours (ui/theme.h) — the HUD
-// had drifted its own amber and red; a "TRUNCATED / TORN" chip must read the
-// same here as in every 2D banner.
+// The whole HUD chip axis is now the shared palette (ui/theme.h T1) — the HUD
+// had drifted its own green, amber, red and grey; an "ok" chip, a "TRUNCATED /
+// TORN" chip and a dim aside must each read the same here as in every 2D pane.
+const ImVec4 kOk = dt_good_col();
 const ImVec4 kWarn = dt_warn_col();
 const ImVec4 kBad = dt_refuse_col();
-const ImVec4 kDim{0.65f, 0.65f, 0.70f, 1.0f};
+const ImVec4 kDim = dt_dim_col();
 
 // A small pill of coloured text; chips sit on one line separated by a bullet.
 void chip(const ImVec4 &col, const char *text, bool &first) {

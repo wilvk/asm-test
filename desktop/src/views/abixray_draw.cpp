@@ -5,6 +5,7 @@
 // move it, and the register deltas do the animation.
 #include "imgui.h"
 
+#include "ui/theme.h"
 #include "views/abixray.h"
 #include "views/views_draw.h"
 
@@ -13,13 +14,14 @@ namespace asmdesk {
 namespace {
 
 // The scrubber's per-step highlight colour (a register changed vs the previous
-// held step), reused so the x-ray's panes light exactly as the standalone
-// scrubber does.
-const ImVec4 kChanged(1.0f, 0.85f, 0.3f, 1.0f);
+// held step), from the shared palette (ui/theme.h T1) so the x-ray's panes light
+// exactly as the standalone scrubber does — one "changed" colour, not two.
+const ImVec4 kChanged = dt_changed_col();
 // A register whose value DIFFERS across the two conventions at this step — the
-// marshalling contrast. Tinted on the register NAME in both panes so the eye
-// pairs them.
-const ImVec4 kDiffer(0.45f, 0.85f, 1.0f, 1.0f);
+// marshalling contrast. This is a selection/pairing highlight: it takes the
+// shared dt_selected_col (T1), not a fourth bespoke blue. Tinted on the register
+// NAME in both panes so the eye pairs them.
+const ImVec4 kDiffer = dt_selected_col();
 
 // One locked pane: the register deck of ONE convention, read from the built
 // cross-pane rows so the DIFF tint and the per-pane highlight stay in sync.

@@ -144,8 +144,9 @@ open exactly one and implement it end to end. They were drafted 2026-07-27
 against HEAD `243f092` with every cited file:line re-verified against the tree
 (the review's own citations predate doc 17 T1, which shifted `shell.cpp` ~200
 lines and added `handle_keymap`; the briefs cite current lines and flag the
-drifts). **None is implemented yet** — this is the drafting/planning pass; the
-code is future work. Recommendation IDs (`T<theme>.<n>`) and finding IDs (`F<n>`)
+drifts). This began as a drafting/planning pass; implementation has since
+started — **doc 24 T1 (the semantic palette) landed 2026-07-27**, and the rest
+is future work. Recommendation IDs (`T<theme>.<n>`) and finding IDs (`F<n>`)
 map to the plan and review.
 
 | Doc | Wave | Recommendations (findings) | Tasks | Depends on | Status |
@@ -156,7 +157,7 @@ map to the plan and review.
 | [21-spine-navigation.md](21-spine-navigation.md) | 2 | command palette, wayfinding breadcrumb, overview/minimap (F8,F9) | 3 | 19 (panes); 15 + 14 T5 (minimap); 16 (ImSearch) | ☐ 0/3 |
 | [22-selection-and-search.md](22-selection-and-search.md) | 2 | shared brushing-and-linking selection, keyboard islands, global find, app-level undo (F7,F18,F17,F12) | 4 | 19 (panes); 16 (ImSearch); 21 T3 (minimap) | ☐ 0/4 |
 | [23-graded-truth-layer.md](23-graded-truth-layer.md) | 3 | graded 3-tier honesty chrome + schema `severity`, session-end placard, split "paused", progress everywhere (F5,F20,F23,F21) | 4 | 01 (**schema-freeze coordination for T1**); 24 T5.1 (palette); 16 T1; 14 T3 | ☐ 0/4 |
-| [24-one-visual-language.md](24-one-visual-language.md) | 3 | semantic palette (extend `theme.h`), CVD-safe + second channel, glossary/term registry, unified filter/time, Loom/3D primer (F3,F14,F15,F16,F4) | 5 | 16 (ImSearch); 15 (ImPlot colormap); T5.1 precedes 23 T1 | ☐ 0/5 |
+| [24-one-visual-language.md](24-one-visual-language.md) | 3 | semantic palette (extend `theme.h`), CVD-safe + second channel, glossary/term registry, unified filter/time, Loom/3D primer (F3,F14,F15,F16,F4) | 5 | 16 (ImSearch); 15 (ImPlot colormap); T5.1 precedes 23 T1 | ◐ 1/5 (T1 semantic palette landed) |
 
 30 tasks across docs 18–24. Sequencing follows the plan's four waves:
 **Wave 0 (doc 18)** stops active breaches and is mostly independent of the

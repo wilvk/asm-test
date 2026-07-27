@@ -392,6 +392,9 @@ $(BUILD)/desktop/test/t/test_shell.o: \
     DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"' \
                          -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
 $(BUILD)/desktop/test/t/test_golden.o:    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
+# test_theme's source-lint (24 T1) reads the drift files straight from the tree,
+# so it needs the source root as a compile define (it runs from the repo root).
+$(BUILD)/desktop/test/t/test_theme.o:     DESKTOP_TEST_EXTRA = -DASMTEST_DESKTOP_SRC_DIR='"desktop/src"'
 $(BUILD)/desktop/test/t/test_live_session.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_inspect.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_converge.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
@@ -485,6 +488,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/addon/imsearch.o \
   $(BUILD)/desktop/$(1)/ui/capability_panel.o \
   $(BUILD)/desktop/$(1)/ui/inspect_door.o \
+  $(BUILD)/desktop/$(1)/ui/legend.o \
   $(BUILD)/desktop/$(1)/ui/gl_scene_host.o \
   $(DESKTOP_LIVE:%=$(BUILD)/desktop/$(1)/lv/%.o) \
   $(BUILD)/desktop/$(1)/sp/projection.o $(BUILD)/desktop/$(1)/sp/terrain.o \
@@ -798,6 +802,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_layout \
                  $(BUILD)/desktop_test_fonts \
                  $(BUILD)/desktop_test_ictedit \
+                 $(BUILD)/desktop_test_theme \
                  $(BUILD)/desktop_test_slice_view_draw \
                  $(BUILD)/desktop_test_slice $(BUILD)/desktop_test_nav \
                  $(BUILD)/desktop_test_projection \
@@ -987,6 +992,7 @@ $(BUILD)/desktop_test_obs_draw: $(BUILD)/desktop/test/t/test_obs_draw.o \
     $(DESKTOP_IMPLOT_OBJ_test) \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) \
     $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
+    $(BUILD)/desktop/test/ui/legend.o \
     $(DESKTOP_TEST_DA) $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
@@ -1145,7 +1151,16 @@ $(BUILD)/desktop_test_slice_view: $(BUILD)/desktop/test/t/test_slice_view.o \
 # canvas_draw.o (draw_banner) + imgui_canvas.o + imgui core.
 $(BUILD)/desktop_test_slice_view_draw: $(BUILD)/desktop/test/t/test_slice_view_draw.o \
     $(BUILD)/desktop/test/vw/slice_view_draw.o $(BUILD)/desktop/test/vw/canvas_draw.o \
+    $(BUILD)/desktop/test/ui/legend.o \
     $(BUILD)/desktop/test/addon/imgui_canvas.o $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The one semantic palette (24-one-visual-language.md T1): the accessor values +
+# the source-lint over the drift files + the shared legend's null-backend smoke.
+# Links ONLY legend.o + imgui core — theme.h is header-only, engine-free (D4), so
+# this link line is itself the proof the palette carries no engine dependency.
+$(BUILD)/desktop_test_theme: $(BUILD)/desktop/test/t/test_theme.o \
+    $(BUILD)/desktop/test/ui/legend.o $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
 # The Author-door code editor (17 T2): TextEditor.o + imgui core. The test needs
@@ -1232,6 +1247,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/addon/imsearch.o \
     $(BUILD)/desktop/test/ui/capability_panel.o \
     $(BUILD)/desktop/test/ui/inspect_door.o \
+    $(BUILD)/desktop/test/ui/legend.o \
     $(BUILD)/desktop/test/addon/imguifiledialog.o \
     $(DESKTOP_TEST_LIVE) \
     $(BUILD)/desktop/test/src/walkthrough.o \
