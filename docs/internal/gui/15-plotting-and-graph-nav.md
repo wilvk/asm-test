@@ -54,6 +54,25 @@ draws and navigates.
 
 ### T1 — ImPlot v1.0 as an axes/pan/zoom/cursor chassis  (M, depends on: 12, 13 F2)
 
+> **Implemented 2026-07-27 (ImPlot chassis + hot-edge heatmap) — green (51
+> suites).** ImPlot **v1.0** vendored (`scripts/fetch-implot.sh`, 2 compiled TUs,
+> MIT; digest pinned; license captured; compile-verified on `1.91.9b-docking`,
+> warning-clean). **Pin note confirmed by integration**: v1.0 is the new
+> `ImPlotSpec` item API — `PlotHeatmap`'s signature differs from ≤0.17, so
+> pre-2026 examples would not compile (exactly why the tag, not master, is
+> pinned). The `ImPlotContext` is created in `main.cpp` beside the ImGui one
+> **for the app only**; every ImPlot draw is guarded on
+> `ImPlot::GetCurrentContext()` so the null-backend view tests (which create
+> none) degrade to text — the app plots, the tests don't crash. First surface
+> wired: `views/hotedges` gains a **src×dst `PlotHeatmap`** over
+> `obs_hotedges_matrix` (a pure, tested helper — a bounded grid of edge WEIGHTS,
+> never a stack, R4-compliant; `test_obs_hotedges` pins total-weight
+> preservation + the cap/truncation). The addon rides the `observer_draw.o` link
+> sites. **Remaining T1**: `perf_history` (`PlotLine`, closing the
+> parsed-but-never-shown gap), `watch` (`PlotStairs`/`PlotDigital`), and the
+> timeline/scrubber `DragLineX` playhead + `SetupAxisLinks` — same chassis,
+> follow-on surfaces. F2's 32-bit `ImDrawIdx` (done) covers the dense heatmap.
+
 **Goal.** Adopt ImPlot **at the `v1.0` tag** as a chassis wrapped around the
 existing pure view-models — not a restyle. Render the four numeric surfaces
 through it and finally show `perf_history`.

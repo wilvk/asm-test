@@ -93,3 +93,5 @@ tarball-sha256  utfcpp         4.0.6  sha256:6920a6a5d6a04b9a89b2a89af7132f8acef
 # ImGuiFileDialog v0.6.8 (14 T7): pure-ImGui open/save (MIT). Works on 1.91.9 via
 # its own <19201 version guard. Release-tag source archive; keep the 3 core files.
 tarball-sha256  imguifiledialog  0.6.8  sha256:7aa3fbb0fc7206c5b434246d906f036057a59eb51e28ae36488aa654a667a266
+# ImPlot v1.0 (15 T1): plotting chassis (MIT). PIN v1.0 tag (master is 1.92 WIP).
+tarball-sha256  implot         v1.0  sha256:e4a9db64eef7bcc604e2a5ea380af124eb97aa3e8a6a96330079c88add0f7e93

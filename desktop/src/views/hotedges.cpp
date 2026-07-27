@@ -145,4 +145,42 @@ std::string obs_hotedges_dump(const HotEdgeView &v) {
     return s;
 }
 
+HotEdgeMatrix obs_hotedges_matrix(const HotEdgeView &v, std::size_t cap) {
+    HotEdgeMatrix m;
+    if (cap == 0)
+        return m;
+    // Assign a row/col index to each distinct from/to, in the edges' rank order.
+    // An edge whose endpoint would exceed the cap is dropped (and flagged), so
+    // the matrix stays bounded for a large snapshot.
+    auto index_of = [cap](std::vector<std::string> &labels, const std::string &s,
+                          bool &trunc) -> long {
+        for (std::size_t i = 0; i < labels.size(); i++)
+            if (labels[i] == s)
+                return static_cast<long>(i);
+        if (labels.size() >= cap) {
+            trunc = true;
+            return -1;
+        }
+        labels.push_back(s);
+        return static_cast<long>(labels.size()) - 1;
+    };
+    struct Placed {
+        long r, c;
+        double count;
+    };
+    std::vector<Placed> placed;
+    for (const HotEdge &e : v.edges) {
+        long r = index_of(m.rows, e.from, m.truncated);
+        long c = index_of(m.cols, e.to, m.truncated);
+        if (r < 0 || c < 0)
+            continue; // an endpoint was capped out
+        placed.push_back({r, c, static_cast<double>(e.count)});
+    }
+    m.cells.assign(m.rows.size() * m.cols.size(), 0.0);
+    for (const Placed &p : placed)
+        m.cells[static_cast<std::size_t>(p.r) * m.cols.size() +
+                static_cast<std::size_t>(p.c)] += p.count;
+    return m;
+}
+
 } // namespace asmdesk

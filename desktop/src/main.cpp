@@ -9,6 +9,7 @@
 #include <memory>
 
 #include "imgui.h"
+#include "implot.h" // the plotting chassis context (15 T1)
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
@@ -73,6 +74,10 @@ int main() {
     // A real ini now persists window/dock layout (the `b` docking hotfix makes
     // loading table settings safe). Kept under build/ so it is git-ignored.
     ImGui::GetIO().IniFilename = "build/desktop-imgui.ini";
+    // The ImPlot context lives beside the ImGui one (15 T1). Only the real app
+    // creates it; the headless view tests create none, so every ImPlot draw is
+    // guarded on ImPlot::GetCurrentContext() and degrades to text there.
+    ImPlot::CreateContext();
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
@@ -113,6 +118,7 @@ int main() {
     scene_host->shutdown();
     scene_host.reset();
 
+    ImPlot::DestroyContext();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();

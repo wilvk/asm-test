@@ -26,6 +26,7 @@ shipped package — are the Pin kits (both versions), Intel SDE, and libdft64
 | `ImGuiTextSelect-LICENSE.txt` | ImGuiTextSelect (text selection + copy-out for line panes) — **bundled**: `textselect.cpp` compiled into the desktop binaries (gui 14-T6) | v1.1.6 ([fetch-textselect.sh](../scripts/fetch-textselect.sh)) | MIT |
 | `utfcpp-LICENSE.txt` | utfcpp (UTF-8 header lib ImGuiTextSelect depends on) — **bundled**: header-only, compiled into the desktop binaries (gui 14-T6) | v4.0.6 ([fetch-utfcpp.sh](../scripts/fetch-utfcpp.sh)) | BSL-1.0 |
 | `ImGuiFileDialog-LICENSE.txt` | ImGuiFileDialog (pure-ImGui open/save dialogs) — **bundled**: `ImGuiFileDialog.cpp` compiled into the desktop binaries (gui 14-T7) | v0.6.8 ([fetch-imguifiledialog.sh](../scripts/fetch-imguifiledialog.sh)) | MIT |
+| `ImPlot-LICENSE.txt` | ImPlot (plotting chassis; the src×dst hot-edge heatmap) — **bundled**: `implot.cpp`+`implot_items.cpp` compiled into the desktop binaries (gui 15-T1) | v1.0 ([fetch-implot.sh](../scripts/fetch-implot.sh)) | MIT |
 
 The DynamoRIO text is captured on first fetch by
 [fetch-dynamorio.sh](../scripts/fetch-dynamorio.sh) (the pinned tarball's own

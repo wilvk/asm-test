@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "imgui.h"
+#include "implot.h"              // src×dst hot-edge heatmap chassis (15 T1)
 #include "imgui_memory_editor.h" // interactive codeimage byte view (14 T4)
 #include "textselect.hpp"        // select + copy for line panes (14 T6)
 
@@ -248,6 +249,37 @@ void draw_obs_hotedges(const HotEdgeView &v) {
     ImGui::TextDisabled("%s", obs_hotedges_chrome_line(v).c_str());
     ImGui::TextDisabled("%s", obs_hotedges_no_flame_note());
     skip_line(v.skip);
+
+    // A src×dst edge-count HEATMAP (15 T1) — a direct display of the edge
+    // weights, never a stack (honesty R4). Guarded on the ImPlot context so the
+    // headless view tests (which create none) skip straight to the table; only
+    // the real app plots. Rows/cols are in rank order; the names live in the
+    // table below, so long labels don't fight the grid.
+    if (ImPlot::GetCurrentContext() && !v.edges.empty()) {
+        HotEdgeMatrix hm = obs_hotedges_matrix(v, 24);
+        if (!hm.cells.empty()) {
+            double maxc = 0.0;
+            for (double c : hm.cells)
+                maxc = std::max(maxc, c);
+            ImGui::TextDisabled(
+                "src×dst edge heatmap (%zu×%zu%s) — rank order; names below",
+                hm.rows.size(), hm.cols.size(), hm.truncated ? ", capped" : "");
+            if (ImPlot::BeginPlot("##hotedge-heat", ImVec2(-1, 240),
+                                  ImPlotFlags_NoMouseText |
+                                      ImPlotFlags_NoLegend)) {
+                ImPlot::SetupAxes(nullptr, nullptr,
+                                  ImPlotAxisFlags_NoDecorations,
+                                  ImPlotAxisFlags_NoDecorations);
+                ImPlot::PlotHeatmap("edges", hm.cells.data(),
+                                    static_cast<int>(hm.rows.size()),
+                                    static_cast<int>(hm.cols.size()), 0.0, maxc,
+                                    nullptr);
+                ImPlot::EndPlot();
+            }
+            ImGui::SameLine();
+            ImPlot::ColormapScale("samples", 0.0, maxc, ImVec2(70, 240));
+        }
+    }
 
     if (!ImGui::BeginTable("hotedges", 5,
                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |

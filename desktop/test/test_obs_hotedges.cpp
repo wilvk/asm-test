@@ -88,6 +88,30 @@ int main() {
               obs_hotedges_dump(b).find("STATISTICAL") != std::string::npos,
               "a producer's wrong claim must not upgrade the data's trust");
 
+    // The ImPlot heatmap's data source (15 T1): a bounded src×dst grid of the
+    // edge weights — preserves total weight (never a stack / never invented),
+    // sizes correctly, and honours the cap with a truncation flag.
+    HotEdgeMatrix hm = obs_hotedges_matrix(v, 24);
+    uint64_t total = 0;
+    for (const HotEdge &e : v.edges)
+        total += e.count;
+    double sum = 0;
+    for (double c : hm.cells)
+        sum += c;
+    vt::check("heatmap preserves total edge weight", sum == static_cast<double>(total),
+              "the heatmap dropped or invented sample weight");
+    vt::eq("heatmap cells sized rows*cols", hm.cells.size(),
+           hm.rows.size() * hm.cols.size());
+    vt::check("3 edges do not truncate at cap 24", !hm.truncated, "over-capped");
+    HotEdgeMatrix cap1 = obs_hotedges_matrix(v, 1);
+    vt::check("cap bounds the matrix", cap1.rows.size() <= 1 && cap1.cols.size() <= 1,
+              "the cap was not honoured");
+    if (hm.rows.size() > 1 || hm.cols.size() > 1)
+        vt::check("dropping edges to the cap is flagged", cap1.truncated,
+                  "a capped heatmap must say it is incomplete");
+    vt::check("cap 0 yields nothing", obs_hotedges_matrix(v, 0).cells.empty(),
+              "cap 0 should produce an empty matrix");
+
     vt::golden("obs-hotedges-ibs.txt", dump);
     vt::golden("obs-hotedges-sw.txt", obs_hotedges_dump(s));
     return vt::report("test_obs_hotedges");

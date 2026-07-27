@@ -129,6 +129,26 @@ $(BUILD)/desktop/%/addon/imguifiledialog.o: $(IFD_HOME)/ImGuiFileDialog.cpp | $(
 	@mkdir -p $(@D)
 	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
 
+# ImPlot v1.0 (15 T1): plotting chassis, TWO compiled TUs. implot.h is PUBLIC API
+# (not in the compile-probe); implot_internal.h (pulled by the .cpp) has
+# imgui_internal.h. Objects ride the observer_draw.o link sites (hotedges heatmap).
+# The draws are guarded on ImPlot::GetCurrentContext() so the null test backends
+# (which create no ImPlot context) degrade to text, and only the app plots.
+IMPLOT_VERSION ?= v1.0
+IMPLOT_HOME    ?= $(BUILD)/addons/implot-$(IMPLOT_VERSION)
+$(IMPLOT_HOME)/implot.cpp $(IMPLOT_HOME)/implot_items.cpp $(IMPLOT_HOME)/implot.h $(IMPLOT_HOME)/implot_internal.h &: scripts/fetch-implot.sh scripts/third-party-digests.txt
+	sh scripts/fetch-implot.sh >/dev/null
+DESKTOP_ADDON_INCLUDES += -I$(IMPLOT_HOME)
+$(BUILD)/desktop/%/addon/implot.o: $(IMPLOT_HOME)/implot.cpp | $(IMPLOT_HOME)/implot.h $(IMPLOT_HOME)/implot_internal.h $(IMGUI_HOME)/imgui.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
+$(BUILD)/desktop/%/addon/implot_items.o: $(IMPLOT_HOME)/implot_items.cpp | $(IMPLOT_HOME)/implot.h $(IMPLOT_HOME)/implot_internal.h $(IMGUI_HOME)/imgui.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
+DESKTOP_IMPLOT_OBJ_app    := $(BUILD)/desktop/app/addon/implot.o $(BUILD)/desktop/app/addon/implot_items.o
+DESKTOP_IMPLOT_OBJ_render := $(BUILD)/desktop/render/addon/implot.o $(BUILD)/desktop/render/addon/implot_items.o
+DESKTOP_IMPLOT_OBJ_test   := $(BUILD)/desktop/test/addon/implot.o $(BUILD)/desktop/test/addon/implot_items.o
+
 # --- source basenames --------------------------------------------------------
 DESKTOP_IMGUI_CORE := imgui imgui_draw imgui_tables imgui_widgets
 DESKTOP_IMGUI_BACK := imgui_impl_glfw imgui_impl_opengl3
@@ -276,6 +296,7 @@ desktop_app_objs = \
   $(DESKTOP_OBS_PURE:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(BUILD)/desktop/$(1)/addon/textselect.o \
+  $(DESKTOP_IMPLOT_OBJ_$(1)) \
   $(BUILD)/desktop/$(1)/addon/imguifiledialog.o \
   $(DESKTOP_LOOM_PURE:%=$(BUILD)/desktop/$(1)/lo/%.o) \
   $(DESKTOP_LOOM_DRAW:%=$(BUILD)/desktop/$(1)/lo/%.o) \
@@ -776,6 +797,7 @@ $(BUILD)/desktop_test_obs_draw: $(BUILD)/desktop/test/t/test_obs_draw.o \
     $(DESKTOP_TEST_OBS) \
     $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
     $(BUILD)/desktop/test/addon/textselect.o \
+    $(DESKTOP_IMPLOT_OBJ_test) \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) \
     $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
     $(DESKTOP_TEST_DA) $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_IG)
@@ -1012,6 +1034,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(DESKTOP_TEST_OBS) \
     $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
     $(BUILD)/desktop/test/addon/textselect.o \
+    $(DESKTOP_IMPLOT_OBJ_test) \
     $(DESKTOP_TEST_LOOM) \
     $(DESKTOP_LOOM_DRAW:%=$(BUILD)/desktop/test/lo/%.o) \
     $(BUILD)/desktop/test/sp/projection.o \

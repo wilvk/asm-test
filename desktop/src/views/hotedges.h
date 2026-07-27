@@ -69,6 +69,22 @@ struct HotEdgeView {
     std::string provenance_conflict;
 };
 
+// The src × dst edge-count matrix for the ImPlot heatmap chassis
+// (15-plotting-and-graph-nav.md T1). Distinct `from` labels are the rows,
+// distinct `to` the cols (both in rank / first-seen order — the edges are already
+// ranked), and cells[r*cols + c] is that edge's sample count (0 = no such edge).
+// It is a direct display of the edge WEIGHTS — never a stack (honesty R4). Capped
+// at `cap` rows and cols so a large snapshot stays a bounded heatmap; `truncated`
+// records that some edges were dropped. Pure, so it is unit-tested without ImPlot
+// (D4) and the draw only feeds it to PlotHeatmap.
+struct HotEdgeMatrix {
+    std::vector<std::string> rows;
+    std::vector<std::string> cols;
+    std::vector<double> cells; // rows.size() * cols.size(), row-major
+    bool truncated = false;
+};
+HotEdgeMatrix obs_hotedges_matrix(const HotEdgeView &v, std::size_t cap);
+
 HotEdgeView obs_hotedges_build(const Recording &r,
                                const ObsLifecycle *lc = nullptr);
 
