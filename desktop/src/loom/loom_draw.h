@@ -14,6 +14,7 @@
 #include "loom/fabric_plan.h"
 #include "loom/feed.h"
 #include "loom/lineage.h"
+#include "ui/primer.h" // first-open primer state (24 T5)
 
 namespace asmdesk {
 
@@ -39,6 +40,7 @@ struct LoomState {
     int lane = -1;         // the inspected lane (its header was clicked)
     uint32_t playhead = 0; // the audit scrubs this
     bool audit = false;
+    dt_primer_state primer; // the first-open primer (24 T5), per recording
 };
 
 // Draw the Loom for recording `self` of `ws` (its decoded streams in `s`).

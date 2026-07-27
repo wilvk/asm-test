@@ -18,7 +18,10 @@
 #include "implot.h"              // src×dst hot-edge heatmap chassis (15 T1)
 #include "textselect.hpp"        // select + copy for line panes (14 T6)
 
+#include "ui/filter.h" // free column sort — dt_sorted_order (24 T4)
+#include "ui/terms.h"  // domain-term-first heading + "?" caveat (24 T3)
 #include "ui/theme.h"
+#include "ui/timepos.h" // one time-position widget, discrete variant (24 T4)
 #include "views/canvas.h"
 #include "views/graph_nav.h"
 #include "views/views_draw.h"
@@ -409,6 +412,9 @@ void draw_obs_topo(const TopoView &v, const std::string &rec_id,
 // --- T4 ---------------------------------------------------------------------
 void draw_obs_hotedges(const HotEdgeView &v, const std::string &rec_id,
                        const std::function<void(const dt_link &)> &go) {
+    // Domain-term-first heading + "?" caveat: "hot-edges are edge counts, not a
+    // call stack" (24 T3).
+    dt_view_header("hotedges");
     chrome_line(v.chrome);
     // Statistical, said before the numbers rather than under them.
     ImGui::TextColored(kWarn, "STATISTICAL");
@@ -433,6 +439,12 @@ void draw_obs_hotedges(const HotEdgeView &v, const std::string &rec_id,
             ImGui::TextDisabled(
                 "src×dst edge heatmap (%zu×%zu%s) — rank order; names below",
                 hm.rows.size(), hm.cols.size(), hm.truncated ? ", capped" : "");
+            // A CVD-safe, perceptually-uniform colormap (24 T2 / F15): Viridis
+            // reads monotonically for protan/deuter/tritan viewers, unlike the
+            // default rainbow. The ColormapScale beside it IS the second channel
+            // — magnitude is read off the labelled scale, not the hue. Pushed/
+            // popped around both so the scale matches the plot exactly.
+            ImPlot::PushColormap(ImPlotColormap_Viridis);
             if (ImPlot::BeginPlot("##hotedge-heat", ImVec2(-1, 240),
                                   ImPlotFlags_NoMouseText |
                                       ImPlotFlags_NoLegend)) {
@@ -446,6 +458,7 @@ void draw_obs_hotedges(const HotEdgeView &v, const std::string &rec_id,
             }
             ImGui::SameLine();
             ImPlot::ColormapScale("samples", 0.0, maxc, ImVec2(70, 240));
+            ImPlot::PopColormap();
         }
     }
 
@@ -464,15 +477,38 @@ void draw_obs_hotedges(const HotEdgeView &v, const std::string &rec_id,
 
     if (!ImGui::BeginTable("hotedges", 5,
                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                               ImGuiTableFlags_ScrollY))
+                               ImGuiTableFlags_ScrollY |
+                               ImGuiTableFlags_Sortable))
         return;
-    ImGui::TableSetupColumn("#");
-    ImGui::TableSetupColumn("from");
-    ImGui::TableSetupColumn("to");
+    ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_DefaultSort);
+    ImGui::TableSetupColumn("from", ImGuiTableColumnFlags_NoSort);
+    ImGui::TableSetupColumn("to", ImGuiTableColumnFlags_NoSort);
     ImGui::TableSetupColumn("samples");
     ImGui::TableSetupColumn("mispred / ret");
     ImGui::TableHeadersRow();
-    for (const HotEdge &e : v.edges) {
+
+    // Free column sort (24 T4): reorder VIEW indices only — the model's recorded
+    // rank order is never touched (D4/D7). ImGui hands us the spec; we key by the
+    // sorted column and reorder our own row indices with the shared pure sort.
+    std::vector<int> order(v.edges.size());
+    for (size_t k = 0; k < order.size(); k++)
+        order[k] = static_cast<int>(k);
+    if (ImGuiTableSortSpecs *ss = ImGui::TableGetSortSpecs();
+        ss && ss->SpecsCount > 0) {
+        const ImGuiTableColumnSortSpecs &c = ss->Specs[0];
+        std::vector<double> keys(v.edges.size());
+        for (size_t k = 0; k < v.edges.size(); k++) {
+            const HotEdge &e = v.edges[k];
+            keys[k] = c.ColumnIndex == 3 ? static_cast<double>(e.count)
+                      : c.ColumnIndex == 4
+                          ? static_cast<double>(e.mispred)
+                          : static_cast<double>(e.rank); // col 0 = rank
+        }
+        order = dt_sorted_order(keys, c.SortDirection ==
+                                          ImGuiSortDirection_Ascending);
+    }
+    for (int oi : order) {
+        const HotEdge &e = v.edges[static_cast<size_t>(oi)];
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::Text("%d", e.rank);
@@ -572,17 +608,16 @@ void draw_obs_region(RegionView &v) {
         return;
     }
 
-    // Discrete paging, never a scrub: between two invocations the target ran
-    // unobserved for an unknown time, and a slider would draw that gap as
-    // elapsed captured time.
-    if (ImGui::Button("< previous"))
-        obs_region_page(v, -1);
-    ImGui::SameLine();
-    ImGui::Text("invocation #%zu of %zu", v.invocations[v.selected].number,
-                v.invocations.size());
-    ImGui::SameLine();
-    if (ImGui::Button("next >"))
-        obs_region_page(v, 1);
+    // The ONE time-position widget, DISCRETE variant (24 T4): between two
+    // invocations the target ran unobserved, so this is deliberate discrete
+    // paging — the widget draws the intentional-discrete marker + the verbatim
+    // reason from the one registry, never a scrub that would fake elapsed time.
+    int inv_idx = static_cast<int>(v.selected);
+    int before = inv_idx;
+    if (dt_timepos_step("invocation", &inv_idx,
+                        static_cast<int>(v.invocations.size()),
+                        dt_timepos_discrete_reason("invocations")))
+        obs_region_page(v, inv_idx - before);
 
     const RegionInvocation &inv = v.invocations[v.selected];
     if (!inv.closed)
@@ -639,6 +674,14 @@ void draw_obs_disasm(const DisasmView &v, ObserverState &s) {
     ImGui::SetNextItemWidth(160);
     if (ImGui::InputInt("as of logical time (0 = latest)", &when))
         s.disasm_when = when < 0 ? 0 : static_cast<uint64_t>(when);
+    // Marked as a DISCRETE logical-time step, not a continuous clock (24 T4):
+    // the same intentional-discrete marker + registry reason the invocation
+    // pager carries, so the honesty choice reads the same across the deck.
+    ImGui::SameLine();
+    ImGui::TextColored(kWarn, "\xE2\x8F\xADlogical step");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s",
+                          dt_timepos_discrete_reason("disasm-logical-time"));
     ImGui::TextDisabled("bytes are resolved to the version with the greatest "
                         "`when` <= this — never the newest, because a JIT "
                         "reuses addresses");

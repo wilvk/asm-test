@@ -27,6 +27,8 @@
 #include "scene3d/hud.h"
 #include "scene3d/pick.h"
 #include "space/projection.h"
+#include "ui/legend.h" // shared semantic legend (24 T1/T2)
+#include "ui/terms.h"  // domain-term-first headings + Terms pane (24 T3)
 #include "views/abixray.h"
 #include "views/views_draw.h"
 
@@ -256,6 +258,22 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         return;
     SceneView &sv = s.scenes[i];
 
+    // Domain-term-first heading + "?" caveat (re-opens the primer) (24 T3/T5).
+    dt_view_header("scene3d", [&sv] { dt_primer_reopen(sv.primer); });
+    // First-open primer (24 T5): what the terrain/trajectory are + exact vs
+    // statistical, with the semantic legend. The "3D to find, 2D to read" line
+    // (formerly buried in the HUD) is promoted here.
+    if (dt_primer_active(sv.primer)) {
+        dt_primer(
+            "scene-primer", "Address-space spacetime (3D overview)",
+            "The terrain is the ADDRESS SPACE laid flat; a trajectory is one "
+            "execution PATH threading across it over time. An exact path is a "
+            "solid tube; statistical residency is stippled, never a solid tube "
+            "(the second channel keeps sampled evidence honestly distinct). Use "
+            "3D to FIND a place, then the flat 2D views to READ it.",
+            [] { dt_semantic_legend(); }, sv.primer);
+    }
+
     // Weave the pure, engine-free models once per recording (lazy — a recording
     // whose 3D tab is never opened pays nothing). The coarse rung's plane comes
     // from the recording's `codeimage` code regions (08-T7); a replay file with
@@ -400,6 +418,7 @@ static void body_timeline(ShellState &s, const Streams *a, const Streams *b) {
     draw_timeline(b ? dt_timeline_build2(*a, *b, lit) : dt_timeline_build(*a, lit));
 }
 static void body_slice(ShellState &s, const Streams *a, const Streams *b) {
+    dt_view_header("slice");
     draw_slice_view(dt_slice_view_build(*a, s.selected_step));
     if (b != nullptr)
         // Never a fake merged graph: the two-recording slice needs the Wave-2
@@ -408,6 +427,7 @@ static void body_slice(ShellState &s, const Streams *a, const Streams *b) {
                             "state-diff producer (Wave 2)");
 }
 static void body_diff(ShellState &s, const Streams *a, const Streams *b) {
+    dt_view_header("diff");
     if (b == nullptr)
         ImGui::TextDisabled("attach a second recording (press d) to compare");
     else
@@ -432,6 +452,7 @@ static void body_scrubber(ShellState &s) {
     // The register time-travel scrubber (09-T3). An absent producer draws its own
     // placard (never a register file of zeros), exactly as the standalone draw
     // does. The playhead is the caller's; draw_scrubber returns the moved value.
+    dt_view_header("scrubber");
     size_t i = static_cast<size_t>(s.active_tab);
     if (i < s.stepidx.size())
         s.scrubber_playhead[i] =
@@ -441,6 +462,7 @@ static void body_abixray(ShellState &s, const Streams *a, const Streams *b) {
     // The ABI x-ray (09-T4): locks the active recording (the SysV leg) against
     // the attached B (the Win64 leg) — the Diff tab's A/B mechanism. The view's
     // own honesty banners handle an unaligned pair / an absent per-pane producer.
+    dt_view_header("abixray");
     if (b == nullptr) {
         ImGui::TextDisabled(
             "attach the Win64 leg (press d) — the ABI x-ray locks this "
@@ -569,6 +591,11 @@ static void draw_recording_tab(ShellState &s, const Recording &r) {
         }
         if (ImGui::BeginTabItem("This host")) {
             draw_capability_panel(s.caps, &r);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Terms")) {
+            dt_view_header("terms");
+            dt_terms_pane();
             ImGui::EndTabItem();
         }
         ImGui::EndTabBar();
