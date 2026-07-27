@@ -325,6 +325,56 @@ $(eval $(call desktop_rules,app,$(FREETYPE_CXX)))
 $(eval $(call desktop_rules,render,-DASMTEST_DESKTOP_RENDER_ONLY=1 $(FREETYPE_CXX)))
 $(eval $(call desktop_rules,test,))
 
+# ---------------------------------------------------------------------------
+# Dear ImGui Test Engine (17-interaction-testing-and-editor.md T1) — the
+# interaction-layer test harness. TEST-LANE ONLY, fetched-at-build, NEVER
+# bundled/linked into a shipped binary (the same posture as Pin/SDE; the one
+# admitted non-MIT dep). Tag v1.91.9 is tag-matched to the imgui pin — move both
+# in one commit (doc 13 F1/F4).
+#
+# The engine's item hooks live behind IMGUI_ENABLE_TEST_ENGINE, which adds a few
+# ImGuiItemStatusFlags enum values and one ImGuiContext field the hooks poke. So
+# the flag must be seen by EVERY TU in the ui-test binary, imgui core included —
+# it must NOT leak into the shipped app/render/test trees. A whole `uitest` tree
+# (the test tree + the flag) keeps that boundary clean and correct-by-
+# construction, and its object set is just the shell test's, path-rewritten.
+ITE_VERSION ?= 1.91.9
+ITE_HOME    ?= $(BUILD)/addons/imgui-test-engine-$(ITE_VERSION)
+ITE_SRCDIR  := $(ITE_HOME)/imgui_test_engine
+# std::thread coroutine backend (the stock one) -> needs -lpthread at link.
+ITE_CXX     := -DIMGUI_ENABLE_TEST_ENGINE \
+               -DIMGUI_TEST_ENGINE_ENABLE_COROUTINE_STDTHREAD_IMPL=1 \
+               -I$(ITE_SRCDIR)
+ITE_ENGINE_SRC := imgui_te_engine imgui_te_context imgui_te_coroutine \
+                  imgui_te_ui imgui_te_utils imgui_te_exporters \
+                  imgui_te_perftool imgui_capture_tool
+
+# One fetch produces the whole tree, so ALL engine sources are grouped outputs
+# of it (&:, like the imgui fetch): make must know each .cpp is producible or the
+# per-source object rule below reports "no rule to make target" on a cold tree
+# (only the first listed .cpp would otherwise have a rule). GNU Make 4.3+.
+ITE_ENGINE_CPP := $(ITE_ENGINE_SRC:%=$(ITE_SRCDIR)/%.cpp)
+$(ITE_ENGINE_CPP) &: scripts/fetch-imgui-test-engine.sh scripts/third-party-digests.txt scripts/fetch-addon.sh
+	ITE_VERSION=$(ITE_VERSION) sh scripts/fetch-imgui-test-engine.sh >/dev/null
+
+$(eval $(call desktop_rules,uitest,$(ITE_CXX)))
+
+# The engine's own TUs are the only ones that #include engine headers +
+# thirdparty/Str, so they alone need the fetch (the app/imgui-core uitest TUs
+# just see -DIMGUI_ENABLE_TEST_ENGINE, which only toggles imgui's own headers).
+# Vendored third-party -> -w (benign upstream -Wunused-result on system()/fread).
+$(BUILD)/desktop/uitest/ite/%.o: $(ITE_SRCDIR)/%.cpp | $(ITE_SRCDIR)/imgui_te_engine.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(DESKTOP_CXXFLAGS) $(ITE_CXX) -w -c $< -o $@
+
+# The test driver #includes the engine headers, so the fetch must land before it
+# compiles too — a warm host masks this, a cold docker build fails "No such
+# file" (the clean-tree ordering hazard). The app/imgui-core uitest TUs do NOT
+# include engine headers, so they need no such prereq. It also opens fixtures,
+# so it needs ASMTEST_FIXTURE_DIR (target-specific, like the other test .o).
+$(BUILD)/desktop/uitest/t/test_ui.o: | $(ITE_SRCDIR)/imgui_te_engine.cpp
+$(BUILD)/desktop/uitest/t/test_ui.o: DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
+
 # imgui_freetype.o (from misc/freetype/) — the one extra imgui TU freetype needs,
 # built with the freetype cflags and linked into the app + viewer ONLY (added to
 # their object sets below when DESKTOP_FREETYPE=1).
@@ -625,7 +675,7 @@ define DESKTOP_GUIDE
 	@false
 endef
 
-.PHONY: desktop desktop-render desktop-test desktop-fmt desktop-fmt-check \
+.PHONY: desktop desktop-render desktop-test desktop-ui-test desktop-fmt desktop-fmt-check \
         docker-desktop desktop-setup desktop-setup-render \
         addon-fetch-test desktop-addon-compile-check
 
@@ -1213,6 +1263,21 @@ $(BUILD)/desktop_test_shell: $(BUILD)/desktop/test/t/test_shell.o \
     $(DESKTOP_TEST_SHELL_OBJ) $(BUILD)/desktop/test/src/vm_compat.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# The ui-test binary (17-T1): the SAME app object set as the shell test, but in
+# the `uitest` tree (built with -DIMGUI_ENABLE_TEST_ENGINE), plus the engine TUs
+# and the test driver. Path-rewrite the shell-obj set rather than restate it, so
+# it can never drift from what the shell test links. Null backend, no GL, no
+# engines — the interaction layer is exercised headless. -lpthread for the
+# engine's std::thread coroutine backend.
+DESKTOP_UITEST_APP_OBJ := \
+    $(subst /desktop/test/,/desktop/uitest/,$(DESKTOP_TEST_SHELL_OBJ)) \
+    $(BUILD)/desktop/uitest/src/vm_compat.o
+DESKTOP_UITEST_ENGINE_OBJ := $(ITE_ENGINE_SRC:%=$(BUILD)/desktop/uitest/ite/%.o)
+
+$(BUILD)/desktop_ui_test: $(BUILD)/desktop/uitest/t/test_ui.o \
+    $(DESKTOP_UITEST_APP_OBJ) $(DESKTOP_UITEST_ENGINE_OBJ)
+	$(CXX) $(DESKTOP_CXXFLAGS) $(ITE_CXX) $^ -o $@ -lpthread
+
 $(BUILD)/desktop_test_golden: $(BUILD)/desktop/test/t/test_golden.o \
     $(DESKTOP_TEST_SHELL_OBJ)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
@@ -1308,7 +1373,20 @@ desktop-test: $(DESKTOP_TESTS)
 	@$(DESKTOP_ENGINE_SAY)
 	@$(DESKTOP_REPLAY_SAY)
 	@$(DESKTOP_GL_SAY)
+	@$(DESKTOP_UITEST_SAY)
 	@for t in $(DESKTOP_ALL_TESTS); do echo "== $$t =="; $$t || exit 1; done
+
+# desktop-ui-test (17-T1): the imgui_test_engine interaction lane. Kept SEPARATE
+# from `desktop-test` on purpose — it fetches the one non-MIT dependency at build
+# (Test Engine License v1.04, test-lane-only, never bundled), so a plain
+# `make desktop-test` stays 100% MIT and network-free. It runs headless (null
+# backend) and writes JUnit XML for CI. docker-desktop runs it (Dockerfile.desktop).
+# `desktop-test` only NOTES it, so the interaction coverage is never silently absent.
+desktop-ui-test: $(BUILD)/desktop_ui_test
+	@echo "== $(BUILD)/desktop_ui_test (imgui_test_engine, headless) =="
+	$(BUILD)/desktop_ui_test
+	@echo "desktop-ui-test: JUnit XML -> $(BUILD)/desktop-ui-test-results.xml"
+DESKTOP_UITEST_SAY = echo "desktop-test: the imgui_test_engine interaction lane is separate (fetches the one non-MIT, test-lane-only dep) — run 'make desktop-ui-test' or 'make docker-desktop'"
 
 # ---------------------------------------------------------------------------
 # gen_walkthroughs — the Learn door's bundled walkthroughs, as recordings

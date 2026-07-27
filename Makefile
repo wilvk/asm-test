@@ -152,6 +152,7 @@ help:
 	@echo '  desktop         build build/asmtest-desktop (full app; links the engines, GPL-2.0 whole)'
 	@echo '  desktop-render  build build/asmtest-viewer (render-only; engine-free, permissive)'
 	@echo '  desktop-test    headless null-backend tests (any host with a C++17 compiler; make docker-desktop)'
+	@echo '  desktop-ui-test imgui_test_engine interaction lane: keymap + door/flow tests, JUnit XML (fetches the one test-lane-only non-MIT dep; make docker-desktop runs it)'
 	@echo '  addon-fetch-test          exercise scripts/fetch-addon.sh (pin + refuse-unpinned; network)'
 	@echo '  desktop-addon-compile-check  imgui-repin gate: vendored imgui_internal.h addons still build'
 	@echo '  asmtrace-export      build build/asmtrace_export (.asmtrace -> speedscope/Perfetto/lcov/DOT)'

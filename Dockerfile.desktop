@@ -33,4 +33,4 @@ COPY . .
 # DESKTOP_FREETYPE=1: the app + viewer link imgui's freetype rasteriser (F3). The
 # headless desktop-test tree stays stb_truetype-only (no freetype), so it needs
 # no libfreetype at link time — the fonts still load and render there.
-CMD sh -c 'make desktop desktop-render desktop-test DESKTOP_FREETYPE=1'
+CMD sh -c 'make desktop desktop-render desktop-test DESKTOP_FREETYPE=1 && make desktop-ui-test'

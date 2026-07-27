@@ -65,6 +65,30 @@ Two larger, higher-leverage adoptions:
 
 ### T1 — imgui_test_engine: test the interaction layer + enforce the keymap  (L, depends on: 12)
 
+> **Harness + keymap enforcement done 2026-07-27 — green (`make desktop-ui-test`,
+> 9/9; docker-desktop clean-room).** The engine is vendored at tag **v1.91.9**
+> (tarball sha `da67f93b…`, matched to the imgui 1.91.9b-docking pin — bump the
+> two together), TEST-LANE ONLY: `scripts/fetch-imgui-test-engine.sh` (a
+> `fetch-addon.sh` tarball wrapper), one digest row, license captured with the
+> test-lane marker; it compiles into `desktop_ui_test` ALONE (a `uitest` make
+> tree = the shell-test object set + `-DIMGUI_ENABLE_TEST_ENGINE`; the shipped
+> binaries never see it, so the repo stays MIT). Runs headless on the null
+> backend, writes JUnit XML (`build/desktop-ui-test-results.xml`); `desktop-test`
+> stays MIT-only and only *notes* the separate lane. **The keymap payoff (step
+> 5) is delivered**: the ten unwired bindings are implemented as a central
+> `handle_keymap` in `draw_shell` (pure ShellState moves — `1`/`2`/`3`/`4`,
+> `j`/`k`+arrows, `PgDn`/`PgUp`, `Enter`, `b`/`f`/`c`, `d`, `x`, `n`/`p`, `y`,
+> `Ctrl+G`), each with a passing engine test (`desktop/test/test_ui.cpp`) that
+> presses the key and asserts the state — the model, not pixels (D4). View
+> switch + swap go through the tab bar's `want_view`/`want_open_tab` SetSelected
+> (a keypress cannot select an ImGui tab directly). `[`/`]` stay view-local
+> (scrubber/slice/abixray). Two clean-tree ordering hazards the docker build
+> caught and fixed: the engine sources are a grouped (`&:`) fetch output, and
+> `test_ui.o` carries the fetch as an order-only prereq. **Remaining T1 (step
+> 4/6)**: the door/syscall-reveal/patch-bay/scrubber-drag flow tests, and
+> InvisibleButton hit-targets for the hand-rolled Loom/slice draw-list views —
+> a follow-on; the keymap enforcement (the doc's stated "real payoff") is done.
+
 **Goal.** Stand up the first-party test engine in a **test-only, fetch-at-build,
 never-vendored** posture, write interaction tests for the untested flows, and —
 the real payoff — **write keymap tests that force the 12 advertised bindings to

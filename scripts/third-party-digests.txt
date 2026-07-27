@@ -18,6 +18,10 @@
 tarball-sha256  dynamorio  11.91.20630  sha256:1499acbee02788ff235a8b4a8016514538ec3bf479463bdc6037c6e33f0bff02
 tarball-sha256  pin        4.2-99776-g21d818fa2  sha256:194a2cec51678203452ece0d9e8cbb1819eb6e1221f0341091c49248f384d869
 tarball-sha256  intel-sde  10.8.0  sha256:50b320cd226acef7a491f5b321fc1be3c3c7984f9e27a456e64894b5b0979dd3
+# Dear ImGui Test Engine (gui 17-T1). TEST-LANE ONLY, fetched-at-build, never
+# bundled (Test Engine License v1.04 — the one admitted non-MIT dep). Tag
+# v1.91.9, tag-matched to the imgui 1.91.9b-docking pin; bump the two together.
+tarball-sha256  imgui-test-engine  1.91.9  sha256:da67f93b5c1adc0bff02504e35447961ce405c086b428ee415918d9111660ec3
 # pin 3.20 is libdft64's only tested kit (pin-libdft-taint-oracle.md); a distinct
 # manifest line keyed on the version, so the shared fetch-pin.sh serves both kits.
 # Self-hashed 2026-07-18 from the Intel mirror (Intel publishes no official digest).

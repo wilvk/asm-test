@@ -3,8 +3,8 @@
 Verbatim license texts for the native dependencies this repo's build/test scripts
 fetch from **pinned upstream releases**. Most are bundled into the published
 packages; the test-lane-only exceptions — never bundled, never linked into a
-shipped package — are the Pin kits (both versions), Intel SDE, and libdft64
-(see their rows and the paragraph below).
+shipped package — are the Pin kits (both versions), Intel SDE, libdft64, and the
+Dear ImGui Test Engine (see their rows and the paragraph below).
 
 | File | Component | Version | SPDX |
 |---|---|---|---|
@@ -19,6 +19,7 @@ shipped package — are the Pin kits (both versions), Intel SDE, and libdft64
 | `intel-sde-10.8.0/` | Intel SDE (test-lane oracle) — **test-lane only, never bundled**: the future/absent-ISA emulator, fetched and digest-verified at build/test time for `docker-sde`/`sde-test`, never linked into a shipped package | 10.8.0 ([fetch-sde.sh](../scripts/fetch-sde.sh)) | LicenseRef-Intel-Simplified-Software-License |
 | `Pin-3.20-98437-gf02b61307.txt` / `-third-party.txt` | Intel Pin (libdft64 differential-oracle test lane) — **test/oracle-only, never bundled**: fetched + digest-verified at build/test time for `docker-taint-oracle`, never linked into a shipped package. The 3.20 kit is libdft64's only tested pin | 3.20-98437-gf02b61307 ([fetch-pin.sh](../scripts/fetch-pin.sh)) | LicenseRef-Intel-EULA-SDP-2018 |
 | `libdft64.txt` | libdft64 (AngoraFuzzer fork) — the independently-implemented byte-level taint engine the DR taint client is cross-validated against — **test/oracle-only, never bundled**: fetched + git-commit-pinned for `docker-taint-oracle`, never linked into `libasmtest`/any binding | 20804d5 ([fetch-libdft.sh](../scripts/fetch-libdft.sh)) | BSD-3-Clause (Columbia libdft) |
+| `DearImGuiTestEngine-LICENSE.txt` | Dear ImGui Test Engine (the desktop interaction-test harness — keymap + door/flow tests) — **test-lane only, never bundled**: fetched + digest-verified at build time for `make desktop-ui-test` / `docker-desktop`, compiled into the `desktop_ui_test` binary ALONE, never into `asmtest-desktop`/`asmtest-viewer`. This is the one admitted non-MIT dependency; keeping it test-lane-only is what lets the shipped binaries stay MIT. Tag v1.91.9, matched to the imgui pin | 1.91.9 ([fetch-imgui-test-engine.sh](../scripts/fetch-imgui-test-engine.sh)) | LicenseRef-Dear-ImGui-Test-Engine-1.04 |
 | `DearImGui-LICENSE.txt` | Dear ImGui (desktop GUI toolkit) — **bundled**: fetched + digest-verified, compiled into both desktop binaries | 1.91.9b-docking ([fetch-imgui.sh](../scripts/fetch-imgui.sh)) | MIT |
 | `nlohmann-json-LICENSE.MIT` | nlohmann/json (`.asmtrace` reader) — **bundled**: single header fetched + digest-verified, compiled into both desktop binaries | 3.11.3 ([fetch-json.sh](../scripts/fetch-json.sh)) | MIT |
 | `ImGuizmo-LICENSE.txt` | ImZoomSlider (Loom/timeline pan+zoom control, one header from the ImGuizmo repo) — **bundled**: compiled into the desktop binaries (gui 14-T5) | commit dc25afb9 ([fetch-imzoomslider.sh](../scripts/fetch-imzoomslider.sh)) | MIT |
@@ -99,8 +100,18 @@ package — so it too is recorded here for provenance and not collected by
 `collect-licenses.sh`. See
 [pin-libdft-taint-oracle.md](../docs/internal/implementations/pin-libdft-taint-oracle.md#constraints--gates).
 
+The Dear ImGui Test Engine is captured on first fetch by
+[fetch-imgui-test-engine.sh](../scripts/fetch-imgui-test-engine.sh) from the pinned
+tag's `imgui_test_engine/LICENSE.txt` (the Dear ImGui Test Engine License v1.04). It
+is **test-lane only** — compiled into the `desktop_ui_test` interaction-test binary
+alone, never into `asmtest-desktop`/`asmtest-viewer` — so, like Pin/SDE/libdft64, it is
+recorded here for provenance and NOT collected by `collect-licenses.sh`. It is the one
+admitted non-MIT dependency in the tree; the shipped desktop binaries stay MIT precisely
+because it never links into them. See
+[17-interaction-testing-and-editor.md](../docs/internal/gui/17-interaction-testing-and-editor.md).
+
 [scripts/collect-licenses.sh](../scripts/collect-licenses.sh) copies the shipped-package
-rows above (not the test-lane-only rows: Pin, SDE, libdft64) into each package's `THIRD-PARTY-LICENSES/` — emitting the
+rows above (not the test-lane-only rows: Pin, SDE, libdft64, Dear ImGui Test Engine) into each package's `THIRD-PARTY-LICENSES/` — emitting the
 native-trace tier entries only when the
 matching lib is actually staged into the slot — (a build-time capture from
 `$PREFIX/share/licenses/<dep>-<ver>/` augments them with the exact-version text when

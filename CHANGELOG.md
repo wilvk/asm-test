@@ -8,6 +8,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The keyboard shortcuts now all work, and are tested.** The desktop help
+  overlay advertised twelve keybindings but only `[`/`]` were wired; the other
+  ten are now implemented (docs/internal/gui/17-interaction-testing-and-editor.md
+  T1): `1`/`2`/`3`/`4` switch view (canvas / timeline / slice / diff), `j`/`k`
+  (and the arrows) and `PgDn`/`PgUp` step the selection, `Enter` opens the slice
+  explorer at the selection, `b`/`f` light the backward / forward dependence
+  cone and `c` clears it, `d` attaches or detaches a second recording for the
+  diff, `x` swaps A and B, `n`/`p` walk the divergences of an attached pair,
+  `y` copies a deep link to the current position, and `Ctrl+G` opens a go-to box
+  that accepts a step number or a full `asmtrace-link`. They are decided in one
+  place, so the help overlay and the behaviour cannot drift.
+- **A headless interaction-test lane for the desktop app** (`make
+  desktop-ui-test`), built on the Dear ImGui Test Engine. It drives the real UI
+  through simulated clicks and keypresses on the null backend — the layer the
+  golden-text tests cannot reach — and writes JUnit XML for CI. Every one of the
+  twelve keybindings has a passing test (which is what proves they all work).
+  The engine is fetched at build and compiled into the test binary only, never
+  into the shipped `asmtest-desktop`/`asmtest-viewer`, so those stay MIT.
+
 - **Non-modal toasts for live-session events** (docs/internal/gui/16-live-
   feedback-and-filtering.md T1, via ImGuiNotify). Events that were previously
   silent — a capture refusal, a session ending, a fatal, a skip

@@ -56,11 +56,22 @@ has the toolchain:
 make desktop            # build build/asmtest-desktop (needs GLFW/GL + the engines)
 make desktop-render     # build build/asmtest-viewer  (needs GLFW/GL only)
 make desktop-test       # headless null-backend tests (only a C++17 compiler)
+make desktop-ui-test    # interaction tests (imgui_test_engine); fetches one test-lane-only dep
 ```
 
 When a dependency is missing, `desktop` / `desktop-render` print the apt line and
 the `make docker-desktop` pointer and fail — never a raw compiler error.
 `desktop-test` needs no display, no GL and no engines, so it runs anywhere.
+
+`desktop-ui-test` is the **interaction lane** (17-T1): the Dear ImGui Test Engine
+drives the real UI through simulated clicks and keypresses on the same null
+backend, covering what the golden-text tests cannot — every advertised keybinding
+has a test there, which is what proves the twelve shortcuts all work. It is kept
+*separate* from `desktop-test` on purpose: the engine is the one non-MIT
+dependency (Test Engine License v1.04), fetched at build and compiled into the
+`desktop_ui_test` binary **only** — never the shipped binaries — so a plain
+`make desktop-test` stays 100% MIT and network-free. It emits JUnit XML for CI and
+is run by `make docker-desktop`.
 
 ## Running
 

@@ -71,6 +71,19 @@ struct ShellState {
     std::optional<uint64_t> selected_off;
     // The lit cones, when a slice is active; cleared by `c`.
     bool cone_active = false;
+    // Which cone `b`/`f` lit (17-T1 keymap): false = backward (what produced
+    // this), true = forward (what this feeds). Read by the timeline/slice draw.
+    bool cone_fwd = false;
+    // The `1`/`2`/`3`/`4` view-switch intent (17-T1 keymap). Consumed by the
+    // view tab bar with ImGuiTabItemFlags_SetSelected, exactly like `want_loom`
+    // below — a keypress cannot select an ImGui tab directly, only ask the tab
+    // to select itself next frame. Cleared once honoured.
+    std::optional<dt_view> want_view;
+    // The `Ctrl+G` go-to-step/offset modal (17-T1 keymap): open flag + its
+    // InputText buffer. The modal parses the text with dt_nav_parse and jumps
+    // via dt_nav_go, so a typed target lands exactly like a clicked link.
+    bool show_goto = false;
+    char goto_buf[64] = {0};
     dt_nav_table nav;
     bool show_help = false;
     bool show_learn = false;
