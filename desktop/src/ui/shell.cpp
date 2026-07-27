@@ -376,11 +376,133 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     }
 }
 
-// One open recording's pane: the summary chrome (03), then the replay views
-// over it (04). Each builder is called fresh per frame from the decoded streams
-// — they are pure and cheap at corpus scale; the threshold at which that stops
-// being true is the worker-thread hand-off 04 describes, which lands with the
-// first PT-scale recording.
+// --- per-view draw bodies (19 T1) --------------------------------------------
+// Each view's exact body, factored out of its old `BeginTabItem` so the two
+// containers that host it — the non-docked single-window tab strip
+// (draw_recording_tab, below) and the docked panes (draw_docked_shell) — share
+// ONE implementation and cannot drift. The honesty placards move WITH the body
+// (D7/F5: restructured, never removed). None of these touches `s.view`; the
+// caller sets that (a selected tab, or a focused pane) so a body drawn every
+// frame in an always-on pane does not clobber the current-view signal.
+static void body_canvas(ShellState &, const Streams *a, const Streams *b) {
+    draw_canvas(b ? dt_canvas_build2(*a, *b) : dt_canvas_build(*a));
+}
+static void body_timeline(ShellState &s, const Streams *a, const Streams *b) {
+    dt_slice cone;
+    if (s.cone_active && s.selected_step)
+        // `b` lights the backward cone (what produced the selection), `f` the
+        // forward cone (what it feeds) — s.cone_fwd (17-T1).
+        cone = s.cone_fwd
+                   ? dt_slice_forward(a->df.edges, a->df.nsteps, *s.selected_step)
+                   : dt_slice_backward(a->df.edges, a->df.nsteps,
+                                       *s.selected_step);
+    const dt_slice *lit = s.cone_active ? &cone : nullptr;
+    draw_timeline(b ? dt_timeline_build2(*a, *b, lit) : dt_timeline_build(*a, lit));
+}
+static void body_slice(ShellState &s, const Streams *a, const Streams *b) {
+    draw_slice_view(dt_slice_view_build(*a, s.selected_step));
+    if (b != nullptr)
+        // Never a fake merged graph: the two-recording slice needs the Wave-2
+        // state-diff producer, and until it exists this says so.
+        ImGui::TextDisabled("showing A only — slice diff lands with the "
+                            "state-diff producer (Wave 2)");
+}
+static void body_diff(ShellState &s, const Streams *a, const Streams *b) {
+    if (b == nullptr)
+        ImGui::TextDisabled("attach a second recording (press d) to compare");
+    else
+        draw_diff_view(dt_diff_view_build(*a, *b), [&s](const dt_link &l) {
+            if (!dt_nav_go(s.nav, l))
+                s.status = s.nav.last_error;
+        });
+}
+static void body_observer(ShellState &s, const Recording &r, const Streams *a) {
+    // The live views (08), over a recording. They are the SAME code that renders
+    // a live session in the Inspect door — how every one is testable without
+    // hardware. The `observer` inner tab bar is the ONE remaining sub-level: it
+    // sits directly inside its pane, so nesting stays <=2 deep (19 T2).
+    size_t i = static_cast<size_t>(s.active_tab);
+    if (i < s.observers.size())
+        draw_observer(s.observers[i], r, a->id, [&s](const dt_link &l) {
+            if (!dt_nav_go(s.nav, l))
+                s.status = s.nav.last_error;
+        });
+}
+static void body_scrubber(ShellState &s) {
+    // The register time-travel scrubber (09-T3). An absent producer draws its own
+    // placard (never a register file of zeros), exactly as the standalone draw
+    // does. The playhead is the caller's; draw_scrubber returns the moved value.
+    size_t i = static_cast<size_t>(s.active_tab);
+    if (i < s.stepidx.size())
+        s.scrubber_playhead[i] =
+            draw_scrubber(s.stepidx[i], s.scrubber_playhead[i]);
+}
+static void body_abixray(ShellState &s, const Streams *a, const Streams *b) {
+    // The ABI x-ray (09-T4): locks the active recording (the SysV leg) against
+    // the attached B (the Win64 leg) — the Diff tab's A/B mechanism. The view's
+    // own honesty banners handle an unaligned pair / an absent per-pane producer.
+    if (b == nullptr) {
+        ImGui::TextDisabled(
+            "attach the Win64 leg (press d) — the ABI x-ray locks this "
+            "recording (the SysV leg) against it");
+        return;
+    }
+    size_t ai = static_cast<size_t>(s.active_tab);
+    size_t bi = static_cast<size_t>(s.b_index);
+    // The rail MUTATES the walk (stop navigation), so it persists across frames;
+    // rebuild only when the pair changes.
+    std::string key = a->id + "\x1f" + b->id;
+    if (s.abixray_key != key) {
+        s.abixray_key = key;
+        s.abixray_walk = wt_build(s.ws.recordings[ai]);
+        s.abixray_playhead = dt_abixray_playhead(s.abixray_walk);
+    }
+    if (ai < s.stepidx.size() && bi < s.stepidx.size())
+        draw_abixray(s.stepidx[ai], s.stepidx[bi], s.abixray_walk,
+                     s.abixray_playhead);
+}
+
+// The Inspect door's "open this capture in the Loom" hand-off (07): the door
+// cannot reach the Workspace, so it posts a path here; the shell opens it and
+// asks the tab strip / Home list to select it (want_open_tab) and its Loom
+// (want_loom). Shared by both the docked and non-docked shells.
+static void handle_inspect_open_request(ShellState &s) {
+    if (s.inspect.open_request.empty())
+        return;
+    std::string path = s.inspect.open_request;
+    s.inspect.open_request.clear();
+    std::string err;
+    int idx = shell_open(s, path, err);
+    if (idx < 0) {
+        s.status = err.empty() ? ("could not open " + path) : err;
+    } else {
+        s.want_open_tab = idx;
+        s.want_loom = true;
+        s.show_inspect = false; // we are leaving the door for the Loom
+    }
+}
+
+// The Learn door's "play this stop" callback: open the recording and route the
+// stop through 04's router so a stop and a pasted deep link land identically.
+static void learn_open(ShellState &s, const std::string &path, long step) {
+    std::string err;
+    if (shell_open(s, path, err) < 0 && !err.empty())
+        s.status = err;
+    dt_link l;
+    l.rec = recording_id(path);
+    l.view = dt_view::timeline;
+    if (step >= 0)
+        l.step = static_cast<uint32_t>(step);
+    shell_wire_nav(s);
+    if (!dt_nav_go(s.nav, l))
+        s.status = s.nav.last_error;
+}
+
+// One open recording's pane, NON-DOCKED path (the null backend's default and any
+// build with no dockspace): the summary chrome (03) then the replay views over
+// it (04), as a single-window tab strip. The docked path (draw_docked_shell)
+// distributes these same bodies across real panes instead. Kept intact so a run
+// with no docking does not regress (19 T1 step 2).
 static void draw_recording_tab(ShellState &s, const Recording &r) {
     if (ImGui::BeginTabBar("views")) {
         if (ImGui::BeginTabItem("Summary")) {
@@ -399,122 +521,43 @@ static void draw_recording_tab(ShellState &s, const Recording &r) {
             };
             if (ImGui::BeginTabItem("Canvas", nullptr, view_flags(dt_view::canvas))) {
                 s.view = dt_view::canvas;
-                draw_canvas(b ? dt_canvas_build2(*a, *b) : dt_canvas_build(*a));
+                body_canvas(s, a, b);
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Timeline", nullptr, view_flags(dt_view::timeline))) {
                 s.view = dt_view::timeline;
-                dt_slice cone;
-                if (s.cone_active && s.selected_step)
-                    // `b` lights the backward cone (what produced the selection),
-                    // `f` the forward cone (what it feeds) — s.cone_fwd (17-T1).
-                    cone = s.cone_fwd
-                               ? dt_slice_forward(a->df.edges, a->df.nsteps,
-                                                  *s.selected_step)
-                               : dt_slice_backward(a->df.edges, a->df.nsteps,
-                                                   *s.selected_step);
-                const dt_slice *lit = s.cone_active ? &cone : nullptr;
-                draw_timeline(b ? dt_timeline_build2(*a, *b, lit)
-                                : dt_timeline_build(*a, lit));
+                body_timeline(s, a, b);
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Slice", nullptr, view_flags(dt_view::slice))) {
                 s.view = dt_view::slice;
-                draw_slice_view(dt_slice_view_build(*a, s.selected_step));
-                if (b != nullptr)
-                    // Never a fake merged graph: the two-recording slice needs
-                    // the Wave-2 state-diff producer, and until it exists this
-                    // says so instead of inventing one.
-                    ImGui::TextDisabled(
-                        "showing A only — slice diff lands with the "
-                        "state-diff producer (Wave 2)");
+                body_slice(s, a, b);
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Diff", nullptr, view_flags(dt_view::diff))) {
                 s.view = dt_view::diff;
-                if (b == nullptr)
-                    ImGui::TextDisabled(
-                        "attach a second recording (press d) to "
-                        "compare");
-                else
-                    draw_diff_view(dt_diff_view_build(*a, *b),
-                                   [&s](const dt_link &l) {
-                                       if (!dt_nav_go(s.nav, l))
-                                           s.status = s.nav.last_error;
-                                   });
+                body_diff(s, a, b);
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Observer")) {
-                // The live views (08), over a recording. They are the SAME
-                // code that renders a live session in the Inspect door — which
-                // is how every one of them is testable without hardware.
-                size_t i = static_cast<size_t>(s.active_tab);
-                if (i < s.observers.size())
-                    draw_observer(s.observers[i], r, a->id,
-                                  [&s](const dt_link &l) {
-                                      if (!dt_nav_go(s.nav, l))
-                                          s.status = s.nav.last_error;
-                                  });
+                body_observer(s, r, a);
                 ImGui::EndTabItem();
             }
             ImGuiTabItemFlags loom_flags = 0;
             if (s.want_loom)
                 loom_flags |= ImGuiTabItemFlags_SetSelected;
             if (ImGui::BeginTabItem("Loom", nullptr, loom_flags)) {
-                // The Phase-2 flagship: the recording as a spacetime fabric.
-                // It weaves from the SAME decoded streams the other views use,
-                // and refuses — with its reason on screen and no partial
-                // drawing — for a recording whose producer was statistical or
-                // carried no per-step values.
                 draw_loom(s.loom, *a, s.ws, s.active_tab);
                 ImGui::EndTabItem();
             }
-            // The register time-travel scrubber (09-T3), surfaced. Over this
-            // recording's `regstate` ring; an absent producer draws its own
-            // placard (never a register file of zeros), exactly as the standalone
-            // draw does. The playhead is the caller's — the slider and `[` / `]`
-            // keys move it, and draw_scrubber returns the moved value to persist.
             if (ImGui::BeginTabItem("Scrubber")) {
-                size_t i = static_cast<size_t>(s.active_tab);
-                if (i < s.stepidx.size())
-                    s.scrubber_playhead[i] =
-                        draw_scrubber(s.stepidx[i], s.scrubber_playhead[i]);
+                body_scrubber(s);
                 ImGui::EndTabItem();
             }
-            // The ABI x-ray (09-T4), surfaced. It locks TWO scrubber panes to one
-            // playhead — the active recording is the SysV leg, the attached B
-            // (press `d`) the Win64 leg — reusing the Diff tab's A/B mechanism.
-            // With no B attached it shows the same "attach a second recording"
-            // placard shape; the view's own honesty banners handle an unaligned
-            // pair or an absent per-pane producer.
             if (ImGui::BeginTabItem("ABI x-ray")) {
-                if (b == nullptr) {
-                    ImGui::TextDisabled(
-                        "attach the Win64 leg (press d) — the ABI x-ray locks "
-                        "this recording (the SysV leg) against it");
-                } else {
-                    size_t ai = static_cast<size_t>(s.active_tab);
-                    size_t bi = static_cast<size_t>(s.b_index);
-                    // The rail MUTATES the walk (stop navigation), so it persists
-                    // across frames; rebuild only when the pair changes.
-                    std::string key = a->id + "\x1f" + b->id;
-                    if (s.abixray_key != key) {
-                        s.abixray_key = key;
-                        s.abixray_walk = wt_build(s.ws.recordings[ai]);
-                        s.abixray_playhead =
-                            dt_abixray_playhead(s.abixray_walk);
-                    }
-                    if (ai < s.stepidx.size() && bi < s.stepidx.size())
-                        draw_abixray(s.stepidx[ai], s.stepidx[bi],
-                                     s.abixray_walk, s.abixray_playhead);
-                }
+                body_abixray(s, a, b);
                 ImGui::EndTabItem();
             }
-            // The 3D spacetime overview (doc 10), surfaced. The pure space/ models
-            // weave engine-free; the scene itself needs a live GL context, drawn
-            // by s.scene_host (threaded from main.cpp, null under the null test
-            // backend — the pane then shows the models + HUD + a placard). Every
-            // pick drills OUT to a flat 2D view through 04's router.
             if (ImGui::BeginTabItem("3D overview")) {
                 draw_scene_overview(s, r, *a);
                 ImGui::EndTabItem();
@@ -525,9 +568,6 @@ static void draw_recording_tab(ShellState &s, const Recording &r) {
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("This host")) {
-            // What THIS machine can do and why not, straight from the
-            // library's status APIs (06 T6). The render-only viewer shows the
-            // loaded recording's provenance instead and says so.
             draw_capability_panel(s.caps, &r);
             ImGui::EndTabItem();
         }
@@ -751,60 +791,22 @@ static void draw_goto_modal(ShellState &s) {
     ImGui::EndPopup();
 }
 
-void draw_shell(ShellState &s) {
-    const ImGuiViewport *vp = ImGui::GetMainViewport();
-
-    // The advertised keyboard bindings, acted on first so a keypress and the
-    // matching click land in the same frame (17-T1).
-    handle_keymap(s);
-
-    // Docking (13-foundation-moves.md T2): when enabled (the real app; the null
-    // test backend leaves it OFF, so everything below is skipped and the shell
-    // draws exactly as before), host a full-viewport dockspace with a passthru
-    // central node so panes can be torn out and re-docked, and build the shipped
-    // default layout on first run (unless a layout was already persisted).
-    const bool docking =
-        (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_DockingEnable) != 0;
-    ImGuiID dockspace_id = 0;
-    if (docking) {
-        dockspace_id = ImGui::DockSpaceOverViewport(
-            0, vp, ImGuiDockNodeFlags_PassthruCentralNode);
-        if (!s.layout_inited) {
-            s.layout_inited = true;
-            if (!layout_exists(dockspace_id))
-                layout_build(dockspace_id, vp->WorkSize,
-                             LayoutPreset::ReplayInspect);
-        }
-    }
-
+// The NON-DOCKED shell (19 T1 step 2): the pre-existing single-window tab layout
+// — one "asmtest" window pinned to the viewport, a "main" tab bar of Home / doors
+// / one tab per open recording. This is exactly what shipped before the pane
+// conversion; the null backend's default (docking OFF) draws it, so a run with no
+// dockspace never regresses.
+static void draw_windowed_shell(ShellState &s, const ImGuiViewport *vp) {
     // Pin the shell to the whole viewport. Without this the "asmtest" window is a
     // floating panel that ImGui auto-fits to a tiny default size on the first
     // frame (and, with IniFilename disabled in main.cpp, never remembers a
     // resize) — so the app reads as "starts very small" inside the OS frame.
     ImGui::SetNextWindowPos(vp->WorkPos);
     ImGui::SetNextWindowSize(vp->WorkSize);
-    ImGuiWindowFlags shell_flags = ImGuiWindowFlags_NoMove |
-                                   ImGuiWindowFlags_NoResize |
-                                   ImGuiWindowFlags_NoCollapse |
-                                   ImGuiWindowFlags_NoTitleBar;
-    if (docking)
-        shell_flags |= ImGuiWindowFlags_MenuBar; // the View menu below
+    ImGuiWindowFlags shell_flags =
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoTitleBar;
     ImGui::Begin("asmtest", nullptr, shell_flags);
-    if (docking && ImGui::BeginMenuBar()) {
-        if (ImGui::BeginMenu("View")) {
-            if (ImGui::MenuItem("Reset layout"))
-                layout_build(dockspace_id, vp->WorkSize,
-                             LayoutPreset::ReplayInspect);
-            ImGui::Separator();
-            for (LayoutPreset p : {LayoutPreset::ReplayInspect,
-                                   LayoutPreset::Author,
-                                   LayoutPreset::LiveObserver})
-                if (ImGui::MenuItem(layout_preset_name(p)))
-                    layout_build(dockspace_id, vp->WorkSize, p);
-            ImGui::EndMenu();
-        }
-        ImGui::EndMenuBar();
-    }
 
     if (ImGui::BeginTabBar("main", ImGuiTabBarFlags_AutoSelectNewTabs)) {
         if (ImGui::BeginTabItem("Home")) {
@@ -813,8 +815,6 @@ void draw_shell(ShellState &s) {
             ImGui::EndTabItem();
         }
 
-        // The Learn door: bundled walkthroughs, in BOTH binaries (it reads
-        // recordings and links no engine — D4).
         // The Author door: full app only, and the render-only build says why
         // rather than hiding the tab (D4's split has to be legible).
         if (s.show_author && ImGui::BeginTabItem("Author", &s.show_author)) {
@@ -827,39 +827,13 @@ void draw_shell(ShellState &s) {
             ImGui::EndTabItem();
         }
 
-        // A capture the Inspect door just saved wants to open in the Loom. The
-        // door cannot reach the Workspace, so it posts the path here and the
-        // shell opens it exactly as the recording-open dialog would, then jumps
-        // the tab strip to it (want_open_tab) and to its Loom (want_loom).
-        if (!s.inspect.open_request.empty()) {
-            std::string path = s.inspect.open_request;
-            s.inspect.open_request.clear();
-            std::string err;
-            int idx = shell_open(s, path, err);
-            if (idx < 0) {
-                s.status = err.empty() ? ("could not open " + path) : err;
-            } else {
-                s.want_open_tab = idx;
-                s.want_loom = true;
-                s.show_inspect = false; // we are leaving the door for the Loom
-            }
-        }
+        handle_inspect_open_request(s);
 
+        // The Learn door: bundled walkthroughs, in BOTH binaries (it reads
+        // recordings and links no engine — D4).
         if (s.show_learn && ImGui::BeginTabItem("Learn", &s.show_learn)) {
             draw_learn_door(s.learn, [&s](const std::string &path, long step) {
-                // Route through 04's router rather than reaching into the
-                // views: a stop and a pasted deep link must land identically.
-                std::string err;
-                if (shell_open(s, path, err) < 0 && !err.empty())
-                    s.status = err;
-                dt_link l;
-                l.rec = recording_id(path);
-                l.view = dt_view::timeline;
-                if (step >= 0)
-                    l.step = static_cast<uint32_t>(step);
-                shell_wire_nav(s);
-                if (!dt_nav_go(s.nav, l))
-                    s.status = s.nav.last_error;
+                learn_open(s, path, step);
             });
             ImGui::EndTabItem();
         }
@@ -905,6 +879,275 @@ void draw_shell(ShellState &s) {
         ImGui::EndTabBar();
     }
     ImGui::End();
+}
+
+// The DOCKED shell (19 T1/T2/T3 — the keystone): the layout manager's five region
+// panes are finally REAL windows the shell `Begin()`s, so the dockspace, presets,
+// tear-out and Reset act on windows that exist. The old inner exclusive
+// `BeginTabBar("views")` is gone; the panes ARE the view surface, and the
+// timeline, the scrubber and the Observer's disassembly can be shown at once.
+//
+// pane -> region -> content mapping (kept HERE beside the Begin calls so it and
+// layout.cpp's DockWindow targets cannot drift, mirroring layout.h:46):
+//   kPaneHome      (left)          the doors + a selectable list of open recordings
+//   kPaneRecording (center)        Summary / Canvas / Slice / Diff / 3D overview,
+//                                  as ONE flat tab bar (no exclusive nesting)
+//   kPaneLoom      (center, tab)   the Loom (its loom-detail bar 1 level below)
+//   kPaneObserver  (right/bottom)  the Observer deck (its observer bar the only
+//                                  remaining sub-level)
+//   kPaneTimeline  (bottom-left)   the operand timeline
+//   kPaneScrubber  (bottom-right)  the register scrubber
+//   kPaneInspector (right)         ABI x-ray / Backends / This host, one flat bar
+// With no active recording a pane shows its own placard rather than vanishing —
+// data-driven pane HIDING is doc 20, so nothing is silently dropped here (D7).
+static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
+    // The View menu (Reset + presets) rides a main menu bar; it reserves the top
+    // strip, and DockSpaceOverViewport then fills the remaining work area. Both
+    // act on the real panes below now — the menu that was inert before this brief.
+    if (ImGui::BeginMainMenuBar()) {
+        if (ImGui::BeginMenu("View")) {
+            if (ImGui::MenuItem("Reset layout"))
+                layout_build(s.dockspace_id, vp->WorkSize,
+                             LayoutPreset::ReplayInspect);
+            ImGui::Separator();
+            for (LayoutPreset p : {LayoutPreset::ReplayInspect,
+                                   LayoutPreset::Author,
+                                   LayoutPreset::LiveObserver})
+                if (ImGui::MenuItem(layout_preset_name(p)))
+                    layout_build(s.dockspace_id, vp->WorkSize, p);
+            ImGui::EndMenu();
+        }
+        ImGui::EndMainMenuBar();
+    }
+
+    s.dockspace_id = ImGui::DockSpaceOverViewport(
+        0, vp, ImGuiDockNodeFlags_PassthruCentralNode);
+    if (!s.layout_inited) {
+        s.layout_inited = true;
+        // First run: DockSpaceOverViewport just created an EMPTY leaf node, so a
+        // plain `layout_exists` is always true here and would wrongly skip the
+        // build (the latent bug that left the panes undocked while they were
+        // phantom). Build the default split unless a real (persisted) layout is
+        // already present.
+        if (layout_needs_default(s.dockspace_id))
+            layout_build(s.dockspace_id, vp->WorkSize, LayoutPreset::ReplayInspect);
+    }
+
+    // A capture the Inspect door just saved may ask to open in the Loom; do it
+    // before we resolve the active recording so this frame reflects it.
+    handle_inspect_open_request(s);
+    if (s.want_open_tab >= 0 &&
+        s.want_open_tab < static_cast<int>(s.ws.recordings.size()))
+        s.active_tab = s.want_open_tab; // the Home list is the docked selector
+
+    const Recording *r =
+        (s.active_tab >= 0 &&
+         static_cast<size_t>(s.active_tab) < s.ws.recordings.size())
+            ? &s.ws.recordings[static_cast<size_t>(s.active_tab)]
+            : nullptr;
+    const Streams *a = shell_a(s);
+    const Streams *b = shell_b(s);
+    int to_close = -1;
+
+    // --- kPaneHome (left): the doors + the persistent open-recording list ---
+    if (ImGui::Begin(kPaneHome)) {
+        draw_doors(s);
+        ImGui::Separator();
+        ImGui::TextUnformatted("open recordings:");
+        if (s.ws.recordings.empty())
+            ImGui::TextDisabled("(none yet — open one from a door above)");
+        for (size_t i = 0; i < s.ws.recordings.size(); ++i) {
+            std::string label =
+                base_name(s.ws.recordings[i].path) + "###home" + std::to_string(i);
+            if (ImGui::Selectable(label.c_str(), s.active_tab == static_cast<int>(i)))
+                s.active_tab = static_cast<int>(i);
+            ImGui::SameLine();
+            ImGui::PushID(static_cast<int>(i));
+            if (ImGui::SmallButton("x"))
+                to_close = static_cast<int>(i);
+            ImGui::PopID();
+        }
+    }
+    ImGui::End();
+
+    // The door screens open as their own dockable windows in the docked layout
+    // (the door-chooser redesign, F13, is doc 21 — not here).
+    if (s.show_author) {
+        if (ImGui::Begin("Author", &s.show_author))
+            draw_author_door(s.author);
+        ImGui::End();
+    }
+    if (s.show_inspect) {
+        if (ImGui::Begin("Inspect", &s.show_inspect))
+            draw_inspect_door(s.inspect);
+        ImGui::End();
+    }
+    if (s.show_learn) {
+        if (ImGui::Begin("Learn", &s.show_learn))
+            draw_learn_door(s.learn, [&s](const std::string &path, long step) {
+                learn_open(s, path, step);
+            });
+        ImGui::End();
+    }
+
+    // --- kPaneRecording (center): the light reading views, ONE flat tab bar ---
+    if (ImGui::Begin(kPaneRecording)) {
+        if (r == nullptr) {
+            ImGui::TextDisabled(
+                "open a recording (a door in Home, or the list) to read it here");
+        } else if (ImGui::BeginTabBar("recording-views")) {
+            if (ImGui::BeginTabItem("Summary")) {
+                draw_summary(*r);
+                ImGui::EndTabItem();
+            }
+            if (a != nullptr) {
+                // 1/2/3/4 still land: want_view SetSelected here for the tabbed
+                // views, SetWindowFocus for the standalone panes (below).
+                auto vf = [&s](dt_view v) -> ImGuiTabItemFlags {
+                    return s.want_view == v ? ImGuiTabItemFlags_SetSelected : 0;
+                };
+                if (ImGui::BeginTabItem("Canvas", nullptr, vf(dt_view::canvas))) {
+                    s.view = dt_view::canvas;
+                    body_canvas(s, a, b);
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Slice", nullptr, vf(dt_view::slice))) {
+                    s.view = dt_view::slice;
+                    body_slice(s, a, b);
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("Diff", nullptr, vf(dt_view::diff))) {
+                    s.view = dt_view::diff;
+                    body_diff(s, a, b);
+                    ImGui::EndTabItem();
+                }
+                if (ImGui::BeginTabItem("3D overview")) {
+                    draw_scene_overview(s, *r, *a);
+                    ImGui::EndTabItem();
+                }
+            }
+            ImGui::EndTabBar();
+        }
+    }
+    ImGui::End();
+
+    // --- kPaneLoom (center, co-docked as a tear-able tab) ---
+    if (ImGui::Begin(kPaneLoom)) {
+        if (a != nullptr)
+            draw_loom(s.loom, *a, s.ws, s.active_tab);
+        else
+            ImGui::TextDisabled("open a recording to weave its Loom");
+    }
+    ImGui::End();
+
+    // --- kPaneObserver: the live/observer deck (its observer bar is the sub-level)
+    if (ImGui::Begin(kPaneObserver)) {
+        if (r != nullptr && a != nullptr)
+            body_observer(s, *r, a);
+        else
+            ImGui::TextDisabled("open a recording to see its live/observer views");
+    }
+    ImGui::End();
+
+    // --- kPaneTimeline (bottom-left): the operand timeline ---
+    if (ImGui::Begin(kPaneTimeline)) {
+        if (a != nullptr)
+            body_timeline(s, a, b);
+        else
+            ImGui::TextDisabled("open a recording to see its operand timeline");
+    }
+    ImGui::End();
+
+    // --- kPaneScrubber (bottom-right): the register scrubber ---
+    if (ImGui::Begin(kPaneScrubber)) {
+        if (a != nullptr)
+            body_scrubber(s);
+        else
+            ImGui::TextDisabled("open a recording to time-travel its registers");
+    }
+    ImGui::End();
+
+    // --- kPaneInspector (right): ABI x-ray / Backends / This host, one flat bar
+    if (ImGui::Begin(kPaneInspector)) {
+        if (ImGui::BeginTabBar("inspector")) {
+            if (ImGui::BeginTabItem("ABI x-ray")) {
+                if (a != nullptr)
+                    body_abixray(s, a, b);
+                else
+                    ImGui::TextDisabled("open a recording (and attach a Win64 leg, "
+                                        "press d) for the ABI x-ray");
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Backends")) {
+                draw_completeness(s.completeness, s.repo_root);
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("This host")) {
+                if (r != nullptr)
+                    draw_capability_panel(s.caps, r);
+                else
+                    ImGui::TextDisabled(
+                        "open a recording to read this host against it");
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
+        }
+    }
+    ImGui::End();
+
+    // A nav refusal lands verbatim, once, below the reading pane.
+    if (!s.status.empty()) {
+        if (ImGui::Begin(kPaneRecording)) {
+            ImGui::Separator();
+            ImGui::TextWrapped("%s", s.status.c_str());
+        }
+        ImGui::End();
+    }
+
+    // Port the keymap view-switch intents to FOCUS (19 T1 step 4): the tabbed
+    // views were already SetSelected above; here bring their pane forward, and
+    // focus the standalone panes the keymap names.
+    if (s.want_view) {
+        switch (*s.want_view) {
+        case dt_view::timeline:
+            ImGui::SetWindowFocus(kPaneTimeline);
+            break;
+        case dt_view::canvas:
+        case dt_view::slice:
+        case dt_view::diff:
+            ImGui::SetWindowFocus(kPaneRecording);
+            break;
+        default:
+            break;
+        }
+    }
+    if (s.want_loom)
+        ImGui::SetWindowFocus(kPaneLoom);
+    s.want_open_tab = -1;
+    s.want_loom = false;
+    s.want_view.reset();
+    if (to_close >= 0)
+        shell_close(s, static_cast<size_t>(to_close));
+}
+
+void draw_shell(ShellState &s) {
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+
+    // The advertised keyboard bindings, acted on first so a keypress and the
+    // matching click land in the same frame (17-T1).
+    handle_keymap(s);
+
+    // Docking (13-foundation-moves.md T2): when enabled (the real app), the shell
+    // draws real dockable panes (19). The null test backend leaves it OFF by
+    // default, so the single-window tab layout draws unchanged — flip it ON in a
+    // test to exercise the panes (that is exactly what test_shell's docked case
+    // does).
+    const bool docking =
+        (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_DockingEnable) != 0;
+    if (docking)
+        draw_docked_shell(s, vp);
+    else
+        draw_windowed_shell(s, vp);
 
     if (s.open_dialog)
         draw_open_dialog(s);

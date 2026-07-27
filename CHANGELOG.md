@@ -2174,6 +2174,32 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The desktop views are now real dockable panes — the docking layout manager,
+  presets and Reset act on visible windows** (docs/internal/gui/19-dockable-panes-keystone.md).
+  Before this, the layout manager docked five named windows (`Home`, `Recording`,
+  `Scrubber`, `Inspector`, `Timeline`) and the View menu offered Reset + three
+  presets, but **no view was `Begin()`'d under any of those names** — the
+  dockspace, every preset, tear-out and Reset acted on phantom windows and were
+  inert, and the whole view surface was a single window nesting **three exclusive
+  tab levels** (recording → `views` → observer), so only one view was ever
+  visible. The shell now `Begin()`s each region as a real pane hosting the active
+  recording, the inner exclusive `views` tab bar is **deleted**, and the
+  3-deep nesting is flattened to at most two (a pane and, for the Loom and the
+  Observer deck, their one data-gated inner bar). The concrete payoff: the
+  timeline, the scrubber and the Observer's disassembly can be shown **at the
+  same time**. **View-menu presets and Reset now rearrange visible panes, and
+  panes can be torn out and restored** — the bottom region was split so a preset
+  holds the timeline and the scrubber together, and Reset rebuilds the default
+  split (the recovery path for a stale/corrupt persisted dock `.ini`, whose
+  auto-fallback lands with doc 18 T2.2). Every view keeps its exact body and its
+  honesty placards — the chrome was restructured into the panes, never removed
+  (D7). The non-docked path (the null test backend's default) still draws the
+  single-window tab layout unchanged, so nothing regresses without a dockspace.
+  The panes are asserted headlessly (`make desktop-test` flips docking on and
+  checks each region window exists and is active, that three siblings are active
+  at once, and that a preset switch moves real panes) and the tear-out → Reset
+  round-trip is driven by the interaction lane (`make desktop-ui-test`).
+
 - **AMD manual pre-release validation shrunk to the runner-uncoverable residue
   (self-hosted-ci-runners.md T4).** `docs/internal/amd-hardware-validation.md`
   was the "one validation step that cannot run in CI"; now that the self-hosted

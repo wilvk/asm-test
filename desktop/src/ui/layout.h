@@ -21,11 +21,13 @@ enum class LayoutPreset { ReplayInspect, Author, LiveObserver };
 // The dock node ids of the default split, so the shell docks its panes into them
 // and the tests assert the tree.
 struct DockLayout {
-    ImGuiID root = 0;   // the dockspace itself
-    ImGuiID left = 0;   // the deck / nav rail
-    ImGuiID center = 0; // the active recording / main view
-    ImGuiID right = 0;  // the inspector (diff / capability)
-    ImGuiID bottom = 0; // the timeline / scrubber
+    ImGuiID root = 0;    // the dockspace itself
+    ImGuiID left = 0;    // the deck / nav rail
+    ImGuiID center = 0;  // the active recording / main view (+ Loom co-docked)
+    ImGuiID right = 0;   // the inspector (ABI x-ray / backends / capability)
+    ImGuiID bottom = 0;  // the timeline (bottom-left half)
+    ImGuiID bottom2 = 0; // the scrubber (bottom-right half) — the T3.1 split, so
+                         // the timeline AND the scrubber are visible together
 };
 
 // Build (or rebuild) the default split for `preset` into `dockspace_id`, sized
@@ -42,6 +44,14 @@ const char *layout_preset_name(LayoutPreset p);
 // include imgui_internal.h itself — the containment the doc-12 gate relies on.
 bool layout_exists(ImGuiID dockspace_id);
 
+// Whether `dockspace_id` needs the default split built into it: true when the
+// node is absent or a bare leaf (a fresh dockspace — DockSpaceOverViewport
+// creates exactly such an empty leaf, so `layout_exists` alone is NOT enough to
+// decide "already laid out"), false once it carries a real split (a persisted
+// `.ini` layout, which must be kept). The one honest first-run signal — again
+// wrapping the imgui_internal.h `ImGuiDockNode` so the shell stays free of it.
+bool layout_needs_default(ImGuiID dockspace_id);
+
 // The window names the layout docks — the SAME strings the shell passes to
 // ImGui::Begin, so the two cannot drift. Exposed for the tests.
 extern const char *const kPaneHome;
@@ -49,6 +59,12 @@ extern const char *const kPaneRecording;
 extern const char *const kPaneScrubber;
 extern const char *const kPaneInspector;
 extern const char *const kPaneTimeline;
+// Two views carry their own inner tab bar (the Loom's `loom-detail`, the
+// Observer deck's `observer`), so they must be their OWN docked pane — nesting
+// them inside another pane's tab strip would rebuild the 3-deep exclusive stack
+// this brief (19) tears down. They dock alongside the five regions above.
+extern const char *const kPaneLoom;
+extern const char *const kPaneObserver;
 
 } // namespace asmdesk
 #endif // ASMDESK_UI_LAYOUT_H

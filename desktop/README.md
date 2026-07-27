@@ -90,6 +90,38 @@ in [`tests/golden-asmtrace/`](../tests/golden-asmtrace/), and every headless
 asmspy mode writes one with `--record=<f>`. The key map is the table under
 [The replay views](#the-replay-views) below.
 
+### Dockable panes (the real workspace)
+
+With docking on (the real app — the null-backend tests leave it off and get the
+single-window tab layout), the views are **real dockable panes**: the layout
+manager's region names ([`ui/layout.cpp`](src/ui/layout.cpp)) are the SAME
+strings the shell passes to `ImGui::Begin`, so the dockspace, the View-menu
+presets and **Reset** act on visible windows, and the timeline, the scrubber and
+the Observer's disassembly can be shown **at the same time** (the old inner
+exclusive `BeginTabBar("views")` — one view visible ever — is gone). Each pane
+hosts the **active** recording (picked from the `Home` list); with no recording
+open a pane states so in place rather than vanishing (nothing is silently
+dropped — D7). The pane → region → content mapping:
+
+| Pane (`Begin` name) | Region | Hosts |
+|---|---|---|
+| `Home` | left rail | the three doors + a selectable list of open recordings (sets the active recording) |
+| `Recording` | center | Summary / Canvas / Slice / Diff / 3D overview, as **one flat** tab strip (no exclusive nesting) |
+| `Loom` | center (co-docked, tear-able) | the Loom fabric; its `loom-detail` bar is one level below the pane |
+| `Observer` | right / bottom | the live/observer deck; its `observer` bar (Syscalls … **Disassembly**) is the only remaining sub-level |
+| `Timeline` | bottom-left | the operand timeline |
+| `Scrubber` | bottom-right | the register scrubber |
+| `Inspector` | right | ABI x-ray / Backends / This host, one flat tab strip |
+
+The **View** menu rearranges these visible panes — three built-in presets
+(Replay / Inspect, Author, Live observer) and **Reset layout**, which rebuilds
+the default split. Because docking persistence is on
+([`main.cpp`](src/main.cpp) points `IniFilename` at `build/desktop-imgui.ini`), a
+stale or corrupt dock `.ini` can dock these now-real windows badly; **Reset
+recovers** by rebuilding the default from scratch (the auto-fallback on a
+broken/empty load is doc 18 T2.2, landing alongside). Panes tear out to floating
+windows and Reset re-docks them (round-tripped by `make desktop-ui-test`).
+
 Formatting: `make desktop-fmt` reformats `desktop/**` with the repo
 [`.clang-format`](../.clang-format); `make desktop-fmt-check` reports drift and is
 informational (desktop/ stays out of the CI-gated format set, D8).

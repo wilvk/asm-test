@@ -22,6 +22,7 @@
 #include "imgui_te_exporters.h" // ImGuiTestEngineExportFormat_JUnitXml
 
 #include "nav.h"                 // dt_view / dt_link — asserted by the keymap tests
+#include "ui/layout.h"           // 19: kPane* names, layout_build, LayoutPreset
 #include "ui/shell.h"            // ShellState, draw_shell, shell_open, shell_a (17-T1)
 #include "views/observer_draw.h" // draw_obs_syscalls — the reveal-all flow test
 #include "views/syscalls.h"      // SyscallView / SyscallRow
@@ -252,8 +253,66 @@ static void register_flow_tests(ImGuiTestEngine *engine) {
     };
 }
 
+// A second shell for the docking tear-out test, loaded once. Separate from
+// g_keymap_shell so enabling docking here never leaks into the keymap tests'
+// non-docked expectations (and this test is registered LAST for the same reason).
+static asmdesk::ShellState g_dock_shell;
+static bool g_dock_loaded = false;
+static void ensure_dock_shell() {
+    if (g_dock_loaded)
+        return;
+    g_dock_loaded = true;
+    std::string err;
+    asmdesk::shell_open(g_dock_shell,
+                        std::string(ASMTEST_GOLDEN_DIR) + "/sum_via_rbx.asmtrace",
+                        err);
+    g_dock_shell.active_tab = 0;
+}
+static void dock_gui(ImGuiTestContext *) {
+    // Docking is off in the shared context (the keymap tests need the non-docked
+    // path); flip it on HERE so draw_shell renders the real panes. The TestFunc
+    // clears it again at the end, and this test runs last, so nothing downstream
+    // sees it.
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    ensure_dock_shell();
+    asmdesk::draw_shell(g_dock_shell);
+}
+
+// The tear-out -> Reset round-trip (19 T3): the ONE assertion that needs a real
+// backend drag, so it belongs in this interaction lane, not the null smoke.
+// Model/window state, not pixels — a docked pane is undocked, then Reset re-docks
+// it into its region.
+static void register_dock_tests(ImGuiTestEngine *engine) {
+    ImGuiTest *t = IM_REGISTER_TEST(engine, "dock", "tearout_reset_roundtrip");
+    t->GuiFunc = dock_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        using namespace asmdesk;
+        ctx->Yield();
+        ctx->Yield();
+        ctx->Yield(); // build the default layout + let docking settle
+        ImGuiWindow *scr = ImGui::FindWindowByName(kPaneScrubber);
+        IM_CHECK(scr != nullptr);
+        IM_CHECK(scr->DockId != 0); // the preset docked it into a region
+        const ImGuiID home_dock = scr->DockId;
+        // Tear it out — undock the pane to a floating window.
+        ctx->UndockWindow(kPaneScrubber);
+        ctx->Yield();
+        IM_CHECK(scr->DockId == 0); // now floating
+        // Reset layout (the View menu's own call) re-docks it into its region.
+        layout_build(g_dock_shell.dockspace_id, ImVec2(1280, 800),
+                     LayoutPreset::ReplayInspect);
+        ctx->Yield();
+        ctx->Yield();
+        IM_CHECK(scr->DockId != 0);         // re-docked
+        IM_CHECK(scr->DockId == home_dock); // back into its original node
+        // Leave the shared context as we found it (docking off) for any later run.
+        ImGui::GetIO().ConfigFlags &= ~ImGuiConfigFlags_DockingEnable;
+    };
+}
+
 // register_tests — every interaction test hangs off here: a harness self-check,
-// the keymap enforcement (T1 step 5), and the interaction-flow tests (step 4).
+// the keymap enforcement (T1 step 5), the interaction-flow tests (step 4), and
+// the docking tear-out round-trip (19 T3, registered LAST — it toggles docking).
 static void register_tests(ImGuiTestEngine *engine) {
     register_keymap_tests(engine);
     register_flow_tests(engine);
@@ -273,6 +332,10 @@ static void register_tests(ImGuiTestEngine *engine) {
         // backend, this click lands and the app-side handler runs.
         IM_CHECK_EQ(g_button_presses, 1);
     };
+
+    // Registered LAST on purpose: it toggles ImGuiConfigFlags_DockingEnable on the
+    // shared context, so it must not run before the (non-docked) keymap tests.
+    register_dock_tests(engine);
 }
 
 int main() {

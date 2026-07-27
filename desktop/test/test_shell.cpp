@@ -7,8 +7,10 @@
 #include <string>
 
 #include "imgui.h"
+#include "imgui_internal.h" // 19: FindWindowByName + ImGuiWindow::{WasActive,DockId}
 
 #include "doc/recording.h"
+#include "ui/layout.h" // 19: kPane* names, DockLayout, LayoutPreset, layout_build
 #include "ui/shell.h"
 #include "views/abixray.h"    // 09-T4: the surfaced ABI x-ray tab's model
 #include "views/slice_view.h" // 09-T5: assert the blame link's backward cone
@@ -339,6 +341,188 @@ int main() {
         check("scene/close keeps scenes parallel",
               s3.scenes.size() == s3.ws.recordings.size(),
               "shell_close must erase the SceneView slot too");
+
+        ImGui::DestroyContext();
+    }
+
+    // --- 19 (dockable panes keystone): the docked shell draws REAL kPane* panes -
+    // Every block above ran the NON-DOCKED path — the null backend leaves docking
+    // off, so `draw_shell` drew the single-window tab layout and the dockspace,
+    // presets and Reset acted on phantom windows. This block flips
+    // ImGuiConfigFlags_DockingEnable on its OWN context (IniFilename still null —
+    // file-free and deterministic, doc 13:394) and pins the thing that was false
+    // before this brief: each region layout.cpp docks is a window the shell
+    // Begin()s, visible and active, and the timeline, the scrubber and the
+    // Observer deck (which hosts the disassembly) can all be shown at once —
+    // impossible under the old exclusive "views" tab bar.
+    {
+        ImGui::CreateContext();
+        ImGuiIO &iod = ImGui::GetIO();
+        iod.IniFilename = nullptr; // still file-free — DockBuilder driven in-proc
+        iod.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+        unsigned char *pd = nullptr;
+        int wd = 0, hd = 0;
+        iod.Fonts->GetTexDataAsRGBA32(&pd, &wd, &hd);
+        iod.DisplaySize = ImVec2(1280, 720);
+        iod.DeltaTime = 1.0f / 60.0f;
+
+        auto frame = [](ShellState &st) {
+            ImGui::NewFrame();
+            draw_shell(st);
+            ImGui::Render();
+        };
+        auto dockid = [](const char *n) -> ImGuiID {
+            ImGuiWindow *w = ImGui::FindWindowByName(n);
+            return w ? w->DockId : 0;
+        };
+        auto active = [](const char *n) -> bool {
+            ImGuiWindow *w = ImGui::FindWindowByName(n);
+            return w != nullptr && w->WasActive;
+        };
+        // DockBuilder mutates the dock tree and needs the frame's current window
+        // (the implicit Debug window ImGui sets up in NewFrame), so it must run
+        // INSIDE a frame — exactly as test_layout drives it, and as the View menu
+        // does mid-draw_shell. This applies a preset the menu's own way, then
+        // settles two frames so the panes adopt the new nodes.
+        auto apply_preset = [&](ShellState &st, LayoutPreset p) {
+            ImGui::NewFrame();
+            layout_build(st.dockspace_id, ImVec2(1280, 720), p);
+            ImGui::Render();
+            frame(st);
+            frame(st);
+        };
+
+        ShellState ds;
+        std::string err;
+        // A codeimage recording (so the Observer deck carries a Disassembly tab)
+        // + a producer-absent one (min-trace: no regstate ring, no codeimage — the
+        // placard fixtures).
+        int icode = shell_open(ds, gd("scene-abs-loop.asmtrace"), err);
+        check("dock/codeimage opened", icode >= 0, err.c_str());
+        int imin = shell_open(ds, fx("min-trace.asmtrace"), err);
+        check("dock/min-trace opened", imin >= 0, err.c_str());
+        ds.active_tab = icode;
+
+        // Frame 1 builds the default ReplayInspect layout and publishes the
+        // dockspace id; a second lets docking settle.
+        frame(ds);
+        check("dock/dockspace published", ds.dockspace_id != 0,
+              "the docked shell must publish its DockSpaceOverViewport id");
+        frame(ds);
+
+        // Arrange the panes into DISTINCT nodes (the brief's T2 "dock them into
+        // distinct nodes") so each asserted pane is a sole, unambiguously visible
+        // occupant: Home | center(Recording+Loom) | Inspector / Observer |
+        // Timeline | Scrubber. Driven INSIDE a frame (DockBuilder needs the
+        // current window).
+        ImGui::NewFrame();
+        {
+            ImGuiID root = ds.dockspace_id;
+            ImGui::DockBuilderRemoveNode(root);
+            ImGui::DockBuilderAddNode(root, ImGuiDockNodeFlags_DockSpace);
+            ImGui::DockBuilderSetNodeSize(root, ImVec2(1280, 720));
+            ImGuiID c = root;
+            ImGuiID nleft =
+                ImGui::DockBuilderSplitNode(c, ImGuiDir_Left, 0.18f, nullptr, &c);
+            ImGuiID nright =
+                ImGui::DockBuilderSplitNode(c, ImGuiDir_Right, 0.24f, nullptr, &c);
+            ImGuiID nrightb = ImGui::DockBuilderSplitNode(nright, ImGuiDir_Down,
+                                                          0.5f, nullptr, &nright);
+            ImGuiID nbot =
+                ImGui::DockBuilderSplitNode(c, ImGuiDir_Down, 0.30f, nullptr, &c);
+            ImGuiID nbot2 = ImGui::DockBuilderSplitNode(nbot, ImGuiDir_Right, 0.5f,
+                                                        nullptr, &nbot);
+            ImGui::DockBuilderDockWindow(kPaneHome, nleft);
+            ImGui::DockBuilderDockWindow(kPaneRecording, c);
+            ImGui::DockBuilderDockWindow(kPaneLoom, c);
+            ImGui::DockBuilderDockWindow(kPaneInspector, nright);
+            ImGui::DockBuilderDockWindow(kPaneObserver, nrightb);
+            ImGui::DockBuilderDockWindow(kPaneTimeline, nbot);
+            ImGui::DockBuilderDockWindow(kPaneScrubber, nbot2);
+            ImGui::DockBuilderFinish(root);
+        }
+        ImGui::Render();
+        frame(ds);
+        frame(ds);
+
+        // T1 — each of the five region panes layout.cpp docks EXISTS and was
+        // ACTIVE, i.e. actually Begin()'d. This is the exact thing that was false
+        // before 19: no view was Begin()'d under any kPane* name.
+        const char *core[] = {kPaneHome, kPaneRecording, kPaneScrubber,
+                              kPaneInspector, kPaneTimeline};
+        for (const char *name : core) {
+            check("dock/pane exists", ImGui::FindWindowByName(name) != nullptr,
+                  name);
+            check("dock/pane was active", active(name), name);
+        }
+
+        // T2 — the refutation of "only one view visible" (F2/F9): the timeline,
+        // the scrubber and the Observer deck are all active in ONE frame, in
+        // distinct dock nodes. The old exclusive "views" tab bar could never make
+        // three siblings active at once.
+        check("dock/timeline+scrubber+observer coexist",
+              active(kPaneTimeline) && active(kPaneScrubber) &&
+                  active(kPaneObserver),
+              "the three sibling panes must be simultaneously active");
+        check("dock/coexist distinct nodes",
+              dockid(kPaneTimeline) != dockid(kPaneScrubber) &&
+                  dockid(kPaneTimeline) != dockid(kPaneObserver) &&
+                  dockid(kPaneScrubber) != dockid(kPaneObserver),
+              "the three panes must occupy distinct dock nodes");
+
+        // T1 honesty — the placards survive the move into the panes (D7). Switch
+        // the active recording to the producer-absent min-trace and drive frames;
+        // the scrubber pane is active (so it drew) while its regstate producer is
+        // absent — it drew the placard, not a register file of zeros.
+        ds.active_tab = imin;
+        frame(ds);
+        frame(ds);
+        check("dock/scrubber placard producer-absent",
+              imin >= 0 && static_cast<size_t>(imin) < ds.stepidx.size() &&
+                  !ds.stepidx[static_cast<size_t>(imin)].present(),
+              "min-trace has no regstate ring — the scrubber pane must placard");
+        check("dock/scrubber pane active for placard", active(kPaneScrubber),
+              "the scrubber pane must be active to have drawn its placard");
+        // The 3D overview's no-regions placard likewise survives into the pane
+        // body: min-trace has no codeimage, so draw_scene_overview weaves the
+        // models but takes the "no address-space regions" placard path.
+        {
+            const Streams *am = shell_a(ds);
+            ImGui::NewFrame();
+            ImGui::Begin("dock-probe-3d");
+            if (am != nullptr)
+                draw_scene_overview(
+                    ds, ds.ws.recordings[static_cast<size_t>(imin)], *am);
+            ImGui::End();
+            ImGui::Render();
+            check("dock/3D placard producer-absent",
+                  static_cast<size_t>(imin) < ds.scenes.size() &&
+                      ds.scenes[static_cast<size_t>(imin)].built &&
+                      !ds.scenes[static_cast<size_t>(imin)].has_regions,
+                  "min-trace has no codeimage — the 3D pane must take the "
+                  "no-regions placard");
+        }
+
+        // T3 — presets + Reset rearrange the REAL panes. Build ReplayInspect, note
+        // the timeline/scrubber dock nodes, switch to LiveObserver and assert both
+        // MOVED (a preset acting on visible windows), then Reset and assert it
+        // RESTORES them. Both are the exact calls the View menu makes.
+        apply_preset(ds, LayoutPreset::ReplayInspect);
+        ImGuiID tl_ri = dockid(kPaneTimeline);
+        ImGuiID sc_ri = dockid(kPaneScrubber);
+        check("dock/preset docked timeline", tl_ri != 0,
+              "the timeline pane must be docked in ReplayInspect");
+        apply_preset(ds, LayoutPreset::LiveObserver);
+        check("dock/preset moves timeline", dockid(kPaneTimeline) != tl_ri,
+              "a preset switch must move the timeline pane to a different node");
+        check("dock/preset moves scrubber", dockid(kPaneScrubber) != sc_ri,
+              "a preset switch must move the scrubber pane to a different node");
+        // Reset layout (the menu's own call) restores the default assignment.
+        apply_preset(ds, LayoutPreset::ReplayInspect);
+        check("dock/reset restores timeline", dockid(kPaneTimeline) == tl_ri,
+              "Reset must restore the timeline pane's node");
+        check("dock/reset restores scrubber", dockid(kPaneScrubber) == sc_ri,
+              "Reset must restore the scrubber pane's node");
 
         ImGui::DestroyContext();
     }

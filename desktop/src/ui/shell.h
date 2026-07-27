@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "imgui.h" // ImGuiID (the published dockspace id, 19)
+
 #include "analysis/stepindex.h"
 #include "doc/streams.h"
 #include "doc/workspace.h"
@@ -53,6 +55,10 @@ struct ShellState {
     int active_tab = -1;        // -1 = home (the three doors)
     bool open_dialog = false;   // the recording-open dialog is showing
     bool layout_inited = false; // the default dock layout was built once (T2)
+    // The DockSpaceOverViewport id, published each frame by the docked shell (19)
+    // so the View menu — and the tests — can rebuild presets against it. 0 until
+    // the first docked frame (the non-docked path never sets it).
+    ImGuiID dockspace_id = 0;
     char open_path[1024] = {0}; // its InputText buffer
     std::string open_error;     // last open failure, rendered verbatim
     // Author/Inspect open an empty placeholder tab in the full app (behaviour

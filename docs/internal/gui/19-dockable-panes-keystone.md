@@ -96,6 +96,31 @@
 
 ## Tasks
 
+> **Landed 2026-07-27 — all three tasks, green (`make desktop-test` +
+> `make desktop-ui-test`).** The docked shell (`draw_docked_shell` in
+> `ui/shell.cpp`) `Begin()`s each region as a real pane; the inner exclusive
+> `BeginTabBar("views")` is gone; the 3-deep nesting is flattened to <=2 (the Loom
+> and the Observer deck each moved to their OWN pane so their inner bar sits one
+> level below a pane, not two). The non-docked path is preserved verbatim in
+> `draw_windowed_shell`, gated on the `docking` bool, so a run with no dockspace
+> does not regress. **Two deviations from this brief, code winning (per the
+> preamble):** (1) `draw_scene_hud` already `Begin()`s its own `"3D overview"`
+> window, so the 3D overview stays a **tab in `kPaneRecording`** rather than a
+> pane named "3D overview" (a name collision) — it has no inner tab bar, so the
+> nesting rule is satisfied either way; (2) the Loom and the Observer deck are
+> their OWN docked panes (`kPaneLoom`, `kPaneObserver`, added to `layout.cpp`)
+> because a view carrying an inner tab bar cannot be nested inside another pane's
+> tab strip without rebuilding the very 3-deep stack this brief removes — the five
+> original region names are unchanged and still each `Begin()`'d. `layout.cpp`
+> split the bottom region in two (`bottom`/`bottom2`) so the default preset holds
+> the timeline AND the scrubber at once (T3.1), and `ShellState::dockspace_id` is
+> published each docked frame so the View menu — and the tests — rebuild presets
+> against it. Tests: `test_shell.cpp` gained a docked case (each `kPane*` exists +
+> `WasActive`; timeline+scrubber+Observer simultaneously active in distinct nodes;
+> the producer-absent scrubber/3D placards survive the move; a preset switch moves
+> real panes and Reset restores them), and `test_ui.cpp` a tear-out→Reset
+> round-trip on the interaction lane.
+
 ### T1 — Convert each view into a real pane `Begin()`'d under the `kPane*` names  (L, depends on: 13 F1)
 
 **Goal.** Replace the inner `BeginTabBar("views")` (`shell.cpp:385`) with real
