@@ -2,6 +2,7 @@
 // Draws only: every decision is in scrubber.cpp, asserted headlessly.
 #include "imgui.h"
 
+#include "ui/theme.h"
 #include "views/views_draw.h"
 
 namespace asmdesk {
@@ -63,7 +64,7 @@ uint64_t draw_scrubber(const StepIndex &idx, uint64_t playhead) {
             // A changed register is the per-step highlight: colour it so the eye
             // lands on what this instruction did, not on the 16 it did not.
             if (r.changed)
-                ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.3f, 1.0f), "0x%llx",
+                ImGui::TextColored(dt_changed_col(), "0x%llx",
                                    static_cast<unsigned long long>(r.value));
             else
                 ImGui::Text("0x%llx", static_cast<unsigned long long>(r.value));

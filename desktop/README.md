@@ -234,6 +234,11 @@ desktop/
       author_door.cpp   assemble -> run -> fault card (full app only)
       capability_panel.cpp  what this host can do and why not (probes in the
                         app; shows the recording's provenance in the viewer)
+      theme.h           the ONE semantic colour palette: named accessors for the
+                        good/bad/maybe/changed/cone/selected/statistical axis +
+                        the caution amber / refuse red (header-only, engine-free)
+      legend.{h,cpp}    the shared palette legend (a swatch + its second-channel
+                        token + its meaning), drawn from theme.h so it can't drift
   test/
     test_null_render.cpp   ImGui builds + renders headlessly (example_null)
     test_recording.cpp     the loader's reject rules + honesty accounting (D7)
@@ -243,6 +248,8 @@ desktop/
     test_slice_diff.cpp    the SAME closures vs the real C slicer (links
                            dataflow.o — the one test-half exception to D4)
     test_nav.cpp           link round-trip, rejections, router refusals
+    test_theme.cpp         the semantic palette: accessor values, the no-inline-
+                           literal source-lint over the drift files, legend smoke
     test_diff.cpp          alignment, refusals, and the bounded-verdict rule
     test_canvas.cpp        heat, gutter, basis refusal, truncation banner
     test_timeline.cpp      annotation literals shared with the TUI
@@ -292,6 +299,31 @@ they belong to
 [docs/internal/gui/asmtrace-schema.md](../docs/internal/gui/asmtrace-schema.md)
 and [`tests/golden-asmtrace/`](../tests/golden-asmtrace/). See the
 [GUI implementation docs](../docs/internal/gui/README.md) for the full plan.
+
+## The semantic palette
+
+There is exactly one place a semantic colour is defined: **`src/ui/theme.h`**.
+It is the single source for the whole encoding axis — `dt_good_col` /
+`dt_bad_col` / `dt_maybe_col` (verdicts), `dt_changed_col` (a per-step register
+delta), `dt_cone_{back,fwd,both,dim}_col` (the dependency cones), `dt_selected_col`
+(a selection / pairing highlight), `dt_statistical_col` (sampled provenance), and
+the two honesty-chrome colours `dt_warn_col` (caution amber) / `dt_refuse_col`
+(refuse red) — each with a paired `_u32` for draw-list views. Every accessor
+documents its ONE meaning, and **no draw file inlines a colour**: a view that
+needs "the changed colour" calls `dt_changed_col()`, so a colour can never drift
+its meaning between panes (the F14 discipline). `dt_bad_col()` *is*
+`dt_refuse_col()` — verdict-no and refused are one meaning, one value.
+
+`src/ui/legend.{h,cpp}` renders that palette: `dt_legend_row(col, channel, label)`
+draws a swatch, a **non-colour second-channel token** (a glyph / pattern / word),
+and the meaning; `dt_semantic_legend()` and `dt_cone_legend()` render whole
+sub-axes. Because the legend is drawn from the same `theme.h` accessors the views
+draw with, the legend and the encoding cannot disagree. Both files are
+header-simple and engine-free, so they link into the full app, the render-only
+viewer, and the null-backend tests identically; `test_theme` pins the accessor
+values, asserts the drift files carry no inline colour literal, and smokes the
+legend headlessly. This palette is the substrate the graded honesty-chrome work
+(docs/internal/gui/23) builds on.
 
 ## The replay views
 

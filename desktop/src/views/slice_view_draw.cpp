@@ -15,26 +15,31 @@
 #include "imgui_internal.h"
 #include "imgui_canvas.h"
 
+#include "ui/legend.h"
+#include "ui/theme.h"
 #include "views/views_draw.h"
 
 namespace asmdesk {
 
 namespace {
 
+// The four dependency-cone hues now live in ui/theme.h (T1) — this routes each
+// case through the shared accessor, so a cone colour cannot drift from the
+// legend that explains it (dt_cone_legend, drawn from the same accessors).
 ImU32 cone_colour(dt_cone c) {
     switch (c) {
     case dt_cone::back:
-        return IM_COL32(120, 170, 255, 255); // what produced the value
+        return dt_cone_back_u32(); // what produced the value
     case dt_cone::fwd:
-        return IM_COL32(255, 180, 110, 255); // what it goes on to affect
+        return dt_cone_fwd_u32(); // what it goes on to affect
     case dt_cone::both:
-        return IM_COL32(255, 255, 255, 255); // the selection itself
+        return dt_cone_both_u32(); // the selection itself
     case dt_cone::dimmed:
-        return IM_COL32(110, 110, 110, 255);
+        return dt_cone_dim_u32();
     case dt_cone::none:
         break;
     }
-    return IM_COL32(200, 200, 200, 255);
+    return IM_COL32(200, 200, 200, 255); // defensive fallback (unreached)
 }
 
 } // namespace
@@ -49,9 +54,11 @@ void draw_slice_view(const dt_slice_view &v) {
     ImGui::Text("selected step: %s",
                 v.selected_step ? std::to_string(*v.selected_step).c_str()
                                 : "(none)");
-    ImGui::TextDisabled("blue = what produced this value; orange = what it "
-                        "affects; grey = outside both cones; drag to pan, wheel "
-                        "to zoom");
+    ImGui::TextDisabled("drag to pan, wheel to zoom");
+    // The cone legend, drawn from the SAME ui/theme.h accessors cone_colour uses
+    // — so the words below can never disagree with the hues above them (T1), and
+    // each carries a second-channel glyph so the axis reads without colour (T2).
+    dt_cone_legend();
 
     // A persistent canvas holds the pan/zoom view across frames (single ImGui
     // context, like the other addon draws). Its viewport is whatever space is

@@ -130,6 +130,30 @@ the words, and the controls that carry those truths.
 
 ### T1 — extend `theme.h` to the full semantic set; delete every inline literal  (L, depends on: —; blocks 23 T4.1)
 
+> **Landed 2026-07-27 — green.** `desktop/src/ui/theme.h` now holds the whole
+> semantic axis as named accessors — `dt_good`/`dt_bad`/`dt_maybe` (verdicts),
+> `dt_changed`, `dt_cone_{back,fwd,both,dim}`, `dt_selected`, `dt_statistical`,
+> each with a paired `_u32` (pure float-pack, static-init-safe) and a
+> one-meaning doc comment. `dt_bad_col()` **is** `dt_refuse_col()` — the
+> 0.90-vs-0.95 refuse-red split is gone (F14). Every cited drift site is routed
+> through the accessors: `inspect_door.cpp` (verdict axis, `kBad` now the shared
+> refuse red), `scrubber_draw.cpp` (`dt_changed_col`), `abixray_draw.cpp`
+> (`kChanged`→`dt_changed_col`, `kDiffer`→`dt_selected_col`),
+> `slice_view_draw.cpp`'s `cone_colour()` (the four `dt_cone_*_u32`),
+> `scene3d/hud.cpp` (`kOk`→`dt_good_col`, `kDim`→new `dt_dim_col`), and the Loom
+> refusal placard `fabric_imgui.cpp`:159 (the third refuse-red copy →
+> `dt_refuse_col`). The Loom-local structural palette (`kSpan`/`kHollow`/`kHot`
+> …) stays loom-local by design — it is not the semantic axis. A shared
+> `desktop/src/ui/legend.{h,cpp}` (`dt_legend_row` + `dt_semantic_legend` +
+> `dt_cone_legend`) renders the palette with a second-channel token beside each
+> swatch; the slice explorer uses `dt_cone_legend`. New `desktop/test/test_theme.cpp`
+> (wired into `make desktop-test`) pins the accessor values, asserts the three
+> former yellows stay distinct and `dt_bad==dt_refuse`, source-lints the drift
+> files for any remaining inline colour literal, and smokes the legend headless.
+> `make docker-desktop` + `make desktop-test` green. **This unblocks 23 T4.1.**
+> Deferred to T2 (not this task): the CVD-safe hue *values* and the contrast
+> gate — the accessors are the seam T2 fills in.
+
 **Goal.** Make `theme.h` the ONE place the good/bad/maybe/changed/cone/selected/
 statistical axis lives, as named accessors, and delete every inline literal at the
 five drift sites (plus the Loom refusal placard). This is the substrate doc 23 T4.1

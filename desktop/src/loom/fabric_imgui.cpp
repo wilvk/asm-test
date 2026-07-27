@@ -155,8 +155,9 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self) {
     }
     if (!L.err.empty()) {
         // A refusal is a full-pane placard and nothing else: there is no fabric,
-        // and half a fabric would be worse than none.
-        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.95f, 0.45f, 0.40f, 1.0f));
+        // and half a fabric would be worse than none. The refuse red is the ONE
+        // shared value (ui/theme.h T1) — this was a third hard-coded copy (F14).
+        ImGui::PushStyleColor(ImGuiCol_Text, dt_refuse_col());
         ImGui::TextWrapped("%s", L.err.c_str());
         ImGui::PopStyleColor();
         return;
