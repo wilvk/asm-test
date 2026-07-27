@@ -406,6 +406,35 @@ static void register_flow_tests(ImGuiTestEngine *engine) {
         IM_CHECK_EQ((int)g_rail_shell.mode, (int)Mode::Author);
         IM_CHECK(g_rail_shell.pending_preset.has_value());
     };
+
+    // 21 T1: the command palette. Ctrl+Shift+P opens the modal fuzzy finder over
+    // the real shell; typing narrows it and clicking a command dispatches through
+    // the spine — asserted at the MODEL (the resulting ShellState), not pixels.
+    t = IM_REGISTER_TEST(engine, "flow", "command_palette");
+    t->GuiFunc = keymap_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        using namespace asmdesk;
+        g_keymap_shell.want_open_tab = 0; // recording 0's outer tab
+        g_keymap_shell.show_palette = false;
+        g_keymap_shell.palette_buf[0] = '\0';
+        g_keymap_shell.want_view.reset();
+        g_keymap_shell.view = dt_view::canvas;
+        ctx->Yield();
+        // Ctrl+Shift+P opens it (Ctrl+P is the alias; both raise show_palette).
+        ctx->KeyPress(ImGuiMod_Ctrl | ImGuiMod_Shift | ImGuiKey_P);
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.show_palette);
+        // Narrow to the timeline view-switch command and run it by click.
+        ctx->SetRef("Command palette");
+        ctx->ItemInput("##palettequery");
+        ctx->KeyCharsReplace("timeline view");
+        ctx->Yield();
+        ctx->ItemClick("Show timeline view");
+        ctx->Yield();
+        ctx->Yield(); // the tab bar consumes want_view -> s.view next frame
+        IM_CHECK(!g_keymap_shell.show_palette);          // dispatched + closed
+        IM_CHECK(g_keymap_shell.view == dt_view::timeline); // via want_view
+    };
 }
 
 // A second shell for the docking tear-out test, loaded once. Separate from

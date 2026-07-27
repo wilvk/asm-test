@@ -148,6 +148,19 @@
 
 ### T1 — command palette on `Ctrl+Shift+P` / `Ctrl+P`, over the router  (M, depends on: 16 T2 ImSearch; 17 T1 for the interaction test)
 
+> **LANDED 2026-07-27.** `desktop/src/ui/palette.{h,cpp}` — a pure `PaletteEntry`
+> table (`build_palette`) enumerating view-switch, go-to-step/offset, open-recent,
+> attach-pid, run-walkthrough, reset-layout, routine/recorded-offset, and a
+> NON-dispatching hint per `dt_nav_bindings()` row; every command dispatches ONLY
+> through `dt_nav_go` (or the exact `want_view`/`show_*` intent `handle_keymap`
+> uses). Opens on `Ctrl+Shift+P` **and** `Ctrl+P` (`handle_keymap`), drawn in
+> `draw_shell` beside the go-to modal, filtered with the "showing N of M" idiom +
+> the app-only guarded-ImSearch relevance path (degrades to an unranked list under
+> the null backend, scoped like `terms.o`). Pinned by
+> `desktop/test/test_palette.cpp` (enumeration one-for-one with the bindings,
+> want_view, go-to == `dt_nav_parse`, a refusal fills `s.status`) and the
+> `flow/command_palette` interaction test in `desktop/test/test_ui.cpp`.
+
 **Goal.** A modal fuzzy finder that makes the whole spine reachable by typing.
 Every entry dispatches through `dt_nav_go` (or the exact `s.want_view`/`show_goto`
 intent the keymap uses), and the accelerator list is enumerated from
@@ -224,6 +237,17 @@ list under the null backend; the interaction flow is green in `desktop-ui-test`.
 
 ### T2 — persistent wayfinding chrome outside the per-tab body  (S, depends on: 19 real panes; sourced from `nav.current`)
 
+> **LANDED 2026-07-27.** `desktop/src/ui/wayfinding.{h,cpp}` — `disambiguated_label`
+> (basename + the shortest distinguishing parent-dir segment, else a short path
+> hash), used in the breadcrumb, the recording tab titles **and** T1's open-recent
+> labels so all three agree; `breadcrumb_model` sourced from `nav.current`
+> (recording ▸ session ▸ view + step/selection + filter + process scope), prompting
+> ("no position — open a recording or press Ctrl+Shift+P") when empty rather than
+> blanking. `draw_wayfinding_bar` lives in the OUTER shell — the docked menu bar
+> and the windowed top strip, outside every pane — built ON doc-18's back/forward
+> affordance (the duplicated "here:" position label was removed from
+> `draw_breadcrumb`, not the buttons). Pinned by `desktop/test/test_wayfinding.cpp`.
+
 **Goal.** A persistent global-context band — **recording → session → view**
 breadcrumb + active step/selection + filter/scope + thread — sourced from
 `nav.current`, living in the outer shell so it is visible from every pane, with
@@ -275,6 +299,19 @@ is green. (Depends on doc 19: real panes give the band a home where sibling
 context coexists.)
 
 ### T3 — always-visible overview/minimap on timeline + Loom, click-to-jump  (M, depends on: 15 T1 ImPlot; 14 T5 ImZoomSlider)
+
+> **LANDED 2026-07-27.** `desktop/src/views/overview.{h,cpp}` — the pure
+> `overview_from_timeline` / `overview_from_fabric` / `overview_click_step`
+> projection: a compressed view of the recording's OWN rows that NEVER fabricates
+> structure (a sparse trace yields a sparse strip — exactly the real steps, pinned
+> by `desktop/test/test_overview.cpp`; see Constraints). The timeline strip
+> (`draw_timeline_overview` in `timeline_draw.cpp`: an ImPlot density + viewport
+> markers + the adopted doc-14 T5 `ImZoomSlider` window control, context-guarded to
+> a text ratio under the null backend) and the Loom minimap (an `ImDrawList`
+> backdrop behind the Loom's own `ImZoomSlider`, `fabric_imgui.cpp`) both draw the
+> whole trace with the current viewport marked and route a click through
+> `dt_nav_go` (a new optional `go` on `draw_loom`). Closes doc-14 T5's "not yet
+> wired" overview-strip / timeline-windowing follow-on.
 
 **Goal.** An always-visible strip that draws the **whole trace** with the current
 viewport marked, on both the timeline and the Loom, with click-to-jump routed

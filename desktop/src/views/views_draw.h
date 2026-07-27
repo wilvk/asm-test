@@ -61,6 +61,17 @@ void draw_progress(LongOp &op);
 void draw_canvas(const dt_canvas &c);
 void draw_timeline(const dt_timeline &t);
 
+// The always-visible timeline overview/minimap strip (21-spine-navigation.md T3,
+// completing 14-quick-wins.md T5). Draws the whole-trace density (ImPlot when a
+// context exists, a text ratio otherwise) with the current viewport `[*lo,*hi]`
+// marked, then the ImZoomSlider window control that writes `*lo`/`*hi` back (step
+// space). A click on the strip calls `jump(step)` with the step under the cursor
+// — the caller routes it through dt_nav_go, so a minimap click and a typed go-to
+// land identically (D4). `nsteps` is the recording's dataflow step count.
+void draw_timeline_overview(const dt_timeline &t, uint32_t nsteps, double *lo,
+                            double *hi,
+                            const std::function<void(uint32_t)> &jump);
+
 // The register time-travel scrubber (09-teaching-producers.md T3). `idx` is the
 // shared step index; `playhead` is owned by the caller and moved by the slider
 // and the `[` / `]` step keys (04's bindings). Returns the (possibly changed)

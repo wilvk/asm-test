@@ -8,6 +8,32 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A command palette (`Ctrl+Shift+P` / `Ctrl+P`) over the `dt_nav_go` router**
+  (docs/internal/gui/21-spine-navigation.md T1). A modal fuzzy finder that makes
+  the whole spine reachable by typing: view-switch, go-to step/offset/link,
+  open-recent (the open workspace), attach-a-process, run-walkthrough,
+  reset-layout, and jump-to-a-recorded-offset — every command dispatching only
+  through `dt_nav_go` (or the exact `want_view`/`show_*` intent the keymap uses),
+  plus a discoverable hint for every advertised accelerator, enumerated from
+  `dt_nav_bindings()` so the palette can never advertise a key the app does not
+  honour. Filtered with the "showing N of M" idiom (app-only ImSearch relevance,
+  degrading to an unranked list under the null backend). No new dependency.
+- **A persistent wayfinding breadcrumb** (recording ▸ session ▸ view +
+  step/filter/process scope) with same-basename disambiguation
+  (docs/internal/gui/21-spine-navigation.md T2). Sourced from `nav.current` and
+  drawn in the outer shell (the docked menu bar / the windowed top strip) so it is
+  visible from every pane; two same-basename `.asmtrace` files are now
+  distinguishable in both the band and the recording tab titles (basename + the
+  shortest distinguishing parent-dir segment, else a short path hash). Builds on
+  the doc-18 back/forward affordance; the empty state prompts rather than blanks.
+- **An always-visible overview/minimap on the timeline and the Loom** (whole
+  trace, current viewport marked, click-to-jump) (docs/internal/gui/21-spine-
+  navigation.md T3). A compressed projection of each recording's own rows —
+  never a fabricated or padded layout (docs 04/08 ban; a sparse trace yields a
+  sparse strip, tested) — with the click routed through `dt_nav_go` so a minimap
+  click and a typed go-to land identically. Completes the doc-14 T5 overview-strip
+  / timeline-windowing follow-on (the `ImZoomSlider` now drives a real timeline
+  window). No new dependency (ImPlot, ImZoomSlider already vendored).
 - **Derivable `severity` honesty-chrome tier in the `.asmtrace` schema**
   (docs/internal/gui/23-graded-truth-layer.md T1). An optional `provenance.severity`
   string (`neutral | caution | integrity`) names the tier a reader renders a
