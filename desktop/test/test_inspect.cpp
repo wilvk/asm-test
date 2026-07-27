@@ -480,12 +480,42 @@ static void test_toasts() {
           "a failed save should raise an Error toast, not a Success");
 }
 
+// The split "paused" state (23 T3, F23): operator pause and budget block are
+// DISTINCT model states with disjoint action sets, and a Queue never auto-swaps.
+static void test_patchbay() {
+    // Free: nothing paused, the jack is available.
+    check("patch/free", patch_mode(false, true) == PatchMode::Free,
+          "no pause + allowed -> Free");
+    // Operator pause -> its ONLY recovery is Resume.
+    PatchMode op = patch_mode(true, true);
+    check("patch/operator", op == PatchMode::OperatorPaused,
+          "the operator paused -> OperatorPaused, distinct from a budget block");
+    PatchActions oa = patch_actions(op);
+    check("patch/operator-actions",
+          oa.resume && !oa.swap && !oa.queue && !oa.cancel,
+          "an operator pause offers ONLY Resume");
+    // Budget block -> Swap / Queue / Cancel, and NOT Resume.
+    PatchMode bl = patch_mode(false, false);
+    check("patch/budget", bl == PatchMode::BudgetBlocked,
+          "the jack is held -> BudgetBlocked, distinct from an operator pause");
+    PatchActions ba = patch_actions(bl);
+    check("patch/budget-actions",
+          !ba.resume && ba.swap && ba.queue && ba.cancel,
+          "a budget block offers Swap / Queue / Cancel — never a bare Resume");
+    // The two states are never the same: an operator pause is not a budget block
+    // even if the jack also happens to be held (operator pause dominates the
+    // label the user reads — they paused it themselves).
+    check("patch/distinct", patch_mode(true, false) == PatchMode::OperatorPaused,
+          "an operator pause reads as its own state, never the budget block");
+}
+
 int main(void) {
     test_attach();
     test_evidence();
     test_front_door();
     test_progress();
     test_toasts();
+    test_patchbay();
     if (failures) {
         std::fprintf(stderr, "test_inspect: %d FAILURE(S)\n", failures);
         return 1;

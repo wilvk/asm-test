@@ -46,6 +46,11 @@ struct SceneView {
     space::ConvergenceSet conv;
     space::Terrain slice;          // the cached terrain slice for `slice_t`
     uint64_t slice_t = UINT64_MAX; // the t `slice` was cut at (invalid => none)
+    // The 3D scrub's degrade-to-coarse state (23-graded-truth-layer.md T4):
+    // `scrub_pending` marks a re-slice deferred because the full slice would
+    // exceed the frame budget — the coarse plane renders this frame and the full
+    // slice lands next, instead of a silent UI-thread stall.
+    bool scrub_pending = false;
     scene3d::Camera cam;
     scene3d::HudState hud;
     bool nav_dragging = false; // a left-drag is orbiting (suppresses the pick)

@@ -189,6 +189,27 @@ int main() {
         check("scrubbing the terrain is well under budget", ms < 500.0,
               "1200 slices took " + std::to_string(ms) + " ms");
         (void)sink;
+
+        // --- the 3D-scrub degrade target (23 T4): coarse_slice() ------------
+        // A flat plane the size of the projection, no per-cell work — what the
+        // scrub renders while a full slice would exceed the frame budget. It is
+        // the same dims as a real slice, all heights zero (a labelled coarse
+        // plane, NOT a measured zero — the pane draws scrub_degrade_note beside
+        // it), and carries no TORN flag for this complete recording.
+        Terrain coarse = m.coarse_slice();
+        Terrain full2 = m.full();
+        check("coarse/same-dims",
+              coarse.w == full2.w && coarse.h == full2.h &&
+                  coarse.height.size() == full2.height.size(),
+              "the coarse plane is the same size as a real slice");
+        check("coarse/flat", nonzero(coarse) == 0,
+              "the coarse plane is flat — the full detail loads next frame");
+        bool any_flag = false;
+        for (uint32_t f : coarse.flags)
+            if (f != 0u)
+                any_flag = true;
+        check("coarse/no-torn-when-clean", !any_flag,
+              "a complete recording's coarse plane carries no TORN flag");
     }
 
     // === Fixture B: a truncated recording sets TORN =======================

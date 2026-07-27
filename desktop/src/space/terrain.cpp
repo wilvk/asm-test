@@ -317,5 +317,18 @@ Terrain TerrainModel::slice(uint64_t t) const {
     return out;
 }
 
+Terrain TerrainModel::coarse_slice() const {
+    // A flat plane the size of the projection, no per-cell work: the degrade
+    // target for an over-budget scrub (T4). Carries the torn flag globally so the
+    // degraded frame is labelled, never a silent measured zero (D7).
+    Terrain out;
+    out.w = w;
+    out.h = h;
+    const size_t n = static_cast<size_t>(w) * h;
+    out.height.assign(n, 0.0f);
+    out.flags.assign(n, torn ? TF_TORN : 0u);
+    return out;
+}
+
 } // namespace space
 } // namespace asmdesk

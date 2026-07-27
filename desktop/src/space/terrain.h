@@ -95,6 +95,15 @@ struct TerrainModel {
     Terrain slice(uint64_t t) const;
     // The whole recording (t past the last step).
     Terrain full() const { return slice(UINT64_MAX); }
+
+    // The degrade-to-coarse plane for the 3D scrub (23-graded-truth-layer.md T4):
+    // a FLAT plane (no per-cell binary searches over the potentially huge
+    // code/data cell lists), carrying the torn flag so it is never a silent zero.
+    // O(plane) instead of O(touched cells) — the caller renders THIS while a full
+    // slice() would exceed the frame budget (should_degrade), then swaps to the
+    // full slice when it lands. It is the same labelled coarse rung the terrain
+    // shows normally, so degrading to it hides nothing (D7).
+    Terrain coarse_slice() const;
 };
 
 // Build the terrain model for a recording over an already-built projection

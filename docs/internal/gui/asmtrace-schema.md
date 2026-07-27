@@ -752,3 +752,55 @@ carries the truncation honestly: `"truncated":true` and the evicted count in
 the missing prefix as a torn edge — never as step 0. A recording with no
 `regstate` events simply had the ring disarmed (`--steps` defaults to 0), the
 normal case.
+
+## `severity` — the derivable honesty-chrome tier (optional)
+
+> **Owned by [01-asmtrace-format.md](01-asmtrace-format.md)**, appended under this
+> file's D5 append-only rule at the request of
+> [23-graded-truth-layer.md](23-graded-truth-layer.md) (T1, F5). It adds ONE
+> **optional** provenance field, **derivable** from fields this schema already
+> carries, and **no new envelope major** and **no field to any existing kind**.
+> The field GRADES how loud a reader renders honesty chrome; it gates **no truth
+> off** — every honesty field still renders regardless of the tier (D7). Because
+> it is derivable and optional, an old recording with no `severity` still grades:
+> a reader computes the tier from the honesty facts. **01 owner sign-off: recorded
+> 2026-07-27 (the Phase-3-freeze checkpoint, D5).**
+
+```json
+{"backend":"ptrace-syscalls","exact":true,"trust":"exact","severity":"neutral"}
+```
+
+An optional `provenance` string, one of `"neutral" | "caution" | "integrity"`,
+naming the tier a reader renders this recording's honesty chrome at. It is the
+**dominant** (loudest) tier over the recording's active honesty signals.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `severity` | str | no | `"neutral"` \| `"caution"` \| `"integrity"` — the honesty-chrome tier. Absent → the reader **derives** it (below). |
+
+**The tier is derivable.** A reader that does not find `severity` computes it from
+the existing honesty fields, so grading is a property of the data, not of the
+producer:
+
+- **integrity** — the recording is **torn** (no `end` footer), a **mixed-basis
+  refusal**, or a **drop on an EXACT capture** (`drops.lost > 0` / `throttled`
+  with `exact:true` — its addresses become UNKNOWN). Rendered loud (red) and
+  **non-collapsible**, exactly as the refusal path always was.
+- **caution** — **truncated-but-usable** (`end.truncated:true` with a usable
+  prefix, not torn) or a **paused gap** (`paused_dropped`). Rendered amber, and a
+  reader **may collapse** it to a chip after first read (its text is unchanged, so
+  it is never gone).
+- **neutral** — a **skip** (a successful session with nothing to report,
+  schema:98), a **statistical** survey (`trust:"statistical"`, including one that
+  dropped — sampling drops are expected and the survey never claimed
+  completeness), **redacted-by-policy** (`redacted:true`), a **bounded window**,
+  or the **coarse-provenance rung**. Rendered as a quiet chip, no warn colour.
+
+When the field IS present it is honoured verbatim (a producer that graded at
+capture time overrides the derivation). Two readings must never disagree, so a
+producer that emits `severity` MUST emit the tier its own honesty fields derive
+to. The rule is the same one `codeimage` states: a reader that gets it wrong is
+silently wrong. The reference mapper is
+[`honesty_severity`](../../../desktop/src/ui/honesty.h) — pure, derivable, and
+pinned against the committed dishonesty fixtures
+([tests/golden-asmtrace/dishonest/](../../../tests/golden-asmtrace/dishonest/)).

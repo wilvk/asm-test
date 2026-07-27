@@ -101,9 +101,18 @@ struct BudgetDecision {
 BudgetDecision budget_can_start(LiveMode want,
                                 const std::vector<LiveMode> &active);
 
-// The UI string for an occupied jack — "paused — another live view holds the
-// tracer", naming the holder. Empty when nothing blocks.
+// The UI string for an occupied jack — "BLOCKED — jack held by <session>",
+// naming the holder (23-graded-truth-layer.md T3, F23). It reads BLOCKED, never
+// "paused": the bare word "paused" used to name BOTH this budget preemption and
+// an operator pause, and their recoveries are disjoint. The caller appends "on
+// <target>". Empty when nothing blocks.
 std::string budget_blocked_label(const BudgetDecision &d);
+
+// May a QUEUED want start now (23-graded-truth-layer.md T3)? True exactly when
+// the jack is genuinely free (budget_can_start allows). The Queue path polls this
+// and fires only when it flips true — never an auto-swap, so the one-ptrace-jack
+// invariant is never bypassed.
+bool budget_queue_ready(LiveMode queued, const std::vector<LiveMode> &active);
 
 } // namespace asmdesk
 #endif // ASMDESK_LIVE_BUDGET_H

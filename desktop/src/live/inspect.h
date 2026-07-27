@@ -68,6 +68,53 @@ std::vector<SessionToast> live_session_toasts(const FeedbackInputs &prev,
                                               const FeedbackInputs &cur);
 
 // ---------------------------------------------------------------------------
+// the patch bay's two distinct states (23-graded-truth-layer.md T3, F23)
+// ---------------------------------------------------------------------------
+//
+// The bare word "paused" named TWO states with disjoint recoveries: an OPERATOR
+// pause (whose only recovery is Resume) and a budget PREEMPTION (another view
+// holds the ptrace jack — Swap / Queue / Cancel). Neither recovery was offered
+// at the state. These pure functions split them so the distinction + the right
+// action set are asserted with no live target — the states are model-checked, the
+// click flow can then use the doc-17 interaction lane.
+
+enum class PatchMode {
+    Free,           // nothing blocks and the operator has not paused
+    OperatorPaused, // the operator hit Pause — recovery is Resume, nothing else
+    BudgetBlocked,  // the jack is held by another view — Swap / Queue / Cancel
+};
+
+// Classify the patch bay. Operator pause and budget block are DISTINCT and never
+// conflated: an operator pause is a deliberate hold the user can Resume; a budget
+// block is a fact about the kernel's one-tracer rule. `budget_allowed` is
+// budget_can_start(...).allowed (kept a bool so this needs no budget link).
+inline PatchMode patch_mode(bool operator_paused, bool budget_allowed) {
+    if (operator_paused)
+        return PatchMode::OperatorPaused;
+    if (!budget_allowed)
+        return PatchMode::BudgetBlocked;
+    return PatchMode::Free;
+}
+
+// The action set each state offers — the whole point of splitting them is that
+// the recoveries do not overlap. Operator pause offers ONLY Resume; a budget
+// block offers Swap / Queue / Cancel and NEVER an auto-swap.
+struct PatchActions {
+    bool resume = false; // operator pause -> Resume
+    bool swap = false;   // budget block -> Swap (a named two-step confirm)
+    bool queue = false;  // budget block -> Queue (a cancellable chip)
+    bool cancel = false; // budget block -> Cancel
+};
+inline PatchActions patch_actions(PatchMode m) {
+    PatchActions a;
+    if (m == PatchMode::OperatorPaused)
+        a.resume = true;
+    else if (m == PatchMode::BudgetBlocked)
+        a.swap = a.queue = a.cancel = true;
+    return a;
+}
+
+// ---------------------------------------------------------------------------
 // 1. attachability
 // ---------------------------------------------------------------------------
 

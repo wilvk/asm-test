@@ -8,6 +8,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Derivable `severity` honesty-chrome tier in the `.asmtrace` schema**
+  (docs/internal/gui/23-graded-truth-layer.md T1). An optional `provenance.severity`
+  string (`neutral | caution | integrity`) names the tier a reader renders a
+  recording's honesty chrome at. It is **derivable** from the honesty fields the
+  schema already carries (torn / truncated / trust / redacted / skip / basis /
+  drops), so a producer need not emit it and every old recording still grades;
+  additive, no new envelope major, no field on any existing kind. Landed under doc
+  01's append-only rule with **01-owner sign-off recorded in the schema doc** (the
+  Phase-3-freeze checkpoint, D5). It grades *loudness*; it gates no truth off (D7).
+- **A uniform elapsed-time + Cancel busy signal on long operations, and a
+  degrade-to-coarse 3D scrub** (docs/internal/gui/23-graded-truth-layer.md T4).
+  `progress.h` grows a pure `LongOp` (elapsed clock + honest determinate-vs-
+  indeterminate mode + observable cancel flag) and a `draw_progress` half, so an op
+  that can exceed a frame shows a spinner + elapsed + Cancel instead of a silent
+  UI-thread stall an expert would mistake for a hang. The 3D scrub degrades to the
+  labelled coarse terrain plane (a pure `should_degrade` decision + `coarse_slice`)
+  while a full re-slice would exceed the frame budget, then swaps to the full slice
+  — the coarse plane is the same labelled rung the terrain shows normally, so it
+  hides nothing. The no-fabricated-total honesty rule is unchanged.
+- **A Queue path on the live patch bay** (docs/internal/gui/23-graded-truth-layer.md
+  T3). A blocked capture can be **queued** as a visible, cancellable chip; it starts
+  automatically the moment the jack frees — and only then (never an auto-swap, so
+  the one-ptrace-jack invariant is never bypassed).
+
 - **In-app term registry, per-view "?" caveats, domain-term-first headings, and a
   searchable Terms pane** (docs/internal/gui/24-one-visual-language.md T3). The
   coined GUI lexicon (Loom, fabric, patch-bay, hollow span, born-untraced,
@@ -2238,6 +2262,34 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Honesty chrome is now a graded 3-tier system over a derivable `severity`
+  field** (docs/internal/gui/23-graded-truth-layer.md T1, F5). The proliferating
+  honesty forms — a redaction placard, a statistical chip, a coarse chip, a
+  bounded-window note and a torn banner, all equally loud and non-collapsible —
+  collapse into ONE vocabulary: one banner, one inline chip, one glyph set, with
+  mandated placement (a banner is pane-top, a chip is on a header row, enforced by
+  the component API). Loudness follows the schema's own severity gradient:
+  **neutral** (skip / statistical / redacted / coarse / bounded) is a quiet chip;
+  **caution** (truncated-but-usable / paused gap) is an amber banner that collapses
+  to its chip after first read; **integrity** (torn / mixed-basis refusal / a drop
+  on an exact capture) is a loud red banner that never collapses. This restructures
+  the honesty layer and removes no truth — every field still renders, graded
+  against the committed dishonesty fixtures (D7).
+- **The live session-end state is now a persistent, cause-distinguished in-pane
+  placard with an inline fix** (docs/internal/gui/23-graded-truth-layer.md T2, F20).
+  The single collapsed "ended" is fanned into its cause — stopped-clean, torn (host
+  crashed), torn (EOF), or a PROTOCOL-MISMATCH (a stale `build/asmspy` that printed
+  a usage banner and exited 0) — each with the trust of the on-screen data, and the
+  protocol-mismatch placard carries the verbatim one-line fix (`make cli`;
+  Disconnect + reconnect). It persists across frames until the next Connect/Start;
+  toasts (doc 16) supplement it, never replace it.
+- **"Paused" is split into an operator pause and a budget block**
+  (docs/internal/gui/23-graded-truth-layer.md T3, F23). The bare word named two
+  states with disjoint recoveries; now an operator pause reads "PAUSED (you) —
+  Resume" and a budget preemption reads "BLOCKED — jack held by \<session\> on
+  \<target\>" with explicit **Swap** (a named two-step confirm), **Queue** (a
+  cancellable chip that starts when the jack frees), and **Cancel**. No path
+  auto-swaps without confirmation.
 - **CVD-safe categorical palette + a second channel on every colour-coded
   distinction** (docs/internal/gui/24-one-visual-language.md T2). Every categorical
   distinction now also carries a NON-colour channel so ~5% of users who cannot

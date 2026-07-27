@@ -338,6 +338,49 @@ background at the smallest font, and the caution amber (`dt_warn`) is
 **large-text-only** (`dt_warn_large_text_only()`), confined to headers and
 banners. `test_cvd` asserts all of this on the model, never on pixels.
 
+## Graded honesty chrome — one vocabulary, three tiers
+
+Honesty chrome used to proliferate: a redaction placard, a statistical chip, a
+coarse-provenance chip, a bounded-window note and a torn banner all rendered
+equally loud and non-collapsible, so the one signal that means *"do not trust the
+tail of this data"* drowned among four that mean *"this is normal"* (F5). It is
+now **one banner, one inline chip, one glyph set**, graded into three tiers whose
+loudness follows the schema's own severity gradient (23 T1). The pure grader is
+[`ui/honesty.h`](src/ui/honesty.h) (`honesty_severity`), pinned against the
+committed dishonesty fixtures; the tier's colours come from the semantic palette
+above (no new literals), and each tier also carries a **Codicon glyph + a text
+token**, so the tier never rides on colour alone.
+
+| Tier | Signals | Chrome | Colour | Collapsible |
+|---|---|---|---|---|
+| **neutral** | skip=success · coarse rung · bounded window · redacted-by-policy · statistical | quiet **chip** on the stream header | `dt_maybe` (no warn colour) | already minimal |
+| **caution** | truncated-but-usable · paused gap | **banner** (pane-top) | `dt_warn` amber | to its chip after first read (never gone) |
+| **integrity** | torn (no `end`) · mixed-basis refusal · a drop on an EXACT capture | **banner** (pane-top), loud | `dt_refuse` red | **never** |
+
+**Placement is enforced by the API**, not by discipline: `draw_honesty_banner`
+is the pane-top placard a pane calls at the top, `draw_honesty_chip` is the inline
+mark a header calls — so a T3 integrity signal cannot be placed as a quiet chip.
+The grading **restructures, it removes no truth** (D7): every honesty field still
+renders, a statistical survey that dropped still surfaces its `lost`/`throttled`
+drop record, and the integrity tier is exactly as non-dismissable as the refusal
+path always was. The derivable `severity` schema field records the tier on the
+wire when a producer grades at capture time (see the schema's `severity` section).
+
+## A uniform busy signal on every long op
+
+Any operation that can exceed a frame budget — a PT decode, a symbol/codeimage
+load, a terrain/trajectory rebuild, the growing live stream — shows the same
+honest busy signal (23 T4): a spinner or (only with an honest total) a real
+fraction, **elapsed time**, and a **Cancel**, so an expert never has to guess
+whether the tool is working or hung. The decision half is pure
+([`ui/progress.h`](src/ui/progress.h), `LongOp`); the honesty rule is unchanged —
+an op with no honest total gets the indeterminate spinner, never a fabricated
+percentage. The **3D scrub degrades to the labelled coarse terrain plane** (a pure
+`should_degrade` decision + `TerrainModel::coarse_slice`) while a full re-slice
+would exceed the frame budget, then swaps to the full slice — the coarse plane is
+the same labelled rung the terrain shows normally, so degrading to it hides
+nothing (never a silent UI-thread stall).
+
 ## Words: the term registry, headings and the Terms pane
 
 The GUI's coined lexicon is defined once — in the Sphinx glossary
@@ -762,12 +805,21 @@ one tracer, and every ptrace view SEIZEs either all of the target's threads or
 the one free slot — AMD IBS-Op reads out of band, attaches nothing, and can run
 alongside anything.
 
-So an occupied jack renders *"paused — another live view holds the tracer"*
-naming the holder and what it is doing, and starting a second view offers an
-explicit **swap** — never a silent one, because a swap stops someone else's
-capture. The serve loop refuses a concurrent `start` too, but that refusal is a
-backstop: the point of deciding client-side is that the user sees an occupied
-jack instead of pulling a lever that returns an error.
+**Two states the bare word "paused" used to conflate, now split** (23 T3, F23),
+because their recoveries are disjoint:
+
+- an **operator pause** reads **"PAUSED (you) — Resume"**: emission is suspended
+  (tracing is not), and the only recovery is Resume.
+- a **budget block** reads **"BLOCKED — jack held by \<session\> on \<target\>"**:
+  another view holds the tracer. Its three explicit recoveries are **Swap** (a
+  named two-step confirm that says exactly what detaches — never silent, because a
+  swap stops someone else's capture), **Queue** (a visible, cancellable chip that
+  starts the queued mode automatically the moment the jack frees — and only then,
+  never an auto-swap), and **Cancel**.
+
+The serve loop refuses a concurrent `start` too, but that refusal is a backstop:
+the point of deciding client-side is that the user sees an occupied jack instead
+of pulling a lever that returns an error.
 
 ### Seeing why not
 
@@ -836,6 +888,14 @@ never-ran candidate walk) be tested *on demand* rather than by luck. The real
 serve section of `make cli-smoke`.
 
 ### Troubleshooting a live session
+
+**The app now reads this table for you.** When a session ends, a persistent
+in-pane placard (23 T2, F20) names the cause it derives from the live status — a
+clean stop, a torn drop (host crashed / EOF), or a **PROTOCOL-MISMATCH** (the
+stale-`asmspy` case below) — states the trust of the data on screen, and for a
+protocol mismatch renders the verbatim one-line fix (`make cli`; Disconnect +
+reconnect). It persists until the next Connect/Start; a toast supplements it but
+never replaces it. This section is the long-form reference behind that placard.
 
 The **session state line** is the first thing to read, and its four values point
 at different problems:

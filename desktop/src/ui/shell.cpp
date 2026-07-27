@@ -29,6 +29,7 @@
 #include "space/projection.h"
 #include "ui/legend.h" // shared semantic legend (24 T1/T2)
 #include "ui/terms.h"  // domain-term-first headings + Terms pane (24 T3)
+#include "ui/theme.h"  // dt_maybe_col — the coarse-scrub degrade note (23 T4)
 #include "views/abixray.h"
 #include "views/views_draw.h"
 
@@ -342,11 +343,27 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     sv.hud.req_reset_view = sv.hud.req_top_down = false;
 
     // Re-slice the terrain when the playhead moved (or on first build). O(touched
-    // cells), far under frame budget for a golden recording (T2 step 3).
+    // cells), far under frame budget for a golden recording (T2 step 3) — but a
+    // pathologically large terrain can exceed it, and a synchronous full slice
+    // there would STALL the UI thread with no busy signal (F21). So the scrub
+    // DEGRADES to the labelled coarse plane for the in-flight frame (23 T4),
+    // showing progress, then lands the full slice next frame. The coarse plane is
+    // the same labelled rung the terrain shows normally, so this hides nothing
+    // (D7). The budget is generous — a golden-sized terrain never degrades.
+    static const uint64_t kScrubCellBudget = 200000;
     if (sv.slice_t != sv.hud.t) {
-        sv.slice = sv.terr.slice(sv.hud.t);
-        sv.slice_t = sv.hud.t;
+        const uint64_t cells = sv.terr.code.size() + sv.terr.data.size();
+        if (!sv.scrub_pending && should_degrade(cells, kScrubCellBudget)) {
+            sv.slice = sv.terr.coarse_slice(); // cheap, labelled coarse
+            sv.scrub_pending = true;           // finish the full slice next frame
+        } else {
+            sv.slice = sv.terr.slice(sv.hud.t); // the full slice lands
+            sv.slice_t = sv.hud.t;
+            sv.scrub_pending = false;
+        }
     }
+    if (sv.scrub_pending)
+        ImGui::TextColored(dt_maybe_col(), "%s", scrub_degrade_note());
     sv.hud.playhead_moved = false;
 
     // No plane to draw without regions — say so, never a blank void.

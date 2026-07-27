@@ -20,6 +20,7 @@
 
 #include <time.h>
 
+#include "live/end_state.h"
 #include "live/session.h"
 #include "views/tree.h"
 
@@ -395,9 +396,101 @@ static void test_process_path() {
     }
 }
 
+// The persistent, cause-distinguished session-end placard (23 T2, F20): the
+// single collapsed `Ended` is fanned into its four causes, each derivable from
+// the state the machine already keeps. Pure end_cause() — no subprocess needed.
+static void test_end_state() {
+    // StoppedClean: a full session brackets, header, event, `end`, stopped.
+    {
+        LiveSession s;
+        s.feed_line(
+            R"({"k":"session","state":"started","mode":"log","pid":7,"params":{}})");
+        s.feed_line(kHeader);
+        s.feed_line(R"({"k":"syscall","line":"openat(...) = 3"})");
+        s.feed_line(
+            R"({"k":"end","events":1,"truncated":false,"drops":{"lost":0,"throttled":false}})");
+        s.feed_line(
+            R"({"k":"session","state":"stopped","mode":"log","events":1,"reason":"stop"})");
+        EndCause c = end_cause(end_facts_of(s));
+        check("end/clean", c == EndCause::StoppedClean,
+              "a fully bracketed session is a clean stop");
+        check("end/clean-neutral", !end_cause_is_integrity(c),
+              "a clean stop is a neutral placard, not integrity");
+        check("end/clean-no-fix", end_cause_fix(c).empty(),
+              "a clean stop needs no fix line");
+    }
+    // TornEof: a stream that stops with a recording still open (EOF mid-capture),
+    // the host status clean/absent.
+    {
+        LiveSession s;
+        s.feed_line(
+            R"({"k":"session","state":"started","mode":"stream","pid":9,"params":{}})");
+        s.feed_line(kHeader);
+        s.feed_line(R"({"k":"stream","text":"work+0x4 push rbp"})");
+        s.mark_eof();
+        EndCause c = end_cause(end_facts_of(s));
+        check("end/eof", c == EndCause::TornEof,
+              "an EOF mid-capture with a clean host status is a torn EOF");
+        check("end/eof-integrity", end_cause_is_integrity(c),
+              "a torn tail is untrusted -> integrity");
+    }
+    // ProtocolMismatch: a usage-banner host — malformed (non-JSON) output, no
+    // header ever, nothing captured. The overwhelmingly common cause.
+    {
+        LiveSession s;
+        s.feed_line("usage: asmspy [--serve] [options]");
+        s.feed_line("  -h, --help   show this help and exit");
+        s.mark_eof();
+        EndFacts f = end_facts_of(s);
+        check("end/mismatch-facts", f.malformed_lines == 2 && !f.any_recording,
+              "a usage banner is malformed lines with no recording");
+        EndCause c = end_cause(f);
+        check("end/mismatch", c == EndCause::ProtocolMismatch,
+              "malformed output + no header = a non-serve asmspy");
+        std::string fix = end_cause_fix(c);
+        check("end/mismatch-fix-make-cli",
+              fix.find("make cli") != std::string::npos,
+              "the fix must name `make cli`");
+        check("end/mismatch-fix-reconnect",
+              fix.find("reconnect") != std::string::npos,
+              "the fix must name Disconnect + reconnect");
+        check("end/mismatch-integrity", end_cause_is_integrity(c),
+              "a protocol mismatch is loud (integrity)");
+    }
+    // TornHostGone: a non-clean host exit (a crash) leaving a torn recording.
+    // host_status is set by reap() (a subprocess), so this cause is asserted by
+    // constructing the facts — end_cause is pure.
+    {
+        EndFacts f;
+        f.host_exited = true;
+        f.host_status = 139; // SIGSEGV-shaped: a crash, not a clean exit
+        f.any_recording = true;
+        f.torn_recording = true;
+        EndCause c = end_cause(f);
+        check("end/host-gone", c == EndCause::TornHostGone,
+              "a non-clean host exit with a torn tail is a crash");
+        check("end/host-gone-integrity", end_cause_is_integrity(c),
+              "a crash mid-capture is integrity");
+    }
+    // The four placards are DISTINCT strings (the user can tell them apart).
+    {
+        std::string a = end_cause_message(EndCause::StoppedClean);
+        std::string b = end_cause_message(EndCause::TornHostGone);
+        std::string d = end_cause_message(EndCause::TornEof);
+        std::string e = end_cause_message(EndCause::ProtocolMismatch);
+        check("end/distinct",
+              a != b && a != d && a != e && b != d && b != e && d != e,
+              "each cause must render a distinct placard string");
+        check("end/mismatch-nothing-captured",
+              e.find("Nothing was captured") != std::string::npos,
+              "the protocol-mismatch placard must state nothing was captured");
+    }
+}
+
 int main(void) {
     test_state_machine();
     test_process_path();
+    test_end_state();
     if (failures) {
         std::fprintf(stderr, "test_live_session: %d FAILURE(S)\n", failures);
         return 1;

@@ -17,6 +17,7 @@
 #include "live/inspect.h"
 #include "live/ptslice.h"
 #include "live/session.h"
+#include "ui/progress.h" // LongOp — the uniform busy signal (23 T4)
 #include "views/observer_draw.h"
 #include "walkthrough.h"
 
@@ -140,6 +141,22 @@ struct InspectState {
     bool swap_pending = false;
     LiveMode swap_blocker = LiveMode::Log;
     std::string swap_reason;
+
+    // The split "paused" state (23-graded-truth-layer.md T3, F23). `operator_paused`
+    // is set by the Pause button and cleared by Resume — it is the OPERATOR pause,
+    // rendered "PAUSED (you)" and distinct from the budget BLOCK. The Queue path:
+    // `has_queued` stashes `queued_want` as a visible cancellable chip when the
+    // jack is held; when budget_queue_ready(queued_want, active) turns true (the
+    // blocker stopped) the start fires automatically — never an auto-swap, since
+    // Queue only fires on a genuinely free jack.
+    bool operator_paused = false;
+    bool has_queued = false;
+    LiveMode queued_want = LiveMode::Log;
+
+    // The uniform busy signal for the unbounded live stream (23 T4): its elapsed
+    // clock + Cancel. `started_at` is re-armed to 0 between sessions so each
+    // capture times from its own start.
+    LongOp stream_op;
 
     // The perturbation gate (18-breach-stops.md T5, F22): arming a single-step
     // (mode_uses_ptrace) mode dirties the traced page, perturbs timing, and on
