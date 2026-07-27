@@ -190,6 +190,18 @@ $(BUILD)/desktop/app/ui/fonts.o $(BUILD)/desktop/render/ui/fonts.o $(BUILD)/desk
 $(BUILD)/desktop/app/src/main.o $(BUILD)/desktop/render/src/main.o: DESKTOP_CXXFLAGS += $(DESKTOP_FONT_DEFS)
 $(BUILD)/desktop/app/src/main.o $(BUILD)/desktop/render/src/main.o: | $(JBM_HOME)/JetBrainsMono-Regular.ttf $(CODICON_HOME)/codicon.ttf
 
+# Clean-tree fetch ordering (docker/CI): these objects #include addon headers, so
+# they must wait for the addon fetches. A fresh build/ (dockerignored) compiles
+# before the fetch otherwise; an incremental host build masks it (headers already
+# present). These accrue as addons gain users — each addon-header include needs
+# its fetch as an order-only prereq of the including object (additive to any
+# per-object prereq already declared above).
+$(BUILD)/desktop/app/src/main.o $(BUILD)/desktop/render/src/main.o: | $(IMPLOT_HOME)/implot.h $(IMSEARCH_HOME)/imsearch.h
+$(BUILD)/desktop/app/vw/observer_draw.o $(BUILD)/desktop/render/vw/observer_draw.o $(BUILD)/desktop/test/vw/observer_draw.o: | $(IMPLOT_HOME)/implot.h $(TEXTSELECT_HOME)/textselect.hpp
+$(BUILD)/desktop/app/ui/learn_door.o $(BUILD)/desktop/render/ui/learn_door.o $(BUILD)/desktop/test/ui/learn_door.o: | $(IMSEARCH_HOME)/imsearch.h
+$(BUILD)/desktop/app/ui/shell.o $(BUILD)/desktop/render/ui/shell.o $(BUILD)/desktop/test/ui/shell.o: | $(IFD_HOME)/ImGuiFileDialog.h
+$(BUILD)/desktop/app/ui/inspect_door.o $(BUILD)/desktop/render/ui/inspect_door.o $(BUILD)/desktop/test/ui/inspect_door.o: | $(IFD_HOME)/ImGuiFileDialog.h
+
 # --- source basenames --------------------------------------------------------
 DESKTOP_IMGUI_CORE := imgui imgui_draw imgui_tables imgui_widgets
 DESKTOP_IMGUI_BACK := imgui_impl_glfw imgui_impl_opengl3
