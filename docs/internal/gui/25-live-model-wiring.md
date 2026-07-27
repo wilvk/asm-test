@@ -183,9 +183,11 @@ Order: `T1` → (`T2` ∥ `T4`) → (`T3`, `T5`, `T7`) → `T6`.
 ## Out of scope
 
 - **A live register producer.** The Scrubber's `regstate` ring has no serve
-  equivalent; building a native per-step register capture is a separate, larger
-  effort ([09](09-teaching-producers.md) §Out of scope). This brief leaves the
-  Scrubber honestly replay/emulator-only.
+  equivalent; building a live per-step register capture is its own brief —
+  [26-live-regstate-producer.md](26-live-regstate-producer.md) (the serve
+  `--dataflow` engine already `PTRACE_GETREGS` every step, so it is a capture-and-
+  serialize job, not new machinery). This brief leaves the Scrubber honestly
+  replay/emulator-only until 26 lands.
 - **Incremental (non-O(n)) builders.** The rebuild-on-growth matches the Observer
   deck's existing profile; streaming/incremental `decode_streams` /
   `build_step_index` is a later optimization if a hot capture demands it.
