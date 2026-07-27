@@ -187,3 +187,19 @@ surface, is gated on the Wave-1 `mem[]` stream for its rich rung, and is
 prioritized only on demand from the RE/security and perf personas.
 The plan's standing expansion-intake table stays in the plan; each wave item
 lands as a new brief here in the same format.
+
+## UX heuristic review (2026-07-27)
+
+A usability heuristic evaluation of this whole doc set against Nielsen/NN·g's ten
+heuristics and supporting UX sources (Shneiderman, Norman, Tognazzini, ISO
+9241-110; profiler-tool conventions; dataviz accessibility), with a restructuring
+roadmap. 24 confirmed findings (7 major / 15 minor / 2 cosmetic); the recurring
+theme is that the app owns the two hardest IA pieces (one `.asmtrace` format, one
+`dt_nav_go` spine) but hides them behind single-window nested tabs, so most fixes
+are wiring on shipped substrate, not redesign.
+
+- [../plans/desktop-gui-ux-review.md](../plans/desktop-gui-ux-review.md) — the
+  findings (F1–F24), method, severities, strengths, sources.
+- [../plans/desktop-gui-ux-restructure-plan.md](../plans/desktop-gui-ux-restructure-plan.md)
+  — the roadmap: five themes, four waves, and which tracks (13/14/15/16/17) to
+  redirect vs. new briefs to cut.
