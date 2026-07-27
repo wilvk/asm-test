@@ -86,3 +86,7 @@ tarball-sha256  linmath        26211bb  sha256:e5ea6c6da3d78d4afa40d987770331837
 tarball-sha256  imzoomslider   dc25afb98bc3ebe00dfc9a23ba7235fead2ccb1d  sha256:c94e3542f060f2235f1130d3320d16d4c2428c7181201b2779f0e4b3d91a03a3
 # imgui_club / imgui_memory_editor.h (14 T4): one 836-line header (MIT), no tag.
 tarball-sha256  imgui_club     a436e793fe44a2c8e827bfcbf138fcbe11940476  sha256:b0e5a116f3cfe4d220ee014f18d100208e999f25a5184475f360f3dfe5f0bb93
+# ImGuiTextSelect v1.1.6 (14 T6): copy-out for line panes (MIT). PIN v1.1.6 — NOT
+# latest (v1.2.0+ need ImGui 1.92). Release-tag source archive; + its utfcpp dep.
+tarball-sha256  textselect     1.1.6  sha256:41ebb4323697bd2e1bedd3bb52a5abd222e941b9e145896d25741143b31ecec7
+tarball-sha256  utfcpp         4.0.6  sha256:6920a6a5d6a04b9a89b2a89af7132f8acefd46e0c2a7b190350539e9213816c0

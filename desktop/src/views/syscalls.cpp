@@ -91,6 +91,17 @@ const char *obs_syscall_tid_note() {
            "capture";
 }
 
+std::vector<std::string> obs_syscall_copy_lines(const SyscallView &v) {
+    // The payload-FREE lines, one per row ("<idx>  <line>"), for the selectable
+    // copy view (14 T6). Payload-free by schema, so always safe to expose and
+    // copy — the reveal-gated payload is deliberately NOT included here.
+    std::vector<std::string> out;
+    out.reserve(v.rows.size());
+    for (size_t i = 0; i < v.rows.size(); i++)
+        out.push_back(std::to_string(i) + "  " + v.rows[i].line);
+    return out;
+}
+
 std::string obs_syscalls_dump(const SyscallView &v) {
     std::string s;
     if (!v.chrome.banner.empty())

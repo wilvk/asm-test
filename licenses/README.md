@@ -23,6 +23,8 @@ shipped package — are the Pin kits (both versions), Intel SDE, and libdft64
 | `nlohmann-json-LICENSE.MIT` | nlohmann/json (`.asmtrace` reader) — **bundled**: single header fetched + digest-verified, compiled into both desktop binaries | 3.11.3 ([fetch-json.sh](../scripts/fetch-json.sh)) | MIT |
 | `ImGuizmo-LICENSE.txt` | ImZoomSlider (Loom/timeline pan+zoom control, one header from the ImGuizmo repo) — **bundled**: compiled into the desktop binaries (gui 14-T5) | commit dc25afb9 ([fetch-imzoomslider.sh](../scripts/fetch-imzoomslider.sh)) | MIT |
 | `imgui_club-LICENSE.txt` | imgui_memory_editor (interactive codeimage byte view, from ocornut's imgui_club) — **bundled**: one header compiled into the desktop binaries (gui 14-T4) | commit a436e793 ([fetch-imguimemedit.sh](../scripts/fetch-imguimemedit.sh)) | MIT |
+| `ImGuiTextSelect-LICENSE.txt` | ImGuiTextSelect (text selection + copy-out for line panes) — **bundled**: `textselect.cpp` compiled into the desktop binaries (gui 14-T6) | v1.1.6 ([fetch-textselect.sh](../scripts/fetch-textselect.sh)) | MIT |
+| `utfcpp-LICENSE.txt` | utfcpp (UTF-8 header lib ImGuiTextSelect depends on) — **bundled**: header-only, compiled into the desktop binaries (gui 14-T6) | v4.0.6 ([fetch-utfcpp.sh](../scripts/fetch-utfcpp.sh)) | BSL-1.0 |
 
 The DynamoRIO text is captured on first fetch by
 [fetch-dynamorio.sh](../scripts/fetch-dynamorio.sh) (the pinned tarball's own

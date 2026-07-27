@@ -102,5 +102,19 @@ int main() {
 
     vt::golden("obs-syscalls.txt", obs_syscalls_dump(obs_syscalls_build(rec)));
     vt::golden("obs-syscalls-redacted.txt", obs_syscalls_dump(rv));
+
+    // The selectable copy view's line source (14 T6): one payload-free line per
+    // row, and NEVER the reveal-gated payload — even after a reveal.
+    std::vector<std::string> lines = obs_syscall_copy_lines(v);
+    vt::eq("copy lines: one per row", lines.size(), v.rows.size());
+    vt::check("copy line 0 is <idx>  <line>",
+              lines[0].rfind("0  ", 0) == 0 &&
+                  lines[0].find(v.rows[0].line) != std::string::npos,
+              "line 0 was: " + lines[0]);
+    obs_syscall_reveal(rv, 0, true);
+    for (const std::string &ln : obs_syscall_copy_lines(rv)) {
+        vt::check("copy lines never leak payload (1)", !leaks(ln, kSecret1), ln);
+        vt::check("copy lines never leak payload (2)", !leaks(ln, kSecret2), ln);
+    }
     return vt::report("test_obs_syscalls");
 }

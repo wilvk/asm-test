@@ -146,8 +146,11 @@ fetch_tarball() {
     _top="$_stage/${_top%/}"
     rm -rf "$home"; mkdir -p "$home"
     if [ -n "${ADDON_TARBALL_KEEP:-}" ]; then
-        printf '%s\n' "$ADDON_TARBALL_KEEP" | while IFS= read -r rel; do
-            [ -n "$(printf '%s' "$rel" | tr -d '[:space:]')" ] || continue
+        # Word-split on whitespace (KEEP is a space/newline list of relpaths); a
+        # `for` loop (not read-per-line) so a multi-item single line splits too
+        # and `set -e` propagates a failed cp.
+        # shellcheck disable=SC2086
+        for rel in $ADDON_TARBALL_KEEP; do
             mkdir -p "$home/$(dirname "$rel")"
             cp -R "$_top/$rel" "$home/$rel"
         done

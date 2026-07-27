@@ -89,6 +89,11 @@ std::string obs_syscall_reveal_all_prompt(const SyscallView &v);
 // show in place of the control it is not going to draw.
 const char *obs_syscall_tid_note();
 
+// The payload-free lines for the selectable copy view (14-quick-wins.md T6),
+// one per row ("<idx>  <line>"). Payload-free by schema, so safe to copy; the
+// reveal-gated payload is never included. Pure, so it is unit-tested (D4).
+std::vector<std::string> obs_syscall_copy_lines(const SyscallView &v);
+
 std::string obs_syscalls_dump(const SyscallView &v);
 
 } // namespace asmdesk

@@ -6,9 +6,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string_view>
 
 #include "imgui.h"
 #include "imgui_memory_editor.h" // interactive codeimage byte view (14 T4)
+#include "textselect.hpp"        // select + copy for line panes (14 T6)
 
 #include "ui/theme.h"
 #include "views/canvas.h"
@@ -129,6 +131,39 @@ void draw_obs_syscalls(SyscallView &v) {
         }
     }
     ImGui::EndTable();
+
+    // A selectable, copy-able view of the payload-FREE lines (14 T6). TextSelect
+    // needs a uniform sequential block from a child's cursor origin, which the
+    // 3-column table above cannot provide (its selection math would drift over
+    // rows), so the copy view is its own child. Payload-free by schema — the
+    // reveal-gated payload is never copyable here. The lines are a pure, tested
+    // source (obs_syscall_copy_lines); the static TextSelect holds the selection.
+    static std::vector<std::string> copy_lines;
+    copy_lines = obs_syscall_copy_lines(v);
+    if (!copy_lines.empty()) {
+        static TextSelect ts(
+            [](size_t i) -> std::string_view {
+                return i < copy_lines.size() ? std::string_view(copy_lines[i])
+                                             : std::string_view();
+            },
+            []() -> size_t { return copy_lines.size(); });
+        ImGui::SeparatorText("Copy (payload-free lines)");
+        ImGui::BeginChild("syscall-copy", ImVec2(0, 120),
+                          ImGuiChildFlags_Borders, ImGuiWindowFlags_NoMove);
+        for (const std::string &ln : copy_lines)
+            ImGui::TextUnformatted(ln.c_str());
+        ts.update();
+        if (ImGui::BeginPopupContextWindow()) {
+            ImGui::BeginDisabled(!ts.hasSelection());
+            if (ImGui::MenuItem("Copy"))
+                ts.copy();
+            ImGui::EndDisabled();
+            if (ImGui::MenuItem("Select all"))
+                ts.selectAll();
+            ImGui::EndPopup();
+        }
+        ImGui::EndChild();
+    }
 }
 
 // --- T2 ---------------------------------------------------------------------

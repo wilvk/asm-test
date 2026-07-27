@@ -92,6 +92,28 @@ $(BUILD)/desktop/app/vw/observer_draw.o \
 $(BUILD)/desktop/render/vw/observer_draw.o \
 $(BUILD)/desktop/test/vw/observer_draw.o: | $(IMMEMEDIT_HOME)/imgui_memory_editor.h
 
+# ImGuiTextSelect v1.1.6 (14 T6): a COMPILED addon (textselect.cpp) + its utfcpp
+# header dep (<utf8.h>). Uses imgui_internal.h -> compile-probe. PIN v1.1.6 — NOT
+# latest (v1.2.0+ require ImGui 1.92). Its object must link into every binary
+# that links observer_draw.o (its user); those three link sites add it below.
+TEXTSELECT_VERSION ?= 1.1.6
+TEXTSELECT_HOME    ?= $(BUILD)/addons/textselect-$(TEXTSELECT_VERSION)
+UTFCPP_VERSION     ?= 4.0.6
+UTFCPP_HOME        ?= $(BUILD)/addons/utfcpp-$(UTFCPP_VERSION)
+$(TEXTSELECT_HOME)/textselect.cpp $(TEXTSELECT_HOME)/textselect.hpp &: scripts/fetch-textselect.sh scripts/third-party-digests.txt
+	sh scripts/fetch-textselect.sh >/dev/null
+$(UTFCPP_HOME)/source/utf8.h: scripts/fetch-utfcpp.sh scripts/third-party-digests.txt
+	sh scripts/fetch-utfcpp.sh >/dev/null
+DESKTOP_ADDON_INCLUDES += -I$(TEXTSELECT_HOME) -I$(UTFCPP_HOME)/source
+ADDON_PROBE_FLAGS += -DASMDESK_HAVE_TEXTSELECT -I$(TEXTSELECT_HOME) -I$(UTFCPP_HOME)/source
+ADDON_PROBE_DEPS  += $(TEXTSELECT_HOME)/textselect.hpp $(UTFCPP_HOME)/source/utf8.h
+# textselect.cpp compiled per tree (the render-only define is harmless to it).
+# -w: it is vendored third-party code we do not modify; -Wall -Wextra noise from
+# it (sign-compare, unused vars) is not actionable and not ours to fix.
+$(BUILD)/desktop/%/addon/textselect.o: $(TEXTSELECT_HOME)/textselect.cpp | $(TEXTSELECT_HOME)/textselect.hpp $(UTFCPP_HOME)/source/utf8.h $(IMGUI_HOME)/imgui.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
+
 # --- source basenames --------------------------------------------------------
 DESKTOP_IMGUI_CORE := imgui imgui_draw imgui_tables imgui_widgets
 DESKTOP_IMGUI_BACK := imgui_impl_glfw imgui_impl_opengl3
@@ -238,6 +260,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/vw/abixray.o $(BUILD)/desktop/$(1)/vw/abixray_draw.o \
   $(DESKTOP_OBS_PURE:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/$(1)/vw/%.o) \
+  $(BUILD)/desktop/$(1)/addon/textselect.o \
   $(DESKTOP_LOOM_PURE:%=$(BUILD)/desktop/$(1)/lo/%.o) \
   $(DESKTOP_LOOM_DRAW:%=$(BUILD)/desktop/$(1)/lo/%.o) \
   $(BUILD)/desktop/$(1)/src/walkthrough.o $(BUILD)/desktop/$(1)/src/capview.o \
@@ -734,6 +757,7 @@ $(BUILD)/desktop_test_obs_disasm: $(BUILD)/desktop/test/t/test_obs_disasm.o \
 $(BUILD)/desktop_test_obs_draw: $(BUILD)/desktop/test/t/test_obs_draw.o \
     $(DESKTOP_TEST_OBS) \
     $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
+    $(BUILD)/desktop/test/addon/textselect.o \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) \
     $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
     $(DESKTOP_TEST_DA) $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_IG)
@@ -961,6 +985,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/vw/abixray_draw.o \
     $(DESKTOP_TEST_OBS) \
     $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
+    $(BUILD)/desktop/test/addon/textselect.o \
     $(DESKTOP_TEST_LOOM) \
     $(DESKTOP_LOOM_DRAW:%=$(BUILD)/desktop/test/lo/%.o) \
     $(BUILD)/desktop/test/sp/projection.o \

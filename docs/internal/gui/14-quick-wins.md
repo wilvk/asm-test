@@ -284,6 +284,24 @@ internal-header include recipe is in the compile-probe.
 
 ### T6 — ImGuiTextSelect (v1.1.6 + utfcpp): copy-out everywhere  (S, depends on: 12)
 
+> **Implemented 2026-07-27 (syscalls copy view) — green.** Vendored at the
+> corrected pin: **ImGuiTextSelect v1.1.6** (`scripts/fetch-textselect.sh`) +
+> **utfcpp v4.0.6** (`scripts/fetch-utfcpp.sh`, BSL-1.0) — two digest rows, two
+> license captures. Compile-verified on `1.91.9b-docking` (v1.2.0+ do NOT compile
+> — the doc-11 correction holds). This is the **first compiled `.cpp` addon**, so
+> it established that mk pattern: `textselect.cpp` compiles per tree (with `-w` —
+> vendored, not ours to fix) and its object rides the three link sites that carry
+> `observer_draw.o` (app/render via `desktop_app_objs`, `test_obs_draw`,
+> `DESKTOP_TEST_SHELL_OBJ`). **Correct-geometry integration**: TextSelect needs a
+> uniform sequential-line block, which the app's syscall *table* cannot provide
+> (its selection would drift), so the copy view is its own `BeginChild(…NoMove)`
+> over the **payload-free** lines (`obs_syscall_copy_lines`, a pure tested source
+> that never exposes the reveal-gated payload — asserted even after a reveal).
+> Also fixed a `fetch-addon.sh` bug the multi-file tarball KEEP surfaced (it read
+> the space-separated KEEP list as one path). **Remaining T6 scope**: the broad
+> rollout to disasm/capability/diff/completeness needs each to render a
+> uniform-line block (or `enableWordWrap`); noted as a follow-on.
+
 **Goal.** Close the bluntest survey finding — no selection/copy anywhere — with a
 callback-driven text-selection overlay for every line-oriented pane
 (observer syscalls, disasm listings, capability machine-reasons, diff halves,
