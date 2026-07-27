@@ -4,7 +4,16 @@
 // step index) and the y position is its arc lane, both decided by the builder.
 // Nothing here iterates, settles, or randomises, so the same recording draws
 // the same picture on every frame and in every session.
+//
+// Wrapped in an ImGuiEx::Canvas (15-plotting-and-graph-nav.md T2) for pan/zoom:
+// the canvas only transforms the view, so the layered layout above stays
+// deterministic — it just fixes the old unbounded rightward overflow by clipping
+// to the viewport and letting the user navigate. Standalone canvas, no node
+// semantics (the node-editor de-risk step).
+#define IMGUI_DEFINE_MATH_OPERATORS // imgui_canvas.h uses ImRect / math operators
 #include "imgui.h"
+#include "imgui_internal.h"
+#include "imgui_canvas.h"
 
 #include "views/views_draw.h"
 
@@ -41,43 +50,74 @@ void draw_slice_view(const dt_slice_view &v) {
                 v.selected_step ? std::to_string(*v.selected_step).c_str()
                                 : "(none)");
     ImGui::TextDisabled("blue = what produced this value; orange = what it "
-                        "affects; grey = outside both cones");
+                        "affects; grey = outside both cones; drag to pan, wheel "
+                        "to zoom");
 
-    const float col_w = 120.0f, lane_h = 18.0f, node_r = 5.0f;
-    const int max_lane = [&] {
-        int m = 0;
-        for (const dt_slice_edge &e : v.edges)
-            m = e.lane > m ? e.lane : m;
-        return m;
-    }();
-    const float height = lane_h * static_cast<float>(max_lane + 3);
-    ImVec2 origin = ImGui::GetCursorScreenPos();
-    ImDrawList *dl = ImGui::GetWindowDrawList();
-    const float node_y = origin.y + height - lane_h;
+    // A persistent canvas holds the pan/zoom view across frames (single ImGui
+    // context, like the other addon draws). Its viewport is whatever space is
+    // left; the content is navigated, not stretched — so a wide slice no longer
+    // overflows the pane.
+    static ImGuiEx::Canvas canvas;
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    if (avail.x < 16.0f)
+        avail.x = 16.0f;
+    if (avail.y < 16.0f)
+        avail.y = 16.0f;
+    if (canvas.Begin("slice-canvas", avail)) {
+        const float col_w = 120.0f, lane_h = 18.0f, node_r = 5.0f;
+        const int max_lane = [&] {
+            int m = 0;
+            for (const dt_slice_edge &e : v.edges)
+                m = e.lane > m ? e.lane : m;
+            return m;
+        }();
+        const float height = lane_h * static_cast<float>(max_lane + 3);
+        // GetCursorScreenPos is canvas-local here — the canvas has transformed the
+        // coordinate system, so the existing layered drawing is unchanged.
+        ImVec2 origin = ImGui::GetCursorScreenPos();
+        ImDrawList *dl = ImGui::GetWindowDrawList();
+        const float node_y = origin.y + height - lane_h;
 
-    auto x_of_step = [&](uint32_t step) {
-        for (const dt_slice_node &n : v.nodes)
-            if (n.step == step)
-                return origin.x + col_w * static_cast<float>(n.column) + node_r;
-        return origin.x;
-    };
+        auto x_of_step = [&](uint32_t step) {
+            for (const dt_slice_node &n : v.nodes)
+                if (n.step == step)
+                    return origin.x + col_w * static_cast<float>(n.column) +
+                           node_r;
+            return origin.x;
+        };
 
-    for (const dt_slice_edge &e : v.edges) {
-        float x0 = x_of_step(e.from_step), x1 = x_of_step(e.to_step);
-        float y = node_y - lane_h * static_cast<float>(e.lane + 1);
-        ImU32 col = IM_COL32(150, 150, 150, 200);
-        dl->AddLine(ImVec2(x0, node_y), ImVec2(x0, y), col);
-        dl->AddLine(ImVec2(x0, y), ImVec2(x1, y), col);
-        dl->AddLine(ImVec2(x1, y), ImVec2(x1, node_y), col);
+        for (const dt_slice_edge &e : v.edges) {
+            float x0 = x_of_step(e.from_step), x1 = x_of_step(e.to_step);
+            float y = node_y - lane_h * static_cast<float>(e.lane + 1);
+            ImU32 col = IM_COL32(150, 150, 150, 200);
+            dl->AddLine(ImVec2(x0, node_y), ImVec2(x0, y), col);
+            dl->AddLine(ImVec2(x0, y), ImVec2(x1, y), col);
+            dl->AddLine(ImVec2(x1, y), ImVec2(x1, node_y), col);
+        }
+        for (const dt_slice_node &n : v.nodes) {
+            float x = origin.x + col_w * static_cast<float>(n.column) + node_r;
+            dl->AddCircleFilled(ImVec2(x, node_y), node_r, cone_colour(n.style));
+            dl->AddText(ImVec2(x - node_r, node_y + node_r + 2),
+                        cone_colour(n.style), n.label.c_str());
+        }
+        canvas.End();
     }
-    for (const dt_slice_node &n : v.nodes) {
-        float x = origin.x + col_w * static_cast<float>(n.column) + node_r;
-        dl->AddCircleFilled(ImVec2(x, node_y), node_r, cone_colour(n.style));
-        dl->AddText(ImVec2(x - node_r, node_y + node_r + 2),
-                    cone_colour(n.style), n.label.c_str());
+    // Pan on left-drag, zoom on wheel, while the canvas is hovered.
+    if (ImGui::IsItemHovered()) {
+        ImGuiIO &io = ImGui::GetIO();
+        ImVec2 vorigin = canvas.ViewOrigin();
+        float vscale = canvas.ViewScale();
+        if (io.MouseWheel != 0.0f) {
+            float ns = vscale * (io.MouseWheel > 0.0f ? 1.1f : 1.0f / 1.1f);
+            ns = ns < 0.1f ? 0.1f : (ns > 8.0f ? 8.0f : ns);
+            canvas.SetView(vorigin, ns);
+        }
+        if (ImGui::IsMouseDragging(ImGuiMouseButton_Left)) {
+            canvas.SetView(
+                ImVec2(vorigin.x + io.MouseDelta.x, vorigin.y + io.MouseDelta.y),
+                vscale);
+        }
     }
-    ImGui::Dummy(ImVec2(col_w * static_cast<float>(v.nodes.size()),
-                        height + lane_h * 2));
 }
 
 } // namespace asmdesk

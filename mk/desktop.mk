@@ -169,6 +169,22 @@ $(BUILD)/desktop/%/addon/imsearch.o: $(IMSEARCH_HOME)/imsearch.cpp | $(IMSEARCH_
 	@mkdir -p $(@D)
 	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
 
+# imgui_canvas (15 T2): the standalone pan/zoom canvas from the imgui-node-editor
+# tree (fetched by fetch-nodeeditor.sh, pinned in 53b3b6f), for the slice
+# explorer. One compiled TU; uses imgui_internal.h -> compile-probe. The full
+# node editor (T3) reuses this fetch. The .cpp's header includes (imgui_extra_math
+# .h/.inl) resolve via -I after the fetch produces the tree.
+NODEEDITOR_VERSION ?= 021aa0ea
+NODEEDITOR_HOME    ?= $(BUILD)/addons/imgui-node-editor-$(NODEEDITOR_VERSION)
+$(NODEEDITOR_HOME)/imgui_canvas.cpp $(NODEEDITOR_HOME)/imgui_canvas.h &: scripts/fetch-nodeeditor.sh scripts/third-party-digests.txt
+	sh scripts/fetch-nodeeditor.sh >/dev/null
+DESKTOP_ADDON_INCLUDES += -I$(NODEEDITOR_HOME)
+ADDON_PROBE_FLAGS += -DASMDESK_HAVE_IMGUI_CANVAS -I$(NODEEDITOR_HOME)
+ADDON_PROBE_DEPS  += $(NODEEDITOR_HOME)/imgui_canvas.h
+$(BUILD)/desktop/%/addon/imgui_canvas.o: $(NODEEDITOR_HOME)/imgui_canvas.cpp | $(NODEEDITOR_HOME)/imgui_canvas.h $(IMGUI_HOME)/imgui.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
+
 # Fonts + icons (13 F3): JetBrains Mono + Codicons TTFs (loaded at RUNTIME by
 # ui/fonts.cpp via stb_truetype — so they work on every lane, no freetype needed)
 # + IconFontCppHeaders' IconsCodicons.h (compile-time, the ICON_CI_* macros +
@@ -206,6 +222,7 @@ $(BUILD)/desktop/app/vw/observer_draw.o $(BUILD)/desktop/render/vw/observer_draw
 $(BUILD)/desktop/app/ui/learn_door.o $(BUILD)/desktop/render/ui/learn_door.o $(BUILD)/desktop/test/ui/learn_door.o: | $(IMSEARCH_HOME)/imsearch.h
 $(BUILD)/desktop/app/ui/shell.o $(BUILD)/desktop/render/ui/shell.o $(BUILD)/desktop/test/ui/shell.o: | $(IFD_HOME)/ImGuiFileDialog.h
 $(BUILD)/desktop/app/ui/inspect_door.o $(BUILD)/desktop/render/ui/inspect_door.o $(BUILD)/desktop/test/ui/inspect_door.o: | $(IFD_HOME)/ImGuiFileDialog.h
+$(BUILD)/desktop/app/vw/slice_view_draw.o $(BUILD)/desktop/render/vw/slice_view_draw.o $(BUILD)/desktop/test/vw/slice_view_draw.o: | $(NODEEDITOR_HOME)/imgui_canvas.h
 
 # --- source basenames --------------------------------------------------------
 DESKTOP_IMGUI_CORE := imgui imgui_draw imgui_tables imgui_widgets
@@ -373,6 +390,7 @@ desktop_app_objs = \
   $(DESKTOP_OBS_PURE:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/$(1)/vw/%.o) \
   $(BUILD)/desktop/$(1)/addon/textselect.o \
+  $(BUILD)/desktop/$(1)/addon/imgui_canvas.o \
   $(DESKTOP_IMPLOT_OBJ_$(1)) \
   $(BUILD)/desktop/$(1)/addon/imguifiledialog.o \
   $(DESKTOP_LOOM_PURE:%=$(BUILD)/desktop/$(1)/lo/%.o) \
@@ -698,6 +716,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_shell $(BUILD)/desktop_test_golden \
                  $(BUILD)/desktop_test_layout \
                  $(BUILD)/desktop_test_fonts \
+                 $(BUILD)/desktop_test_slice_view_draw \
                  $(BUILD)/desktop_test_slice $(BUILD)/desktop_test_nav \
                  $(BUILD)/desktop_test_projection \
                  $(BUILD)/desktop_test_terrain \
@@ -882,6 +901,7 @@ $(BUILD)/desktop_test_obs_draw: $(BUILD)/desktop/test/t/test_obs_draw.o \
     $(DESKTOP_TEST_OBS) \
     $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
     $(BUILD)/desktop/test/addon/textselect.o \
+    $(BUILD)/desktop/test/addon/imgui_canvas.o \
     $(DESKTOP_IMPLOT_OBJ_test) \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) \
     $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
@@ -1037,6 +1057,13 @@ $(BUILD)/desktop_test_slice_view: $(BUILD)/desktop/test/t/test_slice_view.o \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# The canvas-wrapped slice DRAW (15 T2), null-backend smoke: slice_view_draw.o +
+# canvas_draw.o (draw_banner) + imgui_canvas.o + imgui core.
+$(BUILD)/desktop_test_slice_view_draw: $(BUILD)/desktop/test/t/test_slice_view_draw.o \
+    $(BUILD)/desktop/test/vw/slice_view_draw.o $(BUILD)/desktop/test/vw/canvas_draw.o \
+    $(BUILD)/desktop/test/addon/imgui_canvas.o $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 # The register time-travel scrubber (09-teaching-producers.md T3). The PURE
 # builder links scrubber.o + stepindex.o + the doc model and NOTHING else — no
 # ImGui, no engine — the same engine-free closure proof test_timeline makes, now
@@ -1130,6 +1157,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(DESKTOP_TEST_OBS) \
     $(DESKTOP_OBS_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
     $(BUILD)/desktop/test/addon/textselect.o \
+    $(BUILD)/desktop/test/addon/imgui_canvas.o \
     $(DESKTOP_IMPLOT_OBJ_test) \
     $(DESKTOP_TEST_LOOM) \
     $(DESKTOP_LOOM_DRAW:%=$(BUILD)/desktop/test/lo/%.o) \

@@ -128,6 +128,21 @@ null backend; ImPlot is pinned at `v1.0`; F2's 32-bit indices are in place.
 
 ### T2 — imgui_canvas de-risk for the slice explorer  (S, depends on: 12)
 
+> **Implemented 2026-07-27 — green (53 host suites + clean-tree checked).** The
+> standalone `imgui_canvas` (from the imgui-node-editor tree, master `021aa0ea`,
+> MIT; fetched by `scripts/fetch-nodeeditor.sh`, digest pinned in 53b3b6f;
+> compile-verified on `1.91.9b-docking`; in the compile-probe — `imgui_internal.h`)
+> now wraps `views/slice_view_draw.cpp`. It is a **drop-in**: the canvas transforms
+> the coordinate system, so the existing *layered, deterministic* layout draws
+> unchanged inside `canvas.Begin/End` — no force-directed anything (docs 04/08).
+> Dropping the old space-reserving `Dummy` + clipping to the viewport **fixes the
+> survey's "overflows rightward unboundedly"**; drag pans, wheel zooms (clamped
+> 0.1–8×). **New test coverage**: `test_slice_view_draw` drives the draw headless
+> across frames (imgui_canvas is draw-list-only, so it runs under the null
+> backend) + the empty early-return path — the slice draw had *no* test before.
+> `imgui_canvas.o` rides the `slice_view_draw.o` link sites; the full node editor
+> (T3) reuses this same fetch.
+
 **Goal.** Before pulling the full node-editor, adopt the **standalone
 `imgui_canvas`** (846 LOC; `.h`+`.cpp`) alone to give the draw-only slice
 explorer pan/zoom + input remapping — no node semantics. This is doc 11's
