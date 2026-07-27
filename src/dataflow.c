@@ -48,7 +48,22 @@ void asmtest_valtrace_free(asmtest_valtrace_t *v) {
     free(v->insn_off);
     free(v->recs);
     free(v->wide);
+    free(v->regfile);
     free(v);
+}
+
+bool asmtest_valtrace_arm_regfile(asmtest_valtrace_t *v) {
+    if (v == NULL || v->steps_cap == 0)
+        return false;
+    if (v->regfile != NULL)
+        return true; /* idempotent: a ring is already armed */
+    /* Parallel to insn_off: one pre-state slot per storable step. A failed
+     * allocation is not fatal — the capture proceeds ringless (regfile stays
+     * NULL), exactly the disarmed path, so a low-memory host still gets its value
+     * trace, just no Scrubber deck. */
+    v->regfile =
+        (asmtest_regfile_t *)calloc(v->steps_cap, sizeof(asmtest_regfile_t));
+    return v->regfile != NULL;
 }
 
 void asmtest_valtrace_append(asmtest_valtrace_t *v, uint64_t off,

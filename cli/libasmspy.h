@@ -363,8 +363,15 @@ typedef void (*asmspy_dataflow_sink)(void *ctx, long result,
  * It is now bounded (DFP_ENTRY_WAIT_MS, 10 s; ASMTEST_DF_ENTRY_WAIT_MS overrides,
  * 0 restores the old unbounded behaviour). The guard stays as a backstop: it must
  * now never fire, which is exactly what makes it worth keeping. */
+/* `want_steps` (26 T3): when non-zero, arm the per-step register RING — the engine
+ * captures each in-region instruction's PRE-STATE integer register file (the regs it
+ * already reads every single-step) and the sink emits one `regstate` event per step
+ * under the `user_regs@x86_64/sysv` descriptor, so the desktop Scrubber time-travels
+ * a LIVE capture. Zero (the default) leaves the ring disarmed and the output
+ * byte-identical to before. It is a boolean, orthogonal to `max` (which still bounds
+ * the window): the ring rides over whatever window `max` admits. */
 int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
-                           long max, atomic_bool *stop,
+                           long max, int want_steps, atomic_bool *stop,
                            asmspy_dataflow_sink sink, void *ctx);
 
 /* One executed instruction, formatted "<function+off [module]>  <disasm>". */

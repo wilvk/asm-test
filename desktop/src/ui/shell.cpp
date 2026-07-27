@@ -869,11 +869,17 @@ static void body_observer(ShellState &s, const Recording &r, const Streams *a) {
                 s.status = s.nav.last_error;
         });
 }
+static void shell_live_weave_banner(const ShellState &s); // defined below
 static void body_scrubber(ShellState &s) {
     // The register time-travel scrubber (09-T3). An absent producer draws its own
     // placard (never a register file of zeros), exactly as the standalone draw
     // does. The playhead is the caller's; draw_scrubber returns the moved value.
     dt_view_header("scrubber");
+    // 26 T4: a LIVE regstate ring is the real architectural register file, but
+    // captured perturbingly (single-step) over a still-growing capture — carry the
+    // same perturb+torn caveat the live Loom/Slice show (self-gates to the live
+    // tab). The register VALUES are ground truth; the run is not pristine.
+    shell_live_weave_banner(s);
     size_t i = static_cast<size_t>(s.active_tab);
     if (i < s.stepidx.size())
         s.scrubber_playhead[i] =
@@ -973,7 +979,8 @@ static std::vector<ViewPresence> shell_view_presence(const ShellState &s,
     const ObserverState &obs =
         i < s.observers.size() ? s.observers[i] : kEmptyObs;
     const StepIndex &si = i < s.stepidx.size() ? s.stepidx[i] : kEmptySi;
-    return view_presence(*a, obs, si, r, s.mode, shell_b_attachable(s));
+    bool is_live = s.live_tab >= 0 && s.active_tab == s.live_tab;
+    return view_presence(*a, obs, si, r, s.mode, shell_b_attachable(s), is_live);
 }
 
 // 25 T5: the live-weave banner. While the active tab is the still-growing live

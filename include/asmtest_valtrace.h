@@ -85,6 +85,22 @@ typedef struct at_val_rec {
     uint32_t step;  /* index into insn_off[]; stamped by _append             */
 } at_val_rec_t;
 
+/* One per-step x86-64 INTEGER register file — the PRE-STATE of an executed step,
+ * the LIVE-capture parallel to the emulator's emu_x86_regs_t regstate deck. The 16
+ * GPRs plus rip and rflags, in the SAME field/name order emit_regstate emits
+ * (tools/asmtrace_record.c) and the Scrubber's fixed name order keys on. PURE — no
+ * <sys/user.h> — so this cross-arch header stays dependency-free (dataflow.c
+ * compiles it on every host); the ptrace producer (dataflow_ptrace.c) maps a live
+ * `struct user_regs_struct` into it, folding .eflags -> rflags. The XMM/YMM/FP
+ * vector deck is a v1 omission for BOTH producers alike (a wide value is not a bare
+ * u64, exactly the df_step `wide` limit); the descriptor mechanism absorbs it
+ * later, for both at once. */
+typedef struct asmtest_regfile {
+    uint64_t rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp;
+    uint64_t r8, r9, r10, r11, r12, r13, r14, r15;
+    uint64_t rip, rflags;
+} asmtest_regfile_t;
+
 /* The L0 sink. Zero it (or use asmtest_valtrace_new) and point the three arrays at
  * caller-owned buffers; each fills append-only and flips `truncated` when a buffer
  * overflows — the same honest-overflow contract as asmtest_trace_t. `insn_off`
@@ -97,6 +113,15 @@ typedef struct asmtest_valtrace {
     size_t steps_len;
     uint64_t
         steps_total; /* steps seen (counts past steps_cap)                   */
+
+    /* Optional per-step register RING (09/26 `regstate`): when armed via
+     * asmtest_valtrace_arm_regfile, regfile[i] is the PRE-STATE integer register
+     * file of step i, in lockstep with insn_off[i] for i < steps_len (allocated to
+     * steps_cap). NULL = disarmed, the normal case — nothing captured, one untaken
+     * branch per step. A live ptrace-dataflow producer fills it from the register
+     * file it already reads each step, so the Scrubber time-travels a live capture
+     * exactly as it does an emulator `--steps` recording. */
+    asmtest_regfile_t *regfile;
 
     at_val_rec_t
         *recs; /* flattened operand records, caller-owned                */
@@ -121,6 +146,15 @@ typedef struct asmtest_valtrace {
 asmtest_valtrace_t *asmtest_valtrace_new(size_t steps_cap, size_t recs_cap,
                                          size_t wide_cap);
 void asmtest_valtrace_free(asmtest_valtrace_t *v);
+
+/* Arm the optional per-step register ring (see `regfile` above) on an existing
+ * sink: allocate `regfile` parallel to insn_off (steps_cap entries) so a producer
+ * can record each step's PRE-STATE. Returns true when the ring is armed (or already
+ * was — idempotent), false on a NULL sink, a zero steps_cap, or an allocation
+ * failure (the capture then proceeds RINGLESS — honest, never fatal, `regfile`
+ * stays NULL). The register semantics are x86-64; a non-x86-64 producer simply
+ * never arms it. */
+bool asmtest_valtrace_arm_regfile(asmtest_valtrace_t *v);
 
 /* Append one executed step at instruction offset `off`, copying its `n` operand
  * records and stamping each with the new step index. Append-only + truncate: when

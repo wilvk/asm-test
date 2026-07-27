@@ -101,6 +101,14 @@ size_t asmtrace_df_step_body(char *dst, size_t cap, unsigned step, uint64_t off,
 size_t asmtrace_df_edge_body(char *dst, size_t cap,
                              const asmtest_defuse_edge_t *e);
 
+/* {"desc":"user_regs@x86_64/sysv","values":{rax..r15,rip,rflags}} — one per-step
+ * register-file snapshot for the LIVE ptrace-dataflow `regstate` ring (26). The 16
+ * GPRs + rip + rflags as decimal u64, in the fixed name order the Scrubber keys on;
+ * field-compatible with the emulator's emit_regstate (only the descriptor id
+ * differs, naming the ptrace source). Returns the body length written. */
+size_t asmtrace_regstate_body(char *dst, size_t cap,
+                              const asmtest_regfile_t *r);
+
 /* Write the `end` footer (events / truncated / drops, plus `skip` when
  * `skip_update` carries a non-zero skip_code), flush, and fclose when the
  * writer owns the file. A writer closed WITHOUT this leaves a TORN recording —

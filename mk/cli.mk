@@ -526,6 +526,30 @@ asmtrace-golden asmtrace-golden-check:
 	@echo "#   The committed corpus is authoritative; regenerate it with make docker-cli."
 endif
 
+# test_regstate_parity (26 T5.2) — the load-bearing cross-producer check: one
+# deterministic routine through BOTH the live single-step ptrace producer (regfile
+# ring armed) and the trusted emulator ring, asserting their per-step register files
+# agree on the operand-visible computation registers (rax/rdi/rsi), differing only
+# in the base-dependent rip/rsp (real ASLR vs the emulator's fixed EMU_CODE_BASE).
+# Links both producers — the asmtrace_record emulator objects PLUS the ptrace
+# producer (dataflow_ptrace.o + codeimage.o) — and Unicorn/Capstone. Same
+# x86_64 + libunicorn gate as the golden (ASMTRACE_GOLDEN_OK); a run-time ptrace
+# refusal (seccomp) self-skips honestly.
+$(BUILD)/test_regstate_parity: cli/test_regstate_parity.c \
+                          $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                          $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o \
+                          $(BUILD)/dataflow_emu.o $(BUILD)/dataflow_ptrace.o \
+                          $(BUILD)/codeimage.o $(BUILD)/emu.o $(BUILD)/trace.o \
+                          $(BUILD)/disasm.o | $(BUILD)
+	$(CC) $(CFLAGS) -Iinclude -Icli -pthread $^ \
+	  $(UNICORN_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -o $@
+
+ifneq ($(ASMTRACE_GOLDEN_OK),)
+CLI_REGSTATE_PARITY := $(BUILD)/test_regstate_parity
+else
+CLI_REGSTATE_PARITY :=
+endif
+
 .PHONY: cli-smoke
 ifneq ($(UNAME_S),Linux)
 # Same OS gate as `cli` above: asmspy is a Linux-only ptrace/proc tracer and its
@@ -557,12 +581,15 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/fork_victim $(BUILD)/clone_victim \
            $(BUILD)/sock_victim $(BUILD)/longjmp_victim \
            $(BUILD)/sigcall_victim $(BUILD)/argdecode_victim \
-           $(BUILD)/exit_victim $(CLI_I386_VICTIM)
+           $(BUILD)/exit_victim $(CLI_I386_VICTIM) $(CLI_REGSTATE_PARITY)
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
 	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"
 	@echo "--- asmtrace-golden-check (the committed .asmtrace corpus is byte-stable) ---"
 	@$(MAKE) --no-print-directory asmtrace-golden-check
+	@echo "--- regstate parity (26 T5.2: live ptrace ring == emulator ring, modulo base) ---"
+	@if [ -x "$(BUILD)/test_regstate_parity" ]; then $(BUILD)/test_regstate_parity; \
+	 else echo "# SKIP regstate-parity: needs x86_64 + libunicorn (this host: $(CLI_ARCH))"; fi
 	BUILD=$(BUILD) ASMSPY_HAVE_M32='$(CLI_M32_PROBE)' sh cli/cli_smoke.sh
 endif
 

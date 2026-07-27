@@ -2292,6 +2292,15 @@ static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
         asmtrace_df_step_body(body, sizeof body, (unsigned)s, vt->insn_off[s],
                               dis, &vt->recs[first], cur - first);
         rec_emit(r, "df_step", body);
+        /* 26 T2: when the register ring is armed, one `regstate` per step, right
+         * after its `df_step` and in step order — so the Scrubber pairs them 1:1
+         * and any truncation drops a step's control and register state together.
+         * Disarmed (regfile == NULL, the normal case) nothing is emitted and the
+         * stream is byte-identical to before. */
+        if (vt->regfile != NULL) {
+            asmtrace_regstate_body(body, sizeof body, &vt->regfile[s]);
+            rec_emit(r, "regstate", body);
+        }
     }
     for (size_t i = 0; g && i < g->n; i++) {
         asmtrace_df_edge_body(body, sizeof body, &g->edges[i]);
@@ -2698,7 +2707,7 @@ static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
 
 static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                         int json, int auto_region, const char *module,
-                        sampler_mode_t sampler, const char *record) {
+                        sampler_mode_t sampler, const char *record, int steps) {
     asmspy_symtab_t t;
     rec_t rec;
     if (asmspy_symtab_load(pid, &t) < 0) {
@@ -2775,7 +2784,7 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         /* Copy the name BEFORE the symtab dies: dc.func borrows into `t` (or argv),
          * and the messages below outlive asmspy_symtab_free. */
         snprintf(fname, sizeof fname, "%s", dc.func);
-        rc = asmspy_engine_dataflow(pid, tid, base, len, max, &g_sigstop,
+        rc = asmspy_engine_dataflow(pid, tid, base, len, max, steps, &g_sigstop,
                                     dataflow_render_sink, &dc);
         /* The sw candidate walk: residency's winner can be a function that
          * never re-enters (the picker header's documented hazard), and
@@ -2933,6 +2942,7 @@ typedef struct {
     serve_mode_t mode;
     pid_t pid, tid;
     int follow;
+    int steps; /* dataflow/auto: arm the per-step register ring (26 `--steps`) */
     long max;
     long ms;
     uint64_t base;
@@ -3444,11 +3454,19 @@ static size_t serve_params_json(char *dst, size_t cap,
             em);
         break;
     case SM_TRACE:
-    case SM_DATAFLOW:
         o = (size_t)snprintf(
             dst, cap, "{\"tid\":%d,\"base\":%llu,\"len\":%llu,\"max\":%ld}",
             (int)p->tid, (unsigned long long)p->base,
             (unsigned long long)p->len, p->max);
+        break;
+    case SM_DATAFLOW:
+        /* `steps` advertises whether the register ring is armed — trace has no
+         * such ring, so only dataflow carries it. */
+        o = (size_t)snprintf(
+            dst, cap,
+            "{\"tid\":%d,\"base\":%llu,\"len\":%llu,\"max\":%ld,\"steps\":%s}",
+            (int)p->tid, (unsigned long long)p->base,
+            (unsigned long long)p->len, p->max, p->steps ? "true" : "false");
         break;
     case SM_PROCS:
         o = (size_t)snprintf(dst, cap, "{\"max\":%ld,\"count\":\"%s\"}", p->max,
@@ -3466,11 +3484,12 @@ static size_t serve_params_json(char *dst, size_t cap,
     case SM_AUTO:
         o = (size_t)snprintf(dst, cap,
                              "{\"max\":%ld,\"module\":\"%s\",\"sampler\":"
-                             "\"%s\"}",
+                             "\"%s\",\"steps\":%s}",
                              p->max, em,
                              p->sampler == SAMPLER_IBS
                                  ? "ibs"
-                                 : (p->sampler == SAMPLER_SW ? "sw" : "auto"));
+                                 : (p->sampler == SAMPLER_SW ? "sw" : "auto"),
+                             p->steps ? "true" : "false");
         break;
     default:
         o = (size_t)snprintf(dst, cap, "{}");
@@ -3539,7 +3558,8 @@ static void serve_run_engine(serve_session_t *s) {
     case SM_DATAFLOW:
         serve_codeimage_arm(s);
         s->rc = asmspy_engine_dataflow(p->pid, p->tid, p->base, p->len, p->max,
-                                       &s->stop, serve_dataflow_sink, s);
+                                       p->steps, &s->stop, serve_dataflow_sink,
+                                       s);
         break;
     case SM_AUTO: {
         /* The sw path hands back RANKED candidates and the walk below tries
@@ -3602,7 +3622,8 @@ static void serve_run_engine(serve_session_t *s) {
             s->ci_version = 0;
             serve_codeimage_arm(s);
             s->rc = asmspy_engine_dataflow(p->pid, 0, p->base, p->len, p->max,
-                                           &s->stop, serve_dataflow_sink, s);
+                                           p->steps, &s->stop,
+                                           serve_dataflow_sink, s);
             if (s->rc == ASMSPY_REGION_NEVER_RAN && attempt + 1 < ncand) {
                 /* NEVER_RAN is the bounded entry wait saying this CANDIDATE was
                  * not seen entering — a residency winner that never re-enters
@@ -3807,6 +3828,16 @@ static int serve_parse_start(const char *line, serve_params_t *p,
         }
         p->follow = b;
         has_follow = b;
+    }
+    /* 26 T3: dataflow/auto opt-in for the per-step register ring. Unlike the
+     * emulator's `--steps=N` (which SIZES a drop-oldest ring), this is a BOOLEAN:
+     * it adds the register ring over the window already bounded by "max". */
+    if ((v = sj_find(line, "steps")) != NULL) {
+        if (sj_bool(v, &b) != 0) {
+            *why = "\"steps\" must be true or false";
+            return -1;
+        }
+        p->steps = b;
     }
     if ((v = sj_find(line, "max")) != NULL) {
         if (sj_i64(v, &n) != 0) {
@@ -5643,7 +5674,9 @@ static void dfview_sink(void *ctx, long result, const asmtest_valtrace_t *vt,
 static void *dfview_tracer(void *arg) {
     dfview_t *V = arg;
     tracer_arm_alarm(); /* make the engine's blocked waitpid quit-interruptible */
-    int rc = asmspy_engine_dataflow(V->pid, V->tid, V->rbase, V->rlen, V->max,
+    /* The TUI slicer view is interactive over a frozen COPY, not a recording, so
+     * it never wants the register ring (0). */
+    int rc = asmspy_engine_dataflow(V->pid, V->tid, V->rbase, V->rlen, V->max, 0,
                                     &V->stop, dfview_sink, V);
     pthread_mutex_lock(&V->mu);
     V->rc = rc;
@@ -7098,8 +7131,12 @@ static int usage(const char *argv0) {
         "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n] [--tid=<t>]  live samples "
         "of a function/region (any thread)\n"
         "  %s --dataflow <pid> <sym|0xADDR[:LEN]|--auto> [--json] [--tid=<t>] "
-        "[--max=<n>] [--module=<m>] [--sampler=ibs|sw]  scoped L0 value trace "
-        "+ L1 def-use of one invocation (native targets). --auto picks the "
+        "[--max=<n>] [--module=<m>] [--sampler=ibs|sw] [--steps]  scoped L0 "
+        "value trace + L1 def-use of one invocation (native targets). --steps "
+        "adds a per-step `regstate` register ring over the captured window (the "
+        "already-read pre-state per single-step) so the desktop Scrubber "
+        "time-travels it; a BOOLEAN, unlike the emulator's --steps=<N> ring "
+        "size. --auto picks the "
         "function the target is most often ENTERING right now, sampled out of "
         "band (AMD IBS-Op entry edges where available; elsewhere a portable "
         "software-clock RESIDENCY sampler that walks up to 3 candidates, since "
@@ -7253,11 +7290,14 @@ int main(int argc, char **argv) {
         int auto_region = (strcmp(argv[3], "--auto") == 0);
         sampler_mode_t sampler = SAMPLER_AUTO;
         const char *record = NULL;
+        int steps = 0; /* --steps: arm the per-step register ring (26) */
         for (int i = 4; i < argc; i++) { /* [--json] [--tid=N] [--max=N]
                                           * [--module=M] [--sampler=S]
-                                          * [--record=F], any order */
+                                          * [--record=F] [--steps], any order */
             if (strcmp(argv[i], "--json") == 0)
                 json = 1;
+            else if (strcmp(argv[i], "--steps") == 0)
+                steps = 1;
             else if (strncmp(argv[i], "--record=", 9) == 0)
                 record = argv[i] + 9;
             else if (strncmp(argv[i], "--tid=", 6) == 0) {
@@ -7306,7 +7346,7 @@ int main(int argc, char **argv) {
                            "nothing)",
                            argv[3]);
         return cmd_dataflow(pid, argv[3], tid, max, json, auto_region, module,
-                            sampler, record);
+                            sampler, record, steps);
     }
     if (strcmp(argv[1], "--stream") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)

@@ -3627,7 +3627,7 @@ int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
                                        int *survived, asmtest_valtrace_t *vt);
 
 int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
-                           long max, atomic_bool *stop,
+                           long max, int want_steps, atomic_bool *stop,
                            asmspy_dataflow_sink sink, void *ctx) {
     /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
      * decode below assumes the x86-64 ABI, so on an i386 task this engine does
@@ -3665,6 +3665,12 @@ int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
         free(code);
         return ASMTEST_PTRACE_EUNAVAIL; /* OOM: nothing captured */
     }
+    /* 26 T3: arm the per-step register ring when the caller asked for `--steps`.
+     * The engine is x86-64-fixed here (i386 was refused above), matching the
+     * `user_regs@x86_64/sysv` descriptor's arch; a failed arm leaves the capture
+     * ringless (honest, never fatal). */
+    if (want_steps)
+        asmtest_valtrace_arm_regfile(vt);
 
     long result = 0;
     int survived = 0; /* not yet surfaced to the caller; see asmspy.h note */

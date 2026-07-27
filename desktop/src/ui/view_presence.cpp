@@ -17,7 +17,8 @@ static bool mode_offers(ViewId id, Mode mode) {
 
 std::vector<ViewPresence> view_presence(const Streams &a, const ObserverState &obs,
                                         const StepIndex &si, const Recording &r,
-                                        Mode mode, bool b_attachable) {
+                                        Mode mode, bool b_attachable,
+                                        bool is_live) {
     std::vector<ViewPresence> v;
     auto add = [&](ViewId id, const char *label, bool present,
                    std::string reason, std::optional<dt_view> view) {
@@ -80,11 +81,33 @@ std::vector<ViewPresence> view_presence(const Streams &a, const ObserverState &o
     }
 
     // Scrubber — the register time-travel deck. Present iff a regstate ring was
-    // recorded (the `--steps` opt-in).
-    add(ViewId::Scrubber, "Scrubber", si.present(),
-        "no regstate register ring in this recording (record with --steps to "
-        "carry per-step register files)",
-        std::nullopt);
+    // recorded (the `--steps` opt-in). The absent-reason is GRADED by why the ring
+    // is missing (26 T4): a statistical producer never single-steps, so it can
+    // never carry one; an exact per-step capture simply did not arm it — and a
+    // LIVE one says so in live terms, distinct from a saved emulator recording; a
+    // trace-only recording has no per-step stepping at all.
+    {
+        std::string reason;
+        if (a.statistical)
+            reason = "a statistical (sampled) producer never single-steps, so it "
+                     "records no register ring — the Scrubber needs an exact "
+                     "single-stepped capture (emulator --steps, or a live "
+                     "--dataflow --steps)";
+        else if (a.df.present())
+            reason = is_live
+                         ? "this live session did not record the register ring — "
+                           "re-run the capture with --steps (it single-steps "
+                           "dataflow already; --steps also carries each step's "
+                           "register file so the Scrubber time-travels it)"
+                         : "this recording captured per-step dataflow but not the "
+                           "register ring — re-record with --steps to carry each "
+                           "step's register file";
+        else
+            reason = "no regstate register ring in this recording (record with "
+                     "--steps, an exact single-stepped capture, to carry per-step "
+                     "register files)";
+        add(ViewId::Scrubber, "Scrubber", si.present(), reason, std::nullopt);
+    }
 
     // ABI x-ray — locks the SysV leg against an attached Win64 leg (B).
     add(ViewId::AbiXray, "ABI x-ray", b_attachable,

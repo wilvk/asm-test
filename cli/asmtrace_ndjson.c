@@ -237,6 +237,36 @@ size_t asmtrace_df_edge_body(char *dst, size_t cap,
     return op_body(dst, cap, o, &e->loc);
 }
 
+size_t asmtrace_regstate_body(char *dst, size_t cap,
+                              const asmtest_regfile_t *r) {
+    size_t o = 0;
+    if (!dst || !cap)
+        return 0;
+    dst[0] = '\0';
+    /* Same {"desc","values"} shape and field order as the emulator's
+     * emit_regstate (tools/asmtrace_record.c) so ONE Scrubber deck renders both
+     * producers; only the descriptor id differs — user_regs@x86_64/sysv names the
+     * ptrace source (struct user_regs_struct), more authoritative than emulation
+     * yet captured perturbingly (single-step). The consumer keys on field NAMES,
+     * not the id (desktop/src/analysis/stepindex.cpp). */
+    return bp(dst, cap, o,
+              "\"desc\":\"user_regs@x86_64/sysv\",\"values\":{"
+              "\"rax\":%llu,\"rbx\":%llu,\"rcx\":%llu,\"rdx\":%llu,"
+              "\"rsi\":%llu,\"rdi\":%llu,\"rbp\":%llu,\"rsp\":%llu,"
+              "\"r8\":%llu,\"r9\":%llu,\"r10\":%llu,\"r11\":%llu,"
+              "\"r12\":%llu,\"r13\":%llu,\"r14\":%llu,\"r15\":%llu,"
+              "\"rip\":%llu,\"rflags\":%llu}",
+              (unsigned long long)r->rax, (unsigned long long)r->rbx,
+              (unsigned long long)r->rcx, (unsigned long long)r->rdx,
+              (unsigned long long)r->rsi, (unsigned long long)r->rdi,
+              (unsigned long long)r->rbp, (unsigned long long)r->rsp,
+              (unsigned long long)r->r8, (unsigned long long)r->r9,
+              (unsigned long long)r->r10, (unsigned long long)r->r11,
+              (unsigned long long)r->r12, (unsigned long long)r->r13,
+              (unsigned long long)r->r14, (unsigned long long)r->r15,
+              (unsigned long long)r->rip, (unsigned long long)r->rflags);
+}
+
 int asmtrace_close(asmtrace_writer_t *w, unsigned long long lost, int throttled,
                    const asmtrace_prov_t *skip_update) {
     char esc[512];

@@ -248,6 +248,49 @@ assert isinstance(d["defuse"], list)' \
     else
         echo "  json structural checks passed (python3 absent; strict parse skipped)"
     fi
+
+    # 26 T5.1: the per-step register RING. --steps arms one `regstate` event per
+    # df_step in the RECORDING (the desktop Scrubber's feed), field-compatible with
+    # the emulator's; its omission leaves the recording free of regstate (the ring
+    # is zero-cost when off). Assert both, plus the descriptor and all 18 fields.
+    echo "--- asmspy --dataflow $AVPID hotfn --steps --record (regstate ring, 26) ---"
+    dfrec="$BUILD/df_steps_$$.asmtrace"
+    dfrec0="$BUILD/df_nosteps_$$.asmtrace"
+    rm -f "$dfrec" "$dfrec0"
+    set +e
+    timeout 40 "$ASM" --dataflow "$AVPID" hotfn --steps --record="$dfrec" \
+        >/dev/null 2>&1; rc=$?
+    set -e
+    [ "$rc" -eq 124 ] && fail "--dataflow --steps hung"
+    [ "$rc" -eq 0 ] || fail "--dataflow --steps exited $rc"
+    [ -s "$dfrec" ] || fail "--dataflow --steps: no recording written"
+    nstep=$(grep -c '"k":"df_step"' "$dfrec" || true)
+    nreg=$(grep -c '"k":"regstate"' "$dfrec" || true)
+    [ "$nreg" -gt 0 ] \
+        || fail "--dataflow --steps: no regstate events (register ring not armed)"
+    [ "$nreg" = "$nstep" ] \
+        || fail "--dataflow --steps: $nreg regstate != $nstep df_step (not 1:1)"
+    grep -q '"desc":"user_regs@x86_64/sysv"' "$dfrec" \
+        || fail "--dataflow --steps: regstate missing user_regs@x86_64/sysv descriptor"
+    reg1=$(grep -m1 '"k":"regstate"' "$dfrec")
+    for f in rax rbx rcx rdx rsi rdi rbp rsp r8 r9 r10 r11 r12 r13 r14 r15 \
+             rip rflags; do
+        printf '%s' "$reg1" | grep -q "\"$f\":" \
+            || fail "--dataflow --steps: regstate missing field $f"
+    done
+    echo "  regstate ring: $nreg events, 1:1 with df_step, 18 fields, user_regs desc"
+    # negative control: WITHOUT --steps the recording carries NO regstate.
+    set +e
+    timeout 40 "$ASM" --dataflow "$AVPID" hotfn --record="$dfrec0" \
+        >/dev/null 2>&1; rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || fail "--dataflow (no --steps) exited $rc"
+    if [ -s "$dfrec0" ]; then
+        grep -q '"k":"regstate"' "$dfrec0" \
+            && fail "--dataflow WITHOUT --steps emitted regstate (ring not off)"
+        echo "  no --steps: recording carries no regstate (ring disarmed), OK"
+    fi
+    rm -f "$dfrec" "$dfrec0"
 fi
 # ---------------------------------------------------------------------------
 # BOUNDED ENTRY WAIT (asmspy-plan Theme H)

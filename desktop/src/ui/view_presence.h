@@ -65,9 +65,14 @@ struct ViewPresence {
 // live events; Slice iff the dataflow stream is present; Diff iff a B is
 // attachable. `mode` scopes the set — the Observer deck is live-capture-only and
 // reports "not shown in Author mode" there rather than an empty pane.
+// `is_live` marks the active tab as the still-growing live capture (25 T1), which
+// only sharpens the Scrubber's absent-reason: a live exact-dataflow session that
+// did not arm `--steps` recorded no register ring, phrased distinctly from a saved
+// emulator recording's (26 T4). It changes no presence verdict.
 std::vector<ViewPresence> view_presence(const Streams &a, const ObserverState &obs,
                                         const StepIndex &si, const Recording &r,
-                                        Mode mode, bool b_attachable);
+                                        Mode mode, bool b_attachable,
+                                        bool is_live = false);
 
 // Count of absent entries — the N in "unavailable views (N)".
 size_t view_absent_count(const std::vector<ViewPresence> &vp);

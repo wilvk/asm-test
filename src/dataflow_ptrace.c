@@ -505,6 +505,10 @@ typedef struct {
     int have_cur;
     uint64_t cur_off;
     recbuf cur;
+    /* 26 T1: the current open step's PRE-STATE register file, captured at open_step
+     * (only when vt->regfile is armed) and committed to vt->regfile in lockstep
+     * with the append (dfp_append_step). Disarmed, this is never touched. */
+    struct user_regs_struct cur_regs;
     /* F6 windowed survey / T2 scoped gap barrier. `win_mode` = there is no bounded code
      * snapshot: the region set spans the window frame plus every channel-published JIT
      * body at ABSOLUTE addresses, so open_step reads each instruction's bytes LIVE out
@@ -712,6 +716,51 @@ static uint64_t resolve_ea(const struct user_regs_struct *regs,
     return ea;
 }
 
+/* 26 T1: map a live x86-64 register file (PTRACE_GETREGS) into the pure regstate
+ * struct the value trace carries — the 16 GPRs, rip, and rflags (from .eflags), in
+ * the field order emit_regstate / the Scrubber key on. `pre` NULL zeroes the file
+ * (a synthetic step with no captured pre-state). x86-64 only, matching the engine's
+ * i386 refusal and the `user_regs@x86_64/sysv` descriptor's arch. */
+static void dfp_map_regfile(asmtest_regfile_t *out,
+                            const struct user_regs_struct *pre) {
+    if (pre == NULL) {
+        memset(out, 0, sizeof *out);
+        return;
+    }
+    out->rax = pre->rax;
+    out->rbx = pre->rbx;
+    out->rcx = pre->rcx;
+    out->rdx = pre->rdx;
+    out->rsi = pre->rsi;
+    out->rdi = pre->rdi;
+    out->rbp = pre->rbp;
+    out->rsp = pre->rsp;
+    out->r8 = pre->r8;
+    out->r9 = pre->r9;
+    out->r10 = pre->r10;
+    out->r11 = pre->r11;
+    out->r12 = pre->r12;
+    out->r13 = pre->r13;
+    out->r14 = pre->r14;
+    out->r15 = pre->r15;
+    out->rip = pre->rip;
+    out->rflags = pre->eflags;
+}
+
+/* 26 T1: append one step to the value trace AND, when the register ring is armed,
+ * record this step's PRE-STATE in lockstep — regfile[i] parallels insn_off[i]. The
+ * slot is written ONLY when the append actually stored a step (steps_len advanced
+ * by one), so the ring stays 1:1 with insn_off across the steps_cap tail-truncation
+ * — a dropped step drops its regfile entry too, never desyncing the two. Disarmed
+ * (the normal case) this is asmtest_valtrace_append plus one NULL check. */
+static void dfp_append_step(dfp_ctx *c, uint64_t off, const at_val_rec_t *recs,
+                            size_t n, const struct user_regs_struct *pre) {
+    size_t before = c->vt->steps_len;
+    asmtest_valtrace_append(c->vt, off, recs, n);
+    if (c->vt->regfile != NULL && c->vt->steps_len == before + 1)
+        dfp_map_regfile(&c->vt->regfile[before], pre);
+}
+
 /* Finalize the current step: fill every deferred WRITE value from the post-instruction
  * state (`regs` is the next stop's register file, i.e. this step's destination state),
  * then append the step to the value trace. */
@@ -734,7 +783,7 @@ static void finalize_step(dfp_ctx *c, const struct user_regs_struct *regs) {
     if (c->risk != NULL)
         for (size_t i = 0; i < c->cur.n; i++)
             dfp_risk_add(c, &c->cur.v[i]);
-    asmtest_valtrace_append(c->vt, c->cur_off, c->cur.v, c->cur.n);
+    dfp_append_step(c, c->cur_off, c->cur.v, c->cur.n, &c->cur_regs);
     c->have_cur = 0;
     c->cur.n = 0;
 }
@@ -747,6 +796,11 @@ static void open_step(dfp_ctx *c, const struct user_regs_struct *regs,
     c->cur.n = 0;
     c->cur_off = off;
     c->have_cur = 1;
+    /* 26 T1: stash this instruction's PRE-STATE for the register ring, committed in
+     * lockstep when the step is appended. Only when the ring is armed — disarmed,
+     * one untaken branch and no copy, so a ringless capture is byte-unchanged. */
+    if (c->vt->regfile != NULL)
+        c->cur_regs = *regs;
 
     at_val_rec_t rd[64], wr[64];
     size_t nr = 64, nw = 64;
@@ -1059,7 +1113,7 @@ static int dfp_step_loop(dfp_ctx *c, uint64_t base_ip, size_t code_len,
                  * still survives exactly as before. There is deliberately no *result:
                  * the region has not returned, so there is no return value to report,
                  * and `truncated` is what says so. */
-                asmtest_valtrace_append(c->vt, c->cur_off, c->cur.v, c->cur.n);
+                dfp_append_step(c, c->cur_off, c->cur.v, c->cur.n, &c->cur_regs);
                 c->have_cur = 0;
                 c->vt->truncated = true;
                 return dfp_dirty_exit(c, DF_PTRACE_OK, 0, left_stopped);
@@ -2365,13 +2419,17 @@ static void dfp_emit_gap(dfp_ctx *c, const struct user_regs_struct *pre,
 
     if (n == 0 && mn == 0)
         return; /* the glue disturbed nothing the survey had recorded */
-    asmtest_valtrace_append(c->vt, gap_pc, recs, n);
+    /* 26 T1: a synthetic gap step still gets a regfile slot (the pre-excursion
+     * register file) so the ring stays 1:1 with insn_off — the Scrubber pairs
+     * regstate[i] with df_step[i] by index, so a gap without a slot would desync
+     * every later step. */
+    dfp_append_step(c, gap_pc, recs, n, pre);
     if (info != NULL) {
         info->gap_steps++;
         info->gap_recs += n;
     }
     if (mn > 0) {
-        asmtest_valtrace_append(c->vt, gap_pc, mrecs, mn);
+        dfp_append_step(c, gap_pc, mrecs, mn, pre);
         if (info != NULL) {
             info->gap_steps++;
             info->gap_recs += mn;
@@ -2518,7 +2576,7 @@ static int dfp_window_loop(dfp_ctx *c, uint64_t win_base, uint64_t win_len,
             if (max_insns != 0 && ++info->recorded >= max_insns) {
                 /* Bounded scope reached: append what is open (its writes stay
                  * unfilled), flag truncated, leave the target for the detach. */
-                asmtest_valtrace_append(c->vt, c->cur_off, c->cur.v, c->cur.n);
+                dfp_append_step(c, c->cur_off, c->cur.v, c->cur.n, &c->cur_regs);
                 c->have_cur = 0;
                 c->vt->truncated = true;
                 info->nregions = nreg + 1;

@@ -779,14 +779,16 @@ int main() {
         {
             size_t i = static_cast<size_t>(ls.live_tab);
             auto vp = view_presence(ls.streams[i], ls.observers[i], ls.stepidx[i],
-                                    ls.ws.recordings[i], ls.mode, false);
+                                    ls.ws.recordings[i], ls.mode, false, true);
             const ViewPresence *loom = find_view(vp, ViewId::Loom);
             check("25/no df -> Loom absent", loom && !loom->present,
                   "the Loom needs df_step values it does not have yet");
         }
 
-        // Feed df_step: the exact-dataflow views must light live, and the
-        // Scrubber must stay absent with its --steps reason (no live regstate).
+        // Feed df_step: the exact-dataflow views must light live. This live
+        // session did NOT arm --steps (no regstate), so the Scrubber stays absent
+        // — but now with the LIVE absent-reason (26 T4), distinct from a saved
+        // emulator recording's.
         sess.feed_line(
             R"({"k":"df_step","step":0,"off":0,"disasm":"mov eax, edi","ops":[{"space":"reg","reg":35,"size":4,"write":true,"value_valid":true,"value":40}]})");
         sess.feed_line(
@@ -800,7 +802,7 @@ int main() {
             check("25/df decoded live", ls.streams[i].df.present(),
                   "the live tab's df stream must decode the fed df_step events");
             auto vp = view_presence(ls.streams[i], ls.observers[i], ls.stepidx[i],
-                                    ls.ws.recordings[i], ls.mode, false);
+                                    ls.ws.recordings[i], ls.mode, false, true);
             const ViewPresence *loom = find_view(vp, ViewId::Loom);
             const ViewPresence *slice = find_view(vp, ViewId::Slice);
             const ViewPresence *scrub = find_view(vp, ViewId::Scrubber);
@@ -808,11 +810,14 @@ int main() {
                   "an exact dataflow capture must weave a Loom live");
             check("25/Slice live", slice && slice->present,
                   "df_step present -> the slice explorer must be offered live");
-            check("25/Scrubber stays absent", scrub && !scrub->present,
-                  "no live regstate producer exists -> Scrubber is replay-only");
-            check("25/Scrubber names --steps",
-                  scrub && scrub->reason.find("--steps") != std::string::npos,
-                  "the absent Scrubber must name its --steps producer verbatim");
+            check("25/Scrubber absent without --steps", scrub && !scrub->present,
+                  "this live capture did not arm --steps -> no regstate ring");
+            check("26/Scrubber live-no-steps reason",
+                  scrub &&
+                      scrub->reason.find("live session") != std::string::npos &&
+                      scrub->reason.find("--steps") != std::string::npos,
+                  "the live Scrubber's absent-reason must name the live session "
+                  "AND its --steps opt-in (26 T4)");
         }
 
         // T4: the ephemeral, path-less live tab is never written to the store.
@@ -835,6 +840,66 @@ int main() {
         check("25/teardown on reset",
               ls.live_tab == -1 && ls.ws.recordings.empty(),
               "reset() must drop the ephemeral live tab");
+    }
+
+    // --- 26 T5.3: a live --dataflow --steps capture lights the Scrubber ------
+    // The live regstate producer (26) emits one `regstate` per df_step under the
+    // user_regs@x86_64/sysv descriptor. Feeding them makes the live tab's
+    // StepIndex present, so the Scrubber time-travels a LIVE capture — the last
+    // live-vs-replay gap closed. Pure model (no ImGui): assert the StepIndex and
+    // that view_presence now OFFERS the Scrubber.
+    {
+        static const char *kHdr =
+            R"({"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},)"
+            R"("provenance":{"backend":"ptrace-dataflow","exact":true,"trust":"exact"},"arch":"x86_64"})";
+        ShellState ls;
+        ls.mode = Mode::Capture;
+        LiveSession &sess = ls.inspect.session;
+        sess.feed_line(R"({"k":"cmd","cmd":"start","mode":"dataflow"})");
+        sess.feed_line(
+            R"({"k":"session","state":"started","mode":"dataflow","pid":26,"params":{"steps":true}})");
+        sess.feed_line(kHdr);
+        // Interleaved df_step + regstate, exactly as the shared sink emits them.
+        sess.feed_line(
+            R"({"k":"df_step","step":0,"off":0,"disasm":"mov rax, rdi","ops":[{"space":"reg","reg":35,"size":8,"write":true,"value_valid":true,"value":6}]})");
+        sess.feed_line(
+            R"({"k":"regstate","desc":"user_regs@x86_64/sysv","values":{"rax":0,"rbx":0,"rcx":0,"rdx":0,"rsi":7,"rdi":6,"rbp":0,"rsp":140737488347000,"r8":0,"r9":0,"r10":0,"r11":0,"r12":0,"r13":0,"r14":0,"r15":0,"rip":94476548243590,"rflags":514}})");
+        sess.feed_line(
+            R"({"k":"df_step","step":1,"off":3,"disasm":"add rax, rsi","ops":[{"space":"reg","reg":35,"size":8,"write":true,"value_valid":true,"value":13}]})");
+        sess.feed_line(
+            R"({"k":"regstate","desc":"user_regs@x86_64/sysv","values":{"rax":6,"rbx":0,"rcx":0,"rdx":0,"rsi":7,"rdi":6,"rbp":0,"rsp":140737488347000,"r8":0,"r9":0,"r10":0,"r11":0,"r12":0,"r13":0,"r14":0,"r15":0,"rip":94476548243593,"rflags":514}})");
+        shell_sync_live_tab(ls);
+        check("26/live tab created", ls.live_tab >= 0,
+              "a --steps live capture must be promoted like any other");
+        size_t i = static_cast<size_t>(ls.live_tab);
+        const StepIndex &si = ls.stepidx[i];
+        check("26/Scrubber present live", si.present(),
+              "a live regstate ring must make the Scrubber present");
+        check("26/regstate descriptor honest",
+              si.desc == "user_regs@x86_64/sysv",
+              "the live Scrubber must carry the ptrace-source descriptor id");
+        check("26/two held steps", si.count() == 2,
+              "two fed regstate events -> two seek-able steps");
+        {
+            const RegFile *s0 = si.at_step(0);
+            const RegFile *s1 = si.at_step(1);
+            const RegField *rax0 = s0 ? s0->find("rax") : nullptr;
+            const RegField *rax1 = s1 ? s1->find("rax") : nullptr;
+            check("26/rax time-travels",
+                  rax0 && rax1 && rax0->value == 0 && rax1->value == 6,
+                  "the register file must move step-to-step (rax 0 -> 6)");
+        }
+        {
+            auto vp = view_presence(ls.streams[i], ls.observers[i], ls.stepidx[i],
+                                    ls.ws.recordings[i], ls.mode, false, true);
+            const ViewPresence *scrub = find_view(vp, ViewId::Scrubber);
+            check("26/Scrubber offered live", scrub && scrub->present,
+                  "with a live regstate ring the Scrubber is a present view");
+        }
+        // The path-less live tab still never persists (26 keeps 25's guard).
+        WorkspaceState wss = shell_capture_workspace(ls);
+        check("26/live+steps not persisted", wss.open.empty(),
+              "a --steps live tab is still ephemeral and path-less");
     }
 
     // --- 25 T3: dedup the live tab against save->reopen ----------------------

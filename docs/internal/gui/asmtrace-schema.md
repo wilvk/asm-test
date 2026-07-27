@@ -753,6 +753,59 @@ the missing prefix as a torn edge — never as step 0. A recording with no
 `regstate` events simply had the ring disarmed (`--steps` defaults to 0), the
 normal case.
 
+## `regstate` descriptor — `user_regs@x86_64/sysv` (live ptrace producer)
+
+> **Owned by [26-live-regstate-producer.md](26-live-regstate-producer.md)**,
+> appended under this file's D5 append-only rule. It gives the `regstate` kind its
+> **second** concrete producer — the LIVE, single-stepped `asmspy --dataflow`
+> engine — under a distinct descriptor id, and **adds no field to any existing
+> kind and no new envelope major.** The kind, the `{"desc","values"}` shape and the
+> descriptor-reference rule are unchanged and remain 01's.
+
+The scoped ptrace value engine
+([src/dataflow_ptrace.c](../../../src/dataflow_ptrace.c)) already reads the full
+integer register file (`PTRACE_GETREGS`) as each in-region instruction's PRE-STATE.
+With the boolean `--steps` opt-in
+([cli/asmspy.c](../../../cli/asmspy.c) `cmd_dataflow`; serve `steps:true`) it
+carries that pre-state to the sink, which emits one `regstate` event per `df_step`,
+so the desktop **Scrubber** time-travels a LIVE capture — and, because serve and
+`asmspy --dataflow --record` share the sink, a saved `--dataflow --steps` file
+gains the ring too.
+
+**Descriptor id.** `user_regs@x86_64/sysv` — named for the ptrace source (the
+kernel's `struct user_regs_struct`), so the id is honest that these are the **real
+architectural** registers captured perturbingly (single-step), not emulated. The
+`values` **field names are identical** to `emu_x86_regs_t@x86_64/sysv`'s (the 16
+GPRs + `rip` + `rflags`, `struct user_regs_struct.eflags` folded to `rflags`), so
+one Scrubber deck renders both producers unchanged — the consumer keys on the field
+**names**, not the id
+([desktop/src/analysis/stepindex.cpp](../../../desktop/src/analysis/stepindex.cpp)).
+
+```json
+{"k":"regstate","desc":"user_regs@x86_64/sysv","values":{"rax":42,"rbx":0,"rcx":0,"rdx":0,"rsi":2,"rdi":40,"rbp":0,"rsp":140737488347000,"r8":0,"r9":0,"r10":0,"r11":0,"r12":0,"r13":0,"r14":0,"r15":0,"rip":94476548243590,"rflags":514}}
+```
+
+- **Real ASLR'd addresses.** Unlike the emulator's fixed `0x200000` stack base,
+  the live `rsp`/`rbp`/`rip` are the target's actual ASLR'd values. A cross-producer
+  parity check therefore compares per-step register **changes** (which register each
+  step wrote, to what operand-visible value), not absolute values (26 T5.2).
+- **XMM/YMM/FP omitted**, exactly as the emulator descriptor — a wide value is not a
+  bare JSON integer; the descriptor mechanism absorbs a vector deck later, for both
+  producers at once.
+
+**Order, dropping and truncation (D7) — differs from the emulator ring.** The live
+producer does **not** drop-oldest. Its bound is the value trace's `steps_cap`
+(truncate-when-**full**: the earliest `steps_cap` steps are kept, later ones
+dropped), so the held `regstate` events are steps `[0, count)` — the **same** steps
+as the held `df_step` events, emitted **interleaved and in step order**, one
+`regstate` right after its `df_step`. The `end` footer carries `"truncated":true`
+when the tail was dropped, but `drops.lost` stays **0** (no prefix was evicted), so
+a reader offsets the first held step by `drops.lost == 0` and pairs `regstate[i]`
+with `df_step[i]` at step `i`. The tear here is the **missing tail** (a still-growing
+or over-cap capture), not a missing prefix. A live `log`/`trace`/`watch`/`sample`
+session never single-steps, so it carries no `regstate` at all — the Scrubber says
+so, distinctly from a `--steps`-less exact capture.
+
 ## `severity` — the derivable honesty-chrome tier (optional)
 
 > **Owned by [01-asmtrace-format.md](01-asmtrace-format.md)**, appended under this
