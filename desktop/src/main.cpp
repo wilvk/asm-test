@@ -9,7 +9,8 @@
 #include <memory>
 
 #include "imgui.h"
-#include "implot.h" // the plotting chassis context (15 T1)
+#include "implot.h"   // the plotting chassis context (15 T1)
+#include "imsearch.h" // the client-side filtering context (16 T2)
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 
@@ -78,6 +79,7 @@ int main() {
     // creates it; the headless view tests create none, so every ImPlot draw is
     // guarded on ImPlot::GetCurrentContext() and degrades to text there.
     ImPlot::CreateContext();
+    ImSearch::CreateContext(); // client-side filtering (16 T2), app-only like ImPlot
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
@@ -118,6 +120,7 @@ int main() {
     scene_host->shutdown();
     scene_host.reset();
 
+    ImSearch::DestroyContext();
     ImPlot::DestroyContext();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();

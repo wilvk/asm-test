@@ -1,6 +1,7 @@
 // learn_door.cpp — the Learn door: bundled walkthroughs, played
 // (06-doors-and-learning.md T4). Draws and discovers files; decides nothing.
 #include "imgui.h"
+#include "imsearch.h" // client-side catalog filter (16 T2)
 
 #include <algorithm>
 #include <cstdlib>
@@ -86,7 +87,9 @@ void draw_learn_door(LearnState &s,
     }
 
     ImGui::BeginChild("learn-cards", ImVec2(300, 0), true);
-    for (size_t i = 0; i < s.cards.size(); i++) {
+    // One card's draw, factored so the ImSearch-filtered path and the plain
+    // fallback share it (16 T2).
+    auto draw_card = [&](size_t i) {
         const LearnCard &c = s.cards[i];
         bool sel = static_cast<int>(i) == s.open_card;
         if (ImGui::Selectable(c.title.c_str(), sel)) {
@@ -100,11 +103,28 @@ void draw_learn_door(LearnState &s,
                                   ImVec4(0.95f, 0.45f, 0.40f, 1.0f));
             ImGui::TextWrapped("  %s", c.error.c_str());
             ImGui::PopStyleColor();
-            continue;
+            return;
         }
         ImGui::TextDisabled("  %d stop(s) · %s%s", c.stops,
                             c.provenance.c_str(),
                             c.truncated ? " · TRUNCATED" : "");
+    };
+    // Client-side narrowing of the walkthrough catalog by title — honesty-safe
+    // (a flat catalog, unlike the call tree whose depths a filter would break).
+    // Guarded on the ImSearch context so the null test backend shows the plain
+    // list; only the app filters.
+    if (ImSearch::GetCurrentContext() && ImSearch::BeginSearch()) {
+        ImSearch::SearchBar("filter walkthroughs");
+        for (size_t i = 0; i < s.cards.size(); i++) {
+            size_t idx = i;
+            ImSearch::SearchableItem(s.cards[i].title.c_str(),
+                                     [&, idx](const char *) { draw_card(idx); });
+        }
+        ImSearch::Submit(); // flush the filtered draws inside this child
+        ImSearch::EndSearch();
+    } else {
+        for (size_t i = 0; i < s.cards.size(); i++)
+            draw_card(i);
     }
     ImGui::EndChild();
     ImGui::SameLine();

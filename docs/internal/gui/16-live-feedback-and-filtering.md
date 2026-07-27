@@ -102,6 +102,22 @@ choice is recorded; it compiles on 1.91.9 and is in the compile-probe.
 
 ### T2 — ImSearch client-side narrowing  (S, depends on: 12)
 
+> **Implemented 2026-07-27 (Learn catalog filter) — green (51 suites).** ImSearch
+> vendored (`scripts/fetch-imsearch.sh`, branch `main` `7596ac5`, 3 files, MIT,
+> C++11; three digest rows; license captured; in the compile-probe —
+> `imgui_internal.h`; **compile-verified on `1.91.9b-docking`**, the ∅-unverified
+> claim now confirmed). Its `ImSearchContext` is created in `main.cpp`
+> **app-only**, and every use is guarded on `ImSearch::GetCurrentContext()` so the
+> null test backend shows the plain list. First surface: the **Learn-door
+> walkthrough catalog** (`ui/learn_door.cpp`) — a flat `Selectable` list wrapped
+> with `BeginSearch`/`SearchBar`/`SearchableItem`, so typing narrows it by title.
+> **Honesty-safe by choice of target**: the call TREE was deliberately NOT
+> filtered client-side (its `tree.h` warns a client filter makes the surviving
+> depths lie — the engine-side filter stays the tree's narrowing). `imsearch.o`
+> rides the `learn_door.o` link sites. **Remaining T2**: the syscall-name and
+> disasm-routine filters (both tables — need a Selectable/row adapter);
+> follow-on.
+
 **Goal.** Client-side filtering over the existing lists — call-tree, syscall
 names, disasm routine search, the Learn-door catalog — wrapping current
 `Selectable`/`TreeNode` draws via callbacks so **pure view-models stay

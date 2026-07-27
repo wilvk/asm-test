@@ -149,6 +149,21 @@ DESKTOP_IMPLOT_OBJ_app    := $(BUILD)/desktop/app/addon/implot.o $(BUILD)/deskto
 DESKTOP_IMPLOT_OBJ_render := $(BUILD)/desktop/render/addon/implot.o $(BUILD)/desktop/render/addon/implot_items.o
 DESKTOP_IMPLOT_OBJ_test   := $(BUILD)/desktop/test/addon/implot.o $(BUILD)/desktop/test/addon/implot_items.o
 
+# ImSearch (16 T2): client-side filtering, ONE compiled TU (imsearch.cpp). Uses
+# imgui_internal.h -> compile-probe. Its object rides the learn_door.o link sites
+# (the Learn-door catalog filter). Guarded on ImSearch::GetCurrentContext() so
+# the null test backends degrade to the plain list.
+IMSEARCH_VERSION ?= 7596ac5
+IMSEARCH_HOME    ?= $(BUILD)/addons/imsearch-$(IMSEARCH_VERSION)
+$(IMSEARCH_HOME)/imsearch.cpp $(IMSEARCH_HOME)/imsearch.h $(IMSEARCH_HOME)/imsearch_internal.h &: scripts/fetch-imsearch.sh scripts/third-party-digests.txt
+	sh scripts/fetch-imsearch.sh >/dev/null
+DESKTOP_ADDON_INCLUDES += -I$(IMSEARCH_HOME)
+ADDON_PROBE_FLAGS += -DASMDESK_HAVE_IMSEARCH -I$(IMSEARCH_HOME)
+ADDON_PROBE_DEPS  += $(IMSEARCH_HOME)/imsearch.h
+$(BUILD)/desktop/%/addon/imsearch.o: $(IMSEARCH_HOME)/imsearch.cpp | $(IMSEARCH_HOME)/imsearch.h $(IMSEARCH_HOME)/imsearch_internal.h $(IMGUI_HOME)/imgui.cpp
+	@mkdir -p $(@D)
+	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
+
 # --- source basenames --------------------------------------------------------
 DESKTOP_IMGUI_CORE := imgui imgui_draw imgui_tables imgui_widgets
 DESKTOP_IMGUI_BACK := imgui_impl_glfw imgui_impl_opengl3
@@ -305,6 +320,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/ui/author_door.o \
   $(BUILD)/desktop/$(1)/ui/shell.o $(BUILD)/desktop/$(1)/ui/layout.o \
   $(BUILD)/desktop/$(1)/ui/learn_door.o \
+  $(BUILD)/desktop/$(1)/addon/imsearch.o \
   $(BUILD)/desktop/$(1)/ui/capability_panel.o \
   $(BUILD)/desktop/$(1)/ui/inspect_door.o \
   $(BUILD)/desktop/$(1)/ui/gl_scene_host.o \
@@ -1016,6 +1032,7 @@ $(BUILD)/desktop_test_recording: $(BUILD)/desktop/test/t/test_recording.o $(DESK
 DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/ui/layout.o \
     $(BUILD)/desktop/test/ui/learn_door.o \
+    $(BUILD)/desktop/test/addon/imsearch.o \
     $(BUILD)/desktop/test/ui/capability_panel.o \
     $(BUILD)/desktop/test/ui/inspect_door.o \
     $(BUILD)/desktop/test/addon/imguifiledialog.o \
