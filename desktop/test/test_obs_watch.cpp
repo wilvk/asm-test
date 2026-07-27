@@ -88,6 +88,25 @@ int main() {
     vt::eq("addr", j.value("addr", uint64_t{0}), uint64_t{0x601048});
     vt::eq("max", j.value("max", -1L), 8L);
 
+    // The value-over-hit plot series (15-T1 follow-on) includes ONLY value_ok
+    // hits — an un-read-back value is a gap, never a fabricated point.
+    WatchPlot wp = obs_watch_plot(v);
+    size_t ok = 0;
+    for (const WatchHit &h : v.hits)
+        if (h.value_ok)
+            ok++;
+    vt::eq("plot has one point per value_ok hit", wp.steps.size(), ok);
+    vt::eq("plot steps and values are parallel", wp.steps.size(),
+           wp.values.size());
+    vt::check("value_ok hits actually exist to plot", ok >= 1,
+              "the fixture should have a readable value");
+    bool plotted_unread = false;
+    for (double step : wp.steps)
+        if (step == static_cast<double>(v.hits[2].hit_no))
+            plotted_unread = true; // hit 2 is the undecodable, value_ok == false
+    vt::check("plot excludes the unread value (hit 2)", !plotted_unread,
+              "an un-read-back value was plotted — a fabricated point");
+
     vt::golden("obs-watch.txt", dump);
     vt::golden("obs-watch-skip.txt", obs_watch_dump(sv));
     return vt::report("test_obs_watch");

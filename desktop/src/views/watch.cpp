@@ -135,4 +135,15 @@ std::string obs_watch_dump(const WatchView &v) {
     return s;
 }
 
+WatchPlot obs_watch_plot(const WatchView &v) {
+    WatchPlot p;
+    for (const WatchHit &h : v.hits) {
+        if (!h.value_ok)
+            continue; // an unread value is a gap, never a fabricated 0
+        p.steps.push_back(static_cast<double>(h.hit_no));
+        p.values.push_back(static_cast<double>(h.value));
+    }
+    return p;
+}
+
 } // namespace asmdesk

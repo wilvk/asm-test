@@ -179,6 +179,26 @@ void draw_obs_watch(const WatchView &v) {
         ImGui::TextDisabled("no hits yet — the target runs at native speed "
                             "between them");
 
+    // Value-over-hit as PlotStairs (15-T1 follow-on) — the watched value between
+    // hits is a step function (it holds until the next observed write). Only
+    // value_ok hits are plotted; an un-read-back value is a GAP, never a
+    // fabricated 0 (obs_watch_plot enforces it). Guarded on the ImPlot context so
+    // the null test backends skip straight to the table.
+    if (ImPlot::GetCurrentContext()) {
+        WatchPlot wp = obs_watch_plot(v);
+        if (wp.steps.size() >= 2) {
+            if (ImPlot::BeginPlot("##watch-value", ImVec2(-1, 180),
+                                  ImPlotFlags_NoLegend | ImPlotFlags_NoMouseText)) {
+                ImPlot::SetupAxes("hit", "value",
+                                  ImPlotAxisFlags_AutoFit,
+                                  ImPlotAxisFlags_AutoFit);
+                ImPlot::PlotStairs("value", wp.steps.data(), wp.values.data(),
+                                   static_cast<int>(wp.steps.size()));
+                ImPlot::EndPlot();
+            }
+        }
+    }
+
     if (!ImGui::BeginTable("watch", 5,
                            ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                                ImGuiTableFlags_ScrollY))

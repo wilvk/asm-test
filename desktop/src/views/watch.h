@@ -71,6 +71,17 @@ struct WatchView {
     bool have_effective = false;
 };
 
+// The value-over-hit series for the ImPlot chassis (15-T1 follow-on): `steps` is
+// the hit number, `values` the watched value AS A double. Only `value_ok` hits
+// are included — an un-read-back value is NOT a zero (honesty), so it is a GAP in
+// the series, never a fabricated point. Pure, so it is unit-tested without ImPlot
+// (D4); the draw feeds it to PlotStairs guarded on the ImPlot context.
+struct WatchPlot {
+    std::vector<double> steps;  // hit_no
+    std::vector<double> values; // value, only where value_ok
+};
+WatchPlot obs_watch_plot(const WatchView &v);
+
 WatchView obs_watch_build(const Recording &r, const ObsLifecycle *lc = nullptr);
 
 // "write" / "read" / "undecodable" — the third is a real outcome and has its

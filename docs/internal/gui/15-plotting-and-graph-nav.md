@@ -68,8 +68,12 @@ draws and navigates.
 > `obs_hotedges_matrix` (a pure, tested helper — a bounded grid of edge WEIGHTS,
 > never a stack, R4-compliant; `test_obs_hotedges` pins total-weight
 > preservation + the cap/truncation). The addon rides the `observer_draw.o` link
-> sites. **Remaining T1**: `perf_history` (`PlotLine`, closing the
-> parsed-but-never-shown gap), `watch` (`PlotStairs`/`PlotDigital`), and the
+> sites. **Second surface (2026-07-27):** `views/watch` gains a value-over-hit
+> **`PlotStairs`** over `obs_watch_plot` (a pure tested helper — **only
+> `value_ok` hits are plotted; an un-read-back value is a GAP, never a fabricated
+> 0**; `test_obs_watch` pins the exclusion), reusing the ImPlot already linked
+> into `observer_draw.o` (no new link surgery). **Remaining T1**: `perf_history`
+> (`PlotLine`, closing the parsed-but-never-shown gap), and the
 > timeline/scrubber `DragLineX` playhead + `SetupAxisLinks` — same chassis,
 > follow-on surfaces. F2's 32-bit `ImDrawIdx` (done) covers the dense heatmap.
 
