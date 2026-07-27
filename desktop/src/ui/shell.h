@@ -12,6 +12,7 @@
 #include "analysis/stepindex.h"
 #include "doc/streams.h"
 #include "doc/workspace.h"
+#include "live/inspect.h" // FeedbackInputs, for the toast-transition tracker (16 T1)
 #include "loom/loom_draw.h"
 #include "nav.h"
 #include "scene3d/camera.h"
@@ -89,6 +90,12 @@ struct ShellState {
     // The Inspect door (07-serve-live-host.md T4/T5). In BOTH binaries: it
     // links no engine and captures through the `asmspy --serve` subprocess.
     InspectState inspect;
+    // Last frame's feedback state (live status + save outcome), so draw_shell
+    // can raise a toast on each TRANSITION (a new refusal / session end / fatal
+    // / skip / save) rather than every frame (16-live-feedback-and-filtering.md
+    // T1). Toasts SUPPLEMENT the in-pane refusal banners — the Inspect door
+    // still shows them first-class.
+    FeedbackInputs prev_feedback;
     // The live Observer views (08-observer-views.md), one deck per open
     // recording — parallel to ws.recordings, exactly like `streams`. A live
     // session's recording and a replayed file feed the SAME deck, which is the

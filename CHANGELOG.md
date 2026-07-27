@@ -8,6 +8,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Non-modal toasts for live-session events** (docs/internal/gui/16-live-
+  feedback-and-filtering.md T1, via ImGuiNotify). Events that were previously
+  silent — a capture refusal, a session ending, a fatal, a skip
+  (success-with-nothing-to-report), a save completing or failing — now raise a
+  transient toast in the corner. An **exact** saved capture's toast carries an
+  "Open in Loom" button that opens it through the same door the panes use; a
+  statistical capture's does not (there is no Loom for it). Toasts **supplement,
+  never replace**, the in-pane refusal banners (the banner is still the record).
+  The decision of which toast to raise is a pure, unit-tested function over the
+  live status and save outcome, so it is driven as a model by the null-backend
+  tests. ImGuiNotify is vendored (MIT) with a minimal Font Awesome range merged
+  into the UI font for its type icons. Bundled in both the full app and the
+  render-only viewer.
 - **The register scrubber and the ABI x-ray are now hosted in visible shell
   panes** (docs/internal/gui/09-teaching-producers.md T3/T4 — the integration
   surfacing pass). The register time-travel scrubber is a per-recording

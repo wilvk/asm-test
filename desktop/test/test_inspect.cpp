@@ -421,11 +421,71 @@ static void test_progress() {
           "no divide-by-zero");
 }
 
+// Live-session toasts (16 T1): a state TRANSITION raises the right toasts, an
+// unchanged state raises none (no re-toast spam), a skip is Info not Error, and
+// only an exact save carries an "Open in Loom" (open_path) button.
+static void test_toasts() {
+    FeedbackInputs a, b;
+    check("toast/none-when-unchanged", live_session_toasts(a, b).empty(),
+          "no transition should raise no toast");
+    b.status.last_err = "ptrace: Operation not permitted";
+    std::vector<SessionToast> t1 = live_session_toasts(a, b);
+    check("toast/refusal-is-one-error",
+          t1.size() == 1 && t1[0].kind == ToastKind::Error &&
+              has(t1[0].text, "refused"),
+          "a new refusal should raise one Error toast");
+    check("toast/no-repeat", live_session_toasts(b, b).empty(),
+          "an unchanged refusal must not re-toast every frame");
+    FeedbackInputs c = b;
+    c.status.sessions_ended = 1;
+    c.status.last_stop_reason = "exited(0)";
+    std::vector<SessionToast> t2 = live_session_toasts(b, c);
+    check("toast/ended-is-success",
+          t2.size() == 1 && t2[0].kind == ToastKind::Success,
+          "a completed session should raise one Success toast");
+    FeedbackInputs d = c;
+    d.status.skip_code = 42;
+    d.status.skip_reason = "no PT silicon";
+    std::vector<SessionToast> t3 = live_session_toasts(c, d);
+    check("toast/skip-is-info", t3.size() == 1 && t3[0].kind == ToastKind::Info,
+          "a skip means success-with-nothing-to-report — Info, not Error");
+
+    // An exact save carries an "Open in Loom" (open_path) button; a statistical
+    // save does not (there is no Loom for a non-exact capture).
+    FeedbackInputs e = d;
+    e.saved_ok = true;
+    e.saved_path = "capture.asmtrace";
+    std::vector<SessionToast> t4 = live_session_toasts(d, e);
+    check("toast/exact-save-has-open-button",
+          t4.size() == 1 && t4[0].kind == ToastKind::Success &&
+              t4[0].open_path == "capture.asmtrace",
+          "an exact save should offer an Open-in-Loom button");
+    check("toast/save-no-repeat", live_session_toasts(e, e).empty(),
+          "a save must not re-toast until a NEW path is written");
+    FeedbackInputs f = e;
+    f.saved_statistical = true;
+    f.saved_path = "sampled.asmtrace";
+    std::vector<SessionToast> t5 = live_session_toasts(e, f);
+    check("toast/statistical-save-has-no-button",
+          t5.size() == 1 && t5[0].open_path.empty(),
+          "a statistical save must NOT offer a Loom button (there is no Loom)");
+
+    // A failed save (saved_ok stays false, only the status line changes) is an
+    // Error toast, not a phantom success.
+    FeedbackInputs g;
+    g.save_status = "save failed: Permission denied";
+    std::vector<SessionToast> t6 = live_session_toasts(FeedbackInputs{}, g);
+    check("toast/failed-save-is-error",
+          t6.size() == 1 && t6[0].kind == ToastKind::Error,
+          "a failed save should raise an Error toast, not a Success");
+}
+
 int main(void) {
     test_attach();
     test_evidence();
     test_front_door();
     test_progress();
+    test_toasts();
     if (failures) {
         std::fprintf(stderr, "test_inspect: %d FAILURE(S)\n", failures);
         return 1;

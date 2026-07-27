@@ -7,6 +7,7 @@
 #include "imgui.h"
 
 #include "IconsCodicons.h"
+#include "IconsFontAwesome6.h"
 #include "ui/fonts.h"
 
 #ifndef ASMTEST_JBM_TTF
@@ -14,6 +15,9 @@
 #endif
 #ifndef ASMTEST_CODICON_TTF
 #define ASMTEST_CODICON_TTF ""
+#endif
+#ifndef ASMTEST_FA_TTF
+#define ASMTEST_FA_TTF ""
 #endif
 
 static int fails;
@@ -32,17 +36,22 @@ int main() {
     ImGuiIO &io = ImGui::GetIO();
     io.IniFilename = nullptr;
     check("load_fonts accepts the vendored JetBrains Mono TTF",
-          asmdesk::load_fonts(io, ASMTEST_JBM_TTF, ASMTEST_CODICON_TTF));
+          asmdesk::load_fonts(io, ASMTEST_JBM_TTF, ASMTEST_CODICON_TTF,
+                              ASMTEST_FA_TTF));
     unsigned char *px = nullptr;
     int w = 0, h = 0;
     io.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
     check("the font atlas builds", w > 0 && h > 0);
     ImFont *f = io.Fonts->Fonts.empty() ? nullptr : io.Fonts->Fonts[0];
     check("a font is in the atlas", f != nullptr);
-    if (f)
+    if (f) {
         check("a Codicons glyph (ICON_MIN_CI) is merged in",
               f->FindGlyphNoFallback(static_cast<ImWchar>(ICON_MIN_CI)) !=
                   nullptr);
+        check("a FontAwesome glyph (ICON_MIN_FA) is merged in (for ImGuiNotify)",
+              f->FindGlyphNoFallback(static_cast<ImWchar>(ICON_MIN_FA)) !=
+                  nullptr);
+    }
     ImGui::DestroyContext();
 
     // 2) honest degrade: a missing TTF returns false and leaves a usable default.
@@ -50,7 +59,8 @@ int main() {
     ImGuiIO &io2 = ImGui::GetIO();
     io2.IniFilename = nullptr;
     check("a missing TTF makes load_fonts return false",
-          !asmdesk::load_fonts(io2, "/no/such/font.ttf", "/no/such/icons.ttf"));
+          !asmdesk::load_fonts(io2, "/no/such/font.ttf", "/no/such/icons.ttf",
+                               "/no/such/fa.ttf"));
     io2.Fonts->GetTexDataAsRGBA32(&px, &w, &h);
     check("the built-in bitmap font still builds after the degrade", w > 0);
     ImGui::DestroyContext();

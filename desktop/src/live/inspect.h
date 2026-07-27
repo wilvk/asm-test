@@ -31,7 +31,41 @@
 
 #include <nlohmann/json.hpp>
 
+#include "live/session.h" // LiveStatus, for the toast-transition helper (16 T1)
+
 namespace asmdesk {
+
+// Non-modal toast feedback for live-session events (16-live-feedback-and-
+// filtering.md T1). `live_session_toasts` decides which toasts a state
+// TRANSITION should raise — a new refusal, a session end, a fatal, a new skip,
+// a completed save — as a neutral list the shell maps onto ImGuiNotify. Pure +
+// tested; toasts SUPPLEMENT the in-pane refusal banners, they never replace
+// them (D7). Deciding here (not in the draw code) is what lets the null-backend
+// test drive the queue as a MODEL rather than reading pixels.
+enum class ToastKind { Info, Success, Warning, Error };
+struct SessionToast {
+    ToastKind kind = ToastKind::Info;
+    std::string text;
+    // Non-empty -> the shell renders an "Open in Loom" button on the toast that
+    // feeds this path back through InspectState::open_request (the same door the
+    // panes use). Only an exact, saved .asmtrace earns one (a statistical
+    // capture has no Loom, so no button).
+    std::string open_path;
+};
+
+// Everything the shell knows each frame that a toast could be raised from: the
+// live status plus the save outcome (which lives in InspectState, not
+// LiveStatus). Bundling them means ONE pure function and ONE remembered
+// prev-value drive every toast, and the test constructs states directly.
+struct FeedbackInputs {
+    LiveStatus status;
+    bool saved_ok = false;          // a save succeeded
+    bool saved_statistical = false; // ...but the capture was non-exact (no Loom)
+    std::string saved_path;         // the file the last successful save wrote
+    std::string save_status;        // the last save result, verbatim (error too)
+};
+std::vector<SessionToast> live_session_toasts(const FeedbackInputs &prev,
+                                              const FeedbackInputs &cur);
 
 // ---------------------------------------------------------------------------
 // 1. attachability

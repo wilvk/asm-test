@@ -345,4 +345,45 @@ std::string pick_walk_note(const AutoPick &p) {
            "about the target";
 }
 
+std::vector<SessionToast> live_session_toasts(const FeedbackInputs &prev,
+                                              const FeedbackInputs &cur) {
+    const LiveStatus &p = prev.status;
+    const LiveStatus &c = cur.status;
+    std::vector<SessionToast> out;
+    // A NEW refusal (last_err changed to non-empty). Also stays a banner in-pane
+    // (D7): the toast is the notification, the banner is the record.
+    if (!c.last_err.empty() && c.last_err != p.last_err)
+        out.push_back({ToastKind::Error, "refused: " + c.last_err, ""});
+    // A NEW fatal (the host died / a hard failure).
+    if (!c.fatal.empty() && c.fatal != p.fatal)
+        out.push_back({ToastKind::Error, c.fatal, ""});
+    // A session completed (one more ended than we last saw).
+    if (c.sessions_ended > p.sessions_ended)
+        out.push_back({ToastKind::Success,
+                       c.last_stop_reason.empty()
+                           ? "session ended"
+                           : "session ended: " + c.last_stop_reason,
+                       ""});
+    // A NEW skip (the tracer worked, nothing to report — Info, not Error).
+    if (c.skip_code != 0 && c.skip_code != p.skip_code)
+        out.push_back({ToastKind::Info, "skipped: " + c.skip_reason, ""});
+    // A save landed on a NEW path (first save, or a save to a different file).
+    // Carry an "Open in Loom" button only for an exact capture — a statistical
+    // one has no Loom, so the toast says so and offers no button.
+    if (cur.saved_ok && !cur.saved_path.empty() &&
+        cur.saved_path != prev.saved_path)
+        out.push_back({ToastKind::Success,
+                       cur.saved_statistical
+                           ? "saved (statistical — no Loom): " + cur.saved_path
+                           : "saved: " + cur.saved_path,
+                       cur.saved_statistical ? "" : cur.saved_path});
+    // A save that FAILED (a torn capture, a bad path): saved_ok is false but the
+    // status line changed to something non-empty. Surface it; it is also shown
+    // verbatim in-pane.
+    else if (!cur.saved_ok && !cur.save_status.empty() &&
+             cur.save_status != prev.save_status)
+        out.push_back({ToastKind::Error, cur.save_status, ""});
+    return out;
+}
+
 } // namespace asmdesk

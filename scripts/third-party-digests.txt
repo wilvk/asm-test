@@ -105,6 +105,11 @@ tarball-sha256  imgui-node-editor  021aa0ea  sha256:7b51a14f5e13572b4fe60c9bdba5
 # goossens ImGuiColorTextEdit + TextDiff (17 T2): real editor (MIT + bundled dtl
 # BSD-3). master f67e5bc; the fetch applies a 2-line #if IMGUI_VERSION_NUM guard.
 tarball-sha256  ictedit        f67e5bc  sha256:3ad1ec369c94730817a4be608c45c417a43f4f4e6bf3eafe4f3e5e55f21389d0
+# ImGuiNotify (16 T1): live-session toasts (MIT) + its bundled FontAwesome6 header
+# and fa-solid-900.ttf (SIL OFL 1.1 font / CC-BY-4.0 icons). Dev branch pin.
+tarball-sha256  imguinotify-hpp    d00e45f  sha256:e50cde11f092fae2a54ea529faac292cc556fcf36158c78479d6d3c21c46cd4c
+tarball-sha256  iconsfontawesome6  d00e45f  sha256:893e324f4ec90275aefbb9536ded175f01c20a24066cb82d2a06653e543795f3
+tarball-sha256  fa-solid-900       d00e45f  sha256:4312f534f4fc39b771774db6a5a00e22992437d8707a02ce163b4e47e432e65c
 # Fonts + icons (13 F3): JetBrains Mono (OFL), Codicons (CC-BY-4.0), and the
 # IconFontCppHeaders IconsCodicons.h (zlib). Loaded via stb_truetype (no freetype).
 tarball-sha256  jetbrainsmono      v2.304  sha256:a0bf60ef0f83c5ed4d7a75d45838548b1f6873372dfac88f71804491898d138f

@@ -56,6 +56,30 @@ pin.
 
 ### T1 — ImGuiNotify toasts for live-session events  (S, depends on: 12, 13 F3)
 
+> **Implemented 2026-07-27 — green (54 suites).** ImGuiNotify vendored at Dev
+> commit `d00e45f` (MIT) via `fetch-imguinotify.sh` (files-mode: `ImGuiNotify.hpp`
+> + `IconsFontAwesome6.h` + `fa-solid-900.ttf`, three digest rows); in the
+> compile-probe under `ASMDESK_HAVE_IMGUINOTIFY` with
+> `NOTIFY_RENDER_OUTSIDE_MAIN_WINDOW=false`. **FA-vs-Codicons: chose (a)** — a
+> minimal FontAwesome range (`[ICON_MIN_FA, ICON_MAX_FA]`) is merged into the
+> atlas *in addition to* Codicons, because ImGuiNotify's default type icons are
+> specific FA glyphs (`ICON_FA_CIRCLE_CHECK` …) with no clean Codicons mapping;
+> `load_fonts` grew a third TTF arg (`fonts.cpp`, `test_fonts` asserts an
+> `ICON_MIN_FA` glyph is present). The toast DECISION is the pure, tested
+> `live_session_toasts(prev, cur)` (`live/inspect.{h,cpp}`) over a compact
+> `FeedbackInputs` (live status + save outcome); `shell.cpp` maps its neutral
+> `SessionToast`s onto ImGuiNotify at the end of `draw_shell` (guarded on a
+> current context, so null-backend tests stay silent) and calls
+> `RenderNotifications()` last. Transitions covered: **refusal→Error**,
+> **fatal→Error**, **session-ended→Success**, **skip→Info**, **exact-save→Success
+> with an "Open in Loom" button** (feeds `InspectState::open_request`, the same
+> door the panes use), **statistical-save→Success (no button)**, **failed-save→
+> Error**. An unchanged state re-toasts nothing (tracked via
+> `ShellState::prev_feedback`). Refusals still show their in-pane banner (D7) —
+> toasts supplement, never replace. `test_inspect` drives the queue as a MODEL
+> (D4), not pixels. Clean-tree fetch ordering: `shell.o` gains an order-only
+> prereq on `ImGuiNotify.hpp`; `fonts.o`/`main.o` on the FA header/TTF.
+
 **Goal.** Non-modal toasts for the live-session events that are silent today,
 each optionally carrying a callback button ("Open recording") that composes with
 the shell's `open_request` mechanism. Toasts **supplement**, never replace, the

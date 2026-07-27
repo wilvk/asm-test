@@ -648,6 +648,20 @@ The facts are ordered by which one dominates:
 | `ptrace_scope=1` | **Unknown** | it permits a descendant or a `PR_SET_PTRACER` opt-in, and whether the target opted in is *not readable from outside* — an honest Unknown beats a confident Yes that fails at attach |
 | same uid, scope 0 or Yama absent | Yes | |
 
+### Toasts are a notification, never the record
+
+Live-session events that used to be silent — a refusal, a session ending, a
+fatal, a skip, a save landing or failing — now also raise a transient corner
+toast (ImGuiNotify). They are a **supplement**: a refusal still shows its
+non-collapsible in-pane banner, because a toast fades and the banner is the
+record (D7). The toast for an **exact** saved capture carries an "Open in Loom"
+button that opens it through the same `open_request` door the panes use; a
+statistical capture gets no button, because it has no Loom to open. Which toast
+a frame raises is decided by `live_session_toasts` — a pure function over the
+live status and the save outcome — so `test_inspect` drives the whole set as a
+model (a new refusal is one `Error`, an unchanged one re-toasts nothing, a skip
+is `Info` not `Error`, only an exact save carries a button), no pixels involved.
+
 ### The `--auto` front door, and its evidence
 
 `mode:"auto"` picks a hot region instead of making you name one, and it reports

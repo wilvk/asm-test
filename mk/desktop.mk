@@ -200,6 +200,18 @@ $(BUILD)/desktop/%/addon/TextEditor.o: $(ICTEDIT_HOME)/TextEditor.cpp | $(ICTEDI
 	@mkdir -p $(@D)
 	$(CXX) $(DESKTOP_CXXFLAGS) -w -c $< -o $@
 
+# ImGuiNotify (16 T1): HEADER-ONLY toasts (included by ui/shell.cpp) + its bundled
+# FontAwesome6 header (merged by ui/fonts.cpp) + fa-solid-900.ttf (loaded at
+# runtime). ImGuiNotify.hpp uses imgui_internal.h -> compile-probe; the probe also
+# forces NOTIFY_RENDER_OUTSIDE_MAIN_WINDOW=false (the shell's setting).
+IMGUINOTIFY_VERSION ?= d00e45f
+IMGUINOTIFY_HOME    ?= $(BUILD)/addons/imguinotify-$(IMGUINOTIFY_VERSION)
+$(IMGUINOTIFY_HOME)/ImGuiNotify.hpp $(IMGUINOTIFY_HOME)/IconsFontAwesome6.h $(IMGUINOTIFY_HOME)/fa-solid-900.ttf &: scripts/fetch-imguinotify.sh scripts/third-party-digests.txt
+	sh scripts/fetch-imguinotify.sh >/dev/null
+DESKTOP_ADDON_INCLUDES += -I$(IMGUINOTIFY_HOME)
+ADDON_PROBE_FLAGS += -DASMDESK_HAVE_IMGUINOTIFY -DNOTIFY_RENDER_OUTSIDE_MAIN_WINDOW=false -I$(IMGUINOTIFY_HOME)
+ADDON_PROBE_DEPS  += $(IMGUINOTIFY_HOME)/ImGuiNotify.hpp
+
 # Fonts + icons (13 F3): JetBrains Mono + Codicons TTFs (loaded at RUNTIME by
 # ui/fonts.cpp via stb_truetype — so they work on every lane, no freetype needed)
 # + IconFontCppHeaders' IconsCodicons.h (compile-time, the ICON_CI_* macros +
@@ -219,12 +231,14 @@ $(ICONFONT_HOME)/IconsCodicons.h: scripts/fetch-iconfontcppheaders.sh scripts/th
 DESKTOP_ADDON_INCLUDES += -I$(ICONFONT_HOME)
 # The runtime TTF paths, injected as defines into the font loader's users.
 DESKTOP_FONT_DEFS = -DASMTEST_JBM_TTF='"$(JBM_HOME)/JetBrainsMono-Regular.ttf"' \
-                    -DASMTEST_CODICON_TTF='"$(CODICON_HOME)/codicon.ttf"'
-# fonts.cpp #includes IconsCodicons.h; main.o carries the TTF-path defines and
-# calls load_fonts. Both depend on their fetched inputs so a clean tree pulls them.
-$(BUILD)/desktop/app/ui/fonts.o $(BUILD)/desktop/render/ui/fonts.o $(BUILD)/desktop/test/ui/fonts.o: | $(ICONFONT_HOME)/IconsCodicons.h
+                    -DASMTEST_CODICON_TTF='"$(CODICON_HOME)/codicon.ttf"' \
+                    -DASMTEST_FA_TTF='"$(IMGUINOTIFY_HOME)/fa-solid-900.ttf"'
+# fonts.cpp #includes IconsCodicons.h + IconsFontAwesome6.h; main.o carries the
+# TTF-path defines and calls load_fonts. Both depend on their fetched inputs so a
+# clean tree pulls them (the clean-build lesson).
+$(BUILD)/desktop/app/ui/fonts.o $(BUILD)/desktop/render/ui/fonts.o $(BUILD)/desktop/test/ui/fonts.o: | $(ICONFONT_HOME)/IconsCodicons.h $(IMGUINOTIFY_HOME)/IconsFontAwesome6.h
 $(BUILD)/desktop/app/src/main.o $(BUILD)/desktop/render/src/main.o: DESKTOP_CXXFLAGS += $(DESKTOP_FONT_DEFS)
-$(BUILD)/desktop/app/src/main.o $(BUILD)/desktop/render/src/main.o: | $(JBM_HOME)/JetBrainsMono-Regular.ttf $(CODICON_HOME)/codicon.ttf
+$(BUILD)/desktop/app/src/main.o $(BUILD)/desktop/render/src/main.o: | $(JBM_HOME)/JetBrainsMono-Regular.ttf $(CODICON_HOME)/codicon.ttf $(IMGUINOTIFY_HOME)/fa-solid-900.ttf
 
 # Clean-tree fetch ordering (docker/CI): these objects #include addon headers, so
 # they must wait for the addon fetches. A fresh build/ (dockerignored) compiles
@@ -235,7 +249,7 @@ $(BUILD)/desktop/app/src/main.o $(BUILD)/desktop/render/src/main.o: | $(JBM_HOME
 $(BUILD)/desktop/app/src/main.o $(BUILD)/desktop/render/src/main.o: | $(IMPLOT_HOME)/implot.h $(IMSEARCH_HOME)/imsearch.h
 $(BUILD)/desktop/app/vw/observer_draw.o $(BUILD)/desktop/render/vw/observer_draw.o $(BUILD)/desktop/test/vw/observer_draw.o: | $(IMPLOT_HOME)/implot.h $(TEXTSELECT_HOME)/textselect.hpp
 $(BUILD)/desktop/app/ui/learn_door.o $(BUILD)/desktop/render/ui/learn_door.o $(BUILD)/desktop/test/ui/learn_door.o: | $(IMSEARCH_HOME)/imsearch.h
-$(BUILD)/desktop/app/ui/shell.o $(BUILD)/desktop/render/ui/shell.o $(BUILD)/desktop/test/ui/shell.o: | $(IFD_HOME)/ImGuiFileDialog.h
+$(BUILD)/desktop/app/ui/shell.o $(BUILD)/desktop/render/ui/shell.o $(BUILD)/desktop/test/ui/shell.o: | $(IFD_HOME)/ImGuiFileDialog.h $(IMGUINOTIFY_HOME)/ImGuiNotify.hpp
 $(BUILD)/desktop/app/ui/inspect_door.o $(BUILD)/desktop/render/ui/inspect_door.o $(BUILD)/desktop/test/ui/inspect_door.o: | $(IFD_HOME)/ImGuiFileDialog.h
 $(BUILD)/desktop/app/vw/slice_view_draw.o $(BUILD)/desktop/render/vw/slice_view_draw.o $(BUILD)/desktop/test/vw/slice_view_draw.o: | $(NODEEDITOR_HOME)/imgui_canvas.h
 $(BUILD)/desktop/app/ui/author_door.o $(BUILD)/desktop/render/ui/author_door.o $(BUILD)/desktop/test/ui/author_door.o: | $(ICTEDIT_HOME)/TextEditor.h
@@ -1053,7 +1067,9 @@ $(BUILD)/desktop_test_layout: $(BUILD)/desktop/test/t/test_layout.o \
 # rasteriser gate, not needed here). Carries the TTF-path defines + IconsCodicons.h.
 $(BUILD)/desktop/test/t/test_fonts.o: DESKTOP_CXXFLAGS += $(DESKTOP_FONT_DEFS)
 $(BUILD)/desktop/test/t/test_fonts.o: | $(ICONFONT_HOME)/IconsCodicons.h \
-    $(JBM_HOME)/JetBrainsMono-Regular.ttf $(CODICON_HOME)/codicon.ttf
+    $(IMGUINOTIFY_HOME)/IconsFontAwesome6.h \
+    $(JBM_HOME)/JetBrainsMono-Regular.ttf $(CODICON_HOME)/codicon.ttf \
+    $(IMGUINOTIFY_HOME)/fa-solid-900.ttf
 $(BUILD)/desktop_test_fonts: $(BUILD)/desktop/test/t/test_fonts.o \
     $(BUILD)/desktop/test/ui/fonts.o $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@

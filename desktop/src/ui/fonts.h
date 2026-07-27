@@ -14,7 +14,8 @@ namespace asmdesk {
 // bitmap font and returns false — the app degrades honestly rather than
 // asserting on a stripped install. Works via stb_truetype; a build with
 // IMGUI_ENABLE_FREETYPE (the Docker desktop lane) simply rasterises it better.
-bool load_fonts(ImGuiIO &io, const char *jbm_ttf, const char *codicon_ttf);
+bool load_fonts(ImGuiIO &io, const char *jbm_ttf, const char *codicon_ttf,
+                const char *fa_ttf);
 
 } // namespace asmdesk
 #endif // ASMDESK_UI_FONTS_H

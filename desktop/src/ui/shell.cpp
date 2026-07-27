@@ -9,9 +9,17 @@
 #include <utility>
 
 #include "imgui.h"
+// Non-modal toasts for live-session events (16 T1). This header is a docking/
+// multi-viewport client at its default NOTIFY_RENDER_OUTSIDE_MAIN_WINDOW=true;
+// we render inside the main viewport, so pin it false BEFORE the include (the
+// compile-probe pins the same value). It also pulls IconsFontAwesome6.h, whose
+// glyphs load_fonts merges into the atlas — so the icons in a toast resolve.
+#define NOTIFY_RENDER_OUTSIDE_MAIN_WINDOW false
+#include "ImGuiNotify.hpp"
 #include "ImGuiFileDialog.h" // pure-ImGui open dialog (14 T7)
 
 #include "analysis/slice.h"
+#include "live/inspect.h" // live_session_toasts (16 T1)
 #include "scene3d/hud.h"
 #include "scene3d/pick.h"
 #include "space/projection.h"
@@ -705,6 +713,45 @@ void draw_shell(ShellState &s) {
         ImGui::Begin("Keyboard bindings", &s.show_help);
         draw_bindings_help();
         ImGui::End();
+    }
+
+    // Live-session toasts (16 T1): raise one per TRANSITION, then remember this
+    // frame's feedback state so the next comparison is against it (never
+    // re-toast an unchanged state). Guarded on a current context so the
+    // null-backend tests, which drive draw_shell directly, stay silent and
+    // deterministic. The decision is the pure, tested live_session_toasts();
+    // this only maps the neutral ToastKind onto ImGuiNotify, attaches the
+    // Open-in-Loom button when a toast carries a path, and queues it.
+    if (ImGui::GetCurrentContext()) {
+        FeedbackInputs cur;
+        cur.status = s.inspect.session.status();
+        cur.saved_ok = s.inspect.saved_ok;
+        cur.saved_statistical = s.inspect.saved_statistical;
+        cur.saved_path = s.inspect.saved_path;
+        cur.save_status = s.inspect.save_status;
+        for (const SessionToast &t : live_session_toasts(s.prev_feedback, cur)) {
+            ImGuiToastType ty = t.kind == ToastKind::Error     ? ImGuiToastType::Error
+                                : t.kind == ToastKind::Warning ? ImGuiToastType::Warning
+                                : t.kind == ToastKind::Success ? ImGuiToastType::Success
+                                                               : ImGuiToastType::Info;
+            if (t.open_path.empty()) {
+                ImGui::InsertNotification(ImGuiToast(ty, 5000, "%s", t.text.c_str()));
+            } else {
+                // An exact save: offer "Open in Loom", which feeds the path back
+                // through the SAME open_request door the panes use. `s` outlives
+                // every queued toast (main owns it for the whole loop), so a
+                // pointer capture is safe; the path is captured by value.
+                InspectState *ins = &s.inspect;
+                std::string path = t.open_path;
+                ImGui::InsertNotification(ImGuiToast(
+                    ty, 8000, "Open in Loom",
+                    [ins, path]() { ins->open_request = path; }, "%s",
+                    t.text.c_str()));
+            }
+        }
+        s.prev_feedback = cur;
+        // Draw the queued toasts last, so they float over every pane.
+        ImGui::RenderNotifications();
     }
 }
 

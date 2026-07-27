@@ -29,6 +29,9 @@
 #ifndef ASMTEST_CODICON_TTF
 #define ASMTEST_CODICON_TTF ""
 #endif
+#ifndef ASMTEST_FA_TTF
+#define ASMTEST_FA_TTF ""
+#endif
 
 static void glfw_error(int code, const char *desc) {
     std::fprintf(stderr, "glfw error %d: %s\n", code, desc);
@@ -93,7 +96,8 @@ int main() {
     ImSearch::CreateContext(); // client-side filtering (16 T2), app-only like ImPlot
     // Real monospace font + merged Codicons (13 F3). Paths are compiled in
     // (ASMTEST_*_TTF); a stripped install degrades honestly to the bitmap font.
-    asmdesk::load_fonts(ImGui::GetIO(), ASMTEST_JBM_TTF, ASMTEST_CODICON_TTF);
+    asmdesk::load_fonts(ImGui::GetIO(), ASMTEST_JBM_TTF, ASMTEST_CODICON_TTF,
+                        ASMTEST_FA_TTF);
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init(glsl_version);
