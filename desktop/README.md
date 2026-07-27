@@ -325,6 +325,51 @@ values, asserts the drift files carry no inline colour literal, and smokes the
 legend headlessly. This palette is the substrate the graded honesty-chrome work
 (docs/internal/gui/23) builds on.
 
+**Accessibility (CVD-safe + second channel).** No categorical distinction rides
+on hue alone (doc 24 T2, F15). `src/ui/cvd.{h,cpp}` is pure maths — it simulates
+protanopia / deuteranopia / tritanopia and computes WCAG contrast — and every
+categorical entry in the ONE encoding table (`legend.cpp`) carries a **second
+channel**: a shape glyph for cone direction, a fill pattern (solid = hot, hollow
+= dim, dashed = unaligned) for the Loom takes, the `[statistical]` stipple/dashed
+token for sampled provenance, and a labelled `ColormapScale` (over a CVD-safe
+Viridis colormap) for the hot-edge heatmap. Contrast is a gate, not a suggestion:
+semantic **text** clears ≥4.5:1 and **fills/borders** ≥3:1 against the panel
+background at the smallest font, and the caution amber (`dt_warn`) is
+**large-text-only** (`dt_warn_large_text_only()`), confined to headers and
+banners. `test_cvd` asserts all of this on the model, never on pixels.
+
+## Words: the term registry, headings and the Terms pane
+
+The GUI's coined lexicon is defined once — in the Sphinx glossary
+(`docs/project/glossary.md`) — with each term's plain-language definition and its
+expert synonym. `scripts/gen-terms.py` generates the in-app registry
+(`ui/terms_generated.h`) from that one file at build time, exactly as the keymap
+help is generated from `dt_nav_bindings()`; `src/ui/terms.{h,cpp}` wraps it.
+Every coined surface leads with its **domain term** (metaphor as subtitle) via
+`dt_view_header(key)`, carries a per-view **"?"** with the verbatim metric caveat,
+and the **Terms** tab lists the whole lexicon (searchable via the doc-16 ImSearch
+idiom in the app, a plain list under the null backend). `test_terms` parses the
+same glossary the build parses and asserts every headword resolves — one source.
+
+## Filter, sort and time-position
+
+`src/ui/filter.h` is the ONE type-to-narrow filter ("showing N of M") plus a pure
+column-sort that reorders the *view*, never the recorded model order; the
+hot-edge table sorts for free. `src/ui/timepos.h` is the ONE time-position
+widget with two honest variants: a **continuous scrub** where a real total exists
+(the Loom / 3D playheads) and a **discrete step** where it does not (Invocations,
+the disassembly logical-time control), the discrete case visibly marked with its
+verbatim reason from one registry. `test_filter` asserts the counts, the sort
+order and the discrete reasons.
+
+## First-open primer
+
+The two heaviest surfaces (the Loom and the 3D overview) open a dismissible,
+re-openable in-canvas primer + legend (`src/ui/primer.{h,cpp}`) instead of
+dropping a learner into a raw fabric/terrain. It shows once per session, is
+re-opened from the per-view "?", and holds the view's lean default until
+acknowledged. `test_primer` asserts the state transitions headlessly.
+
 ## The replay views
 
 Every view is built in two halves. `<view>.cpp` is a **pure builder**: a

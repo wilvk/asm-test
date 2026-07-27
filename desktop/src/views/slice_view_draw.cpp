@@ -42,6 +42,27 @@ ImU32 cone_colour(dt_cone c) {
     return IM_COL32(200, 200, 200, 255); // defensive fallback (unreached)
 }
 
+// The SECOND CHANNEL for cone direction (24 T2 / F15): a shape glyph so a
+// monochrome reader — or one who cannot separate the back-blue from the
+// fwd-orange — still reads which way the dependency flows. The glyphs match
+// dt_cone_legend / the encoding table exactly (back inflow, fwd outflow, both,
+// off-cone), so the node and its legend can never disagree.
+const char *cone_glyph(dt_cone c) {
+    switch (c) {
+    case dt_cone::back:
+        return "\xE2\x97\x84"; // back-cone: produced it (inflow)
+    case dt_cone::fwd:
+        return "\xE2\x96\xBA"; // fwd-cone: affects (outflow)
+    case dt_cone::both:
+        return "\xE2\x97\x8F"; // the selection itself
+    case dt_cone::dimmed:
+        return "\xC2\xB7"; // off-cone
+    case dt_cone::none:
+        break;
+    }
+    return "";
+}
+
 } // namespace
 
 void draw_slice_view(const dt_slice_view &v) {
@@ -103,9 +124,14 @@ void draw_slice_view(const dt_slice_view &v) {
         }
         for (const dt_slice_node &n : v.nodes) {
             float x = origin.x + col_w * static_cast<float>(n.column) + node_r;
-            dl->AddCircleFilled(ImVec2(x, node_y), node_r, cone_colour(n.style));
-            dl->AddText(ImVec2(x - node_r, node_y + node_r + 2),
-                        cone_colour(n.style), n.label.c_str());
+            ImU32 col = cone_colour(n.style);
+            dl->AddCircleFilled(ImVec2(x, node_y), node_r, col);
+            // The direction glyph rides just above the node (T2 second channel):
+            // the axis reads without depending on the back/fwd hue difference.
+            dl->AddText(ImVec2(x - node_r, node_y - node_r - 14), col,
+                        cone_glyph(n.style));
+            dl->AddText(ImVec2(x - node_r, node_y + node_r + 2), col,
+                        n.label.c_str());
         }
         canvas.End();
     }

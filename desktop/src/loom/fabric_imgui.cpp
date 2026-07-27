@@ -5,7 +5,11 @@
 #include "ImZoomSlider.h"
 
 #include "loom/loom_draw.h"
+#include "ui/legend.h"
+#include "ui/primer.h"
+#include "ui/terms.h"
 #include "ui/theme.h"
+#include "ui/timepos.h"
 
 namespace asmdesk {
 
@@ -25,7 +29,10 @@ constexpr ImU32 kKnot = IM_COL32(255, 255, 255, 40);
 constexpr ImU32 kText = IM_COL32(20, 22, 28, 255);
 constexpr ImU32 kLabel = IM_COL32(210, 214, 224, 255);
 constexpr ImU32 kRibbon = IM_COL32(90, 150, 220, 30);
-constexpr ImU32 kHot = IM_COL32(230, 110, 90, 220);
+// The hot take / patient-zero colour now lives in the shared palette (24 T2):
+// hot reads the same on the fabric as in the take legend. Its SECOND CHANNEL is
+// the solid fill (dim takes are hollow), so it never rides on colour alone.
+const ImU32 kHot = dt_hot_u32();
 
 bool inside(const ImVec2 &p, float x0, float y0, float x1, float y1) {
     return p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
@@ -153,6 +160,27 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self) {
         L.lane = -1;
         L.playhead = L.fabric.steps ? L.fabric.steps - 1 : 0;
     }
+    // Domain-term-first heading + the "?" caveat, which also re-opens the primer
+    // (24 T3/T5). "Data-flow lineage (Loom)", caveat "lineage is def-use, not
+    // control flow".
+    dt_view_header("loom", [&L] { dt_primer_reopen(L.primer); });
+
+    // First-open primer (24 T5): what the fabric is + how to read its channels,
+    // with the take legend, dismissible and re-openable. Front-loads nothing
+    // heavier than this card until acknowledged.
+    if (dt_primer_active(L.primer)) {
+        dt_primer(
+            "loom-primer", "Data-flow lineage (Loom)",
+            "Each lane is a place a value lived; a worldline threads left-to-"
+            "right through the steps that read it. This is LINEAGE (def-use) — "
+            "where a value came from and what it fed — not the order code ran. "
+            "Read the take channel by its PATTERN: a solid rect is a value used "
+            "this step (hot), a hollow outline is present-but-unused (dim), "
+            "dashes are an unaligned tail (never agreement). "
+            "[ and ] walk generations.",
+            [] { dt_loom_take_legend(); }, L.primer);
+    }
+
     if (!L.err.empty()) {
         // A refusal is a full-pane placard and nothing else: there is no fabric,
         // and half a fabric would be worse than none. The refuse red is the ONE
@@ -199,14 +227,19 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self) {
         ImGui::PopID();
     }
     int ph = static_cast<int>(L.playhead);
-    ImGui::SetNextItemWidth(200);
-    if (ImGui::SliderInt("playhead", &ph, 0,
-                         f.steps ? static_cast<int>(f.steps) - 1 : 0))
+    // The ONE time-position widget, CONTINUOUS variant (24 T4): the fabric has a
+    // real step total, so a scrub is honest.
+    if (dt_timepos_scrub("playhead", &ph, f.steps ? static_cast<int>(f.steps) - 1
+                                                  : 0))
         L.playhead = static_cast<uint32_t>(ph);
     ImGui::SameLine();
     ImGui::Checkbox(kLoomAuditTitle, &L.audit);
     if (L.audit && ImGui::IsItemHovered())
         ImGui::SetTooltip("%s", kLoomAuditHover);
+
+    // Inline take legend (24 T3): the fabric's structural axis, named by its
+    // SECOND CHANNEL (solid / hollow / dashed) so it reads without the hue (T2).
+    dt_loom_take_legend();
 
     ImVec2 avail = ImGui::GetContentRegionAvail();
     L.cam.px_w = avail.x > 64 ? avail.x : 64;

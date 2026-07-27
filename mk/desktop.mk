@@ -279,6 +279,30 @@ $(BUILD)/desktop/app/ui/inspect_door.o $(BUILD)/desktop/render/ui/inspect_door.o
 $(BUILD)/desktop/app/vw/slice_view_draw.o $(BUILD)/desktop/render/vw/slice_view_draw.o $(BUILD)/desktop/test/vw/slice_view_draw.o: | $(NODEEDITOR_HOME)/imgui_canvas.h
 $(BUILD)/desktop/app/ui/author_door.o $(BUILD)/desktop/render/ui/author_door.o $(BUILD)/desktop/test/ui/author_door.o: | $(ICTEDIT_HOME)/TextEditor.h
 
+# --- in-app term registry, GENERATED from the ONE glossary (24 T3) -----------
+# scripts/gen-terms.py parses docs/project/glossary.md's {glossary} directive
+# into ui/terms_generated.h (a {term -> definition} table) — the same one-source
+# pattern the keymap help uses (dt_nav_bindings -> help). ui/terms.cpp is its
+# only #includer, so it alone gets the generated header as an order-only prereq,
+# in every tree. Generated under $(BUILD) (never committed); -I puts it on the
+# `ui/` include path so `#include "ui/terms_generated.h"` resolves.
+DESKTOP_TERMS_GEN := $(BUILD)/desktop/gen/ui/terms_generated.h
+$(DESKTOP_TERMS_GEN): scripts/gen-terms.py docs/project/glossary.md
+	@mkdir -p $(@D)
+	python3 scripts/gen-terms.py docs/project/glossary.md > $@
+DESKTOP_CXXFLAGS += -I$(BUILD)/desktop/gen
+$(BUILD)/desktop/app/ui/terms.o $(BUILD)/desktop/render/ui/terms.o \
+$(BUILD)/desktop/test/ui/terms.o $(BUILD)/desktop/uitest/ui/terms.o: \
+    | $(DESKTOP_TERMS_GEN)
+# The shipped app + viewer surface the Terms pane through the doc-16 ImSearch
+# idiom (guarded at runtime on the ImSearch context); the null test + uitest
+# trees compile the plain-list fallback, so they need neither the macro nor a
+# link to imsearch.o for a standalone terms test.
+$(BUILD)/desktop/app/ui/terms.o $(BUILD)/desktop/render/ui/terms.o: \
+    DESKTOP_CXXFLAGS += -DASMDESK_HAVE_IMSEARCH
+$(BUILD)/desktop/app/ui/terms.o $(BUILD)/desktop/render/ui/terms.o: \
+    | $(IMSEARCH_HOME)/imsearch.h
+
 # --- source basenames --------------------------------------------------------
 DESKTOP_IMGUI_CORE := imgui imgui_draw imgui_tables imgui_widgets
 DESKTOP_IMGUI_BACK := imgui_impl_glfw imgui_impl_opengl3
@@ -521,6 +545,11 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/ui/capability_panel.o \
   $(BUILD)/desktop/$(1)/ui/inspect_door.o \
   $(BUILD)/desktop/$(1)/ui/legend.o \
+  $(BUILD)/desktop/$(1)/ui/cvd.o \
+  $(BUILD)/desktop/$(1)/ui/terms.o \
+  $(BUILD)/desktop/$(1)/ui/filter.o \
+  $(BUILD)/desktop/$(1)/ui/timepos.o \
+  $(BUILD)/desktop/$(1)/ui/primer.o \
   $(BUILD)/desktop/$(1)/ui/gl_scene_host.o \
   $(DESKTOP_LIVE:%=$(BUILD)/desktop/$(1)/lv/%.o) \
   $(BUILD)/desktop/$(1)/sp/projection.o $(BUILD)/desktop/$(1)/sp/terrain.o \
@@ -585,6 +614,14 @@ DESKTOP_TEST_DA  := $(BUILD)/desktop/test/da/features_data.o \
                     $(BUILD)/desktop/test/da/perf_history.o
 DESKTOP_TEST_LOOM := $(DESKTOP_LOOM_PURE:%=$(BUILD)/desktop/test/lo/%.o)
 DESKTOP_TEST_LIVE := $(DESKTOP_LIVE:%=$(BUILD)/desktop/test/lv/%.o)
+# The shared visual-language ui/ helpers (24-one-visual-language.md): the
+# palette legend (T1/T2), the glossary-sourced term registry + headings (T3), the
+# one filter + column sort (T4), the one time-position widget (T4), the first-
+# open primer (T5). Any draw-half binary that hosts a coined surface links these,
+# so they are one list rather than five ad-hoc additions. (legend.o was listed
+# standalone before; it now lives here — never list it twice on a link line.)
+DESKTOP_TEST_UI     := legend terms filter timepos primer
+DESKTOP_TEST_UI_OBJ := $(DESKTOP_TEST_UI:%=$(BUILD)/desktop/test/ui/%.o)
 
 # --- missing-dependency probes (mirror mk/cli.mk:32-38) -----------------------
 # The render-only viewer + the full app need GLFW/GL; only the full app needs the
@@ -835,6 +872,10 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_fonts \
                  $(BUILD)/desktop_test_ictedit \
                  $(BUILD)/desktop_test_theme \
+                 $(BUILD)/desktop_test_cvd \
+                 $(BUILD)/desktop_test_terms \
+                 $(BUILD)/desktop_test_filter \
+                 $(BUILD)/desktop_test_primer \
                  $(BUILD)/desktop_test_slice_view_draw \
                  $(BUILD)/desktop_test_slice $(BUILD)/desktop_test_nav \
                  $(BUILD)/desktop_test_projection \
@@ -1035,7 +1076,7 @@ $(BUILD)/desktop_test_obs_draw: $(BUILD)/desktop/test/t/test_obs_draw.o \
     $(DESKTOP_IMPLOT_OBJ_test) \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) \
     $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \
-    $(BUILD)/desktop/test/ui/legend.o \
+    $(DESKTOP_TEST_UI_OBJ) \
     $(DESKTOP_TEST_DA) $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
@@ -1057,6 +1098,7 @@ $(BUILD)/desktop_test_inspect: $(BUILD)/desktop/test/t/test_inspect.o \
 
 $(BUILD)/desktop_test_loom_draw: $(BUILD)/desktop/test/t/test_loom_draw.o \
     $(DESKTOP_TEST_LOOM) $(BUILD)/desktop/test/lo/fabric_imgui.o \
+    $(DESKTOP_TEST_UI_OBJ) \
     $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
@@ -1206,6 +1248,36 @@ $(BUILD)/desktop_test_theme: $(BUILD)/desktop/test/t/test_theme.o \
     $(BUILD)/desktop/test/ui/legend.o $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# The CVD-safe palette + second-channel gate (24 T2): cvd.o (pure maths) +
+# legend.o (the ONE encoding table the assert reads) + imgui core. Engine-free.
+$(BUILD)/desktop_test_cvd: $(BUILD)/desktop/test/t/test_cvd.o \
+    $(BUILD)/desktop/test/ui/cvd.o $(BUILD)/desktop/test/ui/legend.o \
+    $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The glossary-sourced term registry (24 T3): terms.o (generated table +
+# lookup/meta) + imgui core. Reads the SAME glossary the build step parses (path
+# via a compile define) to prove one source. terms.o (test tree) is the plain-
+# list build, so no imsearch link is needed.
+$(BUILD)/desktop/test/t/test_terms.o: \
+    DESKTOP_TEST_EXTRA = -DASMTEST_GLOSSARY_MD='"docs/project/glossary.md"'
+$(BUILD)/desktop_test_terms: $(BUILD)/desktop/test/t/test_terms.o \
+    $(BUILD)/desktop/test/ui/terms.o $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The one filter + column sort + discrete-time reason (24 T4): filter.o +
+# timepos.o + imgui core. Pure model asserts (N of M, sort order, reasons).
+$(BUILD)/desktop_test_filter: $(BUILD)/desktop/test/t/test_filter.o \
+    $(BUILD)/desktop/test/ui/filter.o $(BUILD)/desktop/test/ui/timepos.o \
+    $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# The first-open primer (24 T5): primer.o + imgui core. State transitions +
+# a null-backend draw smoke.
+$(BUILD)/desktop_test_primer: $(BUILD)/desktop/test/t/test_primer.o \
+    $(BUILD)/desktop/test/ui/primer.o $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 # The Author-door code editor (17 T2): TextEditor.o + imgui core. The test needs
 # TextEditor.h fetched (+ the guard applied by fetch-ictedit.sh).
 $(BUILD)/desktop/test/t/test_ictedit.o: | $(ICTEDIT_HOME)/TextEditor.h
@@ -1290,7 +1362,7 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/addon/imsearch.o \
     $(BUILD)/desktop/test/ui/capability_panel.o \
     $(BUILD)/desktop/test/ui/inspect_door.o \
-    $(BUILD)/desktop/test/ui/legend.o \
+    $(DESKTOP_TEST_UI_OBJ) \
     $(BUILD)/desktop/test/addon/imguifiledialog.o \
     $(DESKTOP_TEST_LIVE) \
     $(BUILD)/desktop/test/src/walkthrough.o \

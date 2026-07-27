@@ -215,6 +215,26 @@ viewer with zero engine deps.
 
 ### T2 — one CVD-verified palette, every categorical distinction backed by a second channel  (M, depends on: T1, 15)
 
+> **Landed 2026-07-27 — green.** A pure `desktop/src/ui/cvd.{h,cpp}` simulates
+> protan/deuter/tritan (Machado 2009 severity-1) and computes WCAG contrast, no
+> ImGui context and no engine. The T1 accessors keep their hues (they are already
+> a separated categorical set; changing byte-exact cone values would cascade
+> through the golden/byte tests for no honesty gain), and the F15 fix is carried
+> by the SECOND CHANNEL per the brief's own test (c): a shape glyph beside every
+> cone node (`slice_view_draw.cpp`), the Loom take axis read by fill pattern with
+> a named inline legend `dt_loom_take_legend` (`fabric_imgui.cpp` — `kHot` now
+> routes through a shared `dt_hot_*` accessor), and a CVD-safe Viridis colormap +
+> its `ColormapScale` on the hot-edge heatmap (`observer_draw.cpp`). The ONE
+> encoding table lives in `ui/legend.cpp` (`dt_encoding_table`) and drives both
+> the legend and the test, so the legend is the proof no distinction is
+> colour-only. `theme.h` gains `dt_panel_bg_col` + the `dt_warn_large_text_only`
+> policy marker. New `desktop/test/test_cvd.cpp` (on `make desktop-test`) asserts
+> every categorical entry has a non-empty second channel, contrast ≥4.5:1 text /
+> ≥3:1 fills at the smallest font (amber marked large-text-only at ≥3:1), and that
+> each CVD pair is separable OR covered by a distinct second channel — passing
+> *because of* the redundancy (green/red is asserted to collapse under
+> deuteranopia, proving the test is not vacuous).
+
 **Goal.** Make the T1 palette colour-blind-safe *and* redundant: simulate protan/
 deuter/tritan over it, verify contrast, and guarantee every categorical distinction
 also carries a non-colour channel (shape / pattern / label). Generalise the existing
@@ -276,6 +296,25 @@ has a tested second channel; text ≥4.5:1 / fills ≥3:1 at the smallest font;
 `dt_warn` is confined to large text; the heatmap uses a CVD-safe colormap.
 
 ### T3 — domain-term-first surfaces + a term registry driven from the ONE glossary  (L, depends on: 16)
+
+> **Landed 2026-07-27 — green.** The coined GUI terms (Loom, fabric, patch-bay,
+> hollow span, born-untraced, patient-zero, hot-edges, knot, jack, worldline,
+> Reweave, dim/hot take, terrane) are now defined in `docs/project/glossary.md`
+> with plain definition + expert synonym; `scripts/gen-terms.py` parses the
+> `{glossary}` directive into `ui/terms_generated.h` at build (order-only prereq
+> of `terms.o`, generated under `$(BUILD)/desktop/gen`, `-I`'d onto the `ui/`
+> path), mirroring the `dt_nav_bindings()`→help pattern — no hand-copied second
+> list. `desktop/src/ui/terms.{h,cpp}` wraps it: `dt_term_lookup`, a per-view
+> metadata table (`dt_view_meta`: domain term + metaphor + verbatim caveat),
+> `dt_view_header(key)` (drawn at the head of the Loom, 3D, hot-edges, slice,
+> diff, scrubber, ABI x-ray bodies), a hoverable `dt_term`, a per-view "?" popover
+> carrying the caveat (and the T5 primer re-open handle), and a searchable
+> **Terms** tab (`dt_terms_pane` — ImSearch in the app, plain list under the null
+> backend). New `desktop/test/test_terms.cpp` parses the same glossary the build
+> parses and asserts every headword resolves, the coined terms carry their expert
+> synonym, and every registered view has a domain/metaphor/caveat. The glossary's
+> intro now notes its second consumer. **Note (drift from the brief):** the CODE
+> keeps the accessors' hues (T2 banner); everything else follows the brief.
 
 **Goal.** Lead every coined surface with the canonical domain term (metaphor as
 subtitle), and surface the ONE Sphinx glossary in-app as a hoverable term registry,
@@ -342,6 +381,24 @@ filters via the ImSearch idiom.
 
 ### T4 — one filter affordance + one time-position widget (two honest variants)  (M, depends on: 16)
 
+> **Landed 2026-07-27 — green.** `desktop/src/ui/filter.h` is the one affordance:
+> a pure case-insensitive `dt_filter_match` / `dt_filter_count` ("showing N of M")
+> + a pure `dt_sorted_order` (stable, reorders VIEW indices, never the model), and
+> a `dt_filter_bar` draw helper that works under the null backend (plain
+> InputText, not an addon). Free ImGui column-sort landed on the hot-edge table
+> (`observer_draw.cpp`): `ImGuiTableFlags_Sortable`, keys by column, reordered
+> through `dt_sorted_order`. `desktop/src/ui/timepos.{h,cpp}` is the one
+> time-position widget: `dt_timepos_scrub` (continuous — now behind the Loom and
+> 3D-HUD playheads, replacing their bespoke `SliderInt`s) and `dt_timepos_step`
+> (discrete — the Invocations pager, with an always-visible intentional-discrete
+> marker + the verbatim reason from the one `dt_timepos_discrete_reason` registry;
+> the disassembly logical-time control carries the same marker + registry reason).
+> Tree's engine-side filter and Backends' combo are left as-is by design (a
+> capture bound vs a selector, not client-side narrowing). New
+> `desktop/test/test_filter.cpp` asserts N of M (empty ⇒ N==M, case-insensitive),
+> the sort reorders the view while the model is untouched (stable on ties), and the
+> discrete surfaces carry non-empty reasons.
+
 **Goal.** One filter idiom on every list/table (type-to-narrow "showing N of M") plus
 free ImGui column-sort on the tabular views, and ONE shared time-position widget with
 two honest variants — continuous where a total exists, discrete where it does not —
@@ -401,6 +458,20 @@ sort; the time control is one widget with two variants; the discrete variant sho
 its intentional-honesty reason.
 
 ### T5 — Loom & 3D overview first-open primer + legend  (M, depends on: T1, T3)
+
+> **Landed 2026-07-27 — green.** `desktop/src/ui/primer.{h,cpp}`: a per-view
+> `dt_primer_state` (a plain bool, held in `LoomState` and `SceneView`),
+> `dt_primer` draws the first-open in-canvas card (title + one-paragraph body +
+> the shared legend + "Got it"), and pure predicates `dt_primer_active` /
+> `dt_primer_lean` / `dt_primer_dismiss` / `dt_primer_reopen`. Wired into the Loom
+> (`fabric_imgui.cpp`: lineage = def-use, the solid/hollow/dashed take channels)
+> and the 3D overview (`shell.cpp` `draw_scene_overview`: terrain = address space,
+> trajectory = path, exact-vs-statistical, the promoted "3D to find, 2D to read"
+> line). Re-open rides the T3 per-view "?" (`dt_view_header(key, on_reopen)`
+> clears `dismissed`). Until acknowledged the view holds its lean default
+> (`dt_primer_lean`). New `desktop/test/test_primer.cpp` asserts: shows on first
+> open, "Got it" hides it, the "?" re-opens it, and the lean gate holds while
+> unacknowledged — plus a null-backend draw smoke.
 
 **Goal.** Give the two heaviest surfaces a dismissible, re-openable first-open
 in-canvas primer + legend, so a novice is not dropped into a raw fabric/terrain;

@@ -3,6 +3,12 @@
 Plain-language definitions of the terms and acronyms used throughout these docs.
 If a word in the documentation looks unfamiliar, it is probably explained here.
 
+This file is also the **single source** for the desktop GUI's in-app term
+registry (`docs/internal/gui/24-one-visual-language.md` T3): `scripts/gen-terms.py`
+parses the `{glossary}` directive below into the app's hoverable tooltips and its
+searchable *Terms* pane, so the app's words and the docs' words cannot drift.
+When you add or reword a coined GUI term here, the app follows on the next build.
+
 :::{glossary}
 :sorted:
 
@@ -823,4 +829,82 @@ XMM
 ZF
   *[Zero Flag](https://en.wikipedia.org/wiki/Zero_flag).* A {term}`CPU` status {term}`flag` set when the result of an
   operation is exactly zero.
+
+born-untraced
+  A value the desktop GUI's {term}`Loom` shows entering a computation from
+  *outside* the traced window — its origin was never recorded, so no lineage can
+  be drawn back to it. Expert synonym: an *unrecorded upstream definition*. Drawn
+  with a caution glyph, never as if its provenance were known.
+
+dim take
+  In the desktop {term}`Loom`, a value that is *present* at a step but was not
+  *used* by it — drawn as a hollow outline (never a filled rectangle, which is
+  reserved for a value in use). Expert synonym: a *live-but-unread definition*.
+  Contrast {term}`hot take`.
+
+fabric
+  The woven 2-D field the desktop {term}`Loom` draws: lanes running left-to-right
+  as time, worldlines threading through them. Expert synonym: the *def-use
+  lineage graph laid out over the step axis*. It is the surface; the Loom is the
+  tool that weaves it.
+
+hollow span
+  A span the desktop {term}`Loom` draws as an outline only: the *route* a value
+  took is known but its *value* is not (it was never captured). Expert synonym:
+  an *edge with a known path but no recorded datum*. A filled span would look
+  exactly like one carrying a measurement, so the hollow outline keeps them
+  honestly distinct.
+
+hot-edges
+  A desktop Observer view showing which control-flow edges were taken most often,
+  as a src×dst count heatmap. Expert synonym: *edge execution counts* — it is a
+  count, **not a call stack** and not an ordered path. Statistical when its source
+  is a sampled backend.
+
+hot take
+  In the desktop {term}`Loom`, a value a step actually *used* — drawn as a solid
+  filled rectangle. Expert synonym: a *read (consumed) definition*. Contrast
+  {term}`dim take`.
+
+jack
+  A connection point in the desktop patch-bay metaphor for tracer contention: a
+  place where a tracer can be "plugged in" to a target. Expert synonym: a *trace
+  attachment point / capture slot*.
+
+knot
+  In the desktop {term}`Loom`, the point where two worldlines meet — one value
+  derived from another. Expert synonym: a *def-use join* in the lineage graph.
+
+patch-bay
+  The desktop metaphor for tracer contention and capture budget: like an audio
+  patch-bay, only so many tracers can be plugged into so many targets at once.
+  Expert synonym: *tracer contention / capture-budget arbitration*.
+
+patient-zero
+  The desktop GUI's name for the *first divergence* between two recordings — the
+  earliest step at which they stop agreeing, the origin of everything downstream
+  that differs. Expert synonym: *first divergent step / root difference*.
+
+Reweave
+  Recomputing the desktop {term}`Loom`'s {term}`fabric` after the selection or the
+  step window changes. Expert synonym: *re-deriving the lineage layout*. The
+  fabric is a pure function of its inputs, so a Reweave is deterministic.
+
+terrane
+  A region of the desktop 3-D overview's address-space terrain — a contiguous
+  block of mapped code or data placed on the plane. Expert synonym: an
+  *address-space region / mapped segment*. (Spelled as the geological term, a
+  distinct block of crust, to evoke the terrain metaphor.)
+
+worldline
+  A single value's path through the desktop {term}`Loom`'s {term}`fabric` over
+  time — born at a definition, threading through the steps that read it. Expert
+  synonym: a *value's def-use timeline*. Borrowed from the spacetime sense of a
+  particle's track.
+
+Loom
+  The desktop GUI's data-flow lineage tool: it weaves a recording's def-use
+  edges into a {term}`fabric` of {term}`worldline`s so you can read where a value
+  came from and what it fed. Expert synonym: *data-flow lineage (def-use)* — it
+  shows lineage, **not control flow**.
 :::

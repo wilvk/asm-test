@@ -8,6 +8,7 @@
 
 #include "space/projection.h"
 #include "ui/theme.h"
+#include "ui/timepos.h" // one time-position widget, continuous scrub (24 T4)
 
 namespace asmdesk::scene3d {
 
@@ -75,9 +76,10 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     int tmax = static_cast<int>(s.nsteps);
     if (tmax < 0)
         tmax = 0;
-    if (ImGui::SliderInt("playhead (step)", &t, 0, tmax)) {
-        if (t < 0)
-            t = 0;
+    // The ONE time-position widget, CONTINUOUS variant (24 T4): a real total (the
+    // step count) exists here, so a scrub is honest — unlike the Invocations
+    // pager, which has no continuous total and uses the discrete variant.
+    if (dt_timepos_scrub("playhead (step)", &t, tmax)) {
         s.t = static_cast<uint64_t>(t);
         s.playhead_moved = true;
     }

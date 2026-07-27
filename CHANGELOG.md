@@ -8,6 +8,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **In-app term registry, per-view "?" caveats, domain-term-first headings, and a
+  searchable Terms pane** (docs/internal/gui/24-one-visual-language.md T3). The
+  coined GUI lexicon (Loom, fabric, patch-bay, hollow span, born-untraced,
+  patient-zero, hot-edges, knot, jack, worldline, Reweave, dim/hot take, terrane)
+  is now defined in the ONE Sphinx glossary (`docs/project/glossary.md`) with each
+  term's plain-language definition *and* its expert synonym; `scripts/gen-terms.py`
+  generates the app's registry from that one file (no hand-copied second list), so
+  a tooltip, a legend and the docs cannot drift. Every coined surface now leads
+  with its canonical **domain term** and the metaphor as a subtitle
+  ("Data-flow lineage (Loom)", "First divergence (patient zero)", "Edge execution
+  counts (hot-edges)"), carries a per-view **"?"** with the verbatim metric caveat
+  ("hot-edges are edge counts, not a call stack"), and offers a searchable Terms
+  pane (the doc-16 ImSearch idiom, guarded so the null backend degrades to a plain
+  list). The registry/lookup/heading metadata are asserted headlessly against the
+  same glossary the build parses (one source).
+- **First-open primer + legend on the Loom and the 3D overview**
+  (docs/internal/gui/24-one-visual-language.md T5). The two heaviest surfaces now
+  open a dismissible, in-canvas primer ("what this is / how to read it" + the
+  shared legend) instead of dropping a learner into a raw fabric/terrain; it shows
+  once per session, never nags again, and is re-openable from the per-view "?".
+  Until it is acknowledged the view holds its lean default (nothing heavier is
+  front-loaded). State transitions are asserted headlessly.
 - **Pan/zoom, fit-graph and selection for the graph views** (docs/internal/gui/15-
   plotting-and-graph-nav.md T3, via imgui-node-editor). The process **topology**,
   the live/replay **call tree** and the frozen **hot-edge** snapshot now draw on a
@@ -2191,6 +2213,29 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **CVD-safe categorical palette + a second channel on every colour-coded
+  distinction** (docs/internal/gui/24-one-visual-language.md T2). Every categorical
+  distinction now also carries a NON-colour channel so ~5% of users who cannot
+  read the hue still read the axis: cone direction gains a shape glyph beside each
+  node (◄ inflow / ► outflow / ● selection / · off-cone), the Loom take axis reads
+  by pattern (solid = hot / hollow = dim / dashed = unaligned) with a named inline
+  legend, and the src×dst hot-edge heatmap uses a CVD-safe, perceptually-uniform
+  ImPlot colormap (Viridis) whose labelled `ColormapScale` is the magnitude
+  channel. A pure `ui/cvd.{h,cpp}` simulates protan/deuter/tritan and computes WCAG
+  contrast; the palette is verified in test (text ≥4.5:1, fills/borders ≥3:1 at the
+  smallest font), and the caution amber (`dt_warn`) is marked large-text-only. The
+  shared legend renders from ONE encoding table, so the legend is itself the proof
+  no distinction rides on colour alone.
+- **One filter affordance + one time-position widget across the desktop views**
+  (docs/internal/gui/24-one-visual-language.md T4). A single type-to-narrow filter
+  with a "showing N of M" count (`ui/filter.h`) replaces the ad-hoc client-side
+  idioms, free ImGui column-sort landed on the hot-edge table (reordering the view,
+  never the recorded model order), and ONE time-position widget (`ui/timepos.h`)
+  now carries two honest variants — a continuous scrub where a real total exists
+  (the Loom/3D playheads) and a discrete step where it does not (Invocations, the
+  disassembly logical-time control), the discrete case VISIBLY MARKED as an
+  intentional honesty choice with its verbatim reason. The counts, sort order and
+  discrete-reason registry are asserted headlessly.
 - **The desktop views are now real dockable panes — the docking layout manager,
   presets and Reset act on visible windows** (docs/internal/gui/19-dockable-panes-keystone.md).
   Before this, the layout manager docked five named windows (`Home`, `Recording`,

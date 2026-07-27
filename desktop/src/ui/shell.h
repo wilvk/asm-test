@@ -23,6 +23,7 @@
 #include "space/terrain.h"
 #include "space/trajectory.h"
 #include "ui/doors.h"
+#include "ui/primer.h" // first-open primer state (24 T5)
 #include "ui/scene_host.h"
 #include "views/completeness.h"
 #include "views/observer_draw.h"
@@ -48,6 +49,7 @@ struct SceneView {
     scene3d::Camera cam;
     scene3d::HudState hud;
     bool nav_dragging = false; // a left-drag is orbiting (suppresses the pick)
+    dt_primer_state primer;    // the first-open primer (24 T5), per recording
 };
 
 struct ShellState {
