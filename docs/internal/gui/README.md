@@ -121,17 +121,54 @@ per the doc-11 row above.
 | [12-addon-supply-chain.md](12-addon-supply-chain.md) | amend D2 (addon-admission rule); reusable `fetch-addon.sh` + digest/license conventions; imgui-repin compile-gate (**Track G — blocks all**) | 3 | 03 | ☑ 3/3 |
 | [13-foundation-moves.md](13-foundation-moves.md) | F1 docking repin (`v1.91.9b-docking`) + in-tree layout manager; F2 32-bit `ImDrawIdx`; F3 freetype + JetBrains Mono + Codicons; F4 the 1.92 bump decision (**Track F**) | 5 | 12; 04, 09, 10 | ☑ 5/5 |
 | [14-quick-wins.md](14-quick-wins.md) | diff "go" bug fix; shared theme header; ProgressBar; imgui_memory_editor; ImZoomSlider; ImGuiTextSelect (v1.1.6+utfcpp); ImGuiFileDialog (v0.6.8) (**Track Q**) | 7 | 12 (T4–T7); 04/05/08 | ☑ 7/7 |
-| [15-plotting-and-graph-nav.md](15-plotting-and-graph-nav.md) | ImPlot v1.0 chassis (perf_history/hotedges/timeline/watch); imgui_canvas de-risk; imgui-node-editor for topo/tree | 3 | 12, 13 (F1/F2) | ◐ (T1 plots + T2 canvas) |
-| [16-live-feedback-and-filtering.md](16-live-feedback-and-filtering.md) | ImGuiNotify toasts (live-session events); ImSearch client-side filtering (**both ∅-unverified in doc 11 — compile-check at pin**) | 2 | 12; 13 F3 (Notify) | ◐ (T2 done; T1 needs fonts) |
-| [17-interaction-testing-and-editor.md](17-interaction-testing-and-editor.md) | imgui_test_engine (interaction tests + keymap enforcement, test-lane-only); goossens ImGuiColorTextEdit + TextDiff (Author editor, disasm gutter, side-by-side diff) (**Bigger bets**) | 2 | 12 | ◐ (T2 editor; T1 test-engine pending) |
+| [15-plotting-and-graph-nav.md](15-plotting-and-graph-nav.md) | ImPlot v1.0 chassis (perf_history/hotedges/timeline/watch); imgui_canvas de-risk; imgui-node-editor for topo/tree | 3 | 12, 13 (F1/F2) | ◐ 2/3 (T1 plots ☑ + T2 canvas ☑; **T3 node-editor topo/tree unstarted**) |
+| [16-live-feedback-and-filtering.md](16-live-feedback-and-filtering.md) | ImGuiNotify toasts (live-session events); ImSearch client-side filtering (**both ∅-unverified in doc 11 — compile-check at pin**) | 2 | 12; 13 F3 (Notify) | ✅ 2/2 (T1 toasts `1a9d6d5` + T2 filter `a728d9d`) |
+| [17-interaction-testing-and-editor.md](17-interaction-testing-and-editor.md) | imgui_test_engine (interaction tests + keymap enforcement, test-lane-only); goossens ImGuiColorTextEdit + TextDiff (Author editor, disasm gutter, side-by-side diff) (**Bigger bets**) | 2 | 12 | ✅ 2/2 (T2 editor `fdb5783` + T1 engine/keymap `245ad3f`/`243f092`) |
 
-22 tasks across docs 12–17. Sequencing (doc 11's tracks): **12 (Track G) first**,
+22 tasks across docs 12–17 — **21 landed; the one open item is 15 T3
+(imgui-node-editor for topo/tree/hotedges pan-zoom + fit-graph).** Sequencing (doc 11's tracks): **12 (Track G) first**,
 then Track Q (14) and Track F (13) in parallel, then the plotting/graph chassis
 (15) and feedback/filtering (16) on the foundations, with the bigger bets (17)
 independent of each other at any time after 12. Every addon lands with its
 `fetch-<name>.sh` wrapper, a `scripts/third-party-digests.txt` row, a `licenses/`
 capture, and — for the `imgui_internal.h` dependents — an entry in the doc-12
 compile-probe.
+
+### UX-restructure family (docs 18–24) — implementation briefs cut from the review
+
+These seven briefs are the implementation-ready form of the
+[UX restructuring plan](../plans/desktop-gui-ux-restructure-plan.md) (which
+follows the 24-finding [heuristic review](../plans/desktop-gui-ux-review.md)),
+one per coherent recommendation cluster, each written so a junior developer can
+open exactly one and implement it end to end. They were drafted 2026-07-27
+against HEAD `243f092` with every cited file:line re-verified against the tree
+(the review's own citations predate doc 17 T1, which shifted `shell.cpp` ~200
+lines and added `handle_keymap`; the briefs cite current lines and flag the
+drifts). **None is implemented yet** — this is the drafting/planning pass; the
+code is future work. Recommendation IDs (`T<theme>.<n>`) and finding IDs (`F<n>`)
+map to the plan and review.
+
+| Doc | Wave | Recommendations (findings) | Tasks | Depends on | Status |
+|---|---|---|---|---|---|
+| [18-breach-stops.md](18-breach-stops.md) | 0 | keymap honesty-remainder + convention keys, real Reset, Author save-guard, capability positives, perturb-confirm, nav back/forward (F1,F18,F2,F24,F19,F22,F11) | 6 | 12 (test-engine, for tests); mostly independent of 19 | ☐ 0/6 |
+| [19-dockable-panes-keystone.md](19-dockable-panes-keystone.md) | 1 | real `kPane*` panes + flatten 3-deep nesting — **the keystone**, unblocks 20/21/22 (F2,F4,F9) | 3 | 13 F1 (docking, landed); 18 T2.2 alongside | ☐ 0/3 |
+| [20-workspace-and-settings.md](20-workspace-and-settings.md) | 1 | data-driven tabs, task-language entry rail, workspace persistence + recents, perspectives, Settings/DPI/text-scale (F4,F13,F10,F16,F6) | 5 | 19 (panes); 13 F3 (fonts, for Settings) | ☐ 0/5 |
+| [21-spine-navigation.md](21-spine-navigation.md) | 2 | command palette, wayfinding breadcrumb, overview/minimap (F8,F9) | 3 | 19 (panes); 15 + 14 T5 (minimap); 16 (ImSearch) | ☐ 0/3 |
+| [22-selection-and-search.md](22-selection-and-search.md) | 2 | shared brushing-and-linking selection, keyboard islands, global find, app-level undo (F7,F18,F17,F12) | 4 | 19 (panes); 16 (ImSearch); 21 T3 (minimap) | ☐ 0/4 |
+| [23-graded-truth-layer.md](23-graded-truth-layer.md) | 3 | graded 3-tier honesty chrome + schema `severity`, session-end placard, split "paused", progress everywhere (F5,F20,F23,F21) | 4 | 01 (**schema-freeze coordination for T1**); 24 T5.1 (palette); 16 T1; 14 T3 | ☐ 0/4 |
+| [24-one-visual-language.md](24-one-visual-language.md) | 3 | semantic palette (extend `theme.h`), CVD-safe + second channel, glossary/term registry, unified filter/time, Loom/3D primer (F3,F14,F15,F16,F4) | 5 | 16 (ImSearch); 15 (ImPlot colormap); T5.1 precedes 23 T1 | ☐ 0/5 |
+
+30 tasks across docs 18–24. Sequencing follows the plan's four waves:
+**Wave 0 (doc 18)** stops active breaches and is mostly independent of the
+docking refactor — ship it first. **Wave 1 (docs 19, 20)** is the structural
+unlock: doc 19 (the keystone) converts the orphaned `kPane*` docking into real
+panes and unblocks the rest; land doc 18's real-Reset alongside so a bad `.ini`
+cannot strand the user. **Wave 2 (docs 21, 22)** exposes and operates the
+`dt_nav_go` spine on the real panes. **Wave 3 (docs 23, 24)** does the systematic
+truth-layer + visual-language depth; **doc 24 T5.1 (semantic palette) lands
+before doc 23 T1 (honesty tiers)**, and doc 23 T1's `severity` field is a schema
+change that must coordinate with doc 01's Phase-3 freeze (D5). Nothing here
+removes a truth — the honesty chrome is *restructured* (F5), never removed.
 
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
@@ -203,3 +240,11 @@ are wiring on shipped substrate, not redesign.
 - [../plans/desktop-gui-ux-restructure-plan.md](../plans/desktop-gui-ux-restructure-plan.md)
   — the roadmap: five themes, four waves, and which tracks (13/14/15/16/17) to
   redirect vs. new briefs to cut.
+
+**Briefs cut 2026-07-27.** The roadmap's 28 unbuilt recommendations are now
+implementation-ready briefs — **docs 18–24** above, one per wave/theme cluster,
+each tracing every task to its `T<theme>.<n>` recommendation and `F<n>` finding.
+This was a drafting-only pass (no code); the keystone is doc 19 (real dockable
+panes). The single remaining pre-restructure item is **15 T3** (node-editor
+topo/tree). The [asmspy](../plans/asmspy-plan.md) / [desktop-gui](../plans/desktop-gui-plan.md)
+product plans are unchanged.
