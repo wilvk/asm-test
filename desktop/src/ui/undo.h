@@ -38,7 +38,11 @@ struct UndoCommand {
     bool cone_active_before = false, cone_fwd_before = false;
     bool cone_active_after = false, cone_fwd_after = false;
 
-    // Filter — the active recording's syscall name-filter string.
+    // Filter — a syscall name-filter string, scoped to the recording it was
+    // edited on. `filter_rec` is the recording id (NOT a tab index, which shifts
+    // as tabs open/close): undo/redo must restore the filter on THAT recording,
+    // never on whichever tab happens to be active when Ctrl+Z is pressed.
+    std::string filter_rec;
     std::string filter_before, filter_after;
 
     // TakeSet — the Loom takes gutter's accumulator (add / remove / clear).

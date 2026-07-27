@@ -74,6 +74,13 @@ const char *dt_view_name(dt_view v);
 bool dt_view_parse(std::string_view s, dt_view &out);
 // Every view, for exhaustive iteration (registration, and the round-trip test).
 const std::vector<dt_view> &dt_all_views();
+// True for the reading views that own an OUTER tab/pane the shell switches to on
+// a bare `want_view` intent (canvas/timeline/slice/diff). False for the Observer-
+// deck sub-views (syscalls/watch/topo/hotedges/tree/region/disasm — inner tabs
+// with no outer switch, reached by drill-in) and for `blame` (an entry point, not
+// a view). The command palette offers a "Show X view" only where this is true, so
+// it never advertises a switch the shell silently drops.
+bool dt_view_has_outer_tab(dt_view v);
 
 // Parse the textual form. False + a human-readable `err` on anything that is
 // not a navigable link; never throws, never partially fills `out`.

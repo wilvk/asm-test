@@ -126,6 +126,19 @@ const std::vector<dt_view> &dt_all_views() {
     return all;
 }
 
+bool dt_view_has_outer_tab(dt_view v) {
+    switch (v) {
+    case dt_view::canvas:
+    case dt_view::timeline:
+    case dt_view::slice:
+    case dt_view::diff:
+        return true;
+    default:
+        // Observer-deck sub-views (inner tabs) and blame (an entry point).
+        return false;
+    }
+}
+
 bool dt_nav_parse(std::string_view s, dt_link &out, std::string &err) {
     err.clear();
     const std::string_view scheme(kScheme);

@@ -57,11 +57,19 @@ std::vector<PaletteEntry> build_palette(const ShellState &s) {
     out.push_back({"Go to step or offset…", "Ctrl+G", PaletteCategory::GoTo,
                    [](ShellState &st) { st.show_goto = true; }});
 
-    // 2. VIEW-SWITCH — one per view (blame is the failure ENTRY POINT, not a
-    // view of its own, so it is not offered). Sets want_view, mirroring
-    // handle_keymap's 1/2/3/4 so the visible tab actually switches.
+    // 2. VIEW-SWITCH — one per view the app can actually SWITCH TO by intent.
+    // `want_view` (mirroring handle_keymap's 1/2/3/4) drives the outer tab, which
+    // the shell honours only for the reading views that own an outer tab/pane
+    // (canvas, timeline, slice, diff). `blame` is the failure ENTRY POINT, not a
+    // view; the Observer-deck sub-views (syscalls, watch, topo, hot-edges, tree,
+    // region, disasm) are INNER tabs of the Observer deck with no outer switch —
+    // reachable by topology/blame drill-in through dt_nav_go, but not by a bare
+    // want_view. Offering them here would advertise a command the shell silently
+    // drops, breaking this palette's own invariant (§8) that it never advertises
+    // a key the app does not honour. So the View category lists only the
+    // want_view-honoured views; test_palette pins exactly this set.
     for (dt_view v : dt_all_views()) {
-        if (v == dt_view::blame)
+        if (!dt_view_has_outer_tab(v))
             continue;
         std::string name = dt_view_name(v);
         out.push_back({"Show " + name + " view", "view", PaletteCategory::View,

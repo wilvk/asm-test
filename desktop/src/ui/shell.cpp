@@ -784,22 +784,28 @@ static void body_canvas(ShellState &, const Streams *a, const Streams *b) {
     draw_canvas(b ? dt_canvas_build2(*a, *b) : dt_canvas_build(*a));
 }
 static void body_timeline(ShellState &s, const Streams *a, const Streams *b) {
+    // The shared selection projects onto this recording ONLY when it belongs to
+    // it (22 T1; selection.rec is the disambiguator). Without this, a step brushed
+    // in recording A stays lit on a coincident index in recording B after a tab
+    // switch — a selection misattributed to a recording the user never picked in.
+    const std::optional<uint32_t> sel_step =
+        s.selection.rec == a->id ? s.selection.step : std::nullopt;
     dt_slice cone;
-    if (s.cone_active && s.selection.step)
+    if (s.cone_active && sel_step)
         // `b` lights the backward cone (what produced the selection), `f` the
         // forward cone (what it feeds) — s.cone_fwd (17-T1). The cone is a derived
         // highlight OF the shared selection (22 T1), not a second selection.
-        cone = s.cone_fwd ? dt_slice_forward(a->df.edges, a->df.nsteps,
-                                             *s.selection.step)
-                          : dt_slice_backward(a->df.edges, a->df.nsteps,
-                                              *s.selection.step);
+        cone = s.cone_fwd
+                   ? dt_slice_forward(a->df.edges, a->df.nsteps, *sel_step)
+                   : dt_slice_backward(a->df.edges, a->df.nsteps, *sel_step);
     const dt_slice *lit = s.cone_active ? &cone : nullptr;
     dt_timeline t =
         b ? dt_timeline_build2(*a, *b, lit) : dt_timeline_build(*a, lit);
     // Project the shared selection into the model so the timeline marks the SAME
-    // entity the other panes brush (22 T1). A step absent from this stream simply
-    // does not match a row — "nothing selected" here, never a fabricated row (D7).
-    t.selected_step = s.selection.step;
+    // entity the other panes brush (22 T1), but only when it belongs to this
+    // recording — a step absent (wrong recording, or out of range) simply does not
+    // match a row: "nothing selected" here, never a fabricated row (D7).
+    t.selected_step = sel_step;
     // Highlight-all for the global find (22 T3): mark every timeline hit. Find
     // MARKS, never hides — the hit set is drawn as emphasis and every row stays.
     for (const FindHit &h : s.find.hits)
@@ -1188,7 +1194,7 @@ static void handle_keymap(ShellState &s) {
 
     // y / Ctrl+C — copy a deep link to the current position to the clipboard.
     // Ctrl+C is the convention alias (18-breach-stops.md T1); both are wired.
-    if ((ImGui::IsKeyPressed(ImGuiKey_Y) ||
+    if (((ImGui::IsKeyPressed(ImGuiKey_Y) && !io.KeyCtrl) ||
          ImGui::IsKeyChordPressed(ImGuiMod_Ctrl | ImGuiKey_C)) &&
         s.nav.current)
         ImGui::SetClipboardText(dt_nav_format(*s.nav.current).c_str());
@@ -1316,7 +1322,7 @@ static void handle_keymap(ShellState &s) {
     {
         const bool cone_a0 = s.cone_active, cone_f0 = s.cone_fwd;
         if (ImGui::IsKeyPressed(ImGuiKey_B)) { s.cone_active = true; s.cone_fwd = false; }
-        if (ImGui::IsKeyPressed(ImGuiKey_F) && !io.KeyShift) { s.cone_active = true; s.cone_fwd = true; }
+        if (ImGui::IsKeyPressed(ImGuiKey_F) && !io.KeyShift && !io.KeyCtrl) { s.cone_active = true; s.cone_fwd = true; }
         if (ImGui::IsKeyPressed(ImGuiKey_C) && !io.KeyCtrl) s.cone_active = false;
         if (s.cone_active != cone_a0 || s.cone_fwd != cone_f0) {
             UndoCommand cmd;
@@ -1354,7 +1360,8 @@ static void handle_keymap(ShellState &s) {
     // n / p — walk to the next / previous divergent offset of the pair. Needs a
     // B (d); with none, or a pair with no per-offset divergence, it says why
     // rather than moving the selection to a position it cannot justify.
-    if (ImGui::IsKeyPressed(ImGuiKey_N) || ImGui::IsKeyPressed(ImGuiKey_P)) {
+    if ((ImGui::IsKeyPressed(ImGuiKey_N) || ImGui::IsKeyPressed(ImGuiKey_P)) &&
+        !io.KeyCtrl) {
         const bool fwd = ImGui::IsKeyPressed(ImGuiKey_N);
         const Streams *b = shell_b(s);
         if (b == nullptr) {
@@ -2158,13 +2165,21 @@ void undo_apply(ShellState &s, const UndoCommand &c, bool redo) {
         break;
     case UndoCommand::Kind::Filter: {
         const std::string &val = redo ? c.filter_after : c.filter_before;
-        if (s.active_tab >= 0 &&
-            static_cast<size_t>(s.active_tab) < s.observers.size()) {
-            auto &obs = s.observers[static_cast<size_t>(s.active_tab)];
+        // Restore onto the recording the edit was MADE on (by id), not whatever
+        // tab is active now — a tab switch must not redirect Ctrl+Z to a different
+        // recording's filter. If that recording has since been closed, the move
+        // has nowhere to land: skip it rather than clobber an unrelated tab.
+        int idx = index_of_id(s, c.filter_rec);
+        if (idx >= 0 && static_cast<size_t>(idx) < s.observers.size()) {
+            auto &obs = s.observers[static_cast<size_t>(idx)];
             std::snprintf(obs.syscall_filter, sizeof obs.syscall_filter, "%s",
                           val.c_str());
+            // The detector must not re-record this move — but only its baseline
+            // for the ACTIVE tab is meaningful; touching it when we restored a
+            // different (background) recording would corrupt the active baseline.
+            if (idx == s.active_tab)
+                s.undo_filter_seen = val;
         }
-        s.undo_filter_seen = val; // the detector must not re-record this move
         break;
     }
     case UndoCommand::Kind::TakeSet:
@@ -2198,6 +2213,7 @@ static void record_filter_undo(ShellState &s) {
         return;
     UndoCommand cmd;
     cmd.kind = UndoCommand::Kind::Filter;
+    cmd.filter_rec = s.streams[static_cast<size_t>(s.active_tab)].id;
     cmd.filter_before = s.undo_filter_seen;
     cmd.filter_after = cur;
     s.undo.push(std::move(cmd));
