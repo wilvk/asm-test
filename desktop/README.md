@@ -589,11 +589,46 @@ through the router, so a link and a keypress land identically.
 | `Alt+Left` `Alt+Right` | back / forward through the visited history |
 | `y`, `Ctrl+C` | copy a deep link to this position |
 | `Ctrl+Shift+R` | reset the panel layout to the default |
+| `Ctrl+F` | global find — highlight all, count + cost, `Enter`/`Shift+Enter` cycle |
+| `Ctrl+Z` `Ctrl+Y` | undo / redo a filter / cone / take change (app stack) |
+| `Arrows`, `+`/`-`, `R`, `T` | 3D camera: orbit / dolly / reset / top-down — while a 3D pane holds focus |
 
 The table is `dt_nav_bindings()` in [`src/nav.cpp`](src/nav.cpp) — the help
 overlay and the key map read the same data, so they cannot drift, and each row
 carries a `wired` flag: the overlay greys any not-yet-mapped binding "planned"
 rather than advertising a dead key as live.
+
+**Selection vs navigation (brush vs point).** Two different things move when you
+interact. *Navigation* (`nav.current`, the `1`/`2`/`3`/`4` view switch, the
+back/forward history) **points** a view at a position. *Selection* (`ShellState::
+selection`, a `{rec, step, offset, lane}` entity with a bumped `epoch`) **brushes**
+an entity. A pick in any pane sets both — it points the active pane and brushes the
+entity — and the brush cross-highlights that same entity in every pane it appears
+in (the timeline row, the slice node, the Loom worldline, a 3D drill), and *only*
+there: a pane that has no such offset shows nothing selected rather than a
+fabricated row. Cross-highlighting brushes in place; only the active pane scrolls.
+
+**The 3D camera and slice cones from the keyboard.** The 3D overview is operable
+without a mouse: with the 3D HUD or its Tab-reachable viewport focused, the arrows
+orbit, `+`/`-`/`=` dolly, `R` resets and `T` collapses to the honest top-down
+2D-ish view — all through the same `Camera` methods the mouse drag uses. The slice
+cones (`b`/`f`, `Enter` to open) light the DAG from the selection with no mouse.
+
+**Global find is a measurement.** `Ctrl+F` opens a find that *marks* every hit
+(the timeline highlights them; the doc-21 minimap will paint them when it lands)
+rather than hiding rows, reports the match count and the aggregate cost (summed
+hot-edge samples across sites), and cycles matches with `Enter`/`Shift+Enter`
+through the router. Type-to-narrow "showing N of M" filtering now also covers the
+disasm and hot-edges lists — but never the call **tree**, which stays
+engine-filtered so its surviving depths never lie.
+
+**Two undos, disjoint.** The Author editor owns its own text undo/redo over its
+buffer (doc 17). The app-level stack (`Ctrl+Z`/`Ctrl+Y`) is separate: it reverses
+view-model changes — the filter predicate, a lit cone, the selection, and the Loom
+take set. Both guard on text-input focus, so while the editor is focused its
+`Ctrl+Z` stays its own and the app stack never steals it. The Loom takes gutter
+gains a per-take **remove** and a **clear forks**, both reversible; clearing removes
+a whole take node — its loud refusal intact — never silently dropping a failure.
 
 **The `WASD` camera context.** `W`/`S`/`A`/`D` mean camera zoom/pan **only** when
 a spatial pane (the operand timeline or the 3D overview) holds focus — an explicit

@@ -354,6 +354,11 @@ const std::vector<dt_binding> &dt_nav_bindings() {
          true},
         {"y, Ctrl+C", "copy a deep link to this position", true},
         {"Ctrl+Shift+R", "reset the panel layout to the default", true},
+        {"Ctrl+F", "global find — highlight all, count + cost, Enter/Shift+Enter",
+         true},
+        {"Ctrl+Z / Ctrl+Y", "undo / redo a filter / cone / take change", true},
+        {"Arrows, +/-, R, T",
+         "3D camera: orbit / dolly / reset / top-down (3D pane focus)", true},
     };
     return b;
 }

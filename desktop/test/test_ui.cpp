@@ -96,17 +96,17 @@ static void register_keymap_tests(ImGuiTestEngine *engine) {
     t->GuiFunc = keymap_gui;
     t->TestFunc = [](ImGuiTestContext *ctx) {
         g_keymap_shell.want_open_tab = 0; // select recording 0's outer tab
-        g_keymap_shell.selected_step = 0u;
+        g_keymap_shell.selection.step = 0u;
         ctx->Yield();
         ctx->KeyPress(ImGuiKey_J);
         ctx->Yield();
-        IM_CHECK(g_keymap_shell.selected_step.value_or(99u) == 1u);
+        IM_CHECK(g_keymap_shell.selection.step.value_or(99u) == 1u);
         ctx->KeyPress(ImGuiKey_K);
         ctx->Yield();
-        IM_CHECK(g_keymap_shell.selected_step.value_or(99u) == 0u);
+        IM_CHECK(g_keymap_shell.selection.step.value_or(99u) == 0u);
         ctx->KeyPress(ImGuiKey_DownArrow);
         ctx->Yield();
-        IM_CHECK(g_keymap_shell.selected_step.value_or(99u) == 1u);
+        IM_CHECK(g_keymap_shell.selection.step.value_or(99u) == 1u);
     };
 
     // Enter — open the slice explorer at the selection, cone lit.
@@ -116,7 +116,7 @@ static void register_keymap_tests(ImGuiTestEngine *engine) {
         g_keymap_shell.want_open_tab = 0; // select recording 0's outer tab
         g_keymap_shell.view = dt_view::canvas;
         g_keymap_shell.cone_active = false;
-        g_keymap_shell.selected_step = 0u;
+        g_keymap_shell.selection.step = 0u;
         ctx->Yield();
         ctx->KeyPress(ImGuiKey_Enter);
         ctx->Yield();
@@ -129,7 +129,7 @@ static void register_keymap_tests(ImGuiTestEngine *engine) {
     t->GuiFunc = keymap_gui;
     t->TestFunc = [](ImGuiTestContext *ctx) {
         g_keymap_shell.want_open_tab = 0; // select recording 0's outer tab
-        g_keymap_shell.selected_step = 0u;
+        g_keymap_shell.selection.step = 0u;
         g_keymap_shell.cone_active = false;
         ctx->Yield();
         ctx->KeyPress(ImGuiKey_B);
@@ -168,12 +168,12 @@ static void register_keymap_tests(ImGuiTestEngine *engine) {
     t->TestFunc = [](ImGuiTestContext *ctx) {
         g_keymap_shell.want_open_tab = 1; // select pair-a (recording 1) as A
         g_keymap_shell.b_index = 2;       // pair-b as B
-        g_keymap_shell.selected_off.reset();
+        g_keymap_shell.selection.off.reset();
         g_keymap_shell.status.clear();
         ctx->Yield();
         ctx->KeyPress(ImGuiKey_N);
         ctx->Yield();
-        IM_CHECK(g_keymap_shell.selected_off.has_value() ||
+        IM_CHECK(g_keymap_shell.selection.off.has_value() ||
                  !g_keymap_shell.status.empty());
     };
 
@@ -232,14 +232,14 @@ static void register_keymap_tests(ImGuiTestEngine *engine) {
     t->GuiFunc = keymap_gui;
     t->TestFunc = [](ImGuiTestContext *ctx) {
         g_keymap_shell.want_open_tab = 0;
-        g_keymap_shell.selected_step = 1u;
+        g_keymap_shell.selection.step = 1u;
         ctx->Yield();
         ctx->KeyPress(ImGuiKey_Period);
         ctx->Yield();
-        IM_CHECK(g_keymap_shell.selected_step.value_or(0u) == 2u);
+        IM_CHECK(g_keymap_shell.selection.step.value_or(0u) == 2u);
         ctx->KeyPress(ImGuiKey_Comma);
         ctx->Yield();
-        IM_CHECK(g_keymap_shell.selected_step.value_or(9u) == 1u);
+        IM_CHECK(g_keymap_shell.selection.step.value_or(9u) == 1u);
     };
 
     // F10 / F11 — step / step back (j / k aliases).
@@ -247,14 +247,14 @@ static void register_keymap_tests(ImGuiTestEngine *engine) {
     t->GuiFunc = keymap_gui;
     t->TestFunc = [](ImGuiTestContext *ctx) {
         g_keymap_shell.want_open_tab = 0;
-        g_keymap_shell.selected_step = 1u;
+        g_keymap_shell.selection.step = 1u;
         ctx->Yield();
         ctx->KeyPress(ImGuiKey_F10);
         ctx->Yield();
-        IM_CHECK(g_keymap_shell.selected_step.value_or(0u) == 2u);
+        IM_CHECK(g_keymap_shell.selection.step.value_or(0u) == 2u);
         ctx->KeyPress(ImGuiKey_F11);
         ctx->Yield();
-        IM_CHECK(g_keymap_shell.selected_step.value_or(9u) == 1u);
+        IM_CHECK(g_keymap_shell.selection.step.value_or(9u) == 1u);
     };
 
     // Ctrl+C — copy a deep link, an alias of `y` (and NOT the cone-clear `c`).
@@ -408,6 +408,159 @@ static void register_flow_tests(ImGuiTestEngine *engine) {
     };
 }
 
+// --- 22-selection-and-search.md interaction sections -------------------------
+// The 3D-camera harness (T2): a dedicated shell over a scene fixture, so the
+// keyboard camera is driven through the REAL draw_scene_overview under the null
+// backend — no GL, no mouse. Separate from g_keymap_shell so it never disturbs
+// the keymap tests' state.
+static asmdesk::ShellState g_scene_shell;
+static bool g_scene_loaded = false;
+static void ensure_scene_shell() {
+    if (g_scene_loaded)
+        return;
+    g_scene_loaded = true;
+    std::string err;
+    asmdesk::shell_open(g_scene_shell,
+                        std::string(ASMTEST_GOLDEN_DIR) + "/scene-abs-loop.asmtrace",
+                        err);
+    g_scene_shell.active_tab = 0;
+}
+static void scene_gui(ImGuiTestContext *) {
+    ensure_scene_shell();
+    ImGui::Begin("SceneHarness", nullptr, ImGuiWindowFlags_NoSavedSettings);
+    if (!g_scene_shell.ws.recordings.empty()) {
+        const asmdesk::Recording &r = g_scene_shell.ws.recordings[0];
+        const asmdesk::Streams *a = asmdesk::shell_a(g_scene_shell);
+        if (a != nullptr)
+            asmdesk::draw_scene_overview(g_scene_shell, r, *a);
+    }
+    ImGui::End();
+}
+
+// The Loom takes-gutter harness (T4): a bare LoomState + UndoStack drawn through
+// the REAL draw_loom_takes_gutter, so the per-take remove + clear-forks buttons
+// are exercised by real clicks (they push reversible undo Commands).
+static asmdesk::LoomState g_gutter_loom;
+static asmdesk::UndoStack g_gutter_undo;
+static void gutter_gui(ImGuiTestContext *) {
+    ImGui::Begin("GutterHarness", nullptr, ImGuiWindowFlags_NoSavedSettings);
+    asmdesk::draw_loom_takes_gutter(g_gutter_loom, &g_gutter_undo);
+    ImGui::End();
+}
+
+static void register_search_tests(ImGuiTestEngine *engine) {
+    ImGuiTest *t = nullptr;
+
+    // T3 (F17) — Ctrl+F opens the global find; it MEASURES (count + aggregate
+    // cost), and Next cycles the active match. Model state, D4.
+    t = IM_REGISTER_TEST(engine, "find", "ctrl_f_measures_and_cycles");
+    t->GuiFunc = keymap_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        g_keymap_shell.want_open_tab = 0; // an active recording with dataflow
+        g_keymap_shell.find = asmdesk::FindState{};
+        ctx->Yield();
+        ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_F);
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.find.open);
+        // Type a query through the engine so ImGui's own InputText state is the
+        // source of truth (every timeline row carries an "0x" offset, so "0x"
+        // matches every step); the real draw_find_bar then runs the pure find.
+        ctx->SetRef("Find");
+        ctx->ItemInput("##findq");
+        ctx->KeyCharsAppend("0x");
+        ctx->Yield();
+        IM_CHECK(!g_keymap_shell.find.hits.empty());   // it found matches
+        IM_CHECK(g_keymap_shell.find.total_cost > 0);  // and MEASURED them
+        const int before = g_keymap_shell.find.active;
+        ctx->ItemClick("Next"); // Enter/Next cycles the active match
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.find.active != before);
+        g_keymap_shell.find.open = false; // release the find bar's text focus
+        ctx->Yield();
+    };
+
+    // T4 (F12) — Ctrl+Z / Ctrl+Y reverse and replay a cone change (a reversible
+    // view-model command), driven by REAL keys through handle_keymap.
+    t = IM_REGISTER_TEST(engine, "undo", "ctrl_z_y_reverses_cone");
+    t->GuiFunc = keymap_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        g_keymap_shell.want_open_tab = 0;
+        g_keymap_shell.cone_active = false;
+        g_keymap_shell.cone_fwd = false;
+        g_keymap_shell.undo.clear();
+        ctx->Yield();
+        ctx->KeyPress(ImGuiKey_B); // light the backward cone (pushes a command)
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.cone_active);
+        ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_Z); // undo
+        ctx->Yield();
+        IM_CHECK(!g_keymap_shell.cone_active);
+        ctx->KeyPress(ImGuiMod_Ctrl | ImGuiKey_Y); // redo
+        ctx->Yield();
+        IM_CHECK(g_keymap_shell.cone_active);
+    };
+
+    // T2 (F18) — the keyboard camera and the Tab-reachable viewport target, driven
+    // through the REAL draw_scene_overview under the null backend (no GL, no mouse).
+    t = IM_REGISTER_TEST(engine, "camera", "keyboard_orbit_reset_topdown");
+    t->GuiFunc = scene_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        using namespace asmdesk;
+        ctx->Yield(); // weave the scene, draw the HUD + the viewport target
+        IM_CHECK(!g_scene_shell.scenes.empty());
+        // Tab-reach: the viewport hit-target exists and is reachable (ItemClick
+        // locates it or the test fails) — the accessibility substitute for ImGui's
+        // absent screen-reader tree.
+        ctx->ItemClick("SceneHarness/3d-viewport");
+        ctx->Yield();
+        SceneView &sv = g_scene_shell.scenes[0];
+        // Focus the 3D HUD window; its keys then drive the camera with no mouse.
+        ctx->WindowFocus("3D overview");
+        ctx->Yield();
+        const float yaw0 = sv.cam.yaw;
+        ctx->KeyPress(ImGuiKey_RightArrow); // orbit
+        ctx->Yield();
+        IM_CHECK(sv.cam.yaw != yaw0); // the camera moved with NO mouse
+        ctx->KeyPress(ImGuiKey_R);    // reset to the default pose
+        ctx->Yield();
+        IM_CHECK(sv.cam.yaw == scene3d::Camera{}.yaw);
+        ctx->KeyPress(ImGuiKey_T); // the honest top-down 2D-ish fallback
+        ctx->Yield();
+        IM_CHECK(sv.cam.pitch >= scene3d::Camera::kPitchLimit - 1e-4f);
+    };
+
+    // T4 (F12) — the Loom takes gutter's per-take remove + clear forks, driven by
+    // real clicks (each pushes a reversible undo Command).
+    t = IM_REGISTER_TEST(engine, "loom", "takes_gutter_remove_clear");
+    t->GuiFunc = gutter_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        using namespace asmdesk;
+        g_gutter_loom.takes.clear();
+        g_gutter_undo.clear();
+        {
+            loom_take_node_t a;
+            a.label = "arg0 := 11";
+            g_gutter_loom.takes.push_back(a);
+        }
+        {
+            loom_take_node_t b;
+            b.label = "code patch";
+            b.err = "did not assemble"; // a loud refusal, never dropped (D7)
+            g_gutter_loom.takes.push_back(b);
+        }
+        ctx->SetRef("GutterHarness");
+        ctx->Yield();
+        IM_CHECK(g_gutter_loom.takes.size() == 2);
+        ctx->ItemClick("**/remove"); // the first take's [remove]
+        ctx->Yield();
+        IM_CHECK(g_gutter_loom.takes.size() == 1); // per-take remove works
+        IM_CHECK(g_gutter_undo.can_undo());        // and pushed a reversible command
+        ctx->ItemClick("clear forks");             // the gutter-level clear
+        ctx->Yield();
+        IM_CHECK(g_gutter_loom.takes.empty()); // clear forks empties the set
+    };
+}
+
 // A second shell for the docking tear-out test, loaded once. Separate from
 // g_keymap_shell so enabling docking here never leaks into the keymap tests'
 // non-docked expectations (and this test is registered LAST for the same reason).
@@ -471,6 +624,7 @@ static void register_dock_tests(ImGuiTestEngine *engine) {
 static void register_tests(ImGuiTestEngine *engine) {
     register_keymap_tests(engine);
     register_flow_tests(engine);
+    register_search_tests(engine); // 22: find / undo / camera / takes-gutter
 
     ImGuiTest *t = IM_REGISTER_TEST(engine, "harness", "button_click");
     t->GuiFunc = [](ImGuiTestContext *) {

@@ -36,6 +36,10 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                     const space::TrajectorySet &traj) {
     ImGui::Begin("3D overview");
 
+    // Report HUD keyboard focus (22 T2): the caller applies the camera keys when
+    // the HUD OR the 3D viewport holds focus, so orbiting works from either.
+    s.kbd_focus = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+
     // --- provenance chips: coarse-vs-rich, exact-vs-statistical, truncation ----
     ImGui::TextUnformatted("provenance:");
     ImGui::SameLine();

@@ -137,6 +137,59 @@ int main() {
         }
     }
 
+    // === the KEYBOARD camera (22-selection-and-search.md T2, F18) =============
+    // camera_key routes each key intent through the SAME orbit/dolly/reset/top_down
+    // the mouse uses, so keyboard and mouse are one code path — and it is pure math
+    // (no ImGui, no GL), which is what makes the keyboard camera headlessly
+    // testable at all (CLAUDE.md: a lane that could only self-skip is not a test).
+    using asmdesk::scene3d::camera_key;
+    using asmdesk::scene3d::CamKey;
+    {
+        // Orbit keys move yaw/pitch, and pitch stays clamped off the poles.
+        Camera c;
+        float y0 = c.yaw, p0 = c.pitch;
+        camera_key(c, CamKey::OrbitRight);
+        check("key/orbit-right advances yaw", c.yaw > y0, "yaw did not advance");
+        camera_key(c, CamKey::OrbitLeft);
+        camera_key(c, CamKey::OrbitLeft);
+        check("key/orbit-left retreats yaw", c.yaw < y0, "yaw did not retreat");
+        camera_key(c, CamKey::OrbitUp);
+        check("key/orbit-up raises pitch", c.pitch > p0, "pitch did not rise");
+        for (int i = 0; i < 100; i++)
+            camera_key(c, CamKey::OrbitUp); // way past the pole
+        check("key/orbit clamps pitch", c.pitch <= Camera::kPitchLimit + 1e-6f,
+              "keyboard orbit must honour the pitch clamp");
+    }
+    {
+        // Dolly keys move radius within its working range.
+        Camera c;
+        float r0 = c.radius;
+        camera_key(c, CamKey::DollyIn);
+        check("key/dolly-in shortens radius", c.radius < r0, "radius did not shrink");
+        camera_key(c, CamKey::DollyOut);
+        camera_key(c, CamKey::DollyOut);
+        check("key/dolly-out lengthens radius", c.radius > r0, "radius did not grow");
+        for (int i = 0; i < 100; i++)
+            camera_key(c, CamKey::DollyOut);
+        check("key/dolly clamps radius", c.radius <= Camera::kMaxRadius + 1e-6f,
+              "keyboard dolly must honour the radius clamp");
+    }
+    {
+        // R resets to the default pose; T is the honest top-down 2D-ish fallback.
+        Camera c;
+        c.orbit(1.0f, 0.3f);
+        c.dolly(1.7f);
+        camera_key(c, CamKey::Reset);
+        Camera d;
+        check("key/R resets the view",
+              c.yaw == d.yaw && c.pitch == d.pitch && c.radius == d.radius,
+              "R did not restore the default pose");
+        camera_key(c, CamKey::TopDown);
+        check("key/T yields the top-down pose",
+              c.pitch >= Camera::kPitchLimit - 1e-6f,
+              "T must ride the pitch ceiling (the 2D-ish collapse)");
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d camera check(s) failed\n", failures);
         return 1;

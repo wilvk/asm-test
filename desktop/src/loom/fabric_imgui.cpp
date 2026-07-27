@@ -148,7 +148,8 @@ void draw_loom_plan(const std::vector<loom_prim_t> &prims, std::string *hover) {
 // The panel
 // ---------------------------------------------------------------------------
 
-void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self) {
+void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self,
+               Selection *shared, UndoStack *undo) {
     if (!L.built || L.source_id != s.id) {
         L.source_id = s.id;
         L.built = true;
@@ -245,8 +246,10 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self) {
     L.cam.px_w = avail.x > 64 ? avail.x : 64;
     L.cam.px_h = avail.y > 64 ? avail.y * 0.62f : 64;
     L.cam.lane_h = 18.0f;
-    L.cam.selected_steps =
-        L.has_selection ? L.sel.steps : std::vector<uint32_t>();
+    // 22 T1: the fabric dim is DERIVED from the ONE shared selection — the Loom's
+    // own pick lights its worldline, a brush from another pane dims to that step,
+    // nothing selected dims to nothing (never a fabricated highlight).
+    L.cam.selected_steps = loom_shared_dim(L, shared);
 
     std::vector<loom_prim_t> prims;
     loom_plan(f, L.cam, &prims);
@@ -259,11 +262,18 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self) {
         ImVec2 m = ImGui::GetIO().MousePos;
         int lane = static_cast<int>((m.y - o.y) / L.cam.lane_h) + L.cam.lane0;
         double step = L.cam.step0 + (m.x - o.x) * L.cam.steps_per_px;
-        if (lane >= 0 && step >= 0)
+        if (lane >= 0 && step >= 0) {
             L.has_selection =
                 loom_select(f, L.feed.edges.data(), L.feed.edges.size(),
                             static_cast<uint32_t>(lane),
                             static_cast<uint32_t>(step), &L.sel);
+            // 22 T1: a Loom pick writes the ONE shared selection, so the SAME
+            // entity cross-highlights in the timeline / slice / 3D panes at once
+            // (brush, not navigate — only the active pane scrolls).
+            if (L.has_selection && shared != nullptr)
+                shared->set(s.id, L.sel.origin_step, std::nullopt,
+                            static_cast<int>(lane));
+        }
     }
     ImGui::EndChild();
     if (!hover.empty())
@@ -314,6 +324,14 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self) {
             }
             ImGui::EndTabItem();
         }
+        if (ImGui::BeginTabItem("Takes")) {
+            // The persistent takes gutter (22 T4): per-take remove + clear forks,
+            // both reversible. The accumulator is empty here until a full build
+            // appends a loom_take_run result; the render-only viewer shows recorded
+            // takes but assembles none.
+            draw_loom_takes_gutter(L, undo);
+            ImGui::EndTabItem();
+        }
         if (L.audit && ImGui::BeginTabItem("Zeroization audit")) {
             ImGui::TextWrapped("%s", kLoomAuditHover);
             if (!L.has_selection) {
@@ -336,6 +354,72 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self) {
         ImGui::EndTabBar();
     }
     ImGui::EndChild();
+}
+
+// The persistent takes gutter (22-selection-and-search.md T4, F12): each
+// accumulated take with a per-node [remove] and a gutter-level [clear forks],
+// both reversible undo Commands (each take keeps its edit / alignment / fault /
+// err / disclosure verbatim, so a remove or clear never quietly drops a take's
+// loud refusal — D7). Public so the interaction lane drives its buttons directly.
+void draw_loom_takes_gutter(LoomState &L, UndoStack *undo) {
+    ImGui::TextDisabled("%zu take%s — one-fact counterfactual forks",
+                        L.takes.size(), L.takes.size() == 1 ? "" : "s");
+    if (L.takes.empty()) {
+        ImGui::TextDisabled(
+            "no forks yet — a take changes exactly ONE fact (an entry arg or the "
+            "routine's source) and re-runs from entry. Full app only; the "
+            "render-only viewer shows recorded takes but assembles none.");
+        return;
+    }
+
+    // Clear forks — empties the whole set, reversibly (Ctrl+Z restores it).
+    if (ImGui::SmallButton("clear forks")) {
+        if (undo != nullptr) {
+            UndoCommand cmd;
+            cmd.kind = UndoCommand::Kind::TakeSet;
+            cmd.takes_before = L.takes;
+            loom_takes_clear(L.takes);
+            cmd.takes_after = L.takes;
+            undo->push(std::move(cmd));
+        } else {
+            loom_takes_clear(L.takes);
+        }
+    }
+
+    int remove_idx = -1;
+    for (size_t i = 0; i < L.takes.size(); i++) {
+        const loom_take_node_t &n = L.takes[i];
+        ImGui::PushID(static_cast<int>(i));
+        ImGui::Separator();
+        ImGui::TextUnformatted(n.label.empty() ? "(take)" : n.label.c_str());
+        if (!n.edit.empty())
+            ImGui::BulletText("%s", n.edit.c_str());
+        if (!n.alignment.empty())
+            ImGui::BulletText("%s", n.alignment.c_str());
+        if (!n.fault.empty())
+            ImGui::TextColored(dt_refuse_col(), "%s", n.fault.c_str());
+        // A take's loud refusal, verbatim — removing the whole node takes this
+        // WITH it, never silently dropping the failure (D7).
+        if (!n.err.empty())
+            ImGui::TextColored(dt_refuse_col(), "%s", n.err.c_str());
+        if (!n.disclosure.empty())
+            ImGui::TextDisabled("%s", n.disclosure.c_str());
+        if (ImGui::SmallButton("remove"))
+            remove_idx = static_cast<int>(i);
+        ImGui::PopID();
+    }
+    if (remove_idx >= 0) {
+        if (undo != nullptr) {
+            UndoCommand cmd;
+            cmd.kind = UndoCommand::Kind::TakeSet;
+            cmd.takes_before = L.takes;
+            loom_takes_remove(L.takes, static_cast<size_t>(remove_idx));
+            cmd.takes_after = L.takes;
+            undo->push(std::move(cmd));
+        } else {
+            loom_takes_remove(L.takes, static_cast<size_t>(remove_idx));
+        }
+    }
 }
 
 } // namespace asmdesk

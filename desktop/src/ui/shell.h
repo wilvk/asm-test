@@ -24,10 +24,13 @@
 #include "space/terrain.h"
 #include "space/trajectory.h"
 #include "ui/doors.h"
+#include "ui/find.h"     // global find model (22 T3)
 #include "ui/mode.h"     // task-language modes (20 T2)
 #include "ui/primer.h"   // first-open primer state (24 T5)
 #include "ui/scene_host.h"
-#include "ui/settings.h" // user text-scale / theme / window size (20 T5)
+#include "ui/selection.h" // shared brushing-and-linking selection (22 T1)
+#include "ui/settings.h"  // user text-scale / theme / window size (20 T5)
+#include "ui/undo.h"      // app-level command/undo stack (22 T4)
 #include "views/completeness.h"
 #include "views/observer_draw.h"
 #include "walkthrough.h"
@@ -59,7 +62,11 @@ struct SceneView {
     scene3d::Camera cam;
     scene3d::HudState hud;
     bool nav_dragging = false; // a left-drag is orbiting (suppresses the pick)
-    dt_primer_state primer;    // the first-open primer (24 T5), per recording
+    // Did the Tab-reachable 3D viewport hit-target hold focus last frame (22 T2)?
+    // ORed with the HUD focus to decide whether the keyboard camera acts; persisted
+    // because the target is drawn after the camera keys are applied.
+    bool viewport_focus = false;
+    dt_primer_state primer; // the first-open primer (24 T5), per recording
 };
 
 struct ShellState {
@@ -110,8 +117,13 @@ struct ShellState {
     // attached B side (the `d` binding), -1 for none.
     int b_index = -1;
     dt_view view = dt_view::canvas;
-    std::optional<uint32_t> selected_step;
-    std::optional<uint64_t> selected_off;
+    // The ONE shared brushing-and-linking selection (22 T1, F7): a pick in any
+    // pane writes it and every pane reads its projection, so the same entity
+    // cross-highlights everywhere it appears (detail / disasm / Loom / 3D) and
+    // ONLY there. DISTINCT from nav.current, which points a view (a plain view
+    // switch sets nav; a pick sets both). The cone fields below are a DERIVED
+    // highlight OF this selection, keyed on `step` — not a second selection.
+    Selection selection;
     // The lit cones, when a slice is active; cleared by `c`.
     bool cone_active = false;
     // Which cone `b`/`f` lit (17-T1 keymap): false = backward (what produced
@@ -218,6 +230,29 @@ struct ShellState {
     bool want_layout_reset = false;
     int layout_settle = 0;
 
+    // --- 22-selection-and-search.md T2 (keyboard-camera focus) ------------
+    // Set by the 3D overview pane (its HUD or viewport) when it holds focus, read
+    // by handle_keymap NEXT frame so the arrow keys orbit the camera there rather
+    // than stepping the selection — the same last-frame-focus seam wasd_context
+    // uses. An explicit, testable field, not an implicit focus guess.
+    bool cam_focus = false;
+
+    // --- 22-selection-and-search.md T3 (global find, Ctrl+F) --------------
+    // Search-as-measurement over the active recording's decoded streams + deck.
+    // The model is pure (ui/find.h); this holds the query, the hit set and the
+    // cycled index. Highlights ALL hits; never hides rows (D7).
+    FindState find;
+
+    // --- 22-selection-and-search.md T4 (app-level command / undo stack) ---
+    // Ctrl+Z / Ctrl+Y over reversible view-model state (filter / cone / selection
+    // / take set). DISTINCT from the Author editor's own text undo (doc 17 T2) —
+    // both guard on io.WantTextInput and own disjoint state. `undo_filter_seen`
+    // is the last filter value the stack recorded, so a settled edit becomes ONE
+    // Command rather than one per frame.
+    UndoStack undo;
+    std::string undo_filter_seen;
+    int undo_filter_tab = -1; // the recording undo_filter_seen belongs to
+
     // --- 18-breach-stops.md T3 (Author save-guard) ------------------------
     // `close_pending` is the workspace-recording index whose close is awaiting a
     // save/discard/cancel choice because it is dirty (authored + unsaved); -1 =
@@ -292,6 +327,12 @@ void draw_home_rail(ShellState &s);
 // HUD + placard path. Public so test_shell can drive it without forcing the tab
 // selection. Call inside an ImGui window, with s.active_tab set to the recording.
 void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a);
+
+// Apply one undo Command onto the shell (22 T4). `redo` selects the after-value
+// (Ctrl+Y) vs the before-value (Ctrl+Z); it restores the filter / cone /
+// selection / take-set state the command captured, and never touches the Author
+// editor's own text undo. Pure model move, so test_undo drives it headlessly.
+void undo_apply(ShellState &s, const UndoCommand &c, bool redo);
 
 // The truncation/drops/torn banner for a recording — PURE: nullptr when the
 // recording is clean, else a human-readable line (e.g.

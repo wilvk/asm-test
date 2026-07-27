@@ -913,6 +913,10 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_abixray_draw \
                  $(BUILD)/desktop_test_slice_view \
                  $(BUILD)/desktop_test_diff_view \
+                 $(BUILD)/desktop_test_selection \
+                 $(BUILD)/desktop_test_find \
+                 $(BUILD)/desktop_test_undo \
+                 $(BUILD)/desktop_test_loom_gutter \
                  $(BUILD)/desktop_test_data_readers \
                  $(BUILD)/desktop_test_completeness_view \
                  $(BUILD)/desktop_test_slice_diff \
@@ -1258,6 +1262,27 @@ $(BUILD)/desktop_test_slice_view: $(BUILD)/desktop/test/t/test_slice_view.o \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# --- 22-selection-and-search.md tests ----------------------------------------
+# (test_selection links DESKTOP_TEST_SHELL_OBJ, defined ~130 lines below, so its
+# rule lives beside test_shell — a prerequisite list expands at parse time, so it
+# must come AFTER the variable is set.)
+#
+# T3: the global find MODEL over the decoded streams + a hand-built Observer deck
+# — the pure view/analysis builders + the observer pure set, engine-free (D4).
+$(BUILD)/desktop_test_find: $(BUILD)/desktop/test/t/test_find.o \
+    $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_OBS) $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# T4: the app-level undo STACK is header-only (ui/undo.h), so its test links
+# nothing but its own object — the pure closure proof for the command stack.
+$(BUILD)/desktop_test_undo: $(BUILD)/desktop/test/t/test_undo.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# T4: the Loom takes-gutter accumulator + its reversible remove/clear are pure
+# list edits over LoomState::takes (header-only helpers), so its test links alone.
+$(BUILD)/desktop_test_loom_gutter: $(BUILD)/desktop/test/t/test_loom_gutter.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 # The canvas-wrapped slice DRAW (15 T2), null-backend smoke: slice_view_draw.o +
 # canvas_draw.o (draw_banner) + imgui_canvas.o + imgui core.
 $(BUILD)/desktop_test_slice_view_draw: $(BUILD)/desktop/test/t/test_slice_view_draw.o \
@@ -1434,6 +1459,14 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/s3/pick.o $(DESKTOP_TEST_IG)
 
 $(BUILD)/desktop_test_shell: $(BUILD)/desktop/test/t/test_shell.o \
+    $(DESKTOP_TEST_SHELL_OBJ) $(BUILD)/desktop/test/src/vm_compat.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
+# 22 T1: the ONE shared selection projects consistently to the timeline / slice /
+# Loom models. It builds a real shell (shell_open), so it links the shell obj set
+# — the same engine-free closure test_shell links (and must come AFTER
+# DESKTOP_TEST_SHELL_OBJ is defined, since prerequisites expand at parse time).
+$(BUILD)/desktop_test_selection: $(BUILD)/desktop/test/t/test_selection.o \
     $(DESKTOP_TEST_SHELL_OBJ) $(BUILD)/desktop/test/src/vm_compat.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
@@ -1669,6 +1702,8 @@ $(BUILD)/desktop/test/t/test_abixray.o \
 $(BUILD)/desktop/test/t/test_abixray_draw.o \
 $(BUILD)/desktop/test/t/test_slice_view.o \
 $(BUILD)/desktop/test/t/test_diff.o \
+$(BUILD)/desktop/test/t/test_selection.o \
+$(BUILD)/desktop/test/t/test_find.o \
 $(BUILD)/desktop/test/t/test_diff_view.o: \
     DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"' \
                          -DASMTEST_EXPECTED_DIR='"desktop/test/expected"'
