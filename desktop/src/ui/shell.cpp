@@ -142,31 +142,46 @@ void shell_close(ShellState &s, size_t idx) {
     shell_wire_nav(s);
 }
 
+// 25 T3. Drop the ephemeral live tab and heal the indices around it. Leaves the
+// dedup watermark alone — the caller owns that.
+void shell_retire_live_tab(ShellState &s) {
+    if (s.live_tab < 0)
+        return;
+    size_t idx = static_cast<size_t>(s.live_tab);
+    bool was_active = (s.active_tab == s.live_tab);
+    if (s.active_tab > s.live_tab)
+        s.active_tab--;  // erasing idx shifts later tabs down
+    shell_close(s, idx); // erases every parallel slot + clears live_tab
+    s.live_built_events = 0;
+    s.live_built_recordings = 0;
+    if (was_active)
+        s.active_tab =
+            s.ws.recordings.empty()
+                ? -1
+                : static_cast<int>(std::min(idx, s.ws.recordings.size() - 1));
+}
+
 // 25-live-model-wiring.md T1/T2. Keep one workspace tab mirroring the live
 // capture so the docked panes + view_presence render it exactly as a replayed
 // file — the growing recording is not a second code path, it is the same model.
 void shell_sync_live_tab(ShellState &s) {
     LiveSession &sess = s.inspect.session;
     const Recording *live = sess.growing();
-    if (live == nullptr && !sess.recordings().empty())
+    // A completed capture stays mirrored as a frozen tab — UNLESS it has already
+    // been adopted as a saved file tab (25 T3): past the dedup watermark, the
+    // last completed recording is the one "Open in Loom" already promoted, so it
+    // must not be resurrected here as a second, ephemeral copy of the same run.
+    if (live == nullptr && sess.recordings().size() > s.live_dismissed_done)
         live = &sess.recordings().back();
 
-    // No capture (idle / reset): drop any promoted tab and leave.
+    // No capture to show (idle / reset / the only completed one was adopted):
+    // drop any promoted tab and leave.
     if (live == nullptr) {
-        if (s.live_tab >= 0) {
-            size_t idx = static_cast<size_t>(s.live_tab);
-            bool was_active = (s.active_tab == s.live_tab);
-            if (s.active_tab > s.live_tab)
-                s.active_tab--; // erasing idx shifts later tabs down
-            shell_close(s, idx); // erases every parallel slot + clears live_tab
-            s.live_built_events = 0;
-            s.live_built_recordings = 0;
-            if (was_active)
-                s.active_tab = s.ws.recordings.empty()
-                                   ? -1
-                                   : static_cast<int>(std::min(
-                                         idx, s.ws.recordings.size() - 1));
-        }
+        shell_retire_live_tab(s);
+        // A host with no recordings at all is a clean slate — forget the
+        // watermark so the next connect starts fresh.
+        if (sess.recordings().empty())
+            s.live_dismissed_done = 0;
         return;
     }
 
@@ -209,7 +224,18 @@ void shell_sync_live_tab(ShellState &s) {
     ObsLifecycle lc = observer_lifecycle_from(bodies);
     observer_build(s.observers[i], s.ws.recordings[i], &lc);
     s.stepidx[i] = build_step_index(s.ws.recordings[i]);
-    s.scenes[i] = SceneView{}; // force a lazy 3D re-weave on next view
+    // 25 T6: force a lazy 3D re-weave over the grown recording, but KEEP the
+    // interactive camera / HUD / primer — else a growing capture would snap the
+    // user's 3D view back to the default orbit on every event batch.
+    {
+        scene3d::Camera cam = s.scenes[i].cam;
+        scene3d::HudState hud = s.scenes[i].hud;
+        dt_primer_state primer = s.scenes[i].primer;
+        s.scenes[i] = SceneView{};
+        s.scenes[i].cam = cam;
+        s.scenes[i].hud = hud;
+        s.scenes[i].primer = primer;
+    }
     s.live_built_events = n;
     s.live_built_recordings = ndone;
     shell_wire_nav(s); // the decoded stream id is now live — point the router at it
@@ -787,6 +813,17 @@ static void handle_inspect_open_request(ShellState &s) {
         return;
     std::string path = s.inspect.open_request;
     s.inspect.open_request.clear();
+    // 25 T3: opening a saved capture makes it a permanent, persisted file tab.
+    // If an ENDED session's live tab was mirroring that same run, it is now a
+    // redundant ephemeral copy — retire it BEFORE the open (so the file appends
+    // cleanly and its index is stable) and mark the completed recording adopted
+    // so shell_sync_live_tab does not re-promote it. A still-growing session
+    // keeps its live tab: the saved file is a frozen snapshot of a run still in
+    // flight, genuinely distinct.
+    if (s.live_tab >= 0 && s.inspect.session.growing() == nullptr) {
+        s.live_dismissed_done = s.inspect.session.recordings().size();
+        shell_retire_live_tab(s);
+    }
     std::string err;
     int idx = shell_open(s, path, err);
     if (idx < 0) {

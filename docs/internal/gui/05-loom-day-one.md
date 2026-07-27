@@ -514,7 +514,9 @@ goldens, a dishonesty fixture, a deterministic fork differential.
 
 - **Every growth rung**: Reweave / mid-run edits (no resume-from-state API), per-step register
   ring + O(1) scrub (Phase 4), descriptor-driven decks (Phase 1), secret-class multiverse /
-  FP-env badges (Wave 1), Observer looms via PT replay or ptrace dataflow (Phase 3), per-tid lane
+  FP-env badges (Wave 1), Observer looms via PT replay or ptrace dataflow (Phase 3 — the
+  **ptrace-dataflow** live loom landed 2026-07-27 via [25-live-model-wiring.md](25-live-model-wiring.md);
+  the zero-perturbation **PT-replay** loom is still ahead), per-tid lane
   decks, blame deep-links (Wave 2).
 - **Cross-thread value hops and syscall-born threads** — the valtrace has no tid dimension and no
   structured buffer-EA syscall kind; nothing here may fake either. **arm64-guest fabrics** — no
@@ -523,3 +525,8 @@ goldens, a dishonesty fixture, a deterministic fork differential.
   **reader/generator** (02), **shell/Workspace/docker lane** (03), **generic diff +
   slice-explorer views** (04) — consumed here, owned there. **Live capture of any kind** —
   Observer mode is 07/08's territory; every loom here is a recording or local emulator replay.
+  **Update 2026-07-27:** the live ptrace-dataflow loom below is now realised —
+  [25-live-model-wiring.md](25-live-model-wiring.md) promotes a live `--serve`
+  `dataflow`/`auto` capture's growing recording into this same fabric (it carries exact
+  `df_step`), weaving it live with a perturb+torn banner. A statistical capture still has
+  no loom, and the Scrubber's register ring still has no live producer.

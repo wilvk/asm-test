@@ -213,6 +213,13 @@ struct ShellState {
     int live_tab = -1;
     uint64_t live_built_events = 0;
     size_t live_built_recordings = 0;
+    // 25 T3: the dedup watermark. When an ENDED session's capture is opened as a
+    // saved file (the Inspect door's "Open in Loom"), that permanent file tab
+    // supersedes the ephemeral live tab — so we retire the live tab and remember
+    // how many completed recordings the session had, so shell_sync_live_tab does
+    // not resurrect it from the same still-present `recordings()` entry. Reset to
+    // 0 when the host fully empties (a fresh connect starts clean).
+    size_t live_dismissed_done = 0;
 
     // A pending cross-door jump: a capture the Inspect door just saved and asked
     // to open in the Loom (07-serve-live-host.md). `want_open_tab` is the
@@ -266,6 +273,12 @@ void shell_close(ShellState &s, size_t idx);
 // fed session. Rebuilds the tab's decoded streams / observer / step index only
 // when the capture's event count moves.
 void shell_sync_live_tab(ShellState &s);
+
+// 25 T3: drop the ephemeral live tab (its parallel slots, the index shift, the
+// active-tab clamp) without touching the dedup watermark. Used both by
+// shell_sync_live_tab's own teardown and when a saved capture is opened as a
+// permanent file tab that supersedes it. No-op when no live tab is up.
+void shell_retire_live_tab(ShellState &s);
 
 // The dirty-close guard (18-breach-stops.md T3, F24). `shell_request_close` is
 // the seam the tab `✕` drives: it closes a clean recording immediately, but a

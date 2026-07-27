@@ -350,7 +350,10 @@ assert IN-SLICE/DIMMED for a hand-picked pair of steps.
 
 **Goal.** The interactive def-use DAG: layered layout by step index, click a step →
 backward and forward cones lit. Producer-agnostic (recorded edges only — emulator L0
-today, PT replay when 07/08 land).
+today, PT replay when 07/08 land). **Update 2026-07-27:** a live `asmspy --serve`
+`dataflow`/`auto` capture is a third producer — it emits exact `df_step`/`df_edge` off
+a live ptrace single-step, and [25-live-model-wiring.md](25-live-model-wiring.md) wires
+its growing recording into this same slice view live (perturbing, and labelled so).
 
 **Steps.**
 1. Create `desktop/src/views/slice_view.h` + `slice_view.cpp` (builder + thin draw).

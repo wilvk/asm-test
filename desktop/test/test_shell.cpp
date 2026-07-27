@@ -41,6 +41,16 @@ static std::string gd(const char *name) {
     return std::string(ASMTEST_GOLDEN_DIR) + "/" + name;
 }
 
+// 25-live-model-wiring.md: look up one view's presence entry by id (every id is
+// always in the vector, so a caller checks `->present`, never null for these).
+static const ViewPresence *find_view(const std::vector<ViewPresence> &vp,
+                                     ViewId id) {
+    for (const ViewPresence &e : vp)
+        if (e.id == id)
+            return &e;
+    return nullptr;
+}
+
 // shell_banner over a single fixture that must load.
 static void banner_case(const char *what, const char *file, bool want_banner) {
     std::string err;
@@ -749,14 +759,6 @@ int main() {
         static const char *kExactHeader =
             R"({"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},)"
             R"("provenance":{"backend":"ptrace-dataflow","exact":true,"trust":"exact"},"arch":"x86_64"})";
-        auto find_view = [](const std::vector<ViewPresence> &vp,
-                            ViewId id) -> const ViewPresence * {
-            for (const ViewPresence &e : vp)
-                if (e.id == id)
-                    return &e;
-            return nullptr;
-        };
-
         ShellState ls;
         ls.mode = Mode::Capture; // the live-capture posture (Observer offered)
         LiveSession &sess = ls.inspect.session;
@@ -833,6 +835,87 @@ int main() {
         check("25/teardown on reset",
               ls.live_tab == -1 && ls.ws.recordings.empty(),
               "reset() must drop the ephemeral live tab");
+    }
+
+    // --- 25 T3: dedup the live tab against save->reopen ----------------------
+    // Once an ended session's capture is opened as a permanent saved FILE tab,
+    // the ephemeral live tab of the same run must retire and not resurrect from
+    // the still-present completed recording; a fresh session still promotes.
+    {
+        static const char *kHdr =
+            R"({"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},)"
+            R"("provenance":{"backend":"ptrace-dataflow","exact":true,"trust":"exact"},"arch":"x86_64"})";
+        ShellState ls;
+        ls.mode = Mode::Capture;
+        LiveSession &sess = ls.inspect.session;
+        sess.feed_line(R"({"k":"cmd","cmd":"start","mode":"dataflow"})");
+        sess.feed_line(
+            R"({"k":"session","state":"started","mode":"dataflow","pid":7,"params":{}})");
+        sess.feed_line(kHdr);
+        sess.feed_line(R"({"k":"df_step","step":0,"off":0,"disasm":"nop","ops":[]})");
+        sess.feed_line(
+            R"({"k":"end","events":1,"truncated":false,"drops":{"lost":0,"throttled":false}})");
+        sess.feed_line(
+            R"({"k":"session","state":"stopped","mode":"dataflow","events":1,"reason":"stop"})");
+        shell_sync_live_tab(ls);
+        check("25t3/frozen tab",
+              ls.live_tab >= 0 && ls.ws.recordings.size() == 1,
+              "a completed capture is mirrored as a frozen tab until adopted");
+
+        // Simulate "Open in Loom" adopting the capture as a permanent file tab.
+        ls.live_dismissed_done = sess.recordings().size();
+        shell_retire_live_tab(ls);
+        check("25t3/retired on adopt",
+              ls.live_tab == -1 && ls.ws.recordings.empty(),
+              "adopting the capture must retire the ephemeral live tab");
+        shell_sync_live_tab(ls);
+        check("25t3/no resurrection", ls.live_tab == -1,
+              "the adopted (dismissed) completed recording must not re-promote");
+
+        // A fresh session after disconnect still promotes (the watermark reset).
+        sess.shutdown();
+        sess.reset();
+        shell_sync_live_tab(ls); // empty host -> clears the dedup watermark
+        sess.feed_line(R"({"k":"cmd","cmd":"start","mode":"dataflow"})");
+        sess.feed_line(
+            R"({"k":"session","state":"started","mode":"dataflow","pid":8,"params":{}})");
+        sess.feed_line(kHdr);
+        sess.feed_line(R"({"k":"df_step","step":0,"off":0,"disasm":"nop","ops":[]})");
+        shell_sync_live_tab(ls);
+        check("25t3/fresh session re-promotes", ls.live_tab >= 0,
+              "a new capture after disconnect must promote a fresh live tab");
+    }
+
+    // --- 25 T6: live 3D presence + the camera survives a live re-weave -------
+    {
+        static const char *kHdr =
+            R"({"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},)"
+            R"("provenance":{"backend":"ptrace-dataflow","exact":true,"trust":"exact"},"arch":"x86_64"})";
+        ShellState ls;
+        ls.mode = Mode::Capture;
+        LiveSession &sess = ls.inspect.session;
+        sess.feed_line(R"({"k":"cmd","cmd":"start","mode":"dataflow"})");
+        sess.feed_line(
+            R"({"k":"session","state":"started","mode":"dataflow","pid":9,"params":{}})");
+        sess.feed_line(kHdr);
+        sess.feed_line(
+            R"({"k":"codeimage","base":4198400,"len":8,"version":1,"when":1,"bytes":"f30f1efa554889e5"})");
+        shell_sync_live_tab(ls);
+        size_t i = static_cast<size_t>(ls.live_tab);
+        {
+            auto vp = view_presence(ls.streams[i], ls.observers[i], ls.stepidx[i],
+                                    ls.ws.recordings[i], ls.mode, false);
+            const ViewPresence *s3d = find_view(vp, ViewId::Scene3D);
+            check("25t6/3D live", s3d && s3d->present,
+                  "a live capture carrying codeimage regions must offer 3D");
+        }
+        // Set a camera sentinel, grow the capture, and re-sync: the re-weave must
+        // drop the woven geometry but keep the user's interactive camera.
+        ls.scenes[i].cam.yaw = 2.5f;
+        sess.feed_line(R"({"k":"df_step","step":0,"off":0,"disasm":"nop","ops":[]})");
+        shell_sync_live_tab(ls);
+        check("25t6/camera preserved", ls.scenes[i].cam.yaw == 2.5f,
+              "a live 3D re-weave must keep the camera, not reset the orbit");
     }
 
     if (failures) {

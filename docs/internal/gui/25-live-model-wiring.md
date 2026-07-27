@@ -10,6 +10,11 @@
 > `auto` emit `codeimage` — so this is a **wiring** brief, not a new subsystem:
 > promote the growing `Recording` into the same workspace model the docked panes
 > and `view_presence` already read.
+>
+> **Status (2026-07-27).** T1, T2, T3, T4, T5, T7 landed; T6's live re-weave core
+> (camera-preserving 3D re-weave-on-growth) landed, and its per-tid trajectory
+> overlay is the tail, tracked with [10](10-spacetime-3d-overview.md) T5. The
+> Scrubber stays out of scope (no live `regstate` producer).
 
 ## Why this work exists
 
