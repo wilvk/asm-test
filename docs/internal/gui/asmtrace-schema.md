@@ -1019,6 +1019,79 @@ opt-in**: `asmtrace_record --fpregs` (the emulator ring) and `asmspy --dataflow
   so the hex XMM strings are **inert** until an FP-deck panel renders them (a T2
   follow-up), while `mxcsr` (an integer) already renders as a named register.
 
+## `regstate` descriptor — `emu_arm64_regs_t@aarch64/aapcs64` (R5 arm64 ring)
+
+> **Owned by [32-per-guest-value-producer.md](32-per-guest-value-producer.md)**
+> (T2, the regstate/Scrubber half), appended under this file's D5 append-only
+> rule. It gives the `regstate` kind its **third** concrete descriptor — the
+> emulator's per-step AArch64 register ring — and **adds no field to any
+> existing kind and no new envelope major.** The kind, the `{"desc","values"}`
+> shape and the descriptor-reference rule are unchanged and remain 01's.
+
+The AArch64 analogue of the x86-64 emulator ring
+([include/asmtest_emu.h](../../../include/asmtest_emu.h) —
+`emu_arm64_step_capture`), scoped to the separate `emu_arm64_t` handle (arm64
+has always been its own guest handle type, distinct from the x86-64 `emu_t`;
+this ring is the one Track F seam it gains — `emu_arm64_t` still has no
+snapshot/restore, that stays an x86-64 `emu_t` / Reweave concern). The corpus
+recorder ([tools/asmtrace_record.c](../../../tools/asmtrace_record.c)) bakes a
+ring cap into the arm64 golden fixtures directly (there is no `--steps`-style
+CLI flag for it yet, mirroring how the arm64 value fabric is exercised via
+byte-literal fixtures rather than the host-arch corpus loop); after the run it
+emits one `regstate` event per held pre-state, referencing this descriptor.
+
+**Descriptor id.** `emu_arm64_regs_t@aarch64/aapcs64` — the `emu_arm64_regs_t`
+struct row of [`asmtest_abi.json`](../../../scripts/gen-manifest.c#L127) (arch
+`aarch64`, abi `aapcs64`), the full AArch64 emulator register file
+([include/asmtest_emu.h:213](../../../include/asmtest_emu.h#L213)).
+
+**`values` fields.** The 31 general-purpose registers `x0`..`x30` (AAPCS64
+gives `x29`/`x30` their FP/LR roles, but the descriptor names the physical
+register — exactly as the x86-64 descriptor names `rbp`/`rsp` by register, not
+role) plus `sp`, `pc`, and `nzcv`, in `emu_arm64_regs_t` **declaration order**,
+each a decimal `u64`:
+
+```
+x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24 x25 x26 x27 x28 x29 x30 sp pc nzcv
+```
+
+The pre-state of `arm64-df-chain.asmtrace`'s first held step (args `x0=7,
+x1=5`; `x30`/`sp`/`pc` are the guest's fixed entry state, not yet the routine's
+own values):
+
+```json
+{"k":"regstate","desc":"emu_arm64_regs_t@aarch64/aapcs64","values":{"x0":7,"x1":5,"x2":0,"x3":0,"x4":0,"x5":0,"x6":0,"x7":0,"x8":0,"x9":0,"x10":0,"x11":0,"x12":0,"x13":0,"x14":0,"x15":0,"x16":0,"x17":0,"x18":0,"x19":0,"x20":0,"x21":0,"x22":0,"x23":0,"x24":0,"x25":0,"x26":0,"x27":0,"x28":0,"x29":0,"x30":15728640,"sp":2162672,"pc":1048576,"nzcv":0}}
+```
+
+- **No vector/NEON deck** — like the x86-64 descriptor's original v1 omission,
+  a wide value is not a bare JSON integer; `emu_arm64_regs_t.v[32]` is not
+  captured here (a further descriptor row, mirroring the x86-64 wide-deck
+  extension above), exactly as the arm64 value fabric's own scope stayed
+  integer-only ([32](32-per-guest-value-producer.md) T2).
+- **The reader has no arm64-specific field-order table.**
+  `stepindex_reg_order()`
+  ([desktop/src/analysis/stepindex.cpp](../../../desktop/src/analysis/stepindex.cpp))
+  still lists only the x86-64 18 names; an arm64 `values` object's field names
+  all fall through its generic "any other integer key, sorted" path. The
+  Scrubber therefore renders every field — time-travel works end to end — just
+  in a lexicographic rather than a hand-curated order (`nzcv` before `pc`
+  before `sp` before `x0` `x1` `x10`...). Cosmetic, not correctness: the same
+  kind of follow-on the value fabric's `loom_reg_name` degradation was left as,
+  not a blocker for this one.
+- **No live (ptrace) arm64 producer exists.** This descriptor has exactly one
+  producer today, the emulator ring; a live AArch64 single-step engine is a
+  separate host concern ([32](32-per-guest-value-producer.md) Non-goals).
+
+**Order, dropping and truncation (D7).** Identical discipline to the x86-64
+emulator ring: held pre-states are emitted **oldest first**, each snapshotted
+BEFORE its instruction; when more steps run than the ring holds, the
+**earliest** entries are evicted and the `end` footer carries
+`"truncated":true` plus the evicted count in `drops.lost`, so a reader offsets
+the first held step by `drops.lost` and renders the missing prefix as a torn
+edge. A recording with no `regstate` events simply had the arm64 ring unarmed
+— the `arm64-df-chain.asmtrace` golden without one is the normal case (the
+un-augmented value-fabric-only recording R5 T2 originally shipped).
+
 ## `fpenv` — the FP/SIMD environment (rounding / sticky / FTZ-DAZ)
 
 > **Owned by [31-wide-register-deck.md](31-wide-register-deck.md)** (T2), appended

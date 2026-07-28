@@ -618,6 +618,41 @@ bool emu_step_at(const emu_t *e, size_t i, uint64_t *step_index,
 bool emu_step_mxcsr_at(const emu_t *e, size_t i, uint32_t *out);
 
 /* ------------------------------------------------------------------ */
+/* Opt-in per-step register capture (AArch64 guest, R5)                 */
+/* ------------------------------------------------------------------ */
+
+/* The arm64 analogue of the ring above (docs/internal/gui/
+ * 32-per-guest-value-producer.md): the same drop-oldest / truncation /
+ * absolute-step-index discipline, snapshotting the full emu_arm64_regs_t
+ * BEFORE each executed instruction into a bounded ring on the emu_arm64_t
+ * handle. A SEPARATE API rather than a union grafted onto emu_step_* /
+ * emu_x86_regs_t: emu_t and emu_arm64_t are already distinct per-guest handle
+ * types (this header's existing pattern for every non-x86-64 guest —
+ * emu_riscv_t / emu_arm_t below have their own result structs and call entry
+ * points too), so a second guest's ring is one more mirrored seam, not a
+ * rewrite of the first. emu_arm64_t gains no snapshot/restore or watch/guard
+ * machinery here (those remain an x86-64 emu_t / Reweave concern, out of
+ * scope for this root) — the ring is the one Track F piece this root adds.
+ *
+ * This is the producer half of the `emu_arm64_regs_t@aarch64/aapcs64`
+ * regstate descriptor (docs/internal/gui/asmtrace-schema.md): an armed
+ * AArch64 capture drives the Scrubber's register time-travel exactly the way
+ * the x86-64 ring already does for `emu_x86_regs_t@x86_64/sysv` — no
+ * reader/desktop change, only a new descriptor id and this writer-side seam.
+ * Never armed by default; no wide/NEON deck (a further seam, mirroring how
+ * the arm64 value fabric itself stayed integer-only). */
+bool emu_arm64_step_capture(emu_arm64_t *e, size_t cap); /* arm (realloc ok) */
+void emu_arm64_step_capture_clear(emu_arm64_t *e);       /* disarm + free   */
+size_t emu_arm64_step_count(const emu_arm64_t *e);       /* entries held    */
+uint64_t emu_arm64_step_dropped(const emu_arm64_t *e);   /* steps evicted   */
+/* Entry i (0 = oldest held): the register file BEFORE step_index's insn. Copies
+ * it into *out and the absolute step number (dropped_steps + i) into
+ * *step_index; either out-param may be NULL. Returns false for i >=
+ * emu_arm64_step_count (out-params untouched). */
+bool emu_arm64_step_at(const emu_arm64_t *e, size_t i, uint64_t *step_index,
+                       emu_arm64_regs_t *out);
+
+/* ------------------------------------------------------------------ */
 /* Snapshot / restore (x86-64 guest)                                   */
 /* ------------------------------------------------------------------ */
 

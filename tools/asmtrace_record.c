@@ -346,18 +346,117 @@ static const uint8_t ARM64_DF_CHAIN[] = {
     0xc0, 0x03, 0x5f, 0xd6, /* 0x0c ret            */
 };
 
-/* Record one AArch64 routine as a value-fabric golden (R5 T2): the SAME emulator
- * L0 run record_bytes makes for x86-64, through the arm64 `df_guest`, written as
- * `note` + `trace` (rel) + `df_step` + `df_edge`. The header's `arch` is honestly
- * "aarch64" (the guest, via the writer override) even though the recording is
- * produced on an x86-64 lane. No regstate/mem/blame: those ride their own opt-ins,
- * and the arm64 register RING is a separate emu_t concern (see the scope note in
- * the brief). The reader is already arch-parameterized (descriptor + generic
- * def-use over locations), so the Loom / Slice / Timeline render this with NO
- * desktop change. Returns 0 / -1. */
+/* One AArch64 per-step register snapshot as a `regstate` event, by descriptor
+ * reference — the arm64 analogue of emit_regstate (R5,
+ * docs/internal/gui/32-per-guest-value-producer.md, the regstate/Scrubber
+ * half). `values` names the raw physical register file: x0..x30 (AAPCS64
+ * gives x29/x30 their FP/LR roles, but the descriptor names the register, not
+ * the role — exactly as the x86-64 descriptor names rbp/rsp by register), plus
+ * sp, pc, nzcv, in emu_arm64_regs_t declaration order. No vector/NEON deck: a
+ * wide value is not a bare JSON integer (the same v1 omission the x86-64
+ * descriptor recorded before R4's --fpregs), and capturing it is a further
+ * seam, mirroring how the arm64 value fabric's own guest stayed integer-only
+ * (32-per-guest-value-producer.md T2). Hand-rolled here rather than through a
+ * shared cli/asmtrace_ndjson.c body-builder because there is (yet) only ONE
+ * arm64 regstate producer — this one — exactly the historical shape
+ * emit_regstate itself had before a live x86-64 producer existed to share
+ * asmtrace_regstate_body with. */
+static void emit_regstate_arm64(asmtrace_writer_t *w,
+                                const emu_arm64_regs_t *r) {
+    char body[2048];
+    int o = snprintf(
+        body, sizeof body,
+        "\"desc\":\"emu_arm64_regs_t@aarch64/aapcs64\",\"values\":{"
+        "\"x0\":%llu,\"x1\":%llu,\"x2\":%llu,\"x3\":%llu,\"x4\":%llu,"
+        "\"x5\":%llu,\"x6\":%llu,\"x7\":%llu,\"x8\":%llu,\"x9\":%llu,"
+        "\"x10\":%llu,\"x11\":%llu,\"x12\":%llu,\"x13\":%llu,\"x14\":%llu,"
+        "\"x15\":%llu,\"x16\":%llu,\"x17\":%llu,\"x18\":%llu,\"x19\":%llu,"
+        "\"x20\":%llu,\"x21\":%llu,\"x22\":%llu,\"x23\":%llu,\"x24\":%llu,"
+        "\"x25\":%llu,\"x26\":%llu,\"x27\":%llu,\"x28\":%llu,\"x29\":%llu,"
+        "\"x30\":%llu,\"sp\":%llu,\"pc\":%llu,\"nzcv\":%llu}",
+        (unsigned long long)r->x[0], (unsigned long long)r->x[1],
+        (unsigned long long)r->x[2], (unsigned long long)r->x[3],
+        (unsigned long long)r->x[4], (unsigned long long)r->x[5],
+        (unsigned long long)r->x[6], (unsigned long long)r->x[7],
+        (unsigned long long)r->x[8], (unsigned long long)r->x[9],
+        (unsigned long long)r->x[10], (unsigned long long)r->x[11],
+        (unsigned long long)r->x[12], (unsigned long long)r->x[13],
+        (unsigned long long)r->x[14], (unsigned long long)r->x[15],
+        (unsigned long long)r->x[16], (unsigned long long)r->x[17],
+        (unsigned long long)r->x[18], (unsigned long long)r->x[19],
+        (unsigned long long)r->x[20], (unsigned long long)r->x[21],
+        (unsigned long long)r->x[22], (unsigned long long)r->x[23],
+        (unsigned long long)r->x[24], (unsigned long long)r->x[25],
+        (unsigned long long)r->x[26], (unsigned long long)r->x[27],
+        (unsigned long long)r->x[28], (unsigned long long)r->x[29],
+        (unsigned long long)r->x[30], (unsigned long long)r->sp,
+        (unsigned long long)r->pc, (unsigned long long)r->nzcv);
+    if (o < 0)
+        return;
+    size_t n = (size_t)o >= sizeof body ? sizeof body - 1 : (size_t)o;
+    body[n] = '\0';
+    asmtrace_emit(w, "regstate", body);
+}
+
+/* Per-step AArch64 register ring (R5): when steps_cap > 0, run the SAME bytes
+ * again under a FRESH emu_arm64_t handle with its per-step ring armed
+ * (emu_arm64_step_capture) and emit one `regstate` event per held pre-state
+ * (oldest first) — the arm64 analogue of emit_regstates. This is a SEPARATE
+ * Unicorn engine from the value-fabric run above (df_guest's own uc_open), the
+ * same two-engines-one-recording shape emit_regstates already has relative to
+ * asmtest_dataflow_emu_run for x86-64; the fixed EMU_CODE_BASE/EMU_STACK_BASE
+ * layout matches DF_CODE_BASE/DF_STACK_BASE numerically, so both engines see
+ * the same addresses even though neither shares state with the other. Returns
+ * the number of earliest steps the ring evicted (0 if steps_cap is 0 or the
+ * ring could not arm), which the caller folds into truncation. No
+ * vec/statediff/mem extension yet — further seams, not this one. */
+static uint64_t emit_regstates_arm64(asmtrace_writer_t *w, const uint8_t *code,
+                                     size_t code_len, const long *args,
+                                     int nargs, size_t steps_cap) {
+    emu_arm64_t *e;
+    emu_arm64_result_t res;
+    uint64_t dropped = 0;
+    if (steps_cap == 0)
+        return 0;
+    e = emu_arm64_open();
+    if (e == NULL)
+        return 0;
+    if (emu_arm64_step_capture(e, steps_cap)) {
+        size_t held, i;
+        memset(&res, 0, sizeof res);
+        emu_arm64_call(e, code, code_len, args, nargs, 0, &res);
+        held = emu_arm64_step_count(e);
+        dropped = emu_arm64_step_dropped(e);
+        for (i = 0; i < held; i++) {
+            emu_arm64_regs_t regs;
+            if (!emu_arm64_step_at(e, i, NULL, &regs))
+                continue;
+            emit_regstate_arm64(w, &regs);
+        }
+    }
+    emu_arm64_close(e);
+    return dropped;
+}
+
+/* Record one AArch64 routine as a value-fabric golden (R5 T2), written as
+ * `note` + `trace` (rel) + `df_step` + `df_edge` through the arm64 `df_guest` —
+ * plus, when `steps_cap > 0`, the R5 regstate/Scrubber half: one `regstate`
+ * event per held pre-state of the arm64 per-step ring
+ * (emu_arm64_regs_t@aarch64/aapcs64), so an arm64 Author-mode capture ALSO
+ * drives the Scrubber's register time-travel, mirroring how the x86-64 ring
+ * already does. The header's `arch` is honestly "aarch64" (the guest, via the
+ * writer override) even though the recording is produced on an x86-64 lane. No
+ * mem/blame: those ride their own opt-ins and are not armed here. The reader
+ * needs NO change either way: the value fabric is already arch-parameterized
+ * (descriptor + generic def-use over locations), and the Scrubber's
+ * `regstate` reader (desktop/src/analysis/stepindex.cpp) already renders any
+ * integer `values` field it does not specifically name, falling through to
+ * its generic "extra keys, sorted" path for x0..x30/sp/pc/nzcv — a cosmetic
+ * ordering follow-on, not a blocker, exactly as the value fabric's own
+ * `loom_reg_name` degradation was left as one. Returns 0 / -1. */
 static int record_arm64(const char *dir, const char *out, const char *label,
                         const uint8_t *code, size_t code_len, const long *args,
-                        int nargs) {
+                        int nargs, size_t steps_cap) {
     asmtrace_prov_t prov = {"emu-l0", 1, "exact", 0, NULL, 0};
     asmtrace_writer_t w;
     asmtest_valtrace_t *vt = NULL;
@@ -375,7 +474,8 @@ static int record_arm64(const char *dir, const char *out, const char *label,
                                        nargs, 0, vt);
     if (rc < 0) {
         fprintf(stderr,
-                "asmtrace_record: arm64 emulator producer failed for %s\n", out);
+                "asmtrace_record: arm64 emulator producer failed for %s\n",
+                out);
         asmtest_valtrace_free(vt);
         return -1;
     }
@@ -398,8 +498,9 @@ static int record_arm64(const char *dir, const char *out, const char *label,
         for (int i = 0; i < nargs; i++)
             o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
                           i ? ", " : "", args[i]);
-        snprintf(text + o, sizeof text - (size_t)o,
-                 ") under the deterministic emulator L0 producer, AArch64 guest");
+        snprintf(
+            text + o, sizeof text - (size_t)o,
+            ") under the deterministic emulator L0 producer, AArch64 guest");
         asmtrace_escape(body, sizeof body, text);
         asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
     }
@@ -447,17 +548,28 @@ static int record_arm64(const char *dir, const char *out, const char *label,
         asmtrace_emit(&w, "df_edge", body);
     }
 
-    if (vt->truncated)
+    /* Per-step arm64 register states from the ring (R5), after the value
+     * stream — the same ordering emit_regstates uses for x86-64. A non-zero
+     * eviction count is truncation just like a full recs buffer. */
+    uint64_t step_dropped =
+        emit_regstates_arm64(&w, code, code_len, args, nargs, steps_cap);
+
+    if (vt->truncated || step_dropped > 0)
         w.truncated = 1;
     asmtrace_writer_set_steps_total(&w, vt->steps_total);
-    asmtrace_close(&w, 0, 0, NULL);
+    asmtrace_close(&w, step_dropped, 0, NULL);
 
     {
         size_t nedges = g ? g->n : (size_t)0;
+        int trunc = vt->truncated || step_dropped > 0;
         asmtest_defuse_free(g);
         asmtest_valtrace_free(vt);
-        printf("  %-20s %zu steps, %zu records, %zu def-use edges  [arm64]\n",
-               out, nsteps, nrecs, nedges);
+        printf("  %-20s %zu steps, %zu records, %zu def-use edges", out, nsteps,
+               nrecs, nedges);
+        if (steps_cap > 0)
+            printf(", regstate cap %zu (dropped %llu)", steps_cap,
+                   (unsigned long long)step_dropped);
+        printf("  [arm64]%s\n", trunc ? " [TRUNCATED]" : "");
     }
     return 0;
 }
@@ -1452,11 +1564,29 @@ int main(int argc, char **argv) {
      * guest), so it rides the existing ASMTRACE_GOLDEN_OK gate; deterministic and
      * byte-stable like every other golden. The header's arch is honestly
      * "aarch64" (the guest), and the Loom / Slice / Timeline render its fabric
-     * with no desktop change. */
+     * with no desktop change. Baked steps_cap = 8 comfortably holds all four
+     * executed steps (add/add/mov/ret), so this is also the arm64 regstate
+     * worked example (R5, the regstate/Scrubber half) — the arm64 analogue of
+     * add_signed's own baked-in ring, exercising the `regstate` kind without a
+     * separate --steps-style flag. */
     {
         static const long arm64_args[2] = {7, 5};
-        if (record_arm64(dir, "arm64-df-chain", "arm64_df_chain", ARM64_DF_CHAIN,
-                         sizeof ARM64_DF_CHAIN, arm64_args, 2) != 0)
+        if (record_arm64(dir, "arm64-df-chain", "arm64_df_chain",
+                         ARM64_DF_CHAIN, sizeof ARM64_DF_CHAIN, arm64_args, 2,
+                         8) != 0)
+            failed++;
+        /* The D7 dishonesty fixture for the arm64 ring (mirrors
+         * regstate-truncated.asmtrace): the SAME chain with a two-entry step
+         * ring over four executed steps, so the earliest two pre-states are
+         * evicted. The value fabric itself is uncapped, so this truncation is
+         * the register ring's alone — the footer's `truncated` flips and
+         * `drops.lost` counts the evicted prefix, exactly the D7 honesty
+         * `regstate-truncated.asmtrace` shows for x86-64. `-truncated` in the
+         * name so the golden test (desktop/test/test_golden.cpp) requires it
+         * to actually be truncated. Generated, never hand-edited. */
+        if (record_arm64(dir, "arm64-regstate-truncated",
+                         "arm64_df_chain (steps_cap = 2)", ARM64_DF_CHAIN,
+                         sizeof ARM64_DF_CHAIN, arm64_args, 2, 2) != 0)
             failed++;
     }
 

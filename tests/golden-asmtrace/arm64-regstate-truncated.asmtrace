@@ -1,5 +1,5 @@
-{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"aarch64","code":{"name":"arm64-df-chain","sha256":"7181052e1016378f34bcbb197659e1b2069c9d7187348e106596d2ab2067b273","len":16}}
-{"k":"note","text":"arm64_df_chain(7, 5) under the deterministic emulator L0 producer, AArch64 guest"}
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"aarch64","code":{"name":"arm64-regstate-truncated","sha256":"7181052e1016378f34bcbb197659e1b2069c9d7187348e106596d2ab2067b273","len":16}}
+{"k":"note","text":"arm64_df_chain (steps_cap = 2)(7, 5) under the deterministic emulator L0 producer, AArch64 guest"}
 {"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"add x2, x0, x1"}
 {"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"add x3, x2, x2"}
 {"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"mov x0, x3"}
@@ -10,8 +10,6 @@
 {"k":"df_step","step":3,"off":12,"disasm":"ret","ops":[]}
 {"k":"df_edge","from":0,"to":1,"loc":{"space":"reg","reg":220,"size":0,"write":false,"value_valid":true,"value":12}}
 {"k":"df_edge","from":1,"to":2,"loc":{"space":"reg","reg":221,"size":0,"write":false,"value_valid":true,"value":24}}
-{"k":"regstate","desc":"emu_arm64_regs_t@aarch64/aapcs64","values":{"x0":7,"x1":5,"x2":0,"x3":0,"x4":0,"x5":0,"x6":0,"x7":0,"x8":0,"x9":0,"x10":0,"x11":0,"x12":0,"x13":0,"x14":0,"x15":0,"x16":0,"x17":0,"x18":0,"x19":0,"x20":0,"x21":0,"x22":0,"x23":0,"x24":0,"x25":0,"x26":0,"x27":0,"x28":0,"x29":0,"x30":15728640,"sp":2162672,"pc":1048576,"nzcv":0}}
-{"k":"regstate","desc":"emu_arm64_regs_t@aarch64/aapcs64","values":{"x0":7,"x1":5,"x2":12,"x3":0,"x4":0,"x5":0,"x6":0,"x7":0,"x8":0,"x9":0,"x10":0,"x11":0,"x12":0,"x13":0,"x14":0,"x15":0,"x16":0,"x17":0,"x18":0,"x19":0,"x20":0,"x21":0,"x22":0,"x23":0,"x24":0,"x25":0,"x26":0,"x27":0,"x28":0,"x29":0,"x30":15728640,"sp":2162672,"pc":1048580,"nzcv":0}}
 {"k":"regstate","desc":"emu_arm64_regs_t@aarch64/aapcs64","values":{"x0":7,"x1":5,"x2":12,"x3":24,"x4":0,"x5":0,"x6":0,"x7":0,"x8":0,"x9":0,"x10":0,"x11":0,"x12":0,"x13":0,"x14":0,"x15":0,"x16":0,"x17":0,"x18":0,"x19":0,"x20":0,"x21":0,"x22":0,"x23":0,"x24":0,"x25":0,"x26":0,"x27":0,"x28":0,"x29":0,"x30":15728640,"sp":2162672,"pc":1048584,"nzcv":0}}
 {"k":"regstate","desc":"emu_arm64_regs_t@aarch64/aapcs64","values":{"x0":24,"x1":5,"x2":12,"x3":24,"x4":0,"x5":0,"x6":0,"x7":0,"x8":0,"x9":0,"x10":0,"x11":0,"x12":0,"x13":0,"x14":0,"x15":0,"x16":0,"x17":0,"x18":0,"x19":0,"x20":0,"x21":0,"x22":0,"x23":0,"x24":0,"x25":0,"x26":0,"x27":0,"x28":0,"x29":0,"x30":15728640,"sp":2162672,"pc":1048588,"nzcv":0}}
-{"k":"end","events":15,"truncated":false,"drops":{"lost":0,"throttled":false},"steps_total":4}
+{"k":"end","events":13,"truncated":true,"drops":{"lost":2,"throttled":false},"steps_total":4}
