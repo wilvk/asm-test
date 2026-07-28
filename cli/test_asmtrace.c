@@ -164,6 +164,8 @@ typedef struct {
     int end_truncated;    /* the footer's truncated flag         */
     long long lost;       /* footer drops.lost                   */
     int throttled;        /* footer drops.throttled              */
+    int has_steps_total;  /* footer carried steps_total          */
+    long long steps_total;
     int end_skip_code;    /* footer skip.code (0 = none)         */
     char end_skip_reason[256];
     int prov_exact;    /* header provenance.exact             */
@@ -230,6 +232,7 @@ static void read_stream(FILE *f, recording_t *r) {
                 field_ll(drops, "lost", &r->lost);
                 field_bool(drops, "throttled", &r->throttled);
             }
+            r->has_steps_total = field_ll(line, "steps_total", &r->steps_total);
             if (skip && field_ll(skip, "code", &code)) {
                 r->end_skip_code = (int)code;
                 field_str(skip, "reason", r->end_skip_reason,
@@ -351,6 +354,40 @@ static void test_code_header(void) {
     read_recording(path, &r);
     check("writer.code_absent", r.header_ok && !r.code_present,
           "a recording with no set_code must omit the code object");
+}
+
+/* The `steps_total` footer field (28 R1 T2): armed via
+ * asmtrace_writer_set_steps_total, it rides in the `end` footer; unarmed, it is
+ * OMITTED so an older reader's wording stands. */
+static void test_steps_total_footer(void) {
+    char path[600];
+    recording_t r;
+    asmtrace_writer_t w;
+    asmtrace_prov_t p = {"emu-l0", 1, "exact", 0, NULL, 0};
+
+    /* Armed: the footer carries the total, and a truncated stream can read N of M
+     * (here 3 held past a total of 7). */
+    tmppath(path, sizeof path, "steps_total.asmtrace");
+    asmtrace_open(&w, path, 1);
+    asmtrace_header(&w, "asmtrace_record", &p, 0, NULL);
+    asmtrace_emit(&w, "df_step", "\"step\":0,\"off\":0,\"ops\":[]");
+    w.truncated = 1;
+    asmtrace_writer_set_steps_total(&w, 7);
+    asmtrace_close(&w, 0, 0, NULL);
+    read_recording(path, &r);
+    check("writer.steps_total_present", r.header_ok && r.has_steps_total,
+          "set_steps_total did not emit the field");
+    check_ll("writer.steps_total_value", r.steps_total, 7);
+
+    /* Disarmed: no field. */
+    tmppath(path, sizeof path, "nosteps.asmtrace");
+    asmtrace_open(&w, path, 1);
+    asmtrace_header(&w, "asmtrace_record", &p, 0, NULL);
+    asmtrace_emit(&w, "note", "\"text\":\"hi\"");
+    asmtrace_close(&w, 0, 0, NULL);
+    read_recording(path, &r);
+    check("writer.steps_total_absent", r.header_ok && !r.has_steps_total,
+          "a recording with no set_steps_total must omit the field");
 }
 
 static void test_field_order_fixed(void) {
@@ -684,6 +721,7 @@ int main(void) {
 
     test_header_and_roundtrip();
     test_code_header();
+    test_steps_total_footer();
     test_field_order_fixed();
     test_escape_edges();
     test_deterministic_omits_volatile();

@@ -93,6 +93,8 @@ Streams decode_streams(const Recording &r) {
     s.code_sha = r.code.sha256;
     s.code_name = r.code.name;
     s.code_len = r.code.len;
+    s.has_steps_total = r.has_steps_total;
+    s.steps_total = r.steps_total;
 
     // --- trace ------------------------------------------------------------
     if (const auto *ev = kind(r, "trace")) {

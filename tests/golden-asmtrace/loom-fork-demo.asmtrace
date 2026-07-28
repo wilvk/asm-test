@@ -15,4 +15,4 @@
 {"k":"df_edge","from":0,"to":1,"loc":{"space":"reg","reg":40,"size":0,"write":false,"value_valid":true,"value":3}}
 {"k":"df_edge","from":2,"to":3,"loc":{"space":"reg","reg":35,"size":0,"write":false,"value_valid":true,"value":3}}
 {"k":"df_edge","from":3,"to":4,"loc":{"space":"reg","reg":25,"size":0,"write":false,"value_valid":true,"value":151}}
-{"k":"end","events":16,"truncated":false,"drops":{"lost":0,"throttled":false}}
+{"k":"end","events":16,"truncated":false,"drops":{"lost":0,"throttled":false},"steps_total":6}

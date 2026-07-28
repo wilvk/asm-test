@@ -10,4 +10,4 @@
 {"k":"df_step","step":3,"off":9,"disasm":"ret","ops":[{"space":"reg","reg":44,"size":0,"write":false,"value_valid":true,"value":2162680},{"space":"reg","reg":44,"size":0,"write":true,"value_valid":true,"value":2162688},{"space":"abs","reg":0,"base":0,"index":0,"scale":0,"disp":0,"addr":2162680,"size":8,"write":false,"value_valid":true,"value":15728640}]}
 {"k":"df_edge","from":0,"to":1,"loc":{"space":"reg","reg":37,"size":0,"write":false,"value_valid":true,"value":40}}
 {"k":"df_edge","from":1,"to":2,"loc":{"space":"reg","reg":37,"size":0,"write":false,"value_valid":true,"value":42}}
-{"k":"end","events":11,"truncated":false,"drops":{"lost":0,"throttled":false}}
+{"k":"end","events":11,"truncated":false,"drops":{"lost":0,"throttled":false},"steps_total":4}

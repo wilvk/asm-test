@@ -14,4 +14,4 @@
 {"k":"trace","basis":"abs","kind":"insn","off":1048588,"disasm":"jne 0x100006"}
 {"k":"trace","basis":"abs","kind":"insn","off":1048590,"disasm":"mov rax, rcx"}
 {"k":"trace","basis":"abs","kind":"insn","off":1048593,"disasm":"ret"}
-{"k":"end","events":15,"truncated":false,"drops":{"lost":0,"throttled":false}}
+{"k":"end","events":15,"truncated":false,"drops":{"lost":0,"throttled":false},"steps_total":13}

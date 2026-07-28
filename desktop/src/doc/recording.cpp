@@ -181,6 +181,10 @@ std::optional<Recording> load_recording(std::istream &in, std::string &err) {
                 if (d.contains("throttled") && d["throttled"].is_boolean())
                     rec.drops_throttled = d["throttled"].get<bool>();
             }
+            if (ev.contains("steps_total")) {
+                rec.has_steps_total = true;
+                rec.steps_total = as_u64(ev["steps_total"], 0);
+            }
             continue; // the footer is not stored in by_kind
         }
 
@@ -279,6 +283,8 @@ std::string recording_to_asmtrace(const Recording &rec) {
             d["throttled"] = rec.drops_throttled;
             end["drops"] = d;
         }
+        if (rec.has_steps_total)
+            end["steps_total"] = rec.steps_total;
         out += end.dump();
         out += '\n';
     }

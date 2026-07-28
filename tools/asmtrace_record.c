@@ -350,6 +350,9 @@ static int record_bytes(const char *dir, const char *out, const char *label,
     step_dropped = emit_regstates(&w, code, code_len, args, nargs, steps_cap);
     if (vt->truncated || step_dropped > 0)
         w.truncated = 1;
+    /* The total step count (28 R1 T2): the L0 producer saw them all (steps_total
+     * counts past the cap), so a truncation banner can read "N of M". */
+    asmtrace_writer_set_steps_total(&w, vt->steps_total);
 
     /* rc == 1 means the guest faulted or errored: a PARTIAL trace was still
      * produced, so the recording is real — but it must say so rather than look
@@ -523,6 +526,9 @@ static int record_scene_abs(const char *dir, const char *out, const char *label,
 
     if (lost)
         w.truncated = 1;
+    /* steps_total (28 R1 T2): the scene ran nsteps and holds `kept`; lost carries
+     * the rest, so the total is nsteps. */
+    asmtrace_writer_set_steps_total(&w, vt->steps_total);
     asmtrace_close(&w, lost, 0, NULL);
     asmtest_valtrace_free(vt);
     printf("  %-28s %zu of %zu step(s) held, 1 codeimage%s\n", out, kept,
@@ -783,6 +789,9 @@ static int record_abi_leg(const char *dir, const char *out, const char *intro,
     for (i = 0; i < (size_t)nstops; i++)
         emit_abi_stop(&w, &stops[i]);
 
+    /* steps_total (28 R1 T2): the ring cap holds every step of a pair, so the
+     * total is exactly the executed count — never truncated here. */
+    asmtrace_writer_set_steps_total(&w, (unsigned long long)nsteps);
     asmtrace_close(&w, 0, 0, NULL);
     emu_close(e);
     printf("  %-28s %zu step(s), %zu regstate(s), %d stop(s)  [%s]\n", out,

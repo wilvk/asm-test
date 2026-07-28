@@ -195,6 +195,18 @@ static void rec_truncated(rec_t *r) {
     r->out.truncated = 1;
 }
 
+/* Arm the `steps_total` footer field (28 R1 T2) on every open channel from the
+ * value trace's total. The live tail-drop ring passes drops.lost = 0, so this is
+ * the only source of the "M" a truncation banner needs. */
+static void rec_set_steps_total(rec_t *r, unsigned long long total) {
+    if (!r)
+        return;
+    if (r->have_file)
+        asmtrace_writer_set_steps_total(&r->file, total);
+    if (r->have_out)
+        asmtrace_writer_set_steps_total(&r->out, total);
+}
+
 /* Close with the measured drop counters and, when the run SKIPPED, the skip
  * code + its measured reason: a skipped run still produces a closed, honest
  * recording rather than an empty file. */
@@ -2323,6 +2335,9 @@ static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
     }
     if (vt->truncated)
         rec_truncated(r);
+    /* The value trace saw vt->steps_total steps (it counts past the ring cap even
+     * when the tail is dropped), so the footer can name the M. */
+    rec_set_steps_total(r, (unsigned long long)vt->steps_total);
 }
 
 /* --dataflow JSON schema (documented alongside the --graph / --sample / --tree

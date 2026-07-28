@@ -56,12 +56,21 @@ struct StepIndex {
         false;        // the ring evicted a prefix -> a torn edge precedes it
     std::string desc; // the state-descriptor id referenced (chrome)
 
+    // The footer's `steps_total` (28 R1 T2), 0 when absent. A drop-OLDEST ring
+    // reconstructs the total as dropped+count; a drop-NEWEST (tail-drop) live ring
+    // passes dropped=0 yet ran past the cap, so ONLY this field supplies the true
+    // total. total_steps() takes the larger, so a footer total never shrinks the
+    // reconstructed one and the tail-drop case is no longer undercounted.
+    uint64_t footer_total = 0;
+
     bool present() const { return !entries.empty(); }
     size_t count() const { return entries.size(); }
 
-    // The full step space is [0, total_steps()). The ring holds the LAST `cap`
-    // steps, so nothing follows the last held one: total = dropped + count.
-    uint64_t total_steps() const { return dropped + entries.size(); }
+    // The full step space is [0, total_steps()).
+    uint64_t total_steps() const {
+        uint64_t reconstructed = dropped + entries.size();
+        return footer_total > reconstructed ? footer_total : reconstructed;
+    }
 
     // O(1) seek: the held file whose ABSOLUTE step == `step`, or nullptr when
     // that step was dropped (torn) or never recorded. Never returns a

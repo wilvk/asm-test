@@ -352,6 +352,34 @@ int main() {
         }
     }
 
+    // 28 R1 T2: the feed prefers the `end` footer's steps_total for the M, so a
+    // REPLAYED truncated dataflow recording reads "N of M" instead of naming the
+    // gap. It falls back to the trace stream's insns_total, then to unknown (0) —
+    // the M is never invented.
+    {
+        Streams s;
+        s.df.insn_off = {0, 3, 6};
+        s.df.nsteps = 3;
+        s.df.steps_missing = 0; // 3 recorded steps
+        s.truncated = true;
+
+        s.has_steps_total = true;
+        s.steps_total = 9; // 9 ran, 3 recorded
+        loom_feed_t f = loom_feed_from_streams(s);
+        check("the feed records 3 steps", f.prov.steps_recorded == 3, "");
+        check("the feed takes the footer's total (M = 9)",
+              f.prov.steps_total == 9, "");
+
+        s.has_steps_total = false; // no footer -> the trace total is the fallback
+        s.trace.insns_total = 7;
+        check("without a footer, insns_total is the fallback",
+              loom_feed_from_streams(s).prov.steps_total == 7, "");
+
+        s.trace.insns_total = 0; // neither -> unknown, never invented
+        check("neither source -> unknown total (0)",
+              loom_feed_from_streams(s).prov.steps_total == 0, "");
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d golden loom check(s) failed\n", failures);
         return 1;

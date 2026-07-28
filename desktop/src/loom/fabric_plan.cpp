@@ -106,9 +106,9 @@ std::string loom_torn_text(const loom_provenance_t &p) {
     if (p.steps_total > p.steps_recorded)
         return "trace truncated: " + std::to_string(p.steps_recorded) + " of " +
                std::to_string(p.steps_total) + " steps recorded";
-    // The v1 schema carries no dataflow step total, so a REPLAYED truncated
-    // recording usually cannot supply M. Saying "N of N" would claim the run
-    // ended where the buffer did; naming the gap is the honest form.
+    // No total on the wire (an `end` footer predating steps_total, 28 R1 T2, and
+    // no trace insns_total either). Saying "N of N" would claim the run ended
+    // where the buffer did; naming the gap is the honest form.
     return "trace truncated: " + std::to_string(p.steps_recorded) +
            " steps recorded; this feed did not record the total";
 }

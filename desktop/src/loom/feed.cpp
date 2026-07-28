@@ -90,12 +90,15 @@ loom_feed_t loom_feed_from_streams(const Streams &s) {
     f.prov.isolated_guest = s.backend == "emu-l0";
     f.prov.disasm = df.disasm;
     f.prov.steps_recorded = df.nsteps - df.steps_missing;
-    // v1 has no dataflow step total. `insns_total` is the trace stream's count
-    // of executed instructions SEEN (it counts past the buffer cap), which for a
-    // whole-run value trace is the same population — so it is used when a
-    // coverage event supplied one, and left 0 (unknown) otherwise. The chrome
-    // renders a different sentence for the unknown case; it never invents an M.
-    if (s.trace.insns_total > f.prov.steps_recorded)
+    // The dataflow step total (28 R1 T2): the `end` footer now carries the count
+    // the producer SAW (past any ring cap), so a REPLAYED truncated recording can
+    // read "N of M" directly. Prefer it; fall back to the trace stream's
+    // `insns_total` (the same population for a whole-run value trace) for a
+    // recording whose footer predates the field; leave 0 (unknown) otherwise. The
+    // chrome renders a different sentence for the unknown case; it never invents M.
+    if (s.has_steps_total && s.steps_total > f.prov.steps_recorded)
+        f.prov.steps_total = s.steps_total;
+    else if (s.trace.insns_total > f.prov.steps_recorded)
         f.prov.steps_total = s.trace.insns_total;
     return f;
 }

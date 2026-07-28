@@ -95,6 +95,12 @@ struct Recording {
     bool drops_throttled = false;
     bool torn = false; // no `end` event was seen -> a TORN recording
 
+    // The footer's `steps_total` (28 R1 T2): the total step count the producer
+    // saw, past any ring cap. `has_steps_total` is false when the footer omitted
+    // it (older/non-step recordings), and a consumer keeps its honest fallback.
+    bool has_steps_total = false;
+    uint64_t steps_total = 0;
+
     std::string path;
 
     // Authored + unsaved (18-breach-stops.md T3, F24). An Author run materialised

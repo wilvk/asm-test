@@ -332,12 +332,17 @@ id and field names stable for readers written before the producer exists.
 ### `end` — the footer
 
 ```json
-{"k":"end","events":37,"truncated":false,"drops":{"lost":0,"throttled":false},"skip":{"code":2,"reason":"IBS-Op is an AMD feature; this host is GenuineIntel"}}
+{"k":"end","events":37,"truncated":false,"drops":{"lost":0,"throttled":false},"steps_total":37,"skip":{"code":2,"reason":"IBS-Op is an AMD feature; this host is GenuineIntel"}}
 ```
 
 `events` counts the event lines **before** this one (the header is not an
 event, and `end` does not count itself). `skip` is present only when the run
-skipped.
+skipped. `steps_total` (optional, 28 R1 T2) is the total step count the producer
+**saw**, counting past any ring cap — the *M* a truncation banner reads as
+"N of M". It is the only source of *M* for a truncate-when-full (tail-drop) ring,
+which passes `drops.lost = 0`; a reader that predates the field ignores it and
+keeps its older wording. Field order: `events`, `truncated`, `drops`,
+`steps_total`, `skip`.
 
 **A file without an `end` event is a TORN recording**, and a reader MUST say so
 rather than presenting a partial recording as complete. This is deliberate and

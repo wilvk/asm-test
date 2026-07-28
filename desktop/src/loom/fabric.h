@@ -49,10 +49,11 @@ struct loom_provenance_t {
     std::vector<std::string> disasm; // per step; empty -> offsets (D10)
 
     // The truncation banner's two numbers. `steps_total == 0` means the feed did
-    // not record a total — the v1 schema carries no dataflow step total (only
-    // the `end` footer's truncated flag), so a replayed recording usually cannot
-    // supply M. The chrome says which of the two texts it is rendering rather
-    // than inventing an M; see fabric_plan.cpp.
+    // not record a total. The `end` footer's `steps_total` (28 R1 T2) supplies M
+    // when present; a recording whose footer predates it falls back to the trace
+    // stream's insns_total, and where neither exists the total stays 0. The chrome
+    // says which of the two texts it is rendering rather than inventing an M; see
+    // fabric_plan.cpp.
     uint64_t steps_recorded = 0;
     uint64_t steps_total = 0;
 };

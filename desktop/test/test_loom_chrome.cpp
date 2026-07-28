@@ -64,9 +64,9 @@ int main() {
                   "text was: " + torn[0]->text);
     }
 
-    // The v1 schema carries no dataflow step total, so a replayed truncated
-    // recording usually cannot supply M. The banner must NAME that gap, never
-    // print "6 of 6" — which would claim the run ended where the buffer did.
+    // A recording whose footer carries no steps_total (28 R1 T2) and no trace
+    // insns_total cannot supply M. The banner must NAME that gap, never print
+    // "6 of 6" — which would claim the run ended where the buffer did.
     {
         loom_provenance_t p = prov();
         p.truncated = true;

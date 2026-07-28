@@ -13,4 +13,4 @@
 {"k":"df_step","step":4,"off":17,"disasm":"mov rax, rdx","ops":[]}
 {"k":"df_step","step":5,"off":20,"disasm":"ret","ops":[]}
 {"k":"df_edge","from":0,"to":1,"loc":{"space":"reg","reg":35,"size":0,"write":false,"value_valid":true,"value":7}}
-{"k":"end","events":14,"truncated":true,"drops":{"lost":0,"throttled":false}}
+{"k":"end","events":14,"truncated":true,"drops":{"lost":0,"throttled":false},"steps_total":6}

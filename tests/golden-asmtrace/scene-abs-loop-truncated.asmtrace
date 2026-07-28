@@ -7,4 +7,4 @@
 {"k":"trace","basis":"abs","kind":"insn","off":1048585,"disasm":"dec rax"}
 {"k":"trace","basis":"abs","kind":"insn","off":1048588,"disasm":"jne 0x100006"}
 {"k":"trace","basis":"abs","kind":"insn","off":1048582,"disasm":"add rcx, rax"}
-{"k":"end","events":8,"truncated":true,"drops":{"lost":7,"throttled":false}}
+{"k":"end","events":8,"truncated":true,"drops":{"lost":7,"throttled":false},"steps_total":13}

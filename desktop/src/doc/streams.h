@@ -104,6 +104,12 @@ struct Streams {
     bool torn = false;
     uint64_t lost = 0;
     bool throttled = false;
+
+    // The footer's `steps_total` (28 R1 T2): the total step count the producer
+    // saw. has_steps_total is false when the footer omitted it, and the Loom
+    // keeps its trace-derived fallback for the M.
+    bool has_steps_total = false;
+    uint64_t steps_total = 0;
     bool statistical = false; // provenance.exact == false
     bool redacted = false;
 

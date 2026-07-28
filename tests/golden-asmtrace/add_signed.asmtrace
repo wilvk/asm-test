@@ -10,4 +10,4 @@
 {"k":"regstate","desc":"emu_x86_regs_t@x86_64/sysv","values":{"rax":0,"rbx":0,"rcx":0,"rdx":0,"rsi":2,"rdi":40,"rbp":0,"rsp":2162680,"r8":0,"r9":0,"r10":0,"r11":0,"r12":0,"r13":0,"r14":0,"r15":0,"rip":1048576,"rflags":2}}
 {"k":"regstate","desc":"emu_x86_regs_t@x86_64/sysv","values":{"rax":40,"rbx":0,"rcx":0,"rdx":0,"rsi":2,"rdi":40,"rbp":0,"rsp":2162680,"r8":0,"r9":0,"r10":0,"r11":0,"r12":0,"r13":0,"r14":0,"r15":0,"rip":1048579,"rflags":2}}
 {"k":"regstate","desc":"emu_x86_regs_t@x86_64/sysv","values":{"rax":42,"rbx":0,"rcx":0,"rdx":0,"rsi":2,"rdi":40,"rbp":0,"rsp":2162680,"r8":0,"r9":0,"r10":0,"r11":0,"r12":0,"r13":0,"r14":0,"r15":0,"rip":1048582,"rflags":2}}
-{"k":"end","events":11,"truncated":false,"drops":{"lost":0,"throttled":false}}
+{"k":"end","events":11,"truncated":false,"drops":{"lost":0,"throttled":false},"steps_total":3}

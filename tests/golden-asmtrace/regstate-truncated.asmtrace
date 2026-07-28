@@ -19,4 +19,4 @@
 {"k":"df_edge","from":4,"to":5,"loc":{"space":"reg","reg":44,"size":0,"write":false,"value_valid":true,"value":2162680}}
 {"k":"regstate","desc":"emu_x86_regs_t@x86_64/sysv","values":{"rax":5,"rbx":5,"rcx":0,"rdx":0,"rsi":3,"rdi":2,"rbp":0,"rsp":2162672,"r8":0,"r9":0,"r10":0,"r11":0,"r12":0,"r13":0,"r14":0,"r15":0,"rip":1048586,"rflags":6}}
 {"k":"regstate","desc":"emu_x86_regs_t@x86_64/sysv","values":{"rax":5,"rbx":0,"rcx":0,"rdx":0,"rsi":3,"rdi":2,"rbp":0,"rsp":2162680,"r8":0,"r9":0,"r10":0,"r11":0,"r12":0,"r13":0,"r14":0,"r15":0,"rip":1048587,"rflags":6}}
-{"k":"end","events":20,"truncated":true,"drops":{"lost":4,"throttled":false}}
+{"k":"end","events":20,"truncated":true,"drops":{"lost":4,"throttled":false},"steps_total":6}

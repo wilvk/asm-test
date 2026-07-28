@@ -88,6 +88,14 @@ static void prov_line(FILE *f, const asmtrace_prov_t *p) {
     fputc('}', f);
 }
 
+void asmtrace_writer_set_steps_total(asmtrace_writer_t *w,
+                                     unsigned long long total) {
+    if (!w)
+        return;
+    w->steps_total = total;
+    w->have_steps_total = 1;
+}
+
 void asmtrace_writer_set_code(asmtrace_writer_t *w, const char *name,
                               const char *sha256_hex, unsigned long long len) {
     if (!w)
@@ -300,6 +308,11 @@ int asmtrace_close(asmtrace_writer_t *w, unsigned long long lost, int throttled,
             "\"lost\":%llu,\"throttled\":%s}",
             w->events, w->truncated ? "true" : "false", lost,
             throttled ? "true" : "false");
+    /* The total step count (28 R1 T2), when the producer supplied it: additive,
+     * so a reader that predates it ignores it. It rides after drops, in the
+     * honesty cluster, because it is what turns "truncated" into "N of M". */
+    if (w->have_steps_total)
+        fprintf(w->f, ",\"steps_total\":%llu", w->steps_total);
     if (skip_update && skip_update->skip_code) {
         asmtrace_escape(esc, sizeof esc,
                         skip_update->skip_reason ? skip_update->skip_reason

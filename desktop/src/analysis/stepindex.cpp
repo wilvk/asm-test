@@ -86,6 +86,10 @@ StepIndex build_step_index(const Recording &r) {
     idx.dropped = r.drops_lost;
     idx.first_step = r.drops_lost;
     idx.truncated = idx.dropped > 0;
+    // The footer's total (28 R1 T2): for a tail-drop live ring (dropped == 0 but
+    // steps ran past the cap) it is the only source of the true total.
+    if (r.has_steps_total)
+        idx.footer_total = r.steps_total;
 
     const std::vector<Event> &events = it->second;
     for (size_t i = 0; i < events.size(); i++) {

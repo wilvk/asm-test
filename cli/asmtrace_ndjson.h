@@ -44,6 +44,13 @@ typedef struct {
     int truncated;             /* sticky; folded into `end`              */
     int err;                   /* sticky: an fprintf/fclose failed       */
 
+    /* Optional `steps_total` footer field (28 R1 T2): the total step count the
+     * producer SAW, counting past any ring cap. Set before asmtrace_close so a
+     * truncation banner can read "N of M" instead of naming the gap. Absent
+     * (have_steps_total == 0) keeps the older honest wording. */
+    int have_steps_total;
+    unsigned long long steps_total;
+
     /* Optional `code` header identity (28 R1 T1), set BEFORE asmtrace_header
      * by a producer that holds stable routine bytes. have_code == 0 (the
      * memset default) omits the object entirely — a live attach with no fixed
@@ -80,6 +87,13 @@ int asmtrace_header(asmtrace_writer_t *w, const char *producer,
  * (asmtrace_sha256_hex). */
 void asmtrace_writer_set_code(asmtrace_writer_t *w, const char *name,
                               const char *sha256_hex, unsigned long long len);
+
+/* Arm the optional `steps_total` footer field (28 R1 T2): the total number of
+ * steps the producer saw, past any ring cap. Call before asmtrace_close. This
+ * lets a truncation banner read "N of M" — the M a truncate-when-full (tail-drop)
+ * ring cannot otherwise supply, since it passes drops.lost = 0. */
+void asmtrace_writer_set_steps_total(asmtrace_writer_t *w,
+                                     unsigned long long total);
 
 /* One event line: {"k":"<kind>",<body>}\n. `body` is PRE-FORMATTED JSON fields
  * with NO leading comma, built from asmtrace_escape'd strings; NULL/"" emits a

@@ -164,5 +164,37 @@ int main() {
         vt::golden("scrubber-no-producer.txt", dt_scrubber_dump(sc));
     }
 
+    // --- the footer's steps_total (28 R1 T2): total_steps() takes the larger of
+    // the reconstructed (dropped+count) and the footer total, so a tail-drop live
+    // ring (dropped == 0 but steps ran past the cap) is no longer undercounted,
+    // and a drop-oldest ring's reconstruction is never shrunk by a stale footer.
+    {
+        StepIndex idx;
+        idx.entries.resize(2); // 2 held
+
+        // Tail-drop: dropped == 0, but the footer says 5 steps ran. Reconstruction
+        // (0+2) would undercount; the footer supplies the true total.
+        idx.dropped = 0;
+        idx.footer_total = 5;
+        vt::eq("tail-drop total uses the footer", idx.total_steps(),
+               uint64_t{5});
+
+        // Drop-oldest: the footer equals dropped+count, so it is a no-op.
+        idx.dropped = 4;
+        idx.footer_total = 6;
+        vt::eq("drop-oldest total is unchanged by a matching footer",
+               idx.total_steps(), uint64_t{6});
+
+        // A stale/smaller footer never shrinks the reconstructed total.
+        idx.footer_total = 3;
+        vt::eq("a smaller footer never shrinks the reconstruction",
+               idx.total_steps(), uint64_t{6});
+
+        // Absent footer (0) falls back to the reconstruction exactly as before.
+        idx.footer_total = 0;
+        vt::eq("no footer falls back to dropped+count", idx.total_steps(),
+               uint64_t{6});
+    }
+
     return vt::report("test_scrubber");
 }

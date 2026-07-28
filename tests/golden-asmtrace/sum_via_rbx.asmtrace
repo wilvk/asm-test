@@ -17,4 +17,4 @@
 {"k":"df_edge","from":0,"to":4,"loc":{"space":"reg","reg":44,"size":0,"write":false,"value_valid":true,"value":2162672}}
 {"k":"df_edge","from":0,"to":4,"loc":{"space":"abs","reg":0,"base":0,"index":0,"scale":0,"disp":0,"addr":2162672,"size":8,"write":false,"value_valid":true,"value":0}}
 {"k":"df_edge","from":4,"to":5,"loc":{"space":"reg","reg":44,"size":0,"write":false,"value_valid":true,"value":2162680}}
-{"k":"end","events":18,"truncated":false,"drops":{"lost":0,"throttled":false}}
+{"k":"end","events":18,"truncated":false,"drops":{"lost":0,"throttled":false},"steps_total":6}
