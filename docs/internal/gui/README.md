@@ -263,11 +263,19 @@ one-shot byte-identical) + the `df_invocation` per-pass delimiter (schema-define
 --continuous` (`fa2cef4`); the desktop segments the growing recording per pass
 (`build_segmented_step_index`, latest = the live default) + the capture-pane
 `continuous` checkbox + the hand-authored `dishonest/continuous-df.asmtrace`
-fixture (`fc836e0`). **T2 (interruptible Stop / hold-one-seize) DEFERRED** —
-Stop is observed between passes (near-instant for a hot re-entering region); the
-residual entry-wait bound needs `stop` threaded into the hot, shared
-`dataflow_ptrace.c` core + an arm64 `#else` stub uncompilable on x86-64, so it is
-left for a session with the arm64 lane (rationale in the brief). ◐ 3/4 · —.
+fixture (`fc836e0`). **T2 step 1 (interruptible Stop) landed 2026-07-28**
+(`c2313be`): `stop` is threaded through a new `asmtest_dataflow_ptrace_attach_jit_stop`
+entry (the old signature forwards NULL, so every existing caller stays
+byte-identical) into `dfp_run_to_multi` (the entry wait) and `dfp_step_loop`,
+which terminates through the crash-safe `dfp_dirty_exit` on stop — so a Stop
+during a live continuous capture is honored **within one in-flight pass** rather
+than only between passes (a timed `cli_smoke` test yields inside a bounded entry
+wait, victim surviving the detach). arm64 is architecturally unreachable here (the
+single-step producer is x86-64-only and self-skips), so the detach-fatal hazard
+cannot bite. **T2 step 2 (hold one seize) DEFERRED** — the seize-once +
+re-arm-per-pass refactor rewrites `dfp_step_loop`'s most fragile path for a
+per-pass re-SEIZE that is negligible against a pass's single-step cost; a cost,
+not a correctness gap. ◐ 3/4 (T2 step 1 of 2) · —.
 
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
