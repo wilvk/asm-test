@@ -109,6 +109,14 @@ struct ShellState {
     Settings settings;
     bool show_settings = false;
     bool settings_dirty = false;
+    // Help ▸ About — a standalone "what is this app" window, toggled from the
+    // menu bar (its own section) exactly as show_settings/show_help are.
+    bool show_about = false;
+    // Help ▸ This host — the capability panel now lives in a collapsed "Details"
+    // section under Home (no longer an Inspector tab). This one-frame intent asks
+    // draw_home_rail to expand that section (and the docked shell to focus the
+    // Home pane), so the menu item reaches it without a duplicate surface.
+    bool want_details = false;
 
     // --- the replay views (04-replay-views.md) ---------------------------
     // Decoded once per open recording, parallel to ws.recordings: the builders

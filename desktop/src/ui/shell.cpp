@@ -502,11 +502,26 @@ void draw_home_rail(ShellState &s) {
     }
 
     ImGui::Separator();
-    if (ImGui::SmallButton("Settings"))
-        s.show_settings = true;
-    ImGui::SameLine();
     if (ImGui::SmallButton("Keyboard bindings"))
         s.show_help = !s.show_help;
+
+    // Details ▸ "This host" (the capability panel). It used to be an Inspector
+    // tab; it now lives here, collapsed by default, so Home is the one place that
+    // answers "what can this host do?" without a recording open. Help ▸ This host
+    // sets want_details, which forces the header open for one frame.
+    ImGui::Separator();
+    if (s.want_details) {
+        ImGui::SetNextItemOpen(true, ImGuiCond_Always);
+        s.want_details = false; // consumed — draw_home_rail runs once per frame
+    }
+    if (ImGui::CollapsingHeader("Details")) {
+        const Recording *r =
+            (s.active_tab >= 0 &&
+             s.active_tab < static_cast<int>(s.ws.recordings.size()))
+                ? &s.ws.recordings[static_cast<size_t>(s.active_tab)]
+                : nullptr;
+        draw_capability_panel(s.caps, r);
+    }
 }
 
 // A recording's summary pane: provenance chrome + the honesty banner + per-kind
@@ -1132,13 +1147,10 @@ static void draw_recording_tab(ShellState &s, const Recording &r) {
                 }
             }
         }
-        // App panels, not recording views: always available.
+        // App panels, not recording views: always available. ("This host" moved
+        // to Home ▸ Details; reach it there or via Help ▸ This host.)
         if (ImGui::BeginTabItem("Backends")) {
             draw_completeness(s.completeness, s.repo_root);
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("This host")) {
-            draw_capability_panel(s.caps, &r);
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Terms")) {
@@ -1611,7 +1623,7 @@ static void draw_windowed_shell(ShellState &s, const ImGuiViewport *vp) {
 //                                  remaining sub-level)
 //   kPaneTimeline  (bottom-left)   the operand timeline
 //   kPaneScrubber  (bottom-right)  the register scrubber
-//   kPaneInspector (right)         ABI x-ray / Backends / This host, one flat bar
+//   kPaneInspector (right)         ABI x-ray / Backends, one flat bar
 //   kPaneConnect / kPaneProcesses / kPaneCapture   the Inspect workflow, as three
 //                                  dockable panes (host / target picker / capture)
 // Every pane opens ON DEMAND (its CONTEXT must be met), CLOSES via its own X, and
@@ -1697,6 +1709,11 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
                         rail_open_path(s, *it);
                 }
             }
+            // Settings (20 T5): moved under File from its old top-level slot, so
+            // the menu bar's roots are File / View / Help only.
+            ImGui::Separator();
+            if (ImGui::MenuItem("Settings"))
+                s.show_settings = true;
             ImGui::EndMenu();
         }
         if (ImGui::BeginMenu("View")) {
@@ -1751,8 +1768,18 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
             }
             ImGui::EndMenu();
         }
-        if (ImGui::MenuItem("Settings"))
-            s.show_settings = true;
+        // Help — its own top-level section: About (what this app is) and This
+        // host (the capability panel, which now lives in Home ▸ Details; this
+        // opens the Home pane and expands that section via want_details).
+        if (ImGui::BeginMenu("Help")) {
+            if (ImGui::MenuItem("About"))
+                s.show_about = true;
+            if (ImGui::MenuItem("This host")) {
+                s.want_details = true;
+                s.pane_open[kPaneHome] = true;
+            }
+            ImGui::EndMenu();
+        }
         // Persistent wayfinding chrome (21-spine-navigation.md T2, F9): the
         // "where am I" band rides the always-visible menu bar, outside every dock
         // pane, so it survives tab/pane switches. Read-only; the back/forward
@@ -1829,6 +1856,10 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     // --- kPaneHome (left): the persistent task rail + the open-recording list ---
     if (pane_shown(s, kPaneHome)) {
         bool open = true;
+        // Help ▸ This host raised want_details: bring Home forward so its Details
+        // section (which draw_home_rail expands this same frame) is visible.
+        if (s.want_details)
+            ImGui::SetNextWindowFocus();
         if (ImGui::Begin(kPaneHome, &open)) {
             draw_home_rail(s); // 20 T2: the task-language rail replaces the doors
             ImGui::Separator();
@@ -2072,7 +2103,7 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
             s.pane_open[kPaneScrubber] = false;
     }
 
-    // --- kPaneInspector (right): ABI x-ray / Backends / This host, one flat bar
+    // --- kPaneInspector (right): ABI x-ray / Backends, one flat bar
     bool insp_show = pane_shown(s, kPaneInspector);
     bool insp_open = true;
     if (insp_show && ImGui::Begin(kPaneInspector, &insp_open)) {
@@ -2089,14 +2120,7 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
                 draw_completeness(s.completeness, s.repo_root);
                 ImGui::EndTabItem();
             }
-            if (ImGui::BeginTabItem("This host")) {
-                if (r != nullptr)
-                    draw_capability_panel(s.caps, r);
-                else
-                    ImGui::TextDisabled(
-                        "open a recording to read this host against it");
-                ImGui::EndTabItem();
-            }
+            // "This host" moved to Home ▸ Details (Help ▸ This host jumps there).
             ImGui::EndTabBar();
         }
     }
@@ -2319,6 +2343,32 @@ static void draw_settings(ShellState &s) {
     ImGui::End();
 }
 
+// Help ▸ About: a standalone "what is this app" window, toggled from the menu
+// bar exactly as Settings / Keyboard bindings are. Deliberately spare and honest
+// — it names the app, what it is, and points at the two on-host answers (Details
+// and Backends) rather than reciting a version it cannot truthfully print.
+static void draw_about(ShellState &s) {
+    if (!s.show_about)
+        return;
+    if (ImGui::Begin("About asmtest", &s.show_about,
+                     ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::TextUnformatted("asmtest — desktop");
+        ImGui::Separator();
+        ImGui::TextWrapped(
+            "A viewer and authoring front-end for the asmtest capture library: "
+            "replay .asmtrace recordings, attach to a running process, and "
+            "author assembly to see faults as data.");
+        ImGui::Spacing();
+        ImGui::Text("Recording schema: v%d (.asmtrace)", kAsmtraceMajor);
+        ImGui::Spacing();
+        ImGui::TextDisabled(
+            "What this host can capture lives in Home \xE2\x96\xB8 Details "
+            "(Help \xE2\x96\xB8 This host); what this build can decode is in the "
+            "Backends panel.");
+    }
+    ImGui::End();
+}
+
 // --- 22 T4: apply an undo Command onto the shell ------------------------------
 // Restores the before-value on undo (Ctrl+Z) and the after-value on redo
 // (Ctrl+Y). Touches ONLY the reversible view-model fields (filter / cone /
@@ -2493,7 +2543,8 @@ void draw_shell(ShellState &s) {
     draw_goto_modal(s);   // Ctrl+G (17-T1)
     draw_palette(s);      // Ctrl+Shift+P / Ctrl+P command palette (21 T1)
     draw_close_guards(s); // T3 dirty-close save/discard/cancel
-    draw_settings(s);     // 20 T5 the Settings pane
+    draw_settings(s);     // 20 T5 the Settings pane (File ▸ Settings)
+    draw_about(s);        // Help ▸ About
     draw_find_bar(s);     // 22 T3 the global find (Ctrl+F)
     // 22 T4: coalesce a settled syscall-filter edit into one reversible Command,
     // AFTER the shell drew (and the user may have edited) the filter this frame.
