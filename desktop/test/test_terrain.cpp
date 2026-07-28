@@ -626,6 +626,36 @@ int main() {
         steps_explained("K", m);
     }
 
+    // === Fixture M: a single-span df capture whose offsets ALL clamp out =====
+    // (adversarial-review finding) The df rung must NOT advertise "df residency"
+    // over a zero-cell plane: height_source stays unset and anchor_error says why,
+    // so steps_explained holds — the same honesty guard the trace rung already had.
+    {
+        Recording rec = mk_rec(
+            "{\"asmtrace\":1,\"provenance\":{\"backend\":\"ptrace-dataflow\","
+            "\"exact\":true,\"trust\":\"exact\"},\"arch\":\"x86_64\"}\n"
+            "{\"k\":\"codeimage\",\"base\":4194304,\"len\":16,\"version\":0,"
+            "\"when\":1,\"bytes\":\"90\"}\n" // a tiny 16-byte span
+            "{\"k\":\"df_step\",\"step\":0,\"off\":4096,\"rbase\":4194304}\n"
+            "{\"k\":\"df_step\",\"step\":1,\"off\":8192,\"rbase\":4194304}\n"
+            "{\"k\":\"end\",\"events\":3,\"truncated\":false,"
+            "\"drops\":{\"lost\":0,\"throttled\":false}}\n");
+        Projection p = build_projection(regions_from_codeimage(rec));
+        TerrainModel m = build_terrain(p, rec);
+        check("M: nsteps is real (the time axis survives)", m.nsteps == 2,
+              "got " + std::to_string(m.nsteps));
+        check("M: no cells placed (every offset clamped out)", m.code.empty(),
+              "got " + std::to_string(m.code.size()) + " cells");
+        check(
+            "M: height_source does NOT claim df residency over an empty plane",
+            m.height_source != "df_step", "got '" + m.height_source + "'");
+        check("M: anchor_error says why (never a silent flat plane)",
+              !m.anchor_error.empty(), "silent empty plane over real steps");
+        check("M: plane is flat", nonzero(m.full()) == 0,
+              "cells on an empty df");
+        steps_explained("M", m);
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d terrain check(s) failed\n", failures);
         return 1;

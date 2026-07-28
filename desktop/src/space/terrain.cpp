@@ -292,17 +292,10 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
     // nothing covered, and flags nothing TF_STAT — the stream is exact, not
     // sampled. Per-cell full_heat is the step count, not a canvas heat.
     if (m.code.empty() && s.df.present()) {
-        m.height_source = "df_step";
-        m.height_note = "coarse: heights from single-step residency (df_step) "
-                        "— no block coverage";
         // 37 T3: place each step against its OWN region base (rbase) when the wire
         // states it — so a MULTI-span df recording (an `auto` candidate walk) gets
         // relief, not just the single-span case 36 could anchor. An untagged step
-        // falls back to 36's single-codeimage anchor. No cells AND no wire base AND
-        // no single span ⇒ anchor_error (a flat plane that says why).
-        if (!anchor.ok && !s.df.rbase_present && m.anchor_error.empty())
-            m.anchor_error =
-                anchor.reason; // no span to place df offsets against
+        // falls back to 36's single-codeimage anchor.
         std::map<uint32_t, std::vector<uint64_t>> df_cell_steps;
         std::map<uint32_t, uint64_t>
             df_cell_base; // cell -> region base (churn)
@@ -327,22 +320,46 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
                 df_cell_base[c] = base_i;
             }
         }
-        m.nsteps = s.df.nsteps; // the time axis is the df step count
-        m.code.reserve(df_cell_steps.size());
-        for (auto &kv : df_cell_steps) {
-            TerrainModel::CodeCell cc;
-            cc.cell = kv.first;
-            cc.steps = std::move(kv.second);
-            cc.full_heat = static_cast<uint32_t>(cc.steps.size()); // step count
-            // 37 T3: key the churn join on the step's OWN region base (rbase),
-            // NOT the geometric unproject the trace rung uses — sound even for an
-            // offset projecting into no region, and correct across the multiple
-            // spans a candidate walk carries. The churn walk above now counts
-            // df_step offsets, so this lands at the true step, not step 0.
-            auto f = churn_step.find(df_cell_base[kv.first]);
-            if (f != churn_step.end())
-                cc.churn_step = f->second;
-            m.code.push_back(std::move(cc));
+        m.nsteps = s.df.nsteps; // the time axis is real regardless of placement
+        if (!df_cell_steps.empty()) {
+            // Cells placed: label the rung — and ONLY now, mirroring the trace
+            // rung's `if (!cell_steps.empty())` guard, so a capture that placed
+            // NOTHING never advertises df residency over a flat plane. This is
+            // single-step residency, NOT block coverage: it fills no `blocks`,
+            // marks nothing covered, and flags nothing TF_STAT.
+            m.height_source = "df_step";
+            m.height_note =
+                "coarse: heights from single-step residency (df_step) "
+                "— no block coverage";
+            m.code.reserve(df_cell_steps.size());
+            for (auto &kv : df_cell_steps) {
+                TerrainModel::CodeCell cc;
+                cc.cell = kv.first;
+                cc.steps = std::move(kv.second);
+                cc.full_heat =
+                    static_cast<uint32_t>(cc.steps.size()); // step count
+                // Key the churn join on the step's OWN region base (rbase), NOT
+                // the geometric unproject the trace rung uses — sound even for an
+                // offset projecting into no region, and correct across the
+                // several spans a candidate walk carries. The churn walk above
+                // counts df_step offsets, so this lands at the true step, not 0.
+                auto f = churn_step.find(df_cell_base[kv.first]);
+                if (f != churn_step.end())
+                    cc.churn_step = f->second;
+                m.code.push_back(std::move(cc));
+            }
+        } else if (m.anchor_error.empty()) {
+            // Steps ran but NOTHING placed — never a silent flat plane over real
+            // steps (the steps_explained bar). Say why: no resolvable span (no
+            // wire base AND no single codeimage), or every offset fell outside
+            // its span / named a base with no matching codeimage (the clamp).
+            m.anchor_error =
+                (anchor.ok || s.df.rbase_present)
+                    ? "every df_step offset fell outside its codeimage span "
+                      "(the "
+                      "4096-byte clamp), or named a base with no matching "
+                      "codeimage — no residency cell could be placed"
+                    : anchor.reason;
         }
     }
 
