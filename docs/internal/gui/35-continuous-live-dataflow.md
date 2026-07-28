@@ -19,6 +19,50 @@
 > Authored 2026-07-28, verified against HEAD `f2b6cdf`. If a cited file:line
 > disagrees with the code when you implement, the code wins — re-verify, then fix
 > this doc in the same change.
+>
+> **Status (2026-07-28) — ◐ 3/4. T1, T3, T4 landed; T2 deferred (honest scope).**
+> The continuous feature works end to end: a live `dataflow`/`auto` session
+> re-arms until Stop into one growing recording delimited by `df_invocation`
+> markers, the desktop segments it per pass and follows the latest live, and the
+> capture pane arms it.
+> - **T1 — DONE** (`fa2cef4`): `asmspy_engine_dataflow` gains `continuous`, wraps
+>   the producer in a re-arm loop, and emits a `df_invocation`
+>   `{pass,result,steps,truncated}` marker (new schema kind, D5) before each pass;
+>   `--dataflow --continuous` + serve `continuous:true`; `cli_smoke` proves ≥2
+>   pass-delimited invocations in one recording, clean SIGINT stop, and a
+>   byte-identical one-shot default (verified live, 15 passes).
+> - **T3 — DONE** (`fc836e0`): `build_segmented_step_index` buckets the regstate
+>   ring by `df_invocation` seq into one StepIndex per pass; `build_step_index` is
+>   segment-aware (latest pass = the live default; one-shot byte-identical);
+>   `test_scrubber` drives the hand-authored `dishonest/continuous-df.asmtrace`
+>   fixture. (Def-use/streams per-pass segmentation is a scoped follow-on — the
+>   Scrubber is the primary continuous consumer; a continuous def-use view shows
+>   the last pass's offsets, not a lie about honesty chrome.)
+> - **T4 — DONE** (`fc836e0`): `InspectState.continuous` + a capture-pane checkbox;
+>   `inspect_start_params` sends `continuous:true` only for the dataflow engines
+>   (`test_shell`); the once-per-session perturb confirm covers the session. The
+>   golden is hand-authored (three passes, one truncated) rather than a generator
+>   path, to avoid the make_pair 64-byte-window golden-churn hazard.
+> - **T2 — DEFERRED (interruptible Stop / hold-one-seize).** Stop is observed
+>   BETWEEN passes today; for a HOT re-entering region (the common case) that is
+>   near-instant (a pass completes in ms), so continuous stops promptly. The
+>   residual gap is a region that goes quiet mid-session: a pass can block in the
+>   entry wait up to `DFP_ENTRY_WAIT_MS` (10 s) before yielding. Closing it means
+>   threading `atomic_bool *stop` into `dfp_run_to_multi`'s entry-wait poll (the
+>   safe, high-value half) and `dfp_step_loop` (the risky half — terminating on the
+>   EINTR branch must first reap the in-flight `PTRACE_SINGLESTEP`, or a
+>   detach-while-mid-step strands/kills the tracee). Both need a new public
+>   `attach_jit` entry (the current one has three external callers — `asmspy_engine`,
+>   `test_dataflow_ptrace`, `gccanon`) **and an arm64 `#else` ENOSYS stub that
+>   cannot be compile-verified on an x86-64 host**. Landing an unverifiable change
+>   to the hot, shared `dataflow_ptrace.c` core was judged worse than the latency
+>   win; do T2 on a session with the arm64 docker/GH lane. **T2b (seize-once, hold
+>   one multi-thread seize with `PTRACE_O_TRACECLONE` + planter re-arm) is the
+>   larger invasive refactor and stays deferred with it.** Note (from the T2 map):
+>   the whole `dataflow_ptrace.c` body is `#if __x86_64__`, so the arm64
+>   detach-fatal hazard is not reachable through this producer today — any future
+>   arm64 single-step re-arm MUST use `PTRACE_SYSCALL`-at-resume, never a naive
+>   re-armed `SINGLESTEP`.
 
 ## Why this work exists
 
