@@ -24,6 +24,8 @@ std::string settings_serialize(const Settings &s) {
     j["win_w"] = s.win_w;
     j["win_h"] = s.win_h;
     j["light_theme"] = s.light_theme;
+    j["asmspy_path"] = s.asmspy_path;
+    j["ssh_host"] = s.ssh_host;
     return j.dump(2);
 }
 
@@ -48,6 +50,12 @@ bool settings_parse(const std::string &text, Settings &out) {
     }
     if (auto it = j.find("light_theme"); it != j.end() && it->is_boolean())
         out.light_theme = it->get<bool>();
+    // Free-form strings; a blank (or missing) field is the auto/local default, so
+    // no clamp is meaningful — a hand-edited path is the operator's to own.
+    if (auto it = j.find("asmspy_path"); it != j.end() && it->is_string())
+        out.asmspy_path = it->get<std::string>();
+    if (auto it = j.find("ssh_host"); it != j.end() && it->is_string())
+        out.ssh_host = it->get<std::string>();
     return true;
 }
 

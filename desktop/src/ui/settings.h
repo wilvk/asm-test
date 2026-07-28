@@ -25,6 +25,13 @@ struct Settings {
     int win_h = 720;
     bool light_theme = false; // light vs dark base style
 
+    // The serve-host connection the "Capture a live process" flow uses, moved
+    // out of the transient Connect pane so it persists across launches (the pane
+    // stays as an on-the-fly fallback). Both blank = the old default: resolve
+    // asmspy on $PATH then ./build/asmspy, capture the local machine.
+    std::string asmspy_path; // asmspy the host spawns; blank = auto-resolve
+    std::string ssh_host;    // ssh target; blank = local
+
     static constexpr float kTextScaleMin = 0.8f;
     static constexpr float kTextScaleMax = 2.0f;
 };

@@ -191,6 +191,14 @@ int main() {
 
     asmdesk::ShellState state;
     state.settings = settings;
+    // Seed the Inspect door's connection buffers from the persisted Settings so
+    // the "Capture a live process" auto-connect and the Connect-pane fallback both
+    // start from the saved asmspy path / ssh host. Blank stays blank (the Connect
+    // pane resolve-prefills a concrete path on demand, session-only).
+    std::snprintf(state.inspect.asmspy_path, sizeof state.inspect.asmspy_path,
+                  "%s", settings.asmspy_path.c_str());
+    std::snprintf(state.inspect.ssh_host, sizeof state.inspect.ssh_host, "%s",
+                  settings.ssh_host.c_str());
 
     // Restore the workspace (20 T3): reopen the recordings, replay the active
     // position + per-pane selection, and bring back recents/perspectives/presets

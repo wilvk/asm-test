@@ -142,10 +142,15 @@ void inspect_attach_full_detail(InspectState &s, long pid) {
     s.want_defaulted = true;
     s.steps = true;
     s.want_open_capture = true; // the confirm / status / views land in that pane
+    // No host yet: connect from the saved Settings (asmspy path / ssh host) rather
+    // than bouncing the user to the Connect pane. Only if that connect fails do we
+    // reveal Connect, so its host_error is where the user can act on it.
+    if (!s.host_started)
+        inspect_connect(s);
     if (s.host_started)
         inspect_request_start(s); // arms the perturb confirm for the single-step
     else
-        s.want_open_connect = true; // no host yet — reveal Connect first
+        s.want_open_connect = true; // connect failed — reveal Connect + its error
 }
 
 void inspect_confirm_perturb(InspectState &s) {
@@ -684,6 +689,8 @@ void draw_connect_pane(InspectState &s) {
             "blank path resolves $PATH, then ./build/asmspy. asmspy is a Linux "
             "tracer; from another OS set an ssh host (`ssh <host> asmspy "
             "--serve`).");
+        ImGui::TextDisabled("To save these across launches, set them in File > "
+                            "Settings; this pane is a per-session override.");
         if (ImGui::Button("Connect"))
             inspect_connect(s);
         if (!s.host_error.empty())
@@ -821,6 +828,9 @@ void draw_processes_pane(InspectState &s) {
                     s.want = LiveMode::Dataflow;
                     s.want_defaulted = true;
                     s.want_open_capture = true; // name the region in Live capture
+                    // Connect from saved Settings; reveal Connect only if it fails.
+                    if (!s.host_started)
+                        inspect_connect(s);
                     if (!s.host_started)
                         s.want_open_connect = true;
                 }

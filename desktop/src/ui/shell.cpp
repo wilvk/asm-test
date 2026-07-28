@@ -358,11 +358,13 @@ void shell_select_mode(ShellState &s, Mode m) {
         // `asmspy --serve` as a subprocess, so the render-only viewer hosts live
         // sessions with its `ldd` still free of every tracer.
         s.show_inspect = true; // the windowed shell's Inspect tab
-        // The docked shell shows the inspect workflow as three panes; entering it
-        // (re)opens them together, so a previously-closed one reappears on demand.
-        s.pane_open[kPaneConnect] = true;
+        // Land on the Processes tab and connect the serve host from the saved
+        // Settings (want_autoconnect, consumed in draw_shell) rather than forcing
+        // the Connect pane open. Connect stays a fallback: draw_shell reveals it if
+        // the auto-connect fails, and it is reachable from View ▸ Panels. The
+        // Capture pane opens when the user attaches a target (want_open_capture).
         s.pane_open[kPaneProcesses] = true;
-        s.pane_open[kPaneCapture] = true;
+        s.inspect.want_autoconnect = true;
         break;
     case Mode::Author:
         s.show_author = true;
@@ -2320,6 +2322,29 @@ static void draw_settings(ShellState &s) {
         ImGui::Text("Content (DPI) scale: %.2fx",
                     static_cast<double>(s.settings.content_scale));
 
+        // Connection (live capture): the serve-host config the "Capture a live
+        // process" flow spawns. Moved here from the Connect pane so it persists;
+        // the pane stays as an on-the-fly fallback. Both editors write the same
+        // InspectState buffers, so an edit here takes effect on the next connect;
+        // mirroring into Settings + settings_dirty is what makes it survive a
+        // restart. The Connect pane's own edits stay session-only (it is the
+        // fallback), which is why only this section marks the store dirty.
+        ImGui::Separator();
+        ImGui::TextUnformatted("Connection (live capture)");
+        if (ImGui::InputText("asmspy path", s.inspect.asmspy_path,
+                             sizeof s.inspect.asmspy_path)) {
+            s.settings.asmspy_path = s.inspect.asmspy_path;
+            s.settings_dirty = true;
+        }
+        if (ImGui::InputTextWithHint("ssh host", "blank = local", s.inspect.ssh_host,
+                                     sizeof s.inspect.ssh_host)) {
+            s.settings.ssh_host = s.inspect.ssh_host;
+            s.settings_dirty = true;
+        }
+        ImGui::TextDisabled(
+            "Used by \"Capture a live process\". Blank path resolves $PATH then "
+            "./build/asmspy; from another OS set an ssh host.");
+
         ImGui::Separator();
         ImGui::PushStyleColor(ImGuiCol_Text, dt_warn_col());
         ImGui::TextWrapped(
@@ -2540,6 +2565,20 @@ void draw_shell(ShellState &s) {
     // live views trail the observer deck by at most one frame — imperceptible,
     // and it keeps poll() the door's single responsibility.
     shell_sync_live_tab(s);
+    // Entering Capture mode auto-connects the serve host from the saved Settings
+    // (asmspy path / ssh host) so the "Capture a live process" button lands on the
+    // Processes pane already attached — no Connect detour. Done here, not in
+    // shell_select_mode, so that pure seam stays free of the subprocess spawn (the
+    // null-backend tests drive shell_select_mode without ever reaching this). A
+    // failed connect reveals the Connect pane so its host_error is not swallowed.
+    if (s.inspect.want_autoconnect) {
+        s.inspect.want_autoconnect = false;
+        if (!s.inspect.host_started) {
+            inspect_connect(s.inspect);
+            if (!s.inspect.host_started)
+                s.inspect.want_open_connect = true;
+        }
+    }
     // Keep the honesty-chrome theme flag + the live text-scale in step with the
     // Settings model every frame (20 T5): cheap, and it means a restored setting
     // takes effect without a special apply path.

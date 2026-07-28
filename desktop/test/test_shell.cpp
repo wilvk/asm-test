@@ -713,6 +713,15 @@ int main() {
               es.pending_preset.value_or(LayoutPreset::Author) ==
                   LayoutPreset::LiveObserver,
               "Capture mode requests the LiveObserver perspective");
+        // Capture lands on the Processes pane and asks draw_shell to auto-connect
+        // from the saved Settings, rather than forcing the Connect pane open (it
+        // stays a fallback, revealed only if the connect fails).
+        check("20t2/capture-opens-processes", es.pane_open[kPaneProcesses],
+              "Capture must open the Processes pane");
+        check("20t2/capture-autoconnects", es.inspect.want_autoconnect,
+              "Capture must request an auto-connect from saved Settings");
+        check("20t2/capture-no-forced-connect", !es.pane_open[kPaneConnect],
+              "Capture must not force the Connect pane open");
         shell_select_mode(es, Mode::Learn);
         check("20t2/learn-preset",
               es.pending_preset.value_or(LayoutPreset::LiveObserver) ==

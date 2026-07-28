@@ -155,6 +155,12 @@ struct InspectState {
     // the single-window shell, where all three are already in the Inspect tab.
     bool want_open_connect = false;
     bool want_open_capture = false;
+    // Entering Capture mode raises this so the docked shell connects the serve
+    // host from the saved Settings (asmspy path / ssh host) and lands the user on
+    // the Processes pane already attached — no forced Connect-pane detour. Set by
+    // shell_select_mode, consumed once in draw_shell; a failed connect falls back
+    // to revealing Connect (so its host_error is visible).
+    bool want_autoconnect = false;
 
     // What the client believes is live on this target, for the patch bay. The
     // serve loop refuses a second concurrent start too, but the budget is

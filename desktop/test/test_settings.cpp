@@ -32,6 +32,8 @@ int main() {
     s.win_w = 1600;
     s.win_h = 900;
     s.light_theme = true;
+    s.asmspy_path = "/opt/asmspy";
+    s.ssh_host = "build-box";
     std::string json = settings_serialize(s);
     Settings back;
     check("round-trips", settings_parse(json, back), "settings must parse");
@@ -40,6 +42,19 @@ int main() {
     check("win_w", back.win_w == 1600, "win_w drifted");
     check("win_h", back.win_h == 900, "win_h drifted");
     check("light_theme", back.light_theme, "light_theme drifted");
+    check("asmspy_path", back.asmspy_path == "/opt/asmspy",
+          "asmspy_path drifted");
+    check("ssh_host", back.ssh_host == "build-box", "ssh_host drifted");
+    // The blank default (auto/local) round-trips as an empty string, not a
+    // missing key that reads back as garbage.
+    Settings blank;
+    Settings blank_back;
+    check("blank-round-trips", settings_parse(settings_serialize(blank), blank_back),
+          "a default Settings must serialise + parse");
+    check("blank-asmspy", blank_back.asmspy_path.empty(),
+          "a blank asmspy_path must stay blank");
+    check("blank-ssh", blank_back.ssh_host.empty(),
+          "a blank ssh_host must stay blank");
 
     // --- clamp: a hand-edited store must not make the UI unusable ------------
     check("clamp-hi", settings_clamp_text_scale(3.0f) == Settings::kTextScaleMax,
