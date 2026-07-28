@@ -176,6 +176,31 @@ tag-bump-with-repin rule is documented.
 > anchored to the loud-drop line** — the v1 `asm_result` carries no line, so the
 > verbatim refusal stays a banner; and `TextDiff` for `diff_view` side-by-side
 > (its `dtl.h` is fetched, not yet compiled).
+>
+> **Follow-on done 2026-07-28 (syntax highlighting) — green.**
+> `ui/asm_language.{h,cpp}` builds a `TextEditor::Language` per (arch, dialect) —
+> six definitions covering x86-64 Intel / AT&T / NASM, AArch64, ARM32 and RISC-V —
+> and `author_door.cpp` calls `SetLanguage` when the arch or dialect combo
+> changes (on change only: `SetLanguage` marks the whole document for
+> re-colouring). Mnemonics colour as `keyword`, registers as `knownIdentifier`,
+> Intel size decorators + `lock`/`rep` as `declaration`, a line opening with `.`
+> as `preprocessor`.
+>
+> The load-bearing part is NOT the word lists. **A highlighter that disagrees
+> with the assembler paints a lie about what the next Run will do**, and two
+> characters carry that risk: `;` comments under NASM but SEPARATES under
+> Intel/AT&T/MASM/GAS, and `#` comments on x86/RISC-V but is the IMMEDIATE prefix
+> on ARM (`mov x0, #1` — a comment reading would grey out the operand). Both are
+> `stmt_rules()` in `src/assemble.c`; `dt_asm_comment_rules_for` MIRRORS it, and
+> `test_asm_language` pins the mirror in both directions, so a rule that moves
+> there fails here rather than silently miscolouring. GAS's unclosed character
+> literal (`movb $'a, %al`) is why single-quoted strings are off: colorizer string
+> state survives line ends, so honouring `'` would paint the rest of the file.
+> The test also drives the REAL colorizer (`SetText` colorizes eagerly) and reads
+> classifications back via `IterateIdentifiers` — engine-free, so the whole
+> per-dialect rule set is asserted on a host with neither Keystone nor Unicorn.
+> Error markers anchored to the loud-drop line remain open (still no line in
+> `asm_result`), as does `TextDiff`.
 
 **Goal.** Replace the Author door's `InputTextMultiline` hack with a real code
 editor, give `disasm` an address/bytes gutter + current-PC highlight, and upgrade

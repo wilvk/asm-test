@@ -298,6 +298,12 @@ $(BUILD)/desktop/app/ui/palette.o $(BUILD)/desktop/render/ui/palette.o: | $(IMSE
 # reused confirm-overwrite save dialog), so the fetch must land before it compiles
 # on a clean tree — same order-only prereq shell.o / inspect_door.o already carry.
 $(BUILD)/desktop/app/ui/author_door.o $(BUILD)/desktop/render/ui/author_door.o $(BUILD)/desktop/test/ui/author_door.o: | $(ICTEDIT_HOME)/TextEditor.h $(IFD_HOME)/ImGuiFileDialog.h
+# ui/asm_language.cpp is the Author editor's per-dialect syntax highlighting (17
+# T2 follow-on): its header #includes TextEditor.h, so it carries the same
+# order-only fetch prereq. The uitest tree builds it too (it path-rewrites
+# DESKTOP_TEST_SHELL_OBJ), hence the fourth entry.
+$(BUILD)/desktop/app/ui/asm_language.o $(BUILD)/desktop/render/ui/asm_language.o \
+$(BUILD)/desktop/test/ui/asm_language.o $(BUILD)/desktop/uitest/ui/asm_language.o: | $(ICTEDIT_HOME)/TextEditor.h
 # canvas_draw.cpp now #includes IconsCodicons.h for the ONE glyph set per honesty
 # tier (23-graded-truth-layer.md T1), so the codicon header fetch must land before
 # it compiles on a clean tree — the same order-only prereq fonts.o carries.
@@ -565,6 +571,7 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/src/walkthrough.o $(BUILD)/desktop/$(1)/src/capview.o \
   $(BUILD)/desktop/$(1)/src/author_vm.o \
   $(BUILD)/desktop/$(1)/ui/author_door.o \
+  $(BUILD)/desktop/$(1)/ui/asm_language.o \
   $(BUILD)/desktop/$(1)/addon/TextEditor.o \
   $(BUILD)/desktop/$(1)/ui/shell.o $(BUILD)/desktop/$(1)/ui/layout.o \
   $(BUILD)/desktop/$(1)/ui/palette.o $(BUILD)/desktop/$(1)/ui/wayfinding.o \
@@ -912,6 +919,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_settings \
                  $(BUILD)/desktop_test_perspectives \
                  $(BUILD)/desktop_test_ictedit \
+                 $(BUILD)/desktop_test_asm_language \
                  $(BUILD)/desktop_test_theme \
                  $(BUILD)/desktop_test_honesty \
                  $(BUILD)/desktop_test_progress \
@@ -1360,6 +1368,18 @@ $(BUILD)/desktop_test_ictedit: $(BUILD)/desktop/test/t/test_ictedit.o \
     $(BUILD)/desktop/test/addon/TextEditor.o $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# The Author editor's assembly syntax highlighting (17 T2 follow-on): the
+# language definitions + TextEditor.o + imgui core, and NO engine — asm_language
+# takes arch/dialect as ints, so the whole per-dialect rule set is asserted on a
+# host with neither Keystone nor Unicorn. The colourings themselves are checked
+# by driving the real colorizer (SetText colorizes eagerly) and reading back
+# IterateIdentifiers, so this pins behaviour rather than table contents alone.
+$(BUILD)/desktop/test/t/test_asm_language.o: | $(ICTEDIT_HOME)/TextEditor.h
+$(BUILD)/desktop_test_asm_language: $(BUILD)/desktop/test/t/test_asm_language.o \
+    $(BUILD)/desktop/test/ui/asm_language.o \
+    $(BUILD)/desktop/test/addon/TextEditor.o $(DESKTOP_TEST_IG)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 # The register time-travel scrubber (09-teaching-producers.md T3). The PURE
 # builder links scrubber.o + stepindex.o + the doc model and NOTHING else — no
 # ImGui, no engine — the same engine-free closure proof test_timeline makes, now
@@ -1462,7 +1482,8 @@ DESKTOP_TEST_SHELL_OBJ := $(BUILD)/desktop/test/ui/shell.o \
     $(BUILD)/desktop/test/src/walkthrough.o \
     $(BUILD)/desktop/test/src/capview.o \
     $(BUILD)/desktop/test/src/author_vm.o \
-    $(BUILD)/desktop/test/ui/author_door.o $(BUILD)/desktop/test/addon/TextEditor.o $(DESKTOP_TEST_DOC) \
+    $(BUILD)/desktop/test/ui/author_door.o $(BUILD)/desktop/test/ui/asm_language.o \
+    $(BUILD)/desktop/test/addon/TextEditor.o $(DESKTOP_TEST_DOC) \
     $(DESKTOP_TEST_VW) $(DESKTOP_TEST_AN) $(DESKTOP_TEST_DA) \
     $(BUILD)/desktop/test/an/stepindex.o \
     $(DESKTOP_VIEW_DRAW:%=$(BUILD)/desktop/test/vw/%.o) \

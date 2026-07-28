@@ -17,6 +17,7 @@
 #include <cstring>
 
 #include "author_vm.h"
+#include "ui/asm_language.h" // per-dialect syntax highlighting (17 T2 follow-on)
 #include "ui/doors.h"
 #include "views/views_draw.h"
 
@@ -142,15 +143,25 @@ void draw_author_door(AuthorState &s) {
     // s.source.data()/capacity(), whose fixed capacity silently TRUNCATED a long
     // source (doors.h). The editor owns the text after the first load; GetText()
     // returns the full std::string, so nothing is clipped, and undo/redo +
-    // find/replace (Ctrl+F) come for free. (An x86/ARM asm language definition
-    // for syntax highlighting, and error markers anchored to the assembler's
-    // loud-drop line, are follow-ons — the v1 asm_result carries no line, so the
-    // verbatim refusal stays a banner below.)
+    // find/replace (Ctrl+F) come for free. (Error markers anchored to the
+    // assembler's loud-drop line remain a follow-on — the v1 asm_result carries
+    // no line, so the verbatim refusal stays a banner below.)
+    //
+    // Syntax highlighting follows the arch + dialect combos ABOVE, because those
+    // decide what a ';' or a '#' means (ui/asm_language.h). Re-set on change
+    // only: SetLanguage marks the whole document for re-colouring, so calling it
+    // every frame would re-tokenize the source on every frame.
     static TextEditor editor;
     static bool editor_loaded = false;
+    static int editor_arch = -1, editor_syntax = -1;
     if (!editor_loaded) {
         editor_loaded = true;
         editor.SetText(s.source);
+    }
+    if (editor_arch != s.arch || editor_syntax != s.syntax) {
+        editor_arch = s.arch;
+        editor_syntax = s.syntax;
+        editor.SetLanguage(dt_asm_language(s.arch, s.syntax));
     }
     editor.Render("##src", ImVec2(-1, 200));
     s.source = editor.GetText();
