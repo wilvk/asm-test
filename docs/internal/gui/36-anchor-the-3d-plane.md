@@ -26,7 +26,12 @@
 > disagrees with the code when you implement, the code wins — re-verify, then fix
 > this doc in the same change.
 >
-> **Status (2026-07-29) — ☐ 0/5.** Not started.
+> **Status (2026-07-29) — ✅ 5/5. COMPLETE.** T1 `resolve_anchor` (`38d05d6`);
+> T2 the anchored rel PC path + placement count (`1622aaa`); T3 the labelled
+> `df_step` height rung + anchored trace rung (`ff650c3`); T4 the honesty chrome,
+> `scene-df-loop` golden, and end-to-end tests (`a3b2247`); T5 convergence admits
+> an anchored rel path (this commit). Both docker lanes green; the golden is
+> byte-stable under `docker-cli`.
 
 ## Why this work exists
 

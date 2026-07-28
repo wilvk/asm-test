@@ -1422,7 +1422,10 @@ on the growing recording each frame: as the session appends `trace` events the
 per-tid trajectories lengthen, and the terrain re-slices from `codeimage` + `survey`
 residency as those arrive. An **absolute-basis** live trace (PT) is a real
 address-space path; a **single-step** live trace is region-relative, so it stays
-`TRAJ_RELATIVE_BASIS`-**labelled** and is never projected as a true path.
+`TRAJ_RELATIVE_BASIS`-**labelled** — and, since [36](../../docs/internal/gui/36-anchor-the-3d-plane.md),
+**anchored** onto the plane (`TRAJ_ANCHORED`, `base+off`) when the recording pins
+the span down with a single `codeimage`, or refused *louder* (a stated reason, no
+geometry) when it does not.
 
 **Convergence marks (a hint).** `space/converge.{h,cpp}` (pure, engine- and
 GL-free like the rest of `space/`) is the detector: when two *different* tids place
@@ -1432,10 +1435,16 @@ a PC vertex in the **same projection cell** within a sliding **step window**
 that dwell in one cell make *one* hint, not a flood. It is **always a hint**, never
 a proof: per-tid step indices are not a global clock, so a convergence shows
 co-location, not ordering or a proven race — the label rides in the data
-(`ConvergenceSet::kHint` / `label()`). Only exact, address-placed paths take part;
-a `TRAJ_STATISTICAL` residency layer and a `TRAJ_RELATIVE_BASIS` path are skipped
-by flag, because a "shared cell" over a sampled or region-relative path would be a
-false address-space claim. The scene draws each mark as a bright **magenta arc**
+(`ConvergenceSet::kHint` / `label()`). Only individually **placed** paths take part
+([36](../../docs/internal/gui/36-anchor-the-3d-plane.md) T5's four-condition bar):
+a `TRAJ_STATISTICAL` residency layer is skipped unconditionally, and a
+`TRAJ_RELATIVE_BASIS` path is skipped **only when it was not anchored** — an
+*anchored* rel path (`TRAJ_ANCHORED`, `base+off`) is two paths on one plane and is
+admitted, while an unanchored one, and any individually `!placed` vertex, still
+cannot (deleting the rel bit outright would readmit raw offsets, a false
+address-space claim). Honest limit: a live dataflow `df_step` carries no `tid`, so
+it is one trajectory and yields no marks regardless. The scene draws each mark as a
+bright **magenta arc**
 bowing above the plane between the two vertices — distinct from every per-tid colour
 and the torn-red gash, and toggled by its own `SceneLayers.convergence` layer.
 

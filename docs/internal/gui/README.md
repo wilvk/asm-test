@@ -305,14 +305,15 @@ unanchored one and any individually-unplaced vertex still cannot (with the hones
 limit that `df_step` carries no `tid`, so a live dataflow capture is one trajectory
 and yields no marks regardless). Pure `space/` + HUD: no engine, no GL, no wire
 change, no existing golden regenerated. Authored 2026-07-29 against HEAD `24778e4`.
-◐ 4/5 (T1 `resolve_anchor`; T2 the rel PC path ANCHORED onto the plane; T3 the
-labelled `df_step` height rung + anchored trace rung; T4 the honesty chrome —
-pure testable `placement_chips` (HEIGHTS/PATH NOT PLACED, K-of-N, df residency,
-derived placement), the dropped rel chip fixed (HUD falls back to the traj
-basis), a pane placard for an unplaced plane, the `scene-df-loop` golden
-(byte-stable under docker-cli) + `test_shell`/`test_scene_fbo` end-to-end incl.
-the GL "anchored tube puts pixels on screen", and the doc/schema reconciliation) ·
-will · T5 · 2026-07-29.
+✅ 5/5 (T1 `resolve_anchor` `38d05d6`; T2 the rel PC path ANCHORED onto the plane
+`1622aaa`; T3 the labelled `df_step` height rung + anchored trace rung `ff650c3`;
+T4 the honesty chrome — pure testable `placement_chips`, the dropped rel chip
+fixed, an unplaced-plane pane placard, the `scene-df-loop` golden (byte-stable
+under docker-cli) + `test_shell`/`test_scene_fbo` end-to-end incl. the GL
+"anchored tube puts pixels on screen", and doc/schema reconciliation `a3b2247`;
+T5 convergence admits an anchored rel path — four-condition bar, `!placed`
+per-vertex skip, the unanchored/statistical canaries kept). **COMPLETE — 37 next
+(land 36 in full, then 37).** · —.
 
 [37-region-tag-on-df-step.md](37-region-tag-on-df-step.md) — **the producer half of
 36**: state the region on the wire instead of deriving it. 36 anchors a

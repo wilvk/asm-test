@@ -38,9 +38,18 @@ ConvergenceSet detect_convergences(const TrajectorySet &ts,
     if (n == 0)
         return out; // an empty projection places nothing — no convergences
 
-    // Gather placed PC vertices per cell. Only exact, address-placed paths: a
-    // statistical residency layer and a relative-basis path are not per-thread
-    // address trajectories, so a "shared cell" over them would be meaningless.
+    // Gather placed PC vertices per cell, under the four-condition admission bar
+    // (36 T5). A vertex is a legal input to the ONE projection this function does
+    // only if: (S1) it is in the same address space — guaranteed structurally, T1's
+    // anchor base comes from the SAME region vector build_projection consumed, and
+    // shell.cpp hands the same Projection to both builders; (S2) it was individually
+    // PLACED — a measured absolute vertex, or a rel offset the anchor placed
+    // (base+off), NOT a raw offset left behind (the 4096-byte codeimage clamp makes
+    // those common); (S3) it is per-thread — TRAJ_STATISTICAL stays excluded
+    // unconditionally; (S4) it shares one clock family — the df_step fallback runs
+    // only when the trace loop placed nothing, so one set has one PC source. An
+    // ANCHORED rel path (base+off) meets all four and is two paths on one plane; an
+    // unanchored rel path and the statistical layer do not.
     struct V {
         int32_t tid;
         uint64_t t;
@@ -48,11 +57,23 @@ ConvergenceSet detect_convergences(const TrajectorySet &ts,
     };
     std::map<uint32_t, std::vector<V>> by_cell;
     for (const Trajectory &tr : ts.trajectories) {
-        if (tr.flags & (TRAJ_STATISTICAL | TRAJ_RELATIVE_BASIS))
+        // S3: never the statistical residency layer.
+        if (tr.flags & TRAJ_STATISTICAL)
+            continue;
+        // The rel test, NARROWED not dropped: exclude a relative-basis path ONLY
+        // when it was not anchored. Deleting the rel bit outright would readmit raw
+        // offsets — exactly the false address-space claim this file forbids — so an
+        // UNANCHORED rel path still cannot converge.
+        if ((tr.flags & TRAJ_RELATIVE_BASIS) && !(tr.flags & TRAJ_ANCHORED))
             continue;
         for (const TrajPoint &p : tr.points) {
             if (p.is_access)
                 continue; // an access-mark spur is not a PC vertex
+            // S2: a raw offset the anchor could not place is not a real address —
+            // never bucket it. Applied to EVERY admitted trajectory (placed
+            // defaults true for a measured abs vertex) so the guard cannot rot.
+            if (!p.placed)
+                continue;
             uint32_t c = 0;
             if (!cell_of(proj, n, p.addr, &c))
                 continue; // an unmapped address places no vertex

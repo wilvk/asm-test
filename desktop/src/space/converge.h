@@ -56,15 +56,34 @@ struct ConvergenceSet {
     }
 };
 
-// Detect cross-thread convergences over the exact per-tid trajectories in `ts`,
-// placed on `proj`. Only EXACT, address-placed paths take part: a TRAJ_STATISTICAL
-// residency layer (a survey is aggregate, not a per-thread path) and a
-// TRAJ_RELATIVE_BASIS path (single-step region-relative offsets are labelled, not
-// placed on the address plane) are skipped — a convergence over either would be a
-// false address-space claim. Access-mark spurs (is_access) are not PC vertices and
-// do not converge. Emits exactly one mark per (tid_a, tid_b, cell): the smallest
-// |t_a - t_b| crossing there, so two threads that dwell in one cell yield one
-// hint, not a flood.
+// Detect cross-thread convergences over the per-tid trajectories in `ts`, placed
+// on `proj`. A vertex takes part only under a FOUR-CONDITION admission bar (36 T5):
+//   S1 — same address space: guaranteed structurally, T1's anchor base comes from
+//        the SAME region vector build_projection consumed, and one anchor per
+//        recording means two anchored paths share one base, so cross-anchor
+//        comparison cannot arise;
+//   S2 — individually PLACED: a measured absolute vertex, or a rel offset the
+//        anchor placed (base+off), NOT a raw offset left behind (the 4096-byte
+//        codeimage clamp makes those common) — a !placed vertex is skipped;
+//   S3 — per-thread: TRAJ_STATISTICAL (a survey is aggregate, not a per-thread
+//        path) is excluded unconditionally;
+//   S4 — one clock family: the df_step fallback runs only when the trace loop
+//        placed nothing, so one set has exactly one PC source.
+// So an ANCHORED rel path (TRAJ_ANCHORED, base+off) is admitted — it is two paths
+// on one plane — while an UNANCHORED rel path still is not: deleting the rel test
+// would readmit raw offsets, the false address-space claim. Access-mark spurs
+// (is_access) are not PC vertices. Emits exactly one mark per (tid_a, tid_b, cell):
+// the smallest |t_a - t_b| crossing there — two threads dwelling in one cell yield
+// one hint, not a flood.
+//
+// Two inherited caveats the hint grade already carries (admitting anchored paths
+// does not upgrade it): a mark over an anchored path is a hint over a DERIVED
+// placement (doubly not a proof); and regions_from_codeimage keeps the widest
+// `len` across versions, so a shared cell may name bytes never at that offset in
+// that version (right base, aliased byte). An honest limit worth stating: a live
+// dataflow capture's `df_step` carries no `tid`, so it is ONE trajectory and yields
+// no marks whatever its flags — T5 produces marks only for a rel `trace` whose
+// events carry `tid`.
 ConvergenceSet detect_convergences(const TrajectorySet &ts,
                                    const Projection &proj,
                                    const ConvergeParams &params = {});

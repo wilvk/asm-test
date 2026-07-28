@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -231,6 +232,140 @@ static void test_detection() {
 }
 
 // ---------------------------------------------------------------------------
+// 1b. 36 T5: convergence admits an ANCHORED rel path, and only an anchored one
+// ---------------------------------------------------------------------------
+static void test_anchored_convergence() {
+    const uint64_t base = 0x400000;
+    Projection proj = region_proj(base, 0x2000);
+    const uint32_t A = TRAJ_RELATIVE_BASIS | TRAJ_ANCHORED;
+
+    // Two ANCHORED rel paths (base+off) sharing a cell converge — 36 T5 admits
+    // them where an unanchored rel path is still refused. The mark carries the
+    // ABSOLUTE address, not the raw offset.
+    {
+        TrajectorySet ts;
+        ts.trajectories.push_back(
+            traj(1, A, {{0, base + 0x0}, {1, base + 0x800}}));
+        ts.trajectories.push_back(
+            traj(2, A, {{0, base + 0x800}, {1, base + 0x400}}));
+        ConvergenceSet cs = detect_convergences(ts, proj);
+        check("anchored: two anchored rel paths converge", cs.marks.size() == 1,
+              "got " + std::to_string(cs.marks.size()));
+        if (cs.marks.size() == 1)
+            check("anchored: the mark carries the ABSOLUTE address (base+off)",
+                  cs.marks[0].addr_a == base + 0x800 &&
+                      cs.marks[0].addr_b == base + 0x800,
+                  "not the absolute address");
+    }
+
+    // S1: an anchored path and an equivalent ABS path yield IDENTICAL sets — the
+    // anchored base+off projects exactly as a measured absolute PC would.
+    {
+        const std::vector<std::pair<uint64_t, uint64_t>> p1 = {
+            {0, base + 0x100}, {1, base + 0x800}};
+        const std::vector<std::pair<uint64_t, uint64_t>> p2 = {
+            {0, base + 0x800}, {1, base + 0x200}};
+        TrajectorySet anc, abs;
+        anc.trajectories.push_back(traj(1, A, p1));
+        anc.trajectories.push_back(traj(2, A, p2));
+        abs.trajectories.push_back(traj(1, 0, p1));
+        abs.trajectories.push_back(traj(2, 0, p2));
+        ConvergenceSet ca = detect_convergences(anc, proj);
+        ConvergenceSet cb = detect_convergences(abs, proj);
+        check("anchored: identical to the equivalent abs ConvergenceSet",
+              ca.marks.size() == 1 && cb.marks.size() == 1 &&
+                  ca.marks[0].cell == cb.marks[0].cell &&
+                  ca.marks[0].addr_a == cb.marks[0].addr_a &&
+                  ca.marks[0].addr_b == cb.marks[0].addr_b &&
+                  ca.marks[0].gap == cb.marks[0].gap,
+              "an anchored path diverged from its abs equivalent");
+    }
+
+    // An anchored path and an UNANCHORED rel path do NOT converge — the unanchored
+    // one is excluded, so there is no cross-thread pair (the canary that fails if
+    // someone "fixes" the mask by deleting the rel bit outright).
+    {
+        TrajectorySet ts;
+        ts.trajectories.push_back(traj(1, A, {{0, base + 0x800}}));
+        ts.trajectories.push_back(
+            traj(2, TRAJ_RELATIVE_BASIS, {{0, base + 0x800}}));
+        check("anchored: an anchored path never joins an unanchored one",
+              detect_convergences(ts, proj).marks.empty(),
+              "an unanchored rel path leaked into a convergence");
+    }
+
+    // The clamp case (S2): a shared cell reached ONLY by placed==false vertices
+    // yields zero marks. The unplaced vertices' addr even PROJECTS here, so only
+    // the !placed guard prevents a spurious mark — deleting it fails this.
+    {
+        auto pt = [](uint64_t t, uint64_t addr, bool placed) {
+            TrajPoint p;
+            p.t = t;
+            p.addr = addr;
+            p.tid = 0;
+            p.is_access = false;
+            p.fidelity = TrajPoint::Exact;
+            p.placed = placed;
+            return p;
+        };
+        TrajectorySet ts;
+        Trajectory a;
+        a.tid = 1;
+        a.flags = A;
+        Trajectory b;
+        b.tid = 2;
+        b.flags = A;
+        a.points.push_back(pt(0, base + 0x100, true));  // distinct placed cell
+        a.points.push_back(pt(1, base + 0x800, false)); // shared, but UNPLACED
+        b.points.push_back(pt(0, base + 0x200, true));  // distinct placed cell
+        b.points.push_back(pt(1, base + 0x800, false)); // shared, but UNPLACED
+        ts.trajectories.push_back(a);
+        ts.trajectories.push_back(b);
+        check(
+            "anchored: a cell reached only by unplaced vertices yields no mark",
+            detect_convergences(ts, proj).marks.empty(),
+            "an unplaced (clamped) vertex was bucketed");
+    }
+
+    // End-to-end: a rel `trace` with two tids sharing an offset + one codeimage.
+    // The BUILDER anchors both paths (base+off) and the detector marks them —
+    // proving the predicate matches what build_trajectories actually emits.
+    {
+        std::string nd =
+            "{\"asmtrace\":1,\"provenance\":{\"backend\":\"emu-l0\","
+            "\"exact\":true,\"trust\":\"exact\"},\"arch\":\"x86_64\"}\n";
+        nd += "{\"k\":\"codeimage\",\"base\":4194304,\"len\":8192,"
+              "\"version\":0}\n";
+        nd += "{\"k\":\"trace\",\"basis\":\"rel\",\"off\":256,\"tid\":7}\n";
+        nd +=
+            "{\"k\":\"trace\",\"basis\":\"rel\",\"off\":2048,\"tid\":7}\n"; // sh
+        nd +=
+            "{\"k\":\"trace\",\"basis\":\"rel\",\"off\":2048,\"tid\":9}\n"; // sh
+        nd += "{\"k\":\"trace\",\"basis\":\"rel\",\"off\":512,\"tid\":9}\n";
+        nd += "{\"k\":\"end\",\"events\":6,\"truncated\":false}\n";
+        std::istringstream in(nd);
+        std::string err;
+        auto rec = load_recording(in, err);
+        check("e2e: fixture loads", static_cast<bool>(rec), err);
+        if (rec) {
+            Projection p = region_proj(base, 0x2000);
+            TrajectorySet ts = build_trajectories(*rec, p);
+            check("e2e: the builder anchored the rel trace", ts.anchored,
+                  "rel trace not anchored");
+            ConvergenceSet cs = detect_convergences(ts, p);
+            check("e2e: one convergence on the shared anchored cell",
+                  cs.marks.size() == 1,
+                  "got " + std::to_string(cs.marks.size()));
+            if (cs.marks.size() == 1)
+                check("e2e: the mark is the ABSOLUTE shared address",
+                      cs.marks[0].addr_a == base + 0x800 &&
+                          cs.marks[0].addr_b == base + 0x800,
+                      "not the absolute shared address");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 2. the incremental live feed, against the fake two-thread serve host
 // ---------------------------------------------------------------------------
 static void nap_ms(int ms) {
@@ -343,6 +478,7 @@ static void test_live_feed() {
 
 int main() {
     test_detection();
+    test_anchored_convergence();
     test_live_feed();
     if (failures) {
         std::fprintf(stderr, "%d converge check(s) failed\n", failures);
