@@ -256,8 +256,11 @@ recording. Mirrors the region engine's `while (!stop)` loop; the surgery is a
 per-invocation `df_invocation` discriminator (each pass's `df_step` restarts at 0)
 and threading `stop` into the ptrace step loop. **Not** R3 resume-from-state (no
 state restore/edit) and **not** whole-process-continuous (each pass stays scoped +
-bounded). Authored 2026-07-28 against HEAD `f2b6cdf`; **not yet implemented**
-(planning). ☐ 0/4 · claude · T1–T4 · 2026-07-28.
+bounded). Authored 2026-07-28 against HEAD `f2b6cdf`. **T1 landed 2026-07-28**:
+the engine re-arm loop (`asmspy_engine_dataflow` gains a `continuous` param + loop,
+one-shot byte-identical) + the `df_invocation` per-pass delimiter (schema-defined,
+`asmtrace_df_invocation_body`, `test_asmtrace` format check) + serve `continuous:true`
+/ CLI `--dataflow --continuous`. ◐ 1/4 · claude · T2–T4 · 2026-07-28.
 
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then

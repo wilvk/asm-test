@@ -460,6 +460,30 @@ static void test_mem_body(void) {
           strstr(body, "\"step\":") < strstr(body, "\"space\":"), body);
 }
 
+/* The `df_invocation` continuous-capture pass delimiter (35 T1): one pass's
+ * {pass,result,steps,truncated} in that order. Emitted before each re-armed
+ * pass's df_step block so a reader segments the passes; a one-shot capture emits
+ * none (proven at the engine layer, not here). */
+static void test_df_invocation_body(void) {
+    char body[128];
+
+    /* A normal pass 0: a positive routine result, a per-pass step count, and no
+     * truncation. Field order is fixed: pass, result, steps, truncated. */
+    asmtrace_df_invocation_body(body, sizeof body, 0, 42, 8, 0);
+    check_str("df_invocation.body pass0", body,
+              "\"pass\":0,\"result\":42,\"steps\":8,\"truncated\":false");
+
+    /* A later pass whose operand buffers filled: a truncation flag and a negative
+     * result (results are signed longs) both survive verbatim. */
+    asmtrace_df_invocation_body(body, sizeof body, 3, -1, 1048576ULL, 1);
+    check_str("df_invocation.body truncated", body,
+              "\"pass\":3,\"result\":-1,\"steps\":1048576,\"truncated\":true");
+
+    /* Field order is fixed: `pass` leads, `truncated` trails. */
+    check("df_invocation.body field order",
+          strstr(body, "\"pass\":") < strstr(body, "\"truncated\":"), body);
+}
+
 /* The `blame` backward-attribution body (33 R6 T1): a sink step, an optional loc,
  * an ascending cone of {step,off,kind} producers, and the born_untraced verdict. */
 static void test_blame_body(void) {
@@ -873,6 +897,7 @@ int main(void) {
     test_steps_total_footer();
     test_df_step_wide_bytes();
     test_mem_body();
+    test_df_invocation_body();
     test_blame_body();
     test_statediff_body();
     test_field_order_fixed();
