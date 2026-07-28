@@ -56,8 +56,8 @@ typedef struct {
      * memset default) omits the object entirely — a live attach with no fixed
      * window never emits a zero hash. */
     int have_code;
-    char code_name[128];       /* routine name (escaped at emit)         */
-    char code_sha[65];         /* lowercase-hex SHA-256 of the bytes     */
+    char code_name[128];         /* routine name (escaped at emit)         */
+    char code_sha[65];           /* lowercase-hex SHA-256 of the bytes     */
     unsigned long long code_len; /* the byte length hashed               */
 } asmtrace_writer_t;
 
@@ -139,6 +139,16 @@ size_t asmtrace_df_step_body(char *dst, size_t cap, unsigned step, uint64_t off,
 /* {"from":N,"to":N,"loc":{...}} for one last-writer def-use edge. */
 size_t asmtrace_df_edge_body(char *dst, size_t cap,
                              const asmtest_defuse_edge_t *e);
+
+/* {"step":N,"ea":N,"size":N,"rw":"r"|"w","space":"abs"|"off"} — one memory access
+ * for the `mem` address-stream (29 R2). `ea` is the resolved effective address (the
+ * valtrace record's `addr`), `space` its normalization (from the record's kind:
+ * AT_LOC_MEM_ABS -> "abs", AT_LOC_MEM_OFF -> "off"); a register kind is not a memory
+ * access and must not be passed here. `size` is the access width in bytes. Field
+ * order lives here so the emulator and live producers spell a `mem` event
+ * identically. Returns the body length written. */
+size_t asmtrace_mem_body(char *dst, size_t cap, unsigned step, uint64_t ea,
+                         unsigned size, int is_write, at_loc_kind_t space);
 
 /* {"desc":"user_regs@x86_64/sysv","values":{rax..r15,rip,rflags}} — one per-step
  * register-file snapshot for the LIVE ptrace-dataflow `regstate` ring (26). The 16

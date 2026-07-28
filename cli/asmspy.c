@@ -2291,7 +2291,8 @@ typedef struct {
     pid_t pid;
     const char *func;
     int json;
-    rec_t *r; /* --record tee (NULL = not recording) */
+    rec_t *r;     /* --record tee (NULL = not recording) */
+    int emit_mem; /* 29 R2: --mem armed the `mem` address stream */
 } dataflow_ctx;
 
 /* Record one captured invocation as `df_step` + `df_edge` events, mirroring the
@@ -2300,7 +2301,7 @@ typedef struct {
  * operand identically. */
 static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
                             const asmtest_defuse_t *g, const uint8_t *code,
-                            size_t len, uint64_t base) {
+                            size_t len, uint64_t base, int emit_mem) {
     size_t nsteps = vt->steps_len, nrecs = vt->recs_len, cur = 0;
     char body[65536];
     if (!rec_on(r))
@@ -2328,6 +2329,22 @@ static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
         if (vt->regfile != NULL) {
             asmtrace_regstate_body(body, sizeof body, &vt->regfile[s]);
             rec_emit(r, "regstate", body);
+        }
+    }
+    /* 29 R2 T3: the `mem` address stream, when armed (`--mem` / serve `mem:true`).
+     * A contiguous block of one `mem` per memory access, projected from the same
+     * operand records df_step carries — the live parallel to the recorder's
+     * emit_mem_stream (the body builder is shared, so a live `mem` and a golden one
+     * spell identically). Disarmed (the normal case) nothing is emitted and the
+     * stream is byte-identical to before. */
+    if (emit_mem) {
+        for (size_t i = 0; i < nrecs; i++) {
+            const at_val_rec_t *rr = &vt->recs[i];
+            if (rr->kind != AT_LOC_MEM_ABS && rr->kind != AT_LOC_MEM_OFF)
+                continue;
+            asmtrace_mem_body(body, sizeof body, rr->step, rr->addr, rr->size,
+                              rr->is_write, rr->kind);
+            rec_emit(r, "mem", body);
         }
     }
     for (size_t i = 0; g && i < g->n; i++) {
@@ -2369,7 +2386,7 @@ static void dataflow_render_sink(void *ctx, long result,
     const dataflow_ctx *dc = ctx;
     size_t nsteps = vt->steps_len, nrecs = vt->recs_len;
 
-    dataflow_record(dc->r, vt, g, code, len, base);
+    dataflow_record(dc->r, vt, g, code, len, base, dc->emit_mem);
 
     if (dc->json) {
         char ef[256];
@@ -2738,7 +2755,8 @@ static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
 
 static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                         int json, int auto_region, const char *module,
-                        sampler_mode_t sampler, const char *record, int steps) {
+                        sampler_mode_t sampler, const char *record, int steps,
+                        int mem) {
     asmspy_symtab_t t;
     rec_t rec;
     if (asmspy_symtab_load(pid, &t) < 0) {
@@ -2833,7 +2851,7 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         const char *rname =
             s ? s->name
               : (auto_region ? (autoname[0] ? autoname : "?") : region);
-        dataflow_ctx dc = {pid, rname, json, &rec};
+        dataflow_ctx dc = {pid, rname, json, &rec, mem};
         /* status to STDERR so --json stdout stays a single clean object */
         fprintf(stderr,
                 "data-flow capture of %s @ 0x%llx (%zu bytes) in pid %d%s\n",
@@ -3001,6 +3019,7 @@ typedef struct {
     pid_t pid, tid;
     int follow;
     int steps; /* dataflow/auto: arm the per-step register ring (26 `--steps`) */
+    int mem;   /* dataflow/auto: arm the `mem` address stream (29 R2 `--mem`) */
     long max;
     long ms;
     uint64_t base;
@@ -3251,7 +3270,7 @@ static void serve_dataflow_sink(void *ctx, long result,
                                 size_t len, uint64_t base) {
     serve_session_t *s = ctx;
     (void)result;
-    dataflow_record(&s->rec, vt, g, code, len, base);
+    dataflow_record(&s->rec, vt, g, code, len, base, s->p.mem);
     serve_codeimage_refresh(s);
 }
 
@@ -3518,13 +3537,16 @@ static size_t serve_params_json(char *dst, size_t cap,
             (unsigned long long)p->len, p->max);
         break;
     case SM_DATAFLOW:
-        /* `steps` advertises whether the register ring is armed — trace has no
-         * such ring, so only dataflow carries it. */
+        /* `steps` advertises whether the register ring is armed, `mem` the
+         * address stream (29 R2) — trace has neither, so only dataflow carries
+         * them. */
         o = (size_t)snprintf(
             dst, cap,
-            "{\"tid\":%d,\"base\":%llu,\"len\":%llu,\"max\":%ld,\"steps\":%s}",
+            "{\"tid\":%d,\"base\":%llu,\"len\":%llu,\"max\":%ld,\"steps\":%s,"
+            "\"mem\":%s}",
             (int)p->tid, (unsigned long long)p->base,
-            (unsigned long long)p->len, p->max, p->steps ? "true" : "false");
+            (unsigned long long)p->len, p->max, p->steps ? "true" : "false",
+            p->mem ? "true" : "false");
         break;
     case SM_PROCS:
         o = (size_t)snprintf(dst, cap, "{\"max\":%ld,\"count\":\"%s\"}", p->max,
@@ -3542,12 +3564,13 @@ static size_t serve_params_json(char *dst, size_t cap,
     case SM_AUTO:
         o = (size_t)snprintf(dst, cap,
                              "{\"max\":%ld,\"module\":\"%s\",\"sampler\":"
-                             "\"%s\",\"steps\":%s}",
+                             "\"%s\",\"steps\":%s,\"mem\":%s}",
                              p->max, em,
                              p->sampler == SAMPLER_IBS
                                  ? "ibs"
                                  : (p->sampler == SAMPLER_SW ? "sw" : "auto"),
-                             p->steps ? "true" : "false");
+                             p->steps ? "true" : "false",
+                             p->mem ? "true" : "false");
         break;
     default:
         o = (size_t)snprintf(dst, cap, "{}");
@@ -3896,6 +3919,16 @@ static int serve_parse_start(const char *line, serve_params_t *p,
             return -1;
         }
         p->steps = b;
+    }
+    /* 29 R2 T3: dataflow/auto opt-in for the `mem` address stream. A BOOLEAN like
+     * `steps`: it emits one `mem` per memory access over the same window, off by
+     * default so a recording without it is normal. */
+    if ((v = sj_find(line, "mem")) != NULL) {
+        if (sj_bool(v, &b) != 0) {
+            *why = "\"mem\" must be true or false";
+            return -1;
+        }
+        p->mem = b;
     }
     if ((v = sj_find(line, "max")) != NULL) {
         if (sj_i64(v, &n) != 0) {
@@ -7189,12 +7222,16 @@ static int usage(const char *argv0) {
         "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n] [--tid=<t>]  live samples "
         "of a function/region (any thread)\n"
         "  %s --dataflow <pid> <sym|0xADDR[:LEN]|--auto> [--json] [--tid=<t>] "
-        "[--max=<n>] [--module=<m>] [--sampler=ibs|sw] [--steps]  scoped L0 "
+        "[--max=<n>] [--module=<m>] [--sampler=ibs|sw] [--steps] [--mem]  "
+        "scoped "
+        "L0 "
         "value trace + L1 def-use of one invocation (native targets). --steps "
-        "adds a per-step `regstate` register ring over the captured window (the "
+        "adds a per-step `regstate` register ring over the captured window "
+        "(the "
         "already-read pre-state per single-step) so the desktop Scrubber "
         "time-travels it; a BOOLEAN, unlike the emulator's --steps=<N> ring "
-        "size. --auto picks the "
+        "size. --mem adds one `mem` event per memory access (the resolved "
+        "effective address stream the 3D rich rung reads). --auto picks the "
         "function the target is most often ENTERING right now, sampled out of "
         "band (AMD IBS-Op entry edges where available; elsewhere a portable "
         "software-clock RESIDENCY sampler that walks up to 3 candidates, since "
@@ -7349,13 +7386,17 @@ int main(int argc, char **argv) {
         sampler_mode_t sampler = SAMPLER_AUTO;
         const char *record = NULL;
         int steps = 0; /* --steps: arm the per-step register ring (26) */
+        int mem = 0;   /* --mem: arm the `mem` address stream (29 R2) */
         for (int i = 4; i < argc; i++) { /* [--json] [--tid=N] [--max=N]
                                           * [--module=M] [--sampler=S]
-                                          * [--record=F] [--steps], any order */
+                                          * [--record=F] [--steps] [--mem], any
+                                          * order */
             if (strcmp(argv[i], "--json") == 0)
                 json = 1;
             else if (strcmp(argv[i], "--steps") == 0)
                 steps = 1;
+            else if (strcmp(argv[i], "--mem") == 0)
+                mem = 1;
             else if (strncmp(argv[i], "--record=", 9) == 0)
                 record = argv[i] + 9;
             else if (strncmp(argv[i], "--tid=", 6) == 0) {
@@ -7404,7 +7445,7 @@ int main(int argc, char **argv) {
                            "nothing)",
                            argv[3]);
         return cmd_dataflow(pid, argv[3], tid, max, json, auto_region, module,
-                            sampler, record, steps);
+                            sampler, record, steps, mem);
     }
     if (strcmp(argv[1], "--stream") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)

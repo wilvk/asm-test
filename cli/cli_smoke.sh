@@ -293,6 +293,53 @@ assert isinstance(d["defuse"], list)' \
         echo "  no --steps: recording carries no regstate (ring disarmed), OK"
     fi
     rm -f "$dfrec" "$dfrec0"
+
+    # 29 R2 T3: the `mem` address stream. --mem emits one `mem` event per memory
+    # access into the RECORDING (the desktop 3D rich rung's feed), independent of
+    # --steps. hotfn is register-only (an arithmetic loop), so it exercises the
+    # PLUMBING: the flag is accepted, the recording is well-formed, no `mem` events
+    # leak WITHOUT --mem, and --mem does not arm the regstate ring (the two gates
+    # are independent). The cross-producer VALUE correctness — that the live `mem`
+    # stream matches the emulator on a memory-touching routine — is test_mem_parity.
+    dfmem="$BUILD/df_mem_$$.asmtrace"
+    dfmem0="$BUILD/df_nomem_$$.asmtrace"
+    rm -f "$dfmem" "$dfmem0"
+    set +e
+    timeout 40 "$ASM" --dataflow "$AVPID" hotfn --mem --record="$dfmem" \
+        >/dev/null 2>&1; rc=$?
+    set -e
+    [ "$rc" -eq 124 ] && fail "--dataflow --mem hung"
+    [ "$rc" -eq 0 ] || fail "--dataflow --mem exited $rc"
+    [ -s "$dfmem" ] || fail "--dataflow --mem: no recording written"
+    grep -q '"k":"df_step"' "$dfmem" \
+        || fail "--dataflow --mem: recording carries no df_step"
+    grep -q '"k":"end"' "$dfmem" \
+        || fail "--dataflow --mem: recording has no footer (torn)"
+    # --mem is not --steps: the register ring stays disarmed.
+    grep -q '"k":"regstate"' "$dfmem" \
+        && fail "--dataflow --mem armed the regstate ring (gates not independent)"
+    # Any `mem` event that IS present is well-formed (step/ea/size/rw). hotfn is
+    # register-only so there may be none — assert shape only when present.
+    memln=$(grep -m1 '"k":"mem"' "$dfmem" || true)
+    if [ -n "$memln" ]; then
+        printf '%s' "$memln" | grep -qE '"step":[0-9]+,"ea":[0-9]+,"size":[0-9]+,"rw":"[rw]"' \
+            || fail "--dataflow --mem: malformed mem event: $memln"
+        echo "  --mem: recording carries well-formed mem events"
+    else
+        echo "  --mem: accepted, recording well-formed (hotfn register-only: no mem access)"
+    fi
+    # negative control: WITHOUT --mem the recording carries NO mem events.
+    set +e
+    timeout 40 "$ASM" --dataflow "$AVPID" hotfn --record="$dfmem0" \
+        >/dev/null 2>&1; rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || fail "--dataflow (no --mem) exited $rc"
+    if [ -s "$dfmem0" ]; then
+        grep -q '"k":"mem"' "$dfmem0" \
+            && fail "--dataflow WITHOUT --mem emitted mem events (stream not off)"
+        echo "  no --mem: recording carries no mem events (stream disarmed), OK"
+    fi
+    rm -f "$dfmem" "$dfmem0"
 fi
 # ---------------------------------------------------------------------------
 # BOUNDED ENTRY WAIT (asmspy-plan Theme H)

@@ -128,7 +128,8 @@ int asmtrace_header(asmtrace_writer_t *w, const char *producer,
      * deterministic and live mode because a routine's bytes are not volatile. */
     if (w->have_code) {
         asmtrace_escape(esc, sizeof esc, w->code_name);
-        fprintf(w->f, ",\"code\":{\"name\":\"%s\",\"sha256\":\"%s\",\"len\":%llu}",
+        fprintf(w->f,
+                ",\"code\":{\"name\":\"%s\",\"sha256\":\"%s\",\"len\":%llu}",
                 esc, w->code_sha, w->code_len);
     }
     if (!w->deterministic) {
@@ -281,6 +282,23 @@ size_t asmtrace_df_edge_body(char *dst, size_t cap,
     /* An edge's loc is a location identity, not a captured value: no side buffer,
      * so a wide loc degrades to bytes-less [wide]. */
     return op_body(dst, cap, o, &e->loc, NULL, 0);
+}
+
+size_t asmtrace_mem_body(char *dst, size_t cap, unsigned step, uint64_t ea,
+                         unsigned size, int is_write, at_loc_kind_t space) {
+    size_t o = 0;
+    if (!dst || !cap)
+        return 0;
+    dst[0] = '\0';
+    /* `space` reuses the operand loc token so a reader normalizes a `mem` EA the
+     * same way it does a df_step memory operand's `addr` — abs vs routine-off. A
+     * register kind is not a memory access; loc_space folds an accidental one to
+     * "reg", but the caller filters memory records before reaching here. */
+    return bp(
+        dst, cap, o,
+        "\"step\":%u,\"ea\":%llu,\"size\":%u,\"rw\":\"%s\",\"space\":\"%s\"",
+        step, (unsigned long long)ea, size, is_write ? "w" : "r",
+        loc_space(space));
 }
 
 size_t asmtrace_regstate_body(char *dst, size_t cap,

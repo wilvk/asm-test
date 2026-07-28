@@ -283,6 +283,34 @@ Mirrors [`asmtest_defuse_edge_t`](../../../include/asmtest_valtrace.h#L178):
 the value written at step `from` is read at step `to` through `loc` (the
 consumer's read record, same operand shape as `df_step.ops`).
 
+### `mem` — one memory access (address stream)
+
+```json
+{"k":"mem","step":2,"ea":2097144,"size":8,"rw":"w","space":"abs"}
+```
+
+One effective-address access per event, in step order — the per-access channel
+the 3D rich rung ([10-spacetime-3d-overview.md](10-spacetime-3d-overview.md))
+keys on. `step` is the executing step (index into the `trace` / `df_step`
+stream); `ea` is the resolved effective address; `size` the access width in
+bytes; `rw` is `"r"` (read) or `"w"` (write); `space` is `"abs"`
+(`AT_LOC_MEM_ABS`) \| `"off"` (`AT_LOC_MEM_OFF`) — the same normalization a
+`df_step` memory operand's `addr` carries, so a reader folds a `mem` EA to a
+region offset the identical way. Field order: `step`, `ea`, `size`, `rw`,
+`space`.
+
+`mem` is a **projection of the operand records `df_step` already carries** (a
+memory operand's resolved `addr` + `size` + `write`), lifted to a first-class
+per-access stream so a consumer need not walk `df_step.ops` to reconstruct the
+address trace. Both producers resolve the EA at run time already
+([`src/dataflow_emu.c`](../../../src/dataflow_emu.c) `df_on_mem`, the live
+[`src/dataflow_ptrace.c`](../../../src/dataflow_ptrace.c) `resolve_ea`); this
+kind carries it. It is **opt-in** (the recorder's `--mem`, serve `mem:true`) and
+absent by default, so a recording without it is normal — the rich rung stays
+coarse and says so, never a silent zero. It carries the **address and width, not
+the bytes** (that is `df_step`'s `wide`/`bytes` value channel) and no timestamps
+(the ordering axis is the per-step ordinal).
+
 ### `regstate` — a register-file snapshot, by descriptor reference
 
 ```json
@@ -361,7 +389,6 @@ is no v1 producer. A reader ignores them like any unknown kind (see
 
 | Kind | Intended payload | Claimed by |
 |---|---|---|
-| `mem` | per-step memory access `{step,ea,size,rw}` | [10-spacetime-3d-overview.md](10-spacetime-3d-overview.md) |
 | `fpenv` | FP/SIMD environment + wide register state | expansion wave |
 | `statediff` | step-to-step architectural state delta | expansion wave |
 | `blame` | attribution of a value to a source location | [09-teaching-producers.md](09-teaching-producers.md) |
@@ -379,6 +406,9 @@ stream, never inside a `.asmtrace` file written by `--record`.
 captured code bytes at a version* at the end of this file. Unlike the three
 above it is an ordinary **recording** event: it rides inside the `[header … end]`
 range and the footer counts it.
+
+`mem` was reserved here for 10 and is now **defined** — see *`mem` — one memory
+access (address stream)* above (29 R2). An ordinary opt-in recording event.
 
 Adding a kind is a **new registry row under the ignore-unknown-kinds rule** —
 never a new envelope major.

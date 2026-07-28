@@ -129,6 +129,18 @@ torn/perturbing under the labelled banner; parity test green in both docker lane
   out-of-scope list).
 - Absolute EAs are meaningful only within one capture's address space; the reader
   normalizes via `space` and never compares raw absolute EAs across recordings.
+- **The two producers capture memory by different mechanisms, and `mem` inherits
+  the difference** (discovered 2026-07-28 implementing T2/T3): the emulator L0 uses
+  Unicorn's hardware memory hooks, so it sees EVERY access including implicit stack
+  traffic (a `ret` popping the return address, a `push`/`pop`, a `call`); the live
+  ptrace producer enumerates Capstone operands, so it records only EXPLICITLY-
+  encoded memory operands. The live `mem` stream is therefore a **subset** of the
+  emulator's — the same split `df_step.ops` already carries, since both streams are
+  projections of the same operand records. The parity test
+  ([`cli/test_mem_parity.c`](../../../cli/test_mem_parity.c)) asserts the sound
+  invariant: every live access matches an emulator access on `(step,size,rw)`, the
+  emulator may carry additional implicit accesses, and the effective addresses
+  differ by base.
 
 ## Cross-references
 

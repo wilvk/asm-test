@@ -25,7 +25,7 @@
  * `make asmtrace-golden-check`.
  *
  * Contract: docs/internal/gui/asmtrace-schema.md.
- * Usage: asmtrace_record [--steps=<cap>] <output-directory>
+ * Usage: asmtrace_record [--steps=<cap>] [--mem] <output-directory>
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -72,6 +72,35 @@ static void set_code_identity(asmtrace_writer_t *w, const char *name,
  * below applies when this is 0, so `make asmtrace-golden` (no flag) still emits
  * the one worked example while an explicit --steps=N arms the whole corpus. */
 static size_t g_steps_cap = 0;
+
+/* --mem: arm the `mem` address-stream (29 R2) for the whole corpus loop. Off by
+ * default (the golden default), so `make asmtrace-golden` (no flag) emits `mem`
+ * only for the fixtures that bake it in, and every other golden is byte-unchanged.
+ * A routine's own baked-in want_mem below applies when this is 0. */
+static int g_mem = 0;
+
+/* Emit the `mem` address stream for one invocation (29 R2): one `mem` event per
+ * memory-kind operand record in `recs[0..n)`, in the appended (step) order, gated
+ * by the caller's opt-in. The record stream `df_step` already carries the resolved
+ * effective address; this lifts it to a first-class per-access channel the 3D rich
+ * rung keys on. Register records are not memory accesses and are skipped. The body
+ * builder (asmtrace_ndjson.c) owns field order, so a golden `mem` and a live one
+ * spell identically. Returns the number of events emitted. */
+static size_t emit_mem_stream(asmtrace_writer_t *w, const at_val_rec_t *recs,
+                              size_t n) {
+    char body[128];
+    size_t emitted = 0;
+    for (size_t i = 0; i < n; i++) {
+        const at_val_rec_t *r = &recs[i];
+        if (r->kind != AT_LOC_MEM_ABS && r->kind != AT_LOC_MEM_OFF)
+            continue;
+        asmtrace_mem_body(body, sizeof body, r->step, r->addr, r->size,
+                          r->is_write, r->kind);
+        asmtrace_emit(w, "mem", body);
+        emitted++;
+    }
+    return emitted;
+}
 
 /* Fixed routines and arguments. INTEGER-ARG routines only — the emulator L0
  * producer marshals integer arguments (rdi/rsi/rdx/rcx/r8/r9); widening the
@@ -239,7 +268,8 @@ static uint64_t emit_regstates(asmtrace_writer_t *w, const uint8_t *code,
  */
 static int record_bytes(const char *dir, const char *out, const char *label,
                         const uint8_t *code, size_t code_len, const long *args,
-                        int nargs, size_t recs_cap, size_t steps_cap) {
+                        int nargs, size_t recs_cap, size_t steps_cap,
+                        int want_mem) {
     asmtrace_prov_t prov = {"emu-l0", 1, "exact", 0, NULL, 0};
     asmtrace_writer_t w;
     asmtest_valtrace_t *vt = NULL;
@@ -341,6 +371,14 @@ static int record_bytes(const char *dir, const char *out, const char *label,
                               vt->wide_len);
         asmtrace_emit(&w, "df_step", body);
     }
+
+    /* The `mem` address stream (29 R2), when armed: a contiguous block of one
+     * `mem` per memory access, after the df_step stream it projects. Off by
+     * default (want_mem 0), so the golden corpus is unchanged unless a fixture or
+     * --mem arms it — the same discipline --steps uses for regstate. */
+    if (want_mem || g_mem)
+        emit_mem_stream(&w, vt->recs, nrecs);
+
     for (size_t i = 0; g && i < g->n; i++) {
         asmtrace_df_edge_body(body, sizeof body, &g->edges[i]);
         asmtrace_emit(&w, "df_edge", body);
@@ -398,7 +436,8 @@ static int record_one(const char *dir, const rec_routine_t *r) {
     }
     memcpy(code, fn, sizeof code);
     return record_bytes(dir, r->name, r->name, code, sizeof code, r->args,
-                        r->nargs, 65536, steps_cap);
+                        r->nargs, 65536, steps_cap,
+                        0 /* --mem arms via g_mem */);
 }
 
 /* Record one 3D-overview golden SCENE (10-spacetime-3d-overview.md T7): the
@@ -832,6 +871,9 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strncmp(argv[i], "--steps=", 8) == 0)
             g_steps_cap = (size_t)strtoul(argv[i] + 8, NULL, 10);
+        else if (strcmp(argv[i], "--mem") == 0)
+            g_mem =
+                1; /* 29 R2: arm the mem[] address stream for the whole corpus */
         else
             dir = argv[i];
     }
@@ -855,18 +897,38 @@ int main(int argc, char **argv) {
         const void *fn;
 
         if (record_bytes(dir, "loom-df-chain", "df_chain", LOOM_DF_CHAIN,
-                         sizeof LOOM_DF_CHAIN, df_args, 2, 65536, 0) != 0)
+                         sizeof LOOM_DF_CHAIN, df_args, 2, 65536, 0, 0) != 0)
             failed++;
         /* The D7 dishonesty fixture: a four-record operand buffer fills mid-run,
          * the producer flips `truncated`, and the footer declares it. Generated,
          * never hand-edited — a fixture nobody can produce is a fixture nobody
          * can trust. */
         if (record_bytes(dir, "loom-truncated", "df_chain (recs_cap = 4)",
-                         LOOM_DF_CHAIN, sizeof LOOM_DF_CHAIN, df_args, 2, 4,
+                         LOOM_DF_CHAIN, sizeof LOOM_DF_CHAIN, df_args, 2, 4, 0,
                          0) != 0)
             failed++;
         if (record_bytes(dir, "loom-fork-demo", "fork_demo", LOOM_FORK_DEMO,
-                         sizeof LOOM_FORK_DEMO, fork_args, 1, 65536, 0) != 0)
+                         sizeof LOOM_FORK_DEMO, fork_args, 1, 65536, 0, 0) != 0)
+            failed++;
+        /* The `mem` address-stream golden (29 R2 T2): df_chain armed with --mem.
+         * The listing has an explicit store (mov [rsp-8], rax) and load
+         * (mov rcx, [rsp-8]), so the recording carries `mem` events with real
+         * effective addresses — the 3D rich rung's per-access density input. The
+         * value stream is uncapped, so it is the HAPPY path (never truncated). */
+        if (record_bytes(dir, "mem-df-chain", "df_chain (--mem)", LOOM_DF_CHAIN,
+                         sizeof LOOM_DF_CHAIN, df_args, 2, 65536, 0,
+                         1 /* --mem */) != 0)
+            failed++;
+        /* The D7 torn twin: the SAME --mem capture with a five-record operand
+         * buffer, sized so the store's `mem` write survives while the tail
+         * truncates (footer flips). The rich rung then sees BOTH a `mem` stream and
+         * a torn recording: the touched cells are a floor, flagged TORN, never a
+         * silent full terrain. `-truncated` in the name so the golden test asserts
+         * truncated IFF named. Generated, never hand-edited. */
+        if (record_bytes(dir, "mem-df-chain-truncated",
+                         "df_chain (--mem, recs_cap = 5)", LOOM_DF_CHAIN,
+                         sizeof LOOM_DF_CHAIN, df_args, 2, 5, 0,
+                         1 /* --mem */) != 0)
             failed++;
         /* Walkthrough #2: a callee-save spill (a stack band), an EFLAGS knot and
          * a restore — examples/flags.s:45. HOST-ROUTINE bytes, so this entry is
@@ -879,7 +941,7 @@ int main(int argc, char **argv) {
         } else {
             memcpy(rbx, fn, sizeof rbx);
             if (record_bytes(dir, "loom-sum-via-rbx", "sum_via_rbx", rbx,
-                             sizeof rbx, rbx_args, 2, 65536, 0) != 0)
+                             sizeof rbx, rbx_args, 2, 65536, 0, 0) != 0)
                 failed++;
             /* The T2 register-ring dishonesty fixture (09-teaching-producers.md):
              * the SAME sum_via_rbx bytes with a TWO-entry step ring, so it holds
@@ -892,7 +954,7 @@ int main(int argc, char **argv) {
              * golden to be truncated IFF so named. Generated, never hand-edited. */
             if (record_bytes(dir, "regstate-truncated",
                              "sum_via_rbx (steps_cap = 2)", rbx, sizeof rbx,
-                             rbx_args, 2, 65536, 2) != 0)
+                             rbx_args, 2, 65536, 2, 0) != 0)
                 failed++;
         }
     }

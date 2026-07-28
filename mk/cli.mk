@@ -557,6 +557,28 @@ else
 CLI_REGSTATE_PARITY :=
 endif
 
+# test_mem_parity (29 R2 T3) — the cross-producer check for the `mem` address
+# stream: one load/store routine through BOTH the live single-step ptrace producer
+# and the trusted emulator L0 producer, asserting their per-access `mem` streams
+# agree on the base-independent structure (count + each access's step/size/rw)
+# while the effective addresses differ (real ASLR'd stack vs the emulator's fixed
+# DF_STACK_BASE). Same link set and x86_64 + libunicorn gate as the regstate parity
+# above; a run-time ptrace refusal (seccomp) self-skips honestly.
+$(BUILD)/test_mem_parity: cli/test_mem_parity.c \
+                          $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                          $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o \
+                          $(BUILD)/dataflow_emu.o $(BUILD)/dataflow_ptrace.o \
+                          $(BUILD)/codeimage.o $(BUILD)/emu.o $(BUILD)/trace.o \
+                          $(BUILD)/disasm.o | $(BUILD)
+	$(CC) $(CFLAGS) -Iinclude -Icli -pthread $^ \
+	  $(UNICORN_LIBS) $(CAPSTONE_LIBS) $(LINK_LIBBPF) -o $@
+
+ifneq ($(ASMTRACE_GOLDEN_OK),)
+CLI_MEM_PARITY := $(BUILD)/test_mem_parity
+else
+CLI_MEM_PARITY :=
+endif
+
 .PHONY: cli-smoke
 ifneq ($(UNAME_S),Linux)
 # Same OS gate as `cli` above: asmspy is a Linux-only ptrace/proc tracer and its
@@ -589,7 +611,8 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/fork_victim $(BUILD)/clone_victim \
            $(BUILD)/sock_victim $(BUILD)/longjmp_victim \
            $(BUILD)/sigcall_victim $(BUILD)/argdecode_victim \
-           $(BUILD)/exit_victim $(CLI_I386_VICTIM) $(CLI_REGSTATE_PARITY)
+           $(BUILD)/exit_victim $(CLI_I386_VICTIM) $(CLI_REGSTATE_PARITY) \
+           $(CLI_MEM_PARITY)
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
 	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"
@@ -598,6 +621,9 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
 	@echo "--- regstate parity (26 T5.2: live ptrace ring == emulator ring, modulo base) ---"
 	@if [ -x "$(BUILD)/test_regstate_parity" ]; then $(BUILD)/test_regstate_parity; \
 	 else echo "# SKIP regstate-parity: needs x86_64 + libunicorn (this host: $(CLI_ARCH))"; fi
+	@echo "--- mem parity (29 R2 T3: live ptrace mem stream == emulator, modulo base) ---"
+	@if [ -x "$(BUILD)/test_mem_parity" ]; then $(BUILD)/test_mem_parity; \
+	 else echo "# SKIP mem-parity: needs x86_64 + libunicorn (this host: $(CLI_ARCH))"; fi
 	BUILD=$(BUILD) ASMSPY_HAVE_M32='$(CLI_M32_PROBE)' sh cli/cli_smoke.sh
 endif
 

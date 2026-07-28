@@ -166,7 +166,7 @@ typedef struct {
     int throttled;        /* footer drops.throttled              */
     int has_steps_total;  /* footer carried steps_total          */
     long long steps_total;
-    int end_skip_code;    /* footer skip.code (0 = none)         */
+    int end_skip_code; /* footer skip.code (0 = none)         */
     char end_skip_reason[256];
     int prov_exact;    /* header provenance.exact             */
     int prov_redacted; /* header provenance.redacted          */
@@ -436,6 +436,28 @@ static void test_df_step_wide_bytes(void) {
                           sizeof wide);
     check("df_step.wide out-of-range omits bytes",
           strstr(body, "\"bytes\"") == NULL, body);
+}
+
+/* The `mem` address-stream body (29 R2): a memory access serializes to
+ * {step,ea,size,rw,space} in that order, rw is r/w, space folds the loc kind to
+ * abs/off. */
+static void test_mem_body(void) {
+    char body[128];
+
+    /* A write to an absolute EA. */
+    asmtrace_mem_body(body, sizeof body, 2, 2097144ULL, 8, 1, AT_LOC_MEM_ABS);
+    check_str("mem.body write/abs", body,
+              "\"step\":2,\"ea\":2097144,\"size\":8,\"rw\":\"w\",\"space\":"
+              "\"abs\"");
+
+    /* A read at a routine-relative offset. */
+    asmtrace_mem_body(body, sizeof body, 5, 16, 4, 0, AT_LOC_MEM_OFF);
+    check_str("mem.body read/off", body,
+              "\"step\":5,\"ea\":16,\"size\":4,\"rw\":\"r\",\"space\":\"off\"");
+
+    /* Field order is fixed: `step` leads, `space` trails. */
+    check("mem.body field order",
+          strstr(body, "\"step\":") < strstr(body, "\"space\":"), body);
 }
 
 static void test_field_order_fixed(void) {
@@ -771,6 +793,7 @@ int main(void) {
     test_code_header();
     test_steps_total_footer();
     test_df_step_wide_bytes();
+    test_mem_body();
     test_field_order_fixed();
     test_escape_edges();
     test_deterministic_omits_volatile();
