@@ -67,6 +67,12 @@ struct TrajectorySet {
     uint64_t pc_placed = 0;     // of those, how many project onto it
     bool anchored = false;      // a rel path was PLACED against the single span
     std::string placement_note; // why a rel path was not (fully) placed
+    // 37 T2: HOW a rel path was placed — a real honesty grade, not cosmetics: a
+    // wire-STATED base (df_step.rbase) and a DERIVED single-span anchor are
+    // different claims and must not share a label. "wire" (every placed vertex
+    // used its own rbase), "single-span" (36's derived anchor), "mixed" (both
+    // mechanisms in one recording), "" (nothing anchored, or an abs path).
+    std::string anchor_source;
 
     bool refused() const { return !diagnostic.empty(); }
 };

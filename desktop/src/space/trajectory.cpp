@@ -62,6 +62,8 @@ TrajectorySet build_trajectories(const Recording &r, const Projection &proj) {
     // tid. The grouping is the same code either way.
     std::map<int32_t, Trajectory> by_tid;
     std::map<int32_t, uint64_t> next_t; // per-tid running step index
+    bool from_df_step = false; // 37 T2: the PC path came from df_step (resolved
+                               // per-event against rbase), not the trace loop
 
     if (const auto *ev = kind(r, "trace")) {
         for (const Event &e : *ev) {
@@ -119,24 +121,66 @@ TrajectorySet build_trajectories(const Recording &r, const Projection &proj) {
     // trace path produced nothing (and was not itself refused).
     if (by_tid.empty() && set.diagnostic.empty()) {
         if (const auto *ev = kind(r, "df_step")) {
+            // 37 T2: resolve each df_step against its OWN stated region base
+            // (rbase) when present — a per-event fact that always WINS over the
+            // recording-wide anchor. An untagged df_step falls back to 36's
+            // single-codeimage-span anchor (resolved once here over the SAME
+            // regions the projection was built from). The two placements are
+            // graded distinctly in anchor_source ("wire" vs "single-span"), so a
+            // multi-span `auto` capture — which 36 alone must refuse — resolves.
+            const Anchor anchor = resolve_anchor(proj.regions);
+            uint64_t wire = 0, single = 0;
             for (const Event &e : *ev) {
                 auto off = e.body.find("off");
                 if (off == e.body.end() || !off->is_number())
                     continue; // an offset-less df_step places no vertex
                 int32_t tid = -1;
                 get(e.body, "tid", tid);
+                uint64_t rbase = 0;
+                get(e.body, "rbase", rbase); // 0 when the wire omitted it
                 Trajectory &tr = by_tid[tid];
                 tr.tid = tid;
                 TrajPoint p;
                 p.t = next_t[tid]++;
-                p.addr = off->get<uint64_t>();
                 p.fidelity = TrajPoint::Exact;
                 p.is_access = false;
                 p.tid = tid;
+                const uint64_t raw = off->get<uint64_t>();
+                if (rbase) {
+                    p.addr = rbase + raw; // the wire STATES the base
+                    p.placed = true;
+                    wire++;
+                } else if (anchor.ok) {
+                    uint64_t abs = 0;
+                    if (anchor.place(raw, &abs)) {
+                        p.addr = abs; // 36's single-span derivation
+                        p.placed = true;
+                        single++;
+                    } else {
+                        p.addr = raw; // out-of-span clamp: leave the raw offset
+                        p.placed = false;
+                    }
+                } else {
+                    p.addr = raw; // no resolvable span: leave the raw offset
+                    p.placed = false;
+                }
                 tr.points.push_back(p);
             }
-            if (!by_tid.empty())
+            if (!by_tid.empty()) {
                 set.basis = "rel"; // df_step offsets are region-relative
+                from_df_step = true;
+                if (wire || single) {
+                    set.anchored = true;
+                    for (auto &kv : by_tid)
+                        kv.second.flags |= TRAJ_ANCHORED;
+                }
+                set.anchor_source = (wire && single) ? "mixed"
+                                    : wire           ? "wire"
+                                    : single         ? "single-span"
+                                                     : "";
+                if (!wire && !single && !anchor.ok)
+                    set.placement_note = anchor.reason;
+            }
         }
     }
 
@@ -161,10 +205,14 @@ TrajectorySet build_trajectories(const Recording &r, const Projection &proj) {
     // and the `survey` loop below are absolute by construction and become
     // CONSISTENT with the PC path once it is anchored; that is why neither is
     // touched here.
-    if (set.basis == "rel") {
+    // A rel `trace` path (NOT df_step — that resolved per-event above, honouring
+    // its own rbase) has no `rbase` on the wire, so it takes 36's single-span
+    // derivation wholesale: anchor_source is always "single-span" here.
+    if (set.basis == "rel" && !from_df_step) {
         Anchor anchor = resolve_anchor(proj.regions);
         if (anchor.ok) {
             set.anchored = true;
+            set.anchor_source = "single-span";
             for (auto &kv : by_tid) {
                 kv.second.flags |= TRAJ_ANCHORED;
                 for (TrajPoint &p : kv.second.points) {
@@ -252,12 +300,20 @@ TrajectorySet build_trajectories(const Recording &r, const Projection &proj) {
     // already carries resolve_anchor's reason in placement_note.
     if (set.anchored && set.pc_placed < set.pc_points &&
         set.placement_note.empty()) {
-        set.placement_note =
-            std::to_string(set.pc_points - set.pc_placed) + " of " +
-            std::to_string(set.pc_points) +
-            " path vertices project off-plane — the 4096-byte codeimage clamp "
-            "(SERVE_CI_MAX_BYTES): an in-routine offset past the captured span "
-            "has no plane cell";
+        // Honest about the CAUSE by source (37): a wire-stated base may name a
+        // span with no codeimage (reader rule 4 — sound placement, no bytes), a
+        // single-span derivation can only be the 4096-byte clamp.
+        const char *cause =
+            (set.anchor_source == "wire" || set.anchor_source == "mixed")
+                ? " path vertices project off-plane — a wire-stated base "
+                  "(rbase) "
+                  "with no matching codeimage span, or the 4096-byte codeimage "
+                  "clamp: the offset has no plane cell"
+                : " path vertices project off-plane — the 4096-byte codeimage "
+                  "clamp (SERVE_CI_MAX_BYTES): an in-routine offset past the "
+                  "captured span has no plane cell";
+        set.placement_note = std::to_string(set.pc_points - set.pc_placed) +
+                             " of " + std::to_string(set.pc_points) + cause;
     }
 
     // --- statistical residency from `survey` edges ------------------------

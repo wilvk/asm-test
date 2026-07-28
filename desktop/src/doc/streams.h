@@ -65,7 +65,16 @@ struct TraceStream {
 
 // The L0/L1 dataflow stream: `df_step` + `df_edge` events.
 struct DataflowStream {
-    std::vector<uint64_t> insn_off;  // per step
+    std::vector<uint64_t> insn_off; // per step
+    // 37: per step, the region base `off` is relative to (df_step.rbase); 0 where
+    // the wire did not state one (a pre-37 recording, or a producer that omitted
+    // it). KNOWN ALIASING (pre-existing, not fixed here): the decoder indexes by
+    // `step`, but a continuous capture restarts `step` at 0 per pass (35 T1), so
+    // passes alias — and with rbase that aliasing can now yield a WRONG BASE, not
+    // merely a wrong offset, if two passes ever carry different bases. The fix
+    // belongs with 35's segmentation, not here.
+    std::vector<uint64_t> insn_rbase;
+    bool rbase_present = false;      // any df_step stated an rbase on the wire
     std::vector<std::string> disasm; // per step; "" where the producer had none
     std::vector<ValRec> recs;        // ALL steps' operands, ascending by step
     std::vector<dt_edge> edges;      // def-use endpoints (slice input)

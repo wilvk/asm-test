@@ -251,10 +251,16 @@ PtSliceResult ptslice_run(const PtSliceInput &in) {
 
     for (size_t i = 0; i < vt->steps_len; i++) {
         out.df.insn_off.push_back(vt->insn_off[i]);
+        // 37: the region base off is relative to — the SAME `in.base` a recorded
+        // df_step states as rbase, so the live pane and a replay of the same
+        // capture resolve the span identically (0 when no codeimage pinned it).
+        out.df.insn_rbase.push_back(in.base);
         out.df.disasm.push_back(std::string()); // D10 text is a recorder's, not
                                                 // a replay's, to invent
         out.df.step_present.push_back(1);
     }
+    if (in.base)
+        out.df.rbase_present = true;
     out.df.nsteps = static_cast<uint32_t>(vt->steps_len);
     for (size_t i = 0; i < vt->recs_len; i++) {
         const at_val_rec_t &r = vt->recs[i];

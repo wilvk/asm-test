@@ -176,6 +176,8 @@ Streams decode_streams(const Recording &r) {
         struct Step {
             uint32_t step;
             uint64_t off;
+            uint64_t
+                rbase; // 37: region base off is relative to; 0 = not stated
             std::string disasm;
             std::vector<ValRec> ops;
         };
@@ -190,6 +192,9 @@ Streams decode_streams(const Recording &r) {
                 continue;
             st.step = it->get<uint32_t>();
             get(e.body, "off", st.off);
+            get(e.body, "rbase", st.rbase); // 37: 0 when the wire omitted it
+            if (st.rbase)
+                s.df.rbase_present = true;
             get(e.body, "disasm", st.disasm);
             auto ops = e.body.find("ops");
             if (ops != e.body.end() && ops->is_array())
@@ -210,10 +215,12 @@ Streams decode_streams(const Recording &r) {
         for (const Step &st : steps)
             s.df.nsteps = std::max(s.df.nsteps, st.step + 1);
         s.df.insn_off.assign(s.df.nsteps, 0);
+        s.df.insn_rbase.assign(s.df.nsteps, 0); // 37, parallel to insn_off
         s.df.disasm.assign(s.df.nsteps, std::string());
         std::vector<char> seen(s.df.nsteps, 0);
         for (const Step &st : steps) {
             s.df.insn_off[st.step] = st.off;
+            s.df.insn_rbase[st.step] = st.rbase;
             if (!st.disasm.empty())
                 s.df.disasm[st.step] = st.disasm;
             seen[st.step] = 1;

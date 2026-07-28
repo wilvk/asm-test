@@ -586,6 +586,129 @@ int main() {
         placed_or_explained("36 T2 no-code", ts, proj);
     }
 
+    // === 37 T2: a tagged df_step is placed from a STATED base (rbase) =========
+    // THE HEADLINE: two codeimage spans + df_steps tagged with each ⇒ every
+    // vertex placed, both spans, NO refusal — precisely the recording 36 T1 must
+    // refuse (it cannot derive one base from two spans).
+    {
+        std::vector<Region> regs;
+        Region a;
+        a.base = 0x400000;
+        a.len = 0x1000;
+        a.kind = Region::Code;
+        Region b;
+        b.base = 0x800000;
+        b.len = 0x1000;
+        b.kind = Region::Code;
+        regs.push_back(a);
+        regs.push_back(b);
+        Projection proj = build_projection(std::move(regs));
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"rbase\":4194304}\n";
+        nd += "{\"k\":\"df_step\",\"step\":1,\"off\":16,\"rbase\":8388608}\n";
+        TrajectorySet ts = build_trajectories(load(nd), proj);
+        check("37 T2 wire: NOT refused (two spans resolved from the wire)",
+              !ts.refused() && ts.anchored, "refused or not anchored");
+        check("37 T2 wire: anchor_source is wire", ts.anchor_source == "wire",
+              ts.anchor_source);
+        check("37 T2 wire: every vertex placed",
+              ts.pc_placed == 2 && ts.pc_points == 2,
+              std::to_string(ts.pc_placed) + "/" +
+                  std::to_string(ts.pc_points));
+        if (!ts.trajectories.empty() && ts.trajectories[0].points.size() == 2) {
+            const Trajectory &tr = ts.trajectories[0];
+            check("37 T2 wire: step0 at rbaseA+0, step1 at rbaseB+16",
+                  tr.points[0].addr == 0x400000 &&
+                      tr.points[1].addr == 0x800010,
+                  "wrong wire addresses");
+            check("37 T2 wire: both flags set (still rel, now anchored)",
+                  (tr.flags & TRAJ_RELATIVE_BASIS) &&
+                      (tr.flags & TRAJ_ANCHORED),
+                  "flags");
+        }
+        placed_or_explained("37 T2 wire", ts, proj);
+    }
+
+    // rbase ABSENT with two spans ⇒ STILL refused with 36's reason (fallback).
+    {
+        std::vector<Region> regs;
+        Region a;
+        a.base = 0x400000;
+        a.len = 0x1000;
+        a.kind = Region::Code;
+        Region b;
+        b.base = 0x800000;
+        b.len = 0x1000;
+        b.kind = Region::Code;
+        regs.push_back(a);
+        regs.push_back(b);
+        Projection proj = build_projection(std::move(regs));
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0}\n";
+        nd += "{\"k\":\"df_step\",\"step\":1,\"off\":16}\n";
+        TrajectorySet ts = build_trajectories(load(nd), proj);
+        check("37 T2 fallback: two untagged spans still refuse (36 intact)",
+              !ts.anchored && ts.anchor_source.empty() && ts.pc_placed == 0,
+              "the fallback refusal broke");
+        check("37 T2 fallback: 36's reason names both bases",
+              ts.placement_note.find("0x400000") != std::string::npos &&
+                  ts.placement_note.find("0x800000") != std::string::npos,
+              ts.placement_note);
+    }
+
+    // rbase matching NO codeimage span ⇒ placed (base stated), even off-plane.
+    {
+        Projection proj = code_span(0x400000, 0x1000); // only span A exists
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":16,\"rbase\":8388608}\n";
+        TrajectorySet ts = build_trajectories(load(nd), proj);
+        check("37 T2 no-image: the wire-stated vertex is PLACED (base stated)",
+              ts.anchored && ts.anchor_source == "wire", "not wire-placed");
+        if (!ts.trajectories.empty() && !ts.trajectories[0].points.empty())
+            check("37 T2 no-image: addr is rbase+off even with no codeimage",
+                  ts.trajectories[0].points[0].addr == 0x800010 &&
+                      ts.trajectories[0].points[0].placed,
+                  "wrong address / not placed");
+    }
+
+    // MIXED: one tagged (wire), one untagged (36 single-span) ⇒ anchor_source
+    // names both mechanisms.
+    {
+        Projection proj = code_span(0x400000, 0x1000);
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"rbase\":4194304}\n";
+        nd += "{\"k\":\"df_step\",\"step\":1,\"off\":16}\n";
+        TrajectorySet ts = build_trajectories(load(nd), proj);
+        check("37 T2 mixed: anchor_source is mixed",
+              ts.anchor_source == "mixed", ts.anchor_source);
+        check("37 T2 mixed: both vertices placed at base+off",
+              ts.pc_placed == 2 && !ts.trajectories.empty() &&
+                  ts.trajectories[0].points.size() == 2 &&
+                  ts.trajectories[0].points[0].addr == 0x400000 &&
+                  ts.trajectories[0].points[1].addr == 0x400010,
+              "mixed placement wrong");
+    }
+
+    // rbase + off equals the ABS path's address for the same instruction.
+    {
+        Projection proj = code_span(0x400000, 0x1000);
+        std::string ndrel = kHdrExact;
+        ndrel +=
+            "{\"k\":\"df_step\",\"step\":0,\"off\":16,\"rbase\":4194304}\n";
+        TrajectorySet rel = build_trajectories(load(ndrel), proj);
+        std::string ndabs = kHdrExact;
+        ndabs += "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194320}\n";
+        TrajectorySet abs = build_trajectories(load(ndabs), proj);
+        check("37 T2 equiv: rbase+off == the abs address for the same insn",
+              !rel.trajectories.empty() && !abs.trajectories.empty() &&
+                  !rel.trajectories[0].points.empty() &&
+                  !abs.trajectories[0].points.empty() &&
+                  rel.trajectories[0].points[0].addr ==
+                      abs.trajectories[0].points[0].addr &&
+                  rel.trajectories[0].points[0].addr == 0x400010,
+              "wire and abs disagree");
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d trajectory check(s) failed\n", failures);
         return 1;
