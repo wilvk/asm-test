@@ -32,7 +32,7 @@
 > the pure `kLoomReweaveBanner`) — a reweave is emulator replay, never silicon (D7).
 > `test_loom_forks` extended (straight-line + control-flow + determinism + loud
 > refusals); the pure `draw_loom_reweave_form` gesture is driven in `desktop-ui-test`
-> (`loom/reweave_form_emits_request`).
+> (`loom/reweave_form_emits_request`). **Landed `cc4ad3b`.**
 >
 > **T4** (retire the Scrubber refusal): `dt_scrubber_replayable` (pure) decides —
 > when a producer-absent recording is emulator-replayable (Author/emulator, x86-64,
@@ -43,7 +43,7 @@
 > `StepIndex` a `--steps` capture would, flagged `synthesized` so the deck carries a
 > RE-DERIVATION banner, never presented as original capture (D6). `test_scrubber`
 > asserts BOTH branches; `test_regsynth` proves the re-run; the "not a day-one
-> feature" disclaimer is gone.
+> feature" disclaimer is gone. **Landed `8f38b81`.**
 
 ## Why this work exists
 
