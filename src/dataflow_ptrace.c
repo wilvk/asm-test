@@ -79,7 +79,8 @@
 #define _GNU_SOURCE
 
 #include "asmtest_grow.h" /* asmtest_grow / _pow2 — overflow-checked pool growth (S6) */
-#include <stddef.h> /* offsetof — the F6 telemetry layout guard */
+#include <stdatomic.h> /* atomic_bool *stop — the 35 continuous interruptible entry (every platform: the type is in both entry signatures) */
+#include <stddef.h>    /* offsetof — the F6 telemetry layout guard */
 #include <string.h> /* memset — the F6 window stub zeroes its info on every platform */
 #include <sys/types.h> /* pid_t — used by the attach_pid signature on every platform */
 
@@ -567,6 +568,11 @@ typedef struct {
      * it there) keeps the c->code snapshot path byte-for-byte. */
     asmtest_codeimage_t *img;
     uint64_t when;
+    /* 35 (continuous): an optional interruptible-stop flag. When non-NULL and set,
+     * dfp_step_loop yields WITHIN the pass (truncated prefix, tracee left stopped
+     * for the crash-safe DETACH) instead of only between passes. NULL (every scoped
+     * one-shot path, via the callers' memset) is byte-for-byte unchanged. */
+    atomic_bool *stop;
 } dfp_ctx;
 
 /* F6 — put a recorded WRITE's location into the at-risk set (see dfp_riskset above).
@@ -1063,6 +1069,23 @@ static int dfp_step_loop(dfp_ctx *c, uint64_t base_ip, size_t code_len,
     *left_stopped = 0;
 
     for (;;) {
+        /* 35 (continuous): a `stop` requested mid-pass yields WITHIN this pass
+         * rather than only between passes. The tracee is trap-stopped here (either
+         * pre_positioned at the entry, or from the previous iteration's step +
+         * waitpid), so append whatever step is open as a truncated prefix (its
+         * post-state is unmeasured), flag the trace truncated, and hand the
+         * still-stopped tracee back for the crash-safe DETACH — the foreign path
+         * leaves it stopped and never kills it. NULL stop (every one-shot path) is
+         * unchanged. */
+        if (c->stop != NULL && atomic_load(c->stop)) {
+            if (c->have_cur) {
+                dfp_append_step(c, c->cur_off, c->cur.v, c->cur.n,
+                                &c->cur_regs);
+                c->have_cur = 0;
+            }
+            c->vt->truncated = true;
+            return dfp_dirty_exit(c, DF_PTRACE_OK, 0, left_stopped);
+        }
         if (skip_step) {
             skip_step =
                 0; /* first iteration only: the tracee is already at the entry */
@@ -1874,7 +1897,7 @@ static int dfp_seize_all(pid_t pid, dfp_thrset *set) {
  * — the pre_positioned precondition dfp_step_loop expects) with the OTHER threads running
  * free; returns 0. On failure the shared bp is removed and -1 returned (caller tears down). */
 static int dfp_run_to_multi(dfp_thrset *set, uint64_t base, pid_t only_tid,
-                            pid_t *entering) {
+                            pid_t *entering, atomic_bool *stop) {
     /* 1. Drain each thread's SEIZE/INTERRUPT stop so all are ptrace-stopped (the
      *    precondition for planting the shared int3 and for the release CONT). Drop any
      *    thread that vanished mid-seize. */
@@ -1912,6 +1935,15 @@ static int dfp_run_to_multi(dfp_thrset *set, uint64_t base, pid_t only_tid,
     struct timespec t0;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (;;) {
+        /* 35 (continuous): a `stop` during the entry wait ends it WITHIN this pass
+         * (the 10 s entry wait is the dominant Stop latency). Restore the byte and
+         * leave the threads running (dfp_remove_bp_any's contract), then report -2
+         * exactly as the timeout path does — the caller's detach walk is the same,
+         * and the continuous engine treats a stop as a clean end. */
+        if (stop != NULL && atomic_load(stop)) {
+            dfp_remove_bp_any(set, base, orig);
+            return -2;
+        }
         int st = 0;
         pid_t w = waitpid(-1, &st, __WALL | WNOHANG);
         if (w == 0) { /* nothing ready: every thread is running free */
@@ -2034,7 +2066,7 @@ static int dfp_attach_worker(pid_t pid, pid_t only_tid, uint64_t base,
                              size_t code_len, uint64_t max_insns,
                              asmtest_codeimage_t *img, uint64_t when,
                              long *result, int *survived,
-                             asmtest_valtrace_t *vt) {
+                             asmtest_valtrace_t *vt, atomic_bool *stop) {
     if (survived != NULL)
         *survived = 0;
     if (vt == NULL || pid <= 0 || only_tid < 0 || base == 0 || code_len == 0)
@@ -2065,7 +2097,7 @@ static int dfp_attach_worker(pid_t pid, pid_t only_tid, uint64_t base,
      * (go check the symbol, or the target's phase). The int3 is already restored and
      * every thread left running by dfp_run_to_multi, so the detach walk below is the
      * same one the success path uses. */
-    int rrc = dfp_run_to_multi(&set, base, only_tid, &entering);
+    int rrc = dfp_run_to_multi(&set, base, only_tid, &entering, stop);
     if (rrc != 0) {
         dfp_detach_others(&set, 0, base);
         free(set.v);
@@ -2109,6 +2141,7 @@ static int dfp_attach_worker(pid_t pid, pid_t only_tid, uint64_t base,
     c.img = img;          /* optional versioned decode (NULL = live snapshot) */
     c.when = when;
     c.risk = risk;
+    c.stop = stop; /* 35: interruptible mid-pass (NULL for one-shot callers) */
 
     int left_stopped = 0;
     int rc =
@@ -2147,7 +2180,7 @@ int asmtest_dataflow_ptrace_attach_pid_tid(pid_t pid, pid_t only_tid,
                                            uint64_t max_insns, long *result,
                                            asmtest_valtrace_t *vt) {
     return dfp_attach_worker(pid, only_tid, base, code_len, max_insns, NULL, 0,
-                             result, NULL, vt);
+                             result, NULL, vt, NULL);
 }
 
 /* Increment 5 — the JIT-aware entry point: worker-thread targeting (Inc 4) + hardware/int3
@@ -2169,7 +2202,23 @@ int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
     if (survived != NULL)
         *survived = 0;
     return dfp_attach_worker(pid, only_tid, base, code_len, max_insns, img,
-                             when, result, survived, vt);
+                             when, result, survived, vt, NULL);
+}
+
+/* 35 (continuous) — the INTERRUPTIBLE JIT entry: identical to attach_jit but an
+ * optional `stop` flag is threaded into the entry wait (dfp_run_to_multi) and the
+ * single-step loop (dfp_step_loop, via c->stop), so a re-arm loop yields WITHIN one
+ * in-flight pass rather than only between passes. `stop` NULL is exactly attach_jit.
+ * On a mid-pass stop the tracee is left trap-stopped and DETACHed by the crash-safe
+ * path, so the target SURVIVES unchanged. */
+int asmtest_dataflow_ptrace_attach_jit_stop(
+    pid_t pid, pid_t only_tid, uint64_t base, size_t code_len,
+    asmtest_codeimage_t *img, uint64_t when, uint64_t max_insns, long *result,
+    int *survived, asmtest_valtrace_t *vt, atomic_bool *stop) {
+    if (survived != NULL)
+        *survived = 0;
+    return dfp_attach_worker(pid, only_tid, base, code_len, max_insns, img,
+                             when, result, survived, vt, stop);
 }
 
 /* ================================================================== */
@@ -2876,6 +2925,30 @@ int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
     (void)max_insns;
     (void)result;
     (void)vt;
+    if (survived != NULL)
+        *survived = 0;
+    return DF_PTRACE_ENOSYS;
+}
+
+/* 35 (continuous): off Linux x86-64 (or without Capstone) the interruptible entry
+ * is unavailable exactly as attach_jit is — the live single-step value producer does
+ * not exist here, so the continuous re-arm loop self-skips at the first pass
+ * (DF_PTRACE_ENOSYS -> ASMSPY_DATAFLOW_UNAVAIL) before any PTRACE_SINGLESTEP. This is
+ * why the arm64 detach-fatal single-step hazard is architecturally unreachable. */
+int asmtest_dataflow_ptrace_attach_jit_stop(
+    pid_t pid, pid_t only_tid, uint64_t base, size_t code_len,
+    asmtest_codeimage_t *img, uint64_t when, uint64_t max_insns, long *result,
+    int *survived, asmtest_valtrace_t *vt, atomic_bool *stop) {
+    (void)pid;
+    (void)only_tid;
+    (void)base;
+    (void)code_len;
+    (void)img;
+    (void)when;
+    (void)max_insns;
+    (void)result;
+    (void)vt;
+    (void)stop;
     if (survived != NULL)
         *survived = 0;
     return DF_PTRACE_ENOSYS;

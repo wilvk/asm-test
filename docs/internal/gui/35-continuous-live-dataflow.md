@@ -20,11 +20,12 @@
 > disagrees with the code when you implement, the code wins — re-verify, then fix
 > this doc in the same change.
 >
-> **Status (2026-07-28) — ◐ 3/4. T1, T3, T4 landed; T2 deferred (honest scope).**
+> **Status (2026-07-28) — ☑ 4/4. T1, T2, T3, T4 landed.**
 > The continuous feature works end to end: a live `dataflow`/`auto` session
 > re-arms until Stop into one growing recording delimited by `df_invocation`
-> markers, the desktop segments it per pass and follows the latest live, and the
-> capture pane arms it.
+> markers, the desktop segments it per pass and follows the latest live, the
+> capture pane arms it, and Stop is now honored WITHIN one in-flight pass (T2).
+> (README owned by the orchestrator may still read ◐ 3/4 pending its bump.)
 > - **T1 — DONE** (`fa2cef4`): `asmspy_engine_dataflow` gains `continuous`, wraps
 >   the producer in a re-arm loop, and emits a `df_invocation`
 >   `{pass,result,steps,truncated}` marker (new schema kind, D5) before each pass;
@@ -43,26 +44,35 @@
 >   (`test_shell`); the once-per-session perturb confirm covers the session. The
 >   golden is hand-authored (three passes, one truncated) rather than a generator
 >   path, to avoid the make_pair 64-byte-window golden-churn hazard.
-> - **T2 — DEFERRED (interruptible Stop / hold-one-seize).** Stop is observed
->   BETWEEN passes today; for a HOT re-entering region (the common case) that is
->   near-instant (a pass completes in ms), so continuous stops promptly. The
->   residual gap is a region that goes quiet mid-session: a pass can block in the
->   entry wait up to `DFP_ENTRY_WAIT_MS` (10 s) before yielding. Closing it means
->   threading `atomic_bool *stop` into `dfp_run_to_multi`'s entry-wait poll (the
->   safe, high-value half) and `dfp_step_loop` (the risky half — terminating on the
->   EINTR branch must first reap the in-flight `PTRACE_SINGLESTEP`, or a
->   detach-while-mid-step strands/kills the tracee). Both need a new public
->   `attach_jit` entry (the current one has three external callers — `asmspy_engine`,
->   `test_dataflow_ptrace`, `gccanon`) **and an arm64 `#else` ENOSYS stub that
->   cannot be compile-verified on an x86-64 host**. Landing an unverifiable change
->   to the hot, shared `dataflow_ptrace.c` core was judged worse than the latency
->   win; do T2 on a session with the arm64 docker/GH lane. **T2b (seize-once, hold
->   one multi-thread seize with `PTRACE_O_TRACECLONE` + planter re-arm) is the
->   larger invasive refactor and stays deferred with it.** Note (from the T2 map):
->   the whole `dataflow_ptrace.c` body is `#if __x86_64__`, so the arm64
->   detach-fatal hazard is not reachable through this producer today — any future
->   arm64 single-step re-arm MUST use `PTRACE_SYSCALL`-at-resume, never a naive
->   re-armed `SINGLESTEP`.
+> - **T2 — DONE (interruptible Stop).** `atomic_bool *stop` is threaded through a
+>   new public `asmtest_dataflow_ptrace_attach_jit_stop` (the old `attach_jit`
+>   forwards `NULL`, so its three external callers — `asmspy_engine`,
+>   `test_dataflow_ptrace`, `gccanon` — are unchanged) into `dfp_run_to_multi`'s
+>   entry-wait poll AND `dfp_step_loop`; the T1 re-arm loop now calls `_stop`. The
+>   EINTR/mid-step hazard the earlier deferral flagged is handled: the stop check
+>   sits at the loop TOP, and `serve_stop` / the CLI signal handler set `stop`
+>   BEFORE the `SIGALRM`/`SIGTERM`, so the interrupted `waitpid`'s `continue`
+>   lands on the stop check and terminates via the crash-safe `dfp_dirty_exit`
+>   BEFORE re-issuing a `SINGLESTEP` — the tracee is trap-stopped (clean
+>   `PTRACE_DETACH`), or the kernel auto-detaches on tracer exit; either way the
+>   target survives, proven by the `cli_smoke` SIGTERM case (honored within one
+>   in-flight pass, ≤ 5 s, victim survives). The arm64 `#else` ENOSYS stub was
+>   ADDED and **compile-verified on aarch64** (the pinned arm64 docker bindings
+>   base under qemu — the whole `dataflow_ptrace.c` body stays `#if __x86_64__`, so
+>   continuous on arm64 self-skips (`ASMSPY_DATAFLOW_UNAVAIL`) before any
+>   `PTRACE_SINGLESTEP` and the detach-fatal hazard is architecturally unreachable;
+>   any FUTURE arm64 single-step re-arm must still use `PTRACE_SYSCALL`-at-resume,
+>   never a naive re-armed `SINGLESTEP`). **T2b (seize-once — hold one multi-thread
+>   seize across passes) stays DEFERRED:** making `dfp_step_loop` whole-target-
+>   drain-aware to let the target run free between passes while holding the seize
+>   rewrites the tier's most fragile function; the per-pass re-SEIZE is O(threads)
+>   and negligible against a pass's 10³–10⁵× single-step cost, so there is no
+>   measurable regression. **Known separate issue (pre-existing, not T2):** a
+>   `--serve` continuous session's `max` bounds insns-per-pass (not pass count), so
+>   the pass loop is unbounded, and a `quit` there is not honored promptly (the
+>   CPU-intensive re-arm loop starves the command thread) — reproduced on
+>   `origin/main` WITHOUT this change; it is a T1 serve-loop concern, not the
+>   producer's interruptibility.
 
 ## Why this work exists
 

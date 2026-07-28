@@ -391,6 +391,43 @@ assert isinstance(d["defuse"], list)' \
         echo "  one-shot: no df_invocation (byte-identical default preserved), OK"
     fi
     rm -f "$dfcont" "$dfone"
+
+    # 35 T2: interruptible Stop. The stop is threaded into the entry wait
+    # (dfp_run_to_multi) and the single-step loop (dfp_step_loop), so a SIGTERM
+    # mid-session is honored WITHIN one in-flight pass (bounded well under the 10 s
+    # entry wait) AND the victim SURVIVES the crash-safe detach — the same clean-
+    # detach invariant the SIGTERM-mid-trace case proves for the region engine, now
+    # for the re-arm loop.
+    echo "--- asmspy --dataflow $AVPID hotfn --continuous + SIGTERM (35 T2) ---"
+    dfcsig="$BUILD/df_cont_sig_$$.asmtrace"
+    rm -f "$dfcsig"
+    "$ASM" --dataflow "$AVPID" hotfn --continuous --steps --record="$dfcsig" \
+        >/dev/null 2>&1 &
+    DCPID=$!
+    i=0
+    until grep -q '"k":"df_invocation"' "$dfcsig" 2>/dev/null; do # >=1 pass ran
+        i=$((i+1)); [ "$i" -le 100 ] || fail "continuous+sigterm: no pass within 10s"
+        kill -0 "$DCPID" 2>/dev/null \
+            || fail "continuous+sigterm: tracer exited before signal"
+        sleep 0.1
+    done
+    kill -TERM "$DCPID"
+    i=0
+    while :; do # poll /proc state: kill -0 stays true on a zombie, this doesn't
+        st=$(awk '{print $3}' "/proc/$DCPID/stat" 2>/dev/null) || st=""
+        { [ -z "$st" ] || [ "$st" = "Z" ]; } && break
+        i=$((i+1)); [ "$i" -le 50 ] \
+            || fail "continuous+sigterm: tracer alive 5s after SIGTERM (stop not honored within a pass)"
+        sleep 0.1
+    done
+    set +e; wait "$DCPID"; dcrc=$?; set -e
+    [ "$dcrc" -eq 0 ] \
+        || fail "continuous+sigterm: tracer exited $dcrc (expected a clean detach)"
+    sleep 1 # grace: the victim keeps entering hotfn — an orphaned int3 kills it
+    kill -0 "$AVPID" 2>/dev/null \
+        || fail "continuous+sigterm: victim died (leaked breakpoint)"
+    rm -f "$dfcsig"
+    echo "continuous+SIGTERM: honored within a pass, clean detach, victim survived"
 fi
 # ---------------------------------------------------------------------------
 # BOUNDED ENTRY WAIT (asmspy-plan Theme H)

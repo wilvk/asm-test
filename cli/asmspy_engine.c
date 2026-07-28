@@ -3626,6 +3626,17 @@ int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
                                        uint64_t max_insns, long *result,
                                        int *survived, asmtest_valtrace_t *vt);
 
+/* 35 T2 (continuous): the INTERRUPTIBLE producer variant — an atomic `stop` is
+ * threaded into the entry wait (dfp_run_to_multi) and the single-step loop
+ * (dfp_step_loop), so a re-arm loop yields WITHIN one in-flight pass rather than
+ * only between passes. The old signature above forwards NULL to this one; both are
+ * re-declared here (the producer ships no public header), in step with
+ * src/dataflow_ptrace.c and its test suite. */
+int asmtest_dataflow_ptrace_attach_jit_stop(
+    pid_t pid, pid_t only_tid, uint64_t base, size_t code_len,
+    asmtest_codeimage_t *img, uint64_t when, uint64_t max_insns, long *result,
+    int *survived, asmtest_valtrace_t *vt, atomic_bool *stop);
+
 int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
                            long max, int want_steps, int want_fpregs,
                            int continuous, atomic_bool *stop,
@@ -3697,10 +3708,13 @@ int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
             0; /* not yet surfaced to the caller; see asmspy.h note */
         /* SEIZE every thread of `pid` and step whichever one first enters the
          * region — so a routine on a worker thread is reached, not just the
-         * leader. `only_tid` (non-0, --tid) pins exactly that thread. */
-        int prc = asmtest_dataflow_ptrace_attach_jit(pid, only_tid, base, len,
-                                                     NULL, 0, max_insns,
-                                                     &result, &survived, vt);
+         * leader. `only_tid` (non-0, --tid) pins exactly that thread. 35 T2: the
+         * `_stop` variant threads `stop` into the entry wait + single-step loop, so
+         * a Stop yields WITHIN this in-flight pass, not only between passes (NULL
+         * stop is exactly the one-shot attach_jit — byte-identical). */
+        int prc = asmtest_dataflow_ptrace_attach_jit_stop(
+            pid, only_tid, base, len, NULL, 0, max_insns, &result, &survived,
+            vt, stop);
 
         int stop_loop = 1;
         switch (prc) {
