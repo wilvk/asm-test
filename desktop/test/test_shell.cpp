@@ -1191,6 +1191,10 @@ int main() {
     // a region they do not need, and never sends one the serve host would reject.
     {
         InspectState is;
+        // Isolate from the `steps` ring's own default (true — see doors.h): this
+        // block's assertions are about REGION params only, and the dedicated
+        // sub-block below already covers `steps` on its own terms.
+        is.steps = false;
         std::snprintf(is.region, sizeof is.region, "%s", "0x1000:16");
         is.want = LiveMode::Log;
         check("cap/log no region", inspect_start_params(is).empty(),

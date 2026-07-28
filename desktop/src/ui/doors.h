@@ -145,9 +145,13 @@ struct InspectState {
 
     // The per-step register RING (--steps, doc 26): armed for the dataflow single-
     // step engines (dataflow / auto) so the live Scrubber time-travels registers.
-    // Set by the "full detail" attach (double-click / right-click) and a capture-
-    // pane checkbox; sent as `steps:true` in the start params.
-    bool steps = false;
+    // ON by default for those two modes: PTRACE_GETREGS already runs every step
+    // regardless of this flag (dataflow_ptrace.c's cost model; doc 26 "not
+    // hardware-gated... the reg file is already read") — arming the ring only
+    // retains that value into a bounded buffer, not new perturbation. Set by the
+    // "full detail" attach and a capture-pane checkbox, either of which can still
+    // turn it off; sent as `steps:true` in the start params.
+    bool steps = true;
 
     // CONTINUOUS capture (35 T4): the dataflow/auto engine re-arms the same scoped
     // region and keeps capturing until Stop, appending each invocation into one

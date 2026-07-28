@@ -368,8 +368,9 @@ void draw_patch_bay(InspectState &s) {
 
     // The register ring (--steps, doc 26): the dataflow single-step engines
     // (dataflow + auto) can carry a per-step register file so the live Scrubber
-    // time-travels. Off by default (it is extra, perturbing capture); the
-    // full-detail attach (double-click a process) arms it.
+    // time-travels. On by default: the GETREGS it rides on already happens every
+    // step, so arming the ring is a bounded-memory retain, not extra perturbation.
+    // The checkbox lets a session opt back out.
     if (s.want == LiveMode::Dataflow || s.want == LiveMode::Auto) {
         ImGui::Checkbox("record the register ring (--steps → live Scrubber)",
                         &s.steps);
