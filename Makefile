@@ -150,6 +150,7 @@ help:
 	@echo '  desktop-setup   one command: install every host dep, then build both binaries'
 	@echo '  desktop-setup-render  the same for the viewer alone (app backends, no engines)'
 	@echo '  desktop         build build/asmtest-desktop (full app; links the engines, GPL-2.0 whole)'
+	@echo '                  parallel by default (DESKTOP_JOBS, defaults to nproc; lower it on a memory-constrained host)'
 	@echo '  desktop-render  build build/asmtest-viewer (render-only; engine-free, permissive)'
 	@echo '  desktop-test    headless null-backend tests (any host with a C++17 compiler; make docker-desktop)'
 	@echo '  desktop-ui-test imgui_test_engine interaction lane: keymap + door/flow tests, JUnit XML (fetches the one test-lane-only non-MIT dep; make docker-desktop runs it)'

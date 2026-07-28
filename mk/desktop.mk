@@ -784,6 +784,14 @@ ifeq ($(strip $(shell pkg-config --exists keystone 2>/dev/null && echo ok \
 DESKTOP_ENGINE_MISSING += libkeystone-dev
 endif
 
+# DESKTOP_JOBS: the app/viewer object trees are ~90 independent C++ TUs (imgui +
+# addons + desktop/src/) with no inter-TU dependency until the final link, so a
+# plain `make desktop` — no -j anywhere in this file — compiles them one at a
+# time. Default to the host's CPU count; override on a memory-constrained host
+# (`make DESKTOP_JOBS=4 desktop`) since the heavier TUs — imgui itself, the node
+# editor, TextEditor, ImPlot — each peak over 1GB RSS under -O2 -g.
+DESKTOP_JOBS ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+
 # Guidance recipe (mirrors mk/cli.mk:100-110): print the apt line + the docker
 # lane, then fail — so a bare host never sees a raw header/link error.
 define DESKTOP_GUIDE
@@ -856,15 +864,24 @@ $(BUILD)/asmtest-viewer: $(DESKTOP_RENDER_OBJ)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(GLFW_LIBS) $(GL_LIBS) $(FREETYPE_LIBS) -o $@
 	@echo "built $@ — the render-only viewer (engine-free; permissively distributable)"
 
+# Both recipes recurse through a sub-$(MAKE) -j$(DESKTOP_JOBS) rather than
+# listing the binary as a plain prerequisite: a bare `desktop: $(BUILD)/asmtest-
+# desktop` would build that prerequisite under whatever -j (or none) the
+# invoking `make desktop` itself was given, so a plain `make desktop` would stay
+# single-threaded. The sub-make is cheap to re-run when already up to date (the
+# same tradeoff desktop-setup's sub-make above makes), and DESKTOP_JOBS is still
+# overridable per invocation (`make DESKTOP_JOBS=4 desktop`).
 ifeq ($(strip $(DESKTOP_MISSING)$(DESKTOP_ENGINE_MISSING)),)
-desktop: $(BUILD)/asmtest-desktop
+desktop:
+	$(MAKE) -j$(DESKTOP_JOBS) $(BUILD)/asmtest-desktop
 else
 desktop:
 	$(call DESKTOP_GUIDE,asmtest-desktop (full app),$(DESKTOP_MISSING) $(DESKTOP_ENGINE_MISSING))
 endif
 
 ifeq ($(strip $(DESKTOP_MISSING)),)
-desktop-render: $(BUILD)/asmtest-viewer
+desktop-render:
+	$(MAKE) -j$(DESKTOP_JOBS) $(BUILD)/asmtest-viewer
 else
 desktop-render:
 	$(call DESKTOP_GUIDE,asmtest-viewer (render-only),$(DESKTOP_MISSING))

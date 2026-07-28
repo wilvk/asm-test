@@ -22,11 +22,19 @@ ENV DEBIAN_FRONTEND=noninteractive
 # libfreetype-dev: the imgui freetype rasteriser (13-foundation-moves.md F3) —
 # the app + viewer build with DESKTOP_FREETYPE=1 below. The fonts themselves load
 # via stb_truetype and need none of this; freetype is the higher-quality path.
+# ccache: the CMD below runs FOUR separate `make` trees in this one container
+# (desktop, desktop-render, desktop-test, desktop-ui-test) that share most of
+# their addon TUs (ImPlot/node-editor/TextEditor/etc. compile with identical
+# flags in every tree — see mk/desktop.mk's per-tree addon rules) — so the
+# second and third tree hit cache instead of recompiling them from scratch.
+# Debian's ccache package puts compiler-name symlinks under /usr/lib/ccache, so
+# prepending it to PATH is enough; no CC/CXX change needed in the Makefile.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       libglfw3-dev libgl1-mesa-dev libgl1-mesa-dri libegl1-mesa-dev \
-      libfreetype-dev \
+      libfreetype-dev ccache \
  && rm -rf /var/lib/apt/lists/*
+ENV PATH=/usr/lib/ccache:$PATH
 # Force software rendering for the headless GL smoke (no GPU in CI).
 ENV LIBGL_ALWAYS_SOFTWARE=1
 COPY . .
