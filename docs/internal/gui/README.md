@@ -175,6 +175,37 @@ before doc 23 T1 (honesty tiers)**, and doc 23 T1's `severity` field is a schema
 change that must coordinate with doc 01's Phase-3 freeze (D5). Nothing here
 removes a truth — the honesty chrome is *restructured* (F5), never removed.
 
+### Extension family (docs 27–33) — unblocking the deferred views
+
+The ~30 DEFERRED / BLOCKED / REFUSED markers across docs 01–26 and the plan's
+Honest-limits / Killed-in-grounding lists collapse onto **six root
+prerequisites** — one engine or schema change apiece, each fanning out to
+several stuck views. [27-extension-roadmap.md](27-extension-roadmap.md) is the
+family overview (mapping + dependency graph + sequencing, like doc 11 for its
+addon family); docs 28–33 are the full per-root briefs. Authored 2026-07-28
+against HEAD `da566c9`; **not yet implemented** (planning). Excludes what already
+shipped (live `regstate` doc 26, `severity` doc 23, offline scrubber doc 09).
+
+| Doc | Root | Prerequisite | Tasks | Depends on | Status |
+|---|---|---|---|---|---|
+| [27-extension-roadmap.md](27-extension-roadmap.md) | — | family overview + dependency graph (**not a brief**) | — | 01–26 (survey) | overview |
+| [28-schema-freeze-completion.md](28-schema-freeze-completion.md) | R1 | `code` header (routine hash), footer `steps_total`, serialize `wide[]` | 3 | 01 (**Phase-3 freeze, D5**) | ☐ 0/3 |
+| [29-mem-address-stream.md](29-mem-address-stream.md) | R2 | the reserved `mem` kind — no producer today | 3 | 01; 10 (consumer, inert-ready) | ☐ 0/3 |
+| [30-resume-from-state-and-reweave.md](30-resume-from-state-and-reweave.md) | R3 | route the value producer through `emu_snapshot`/`emu_restore` | 4 | 05 (forks); 28 T1 (for T4) | ☐ 0/4 |
+| [31-wide-register-deck.md](31-wide-register-deck.md) | R4 | `fpenv` kind + XMM/YMM/MXCSR capture + SSE-class args | 3 | 28 T3 (`wide[]` format); 01/D5 | ☐ 0/3 |
+| [32-per-guest-value-producer.md](32-per-guest-value-producer.md) | R5 | arch-parameterize `dataflow_emu.c` (arm64 first) | 3 | independent axis; demand-gated | ☐ 0/3 |
+| [33-backward-attribution-producers.md](33-backward-attribution-producers.md) | R6 | the reserved `blame` + `statediff` kinds | 2 | 28 T1 (statediff pairing); 05 (L1 edges) | ☐ 0/2 |
+
+18 tasks across docs 28–33. Suggested order (per the roadmap): **R1 first**
+(cheapest, no new engine, prerequisite for R4/R6, closes 04/05 honesty gaps —
+land it through the Phase-3 freeze), then **R2 and R6 in parallel** (new
+producers over an existing recording; R6's `statediff` waits on R1 T1), then
+**R4** (reuses R1's `wide[]` format), then **R3** (the headline — it is what "not
+a day-one feature" gates — largest, lower urgency), with **R5** an independent
+demand-gated arch axis. The plan's permanent Honest-limits (exact-only fabric, no
+cross-thread hops, forks-never-touch-live, statistical-absence-proves-nothing)
+are out of scope by design — a brief there would fight the design.
+
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
 09 (09-T1 — the emulator ring — is engine-only and can start any time).
