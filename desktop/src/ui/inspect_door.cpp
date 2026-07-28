@@ -112,6 +112,11 @@ bool inspect_request_start(InspectState &s) {
 // fired honest about what it sends.
 nlohmann::json inspect_start_params(const InspectState &s) {
     nlohmann::json params = nlohmann::json::object();
+    // The register ring (--steps, doc 26): the dataflow single-step engines
+    // (dataflow + auto) can carry a per-step register file so the live Scrubber
+    // time-travels. trace / whole-process modes have no such ring.
+    if ((s.want == LiveMode::Dataflow || s.want == LiveMode::Auto) && s.steps)
+        params["steps"] = true;
     if (!mode_needs_region(s.want))
         return params;
     std::string spec(s.region);
@@ -123,6 +128,22 @@ nlohmann::json inspect_start_params(const InspectState &s) {
         params["func"] = spec;
     }
     return params;
+}
+
+void inspect_attach_full_detail(InspectState &s, long pid) {
+    s.selected_pid = pid;
+    // `auto` is the fullest detail an UN-NAMED target admits: it samples to pick
+    // the hottest function and data-flows it. Arm the register ring too, so the
+    // Scrubber lights. Pin want_defaulted so the patch bay's least-perturbing
+    // default cannot override the choice on its first draw.
+    s.want = LiveMode::Auto;
+    s.want_defaulted = true;
+    s.steps = true;
+    s.want_open_capture = true; // the confirm / status / views land in that pane
+    if (s.host_started)
+        inspect_request_start(s); // arms the perturb confirm for the single-step
+    else
+        s.want_open_connect = true; // no host yet — reveal Connect first
 }
 
 void inspect_confirm_perturb(InspectState &s) {
@@ -333,6 +354,15 @@ void draw_patch_bay(InspectState &s) {
             mode_name(s.want));
     }
     const bool has_region = !needs_region || s.region[0] != '\0';
+
+    // The register ring (--steps, doc 26): the dataflow single-step engines
+    // (dataflow + auto) can carry a per-step register file so the live Scrubber
+    // time-travels. Off by default (it is extra, perturbing capture); the
+    // full-detail attach (double-click a process) arms it.
+    if (s.want == LiveMode::Dataflow || s.want == LiveMode::Auto) {
+        ImGui::Checkbox("record the register ring (--steps → live Scrubber)",
+                        &s.steps);
+    }
 
     // The Queue path (23 T3): a queued want starts the MOMENT the jack frees —
     // never an auto-swap, because budget_queue_ready is true only when the jack is
@@ -696,6 +726,8 @@ void draw_processes_pane(InspectState &s) {
     for (const ProcRow &r : s.rows)
         hay.push_back(std::to_string(r.pid) + " " + r.comm + " " + r.cmdline);
     std::string q = dt_filter_bar(s.proc_filter, hay, "filter");
+    ImGui::TextDisabled("double-click a row to attach & trace at full detail; "
+                        "right-click for more.");
 
     if (ImGui::BeginTable("procs", 4,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -715,8 +747,35 @@ void draw_processes_pane(InspectState &s) {
             char lbl[64];
             std::snprintf(lbl, sizeof lbl, "%ld##p%ld", r.pid, r.pid);
             if (ImGui::Selectable(lbl, s.selected_pid == r.pid,
-                                  ImGuiSelectableFlags_SpanAllColumns))
+                                  ImGuiSelectableFlags_SpanAllColumns |
+                                      ImGuiSelectableFlags_AllowDoubleClick)) {
                 s.selected_pid = r.pid;
+                // Double-click = attach & trace at FULL detail (auto + the register
+                // ring); a single click only selects the target.
+                if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
+                    inspect_attach_full_detail(s, r.pid);
+            }
+            // Right-click the row: attach at full detail, trace a named function,
+            // or reveal the Connect pane. BeginPopupContextItem() with no id binds
+            // to the row's Selectable above (its ##p<pid> makes each row unique).
+            if (ImGui::BeginPopupContextItem()) {
+                ImGui::TextDisabled("pid %ld — %s", r.pid, r.comm.c_str());
+                ImGui::Separator();
+                if (ImGui::MenuItem("Attach & trace (full detail)"))
+                    inspect_attach_full_detail(s, r.pid);
+                if (ImGui::MenuItem("Trace a function… (dataflow)")) {
+                    s.selected_pid = r.pid;
+                    s.want = LiveMode::Dataflow;
+                    s.want_defaulted = true;
+                    s.want_open_capture = true; // name the region in Live capture
+                    if (!s.host_started)
+                        s.want_open_connect = true;
+                }
+                ImGui::Separator();
+                if (ImGui::MenuItem("Open Connect pane"))
+                    s.want_open_connect = true;
+                ImGui::EndPopup();
+            }
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(r.comm.c_str());
             ImGui::TableNextColumn();
@@ -764,6 +823,10 @@ void draw_inspect_door(InspectState &s) {
     draw_processes_pane(s);
     ImGui::SeparatorText("Live capture");
     draw_capture_pane(s);
+    // The cross-pane reveal requests are docked-shell only — here all three are
+    // already in the one Inspect tab, so consume (clear) them without action.
+    s.want_open_connect = false;
+    s.want_open_capture = false;
 }
 
 } // namespace asmdesk

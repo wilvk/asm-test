@@ -1872,6 +1872,20 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     // three; each pane opens on demand, closes (X), undocks, and is in View ▸
     // Panels. `show_inspect` stays the windowed shell's tab flag.
     s.inspect.session.poll();
+    // Cross-pane reveal requests from the Processes pane's row actions (a double-
+    // click / right-click with no host, or "Open Connect pane"): the door raises a
+    // flag; the docked shell reveals the pane so the target's confirm/status is
+    // visible even if the user had closed it.
+    if (s.inspect.want_open_connect) {
+        s.inspect.want_open_connect = false;
+        s.show_inspect = true;
+        s.pane_open[kPaneConnect] = true;
+    }
+    if (s.inspect.want_open_capture) {
+        s.inspect.want_open_capture = false;
+        s.show_inspect = true;
+        s.pane_open[kPaneCapture] = true;
+    }
     if (pane_shown(s, kPaneConnect)) {
         bool open = true;
         if (ImGui::Begin(kPaneConnect, &open))

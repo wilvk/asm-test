@@ -1110,6 +1110,43 @@ int main() {
         check("cap/trace func",
               f.value("func", std::string()) == "hotfn" && !f.contains("base"),
               "trace + a name -> {func:\"hotfn\"}");
+
+        // The register ring (--steps): armed only for the dataflow single-step
+        // engines (dataflow / auto); a whole-process mode ignores it.
+        is.want = LiveMode::Auto;
+        is.steps = true;
+        check("cap/auto steps", inspect_start_params(is).value("steps", false),
+              "auto + steps -> {steps:true} (the live Scrubber's register ring)");
+        is.want = LiveMode::Log;
+        check("cap/log ignores steps", inspect_start_params(is).empty(),
+              "a whole-process mode carries no register ring, steps or not");
+    }
+
+    // --- Processes double-click / right-click: the "full detail" attach. It
+    // captures at the fullest an un-named target admits (auto + register ring) and
+    // reveals the right pane, arming the perturb confirm only once a host is up.
+    {
+        InspectState at;
+        inspect_attach_full_detail(at, 4242);
+        check("attach/pid", at.selected_pid == 4242,
+              "the attach must select the double-clicked pid");
+        check("attach/mode-auto", at.want == LiveMode::Auto,
+              "full-detail attach uses auto — the fullest un-named capture");
+        check("attach/ring", at.steps,
+              "full-detail attach arms the register ring (--steps)");
+        check("attach/no-host reveals panes",
+              at.want_open_connect && at.want_open_capture,
+              "with no host, attach reveals the Connect + Live-capture panes");
+        check("attach/no-host does not start", !at.perturb_pending,
+              "with no host there is nothing to arm yet");
+
+        InspectState ah;
+        ah.host_started = true;
+        inspect_attach_full_detail(ah, 7);
+        check("attach/host arms confirm",
+              ah.perturb_pending && ah.want == LiveMode::Auto,
+              "with a host, full-detail attach arms the perturb confirm for the "
+              "single-step (it does not silently start)");
     }
 
     if (failures) {

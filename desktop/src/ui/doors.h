@@ -143,6 +143,19 @@ struct InspectState {
     // whole-process modes and `auto` (which finds its own region).
     char region[256] = {0};
 
+    // The per-step register RING (--steps, doc 26): armed for the dataflow single-
+    // step engines (dataflow / auto) so the live Scrubber time-travels registers.
+    // Set by the "full detail" attach (double-click / right-click) and a capture-
+    // pane checkbox; sent as `steps:true` in the start params.
+    bool steps = false;
+
+    // Cross-pane requests from the Processes pane's row actions (double-click /
+    // right-click): the door cannot reach ShellState, so it raises a flag the
+    // docked shell consumes to reveal the Connect / Live-capture pane. No-ops in
+    // the single-window shell, where all three are already in the Inspect tab.
+    bool want_open_connect = false;
+    bool want_open_capture = false;
+
     // What the client believes is live on this target, for the patch bay. The
     // serve loop refuses a second concurrent start too, but the budget is
     // decided HERE so the UI can render an occupied jack and offer a swap
@@ -240,9 +253,18 @@ void inspect_confirm_perturb(InspectState &s);
 void inspect_confirm_swap(InspectState &s);
 
 // The serve `start` params for the current want: a scoped region (func name or
-// base+len, parse_region_spec) for trace/dataflow, empty for the whole-process
-// modes and for `auto`. Pure over InspectState; test_inspect drives it.
+// base+len, parse_region_spec) for trace/dataflow, plus `steps:true` when the
+// register ring is armed on a dataflow/auto capture; empty for the whole-process
+// modes. Pure over InspectState; test_shell drives it.
 nlohmann::json inspect_start_params(const InspectState &s);
+
+// The "full detail" attach (a Processes-pane double-click, or the right-click
+// "Attach & trace"): capture `pid` at the fullest detail an un-named target
+// allows — `auto` picks the hottest region and data-flows it, with the register
+// ring armed, so the Loom / Slice / 3D / Scrubber all light. With a host up this
+// arms the capture (the perturb confirm still gates the first single-step); with
+// no host it selects the target and asks the shell to reveal the Connect pane.
+void inspect_attach_full_detail(InspectState &s, long pid);
 
 // The Inspect / live-capture workflow, split into three dockable panes (the
 // docked shell Begins each in its own window; draw_inspect_door stacks all three
