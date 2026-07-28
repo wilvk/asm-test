@@ -76,6 +76,18 @@ static size_t nonzero(const Terrain &t) {
     return n;
 }
 
+// 36 T3 regression bar: STEPS WITHOUT CELLS MUST BE EXPLAINED. A terrain with a
+// real time axis (nsteps > 0) but no placed code cells must carry a stated reason
+// — basis_error (mixed bases) or anchor_error (no resolvable span) — never a
+// silent flat plane over real steps.
+static void steps_explained(const std::string &what, const TerrainModel &m) {
+    if (m.nsteps > 0 && m.code.empty())
+        check(what + ": steps without cells are explained",
+              !m.basis_error.empty() || !m.anchor_error.empty(),
+              "nsteps=" + std::to_string(m.nsteps) +
+                  " but no cells and no stated reason");
+}
+
 // -------------------------------------------------------------------------
 // The addresses the fixtures use, named for readability.
 static const uint64_t A0 = 0x400000; // region 1, hit twice
@@ -210,6 +222,7 @@ int main() {
                 any_flag = true;
         check("coarse/no-torn-when-clean", !any_flag,
               "a complete recording's coarse plane carries no TORN flag");
+        steps_explained("A", m);
     }
 
     // === Fixture B: a truncated recording sets TORN =======================
@@ -242,6 +255,7 @@ int main() {
                   " populated=" + std::to_string(populated));
         check("a torn terrain still has height", populated > 0,
               "truncation floors the heights, it does not erase them");
+        steps_explained("B", m);
     }
 
     // === Fixture C: survey-only — a STAT layer, an EMPTY exact layer =======
@@ -290,6 +304,7 @@ int main() {
         for (uint32_t f : full.flags)
             check("no STAT bit ever leaks onto the exact terrain",
                   (f & TF_STAT) == 0u, "statistical flag on the exact layer");
+        steps_explained("C", m);
     }
 
     // === Fixture D: the rich `mem` rung, behind the runtime gate ===========
@@ -346,6 +361,7 @@ int main() {
                   (t0.flags[cD0] & TF_WRITE) && !(t0.flags[cD0] & TF_READ) &&
                   t0.height[cD1] == 0.0f,
               "the mem playhead at 0 is wrong");
+        steps_explained("D", m);
     }
 
     // === Fixture E: JIT churn — a version change within [0,t] sets CHURN ====
@@ -384,6 +400,7 @@ int main() {
               "the version changed within [0,3] and the cells must say so");
         check("churn is set on the full slice", churn_cells(m.full()) > 0,
               "the whole recording churned");
+        steps_explained("E", m);
     }
 
     // === Fixture F: mixed bases — the exact terrain refuses ================
@@ -403,6 +420,126 @@ int main() {
               "a stream mixing rel and abs cannot be placed on one plane");
         check("a refused terrain is flat, not wrong", nonzero(m.full()) == 0,
               "no density may be drawn over an unresolvable basis");
+        steps_explained("F", m);
+    }
+
+    // === Fixture G / G2: the df_step height rung (36 T3) ===================
+    // A live serve dataflow/auto capture: one codeimage span + df_step offsets,
+    // NO trace. The coarse rung is single-step residency, anchored to the span —
+    // and it never claims block coverage (G2).
+    {
+        Recording rec = mk_rec(
+            "{\"asmtrace\":1,\"provenance\":{\"backend\":\"ptrace-dataflow\","
+            "\"exact\":true,\"trust\":\"exact\"},\"arch\":\"x86_64\"}\n"
+            "{\"k\":\"codeimage\",\"base\":4194304,\"len\":256,\"version\":0,"
+            "\"when\":1,\"bytes\":\"90\"}\n"
+            "{\"k\":\"df_step\",\"step\":0,\"off\":0}\n"  // base+0  = A0
+            "{\"k\":\"df_step\",\"step\":1,\"off\":16}\n" // base+16 = A1
+            "{\"k\":\"df_step\",\"step\":2,\"off\":0}\n"  // base+0  = A0 again
+            "{\"k\":\"end\",\"events\":4,\"truncated\":false,"
+            "\"drops\":{\"lost\":0,\"throttled\":false}}\n");
+        Projection p = build_projection(regions_from_codeimage(rec));
+        TerrainModel m = build_terrain(p, rec);
+
+        check("G: df rung sets height_source df_step",
+              m.height_source == "df_step", "got '" + m.height_source + "'");
+        check("G: label is single-step residency, not coverage",
+              m.height_note.find("single-step residency") != std::string::npos &&
+                  m.height_note.find("no block coverage") != std::string::npos,
+              "note: " + m.height_note);
+        check("G: nsteps is the df step count (real time axis)", m.nsteps == 3,
+              "got " + std::to_string(m.nsteps));
+        bool ok = false;
+        uint32_t cA0 = cell_at(p, A0, &ok); // base+0
+        uint32_t cA1 = cell_at(p, A1, &ok); // base+16
+        Terrain full = m.full();
+        check("G: cell at base+0 has two df hits (log1p 2)",
+              near(full.height[cA0], std::log1p(2.0f)),
+              "got " + std::to_string(full.height[cA0]));
+        check("G: cell at base+16 has one df hit (log1p 1)",
+              near(full.height[cA1], std::log1p(1.0f)),
+              "got " + std::to_string(full.height[cA1]));
+        check("G: exactly two non-zero df cells", nonzero(full) == 2,
+              "got " + std::to_string(nonzero(full)));
+        Terrain t0 = m.slice(0);
+        check("G: slice(0) shows only the first hit",
+              near(t0.height[cA0], std::log1p(1.0f)) && t0.height[cA1] == 0.0f,
+              "the df playhead at 0 must show one hit at base+0 only");
+
+        // G2: a df height NEVER claims block coverage.
+        for (uint32_t f : full.flags)
+            check("G2: a df height carries no STAT bit (exact, not sampled)",
+                  (f & TF_STAT) == 0u, "df residency flagged statistical");
+        check("G2: no separate statistical layer", !m.has_stat, "has_stat set");
+        check("G2: no data cells synthesized", m.data.empty(), "data not empty");
+        steps_explained("G", m);
+    }
+
+    // === Fixture H: two codeimage spans ⇒ no cells, anchor_error, real nsteps =
+    // A flat plane that SAYS WHY (distinct from the mixed-basis basis_error).
+    {
+        Recording rec = mk_rec(
+            "{\"asmtrace\":1,\"provenance\":{\"backend\":\"ptrace-dataflow\","
+            "\"exact\":true,\"trust\":\"exact\"},\"arch\":\"x86_64\"}\n"
+            "{\"k\":\"codeimage\",\"base\":4194304,\"len\":256,\"version\":0,"
+            "\"when\":1,\"bytes\":\"90\"}\n"
+            "{\"k\":\"codeimage\",\"base\":5242880,\"len\":256,\"version\":0,"
+            "\"when\":1,\"bytes\":\"90\"}\n"
+            "{\"k\":\"df_step\",\"step\":0,\"off\":0}\n"
+            "{\"k\":\"df_step\",\"step\":1,\"off\":16}\n"
+            "{\"k\":\"end\",\"events\":4,\"truncated\":false,"
+            "\"drops\":{\"lost\":0,\"throttled\":false}}\n");
+        Projection p = build_projection(regions_from_codeimage(rec));
+        TerrainModel m = build_terrain(p, rec);
+        check("H: two spans ⇒ no code cells placed", m.code.empty(),
+              "got " + std::to_string(m.code.size()) + " cells");
+        check("H: anchor_error is set (says why)", !m.anchor_error.empty(),
+              "no anchor_error on an ambiguous df recording");
+        check("H: anchor_error names both bases",
+              m.anchor_error.find("0x400000") != std::string::npos &&
+                  m.anchor_error.find("0x500000") != std::string::npos,
+              "anchor_error: " + m.anchor_error);
+        check("H: NOT basis_error (that is reserved for mixed bases)",
+              m.basis_error.empty(), "basis_error misused for ambiguity");
+        check("H: nsteps is still real (the time axis survives)", m.nsteps == 2,
+              "got " + std::to_string(m.nsteps));
+        check("H: the plane is flat", nonzero(m.full()) == 0,
+              "cells placed against an unresolvable anchor");
+        steps_explained("H", m);
+    }
+
+    // === Fixture I: a rel-basis `trace` anchors to its single span (36 T3) ==
+    {
+        Recording rec = mk_rec(
+            "{\"asmtrace\":1,\"provenance\":{\"backend\":\"ptrace-region\","
+            "\"exact\":true,\"trust\":\"exact\"},\"arch\":\"x86_64\"}\n"
+            "{\"k\":\"codeimage\",\"base\":4194304,\"len\":256,\"version\":0,"
+            "\"when\":1,\"bytes\":\"90\"}\n"
+            "{\"k\":\"trace\",\"basis\":\"rel\",\"off\":0}\n"  // base+0
+            "{\"k\":\"trace\",\"basis\":\"rel\",\"off\":16}\n" // base+16
+            "{\"k\":\"trace\",\"basis\":\"rel\",\"off\":0}\n"  // base+0
+            "{\"k\":\"end\",\"events\":4,\"truncated\":false,"
+            "\"drops\":{\"lost\":0,\"throttled\":false}}\n");
+        Projection p = build_projection(regions_from_codeimage(rec));
+        TerrainModel m = build_terrain(p, rec);
+        check("I: rel trace basis recorded", m.basis == "rel", m.basis);
+        check("I: rel trace with one span places cells (no anchor_error)",
+              m.anchor_error.empty(), "anchor_error: " + m.anchor_error);
+        check("I: height_source is trace", m.height_source == "trace",
+              "got '" + m.height_source + "'");
+        bool ok = false;
+        uint32_t cA0 = cell_at(p, A0, &ok);
+        uint32_t cA1 = cell_at(p, A1, &ok);
+        Terrain full = m.full();
+        check("I: cell at base+0 has two hits",
+              near(full.height[cA0], std::log1p(2.0f)),
+              "got " + std::to_string(full.height[cA0]));
+        check("I: cell at base+16 has one hit",
+              near(full.height[cA1], std::log1p(1.0f)),
+              "got " + std::to_string(full.height[cA1]));
+        check("I: exactly two non-zero cells (anchored rel trace)",
+              nonzero(full) == 2, "got " + std::to_string(nonzero(full)));
+        steps_explained("I", m);
     }
 
     if (failures) {

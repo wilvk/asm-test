@@ -21,6 +21,14 @@
 //   - COARSE IS NEVER A SILENT ZERO. Absent the Wave-1 `mem` stream the data
 //     cells stay flat, and `mem_note` carries a provenance chip that says so —
 //     the flat plane is labelled coarse, not presented as measured emptiness.
+//   - A DF HEIGHT IS NOT BLOCK COVERAGE (36 T3). When the coarse rung is fed by
+//     the single-step residency stream (`df_step`, a live dataflow/auto capture
+//     that carries no `trace`), `height_source` says "df_step" and `height_note`
+//     labels it single-step residency, NOT block coverage — it fills no `blocks`,
+//     marks nothing covered, and flags nothing TF_STAT (the stream is exact, not
+//     sampled). A rel path with no resolvable codeimage span places no cells and
+//     sets `anchor_error` — a flat plane that SAYS WHY, distinct from the
+//     mixed-basis refusal `basis_error` carries.
 #ifndef ASMDESK_SPACE_TERRAIN_H
 #define ASMDESK_SPACE_TERRAIN_H
 
@@ -59,6 +67,12 @@ struct TerrainModel {
     std::string basis_error; // non-empty => the EXACT terrain is refused (mixed
                              // bases); slice() returns a flat plane and the HUD
                              // shows this rather than a mis-placed density
+    // 36 T3: which stream fed the height field, and its provenance.
+    std::string height_source; // "trace" | "df_step" | "" (nothing placed)
+    std::string height_note;   // labels a df_step rung as single-step residency
+    std::string anchor_error;  // non-empty => a rel path had no resolvable
+                               // codeimage span: no cells, but nsteps is real.
+                               // DISTINCT from basis_error (which is mixed bases)
     bool torn = false; // the recording is truncated/torn or dropped events
     bool mem_present = false; // the rich rung's `mem` stream fed the data cells
     std::string mem_note; // "coarse: no per-access memory stream" when absent

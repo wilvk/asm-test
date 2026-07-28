@@ -143,6 +143,27 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
         return m;
     }
 
+    // 36 T3: anchor a rel trace's offsets onto the absolute plane — the SAME
+    // derivation the trajectory uses (resolve_anchor over the very region vector
+    // the projection was built from). For an "abs" basis the placement is the
+    // identity, so every existing fixture and both scene goldens are unchanged.
+    // A rel trace with no resolvable span places NO cells (an unanchored offset
+    // has no true plane cell) but its time axis is still real (nsteps below); set
+    // anchor_error — never basis_error, which is reserved for MIXED bases.
+    Anchor anchor = resolve_anchor(proj.regions);
+    const bool rel = (m.basis == "rel");
+    if (rel && !anchor.ok)
+        m.anchor_error = anchor.reason;
+    auto place_off = [&](uint64_t off, bool *ok) -> uint64_t {
+        if (!rel) {
+            *ok = true;
+            return off; // abs: the offset IS the absolute address
+        }
+        uint64_t abs = 0;
+        *ok = anchor.ok && anchor.place(off, &abs);
+        return abs;
+    };
+
     // The coarse height source, straight from the canvas (NOT recomputed here):
     // a cell's full heat is the SUM of the canvas per-offset execution counts of
     // the offsets that project into it. The ordered insn stream below is the same
@@ -151,8 +172,12 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
     // this canvas-sourced heat (pinned in test_terrain.cpp).
     std::map<uint32_t, uint32_t> full_heat_by_cell;
     for (const dt_canvas_row &r : canvas.rows) {
+        bool aok = false;
+        uint64_t addr = place_off(r.off, &aok); // 36 T3: anchor a rel offset
+        if (!aok)
+            continue;
         bool ok = false;
-        uint32_t c = cell_of(proj, m.w, m.h, r.off, &ok);
+        uint32_t c = cell_of(proj, m.w, m.h, addr, &ok);
         if (ok)
             full_heat_by_cell[c] += r.heat;
     }
@@ -162,6 +187,13 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
     // precede each version increase. churn_step[base] is the count before the
     // FIRST bump of that base, so a slice t (inclusive) shows CHURN over the base
     // once t >= churn_step[base].
+    //
+    // 36 T3 / 37: this seq-merge with a step counter is the RIGHT SHAPE for a
+    // sound "region as-of this step" resolver, but is unusable for a df recording
+    // today — it counts only `trace` offsets (a df recording has none, so its
+    // churn pins at step 0), retains only the FIRST bump per base, and never walks
+    // df_step. Reuse it once 37 tags df_step with its region on the wire; until
+    // then the df rung below carries no churn.
     struct SE {
         uint64_t seq;
         const Event *ev;
@@ -210,13 +242,19 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
     std::map<uint32_t, std::vector<uint64_t>> cell_steps;
     uint64_t step = 0;
     for (uint64_t off : s.trace.insns) {
-        bool ok = false;
-        uint32_t c = cell_of(proj, m.w, m.h, off, &ok);
-        if (ok)
-            cell_steps[c].push_back(step);
-        step++;
+        bool aok = false;
+        uint64_t addr = place_off(off, &aok); // 36 T3: anchor a rel offset
+        if (aok) {
+            bool ok = false;
+            uint32_t c = cell_of(proj, m.w, m.h, addr, &ok);
+            if (ok)
+                cell_steps[c].push_back(step);
+        }
+        step++; // the STEP is real even when its offset places no cell
     }
     m.nsteps = s.trace.insns.size();
+    if (!cell_steps.empty())
+        m.height_source = "trace";
 
     m.code.reserve(cell_steps.size());
     for (auto &kv : cell_steps) {
@@ -235,6 +273,47 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
                 cc.churn_step = f->second;
         }
         m.code.push_back(std::move(cc));
+    }
+
+    // --- 36 T3: the df_step height rung --------------------------------------
+    // When the trace canvas placed NOTHING (a live serve dataflow/auto session,
+    // or a --dataflow file: df_step only, no `trace`), drive the coarse rung from
+    // the single-step residency stream instead. df_step.off is ROUTINE-RELATIVE
+    // by construction, so it anchors exactly like a rel trace (base+off). This is
+    // single-step residency, NOT block coverage: it fills no `blocks`, marks
+    // nothing covered, and flags nothing TF_STAT — the stream is exact, not
+    // sampled. Per-cell full_heat is the step count, not a canvas heat.
+    if (m.code.empty() && s.df.present()) {
+        m.height_source = "df_step";
+        m.height_note = "coarse: heights from single-step residency (df_step) "
+                        "— no block coverage";
+        if (!anchor.ok && m.anchor_error.empty())
+            m.anchor_error = anchor.reason; // no span to place df offsets against
+        std::map<uint32_t, std::vector<uint64_t>> df_cell_steps;
+        for (uint32_t st = 0; st < s.df.nsteps; ++st) {
+            if (!s.df.has_step(st))
+                continue; // an uncovered step index has an UNKNOWN offset, not 0
+            uint64_t abs = 0;
+            if (!anchor.ok || !anchor.place(s.df.insn_off[st], &abs))
+                continue;
+            bool ok = false;
+            uint32_t c = cell_of(proj, m.w, m.h, abs, &ok);
+            if (ok)
+                df_cell_steps[c].push_back(st);
+        }
+        m.nsteps = s.df.nsteps; // the time axis is the df step count
+        m.code.reserve(df_cell_steps.size());
+        for (auto &kv : df_cell_steps) {
+            TerrainModel::CodeCell cc;
+            cc.cell = kv.first;
+            cc.steps = std::move(kv.second);
+            cc.full_heat = static_cast<uint32_t>(cc.steps.size()); // step count
+            // No churn timing: the churn walk above counts `trace` offsets, and a
+            // df recording carries none. 37 states the region on the wire, which
+            // turns that walk into a sound "region as-of this step" resolver over
+            // df_step — see the churn-walk note above.
+            m.code.push_back(std::move(cc));
+        }
     }
 
     // --- rich rung: per-cell ordered data accesses (gated on `mem`) -----------
