@@ -267,14 +267,23 @@ static size_t op_body(char *b, size_t cap, size_t o, const at_val_rec_t *r,
 }
 
 size_t asmtrace_df_step_body(char *dst, size_t cap, unsigned step, uint64_t off,
-                             const char *disasm, const at_val_rec_t *recs,
-                             size_t n, const uint8_t *wide, size_t wide_len) {
+                             uint64_t rbase, const char *disasm,
+                             const at_val_rec_t *recs, size_t n,
+                             const uint8_t *wide, size_t wide_len) {
     size_t o = 0;
     if (!dst || !cap)
         return 0;
     dst[0] = '\0';
     o = bp(dst, cap, o, "\"step\":%u,\"off\":%llu", step,
            (unsigned long long)off);
+    /* 37: the absolute region base `off` is relative to, immediately after `off`
+     * (the anchor beside the thing it anchors). Emitted ONLY when the producer
+     * knows it; OMITTED — never null, never 0-as-unknown — otherwise, since
+     * address 0 is never a mapped code span, so base==0 means "not known" at the
+     * writer. `off` is region-relative by definition; an absolute-offset producer
+     * (base==0) is out of contract and must not be wired to df_step. */
+    if (rbase)
+        o = bp(dst, cap, o, ",\"rbase\":%llu", (unsigned long long)rbase);
     if (disasm && *disasm) {
         char esc[512];
         asmtrace_escape(esc, sizeof esc, disasm);

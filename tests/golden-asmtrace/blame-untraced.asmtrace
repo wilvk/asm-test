@@ -2,7 +2,7 @@
 {"k":"note","text":"identity (--blame)(7) under the deterministic emulator L0 producer"}
 {"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov rax, rdi"}
 {"k":"trace","basis":"rel","kind":"insn","off":3,"disasm":"ret"}
-{"k":"df_step","step":0,"off":0,"disasm":"mov rax, rdi","ops":[{"space":"reg","reg":39,"size":0,"write":false,"value_valid":true,"value":7},{"space":"reg","reg":35,"size":0,"write":true,"value_valid":true,"value":7}]}
-{"k":"df_step","step":1,"off":3,"disasm":"ret","ops":[{"space":"reg","reg":44,"size":0,"write":false,"value_valid":true,"value":2162680},{"space":"reg","reg":44,"size":0,"write":true,"value_valid":true,"value":2162688},{"space":"abs","reg":0,"base":0,"index":0,"scale":0,"disp":0,"addr":2162680,"size":8,"write":false,"value_valid":true,"value":15728640}]}
+{"k":"df_step","step":0,"off":0,"rbase":1048576,"disasm":"mov rax, rdi","ops":[{"space":"reg","reg":39,"size":0,"write":false,"value_valid":true,"value":7},{"space":"reg","reg":35,"size":0,"write":true,"value_valid":true,"value":7}]}
+{"k":"df_step","step":1,"off":3,"rbase":1048576,"disasm":"ret","ops":[{"space":"reg","reg":44,"size":0,"write":false,"value_valid":true,"value":2162680},{"space":"reg","reg":44,"size":0,"write":true,"value_valid":true,"value":2162688},{"space":"abs","reg":0,"base":0,"index":0,"scale":0,"disp":0,"addr":2162680,"size":8,"write":false,"value_valid":true,"value":15728640}]}
 {"k":"blame","step":0,"off":0,"loc":{"space":"reg","reg":35,"size":0,"write":true,"value_valid":true,"value":7},"cone":[{"step":0,"off":0,"kind":"insn"}],"born_untraced":true}
 {"k":"end","events":6,"truncated":false,"drops":{"lost":0,"throttled":false},"steps_total":2}

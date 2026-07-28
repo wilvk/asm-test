@@ -312,6 +312,11 @@ Recording author_recording(const author_result_t &r, int arch,
             ev["k"] = "df_step";
             ev["step"] = (uint32_t)s;
             ev["off"] = vf->insn_off[s];
+            // 37: state the region base on the wire (the same `base` the codeimage
+            // event above carries), so an Author save resolves its span the way
+            // the CLI recorders do rather than diverging. Omitted when base == 0.
+            if (base)
+                ev["rbase"] = base;
             if (s < vf->disasm.size() && !vf->disasm[s].empty())
                 ev["disasm"] = vf->disasm[s];
             nlohmann::json ops = nlohmann::json::array();

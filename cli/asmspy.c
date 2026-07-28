@@ -2330,8 +2330,11 @@ static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
         first = cur;
         while (cur < nrecs && vt->recs[cur].step == s)
             cur++;
+        /* 37: `base` is the scoped region base `off` (pc - base_ip) is relative
+         * to — state it on the wire as `rbase` so a reader resolves the span
+         * instead of deriving it (the auto candidate walk emits several spans). */
         asmtrace_df_step_body(body, sizeof body, (unsigned)s, vt->insn_off[s],
-                              dis, &vt->recs[first], cur - first, vt->wide,
+                              base, dis, &vt->recs[first], cur - first, vt->wide,
                               vt->wide_len);
         rec_emit(r, "df_step", body);
         /* 26 T2: when the register ring is armed, one `regstate` per step, right

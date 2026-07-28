@@ -256,8 +256,10 @@ when unresolved.
 ### `df_step` — one executed step's operand values (L0)
 
 ```json
-{"k":"df_step","step":0,"off":0,"disasm":"mov eax, edi","ops":[{"space":"reg","reg":35,"size":4,"write":false,"value_valid":true,"value":40}]}
+{"k":"df_step","step":0,"off":0,"rbase":1048576,"disasm":"mov eax, edi","ops":[{"space":"reg","reg":35,"size":4,"write":false,"value_valid":true,"value":40}]}
 ```
+
+Field order: `step`, `off`, `rbase?`, `disasm?`, `ops`.
 
 Operand objects mirror [`at_val_rec_t`](../../../include/asmtest_valtrace.h#L61)
 with the enum rendered as a token: `space` is `"reg"` (`AT_LOC_REG`) \| `"abs"`
@@ -273,16 +275,34 @@ side buffer (bounded, ≤ 64 bytes). `bytes` is **omitted** when the producer ha
 no side buffer or the value was not captured, and a reader then degrades to a
 `[wide]` placeholder — the bytes are never invented.
 
-**`off` is region-relative, and carries no `basis`** (doc-only clarification,
-[36](36-anchor-the-3d-plane.md) T4, 2026-07-29 — the wire is unchanged). Unlike
-`trace`, a `df_step` states no `basis` field: `off` is **always** an offset from
-the session's scoped region base (`pc - base_ip`,
-[dataflow_ptrace.c](../../../src/dataflow_ptrace.c)), by definition. A consumer
-that needs the absolute address anchors it to the recording's `codeimage` span
-(`base + off`); with exactly one code span that derivation is exact, and with
-zero or ≥2 it is unrecoverable from a bare offset (which
-[37](37-region-tag-on-df-step.md) resolves by stating the region on the wire as
-an optional `rbase`). An absolute-offset producer would be out of this contract.
+**`off` is region-relative, and carries no `basis`.** Unlike `trace`, a `df_step`
+states no `basis` field: `off` is **always** an offset from the session's scoped
+region base (`pc - base_ip`,
+[dataflow_ptrace.c](../../../src/dataflow_ptrace.c)), by definition. An
+absolute-offset producer is **out of this contract** and must not be wired to
+`df_step`.
+
+**`rbase` — the region base `off` is relative to** ([37](37-region-tag-on-df-step.md),
+2026-07-29). An optional u64 giving the absolute base address of the code span
+`off` is an offset within, so a reader resolves the step's PC as `rbase + off` and
+its span as the `codeimage` whose `base == rbase` — no wire-order inference, no
+single-span requirement. It is **omitted entirely — never `null`, never
+0-as-unknown** — when the producer does not know a base (address 0 is never a
+mapped code span, so `base == 0` means "not known"). Resolution rule (normative):
+(1) **with `rbase`**, the PC is `rbase + off` and the span is the matching
+`codeimage`; (2) **without `rbase`**, [36](36-anchor-the-3d-plane.md)'s single-span
+anchor is the documented **permanent fallback** — exactly one `codeimage` code span
+⇒ `base + off`, zero or ≥2 ⇒ refuse with the stated reason; (3) a reader **never**
+guesses `rbase` from wire order or the nearest preceding `codeimage` (seq order is
+"steps then image" — the refresh emits `codeimage` *after* its invocation); (4)
+`rbase` present but matching no `codeimage` span ⇒ placement is sound (the producer
+stated the base) but there are no bytes — place it, report "no code image for this
+span"; (5) a per-event `rbase` always wins over the recording-wide anchor, and a
+recording mixing tagged and untagged events resolves each by its own rule.
+Additive optional field on a known kind ⇒ no envelope bump, no break; `rbase` is
+`"region base"`, not the operand `base` register inside `ops[]`, so the two
+substring-scanning readers (the conformance `field()` and `cli_smoke.sh`) do not
+collide.
 
 ### `df_edge` — one last-writer def-use edge (L1)
 
@@ -596,6 +616,13 @@ has to make explicitly rather than inherit.
   T3).** A >8-byte operand now emits its bytes in the `bytes` hex field (see
   `df_step` above) when the producer carries the `wide` side buffer; a reader
   renders the bytes and degrades to `[wide]` only when they are genuinely absent.
+- ~~**`df_step` states no region.**~~ **CLOSED 2026-07-29 (37 T1).** `df_step`
+  now carries an optional `rbase` (see *`df_step`* above): the producer knows the
+  region base as it writes the offset, so it states it, and a reader resolves the
+  span as `rbase + off` instead of deriving it from a single `codeimage` (which a
+  live `auto` candidate walk — several spans — made unrecoverable). 36's
+  single-span anchor remains the permanent fallback for pre-37 recordings and for
+  rel `trace`, which 37 deliberately does not tag. Raised 2026-07-29 by 36.
 
 ## Example
 
@@ -605,8 +632,8 @@ A complete, minimal recording — the reference a reader is tested against
 ```json
 {"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
 {"k":"note","text":"add_signed(40,2) under the deterministic emulator"}
-{"k":"df_step","step":0,"off":0,"disasm":"mov eax, edi","ops":[{"space":"reg","reg":19,"size":4,"write":false,"value_valid":true,"value":40},{"space":"reg","reg":35,"size":4,"write":true,"value_valid":true,"value":40}]}
-{"k":"df_step","step":1,"off":2,"disasm":"add eax, esi","ops":[{"space":"reg","reg":35,"size":4,"write":false,"value_valid":true,"value":40},{"space":"reg","reg":43,"size":4,"write":false,"value_valid":true,"value":2},{"space":"reg","reg":35,"size":4,"write":true,"value_valid":true,"value":42}]}
+{"k":"df_step","step":0,"off":0,"rbase":1048576,"disasm":"mov eax, edi","ops":[{"space":"reg","reg":19,"size":4,"write":false,"value_valid":true,"value":40},{"space":"reg","reg":35,"size":4,"write":true,"value_valid":true,"value":40}]}
+{"k":"df_step","step":1,"off":2,"rbase":1048576,"disasm":"add eax, esi","ops":[{"space":"reg","reg":35,"size":4,"write":false,"value_valid":true,"value":40},{"space":"reg","reg":43,"size":4,"write":false,"value_valid":true,"value":2},{"space":"reg","reg":35,"size":4,"write":true,"value_valid":true,"value":42}]}
 {"k":"df_edge","from":0,"to":1,"loc":{"space":"reg","reg":35,"size":4,"write":false,"value_valid":true,"value":40}}
 {"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov eax, edi"}
 {"k":"trace","basis":"rel","kind":"insn","off":2,"disasm":"add eax, esi"}
@@ -1190,3 +1217,20 @@ silently wrong. The reference mapper is
 [`honesty_severity`](../../../desktop/src/ui/honesty.h) — pure, derivable, and
 pinned against the committed dishonesty fixtures
 ([tests/golden-asmtrace/dishonest/](../../../tests/golden-asmtrace/dishonest/)).
+
+## `df_step` region tag — the `rbase` extension (37)
+
+> **Owned by [37-region-tag-on-df-step.md](37-region-tag-on-df-step.md)** (T1),
+> appended under this file's D5 append-only rule. It **adds one optional field**
+> (`rbase`) to the existing `df_step` kind (see *`df_step`* above for the field,
+> the normative order `step, off, rbase?, disasm?, ops`, the omit-when-unknown
+> rule, and the five-part resolution rule) — **no new kind, no new descriptor, no
+> new envelope major**. A `rbase == 0` (omitted) `df_step` is byte-identical to a
+> pre-37 recording, which is why the append is a break-free additive change under
+> *Ignore unknown fields*, and why 36's single-`codeimage`-span anchor stays the
+> permanent fallback for every untagged recording. **01 owner sign-off: `rbase`
+> adds an optional field to a known kind, stated by the producer that already
+> holds the base, and no reader in the tree rejects it — the pre-37 corpus and the
+> deliberately-untagged hand-authored fixtures remain valid, and the freeze
+> checklist item *"`df_step` states no region"* is closed by it. Recorded
+> 2026-07-29.**

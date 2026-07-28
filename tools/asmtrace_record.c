@@ -538,8 +538,8 @@ static int record_arm64(const char *dir, const char *out, const char *label,
         while (cur < nrecs && vt->recs[cur].step == s)
             cur++;
         asmtrace_df_step_body(body, sizeof body, (unsigned)s, vt->insn_off[s],
-                              dis, &vt->recs[first], cur - first, vt->wide,
-                              vt->wide_len);
+                              REC_CODE_BASE, dis, &vt->recs[first], cur - first,
+                              vt->wide, vt->wide_len);
         asmtrace_emit(&w, "df_step", body);
     }
 
@@ -865,8 +865,8 @@ static int record_bytes_fp(const char *dir, const char *out, const char *label,
         while (cur < nrecs && vt->recs[cur].step == s)
             cur++;
         asmtrace_df_step_body(body, sizeof body, (unsigned)s, vt->insn_off[s],
-                              dis, &vt->recs[first], cur - first, vt->wide,
-                              vt->wide_len);
+                              REC_CODE_BASE, dis, &vt->recs[first], cur - first,
+                              vt->wide, vt->wide_len);
         asmtrace_emit(&w, "df_step", body);
     }
 
@@ -1180,22 +1180,27 @@ static int record_scene_df(const char *dir, const char *out, const char *label,
                    (unsigned long long)REC_CODE_BASE,
                    (unsigned long long)code_len, hexbytes);
 
-    /* df_step: step + REGION-RELATIVE off + disasm (no ops). Field order is the
-     * schema's step, off, disasm? — the same prefix cli_smoke greps and the
-     * anchor case 37 later extends with `rbase`. */
+    /* df_step: step + REGION-RELATIVE off + rbase (37, the region base) + disasm
+     * (no ops). Field order is the schema's step, off, rbase?, disasm? — the
+     * `"step":N,"off":N` prefix cli_smoke greps stays first, and rbase == the
+     * codeimage base so a reader resolves the span from the wire. */
     for (s = 0; s < nsteps; s++) {
         char dis[160] = "";
         unsigned long long off = (unsigned long long)vt->insn_off[s];
+        unsigned long long rbase = (unsigned long long)REC_CODE_BASE;
         if (emu_disas_available())
             emu_disas(EMU_ARCH_X86_64, code, code_len, REC_CODE_BASE,
                       vt->insn_off[s], dis, sizeof dis);
         if (dis[0]) {
             asmtrace_escape(body, sizeof body, dis);
             asmtrace_emitf(&w, "df_step",
-                           "\"step\":%zu,\"off\":%llu,\"disasm\":\"%s\"", s, off,
-                           body);
+                           "\"step\":%zu,\"off\":%llu,\"rbase\":%llu,"
+                           "\"disasm\":\"%s\"",
+                           s, off, rbase, body);
         } else {
-            asmtrace_emitf(&w, "df_step", "\"step\":%zu,\"off\":%llu", s, off);
+            asmtrace_emitf(&w, "df_step",
+                           "\"step\":%zu,\"off\":%llu,\"rbase\":%llu", s, off,
+                           rbase);
         }
     }
 

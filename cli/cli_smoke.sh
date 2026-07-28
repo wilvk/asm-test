@@ -281,6 +281,21 @@ assert isinstance(d["defuse"], list)' \
             || fail "--dataflow --steps: regstate missing field $f"
     done
     echo "  regstate ring: $nreg events, 1:1 with df_step, 18 fields, user_regs desc"
+    # 37 T1: every df_step states its region base `rbase` — the scoped region base
+    # the session captured, identical across that one region and nonzero (0 is
+    # omitted, never emitted). The existing "step":N,"off":N prefix is unchanged
+    # (rbase follows off), so a reader that keyed on it still parses.
+    grep -q '"rbase":' "$dfrec" \
+        || fail "--dataflow --steps: df_step carries no rbase (37 region tag)"
+    grep -q '"step":0,"off":' "$dfrec" \
+        || fail "--dataflow --steps: df_step step/off prefix changed (rbase misplaced)"
+    nrb=$(grep -oE '"rbase":[0-9]+' "$dfrec" | sort -u | wc -l | tr -d ' ')
+    [ "$nrb" = "1" ] \
+        || fail "--dataflow --steps: df_step rbase not identical across the scoped region ($nrb distinct)"
+    rbval=$(grep -oE '"rbase":[0-9]+' "$dfrec" | head -1 | grep -oE '[0-9]+')
+    [ -n "$rbval" ] && [ "$rbval" != "0" ] \
+        || fail "--dataflow --steps: df_step rbase is 0/empty (should be omitted, not 0)"
+    echo "  df_step rbase = $rbval (region base stated on the wire, identical across the region, 37)"
     # negative control: WITHOUT --steps the recording carries NO regstate.
     set +e
     timeout 40 "$ASM" --dataflow "$AVPID" hotfn --record="$dfrec0" \
