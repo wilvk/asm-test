@@ -383,6 +383,31 @@ blame/statediff *views*, which already work live client-side) and **fixed two st
 "`mem` has no producer" comments** (R2/doc 29 landed the live `--mem` producer).
 Authored 2026-07-29. overview · —.
 
+[39-auto-capture-reliability.md](39-auto-capture-reliability.md) — **make `auto`
+reliably capture**, and stop a self-ended session wedging the pane. Cut from
+[38](38-live-feed-completion-roadmap.md) as its first per-gap brief. Two halves
+produce one complaint (*"start and arm, it starts then stops, `refused: no session
+is running`"*). **The headline is host-shaped and backwards:** the portable
+software-clock *residency* picker gets a documented retry walk over up to three
+ranked candidates, while the AMD IBS-Op *entry-arrival* picker — the stronger
+evidence — gets **one candidate and no walk**, because `auto_pick` ranks `nc`
+candidates, reports the count, then returns only `cands[0]`, so the walk's guard
+`attempt + 1 < ncand` sees `ncand == 0` and never fires. On an AMD box the better
+sampler yields the less resilient capture. Second half: nothing reconciles
+`InspectState::active` against a session that ends on its own, so the jack stays
+held, the pane offers only Swap, and Swap's `stop` is refused by a host whose own
+`serve_reap` — which runs at the top of the command loop, before dispatch — just
+cleared the precondition. Adds: a pure candidate-walk decision (killing the
+duplicated inline walk), ranked candidates on the IBS path, empty-window retry plus
+a wire-settable sample window, `continuous` re-arming through a quiet region
+(today `DF_PTRACE_NEVER` breaks the loop regardless of the flag), and the
+session-lifecycle repairs — including passing `inspect_start_params` on the swap and
+queue restarts, which is what makes `continuous` un-settable in practice. **No
+hardware unlock:** every policy change is proven by pure tests in `test_autoregion`
+(no backend link, both `cli-smoke` lanes), because no CI lane has AMD silicon — per
+CLAUDE.md, *"a test that can only ever self-skip is not a test."* Authored
+2026-07-29 against HEAD `0b52704`, measured on the Zen 2 dev box. ☐ 0/6 · *free*.
+
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
 09 (09-T1 — the emulator ring — is engine-only and can start any time).
