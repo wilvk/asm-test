@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <iterator>
 #include <map>
+#include <set>
 #include <utility>
 
 namespace asmdesk {
@@ -208,6 +209,123 @@ std::string dt_diff_dump(const dt_diff &d) {
              "at least one recording is truncated)\n";
     else
         s += "divergence: none — the streams are identical\n";
+    return s;
+}
+
+// --- two-recording state-diff (33 R6 T2) --------------------------------
+
+dt_statediff dt_statediff_build(const Streams &a, const Streams &b) {
+    dt_statediff out;
+
+    // Gate on routine identity FIRST, reusing dt_diff_build's exact refusal
+    // (basis / arch / code_sha) — a wrong-routine pair is refused before any
+    // state is merged, so the merge never compares unrelated code.
+    dt_diff gate;
+    std::string err;
+    if (!dt_diff_build(a, b, gate, err)) {
+        out.err = err;
+        return out;
+    }
+    out.identity_note = gate.identity_note;
+
+    // No statediff on one (or both) sides: the merge cannot run — say so rather
+    // than present an empty comparison as agreement.
+    if (a.statediff.empty() || b.statediff.empty()) {
+        out.note =
+            (a.statediff.empty() && b.statediff.empty())
+                ? "neither recording carries a statediff stream"
+                : (a.statediff.empty() ? "the first recording carries no "
+                                         "statediff stream"
+                                       : "the second recording carries no "
+                                         "statediff stream");
+        return out;
+    }
+
+    out.merged = true;
+
+    // Index each side by absolute step.
+    std::map<uint32_t, const StateDelta *> ma, mb;
+    for (const StateDelta &d : a.statediff)
+        ma[d.step] = &d;
+    for (const StateDelta &d : b.statediff)
+        mb[d.step] = &d;
+
+    // The union of steps, ascending (std::map iterates sorted).
+    std::set<uint32_t> steps;
+    for (const auto &kv : ma)
+        steps.insert(kv.first);
+    for (const auto &kv : mb)
+        steps.insert(kv.first);
+
+    for (uint32_t step : steps) {
+        auto ia = ma.find(step);
+        auto ib = mb.find(step);
+        const StateDelta *da = ia != ma.end() ? ia->second : nullptr;
+        const StateDelta *db = ib != mb.end() ? ib->second : nullptr;
+
+        // Bounded when a step's delta is absent on a side, or was not COMPUTED
+        // (the first held step / an evicted boundary): the comparison there is a
+        // floor, never an equality claim.
+        bool bounded = da == nullptr || db == nullptr ||
+                       !da->computed || !db->computed;
+
+        // Diverging registers: the symmetric difference of the two changed sets,
+        // plus registers changed on both sides but to different values. Only when
+        // both sides have a computed delta can a real divergence be named; a
+        // bounded step contributes its step marker but no false register list.
+        std::vector<std::string> regs;
+        if (da != nullptr && db != nullptr && da->computed && db->computed) {
+            for (const auto &kv : da->changed) {
+                auto jt = db->changed.find(kv.first);
+                if (jt == db->changed.end() || jt->second != kv.second)
+                    regs.push_back(kv.first);
+            }
+            for (const auto &kv : db->changed) {
+                if (da->changed.find(kv.first) == da->changed.end())
+                    regs.push_back(kv.first);
+            }
+            std::sort(regs.begin(), regs.end());
+            regs.erase(std::unique(regs.begin(), regs.end()), regs.end());
+        }
+
+        if (bounded)
+            out.bounded = true;
+        // Record a step only when it says something: a real divergence, or a
+        // bounded step (whose absence of a verdict is itself a fact a view shows).
+        if (!regs.empty() || bounded) {
+            dt_state_step ss;
+            ss.step = step;
+            ss.regs = std::move(regs);
+            ss.bounded = bounded;
+            out.steps.push_back(std::move(ss));
+        }
+    }
+    return out;
+}
+
+std::string dt_statediff_dump(const dt_statediff &d) {
+    std::string s;
+    if (!d.err.empty())
+        return "refused: " + d.err + "\n";
+    s += "identity: " + d.identity_note + "\n";
+    if (!d.merged) {
+        s += "merge: not run — " + d.note + "\n";
+        return s;
+    }
+    s += "merge: " + std::to_string(d.steps.size()) + " step(s)" +
+         (d.bounded ? " (bounded — a step lacked a computed delta on a side)"
+                    : "") +
+         "\n";
+    for (const dt_state_step &ss : d.steps) {
+        s += "  step " + std::to_string(ss.step);
+        if (ss.bounded)
+            s += " [bounded]";
+        for (const std::string &r : ss.regs)
+            s += " " + r;
+        s += "\n";
+    }
+    if (d.steps.empty())
+        s += "  none — the two recordings evolve state identically\n";
     return s;
 }
 

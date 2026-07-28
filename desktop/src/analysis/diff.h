@@ -16,14 +16,13 @@
 //  3. Hot-edge deltas keep their statistical provenance attached and are never
 //     merged into the exact heat delta (schema Provenance rule).
 //
-// ROUTINE IDENTITY IS NOT VERIFIABLE IN v1. The doc that specified this task
-// assumed a code-bytes hash in the recording header; the shipped schema
-// (docs/internal/gui/asmtrace-schema.md, Envelope) has no such field, and the
-// code wins. So the precondition check covers what the format actually carries
-// — arch and address basis — and `identity_note` states plainly that the caller
-// is asserting the two recordings are of the same routine. Silently pretending
-// to have checked would be exactly the false confidence this tree exists to
-// avoid; a header identity field is a Phase-3-freeze item.
+// ROUTINE IDENTITY. The header's `code` object (a SHA-256 of the routine bytes)
+// landed with 28 R1 T1, so the precondition check now REFUSES a pair whose code
+// hashes differ (as it refuses a basis or arch mismatch), and `identity_note`
+// records a matching pair as a finding. When either side omits `code` the note
+// keeps the honest "the caller is asserting the two recordings are of the same
+// routine" caveat — silently pretending to have checked would be exactly the
+// false confidence this tree exists to avoid.
 #ifndef ASMDESK_ANALYSIS_DIFF_H
 #define ASMDESK_ANALYSIS_DIFF_H
 
@@ -91,6 +90,39 @@ bool dt_diff_build(const Streams &a, const Streams &b, dt_diff &out,
 
 // Deterministic one-line-per-fact dump — the golden-test surface.
 std::string dt_diff_dump(const dt_diff &d);
+
+// One step at which two recordings' architectural-state EVOLUTION disagrees
+// (33 R6 T2): the register names whose per-step delta differs between A and B —
+// changed on one side and not the other, or changed to a different value.
+struct dt_state_step {
+    uint32_t step = 0;
+    std::vector<std::string> regs; // diverging register names, sorted
+    // The comparison at this step is a floor, not an equality: at least one side
+    // had no COMPUTED delta here (the first held step, or an evicted boundary),
+    // so agreement past what is listed was never observed.
+    bool bounded = false;
+};
+
+// The two-recording state-diff: the per-step register-evolution comparison built
+// from the two recordings' `statediff` streams, GATED on routine identity — a
+// wrong-routine pair is refused by the SAME code_sha check dt_diff_build applies,
+// before any state is merged (33 R6 T2). This is the exact per-step basis the
+// slice explorer's two-recording merge needs; until statediff exists it refused.
+struct dt_statediff {
+    std::vector<dt_state_step> steps; // steps where A and B diverge (or bounded)
+    std::string err;                  // set => refused pair (identity/basis/arch)
+    std::string identity_note;        // reused from dt_diff_build (the caveat)
+    std::string note;                 // e.g. "neither recording carries statediff"
+    bool bounded = false;             // any compared step lacked a computed delta
+    bool merged = false;              // a merge actually ran (not refused/absent)
+};
+
+// Build the two-recording state-diff. Never throws; a refused pair yields
+// `err` set and `steps` empty, exactly as dt_diff_build does.
+dt_statediff dt_statediff_build(const Streams &a, const Streams &b);
+
+// Deterministic one-line-per-fact dump — the golden-test surface.
+std::string dt_statediff_dump(const dt_statediff &d);
 
 } // namespace asmdesk
 #endif // ASMDESK_ANALYSIS_DIFF_H

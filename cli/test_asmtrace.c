@@ -460,6 +460,85 @@ static void test_mem_body(void) {
           strstr(body, "\"step\":") < strstr(body, "\"space\":"), body);
 }
 
+/* The `blame` backward-attribution body (33 R6 T1): a sink step, an optional loc,
+ * an ascending cone of {step,off,kind} producers, and the born_untraced verdict. */
+static void test_blame_body(void) {
+    char body[512];
+    at_val_rec_t loc;
+    uint32_t cone_steps[3] = {0, 2, 3};
+    uint64_t cone_offs[3] = {0, 4, 6};
+
+    memset(&loc, 0, sizeof loc);
+    loc.kind = AT_LOC_REG;
+    loc.reg = 35; /* eax/rax */
+    loc.is_write = true;
+    loc.size = 4;
+    loc.value_valid = true;
+    loc.value = 6;
+
+    /* A traced cone: three producers, loc present, not born of untraced state. */
+    asmtrace_blame_body(body, sizeof body, 3, 6, &loc, cone_steps, cone_offs, 3,
+                        0);
+    check("blame.body has the sink step + off",
+          strstr(body, "\"step\":3,\"off\":6") == body, body);
+    check("blame.body carries the loc operand",
+          strstr(body, "\"loc\":{\"space\":\"reg\"") != NULL, body);
+    check("blame.body carries the cone entries",
+          strstr(body, "\"cone\":[{\"step\":0,\"off\":0,\"kind\":\"insn\"},"
+                       "{\"step\":2,\"off\":4,\"kind\":\"insn\"},"
+                       "{\"step\":3,\"off\":6,\"kind\":\"insn\"}]") != NULL,
+          body);
+    check("blame.body not born_untraced",
+          strstr(body, "\"born_untraced\":false") != NULL, body);
+
+    /* A value born of untraced state: the sink alone, born_untraced true, and a
+     * non-empty cone (honest, never {}). loc omitted (NULL). */
+    asmtrace_blame_body(body, sizeof body, 0, 0, NULL, cone_steps, cone_offs, 1,
+                        1);
+    check("blame.body untraced omits loc", strstr(body, "\"loc\":") == NULL,
+          body);
+    check("blame.body untraced cone is the sink alone, non-empty",
+          strstr(body, "\"cone\":[{\"step\":0,\"off\":0,\"kind\":\"insn\"}]") !=
+              NULL,
+          body);
+    check("blame.body untraced verdict",
+          strstr(body, "\"born_untraced\":true") != NULL, body);
+}
+
+/* The `statediff` step-to-step delta body (33 R6 T2): the changed register subset
+ * with new values, and the first-held `computed:false` baseline honesty. */
+static void test_statediff_body(void) {
+    char body[512];
+    asmtest_regfile_t prev, cur;
+
+    memset(&prev, 0, sizeof prev);
+    memset(&cur, 0, sizeof cur);
+    prev.rax = 6;
+    prev.rip = 0x1000;
+    cur.rax = 12;     /* changed */
+    cur.rbx = 0;      /* unchanged (both 0) */
+    cur.rip = 0x1003; /* changed */
+
+    /* A real delta: only rax and rip differ, carrying their NEW values, in
+     * descriptor order (rax before rip). */
+    asmtrace_statediff_body(body, sizeof body, 2, &prev, &cur);
+    check_str("statediff.body real delta", body,
+              "\"step\":2,\"changed\":{\"rax\":12,\"rip\":4099},\"computed\":"
+              "true");
+
+    /* The first held step: no known predecessor -> empty delta, computed false.
+     * A full delta here would be a D7 lie ("everything changed"). */
+    asmtrace_statediff_body(body, sizeof body, 0, NULL, &cur);
+    check_str("statediff.body baseline", body,
+              "\"step\":0,\"changed\":{},\"computed\":false");
+
+    /* A step that changed nothing (prev == cur): an honest empty delta, but
+     * computed TRUE (the predecessor IS known). */
+    asmtrace_statediff_body(body, sizeof body, 3, &cur, &cur);
+    check_str("statediff.body no-change", body,
+              "\"step\":3,\"changed\":{},\"computed\":true");
+}
+
 static void test_field_order_fixed(void) {
     char a[600], b[600];
     FILE *fa, *fb;
@@ -794,6 +873,8 @@ int main(void) {
     test_steps_total_footer();
     test_df_step_wide_bytes();
     test_mem_body();
+    test_blame_body();
+    test_statediff_body();
     test_field_order_fixed();
     test_escape_edges();
     test_deterministic_omits_volatile();

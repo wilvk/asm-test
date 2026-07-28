@@ -263,6 +263,47 @@ Streams decode_streams(const Recording &r) {
             }
         }
     }
+
+    // --- blame (backward attribution, 33 R6 T1) --------------------------
+    if (const auto *ev = kind(r, "blame")) {
+        for (const Event &e : *ev) {
+            BlameAttr b;
+            get(e.body, "step", b.step);
+            get(e.body, "off", b.off);
+            get(e.body, "born_untraced", b.born_untraced);
+            auto loc = e.body.find("loc");
+            if (loc != e.body.end() && loc->is_object()) {
+                b.loc = decode_op(*loc);
+                b.has_loc = true;
+            }
+            auto cone = e.body.find("cone");
+            if (cone != e.body.end() && cone->is_array()) {
+                for (const auto &c : *cone) {
+                    uint32_t st = 0;
+                    get(c, "step", st);
+                    b.cone.push_back(st);
+                }
+            }
+            s.blame.push_back(std::move(b));
+        }
+    }
+
+    // --- statediff (step-to-step register delta, 33 R6 T2) ---------------
+    if (const auto *ev = kind(r, "statediff")) {
+        for (const Event &e : *ev) {
+            StateDelta d;
+            get(e.body, "step", d.step);
+            get(e.body, "computed", d.computed);
+            auto ch = e.body.find("changed");
+            if (ch != e.body.end() && ch->is_object()) {
+                for (auto it = ch->begin(); it != ch->end(); ++it) {
+                    if (it->is_number_integer() || it->is_number_unsigned())
+                        d.changed[it.key()] = it->get<uint64_t>();
+                }
+            }
+            s.statediff.push_back(std::move(d));
+        }
+    }
     return s;
 }
 

@@ -25,7 +25,7 @@
  * `make asmtrace-golden-check`.
  *
  * Contract: docs/internal/gui/asmtrace-schema.md.
- * Usage: asmtrace_record [--steps=<cap>] [--mem] <output-directory>
+ * Usage: asmtrace_record [--steps=<cap>] [--mem] [--blame] [--statediff] <output-directory>
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -102,6 +102,83 @@ static size_t emit_mem_stream(asmtrace_writer_t *w, const at_val_rec_t *recs,
     return emitted;
 }
 
+/* --blame: arm the `blame` backward-attribution stream (33 R6 T1) for the whole
+ * corpus loop. Off by default (the golden default), so `make asmtrace-golden`
+ * emits `blame` only for the fixtures that bake it in. Like --mem/--steps, this is
+ * a pure derived pass — no engine re-run. */
+static int g_blame = 0;
+
+/* --statediff: arm the `statediff` step-delta stream (33 R6 T2) for the whole
+ * corpus loop. Off by default; a separate gate from --steps so an existing
+ * regstate golden stays byte-identical (statediff rides ALONGSIDE regstate but is
+ * armed independently). Only meaningful where the regstate ring is armed. */
+static int g_statediff = 0;
+
+/* Emit one `blame` backward-attribution event (33 R6 T1) for `seed` step: the
+ * backward def-use slice (asmtest_slice_backward_seed — the SAME pure pass the
+ * TUI and desktop slicers are parity-pinned against) is the cone of producing
+ * steps, and the sink-alone case is the honest born-of-untraced-state verdict
+ * ("provenance starts at instrumentation"), never an empty cone. `loc` is the
+ * seed step's write record (the blamed value), or NULL. The def-use graph `g` is
+ * already built (record_bytes calls asmtest_defuse_build); this is a projection
+ * over it. */
+static void emit_blame(asmtrace_writer_t *w, const asmtest_valtrace_t *vt,
+                       const asmtest_defuse_t *g, uint32_t seed) {
+    at_val_rec_t seed_rec;
+    asmtest_slice_t *sl;
+    uint32_t *cone_steps;
+    uint64_t *cone_offs;
+    const at_val_rec_t *loc = NULL;
+    char *body;
+    size_t ncone = 0;
+
+    memset(&seed_rec, 0, sizeof seed_rec);
+    seed_rec.step = seed; /* the slicer reads only .step */
+    sl = asmtest_slice_backward_seed(g, &seed_rec);
+    if (sl == NULL)
+        return;
+    /* The cone is at most one entry per step, so it never exceeds sl->n; size the
+     * buffers (and the body, ~24 bytes/entry) to the ACTUAL cone so a long slice
+     * over a looping routine is serialized in full, never silently truncated. */
+    cone_steps = (uint32_t *)malloc((sl->n ? sl->n : 1) * sizeof *cone_steps);
+    cone_offs = (uint64_t *)malloc((sl->n ? sl->n : 1) * sizeof *cone_offs);
+    body = (char *)malloc(4096 + sl->n * 32);
+    if (cone_steps == NULL || cone_offs == NULL || body == NULL) {
+        free(cone_steps);
+        free(cone_offs);
+        free(body);
+        asmtest_slice_free(sl);
+        return; /* fail closed: no blame beats a truncated one */
+    }
+    for (size_t i = 0; i < sl->n; i++) {
+        uint32_t s = sl->steps[i];
+        cone_steps[ncone] = s;
+        cone_offs[ncone] = (s < vt->steps_len) ? vt->insn_off[s] : 0;
+        ncone++;
+    }
+    /* The blamed value is the seed step's first register write. A value with no
+     * write record (or a memory-only step) blames the step without a `loc`. */
+    for (size_t i = 0; i < vt->recs_len; i++) {
+        if (vt->recs[i].step == seed && vt->recs[i].is_write &&
+            vt->recs[i].kind == AT_LOC_REG) {
+            loc = &vt->recs[i];
+            break;
+        }
+    }
+    /* Born of untraced state: the backward slice reached only the sink, so no
+     * traced instruction produced this value (it came from an argument, a
+     * constant, or pre-existing state — the ancestry ends at instrumentation). */
+    int born_untraced = sl->n <= 1;
+    asmtrace_blame_body(body, 4096 + sl->n * 32, seed,
+                        (seed < vt->steps_len) ? vt->insn_off[seed] : 0, loc,
+                        cone_steps, cone_offs, ncone, born_untraced);
+    asmtrace_emit(w, "blame", body);
+    free(cone_steps);
+    free(cone_offs);
+    free(body);
+    asmtest_slice_free(sl);
+}
+
 /* Fixed routines and arguments. INTEGER-ARG routines only — the emulator L0
  * producer marshals integer arguments (rdi/rsi/rdx/rcx/r8/r9); widening the
  * corpus to FP/vector routines needs a producer change, not a table entry.
@@ -136,6 +213,17 @@ static const rec_routine_t ROUTINES[] = {
 static const uint8_t LOOM_DF_CHAIN[] = {
     0x48, 0x89, 0xf8, 0x48, 0x89, 0x44, 0x24, 0xf8, 0x48, 0x8b, 0x4c,
     0x24, 0xf8, 0x48, 0x8d, 0x14, 0x31, 0x48, 0x89, 0xd0, 0xc3,
+};
+
+/* identity(a) = a — the born-of-untraced-state blame fixture (33 R6 T1):
+ *   0x00 mov rax, rdi   ; 48 89 f8   (reads rdi, an ARGUMENT: no traced producer)
+ *   0x03 ret            ; c3
+ * The blame seed is the penultimate step (mov rax, rdi); its only input is rdi,
+ * which no traced instruction wrote, so the backward slice is the sink ALONE and
+ * born_untraced fires — provenance starts at instrumentation. */
+static const uint8_t BLAME_UNTRACED[] = {
+    0x48, 0x89, 0xf8, /* mov rax, rdi */
+    0xc3,             /* ret          */
 };
 
 /* fork_demo(a)  [rdi=a] — one dimmed, one hot, one control divergence:
@@ -220,6 +308,30 @@ static void emit_regstate(asmtrace_writer_t *w, const emu_x86_regs_t *r) {
     asmtrace_emit(w, "regstate", body);
 }
 
+/* Copy the emulator's per-step register file into the pure `asmtest_regfile_t`
+ * the statediff body-builder diffs — the SAME 18 fields (rax..r15, rip, rflags),
+ * so the delta uses one field-order owner (asmtrace_ndjson.c). */
+static void regs_to_regfile(asmtest_regfile_t *rf, const emu_x86_regs_t *r) {
+    rf->rax = r->rax;
+    rf->rbx = r->rbx;
+    rf->rcx = r->rcx;
+    rf->rdx = r->rdx;
+    rf->rsi = r->rsi;
+    rf->rdi = r->rdi;
+    rf->rbp = r->rbp;
+    rf->rsp = r->rsp;
+    rf->r8 = r->r8;
+    rf->r9 = r->r9;
+    rf->r10 = r->r10;
+    rf->r11 = r->r11;
+    rf->r12 = r->r12;
+    rf->r13 = r->r13;
+    rf->r14 = r->r14;
+    rf->r15 = r->r15;
+    rf->rip = r->rip;
+    rf->rflags = r->rflags;
+}
+
 /* Per-step register ring (09-teaching-producers.md T2). When steps_cap > 0,
  * re-run the SAME bytes under the emu_t handle with an armed capture ring and
  * emit one `regstate` event per held pre-state (oldest first). Returns the
@@ -228,10 +340,18 @@ static void emit_regstate(asmtrace_writer_t *w, const emu_x86_regs_t *r) {
  * honest data — the held deck is steps [dropped, dropped+count) and the footer
  * says how many fell off the front. The ring is x86-64-guest only, exactly the
  * corpus's own arch gate; where emu_step_capture cannot arm (non-x86-64 or an
- * allocation failure) nothing is written and 0 is returned. */
+ * allocation failure) nothing is written and 0 is returned.
+ *
+ * When `want_statediff` (33 R6 T2), each `regstate` is paired 1:1 with a
+ * `statediff` event carrying the CHANGED-register delta from the previous held
+ * step. The first held step has no known predecessor (its true predecessor is
+ * either genuine step 0 or the evicted prefix), so it emits `computed:false` with
+ * an empty delta — a full delta there would be a D7 lie. statediff carries an
+ * absolute step (dropped + held-index) so a two-recording merge aligns
+ * truncation-robustly. Off by default so a regstate-only golden is byte-unchanged. */
 static uint64_t emit_regstates(asmtrace_writer_t *w, const uint8_t *code,
                                size_t code_len, const long *args, int nargs,
-                               size_t steps_cap) {
+                               size_t steps_cap, int want_statediff) {
     emu_t *e;
     emu_result_t res;
     uint64_t dropped = 0;
@@ -242,15 +362,28 @@ static uint64_t emit_regstates(asmtrace_writer_t *w, const uint8_t *code,
         return 0;
     if (emu_step_capture(e, steps_cap)) {
         size_t held, i;
+        asmtest_regfile_t prev, cur;
+        int have_prev = 0;
         memset(&res, 0, sizeof res);
         emu_call(e, code, code_len, args, nargs, 0, &res);
         held = emu_step_count(e);
+        dropped = emu_step_dropped(e);
         for (i = 0; i < held; i++) {
             emu_x86_regs_t regs;
-            if (emu_step_at(e, i, NULL, &regs))
-                emit_regstate(w, &regs);
+            if (!emu_step_at(e, i, NULL, &regs))
+                continue;
+            emit_regstate(w, &regs);
+            if (want_statediff) {
+                char body[512];
+                regs_to_regfile(&cur, &regs);
+                asmtrace_statediff_body(body, sizeof body,
+                                        (unsigned)(dropped + i),
+                                        have_prev ? &prev : NULL, &cur);
+                asmtrace_emit(w, "statediff", body);
+                prev = cur;
+                have_prev = 1;
+            }
         }
-        dropped = emu_step_dropped(e);
     }
     emu_close(e);
     return dropped;
@@ -269,7 +402,7 @@ static uint64_t emit_regstates(asmtrace_writer_t *w, const uint8_t *code,
 static int record_bytes(const char *dir, const char *out, const char *label,
                         const uint8_t *code, size_t code_len, const long *args,
                         int nargs, size_t recs_cap, size_t steps_cap,
-                        int want_mem) {
+                        int want_mem, int want_blame, int want_statediff) {
     asmtrace_prov_t prov = {"emu-l0", 1, "exact", 0, NULL, 0};
     asmtrace_writer_t w;
     asmtest_valtrace_t *vt = NULL;
@@ -384,9 +517,28 @@ static int record_bytes(const char *dir, const char *out, const char *label,
         asmtrace_emit(&w, "df_edge", body);
     }
 
+    /* The `blame` backward-attribution (33 R6 T1), when armed: one blame event
+     * over the def-use graph `g` just emitted, seeded at the PENULTIMATE step
+     * (nsteps-2) — the last instruction before the `ret`. For an epilogue-free
+     * routine (the dedicated blame fixtures) that is the return value's producer;
+     * for a routine with a callee-save restore between the value and the `ret`
+     * (`... mov rax, rbx; pop rbx; ret`) it seeds the restore instead. Either way
+     * the emitted cone is the EXACT backward slice of the seeded step — the seed is
+     * a which-value POLICY, never a source of dishonesty. Whatever the seed, a sink
+     * with no producer is the born-untraced verdict. Off by default so the golden
+     * corpus is unchanged unless a fixture or --blame arms it; needs g (a routine
+     * that produced no def-use graph carries none, e.g. the scene/ABI paths). */
+    if ((want_blame || g_blame) && g != NULL && nsteps >= 1) {
+        uint32_t seed =
+            (nsteps >= 2) ? (uint32_t)(nsteps - 2) : (uint32_t)(nsteps - 1);
+        emit_blame(&w, vt, g, seed);
+    }
+
     /* Per-step register states from the ring (T2), after the value stream.
-     * A non-zero eviction count is truncation just like a full recs buffer. */
-    step_dropped = emit_regstates(&w, code, code_len, args, nargs, steps_cap);
+     * A non-zero eviction count is truncation just like a full recs buffer.
+     * `want_statediff || g_statediff` pairs each regstate with a step-delta. */
+    step_dropped = emit_regstates(&w, code, code_len, args, nargs, steps_cap,
+                                  want_statediff || g_statediff);
     if (vt->truncated || step_dropped > 0)
         w.truncated = 1;
     /* The total step count (28 R1 T2): the L0 producer saw them all (steps_total
@@ -436,8 +588,9 @@ static int record_one(const char *dir, const rec_routine_t *r) {
     }
     memcpy(code, fn, sizeof code);
     return record_bytes(dir, r->name, r->name, code, sizeof code, r->args,
-                        r->nargs, 65536, steps_cap,
-                        0 /* --mem arms via g_mem */);
+                        r->nargs, 65536, steps_cap, 0 /* mem via g_mem */,
+                        0 /* blame via g_blame */,
+                        0 /* statediff via g_statediff */);
 }
 
 /* Record one 3D-overview golden SCENE (10-spacetime-3d-overview.md T7): the
@@ -874,6 +1027,11 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "--mem") == 0)
             g_mem =
                 1; /* 29 R2: arm the mem[] address stream for the whole corpus */
+        else if (strcmp(argv[i], "--blame") == 0)
+            g_blame =
+                1; /* 33 R6 T1: arm the blame backward-attribution stream */
+        else if (strcmp(argv[i], "--statediff") == 0)
+            g_statediff = 1; /* 33 R6 T2: arm the statediff step-delta stream */
         else
             dir = argv[i];
     }
@@ -897,7 +1055,8 @@ int main(int argc, char **argv) {
         const void *fn;
 
         if (record_bytes(dir, "loom-df-chain", "df_chain", LOOM_DF_CHAIN,
-                         sizeof LOOM_DF_CHAIN, df_args, 2, 65536, 0, 0) != 0)
+                         sizeof LOOM_DF_CHAIN, df_args, 2, 65536, 0, 0, 0,
+                         0) != 0)
             failed++;
         /* The D7 dishonesty fixture: a four-record operand buffer fills mid-run,
          * the producer flips `truncated`, and the footer declares it. Generated,
@@ -905,10 +1064,11 @@ int main(int argc, char **argv) {
          * can trust. */
         if (record_bytes(dir, "loom-truncated", "df_chain (recs_cap = 4)",
                          LOOM_DF_CHAIN, sizeof LOOM_DF_CHAIN, df_args, 2, 4, 0,
-                         0) != 0)
+                         0, 0, 0) != 0)
             failed++;
         if (record_bytes(dir, "loom-fork-demo", "fork_demo", LOOM_FORK_DEMO,
-                         sizeof LOOM_FORK_DEMO, fork_args, 1, 65536, 0, 0) != 0)
+                         sizeof LOOM_FORK_DEMO, fork_args, 1, 65536, 0, 0, 0,
+                         0) != 0)
             failed++;
         /* The `mem` address-stream golden (29 R2 T2): df_chain armed with --mem.
          * The listing has an explicit store (mov [rsp-8], rax) and load
@@ -917,7 +1077,7 @@ int main(int argc, char **argv) {
          * value stream is uncapped, so it is the HAPPY path (never truncated). */
         if (record_bytes(dir, "mem-df-chain", "df_chain (--mem)", LOOM_DF_CHAIN,
                          sizeof LOOM_DF_CHAIN, df_args, 2, 65536, 0,
-                         1 /* --mem */) != 0)
+                         1 /* --mem */, 0, 0) != 0)
             failed++;
         /* The D7 torn twin: the SAME --mem capture with a five-record operand
          * buffer, sized so the store's `mem` write survives while the tail
@@ -927,8 +1087,25 @@ int main(int argc, char **argv) {
          * truncated IFF named. Generated, never hand-edited. */
         if (record_bytes(dir, "mem-df-chain-truncated",
                          "df_chain (--mem, recs_cap = 5)", LOOM_DF_CHAIN,
-                         sizeof LOOM_DF_CHAIN, df_args, 2, 5, 0,
-                         1 /* --mem */) != 0)
+                         sizeof LOOM_DF_CHAIN, df_args, 2, 5, 0, 1 /* --mem */,
+                         0, 0) != 0)
+            failed++;
+        /* The `blame` backward-attribution golden (33 R6 T1): df_chain armed with
+         * --blame. Seeded at the penultimate step (`mov rax, rdx`), the cone is the
+         * full value chain back to the argument — a TRACED cone (born_untraced
+         * false). The consumer socket cones over the same df_edge stream. */
+        if (record_bytes(dir, "blame-df-chain", "df_chain (--blame)",
+                         LOOM_DF_CHAIN, sizeof LOOM_DF_CHAIN, df_args, 2, 65536,
+                         0, 0, 1 /* --blame */, 0) != 0)
+            failed++;
+        /* The D7 honesty fixture for T1: `identity(a) = a` (mov rax, rdi; ret).
+         * Its penultimate step reads rdi — an ARGUMENT, produced by no traced
+         * instruction — so the backward slice is the sink ALONE and the blame is
+         * born_untraced: an honest "provenance starts at instrumentation" verdict,
+         * never an empty cone. */
+        if (record_bytes(dir, "blame-untraced", "identity (--blame)",
+                         BLAME_UNTRACED, sizeof BLAME_UNTRACED, df_args, 1,
+                         65536, 0, 0, 1 /* --blame */, 0) != 0)
             failed++;
         /* Walkthrough #2: a callee-save spill (a stack band), an EFLAGS knot and
          * a restore — examples/flags.s:45. HOST-ROUTINE bytes, so this entry is
@@ -941,7 +1118,7 @@ int main(int argc, char **argv) {
         } else {
             memcpy(rbx, fn, sizeof rbx);
             if (record_bytes(dir, "loom-sum-via-rbx", "sum_via_rbx", rbx,
-                             sizeof rbx, rbx_args, 2, 65536, 0, 0) != 0)
+                             sizeof rbx, rbx_args, 2, 65536, 0, 0, 0, 0) != 0)
                 failed++;
             /* The T2 register-ring dishonesty fixture (09-teaching-producers.md):
              * the SAME sum_via_rbx bytes with a TWO-entry step ring, so it holds
@@ -954,7 +1131,26 @@ int main(int argc, char **argv) {
              * golden to be truncated IFF so named. Generated, never hand-edited. */
             if (record_bytes(dir, "regstate-truncated",
                              "sum_via_rbx (steps_cap = 2)", rbx, sizeof rbx,
-                             rbx_args, 2, 65536, 2, 0) != 0)
+                             rbx_args, 2, 65536, 2, 0, 0, 0) != 0)
+                failed++;
+            /* The `statediff` step-delta golden (33 R6 T2): sum_via_rbx with the
+             * register ring armed (steps_cap holds every step) AND --statediff, so
+             * each regstate is paired 1:1 with its step-to-step delta. The first
+             * held step carries computed:false (no known predecessor). */
+            if (record_bytes(dir, "statediff-sum-via-rbx",
+                             "sum_via_rbx (--steps --statediff)", rbx,
+                             sizeof rbx, rbx_args, 2, 65536, 16, 0, 0,
+                             1 /* --statediff */) != 0)
+                failed++;
+            /* The D7 torn twin: the SAME bytes with a TWO-entry step ring, so the
+             * earliest pre-states are evicted. The first HELD statediff then has an
+             * evicted predecessor — computed:false, empty delta — proving a
+             * step-delta is never fabricated across a truncation boundary.
+             * `-truncated` in the name so the golden test asserts truncated IFF. */
+            if (record_bytes(dir, "statediff-sum-via-rbx-truncated",
+                             "sum_via_rbx (steps_cap = 2, --statediff)", rbx,
+                             sizeof rbx, rbx_args, 2, 65536, 2, 0, 0,
+                             1 /* --statediff */) != 0)
                 failed++;
         }
     }

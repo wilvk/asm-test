@@ -245,5 +245,89 @@ int main() {
                   d.identity_note);
     }
 
+    // --- the two-recording state-diff (33 R6 T2) ----------------------------
+    // A helper that arms a statediff stream: each entry is {step, computed,
+    // {reg: new value}}. The first held step is the baseline (computed false).
+    auto with_sd = [](Streams s,
+                      std::vector<StateDelta> sd) -> Streams {
+        s.statediff = std::move(sd);
+        return s;
+    };
+
+    {
+        // Two matched-identity recordings whose state evolves IDENTICALLY: the
+        // merge runs (identity is a finding) and reports no divergence.
+        Streams a = with_sd(mk({0, 2, 4}, {0}, false, "rel", "x86_64", "abc"),
+                            {{0, {}, false}, {1, {{"rax", 7}}, true}});
+        Streams b = with_sd(mk({0, 2, 4}, {0}, false, "rel", "x86_64", "abc"),
+                            {{0, {}, false}, {1, {{"rax", 7}}, true}});
+        dt_statediff m = dt_statediff_build(a, b);
+        vt::check("statediff merge runs on a matched pair", m.merged, m.err);
+        vt::check("identical state evolution => no register divergence",
+                  [&] {
+                      for (const auto &ss : m.steps)
+                          if (!ss.regs.empty())
+                              return false;
+                      return true;
+                  }(),
+                  dt_statediff_dump(m));
+        // step 0 is bounded on both sides (baseline, computed false).
+        vt::check("the baseline step is bounded, not a fabricated delta",
+                  !m.steps.empty() && m.steps.front().step == 0 &&
+                      m.steps.front().bounded,
+                  dt_statediff_dump(m));
+    }
+    {
+        // Same routine, DIFFERENT state at step 1 (rax 7 vs 9): the merge names
+        // rax as the diverging register at that step.
+        Streams a = with_sd(mk({0, 2, 4}, {0}, false, "rel", "x86_64", "abc"),
+                            {{0, {}, false}, {1, {{"rax", 7}}, true}});
+        Streams b = with_sd(mk({0, 2, 4}, {0}, false, "rel", "x86_64", "abc"),
+                            {{0, {}, false}, {1, {{"rax", 9}}, true}});
+        dt_statediff m = dt_statediff_build(a, b);
+        vt::check("a state divergence is found", m.merged && !m.steps.empty(),
+                  dt_statediff_dump(m));
+        bool named = false;
+        for (const auto &ss : m.steps)
+            if (ss.step == 1 && ss.regs.size() == 1 && ss.regs[0] == "rax")
+                named = true;
+        vt::check("the diverging register is named at its step", named,
+                  dt_statediff_dump(m));
+    }
+    {
+        // A wrong-routine pair is REFUSED by identity before any state merges —
+        // the R1 T1 gate, reused.
+        Streams a = with_sd(mk({0, 2}, {0}, false, "rel", "x86_64", "aaa"),
+                            {{0, {}, false}});
+        Streams b = with_sd(mk({0, 2}, {0}, false, "rel", "x86_64", "bbb"),
+                            {{0, {}, false}});
+        dt_statediff m = dt_statediff_build(a, b);
+        vt::check("a code-mismatched pair is refused before merging",
+                  !m.err.empty() && !m.merged, "must refuse by identity");
+        vt::check("the refusal carries no fabricated steps", m.steps.empty(),
+                  "a refused merge produces nothing");
+    }
+    {
+        // A code-LESS pair keeps the honest caveat (identity not checked) but
+        // still merges what it has.
+        Streams a = with_sd(mk({0, 2}, {0}), {{0, {}, false}});
+        Streams b = with_sd(mk({0, 2}, {0}), {{0, {}, false}});
+        dt_statediff m = dt_statediff_build(a, b);
+        vt::check("a code-less pair still merges", m.merged, m.err);
+        vt::check("but keeps the identity caveat",
+                  m.identity_note.find("NOT checked") != std::string::npos,
+                  m.identity_note);
+    }
+    {
+        // No statediff on one side: the merge says so rather than presenting an
+        // empty comparison as agreement.
+        Streams a = with_sd(mk({0, 2}, {0}, false, "rel", "x86_64", "abc"),
+                            {{0, {}, false}});
+        Streams b = mk({0, 2}, {0}, false, "rel", "x86_64", "abc");
+        dt_statediff m = dt_statediff_build(a, b);
+        vt::check("a missing statediff stream is not silently agreed",
+                  !m.merged && !m.note.empty(), dt_statediff_dump(m));
+    }
+
     return vt::report("test_diff");
 }

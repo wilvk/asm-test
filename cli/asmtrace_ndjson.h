@@ -158,6 +158,34 @@ size_t asmtrace_mem_body(char *dst, size_t cap, unsigned step, uint64_t ea,
 size_t asmtrace_regstate_body(char *dst, size_t cap,
                               const asmtest_regfile_t *r);
 
+/* {"step":S,"off":O,"loc":{...}?,"cone":[{"step":N,"off":M,"kind":"insn"},...],
+ * "born_untraced":bool} — one backward-attribution (`blame`) event (33 R6 T1): the
+ * value produced at step `S` (offset `O`, identified by the optional `loc` operand)
+ * attributed to the producing steps `cone` (the ascending backward def-use slice,
+ * INCLUDING the sink step S). `cone_steps`/`cone_offs` are parallel arrays of length
+ * `ncone` (each cone step and its instruction offset). `born_untraced` is 1 when the
+ * value has NO traced producer inside the window (cone is the sink alone) — the
+ * honest "provenance starts at instrumentation" verdict, never an empty cone. `loc`
+ * NULL omits the field (blame is step-granular). Field order lives here. Returns the
+ * body length written. */
+size_t asmtrace_blame_body(char *dst, size_t cap, unsigned step, uint64_t off,
+                           const at_val_rec_t *loc, const uint32_t *cone_steps,
+                           const uint64_t *cone_offs, size_t ncone,
+                           int born_untraced);
+
+/* {"step":S,"changed":{"<reg>":<u64>,...},"computed":bool} — one step-to-step
+ * architectural-state delta (`statediff`, 33 R6 T2): the registers whose value
+ * differs between `prev` and `cur` (the previous and current held register files),
+ * in descriptor order, each carrying its NEW value. `prev` NULL means there is no
+ * known predecessor (the first held step, or across an evicted boundary): emit
+ * `"changed":{},"computed":false` — a full delta there would be a D7 lie
+ * ("everything changed"). With a real predecessor, `computed` is true. One
+ * statediff pairs 1:1 with its `regstate`. Field order lives here. Returns the body
+ * length written. */
+size_t asmtrace_statediff_body(char *dst, size_t cap, unsigned step,
+                               const asmtest_regfile_t *prev,
+                               const asmtest_regfile_t *cur);
+
 /* Write the `end` footer (events / truncated / drops, plus `skip` when
  * `skip_update` carries a non-zero skip_code), flush, and fclose when the
  * writer owns the file. A writer closed WITHOUT this leaves a TORN recording —

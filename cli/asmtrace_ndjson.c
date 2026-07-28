@@ -331,6 +331,97 @@ size_t asmtrace_regstate_body(char *dst, size_t cap,
               (unsigned long long)r->rip, (unsigned long long)r->rflags);
 }
 
+size_t asmtrace_blame_body(char *dst, size_t cap, unsigned step, uint64_t off,
+                           const at_val_rec_t *loc, const uint32_t *cone_steps,
+                           const uint64_t *cone_offs, size_t ncone,
+                           int born_untraced) {
+    size_t o = 0;
+    if (!dst || !cap)
+        return 0;
+    dst[0] = '\0';
+    o = bp(dst, cap, o, "\"step\":%u,\"off\":%llu", step,
+           (unsigned long long)off);
+    /* The blamed value's identity, when supplied — the sink step's write record,
+     * spelled through the SAME op_body df_step/df_edge use, so a blame `loc` reads
+     * identically to a df_edge one. A loc is a location identity, not a captured
+     * value, so no wide side buffer (like df_edge). */
+    if (loc != NULL) {
+        o = bp(dst, cap, o, ",\"loc\":");
+        o = op_body(dst, cap, o, loc, NULL, 0);
+    }
+    /* The attributed cone: the ascending backward def-use slice, each producing
+     * step with its instruction offset and an `insn` kind tag (mirroring the
+     * `srcmap` {off,kind} row). The sink step S is the first entry — a value with
+     * no traced producer carries the sink ALONE (born_untraced below), never an
+     * empty cone. */
+    o = bp(dst, cap, o, ",\"cone\":[");
+    for (size_t i = 0; i < ncone; i++) {
+        if (i)
+            o = bp(dst, cap, o, ",");
+        o = bp(dst, cap, o, "{\"step\":%u,\"off\":%llu,\"kind\":\"insn\"}",
+               cone_steps[i], (unsigned long long)cone_offs[i]);
+    }
+    o = bp(dst, cap, o, "]");
+    /* The honesty verdict: 1 when the value is born of untraced state (its
+     * ancestry ends at instrumentation — no producer inside the window). The
+     * consumer renders the lineage wording; the wire carries the machine-readable
+     * fact so the cone-of-one is never mistaken for "nothing happened". */
+    return bp(dst, cap, o, ",\"born_untraced\":%s",
+              born_untraced ? "true" : "false");
+}
+
+/* The register file's 18 fields, in descriptor order (rax..r15, rip, rflags) —
+ * the SAME order both regstate emitters use — as name + struct member so
+ * statediff can diff and emit a NAMED subset. */
+#define REGFILE_FIELD(f)                                                       \
+    { #f, offsetof(asmtest_regfile_t, f) }
+static const struct {
+    const char *name;
+    size_t off;
+} kRegfileFields[] = {
+    REGFILE_FIELD(rax), REGFILE_FIELD(rbx), REGFILE_FIELD(rcx),
+    REGFILE_FIELD(rdx), REGFILE_FIELD(rsi), REGFILE_FIELD(rdi),
+    REGFILE_FIELD(rbp), REGFILE_FIELD(rsp), REGFILE_FIELD(r8),
+    REGFILE_FIELD(r9),  REGFILE_FIELD(r10), REGFILE_FIELD(r11),
+    REGFILE_FIELD(r12), REGFILE_FIELD(r13), REGFILE_FIELD(r14),
+    REGFILE_FIELD(r15), REGFILE_FIELD(rip), REGFILE_FIELD(rflags),
+};
+#undef REGFILE_FIELD
+
+static uint64_t regfield(const asmtest_regfile_t *r, size_t off) {
+    uint64_t v;
+    memcpy(&v, (const char *)r + off, sizeof v);
+    return v;
+}
+
+size_t asmtrace_statediff_body(char *dst, size_t cap, unsigned step,
+                               const asmtest_regfile_t *prev,
+                               const asmtest_regfile_t *cur) {
+    size_t o = 0;
+    int first = 1;
+    if (!dst || !cap)
+        return 0;
+    dst[0] = '\0';
+    o = bp(dst, cap, o, "\"step\":%u,\"changed\":{", step);
+    /* No known predecessor (the first held step, or across an evicted boundary):
+     * an empty delta with computed=false. The consumer must NOT read "nothing
+     * changed" as truth here — the predecessor's state is unknown, so a full
+     * delta would be a D7 lie. */
+    if (prev != NULL) {
+        for (size_t i = 0; i < sizeof kRegfileFields / sizeof kRegfileFields[0];
+             i++) {
+            uint64_t pv = regfield(prev, kRegfileFields[i].off);
+            uint64_t cv = regfield(cur, kRegfileFields[i].off);
+            if (pv == cv)
+                continue;
+            o = bp(dst, cap, o, "%s\"%s\":%llu", first ? "" : ",",
+                   kRegfileFields[i].name, (unsigned long long)cv);
+            first = 0;
+        }
+    }
+    return bp(dst, cap, o, "},\"computed\":%s", prev ? "true" : "false");
+}
+
 int asmtrace_close(asmtrace_writer_t *w, unsigned long long lost, int throttled,
                    const asmtrace_prov_t *skip_update) {
     char esc[512];

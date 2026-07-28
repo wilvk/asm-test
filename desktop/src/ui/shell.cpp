@@ -858,11 +858,35 @@ static void body_timeline(ShellState &s, const Streams *a, const Streams *b) {
 static void body_slice(ShellState &s, const Streams *a, const Streams *b) {
     dt_view_header("slice");
     draw_slice_view(dt_slice_view_build(*a, s.selection.step));
-    if (b != nullptr)
-        // Never a fake merged graph: the two-recording slice needs the Wave-2
-        // state-diff producer, and until it exists this says so.
-        ImGui::TextDisabled("showing A only — slice diff lands with the "
-                            "state-diff producer (Wave 2)");
+    if (b != nullptr) {
+        // The two-recording state-diff (33 R6 T2): the `statediff` producer now
+        // gives the merge an exact per-step basis, gated on routine identity — a
+        // wrong-routine pair is refused before any state is merged.
+        dt_statediff sd = dt_statediff_build(*a, *b);
+        ImGui::Separator();
+        if (!sd.err.empty()) {
+            ImGui::TextDisabled("slice diff refused: %s", sd.err.c_str());
+        } else if (!sd.merged) {
+            ImGui::TextDisabled("slice diff needs a statediff stream on both "
+                                "sides — %s",
+                                sd.note.c_str());
+        } else if (sd.steps.empty()) {
+            ImGui::TextDisabled(
+                "slice diff: the two recordings evolve state identically%s",
+                sd.bounded ? " (within the recorded window)" : "");
+        } else {
+            ImGui::TextDisabled("slice diff: %zu step(s) diverge%s",
+                                sd.steps.size(),
+                                sd.bounded ? " (bounded)" : "");
+            for (const dt_state_step &ss : sd.steps) {
+                std::string regs;
+                for (const std::string &r : ss.regs)
+                    regs += (regs.empty() ? "" : " ") + r;
+                ImGui::BulletText("step %u%s %s", ss.step,
+                                  ss.bounded ? " [bounded]" : "", regs.c_str());
+            }
+        }
+    }
 }
 static void body_diff(ShellState &s, const Streams *a, const Streams *b) {
     dt_view_header("diff");

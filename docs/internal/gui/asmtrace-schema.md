@@ -321,6 +321,59 @@ the bytes** (that is `df_step`'s `wide`/`bytes` value channel) and no timestamps
 register list — that is what lets one viewer render an x86-64, AArch64 or RISC-V
 register deck without knowing any of them at compile time.
 
+### `blame` — a value's backward attribution (def-use cone)
+
+```json
+{"k":"blame","step":4,"off":17,"loc":{"space":"reg","reg":35,"size":0,"write":true,"value_valid":true,"value":12},"cone":[{"step":0,"off":0,"kind":"insn"},{"step":4,"off":17,"kind":"insn"}],"born_untraced":false}
+```
+
+Attributes the value produced at `step` (instruction offset `off`, identified by
+the optional operand `loc`) to the instruction(s) that produced it: `cone` is the
+**ascending backward def-use slice** — the least set of producing steps reachable
+from the sink along last-writer edges — **including the sink step itself**. Each
+cone entry is a `{step, off, kind}` triple mirroring the `srcmap` row shape;
+`kind` is `"insn"` for a traced producer. `loc` reuses the `df_step`/`df_edge`
+operand shape (omitted when the sink writes no register). Field order: `step`,
+`off`, `loc`, `cone`, `born_untraced`.
+
+`born_untraced` is the honesty verdict (33 R6 T1): `true` when the value has **no
+traced producer** inside the window — the backward slice reached only the sink,
+because it was read from an argument, a constant, or pre-existing state. The cone
+is then the **sink alone** — never empty. This is *provenance starts at
+instrumentation*, the same worldline-honesty the Loom's lineage carries
+([05-loom-day-one.md](05-loom-day-one.md)); a reader distinguishes it from
+"nothing happened" and never invents ancestry. `blame` is a **pure derived pass**
+over the `df_edge` graph a recording already carries (`asmtest_slice_backward` —
+the same slicer the TUI and desktop cones use), **opt-in** (`--blame`), absent by
+default. It is **exact-only** and never crosses threads (hard refusals). A cone
+over heap memory is sound only after GC-canonicalization; the golden corpus is
+register/stack-arg only.
+
+### `statediff` — the step-to-step architectural-state delta
+
+```json
+{"k":"statediff","step":2,"changed":{"rax":12,"rip":4099},"computed":true}
+```
+
+The register-file delta between step `step` and the previous held step: `changed`
+carries only the registers whose value **differs** from the predecessor, each with
+its NEW value, in descriptor order. It is the wire form of the Scrubber's
+per-field change-highlight (the pure `pf->value != f.value` logic,
+[stepindex.cpp](../../../desktop/src/analysis/stepindex.cpp)), lifted into the
+producer so a **two-recording merged view** has an exact per-step basis. `step` is
+absolute (past any evicted prefix) so two recordings align truncation-robustly.
+Field order: `step`, `changed`, `computed`.
+
+`computed` is the honesty flag (33 R6 T2): `false` when there is **no known
+predecessor** — the first held step (whose true predecessor is either genuine step
+0 or an evicted step the ring cannot distinguish) — with an empty `changed`. A
+full delta there would be a D7 lie ("everything changed"); `computed:false` says
+the delta was not derivable. One `statediff` pairs **1:1 with its `regstate`** (it
+rides the same per-step ring), **opt-in** (`--statediff`, alongside `--steps`),
+absent by default. It is architectural (the register file), not memory-content
+diff (that rides `mem` / `wide`), and is **derived** from an existing recording,
+not a new execution.
+
 ### `result` — a test / bench / features row
 
 ```json
@@ -390,8 +443,6 @@ is no v1 producer. A reader ignores them like any unknown kind (see
 | Kind | Intended payload | Claimed by |
 |---|---|---|
 | `fpenv` | FP/SIMD environment + wide register state | expansion wave |
-| `statediff` | step-to-step architectural state delta | expansion wave |
-| `blame` | attribution of a value to a source location | [09-teaching-producers.md](09-teaching-producers.md) |
 | `fuzzstats` | corpus/coverage counters from a fuzz run | expansion wave |
 | `taint` | taint labels propagated through a step | expansion wave |
 | `srcmap` | one source line-map row `{off,value,kind,file,col}`, mirroring [`asmtest_srcmap_entry_t`](../../../include/asmtest_trace.h#L177) | [05-loom-day-one.md](05-loom-day-one.md) |
@@ -409,6 +460,11 @@ range and the footer counts it.
 
 `mem` was reserved here for 10 and is now **defined** — see *`mem` — one memory
 access (address stream)* above (29 R2). An ordinary opt-in recording event.
+
+`blame` (reserved for 09) and `statediff` (expansion wave) are now **defined** —
+see *`blame` — a value's backward attribution* and *`statediff` — the step-to-step
+architectural-state delta* above (33 R6). Both are ordinary opt-in recording
+events, pure derived passes over a recording's own `df_edge` / `regstate` streams.
 
 Adding a kind is a **new registry row under the ignore-unknown-kinds rule** —
 never a new envelope major.

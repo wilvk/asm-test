@@ -176,6 +176,66 @@ int main() {
             check("blame/unrelated steps stay dimmed",
                   style(1) == dt_cone::dimmed && style(4) == dt_cone::dimmed,
                   "the ebx chain neither produced nor consumed the value");
+
+            // 33 R6 T1: the PRODUCED `blame` event is decoded, and its cone is
+            // EXACTLY the backward slice the consumer would compute — the
+            // producer and the client-side slicer agree.
+            check("blame/event decoded", a->blame.size() == 1,
+                  "one blame event expected");
+            if (a->blame.size() == 1) {
+                const BlameAttr &bl = a->blame[0];
+                dt_slice want =
+                    dt_slice_backward(a->df.edges, a->df.nsteps, bl.step);
+                check("blame/cone == backward slice", bl.cone == want.steps,
+                      "the emitted cone must equal asmtest_slice_backward");
+                check("blame/traced value is not born_untraced",
+                      !bl.born_untraced, "step 3 has traced producers");
+            }
+        }
+    }
+
+    // --- 33 R6 T1: the PRODUCED blame goldens carry an honest cone -----------
+    // blame-df-chain: a fully-traced value chain (born_untraced false, the cone
+    // is the whole backward slice). blame-untraced: identity(a)=a, whose value
+    // came from an ARGUMENT — no traced producer, so the cone is the sink ALONE
+    // and born_untraced fires. The honesty distinction the socket renders.
+    {
+        std::string err;
+        auto chain = load_recording_file(gd("blame-df-chain.asmtrace"), err);
+        check("blame-golden/chain opens", chain.has_value(), err.c_str());
+        if (chain) {
+            Streams s = decode_streams(*chain);
+            check("blame-golden/chain has one blame", s.blame.size() == 1,
+                  "one blame event");
+            if (s.blame.size() == 1) {
+                const BlameAttr &bl = s.blame[0];
+                check("blame-golden/chain is traced", !bl.born_untraced,
+                      "the value has traced producers");
+                check("blame-golden/chain cone is the full slice",
+                      bl.cone ==
+                          dt_slice_backward(s.df.edges, s.df.nsteps, bl.step)
+                              .steps,
+                      "the emitted cone must equal the backward slice");
+                check("blame-golden/chain cone is more than the sink",
+                      bl.cone.size() > 1, "a traced chain has ancestors");
+            }
+        }
+        auto un = load_recording_file(gd("blame-untraced.asmtrace"), err);
+        check("blame-golden/untraced opens", un.has_value(), err.c_str());
+        if (un) {
+            Streams s = decode_streams(*un);
+            check("blame-golden/untraced has one blame", s.blame.size() == 1,
+                  "one blame event");
+            if (s.blame.size() == 1) {
+                const BlameAttr &bl = s.blame[0];
+                check("blame-golden/untraced is born_untraced",
+                      bl.born_untraced,
+                      "an argument-derived value has no traced producer");
+                check("blame-golden/untraced cone is the sink alone, non-empty",
+                      bl.cone.size() == 1 && bl.cone[0] == bl.step,
+                      "provenance starts at instrumentation — never an empty "
+                      "cone");
+            }
         }
     }
 

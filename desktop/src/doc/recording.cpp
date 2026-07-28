@@ -32,10 +32,12 @@ using nlohmann::json;
 // — captured code bytes at a version", owned by 08): it is now a DEFINED kind
 // with a producer, and unlike the serve-only three it is an ordinary recording
 // event that the `end` footer counts.
-static const std::array<const char *, 20> kKnownKinds = {
-    {"trace",  "coverage", "syscall", "stream",  "call",     "graph",    "topo",
-     "survey", "watch",    "df_step", "df_edge", "regstate", "result",   "note",
-     "stitch", "end",      "session", "cmd",     "err",      "codeimage"}};
+static const std::array<const char *, 23> kKnownKinds = {
+    {"trace",  "coverage",  "syscall", "stream",     "call",
+     "graph",  "topo",      "survey",  "watch",      "df_step",
+     "df_edge", "regstate", "result",  "note",       "stitch",
+     "end",    "session",   "cmd",     "err",        "codeimage",
+     "mem",    "blame",     "statediff"}};
 
 bool is_known_kind(const std::string &kind) {
     for (const char *k : kKnownKinds)

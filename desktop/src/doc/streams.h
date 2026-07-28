@@ -96,6 +96,31 @@ struct SurveyEdge {
     uint64_t count = 0, mispred = 0;
 };
 
+// One `blame` backward-attribution (33 R6 T1): the value at `step`/`off`
+// (identified by the optional `loc`) and its ascending backward def-use cone —
+// the producing steps, INCLUDING the sink. `born_untraced` is the honesty
+// verdict: the value has no traced producer (the cone is the sink alone), so its
+// provenance starts at instrumentation — never presented as an empty cone.
+struct BlameAttr {
+    uint32_t step = 0;
+    uint64_t off = 0;
+    bool has_loc = false;
+    ValRec loc;
+    std::vector<uint32_t> cone; // ascending producing steps (sink included)
+    bool born_untraced = false;
+};
+
+// One `statediff` step-to-step delta (33 R6 T2): the registers whose value
+// changed from the previous held step (name -> NEW value), and whether the delta
+// was `computed` from a known predecessor. `computed == false` (the first held
+// step / across an evicted boundary) carries an EMPTY `changed` and must never be
+// read as "nothing changed".
+struct StateDelta {
+    uint32_t step = 0; // absolute step (past any evicted prefix)
+    std::map<std::string, uint64_t> changed; // reg name -> new value
+    bool computed = false;
+};
+
 // Everything the replay views need, decoded once.
 struct Streams {
     TraceStream trace;
@@ -103,6 +128,8 @@ struct Streams {
     std::vector<SurveyEdge> survey;
     uint64_t survey_samples = 0;
     uint64_t survey_lost = 0;
+    std::vector<BlameAttr> blame;      // `blame` events (33 R6 T1)
+    std::vector<StateDelta> statediff; // `statediff` events (33 R6 T2)
 
     // The Recording's honesty facts, lifted so a builder needs only this.
     bool truncated = false; // footer truncation OR torn OR a truncated coverage
