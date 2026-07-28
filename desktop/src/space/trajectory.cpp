@@ -4,6 +4,9 @@
 
 #include <algorithm>
 #include <map>
+#include <string>
+
+#include "space/projection.h" // resolve_anchor / Anchor (36 T2)
 
 namespace asmdesk::space {
 
@@ -38,6 +41,12 @@ const std::vector<Event> *kind(const Recording &r, const char *k) {
 } // namespace
 
 TrajectorySet build_trajectories(const Recording &r) {
+    // TEST / PLANE-FREE overload: no plane, so no rel path can be anchored.
+    Projection none;
+    return build_trajectories(r, none);
+}
+
+TrajectorySet build_trajectories(const Recording &r, const Projection &proj) {
     TrajectorySet set;
 
     // --- PC path from `trace` events, grouped by tid ----------------------
@@ -100,9 +109,11 @@ TrajectorySet build_trajectories(const Recording &r) {
     // placed no vertex. Its PC path is the df_step offset stream instead. Those
     // offsets are ROUTINE-RELATIVE by construction (df_step.off is an offset
     // from the scoped region base, exactly like a trace basis:"rel"), so the
-    // path is woven as rel: the HUD labels it "rel: routine-relative (not a true
-    // path)" and the renderer never places it on the absolute plane — the live
-    // single-step overlay honesty from doc 10 T5 / doc 25 T6. `trace`, when
+    // path is woven as rel. Until 36 T2 the renderer then dropped it silently;
+    // now the anchoring pass below PLACES it against the recording's single
+    // codeimage span when there is one (base+off is the true address), and when
+    // there is not, refuses LOUDER — no geometry AND a stated reason — instead of
+    // the old silent empty plane (this is the sentence 36 narrows). `trace`, when
     // present, is authoritative and already fixed the basis above; an emulator
     // dataflow file carries BOTH and its trace wins, so this runs only when the
     // trace path produced nothing (and was not itself refused).
@@ -135,6 +146,43 @@ TrajectorySet build_trajectories(const Recording &r) {
     if (set.basis == "rel")
         for (auto &kv : by_tid)
             kv.second.flags |= TRAJ_RELATIVE_BASIS;
+
+    // --- 36 T2: anchor the rel PC path to the recording's codeimage span -----
+    // A rel path's vertices are routine-relative offsets. When the recording
+    // pins the span down — exactly one codeimage code span, resolved over the
+    // SAME region vector the projection was built from (so an anchored offset
+    // projects exactly as a measured absolute PC at that address would) —
+    // base+off IS the true address, a derivation from a stated fact, not a guess.
+    // Rewrite each PC vertex onto the absolute plane, flag TRAJ_ANCHORED while
+    // KEEPING TRAJ_RELATIVE_BASIS (the wire basis is still rel), and MEASURE
+    // p.placed per vertex (place() fails past the 4096-byte codeimage clamp). A
+    // span that is absent or ambiguous leaves the offsets verbatim — never a
+    // fabricated address — and records why in placement_note. The `mem` spur loop
+    // and the `survey` loop below are absolute by construction and become
+    // CONSISTENT with the PC path once it is anchored; that is why neither is
+    // touched here.
+    if (set.basis == "rel") {
+        Anchor anchor = resolve_anchor(proj.regions);
+        if (anchor.ok) {
+            set.anchored = true;
+            for (auto &kv : by_tid) {
+                kv.second.flags |= TRAJ_ANCHORED;
+                for (TrajPoint &p : kv.second.points) {
+                    if (p.is_access)
+                        continue; // no access marks yet, but stay honest
+                    uint64_t abs = 0;
+                    if (anchor.place(p.addr, &abs)) {
+                        p.addr = abs;
+                        p.placed = true;
+                    } else {
+                        p.placed = false; // out-of-span: leave addr = raw offset
+                    }
+                }
+            }
+        } else {
+            set.placement_note = anchor.reason;
+        }
+    }
 
     // Refuse: mirror the canvas — a refused build has no trajectories at all,
     // only the diagnostic (and the basis, for the HUD chip). Anything drawn
@@ -173,6 +221,11 @@ TrajectorySet build_trajectories(const Recording &r) {
 
     // Emit the exact PC trajectories, tid-ascending for determinism, each
     // sorted by (t, is_access) so a PC vertex precedes its own access mark.
+    // Count placement as we go (36 T2 step 3): every PC vertex is offered to the
+    // plane and pc_placed counts how many the renderer's own test — proj.project
+    // — actually accepts. For an anchored path this equals the count of placed
+    // vertices; for an abs path it is the honest projected count. This is the
+    // assertion whose ABSENCE let a total placement failure look like success.
     for (auto &kv : by_tid) {
         std::stable_sort(kv.second.points.begin(), kv.second.points.end(),
                          [](const TrajPoint &a, const TrajPoint &b) {
@@ -180,7 +233,30 @@ TrajectorySet build_trajectories(const Recording &r) {
                                  return a.t < b.t;
                              return !a.is_access && b.is_access;
                          });
+        for (const TrajPoint &p : kv.second.points) {
+            if (p.is_access)
+                continue;
+            set.pc_points++;
+            float u, v;
+            if (proj.project(p.addr, &u, &v))
+                set.pc_placed++;
+        }
         set.trajectories.push_back(std::move(kv.second));
+    }
+
+    // Honest partial placement: name the SERVE_CI_MAX_BYTES=4096 codeimage clamp
+    // as the cause, or an honest partial reads as a regression. Only for an
+    // anchored path — an abs path that fails to project is a different situation
+    // (no code region covers it), not the clamp, and an unanchored rel path
+    // already carries resolve_anchor's reason in placement_note.
+    if (set.anchored && set.pc_placed < set.pc_points &&
+        set.placement_note.empty()) {
+        set.placement_note =
+            std::to_string(set.pc_points - set.pc_placed) + " of " +
+            std::to_string(set.pc_points) +
+            " path vertices project off-plane — the 4096-byte codeimage clamp "
+            "(SERVE_CI_MAX_BYTES): an in-routine offset past the captured span "
+            "has no plane cell";
     }
 
     // --- statistical residency from `survey` edges ------------------------

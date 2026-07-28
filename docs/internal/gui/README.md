@@ -305,8 +305,10 @@ unanchored one and any individually-unplaced vertex still cannot (with the hones
 limit that `df_step` carries no `tid`, so a live dataflow capture is one trajectory
 and yields no marks regardless). Pure `space/` + HUD: no engine, no GL, no wire
 change, no existing golden regenerated. Authored 2026-07-29 against HEAD `24778e4`.
-◐ 1/5 (T1 `resolve_anchor` — one code span anchors, zero/≥2 refuse with a
-stated reason) · will · T2–T5 · 2026-07-29.
+◐ 2/5 (T1 `resolve_anchor`; T2 the rel PC path is ANCHORED onto the plane —
+`base+off`, `TRAJ_ANCHORED` alongside `TRAJ_RELATIVE_BASIS`, placement counted,
+every anchored vertex projects, and `placement_note` states any shortfall/refusal
+— plus `TrajPoint::placed` for T5) · will · T3–T5 · 2026-07-29.
 
 [37-region-tag-on-df-step.md](37-region-tag-on-df-step.md) — **the producer half of
 36**: state the region on the wire instead of deriving it. 36 anchors a

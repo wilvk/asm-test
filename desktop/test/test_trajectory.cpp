@@ -69,6 +69,37 @@ static size_t pc_count(const Trajectory &t) {
     return n;
 }
 
+// A single-code-span plane, exactly as regions_from_codeimage yields for a live
+// serve session that scoped one region (36 T2 anchors a rel path against it).
+static Projection code_span(uint64_t base, uint64_t len) {
+    std::vector<Region> regs;
+    Region c;
+    c.base = base;
+    c.len = len;
+    c.kind = Region::Code;
+    regs.push_back(c);
+    return build_projection(std::move(regs));
+}
+
+// 36 T2 regression bar: every BUILT PC vertex is either placed on the plane or
+// explained (a note / a refusal). The ABSENCE of this bar is what let a total
+// placement failure look like success — so it runs at the end of every T2 case.
+static void placed_or_explained(const std::string &what, const TrajectorySet &ts,
+                                const Projection &proj) {
+    const bool explained = !ts.placement_note.empty() || ts.refused();
+    for (const Trajectory &tr : ts.trajectories)
+        for (const TrajPoint &p : tr.points) {
+            if (p.is_access)
+                continue;
+            float u = 0, v = 0;
+            const bool on_plane = proj.project(p.addr, &u, &v);
+            check(what + ": a built vertex is placed or explained",
+                  on_plane || explained,
+                  "vertex addr " + std::to_string(p.addr) +
+                      " neither projects nor is explained");
+        }
+}
+
 int main() {
     // === abs: vertices at the projected cells, in step order ================
     {
@@ -386,6 +417,166 @@ int main() {
         nd += "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194304}\n";
         TrajectorySet ts = build_trajectories(load(nd));
         check("no mem kind -> gate stays closed", !ts.mem_present, "gate open");
+    }
+
+    // === 36 T2: a df_step rel path ANCHORS to the recording's single span ====
+    // The two-arg builder gets the terrain's Projection; its single codeimage
+    // code span pins the offsets down, so base+off is the true address.
+    {
+        const uint64_t base = 0x400000, len = 0x1000;
+        Projection proj = code_span(base, len);
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"disasm\":\"a\"}\n";
+        nd += "{\"k\":\"df_step\",\"step\":1,\"off\":2}\n";
+        nd += "{\"k\":\"df_step\",\"step\":2,\"off\":6}\n";
+        TrajectorySet ts = build_trajectories(load(nd), proj);
+
+        check("36 T2 df_step: not refused", !ts.refused(), ts.diagnostic);
+        check("36 T2 df_step: basis stays rel (wire basis unchanged)",
+              ts.basis == "rel", "got '" + ts.basis + "'");
+        check("36 T2 df_step: the set is anchored", ts.anchored, "not anchored");
+        check("36 T2 df_step: one trajectory", ts.trajectories.size() == 1,
+              "got " + std::to_string(ts.trajectories.size()));
+        if (ts.trajectories.size() == 1) {
+            const Trajectory &tr = ts.trajectories[0];
+            check("36 T2 df_step: BOTH rel and anchored flags set",
+                  (tr.flags & TRAJ_RELATIVE_BASIS) && (tr.flags & TRAJ_ANCHORED),
+                  "flags=" + std::to_string(tr.flags));
+            const uint64_t off[3] = {0, 2, 6};
+            for (size_t i = 0; i < tr.points.size() && i < 3; i++) {
+                check("36 T2 df_step: addr == base + off",
+                      tr.points[i].addr == base + off[i],
+                      "got " + std::to_string(tr.points[i].addr));
+                check("36 T2 df_step: vertex measured placed",
+                      tr.points[i].placed, "placed false");
+                // THE assertion whose absence hid the bug: every anchored vertex
+                // projects onto the plane the renderer draws it on.
+                float u = 0, v = 0;
+                check("36 T2 df_step: every anchored vertex projects",
+                      proj.project(tr.points[i].addr, &u, &v),
+                      "addr " + std::to_string(tr.points[i].addr) +
+                          " did not project");
+            }
+        }
+        check("36 T2 df_step: placement counted (all placed)",
+              ts.pc_points == 3 && ts.pc_placed == 3,
+              std::to_string(ts.pc_placed) + "/" + std::to_string(ts.pc_points));
+        placed_or_explained("36 T2 df_step", ts, proj);
+    }
+
+    // === 36 T2: a rel `trace` anchors the same way ==========================
+    {
+        const uint64_t base = 0x400000;
+        Projection proj = code_span(base, 0x1000);
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"trace\",\"basis\":\"rel\",\"off\":0}\n";
+        nd += "{\"k\":\"trace\",\"basis\":\"rel\",\"off\":4}\n";
+        nd += "{\"k\":\"trace\",\"basis\":\"rel\",\"off\":8}\n";
+        TrajectorySet ts = build_trajectories(load(nd), proj);
+        check("36 T2 rel trace: anchored", ts.anchored, "not anchored");
+        check("36 T2 rel trace: basis still rel", ts.basis == "rel", ts.basis);
+        if (!ts.trajectories.empty()) {
+            const Trajectory &tr = ts.trajectories[0];
+            check("36 T2 rel trace: both flags",
+                  (tr.flags & TRAJ_RELATIVE_BASIS) && (tr.flags & TRAJ_ANCHORED),
+                  "flags");
+            check("36 T2 rel trace: addr == base + off",
+                  tr.points.size() == 3 && tr.points[0].addr == base &&
+                      tr.points[1].addr == base + 4 &&
+                      tr.points[2].addr == base + 8,
+                  "not placed");
+        }
+        check("36 T2 rel trace: all placed",
+              ts.pc_placed == ts.pc_points && ts.pc_points == 3, "count");
+        placed_or_explained("36 T2 rel trace", ts, proj);
+    }
+
+    // === 36 T2: two code spans refuse HONESTLY (not pick-the-first) ==========
+    {
+        std::vector<Region> regs;
+        Region a;
+        a.base = 0x400000;
+        a.len = 0x1000;
+        a.kind = Region::Code;
+        Region b;
+        b.base = 0x800000;
+        b.len = 0x2000;
+        b.kind = Region::Code;
+        regs.push_back(a);
+        regs.push_back(b);
+        Projection proj = build_projection(std::move(regs));
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0}\n";
+        nd += "{\"k\":\"df_step\",\"step\":1,\"off\":2}\n";
+        TrajectorySet ts = build_trajectories(load(nd), proj);
+        check("36 T2 two-span: NOT anchored", !ts.anchored, "anchored");
+        check("36 T2 two-span: refused() still false (each vertex merely failed)",
+              !ts.refused(), "refused");
+        check("36 T2 two-span: placement_note names both bases",
+              ts.placement_note.find("0x400000") != std::string::npos &&
+                  ts.placement_note.find("0x800000") != std::string::npos,
+              "note: " + ts.placement_note);
+        check("36 T2 two-span: nothing placed", ts.pc_placed == 0,
+              std::to_string(ts.pc_placed));
+        if (!ts.trajectories.empty()) {
+            const Trajectory &tr = ts.trajectories[0];
+            check("36 T2 two-span: NO TRAJ_ANCHORED flag",
+                  (tr.flags & TRAJ_ANCHORED) == 0, "anchored flag set");
+            check("36 T2 two-span: addrs left VERBATIM (raw offsets)",
+                  tr.points.size() == 2 && tr.points[0].addr == 0 &&
+                      tr.points[1].addr == 2,
+                  "addrs mutated");
+        }
+        placed_or_explained("36 T2 two-span", ts, proj);
+    }
+
+    // === 36 T2: an offset past the span is COUNTED, not placed (the clamp) ===
+    {
+        const uint64_t base = 0x400000, len = 0x1000;
+        Projection proj = code_span(base, len);
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0}\n";    // in span
+        nd += "{\"k\":\"df_step\",\"step\":1,\"off\":4096}\n"; // == len: clamped out
+        TrajectorySet ts = build_trajectories(load(nd), proj);
+        check("36 T2 clamp: anchored", ts.anchored, "not anchored");
+        check("36 T2 clamp: two points offered", ts.pc_points == 2,
+              std::to_string(ts.pc_points));
+        check("36 T2 clamp: one placed, one not (counted, not dropped)",
+              ts.pc_placed == 1, std::to_string(ts.pc_placed));
+        check("36 T2 clamp: the shortfall note names the clamp",
+              ts.placement_note.find("clamp") != std::string::npos,
+              "note: " + ts.placement_note);
+        if (!ts.trajectories.empty() && ts.trajectories[0].points.size() == 2) {
+            const Trajectory &tr = ts.trajectories[0];
+            check("36 T2 clamp: in-span vertex placed at base+off",
+                  tr.points[0].placed && tr.points[0].addr == base,
+                  "in-span not placed");
+            check("36 T2 clamp: out-of-span vertex NOT placed, addr verbatim",
+                  !tr.points[1].placed && tr.points[1].addr == 4096,
+                  "clamp vertex mutated or marked placed");
+        }
+        placed_or_explained("36 T2 clamp", ts, proj);
+    }
+
+    // === 36 T2: no code span leaves the path unanchored and SAYS SO =========
+    {
+        std::vector<Region> regs;
+        Region d;
+        d.base = 0x600000;
+        d.len = 0x1000;
+        d.kind = Region::Data; // a non-code region does not anchor
+        regs.push_back(d);
+        Projection proj = build_projection(std::move(regs));
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0}\n";
+        nd += "{\"k\":\"df_step\",\"step\":1,\"off\":4}\n";
+        TrajectorySet ts = build_trajectories(load(nd), proj);
+        check("36 T2 no-code: NOT anchored", !ts.anchored, "anchored");
+        check("36 T2 no-code: reason names the missing codeimage code span",
+              ts.placement_note.find("no codeimage code span") !=
+                  std::string::npos,
+              "note: " + ts.placement_note);
+        placed_or_explained("36 T2 no-code", ts, proj);
     }
 
     if (failures) {

@@ -50,10 +50,21 @@ struct Projection {
 // One trajectory sample: the PC (or a data access) at a logical time.
 struct TrajPoint {
     uint64_t t = 0;    // trace step index (time = vertical axis)
-    uint64_t addr = 0; // absolute address (basis:"abs") or region-relative
+    uint64_t addr = 0; // an address in the recording's address space: absolute
+                       // for a measured abs vertex; the DERIVED absolute address
+                       // base+off for a rel offset the anchor placed (36 T2 —
+                       // set.basis still reads "rel"); the raw wire offset for a
+                       // rel offset the anchor could NOT place (with placed=false)
     enum { Exact, Statistical } fidelity = Exact; // trace/PT vs ibs survey
     bool is_access = false; // false = PC vertex; true = a data-access mark
     int32_t tid = -1;       // -1 = single-trajectory replay; else per-thread
+    // 36 T5: true for a measured absolute vertex and for a rel offset the anchor
+    // placed; FALSE for one it could not place (off past the codeimage span,
+    // where `addr` is still the raw wire offset). Defaulting true leaves every
+    // existing producer and hand-built test point unchanged; the anchoring pass
+    // MEASURES it. Convergence skips a !placed vertex so a raw offset — which
+    // could otherwise alias a real cell — is never bucketed.
+    bool placed = true;
 };
 
 // Height field over the projection's cells.

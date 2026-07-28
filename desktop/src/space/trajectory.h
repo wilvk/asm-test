@@ -31,6 +31,12 @@ enum TrajFlag : uint32_t {
     // survey-derived statistical residency: every point is Statistical and this
     // trajectory is NEVER joined into an exact one (the honesty invariant).
     TRAJ_STATISTICAL = 1u << 1,
+    // 36 T2: rel offsets PLACED against the recording's single codeimage span —
+    // a DERIVED placement (base+off), not a measured absolute address. Set
+    // ALONGSIDE TRAJ_RELATIVE_BASIS (the wire basis is still rel and must keep
+    // saying so), so the renderer may now place these vertices and convergence
+    // (T5) admits an anchored rel path where it still refuses an unanchored one.
+    TRAJ_ANCHORED = 1u << 2,
 };
 
 // One trajectory: the ordered TrajPoints for a single tid (a replay recording
@@ -56,6 +62,12 @@ struct TrajectorySet {
     std::string diagnostic;   // non-empty => REFUSED: mixed / absent basis
     bool mem_present = false; // the "kind present?" gate: mem events were seen
 
+    // 36 T2: rel PC-path anchoring against the recording's codeimage span.
+    uint64_t pc_points = 0;     // PC vertices offered to the plane
+    uint64_t pc_placed = 0;     // of those, how many project onto it
+    bool anchored = false;      // a rel path was PLACED against the single span
+    std::string placement_note; // why a rel path was not (fully) placed
+
     bool refused() const { return !diagnostic.empty(); }
 };
 
@@ -71,8 +83,20 @@ struct TrajectorySet {
 //   - statistical residency from `survey` edges, as a SEPARATE Statistical
 //     trajectory that is never merged into an exact path.
 // Refuses (sets `diagnostic`, empties `trajectories`) when the PC path mixes
-// address bases, or an event omits `basis` — mirroring 04's canvas rule. Pure
-// and engine-free (D4).
+// address bases, or an event omits `basis` — mirroring 04's canvas rule.
+//
+// 36 T2 — a rel PC path (df_step offsets, or a rel `trace`) is ANCHORED onto the
+// absolute plane when `proj`'s regions pin the span down (exactly one codeimage
+// code span): each PC vertex is rewritten to base+off, TRAJ_ANCHORED is set
+// alongside TRAJ_RELATIVE_BASIS, and `anchored`/`pc_placed`/`pc_points` record
+// the placement. When the span is absent or ambiguous the offsets are left
+// verbatim and `placement_note` states why — never a silent drop. Pure and
+// engine-free (D4).
+TrajectorySet build_trajectories(const Recording &r, const Projection &proj);
+// Overload — TEST / PLANE-FREE ONLY. Builds with no Projection, so a rel path is
+// never anchored (offsets stay verbatim, exactly as before 36 T2, and
+// placement_note carries resolve_anchor's "no codeimage code span" reason).
+// Production always passes the terrain's Projection so a rel path can be placed.
 TrajectorySet build_trajectories(const Recording &r);
 
 } // namespace asmdesk::space

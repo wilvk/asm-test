@@ -655,7 +655,10 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
         sv.has_regions = !regs.empty();
         sv.terr =
             space::build_terrain(space::build_projection(std::move(regs)), r);
-        sv.traj = space::build_trajectories(r);
+        // 36 T2: the terrain's Projection anchors a rel PC path onto the plane
+        // (build_terrain moved it into sv.terr.proj above; the terrain is built
+        // first precisely so it is available here).
+        sv.traj = space::build_trajectories(r, sv.terr.proj);
         sv.conv = space::detect_convergences(sv.traj, sv.terr.proj);
         sv.hud.nsteps = sv.terr.nsteps;
         sv.hud.t = sv.terr.nsteps; // show the whole trace by default
