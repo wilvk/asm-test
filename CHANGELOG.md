@@ -6,6 +6,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`df_step` states its region base on the wire (`rbase`)**
+  (docs/internal/gui/37-region-tag-on-df-step.md). 36 anchors a routine-relative
+  `df_step` offset by *deriving* the base from a recording's single `codeimage`
+  span, and must refuse whenever a recording carries zero or ≥2 spans — which a
+  live `auto` candidate walk produces routinely. The producer already knows the
+  base as it writes the offset, so it now states it: `df_step` gains an optional
+  `rbase` (emitted only when nonzero, so a `rbase == 0` step is byte-identical to
+  pre-37). All four producers state it (live ptrace, both corpus recorders, the
+  Author VM). The desktop reader places a tagged step from `rbase + off` — a
+  **stated** fact — with per-event precedence over 36's recording-wide anchor, and
+  grades HOW it was placed (`wire` / `single-span` / `mixed`) in the HUD, so a
+  multi-span capture that 36 alone must refuse now places every vertex; 36's
+  single-span anchor remains the permanent fallback for pre-37 recordings and for
+  rel `trace`. The terrain churn walk is redeemed as a sound "region as-of this
+  step" resolver — it counts `df_step` offsets as steps (a dataflow recording's
+  churn no longer pins at step 0) and keys the churn join on each step's own
+  `rbase`. Additive optional field on a known kind — no envelope bump, no break.
+
 ### Fixed
 
 - **The 3D overview places a live routine-relative path, or says why not**

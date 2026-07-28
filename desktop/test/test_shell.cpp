@@ -441,27 +441,31 @@ int main() {
                    std::to_string(sv.traj.pc_points))
                       .c_str());
 
-            // The honesty chrome: a df capture raises exactly the residency +
-            // derived-placement chips, and NEITHER "NOT PLACED" refusal. Deleting
-            // a chip branch fails one of these named checks.
+            // The honesty chrome: the df capture raises the residency chip and —
+            // now that 37 T1 tags scene-df-loop's df_step with rbase — the WIRE
+            // placement chip (not the derived-placement one), and NEITHER "NOT
+            // PLACED" refusal. Deleting a chip branch fails one of these checks.
+            check("scene/df anchor_source is wire (rbase-tagged golden)",
+                  sv.traj.anchor_source == "wire",
+                  ("got '" + sv.traj.anchor_source + "'").c_str());
             auto chips = scene3d::placement_chips(sv.terr, sv.traj);
-            bool df_residency = false, derived = false, not_placed = false;
+            bool df_residency = false, wire = false, not_placed = false;
             for (const scene3d::PlacementChip &c : chips) {
                 if (c.text.find("single-step residency (df_step)") !=
                     std::string::npos)
                     df_residency = true;
-                if (c.text.find("anchored to the codeimage span") !=
+                if (c.text.find("stated on the wire (rbase)") !=
                     std::string::npos)
-                    derived = true;
+                    wire = true;
                 if (c.text.find("NOT PLACED") != std::string::npos)
                     not_placed = true;
             }
             check("scene/df chip: single-step residency (df_step)",
                   df_residency,
                   "the df height rung must label itself, not claim coverage");
-            check(
-                "scene/df chip: rel anchored (derived placement)", derived,
-                "a fully-anchored rel path must say it is a derived placement");
+            check("scene/df chip: wire placement (rbase stated on the wire)",
+                  wire,
+                  "a wire-tagged df capture must say its span is wire-stated");
             check("scene/df chip: nothing refused as NOT PLACED", !not_placed,
                   "a placed df capture must raise no NOT PLACED refusal");
         }
@@ -540,16 +544,40 @@ int main() {
                       scene3d::PlacementChip::Warn),
                   "a partial placement must raise the K of N chip");
         }
-        { // fully anchored rel path -> derived-placement chip (Warn).
+        { // fully anchored rel path, single-span (36) -> derived-placement chip.
             TrajectorySet tr;
             tr.pc_points = 4;
             tr.pc_placed = 4;
             tr.anchored = true;
-            check("chip/derived placement",
+            tr.anchor_source = "single-span";
+            check("chip/derived placement (single-span)",
                   has(scene3d::placement_chips(TerrainModel{}, tr),
                       "anchored to the codeimage span",
                       scene3d::PlacementChip::Warn),
-                  "a fully anchored rel path must say derived placement");
+                  "a single-span anchor must say derived placement");
+        }
+        { // 37 T5: a WIRE-stated placement is a distinct, stronger claim.
+            TrajectorySet tr;
+            tr.pc_points = 4;
+            tr.pc_placed = 4;
+            tr.anchored = true;
+            tr.anchor_source = "wire";
+            check(
+                "chip/wire placement (rbase)",
+                has(scene3d::placement_chips(TerrainModel{}, tr),
+                    "stated on the wire (rbase)", scene3d::PlacementChip::Warn),
+                "a wire-stated placement must say so, distinctly from derived");
+        }
+        { // 37 T5: a MIXED recording names both mechanisms.
+            TrajectorySet tr;
+            tr.pc_points = 4;
+            tr.pc_placed = 4;
+            tr.anchored = true;
+            tr.anchor_source = "mixed";
+            check("chip/mixed placement (wire + anchor)",
+                  has(scene3d::placement_chips(TerrainModel{}, tr), "(mixed)",
+                      scene3d::PlacementChip::Warn),
+                  "a mixed recording must name both mechanisms");
         }
         { // fully placed ABS path -> no chip at all.
             TrajectorySet tr;

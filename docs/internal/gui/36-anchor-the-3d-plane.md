@@ -473,9 +473,13 @@ before T2: `TRAJ_ANCHORED` does not exist in the tree today.
   for the multi-span ambiguity — with it, the churn walk becomes a sound "region
   as-of this step" resolver and the refusal branch mostly disappears — and it is a
   producer + schema change with its own brief:
-  [37](37-region-tag-on-df-step.md). **T1's `resolve_anchor` remains the permanent
-  documented fallback** for every recording produced before 37 lands, and for rel
-  `trace` recordings, which 37 deliberately does not tag.
+  [37](37-region-tag-on-df-step.md) — **now landed (T1–T3, T5).** With it, a tagged
+  `df_step` resolves its span from the stated `rbase`, the churn walk *is* a sound
+  "region as-of this step" resolver, and the refusal branch fires only for (a)
+  recordings produced before 37 and (b) rel `trace`, which 37 deliberately does not
+  tag. **T1's `resolve_anchor` is retitled *the fallback*, never deleted** — it
+  stays permanent for exactly those two cases; the HUD grades a wire-stated
+  placement (`anchor_source == "wire"`) distinctly from this derived one.
 - **Not "region as-of this step".** That rule is **not soundly recoverable** today
   and must not be attempted: `df_step` carries no region tag; the candidate walk
   resets the version counter and restarts the `when` timeline; and the refresh path

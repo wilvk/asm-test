@@ -57,9 +57,18 @@ std::vector<PlacementChip> placement_chips(const space::TerrainModel &terr,
                           (unsigned long long)traj.pc_points);
             out.push_back({PlacementChip::Warn, buf});
         } else if (traj.anchored) {
-            out.push_back(
-                {PlacementChip::Warn,
-                 "rel: anchored to the codeimage span (derived placement)"});
+            // 37 T5: grade the placement by HOW it was resolved — a wire-STATED
+            // base (df_step.rbase) and a DERIVED single-codeimage-span anchor are
+            // different claims and must not share a label.
+            const char *label =
+                traj.anchor_source == "wire"
+                    ? "rel: span stated on the wire (rbase)"
+                : traj.anchor_source == "mixed"
+                    ? "rel: span from the wire (rbase) and the codeimage "
+                      "anchor "
+                      "(mixed)"
+                    : "rel: anchored to the codeimage span (derived placement)";
+            out.push_back({PlacementChip::Warn, label});
         }
     }
     return out;

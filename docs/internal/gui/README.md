@@ -349,8 +349,11 @@ live pane; the two-span recording 36 must refuse now places every vertex, the
 untagged fallback stays intact; T3 the terrain churn walk is redeemed — it counts
 `df_step` offsets as steps (a df recording's churn no longer pins at step 0) and
 keys the churn join + df-rung placement on each step's own `rbase`, so a
-multi-span `auto` capture gets relief and two spans churn at distinct steps) ·
-will · T4–T6 · 2026-07-29.
+multi-span `auto` capture gets relief and two spans churn at distinct steps; T5
+the HUD grades the placement by `anchor_source` — `wire` ("span stated on the
+wire (rbase)") distinct from `single-span` ("derived placement") and `mixed`;
+36's fallback reconciled in doc 36 + CHANGELOG) · will · T6 (T4 severable) ·
+2026-07-29.
 
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
