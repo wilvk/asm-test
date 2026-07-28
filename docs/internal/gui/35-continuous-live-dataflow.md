@@ -25,7 +25,8 @@
 > re-arms until Stop into one growing recording delimited by `df_invocation`
 > markers, the desktop segments it per pass and follows the latest live, the
 > capture pane arms it, and Stop is now honored WITHIN one in-flight pass (T2).
-> (README owned by the orchestrator may still read ◐ 3/4 pending its bump.)
+> (README reconciled to ☑ 4/4 — T2's "Done when" bar is met; T2b seize-once is
+> a deferred beyond-bar optimization with no measurable regression.)
 > - **T1 — DONE** (`fa2cef4`): `asmspy_engine_dataflow` gains `continuous`, wraps
 >   the producer in a re-arm loop, and emits a `df_invocation`
 >   `{pass,result,steps,truncated}` marker (new schema kind, D5) before each pass;

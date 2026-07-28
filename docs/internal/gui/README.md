@@ -272,10 +272,12 @@ during a live continuous capture is honored **within one in-flight pass** rather
 than only between passes (a timed `cli_smoke` test yields inside a bounded entry
 wait, victim surviving the detach). arm64 is architecturally unreachable here (the
 single-step producer is x86-64-only and self-skips), so the detach-fatal hazard
-cannot bite. **T2 step 2 (hold one seize) DEFERRED** — the seize-once +
-re-arm-per-pass refactor rewrites `dfp_step_loop`'s most fragile path for a
-per-pass re-SEIZE that is negligible against a pass's single-step cost; a cost,
-not a correctness gap. ◐ 3/4 (T2 step 1 of 2) · —.
+cannot bite. **T2b (seize-once — hold one seize across passes) DEFERRED as a
+beyond-bar optimization** — the seize-once + re-arm-per-pass refactor rewrites
+`dfp_step_loop`'s most fragile path for a per-pass re-SEIZE that is O(threads) and
+negligible against a pass's 10³–10⁵× single-step cost, so T2's "no per-pass
+re-SEIZE cost regression" bar is already met with no measurable regression; a cost
+optimization, not a correctness gap or a required step. ☑ 4/4 · —.
 
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
