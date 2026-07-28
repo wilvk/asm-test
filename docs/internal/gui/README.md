@@ -236,6 +236,16 @@ cross-thread hops, forks-never-touch-live, statistical-absence-proves-nothing)
 are out of scope by design — a brief there would fight the design.
 
 **Follow-on briefs (beyond the six roots).**
+[34-playhead-and-scene-reach.md](34-playhead-and-scene-reach.md) — close the three
+seams in the *"pick a process → watch the 3D graph change over time"* flow: put the
+register Scrubber on the shared **execution-step** brush (T1), give the 3D overview a
+`5` keyroute + a "View in 3D" handoff from the Live-capture pane (T2), add a
+**play/pause transport** to each playhead (T3), and name each axis so the two
+playheads read as different axes, not a faked global clock (T4/honesty). A pure
+`ShellState`/`HudState` desktop brief — no producer/engine/schema change, driven by
+the null backend (D4). Authored 2026-07-28 against HEAD `326afde`.
+☐ 0/5 · `agent-opus-b · doc34 T1–T5 · 2026-07-28`.
+
 [35-continuous-live-dataflow.md](35-continuous-live-dataflow.md) — make the live
 `dataflow` / `auto` engine **re-arm and keep capturing until Stop** (today it is
 one-shot: "auto + Start starts then stops"), into one continuously growing
