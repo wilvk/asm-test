@@ -346,7 +346,11 @@ the wire — `streams` decodes `insn_rbase`, the trajectory places a tagged df_s
 per-event at `rbase+off` (per-event precedence over 36's anchor) and grades it in
 `anchor_source` (`wire`/`single-span`/`mixed`), `ptslice` populates it for the
 live pane; the two-span recording 36 must refuse now places every vertex, the
-untagged fallback stays intact) · will · T3–T6 · 2026-07-29.
+untagged fallback stays intact; T3 the terrain churn walk is redeemed — it counts
+`df_step` offsets as steps (a df recording's churn no longer pins at step 0) and
+keys the churn join + df-rung placement on each step's own `rbase`, so a
+multi-span `auto` capture gets relief and two spans churn at distinct steps) ·
+will · T4–T6 · 2026-07-29.
 
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then

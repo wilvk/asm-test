@@ -544,6 +544,88 @@ int main() {
         steps_explained("I", m);
     }
 
+    // === Fixture J: a df recording's churn lands at its TRUE step (37 T3) ====
+    // Before 37 the churn walk counted only `trace` offsets, so a df recording's
+    // detected churn pinned at step 0. Now its df_step offsets are counted and the
+    // churn join keys on the step's own rbase.
+    {
+        Recording rec = mk_rec(
+            "{\"asmtrace\":1,\"provenance\":{\"backend\":\"ptrace-dataflow\","
+            "\"exact\":true,\"trust\":\"exact\"},\"arch\":\"x86_64\"}\n"
+            "{\"k\":\"codeimage\",\"base\":4194304,\"len\":256,\"version\":0,"
+            "\"when\":1,\"bytes\":\"90\"}\n"
+            "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"rbase\":4194304}\n"
+            "{\"k\":\"df_step\",\"step\":1,\"off\":16,\"rbase\":4194304}\n"
+            "{\"k\":\"codeimage\",\"base\":4194304,\"len\":256,\"version\":1,"
+            "\"when\":5,\"bytes\":\"cc\"}\n" // churn after 2 df_steps
+            "{\"k\":\"df_step\",\"step\":2,\"off\":0,\"rbase\":4194304}\n"
+            "{\"k\":\"df_step\",\"step\":3,\"off\":16,\"rbase\":4194304}\n"
+            "{\"k\":\"end\",\"events\":6,\"truncated\":false,"
+            "\"drops\":{\"lost\":0,\"throttled\":false}}\n");
+        Projection p = build_projection(regions_from_codeimage(rec));
+        TerrainModel m = build_terrain(p, rec);
+        auto churn_cells = [](const Terrain &t) {
+            size_t n = 0;
+            for (uint32_t f : t.flags)
+                if (f & TF_CHURN)
+                    n++;
+            return n;
+        };
+        check("J: a df recording detects churn", m.churn_present, "no churn");
+        check("J: no churn before the bump (t=1)", churn_cells(m.slice(1)) == 0,
+              "churn landed too early (the step-0 bug?)");
+        check("J: churn appears at the TRUE step (t=2), not step 0",
+              churn_cells(m.slice(2)) > 0, "churn did not land at step 2");
+        steps_explained("J", m);
+    }
+
+    // === Fixture K: two tagged spans ⇒ two DISTINCT, correct churn steps =====
+    {
+        Recording rec =
+            mk_rec("{\"asmtrace\":1,\"provenance\":{\"backend\":\"ptrace-"
+                   "dataflow\","
+                   "\"exact\":true,\"trust\":\"exact\"},\"arch\":\"x86_64\"}\n"
+                   "{\"k\":\"codeimage\",\"base\":4194304,\"len\":256,"
+                   "\"version\":0,"
+                   "\"when\":1,\"bytes\":\"90\"}\n"
+                   "{\"k\":\"codeimage\",\"base\":8388608,\"len\":256,"
+                   "\"version\":0,"
+                   "\"when\":1,\"bytes\":\"90\"}\n"
+                   "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"rbase\":4194304}"
+                   "\n" // A
+                   "{\"k\":\"df_step\",\"step\":1,\"off\":0,\"rbase\":8388608}"
+                   "\n" // B
+                   "{\"k\":\"codeimage\",\"base\":4194304,\"len\":256,"
+                   "\"version\":1," // A churn @2
+                   "\"when\":5,\"bytes\":\"cc\"}\n"
+                   "{\"k\":\"df_step\",\"step\":2,\"off\":16,\"rbase\":4194304}"
+                   "\n" // A
+                   "{\"k\":\"df_step\",\"step\":3,\"off\":16,\"rbase\":8388608}"
+                   "\n" // B
+                   "{\"k\":\"codeimage\",\"base\":8388608,\"len\":256,"
+                   "\"version\":1," // B churn @4
+                   "\"when\":9,\"bytes\":\"cc\"}\n"
+                   "{\"k\":\"df_step\",\"step\":4,\"off\":0,\"rbase\":8388608}"
+                   "\n" // B
+                   "{\"k\":\"end\",\"events\":9,\"truncated\":false,"
+                   "\"drops\":{\"lost\":0,\"throttled\":false}}\n");
+        Projection p = build_projection(regions_from_codeimage(rec));
+        TerrainModel m = build_terrain(p, rec);
+        bool ok = false;
+        uint32_t cA = cell_at(p, 0x400000, &ok); // span A, off 0 (steps 0)
+        uint32_t cB = cell_at(p, 0x800000, &ok); // span B, off 0 (steps 1,4)
+        auto churned = [&](uint32_t cell, uint64_t t) {
+            return (m.slice(t).flags[cell] & TF_CHURN) != 0;
+        };
+        check("K: span A churns at ITS step (2), not before",
+              !churned(cA, 1) && churned(cA, 2), "span A churn step wrong");
+        check("K: span B churns at ITS step (4), not span A's (2)",
+              !churned(cB, 3) && churned(cB, 4), "span B churn step wrong");
+        check("K: the two spans churn at DISTINCT steps (rbase-keyed, not 0)",
+              churned(cA, 2) && !churned(cB, 2), "spans share a churn step");
+        steps_explained("K", m);
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d terrain check(s) failed\n", failures);
         return 1;

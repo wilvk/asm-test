@@ -188,12 +188,13 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
     // FIRST bump of that base, so a slice t (inclusive) shows CHURN over the base
     // once t >= churn_step[base].
     //
-    // 36 T3 / 37: this seq-merge with a step counter is the RIGHT SHAPE for a
-    // sound "region as-of this step" resolver, but is unusable for a df recording
-    // today — it counts only `trace` offsets (a df recording has none, so its
-    // churn pins at step 0), retains only the FIRST bump per base, and never walks
-    // df_step. Reuse it once 37 tags df_step with its region on the wire; until
-    // then the df rung below carries no churn.
+    // 37 T3: redeemed for a df recording. A dataflow recording carries no `trace`,
+    // so counting only trace offsets pinned every detected churn at step 0 (the
+    // pre-existing bug 36 T3 flagged) — now its df_step offsets are counted as
+    // steps too. It still retains only the FIRST bump per base; the honest limit
+    // that version resets to 0 mid-recording on a candidate walk (so a re-armed
+    // span's baseline never registers as churn under the greater-than rule) is
+    // benign while candidates have distinct bases and is stated, not papered over.
     struct SE {
         uint64_t seq;
         const Event *ev;
@@ -203,6 +204,13 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
     if (auto it = rec.by_kind.find("trace"); it != rec.by_kind.end())
         for (const Event &e : it->second)
             ord.push_back({e.seq, &e, false});
+    // A df recording has no `trace`; count its df_step offsets as steps so the
+    // churn walk advances (a recording carrying `trace` uses that and ignores
+    // df_step, so the counter stays in one step space).
+    if (s.trace.insns.empty())
+        if (auto it = rec.by_kind.find("df_step"); it != rec.by_kind.end())
+            for (const Event &e : it->second)
+                ord.push_back({e.seq, &e, false});
     if (auto it = rec.by_kind.find("codeimage"); it != rec.by_kind.end())
         for (const Event &e : it->second)
             ord.push_back({e.seq, &e, true});
@@ -287,20 +295,37 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
         m.height_source = "df_step";
         m.height_note = "coarse: heights from single-step residency (df_step) "
                         "— no block coverage";
-        if (!anchor.ok && m.anchor_error.empty())
+        // 37 T3: place each step against its OWN region base (rbase) when the wire
+        // states it — so a MULTI-span df recording (an `auto` candidate walk) gets
+        // relief, not just the single-span case 36 could anchor. An untagged step
+        // falls back to 36's single-codeimage anchor. No cells AND no wire base AND
+        // no single span ⇒ anchor_error (a flat plane that says why).
+        if (!anchor.ok && !s.df.rbase_present && m.anchor_error.empty())
             m.anchor_error =
                 anchor.reason; // no span to place df offsets against
         std::map<uint32_t, std::vector<uint64_t>> df_cell_steps;
+        std::map<uint32_t, uint64_t>
+            df_cell_base; // cell -> region base (churn)
         for (uint32_t st = 0; st < s.df.nsteps; ++st) {
             if (!s.df.has_step(st))
                 continue; // an uncovered step index has an UNKNOWN offset, not 0
-            uint64_t abs = 0;
-            if (!anchor.ok || !anchor.place(s.df.insn_off[st], &abs))
-                continue;
+            const uint64_t rbase =
+                st < s.df.insn_rbase.size() ? s.df.insn_rbase[st] : 0;
+            uint64_t abs = 0, base_i = 0;
+            if (rbase) {
+                abs = rbase + s.df.insn_off[st]; // 37: the wire STATES the base
+                base_i = rbase;
+            } else if (anchor.ok && anchor.place(s.df.insn_off[st], &abs)) {
+                base_i = anchor.base; // 36's single-span derivation
+            } else {
+                continue; // no base to place this step against
+            }
             bool ok = false;
             uint32_t c = cell_of(proj, m.w, m.h, abs, &ok);
-            if (ok)
+            if (ok) {
                 df_cell_steps[c].push_back(st);
+                df_cell_base[c] = base_i;
+            }
         }
         m.nsteps = s.df.nsteps; // the time axis is the df step count
         m.code.reserve(df_cell_steps.size());
@@ -309,10 +334,14 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
             cc.cell = kv.first;
             cc.steps = std::move(kv.second);
             cc.full_heat = static_cast<uint32_t>(cc.steps.size()); // step count
-            // No churn timing: the churn walk above counts `trace` offsets, and a
-            // df recording carries none. 37 states the region on the wire, which
-            // turns that walk into a sound "region as-of this step" resolver over
-            // df_step — see the churn-walk note above.
+            // 37 T3: key the churn join on the step's OWN region base (rbase),
+            // NOT the geometric unproject the trace rung uses — sound even for an
+            // offset projecting into no region, and correct across the multiple
+            // spans a candidate walk carries. The churn walk above now counts
+            // df_step offsets, so this lands at the true step, not step 0.
+            auto f = churn_step.find(df_cell_base[kv.first]);
+            if (f != churn_step.end())
+                cc.churn_step = f->second;
             m.code.push_back(std::move(cc));
         }
     }
