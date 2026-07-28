@@ -24,8 +24,15 @@
 > disagrees with the code when you implement, the code wins — re-verify, then fix
 > this doc in the same change.
 >
-> **Status (2026-07-29) — ☐ 0/6.** Not started. **This is a producer + schema
-> change (D5).**
+> **Status (2026-07-29) — ☑ 5/6. LANDED.** T1 the `rbase` writer + all 4 producers +
+> schema + corpus regen (`6612ef8`); T2 the desktop reader resolves the span from
+> the wire (`ad32299`); T3 the churn walk region-as-of-step resolver (`06f2991`, + a
+> review-surfaced honesty fix `07fa0d1`); T5 the `anchor_source` HUD grade + 36
+> reconciliation (`7f5b048`); T6 the `scene-df-two-span` end-to-end golden
+> (`2516d06`). **T4 (`when`) DEFERRED as the severable extension this brief marks it**
+> — a serve-path disasm-version refinement, no view breaks without it (reader-rule 2
+> is sound). Corpus byte-stable under docker-cli; a live `cli_smoke` asserts
+> `df_step.rbase` == the region base. This is a producer + schema change (D5).
 
 ## Why this work exists
 
