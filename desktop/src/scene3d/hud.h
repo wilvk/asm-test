@@ -23,14 +23,24 @@ namespace asmdesk::scene3d {
 // 36 T4: the placement-provenance chips, as PURE DATA so the honesty chrome is
 // testable without an ImGui frame — deleting a branch fails a named check. Bad is
 // a refusal (rendered ALL CAPS, in the refuse colour); Warn is a graded fact
-// (lowercase `label: explanation`, in the warn colour). draw_scene_hud renders
-// this list into the chip row; the tests assert its contents per scenario.
+// (lowercase `label: explanation`, in the warn colour); Ok is a good state (green,
+// the basis chip). draw_scene_hud renders these into the chip row; the tests
+// assert their contents per scenario.
 struct PlacementChip {
-    enum Sev { Bad, Warn } sev;
+    enum Sev { Bad, Warn, Ok } sev;
     std::string text;
 };
 std::vector<PlacementChip> placement_chips(const space::TerrainModel &terr,
                                            const space::TrajectorySet &traj);
+
+// 36 T4 defect 1: the BASIS chip as pure data, so its fallback is testable —
+// reverting it must fail a named check. Returns a Bad chip for a mixed-basis
+// refusal, an Ok chip for a valid basis (falling back to the TRAJECTORY's basis
+// when the terrain canvas has none — the df-only case 25 T6 promised but the HUD
+// never drew, because it keyed only on the canvas basis), or an empty `text`
+// (Ok) when there is no basis to report.
+PlacementChip basis_chip(const space::TerrainModel &terr,
+                         const space::TrajectorySet &traj);
 
 struct HudState {
     uint64_t t = 0;      // playhead: the inclusive terrain slice [0, t]

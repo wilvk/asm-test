@@ -627,6 +627,51 @@ int main() {
                   scene3d::placement_chips(TerrainModel{}, tr).empty(),
                   "a fully placed abs path must raise no placement chip");
         }
+        // 36 T4 defect 1 (review): the BASIS chip is now pure, so its fallback is
+        // testable — reverting the `: traj.basis` fallback fails the df-only case.
+        { // abs canvas basis -> the abs chip.
+            TerrainModel t;
+            t.basis = "abs";
+            auto bc = scene3d::basis_chip(t, TrajectorySet{});
+            check("chip/basis abs",
+                  bc.sev == scene3d::PlacementChip::Ok &&
+                      bc.text.find("abs: true address-space path") !=
+                          std::string::npos,
+                  bc.text.c_str());
+        }
+        { // rel canvas basis -> the rel chip.
+            TerrainModel t;
+            t.basis = "rel";
+            auto bc = scene3d::basis_chip(t, TrajectorySet{});
+            check("chip/basis rel",
+                  bc.sev == scene3d::PlacementChip::Ok &&
+                      bc.text.find("routine-relative") != std::string::npos,
+                  bc.text.c_str());
+        }
+        { // THE defect-1 case: a df-only recording has an EMPTY canvas basis, so
+            // the basis chip MUST fall back to the trajectory's basis (rel).
+            TerrainModel t; // t.basis == "" (df-only: no trace canvas)
+            TrajectorySet tr;
+            tr.basis = "rel";
+            auto bc = scene3d::basis_chip(t, tr);
+            check(
+                "chip/basis df-only falls back to traj.basis (25 T6 rel chip)",
+                bc.sev == scene3d::PlacementChip::Ok &&
+                    bc.text.find("routine-relative") != std::string::npos,
+                ("reverting the traj.basis fallback drops the rel chip: '" +
+                 bc.text + "'")
+                    .c_str());
+        }
+        { // mixed basis -> the refusal chip.
+            TerrainModel t;
+            t.basis_error = "mixed";
+            auto bc = scene3d::basis_chip(t, TrajectorySet{});
+            check("chip/basis mixed -> EXACT TERRAIN REFUSED",
+                  bc.sev == scene3d::PlacementChip::Bad &&
+                      bc.text.find("EXACT TERRAIN REFUSED") !=
+                          std::string::npos,
+                  bc.text.c_str());
+        }
     }
 
     // --- 19 (dockable panes keystone): the docked shell draws REAL kPane* panes -

@@ -31,6 +31,13 @@ void chip(const ImVec4 &col, const char *text, bool &first) {
     first = false;
 }
 
+// Map a PlacementChip severity to its shared-palette colour.
+const ImVec4 &sev_col(PlacementChip::Sev s) {
+    return s == PlacementChip::Bad    ? kBad
+           : s == PlacementChip::Warn ? kWarn
+                                      : kOk;
+}
+
 } // namespace
 
 std::vector<PlacementChip> placement_chips(const space::TerrainModel &terr,
@@ -74,6 +81,24 @@ std::vector<PlacementChip> placement_chips(const space::TerrainModel &terr,
     return out;
 }
 
+PlacementChip basis_chip(const space::TerrainModel &terr,
+                         const space::TrajectorySet &traj) {
+    if (!terr.basis_error.empty())
+        return {PlacementChip::Bad, "EXACT TERRAIN REFUSED (mixed basis)"};
+    // 36 T4 (defect 1): a df-only recording has an EMPTY terr.basis (no `trace`
+    // feeds the canvas), so fall back to the trajectory's basis — which DOES say
+    // "rel". This finally reports the rel chip 25 T6 promised but that never fired
+    // because the HUD keyed only on the canvas basis. Deleting the `: traj.basis`
+    // fallback makes a df-only recording return an empty basis chip — which a
+    // named test now catches.
+    const std::string &basis = !terr.basis.empty() ? terr.basis : traj.basis;
+    if (basis.empty())
+        return {PlacementChip::Ok, ""}; // nothing to say
+    return {PlacementChip::Ok, basis == "abs"
+                                   ? "abs: true address-space path"
+                                   : "rel: routine-relative (not a true path)"};
+}
+
 void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                     const space::TrajectorySet &traj) {
     ImGui::Begin("3D overview");
@@ -86,27 +111,18 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     ImGui::TextUnformatted("provenance:");
     ImGui::SameLine();
     bool first = true;
-    if (!terr.basis_error.empty()) {
-        chip(kBad, "EXACT TERRAIN REFUSED (mixed basis)", first);
-    } else {
-        // 36 T4 (defect 1): a df-only recording has an EMPTY terr.basis (no
-        // `trace` feeds the canvas), so fall back to the trajectory's basis —
-        // which DOES say "rel". This finally draws the rel chip 25 T6 promised
-        // but that never fired because the HUD keyed only on the canvas basis.
-        const std::string &basis =
-            !terr.basis.empty() ? terr.basis : traj.basis;
-        if (!basis.empty())
-            chip(kOk,
-                 basis == "abs" ? "abs: true address-space path"
-                                : "rel: routine-relative (not a true path)",
-                 first);
+    // The basis chip is now PURE (basis_chip), so its defect-1 traj.basis fallback
+    // is testable — reverting it fails a named check.
+    {
+        const PlacementChip bc = basis_chip(terr, traj);
+        if (!bc.text.empty())
+            chip(sev_col(bc.sev), bc.text.c_str(), first);
     }
     if (traj.refused())
         chip(kBad, "trajectory refused", first);
     // 36 T4: the placement chrome — nothing about anchoring is silent.
     for (const PlacementChip &pc : placement_chips(terr, traj))
-        chip(pc.sev == PlacementChip::Bad ? kBad : kWarn, pc.text.c_str(),
-             first);
+        chip(sev_col(pc.sev), pc.text.c_str(), first);
     // coarse-vs-rich
     chip(terr.mem_present ? kOk : kWarn,
          terr.mem_present ? "rich: per-access memory"
