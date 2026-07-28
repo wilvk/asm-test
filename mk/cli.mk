@@ -397,6 +397,13 @@ $(BUILD)/test_graphsort: cli/test_graphsort.c cli/asmspy_graphsort.h \
 $(BUILD)/test_ghash: cli/test_ghash.c cli/asmspy_ghash.h | $(BUILD)
 	$(CC) $(CFLAGS) -Icli -o $@ cli/test_ghash.c
 
+# test_sha256 — pins cli/asmtrace_sha256.h (the `code` header's routine-identity
+# digest) against the published FIPS-180-4 vectors, so a transcription typo in
+# the algorithm cannot pass as a wrong-but-stable hash the golden corpus blesses.
+# Header-only + pure C, so it runs on every host the smoke does.
+$(BUILD)/test_sha256: cli/test_sha256.c cli/asmtrace_sha256.h | $(BUILD)
+	$(CC) $(CFLAGS) -Icli -o $@ cli/test_sha256.c
+
 # test_treefilter — headless unit test for the call-tree output filter
 # (cli/asmspy_treefilter.h: --tree --depth/--focus/--module). Replays scripted
 # call/ret streams through the filter, so the focus open/close and depth re-base
@@ -576,7 +583,8 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_arch $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
            $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/test_autoregion \
-           $(BUILD)/test_ghash $(BUILD)/test_asmtrace $(BUILD)/test_libasmspy \
+           $(BUILD)/test_ghash $(BUILD)/test_sha256 $(BUILD)/test_asmtrace \
+           $(BUILD)/test_libasmspy \
            $(BUILD)/exec_victim $(BUILD)/exec_stage2 \
            $(BUILD)/fork_victim $(BUILD)/clone_victim \
            $(BUILD)/sock_victim $(BUILD)/longjmp_victim \

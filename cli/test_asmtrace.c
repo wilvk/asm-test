@@ -169,6 +169,10 @@ typedef struct {
     int prov_exact;    /* header provenance.exact             */
     int prov_redacted; /* header provenance.redacted          */
     char backend[64];  /* header provenance.backend           */
+    int code_present;  /* header carried a `code` object      */
+    char code_name[64];
+    char code_sha[80];
+    long long code_len;
 } recording_t;
 
 /* Read one recording from an already-open stream. Never fails hard: what it
@@ -198,6 +202,18 @@ static void read_stream(FILE *f, recording_t *r) {
                 field_bool(prov, "exact", &r->prov_exact);
                 field_bool(prov, "redacted", &r->prov_redacted);
                 field_str(prov, "backend", r->backend, sizeof r->backend);
+            }
+            /* The optional `code` routine identity (28 R1 T1). Scanning from the
+             * `"code":` position keeps producer's own "name" out of the match —
+             * producer is emitted earlier on the line. */
+            {
+                const char *codep = strstr(line, "\"code\":");
+                if (codep) {
+                    r->code_present = 1;
+                    field_str(codep, "name", r->code_name, sizeof r->code_name);
+                    field_str(codep, "sha256", r->code_sha, sizeof r->code_sha);
+                    field_ll(codep, "len", &r->code_len);
+                }
             }
             continue;
         }
@@ -298,6 +314,43 @@ static void test_header_and_roundtrip(void) {
           "kinds not read back in written order");
     check_str("writer.provenance_backend", r.backend, "emu-l0");
     check("writer.provenance_exact", r.prov_exact == 1, NULL);
+}
+
+/* The `code` routine-identity header (28 R1 T1): armed via
+ * asmtrace_writer_set_code, it rides after the identity cluster; unarmed, the
+ * object is OMITTED (never a zero hash). */
+static void test_code_header(void) {
+    char path[600];
+    recording_t r;
+    asmtrace_writer_t w;
+    asmtrace_prov_t p = {"emu-l0", 1, "exact", 0, NULL, 0};
+    const char *sha =
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+
+    /* Armed: the object is present, and its fields round-trip verbatim. */
+    tmppath(path, sizeof path, "code.asmtrace");
+    asmtrace_open(&w, path, 1);
+    asmtrace_writer_set_code(&w, "add_signed", sha, 64);
+    asmtrace_header(&w, "asmtrace_record", &p, 0, NULL);
+    asmtrace_emit(&w, "note", "\"text\":\"hi\"");
+    asmtrace_close(&w, 0, 0, NULL);
+    read_recording(path, &r);
+    check("writer.code_present", r.header_ok && r.code_present,
+          "set_code did not emit a code object");
+    check_str("writer.code_name", r.code_name, "add_signed");
+    check_str("writer.code_sha", r.code_sha, sha);
+    check_ll("writer.code_len", r.code_len, 64);
+
+    /* Disarmed: no object, and a NULL sha is the explicit disarm. */
+    tmppath(path, sizeof path, "nocode.asmtrace");
+    asmtrace_open(&w, path, 1);
+    asmtrace_writer_set_code(&w, "x", NULL, 99); /* NULL sha -> omit */
+    asmtrace_header(&w, "asmtrace_record", &p, 0, NULL);
+    asmtrace_emit(&w, "note", "\"text\":\"hi\"");
+    asmtrace_close(&w, 0, 0, NULL);
+    read_recording(path, &r);
+    check("writer.code_absent", r.header_ok && !r.code_present,
+          "a recording with no set_code must omit the code object");
 }
 
 static void test_field_order_fixed(void) {
@@ -630,6 +683,7 @@ int main(void) {
     snprintf(tmpdir, sizeof tmpdir, "%s", tmpl);
 
     test_header_and_roundtrip();
+    test_code_header();
     test_field_order_fixed();
     test_escape_edges();
     test_deterministic_omits_volatile();

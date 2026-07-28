@@ -1,4 +1,4 @@
-{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64","code":{"name":"loom-df-chain","sha256":"9a493fccb80d5bb9130791fdeb39e1f8244c2f15fb266f776f0667e9b31d3915","len":21}}
 {"k":"note","text":"df_chain(7, 5) under the deterministic emulator L0 producer"}
 {"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov rax, rdi"}
 {"k":"trace","basis":"rel","kind":"insn","off":3,"disasm":"mov qword ptr [rsp - 8], rax"}

@@ -43,6 +43,15 @@ typedef struct {
     unsigned long long events; /* event lines emitted so far             */
     int truncated;             /* sticky; folded into `end`              */
     int err;                   /* sticky: an fprintf/fclose failed       */
+
+    /* Optional `code` header identity (28 R1 T1), set BEFORE asmtrace_header
+     * by a producer that holds stable routine bytes. have_code == 0 (the
+     * memset default) omits the object entirely — a live attach with no fixed
+     * window never emits a zero hash. */
+    int have_code;
+    char code_name[128];       /* routine name (escaped at emit)         */
+    char code_sha[65];         /* lowercase-hex SHA-256 of the bytes     */
+    unsigned long long code_len; /* the byte length hashed               */
 } asmtrace_writer_t;
 
 /* Open `path` for writing and zero the rest of *w. Returns 0, or -1 (errno set
@@ -56,9 +65,21 @@ int asmtrace_open_file(asmtrace_writer_t *w, FILE *f, int deterministic);
 
 /* The header line (must be first). `producer` is "asmspy" or
  * "asmtrace_record"; `pid` <= 0 and `cmd` == NULL are omitted, as is everything
- * volatile in deterministic mode. Returns 0 / -1 on I/O failure. */
+ * volatile in deterministic mode. When asmtrace_writer_set_code has armed the
+ * `code` identity, the header carries it (in BOTH modes — routine identity is a
+ * fact about the bytes, not the run). Returns 0 / -1 on I/O failure. */
 int asmtrace_header(asmtrace_writer_t *w, const char *producer,
                     const asmtrace_prov_t *prov, long pid, const char *cmd);
+
+/* Arm the optional `code` header object {"name","sha256","len"} (28 R1 T1): the
+ * SHA-256 identity of the routine's bytes, so a consumer can prove two recordings
+ * are (or refuse them as not) the same routine. Call AFTER asmtrace_open* and
+ * BEFORE asmtrace_header. `name` and `sha256_hex` are copied (bounded); a NULL
+ * `sha256_hex` disarms it (nothing is emitted) — the honest state for a producer
+ * that lacks stable bytes. `sha256_hex` must be the 64-char lowercase-hex digest
+ * (asmtrace_sha256_hex). */
+void asmtrace_writer_set_code(asmtrace_writer_t *w, const char *name,
+                              const char *sha256_hex, unsigned long long len);
 
 /* One event line: {"k":"<kind>",<body>}\n. `body` is PRE-FORMATTED JSON fields
  * with NO leading comma, built from asmtrace_escape'd strings; NULL/"" emits a

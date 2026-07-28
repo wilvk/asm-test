@@ -58,6 +58,15 @@ bool dt_diff_build(const Streams &a, const Streams &b, dt_diff &out,
         err = "these recordings are of different architectures (" + a.arch +
               " vs " + b.arch +
               ") — the same offset is a different instruction";
+    } else if (a.code_present && b.code_present && a.code_sha != b.code_sha) {
+        // Both recordings now carry a `code` routine identity (28 R1 T1), and
+        // the byte hashes differ: they are of different routines, so aligning
+        // their offsets would compare unrelated code. This is a finding, not a
+        // caveat — refuse it, the same way a basis or arch mismatch is refused.
+        err = "these recordings are of different routines (code sha256 " +
+              a.code_sha.substr(0, 12) + "… vs " + b.code_sha.substr(0, 12) +
+              "…) — the same offset is a different instruction; a diff would "
+              "align unrelated code";
     }
     if (!err.empty()) {
         out.err = err;
@@ -66,12 +75,30 @@ bool dt_diff_build(const Streams &a, const Streams &b, dt_diff &out,
 
     out.a_truncated = a.truncated;
     out.b_truncated = b.truncated;
-    out.identity_note =
-        "checked: address basis (" + a.trace.basis + ") and arch (" +
-        (a.arch.empty() ? std::string("unstated") : a.arch) +
-        "). NOT checked: that both recordings are of the same routine — the v1 "
-        ".asmtrace header carries no routine identity, so that is the reader's "
-        "assertion, not this build's finding.";
+    // Routine identity: with a matching `code` header on both sides it is now a
+    // FINDING (the byte hashes agree), not the reader's assertion. When either
+    // side lacks the header the honest caveat stands — v1 recordings without a
+    // producer that carries stable bytes still exist.
+    if (a.code_present && b.code_present) {
+        out.identity_note =
+            "checked: address basis (" + a.trace.basis + "), arch (" +
+            (a.arch.empty() ? std::string("unstated") : a.arch) +
+            "), and routine identity (code sha256 " + a.code_sha.substr(0, 12) +
+            "… matches).";
+    } else {
+        out.identity_note =
+            "checked: address basis (" + a.trace.basis + ") and arch (" +
+            (a.arch.empty() ? std::string("unstated") : a.arch) +
+            "). NOT checked: that both recordings are of the same routine — " +
+            (a.code_present || b.code_present
+                 ? std::string("only ") + (a.code_present ? "the first" : "the "
+                                                                          "second") +
+                       " recording carries a code identity, so the hashes "
+                       "cannot be compared"
+                 : std::string("neither .asmtrace header carries a code "
+                               "identity")) +
+            ", so that is the reader's assertion, not this build's finding.";
+    }
 
     // --- coverage ---------------------------------------------------------
     const auto &ba = a.trace.blocks;

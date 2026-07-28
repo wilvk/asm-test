@@ -47,6 +47,7 @@
 #include "asmtest_codeimage.h" /* --serve: JIT-safe bytes for a region session */
 #include "asmtest_ibs.h" /* --sample: out-of-band statistical hot-edge capture */
 #include "asmtrace_ndjson.h" /* --record / --json: the .asmtrace NDJSON writer */
+#include "asmtrace_sha256.h" /* `code` header: routine-identity hash of the region */
 
 /* ================================================================== */
 /* .asmtrace recording plumbing, shared by every headless subcommand   */
@@ -110,9 +111,14 @@ static void proc_cmdline(pid_t pid, char *out, size_t cap) {
  * because --serve=<socket> writes the very same bytes to a different fd, and a
  * second copy of the header/emit plumbing is exactly what one-writer-TU exists
  * to prevent. */
-static int rec_open(rec_t *r, const char *path, FILE *stream,
-                    const char *backend, int exact, const char *trust,
-                    pid_t pid) {
+/* rec_open, plus the optional `code` routine-identity header (28 R1 T1). A
+ * non-NULL `code_sha` (a 64-char lowercase-hex SHA-256, with `code_name` and
+ * `code_len`) arms the `code` object on every opened channel BEFORE its header
+ * line; NULL omits it — the honest state for a producer without stable bytes. */
+static int rec_open_code(rec_t *r, const char *path, FILE *stream,
+                         const char *backend, int exact, const char *trust,
+                         pid_t pid, const char *code_name,
+                         const char *code_sha, unsigned long long code_len) {
     asmtrace_prov_t prov = {backend, exact, trust, 0, NULL, 0};
     char cmd[256];
     memset(r, 0, sizeof *r);
@@ -124,16 +130,25 @@ static int rec_open(rec_t *r, const char *path, FILE *stream,
             return -1;
         }
         r->have_file = 1;
+        asmtrace_writer_set_code(&r->file, code_name, code_sha, code_len);
         asmtrace_header(&r->file, "asmspy", &prov, (long)pid,
                         cmd[0] ? cmd : NULL);
     }
     if (stream) {
         asmtrace_open_file(&r->out, stream, 0);
         r->have_out = 1;
+        asmtrace_writer_set_code(&r->out, code_name, code_sha, code_len);
         asmtrace_header(&r->out, "asmspy", &prov, (long)pid,
                         cmd[0] ? cmd : NULL);
     }
     return 0;
+}
+
+static int rec_open(rec_t *r, const char *path, FILE *stream,
+                    const char *backend, int exact, const char *trust,
+                    pid_t pid) {
+    return rec_open_code(r, path, stream, backend, exact, trust, pid, NULL, NULL,
+                         0);
 }
 
 static void rec_emit(rec_t *r, const char *kind, const char *body) {
@@ -2759,7 +2774,34 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
      * --auto pick is an argument/selection failure, not a measurement, so it
      * must not leave a torn recording behind. Everything past this point IS a
      * measurement, including the skips. */
-    if (rec_open(&rec, record, NULL, "ptrace-dataflow", 1, "exact", pid) != 0) {
+    /* Routine identity for the `code` header (28 R1 T1): the region has fixed
+     * bytes, so hash them so a consumer can prove two recordings are — or refuse
+     * them as not — the same routine. Only worth reading when a channel will
+     * carry a header (--record); an unreadable region omits the object rather
+     * than hashing garbage. code_name borrows from the symtab / argv, both alive
+     * until asmspy_symtab_free, and rec_open_code copies it before the header. */
+    char code_sha[65];
+    const char *code_name = NULL;
+    unsigned long long code_len = 0;
+    if (record) {
+        uint8_t *rbytes = malloc(len ? len : 1);
+        if (rbytes) {
+            struct iovec liov = {rbytes, len};
+            struct iovec riov = {(void *)(uintptr_t)base, len};
+            ssize_t got = process_vm_readv(pid, &liov, 1, &riov, 1, 0);
+            if (got > 0) {
+                const asmspy_sym_t *s0 = asmspy_symtab_at(&t, base);
+                asmtrace_sha256_hex(rbytes, (size_t)got, code_sha);
+                code_name = s0 ? s0->name
+                                : (auto_region ? (autoname[0] ? autoname : "?")
+                                               : region);
+                code_len = (unsigned long long)got;
+            }
+            free(rbytes);
+        }
+    }
+    if (rec_open_code(&rec, record, NULL, "ptrace-dataflow", 1, "exact", pid,
+                      code_name, code_len ? code_sha : NULL, code_len) != 0) {
         asmspy_symtab_free(&t);
         return 1;
     }

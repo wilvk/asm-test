@@ -1,6 +1,6 @@
 A=pair-a.asmtrace B=pair-b.asmtrace
 header|exact|A = pair-a.asmtrace  B = pair-b.asmtrace
-note|exact|checked: address basis (rel) and arch (x86_64). NOT checked: that both recordings are of the same routine — the v1 .asmtrace header carries no routine identity, so that is the reader's assertion, not this build's finding.
+note|exact|checked: address basis (rel) and arch (x86_64). NOT checked: that both recordings are of the same routine — neither .asmtrace header carries a code identity, so that is the reader's assertion, not this build's finding.
 coverage|exact|blocks: both=1  A-only=1  B-only=1
 coverage|exact|A-only block 0x6  -> asmtrace-link:v=canvas&rec=pair-a.asmtrace&rec_b=pair-b.asmtrace&off=0x6
 coverage|exact|B-only block 0x14  -> asmtrace-link:v=canvas&rec=pair-b.asmtrace&rec_b=pair-a.asmtrace&off=0x14

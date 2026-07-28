@@ -1,4 +1,4 @@
-{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64","code":{"name":"clear_carry","sha256":"f7460a1c80ceae269acf2ebece1a321bd8f64a35140e6c9e0d72d5c681eb4750","len":64}}
 {"k":"note","text":"clear_carry() under the deterministic emulator L0 producer"}
 {"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"clc"}
 {"k":"trace","basis":"rel","kind":"insn","off":1,"disasm":"mov rax, 0"}

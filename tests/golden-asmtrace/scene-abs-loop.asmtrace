@@ -1,4 +1,4 @@
-{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64","code":{"name":"scene-abs-loop","sha256":"85eb12392796c2989702459300f0b75f046a4ed0ca516450cddf70bcb9dc915d","len":18}}
 {"k":"note","text":"3D-overview golden scene: scene_hot_loop(3) under the deterministic emulator L0 producer, written as `codeimage` + ABSOLUTE-basis `trace`. The producer maps the routine window at 0x100000, so each `off` is the address the guest executed; the loop body's repeats are the terrain's heat."}
 {"k":"codeimage","base":1048576,"len":18,"version":0,"when":0,"bytes":"4889f84831c94801c148ffc875f84889c8c3"}
 {"k":"trace","basis":"abs","kind":"insn","off":1048576,"disasm":"mov rax, rdi"}

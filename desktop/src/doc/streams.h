@@ -110,6 +110,15 @@ struct Streams {
     std::string arch;
     std::string backend;
     std::string id; // the recording's basename — the deep-link `rec` key
+
+    // The header's `code` routine identity (28 R1 T1), lifted so dt_diff_build
+    // can refuse a wrong-routine pair. code_present is false when the producer
+    // omitted it, and the diff then keeps its honest "identity not checked"
+    // caveat rather than asserting sameness.
+    bool code_present = false;
+    std::string code_sha;  // lowercase-hex SHA-256 of the routine bytes
+    std::string code_name; // the routine name (informational)
+    uint64_t code_len = 0;
 };
 
 // Decode one loaded Recording. Total: an event this does not understand is

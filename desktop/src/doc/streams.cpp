@@ -89,6 +89,10 @@ Streams decode_streams(const Recording &r) {
     s.lost = r.drops_lost;
     s.throttled = r.drops_throttled;
     s.id = recording_id(r.path);
+    s.code_present = r.code.present;
+    s.code_sha = r.code.sha256;
+    s.code_name = r.code.name;
+    s.code_len = r.code.len;
 
     // --- trace ------------------------------------------------------------
     if (const auto *ev = kind(r, "trace")) {

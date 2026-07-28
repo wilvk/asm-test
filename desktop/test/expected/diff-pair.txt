@@ -1,4 +1,4 @@
-identity: checked: address basis (rel) and arch (x86_64). NOT checked: that both recordings are of the same routine — the v1 .asmtrace header carries no routine identity, so that is the reader's assertion, not this build's finding.
+identity: checked: address basis (rel) and arch (x86_64). NOT checked: that both recordings are of the same routine — neither .asmtrace header carries a code identity, so that is the reader's assertion, not this build's finding.
 truncated: a=no b=no
 coverage: both=1 only_a=1 only_b=1
   only_a 0x6

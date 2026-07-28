@@ -88,6 +88,20 @@ static void prov_line(FILE *f, const asmtrace_prov_t *p) {
     fputc('}', f);
 }
 
+void asmtrace_writer_set_code(asmtrace_writer_t *w, const char *name,
+                              const char *sha256_hex, unsigned long long len) {
+    if (!w)
+        return;
+    if (!sha256_hex) {
+        w->have_code = 0;
+        return;
+    }
+    snprintf(w->code_name, sizeof w->code_name, "%s", name ? name : "");
+    snprintf(w->code_sha, sizeof w->code_sha, "%s", sha256_hex);
+    w->code_len = len;
+    w->have_code = 1;
+}
+
 int asmtrace_header(asmtrace_writer_t *w, const char *producer,
                     const asmtrace_prov_t *prov, long pid, const char *cmd) {
     static const asmtrace_prov_t unknown = {"unknown", 1, "exact", 0, NULL, 0};
@@ -101,6 +115,14 @@ int asmtrace_header(asmtrace_writer_t *w, const char *producer,
     fputs("\",\"version\":\"" ASMTEST_VERSION "\"},\"provenance\":", w->f);
     prov_line(w->f, prov ? prov : &unknown);
     fputs(",\"arch\":\"" ASMTRACE_ARCH "\"", w->f);
+    /* `code` routine identity, when armed — an optional object right after the
+     * required identity cluster (producer/provenance/arch), emitted in both
+     * deterministic and live mode because a routine's bytes are not volatile. */
+    if (w->have_code) {
+        asmtrace_escape(esc, sizeof esc, w->code_name);
+        fprintf(w->f, ",\"code\":{\"name\":\"%s\",\"sha256\":\"%s\",\"len\":%llu}",
+                esc, w->code_sha, w->code_len);
+    }
     if (!w->deterministic) {
         if (pid > 0)
             fprintf(w->f, ",\"pid\":%ld", pid);

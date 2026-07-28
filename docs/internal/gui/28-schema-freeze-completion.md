@@ -69,9 +69,19 @@ where the producer has the routine bytes.
 
 **Steps.**
 1. Extend `asmtrace_open` (or the header struct it serializes) with an optional
-   code-identity triple; emit it in `cli/asmtrace_ndjson.c` header block
-   (`:91-116`) after `provenance`, omitted when absent (like `descriptors`).
-   `sha256` reuses the repo's existing hash tier (no new dependency).
+   code-identity triple; emit it in `cli/asmtrace_ndjson.c` header block after
+   the identity cluster (producer/provenance/arch), omitted when absent (like
+   `descriptors`). **Implemented 2026-07-28 as an `asmtrace_writer_set_code`
+   setter on the writer** (called between `asmtrace_open*` and `asmtrace_header`),
+   emitting `code` right after `arch` — the tree's convention is that optional
+   header objects follow `arch`, alongside `descriptors`. **Correction to this
+   brief:** the repo had **no** SHA-256 to reuse — `asmspy_ghash.h` is a
+   splitmix64 hash-table *router*, not a digest, and a field literally named
+   `sha256` must contain a real SHA-256 a cross-language reader can recompute. So
+   a self-contained pure-C SHA-256 was vendored as
+   [`cli/asmtrace_sha256.h`](../../../cli/asmtrace_sha256.h) (header-only static
+   inline, no external dependency, pinned to the FIPS vectors by
+   `cli/test_sha256.c`).
 2. Fill it in the corpus recorder from the `REC_WINDOW` bytes it already copies
    ([asmtrace_record.c](../../../tools/asmtrace_record.c)); `name` = the routine
    name from the `rec_routine_t` table, `len` = the byte length hashed.

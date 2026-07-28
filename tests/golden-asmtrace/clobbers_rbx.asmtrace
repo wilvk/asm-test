@@ -1,4 +1,4 @@
-{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64","code":{"name":"clobbers_rbx","sha256":"455a18f369100c0a48354f16b024833e8cf37a3b94d54b68ed3be4f80d15a222","len":64}}
 {"k":"note","text":"clobbers_rbx(40, 2) under the deterministic emulator L0 producer"}
 {"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov rbx, rdi"}
 {"k":"trace","basis":"rel","kind":"insn","off":3,"disasm":"add rbx, rsi"}

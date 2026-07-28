@@ -14,7 +14,8 @@ namespace {
 // exactly what they say they are.
 Streams mk(const std::vector<uint64_t> &insns,
            const std::vector<uint64_t> &blocks, bool truncated = false,
-           const char *basis = "rel", const char *arch = "x86_64") {
+           const char *basis = "rel", const char *arch = "x86_64",
+           const char *code_sha = "") {
     Streams s;
     s.trace.insns = insns;
     s.trace.blocks = blocks;
@@ -22,6 +23,12 @@ Streams mk(const std::vector<uint64_t> &insns,
     s.truncated = truncated;
     s.arch = arch;
     s.id = "hand";
+    if (code_sha && code_sha[0]) {
+        s.code_present = true;
+        s.code_sha = code_sha;
+        s.code_name = "hand";
+        s.code_len = 64;
+    }
     return s;
 }
 
@@ -143,6 +150,54 @@ int main() {
                   d.identity_note);
     }
 
+    // --- routine identity from a `code` header (28 R1 T1) --------------------
+    {
+        std::string sha(64, 'a');
+        // Matching sha256: identity is now a FINDING, not the reader's caveat.
+        Streams a = mk({0, 2, 4}, {0}, false, "rel", "x86_64", sha.c_str());
+        Streams b = mk({0, 2, 4}, {0}, false, "rel", "x86_64", sha.c_str());
+        vt::check("a matching-code pair compares", dt_diff_build(a, b, d, err),
+                  err);
+        vt::check("routine identity is now a finding",
+                  d.identity_note.find("routine identity") !=
+                          std::string::npos &&
+                      d.identity_note.find("matches") != std::string::npos,
+                  d.identity_note);
+        vt::check("it no longer states the caveat",
+                  d.identity_note.find("NOT checked") == std::string::npos,
+                  d.identity_note);
+    }
+    {
+        std::string sa(64, 'a'), sb(64, 'b');
+        // Differing sha256: a wrong-routine pair is REFUSED, with a reason and
+        // no numbers — the same discipline as a basis or arch mismatch.
+        Streams a = mk({0, 2, 4}, {0}, false, "rel", "x86_64", sa.c_str());
+        Streams b = mk({0, 2, 4}, {0}, false, "rel", "x86_64", sb.c_str());
+        vt::check("a differing-code pair is REFUSED",
+                  !dt_diff_build(a, b, d, err), "different routines refuse");
+        vt::check("the reason names different routines",
+                  err.find("different routines") != std::string::npos, err);
+        vt::check("a refused diff carries no coverage numbers",
+                  d.only_a.empty() && d.only_b.empty() && d.both.empty(),
+                  "a refusal must be empty, not plausible");
+    }
+    {
+        std::string sa(64, 'c');
+        // One side carries `code`, the other does not: the hashes cannot be
+        // compared, so the honest caveat STANDS — a code-less v1 recording is
+        // still real, it just cannot prove sameness.
+        Streams a = mk({0, 2, 4}, {0}, false, "rel", "x86_64", sa.c_str());
+        Streams b = mk({0, 2, 4}, {0});
+        vt::check("a one-sided-code pair still compares",
+                  dt_diff_build(a, b, d, err), err);
+        vt::check("the caveat stands",
+                  d.identity_note.find("NOT checked") != std::string::npos,
+                  d.identity_note);
+        vt::check("it names the one-sided gap",
+                  d.identity_note.find("only the first") != std::string::npos,
+                  d.identity_note);
+    }
+
     // --- the golden pair, from committed fixtures ---------------------------
     {
         Streams a = load("views/pair-a.asmtrace");
@@ -158,18 +213,36 @@ int main() {
         vt::golden("diff-pair.txt", dt_diff_dump(d));
     }
 
-    // --- two DIFFERENT routines still compare, with the gap stated ----------
-    // add_signed and sum3 are different routines in the same basis and arch.
-    // v1 cannot tell, and this is exactly what the identity note is for.
+    // --- two DIFFERENT routines are now REFUSED by their code identity ------
+    // add_signed and sum3 are different routines; the regenerated corpus carries
+    // a `code` header (28 R1 T1), so their byte hashes differ and the diff
+    // REFUSES the pair rather than stating an unverifiable caveat. This flip is
+    // the whole point of T1 — the gap that test used to pin is now closed.
     {
         Streams a = load("add_signed.asmtrace");
         Streams b = load("sum3.asmtrace");
-        vt::check("v1 cannot refuse a wrong-routine pair",
-                  dt_diff_build(a, b, d, err), err);
-        vt::check("so it says so, loudly",
-                  d.identity_note.find("NOT checked") != std::string::npos,
-                  d.identity_note);
+        vt::check("both goldens carry a code identity",
+                  a.code_present && b.code_present,
+                  "the regenerated corpus must carry the code header");
+        vt::check("a wrong-routine pair is now REFUSED",
+                  !dt_diff_build(a, b, d, err),
+                  "different sha256 must refuse the diff");
+        vt::check("the reason names different routines",
+                  err.find("different routines") != std::string::npos, err);
         vt::golden("diff-different-routines.txt", dt_diff_dump(d));
+    }
+
+    // --- the SAME routine, twice: identity is a finding ---------------------
+    {
+        Streams a = load("add_signed.asmtrace");
+        Streams b = load("add_signed.asmtrace");
+        vt::check("same-routine goldens compare", dt_diff_build(a, b, d, err),
+                  err);
+        vt::check("routine identity is a finding, not a caveat",
+                  d.identity_note.find("routine identity") !=
+                          std::string::npos &&
+                      d.identity_note.find("NOT checked") == std::string::npos,
+                  d.identity_note);
     }
 
     return vt::report("test_diff");

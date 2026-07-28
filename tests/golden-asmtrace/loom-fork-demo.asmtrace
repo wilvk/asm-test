@@ -1,4 +1,4 @@
-{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64","code":{"name":"loom-fork-demo","sha256":"86180c72c0f9af64742858073691fcdf26652a653d4465cd6f1eaf28d83b020e","len":20}}
 {"k":"note","text":"fork_demo(3) under the deterministic emulator L0 producer"}
 {"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov rdx, rdi"}
 {"k":"trace","basis":"rel","kind":"insn","off":3,"disasm":"shr rdx, 0x3f"}

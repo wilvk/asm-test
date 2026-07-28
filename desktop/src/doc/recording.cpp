@@ -122,6 +122,21 @@ std::optional<Recording> load_recording(std::istream &in, std::string &err) {
     if (header.contains("arch") && header["arch"].is_string())
         rec.arch = header["arch"].get<std::string>();
 
+    // Optional `code` routine identity (28 R1 T1). Absent is normal (a producer
+    // without stable bytes omits it); a malformed one degrades to absent rather
+    // than erroring — an unknown-shaped optional never rejects a recording.
+    if (header.contains("code") && header["code"].is_object()) {
+        const json &c = header["code"];
+        if (c.contains("sha256") && c["sha256"].is_string()) {
+            rec.code.present = true;
+            rec.code.sha256 = c["sha256"].get<std::string>();
+            if (c.contains("name") && c["name"].is_string())
+                rec.code.name = c["name"].get<std::string>();
+            if (c.contains("len"))
+                rec.code.len = as_u64(c["len"], 0);
+        }
+    }
+
     // --- event lines ---
     size_t lineno = 1;
     while (std::getline(in, line)) {
@@ -222,6 +237,15 @@ std::string recording_to_asmtrace(const Recording &rec) {
     }
     if (!rec.arch.empty())
         header["arch"] = rec.arch;
+    // The `code` routine identity survives a save (Inspect-door-to-disk), so a
+    // re-loaded live capture still refuses a wrong-routine diff.
+    if (rec.code.present) {
+        json c;
+        c["name"] = rec.code.name;
+        c["sha256"] = rec.code.sha256;
+        c["len"] = rec.code.len;
+        header["code"] = c;
+    }
 
     std::string out = header.dump();
     out += '\n';

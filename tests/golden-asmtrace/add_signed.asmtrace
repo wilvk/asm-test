@@ -1,4 +1,4 @@
-{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64","code":{"name":"add_signed","sha256":"e3ade46a0169b244c591ded19afaae723e85b8a6a7f6aa90bb3b975b78fda7e1","len":64}}
 {"k":"note","text":"add_signed(40, 2) under the deterministic emulator L0 producer"}
 {"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov rax, rdi"}
 {"k":"trace","basis":"rel","kind":"insn","off":3,"disasm":"add rax, rsi"}

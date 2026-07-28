@@ -1,4 +1,4 @@
-{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64","code":{"name":"sum_via_rbx","sha256":"5d7406a8dc28364018a2f8eceed34cf96b9912bc037ba401f9db391fb91ee17f","len":64}}
 {"k":"note","text":"sum_via_rbx(40, 2) under the deterministic emulator L0 producer"}
 {"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"push rbx"}
 {"k":"trace","basis":"rel","kind":"insn","off":1,"disasm":"mov rbx, rdi"}

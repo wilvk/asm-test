@@ -35,6 +35,7 @@
 #include "asmtest_emu.h"      /* emu_disas (D10) */
 #include "asmtest_valtrace.h" /* the L0 sink + L1 def-use graph */
 #include "asmtrace_ndjson.h"  /* the shared writer (field order lives there) */
+#include "asmtrace_sha256.h"  /* routine-identity hash for the `code` header */
 
 /* The emulator L0 producer. It is a TIER producer, not part of the pure public
  * sink surface, so it ships no public header and consumers re-declare it (the
@@ -53,6 +54,18 @@ void *asmtest_corpus_routine(const char *name);
 /* The conformance emulator convention: a corpus routine is captured as a fixed
  * 64-byte window from its entry (bindings/conformance/conformance.c). */
 #define REC_WINDOW 64
+
+/* Arm the writer's `code` routine-identity header (28 R1 T1) from the fixed
+ * bytes this recorder already holds: the SHA-256 of code[0..len) names the
+ * routine by its bytes, so dt_diff refuses a wrong-routine pair. Deterministic
+ * (the bytes and the window length are fixed), so it is part of the golden.
+ * Call after asmtrace_open, before asmtrace_header. */
+static void set_code_identity(asmtrace_writer_t *w, const char *name,
+                              const uint8_t *code, size_t len) {
+    char hex[65];
+    asmtrace_sha256_hex(code, len, hex);
+    asmtrace_writer_set_code(w, name, hex, (unsigned long long)len);
+}
 
 /* --steps=<cap>: the default per-step register-ring cap for the corpus loop
  * (0 = off, the golden default). Set once from argv; a routine's own steps_cap
@@ -260,6 +273,7 @@ static int record_bytes(const char *dir, const char *out, const char *label,
         asmtest_valtrace_free(vt);
         return -1;
     }
+    set_code_identity(&w, out, code, code_len);
     asmtrace_header(&w, "asmtrace_record", &prov, 0, NULL);
 
     /* A note naming the routine and its arguments, so the recording explains
@@ -450,6 +464,7 @@ static int record_scene_abs(const char *dir, const char *out, const char *label,
         asmtest_valtrace_free(vt);
         return -1;
     }
+    set_code_identity(&w, out, code, code_len);
     asmtrace_header(&w, "asmtrace_record", &prov, 0, NULL);
 
     /* A note that explains the scene without a sidecar: which routine, why the
@@ -725,6 +740,7 @@ static int record_abi_leg(const char *dir, const char *out, const char *intro,
         emu_close(e);
         return -1;
     }
+    set_code_identity(&w, out, code, code_len);
     asmtrace_header(&w, "asmtrace_record", &prov, 0, NULL);
 
     asmtrace_escape(body, sizeof body, intro);

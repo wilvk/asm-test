@@ -51,6 +51,7 @@ Header fields, in this order:
 | `producer` | obj | yes | `{"name":str,"version":str}` — `name` is `"asmspy"` or `"asmtrace_record"`; `version` is [`ASMTEST_VERSION`](../../../include/asmtest.h#L44). |
 | `provenance` | obj | yes | See below. |
 | `arch` | str | yes | `"x86_64"`, `"aarch64"`, … (the *recording host* arch). |
+| `code` | obj | no | `{"name":str,"sha256":str,"len":int}` — the identity of the recorded routine's bytes (see *Routine identity* below). Omitted by a producer without stable bytes. |
 | `descriptors` | array | no | Embedded state descriptors (see *State descriptors*). |
 | `pid` | int | no | Traced pid. **Omitted in deterministic mode.** |
 | `cmd` | str | no | Traced command line. **Omitted in deterministic mode.** |
@@ -98,6 +99,40 @@ Rules:
 - **A skip is a recording.** A run that skipped still writes a header and a
   clean `end`; the `end` carries the skip. An empty file is a *bug*; a
   skip-carrying file is *data*.
+
+## Routine identity — the `code` header
+
+```json
+{"...":"...","arch":"x86_64","code":{"name":"add_signed","sha256":"…64 hex…","len":64}}
+```
+
+An **optional** header object naming the recorded routine by the **SHA-256 of
+its bytes**, so a consumer can prove two recordings are — or refuse them as not —
+the same routine (28 R1 T1). `dt_diff_build` ([04-replay-views.md](04-replay-views.md)
+T6) refuses a pair whose `code.sha256` differ; when either side omits `code` it
+keeps its honest "identity not checked" caveat.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `name` | str | yes | The routine name (informational; the hash is authoritative). |
+| `sha256` | str | yes | Lowercase-hex SHA-256 of the hashed bytes. |
+| `len` | int | yes | The number of bytes hashed. |
+
+Rules:
+
+- **A `code` header is emitted only where the producer holds stable bytes.** The
+  Author-mode corpus recorder hashes its fixed 64-byte routine window; the live
+  `--dataflow` producer hashes the resolved region it read. A producer that
+  genuinely lacks stable bytes (a live attach with no fixed window) **omits the
+  object** — never a zero or placeholder hash.
+- The hash is over the producer's captured window, so `len` is the **window**
+  length, not necessarily the routine's true extent. A `code` match proves the
+  **bytes** match, not that two runs used the same ABI or arguments — the diff
+  still states what it does and does not verify.
+- `sha256` is a real FIPS-180-4 SHA-256 (the producer's
+  [`cli/asmtrace_sha256.h`](../../../cli/asmtrace_sha256.h), a self-contained
+  pure-C digest, not the `asmspy_ghash.h` hash-table router), so a cross-language
+  reader can recompute and compare it.
 
 ## Event kinds (v1)
 
@@ -397,15 +432,12 @@ nicety:
 Appended by consumers as they hit them; each is a decision the Phase-3 freeze
 has to make explicitly rather than inherit.
 
-- **No routine identity.** The Envelope names the producer, the provenance, the
-  arch and (outside deterministic mode) the pid and cmd — but nothing that says
-  *which code this is*. A consumer that compares two recordings therefore
-  cannot verify they are of the same routine: `dt_diff_build`
-  ([04-replay-views.md](04-replay-views.md) T6) checks basis and arch, and
-  states in every diff that routine identity is the reader's assertion rather
-  than a finding. A `code` header object (`{"name":str,"sha256":str,"len":int}`)
-  would close it; the corpus recorder already copies a fixed 64-byte window and
-  could hash it. Raised 2026-07-24 by 04.
+- ~~**No routine identity.**~~ **CLOSED 2026-07-28 (28 R1 T1).** The `code`
+  header object (`{"name":str,"sha256":str,"len":int}`, see *Routine identity*
+  above) now carries the SHA-256 of the recorded bytes: the corpus recorder
+  hashes its fixed 64-byte window and the live `--dataflow` producer hashes the
+  region it read, so `dt_diff_build` refuses a pair whose hashes differ and keeps
+  the honest caveat only when a side omits `code`. Raised 2026-07-24 by 04.
 - **No block starts from the L0 producer.** `coverage` is defined and the
   region tiers write it, but the emulator L0 value producer measures executed
   *steps* and has no block information, so the generated corpus carries `trace`

@@ -46,6 +46,18 @@ struct Provenance {
         raw; // the whole provenance object, for chrome / the lane annex
 };
 
+// The header's optional `code` object (schema, 28 R1 T1): the identity of the
+// routine's bytes, so a consumer can prove two recordings are — or refuse them
+// as not — the same routine. `present` is false when the header omitted it (a
+// producer without stable bytes), and a consumer then keeps its honest caveat
+// rather than asserting sameness.
+struct Code {
+    bool present = false;
+    std::string name;   // the routine name (informational)
+    std::string sha256; // lowercase-hex SHA-256 of the bytes (authoritative)
+    uint64_t len = 0;   // the byte length hashed
+};
+
 // One event line. `kind` is the schema "k" selector; `body` is the whole line so
 // views decode fields lazily (D10: an optional "disasm" string rides in body
 // untouched — absent is normal, and a view degrades to offsets).
@@ -69,6 +81,7 @@ struct Recording {
     Producer producer;
     Provenance provenance;
     std::string arch;
+    Code code; // optional routine identity (absent => code.present == false)
 
     std::map<std::string, std::vector<Event>> by_kind;
     uint64_t unknown_kinds = 0; // events kept but outside the v1 kind registry
