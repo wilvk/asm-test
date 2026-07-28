@@ -48,6 +48,17 @@ not a guarantee: `cli/test_asmtrace.c`'s `fixture.*` checks replay these files
 and assert each fact survives the reader, and the desktop viewer's tests replay
 the same files to assert the banner / provenance chrome / redaction default.
 
+`continuous-df.asmtrace` (35 T3/T4) is the continuous-capture fixture: three
+`df_invocation`-delimited passes (two clean, one **truncated**) in one growing
+recording, each restarting its `df_step`/`regstate` at step 0. It lives here
+because it carries a dishonesty — the last pass's operand buffer filled, so its
+marker flips `truncated` — and because it is hand-authored (the live producer
+path is proven by `cli/cli_smoke.sh`, not committed as a byte-stable golden).
+`desktop/test/test_scrubber.cpp` replays it to assert the segmenter keeps the
+passes separately addressable (never conflated into one fake-monotonic run), that
+`build_step_index` resolves to the latest pass, and that the truncated pass tears
+its own placard.
+
 **The `docker-cli` image is authoritative for regeneration.** Golden bytes
 include Capstone disassembly text, and the image pins Capstone 5.0.1 while a
 host's apt Capstone 4.x renders some instructions differently — regenerating on

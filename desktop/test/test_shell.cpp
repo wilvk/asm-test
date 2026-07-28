@@ -1220,6 +1220,24 @@ int main() {
         is.want = LiveMode::Log;
         check("cap/log ignores steps", inspect_start_params(is).empty(),
               "a whole-process mode carries no register ring, steps or not");
+
+        // 35 T4: `continuous` re-arm, only for the dataflow single-step engines
+        // (region "hotfn" is still set from above, so the params also carry func).
+        is.want = LiveMode::Dataflow;
+        is.continuous = true;
+        check("cap/dataflow continuous",
+              inspect_start_params(is).value("continuous", false),
+              "dataflow + continuous -> {continuous:true} (re-arm until Stop)");
+        is.continuous = false;
+        check("cap/dataflow no continuous by default",
+              !inspect_start_params(is).contains("continuous"),
+              "off by default -> the param is omitted (one invocation, then "
+              "done)");
+        is.want = LiveMode::Log;
+        is.continuous = true;
+        check("cap/log ignores continuous",
+              !inspect_start_params(is).contains("continuous"),
+              "a whole-process mode has no re-arm loop, continuous or not");
     }
 
     // --- Processes double-click / right-click: the "full detail" attach. It

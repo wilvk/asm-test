@@ -74,26 +74,28 @@ std::vector<RegField> read_values(const nlohmann::json &values) {
 
 } // namespace
 
-StepIndex build_step_index(const Recording &r) {
+// Build one StepIndex from a list of `regstate` event pointers (already in stream
+// order) with the given drop/total/truncation facts. The pure core shared by the
+// whole-recording build and the per-pass segmentation (35 T3).
+static StepIndex build_index_core(const std::vector<const Event *> &regs,
+                                  uint64_t dropped, bool truncated,
+                                  uint64_t footer_total) {
     StepIndex idx;
-
-    auto it = r.by_kind.find("regstate");
-    if (it == r.by_kind.end() || it->second.empty())
-        return idx; // absent: the ring was disarmed (the normal case)
-
     // Held events are steps [dropped, dropped + count); the footer's drop count
     // is the evicted prefix width (asmtrace-schema.md, `regstate` D7 rule).
-    idx.dropped = r.drops_lost;
-    idx.first_step = r.drops_lost;
-    idx.truncated = idx.dropped > 0;
-    // The footer's total (28 R1 T2): for a tail-drop live ring (dropped == 0 but
-    // steps ran past the cap) it is the only source of the true total.
-    if (r.has_steps_total)
-        idx.footer_total = r.steps_total;
+    idx.dropped = dropped;
+    idx.first_step = dropped;
+    // An absent ring (no held regstate) stays fully absent: no held steps, no
+    // total, no truncation — total_steps() is 0, exactly as the pre-35 build. A
+    // footer/marker total only describes a ring that actually held steps.
+    idx.truncated = regs.empty() ? false : truncated;
+    // The footer's / marker's total (28 R1 T2): for a tail-drop live ring
+    // (dropped == 0 but steps ran past the cap) it is the only source of the true
+    // total.
+    idx.footer_total = regs.empty() ? 0 : footer_total;
 
-    const std::vector<Event> &events = it->second;
-    for (size_t i = 0; i < events.size(); i++) {
-        const nlohmann::json &body = events[i].body;
+    for (size_t i = 0; i < regs.size(); i++) {
+        const nlohmann::json &body = regs[i]->body;
         if (idx.desc.empty()) {
             auto d = body.find("desc");
             if (d != body.end() && d->is_string())
@@ -118,6 +120,72 @@ StepIndex build_step_index(const Recording &r) {
         idx.entries.push_back(std::move(file));
     }
     return idx;
+}
+
+SegmentedStepIndex build_segmented_step_index(const Recording &r) {
+    SegmentedStepIndex seg;
+
+    // The regstate ring events, in stream order (by_kind preserves append order,
+    // so they are seq-ascending); pointers so a pass can own a slice by seq.
+    std::vector<const Event *> regs;
+    auto rit = r.by_kind.find("regstate");
+    if (rit != r.by_kind.end())
+        for (const Event &e : rit->second)
+            regs.push_back(&e);
+
+    // The continuous-capture pass delimiters (35): one emitted before each pass's
+    // df_step block. A one-shot recording has none.
+    std::vector<const Event *> marks;
+    auto mit = r.by_kind.find("df_invocation");
+    if (mit != r.by_kind.end())
+        for (const Event &e : mit->second)
+            marks.push_back(&e);
+
+    if (marks.empty()) {
+        // One-shot (or any non-continuous recording): a single pass over the whole
+        // regstate list with the footer's drop/total facts — the pre-35 behaviour.
+        seg.passes.push_back(
+            build_index_core(regs, r.drops_lost, r.drops_lost > 0,
+                             r.has_steps_total ? r.steps_total : 0));
+        return seg;
+    }
+
+    // Segment: each pass owns the regstate events whose stream position (seq) falls
+    // at or after its marker and before the next. Each pass restarts at step 0
+    // (dropped = 0); its marker carries that pass's own step total + truncation.
+    std::sort(marks.begin(), marks.end(),
+              [](const Event *a, const Event *b) { return a->seq < b->seq; });
+    for (size_t p = 0; p < marks.size(); p++) {
+        uint64_t lo = marks[p]->seq;
+        uint64_t hi = (p + 1 < marks.size()) ? marks[p + 1]->seq
+                                             : ~static_cast<uint64_t>(0);
+        std::vector<const Event *> bucket;
+        for (const Event *e : regs)
+            if (e->seq >= lo && e->seq < hi)
+                bucket.push_back(e);
+        const nlohmann::json &mb = marks[p]->body;
+        uint64_t steps = 0;
+        auto st = mb.find("steps");
+        if (st != mb.end() && st->is_number_integer())
+            steps = st->get<uint64_t>();
+        bool trunc = false;
+        auto tr = mb.find("truncated");
+        if (tr != mb.end() && tr->is_boolean())
+            trunc = tr->get<bool>();
+        seg.passes.push_back(build_index_core(bucket, 0, trunc, steps));
+    }
+    return seg;
+}
+
+StepIndex build_step_index(const Recording &r) {
+    // Segment-aware: a continuous recording resolves to its LATEST invocation (the
+    // live default); a one-shot recording resolves to its single pass — the whole
+    // regstate list, byte-identical to the pre-35 flat build. An absent ring yields
+    // an absent index either way.
+    SegmentedStepIndex seg = build_segmented_step_index(r);
+    if (seg.passes.empty())
+        return StepIndex{};
+    return std::move(seg.passes[seg.latest()]);
 }
 
 } // namespace asmdesk

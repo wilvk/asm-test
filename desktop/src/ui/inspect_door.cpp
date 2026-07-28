@@ -119,6 +119,10 @@ nlohmann::json inspect_start_params(const InspectState &s) {
     // time-travels. trace / whole-process modes have no such ring.
     if ((s.want == LiveMode::Dataflow || s.want == LiveMode::Auto) && s.steps)
         params["steps"] = true;
+    // 35 T4: continuous re-arm, only for the dataflow single-step engines.
+    if ((s.want == LiveMode::Dataflow || s.want == LiveMode::Auto) &&
+        s.continuous)
+        params["continuous"] = true;
     if (!mode_needs_region(s.want))
         return params;
     std::string spec(s.region);
@@ -369,6 +373,12 @@ void draw_patch_bay(InspectState &s) {
     if (s.want == LiveMode::Dataflow || s.want == LiveMode::Auto) {
         ImGui::Checkbox("record the register ring (--steps → live Scrubber)",
                         &s.steps);
+        // 35 T4: keep re-arming the same region until Stop, into one growing
+        // recording (the Scrubber follows the latest invocation live). One start
+        // fires; the once-per-session perturb confirm is not re-asked per pass.
+        ImGui::Checkbox(
+            "continuous — re-arm and keep capturing until Stop (35)",
+            &s.continuous);
     }
 
     // The Queue path (23 T3): a queued want starts the MOMENT the jack frees —

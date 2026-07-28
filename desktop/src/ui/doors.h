@@ -149,6 +149,15 @@ struct InspectState {
     // pane checkbox; sent as `steps:true` in the start params.
     bool steps = false;
 
+    // CONTINUOUS capture (35 T4): the dataflow/auto engine re-arms the same scoped
+    // region and keeps capturing until Stop, appending each invocation into one
+    // growing recording delimited by `df_invocation` markers (the Scrubber shows
+    // the latest pass, refreshing live). A capture-pane checkbox; sent as
+    // `continuous:true`. Off by default (one invocation, then done). The
+    // once-per-session perturb confirm already covers the whole session, so
+    // continuous does NOT re-confirm per pass.
+    bool continuous = false;
+
     // Cross-pane requests from the Processes pane's row actions (double-click /
     // right-click): the door cannot reach ShellState, so it raises a flag the
     // docked shell consumes to reveal the Connect / Live-capture pane. No-ops in

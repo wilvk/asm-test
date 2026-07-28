@@ -89,7 +89,38 @@ struct StepIndex {
 // Build the index from a loaded recording. Reads only its `regstate` events and
 // its `end`-footer drop count; a recording with none yields an empty (absent)
 // index, which is the normal case (the ring is opt-in, `--steps` defaults off).
+//
+// SEGMENT-AWARE (35 T3): a continuous `dataflow`/`auto` capture appends many
+// invocations into one recording, each delimited by a `df_invocation` marker and
+// each restarting its regstate at step 0. This returns the LATEST invocation's
+// index (the live default) so two passes never conflate into one fake-monotonic
+// run; a one-shot recording (no marker) resolves to its single pass, byte-identical
+// to the pre-35 flat build. Use build_segmented_step_index for every pass.
 StepIndex build_step_index(const Recording &r);
+
+// 35 T3: one StepIndex PER continuous-capture pass, in stream order, so each
+// invocation is separately addressable (a prev/next navigator, or the latest as the
+// live default). A one-shot recording (no `df_invocation` marker) is exactly ONE
+// pass over the whole regstate list — byte-identical to build_step_index. Each pass
+// restarts at step 0; its `df_invocation` marker carries that pass's own step total
+// and truncation (the footer's `steps_total` names only the last pass).
+struct SegmentedStepIndex {
+    std::vector<StepIndex> passes; // one per pass, oldest first
+    // The latest (newest) pass — the live default. 0 when passes is empty.
+    size_t latest() const { return passes.empty() ? 0 : passes.size() - 1; }
+    bool present() const { return !passes.empty(); }
+    // How many passes carry a present register ring (an absent pass is one whose
+    // window recorded no regstate — e.g. --continuous without --steps).
+    size_t present_passes() const {
+        size_t n = 0;
+        for (const StepIndex &p : passes)
+            if (p.present())
+                n++;
+        return n;
+    }
+};
+
+SegmentedStepIndex build_segmented_step_index(const Recording &r);
 
 // The descriptor's field order (asmtrace-schema.md `regstate` descriptor):
 // rax rbx rcx rdx rsi rdi rbp rsp r8 r9 r10 r11 r12 r13 r14 r15 rip rflags.

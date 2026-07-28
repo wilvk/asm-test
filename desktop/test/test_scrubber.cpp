@@ -268,5 +268,57 @@ int main() {
                uint64_t{6});
     }
 
+    // --- 35 T3: a continuous recording segments into per-pass indexes --------
+    // The dishonesty fixture has three `df_invocation` passes: two clean (3 steps
+    // each) and a truncated third (5 steps ran, only 2 held). A single flat index
+    // would conflate all eight regstate events into one fake-monotonic run; the
+    // segmented builder keeps each pass separately addressable, and the scalar
+    // build_step_index resolves to the LATEST (the live default).
+    {
+        Recording r = load_rec("dishonest/continuous-df.asmtrace");
+        SegmentedStepIndex seg = build_segmented_step_index(r);
+        vt::eq("continuous: three invocation passes", seg.passes.size(),
+               size_t{3});
+        vt::eq("continuous: all three passes carry a ring",
+               seg.present_passes(), size_t{3});
+
+        // Each pass restarts at step 0 and owns only its own regstate events —
+        // never conflated with a neighbour's (distinct rax progressions).
+        const StepIndex &p0 = seg.passes[0];
+        const StepIndex &p1 = seg.passes[1];
+        const StepIndex &p2 = seg.passes[2];
+        vt::eq("pass 0 first step is 0", p0.first_step, uint64_t{0});
+        vt::eq("pass 0 held count", p0.count(), size_t{3});
+        vt::eq("pass 1 held count", p1.count(), size_t{3});
+        const RegFile *p0s0 = p0.at_step(0);
+        const RegFile *p1s0 = p1.at_step(0);
+        const RegField *p0rax = p0s0 ? p0s0->find("rax") : nullptr;
+        const RegField *p1rax = p1s0 ? p1s0->find("rax") : nullptr;
+        vt::check("pass 0 step 0 rax is its own (6, not conflated)",
+                  p0rax && p0rax->value == 6, "distinct per pass");
+        vt::check("pass 1 step 0 rax is its own (10, not pass 0's)",
+                  p1rax && p1rax->value == 10, "not conflated with pass 0");
+
+        // The truncated pass carries its own honesty from the marker: 5 steps
+        // seen, 2 held, marked truncated — the per-pass placard the reader tears.
+        vt::check("pass 2 is marked truncated (its marker said so)",
+                  p2.truncated, "the operand buffer filled mid-pass");
+        vt::eq("pass 2 held count", p2.count(), size_t{2});
+        vt::eq("pass 2 total steps from its marker", p2.total_steps(),
+               uint64_t{5});
+        dt_scrubber sc2 = dt_scrubber_build(p2, 4);
+        vt::check("pass 2 seeks past the held steps into a torn/absent region",
+                  sc2.torn_here || sc2.playhead < p2.count(),
+                  "the tail past the 2 held steps is unknown, never invented");
+
+        // The scalar build_step_index is the LATEST pass (the live default),
+        // NOT a flat conflation of all eight regstate events.
+        StepIndex latest = build_step_index(r);
+        vt::eq("build_step_index resolves to the latest pass (2 held, not 8)",
+               latest.count(), size_t{2});
+        vt::check("the latest-pass default is the truncated pass",
+                  latest.truncated, "pass 2 is newest");
+    }
+
     return vt::report("test_scrubber");
 }
