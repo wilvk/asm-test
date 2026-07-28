@@ -8,10 +8,10 @@
 >
 > Authored 2026-07-28, verified against HEAD `da566c9`.
 
-## Status (2026-07-29) — T1 + T2 value fabric + T3 author-run landed; T2's regstate/Scrubber sub-item is the one open thread
+## Status (2026-07-29) — T1 + T2 (value fabric + regstate/Scrubber) + T3 all landed
 
-The **value-producer core AND the Author door's arm64 run path are both landed
-and docker-verified**:
+The **value-producer core, its per-step register ring, and the Author door's
+arm64 run path are all landed and docker-verified**:
 
 - **T1 — DONE (byte-identical).** The six inline x86-64 seams in
   [`dataflow_emu.c`](../../../src/dataflow_emu.c) are now a `df_guest` descriptor
@@ -22,8 +22,7 @@ and docker-verified**:
   identical** — the ONLY golden churn is `make_pair`'s 64-byte-window `code.sha256`
   (the documented R1-T1 fragility: adding the arm64 functions shifted the binary
   `.text` the window reads past the real routine), regenerated with the corpus.
-- **T2 value fabric — DONE** (its `regstate`/Scrubber sub-item is not; see below).
-  A `df_guest_arm64` (`UC_ARCH_ARM64`, a
+- **T2 value fabric — DONE.** A `df_guest_arm64` (`UC_ARCH_ARM64`, a
   `cap_arm64_to_uc` map folding W→X and X29/X30=FP/LR, AAPCS64 args x0–x7, the
   register init, and a link-register return). The operand enumerator already
   covered `ASMTEST_ARCH_ARM64`, so no enumerator change was needed. Proven end to
@@ -34,14 +33,48 @@ and docker-verified**:
   `asmtrace-golden-check` green). The Loom / Slice / Timeline render it with **no
   desktop change** (the reader is arch-generic over locations; `loom_reg_name`
   degrades an unmapped arm64 id to `reg#N`, a cosmetic reg-name follow-on).
+- **T2 `regstate`/Scrubber ring — DONE.** The per-step register RING
+  ([`emu.c`](../../../src/emu.c)) is arch-parameterized the same way the value
+  producer was: `emu_arm64_t` gains its OWN drop-oldest ring
+  (`emu_arm64_step_capture`/`_clear`/`_count`/`_dropped`/`_at`, mirroring the
+  x86-64 `emu_step_*` shape 1:1 over `emu_arm64_regs_t` instead of a union
+  grafted onto `emu_t`/`emu_x86_regs_t` — `emu_t` and `emu_arm64_t` are already
+  separate per-guest handle types, so a second guest's ring is one more
+  mirrored seam, exactly as `df_guest_arm64` was for the value producer). Zero
+  changes to `emu_t`, `emu_x86_regs_t`, or `emu_snapshot`/`emu_restore` — the
+  x86-64 ring, `src/dataflow_resume.c`'s hosted/Reweave path, and
+  `desktop/src/views/regsynth.cpp`'s synthesizer stay exactly as they were
+  (`cli/test_reweave.c` and `cli/test_regstate_parity.c` both still pass
+  unchanged). A new `emu_arm64_regs_t@aarch64/aapcs64` `regstate` descriptor
+  (`docs/internal/gui/asmtrace-schema.md`) names the raw AArch64 register file
+  (`x0`..`x30`, `sp`, `pc`, `nzcv`; no vector/NEON deck, mirroring the value
+  fabric's own integer-only scope); `tools/asmtrace_record.c` bakes a
+  `steps_cap = 8` ring into the **same** `arm64-df-chain.asmtrace` golden (the
+  arm64 analogue of `add_signed`'s worked example — no separate `--steps`-style
+  flag exists yet), so its `regstate` events now show x2=12 / x3=24 / x0=24 at
+  the SAME steps the value fabric already proved, plus a new D7 dishonesty
+  fixture `arm64-regstate-truncated.asmtrace` (`steps_cap = 2`, the ring evicts
+  2 of 4 steps, `truncated`/`drops.lost` honest). **No desktop/reader change**:
+  `desktop/src/analysis/stepindex.cpp`'s `read_values` already renders any
+  integer `values` key it does not specifically name via its generic
+  "extra keys, sorted" fallback, so the Scrubber time-travels an arm64 capture
+  today — the field ORDER is merely lexicographic rather than hand-curated
+  (`nzcv`, `pc`, `sp`, `x0`, `x1`, `x10`...), a cosmetic follow-on exactly like
+  `loom_reg_name`'s arm64 degradation above, not a correctness gap. New
+  coverage in `examples/test_emu.c`
+  (`emu_arm64.step_capture_records_prestates` /
+  `_drops_oldest_and_counts` / `_arming_survives_across_calls_on_same_handle`).
+  Deferred, honestly out of scope for this root: arm64 snapshot/restore (an
+  x86-64 `emu_t` / Reweave concern) and a vector/NEON regstate deck (a further
+  descriptor row, like R4 was for x86-64).
 - **T3 Author-mode arm64 run — DONE.** The Author door's Run button dispatches
   arm64 through the per-guest value-fabric producer
   (`asmtest_dataflow_emu_run_arch(ASMTEST_ARCH_ARM64, …)`, re-declared in
   `author_door.cpp`'s new `author_run_vf` per the `loom/forks.cpp`
   tier-producer-has-no-public-header precedent) instead of the x86-64-only
-  `emu_call_traced`/`emu_result_t` path — `src/emu.c` and its register ring are
-  untouched (that is the sibling T2-regstate item below, deliberately not
-  collided with). The result is a genuinely different SHAPE,
+  `emu_call_traced`/`emu_result_t` path — T3's OWN changes touch no `emu.c`
+  code (that is the T2-regstate item above, landed separately so the two
+  did not collide). The result is a genuinely different SHAPE,
   `author_result_t::ran_value_fabric` (step + def-use-edge counts, an honest
   `vf_note`), which deliberately never populates the x86-64 `ran`/register/
   fault fields: this producer captures no register file and no fault
@@ -71,22 +104,14 @@ and docker-verified**:
   per-arch interaction test existed for x86-64 to mirror, so none was invented
   uniquely for arm64 either; noted here rather than silently left out.
 
-**Still open, honest scope:**
+**Honest limits that remain (not scoped as tasks — see Non-goals below):**
+arm64 snapshot/restore + Reweave, and a vector/NEON regstate deck, both noted
+in their landing bullets above as further, separate seams — not this root.
 
-- **T2 arm64 `regstate` / Scrubber time-travel — OPEN, claimed separately.**
-  The per-step register RING lives in [`emu.c`](../../../src/emu.c) as
-  `emu_x86_regs_t` (x86-64-only), NOT in the value producer. Arch-parameterizing
-  that ring is the **R4** vector-deck axis ([31](31-wide-register-deck.md)),
-  which has since landed, but extending the RING itself to arm64 is a separate,
-  larger `emu.c` change from this brief's producer/door work and is tracked
-  under its own claim (README.md's doc-32 row) rather than folded in here. The
-  value fabric renders without it; the descriptor path
-  (`user_regs@aarch64/aapcs64`) is ready for when the arm64 ring lands.
-
-The remainder of this brief is the original plan; T1's seam, T2's producer half,
-and T3's Author-mode routing are what shipped. RISC-V is now another `df_guest`
-instance, exactly as designed; the regstate/Scrubber ring is the one remaining
-thread on this root.
+The remainder of this brief is the original plan; T1's seam, T2's value-fabric
+and regstate/Scrubber halves, and T3's Author-mode routing are all now shipped.
+RISC-V is now another `df_guest` instance (and, following the same mirrored
+pattern, another `emu_<arch>_t` ring instance), exactly as designed.
 
 ## Why this work exists
 

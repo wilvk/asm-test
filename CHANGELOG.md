@@ -22,6 +22,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   AArch64 row is now runnable, the shared refusal label now names only the
   arches still unsupported (ARM32 / RISC-V), and the capability panel states
   which arches Author mode runs straight from that same table.
+- **arm64 register-ring time-travel for the Scrubber** (docs/internal/gui/
+  32-per-guest-value-producer.md R5 T2, the regstate half). The emulator's
+  per-step register ring (`src/emu.c`) is arch-parameterized: `emu_arm64_t`
+  gains its own opt-in drop-oldest ring (`emu_arm64_step_capture`/`_clear`/
+  `_count`/`_dropped`/`_at`), mirroring the x86-64 ring's shape over
+  `emu_arm64_regs_t` instead of a union grafted onto the x86-64 handle — zero
+  changes to `emu_t`, `emu_x86_regs_t`, or `emu_snapshot`/`emu_restore`. A new
+  `emu_arm64_regs_t@aarch64/aapcs64` `regstate` descriptor
+  (docs/internal/gui/asmtrace-schema.md) names the AArch64 GP file (`x0`..`x30`,
+  `sp`, `pc`, `nzcv`); the `arm64-df-chain` golden now also carries a
+  `regstate` ring (steps_cap = 8, the arm64 analogue of `add_signed`'s worked
+  example), and a new `arm64-regstate-truncated` golden proves the ring's
+  honest truncation (D7). No desktop/reader change: the Scrubber's existing
+  generic "unnamed integer field" fallback already renders the new register
+  names (in a plain sorted rather than hand-curated order, a cosmetic
+  follow-on).
 - **A command palette (`Ctrl+Shift+P` / `Ctrl+P`) over the `dt_nav_go` router**
   (docs/internal/gui/21-spine-navigation.md T1). A modal fuzzy finder that makes
   the whole spine reachable by typing: view-switch, go-to step/offset/link,
