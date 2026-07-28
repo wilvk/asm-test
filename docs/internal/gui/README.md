@@ -83,25 +83,54 @@ Every doc conforms to these; they are stated once here.
 - **D11 — naming.** The nine docs and their cross-reference names are exactly
   the filenames below.
 
+## Claiming work (parallel agents)
+
+Every doc table carries a **Claim** column so several agents can work this family
+at once without colliding. The column is the only coordination channel — there is
+no lock server; the git history is the arbiter.
+
+- **Claim before you edit code.** Write your claim into the row, commit *that
+  edit alone*, and push. If the push rejects, `git pull --rebase` and re-read the
+  cell: someone claimed it first, so pick another row. Winning the push is what
+  makes the claim real.
+- **Format:** `<who> · <task ids> · <YYYY-MM-DD>` — e.g.
+  `agent-a · T1–T2 · 2026-07-28`. Task-level granularity is expected; two agents
+  may share a doc if their tasks are independent, so list the tasks, never just
+  the doc. Separate multiple claims on one row with `;`.
+- **`*free*`** means unclaimed and open. **`—`** means nothing left to claim
+  (doc complete, or not a brief).
+- **Release when you land or stop.** On landing, update **Status** and set Claim
+  back to `*free*` (or `—` when the doc is complete). If you abandon a claim,
+  clear it in the same commit as your last push — a stale claim blocks others,
+  and any claim older than a day with no commits touching it is fair game to take
+  over.
+- **Respect *Depends on*.** A row whose dependency is unlanded is not claimable
+  yet, even if the Claim cell reads `*free*`; the docs 28–33 order in the
+  sequencing note below is the intended parallel schedule.
+
 ## The documents
 
 **Status** tracks task completion as `done/total`; update the cell as tasks
 land (legend as in [../implementations/README.md](../implementations/README.md):
 ☐ · ◐ · ☑ · ✅).
 
-| Doc | Area | Tasks | Depends on | Status |
-|---|---|---|---|---|
-| [01-asmtrace-format.md](01-asmtrace-format.md) | `.asmtrace` schema, record modes, golden corpus | 8 | — | ✅ 8/8 |
-| [02-exporters-and-readers.md](02-exporters-and-readers.md) | speedscope/Perfetto exporters, completeness readers | 6 | 01 (03 for T5–T6) | ✅ 6/6 |
-| [03-desktop-shell.md](03-desktop-shell.md) | desktop/ skeleton, deps, mk/desktop.mk, document model | 8 | 01 (corpus, for T7) | ✅ 8/8 |
-| [04-replay-views.md](04-replay-views.md) | canvas, operand timeline, slice explorer, diff, deep links | 8 | 01, 03 | ✅ 8/8 |
-| [05-loom-day-one.md](05-loom-day-one.md) | the Loom fabric, lineage, lane annex, forks | 7 | 02 (reader), 03, 04 | ✅ 7/7 |
-| [06-doors-and-learning.md](06-doors-and-learning.md) | Learn/Author doors, ct_eq, capability panel, runner record mode | 7 | 01–04 | ✅ 7/7 |
-| [07-serve-live-host.md](07-serve-live-host.md) | extract `libasmspy`, `--serve` wrapper, session host, budget patch-bay, Inspect door | 7 | 01, 03 | ✅ 7/7 |
-| [08-observer-views.md](08-observer-views.md) | live views: syscalls, watch, topo, hot edges, tree filters, codeimage, PT slice | 8 | 07, 04, 01 | ✅ 8/8 |
-| [09-teaching-producers.md](09-teaching-producers.md) | per-step register ring, scrubber, ABI x-ray, blame socket | 5 | 01, 03, 04, 06 | ☑ 5/5 |
-| [10-spacetime-3d-overview.md](10-spacetime-3d-overview.md) | 3D memory-terrain + execution-trajectory overview surface (**growth-rung companion**) | 7 | 01, 03, 04, 07, 08 | ☑ 7/7 |
-| [11-imgui-addons.md](11-imgui-addons.md) | Dear ImGui addon research + adoption plan (**research/planning doc, not a brief**) — D2 amended (addon-admission rule, above); Track G + 2 no-dep quick wins landed | — | 01–10 (survey) | planning · G done |
+**Claim** is the parallel-work lane — see
+[Claiming work (parallel agents)](#claiming-work-parallel-agents) below. `—` means
+nothing left to claim; *free* means the row is open.
+
+| Doc | Area | Tasks | Depends on | Status | Claim |
+|---|---|---|---|---|---|
+| [01-asmtrace-format.md](01-asmtrace-format.md) | `.asmtrace` schema, record modes, golden corpus | 8 | — | ✅ 8/8 | — |
+| [02-exporters-and-readers.md](02-exporters-and-readers.md) | speedscope/Perfetto exporters, completeness readers | 6 | 01 (03 for T5–T6) | ✅ 6/6 | — |
+| [03-desktop-shell.md](03-desktop-shell.md) | desktop/ skeleton, deps, mk/desktop.mk, document model | 8 | 01 (corpus, for T7) | ✅ 8/8 | — |
+| [04-replay-views.md](04-replay-views.md) | canvas, operand timeline, slice explorer, diff, deep links | 8 | 01, 03 | ✅ 8/8 | — |
+| [05-loom-day-one.md](05-loom-day-one.md) | the Loom fabric, lineage, lane annex, forks | 7 | 02 (reader), 03, 04 | ✅ 7/7 | — |
+| [06-doors-and-learning.md](06-doors-and-learning.md) | Learn/Author doors, ct_eq, capability panel, runner record mode | 7 | 01–04 | ✅ 7/7 | — |
+| [07-serve-live-host.md](07-serve-live-host.md) | extract `libasmspy`, `--serve` wrapper, session host, budget patch-bay, Inspect door | 7 | 01, 03 | ✅ 7/7 | — |
+| [08-observer-views.md](08-observer-views.md) | live views: syscalls, watch, topo, hot edges, tree filters, codeimage, PT slice | 8 | 07, 04, 01 | ✅ 8/8 | — |
+| [09-teaching-producers.md](09-teaching-producers.md) | per-step register ring, scrubber, ABI x-ray, blame socket | 5 | 01, 03, 04, 06 | ☑ 5/5 | — |
+| [10-spacetime-3d-overview.md](10-spacetime-3d-overview.md) | 3D memory-terrain + execution-trajectory overview surface (**growth-rung companion**) | 7 | 01, 03, 04, 07, 08 | ☑ 7/7 | — |
+| [11-imgui-addons.md](11-imgui-addons.md) | Dear ImGui addon research + adoption plan (**research/planning doc, not a brief**) — D2 amended (addon-admission rule, above); Track G + 2 no-dep quick wins landed | — | 01–10 (survey) | planning · G done | — |
 
 ### Addon-adoption family (docs 12–17) — implementation briefs cut from doc 11
 
@@ -116,14 +145,14 @@ shows. Status reflects committed `main`; the D2 amendment (12-T1) and the two
 no-dependency quick wins (14-T1 diff-fix, 14-T2 `theme.h`) are already in flight
 per the doc-11 row above.
 
-| Doc | Area | Tasks | Depends on | Status |
-|---|---|---|---|---|
-| [12-addon-supply-chain.md](12-addon-supply-chain.md) | amend D2 (addon-admission rule); reusable `fetch-addon.sh` + digest/license conventions; imgui-repin compile-gate (**Track G — blocks all**) | 3 | 03 | ☑ 3/3 |
-| [13-foundation-moves.md](13-foundation-moves.md) | F1 docking repin (`v1.91.9b-docking`) + in-tree layout manager; F2 32-bit `ImDrawIdx`; F3 freetype + JetBrains Mono + Codicons; F4 the 1.92 bump decision (**Track F**) | 5 | 12; 04, 09, 10 | ☑ 5/5 |
-| [14-quick-wins.md](14-quick-wins.md) | diff "go" bug fix; shared theme header; ProgressBar; imgui_memory_editor; ImZoomSlider; ImGuiTextSelect (v1.1.6+utfcpp); ImGuiFileDialog (v0.6.8) (**Track Q**) | 7 | 12 (T4–T7); 04/05/08 | ☑ 7/7 |
-| [15-plotting-and-graph-nav.md](15-plotting-and-graph-nav.md) | ImPlot v1.0 chassis (perf_history/hotedges/timeline/watch); imgui_canvas de-risk; imgui-node-editor for topo/tree | 3 | 12, 13 (F1/F2) | ✅ 3/3 (T1 plots ☑ + T2 canvas ☑ + T3 node-editor topo/tree/hot-edges ☑) |
-| [16-live-feedback-and-filtering.md](16-live-feedback-and-filtering.md) | ImGuiNotify toasts (live-session events); ImSearch client-side filtering (**both ∅-unverified in doc 11 — compile-check at pin**) | 2 | 12; 13 F3 (Notify) | ✅ 2/2 (T1 toasts `1a9d6d5` + T2 filter `a728d9d`) |
-| [17-interaction-testing-and-editor.md](17-interaction-testing-and-editor.md) | imgui_test_engine (interaction tests + keymap enforcement, test-lane-only); goossens ImGuiColorTextEdit + TextDiff (Author editor, disasm gutter, side-by-side diff) (**Bigger bets**) | 2 | 12 | ✅ 2/2 (T2 editor `fdb5783` + T1 engine/keymap `245ad3f`/`243f092`) |
+| Doc | Area | Tasks | Depends on | Status | Claim |
+|---|---|---|---|---|---|
+| [12-addon-supply-chain.md](12-addon-supply-chain.md) | amend D2 (addon-admission rule); reusable `fetch-addon.sh` + digest/license conventions; imgui-repin compile-gate (**Track G — blocks all**) | 3 | 03 | ☑ 3/3 | — |
+| [13-foundation-moves.md](13-foundation-moves.md) | F1 docking repin (`v1.91.9b-docking`) + in-tree layout manager; F2 32-bit `ImDrawIdx`; F3 freetype + JetBrains Mono + Codicons; F4 the 1.92 bump decision (**Track F**) | 5 | 12; 04, 09, 10 | ☑ 5/5 | — |
+| [14-quick-wins.md](14-quick-wins.md) | diff "go" bug fix; shared theme header; ProgressBar; imgui_memory_editor; ImZoomSlider; ImGuiTextSelect (v1.1.6+utfcpp); ImGuiFileDialog (v0.6.8) (**Track Q**) | 7 | 12 (T4–T7); 04/05/08 | ☑ 7/7 | — |
+| [15-plotting-and-graph-nav.md](15-plotting-and-graph-nav.md) | ImPlot v1.0 chassis (perf_history/hotedges/timeline/watch); imgui_canvas de-risk; imgui-node-editor for topo/tree | 3 | 12, 13 (F1/F2) | ✅ 3/3 (T1 plots ☑ + T2 canvas ☑ + T3 node-editor topo/tree/hot-edges ☑) | — |
+| [16-live-feedback-and-filtering.md](16-live-feedback-and-filtering.md) | ImGuiNotify toasts (live-session events); ImSearch client-side filtering (**both ∅-unverified in doc 11 — compile-check at pin**) | 2 | 12; 13 F3 (Notify) | ✅ 2/2 (T1 toasts `1a9d6d5` + T2 filter `a728d9d`) | — |
+| [17-interaction-testing-and-editor.md](17-interaction-testing-and-editor.md) | imgui_test_engine (interaction tests + keymap enforcement, test-lane-only); goossens ImGuiColorTextEdit + TextDiff (Author editor, disasm gutter, side-by-side diff) (**Bigger bets**) | 2 | 12 | ✅ 2/2 (T2 editor `fdb5783` + T1 engine/keymap `245ad3f`/`243f092`) | — |
 
 22 tasks across docs 12–17 — **all 22 landed** (the last was 15 T3,
 imgui-node-editor for topo/tree/hotedges pan-zoom + fit-graph). Sequencing (doc 11's tracks): **12 (Track G) first**,
@@ -151,17 +180,17 @@ registry, T4 the unified filter/time widgets, T5 the Loom/3D first-open primer),
 and the rest is future work. Recommendation IDs (`T<theme>.<n>`) and finding IDs (`F<n>`)
 map to the plan and review.
 
-| Doc | Wave | Recommendations (findings) | Tasks | Depends on | Status |
-|---|---|---|---|---|---|
-| [18-breach-stops.md](18-breach-stops.md) | 0 | keymap honesty-remainder + convention keys, real Reset, Author save-guard, capability positives, perturb-confirm, nav back/forward (F1,F18,F2,F24,F19,F22,F11) | 6 | 12 (test-engine, for tests); mostly independent of 19 | ✅ 6/6 |
-| [19-dockable-panes-keystone.md](19-dockable-panes-keystone.md) | 1 | real `kPane*` panes + flatten 3-deep nesting — **the keystone**, unblocks 20/21/22 (F2,F4,F9) | 3 | 13 F1 (docking, landed); 18 T2.2 alongside | ✅ 3/3 |
-| [20-workspace-and-settings.md](20-workspace-and-settings.md) | 1 | data-driven tabs, task-language entry rail, workspace persistence + recents, perspectives, Settings/DPI/text-scale (F4,F13,F10,F16,F6) | 5 | 19 (panes); 13 F3 (fonts, for Settings) | ✅ 5/5 |
-| [21-spine-navigation.md](21-spine-navigation.md) | 2 | command palette, wayfinding breadcrumb, overview/minimap (F8,F9) | 3 | 19 (panes); 15 + 14 T5 (minimap); 16 (ImSearch) | ✅ 3/3 |
-| [22-selection-and-search.md](22-selection-and-search.md) | 2 | shared brushing-and-linking selection, keyboard islands, global find, app-level undo (F7,F18,F17,F12) | 4 | 19 (panes); 16 (ImSearch); 21 T3 (minimap) | ✅ 4/4 (T1–T4 landed 2026-07-27) |
-| [23-graded-truth-layer.md](23-graded-truth-layer.md) | 3 | graded 3-tier honesty chrome + schema `severity`, session-end placard, split "paused", progress everywhere (F5,F20,F23,F21) | 4 | 01 (**schema-freeze coordination for T1**); 24 T5.1 (palette); 16 T1; 14 T3 | ✅ 4/4 (T1–T4 landed 2026-07-27) |
-| [24-one-visual-language.md](24-one-visual-language.md) | 3 | semantic palette (extend `theme.h`), CVD-safe + second channel, glossary/term registry, unified filter/time, Loom/3D primer (F3,F14,F15,F16,F4) | 5 | 16 (ImSearch); 15 (ImPlot colormap); T5.1 precedes 23 T1 | ✅ 5/5 (T1–T5 landed 2026-07-27) |
-| [25-live-model-wiring.md](25-live-model-wiring.md) | 4 | promote the growing capture into the workspace model so Loom / Slice / Timeline / 3D go live, not just Observer — closes the 2026-07-27 live-vs-replay audit gap; Scrubber was replay-only until doc 26 landed the live `regstate` producer | 7 | 20 T1 (`view_presence`); 07/08 (live host + observer deck) | ✅ 7/7 (T6 completed 2026-07-28: the live single-step 3D overlay — `build_trajectories` weaves the `df_step` offset stream as a region-relative, per-tid path when no `trace` is present) |
-| [26-live-regstate-producer.md](26-live-regstate-producer.md) | 4 | live `regstate` producer on the serve/`--dataflow` single-step engine (it already `PTRACE_GETREGS` every step) → the Scrubber goes live; the last live-vs-replay gap. Consumer already done (doc 25); producer + serve opt-in + emulator parity | 5 | 25 (consumer wiring); 07 (serve); the `--dataflow` ptrace engine | ✅ 5/5 (T1–T5 landed 2026-07-28; `--dataflow --steps` + serve `steps:true` arm the `user_regs@x86_64/sysv` ring; emulator-parity green) |
+| Doc | Wave | Recommendations (findings) | Tasks | Depends on | Status | Claim |
+|---|---|---|---|---|---|---|
+| [18-breach-stops.md](18-breach-stops.md) | 0 | keymap honesty-remainder + convention keys, real Reset, Author save-guard, capability positives, perturb-confirm, nav back/forward (F1,F18,F2,F24,F19,F22,F11) | 6 | 12 (test-engine, for tests); mostly independent of 19 | ✅ 6/6 | — |
+| [19-dockable-panes-keystone.md](19-dockable-panes-keystone.md) | 1 | real `kPane*` panes + flatten 3-deep nesting — **the keystone**, unblocks 20/21/22 (F2,F4,F9) | 3 | 13 F1 (docking, landed); 18 T2.2 alongside | ✅ 3/3 | — |
+| [20-workspace-and-settings.md](20-workspace-and-settings.md) | 1 | data-driven tabs, task-language entry rail, workspace persistence + recents, perspectives, Settings/DPI/text-scale (F4,F13,F10,F16,F6) | 5 | 19 (panes); 13 F3 (fonts, for Settings) | ✅ 5/5 | — |
+| [21-spine-navigation.md](21-spine-navigation.md) | 2 | command palette, wayfinding breadcrumb, overview/minimap (F8,F9) | 3 | 19 (panes); 15 + 14 T5 (minimap); 16 (ImSearch) | ✅ 3/3 | — |
+| [22-selection-and-search.md](22-selection-and-search.md) | 2 | shared brushing-and-linking selection, keyboard islands, global find, app-level undo (F7,F18,F17,F12) | 4 | 19 (panes); 16 (ImSearch); 21 T3 (minimap) | ✅ 4/4 (T1–T4 landed 2026-07-27) | — |
+| [23-graded-truth-layer.md](23-graded-truth-layer.md) | 3 | graded 3-tier honesty chrome + schema `severity`, session-end placard, split "paused", progress everywhere (F5,F20,F23,F21) | 4 | 01 (**schema-freeze coordination for T1**); 24 T5.1 (palette); 16 T1; 14 T3 | ✅ 4/4 (T1–T4 landed 2026-07-27) | — |
+| [24-one-visual-language.md](24-one-visual-language.md) | 3 | semantic palette (extend `theme.h`), CVD-safe + second channel, glossary/term registry, unified filter/time, Loom/3D primer (F3,F14,F15,F16,F4) | 5 | 16 (ImSearch); 15 (ImPlot colormap); T5.1 precedes 23 T1 | ✅ 5/5 (T1–T5 landed 2026-07-27) | — |
+| [25-live-model-wiring.md](25-live-model-wiring.md) | 4 | promote the growing capture into the workspace model so Loom / Slice / Timeline / 3D go live, not just Observer — closes the 2026-07-27 live-vs-replay audit gap; Scrubber was replay-only until doc 26 landed the live `regstate` producer | 7 | 20 T1 (`view_presence`); 07/08 (live host + observer deck) | ✅ 7/7 (T6 completed 2026-07-28: the live single-step 3D overlay — `build_trajectories` weaves the `df_step` offset stream as a region-relative, per-tid path when no `trace` is present) | — |
+| [26-live-regstate-producer.md](26-live-regstate-producer.md) | 4 | live `regstate` producer on the serve/`--dataflow` single-step engine (it already `PTRACE_GETREGS` every step) → the Scrubber goes live; the last live-vs-replay gap. Consumer already done (doc 25); producer + serve opt-in + emulator parity | 5 | 25 (consumer wiring); 07 (serve); the `--dataflow` ptrace engine | ✅ 5/5 (T1–T5 landed 2026-07-28; `--dataflow --steps` + serve `steps:true` arm the `user_regs@x86_64/sysv` ring; emulator-parity green) | — |
 
 30 tasks across docs 18–24. Sequencing follows the plan's four waves:
 **Wave 0 (doc 18)** stops active breaches and is mostly independent of the
@@ -186,15 +215,15 @@ addon family); docs 28–33 are the full per-root briefs. Authored 2026-07-28
 against HEAD `da566c9`; **not yet implemented** (planning). Excludes what already
 shipped (live `regstate` doc 26, `severity` doc 23, offline scrubber doc 09).
 
-| Doc | Root | Prerequisite | Tasks | Depends on | Status |
-|---|---|---|---|---|---|
-| [27-extension-roadmap.md](27-extension-roadmap.md) | — | family overview + dependency graph (**not a brief**) | — | 01–26 (survey) | overview |
-| [28-schema-freeze-completion.md](28-schema-freeze-completion.md) | R1 | `code` header (routine hash), footer `steps_total`, serialize `wide[]` | 3 | 01 (**Phase-3 freeze, D5**) | ☐ 0/3 |
-| [29-mem-address-stream.md](29-mem-address-stream.md) | R2 | the reserved `mem` kind — no producer today | 3 | 01; 10 (consumer, inert-ready) | ☐ 0/3 |
-| [30-resume-from-state-and-reweave.md](30-resume-from-state-and-reweave.md) | R3 | route the value producer through `emu_snapshot`/`emu_restore` | 4 | 05 (forks); 28 T1 (for T4) | ☐ 0/4 |
-| [31-wide-register-deck.md](31-wide-register-deck.md) | R4 | `fpenv` kind + XMM/YMM/MXCSR capture + SSE-class args | 3 | 28 T3 (`wide[]` format); 01/D5 | ☐ 0/3 |
-| [32-per-guest-value-producer.md](32-per-guest-value-producer.md) | R5 | arch-parameterize `dataflow_emu.c` (arm64 first) | 3 | independent axis; demand-gated | ☐ 0/3 |
-| [33-backward-attribution-producers.md](33-backward-attribution-producers.md) | R6 | the reserved `blame` + `statediff` kinds | 2 | 28 T1 (statediff pairing); 05 (L1 edges) | ☐ 0/2 |
+| Doc | Root | Prerequisite | Tasks | Depends on | Status | Claim |
+|---|---|---|---|---|---|---|
+| [27-extension-roadmap.md](27-extension-roadmap.md) | — | family overview + dependency graph (**not a brief**) | — | 01–26 (survey) | overview | — |
+| [28-schema-freeze-completion.md](28-schema-freeze-completion.md) | R1 | `code` header (routine hash), footer `steps_total`, serialize `wide[]` | 3 | 01 (**Phase-3 freeze, D5**) | ☐ 0/3 | *free* |
+| [29-mem-address-stream.md](29-mem-address-stream.md) | R2 | the reserved `mem` kind — no producer today | 3 | 01; 10 (consumer, inert-ready) | ☐ 0/3 | *free* |
+| [30-resume-from-state-and-reweave.md](30-resume-from-state-and-reweave.md) | R3 | route the value producer through `emu_snapshot`/`emu_restore` | 4 | 05 (forks); 28 T1 (for T4) | ☐ 0/4 | *free* |
+| [31-wide-register-deck.md](31-wide-register-deck.md) | R4 | `fpenv` kind + XMM/YMM/MXCSR capture + SSE-class args | 3 | 28 T3 (`wide[]` format); 01/D5 | ☐ 0/3 | *free* |
+| [32-per-guest-value-producer.md](32-per-guest-value-producer.md) | R5 | arch-parameterize `dataflow_emu.c` (arm64 first) | 3 | independent axis; demand-gated | ☐ 0/3 | *free* |
+| [33-backward-attribution-producers.md](33-backward-attribution-producers.md) | R6 | the reserved `blame` + `statediff` kinds | 2 | 28 T1 (statediff pairing); 05 (L1 edges) | ☐ 0/2 | *free* |
 
 18 tasks across docs 28–33. Suggested order (per the roadmap): **R1 first**
 (cheapest, no new engine, prerequisite for R4/R6, closes 04/05 honesty gaps —
