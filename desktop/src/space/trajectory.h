@@ -60,7 +60,11 @@ struct TrajectorySet {
 };
 
 // Build ordered trajectories from a recording:
-//   - PC vertices from `trace` events, in step order, grouped by tid;
+//   - PC vertices from `trace` events, in step order, grouped by tid; when a
+//     recording carries no `trace` (a live serve dataflow/auto session, or a
+//     `--dataflow` file, emits `df_step`/`df_edge` only), the PC path falls back
+//     to the `df_step` offset stream, woven region-relative (RELATIVE_BASIS) —
+//     the live single-step overlay of doc 10 T5 / doc 25 T6;
 //   - access marks from `mem` events (the rich rung), attached to the PC vertex
 //     of their `step` — gated on the `mem` kind being present (inert until the
 //     Wave-1 producer lands);

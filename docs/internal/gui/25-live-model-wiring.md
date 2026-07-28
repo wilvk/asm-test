@@ -11,10 +11,16 @@
 > promote the growing `Recording` into the same workspace model the docked panes
 > and `view_presence` already read.
 >
-> **Status (2026-07-27).** T1, T2, T3, T4, T5, T7 landed; T6's live re-weave core
-> (camera-preserving 3D re-weave-on-growth) landed, and its per-tid trajectory
-> overlay is the tail, tracked with [10](10-spacetime-3d-overview.md) T5. The
-> Scrubber stays out of scope (no live `regstate` producer).
+> **Status (2026-07-28).** ✅ **7/7 — all tasks landed.** T1–T5, T7 landed
+> 2026-07-27; T6 completed 2026-07-28. T6's live re-weave core
+> (camera-preserving 3D re-weave-on-growth) landed first; its per-tid trajectory
+> overlay — the last tail, tracked with [10](10-spacetime-3d-overview.md) T5 —
+> now lands too: `build_trajectories` weaves the `df_step` offset stream as a
+> region-relative, per-tid path when a recording carries no `trace` (the live
+> serve `dataflow`/`auto` case), so the 3D overview shows an honest
+> routine-relative execution path during a single-step capture instead of empty
+> terrain. The Scrubber's `regstate` ring, once out of scope here, went live
+> under [26](26-live-regstate-producer.md).
 
 ## Why this work exists
 
@@ -139,13 +145,33 @@ register ring.
 **Done when.** the live Loom/Slice show the perturb+growing banner; a replayed
 file shows neither; the Scrubber placard is unchanged.
 
-### T6 — 3D overview live (optional / follow-on, tie to [10](10-spacetime-3d-overview.md) T5)  (M)
+### T6 — 3D overview live (optional / follow-on, tie to [10](10-spacetime-3d-overview.md) T5)  ✅ DONE
 
 3D *presence* already works live at T2 (the tab gates on `regions_from_codeimage`,
 which is cheap; the terrain weave is lazy on first view). This task is only the
 **live re-weave-on-growth** of an opened 3D pane + doc 10 T5's per-tid trajectory
 overlay (absolute-basis PT traces give real paths; single-step traces are
 region-relative → labelled). Deferrable without blocking T1–T5.
+
+> **Landed 2026-07-28.** The re-weave-on-growth core landed first
+> (`shell_sync_live_tab` resets `scenes[i]` to force a lazy 3D re-weave over the
+> grown recording while preserving the interactive camera / HUD / primer). The
+> trajectory overlay was the remaining tail: a live serve `dataflow`/`auto`
+> session emits `df_step`/`df_edge` and **no** `trace` (the SERVE_MODES table),
+> so `build_trajectories` — which built the PC path from `trace` only — produced
+> an empty set and the live single-step 3D pane drew terrain with no execution
+> path. It now falls back to the `df_step` offset stream when `trace` is absent,
+> woven **region-relative** (`TRAJ_RELATIVE_BASIS`, `basis:"rel"`) and grouped
+> per tid, exactly as a `trace basis:"rel"` path is. Those region-relative
+> offsets do not project onto the absolute plane, so the renderer never fakes a
+> true address-space path (doc 10 T5's honesty rule) and the HUD shows the
+> existing *"rel: routine-relative (not a true path)"* chip. `trace`, when
+> present (an emulator `--dataflow` file carries both), stays authoritative — the
+> fallback is inert, so nothing regresses. Pinned by three `test_trajectory`
+> cases (df_step-only → rel per-tid path; trace-wins-over-df_step; df_step
+> per-tid split); the shell weave reaches it through the unchanged
+> `draw_scene_overview` → `build_trajectories` call, and the live re-weave
+> through `shell_sync_live_tab`.
 
 ### T7 — headless test in `test_shell`  (S, depends on: T2, T4)
 

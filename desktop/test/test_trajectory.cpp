@@ -8,8 +8,9 @@
 // The four cases the brief pins: an `abs` fixture yields vertices at the
 // projected cells in step order; a `rel` fixture sets RELATIVE_BASIS; a mixed
 // fixture is refused with a diagnostic; a `survey` fixture is all Statistical.
-// Two more pin the features the brief also builds: per-tid grouping, and the
-// gated `mem` access marks.
+// Three more pin the features the brief also builds: per-tid grouping, the
+// gated `mem` access marks, and the `df_step` fallback (a live single-step
+// capture with no `trace` — doc 10 T5 / doc 25 T6 — woven region-relative).
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -254,6 +255,79 @@ int main() {
         }
         check("per-tid: both threads present", saw7 && saw9,
               "a tid is missing");
+    }
+
+    // === df_step fallback: a live single-step capture carries no `trace` =====
+    // A serve dataflow/auto session (and a --dataflow file) emits df_step and no
+    // trace (SERVE_MODES). Its PC path is the df_step offset stream, woven
+    // region-relative (RELATIVE_BASIS) so the 3D overview labels it rather than
+    // faking an absolute address-space path (doc 10 T5 / doc 25 T6). Without
+    // this the live single-step 3D pane shows terrain with no execution path.
+    {
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"disasm\":\"a\"}\n";
+        nd += "{\"k\":\"df_step\",\"step\":1,\"off\":2}\n";
+        nd += "{\"k\":\"df_step\",\"step\":2,\"off\":6}\n";
+        TrajectorySet ts = build_trajectories(load(nd));
+
+        check("df_step is not refused", !ts.refused(), ts.diagnostic);
+        check("df_step path is region-relative", ts.basis == "rel",
+              "got '" + ts.basis + "'");
+        check("df_step is a single trajectory", ts.trajectories.size() == 1,
+              "got " + std::to_string(ts.trajectories.size()));
+        if (ts.trajectories.size() == 1) {
+            const Trajectory &tr = ts.trajectories[0];
+            check("df_step trajectory is flagged RELATIVE_BASIS",
+                  (tr.flags & TRAJ_RELATIVE_BASIS) != 0, "flag not set");
+            check("df_step is not flagged statistical",
+                  (tr.flags & TRAJ_STATISTICAL) == 0, "stat flag set");
+            check("df_step has three PC vertices", pc_count(tr) == 3,
+                  "got " + std::to_string(pc_count(tr)));
+            const uint64_t want[3] = {0, 2, 6};
+            for (size_t i = 0; i < tr.points.size() && i < 3; i++)
+                check("df_step vertex is the offset in step order",
+                      tr.points[i].addr == want[i] && tr.points[i].t == i &&
+                          tr.points[i].fidelity == TrajPoint::Exact,
+                      "off " + std::to_string(tr.points[i].addr));
+        }
+    }
+
+    // `trace` is authoritative: an emulator dataflow file carries BOTH df_step
+    // and an explicit trace basis line. The trace path wins and df_step adds no
+    // second, duplicate trajectory (else the path would be drawn twice).
+    {
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0}\n";
+        nd += "{\"k\":\"df_step\",\"step\":1,\"off\":2}\n";
+        nd += "{\"k\":\"trace\",\"basis\":\"abs\",\"off\":4194304}\n";
+        TrajectorySet ts = build_trajectories(load(nd));
+        check("trace wins over df_step (basis stays abs)", ts.basis == "abs",
+              "got '" + ts.basis + "'");
+        check("trace wins over df_step (one path, no duplicate)",
+              ts.trajectories.size() == 1,
+              "got " + std::to_string(ts.trajectories.size()));
+        if (ts.trajectories.size() == 1)
+            check("the surviving path is the trace vertex, not df_step",
+                  pc_count(ts.trajectories[0]) == 1 &&
+                      ts.trajectories[0].points[0].addr == 0x400000,
+                  "df_step leaked into the trace path");
+    }
+
+    // df_step also splits per tid, when a live multi-thread feed tags the steps
+    // (the same grouping the trace path uses).
+    {
+        std::string nd = kHdrExact;
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"tid\":7}\n";
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0,\"tid\":9}\n";
+        nd += "{\"k\":\"df_step\",\"step\":1,\"off\":4,\"tid\":7}\n";
+        TrajectorySet ts = build_trajectories(load(nd));
+        check("df_step per-tid: two trajectories", ts.trajectories.size() == 2,
+              "got " + std::to_string(ts.trajectories.size()));
+        check("df_step per-tid: still region-relative", ts.basis == "rel",
+              "got '" + ts.basis + "'");
+        for (const Trajectory &tr : ts.trajectories)
+            check("df_step per-tid path stays RELATIVE_BASIS",
+                  (tr.flags & TRAJ_RELATIVE_BASIS) != 0, "flag not set");
     }
 
     // === mem access marks: gated on the kind, attached to the PC step =======

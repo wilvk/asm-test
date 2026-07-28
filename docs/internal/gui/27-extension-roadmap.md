@@ -35,9 +35,11 @@ duplicate landed work:
 - **Graded-honesty `severity` schema field** ([23](23-graded-truth-layer.md) T1,
   landed 2026-07-27) — the one Phase-3-freeze schema item already **closed** with
   01-owner sign-off ([asmtrace-schema.md](asmtrace-schema.md) owner sign-off note).
-- **Live model wiring** ([25](25-live-model-wiring.md)) — Loom / Slice / Timeline
-  / 3D go live; only the per-tid trajectory overlay (T6 → [10](10-spacetime-3d-overview.md)
-  T5) is a tail item (below).
+- **Live model wiring** ([25](25-live-model-wiring.md), ✅ 7/7) — Loom / Slice /
+  Timeline / 3D go live; the last tail, the per-tid trajectory overlay (T6 →
+  [10](10-spacetime-3d-overview.md) T5), **landed 2026-07-28** (`build_trajectories`
+  weaves the live single-step `df_step` offset stream as a region-relative,
+  per-tid path). The 3D-render-tail row below is retired.
 
 ## The six roots
 
@@ -108,7 +110,7 @@ the roots above and become small follow-ups once it lands.
 
 | Item | Where noted | Gate |
 |---|---|---|
-| Per-tid trajectory overlay (3D) | [25](25-live-model-wiring.md) T6 → [10](10-spacetime-3d-overview.md) T5 | per-tid stitched slice sets (exist); 3D render tail |
+| ~~Per-tid trajectory overlay (3D)~~ — **✅ landed 2026-07-28** (`build_trajectories` weaves the live single-step `df_step` offset stream as a region-relative, per-tid path) | [25](25-live-model-wiring.md) T6 → [10](10-spacetime-3d-overview.md) T5 | ~~per-tid stitched slice sets (exist); 3D render tail~~ (done) |
 | `--lcov-source` (source-line lcov) | [02](02-exporters-and-readers.md) T-exporters | the reserved `srcmap` kind producer |
 | Offline `--graph` / `--procs` DOT regeneration | [02](02-exporters-and-readers.md) | Phase-3 record modes (07's snapshot kinds offline) |
 | SARIF export | [02](02-exporters-and-readers.md) | Wave 4 |

@@ -269,6 +269,13 @@ marks), tagged exact/statistical and by tid.
    never joined into an exact tube.
 4. Per-tid grouping for the live overlay (T5): `tid` from the event (`syscall`/
    stitch/PT carry it); replay recordings are `tid = -1` (single trajectory).
+5. `df_step` fallback (landed 2026-07-28, realises the T5 single-step overlay):
+   a live serve `dataflow`/`auto` session emits `df_step`/`df_edge` and **no**
+   `trace`, so when a recording carries no `trace` the PC path is woven from the
+   `df_step` offset stream instead — region-relative by construction
+   (`RELATIVE_BASIS`, `basis:"rel"`), grouped per tid, and never projected as a
+   true absolute path. `trace`, when present, wins (an emulator `--dataflow` file
+   carries both).
 
 **Tests.** `test_trajectory.cpp` (headless): an `abs` fixture yields vertices at
 the projected cells in step order; a `rel` fixture sets `RELATIVE_BASIS`; a mixed

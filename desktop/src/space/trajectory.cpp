@@ -94,6 +94,41 @@ TrajectorySet build_trajectories(const Recording &r) {
         }
     }
 
+    // --- fall back to `df_step` for a single-step capture with no `trace` ----
+    // A live serve `dataflow`/`auto` session — and a `--dataflow` file — emits
+    // df_step/df_edge and NO `trace` (the SERVE_MODES table), so the loop above
+    // placed no vertex. Its PC path is the df_step offset stream instead. Those
+    // offsets are ROUTINE-RELATIVE by construction (df_step.off is an offset
+    // from the scoped region base, exactly like a trace basis:"rel"), so the
+    // path is woven as rel: the HUD labels it "rel: routine-relative (not a true
+    // path)" and the renderer never places it on the absolute plane — the live
+    // single-step overlay honesty from doc 10 T5 / doc 25 T6. `trace`, when
+    // present, is authoritative and already fixed the basis above; an emulator
+    // dataflow file carries BOTH and its trace wins, so this runs only when the
+    // trace path produced nothing (and was not itself refused).
+    if (by_tid.empty() && set.diagnostic.empty()) {
+        if (const auto *ev = kind(r, "df_step")) {
+            for (const Event &e : *ev) {
+                auto off = e.body.find("off");
+                if (off == e.body.end() || !off->is_number())
+                    continue; // an offset-less df_step places no vertex
+                int32_t tid = -1;
+                get(e.body, "tid", tid);
+                Trajectory &tr = by_tid[tid];
+                tr.tid = tid;
+                TrajPoint p;
+                p.t = next_t[tid]++;
+                p.addr = off->get<uint64_t>();
+                p.fidelity = TrajPoint::Exact;
+                p.is_access = false;
+                p.tid = tid;
+                tr.points.push_back(p);
+            }
+            if (!by_tid.empty())
+                set.basis = "rel"; // df_step offsets are region-relative
+        }
+    }
+
     // A rel-basis PC path is routine-relative, not a true address path: flag
     // every trajectory so the HUD can say so and the renderer never treats it
     // as absolute.
