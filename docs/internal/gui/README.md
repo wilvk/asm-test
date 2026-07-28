@@ -299,9 +299,36 @@ states, not a guess), so it is placed and flagged `TRAJ_ANCHORED`; when the span
 is absent or ambiguous it refuses **louder** than today — no geometry *and* a
 stated reason. Adds a labelled `df_step` residency height rung (never block
 coverage), the placement counters + HUD chips, and a `scene-df-loop` golden in the
-live shape no existing fixture carries. Pure `space/` + HUD: no engine, no GL, no
-wire change, no existing golden regenerated. Authored 2026-07-29 against HEAD
-`24778e4`. ☐ 0/4 · *free*.
+live shape no existing fixture carries. T5 then narrows `converge.cpp`'s exclusion
+the same way — an *anchored* rel path takes part in convergence detection while an
+unanchored one and any individually-unplaced vertex still cannot (with the honest
+limit that `df_step` carries no `tid`, so a live dataflow capture is one trajectory
+and yields no marks regardless). Pure `space/` + HUD: no engine, no GL, no wire
+change, no existing golden regenerated. Authored 2026-07-29 against HEAD `24778e4`.
+☐ 0/5 · *free*.
+
+[37-region-tag-on-df-step.md](37-region-tag-on-df-step.md) — **the producer half of
+36**: state the region on the wire instead of deriving it. 36 anchors a
+routine-relative offset by deriving the base from the recording's single `codeimage`
+span, and must **refuse** whenever a recording carries zero or ≥2 spans — which a
+live `auto` candidate walk produces routinely — because `df_step` says only `step`,
+`off`, `disasm?`, `ops`. Yet the producer *knows* the base as it writes the offset
+(it is already a `dataflow_record` parameter, used today only for disassembly) and
+simply does not emit it. This brief adds an optional `rbase` (a base, not a version:
+`version`/`when` both reset to 0 mid-recording on a candidate walk, so base is the
+only globally distinguishing field `codeimage` carries), turning 36's derivation into
+a stated fact and making the multi-span case resolvable rather than refusable. It
+also redeems 36 T3's promise — the terrain churn walk becomes a sound "region as-of
+this step" resolver, fixing a pre-existing bug where a dataflow recording's churn
+always pins at step 0. Additive optional field on a known kind ⇒ no envelope bump and
+no break (*"Ignore unknown fields"*, and no reader in the tree rejects them); the
+schema is still *draft, not frozen*, so it lands under the append-only rule. Costs
+one 20-file golden regen inside `docker-cli`; 3 hand-authored goldens + 1 desktop
+fixture stay deliberately untagged as standing coverage for the absent-`rbase`
+fallback. **36's `resolve_anchor` is retired to *the fallback*, never deleted** — it
+remains permanent for pre-37 recordings and for rel `trace`, which this brief
+deliberately does not tag. T4 (`when`: which bytes were live at this step) is
+severable. Authored 2026-07-29 against HEAD `81e6ade`. ☐ 0/6 · *free*.
 
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then

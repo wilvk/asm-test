@@ -26,7 +26,7 @@
 > disagrees with the code when you implement, the code wins — re-verify, then fix
 > this doc in the same change.
 >
-> **Status (2026-07-29) — ☐ 0/4.** Not started.
+> **Status (2026-07-29) — ☐ 0/5.** Not started.
 
 ## Why this work exists
 
@@ -345,10 +345,95 @@ real Auto/Dataflow shape renders end to end.
 deleting any one chip branch fails a named check; `make asmtrace-golden-check`
 passes in `docker-cli`.
 
+### T5 — convergence admits an anchored rel path  (S, depends on: T2)
+
+**Goal.** Once a rel path is genuinely *placed* (T2), two anchored paths in the
+same span are two paths on the same plane, and
+[converge.cpp:50-51](../../../desktop/src/space/converge.cpp#L50) is refusing a
+measurement rather than protecting one — the same narrowing this brief already made
+for the renderer. Admit them, **and only them**.
+
+**The soundness bar.** `detect_convergences` never compares an address to an
+address: it projects each `TrajPoint::addr` once, buckets by **cell**, and joins on
+cell identity + a step-gap window + `tid_a != tid_b`. So admission need only
+establish that both `addr` values are legal inputs to that one projection:
+
+- **S1 — same address space.** Guaranteed structurally, not by luck: T1's anchor
+  base comes from `regions_from_codeimage`, which is the *same* region vector
+  `build_projection` consumed, and [shell.cpp:653-663](../../../desktop/src/ui/shell.cpp#L653)
+  hands the *same* `sv.terr.proj` to both builders. `base + off` projects exactly as
+  a measured absolute PC at that address would. There is one anchor per recording,
+  so two anchored trajectories are anchored to the *same* base by construction —
+  cross-anchor comparison cannot arise.
+- **S2 — individually placed.** Each vertex must be the *output of a successful
+  placement*, not a raw offset left behind. This is the sharp one: T1's `place()`
+  fails for `off >= len` and T2 leaves those vertices verbatim inside an otherwise
+  anchored vector, and the 4096-byte clamp makes that common.
+- **S3 — per-thread.** `TRAJ_STATISTICAL` stays excluded unconditionally.
+- **S4 — one clock family.** Holds by construction: the `df_step` fallback runs only
+  when the trace loop placed nothing, so one set has exactly one PC source. Worth a
+  sentence in `converge.h`, not a guard.
+
+**Steps.**
+1. [`space/types.h`](../../../desktop/src/space/types.h): add `bool placed = true;`
+   to `TrajPoint`, documented as *"`addr` is an address in the recording's address
+   space — true for a measured absolute vertex, true for a rel offset the anchor
+   placed, **false** for one it could not place, where `addr` is still the raw wire
+   offset."* Defaulting `true` leaves every existing producer and hand-built test
+   point unchanged. This is also the natural source for T2's `pc_placed` counter.
+2. In T2's anchoring pass, set `p.placed` from the `place()` result. If T5 lands
+   **with** T2, fold this in and drop this step.
+3. [`converge.cpp:50-51`](../../../desktop/src/space/converge.cpp#L50): narrow the
+   mask — keep `TRAJ_STATISTICAL` excluded unconditionally, exclude
+   `TRAJ_RELATIVE_BASIS` **only when `TRAJ_ANCHORED` is absent**, and skip any
+   `!p.placed` vertex. Apply the per-point skip to *every* admitted trajectory, not
+   only anchored ones, so it cannot rot. The rel test is **narrowed, never dropped**:
+   deleting the rel bit outright would readmit raw offsets, which is exactly the
+   false address-space claim the file's comment forbids.
+4. Rewrite the comment at [converge.cpp:41-43](../../../desktop/src/space/converge.cpp#L41)
+   and the doc block in [`converge.h`](../../../desktop/src/space/converge.h) to state
+   the four-condition bar, plus two inherited caveats: a mark over an anchored path is
+   a hint over a **derived** placement (doubly not a proof), and widest-`len` aliasing
+   means the shared cell may name bytes never at that offset in that version. The hint
+   grade itself is unchanged — admitting anchored paths does not upgrade it.
+
+**Honest limit, state it plainly.** `df_step` carries **no `tid`** on the wire
+([asmtrace_ndjson.c:269-290](../../../cli/asmtrace_ndjson.c#L269)), so a live
+single-step dataflow capture reads `tid = -1` and is **one** trajectory — it yields
+zero marks whatever the flags say. T5 produces marks only for a rel **`trace`**
+recording whose events carry `tid`. Without this sentence the task reads as promising
+arcs on the Auto/Dataflow pane that will never appear.
+
+**No change elsewhere.** `Scene::set_convergences` re-projects the mark addresses, so
+an anchored absolute address lands on the drawn path with no `scene3d` edit; the HUD
+does not consume `ConvergenceSet` at all, so there is no chip to add — the
+derived-placement caveat already rides on T4's path chip. `desktop_test_converge`
+already links what it needs, so no `mk/desktop.mk` edit.
+
+**Tests.** `desktop/test/test_converge.cpp`: two anchored rel paths in one span
+converge; the mark carries the **absolute** address (`base + off`, not `off`); an
+anchored path and an equivalent abs path yield **identical** `ConvergenceSet`s (the S1
+assertion); an anchored path never converges with an unanchored one; a shared cell
+reached only by `placed == false` vertices yields zero marks (the clamp case);
+same-tid and window rules unchanged; and an end-to-end case over inline NDJSON proving
+the predicate matches what the builder actually emits. The **existing** unanchored-rel
+and statistical exclusion cases stay untouched — they are the canaries that fail if
+someone "fixes" the mask by deleting the rel bit.
+
+**Docs.** The exclusion is currently asserted in three places — this brief's own
+non-goals, `desktop/README.md`, and [10](10-spacetime-3d-overview.md) — and all three
+become false; reconcile them in the same change.
+
+**Done when.** `make desktop-test` green; reverting the predicate fails the first
+case; deleting `TRAJ_RELATIVE_BASIS` from it outright fails the unanchored canary;
+deleting the `!p.placed` skip fails the clamp case; removing the `placed` assignment
+fails it too (the bit must be *measured*, not defaulted).
+
 ## Task order & parallelism
 
-`T1` → (`T2` ∥ `T3`) → `T4`. T2 and T3 touch disjoint files and share only the T1
-helper.
+`T1` → (`T2` ∥ `T3`) → `T4`, with `T5` after `T2` — it can land in parallel with
+`T4`. T2 and T3 touch disjoint files and share only the T1 helper. T5 cannot start
+before T2: `TRAJ_ANCHORED` does not exist in the tree today.
 
 ## Constraints & gates
 
@@ -378,11 +463,14 @@ helper.
 
 ## Non-goals / honest limits
 
-- **Not a schema change.** `df_step` gains no `basis` and no region tag; the
-  producers keep emitting `"rel"`. Tagging `df_step` with a region is the real fix
+- **Not a schema change.** `df_step` gains no `basis` and no region tag here; the
+  producers keep emitting `"rel"`. Tagging `df_step` with its region is the real fix
   for the multi-span ambiguity — with it, the churn walk becomes a sound "region
-  as-of this step" resolver and the refusal branch mostly disappears — but it is a
-  producer + schema change and belongs in its own brief.
+  as-of this step" resolver and the refusal branch mostly disappears — and it is a
+  producer + schema change with its own brief:
+  [37](37-region-tag-on-df-step.md). **T1's `resolve_anchor` remains the permanent
+  documented fallback** for every recording produced before 37 lands, and for rel
+  `trace` recordings, which 37 deliberately does not tag.
 - **Not "region as-of this step".** That rule is **not soundly recoverable** today
   and must not be attempted: `df_step` carries no region tag; the candidate walk
   resets the version counter and restarts the `when` timeline; and the refresh path
@@ -399,10 +487,11 @@ helper.
   the flag pass and uses absolute survey endpoints, so it is not mis-placed — but a
   rel recording carrying `survey` still holds two address families in one set,
   distinguished only by `TRAJ_STATISTICAL`. Documented, not fixed.
-- **Convergence still refuses anchored rel paths.** [converge.cpp:51](../../../desktop/src/space/converge.cpp#L51)
-  excludes every `TRAJ_RELATIVE_BASIS` trajectory, so the 3D view will draw a path the
-  convergence layer declines to reason about. Conservative and not a lie; admitting
-  anchored paths is a deliberate follow-on.
+- **Convergence admits anchored paths, but only in T5 and only for `trace`.** T5
+  narrows [converge.cpp:50-51](../../../desktop/src/space/converge.cpp#L50) so an
+  *anchored* rel path takes part while an unanchored one still cannot. It changes
+  nothing for the live Auto/Dataflow pane: `df_step` carries no `tid`, so such a
+  capture is a single trajectory and convergence needs two.
 
 ## Cross-references
 
@@ -413,7 +502,9 @@ rel chip that never fired). Consumes the live substrate of
 defined there. Sits directly downstream of [35](35-continuous-live-dataflow.md) —
 a continuous capture is exactly the session whose 3D pane stays empty longest — and
 beside [34](34-playhead-and-scene-reach.md), whose two-axis honesty note governs the
-terrain-time axis this brief now derives from `df_step`. Schema/D5
+terrain-time axis this brief now derives from `df_step`. Its producer-side sequel is
+[37](37-region-tag-on-df-step.md), which states the region on the wire so the
+multi-span case resolves instead of refusing; land **36 in full, then 37**. Schema/D5
 [01](01-asmtrace-format.md) + [asmtrace-schema.md](asmtrace-schema.md) (doc-only
 clarification). Honesty chrome D7 / [23](23-graded-truth-layer.md); palette and
 wording D7 / [24](24-one-visual-language.md). Engine-free closure D4; capture host
