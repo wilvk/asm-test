@@ -21,6 +21,7 @@
 #include <algorithm> // std::sort/std::swap for the keymap (17 T1)
 #include <cstdio>    // std::snprintf — undo_apply's filter restore (22 T4)
 #include <cstdlib>   // std::strtoul — the go-to modal's step parse (17 T1)
+#include <cstring>   // std::strcmp — the pane-def name lookup
 
 #include "analysis/diff.h"  // dt_diff_build — n/p divergence walk (17 T1)
 #include "analysis/slice.h"
@@ -356,7 +357,12 @@ void shell_select_mode(ShellState &s, Mode m) {
         // It links no engine: it reads /proc itself and captures by spawning
         // `asmspy --serve` as a subprocess, so the render-only viewer hosts live
         // sessions with its `ldd` still free of every tracer.
-        s.show_inspect = true;
+        s.show_inspect = true; // the windowed shell's Inspect tab
+        // The docked shell shows the inspect workflow as three panes; entering it
+        // (re)opens them together, so a previously-closed one reappears on demand.
+        s.pane_open[kPaneConnect] = true;
+        s.pane_open[kPaneProcesses] = true;
+        s.pane_open[kPaneCapture] = true;
         break;
     case Mode::Author:
         s.show_author = true;
@@ -1606,8 +1612,55 @@ static void draw_windowed_shell(ShellState &s, const ImGuiViewport *vp) {
 //   kPaneTimeline  (bottom-left)   the operand timeline
 //   kPaneScrubber  (bottom-right)  the register scrubber
 //   kPaneInspector (right)         ABI x-ray / Backends / This host, one flat bar
-// With no active recording a pane shows its own placard rather than vanishing —
-// data-driven pane HIDING is doc 20, so nothing is silently dropped here (D7).
+//   kPaneConnect / kPaneProcesses / kPaneCapture   the Inspect workflow, as three
+//                                  dockable panes (host / target picker / capture)
+// Every pane opens ON DEMAND (its CONTEXT must be met), CLOSES via its own X, and
+// re-opens from View ▸ Panels — so an irrelevant pane never clutters the workspace,
+// yet nothing is hidden (the menu still names a not-yet-available pane, greyed, D7).
+// A pane whose recording cannot fill it still shows its own placard when open (the
+// scrubber over a no-regstate recording, etc.) — that finer honesty is unchanged.
+
+// --- dockable-pane management (open-on-demand + close + undock + menu) ------
+struct PaneDef {
+    const char *name;
+    bool default_open;
+    bool (*context_ok)(const ShellState &);
+    const char *unavailable_hint; // why the menu greys it when context is unmet
+};
+static bool pctx_always(const ShellState &) { return true; }
+static bool pctx_recording(const ShellState &s) { return shell_a(s) != nullptr; }
+static bool pctx_host(const ShellState &s) { return s.inspect.host_started; }
+static const PaneDef kManagedPanes[] = {
+    {kPaneHome, true, pctx_always, ""},
+    {kPaneConnect, false, pctx_always, ""},
+    {kPaneProcesses, false, pctx_always, ""},
+    {kPaneCapture, false, pctx_host,
+     "connect a serve host in the Connect pane first"},
+    {kPaneRecording, true, pctx_recording, "open a recording first"},
+    {kPaneLoom, true, pctx_recording, "open a recording first"},
+    {kPaneObserver, true, pctx_recording, "open a recording first"},
+    {kPaneTimeline, true, pctx_recording, "open a recording first"},
+    {kPaneScrubber, true, pctx_recording, "open a recording first"},
+    {kPaneInspector, true, pctx_always, ""},
+};
+static const PaneDef *pane_def(const char *name) {
+    for (const PaneDef &p : kManagedPanes)
+        if (std::strcmp(p.name, name) == 0)
+            return &p;
+    return nullptr;
+}
+static bool pane_is_open(const ShellState &s, const char *name) {
+    auto it = s.pane_open.find(name);
+    if (it != s.pane_open.end())
+        return it->second;
+    const PaneDef *d = pane_def(name);
+    return d ? d->default_open : true;
+}
+static bool pane_shown(const ShellState &s, const char *name) {
+    const PaneDef *d = pane_def(name);
+    return pane_is_open(s, name) && (d == nullptr || d->context_ok(s));
+}
+
 static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     // The View menu (Reset + presets) rides a main menu bar; it reserves the top
     // strip, and DockSpaceOverViewport then fills the remaining work area. Both
@@ -1675,6 +1728,24 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
                     s.perspectives[s.persp_name] = perspective_snapshot();
                     s.ws_dirty = true;
                     s.persp_name[0] = '\0';
+                }
+                ImGui::EndMenu();
+            }
+            // Panels: every dockable pane with a checkbox bound to its open state,
+            // so a CLOSED pane is re-openable here. A pane whose CONTEXT is not yet
+            // met (no recording open / no host connected) is greyed but still named
+            // and reasoned — nothing is hidden, only gated on demand (D7).
+            ImGui::Separator();
+            if (ImGui::BeginMenu("Panels")) {
+                for (const PaneDef &p : kManagedPanes) {
+                    bool open = pane_is_open(s, p.name);
+                    bool ctx = p.context_ok(s);
+                    if (ImGui::MenuItem(p.name, nullptr, &open, ctx))
+                        s.pane_open[p.name] = open;
+                    if (!ctx && *p.unavailable_hint &&
+                        ImGui::IsItemHovered(
+                            ImGuiHoveredFlags_AllowWhenDisabled))
+                        ImGui::SetTooltip("%s", p.unavailable_hint);
                 }
                 ImGui::EndMenu();
             }
@@ -1756,27 +1827,33 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     int to_close = -1;
 
     // --- kPaneHome (left): the persistent task rail + the open-recording list ---
-    if (ImGui::Begin(kPaneHome)) {
-        draw_home_rail(s); // 20 T2: the task-language rail replaces the doors
-        ImGui::Separator();
-        ImGui::TextUnformatted("open recordings:");
-        if (s.ws.recordings.empty())
-            ImGui::TextDisabled("(none yet — pick a task above)");
-        for (size_t i = 0; i < s.ws.recordings.size(); ++i) {
-            // A dirty (authored + unsaved) recording carries a trailing `*` (T3).
-            std::string label = disambiguated_label(s.ws, i) +
-                                (s.ws.recordings[i].dirty ? " *" : "") +
-                                "###home" + std::to_string(i);
-            if (ImGui::Selectable(label.c_str(), s.active_tab == static_cast<int>(i)))
-                s.active_tab = static_cast<int>(i);
-            ImGui::SameLine();
-            ImGui::PushID(static_cast<int>(i));
-            if (ImGui::SmallButton("x"))
-                to_close = static_cast<int>(i);
-            ImGui::PopID();
+    if (pane_shown(s, kPaneHome)) {
+        bool open = true;
+        if (ImGui::Begin(kPaneHome, &open)) {
+            draw_home_rail(s); // 20 T2: the task-language rail replaces the doors
+            ImGui::Separator();
+            ImGui::TextUnformatted("open recordings:");
+            if (s.ws.recordings.empty())
+                ImGui::TextDisabled("(none yet — pick a task above)");
+            for (size_t i = 0; i < s.ws.recordings.size(); ++i) {
+                // A dirty (authored + unsaved) recording carries a trailing `*`.
+                std::string label = disambiguated_label(s.ws, i) +
+                                    (s.ws.recordings[i].dirty ? " *" : "") +
+                                    "###home" + std::to_string(i);
+                if (ImGui::Selectable(label.c_str(),
+                                      s.active_tab == static_cast<int>(i)))
+                    s.active_tab = static_cast<int>(i);
+                ImGui::SameLine();
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::SmallButton("x"))
+                    to_close = static_cast<int>(i);
+                ImGui::PopID();
+            }
         }
+        ImGui::End();
+        if (!open)
+            s.pane_open[kPaneHome] = false;
     }
-    ImGui::End();
 
     // The door screens open as their own dockable windows in the docked layout
     // (the door-chooser redesign, F13, is doc 21 — not here).
@@ -1790,10 +1867,34 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
         if (!author_keep)
             shell_request_author_close(s); // T3 dirty guard
     }
-    if (s.show_inspect) {
-        if (ImGui::Begin("Inspect", &s.show_inspect))
-            draw_inspect_door(s.inspect);
+    // The Inspect workflow as three dockable panes (Connect / Processes / Live
+    // capture) instead of one door window. Poll the serve session ONCE for all
+    // three; each pane opens on demand, closes (X), undocks, and is in View ▸
+    // Panels. `show_inspect` stays the windowed shell's tab flag.
+    s.inspect.session.poll();
+    if (pane_shown(s, kPaneConnect)) {
+        bool open = true;
+        if (ImGui::Begin(kPaneConnect, &open))
+            draw_connect_pane(s.inspect);
         ImGui::End();
+        if (!open)
+            s.pane_open[kPaneConnect] = false;
+    }
+    if (pane_shown(s, kPaneProcesses)) {
+        bool open = true;
+        if (ImGui::Begin(kPaneProcesses, &open))
+            draw_processes_pane(s.inspect);
+        ImGui::End();
+        if (!open)
+            s.pane_open[kPaneProcesses] = false;
+    }
+    if (pane_shown(s, kPaneCapture)) {
+        bool open = true;
+        if (ImGui::Begin(kPaneCapture, &open))
+            draw_capture_pane(s.inspect);
+        ImGui::End();
+        if (!open)
+            s.pane_open[kPaneCapture] = false;
     }
     if (s.show_learn) {
         if (ImGui::Begin("Learn", &s.show_learn))
@@ -1804,7 +1905,9 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     }
 
     // --- kPaneRecording (center): the light reading views, ONE flat tab bar ---
-    if (ImGui::Begin(kPaneRecording)) {
+    bool rec_show = pane_shown(s, kPaneRecording);
+    bool rec_open = true;
+    if (rec_show && ImGui::Begin(kPaneRecording, &rec_open)) {
         if (r == nullptr) {
             ImGui::TextDisabled(
                 "open a recording (a door in Home, or the list) to read it here");
@@ -1877,10 +1980,16 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
             ImGui::EndTabBar();
         }
     }
-    ImGui::End();
+    if (rec_show) {
+        ImGui::End();
+        if (!rec_open)
+            s.pane_open[kPaneRecording] = false;
+    }
 
     // --- kPaneLoom (center, co-docked as a tear-able tab) ---
-    if (ImGui::Begin(kPaneLoom)) {
+    bool loom_show = pane_shown(s, kPaneLoom);
+    bool loom_open = true;
+    if (loom_show && ImGui::Begin(kPaneLoom, &loom_open)) {
         if (a != nullptr) {
             shell_live_weave_banner(s); // 25 T5: perturb+torn caveat on a live weave
             draw_loom(
@@ -1890,16 +1999,26 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
         } else
             ImGui::TextDisabled("open a recording to weave its Loom");
     }
-    ImGui::End();
+    if (loom_show) {
+        ImGui::End();
+        if (!loom_open)
+            s.pane_open[kPaneLoom] = false;
+    }
 
     // --- kPaneObserver: the live/observer deck (its observer bar is the sub-level)
-    if (ImGui::Begin(kPaneObserver)) {
+    bool obs_show = pane_shown(s, kPaneObserver);
+    bool obs_open = true;
+    if (obs_show && ImGui::Begin(kPaneObserver, &obs_open)) {
         if (r != nullptr && a != nullptr)
             body_observer(s, *r, a);
         else
             ImGui::TextDisabled("open a recording to see its live/observer views");
     }
-    ImGui::End();
+    if (obs_show) {
+        ImGui::End();
+        if (!obs_open)
+            s.pane_open[kPaneObserver] = false;
+    }
 
     // --- kPaneTimeline (bottom-left): the operand timeline ---
     // A spatial pane: while it (or the 3D view inside the recording pane) holds
@@ -1907,7 +2026,9 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     // labelled context switch (T1). Recorded as an explicit ShellState field the
     // keymap reads next frame, not an implicit focus guess.
     bool spatial_focus = false;
-    if (ImGui::Begin(kPaneTimeline)) {
+    bool tl_show = pane_shown(s, kPaneTimeline);
+    bool tl_open = true;
+    if (tl_show && ImGui::Begin(kPaneTimeline, &tl_open)) {
         if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows))
             spatial_focus = true;
         if (a != nullptr)
@@ -1915,20 +2036,32 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
         else
             ImGui::TextDisabled("open a recording to see its operand timeline");
     }
-    ImGui::End();
+    if (tl_show) {
+        ImGui::End();
+        if (!tl_open)
+            s.pane_open[kPaneTimeline] = false;
+    }
     s.wasd_context = spatial_focus;
 
     // --- kPaneScrubber (bottom-right): the register scrubber ---
-    if (ImGui::Begin(kPaneScrubber)) {
+    bool sc_show = pane_shown(s, kPaneScrubber);
+    bool sc_open = true;
+    if (sc_show && ImGui::Begin(kPaneScrubber, &sc_open)) {
         if (a != nullptr)
             body_scrubber(s);
         else
             ImGui::TextDisabled("open a recording to time-travel its registers");
     }
-    ImGui::End();
+    if (sc_show) {
+        ImGui::End();
+        if (!sc_open)
+            s.pane_open[kPaneScrubber] = false;
+    }
 
     // --- kPaneInspector (right): ABI x-ray / Backends / This host, one flat bar
-    if (ImGui::Begin(kPaneInspector)) {
+    bool insp_show = pane_shown(s, kPaneInspector);
+    bool insp_open = true;
+    if (insp_show && ImGui::Begin(kPaneInspector, &insp_open)) {
         if (ImGui::BeginTabBar("inspector")) {
             if (ImGui::BeginTabItem("ABI x-ray")) {
                 if (a != nullptr)
@@ -1953,16 +2086,23 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
             ImGui::EndTabBar();
         }
     }
-    ImGui::End();
+    if (insp_show) {
+        ImGui::End();
+        if (!insp_open)
+            s.pane_open[kPaneInspector] = false;
+    }
 
-    // The back/forward affordance + a nav refusal land below the reading pane.
-    if (ImGui::Begin(kPaneRecording)) {
+    // The back/forward affordance + a nav refusal append below the reading pane —
+    // a second Begin on the SAME kPaneRecording window (ImGui appends), so it rides
+    // the recording pane's visibility rather than being its own.
+    if (rec_show && ImGui::Begin(kPaneRecording)) {
         ImGui::Separator();
         draw_breadcrumb(s); // T6 back/forward history affordance
         if (!s.status.empty())
             ImGui::TextWrapped("%s", s.status.c_str());
     }
-    ImGui::End();
+    if (rec_show)
+        ImGui::End();
 
     // Port the keymap view-switch intents to FOCUS (19 T1 step 4): the tabbed
     // views were already SetSelected above; here bring their pane forward, and

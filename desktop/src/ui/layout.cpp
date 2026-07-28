@@ -14,6 +14,9 @@ const char *const kPaneInspector = "Inspector";
 const char *const kPaneTimeline = "Timeline";
 const char *const kPaneLoom = "Loom";
 const char *const kPaneObserver = "Observer";
+const char *const kPaneConnect = "Connect";
+const char *const kPaneProcesses = "Processes";
+const char *const kPaneCapture = "Live capture";
 
 const char *layout_preset_name(LayoutPreset p) {
     switch (p) {
@@ -91,6 +94,14 @@ DockLayout layout_build(ImGuiID dockspace_id, ImVec2 size, LayoutPreset preset) 
     ImGui::DockBuilderDockWindow(kPaneRecording, L.center);
     ImGui::DockBuilderDockWindow(kPaneLoom, L.center);
     ImGui::DockBuilderDockWindow(kPaneInspector, L.right);
+    // The Inspect/live-capture panes: the target-selection pair (Connect + the
+    // searchable Processes list) tab into the left rail beside Home; the Live-
+    // capture controls tab into the right beside the Inspector. Docked the same
+    // across presets — they are a workflow, not a reading arrangement — so they
+    // reopen to a stable home; on-demand visibility gates whether they show.
+    ImGui::DockBuilderDockWindow(kPaneConnect, L.left);
+    ImGui::DockBuilderDockWindow(kPaneProcesses, L.left);
+    ImGui::DockBuilderDockWindow(kPaneCapture, L.right);
     switch (preset) {
     case LayoutPreset::ReplayInspect:
     case LayoutPreset::Author:

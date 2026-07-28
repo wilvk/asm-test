@@ -17,6 +17,7 @@
 #include "live/inspect.h"
 #include "live/ptslice.h"
 #include "live/session.h"
+#include "ui/filter.h"   // dt_filter_state — the shared type-to-narrow filter (24 T4)
 #include "ui/progress.h" // LongOp — the uniform busy signal (23 T4)
 #include "views/observer_draw.h"
 #include "walkthrough.h"
@@ -126,9 +127,21 @@ struct InspectState {
     char asmspy_path[512] = {0};
     char ssh_host[256] = {0};
 
+    // Pre-fill the asmspy path with resolve_asmspy_path() once, so the Connect
+    // pane shows the concrete resolved exe (editable) rather than a blank field.
+    bool asmspy_prefilled = false;
+
     std::vector<ProcRow> rows;
     bool scanned = false;
     long selected_pid = 0;
+    // The Processes pane's type-to-narrow filter (24 T4's shared idiom) over
+    // pid / comm / cmdline.
+    dt_filter_state proc_filter;
+
+    // The scoped region for trace/dataflow (mode_needs_region): a func NAME or
+    // "0xADDR:LEN". Sent as the `start` params (parse_region_spec); ignored by the
+    // whole-process modes and `auto` (which finds its own region).
+    char region[256] = {0};
 
     // What the client believes is live on this target, for the patch bay. The
     // serve loop refuses a second concurrent start too, but the budget is
@@ -226,6 +239,24 @@ void inspect_confirm_perturb(InspectState &s);
 // Confirm the armed swap: stop the holder, then start what was refused.
 void inspect_confirm_swap(InspectState &s);
 
+// The serve `start` params for the current want: a scoped region (func name or
+// base+len, parse_region_spec) for trace/dataflow, empty for the whole-process
+// modes and for `auto`. Pure over InspectState; test_inspect drives it.
+nlohmann::json inspect_start_params(const InspectState &s);
+
+// The Inspect / live-capture workflow, split into three dockable panes (the
+// docked shell Begins each in its own window; draw_inspect_door stacks all three
+// for the windowed / render-only path):
+//   Connect     — the serve-host connection (asmspy path pre-filled + ssh host).
+//   Processes   — the searchable /proc target picker (pid / comm / attach / why).
+//   Live capture — the patch bay (mode + region), session status, live views,
+//                  save-to-.asmtrace, and the PT-replay slice.
+void draw_connect_pane(InspectState &s);
+void draw_processes_pane(InspectState &s);
+void draw_capture_pane(InspectState &s);
+
+// The single-window composition of the three panes (the windowed shell's Inspect
+// tab and the render-only viewer). The docked shell draws the three separately.
 void draw_inspect_door(InspectState &s);
 
 } // namespace asmdesk

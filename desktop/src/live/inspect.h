@@ -170,6 +170,14 @@ AttachFacts probe_attach(long pid, int yama_scope, long our_uid, bool have_cap);
 // need a tracer to enumerate processes). Sorted by pid.
 std::vector<ProcRow> list_processes();
 
+// Parse a scoped-region spec for trace/dataflow's serve `start` params. A spec of
+// the form "0xADDR:LEN" (base and len each 0x-hex or decimal, len > 0) yields
+// base+len — fills *base/*len and returns true. Anything else is a FUNCTION NAME:
+// returns false with *base=*len=0, and the caller sends {"func": spec}. Pure and
+// allocation-free, so test_inspect drives it headlessly. A C++ symbol containing
+// `::` stays a name (its left half is not a number).
+bool parse_region_spec(const std::string &spec, uint64_t *base, uint64_t *len);
+
 // Why LOCAL inspection has no body on this host, or "" where it has one.
 //
 // A /proc-less host makes list_processes() return an empty vector, and an empty

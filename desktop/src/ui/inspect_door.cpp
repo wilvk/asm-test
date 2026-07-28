@@ -14,6 +14,7 @@
 #include "ImGuiFileDialog.h" // pure-ImGui save dialog (14 T7)
 #include "live/end_state.h"  // end_cause — the session-end placard (23 T2)
 #include "ui/doors.h"
+#include "ui/filter.h"   // dt_filter_bar / dt_filter_match — searchable procs (24 T4)
 #include "ui/honesty.h"  // the graded honesty vocabulary (23 T1)
 #include "ui/progress.h"
 #include "ui/theme.h"
@@ -98,9 +99,30 @@ bool inspect_request_start(InspectState &s) {
         s.swap_reason = d.reason;
         return false;
     }
-    s.session.send_start(mode_name(s.want), s.selected_pid);
+    s.session.send_start(mode_name(s.want), s.selected_pid,
+                         inspect_start_params(s));
     s.active.push_back(s.want);
     return true;
+}
+
+// The `start` params for the current want: a scoped region for trace/dataflow (a
+// func name or base+len, parse_region_spec), empty for every whole-process mode
+// and for `auto` (which finds its own region). Sending the region here — rather
+// than making the door build the JSON inline — keeps the one place a start is
+// fired honest about what it sends.
+nlohmann::json inspect_start_params(const InspectState &s) {
+    nlohmann::json params = nlohmann::json::object();
+    if (!mode_needs_region(s.want))
+        return params;
+    std::string spec(s.region);
+    uint64_t base = 0, len = 0;
+    if (parse_region_spec(spec, &base, &len)) {
+        params["base"] = base;
+        params["len"] = len;
+    } else if (!spec.empty()) {
+        params["func"] = spec;
+    }
+    return params;
 }
 
 void inspect_confirm_perturb(InspectState &s) {
@@ -296,6 +318,22 @@ void draw_patch_bay(InspectState &s) {
         s.want = budget_least_perturbing(s.sample_available);
     }
 
+    // The scoped-region input (the dataflow/trace region gap). trace and dataflow
+    // single-step ONE region, so the serve host requires a func name or 0xADDR:LEN
+    // (serve_resolve_region) — without one, `start` is rejected. Shown ONLY for
+    // those modes; `auto` finds its own region via the sampler, so it needs none.
+    const bool needs_region = mode_needs_region(s.want);
+    if (needs_region) {
+        ImGui::InputTextWithHint("region##cap",
+                                 "function name   or   0xADDR:LEN", s.region,
+                                 sizeof s.region);
+        ImGui::TextDisabled(
+            "%s single-steps ONE region — name a function or an address range, "
+            "or pick `auto` to trace the hottest function automatically.",
+            mode_name(s.want));
+    }
+    const bool has_region = !needs_region || s.region[0] != '\0';
+
     // The Queue path (23 T3): a queued want starts the MOMENT the jack frees —
     // never an auto-swap, because budget_queue_ready is true only when the jack is
     // genuinely free (the blocker stopped/ended). The one-ptrace-jack invariant is
@@ -315,15 +353,18 @@ void draw_patch_bay(InspectState &s) {
         ImGui::TextWrapped("%s", d.reason.c_str());
     }
 
-    const bool can = s.host_started && s.selected_pid > 0;
+    const bool can = s.host_started && s.selected_pid > 0 && has_region;
     ImGui::BeginDisabled(!can);
     if (ImGui::Button("Start"))
         inspect_request_start(s);
     ImGui::EndDisabled();
     if (!can) {
         ImGui::SameLine();
-        ImGui::TextDisabled("%s", !s.host_started ? "connect a serve host first"
-                                                  : "select a process first");
+        const char *why = !s.host_started  ? "connect a serve host first"
+                          : s.selected_pid <= 0 ? "select a process first"
+                                              : "name a region above, or pick "
+                                                "`auto`";
+        ImGui::TextDisabled("%s", why);
     }
     ImGui::SameLine();
     if (ImGui::Button("Stop")) {
@@ -585,28 +626,39 @@ void draw_pt_slice(InspectState &s) {
 
 } // namespace
 
-void draw_inspect_door(InspectState &s) {
-    // Pumped once per frame; non-blocking.
-    s.session.poll();
-
-    ImGui::TextUnformatted(
-        "Inspect — attach to a running process. The capture host is the "
-        "`asmspy --serve` subprocess, so nothing here links a tracer.");
+// --- Connect pane: the serve-host connection ------------------------------
+void draw_connect_pane(InspectState &s) {
+    ImGui::TextWrapped(
+        "Attach to a running process. The capture host is the `asmspy --serve` "
+        "subprocess, so nothing here links a tracer.");
     ImGui::Spacing();
 
     if (!s.host_started) {
-        ImGui::InputText("asmspy path (blank = $PATH, then ./build/asmspy)",
-                         s.asmspy_path, sizeof s.asmspy_path);
-        ImGui::InputText("ssh host (blank = local)", s.ssh_host,
-                         sizeof s.ssh_host);
-        std::string found = resolve_asmspy_path();
-        ImGui::TextDisabled("resolved: %s",
-                            found.empty() ? "(none found)" : found.c_str());
+        // Pre-fill the asmspy path ONCE with what a blank would resolve to, so the
+        // field shows the concrete exe (still editable) rather than an empty box —
+        // the operator sees exactly which binary Connect will spawn.
+        if (!s.asmspy_prefilled) {
+            s.asmspy_prefilled = true;
+            if (s.asmspy_path[0] == '\0') {
+                std::string found = resolve_asmspy_path();
+                std::snprintf(s.asmspy_path, sizeof s.asmspy_path, "%s",
+                              found.c_str());
+            }
+        }
+        ImGui::InputText("asmspy path", s.asmspy_path, sizeof s.asmspy_path);
+        ImGui::InputTextWithHint("ssh host", "blank = local", s.ssh_host,
+                                 sizeof s.ssh_host);
+        ImGui::TextDisabled(
+            "blank path resolves $PATH, then ./build/asmspy. asmspy is a Linux "
+            "tracer; from another OS set an ssh host (`ssh <host> asmspy "
+            "--serve`).");
         if (ImGui::Button("Connect"))
             inspect_connect(s);
         if (!s.host_error.empty())
             ImGui::TextColored(kBad, "%s", s.host_error.c_str());
     } else {
+        const LiveStatus &st = s.session.status();
+        ImGui::Text("host: %s", st.command.c_str());
         // The way back to the Connect form. Without it host_started latches for
         // the life of the process, and re-entering connection details (a
         // different asmspy, a different ssh host) means relaunching the app.
@@ -614,21 +666,19 @@ void draw_inspect_door(InspectState &s) {
             inspect_disconnect(s);
         ImGui::SameLine();
         ImGui::TextDisabled("stop the serve host and return to Connect");
-        draw_patch_bay(s);
-        draw_status(s);
-        ImGui::SeparatorText("live views");
-        draw_live_views(s);
-        draw_save_capture(s);
-        draw_pt_slice(s);
     }
+}
 
-    ImGui::SeparatorText("processes");
+// --- Processes pane: the searchable /proc target picker -------------------
+void draw_processes_pane(InspectState &s) {
     // A host with no /proc lists nothing, and "0 process(es); ptrace_scope=-1"
     // reads as "nothing running, no restrictions" — two measurements neither of
-    // which was made. State the absence instead, and draw no table: an empty
-    // one would be the same claim in a different shape.
+    // which was made. State the absence instead, and draw no table: an empty one
+    // would be the same claim in a different shape.
     if (const char *why = local_inspect_unavailable(); *why) {
         ImGui::TextWrapped("local inspection unavailable: %s", why);
+        ImGui::TextDisabled(
+            "remote capture still works — set an ssh host in Connect.");
         return;
     }
     if (!s.scanned)
@@ -636,8 +686,16 @@ void draw_inspect_door(InspectState &s) {
     if (ImGui::Button("Rescan"))
         inspect_scan(s);
     ImGui::SameLine();
-    ImGui::TextDisabled("%zu process(es); ptrace_scope=%d", s.rows.size(),
-                        read_yama_scope());
+    ImGui::TextDisabled("ptrace_scope=%d", read_yama_scope());
+
+    // Type-to-narrow (24 T4's shared filter) over pid / comm / cmdline — the
+    // /proc list is the one client-side table that never had a filter (doc 16's
+    // framing). Build the haystack once; the matcher + "showing N of M" are pure.
+    std::vector<std::string> hay;
+    hay.reserve(s.rows.size());
+    for (const ProcRow &r : s.rows)
+        hay.push_back(std::to_string(r.pid) + " " + r.comm + " " + r.cmdline);
+    std::string q = dt_filter_bar(s.proc_filter, hay, "filter");
 
     if (ImGui::BeginTable("procs", 4,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
@@ -646,8 +704,12 @@ void draw_inspect_door(InspectState &s) {
         ImGui::TableSetupColumn("comm");
         ImGui::TableSetupColumn("attach");
         ImGui::TableSetupColumn("why / remedy");
+        ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
-        for (const ProcRow &r : s.rows) {
+        for (size_t i = 0; i < s.rows.size(); ++i) {
+            if (!dt_filter_match(q, hay[i]))
+                continue;
+            const ProcRow &r = s.rows[i];
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             char lbl[64];
@@ -661,15 +723,47 @@ void draw_inspect_door(InspectState &s) {
             ImGui::TextColored(verdict_colour(r.verdict.verdict), "%s",
                                verdict_word(r.verdict.verdict));
             ImGui::TableNextColumn();
-            // The reason is FIRST-CLASS, in the row — not a toast that
-            // disappears and not an error the user has to provoke. That is the
-            // door's whole promise: see why not.
+            // The reason is FIRST-CLASS, in the row — not a toast that disappears
+            // and not an error the user has to provoke. That is the door's whole
+            // promise: see why not.
             ImGui::TextUnformatted(r.verdict.why.c_str());
             if (!r.verdict.remedy.empty())
                 ImGui::TextDisabled("-> %s", r.verdict.remedy.c_str());
         }
         ImGui::EndTable();
     }
+}
+
+// --- Live capture pane: the patch bay + session + views + save + PT slice --
+void draw_capture_pane(InspectState &s) {
+    if (!s.host_started) {
+        ImGui::TextDisabled(
+            "connect a serve host (the Connect pane) to capture.");
+        return;
+    }
+    if (s.selected_pid <= 0)
+        ImGui::TextDisabled(
+            "pick a process in the Processes pane, then arm a mode below.");
+    draw_patch_bay(s);
+    draw_status(s);
+    ImGui::SeparatorText("live views");
+    draw_live_views(s);
+    draw_save_capture(s);
+    draw_pt_slice(s);
+}
+
+void draw_inspect_door(InspectState &s) {
+    // The single-window composition (windowed shell + render-only viewer): the
+    // three panes stacked, each under its own separator. The docked shell instead
+    // Begins draw_connect_pane / draw_processes_pane / draw_capture_pane in three
+    // real dockable windows. Poll once per frame here; the docked path polls too.
+    s.session.poll();
+    ImGui::SeparatorText("Connect");
+    draw_connect_pane(s);
+    ImGui::SeparatorText("Processes");
+    draw_processes_pane(s);
+    ImGui::SeparatorText("Live capture");
+    draw_capture_pane(s);
 }
 
 } // namespace asmdesk

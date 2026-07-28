@@ -157,6 +157,13 @@ struct ShellState {
     bool show_learn = false;
     bool show_author = false;
     bool show_inspect = false;
+    // Dockable-pane visibility (the docked shell): the user's open/close state per
+    // pane, keyed by the kPane* name; absent => the pane's shipped default (see
+    // pane_default_open). The View ▸ Panels menu toggles these and each pane's
+    // close (X) clears its own. Panes are ALSO gated on CONTEXT (a recording open /
+    // a host connected) so an irrelevant pane never shows — "only open as
+    // required". A pure model field, so test_shell can drive visibility headlessly.
+    std::map<std::string, bool> pane_open;
     std::string status; // the status bar: nav refusals land here verbatim
     CompletenessState completeness;
     // The Loom's per-tab state (05-loom-day-one.md). Woven once per recording,

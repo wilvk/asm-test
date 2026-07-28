@@ -509,6 +509,40 @@ static void test_patchbay() {
           "an operator pause reads as its own state, never the budget block");
 }
 
+// The scoped-region parser (the dataflow/trace region input). "0xADDR:LEN" yields
+// base+len; a bare name (including a C++ `ns::func`) is the func form; anything
+// malformed falls back to the name form. A wrong split here sends garbage to the
+// tracer, so the shapes are pinned exactly.
+static void test_region() {
+    uint64_t base = 123, len = 456;
+    check("region/hex-dec",
+          parse_region_spec("0x401000:64", &base, &len) && base == 0x401000 &&
+              len == 64,
+          "0x401000:64 -> base 0x401000, len 64");
+    base = len = 0;
+    check("region/hex-hex",
+          parse_region_spec("0x1000:0x20", &base, &len) && base == 0x1000 &&
+              len == 0x20,
+          "0x1000:0x20 -> base 0x1000, len 32");
+    base = len = 0;
+    check("region/dec-dec",
+          parse_region_spec("4096:16", &base, &len) && base == 4096 &&
+              len == 16,
+          "4096:16 -> base 4096, len 16");
+    base = 9, len = 9;
+    check("region/name",
+          !parse_region_spec("hotfn", &base, &len) && base == 0 && len == 0,
+          "a bare name is the func form (false; base/len cleared)");
+    check("region/cpp-name", !parse_region_spec("ns::func", nullptr, nullptr),
+          "ns::func must stay a name, not be split as base:len");
+    check("region/zero-len", !parse_region_spec("0x1000:0", nullptr, nullptr),
+          "a zero length is not a region -> name form");
+    check("region/junk", !parse_region_spec("0x1000:64x", nullptr, nullptr),
+          "trailing junk in the length must not parse as a region");
+    check("region/empty", !parse_region_spec("", nullptr, nullptr),
+          "an empty spec is the (invalid) name form");
+}
+
 int main(void) {
     test_attach();
     test_evidence();
@@ -516,6 +550,7 @@ int main(void) {
     test_progress();
     test_toasts();
     test_patchbay();
+    test_region();
     if (failures) {
         std::fprintf(stderr, "test_inspect: %d FAILURE(S)\n", failures);
         return 1;

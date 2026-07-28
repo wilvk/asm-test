@@ -80,6 +80,13 @@ extern const char *const kPaneTimeline;
 // this brief (19) tears down. They dock alongside the five regions above.
 extern const char *const kPaneLoom;
 extern const char *const kPaneObserver;
+// The Inspect / live-capture workflow, split into three dockable panes (replacing
+// the single Inspect door window): the host Connect pane, the searchable Processes
+// target picker, and the Live-capture controls (patch bay + region + save + PT
+// slice). Each opens on demand, closes, undocks, and appears in View ▸ Panels.
+extern const char *const kPaneConnect;
+extern const char *const kPaneProcesses;
+extern const char *const kPaneCapture;
 
 } // namespace asmdesk
 #endif // ASMDESK_UI_LAYOUT_H

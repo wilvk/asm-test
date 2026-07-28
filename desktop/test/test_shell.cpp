@@ -536,6 +536,33 @@ int main() {
         check("dock/reset restores scrubber", dockid(kPaneScrubber) == sc_ri,
               "Reset must restore the scrubber pane's node");
 
+        // Pane visibility (open-on-demand + close + reopen). Entering Inspect
+        // opens the Connect/Processes panes; the Live-capture pane stays hidden
+        // until a host connects (CONTEXT gating, not user-close); closing the
+        // scrubber pane hides it, and reopening it (what View ▸ Panels does) brings
+        // it back — a recording is still open, so its context is met.
+        ds.show_inspect = true;
+        ds.pane_open[kPaneConnect] = true;
+        ds.pane_open[kPaneProcesses] = true;
+        ds.pane_open[kPaneCapture] = true; // but no serve host is connected
+        frame(ds);
+        frame(ds);
+        check("pane/inspect opens on demand",
+              active(kPaneConnect) && active(kPaneProcesses),
+              "entering Inspect must show the Connect + Processes panes");
+        check("pane/capture needs a host", !active(kPaneCapture),
+              "Live capture must stay hidden until a serve host connects");
+        ds.pane_open[kPaneScrubber] = false;
+        frame(ds);
+        frame(ds);
+        check("pane/close hides", !active(kPaneScrubber),
+              "closing the scrubber pane (its X) must hide it");
+        ds.pane_open[kPaneScrubber] = true;
+        frame(ds);
+        frame(ds);
+        check("pane/menu reopens", active(kPaneScrubber),
+              "reopening (View ▸ Panels) must bring the scrubber pane back");
+
         ImGui::DestroyContext();
     }
 
@@ -1056,6 +1083,33 @@ int main() {
               std::string(s.observers[1].syscall_filter) == "read" &&
                   std::string(s.observers[0].syscall_filter) == "openat",
               "an undo for a closed recording must not write to any live tab");
+    }
+
+    // --- region gap: inspect_start_params attaches a scoped region ONLY for the
+    // scoped modes (trace/dataflow) and picks base+len vs func by the spec shape.
+    // A whole-process mode and `auto` send none — so the door never blocks Start on
+    // a region they do not need, and never sends one the serve host would reject.
+    {
+        InspectState is;
+        std::snprintf(is.region, sizeof is.region, "%s", "0x1000:16");
+        is.want = LiveMode::Log;
+        check("cap/log no region", inspect_start_params(is).empty(),
+              "a whole-process mode must send empty start params");
+        is.want = LiveMode::Auto;
+        check("cap/auto no region", inspect_start_params(is).empty(),
+              "auto samples its own region — no region params");
+        is.want = LiveMode::Dataflow;
+        nlohmann::json p = inspect_start_params(is);
+        check("cap/dataflow base+len",
+              p.value("base", 0ull) == 0x1000ull &&
+                  p.value("len", 0ull) == 16ull && !p.contains("func"),
+              "dataflow + 0x1000:16 -> {base,len}");
+        is.want = LiveMode::Trace;
+        std::snprintf(is.region, sizeof is.region, "%s", "hotfn");
+        nlohmann::json f = inspect_start_params(is);
+        check("cap/trace func",
+              f.value("func", std::string()) == "hotfn" && !f.contains("base"),
+              "trace + a name -> {func:\"hotfn\"}");
     }
 
     if (failures) {

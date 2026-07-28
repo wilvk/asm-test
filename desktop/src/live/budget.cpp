@@ -83,6 +83,15 @@ const std::vector<LiveMode> &all_modes() {
 
 bool mode_uses_ptrace(LiveMode m) { return row_for(m)->ptrace; }
 
+bool mode_needs_region(LiveMode m) {
+    // trace and dataflow single-step ONE scoped region, so the serve host demands
+    // a base+len or a func name (serve_resolve_region, cli/asmspy.c) — starting
+    // one without a region is rejected. `auto` is dataflow-with-a-picker: it finds
+    // its own region via the sampler, so it needs none; every whole-process mode
+    // (log/stream/tree/graph/procs/sample/watch) traces the whole task.
+    return m == LiveMode::Trace || m == LiveMode::Dataflow;
+}
+
 const char *mode_jack_reason(LiveMode m) { return row_for(m)->why; }
 
 namespace {

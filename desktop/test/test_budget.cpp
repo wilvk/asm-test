@@ -51,6 +51,27 @@ int main(void) {
     check("auto/holds-jack", mode_uses_ptrace(autom),
           "auto captures with the data-flow engine, so it takes the jack");
 
+    // A scoped REGION is needed by EXACTLY trace + dataflow (they single-step ONE
+    // region, so the serve host demands a func/base+len). `auto` finds its own, so
+    // it needs none — the door must NOT block Start on a region for auto — and
+    // every whole-process mode needs none either. Stated positively so a future
+    // scoped mode marked region-free (or a whole-process mode marked needing one)
+    // fails here rather than as a rejected `start` in production.
+    int region_count = 0;
+    for (LiveMode m : modes)
+        if (mode_needs_region(m)) {
+            region_count++;
+            std::string n = mode_name(m);
+            check("region/is-scoped", n == "trace" || n == "dataflow",
+                  std::string("only trace/dataflow are scoped; `") + n +
+                      "` must not be marked as needing a region");
+        }
+    check("region/count", region_count == 2,
+          "exactly trace + dataflow need a region; got " +
+              std::to_string(region_count));
+    check("region/auto-free", !mode_needs_region(autom),
+          "auto finds its own region via the sampler — it must need none");
+
     // Every mode names its structural reason — a refusal with no reason is a
     // dead end rather than a next step.
     for (LiveMode m : modes) {

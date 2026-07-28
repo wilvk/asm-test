@@ -50,6 +50,12 @@ const std::vector<LiveMode> &all_modes();
 // Does this mode occupy the target's single ptrace jack?
 bool mode_uses_ptrace(LiveMode m);
 
+// Does this mode need a scoped REGION (a func name or base+len)? trace/dataflow
+// single-step ONE region, so the serve host requires one (serve_resolve_region);
+// `auto` finds its own via the sampler and every whole-process mode needs none.
+// The door shows a region input only for these, and gates Start on it being set.
+bool mode_needs_region(LiveMode m);
+
 // Why it does (or does not) — the measured structural reason, for the UI to
 // show instead of a bare "unavailable". Never empty.
 const char *mode_jack_reason(LiveMode m);

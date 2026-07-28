@@ -3,7 +3,9 @@
 #include "live/inspect.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -16,6 +18,39 @@
 namespace asmdesk {
 
 using nlohmann::json;
+
+bool parse_region_spec(const std::string &spec, uint64_t *base, uint64_t *len) {
+    if (base)
+        *base = 0;
+    if (len)
+        *len = 0;
+    std::string::size_type colon = spec.find(':');
+    if (colon == std::string::npos)
+        return false; // a bare name (or a bare address, which lacks a length)
+    // Both halves must be numbers (0x-hex or decimal) for a base+len spec; a name
+    // like `ns::func` has a non-numeric left half and stays a name.
+    auto as_num = [](const std::string &t, uint64_t *out) -> bool {
+        if (t.empty())
+            return false;
+        errno = 0;
+        char *end = nullptr;
+        unsigned long long v = std::strtoull(t.c_str(), &end, 0);
+        if (end == t.c_str() || *end != '\0' || errno != 0)
+            return false;
+        if (out)
+            *out = static_cast<uint64_t>(v);
+        return true;
+    };
+    uint64_t b = 0, l = 0;
+    if (!as_num(spec.substr(0, colon), &b) ||
+        !as_num(spec.substr(colon + 1), &l) || l == 0)
+        return false; // not a valid base+len -> treat the whole thing as a name
+    if (base)
+        *base = b;
+    if (len)
+        *len = l;
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // attachability
