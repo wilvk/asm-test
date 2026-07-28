@@ -609,6 +609,14 @@ uint64_t emu_step_dropped(const emu_t *e);   /* steps evicted        */
 bool emu_step_at(const emu_t *e, size_t i, uint64_t *step_index,
                  emu_x86_regs_t *out);
 
+/* R4 (31-wide-register-deck.md): entry i's MXCSR pre-state, from a parallel ring
+ * captured alongside emu_step_at's register file. MXCSR is kept OUT of
+ * emu_x86_regs_t so that struct's ABI layout (the manifest/bindings contract) is
+ * untouched; a wide-register `regstate` producer reads the XMM file from
+ * emu_step_at and its MXCSR from here. Returns false for i >= emu_step_count or
+ * when the MXCSR ring could not be allocated (out untouched). x86-64 guest. */
+bool emu_step_mxcsr_at(const emu_t *e, size_t i, uint32_t *out);
+
 /* ------------------------------------------------------------------ */
 /* Snapshot / restore (x86-64 guest)                                   */
 /* ------------------------------------------------------------------ */

@@ -369,10 +369,17 @@ typedef void (*asmspy_dataflow_sink)(void *ctx, long result,
  * under the `user_regs@x86_64/sysv` descriptor, so the desktop Scrubber time-travels
  * a LIVE capture. Zero (the default) leaves the ring disarmed and the output
  * byte-identical to before. It is a boolean, orthogonal to `max` (which still bounds
- * the window): the ring rides over whatever window `max` admits. */
+ * the window): the ring rides over whatever window `max` admits.
+ *
+ * `want_fpregs` (31 R4): when non-zero, the per-step register deck ALSO carries the
+ * wide FP/vector state — the 16 XMM registers + MXCSR, read in one PTRACE_GETFPREGS
+ * per step. It arms the ring too (so `--fpregs` alone yields a vector-carrying
+ * `regstate` stream), and each event gains `xmm0..15`/`mxcsr` fields under the same
+ * descriptor. Zero (the default) leaves the deck GPR-only and byte-identical. */
 int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
-                           long max, int want_steps, atomic_bool *stop,
-                           asmspy_dataflow_sink sink, void *ctx);
+                           long max, int want_steps, int want_fpregs,
+                           atomic_bool *stop, asmspy_dataflow_sink sink,
+                           void *ctx);
 
 /* One executed instruction, formatted "<function+off [module]>  <disasm>". */
 typedef void (*asmspy_stream_sink)(void *ctx, const char *line);

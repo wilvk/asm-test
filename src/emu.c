@@ -47,6 +47,7 @@ typedef struct {
 typedef struct {
     bool armed;
     emu_x86_regs_t *buf; /* cap entries, handle-owned (NULL == disarmed)    */
+    uint32_t *mxcsr;     /* R4: parallel MXCSR ring (cap entries), same head */
     size_t cap;          /* ring capacity in entries                        */
     size_t head;         /* index of the oldest held entry                  */
     size_t count;        /* entries currently held (<= cap)                 */
@@ -258,6 +259,7 @@ void emu_close(emu_t *e) {
     uc_close(e->uc);
     free(e->fuzz_corpus);
     free(e->step_ring.buf);
+    free(e->step_ring.mxcsr);
     free(e);
 }
 
@@ -350,6 +352,11 @@ static void on_code_step(uc_engine *uc, uint64_t address, uint32_t size,
         sr->dropped++;
     }
     read_all_regs(uc, &sr->buf[pos]);
+    /* R4: the MXCSR pre-state, into the parallel ring — kept beside the GP+XMM
+     * snapshot rather than in emu_x86_regs_t so that struct's ABI layout (the
+     * manifest/bindings contract) is untouched. */
+    if (sr->mxcsr != NULL)
+        uc_reg_read(uc, UC_X86_REG_MXCSR, &sr->mxcsr[pos]);
 }
 
 /* Shared System V setup: copy the routine in, plant the sentinel return address
@@ -800,9 +807,15 @@ bool emu_step_capture(emu_t *e, size_t cap) {
     emu_x86_regs_t *buf = (emu_x86_regs_t *)calloc(cap, sizeof *buf);
     if (buf == NULL)
         return false;
+    /* R4: the parallel MXCSR ring. If it cannot be allocated the register ring is
+     * still armed — the deck simply carries no MXCSR (emu_step_mxcsr_at returns
+     * false), honest degradation rather than a failed capture. */
+    uint32_t *mxr = (uint32_t *)calloc(cap, sizeof *mxr);
     free(e->step_ring.buf); /* drop any previously armed ring */
+    free(e->step_ring.mxcsr);
     e->step_ring.armed = true;
     e->step_ring.buf = buf;
+    e->step_ring.mxcsr = mxr;
     e->step_ring.cap = cap;
     e->step_ring.head = 0;
     e->step_ring.count = 0;
@@ -815,7 +828,9 @@ void emu_step_capture_clear(emu_t *e) {
     if (e == NULL)
         return;
     free(e->step_ring.buf);
+    free(e->step_ring.mxcsr);
     e->step_ring.buf = NULL;
+    e->step_ring.mxcsr = NULL;
     e->step_ring.armed = false;
     e->step_ring.cap = 0;
     e->step_ring.head = 0;
@@ -841,6 +856,17 @@ bool emu_step_at(const emu_t *e, size_t i, uint64_t *step_index,
         *step_index = e->step_ring.dropped + (uint64_t)i;
     if (out != NULL)
         *out = e->step_ring.buf[(e->step_ring.head + i) % e->step_ring.cap];
+    return true;
+}
+
+bool emu_step_mxcsr_at(const emu_t *e, size_t i, uint32_t *out) {
+    /* R4: entry i's MXCSR pre-state, from the parallel ring (same head/index math
+     * as emu_step_at). False when i is out of range or the MXCSR ring could not be
+     * allocated — the caller then omits MXCSR from the deck, honestly. */
+    if (e == NULL || i >= e->step_ring.count || e->step_ring.mxcsr == NULL)
+        return false;
+    if (out != NULL)
+        *out = e->step_ring.mxcsr[(e->step_ring.head + i) % e->step_ring.cap];
     return true;
 }
 

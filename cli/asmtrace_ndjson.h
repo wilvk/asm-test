@@ -158,6 +158,26 @@ size_t asmtrace_mem_body(char *dst, size_t cap, unsigned step, uint64_t ea,
 size_t asmtrace_regstate_body(char *dst, size_t cap,
                               const asmtest_regfile_t *r);
 
+/* R4 (31-wide-register-deck.md): append the wide FP/vector deck to an already-open
+ * regstate `values` object at offset `o` — `,"xmm0":"<32 hex>",...,"xmm15":"...",
+ * "mxcsr":<u32>` — and return the new offset (the caller then closes `}`). The 16
+ * XMM registers ride as lowercase-hex `bytes` strings (the 28 R1 T3 wide-value
+ * convention); MXCSR is a plain u32. ONE field-order owner for BOTH regstate
+ * producers (the emulator's emit_regstate and the live asmtrace_regstate_body),
+ * called only when the vector deck was armed. Bounds-checked (bp), so a short
+ * buffer truncates safely. */
+size_t asmtrace_regstate_vec_append(char *dst, size_t cap, size_t o,
+                                    const uint8_t xmm[16][16], uint32_t mxcsr);
+
+/* {"step":S,"mxcsr":M,"round":str,"ftz":bool,"daz":bool,"sticky":[str,...]} — one
+ * FP/SIMD-environment (`fpenv`, 31 R4 T2) event decoding a step's MXCSR into the
+ * SSE rounding mode, flush-to-zero / denormals-are-zero bits, and the SET sticky
+ * exception flags (in bit order). Every field is a pure function of `mxcsr` (carried
+ * alongside so the decode is auditable); paired 1:1 with the step's `regstate`. Field
+ * order lives here. Returns the body length written. */
+size_t asmtrace_fpenv_body(char *dst, size_t cap, unsigned step,
+                           uint32_t mxcsr);
+
 /* {"step":S,"off":O,"loc":{...}?,"cone":[{"step":N,"off":M,"kind":"insn"},...],
  * "born_untraced":bool} — one backward-attribution (`blame`) event (33 R6 T1): the
  * value produced at step `S` (offset `O`, identified by the optional `loc` operand)

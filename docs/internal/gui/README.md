@@ -221,7 +221,7 @@ shipped (live `regstate` doc 26, `severity` doc 23, offline scrubber doc 09).
 | [28-schema-freeze-completion.md](28-schema-freeze-completion.md) | R1 | `code` header (routine hash), footer `steps_total`, serialize `wide[]` | 3 | 01 (**Phase-3 freeze, D5**) | ✅ 3/3 (T1 `5803086` + T2 `47c3280` + T3 `878de40`) | — |
 | [29-mem-address-stream.md](29-mem-address-stream.md) | R2 | the reserved `mem` kind — no producer today | 3 | 01; 10 (consumer, inert-ready) | ✅ 3/3 (T1 writer+schema+unit, T2 emulator projection + golden `mem-df-chain`(+torn), T3 live `--dataflow --mem`/serve `mem:true` + `test_mem_parity`) | — |
 | [30-resume-from-state-and-reweave.md](30-resume-from-state-and-reweave.md) | R3 | route the value producer through `emu_snapshot`/`emu_restore` | 4 | 05 (forks); 28 T1 (for T4) | ☐ 0/4 | agent-opus · T1–T2 · 2026-07-28 |
-| [31-wide-register-deck.md](31-wide-register-deck.md) | R4 | `fpenv` kind + XMM/YMM/MXCSR capture + SSE-class args | 3 | 28 T3 (`wide[]` format); 01/D5 | ☐ 0/3 | agent-opus · T1–T3 · 2026-07-28 |
+| [31-wide-register-deck.md](31-wide-register-deck.md) | R4 | `fpenv` kind + XMM/YMM/MXCSR capture + SSE-class args | 3 | 28 T3 (`wide[]` format); 01/D5 | ✅ 3/3 (T1 XMM+MXCSR deck both producers + `movq` parity; T2 `fpenv` decode + honest degradation; T3 `run_fp` SSE args + XMM `df_step` values + `fp-scale-add` golden; 128-bit only, YMM deferred) | — |
 | [32-per-guest-value-producer.md](32-per-guest-value-producer.md) | R5 | arch-parameterize `dataflow_emu.c` (arm64 first) | 3 | independent axis; demand-gated | ☐ 0/3 | agent-opus-b · T1–T3 · 2026-07-28 |
 | [33-backward-attribution-producers.md](33-backward-attribution-producers.md) | R6 | the reserved `blame` + `statediff` kinds | 2 | 28 T1 (statediff pairing); 05 (L1 edges) | ✅ 2/2 (T1 `blame` cone + born-untraced honesty, T2 `statediff` delta + two-recording merge gated on R1 identity; recorder-only producers, asmspy leg deferred) | — |
 
@@ -229,9 +229,10 @@ shipped (live `regstate` doc 26, `severity` doc 23, offline scrubber doc 09).
 (cheapest, no new engine, prerequisite for R4/R6, closes 04/05 honesty gaps —
 land it through the Phase-3 freeze), then **R2 and R6 in parallel** (new
 producers over an existing recording; R6's `statediff` waits on R1 T1), then
-**R4** (reuses R1's `wide[]` format), then **R3** (the headline — it is what "not
-a day-one feature" gates — largest, lower urgency), with **R5** an independent
-demand-gated arch axis. The plan's permanent Honest-limits (exact-only fabric, no
+**R4** (reuses R1's `wide[]` format — **✅ landed 2026-07-28**: the XMM/MXCSR deck +
+`fpenv` on both producers, 128-bit only with YMM deferred), then **R3** (the
+headline — it is what "not a day-one feature" gates — largest, lower urgency), with
+**R5** an independent demand-gated arch axis. The plan's permanent Honest-limits (exact-only fabric, no
 cross-thread hops, forks-never-touch-live, statistical-absence-proves-nothing)
 are out of scope by design — a brief there would fight the design.
 

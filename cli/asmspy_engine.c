@@ -3627,8 +3627,9 @@ int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
                                        int *survived, asmtest_valtrace_t *vt);
 
 int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
-                           long max, int want_steps, atomic_bool *stop,
-                           asmspy_dataflow_sink sink, void *ctx) {
+                           long max, int want_steps, int want_fpregs,
+                           atomic_bool *stop, asmspy_dataflow_sink sink,
+                           void *ctx) {
     /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
      * decode below assumes the x86-64 ABI, so on an i386 task this engine does
      * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
@@ -3671,6 +3672,11 @@ int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
      * ringless (honest, never fatal). */
     if (want_steps)
         asmtest_valtrace_arm_regfile(vt);
+    /* 31 R4: `--fpregs` also captures the wide XMM/MXCSR deck. It arms the ring
+     * too (arm_fpregs calls arm_regfile), so `--fpregs` alone yields a
+     * vector-carrying regstate stream; a failed arm degrades to GPR-only. */
+    if (want_fpregs)
+        asmtest_valtrace_arm_fpregs(vt);
 
     long result = 0;
     int survived = 0; /* not yet surfaced to the caller; see asmspy.h note */

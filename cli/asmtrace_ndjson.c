@@ -301,6 +301,33 @@ size_t asmtrace_mem_body(char *dst, size_t cap, unsigned step, uint64_t ea,
         loc_space(space));
 }
 
+size_t asmtrace_regstate_vec_append(char *dst, size_t cap, size_t o,
+                                    const uint8_t xmm[16][16], uint32_t mxcsr) {
+    if (!dst || !cap)
+        return o;
+    /* The wide FP/vector deck (R4), appended INSIDE an open `values` object right
+     * after `rflags` and before its closing `}` — so a reader that predates R4
+     * ignores the extra fields (ignore-unknown-fields) and a producer that did not
+     * arm the deck emits none of them (unarmed = byte-identical, D6). One
+     * field-order owner: BOTH regstate emitters (the emulator's emit_regstate and
+     * the live asmtrace_regstate_body) route their wide lanes through here.
+     *
+     * Each XMM register serializes as a lowercase-hex `bytes` STRING of its 16
+     * bytes — a wide value is not a bare JSON integer, exactly the df_step `wide`
+     * limit R1 T3 already spells as hex bytes. MXCSR is a 32-bit control/status
+     * word, so it stays a plain decimal integer. The consumer keys on field name;
+     * the current Scrubber index skips non-integer `values` fields
+     * (desktop/src/analysis/stepindex.cpp), so the XMM strings are inert until an
+     * FP-deck panel renders them (31 R4 T2 follow-up), while mxcsr renders today. */
+    for (int i = 0; i < 16; i++) {
+        o = bp(dst, cap, o, ",\"xmm%d\":\"", i);
+        for (int k = 0; k < 16; k++)
+            o = bp(dst, cap, o, "%02x", xmm[i][k]);
+        o = bp(dst, cap, o, "\"");
+    }
+    return bp(dst, cap, o, ",\"mxcsr\":%u", mxcsr);
+}
+
 size_t asmtrace_regstate_body(char *dst, size_t cap,
                               const asmtest_regfile_t *r) {
     size_t o = 0;
@@ -313,22 +340,53 @@ size_t asmtrace_regstate_body(char *dst, size_t cap,
      * ptrace source (struct user_regs_struct), more authoritative than emulation
      * yet captured perturbingly (single-step). The consumer keys on field NAMES,
      * not the id (desktop/src/analysis/stepindex.cpp). */
-    return bp(dst, cap, o,
-              "\"desc\":\"user_regs@x86_64/sysv\",\"values\":{"
-              "\"rax\":%llu,\"rbx\":%llu,\"rcx\":%llu,\"rdx\":%llu,"
-              "\"rsi\":%llu,\"rdi\":%llu,\"rbp\":%llu,\"rsp\":%llu,"
-              "\"r8\":%llu,\"r9\":%llu,\"r10\":%llu,\"r11\":%llu,"
-              "\"r12\":%llu,\"r13\":%llu,\"r14\":%llu,\"r15\":%llu,"
-              "\"rip\":%llu,\"rflags\":%llu}",
-              (unsigned long long)r->rax, (unsigned long long)r->rbx,
-              (unsigned long long)r->rcx, (unsigned long long)r->rdx,
-              (unsigned long long)r->rsi, (unsigned long long)r->rdi,
-              (unsigned long long)r->rbp, (unsigned long long)r->rsp,
-              (unsigned long long)r->r8, (unsigned long long)r->r9,
-              (unsigned long long)r->r10, (unsigned long long)r->r11,
-              (unsigned long long)r->r12, (unsigned long long)r->r13,
-              (unsigned long long)r->r14, (unsigned long long)r->r15,
-              (unsigned long long)r->rip, (unsigned long long)r->rflags);
+    o = bp(dst, cap, o,
+           "\"desc\":\"user_regs@x86_64/sysv\",\"values\":{"
+           "\"rax\":%llu,\"rbx\":%llu,\"rcx\":%llu,\"rdx\":%llu,"
+           "\"rsi\":%llu,\"rdi\":%llu,\"rbp\":%llu,\"rsp\":%llu,"
+           "\"r8\":%llu,\"r9\":%llu,\"r10\":%llu,\"r11\":%llu,"
+           "\"r12\":%llu,\"r13\":%llu,\"r14\":%llu,\"r15\":%llu,"
+           "\"rip\":%llu,\"rflags\":%llu",
+           (unsigned long long)r->rax, (unsigned long long)r->rbx,
+           (unsigned long long)r->rcx, (unsigned long long)r->rdx,
+           (unsigned long long)r->rsi, (unsigned long long)r->rdi,
+           (unsigned long long)r->rbp, (unsigned long long)r->rsp,
+           (unsigned long long)r->r8, (unsigned long long)r->r9,
+           (unsigned long long)r->r10, (unsigned long long)r->r11,
+           (unsigned long long)r->r12, (unsigned long long)r->r13,
+           (unsigned long long)r->r14, (unsigned long long)r->r15,
+           (unsigned long long)r->rip, (unsigned long long)r->rflags);
+    /* The wide deck rides alongside, when this producer armed it (has_vec). */
+    if (r->has_vec)
+        o = asmtrace_regstate_vec_append(dst, cap, o, r->xmm, r->mxcsr);
+    return bp(dst, cap, o, "}");
+}
+
+size_t asmtrace_fpenv_body(char *dst, size_t cap, unsigned step,
+                           uint32_t mxcsr) {
+    /* The MXCSR bit layout (SSE control/status), decoded so a viewer needs no bit
+     * knowledge; `mxcsr` rides alongside so the decode stays auditable (31 R4 T2).
+     * Exception flags bits 0..5 (IE DE ZE OE UE PE), DAZ bit 6, RC bits 13..14,
+     * FTZ bit 15. Only the SET sticky flags are listed, in bit order. */
+    static const char *const RC[4] = {"nearest", "down", "up", "zero"};
+    static const char *const EX[6] = {"ie", "de", "ze", "oe", "ue", "pe"};
+    size_t o = 0;
+    int first = 1;
+    if (!dst || !cap)
+        return 0;
+    dst[0] = '\0';
+    o = bp(dst, cap, o,
+           "\"step\":%u,\"mxcsr\":%u,\"round\":\"%s\",\"ftz\":%s,\"daz\":%s,"
+           "\"sticky\":[",
+           step, mxcsr, RC[(mxcsr >> 13) & 3u],
+           (mxcsr & (1u << 15)) ? "true" : "false",
+           (mxcsr & (1u << 6)) ? "true" : "false");
+    for (int b = 0; b < 6; b++)
+        if (mxcsr & (1u << b)) {
+            o = bp(dst, cap, o, "%s\"%s\"", first ? "" : ",", EX[b]);
+            first = 0;
+        }
+    return bp(dst, cap, o, "]");
 }
 
 size_t asmtrace_blame_body(char *dst, size_t cap, unsigned step, uint64_t off,

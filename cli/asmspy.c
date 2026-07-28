@@ -2329,6 +2329,15 @@ static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
         if (vt->regfile != NULL) {
             asmtrace_regstate_body(body, sizeof body, &vt->regfile[s]);
             rec_emit(r, "regstate", body);
+            /* 31 R4 T2: the FP-environment, paired 1:1 with the regstate, only
+             * where the wide deck armed and MXCSR was read (has_vec) — a GPR-only
+             * ring (no --fpregs) emits no fpenv. */
+            if (vt->regfile[s].has_vec) {
+                char fb[256];
+                asmtrace_fpenv_body(fb, sizeof fb, (unsigned)s,
+                                    vt->regfile[s].mxcsr);
+                rec_emit(r, "fpenv", fb);
+            }
         }
     }
     /* 29 R2 T3: the `mem` address stream, when armed (`--mem` / serve `mem:true`).
@@ -2756,7 +2765,7 @@ static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
 static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                         int json, int auto_region, const char *module,
                         sampler_mode_t sampler, const char *record, int steps,
-                        int mem) {
+                        int mem, int fpregs) {
     asmspy_symtab_t t;
     rec_t rec;
     if (asmspy_symtab_load(pid, &t) < 0) {
@@ -2860,8 +2869,8 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         /* Copy the name BEFORE the symtab dies: dc.func borrows into `t` (or argv),
          * and the messages below outlive asmspy_symtab_free. */
         snprintf(fname, sizeof fname, "%s", dc.func);
-        rc = asmspy_engine_dataflow(pid, tid, base, len, max, steps, &g_sigstop,
-                                    dataflow_render_sink, &dc);
+        rc = asmspy_engine_dataflow(pid, tid, base, len, max, steps, fpregs,
+                                    &g_sigstop, dataflow_render_sink, &dc);
         /* The sw candidate walk: residency's winner can be a function that
          * never re-enters (the picker header's documented hazard), and
          * NEVER_RAN is the bounded entry wait saying exactly that — an honest
@@ -3020,6 +3029,7 @@ typedef struct {
     int follow;
     int steps; /* dataflow/auto: arm the per-step register ring (26 `--steps`) */
     int mem;   /* dataflow/auto: arm the `mem` address stream (29 R2 `--mem`) */
+    int fpregs; /* dataflow/auto: arm the XMM/MXCSR deck (31 R4 `fpregs:true`) */
     long max;
     long ms;
     uint64_t base;
@@ -3538,15 +3548,15 @@ static size_t serve_params_json(char *dst, size_t cap,
         break;
     case SM_DATAFLOW:
         /* `steps` advertises whether the register ring is armed, `mem` the
-         * address stream (29 R2) — trace has neither, so only dataflow carries
-         * them. */
+         * address stream (29 R2), `fpregs` the XMM/MXCSR deck (31 R4) — trace has
+         * none of these, so only dataflow carries them. */
         o = (size_t)snprintf(
             dst, cap,
             "{\"tid\":%d,\"base\":%llu,\"len\":%llu,\"max\":%ld,\"steps\":%s,"
-            "\"mem\":%s}",
+            "\"mem\":%s,\"fpregs\":%s}",
             (int)p->tid, (unsigned long long)p->base,
             (unsigned long long)p->len, p->max, p->steps ? "true" : "false",
-            p->mem ? "true" : "false");
+            p->mem ? "true" : "false", p->fpregs ? "true" : "false");
         break;
     case SM_PROCS:
         o = (size_t)snprintf(dst, cap, "{\"max\":%ld,\"count\":\"%s\"}", p->max,
@@ -3564,13 +3574,14 @@ static size_t serve_params_json(char *dst, size_t cap,
     case SM_AUTO:
         o = (size_t)snprintf(dst, cap,
                              "{\"max\":%ld,\"module\":\"%s\",\"sampler\":"
-                             "\"%s\",\"steps\":%s,\"mem\":%s}",
+                             "\"%s\",\"steps\":%s,\"mem\":%s,\"fpregs\":%s}",
                              p->max, em,
                              p->sampler == SAMPLER_IBS
                                  ? "ibs"
                                  : (p->sampler == SAMPLER_SW ? "sw" : "auto"),
                              p->steps ? "true" : "false",
-                             p->mem ? "true" : "false");
+                             p->mem ? "true" : "false",
+                             p->fpregs ? "true" : "false");
         break;
     default:
         o = (size_t)snprintf(dst, cap, "{}");
@@ -3639,8 +3650,8 @@ static void serve_run_engine(serve_session_t *s) {
     case SM_DATAFLOW:
         serve_codeimage_arm(s);
         s->rc = asmspy_engine_dataflow(p->pid, p->tid, p->base, p->len, p->max,
-                                       p->steps, &s->stop, serve_dataflow_sink,
-                                       s);
+                                       p->steps, p->fpregs, &s->stop,
+                                       serve_dataflow_sink, s);
         break;
     case SM_AUTO: {
         /* The sw path hands back RANKED candidates and the walk below tries
@@ -3703,7 +3714,7 @@ static void serve_run_engine(serve_session_t *s) {
             s->ci_version = 0;
             serve_codeimage_arm(s);
             s->rc = asmspy_engine_dataflow(p->pid, 0, p->base, p->len, p->max,
-                                           p->steps, &s->stop,
+                                           p->steps, p->fpregs, &s->stop,
                                            serve_dataflow_sink, s);
             if (s->rc == ASMSPY_REGION_NEVER_RAN && attempt + 1 < ncand) {
                 /* NEVER_RAN is the bounded entry wait saying this CANDIDATE was
@@ -3929,6 +3940,16 @@ static int serve_parse_start(const char *line, serve_params_t *p,
             return -1;
         }
         p->mem = b;
+    }
+    /* 31 R4: dataflow/auto opt-in for the wide XMM/MXCSR deck. A BOOLEAN like
+     * `steps`; it arms the register ring too, so `fpregs:true` alone yields a
+     * vector-carrying `regstate` stream. Off by default. */
+    if ((v = sj_find(line, "fpregs")) != NULL) {
+        if (sj_bool(v, &b) != 0) {
+            *why = "\"fpregs\" must be true or false";
+            return -1;
+        }
+        p->fpregs = b;
     }
     if ((v = sj_find(line, "max")) != NULL) {
         if (sj_i64(v, &n) != 0) {
@@ -5768,7 +5789,7 @@ static void *dfview_tracer(void *arg) {
     /* The TUI slicer view is interactive over a frozen COPY, not a recording, so
      * it never wants the register ring (0). */
     int rc = asmspy_engine_dataflow(V->pid, V->tid, V->rbase, V->rlen, V->max, 0,
-                                    &V->stop, dfview_sink, V);
+                                    0, &V->stop, dfview_sink, V);
     pthread_mutex_lock(&V->mu);
     V->rc = rc;
     pthread_mutex_unlock(&V->mu);
@@ -7222,7 +7243,8 @@ static int usage(const char *argv0) {
         "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n] [--tid=<t>]  live samples "
         "of a function/region (any thread)\n"
         "  %s --dataflow <pid> <sym|0xADDR[:LEN]|--auto> [--json] [--tid=<t>] "
-        "[--max=<n>] [--module=<m>] [--sampler=ibs|sw] [--steps] [--mem]  "
+        "[--max=<n>] [--module=<m>] [--sampler=ibs|sw] [--steps] [--mem] "
+        "[--fpregs]  "
         "scoped "
         "L0 "
         "value trace + L1 def-use of one invocation (native targets). --steps "
@@ -7231,7 +7253,9 @@ static int usage(const char *argv0) {
         "already-read pre-state per single-step) so the desktop Scrubber "
         "time-travels it; a BOOLEAN, unlike the emulator's --steps=<N> ring "
         "size. --mem adds one `mem` event per memory access (the resolved "
-        "effective address stream the 3D rich rung reads). --auto picks the "
+        "effective address stream the 3D rich rung reads). --fpregs adds the "
+        "wide XMM/MXCSR deck to each `regstate` (one GETFPREGS per step). --auto "
+        "picks the "
         "function the target is most often ENTERING right now, sampled out of "
         "band (AMD IBS-Op entry edges where available; elsewhere a portable "
         "software-clock RESIDENCY sampler that walks up to 3 candidates, since "
@@ -7385,18 +7409,21 @@ int main(int argc, char **argv) {
         int auto_region = (strcmp(argv[3], "--auto") == 0);
         sampler_mode_t sampler = SAMPLER_AUTO;
         const char *record = NULL;
-        int steps = 0; /* --steps: arm the per-step register ring (26) */
-        int mem = 0;   /* --mem: arm the `mem` address stream (29 R2) */
+        int steps = 0;  /* --steps: arm the per-step register ring (26) */
+        int mem = 0;    /* --mem: arm the `mem` address stream (29 R2) */
+        int fpregs = 0; /* --fpregs: arm the XMM/MXCSR deck (31 R4) */
         for (int i = 4; i < argc; i++) { /* [--json] [--tid=N] [--max=N]
                                           * [--module=M] [--sampler=S]
-                                          * [--record=F] [--steps] [--mem], any
-                                          * order */
+                                          * [--record=F] [--steps] [--mem]
+                                          * [--fpregs], any order */
             if (strcmp(argv[i], "--json") == 0)
                 json = 1;
             else if (strcmp(argv[i], "--steps") == 0)
                 steps = 1;
             else if (strcmp(argv[i], "--mem") == 0)
                 mem = 1;
+            else if (strcmp(argv[i], "--fpregs") == 0)
+                fpregs = 1;
             else if (strncmp(argv[i], "--record=", 9) == 0)
                 record = argv[i] + 9;
             else if (strncmp(argv[i], "--tid=", 6) == 0) {
@@ -7445,7 +7472,7 @@ int main(int argc, char **argv) {
                            "nothing)",
                            argv[3]);
         return cmd_dataflow(pid, argv[3], tid, max, json, auto_region, module,
-                            sampler, record, steps, mem);
+                            sampler, record, steps, mem, fpregs);
     }
     if (strcmp(argv[1], "--stream") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)

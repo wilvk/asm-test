@@ -25,7 +25,7 @@
  * `make asmtrace-golden-check`.
  *
  * Contract: docs/internal/gui/asmtrace-schema.md.
- * Usage: asmtrace_record [--steps=<cap>] [--mem] [--blame] [--statediff] <output-directory>
+ * Usage: asmtrace_record [--steps=<cap>] [--mem] [--fpregs] [--blame] [--statediff] <output-directory>
  */
 #include <stdint.h>
 #include <stdio.h>
@@ -43,6 +43,14 @@
 int asmtest_dataflow_emu_run(const uint8_t *code, size_t code_len,
                              const long *args, int nargs, uint64_t max_insns,
                              asmtest_valtrace_t *vt);
+
+/* R4 T3: the FP/vector-arg value producer — marshals `nfargs` SSE-class doubles
+ * into xmm0..7 alongside the `niargs` integer args, so an FP-argument routine
+ * records with its real XMM inputs (the operand values ride `wide[]`). */
+int asmtest_dataflow_emu_run_fp(const uint8_t *code, size_t code_len,
+                                const long *iargs, int niargs,
+                                const double *fargs, int nfargs,
+                                uint64_t max_insns, asmtest_valtrace_t *vt);
 
 /* name -> routine pointer, from the conformance corpus. */
 void *asmtest_corpus_routine(const char *name);
@@ -78,6 +86,13 @@ static size_t g_steps_cap = 0;
  * only for the fixtures that bake it in, and every other golden is byte-unchanged.
  * A routine's own baked-in want_mem below applies when this is 0. */
 static int g_mem = 0;
+
+/* --fpregs: arm the wide FP/vector register deck (31 R4) for the whole corpus
+ * loop — each `regstate` then also carries the 16 XMM registers + MXCSR. Off by
+ * default (the golden default), so `make asmtrace-golden` (no flag) leaves every
+ * existing regstate golden byte-identical; the dedicated FP fixture (T3) arms it
+ * on its own. Only meaningful where the register ring is armed (--steps > 0). */
+static int g_fpregs = 0;
 
 /* Emit the `mem` address stream for one invocation (29 R2): one `mem` event per
  * memory-kind operand record in `recs[0..n)`, in the appended (step) order, gated
@@ -179,12 +194,13 @@ static void emit_blame(asmtrace_writer_t *w, const asmtest_valtrace_t *vt,
     asmtest_slice_free(sl);
 }
 
-/* Fixed routines and arguments. INTEGER-ARG routines only — the emulator L0
- * producer marshals integer arguments (rdi/rsi/rdx/rcx/r8/r9); widening the
- * corpus to FP/vector routines needs a producer change, not a table entry.
- * `steps_cap` is the per-step register-ring cap baked into the golden for that
- * routine (0 = no regstate); add_signed carries the worked example so the
- * committed corpus exercises the `regstate` kind without --steps. */
+/* Fixed routines and arguments. These are INTEGER-ARG routines (the emulator L0
+ * producer marshals rdi/rsi/rdx/rcx/r8/r9); the FP/vector case is retired by 31 R4
+ * T3's `asmtest_dataflow_emu_run_fp` + record_bytes_fp, exercised by the fp-scale-add
+ * byte-literal fixture below rather than a table entry (the corpus routines are
+ * host-native integer symbols). `steps_cap` is the per-step register-ring cap baked
+ * into the golden for that routine (0 = no regstate); add_signed carries the worked
+ * example so the committed corpus exercises the `regstate` kind without --steps. */
 typedef struct {
     const char *name;
     long args[3];
@@ -247,6 +263,21 @@ static const uint8_t LOOM_FORK_DEMO[] = {
     0xc3,                   /* 0x13 ret           */
 };
 
+/* fp_scale_add(x, y) [xmm0=x, xmm1=y] — the FP/vector worked example (31 R4 T3),
+ * retiring the "integer-arg only" corpus limit. A BYTE LITERAL like the loom
+ * fixtures, because its FP arithmetic is hand-derivable on paper and must stay so:
+ *   0x00  addsd xmm0, xmm1   ; f2 0f 58 c1   xmm0 <- x + y
+ *   0x04  ret                ; c3
+ * Recorded with SSE-class args x=1.5, y=2.25 (marshalled into xmm0/xmm1 by the FP
+ * value producer) under the wide deck (--fpregs baked in): the regstate ring shows
+ * xmm0 = 1.5 at the pre-state of `addsd` and xmm0 = 3.75 at the pre-state of `ret`
+ * — the whole FP computation, countable off this listing. The `df_step` operand
+ * values ride wide[] (28 R1 T3 hex bytes), and each held step carries an `fpenv`. */
+static const uint8_t FP_SCALE_ADD[] = {
+    0xf2, 0x0f, 0x58, 0xc1, /* 0x00 addsd xmm0, xmm1 */
+    0xc3,                   /* 0x04 ret             */
+};
+
 /* ------------------------------------------------------------------ */
 /* The 3D spacetime overview's golden SCENES                            */
 /* (docs/internal/gui/10-spacetime-3d-overview.md T7)                   */
@@ -283,28 +314,46 @@ static const uint8_t SCENE_HOT_LOOP[] = {
  * reference (schema: `desc` names a state descriptor, never a bare inline
  * register list). The `values` object carries the full x86-64 INTEGER file —
  * the 16 GP registers plus rip and rflags, in emu_x86_regs_t declaration order,
- * each a decimal u64. The 128-bit XMM file is a documented v1 omission: a wide
- * value is not a bare JSON integer (exactly the df_step `wide` limit), and the
- * descriptor mechanism absorbs an FP/vector deck later. See the descriptor
- * entry appended to docs/internal/gui/asmtrace-schema.md. */
-static void emit_regstate(asmtrace_writer_t *w, const emu_x86_regs_t *r) {
-    char body[512];
-    snprintf(body, sizeof body,
-             "\"desc\":\"emu_x86_regs_t@x86_64/sysv\",\"values\":{"
-             "\"rax\":%llu,\"rbx\":%llu,\"rcx\":%llu,\"rdx\":%llu,"
-             "\"rsi\":%llu,\"rdi\":%llu,\"rbp\":%llu,\"rsp\":%llu,"
-             "\"r8\":%llu,\"r9\":%llu,\"r10\":%llu,\"r11\":%llu,"
-             "\"r12\":%llu,\"r13\":%llu,\"r14\":%llu,\"r15\":%llu,"
-             "\"rip\":%llu,\"rflags\":%llu}",
-             (unsigned long long)r->rax, (unsigned long long)r->rbx,
-             (unsigned long long)r->rcx, (unsigned long long)r->rdx,
-             (unsigned long long)r->rsi, (unsigned long long)r->rdi,
-             (unsigned long long)r->rbp, (unsigned long long)r->rsp,
-             (unsigned long long)r->r8, (unsigned long long)r->r9,
-             (unsigned long long)r->r10, (unsigned long long)r->r11,
-             (unsigned long long)r->r12, (unsigned long long)r->r13,
-             (unsigned long long)r->r14, (unsigned long long)r->r15,
-             (unsigned long long)r->rip, (unsigned long long)r->rflags);
+ * each a decimal u64.
+ *
+ * R4 (31-wide-register-deck.md): when `want_vec`, the wide FP/vector deck rides
+ * alongside — the 16 128-bit XMM registers (each a hex `bytes` string) plus MXCSR
+ * (a u32) — appended to the SAME `values` object through the one field-order owner
+ * asmtrace_regstate_vec_append, so the emulator and the live producer spell the
+ * deck identically. Off by default (`--fpregs`), so an unarmed recording is
+ * byte-identical to the pre-R4 golden (D6). The emulator's per-step ring already
+ * captures xmm[16]; MXCSR comes from the parallel ring (emu_step_mxcsr_at). */
+static void emit_regstate(asmtrace_writer_t *w, const emu_x86_regs_t *r,
+                          int want_vec, uint32_t mxcsr) {
+    char body[2048];
+    size_t o = (size_t)snprintf(
+        body, sizeof body,
+        "\"desc\":\"emu_x86_regs_t@x86_64/sysv\",\"values\":{"
+        "\"rax\":%llu,\"rbx\":%llu,\"rcx\":%llu,\"rdx\":%llu,"
+        "\"rsi\":%llu,\"rdi\":%llu,\"rbp\":%llu,\"rsp\":%llu,"
+        "\"r8\":%llu,\"r9\":%llu,\"r10\":%llu,\"r11\":%llu,"
+        "\"r12\":%llu,\"r13\":%llu,\"r14\":%llu,\"r15\":%llu,"
+        "\"rip\":%llu,\"rflags\":%llu",
+        (unsigned long long)r->rax, (unsigned long long)r->rbx,
+        (unsigned long long)r->rcx, (unsigned long long)r->rdx,
+        (unsigned long long)r->rsi, (unsigned long long)r->rdi,
+        (unsigned long long)r->rbp, (unsigned long long)r->rsp,
+        (unsigned long long)r->r8, (unsigned long long)r->r9,
+        (unsigned long long)r->r10, (unsigned long long)r->r11,
+        (unsigned long long)r->r12, (unsigned long long)r->r13,
+        (unsigned long long)r->r14, (unsigned long long)r->r15,
+        (unsigned long long)r->rip, (unsigned long long)r->rflags);
+    if (o >= sizeof body)
+        o = sizeof body - 1;
+    if (want_vec) {
+        uint8_t xb[16][16];
+        for (int i = 0; i < 16; i++)
+            memcpy(xb[i], r->xmm[i].u8, 16);
+        o = asmtrace_regstate_vec_append(body, sizeof body, o, xb, mxcsr);
+    }
+    if (o < sizeof body - 1)
+        body[o++] = '}';
+    body[o] = '\0';
     asmtrace_emit(w, "regstate", body);
 }
 
@@ -351,7 +400,9 @@ static void regs_to_regfile(asmtest_regfile_t *rf, const emu_x86_regs_t *r) {
  * truncation-robustly. Off by default so a regstate-only golden is byte-unchanged. */
 static uint64_t emit_regstates(asmtrace_writer_t *w, const uint8_t *code,
                                size_t code_len, const long *args, int nargs,
-                               size_t steps_cap, int want_statediff) {
+                               const double *fargs, int nfargs,
+                               size_t steps_cap, int want_statediff,
+                               int want_vec) {
     emu_t *e;
     emu_result_t res;
     uint64_t dropped = 0;
@@ -365,14 +416,33 @@ static uint64_t emit_regstates(asmtrace_writer_t *w, const uint8_t *code,
         asmtest_regfile_t prev, cur;
         int have_prev = 0;
         memset(&res, 0, sizeof res);
-        emu_call(e, code, code_len, args, nargs, 0, &res);
+        /* R4 T3: with SSE-class args (nfargs > 0) the deck must re-run through the
+         * FP call path so xmm0..7 carry the double args; else the integer path. */
+        if (nfargs > 0)
+            emu_call_fp(e, code, code_len, args, nargs, fargs, nfargs, 0, &res);
+        else
+            emu_call(e, code, code_len, args, nargs, 0, &res);
         held = emu_step_count(e);
         dropped = emu_step_dropped(e);
         for (i = 0; i < held; i++) {
             emu_x86_regs_t regs;
+            uint32_t mxcsr = 0;
             if (!emu_step_at(e, i, NULL, &regs))
                 continue;
-            emit_regstate(w, &regs);
+            /* R4: the per-step MXCSR from the parallel ring — 0 if the ring could
+             * not be allocated, which the vec serializer emits honestly. */
+            if (want_vec)
+                emu_step_mxcsr_at(e, i, &mxcsr);
+            emit_regstate(w, &regs, want_vec, mxcsr);
+            /* R4 T2: the FP-environment, decoded from the same MXCSR the deck
+             * carried — paired 1:1 with the regstate, only where the deck is armed
+             * (a step with no captured MXCSR emits no fpenv, never a default). */
+            if (want_vec) {
+                char fb[256];
+                asmtrace_fpenv_body(fb, sizeof fb, (unsigned)(dropped + i),
+                                    mxcsr);
+                asmtrace_emit(w, "fpenv", fb);
+            }
             if (want_statediff) {
                 char body[512];
                 regs_to_regfile(&cur, &regs);
@@ -389,6 +459,25 @@ static uint64_t emit_regstates(asmtrace_writer_t *w, const uint8_t *code,
     return dropped;
 }
 
+static int record_bytes_fp(const char *dir, const char *out, const char *label,
+                           const uint8_t *code, size_t code_len,
+                           const long *args, int nargs, const double *fargs,
+                           int nfargs, int want_fpregs, size_t recs_cap,
+                           size_t steps_cap, int want_mem, int want_blame,
+                           int want_statediff);
+
+/* The integer-arg recorder — the historical signature every corpus / loom / scene
+ * caller uses (no FP args, no baked-in vector deck). Thin wrapper over the FP form
+ * so those callsites stay unchanged and byte-stable. */
+static int record_bytes(const char *dir, const char *out, const char *label,
+                        const uint8_t *code, size_t code_len, const long *args,
+                        int nargs, size_t recs_cap, size_t steps_cap,
+                        int want_mem, int want_blame, int want_statediff) {
+    return record_bytes_fp(dir, out, label, code, code_len, args, nargs, NULL,
+                           0, 0, recs_cap, steps_cap, want_mem, want_blame,
+                           want_statediff);
+}
+
 /*
  * Record `code[0..code_len)` under the producer and write <dir>/<out>.asmtrace.
  * `label` is what the recording's `note` calls the routine; `recs_cap` bounds
@@ -397,12 +486,19 @@ static uint64_t emit_regstates(asmtrace_writer_t *w, const uint8_t *code,
  * dishonesty fixture rather than a hand-edited file). `steps_cap` arms the
  * per-step register ring (0 = no regstate); a small cap over a longer routine
  * is how the register-ring truncation fixture is made, the same way.
+ *
+ * R4 T3: `fargs`/`nfargs` are SSE-class double args — non-zero routes BOTH the L0
+ * value producer and the regstate ring through the FP call path so xmm0..7 carry
+ * them. `want_fpregs` bakes in the wide XMM/MXCSR deck for this recording (like
+ * add_signed bakes in its ring cap), independent of the corpus-wide --fpregs.
  * Returns 0 on success, -1 on a setup/write failure.
  */
-static int record_bytes(const char *dir, const char *out, const char *label,
-                        const uint8_t *code, size_t code_len, const long *args,
-                        int nargs, size_t recs_cap, size_t steps_cap,
-                        int want_mem, int want_blame, int want_statediff) {
+static int record_bytes_fp(const char *dir, const char *out, const char *label,
+                           const uint8_t *code, size_t code_len,
+                           const long *args, int nargs, const double *fargs,
+                           int nfargs, int want_fpregs, size_t recs_cap,
+                           size_t steps_cap, int want_mem, int want_blame,
+                           int want_statediff) {
     asmtrace_prov_t prov = {"emu-l0", 1, "exact", 0, NULL, 0};
     asmtrace_writer_t w;
     asmtest_valtrace_t *vt = NULL;
@@ -417,7 +513,12 @@ static int record_bytes(const char *dir, const char *out, const char *label,
         fprintf(stderr, "asmtrace_record: out of memory\n");
         return -1;
     }
-    rc = asmtest_dataflow_emu_run(code, code_len, args, nargs, 0, vt);
+    /* R4 T3: the FP producer when SSE-class args are present (xmm operand values
+     * ride wide[]); the integer producer otherwise (byte-unchanged for the corpus). */
+    rc = (nfargs > 0)
+             ? asmtest_dataflow_emu_run_fp(code, code_len, args, nargs, fargs,
+                                           nfargs, 0, vt)
+             : asmtest_dataflow_emu_run(code, code_len, args, nargs, 0, vt);
     if (rc < 0) {
         /* The producer could not even set up (no Unicorn at run time). That is
          * a lane failure, not a recording: fail loudly rather than commit an
@@ -537,8 +638,9 @@ static int record_bytes(const char *dir, const char *out, const char *label,
     /* Per-step register states from the ring (T2), after the value stream.
      * A non-zero eviction count is truncation just like a full recs buffer.
      * `want_statediff || g_statediff` pairs each regstate with a step-delta. */
-    step_dropped = emit_regstates(&w, code, code_len, args, nargs, steps_cap,
-                                  want_statediff || g_statediff);
+    step_dropped = emit_regstates(
+        &w, code, code_len, args, nargs, fargs, nfargs, steps_cap,
+        want_statediff || g_statediff, want_fpregs || g_fpregs);
     if (vt->truncated || step_dropped > 0)
         w.truncated = 1;
     /* The total step count (28 R1 T2): the L0 producer saw them all (steps_total
@@ -973,8 +1075,10 @@ static int record_abi_leg(const char *dir, const char *out, const char *intro,
     held = emu_step_count(e);
     for (i = 0; i < held; i++) {
         emu_x86_regs_t regs;
+        /* The ABI x-ray legs stay GPR-only — arming the vector deck here would
+         * churn their committed goldens for no marshalling story (R4 want_vec=0). */
         if (emu_step_at(e, i, NULL, &regs))
-            emit_regstate(&w, &regs);
+            emit_regstate(&w, &regs, 0, 0);
     }
 
     /* Stops last, so file order IS ordinal order — the player's contract. The
@@ -1027,6 +1131,9 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "--mem") == 0)
             g_mem =
                 1; /* 29 R2: arm the mem[] address stream for the whole corpus */
+        else if (strcmp(argv[i], "--fpregs") == 0)
+            g_fpregs =
+                1; /* 31 R4: arm the XMM/MXCSR deck for the whole corpus */
         else if (strcmp(argv[i], "--blame") == 0)
             g_blame =
                 1; /* 33 R6 T1: arm the blame backward-attribution stream */
@@ -1153,6 +1260,19 @@ int main(int argc, char **argv) {
                              1 /* --statediff */) != 0)
                 failed++;
         }
+    }
+
+    /* The FP/vector worked example (31 R4 T3): fp_scale_add(1.5, 2.25) recorded with
+     * SSE-class args marshalled into xmm0/xmm1 and the wide XMM/MXCSR deck armed
+     * (want_fpregs), so the committed corpus exercises the vector `regstate` deck +
+     * `fpenv` without --fpregs — the FP analogue of add_signed's regstate example. */
+    {
+        static const double fp_args[2] = {1.5, 2.25};
+        if (record_bytes_fp(dir, "fp-scale-add", "fp_scale_add", FP_SCALE_ADD,
+                            sizeof FP_SCALE_ADD, NULL, 0, fp_args, 2,
+                            1 /* want_fpregs */, 65536, 8 /* steps_cap */, 0, 0,
+                            0) != 0)
+            failed++;
     }
 
     /* The 3D spacetime overview's two golden SCENES

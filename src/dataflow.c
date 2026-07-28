@@ -66,6 +66,16 @@ bool asmtest_valtrace_arm_regfile(asmtest_valtrace_t *v) {
     return v->regfile != NULL;
 }
 
+bool asmtest_valtrace_arm_fpregs(asmtest_valtrace_t *v) {
+    /* R4: the wide deck rides the same ring — arm it, then flag that a producer
+     * should capture the XMM/MXCSR lanes too. If the ring cannot be armed the flag
+     * is meaningless (no slot to fill), so leave it clear and fail honestly. */
+    if (!asmtest_valtrace_arm_regfile(v))
+        return false;
+    v->regfile_fp = true;
+    return true;
+}
+
 void asmtest_valtrace_append(asmtest_valtrace_t *v, uint64_t off,
                              const at_val_rec_t *recs, size_t n) {
     if (v == NULL)

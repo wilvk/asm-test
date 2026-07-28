@@ -389,6 +389,24 @@ static int read_ymm(pid_t pid, int idx, uint8_t out[32]) {
     return 1;
 }
 
+/* R4 (31-wide-register-deck.md): read the full live XMM file (xmm0..15, 16 bytes
+ * each) and MXCSR in ONE PTRACE_GETFPREGS — the per-step wide deck the register
+ * ring carries when `--fpregs` armed it. Returns 1 on success; on a GETFPREGS
+ * refusal (a hardened tracee) it zeroes the deck and returns 0, so the caller
+ * records an honest "unrecorded" (has_vec=false) rather than stale bytes. The
+ * cross-basis parity test compares the live XMM deck against the emulator's. */
+static int read_fpregs_all(pid_t pid, uint8_t xmm[16][16], uint32_t *mxcsr) {
+    struct user_fpregs_struct fp;
+    memset(xmm, 0, 16 * 16);
+    *mxcsr = 0;
+    if (ptrace(PTRACE_GETFPREGS, pid, NULL, &fp) != 0)
+        return 0;
+    for (int i = 0; i < 16; i++)
+        memcpy(xmm[i], &fp.xmm_space[i * 4], 16);
+    *mxcsr = fp.mxcsr;
+    return 1;
+}
+
 /* Read `n` bytes of the TRACEE's memory at `addr` into `buf` (process_vm_readv, with a
  * PTRACE_PEEKDATA fallback for a hardened /proc). Returns 1 iff all n bytes were read. */
 static int child_read(pid_t pid, uint64_t addr, void *buf, size_t n) {
@@ -509,6 +527,14 @@ typedef struct {
      * (only when vt->regfile is armed) and committed to vt->regfile in lockstep
      * with the append (dfp_append_step). Disarmed, this is never touched. */
     struct user_regs_struct cur_regs;
+    /* 31 R4: the current open step's PRE-STATE wide FP/vector deck (XMM + MXCSR),
+     * captured at open_step in the SAME instant as cur_regs (one PTRACE_GETFPREGS)
+     * when the vector deck is armed (regfile_fp) — NOT read live at append time,
+     * which would be the POST-instruction state. `cur_has_vec` says the stash is
+     * real for this step; a synthetic gap step leaves it false (honest). */
+    uint8_t cur_xmm[16][16];
+    uint32_t cur_mxcsr;
+    int cur_has_vec;
     /* F6 windowed survey / T2 scoped gap barrier. `win_mode` = there is no bounded code
      * snapshot: the region set spans the window frame plus every channel-published JIT
      * body at ABSOLUTE addresses, so open_step reads each instruction's bytes LIVE out
@@ -721,7 +747,7 @@ static uint64_t resolve_ea(const struct user_regs_struct *regs,
  * the field order emit_regstate / the Scrubber key on. `pre` NULL zeroes the file
  * (a synthetic step with no captured pre-state). x86-64 only, matching the engine's
  * i386 refusal and the `user_regs@x86_64/sysv` descriptor's arch. */
-static void dfp_map_regfile(asmtest_regfile_t *out,
+static void dfp_map_regfile(const dfp_ctx *c, asmtest_regfile_t *out,
                             const struct user_regs_struct *pre) {
     if (pre == NULL) {
         memset(out, 0, sizeof *out);
@@ -745,6 +771,17 @@ static void dfp_map_regfile(asmtest_regfile_t *out,
     out->r15 = pre->r15;
     out->rip = pre->rip;
     out->rflags = pre->eflags;
+    /* R4: the wide FP/vector deck, from the PRE-STATE stash captured at open_step in
+     * the same instant as the GP `pre` (NOT a live read here — this runs at append
+     * time, i.e. the POST-instruction state, which would be off by one step).
+     * has_vec records that the lanes are REAL, so the serializer emits them and a
+     * reader never renders an unrecorded deck as zeros (D7). */
+    out->has_vec = false;
+    if (c != NULL && c->cur_has_vec) {
+        memcpy(out->xmm, c->cur_xmm, sizeof out->xmm);
+        out->mxcsr = c->cur_mxcsr;
+        out->has_vec = true;
+    }
 }
 
 /* 26 T1: append one step to the value trace AND, when the register ring is armed,
@@ -758,7 +795,7 @@ static void dfp_append_step(dfp_ctx *c, uint64_t off, const at_val_rec_t *recs,
     size_t before = c->vt->steps_len;
     asmtest_valtrace_append(c->vt, off, recs, n);
     if (c->vt->regfile != NULL && c->vt->steps_len == before + 1)
-        dfp_map_regfile(&c->vt->regfile[before], pre);
+        dfp_map_regfile(c, &c->vt->regfile[before], pre);
 }
 
 /* Finalize the current step: fill every deferred WRITE value from the post-instruction
@@ -786,6 +823,10 @@ static void finalize_step(dfp_ctx *c, const struct user_regs_struct *regs) {
     dfp_append_step(c, c->cur_off, c->cur.v, c->cur.n, &c->cur_regs);
     c->have_cur = 0;
     c->cur.n = 0;
+    /* 31 R4: the pre-state vec stash belongs to this step only — clear it so a
+     * following synthetic GAP step (which does not open_step) records has_vec=false
+     * rather than reusing this step's XMM. The next open_step re-captures it. */
+    c->cur_has_vec = 0;
 }
 
 /* Open the step at region offset `off`: enumerate its read/write set (Phase 0), capture
@@ -801,6 +842,13 @@ static void open_step(dfp_ctx *c, const struct user_regs_struct *regs,
      * one untaken branch and no copy, so a ringless capture is byte-unchanged. */
     if (c->vt->regfile != NULL)
         c->cur_regs = *regs;
+    /* 31 R4: the wide FP/vector deck's PRE-STATE, captured HERE (the process is
+     * stopped at this instruction's pre-state) in one PTRACE_GETFPREGS — not live at
+     * append time. Only when the deck is armed; a failed read leaves has_vec false
+     * (honest "not measured"). */
+    c->cur_has_vec = 0;
+    if (c->vt->regfile != NULL && c->vt->regfile_fp)
+        c->cur_has_vec = read_fpregs_all(c->pid, c->cur_xmm, &c->cur_mxcsr);
 
     at_val_rec_t rd[64], wr[64];
     size_t nr = 64, nw = 64;

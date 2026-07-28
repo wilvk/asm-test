@@ -10,6 +10,35 @@
 > side buffer). Coordinate the new `fpenv` kind with the Phase-3 freeze (D5).
 >
 > Authored 2026-07-28, verified against HEAD `da566c9`.
+>
+> **LANDED 2026-07-28 (T1–T3), both docker lanes green.** What shipped, with the
+> honest deviations recorded:
+> - **T1** — `asmtest_regfile_t` carries `xmm[16]` + `mxcsr` + `has_vec`; both
+>   producers emit them behind one opt-in (`asmtrace_record --fpregs`, `asmspy
+>   --dataflow --fpregs`, serve `fpregs:true`), off by default so the golden corpus
+>   is byte-unchanged (D6). One field-order owner (`asmtrace_regstate_vec_append`)
+>   serializes each XMM as a hex `bytes` string (R1 T3 convention), MXCSR as a u32.
+>   The emulator reads XMM from its per-step ring + MXCSR from a new parallel ring
+>   (`emu_step_mxcsr_at`, `emu_x86_regs_t` ABI untouched); the live ring reads all 16
+>   XMM + MXCSR in one `PTRACE_GETFPREGS` **captured at the pre-state instant**
+>   (`open_step`), not live at append time. `cli/test_regstate_parity.c` asserts the
+>   two XMM decks byte-agree (via a zero-extending `movq xmm0, rdi` so the whole
+>   128-bit register is base-independent — a scalar op would leave the upper lane at
+>   basis-dependent entry state). **Deviation:** only 128-bit XMM ships; YMM high
+>   halves / AVX-512 remain a further descriptor row (as the Non-goals foretold).
+> - **T2** — `fpenv` promoted reserved → defined: one event per held step decoding
+>   MXCSR into `round`/`ftz`/`daz`/`sticky[]`, emitted by both producers under the
+>   same opt-in, paired 1:1 with `regstate`, absent (never faked) where unarmed.
+>   **Deviation:** SSE MXCSR only (x87 deferred); the dedicated FP-env *panel* is a
+>   draw-half follow-up — today `mxcsr` renders as a named register field and the
+>   XMM hex strings are inert (the Scrubber index skips non-integer `values`).
+> - **T3** — `asmtest_dataflow_emu_run_fp` marshals SSE-class doubles into xmm0..7,
+>   and the value producer now captures XMM operand values into `wide[]` (matched by
+>   reg id, not the enumerator's 0 size). The `fp-scale-add` golden (`addsd`, args
+>   1.5/2.25) shows the whole FP computation: `df_step` xmm bytes 1.5+2.25→3.75, the
+>   vector `regstate` deck, and `fpenv` — the FP analogue of add_signed, without a
+>   flag. Its 5-byte routine has no 64-byte-window over-read, so its `code` sha is
+>   stable (unlike the abixray fixtures, which re-churned on this root's layout).
 
 ## Why this work exists
 

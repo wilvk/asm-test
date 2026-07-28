@@ -466,6 +466,10 @@ see *`blame` — a value's backward attribution* and *`statediff` — the step-t
 architectural-state delta* above (33 R6). Both are ordinary opt-in recording
 events, pure derived passes over a recording's own `df_edge` / `regstate` streams.
 
+`fpenv` (expansion wave) is now **defined** — see *`fpenv` — the FP/SIMD
+environment* below (31 R4 T2). An ordinary opt-in recording event, a pure derived
+decode of the MXCSR the wide `regstate` deck captures under `--fpregs`.
+
 Adding a kind is a **new registry row under the ignore-unknown-kinds rule** —
 never a new envelope major.
 
@@ -932,6 +936,86 @@ with `df_step[i]` at step `i`. The tear here is the **missing tail** (a still-gr
 or over-cap capture), not a missing prefix. A live `log`/`trace`/`watch`/`sample`
 session never single-steps, so it carries no `regstate` at all — the Scrubber says
 so, distinctly from a `--steps`-less exact capture.
+
+## `regstate` wide deck — the XMM/MXCSR extension (R4)
+
+> **Owned by [31-wide-register-deck.md](31-wide-register-deck.md)** (T1), appended
+> under this file's D5 append-only rule. It **extends the `values` object** of BOTH
+> existing `regstate` descriptors (`emu_x86_regs_t@x86_64/sysv` and
+> `user_regs@x86_64/sysv`) with the wide FP/vector deck — it **adds no new kind, no
+> new descriptor id, and no new envelope major**, exactly as those descriptors
+> foretold ("the struct row still names `xmm`, so a future wide-register producer
+> can extend `values` without a new descriptor id"). The `{"desc","values"}` shape,
+> the descriptor-reference rule, and the render-what-is-present rule are unchanged.
+
+The XMM/MXCSR omission recorded in both descriptors above **closes here, as an
+opt-in**: `asmtrace_record --fpregs` (the emulator ring) and `asmspy --dataflow
+--fpregs` / serve `fpregs:true` (the live ring) add, to each `regstate` event's
+`values` object, the 16 XMM registers and MXCSR — appended after `rflags`:
+
+```json
+{"k":"regstate","desc":"user_regs@x86_64/sysv","values":{"rax":42,"...":0,"rip":1048582,"rflags":2,"xmm0":"0000000000000000000000000000c05f","xmm1":"00000000000000000000000000000000","...":"...","xmm15":"00000000000000000000000000000000","mxcsr":8064}}
+```
+
+- **`xmm0`..`xmm15`** — each a **lowercase-hex string of the register's 16 bytes**
+  (little-endian in memory order, the same wide-value convention `df_step`'s
+  `bytes` uses, since a 128-bit value is not a bare JSON integer). A future YMM/AVX
+  extension lengthens the string; a reader keys on the field name, not the width.
+- **`mxcsr`** — the 32-bit SSE control/status word, a **plain decimal integer**
+  (it is 32-bit, so it needs no hex string). It is the source of the `fpenv` event
+  (see below).
+- **Off by default (D6).** A recording written without the opt-in carries **none**
+  of these fields and is byte-identical to a pre-R4 `regstate` — the golden corpus
+  is unchanged unless a fixture or `--fpregs` arms it. The `has_vec`/`--fpregs`
+  gate means a deck's *absence* is honest "not measured", never a rendered zero.
+- **Both producers, one field-order owner.** The emulator's `emit_regstate` reads
+  the XMM file from its per-step ring (already captured) and MXCSR from a parallel
+  ring; the live ring reads all 16 XMM + MXCSR in one `PTRACE_GETFPREGS` per step.
+  Both serialize through the single `asmtrace_regstate_vec_append`
+  ([cli/asmtrace_ndjson.c](../../../cli/asmtrace_ndjson.c)), so the two producers
+  spell the deck identically — the property `cli/test_regstate_parity.c` pins:
+  **XMM is base-INDEPENDENT** (a function of the inputs, so the two producers
+  byte-agree once written), while MXCSR, like `rip`/`rsp`, may differ by basis.
+- **Consumer today.** The Scrubber index skips non-integer `values` fields
+  ([desktop/src/analysis/stepindex.cpp](../../../desktop/src/analysis/stepindex.cpp)),
+  so the hex XMM strings are **inert** until an FP-deck panel renders them (a T2
+  follow-up), while `mxcsr` (an integer) already renders as a named register.
+
+## `fpenv` — the FP/SIMD environment (rounding / sticky / FTZ-DAZ)
+
+> **Owned by [31-wide-register-deck.md](31-wide-register-deck.md)** (T2), appended
+> under this file's D5 append-only rule. It **promotes the reserved `fpenv` kind
+> to defined** (see *Reserved kinds*), giving it its first fields. An ordinary
+> opt-in recording event — it rides inside `[header … end]`, the footer counts it,
+> and it is **derived** from the MXCSR the wide deck (above) already captures, so it
+> **adds no new capture and no new envelope major**. Off by default (the `--fpregs`
+> opt-in arms it with the deck), so a recording without it is normal.
+
+One `fpenv` event per held step (paired with that step's `regstate`, like
+`statediff`), decoding the step's **MXCSR** into the FP-environment fields a panel
+needs — the SSE rounding mode, the sticky exception flags, and the flush-to-zero /
+denormals-are-zero bits:
+
+```json
+{"k":"fpenv","step":1,"mxcsr":8064,"round":"nearest","ftz":false,"daz":false,"sticky":[]}
+```
+
+| Field | Type | Meaning |
+|---|---|---|
+| `step` | int | the step this environment is the pre-state of (pairs 1:1 with `regstate`) |
+| `mxcsr` | int | the raw 32-bit MXCSR (the source of every field below; a reader can re-derive) |
+| `round` | string | the RC field (MXCSR[14:13]): `"nearest"` \| `"down"` \| `"up"` \| `"zero"` |
+| `ftz` | bool | flush-to-zero (MXCSR[15]) |
+| `daz` | bool | denormals-are-zero (MXCSR[6]) |
+| `sticky` | array | the set exception flags (MXCSR[5:0]), each of `"ie" "de" "ze" "oe" "ue" "pe"` in bit order |
+
+- **Derived, not re-measured.** Every field is a pure function of `mxcsr`, carried
+  decoded so a viewer needs no MXCSR bit knowledge; `mxcsr` rides alongside so the
+  decode is auditable. x87 control/status is **not** carried (the corpus is SSE;
+  an x87 fixture would extend this row, not replace it).
+- **Honest degradation (D7).** `fpenv` is emitted only where the wide deck is armed
+  and MXCSR was actually read; a step whose MXCSR is unrecorded emits **no** `fpenv`
+  (never a fabricated default), exactly as a disarmed ring emits no `regstate`.
 
 ## `severity` — the derivable honesty-chrome tier (optional)
 

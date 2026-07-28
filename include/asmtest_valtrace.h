@@ -91,14 +91,25 @@ typedef struct at_val_rec {
  * (tools/asmtrace_record.c) and the Scrubber's fixed name order keys on. PURE — no
  * <sys/user.h> — so this cross-arch header stays dependency-free (dataflow.c
  * compiles it on every host); the ptrace producer (dataflow_ptrace.c) maps a live
- * `struct user_regs_struct` into it, folding .eflags -> rflags. The XMM/YMM/FP
- * vector deck is a v1 omission for BOTH producers alike (a wide value is not a bare
- * u64, exactly the df_step `wide` limit); the descriptor mechanism absorbs it
- * later, for both at once. */
+ * `struct user_regs_struct` into it, folding .eflags -> rflags.
+ *
+ * R4 (31-wide-register-deck.md): the wide FP/vector deck — the 16 128-bit XMM
+ * registers plus MXCSR — rides ALONGSIDE the integer file, populated only when the
+ * producer armed the vector opt-in (`--fpregs` / serve `fpregs:true`). `has_vec`
+ * distinguishes a genuine all-zero XMM file from an UNRECORDED one, so a reader
+ * never renders "not measured" as a zero (D7): the wide lanes serialize (28 R1 T3
+ * hex-`bytes` convention) only when has_vec is set. The GP fields keep their
+ * offsets (the deck is appended), so the statediff field table and the descriptor
+ * order are unchanged; a disarmed capture stays byte-identical (D6). YMM high
+ * halves and AVX-512 remain a further descriptor row, not this deck. */
 typedef struct asmtest_regfile {
     uint64_t rax, rbx, rcx, rdx, rsi, rdi, rbp, rsp;
     uint64_t r8, r9, r10, r11, r12, r13, r14, r15;
     uint64_t rip, rflags;
+    uint8_t xmm[16]
+               [16]; /* R4: XMM0..15, 16 raw bytes each (has_vec gates it) */
+    uint32_t mxcsr;  /* R4: the SSE control/status word                    */
+    bool has_vec;    /* R4: the XMM/MXCSR lanes above were captured        */
 } asmtest_regfile_t;
 
 /* The L0 sink. Zero it (or use asmtest_valtrace_new) and point the three arrays at
@@ -122,6 +133,12 @@ typedef struct asmtest_valtrace {
      * file it already reads each step, so the Scrubber time-travels a live capture
      * exactly as it does an emulator `--steps` recording. */
     asmtest_regfile_t *regfile;
+
+    /* R4 (31-wide-register-deck.md): when true (set by asmtest_valtrace_arm_fpregs),
+     * a producer filling `regfile` ALSO captures the wide FP/vector deck (XMM +
+     * MXCSR) into each regfile[i], setting its has_vec. Off by default so the ring
+     * stays GPR-only (one on-demand PTRACE_GETFPREGS per step only when armed). */
+    bool regfile_fp;
 
     at_val_rec_t
         *recs; /* flattened operand records, caller-owned                */
@@ -155,6 +172,15 @@ void asmtest_valtrace_free(asmtest_valtrace_t *v);
  * stays NULL). The register semantics are x86-64; a non-x86-64 producer simply
  * never arms it. */
 bool asmtest_valtrace_arm_regfile(asmtest_valtrace_t *v);
+
+/* R4: also arm the wide FP/vector deck on the per-step register ring — arms the
+ * regfile ring (idempotent, as _arm_regfile) AND sets `regfile_fp`, so a producer
+ * that fills regfile[i] captures its XMM/MXCSR lanes too (has_vec set per step).
+ * Returns true when both the ring is armed and the flag is set, false on a NULL
+ * sink or when the ring could not be armed (the capture then stays GPR-only —
+ * honest, never fatal). The x86-64 register semantics are the regfile's own; a
+ * non-x86-64 producer simply never arms it. */
+bool asmtest_valtrace_arm_fpregs(asmtest_valtrace_t *v);
 
 /* Append one executed step at instruction offset `off`, copying its `n` operand
  * records and stamping each with the new step index. Append-only + truncate: when
