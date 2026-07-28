@@ -139,7 +139,11 @@ int main() {
         vt::golden("scrubber-regstate-truncated.txt", scrub_dump(idx));
     }
 
-    // --- a recording with no producer: the absent message -------------------
+    // --- a recording with no producer: the two branches (30 R3 T4) ----------
+    // BRANCH A — NOT emulator-replayable: the honest refusal stands, naming the
+    // reason, deep-linking the docs, and NEVER offering synthesis. sum_via_rbx is
+    // an emu-l0 recording with a `code` header but NO codeimage bytes, so there is
+    // nothing to re-run.
     {
         Recording r = load_rec("sum_via_rbx.asmtrace");
         StepIndex idx = build_step_index(r);
@@ -148,20 +152,88 @@ int main() {
         vt::eq("an absent producer indexes to zero steps", idx.total_steps(),
                uint64_t{0});
 
-        dt_scrubber sc = dt_scrubber_build(idx, 0);
+        dt_scrubber_replay replay = dt_scrubber_replayable(r);
+        vt::check("sum_via_rbx is NOT emulator-replayable (no codeimage bytes)",
+                  !replay.replayable, "reason: " + replay.why);
+
+        dt_scrubber sc = dt_scrubber_build(idx, 0, replay);
         vt::check("the view states the producer is absent", !sc.present,
                   "present must be false");
+        vt::check("the honest refusal does NOT offer synthesis here",
+                  !sc.synthesizable, "no codeimage -> no re-run");
         vt::check("the message names the --steps producer",
                   sc.absent_message.find("--steps") != std::string::npos,
                   "message: " + sc.absent_message);
-        vt::check("the message rules out the max_insns fallback (not day-one)",
-                  sc.absent_message.find("not a day-one feature") !=
+        vt::check("the refusal names WHY it is not replayable here",
+                  sc.absent_message.find("codeimage") != std::string::npos,
+                  "message: " + sc.absent_message);
+        // The stale "not a day-one feature" disclaimer is GONE — synthesis IS a
+        // feature now, just not available for this (non-replayable) recording.
+        vt::check("the message no longer claims 'not a day-one feature'",
+                  sc.absent_message.find("not a day-one feature") ==
                       std::string::npos,
                   "message: " + sc.absent_message);
         vt::check("the view deep-links the docs", !sc.docs.empty(),
                   "docs link must be present");
 
         vt::golden("scrubber-no-producer.txt", dt_scrubber_dump(sc));
+    }
+
+    // BRANCH B — emulator-replayable (Author, x86-64, codeimage): the deck OFFERS
+    // to synthesise a register history, labelled a re-derivation (D6). Built
+    // in-memory so the pure decision is proved with no golden dependency.
+    {
+        Recording emu;
+        emu.arch = "x86_64";
+        emu.producer.name = "asmtest-author";
+        emu.provenance.backend = "author-emulator";
+        emu.provenance.exact = true;
+        nlohmann::json ci;
+        ci["k"] = "codeimage";
+        ci["base"] = 0x100000;
+        ci["len"] = 1;
+        ci["bytes"] = "c3"; // a bare `ret` — enough to be replayable
+        emu.by_kind["codeimage"].push_back(Event{"codeimage", ci, emu.next_seq++});
+
+        dt_scrubber_replay er = dt_scrubber_replayable(emu);
+        vt::check("an Author/emulator x86-64 recording IS replayable",
+                  er.replayable, "reason: " + er.why);
+
+        StepIndex empty; // no regstate: the absent index the offer is built over
+        dt_scrubber so = dt_scrubber_build(empty, 0, er);
+        vt::check("the replayable deck is still producer-absent", !so.present,
+                  "no regstate events");
+        vt::check("the replayable deck OFFERS to synthesise", so.synthesizable,
+                  "synthesizable must be set");
+        vt::check("the offer names the synthesise action",
+                  !so.synth_action.empty() &&
+                      so.synth_action.find("synthesize") != std::string::npos,
+                  "action: " + so.synth_action);
+        vt::check("the offer is LABELLED a re-derivation (D6)",
+                  so.synth_label.find("re-derived") != std::string::npos &&
+                      so.synth_label.find("not") != std::string::npos,
+                  "label: " + so.synth_label);
+        vt::check("the replayable offer still deep-links the docs",
+                  !so.docs.empty(), "docs link must be present");
+
+        vt::golden("scrubber-synthesizable.txt", dt_scrubber_dump(so));
+    }
+
+    // A SYNTHESISED deck says so (D6): a present index flagged `synthesized`
+    // carries the re-derivation banner — never presenting a re-run as capture.
+    {
+        StepIndex syn;
+        syn.entries.resize(1);
+        syn.entries[0].step = 0;
+        syn.entries[0].fields.push_back(RegField{"rax", 7, false});
+        syn.synthesized = true;
+        dt_scrubber ss = dt_scrubber_build(syn, 0);
+        vt::check("a synthesised deck is present", ss.present, "one held step");
+        vt::check("a synthesised deck is flagged", ss.synthesized,
+                  "synthesized must propagate");
+        vt::check("the banner announces the re-derivation",
+                  ss.banner.find("SYNTHESIZED") != std::string::npos,
+                  "banner: " + ss.banner);
     }
 
     // --- the footer's steps_total (28 R1 T2): total_steps() takes the larger of

@@ -964,7 +964,11 @@ static void body_scrubber(ShellState &s) {
     size_t i = static_cast<size_t>(s.active_tab);
     if (i >= s.stepidx.size())
         return;
-    const StepIndex &idx = s.stepidx[i];
+    // 30 R3 T4: mutable so a synthesise action can REPLACE the (absent) index in
+    // place with a re-derived one; `rec` drives that offer's replayability check.
+    StepIndex &idx = s.stepidx[i];
+    const Recording *rec =
+        i < s.ws.recordings.size() ? &s.ws.recordings[i] : nullptr;
     const Streams *a = shell_a(s);
     // 34 T1: the Scrubber joins the shared execution-step brush (22 T1). Seed the
     // playhead from the shared selection when it belongs to THIS recording, so a
@@ -996,7 +1000,7 @@ static void body_scrubber(ShellState &s) {
     ImGui::SameLine();
     ImGui::TextDisabled("play — step (execution)");
     const uint64_t before = s.scrubber_playhead[i];
-    s.scrubber_playhead[i] = draw_scrubber(idx, before);
+    s.scrubber_playhead[i] = draw_scrubber(idx, before, rec);
     // 34 T1: a manual scrub brushes the shared selection through the ONE writer
     // (D4), so the timeline / slice / Loom follow to the same step.
     if (a && s.scrubber_playhead[i] != before)

@@ -1,13 +1,20 @@
 // scrubber_draw.cpp — the ImGui half of the register time-travel scrubber.
-// Draws only: every decision is in scrubber.cpp, asserted headlessly.
+// Draws only: every decision is in scrubber.cpp, asserted headlessly. The one
+// engine call (regsynth, behind ASMTEST_DESKTOP_CAN_AUTHOR) is the app-tree's
+// only; the viewer compiles it out and shows the honest "full app only" note (D4).
 #include "imgui.h"
+
+#include <utility> // std::move (the synth swaps the index in place)
 
 #include "ui/theme.h"
 #include "views/views_draw.h"
+#ifdef ASMTEST_DESKTOP_CAN_AUTHOR
+#include "views/regsynth.h"
+#endif
 
 namespace asmdesk {
 
-uint64_t draw_scrubber(const StepIndex &idx, uint64_t playhead) {
+uint64_t draw_scrubber(StepIndex &idx, uint64_t playhead, const Recording *rec) {
     // `[` / `]` step keys (04's bindings) — the same pair the help overlay
     // lists. They walk the FULL step space, torn region included, so a reader
     // steps across the tear rather than around it.
@@ -16,10 +23,33 @@ uint64_t draw_scrubber(const StepIndex &idx, uint64_t playhead) {
     if (ImGui::IsKeyPressed(ImGuiKey_RightBracket))
         playhead = dt_scrubber_next(idx, playhead);
 
-    dt_scrubber s = dt_scrubber_build(idx, playhead);
+    // 30 R3 T4: only the producer-absent path consults replayability; a present
+    // deck (real or already-synthesised) needs no recording facts.
+    dt_scrubber_replay replay;
+    if (rec != nullptr && !idx.present())
+        replay = dt_scrubber_replayable(*rec);
+    dt_scrubber s = dt_scrubber_build(idx, playhead, replay);
 
     if (!s.present) {
         draw_banner(s.absent_message.c_str(), true);
+        if (s.synthesizable) {
+            // The offer + its MANDATORY re-derivation caveat (D6).
+            ImGui::TextDisabled("%s", s.synth_label.c_str());
+#ifdef ASMTEST_DESKTOP_CAN_AUTHOR
+            if (rec != nullptr && ImGui::Button(s.synth_action.c_str())) {
+                StepIndex synth;
+                std::string err;
+                if (regsynth_synthesize(*rec, &synth, &err))
+                    idx = std::move(synth); // now present + `synthesized`
+                else
+                    ImGui::TextColored(dt_refuse_col(), "%s", err.c_str());
+            }
+#else
+            ImGui::TextDisabled("(%s: full app only — the render-only viewer "
+                                "runs no emulator)",
+                                s.synth_action.c_str());
+#endif
+        }
         ImGui::TextDisabled("producer docs: %s", s.docs.c_str());
         return s.playhead;
     }

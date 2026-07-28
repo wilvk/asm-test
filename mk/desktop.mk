@@ -596,8 +596,13 @@ desktop_app_objs = \
   $(BUILD)/desktop/$(1)/sp/trajectory.o $(BUILD)/desktop/$(1)/sp/converge.o \
   $(BUILD)/desktop/$(1)/s3/scene.o $(BUILD)/desktop/$(1)/s3/pick.o \
   $(BUILD)/desktop/$(1)/s3/hud.o
+# regsynth.o (30 R3 T4) is the Scrubber's register-history synthesiser: it links
+# the emulator (emu.o), so — like forks.o — it is APP-ONLY (never in the viewer's
+# object set, which is what keeps asmtest-viewer engine-free, D4).
+DESKTOP_VIEW_APP := regsynth
 DESKTOP_APP_OBJ    := $(call desktop_app_objs,app) \
-                      $(DESKTOP_LOOM_APP:%=$(BUILD)/desktop/app/lo/%.o)
+                      $(DESKTOP_LOOM_APP:%=$(BUILD)/desktop/app/lo/%.o) \
+                      $(DESKTOP_VIEW_APP:%=$(BUILD)/desktop/app/vw/%.o)
 DESKTOP_RENDER_OBJ := $(call desktop_app_objs,render)
 # Freetype rasteriser TU, app + viewer only, when DESKTOP_FREETYPE=1 (F3).
 ifeq ($(DESKTOP_FREETYPE),1)
@@ -622,7 +627,7 @@ endif
 #
 # dataflow_resume.o joins for the Loom's Reweave (30 R3 T3): forks.cpp's
 # fork-from-step-K checkpoints + resumes the value producer on an emu_t through
-# this seam.
+# this seam, and regsynth.cpp (T4) re-derives a register history the same way.
 DESKTOP_ENGINE_OBJ := $(BUILD)/emu.o $(BUILD)/trace.o \
                       $(BUILD)/disasm.o $(BUILD)/assemble.o \
                       $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
@@ -833,6 +838,11 @@ $(BUILD)/desktop/app/lv/ptslice.o: \
 # The Author door's two engine calls compile in for the APP tree only; the
 # viewer and the headless tests get the static licence tile instead (D4).
 $(BUILD)/desktop/app/ui/author_door.o: \
+    DESKTOP_CXXFLAGS += -DASMTEST_DESKTOP_CAN_AUTHOR=1
+# The Scrubber's synthesise-register-history action (30 R3 T4) is the same story:
+# the app tree gets the engine call (regsynth), the viewer + tests get the honest
+# "full app only" note. Only the app object references regsynth.o.
+$(BUILD)/desktop/app/vw/scrubber_draw.o: \
     DESKTOP_CXXFLAGS += -DASMTEST_DESKTOP_CAN_AUTHOR=1
 
 $(BUILD)/asmtest-desktop: $(DESKTOP_APP_OBJ) $(DESKTOP_ENGINE_OBJ) \
@@ -1609,7 +1619,8 @@ $(BUILD)/desktop_test_golden: $(BUILD)/desktop/test/t/test_golden.o \
 # This is a host-capability gate, NOT a self-skip lane: `make docker-desktop`
 # installs all three and runs it every time (CLAUDE.md — a test that can only
 # ever self-skip is not a test), and the gate below prints why on a bare host.
-DESKTOP_ENGINE_TESTS := $(BUILD)/desktop_test_loom_forks
+DESKTOP_ENGINE_TESTS := $(BUILD)/desktop_test_loom_forks \
+                        $(BUILD)/desktop_test_regsynth
 # ...and the REPLAY half, which needs only Unicorn + Capstone (no assembler), so
 # it runs on strictly more hosts than the fork tests do.
 DESKTOP_REPLAY_TESTS := $(BUILD)/desktop_test_ptslice_run
@@ -1653,6 +1664,17 @@ $(BUILD)/desktop_test_loom_forks: $(BUILD)/desktop/test/t/test_loom_forks.o \
     $(BUILD)/dataflow_resume.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) \
 	  $(CAPSTONE_LIBS) -o $@
+
+# The Scrubber's register-history synthesiser (30 R3 T4). Like the fork test it
+# links the emulator (emu.o -> Unicorn) — but NOT the assembler (no Keystone): it
+# re-runs recorded bytes under the per-step ring, it assembles nothing. Same
+# host-capability gate as the fork test (docker-desktop runs it every time).
+$(BUILD)/desktop_test_regsynth: $(BUILD)/desktop/test/t/test_regsynth.o \
+    $(BUILD)/desktop/test/vw/regsynth.o \
+    $(BUILD)/desktop/test/vw/scrubber.o $(BUILD)/desktop/test/an/stepindex.o \
+    $(DESKTOP_TEST_DOC) \
+    $(BUILD)/emu.o $(BUILD)/trace.o $(BUILD)/disasm.o
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(UNICORN_LIBS) $(CAPSTONE_LIBS) -o $@
 
 DESKTOP_ALL_TESTS  = $(DESKTOP_TESTS)
 DESKTOP_ENGINE_SAY = :

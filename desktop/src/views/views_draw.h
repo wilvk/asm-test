@@ -76,7 +76,15 @@ void draw_timeline_overview(const dt_timeline &t, uint32_t nsteps, double *lo,
 // shared step index; `playhead` is owned by the caller and moved by the slider
 // and the `[` / `]` step keys (04's bindings). Returns the (possibly changed)
 // playhead so the shell can persist it.
-uint64_t draw_scrubber(const StepIndex &idx, uint64_t playhead);
+//
+// 30 R3 T4: `rec` (the recording `idx` was built from, or null in a standalone
+// draw) drives the producer-absent path. When it is emulator-replayable, the
+// deck offers a "synthesize register history" button that RE-DERIVES the history
+// under the emulator ring (regsynth.h, full app only) and REPLACES `idx` in place
+// (hence non-const) with the synthesised, clearly-labelled index; where it is not
+// replayable, the honest refusal + its reason stand.
+uint64_t draw_scrubber(StepIndex &idx, uint64_t playhead,
+                       const Recording *rec = nullptr);
 
 // The ABI x-ray (09-teaching-producers.md T4). Two register scrubbers — the
 // SysV and Win64 halves of a paired recording — LOCKED to one playhead, with an

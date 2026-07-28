@@ -31,6 +31,20 @@ struct dt_scrubber_reg {
     bool changed = false; // differs from the previous held step (the highlight)
 };
 
+// Whether a producer-absent recording can have its register history RE-DERIVED
+// (30 R3 T4). Replayable = an emulator/Author recording, x86-64 guest, with the
+// code bytes to re-run (a `codeimage` event). The pure decision; the actual
+// re-run lives in the full-build-only synthesiser (regsynth.h).
+struct dt_scrubber_replay {
+    bool replayable = false; // synthesis is possible for this recording
+    std::string why;         // when !replayable, the honest machine reason
+};
+
+// The pure replayability decision, from the recording's own facts (backend,
+// arch, codeimage) — no engine. Where it says replayable, the Scrubber offers
+// the synthesise action; where not, it keeps the honest refusal + its reason.
+dt_scrubber_replay dt_scrubber_replayable(const Recording &r);
+
 // The scrubber's view-model at one playhead position.
 struct dt_scrubber {
     // present == false: the producer is absent. `absent_message` is the placard
@@ -38,6 +52,16 @@ struct dt_scrubber {
     bool present = false;
     std::string absent_message;
     std::string docs;
+
+    // 30 R3 T4: producer absent BUT emulator-replayable — the deck offers to
+    // SYNTHESISE a register history by re-running under the emulator ring.
+    // `synth_action` is the button label; `synth_label` is the mandatory honesty
+    // caveat (a re-derivation from code + seed, NOT the original run's bytes).
+    bool synthesizable = false;
+    std::string synth_action;
+    std::string synth_label;
+    // present == true AND this deck was itself synthesised: the banner says so.
+    bool synthesized = false;
 
     std::string desc; // the state-descriptor id the deck renders from
 
@@ -60,8 +84,11 @@ struct dt_scrubber {
 };
 
 // Build the model at `playhead` (clamped into the full step space). An absent
-// producer yields a present==false model carrying the placard and docs link.
-dt_scrubber dt_scrubber_build(const StepIndex &idx, uint64_t playhead);
+// producer yields a present==false model carrying the placard and docs link —
+// or, when `replay.replayable`, the synthesise offer instead. A present deck
+// whose `idx.synthesized` is set carries the re-derivation banner (30 R3 T4).
+dt_scrubber dt_scrubber_build(const StepIndex &idx, uint64_t playhead,
+                              const dt_scrubber_replay &replay = {});
 
 // `[` / `]` (04's step-key bindings): the previous / next step, clamped to the
 // full step space [0, total). Torn steps are walkable too — the tear is part of

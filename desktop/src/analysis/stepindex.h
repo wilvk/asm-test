@@ -63,6 +63,12 @@ struct StepIndex {
     // reconstructed one and the tail-drop case is no longer undercounted.
     uint64_t footer_total = 0;
 
+    // 30 R3 T4: this index was RE-DERIVED by re-running the recorded code under
+    // the emulator ring (regsynth.h), not read from captured `regstate` events.
+    // A synthesised deck MUST say so (D6) — the Scrubber's banner reads this.
+    // build_step_index (real captures) always leaves it false.
+    bool synthesized = false;
+
     bool present() const { return !entries.empty(); }
     size_t count() const { return entries.size(); }
 

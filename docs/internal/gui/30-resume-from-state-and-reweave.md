@@ -12,22 +12,38 @@
 >
 > Authored 2026-07-28, verified against HEAD `da566c9`.
 >
-> **T1 + T2 landed 2026-07-28** (◐ 2/4). The value producer is now re-hosted on
-> `emu_t` (`asmtest_dataflow_emu_run_hosted`, `src/dataflow_resume.c`) sharing the
-> exact seed/run engine with the standalone (`asmtest_dataflow_internal.h`), so the
-> two are byte-identical by construction — proved directly by `cli/test_reweave.c`
-> (T1) rather than by moving the golden (the golden generator's re-route is
-> deferred to avoid colliding with the concurrent R4 `asmtrace_record` rewrite; the
-> stronger standalone-vs-hosted record-level comparison stands in). The
-> checkpoint/resume pair (`_checkpoint` snapshots the guest at a chosen step via a
-> pre-instruction hook; `_resume` restores + re-runs) reproduces the original run's
-> tail byte-for-byte and a one-register edit at K (`_edit_gp`) diverges only
-> downstream — the Reweave seam. The `emu_uc` internal accessor
-> (`asmtest_emu_internal.h`) is what lets the producer reach the emu_t engine that
-> carries `emu_snapshot`/`emu_restore`. Only `dataflow_resume.o` references `emu.o`,
-> so every other consumer of `dataflow_emu.o` stays emu-free. **T3** (Loom
-> fork-from-step-K UI) and **T4** (retire the Scrubber's "not a day-one feature"
-> refusal) remain — both desktop consumers of this seam, `*free*`.
+> **ALL FOUR TASKS LANDED 2026-07-28** (● 4/4). T1 + T2: the value producer is
+> re-hosted on `emu_t` (`asmtest_dataflow_emu_run_hosted`, `src/dataflow_resume.c`)
+> sharing the exact seed/run engine with the standalone (`asmtest_dataflow_internal.h`),
+> byte-identical by construction — proved by `cli/test_reweave.c`. The
+> checkpoint/resume pair (`_checkpoint` snapshots at a chosen step; `_resume`
+> restores + re-runs) reproduces the tail byte-for-byte and a one-register edit at K
+> (`_edit_gp`, plus `_edit_mem` for the memory half added in T3) diverges only
+> downstream. Only `dataflow_resume.o` references `emu.o`, so every other consumer
+> of `dataflow_emu.o` stays emu-free.
+>
+> **T3** (Reweave): the Loom fork model gains a fork-from-step-K take
+> (`loom_take_run_from_step`, `desktop/src/loom/forks.cpp`): checkpoint at K, apply
+> one register/memory edit, resume, and weave the result as a STITCHED full
+> worldline (`[0,K)` = the unchanged parent prefix, `[K,end)` = the edited tail) so
+> it drops straight into the existing take-view divergence card — "patient zero at
+> at/after K" on a control-flow edit, values-only divergence on straight-line code.
+> It carries the mandatory crossing-the-line disclosure (`kLoomForkDisclosure` /
+> the pure `kLoomReweaveBanner`) — a reweave is emulator replay, never silicon (D7).
+> `test_loom_forks` extended (straight-line + control-flow + determinism + loud
+> refusals); the pure `draw_loom_reweave_form` gesture is driven in `desktop-ui-test`
+> (`loom/reweave_form_emits_request`).
+>
+> **T4** (retire the Scrubber refusal): `dt_scrubber_replayable` (pure) decides —
+> when a producer-absent recording is emulator-replayable (Author/emulator, x86-64,
+> `codeimage` bytes) the Scrubber OFFERS "synthesize register history"; where not
+> (no code bytes / non-x86-64 / a live capture) it keeps the honest refusal naming
+> WHY. The synthesiser (`desktop/src/views/regsynth.cpp`, full-build-only, links
+> `emu.o`) re-runs the recorded code under the per-step ring and builds the SAME
+> `StepIndex` a `--steps` capture would, flagged `synthesized` so the deck carries a
+> RE-DERIVATION banner, never presented as original capture (D6). `test_scrubber`
+> asserts BOTH branches; `test_regsynth` proves the re-run; the "not a day-one
+> feature" disclaimer is gone.
 
 ## Why this work exists
 

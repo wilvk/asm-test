@@ -39,8 +39,9 @@ static Recording load(const std::string &name) {
 }
 
 // One frame drawing the scrubber over `idx` at `playhead`. Returns the vertex
-// count as "something was drawn".
-static int frame(const StepIndex &idx, uint64_t playhead) {
+// count as "something was drawn". `idx` is mutable (draw_scrubber takes it by ref
+// so the synthesise action can replace it) but no synth runs here — rec is null.
+static int frame(StepIndex &idx, uint64_t playhead) {
     ImGuiIO &io = ImGui::GetIO();
     io.DisplaySize = ImVec2(1280, 720);
     io.DeltaTime = 1.0f / 60.0f;
