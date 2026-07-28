@@ -34,21 +34,19 @@
  */
 #include "asmtest_valtrace.h"
 
+#include "asmtest_dataflow_internal.h" /* DF_* layout + the seed/capture seam (R3) */
 #include "asmtest_grow.h" /* asmtest_grow / _pow2 — overflow-checked pool growth (S6) */
 #include <capstone/capstone.h> /* X86_REG_* / ARM64_REG_* ids from the enumerator */
 #include <stdlib.h>
 #include <string.h>
 #include <unicorn/unicorn.h>
 
-/* Guest layout — matches src/emu.c's constants so behaviour is identical. Shared by
- * every guest: Unicorn maps whatever addresses it is told, so the same fixed bases
- * host an x86-64 or an AArch64 routine equally (the code base is where the routine
- * runs; the sentinel return address is where a clean run stops). */
-#define DF_CODE_BASE  0x00100000UL
-#define DF_CODE_SIZE  0x00010000UL
-#define DF_STACK_BASE 0x00200000UL
-#define DF_STACK_SIZE 0x00010000UL
-#define DF_RET_MAGIC  0x00f00000UL
+/* Guest layout (DF_CODE_BASE / DF_CODE_SIZE / DF_STACK_BASE / DF_STACK_SIZE /
+ * DF_RET_MAGIC) — matches src/emu.c's constants so behaviour is identical, and is
+ * the SHARED seam (asmtest_dataflow_internal.h) the emu_t-hosted producer keys on
+ * too. Shared by every guest: Unicorn maps whatever addresses it is told, so the
+ * same fixed bases host an x86-64 or an AArch64 routine equally (the code base is
+ * where the routine runs; the sentinel return address is where a clean run stops). */
 
 /* A one-step scratch buffer of operand records, finalized + appended when the next
  * step begins (or the run ends). */
@@ -305,7 +303,9 @@ static const df_guest DF_GUEST_ARM64 = {
     NULL,            df_init_arm64,  setup_call_arm64,
 };
 
-static const df_guest *df_guest_for(asmtest_arch_t arch) {
+/* Non-static (declared in asmtest_dataflow_internal.h) so the emu_t-hosted producer
+ * (src/dataflow_resume.c, R3) selects the same descriptor the standalone run does. */
+const df_guest *df_guest_for(asmtest_arch_t arch) {
     switch (arch) {
     case ASMTEST_ARCH_X86_64:
         return &DF_GUEST_X86_64;
@@ -430,6 +430,69 @@ static void df_on_mem(uc_engine *uc, uc_mem_type type, uint64_t addr, int size,
  * address, 1 if the guest faulted / errored (a partial trace is still produced), -1
  * on a setup failure. `max_insns` caps the step count (0 = unbounded).
  */
+/* Shared seam (asmtest_dataflow_internal.h): seed a fresh entry state for guest `g`
+ * on an ALREADY-mapped `uc`. Write the routine bytes (no trap-fill — a fresh
+ * Unicorn map is zero-filled), run the guest's deterministic register init +
+ * call/return setup, and marshal the integer (and, where the guest supports it, FP)
+ * args. Byte-for-byte the standalone setup, now callable on an emu_t's engine too
+ * (the R3 hosted producer). `uc` is the opaque struct uc_struct from the header. */
+void asmtest_df_seed(const df_guest *g, struct uc_struct *uc_s,
+                     const uint8_t *code, size_t code_len, const long *iargs,
+                     int niargs, const double *fargs, int nfargs) {
+    uc_engine *uc = (uc_engine *)uc_s;
+    size_t clen = code_len > DF_CODE_SIZE ? DF_CODE_SIZE : code_len;
+    uc_mem_write(uc, DF_CODE_BASE, code, clen);
+    g->init_regs(uc);
+    g->setup_call(uc, DF_STACK_BASE + DF_STACK_SIZE, DF_RET_MAGIC);
+    for (int i = 0; i < niargs && i < g->nargs; i++) {
+        uint64_t v = (uint64_t)iargs[i];
+        uc_reg_write(uc, g->arg_regs[i], &v);
+    }
+    if (g->setup_fp_args)
+        g->setup_fp_args(uc, fargs, nfargs);
+}
+
+/* Shared seam: attach the value-capture hooks, run guest `g` from `start_addr` to
+ * the sentinel, finalize the last step, and detach — one engine, whoever owns it.
+ * `base` is the offset origin for the step spine (DF_CODE_BASE); `extra_hook` (or
+ * NULL) is one more UC_HOOK_CODE the checkpoint path uses to snapshot at a step. */
+int asmtest_df_capture(const df_guest *g, struct uc_struct *uc_s,
+                       const uint8_t *code, size_t code_len, uint64_t base,
+                       uint64_t start_addr, uint64_t max_insns,
+                       asmtest_valtrace_t *vt, df_code_hook_t extra_hook,
+                       void *extra_user) {
+    uc_engine *uc = (uc_engine *)uc_s;
+    df_ctx c;
+    memset(&c, 0, sizeof c);
+    c.uc = uc;
+    c.g = g;
+    c.vt = vt;
+    c.code = code;
+    c.code_len = code_len;
+    c.base = base;
+
+    uc_hook hcode = 0, hread = 0, hwrite = 0, hextra = 0;
+    uc_hook_add(uc, &hcode, UC_HOOK_CODE, (void *)df_on_code, &c, 1, 0);
+    uc_hook_add(uc, &hread, UC_HOOK_MEM_READ_AFTER, (void *)df_on_mem, &c, 1,
+                0);
+    uc_hook_add(uc, &hwrite, UC_HOOK_MEM_WRITE, (void *)df_on_mem, &c, 1, 0);
+    if (extra_hook != NULL)
+        uc_hook_add(uc, &hextra, UC_HOOK_CODE, (void *)extra_hook, extra_user,
+                    1, 0);
+
+    uc_err err = uc_emu_start(uc, start_addr, DF_RET_MAGIC, 0, (size_t)max_insns);
+    if (c.have_cur)
+        df_finalize(&c); /* last step's deferred writes + append */
+
+    uc_hook_del(uc, hcode);
+    uc_hook_del(uc, hread);
+    uc_hook_del(uc, hwrite);
+    if (hextra)
+        uc_hook_del(uc, hextra);
+    free(c.cur.v);
+    return err == UC_ERR_OK ? 0 : 1;
+}
+
 static int df_run_impl(const df_guest *g, const uint8_t *code, size_t code_len,
                        const long *iargs, int niargs, const double *fargs,
                        int nfargs, uint64_t max_insns, asmtest_valtrace_t *vt) {
@@ -446,47 +509,11 @@ static int df_run_impl(const df_guest *g, const uint8_t *code, size_t code_len,
         uc_close(uc);
         return -1;
     }
-    size_t clen = code_len > DF_CODE_SIZE ? DF_CODE_SIZE : code_len;
-    if (uc_mem_write(uc, DF_CODE_BASE, code, clen) != UC_ERR_OK) {
-        uc_close(uc);
-        return -1;
-    }
-    g->init_regs(uc);
-
-    g->setup_call(uc, DF_STACK_BASE + DF_STACK_SIZE, DF_RET_MAGIC);
-    for (int i = 0; i < niargs && i < g->nargs; i++) {
-        uint64_t v = (uint64_t)iargs[i];
-        uc_reg_write(uc, g->arg_regs[i], &v);
-    }
-    if (g->setup_fp_args)
-        g->setup_fp_args(uc, fargs, nfargs);
-
-    df_ctx c;
-    memset(&c, 0, sizeof c);
-    c.uc = uc;
-    c.g = g;
-    c.vt = vt;
-    c.code = code;
-    c.code_len = code_len;
-    c.base = DF_CODE_BASE;
-
-    uc_hook hcode = 0, hread = 0, hwrite = 0;
-    uc_hook_add(uc, &hcode, UC_HOOK_CODE, (void *)df_on_code, &c, 1, 0);
-    uc_hook_add(uc, &hread, UC_HOOK_MEM_READ_AFTER, (void *)df_on_mem, &c, 1,
-                0);
-    uc_hook_add(uc, &hwrite, UC_HOOK_MEM_WRITE, (void *)df_on_mem, &c, 1, 0);
-
-    uc_err err =
-        uc_emu_start(uc, DF_CODE_BASE, DF_RET_MAGIC, 0, (size_t)max_insns);
-    if (c.have_cur)
-        df_finalize(&c); /* last step's deferred writes + append */
-
-    uc_hook_del(uc, hcode);
-    uc_hook_del(uc, hread);
-    uc_hook_del(uc, hwrite);
-    free(c.cur.v);
+    asmtest_df_seed(g, uc, code, code_len, iargs, niargs, fargs, nfargs);
+    int rc = asmtest_df_capture(g, uc, code, code_len, DF_CODE_BASE,
+                                DF_CODE_BASE, max_insns, vt, NULL, NULL);
     uc_close(uc);
-    return err == UC_ERR_OK ? 0 : 1;
+    return rc;
 }
 
 /* The integer-arg x86-64 producer (the historical signature every caller uses):

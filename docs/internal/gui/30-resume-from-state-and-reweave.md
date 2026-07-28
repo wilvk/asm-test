@@ -11,6 +11,23 @@
 > producer merely bypasses it.
 >
 > Authored 2026-07-28, verified against HEAD `da566c9`.
+>
+> **T1 + T2 landed 2026-07-28** (◐ 2/4). The value producer is now re-hosted on
+> `emu_t` (`asmtest_dataflow_emu_run_hosted`, `src/dataflow_resume.c`) sharing the
+> exact seed/run engine with the standalone (`asmtest_dataflow_internal.h`), so the
+> two are byte-identical by construction — proved directly by `cli/test_reweave.c`
+> (T1) rather than by moving the golden (the golden generator's re-route is
+> deferred to avoid colliding with the concurrent R4 `asmtrace_record` rewrite; the
+> stronger standalone-vs-hosted record-level comparison stands in). The
+> checkpoint/resume pair (`_checkpoint` snapshots the guest at a chosen step via a
+> pre-instruction hook; `_resume` restores + re-runs) reproduces the original run's
+> tail byte-for-byte and a one-register edit at K (`_edit_gp`) diverges only
+> downstream — the Reweave seam. The `emu_uc` internal accessor
+> (`asmtest_emu_internal.h`) is what lets the producer reach the emu_t engine that
+> carries `emu_snapshot`/`emu_restore`. Only `dataflow_resume.o` references `emu.o`,
+> so every other consumer of `dataflow_emu.o` stays emu-free. **T3** (Loom
+> fork-from-step-K UI) and **T4** (retire the Scrubber's "not a day-one feature"
+> refusal) remain — both desktop consumers of this seam, `*free*`.
 
 ## Why this work exists
 

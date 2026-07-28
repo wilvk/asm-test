@@ -579,6 +579,31 @@ else
 CLI_MEM_PARITY :=
 endif
 
+# test_reweave (30 R3 T1/T2) — the resume-from-state producer checks:
+#   T1: the emu_t-HOSTED value producer (asmtest_dataflow_emu_run_hosted, on a
+#       fresh emu_open handle) yields a valtrace BYTE-IDENTICAL to the standalone
+#       asmtest_dataflow_emu_run for every corpus routine — the re-host is a pure
+#       refactor with zero observable change (the strongest byte-identity proof).
+#   T2: a checkpoint at step K then a resume reproduces the ORIGINAL run's tail
+#       (K->end) byte-for-byte, and a resume after a register edit at K diverges
+#       only where the edit reaches.
+# Links the emulator producer + the HOSTED/resume TU (dataflow_resume.o) + emu.o
+# (the snapshot/restore keystone) + a corpus routine object. Same x86_64 +
+# libunicorn gate as the parity tests above.
+$(BUILD)/test_reweave: cli/test_reweave.c \
+                       $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
+                       $(BUILD)/dataflow_gcmove.o $(BUILD)/dataflow_method.o \
+                       $(BUILD)/dataflow_emu.o $(BUILD)/dataflow_resume.o \
+                       $(BUILD)/emu.o $(BUILD)/trace.o $(BUILD)/disasm.o | $(BUILD)
+	$(CC) $(CFLAGS) -Iinclude -Icli -pthread $^ \
+	  $(UNICORN_LIBS) $(CAPSTONE_LIBS) -o $@
+
+ifneq ($(ASMTRACE_GOLDEN_OK),)
+CLI_REWEAVE := $(BUILD)/test_reweave
+else
+CLI_REWEAVE :=
+endif
+
 .PHONY: cli-smoke
 ifneq ($(UNAME_S),Linux)
 # Same OS gate as `cli` above: asmspy is a Linux-only ptrace/proc tracer and its
@@ -612,7 +637,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/sock_victim $(BUILD)/longjmp_victim \
            $(BUILD)/sigcall_victim $(BUILD)/argdecode_victim \
            $(BUILD)/exit_victim $(CLI_I386_VICTIM) $(CLI_REGSTATE_PARITY) \
-           $(CLI_MEM_PARITY)
+           $(CLI_MEM_PARITY) $(CLI_REWEAVE)
 	@echo "== cli-smoke =="
 	@echo "   disassembler: Capstone $$(pkg-config --modversion capstone 2>/dev/null || echo '?')" \
 	      "(5.x = pinned 5.0.1 source; 4.x = apt, some disasm silently degraded)"
@@ -624,6 +649,9 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
 	@echo "--- mem parity (29 R2 T3: live ptrace mem stream == emulator, modulo base) ---"
 	@if [ -x "$(BUILD)/test_mem_parity" ]; then $(BUILD)/test_mem_parity; \
 	 else echo "# SKIP mem-parity: needs x86_64 + libunicorn (this host: $(CLI_ARCH))"; fi
+	@echo "--- reweave (30 R3: emu_t-hosted run == standalone; checkpoint/resume tail identity) ---"
+	@if [ -x "$(BUILD)/test_reweave" ]; then $(BUILD)/test_reweave; \
+	 else echo "# SKIP reweave: needs x86_64 + libunicorn (this host: $(CLI_ARCH))"; fi
 	BUILD=$(BUILD) ASMSPY_HAVE_M32='$(CLI_M32_PROBE)' sh cli/cli_smoke.sh
 endif
 

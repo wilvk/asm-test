@@ -4,6 +4,7 @@
  */
 #include "asmtest_emu.h"
 
+#include "asmtest_emu_internal.h" /* emu_uc — the internal handle seam (R3) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -261,6 +262,14 @@ void emu_close(emu_t *e) {
     free(e->step_ring.buf);
     free(e->step_ring.mxcsr);
     free(e);
+}
+
+/* INTERNAL (asmtest_emu_internal.h): the raw Unicorn handle behind `e`, so the
+ * sibling value-producer tier (src/dataflow_resume.c, R3) can seed registers,
+ * attach its value-capture hooks, and drive the engine on the SAME uc that
+ * carries emu_snapshot / emu_restore + the per-step ring. Not a public API. */
+struct uc_struct *emu_uc(emu_t *e) {
+    return e != NULL ? e->uc : NULL;
 }
 
 /* Hand the coverage-growing corpus (malloc'd by emu_fuzz_cover1) to the handle,

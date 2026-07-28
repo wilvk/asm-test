@@ -60,7 +60,19 @@ $(BUILD)/dataflow_operands.o: src/dataflow_operands.c include/asmtest_valtrace.h
 
 # Unicorn producer: needs both Unicorn (engine) and Capstone (operand enumerator).
 $(BUILD)/dataflow_emu.o: src/dataflow_emu.c include/asmtest_valtrace.h \
+                         include/asmtest_dataflow_internal.h \
                          include/asmtest_trace.h $(BUILD)/.build-flags | $(BUILD)
+	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
+
+# emu_t-HOSTED value producer (extension roadmap R3, docs/internal/gui/30): the
+# same value trace on a caller-owned emu_t engine (via the emu_uc seam), plus the
+# checkpoint/resume pair. Split from dataflow_emu.o so ONLY the links that want the
+# hosted path (asmtrace_record, test_reweave) pull in emu.o — every other consumer
+# of dataflow_emu.o stays emu-free. Same Unicorn + Capstone gate as the producer.
+$(BUILD)/dataflow_resume.o: src/dataflow_resume.c include/asmtest_valtrace.h \
+                            include/asmtest_dataflow_internal.h \
+                            include/asmtest_emu.h include/asmtest_emu_internal.h \
+                            $(BUILD)/.build-flags | $(BUILD)
 	$(CC) $(CFLAGS) $(UNICORN_CFLAGS) $(CAPSTONE_CFLAGS) $(CAPSTONE_DEF) -c $< -o $@
 
 # Scoped ptrace L0 producer (Phase 3): fills the SAME asmtest_valtrace_t from a live,
