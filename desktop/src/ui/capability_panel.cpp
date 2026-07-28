@@ -88,6 +88,20 @@ void draw_capability_panel(CapState &s, const Recording *loaded) {
     // tool does not work here". Composed by the pure resolver from the same rows.
     ImGui::Separator();
     ImGui::TextWrapped("%s", capview_summary(s.rows).c_str());
+
+    // Which arches Author mode can actually RUN (not just assemble), read
+    // straight from author_arch_table() — the SAME single source of truth
+    // gating the door's own Run button (32-per-guest-value-producer.md R5 T3)
+    // — so this line can never go stale: it names arm64 automatically now
+    // that the per-guest value-fabric producer backs it, with no separate
+    // capability probe to keep in sync.
+    {
+        std::string names;
+        for (const author_arch_row &row : author_arch_table())
+            if (row.can_run)
+                names += (names.empty() ? "" : ", ") + std::string(row.name);
+        ImGui::TextWrapped("Author mode runs/traces: %s", names.c_str());
+    }
     ImGui::Separator();
 
     // Available backends stay above the fold. The refusal (native-only empty) is

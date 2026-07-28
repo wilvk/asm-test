@@ -1,21 +1,25 @@
 // author_door.cpp — the Author door: type assembly, run it, see faults as data
 // (docs/internal/gui/06-doors-and-learning.md T5).
 //
-// FULL BUILD ONLY (D4/D9): the two engine calls — asmtest_assemble (Keystone)
-// and emu_call_traced (Unicorn) — compile in behind ASMTEST_DESKTOP_CAN_AUTHOR,
-// which only the app tree defines. The render-only viewer shows a static tile
-// naming the licence boundary and links neither engine.
+// FULL BUILD ONLY (D4/D9): the engine calls — asmtest_assemble (Keystone),
+// emu_call_traced (Unicorn, x86-64), and asmtest_dataflow_emu_run_arch
+// (Unicorn, arm64's per-guest value-fabric producer, R5 T3) — compile in
+// behind ASMTEST_DESKTOP_CAN_AUTHOR, which only the app tree defines. The
+// render-only viewer shows a static tile naming the licence boundary and
+// links neither engine.
 //
 // The door decides nothing: everything about the assembler diagnostic, the
-// fault card and the arch gate lives in author_vm.h, which test_author_vm pins
-// on every host.
+// fault card, the value fabric, and the arch gate lives in author_vm.h, which
+// test_author_vm pins on every host.
 #include "imgui.h"
 #include "ImGuiFileDialog.h" // confirm-overwrite save dialog, reused from Inspect (T3)
 #include "TextEditor.h"      // real code editor for the source (17 T2)
 
 #include <cstdio>
 #include <cstring>
+#include <utility>
 
+#include "asmtest_valtrace.h" // asmtest_valtrace_t / at_val_rec_t (R5 T3)
 #include "author_vm.h"
 #include "ui/asm_language.h" // per-dialect syntax highlighting (17 T2 follow-on)
 #include "ui/doors.h"
@@ -24,7 +28,75 @@
 namespace asmdesk {
 
 #ifdef ASMTEST_DESKTOP_CAN_AUTHOR
+
+// The per-guest value-fabric producer (R5, src/dataflow_emu.c). It is a TIER
+// producer, not part of the pure public sink surface, so it ships no public
+// header and consumers re-declare it — the examples/test_dataflow_emu.c /
+// loom/forks.cpp precedent this door follows rather than inventing a header
+// 06 does not own. dataflow_emu.o is already on the app's link line (forks.cpp
+// pulls it in for the Loom's fork engine), so this adds no new link
+// dependency.
+extern "C" int asmtest_dataflow_emu_run_arch(asmtest_arch_t arch,
+                                             const uint8_t *code,
+                                             size_t code_len, const long *args,
+                                             int nargs, uint64_t max_insns,
+                                             asmtest_valtrace_t *vt);
+
 namespace {
+
+// Buffer caps for one Author-mode value-fabric run. Generous for a hand-typed
+// routine, and honest when it is not enough: the producer flips `truncated`
+// and the door says so (author_apply_run_vf) rather than quietly showing a
+// short fabric. Mirrors loom/forks.cpp's kTakeSteps/kTakeRecs/kTakeWide.
+constexpr size_t kAuthorVfSteps = 1u << 16;
+constexpr size_t kAuthorVfRecs = 1u << 18;
+constexpr size_t kAuthorVfWide = 1u << 16;
+
+// The arm64 run: dispatches through the per-guest VALUE FABRIC producer
+// (src/dataflow_emu.c), never emu_call_traced (x86-64-only) — a value fabric
+// (def-use edges + per-step operand values), not an emu_result_t
+// register/fault snapshot. `r` is the already-successful assemble result.
+void author_run_vf(AuthorState &s, const asm_result_t &r) {
+    asmtest_valtrace_t *vt =
+        asmtest_valtrace_new(kAuthorVfSteps, kAuthorVfRecs, kAuthorVfWide);
+    author_valuefabric_t vf;
+    if (vt == nullptr) {
+        // vf.ran stays false: author_apply_run_vf names the setup failure
+        // rather than leaving the door silent about why nothing ran.
+        author_apply_run_vf(s.result, vf);
+        return;
+    }
+    long args[6] = {0, 0, 0, 0, 0, 0};
+    for (int i = 0; i < s.nargs && i < 6; i++)
+        args[i] = s.args[i];
+    int rc = asmtest_dataflow_emu_run_arch(ASMTEST_ARCH_ARM64, r.bytes, r.len,
+                                           args, s.nargs, kAuthorMaxInsns, vt);
+    vf.ran = rc >= 0;
+    if (vf.ran) {
+        vf.ok = rc == 0;
+        vf.truncated = vt->truncated;
+        vf.insn_off.assign(vt->insn_off, vt->insn_off + vt->steps_len);
+        vf.disasm.assign(vt->steps_len, std::string());
+        if (emu_disas_available())
+            for (size_t i = 0; i < vt->steps_len; i++) {
+                char dis[160] = "";
+                emu_disas(EMU_ARCH_ARM64, r.bytes, r.len, EMU_CODE_BASE,
+                          vt->insn_off[i], dis, sizeof dis);
+                vf.disasm[i] = dis;
+            }
+        vf.recs.assign(vt->recs, vt->recs + vt->recs_len);
+        vf.wide.assign(vt->wide, vt->wide + vt->wide_len);
+        asmtest_defuse_t *g = asmtest_defuse_build(vt);
+        if (g != nullptr) {
+            vf.edges.assign(g->edges, g->edges + g->n);
+            asmtest_defuse_free(g);
+        }
+    }
+    author_apply_run_vf(s.result, vf);
+    s.steps = vf.insn_off.size();
+    s.vf = std::move(vf);
+    asmtest_valtrace_free(vt);
+}
 
 // Assemble + run on the calling thread, capped so a spin in the box cannot hang
 // the UI. The cap is REPORTED (author_result_t::capped) rather than looking
@@ -43,6 +115,7 @@ void author_run(AuthorState &s) {
     s.save_status.clear();
     s.image.clear();
     s.image_base = EMU_CODE_BASE;
+    s.vf = author_valuefabric_t{}; // clear any earlier arm64 run's fabric
     if (r.ok && r.bytes != nullptr && r.len > 0)
         s.image.assign(r.bytes, r.bytes + r.len);
     if (!r.ok) {
@@ -55,6 +128,14 @@ void author_run(AuthorState &s) {
     const author_arch_row *row = author_arch(s.arch);
     if (row == nullptr || !row->can_run) {
         author_apply_run(s.result, s.arch, nullptr, "", false);
+        asmtest_asm_free(&r);
+        return;
+    }
+
+    if (s.arch == ASM_ARM64) {
+        // R5 T3: the arm64 guest runs through the per-guest VALUE FABRIC
+        // producer, never emu_call_traced (x86-64-only, below).
+        author_run_vf(s, r);
         asmtest_asm_free(&r);
         return;
     }
@@ -223,7 +304,12 @@ void draw_author_door(AuthorState &s) {
         ImGuiFileDialog::Instance()->Close();
     }
     if (ImGui::Button("Save .asmtrace##author")) {
-        Recording rec = author_recording(s.result, s.arch, s.image, s.image_base);
+        // R5 T3: an arm64 run's value fabric (s.vf) rides along too, so the
+        // saved recording carries its trace/df_step/df_edge events and opens
+        // in the Loom / Slice / Timeline like any other recording.
+        Recording rec =
+            author_recording(s.result, s.arch, s.image, s.image_base,
+                             s.result.ran_value_fabric ? &s.vf : nullptr);
         std::string err;
         if (save_recording_file(rec, s.save_path, err)) {
             s.saved_ok = true;
@@ -236,6 +322,17 @@ void draw_author_door(AuthorState &s) {
     }
     if (!s.save_status.empty())
         ImGui::TextWrapped("%s", s.save_status.c_str());
+
+    if (r.ran_value_fabric) {
+        // R5 T3: the arm64 result SHAPE — def-use edges + per-step operand
+        // values, never a register file or a fault card (D7: this producer
+        // does not capture either, unlike the x86-64 emu_result_t path below).
+        ImGui::Separator();
+        ImGui::Text("value fabric: %zu step(s), %zu def-use edge(s)",
+                    r.vf_steps, r.vf_edges);
+        draw_banner(r.vf_note.c_str(), !r.vf_ok);
+        return;
+    }
 
     if (!r.ran)
         return;

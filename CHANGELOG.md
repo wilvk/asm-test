@@ -8,6 +8,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Author-mode arm64 run/trace** (docs/internal/gui/32-per-guest-value-producer.md
+  R5 T3). The Author door's Run button now dispatches assembled AArch64 code
+  through the per-guest emulator L0 value-fabric producer
+  (`asmtest_dataflow_emu_run_arch`, `src/dataflow_emu.c`) instead of refusing
+  it — never through the x86-64-only `emu_call_traced`/`emu_result_t` path, and
+  never touching `src/emu.c`'s register ring. The result is an honestly
+  distinct shape (def-use edges + per-step operand values, no register file,
+  no fault kind/address — the door says so explicitly rather than showing
+  zeros) that materialises, on Save, into `trace`/`df_step`/`df_edge` events
+  through the existing recording writer, so an arm64 Author run opens in the
+  Loom / Slice / Timeline like any other recording. The arch-gating table's
+  AArch64 row is now runnable, the shared refusal label now names only the
+  arches still unsupported (ARM32 / RISC-V), and the capability panel states
+  which arches Author mode runs straight from that same table.
 - **A command palette (`Ctrl+Shift+P` / `Ctrl+P`) over the `dt_nav_go` router**
   (docs/internal/gui/21-spine-navigation.md T1). A modal fuzzy finder that makes
   the whole spine reachable by typing: view-switch, go-to step/offset/link,

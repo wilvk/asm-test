@@ -8,9 +8,10 @@
 >
 > Authored 2026-07-28, verified against HEAD `da566c9`.
 
-## Status (2026-07-28) — T1 + the T2 value fabric landed; regstate + T3 scoped
+## Status (2026-07-29) — T1 + T2 value fabric + T3 author-run landed; T2's regstate/Scrubber sub-item is the one open thread
 
-The **value-producer core landed and is docker-verified**:
+The **value-producer core AND the Author door's arm64 run path are both landed
+and docker-verified**:
 
 - **T1 — DONE (byte-identical).** The six inline x86-64 seams in
   [`dataflow_emu.c`](../../../src/dataflow_emu.c) are now a `df_guest` descriptor
@@ -21,7 +22,8 @@ The **value-producer core landed and is docker-verified**:
   identical** — the ONLY golden churn is `make_pair`'s 64-byte-window `code.sha256`
   (the documented R1-T1 fragility: adding the arm64 functions shifted the binary
   `.text` the window reads past the real routine), regenerated with the corpus.
-- **T2 value fabric — DONE.** A `df_guest_arm64` (`UC_ARCH_ARM64`, a
+- **T2 value fabric — DONE** (its `regstate`/Scrubber sub-item is not; see below).
+  A `df_guest_arm64` (`UC_ARCH_ARM64`, a
   `cap_arm64_to_uc` map folding W→X and X29/X30=FP/LR, AAPCS64 args x0–x7, the
   register init, and a link-register return). The operand enumerator already
   covered `ASMTEST_ARCH_ARM64`, so no enumerator change was needed. Proven end to
@@ -32,40 +34,74 @@ The **value-producer core landed and is docker-verified**:
   `asmtrace-golden-check` green). The Loom / Slice / Timeline render it with **no
   desktop change** (the reader is arch-generic over locations; `loom_reg_name`
   degrades an unmapped arm64 id to `reg#N`, a cosmetic reg-name follow-on).
+- **T3 Author-mode arm64 run — DONE.** The Author door's Run button dispatches
+  arm64 through the per-guest value-fabric producer
+  (`asmtest_dataflow_emu_run_arch(ASMTEST_ARCH_ARM64, …)`, re-declared in
+  `author_door.cpp`'s new `author_run_vf` per the `loom/forks.cpp`
+  tier-producer-has-no-public-header precedent) instead of the x86-64-only
+  `emu_call_traced`/`emu_result_t` path — `src/emu.c` and its register ring are
+  untouched (that is the sibling T2-regstate item below, deliberately not
+  collided with). The result is a genuinely different SHAPE,
+  `author_result_t::ran_value_fabric` (step + def-use-edge counts, an honest
+  `vf_note`), which deliberately never populates the x86-64 `ran`/register/
+  fault fields: this producer captures no register file and no fault
+  kind/address, and the door says so in every branch (a clean run, a run that
+  did not reach the return sentinel, a truncated buffer, and a producer setup
+  failure all get distinct, honest notes — `author_vm.h`'s
+  `author_valuefabric_t` / `author_apply_run_vf`) rather than rendering
+  zeros. Saving the run materialises the fabric as `trace` + `df_step` +
+  `df_edge` events through the SAME writer the `codeimage` event already used
+  (`author_recording`'s new optional `vf` parameter, unchanged
+  `recording_to_asmtrace`) — the exact schema shape
+  `tools/asmtrace_record.c`'s `record_arm64` writes for the `arm64-df-chain`
+  golden — so an arm64 Author run opens in the Loom / Slice / Timeline with
+  **no reader change**. `author_arch_table()`'s AArch64 row is now
+  `can_run = true`; the shared refusal label (`kAuthorArchLimit`) and RISC-V's
+  own note now read "x86-64/AArch64-only in v1" (not "x86-64-only"), so ARM32
+  and RISC-V's limits stay accurate rather than going stale. The capability
+  panel (06 T6) now states which arches Author mode runs straight from
+  `author_arch_table()` — one source of truth, not a second hardcoded arch
+  list that could drift from the door's own gate. Tested in
+  `test_author_vm.cpp`: the arch-gating table flip, all four
+  `author_apply_run_vf` honesty branches, and an end-to-end
+  `author_recording` → `recording_to_asmtrace` → `load_recording` round-trip
+  carrying `trace`/`df_step`/`df_edge` for a synthetic arm64 fabric (the same
+  `arm64_df_chain` listing as the T2 golden). `desktop-ui-test`'s Author
+  coverage is unchanged — it only pins that the door is reachable, and no
+  per-arch interaction test existed for x86-64 to mirror, so none was invented
+  uniquely for arm64 either; noted here rather than silently left out.
 
-**Deferred (honest scope), each with a concrete reason:**
+**Still open, honest scope:**
 
-- **T2 arm64 `regstate` / Scrubber time-travel — DEFERRED.** The per-step register
-  RING lives in [`emu.c`](../../../src/emu.c) as `emu_x86_regs_t` (x86-64-only),
-  NOT in the value producer. Arch-parameterizing that ring is the **R4** vector-deck
-  axis ([31](31-wide-register-deck.md)) and was under active concurrent rewrite, so
-  extending it here would collide destructively. The value fabric renders without
-  it; the descriptor path (`user_regs@aarch64/aapcs64`) is ready for when the arm64
-  ring lands.
-- **T3 Author-mode arm64 run — DEFERRED.** The Author door's run path is
-  x86-coupled end to end: `emu_call_traced` (`emu.c`, x86-64), an `emu_result_t`
-  with `rip/rax/rbx…` fields, and `emu_fault_describe(EMU_ARCH_X86_64, …)`
-  ([`author_door.cpp`](../../../desktop/src/ui/author_door.cpp) `:81-92`). Flipping
-  `can_run` for arm64 without an arm64 run path + an arm64-shaped result + register
-  display would be a D7 lie, so the honest "run/trace is x86-64-only in v1" author
-  label **stays accurate**. The producer is now ready; routing the author RUN to
-  the arm64 guest (a value fabric, not an `emu_result_t`) is the follow-on.
+- **T2 arm64 `regstate` / Scrubber time-travel — OPEN, claimed separately.**
+  The per-step register RING lives in [`emu.c`](../../../src/emu.c) as
+  `emu_x86_regs_t` (x86-64-only), NOT in the value producer. Arch-parameterizing
+  that ring is the **R4** vector-deck axis ([31](31-wide-register-deck.md)),
+  which has since landed, but extending the RING itself to arm64 is a separate,
+  larger `emu.c` change from this brief's producer/door work and is tracked
+  under its own claim (README.md's doc-32 row) rather than folded in here. The
+  value fabric renders without it; the descriptor path
+  (`user_regs@aarch64/aapcs64`) is ready for when the arm64 ring lands.
 
-The remainder of this brief is the original plan; the seam it specifies (T1) is
-what shipped, and T2's producer half is done. RISC-V is now another `df_guest`
-instance, exactly as designed.
+The remainder of this brief is the original plan; T1's seam, T2's producer half,
+and T3's Author-mode routing are what shipped. RISC-V is now another `df_guest`
+instance, exactly as designed; the regstate/Scrubber ring is the one remaining
+thread on this root.
 
 ## Why this work exists
 
 The plan states the limit plainly and the code enforces it: "value fabrics are
 x86-64-guest-only until a per-guest valtrace producer exists" (plan Honest
-limits); Author mode shows non-x86-64 code as bytes + a labelled "run/trace is
+limits); Author mode showed non-x86-64 code as bytes + a labelled "run/trace is
 x86-64-only in v1" ([06](06-doors-and-learning.md) door;
-`desktop/src/author_vm.cpp:18`). The Loom says the same: "arm64-guest fabrics —
-no arm64-code value producer exists; the fabric is x86-64-guest-only and says so"
-([05](05-loom-day-one.md) out-of-scope). The plan's expansion table lists an
-"*(opportunistic)* arm64-guest emulator L0 value producer — `src/dataflow_emu.c`
-guest seam — medium, demand-gated."
+`desktop/src/author_vm.cpp`) — **since T3 above, this is no longer true for
+arm64 specifically**: the label and the gate now name only ARM32/RISC-V,
+verbatim wherever this paragraph is quoted elsewhere. The Loom says the same about
+the value fabric itself: "arm64-guest fabrics — no arm64-code value producer
+exists; the fabric is x86-64-guest-only and says so" ([05](05-loom-day-one.md)
+out-of-scope) — also superseded by T2's value fabric above. The plan's expansion
+table lists an "*(opportunistic)* arm64-guest emulator L0 value producer —
+`src/dataflow_emu.c` guest seam — medium, demand-gated."
 
 The producer is a self-contained Unicorn client with **every arch decision inline
 at one call site**, so arch-parameterizing it is mechanical but broad — nothing is

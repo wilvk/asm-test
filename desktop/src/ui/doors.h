@@ -98,6 +98,12 @@ struct AuthorState {
     std::string save_status;
     bool saved_ok = false;
 
+    // R5 T3 (32-per-guest-value-producer.md): the last run's value fabric,
+    // held across frames like `image` above so a later Save can materialise
+    // it into the recording. Populated only by an arm64 (per-guest producer)
+    // run; empty (vf.ran == false) after an x86-64 run or before any Run.
+    author_valuefabric_t vf;
+
     AuthorState() {
         source.reserve(64 * 1024);
         source = "mov rax, rdi\nimul rax, rdi\nret\n";
