@@ -336,7 +336,7 @@ fixture stay deliberately untagged as standing coverage for the absent-`rbase`
 fallback. **36's `resolve_anchor` is retired to *the fallback*, never deleted** — it
 remains permanent for pre-37 recordings and for rel `trace`, which this brief
 deliberately does not tag. T4 (`when`: which bytes were live at this step) is
-severable. Authored 2026-07-29 against HEAD `81e6ade`. ☐ 0/6 · *free*.
+severable. Authored 2026-07-29 against HEAD `81e6ade`. ☐ 0/6 · will · T1–T6 · 2026-07-29.
 
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
