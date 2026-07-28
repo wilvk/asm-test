@@ -340,6 +340,57 @@ assert isinstance(d["defuse"], list)' \
         echo "  no --mem: recording carries no mem events (stream disarmed), OK"
     fi
     rm -f "$dfmem" "$dfmem0"
+
+    # 35 T1: --continuous re-arms the SAME region and keeps capturing until a stop
+    # signal, appending each pass into ONE growing recording delimited by a
+    # `df_invocation` marker (each pass's df_step restarts at step 0). attach_victim
+    # calls hotfn continuously, so >=2 passes land in a couple of seconds; a SIGINT
+    # ends the session cleanly (stop observed between passes). The one-shot default
+    # emits NO marker and is byte-identical to before.
+    echo "--- asmspy --dataflow $AVPID hotfn --continuous (35 T1: re-arm loop) ---"
+    dfcont="$BUILD/df_cont_$$.asmtrace"
+    dfone="$BUILD/df_one_$$.asmtrace"
+    rm -f "$dfcont" "$dfone"
+    set +e
+    timeout 40 "$ASM" --dataflow "$AVPID" hotfn --continuous \
+        --record="$dfcont" >/dev/null 2>&1 &
+    contpid=$!
+    sleep 3
+    kill -INT "$contpid" 2>/dev/null
+    wait "$contpid"; rc=$?
+    set -e
+    [ "$rc" -eq 124 ] && fail "--dataflow --continuous hung (stop not honored)"
+    [ -s "$dfcont" ] || fail "--dataflow --continuous: no recording written"
+    ninv=$(grep -c '"k":"df_invocation"' "$dfcont" || true)
+    [ "$ninv" -ge 2 ] \
+        || fail "--dataflow --continuous: expected >=2 df_invocation passes, got $ninv"
+    # ONE growing recording: exactly one header + one footer across all passes.
+    [ "$(grep -c '"asmtrace":1' "$dfcont")" = 1 ] \
+        || fail "--dataflow --continuous: not one recording (multiple headers)"
+    grep -q '"k":"end"' "$dfcont" \
+        || fail "--dataflow --continuous: no footer (torn) — stop did not close cleanly"
+    # the marker's field order + shape (pass,result,steps,truncated), pass 0 first.
+    grep -m1 '"k":"df_invocation"' "$dfcont" \
+        | grep -qE '"pass":0,"result":-?[0-9]+,"steps":[0-9]+,"truncated":(true|false)' \
+        || fail "--dataflow --continuous: malformed df_invocation marker"
+    # segmentation invariant: the FIRST df_step after a marker restarts at step 0,
+    # so two passes' step ranges do not conflate (the desktop keys on this).
+    awk '/"k":"df_invocation"/{seen++} seen>=1 && /"k":"df_step"/{print; exit}' \
+        "$dfcont" | grep -q '"step":0,' \
+        || fail "--dataflow --continuous: a pass's df_step did not restart at step 0"
+    echo "  --continuous: $ninv df_invocation-delimited passes in one recording, clean stop"
+    # negative control: WITHOUT --continuous, one invocation and NO marker (default).
+    set +e
+    timeout 40 "$ASM" --dataflow "$AVPID" hotfn --record="$dfone" \
+        >/dev/null 2>&1; rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || fail "--dataflow (one-shot) exited $rc"
+    if [ -s "$dfone" ]; then
+        grep -q '"k":"df_invocation"' "$dfone" \
+            && fail "--dataflow one-shot emitted df_invocation (default is not one-shot)"
+        echo "  one-shot: no df_invocation (byte-identical default preserved), OK"
+    fi
+    rm -f "$dfcont" "$dfone"
 fi
 # ---------------------------------------------------------------------------
 # BOUNDED ENTRY WAIT (asmspy-plan Theme H)

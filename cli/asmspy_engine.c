@@ -3628,8 +3628,8 @@ int asmtest_dataflow_ptrace_attach_jit(pid_t pid, pid_t only_tid, uint64_t base,
 
 int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
                            long max, int want_steps, int want_fpregs,
-                           atomic_bool *stop, asmspy_dataflow_sink sink,
-                           void *ctx) {
+                           int continuous, atomic_bool *stop,
+                           asmspy_dataflow_sink sink, void *ctx) {
     /* Refuse a 32-bit tracee BEFORE attaching: every register read and syscall
      * decode below assumes the x86-64 ABI, so on an i386 task this engine does
      * not fail — it reports confident nonsense. (asmspy.h: ASMSPY_ETRACEE_I386) */
@@ -3660,71 +3660,91 @@ int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
     if (steps_cap > 65536)
         steps_cap =
             65536; /* bound the one-shot allocation (~33 MB worst case) */
-    asmtest_valtrace_t *vt =
-        asmtest_valtrace_new(steps_cap, steps_cap * 8, steps_cap * 16);
-    if (!vt) {
-        free(code);
-        return ASMTEST_PTRACE_EUNAVAIL; /* OOM: nothing captured */
-    }
-    /* 26 T3: arm the per-step register ring when the caller asked for `--steps`.
-     * The engine is x86-64-fixed here (i386 was refused above), matching the
-     * `user_regs@x86_64/sysv` descriptor's arch; a failed arm leaves the capture
-     * ringless (honest, never fatal). */
-    if (want_steps)
-        asmtest_valtrace_arm_regfile(vt);
-    /* 31 R4: `--fpregs` also captures the wide XMM/MXCSR deck. It arms the ring
-     * too (arm_fpregs calls arm_regfile), so `--fpregs` alone yields a
-     * vector-carrying regstate stream; a failed arm degrades to GPR-only. */
-    if (want_fpregs)
-        asmtest_valtrace_arm_fpregs(vt);
-
-    long result = 0;
-    int survived = 0; /* not yet surfaced to the caller; see asmspy.h note */
-    /* SEIZE every thread of `pid` and step whichever one first enters the region —
-     * so a routine that runs on a worker thread (as managed methods almost always
-     * do) is reached, not just the leader. `only_tid` (non-0, the --tid convention)
-     * pins exactly that thread instead of racing all of them. */
+    /* The producer allocates a FRESH value trace per invocation (each pass's
+     * df_step / regstate restart at step 0), so the buffers live INSIDE the loop.
+     * One-shot (continuous == 0) runs the body exactly once and is byte-identical
+     * to before; continuous (35 T1) re-arms the SAME scoped region until stop,
+     * mirroring asmspy_engine_region's held loop — except the JIT-aware producer
+     * re-SEIZEs the target per pass (leak-free by contract, safe to loop), which
+     * 35 T2 later refactors to one held seize. Stop is observed BETWEEN passes
+     * here; bounding a RUNNING pass (the entry wait / step loop) is 35 T2. */
     uint64_t max_insns = (max > 0) ? (uint64_t)max : 0;
-    int prc = asmtest_dataflow_ptrace_attach_jit(
-        pid, only_tid, base, len, NULL, 0, max_insns, &result, &survived, vt);
+    int rc = 0;
+    unsigned passes = 0;
+    for (;;) {
+        if (stop && atomic_load(stop)) {
+            rc = 0; /* a Stop between passes ends the session cleanly */
+            break;
+        }
+        asmtest_valtrace_t *vt =
+            asmtest_valtrace_new(steps_cap, steps_cap * 8, steps_cap * 16);
+        if (!vt) {
+            rc = ASMTEST_PTRACE_EUNAVAIL; /* OOM: nothing captured */
+            break;
+        }
+        /* 26 T3 / 31 R4: arm the per-step register ring (`--steps`) and the wide
+         * XMM/MXCSR deck (`--fpregs`) when asked. The engine is x86-64-fixed here
+         * (i386 was refused above), matching the `user_regs@x86_64/sysv`
+         * descriptor's arch; a failed arm degrades honestly (ringless / GPR-only),
+         * never fatal. */
+        if (want_steps)
+            asmtest_valtrace_arm_regfile(vt);
+        if (want_fpregs)
+            asmtest_valtrace_arm_fpregs(vt);
 
-    int rc;
-    switch (prc) {
-    case DF_PTRACE_OK:
-    case DF_PTRACE_FAULT: {
-        /* Captured fully, or a partial prefix on a fault (vt->truncated tells the
-         * story). Build the last-writer def-use graph and surface both. */
-        asmtest_defuse_t *g = asmtest_defuse_build(vt);
-        if (sink)
-            sink(ctx, result, vt, g, code, len, base);
-        asmtest_defuse_free(g);
-        rc = 0;
-        break;
-    }
-    case DF_PTRACE_NEVER:
-        /* The attach worked; no thread reached the entry inside the bound. Reuse the
-         * REGION engine's positive rather than minting a fourth code: it is the SAME
-         * fact about the SAME target ("this region did not execute in the window"), so
-         * a second spelling would only let the two views disagree in words about an
-         * identical observation. cli/asmspy.h numbers these across engines, not per
-         * engine, precisely so a shared meaning can share a code. */
-        rc = ASMSPY_REGION_NEVER_RAN;
-        break;
-    case DF_PTRACE_ENOSYS:
-        rc =
-            ASMSPY_DATAFLOW_UNAVAIL; /* off-platform / no Capstone: clean skip */
-        break;
-    case DF_PTRACE_EINVAL:
-        rc = ASMTEST_PTRACE_EINVAL;
-        break;
-    case DF_PTRACE_ETRACE:
-    default:
-        rc =
-            ASMTEST_PTRACE_ETRACE; /* SEIZE/permission failure (yama/seccomp) */
-        break;
-    }
+        long result = 0;
+        int survived =
+            0; /* not yet surfaced to the caller; see asmspy.h note */
+        /* SEIZE every thread of `pid` and step whichever one first enters the
+         * region — so a routine on a worker thread is reached, not just the
+         * leader. `only_tid` (non-0, --tid) pins exactly that thread. */
+        int prc = asmtest_dataflow_ptrace_attach_jit(pid, only_tid, base, len,
+                                                     NULL, 0, max_insns,
+                                                     &result, &survived, vt);
 
-    asmtest_valtrace_free(vt);
+        int stop_loop = 1;
+        switch (prc) {
+        case DF_PTRACE_OK:
+        case DF_PTRACE_FAULT: {
+            /* Captured fully, or a partial prefix on a fault (vt->truncated tells
+             * the story). Build the last-writer def-use graph and surface both.
+             * The sink emits a `df_invocation` marker before this pass's df_step
+             * block when continuous, so a reader segments the re-armed passes. */
+            asmtest_defuse_t *g = asmtest_defuse_build(vt);
+            if (sink)
+                sink(ctx, result, vt, g, code, len, base);
+            asmtest_defuse_free(g);
+            rc = 0;
+            passes++;
+            stop_loop = !continuous; /* keep re-arming while continuous */
+            break;
+        }
+        case DF_PTRACE_NEVER:
+            /* No thread reached the entry inside the bound. In a continuous session
+             * that has ALREADY produced, the region simply went quiet — a clean
+             * end, not a NEVER_RAN verdict (mirrors the region engine: any sample
+             * means it ran). On the first pass it is the real "did not run in the
+             * window" answer. Reuse the REGION engine's positive rather than
+             * minting a fourth code (cli/asmspy.h numbers these across engines). */
+            rc = (continuous && passes > 0) ? 0 : ASMSPY_REGION_NEVER_RAN;
+            break;
+        case DF_PTRACE_ENOSYS:
+            rc = ASMSPY_DATAFLOW_UNAVAIL; /* off-platform / no Capstone: skip */
+            break;
+        case DF_PTRACE_EINVAL:
+            rc = ASMTEST_PTRACE_EINVAL;
+            break;
+        case DF_PTRACE_ETRACE:
+        default:
+            rc =
+                ASMTEST_PTRACE_ETRACE; /* SEIZE/permission failure (yama/seccomp) */
+            break;
+        }
+
+        asmtest_valtrace_free(vt);
+        if (stop_loop)
+            break;
+    }
     free(code);
     return rc;
 }

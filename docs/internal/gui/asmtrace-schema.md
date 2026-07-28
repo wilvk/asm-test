@@ -283,6 +283,40 @@ Mirrors [`asmtest_defuse_edge_t`](../../../include/asmtest_valtrace.h#L178):
 the value written at step `from` is read at step `to` through `loc` (the
 consumer's read record, same operand shape as `df_step.ops`).
 
+### `df_invocation` — one continuous-capture pass delimiter (35)
+
+```json
+{"k":"df_invocation","pass":0,"result":42,"steps":8,"truncated":false}
+```
+
+A live **continuous** `dataflow` / `auto` capture (asmspy `--dataflow
+--continuous`, serve `continuous:true`) re-arms the *same* scoped region and
+re-samples it until Stop, appending every pass into ONE growing recording. A
+single `df_invocation` marker is emitted **before** each pass's `df_step` block,
+so a reader segments the passes without guessing: every `df_step` / `regstate` /
+`fpenv` / `mem` / `df_edge` event after a marker (up to the next marker or `end`)
+belongs to that pass. Field order: `pass`, `result`, `steps`, `truncated`.
+
+- `pass` is the 0-based invocation ordinal within this session.
+- `result` is that invocation's routine return value (the same `result` the
+  one-shot `--dataflow` JSON already reports).
+- `steps` is the step count THIS pass saw (`vt->steps_total`), authoritative
+  **per pass**: each pass gets a fresh value trace, so `df_step.step` restarts at
+  0 every pass and two passes' step ranges would otherwise collide. The marker is
+  the per-pass step-range discriminator the desktop keys on
+  ([stepindex](../../../desktop/src/analysis/stepindex.cpp), which otherwise
+  assumes one monotonic run). The footer's `steps_total` is overwritten per pass
+  and so names only the LAST pass; the per-pass `steps` is the authority.
+- `truncated` is this pass's own truncation (`vt->truncated`) — a pass whose
+  operand buffers filled flips it, and a reader tears that pass's chrome without
+  contaminating its neighbours.
+
+Emitted **only** in continuous mode; a one-shot capture (the default) emits no
+`df_invocation` and is byte-identical to before. A pass that reaches the entry
+wait without the region running ends the session (like the region engine's idle
+bailout) and emits no marker; a hand-authored *skip* dishonesty fixture may carry
+a marker with `steps:0` to exercise the per-pass placard.
+
 ### `mem` — one memory access (address stream)
 
 ```json
@@ -460,6 +494,10 @@ range and the footer counts it.
 
 `mem` was reserved here for 10 and is now **defined** — see *`mem` — one memory
 access (address stream)* above (29 R2). An ordinary opt-in recording event.
+
+`df_invocation` (35) is **defined** — see *`df_invocation` — one continuous-capture
+pass delimiter* above. An ordinary recording event emitted only by a **continuous**
+live capture, delimiting its re-armed passes; absent in a one-shot recording.
 
 `blame` (reserved for 09) and `statediff` (expansion wave) are now **defined** —
 see *`blame` — a value's backward attribution* and *`statediff` — the step-to-step

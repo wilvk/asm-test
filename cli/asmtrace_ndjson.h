@@ -157,6 +157,18 @@ size_t asmtrace_df_step_body(char *dst, size_t cap, unsigned step, uint64_t off,
 size_t asmtrace_df_edge_body(char *dst, size_t cap,
                              const asmtest_defuse_edge_t *e);
 
+/* {"pass":N,"result":R,"steps":S,"truncated":BOOL} — one continuous-capture pass
+ * delimiter (35). Emitted before each pass's `df_step` block by a continuous live
+ * `dataflow`/`auto` session so a reader segments the re-armed passes without
+ * guessing. `result` is that invocation's routine return value; `steps` is the
+ * per-pass authoritative step count (vt->steps_total, since df_step.step restarts
+ * at 0 each pass); `truncated` is that pass's own truncation. Field order lives
+ * here so a live producer and a future Author-mode recorder spell it identically.
+ * Returns the body length written. */
+size_t asmtrace_df_invocation_body(char *dst, size_t cap, unsigned pass,
+                                   long result, unsigned long long steps,
+                                   int truncated);
+
 /* {"step":N,"ea":N,"size":N,"rw":"r"|"w","space":"abs"|"off"} — one memory access
  * for the `mem` address-stream (29 R2). `ea` is the resolved effective address (the
  * valtrace record's `addr`), `space` its normalization (from the record's kind:

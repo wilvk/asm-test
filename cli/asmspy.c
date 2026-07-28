@@ -2293,6 +2293,8 @@ typedef struct {
     int json;
     rec_t *r;     /* --record tee (NULL = not recording) */
     int emit_mem; /* 29 R2: --mem armed the `mem` address stream */
+    int continuous; /* 35 T1: re-arm loop -> emit a df_invocation per pass */
+    unsigned pass;  /* 35 T1: 0-based invocation ordinal, ++ per sink call */
 } dataflow_ctx;
 
 /* Record one captured invocation as `df_step` + `df_edge` events, mirroring the
@@ -2301,11 +2303,22 @@ typedef struct {
  * operand identically. */
 static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
                             const asmtest_defuse_t *g, const uint8_t *code,
-                            size_t len, uint64_t base, int emit_mem) {
+                            size_t len, uint64_t base, int emit_mem,
+                            int continuous, unsigned pass, long result) {
     size_t nsteps = vt->steps_len, nrecs = vt->recs_len, cur = 0;
     char body[65536];
     if (!rec_on(r))
         return;
+    /* 35 T1: a continuous session delimits each re-armed pass with a
+     * `df_invocation` marker BEFORE its df_step block, so a reader segments the
+     * passes (each pass's df_step restarts at step 0 and would otherwise collide).
+     * A one-shot recording emits none and stays byte-identical. */
+    if (continuous) {
+        asmtrace_df_invocation_body(body, sizeof body, pass, result,
+                                    (unsigned long long)vt->steps_total,
+                                    vt->truncated);
+        rec_emit(r, "df_invocation", body);
+    }
     for (size_t s = 0; s < nsteps; s++) {
         char dis[160] = "";
         size_t first;
@@ -2392,10 +2405,14 @@ static void dataflow_render_sink(void *ctx, long result,
                                  const asmtest_valtrace_t *vt,
                                  const asmtest_defuse_t *g, const uint8_t *code,
                                  size_t len, uint64_t base) {
-    const dataflow_ctx *dc = ctx;
+    dataflow_ctx *dc = ctx;
     size_t nsteps = vt->steps_len, nrecs = vt->recs_len;
 
-    dataflow_record(dc->r, vt, g, code, len, base, dc->emit_mem);
+    /* 35 T1: post-increment the per-session pass ordinal so each continuous
+     * invocation's df_invocation marker carries a distinct `pass`. */
+    unsigned pass = dc->pass++;
+    dataflow_record(dc->r, vt, g, code, len, base, dc->emit_mem, dc->continuous,
+                    pass, result);
 
     if (dc->json) {
         char ef[256];
@@ -2765,7 +2782,7 @@ static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
 static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                         int json, int auto_region, const char *module,
                         sampler_mode_t sampler, const char *record, int steps,
-                        int mem, int fpregs) {
+                        int mem, int fpregs, int continuous) {
     asmspy_symtab_t t;
     rec_t rec;
     if (asmspy_symtab_load(pid, &t) < 0) {
@@ -2860,7 +2877,7 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         const char *rname =
             s ? s->name
               : (auto_region ? (autoname[0] ? autoname : "?") : region);
-        dataflow_ctx dc = {pid, rname, json, &rec, mem};
+        dataflow_ctx dc = {pid, rname, json, &rec, mem, continuous, 0};
         /* status to STDERR so --json stdout stays a single clean object */
         fprintf(stderr,
                 "data-flow capture of %s @ 0x%llx (%zu bytes) in pid %d%s\n",
@@ -2870,7 +2887,8 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
          * and the messages below outlive asmspy_symtab_free. */
         snprintf(fname, sizeof fname, "%s", dc.func);
         rc = asmspy_engine_dataflow(pid, tid, base, len, max, steps, fpregs,
-                                    &g_sigstop, dataflow_render_sink, &dc);
+                                    continuous, &g_sigstop,
+                                    dataflow_render_sink, &dc);
         /* The sw candidate walk: residency's winner can be a function that
          * never re-enters (the picker header's documented hazard), and
          * NEVER_RAN is the bounded entry wait saying exactly that — an honest
@@ -3030,6 +3048,7 @@ typedef struct {
     int steps; /* dataflow/auto: arm the per-step register ring (26 `--steps`) */
     int mem;   /* dataflow/auto: arm the `mem` address stream (29 R2 `--mem`) */
     int fpregs; /* dataflow/auto: arm the XMM/MXCSR deck (31 R4 `fpregs:true`) */
+    int continuous; /* dataflow/auto: re-arm until stop (35 `continuous:true`) */
     long max;
     long ms;
     uint64_t base;
@@ -3055,6 +3074,7 @@ typedef struct {
     asmspy_symtab_t syms;
     int have_syms;
     unsigned long long events; /* this session's emitted event count     */
+    unsigned df_pass; /* 35 T1: continuous dataflow invocation ordinal   */
     int rc;                    /* the engine's return                    */
     char autoname[160];        /* mode auto: what the picker chose        */
     /* --- codeimage: the region's bytes AS OF each capture (08 T7) ----- */
@@ -3279,8 +3299,11 @@ static void serve_dataflow_sink(void *ctx, long result,
                                 const asmtest_defuse_t *g, const uint8_t *code,
                                 size_t len, uint64_t base) {
     serve_session_t *s = ctx;
-    (void)result;
-    dataflow_record(&s->rec, vt, g, code, len, base, s->p.mem);
+    /* 35 T1: in a continuous session the sink fires once per re-armed pass; the
+     * per-session df_pass ordinal delimits them via the df_invocation marker. */
+    unsigned pass = s->df_pass++;
+    dataflow_record(&s->rec, vt, g, code, len, base, s->p.mem, s->p.continuous,
+                    pass, result);
     serve_codeimage_refresh(s);
 }
 
@@ -3553,10 +3576,11 @@ static size_t serve_params_json(char *dst, size_t cap,
         o = (size_t)snprintf(
             dst, cap,
             "{\"tid\":%d,\"base\":%llu,\"len\":%llu,\"max\":%ld,\"steps\":%s,"
-            "\"mem\":%s,\"fpregs\":%s}",
+            "\"mem\":%s,\"fpregs\":%s,\"continuous\":%s}",
             (int)p->tid, (unsigned long long)p->base,
             (unsigned long long)p->len, p->max, p->steps ? "true" : "false",
-            p->mem ? "true" : "false", p->fpregs ? "true" : "false");
+            p->mem ? "true" : "false", p->fpregs ? "true" : "false",
+            p->continuous ? "true" : "false");
         break;
     case SM_PROCS:
         o = (size_t)snprintf(dst, cap, "{\"max\":%ld,\"count\":\"%s\"}", p->max,
@@ -3572,16 +3596,16 @@ static size_t serve_params_json(char *dst, size_t cap,
             (unsigned long long)p->addr, p->wlen, p->rw, p->max);
         break;
     case SM_AUTO:
-        o = (size_t)snprintf(dst, cap,
-                             "{\"max\":%ld,\"module\":\"%s\",\"sampler\":"
-                             "\"%s\",\"steps\":%s,\"mem\":%s,\"fpregs\":%s}",
-                             p->max, em,
-                             p->sampler == SAMPLER_IBS
-                                 ? "ibs"
-                                 : (p->sampler == SAMPLER_SW ? "sw" : "auto"),
-                             p->steps ? "true" : "false",
-                             p->mem ? "true" : "false",
-                             p->fpregs ? "true" : "false");
+        o = (size_t)snprintf(
+            dst, cap,
+            "{\"max\":%ld,\"module\":\"%s\",\"sampler\":"
+            "\"%s\",\"steps\":%s,\"mem\":%s,\"fpregs\":%s,\"continuous\":%s}",
+            p->max, em,
+            p->sampler == SAMPLER_IBS
+                ? "ibs"
+                : (p->sampler == SAMPLER_SW ? "sw" : "auto"),
+            p->steps ? "true" : "false", p->mem ? "true" : "false",
+            p->fpregs ? "true" : "false", p->continuous ? "true" : "false");
         break;
     default:
         o = (size_t)snprintf(dst, cap, "{}");
@@ -3650,8 +3674,8 @@ static void serve_run_engine(serve_session_t *s) {
     case SM_DATAFLOW:
         serve_codeimage_arm(s);
         s->rc = asmspy_engine_dataflow(p->pid, p->tid, p->base, p->len, p->max,
-                                       p->steps, p->fpregs, &s->stop,
-                                       serve_dataflow_sink, s);
+                                       p->steps, p->fpregs, p->continuous,
+                                       &s->stop, serve_dataflow_sink, s);
         break;
     case SM_AUTO: {
         /* The sw path hands back RANKED candidates and the walk below tries
@@ -3714,8 +3738,8 @@ static void serve_run_engine(serve_session_t *s) {
             s->ci_version = 0;
             serve_codeimage_arm(s);
             s->rc = asmspy_engine_dataflow(p->pid, 0, p->base, p->len, p->max,
-                                           p->steps, p->fpregs, &s->stop,
-                                           serve_dataflow_sink, s);
+                                           p->steps, p->fpregs, p->continuous,
+                                           &s->stop, serve_dataflow_sink, s);
             if (s->rc == ASMSPY_REGION_NEVER_RAN && attempt + 1 < ncand) {
                 /* NEVER_RAN is the bounded entry wait saying this CANDIDATE was
                  * not seen entering — a residency winner that never re-enters
@@ -3950,6 +3974,16 @@ static int serve_parse_start(const char *line, serve_params_t *p,
             return -1;
         }
         p->fpregs = b;
+    }
+    /* 35 T1: dataflow/auto opt-in to CONTINUOUS capture — re-arm the same scoped
+     * region and re-sample until stop, into one growing recording delimited by
+     * `df_invocation` markers. A BOOLEAN like `steps`; off by default (one-shot). */
+    if ((v = sj_find(line, "continuous")) != NULL) {
+        if (sj_bool(v, &b) != 0) {
+            *why = "\"continuous\" must be true or false";
+            return -1;
+        }
+        p->continuous = b;
     }
     if ((v = sj_find(line, "max")) != NULL) {
         if (sj_i64(v, &n) != 0) {
@@ -5788,8 +5822,8 @@ static void *dfview_tracer(void *arg) {
     tracer_arm_alarm(); /* make the engine's blocked waitpid quit-interruptible */
     /* The TUI slicer view is interactive over a frozen COPY, not a recording, so
      * it never wants the register ring (0). */
-    int rc = asmspy_engine_dataflow(V->pid, V->tid, V->rbase, V->rlen, V->max, 0,
-                                    0, &V->stop, dfview_sink, V);
+    int rc = asmspy_engine_dataflow(V->pid, V->tid, V->rbase, V->rlen, V->max,
+                                    0, 0, 0, &V->stop, dfview_sink, V);
     pthread_mutex_lock(&V->mu);
     V->rc = rc;
     pthread_mutex_unlock(&V->mu);
@@ -7244,7 +7278,7 @@ static int usage(const char *argv0) {
         "of a function/region (any thread)\n"
         "  %s --dataflow <pid> <sym|0xADDR[:LEN]|--auto> [--json] [--tid=<t>] "
         "[--max=<n>] [--module=<m>] [--sampler=ibs|sw] [--steps] [--mem] "
-        "[--fpregs]  "
+        "[--fpregs] [--continuous]  "
         "scoped "
         "L0 "
         "value trace + L1 def-use of one invocation (native targets). --steps "
@@ -7254,7 +7288,12 @@ static int usage(const char *argv0) {
         "time-travels it; a BOOLEAN, unlike the emulator's --steps=<N> ring "
         "size. --mem adds one `mem` event per memory access (the resolved "
         "effective address stream the 3D rich rung reads). --fpregs adds the "
-        "wide XMM/MXCSR deck to each `regstate` (one GETFPREGS per step). --auto "
+        "wide XMM/MXCSR deck to each `regstate` (one GETFPREGS per step). "
+        "--continuous re-arms the same region and keeps capturing until "
+        "Ctrl-C, "
+        "into one growing recording delimited by `df_invocation` markers "
+        "(default "
+        "is one invocation, then done). --auto "
         "picks the "
         "function the target is most often ENTERING right now, sampled out of "
         "band (AMD IBS-Op entry edges where available; elsewhere a portable "
@@ -7412,10 +7451,11 @@ int main(int argc, char **argv) {
         int steps = 0;  /* --steps: arm the per-step register ring (26) */
         int mem = 0;    /* --mem: arm the `mem` address stream (29 R2) */
         int fpregs = 0; /* --fpregs: arm the XMM/MXCSR deck (31 R4) */
+        int continuous = 0; /* --continuous: re-arm until Ctrl-C (35 T1) */
         for (int i = 4; i < argc; i++) { /* [--json] [--tid=N] [--max=N]
                                           * [--module=M] [--sampler=S]
                                           * [--record=F] [--steps] [--mem]
-                                          * [--fpregs], any order */
+                                          * [--fpregs] [--continuous], any order */
             if (strcmp(argv[i], "--json") == 0)
                 json = 1;
             else if (strcmp(argv[i], "--steps") == 0)
@@ -7424,6 +7464,8 @@ int main(int argc, char **argv) {
                 mem = 1;
             else if (strcmp(argv[i], "--fpregs") == 0)
                 fpregs = 1;
+            else if (strcmp(argv[i], "--continuous") == 0)
+                continuous = 1;
             else if (strncmp(argv[i], "--record=", 9) == 0)
                 record = argv[i] + 9;
             else if (strncmp(argv[i], "--tid=", 6) == 0) {
@@ -7472,7 +7514,7 @@ int main(int argc, char **argv) {
                            "nothing)",
                            argv[3]);
         return cmd_dataflow(pid, argv[3], tid, max, json, auto_region, module,
-                            sampler, record, steps, mem, fpregs);
+                            sampler, record, steps, mem, fpregs, continuous);
     }
     if (strcmp(argv[1], "--stream") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)

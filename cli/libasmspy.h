@@ -375,11 +375,19 @@ typedef void (*asmspy_dataflow_sink)(void *ctx, long result,
  * wide FP/vector state — the 16 XMM registers + MXCSR, read in one PTRACE_GETFPREGS
  * per step. It arms the ring too (so `--fpregs` alone yields a vector-carrying
  * `regstate` stream), and each event gains `xmm0..15`/`mxcsr` fields under the same
- * descriptor. Zero (the default) leaves the deck GPR-only and byte-identical. */
+ * descriptor. Zero (the default) leaves the deck GPR-only and byte-identical.
+ *
+ * `continuous` (35 T1): when non-zero, RE-ARM the same scoped region and re-sample
+ * it until `stop`, calling the sink once per produced invocation into ONE growing
+ * recording (each pass gets a fresh value trace, so `df_step`/`regstate` restart at
+ * step 0). The sink emits a `df_invocation` delimiter before each pass so a reader
+ * segments them. Zero (the default) captures exactly one invocation and returns —
+ * byte-identical to before. Stop is observed BETWEEN passes; bounding a running
+ * pass is 35 T2. The producer re-SEIZEs per pass (leak-free by contract). */
 int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
                            long max, int want_steps, int want_fpregs,
-                           atomic_bool *stop, asmspy_dataflow_sink sink,
-                           void *ctx);
+                           int continuous, atomic_bool *stop,
+                           asmspy_dataflow_sink sink, void *ctx);
 
 /* One executed instruction, formatted "<function+off [module]>  <disasm>". */
 typedef void (*asmspy_stream_sink)(void *ctx, const char *line);

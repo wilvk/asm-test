@@ -289,6 +289,18 @@ size_t asmtrace_df_step_body(char *dst, size_t cap, unsigned step, uint64_t off,
     return bp(dst, cap, o, "]");
 }
 
+size_t asmtrace_df_invocation_body(char *dst, size_t cap, unsigned pass,
+                                   long result, unsigned long long steps,
+                                   int truncated) {
+    size_t o = 0;
+    if (!dst || !cap)
+        return 0;
+    dst[0] = '\0';
+    return bp(dst, cap, o,
+              "\"pass\":%u,\"result\":%ld,\"steps\":%llu,\"truncated\":%s",
+              pass, result, steps, truncated ? "true" : "false");
+}
+
 size_t asmtrace_df_edge_body(char *dst, size_t cap,
                              const asmtest_defuse_edge_t *e) {
     size_t o = 0;
