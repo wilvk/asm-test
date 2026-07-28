@@ -15,8 +15,16 @@
 // compile-probe pins the same value). It also pulls IconsFontAwesome6.h, whose
 // glyphs load_fonts merges into the atlas — so the icons in a toast resolve.
 #define NOTIFY_RENDER_OUTSIDE_MAIN_WINDOW false
-#include "ImGuiFileDialog.h" // pure-ImGui open dialog (14 T7)
+// The addon include ORDER below is load-bearing: ImGuiNotify.hpp includes
+// imgui_internal.h while IMGUI_DEFINE_MATH_OPERATORS is still undefined (its guard
+// passes), and MUST precede ImGuiFileDialog.h, which #defines that macro and
+// re-pulls imgui_internal.h. Alphabetical sorting (FileDialog first) makes
+// imgui_internal.h #error "define IMGUI_DEFINE_MATH_OPERATORS before imgui.h", so
+// the block is fenced from clang-format's include sorting.
+// clang-format off
 #include "ImGuiNotify.hpp"
+#include "ImGuiFileDialog.h" // pure-ImGui open dialog (14 T7)
+// clang-format on
 
 #include <algorithm> // std::sort/std::swap for the keymap (17 T1)
 #include <cstdio>    // std::snprintf — undo_apply's filter restore (22 T4)
