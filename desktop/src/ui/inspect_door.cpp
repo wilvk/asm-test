@@ -3,9 +3,11 @@
 // pure modules (live/inspect.h for attachability + evidence, live/budget.h for
 // the jack), which test_inspect and test_budget drive headlessly. This file is
 // the drawing and the wiring, and holds no rule of its own.
+#include <algorithm> // stable_sort — the free column sort over the /proc rows
 #include <cfloat>
 #include <cstdio>
 #include <cstring>
+#include <strings.h> // strcasecmp — case-insensitive column sort of comm / why
 
 #include <sys/utsname.h> // uname — best-effort target arch for the arm64 gate
 
@@ -729,16 +731,67 @@ void draw_processes_pane(InspectState &s) {
     ImGui::TextDisabled("double-click a row to attach & trace at full detail; "
                         "right-click for more.");
 
+    // The picker is now a full table: columns Resize by dragging their edge,
+    // Reorder by dragging their header, and Sort by clicking it. The sort is the
+    // 24-T4 free-column-sort idiom — reorder our own VIEW indices only; the model
+    // (list_processes(), pid-sorted) is never touched (D4/D7). The type-to-narrow
+    // filter above still applies on top, over whichever order is showing.
     if (ImGui::BeginTable("procs", 4,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                              ImGuiTableFlags_ScrollY)) {
-        ImGui::TableSetupColumn("pid");
+                              ImGuiTableFlags_ScrollY |
+                              ImGuiTableFlags_Resizable |
+                              ImGuiTableFlags_Reorderable |
+                              ImGuiTableFlags_Sortable)) {
+        // pid is the default sort (ascending — the order the model already has),
+        // and fixed-width so the numeric column does not stretch.
+        ImGui::TableSetupColumn("pid", ImGuiTableColumnFlags_DefaultSort |
+                                           ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableSetupColumn("comm");
         ImGui::TableSetupColumn("attach");
         ImGui::TableSetupColumn("why / remedy");
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableHeadersRow();
-        for (size_t i = 0; i < s.rows.size(); ++i) {
+
+        // Reorder the row indices to match the clicked column. stable_sort keeps
+        // ties in the model's pid order. pid sorts numerically; comm and the
+        // reason sort case-insensitively; attach sorts by the Attach verdict enum
+        // (Yes, No, Unknown), so attachable targets rise to the top ascending.
+        std::vector<int> order(s.rows.size());
+        for (size_t k = 0; k < order.size(); ++k)
+            order[k] = static_cast<int>(k);
+        if (ImGuiTableSortSpecs *ss = ImGui::TableGetSortSpecs();
+            ss && ss->SpecsCount > 0) {
+            const ImGuiTableColumnSortSpecs &c = ss->Specs[0];
+            const bool asc = c.SortDirection == ImGuiSortDirection_Ascending;
+            std::stable_sort(
+                order.begin(), order.end(), [&](int a, int b) {
+                    const ProcRow &ra = s.rows[static_cast<size_t>(a)];
+                    const ProcRow &rb = s.rows[static_cast<size_t>(b)];
+                    int cmp;
+                    switch (c.ColumnIndex) {
+                    case 1: // comm
+                        cmp = strcasecmp(ra.comm.c_str(), rb.comm.c_str());
+                        break;
+                    case 2: // attach — by attachability (the verdict enum)
+                        cmp = static_cast<int>(ra.verdict.verdict) -
+                              static_cast<int>(rb.verdict.verdict);
+                        break;
+                    case 3: // why / remedy
+                        cmp = strcasecmp(ra.verdict.why.c_str(),
+                                         rb.verdict.why.c_str());
+                        break;
+                    default: // pid — numeric
+                        cmp = (ra.pid < rb.pid)   ? -1
+                              : (ra.pid > rb.pid) ? 1
+                                                  : 0;
+                        break;
+                    }
+                    return asc ? cmp < 0 : cmp > 0;
+                });
+        }
+
+        for (int oi : order) {
+            const size_t i = static_cast<size_t>(oi);
             if (!dt_filter_match(q, hay[i]))
                 continue;
             const ProcRow &r = s.rows[i];
