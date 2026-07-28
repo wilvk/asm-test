@@ -365,6 +365,24 @@ the live-process *visualization* goal; it re-plumbs the serve sink + the observe
 disasm-at-`when` default. Reader-rule 2 fallback stays sound without it. · will ·
 T4 deferred · 2026-07-29.
 
+[38-live-feed-completion-roadmap.md](38-live-feed-completion-roadmap.md) — **the
+live-feed audit + roadmap** (a family overview like [27](27-extension-roadmap.md),
+not a brief). After 36/37 anchored the live 3D plane, a 2026-07-29 audit of every
+desktop visualization against *"can this be produced from a **live** process?"*
+found the live **x86-64** pipeline already close to comprehensive — Summary, Canvas,
+Slice, Timeline, Loom, Scrubber (+`fpenv`), the full Observer deck, and the 3D
+terrain/trajectory/HUD all feed live off a growing recording. It maps the short list
+of **closable** gaps (L1 the arm64 live-dataflow leg — biggest, hazard-gated; L2
+`decode_streams` `df_invocation`-awareness for continuous per-pass — cleanest;
+L3 the precomputed `blame`/`statediff` serve kinds — low, the *views* already work
+live; L4/L5 Author macOS/ARM32/RISC-V; L6 = 37 T4) and records the **permanent**
+gates (AMD-IBS survey, Intel-PT observer, Watch HW debug regs, signed installers)
+so they are not re-opened. **Corrected two audit over-claims** (a `tid`-on-`df_step`
+convergence brief — dead, the live df engine is single-threaded by scope — and the
+blame/statediff *views*, which already work live client-side) and **fixed two stale
+"`mem` has no producer" comments** (R2/doc 29 landed the live `--mem` producer).
+Authored 2026-07-29. overview · —.
+
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
 09 (09-T1 — the emulator ring — is engine-only and can start any time).

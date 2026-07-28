@@ -242,11 +242,12 @@ TrajectorySet build_trajectories(const Recording &r, const Projection &proj) {
     }
 
     // --- access marks from `mem` events (rich rung; gated) ----------------
-    // The "kind present?" runtime gate (10 doc T2/T3): `mem` has no v1 producer,
-    // so a real recording carries none of these and this whole path is inert. A
-    // synthetic fixture (hand-authored `mem` lines) exercises it. Absent the
-    // stream the data cells stay flat and the HUD shows a "coarse: no per-access
-    // memory stream" provenance chip — never a silent zero.
+    // The "kind present?" runtime gate (10 doc T2/T3). Its producer LANDED (29 R2:
+    // live `--dataflow --mem` / serve `mem:true`, and the emulator projection), so
+    // a live capture with `--mem` DOES weave these spurs; a capture without it (and
+    // every `trace`/region recording) carries none and this path stays inert.
+    // Absent the stream the data cells stay flat and the HUD shows a "coarse: no
+    // per-access memory stream" provenance chip — never a silent zero.
     if (const auto *ev = kind(r, "mem")) {
         set.mem_present = !ev->empty();
         for (const Event &e : *ev) {

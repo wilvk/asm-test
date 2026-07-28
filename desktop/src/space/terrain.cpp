@@ -121,10 +121,12 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
     m.torn = rec.truncated() || rec.dropped();
     m.basis = canvas.basis;
 
-    // The rich rung's `mem` stream is gated at runtime on the kind being present
-    // (there is no producer yet, so a real recording never carries it — the path
-    // stays inert). Absent it, data cells stay flat and the note says so, never a
-    // silent zero.
+    // The rich rung's `mem` stream is gated at runtime on the kind being present.
+    // Its producer LANDED (29 R2: live `--dataflow --mem` / serve `mem:true`, and
+    // the emulator projection), so a live capture with `--mem` DOES carry it and
+    // lights the rich rung; a capture without it, and every `trace`/region
+    // recording, carries none — the data cells stay flat and the note says so,
+    // never a silent zero.
     m.mem_present = rec.by_kind.count("mem") != 0;
     m.mem_note =
         m.mem_present ? std::string() : "coarse: no per-access memory stream";
