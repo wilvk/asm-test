@@ -279,6 +279,30 @@ negligible against a pass's 10³–10⁵× single-step cost, so T2's "no per-pas
 re-SEIZE cost regression" bar is already met with no measurable regression; a cost
 optimization, not a correctness gap or a required step. ☑ 4/4 · —.
 
+[36-anchor-the-3d-plane.md](36-anchor-the-3d-plane.md) — **place a
+routine-relative path on the 3D plane, or say why not.** The 3D overview places
+geometry only for a `basis:"abs"` recording, and the only producer of
+`basis:"abs"` in the tree is the synthetic golden-scene generator
+(`record_scene_abs`) — every real capture (live `trace`, live `dataflow`/`auto`,
+every corpus file) is `basis:"rel"`, so its plane comes up **empty and
+unlabelled**: the "3D overview" tab opens onto nothing after a live attach, with
+no error. Three defects stack: the rel chip [25](25-live-model-wiring.md) T6
+promised never fires (the HUD keys it on the *canvas* basis, which is empty when a
+recording carries no `trace`); nothing counts placement, so every vertex silently
+failing `Projection::project` is indistinguishable from success (`refused()` stays
+false — nothing was *detected*, each point merely failed); and the value producer
+emits no `coverage`, so even a correctly anchored capture draws a flat plane. This
+brief narrows — explicitly, not silently — doc 10 T3's *"never projected as a true
+absolute path"* rule: when a recording carries exactly one `codeimage` code span,
+`base + off` **is** the true address (a derivation from a fact the recording
+states, not a guess), so it is placed and flagged `TRAJ_ANCHORED`; when the span
+is absent or ambiguous it refuses **louder** than today — no geometry *and* a
+stated reason. Adds a labelled `df_step` residency height rung (never block
+coverage), the placement counters + HUD chips, and a `scene-df-loop` golden in the
+live shape no existing fixture carries. Pure `space/` + HUD: no engine, no GL, no
+wire change, no existing golden regenerated. Authored 2026-07-29 against HEAD
+`24778e4`. ☐ 0/4 · *free*.
+
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
 09 (09-T1 — the emulator ring — is engine-only and can start any time).
