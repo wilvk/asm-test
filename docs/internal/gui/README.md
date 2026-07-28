@@ -357,7 +357,13 @@ wire (rbase)") distinct from `single-span` ("derived placement") and `mixed`;
 `df_step`s tagged to each, no `trace`; byte-stable under docker-cli), and
 `test_shell` asserts both spans place, `pc_placed==pc_points>0`, and
 `anchor_source=="wire"` — the recording 36 alone renders labelled-empty). **☑ 5/6
-LANDED (T1–T3, T5, T6); T4 (`when`) severable.** · will · T4 · 2026-07-29.
+LANDED (T1–T3, T5, T6).** T4 (`when`: which bytes were live at this step) is
+**DEFERRED as the severable extension the brief marks it** — it is a serve-path
+disasm-version refinement (disassemble each JIT-churning step against the bytes in
+force), orthogonal to the multi-span resolution the other five tasks deliver and to
+the live-process *visualization* goal; it re-plumbs the serve sink + the observer
+disasm-at-`when` default. Reader-rule 2 fallback stays sound without it. · will ·
+T4 deferred · 2026-07-29.
 
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
