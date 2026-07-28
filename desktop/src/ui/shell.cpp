@@ -501,10 +501,6 @@ void draw_home_rail(ShellState &s) {
             ImGui::SetTooltip("%s", s.recents[i].c_str());
     }
 
-    ImGui::Separator();
-    if (ImGui::SmallButton("Keyboard bindings"))
-        s.show_help = !s.show_help;
-
     // Details ▸ "This host" (the capability panel). It used to be an Inspector
     // tab; it now lives here, collapsed by default, so Home is the one place that
     // answers "what can this host do?" without a recording open. Help ▸ This host
@@ -1768,16 +1764,21 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
             }
             ImGui::EndMenu();
         }
-        // Help — its own top-level section: About (what this app is) and This
-        // host (the capability panel, which now lives in Home ▸ Details; this
-        // opens the Home pane and expands that section via want_details).
+        // Help — its own top-level section: Keyboard bindings (the overlay, moved
+        // here from the Home rail), This host (the capability panel, now in Home ▸
+        // Details — this opens the Home pane and expands that section via
+        // want_details), and About (what this app is).
         if (ImGui::BeginMenu("Help")) {
-            if (ImGui::MenuItem("About"))
-                s.show_about = true;
+            // The bool* overload toggles show_help and shows a checkmark, so the
+            // menu reflects whether the bindings overlay is currently up.
+            ImGui::MenuItem("Keyboard bindings", nullptr, &s.show_help);
             if (ImGui::MenuItem("This host")) {
                 s.want_details = true;
                 s.pane_open[kPaneHome] = true;
             }
+            ImGui::Separator();
+            if (ImGui::MenuItem("About"))
+                s.show_about = true;
             ImGui::EndMenu();
         }
         // Persistent wayfinding chrome (21-spine-navigation.md T2, F9): the
