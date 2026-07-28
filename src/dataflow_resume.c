@@ -192,3 +192,20 @@ bool asmtest_dataflow_emu_edit_gp(emu_t *e, const char *name, uint64_t val) {
     }
     return false;
 }
+
+/* Poke `n` bytes at guest absolute address `addr` on `e`'s CURRENT state — the
+ * memory half of the edit-at-step-K seam (the register half is _edit_gp), applied
+ * between emu_restore and _run_from_current so a Reweave can rewrite a stack slot
+ * or a data cell as easily as a register. `addr` is a guest virtual address in an
+ * already-mapped region (the CODE/STACK the seam set up); a write into an unmapped
+ * page fails rather than growing the map silently. Returns false on a NULL/zero
+ * request or a Unicorn write error. Keeps <unicorn/unicorn.h> inside this TU. */
+bool asmtest_dataflow_emu_edit_mem(emu_t *e, uint64_t addr, const void *bytes,
+                                   size_t n) {
+    if (e == NULL || bytes == NULL || n == 0)
+        return false;
+    struct uc_struct *uc = emu_uc(e);
+    if (uc == NULL)
+        return false;
+    return uc_mem_write((uc_engine *)uc, addr, bytes, n) == UC_ERR_OK;
+}

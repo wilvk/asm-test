@@ -48,6 +48,12 @@ struct loom_edit_desc_t {
     // code_patch: the two byte images, so the cone can seed at the first step
     // whose instruction bytes actually differ.
     std::vector<uint8_t> base_code, take_code;
+    // reweave / fork-from-step-K (30 R3 T3): the edit happened at a chosen
+    // execution step, not at entry, so the cone seeds from that step directly
+    // (every consequence of the edited fact is downstream of where it applied).
+    // When set, this supersedes the entry_arg / code_patch seeding above.
+    bool from_step_edit = false;
+    uint32_t from_step = 0;
 };
 
 enum class take_verdict { neutral, dim, hot };
@@ -124,6 +130,8 @@ inline void loom_takes_clear(std::vector<loom_take_node_t> &takes) {
 // Copy pinned by test_loom_forks.cpp.
 extern const char *const kLoomAlignedEndToEnd;
 extern const char *const kLoomDashedTailHover;
+// The pure crossing-the-line disclosure the fork/reweave UX shows (30 R3 T3).
+extern const char *const kLoomReweaveBanner;
 
 } // namespace asmdesk
 #endif // ASMDESK_LOOM_TAKE_VIEW_H

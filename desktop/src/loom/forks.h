@@ -50,12 +50,31 @@ struct loom_edit_t {
     std::string describe() const;
 };
 
+// Reweave (30 R3 T3): the ONE fact a fork-from-step-K changes — a register or a
+// memory cell of the CHECKPOINT at step K, not an entry argument or the source.
+// The resume seam restores the guest to its pre-step-K state, applies this edit,
+// and re-runs forward; the counterfactual diverges only where the edit reaches.
+struct loom_from_step_edit_t {
+    enum class kind { reg, mem };
+    kind k = kind::reg;
+    uint64_t step = 0;              // K: the step whose PRE-state is edited
+    std::string reg;                // reg: "rax".."r15" | "rip" | "rflags"
+    uint64_t reg_value = 0;         // reg: the new value
+    uint64_t mem_addr = 0;          // mem: guest absolute address
+    std::vector<uint8_t> mem_bytes; // mem: the bytes to poke
+    std::string describe() const;
+};
+
 // One take's result. It owns its buffers; `vt`/`g` are the C views the fabric
 // builder consumes, re-pointed by `bind()` (so the struct survives a move).
 struct loom_take_t {
     loom_edit_t edit;
     std::vector<uint8_t> code; // the bytes that actually ran
     std::vector<long> args;    // the arguments that actually ran
+    // The producer id the provenance chip shows. A plain fork re-runs from entry
+    // ("dataflow-emu (fork)"); a Reweave resumes a checkpoint ("… (reweave@K)") —
+    // both isolated-guest emulator replays, badged as such (D7).
+    std::string producer = "dataflow-emu (fork)";
 
     std::vector<uint64_t> insn_off;
     std::vector<at_val_rec_t> recs;
@@ -94,6 +113,24 @@ struct loom_take_t {
 bool loom_take_run(emu_t *session, const emu_snapshot_t *base_state,
                    const uint8_t *code, size_t code_len, const long *args,
                    int nargs, const loom_edit_t &edit, loom_take_t *out);
+
+// Reweave: fork from a chosen execution step K (30 R3 T3, extends the T5 fork
+// model). Checkpoint the run at step K via the resume seam, apply ONE
+// register/memory edit to that checkpoint, resume forward, and weave the result
+// as a STITCHED full worldline: steps [0, K) are the unchanged parent prefix and
+// [K, end) is the edited tail, so it drops straight into the take-view divergence
+// card beside the parent (patient zero at/after K, or values-only divergence on
+// straight-line code). Hermetic — it opens its OWN emu_t (the resume seam needs a
+// fresh handle), so two identical reweaves are byte-identical and this needs no
+// shared session. Returns false with `out->err` set on: K past the run's length
+// (no checkpoint), an unknown register name / unmapped memory edit, or a producer
+// setup failure. x86-64 guest only (the resume seam's scope). The take carries
+// `kLoomForkDisclosure` like every fork — a reweave is emulator replay, never
+// silicon (D7).
+bool loom_take_run_from_step(const uint8_t *code, size_t code_len,
+                             const long *args, int nargs,
+                             const loom_from_step_edit_t &edit,
+                             loom_take_t *out);
 
 } // namespace asmdesk
 #endif // ASMDESK_LOOM_FORKS_H

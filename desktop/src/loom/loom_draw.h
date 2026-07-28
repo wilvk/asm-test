@@ -30,6 +30,29 @@ namespace asmdesk {
 void draw_loom_plan(const std::vector<loom_prim_t> &prims,
                     std::string *hover = nullptr);
 
+// The Reweave gesture's input state (30 R3 T3, the Loom's fork-from-step-K).
+// A PURE form: pick a step K, a GP register and a new value, then press
+// "Reweave from step K". It emits a REQUEST and never runs the engine itself —
+// the render-only viewer draws the form but assembles nothing, exactly like the
+// takes gutter — which the full app applies through loom_take_run_from_step
+// (forks.h). `requested` latches true for the ONE frame after a valid submit,
+// carrying the captured edit; the caller consumes it and clears it.
+struct loom_reweave_form_t {
+    int step = 0;               // K — the execution step whose pre-state is edited
+    int reg = 0;                // index into loom_reweave_regs()
+    char value_hex[24] = "0x0"; // the new value, hex text (parsed on submit)
+
+    bool requested = false; // set for one frame after a valid submit
+    uint64_t req_step = 0;  // the captured request (valid when `requested`)
+    std::string req_reg;
+    uint64_t req_value = 0;
+};
+
+// The GP registers a reweave may edit — the resume seam's _edit_gp table
+// (src/dataflow_resume.c). Exposed so the form's combo and a headless test share
+// one order.
+const std::vector<std::string> &loom_reweave_regs();
+
 // The panel's per-tab state. The fabric is woven ONCE per recording (weaving is
 // not a per-frame operation) and `source_id` is how the panel notices the tab
 // changed under it.
@@ -56,6 +79,9 @@ struct LoomState {
     // reversible undo Commands (each keeps its `err`/`disclosure` verbatim, so a
     // clear never quietly drops a take's loud refusal — D7).
     std::vector<loom_take_node_t> takes;
+
+    // The Reweave form state (30 R3 T3), persisted across frames per recording.
+    loom_reweave_form_t reweave;
 };
 
 // The Loom camera's selection dim, DERIVED from the ONE shared selection (22 T1).
@@ -90,6 +116,13 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self,
 // so the interaction lane drives its buttons directly (test_ui), exactly as it
 // drives draw_obs_syscalls. Call inside an ImGui window.
 void draw_loom_takes_gutter(LoomState &L, UndoStack *undo);
+
+// The Reweave form (30 R3 T3): the mandatory crossing-the-line disclosure, a
+// step-K / register / value input row and a "Reweave from step K" button that
+// emits a fork-from-step-K request into `f` (never runs the engine — that is the
+// full app's loom_take_run_from_step). Public so the interaction lane drives the
+// gesture directly (test_ui), like the takes gutter. Call inside an ImGui window.
+void draw_loom_reweave_form(loom_reweave_form_t &f);
 
 } // namespace asmdesk
 #endif // ASMDESK_LOOM_DRAW_H

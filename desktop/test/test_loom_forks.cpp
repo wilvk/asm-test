@@ -342,6 +342,169 @@ int main() {
               vb.node.err.find("skipped") != std::string::npos, vb.node.err);
     }
 
+    // --- 30 R3 T3: Reweave — fork from a chosen execution step K -----------
+    // A one-register edit at step K, resumed forward. Straight-line code keeps
+    // the offsets aligned and diverges in VALUES; the honesty label is mandatory.
+    {
+        // poly(a,b,c) — straight-line; step 3 (imul) is the reweave point.
+        //   0 mov rax,rdi  1 add rax,rsi  2 add rax,rdx  3 imul rax,rax
+        //   4 mov [rsp-8],rax  5 mov rcx,[rsp-8]  6 add rax,rcx  7 ret
+        static const uint8_t poly[] = {
+            0x48, 0x89, 0xf8,             0x48, 0x01, 0xf0, 0x48, 0x01, 0xd0,
+            0x48, 0x0f, 0xaf, 0xc0,       0x48, 0x89, 0x44, 0x24, 0xf8,
+            0x48, 0x8b, 0x4c, 0x24, 0xf8, 0x48, 0x01, 0xc8, 0xc3,
+        };
+        const long pa[3] = {2, 3, 4};
+
+        // The parent (entry) run the take-view diverges against.
+        loom_edit_t ident;
+        ident.arg_index = 0;
+        ident.arg_value = 2; // the identity edit
+        loom_take_t parent;
+        loom_take_run(e, base_state, poly, sizeof poly, pa, 3, ident, &parent);
+        check("poly parent is an 8-step run", parent.insn_off.size() == 8,
+              "got " + std::to_string(parent.insn_off.size()));
+
+        // Reweave: rax := 0 at step 3 (pre-imul; rax held a+b+c = 9).
+        loom_from_step_edit_t edit;
+        edit.k = loom_from_step_edit_t::kind::reg;
+        edit.step = 3;
+        edit.reg = "rax";
+        edit.reg_value = 0;
+        loom_take_t rw;
+        check("the reweave runs",
+              loom_take_run_from_step(poly, sizeof poly, pa, 3, edit, &rw),
+              rw.err);
+        check("no loud error on a clean reweave", rw.err.empty(), rw.err);
+        check("the reweave is a full 8-step worldline (straight-line)",
+              rw.insn_off.size() == 8,
+              "got " + std::to_string(rw.insn_off.size()));
+        check("the reweave shares the parent's instruction spine (values-only "
+              "divergence)",
+              rw.insn_off == parent.insn_off, "offsets moved");
+        check("the reweave is badged as a resumed isolated-guest replay",
+              rw.provenance().producer.find("reweave@3") != std::string::npos &&
+                  rw.provenance().isolated_guest && rw.provenance().exact,
+              rw.provenance().producer);
+
+        loom_fabric_t fp = weave(parent), fr = weave(rw);
+        loom_edit_desc_t d;
+        d.from_step_edit = true;
+        d.from_step = 3;
+        d.label = edit.describe();
+        loom_take_view_t v =
+            loom_take_view(fp, fr, rw.edges.data(), rw.edges.size(), d, "", "");
+        std::string dump = loom_take_dump(v);
+        check("straight-line reweave is aligned end-to-end (no offset patient "
+              "zero)",
+              !v.div.diverged &&
+                  v.node.alignment == std::string(kLoomAlignedEndToEnd),
+              dump);
+        // The MANDATORY honesty label (D7): a reweave IS emulator replay, never
+        // observed silicon — it carries the same crossing-the-line disclosure.
+        check("the reweave carries the crossing-the-line disclosure",
+              v.node.disclosure == std::string(kLoomForkDisclosure),
+              v.node.disclosure);
+        check("the cone seeds at the reweave step (K=3)",
+              !v.cone.empty() && v.cone.front() == 3, dump);
+        bool any_hot = false;
+        for (const loom_take_step_t &x : v.steps)
+            if (x.in_cone && x.verdict == take_verdict::hot)
+                any_hot = true;
+        check("the reweave's cone carries a real value divergence (HOT)",
+              any_hot, dump);
+
+        // Determinism: the same reweave twice is byte-identical (hermetic).
+        loom_take_t rw2;
+        loom_take_run_from_step(poly, sizeof poly, pa, 3, edit, &rw2);
+        check("the same reweave twice yields identical offsets",
+              rw2.insn_off == rw.insn_off, "");
+        check("...and identical operand records",
+              rw2.recs.size() == rw.recs.size() &&
+                  std::memcmp(rw2.recs.data(), rw.recs.data(),
+                              rw.recs.size() * sizeof(at_val_rec_t)) == 0,
+              "");
+
+        // A step past the run's end is refused loudly (no checkpoint there).
+        loom_from_step_edit_t far;
+        far.step = 999;
+        far.reg = "rax";
+        loom_take_t oob;
+        check("a step past the run's end is refused",
+              !loom_take_run_from_step(poly, sizeof poly, pa, 3, far, &oob),
+              "it ran anyway");
+        check("the refusal names the missing checkpoint",
+              oob.err.find("no checkpoint") != std::string::npos, oob.err);
+
+        // An unknown register name is refused loudly.
+        loom_from_step_edit_t badreg;
+        badreg.step = 3;
+        badreg.reg = "rzx";
+        loom_take_t br;
+        check("an unknown register is refused",
+              !loom_take_run_from_step(poly, sizeof poly, pa, 3, badreg, &br),
+              "it ran anyway");
+        check("the refusal names the register",
+              br.err.find("rzx") != std::string::npos, br.err);
+
+        // A memory reweave: poke the spilled slot [rsp-8] AFTER the store (step 5
+        // reloads it into rcx), so the counterfactual reaches through memory.
+        loom_from_step_edit_t medit;
+        medit.k = loom_from_step_edit_t::kind::mem;
+        medit.step = 5; // pre-`mov rcx,[rsp-8]`
+        medit.mem_addr = 0x20fff8 - 8; // DF_STACK top - 8 = [rsp-8]
+        medit.mem_bytes.assign(8, 0);  // zero the slot
+        loom_take_t mrw;
+        check("a memory reweave runs",
+              loom_take_run_from_step(poly, sizeof poly, pa, 3, medit, &mrw),
+              mrw.err);
+        check("the memory reweave is a full 8-step worldline",
+              mrw.insn_off.size() == 8,
+              "got " + std::to_string(mrw.insn_off.size()));
+    }
+
+    // --- 30 R3 T3: a control-flow reweave -> patient zero at/after K -------
+    if (!demo.empty()) {
+        const long a3[1] = {3};
+        loom_edit_t ident;
+        ident.arg_index = 0;
+        ident.arg_value = 3;
+        loom_take_t parent;
+        loom_take_run(e, base_state, demo.data(), demo.size(), a3, 1, ident,
+                      &parent);
+        // rax := 11 at step 3 (pre-`cmp rax,10`) flips the jle: the base takes
+        // the branch (6 steps), the reweave falls through into neg (7 steps).
+        loom_from_step_edit_t edit;
+        edit.step = 3;
+        edit.reg = "rax";
+        edit.reg_value = 11;
+        loom_take_t rw;
+        check("the control-flow reweave runs",
+              loom_take_run_from_step(demo.data(), demo.size(), a3, 1, edit,
+                                      &rw),
+              rw.err);
+        check("the base took the jle arm (6 steps)", parent.insn_off.size() == 6,
+              "got " + std::to_string(parent.insn_off.size()));
+        check("the reweave fell through into neg (7 steps)",
+              rw.insn_off.size() == 7,
+              "got " + std::to_string(rw.insn_off.size()));
+        loom_fabric_t fp = weave(parent), fr = weave(rw);
+        loom_edit_desc_t d;
+        d.from_step_edit = true;
+        d.from_step = 3;
+        d.label = edit.describe();
+        loom_take_view_t v =
+            loom_take_view(fp, fr, rw.edges.data(), rw.edges.size(), d, "", "");
+        std::string dump = loom_take_dump(v);
+        check("patient zero appears at or after the edit step (K=3)",
+              v.div.diverged && v.div.step >= 3, dump);
+        check("patient zero is base 0x13 (ret) vs take 0x10 (neg)",
+              v.div.off_a == 0x13 && v.div.off_b == 0x10, dump);
+        check("the control-flow reweave carries the disclosure too",
+              v.node.disclosure == std::string(kLoomForkDisclosure),
+              v.node.disclosure);
+    }
+
     emu_snapshot_free(base_state);
     emu_close(e);
     if (failures) {

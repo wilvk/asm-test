@@ -15,6 +15,23 @@ extern "C" int asmtest_dataflow_emu_run(const uint8_t *code, size_t code_len,
                                         uint64_t max_insns,
                                         asmtest_valtrace_t *vt);
 
+// The resume-from-state seam (30 R3 T1/T2, src/dataflow_resume.c). Same
+// re-declare-the-tier-producer precedent as above; only forks.cpp (full build)
+// pulls emu.o in through them, so the render-only viewer stays engine-free.
+extern "C" {
+int asmtest_dataflow_emu_checkpoint(emu_t *e, const uint8_t *code,
+                                    size_t code_len, const long *args, int nargs,
+                                    uint64_t max_insns, uint64_t k,
+                                    asmtest_valtrace_t *vt,
+                                    emu_snapshot_t **snap_out);
+int asmtest_dataflow_emu_run_from_current(emu_t *e, const uint8_t *code,
+                                          size_t code_len,
+                                          asmtest_valtrace_t *vt);
+bool asmtest_dataflow_emu_edit_gp(emu_t *e, const char *name, uint64_t val);
+bool asmtest_dataflow_emu_edit_mem(emu_t *e, uint64_t addr, const void *bytes,
+                                   size_t n);
+}
+
 namespace asmdesk {
 
 const char *const kLoomForkDisclosure =
@@ -47,6 +64,13 @@ std::string loom_edit_t::describe() const {
            " bytes of source)";
 }
 
+std::string loom_from_step_edit_t::describe() const {
+    if (k == kind::reg)
+        return reg + "@step" + std::to_string(step) + " := " + hex(reg_value);
+    return "[" + hex(mem_addr) + "]@step" + std::to_string(step) + " := " +
+           std::to_string(mem_bytes.size()) + " byte(s)";
+}
+
 const asmtest_valtrace_t *loom_take_t::vt() const {
     vt_ = asmtest_valtrace_t{};
     vt_.insn_off =
@@ -71,7 +95,7 @@ const asmtest_defuse_t *loom_take_t::g() const {
 
 loom_provenance_t loom_take_t::provenance() const {
     loom_provenance_t p;
-    p.producer = "dataflow-emu (fork)";
+    p.producer = producer;
     p.exact = true;
     p.isolated_guest = true; // a take is ALWAYS an emulator replay
     p.steps_recorded = insn_off.size();
@@ -199,6 +223,136 @@ bool loom_take_run(emu_t *session, const emu_snapshot_t *base_state,
     if (producer_truncated && out->err.empty())
         out->err = "the take's operand buffers filled: its fabric is a lower "
                    "bound";
+    return true;
+}
+
+bool loom_take_run_from_step(const uint8_t *code, size_t code_len,
+                             const long *args, int nargs,
+                             const loom_from_step_edit_t &edit,
+                             loom_take_t *out) {
+    if (out == nullptr)
+        return false;
+    *out = loom_take_t{};
+    out->producer = "dataflow-emu (reweave@" + std::to_string(edit.step) + ")";
+    if (code == nullptr || code_len == 0) {
+        out->err = "no base code to reweave from";
+        return false;
+    }
+    if (nargs < 0 || nargs > 6) {
+        out->err = "the SysV integer-argument table holds at most 6 arguments";
+        return false;
+    }
+    out->code.assign(code, code + code_len);
+    out->args.assign(args, args + nargs);
+
+    // The resume seam maps CODE + STACK at fixed guest bases, so it needs a FRESH
+    // handle — a reweave opens its own (and is hermetic like the value producer:
+    // two identical reweaves are byte-identical, needing no shared session).
+    emu_t *e = emu_open();
+    if (e == nullptr) {
+        out->err = "could not open the emulator handle for the reweave";
+        return false;
+    }
+    auto fail = [&](const std::string &why, asmtest_valtrace_t *b,
+                    asmtest_valtrace_t *t, emu_snapshot_t *s) {
+        out->err = why;
+        if (t != nullptr)
+            asmtest_valtrace_free(t);
+        if (b != nullptr)
+            asmtest_valtrace_free(b);
+        if (s != nullptr)
+            emu_snapshot_free(s);
+        emu_close(e);
+        return false;
+    };
+
+    // --- 1. checkpoint the run at step K (yields the full PARENT trace too) --
+    asmtest_valtrace_t *base =
+        asmtest_valtrace_new(kTakeSteps, kTakeRecs, kTakeWide);
+    if (base == nullptr)
+        return fail("could not allocate the reweave's base value trace", nullptr,
+                    nullptr, nullptr);
+    emu_snapshot_t *snap = nullptr;
+    int rcb = asmtest_dataflow_emu_checkpoint(
+        e, code, code_len, out->args.empty() ? nullptr : out->args.data(), nargs,
+        0, edit.step, base, &snap);
+    if (rcb < 0)
+        return fail("the emulator L0 producer could not set up this reweave",
+                    base, nullptr, nullptr);
+    if (snap == nullptr)
+        return fail("step " + std::to_string(edit.step) + " is at or past this "
+                    "run's " + std::to_string(base->steps_len) +
+                    " steps — no checkpoint to reweave from",
+                    base, nullptr, nullptr);
+
+    // --- 2. restore to pre-K, apply the ONE edit, resume forward ------------
+    if (!emu_restore(e, snap))
+        return fail("could not restore the checkpoint at step " +
+                        std::to_string(edit.step),
+                    base, nullptr, snap);
+    bool edited =
+        edit.k == loom_from_step_edit_t::kind::reg
+            ? asmtest_dataflow_emu_edit_gp(e, edit.reg.c_str(), edit.reg_value)
+            : (!edit.mem_bytes.empty() &&
+               asmtest_dataflow_emu_edit_mem(e, edit.mem_addr,
+                                             edit.mem_bytes.data(),
+                                             edit.mem_bytes.size()));
+    if (!edited)
+        return fail(edit.k == loom_from_step_edit_t::kind::reg
+                        ? "unknown register '" + edit.reg +
+                              "' for the reweave edit"
+                        : "the reweave memory edit could not be applied "
+                          "(unmapped address or empty bytes)",
+                    base, nullptr, snap);
+    asmtest_valtrace_t *tail =
+        asmtest_valtrace_new(kTakeSteps, kTakeRecs, kTakeWide);
+    if (tail == nullptr)
+        return fail("could not allocate the reweave's tail value trace", base,
+                    nullptr, snap);
+    int rct = asmtest_dataflow_emu_run_from_current(e, code, code_len, tail);
+    if (rct < 0)
+        return fail("the reweave resume could not run forward from step " +
+                        std::to_string(edit.step),
+                    base, tail, snap);
+
+    // --- 3. STITCH the unchanged parent prefix [0,K) with the edited tail ---
+    // A reweave is a full worldline that shares its parent's prefix and diverges
+    // at the edit, so it drops straight into the take-view divergence card.
+    const uint32_t K = static_cast<uint32_t>(edit.step);
+    for (size_t i = 0; i < K && i < base->steps_len; i++)
+        out->insn_off.push_back(base->insn_off[i]);
+    for (size_t j = 0; j < tail->steps_len; j++)
+        out->insn_off.push_back(tail->insn_off[j]);
+    for (size_t i = 0; i < base->recs_len; i++)
+        if (base->recs[i].step < K)
+            out->recs.push_back(base->recs[i]);
+    for (size_t i = 0; i < tail->recs_len; i++) {
+        at_val_rec_t r = tail->recs[i];
+        r.step += K; // re-base the tail's step 0 onto absolute step K
+        out->recs.push_back(r);
+    }
+    const bool truncated = base->truncated || tail->truncated;
+    asmtest_valtrace_free(base);
+    asmtest_valtrace_free(tail);
+    emu_snapshot_free(snap);
+    emu_close(e);
+
+    // --- 4. def-use over the stitched worldline (rebuilt, so the edges across
+    //        the K boundary reflect the counterfactual, not the parent) -------
+    asmtest_defuse_t *g = asmtest_defuse_build(out->vt());
+    if (g != nullptr) {
+        out->edges.assign(g->edges, g->edges + g->n);
+        asmtest_defuse_free(g);
+    }
+
+    if (truncated)
+        out->err = "the reweave's operand buffers filled: its fabric is a lower "
+                   "bound";
+    else if (rct == 1)
+        // A guest fault AFTER the edit is a valid counterfactual outcome, not a
+        // build failure — the (partial) fabric stands; name it, never hide it.
+        out->err = "the reweave faulted after the edit at step " +
+                   std::to_string(edit.step);
     return true;
 }
 

@@ -11,6 +11,14 @@ namespace asmdesk {
 
 const char *const kLoomAlignedEndToEnd = "aligned end-to-end";
 const char *const kLoomDashedTailHover = "unaligned — never drawn as agreement";
+// The mandatory crossing-the-line disclosure every fork / reweave carries (D7).
+// One pure copy so the render-only fork-from-K form (fabric_imgui.cpp) states the
+// same sentence the woven take does; it is byte-identical to forks.cpp's engine
+// -side kLoomForkDisclosure (test_loom_forks asserts the two agree).
+const char *const kLoomReweaveBanner =
+    "forks re-run the emulator replay — an explicit crossing of the "
+    "native→virtual line; never evidence about a live process or silicon "
+    "timing";
 
 namespace {
 
@@ -99,10 +107,7 @@ loom_take_view(const loom_fabric_t &base, const loom_fabric_t &take,
     v.node.edit = edit.label;
     v.node.fault = fault;
     v.node.err = err;
-    v.node.disclosure =
-        "forks re-run the emulator replay — an explicit crossing of the "
-        "native→virtual line; never evidence about a live process or silicon "
-        "timing";
+    v.node.disclosure = kLoomReweaveBanner;
 
     // --- alignment: 04's shared-prefix helper, over the two insn_off arrays --
     v.div = dt_first_divergence(base.insn_off, take.insn_off,
@@ -123,7 +128,14 @@ loom_take_view(const loom_fabric_t &base, const loom_fabric_t &take,
 
     // --- the cone of the edited fact ---------------------------------------
     std::set<uint32_t> seed;
-    if (edit.code_patch) {
+    if (edit.from_step_edit) {
+        // Reweave (fork-from-step-K): the ONE fact changed at step K itself, so
+        // the cone is the forward closure from K. Everything before K is the
+        // shared prefix (identical to the parent by construction) and outside the
+        // cone; everything the edit reaches is downstream of K.
+        if (edit.from_step < take.steps)
+            seed.insert(edit.from_step);
+    } else if (edit.code_patch) {
         // Seed at the first ALIGNED step whose instruction bytes differ. The
         // step's own offset is the key: a patch that changed nothing the run
         // executed seeds nothing, and the cone is honestly empty.

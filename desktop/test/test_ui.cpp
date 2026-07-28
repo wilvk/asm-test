@@ -557,6 +557,16 @@ static void gutter_gui(ImGuiTestContext *) {
     ImGui::End();
 }
 
+// The Reweave form harness (30 R3 T3): a bare form drawn through the REAL
+// draw_loom_reweave_form, so the fork-from-step-K gesture (step K + register +
+// value + submit) is exercised by real inputs and a real click.
+static asmdesk::loom_reweave_form_t g_reweave_form;
+static void reweave_gui(ImGuiTestContext *) {
+    ImGui::Begin("ReweaveHarness", nullptr, ImGuiWindowFlags_NoSavedSettings);
+    asmdesk::draw_loom_reweave_form(g_reweave_form);
+    ImGui::End();
+}
+
 static void register_search_tests(ImGuiTestEngine *engine) {
     ImGuiTest *t = nullptr;
 
@@ -667,6 +677,36 @@ static void register_search_tests(ImGuiTestEngine *engine) {
         ctx->ItemClick("clear forks");             // the gutter-level clear
         ctx->Yield();
         IM_CHECK(g_gutter_loom.takes.empty()); // clear forks empties the set
+    };
+
+    // 30 R3 T3 — the Reweave gesture: pick a step K, a register and a value and
+    // submit, asserting the fork-from-step-K request the full app applies
+    // (loom_take_run_from_step). Driven by real inputs/clicks through the REAL
+    // draw_loom_reweave_form; the disclosure the take carries is pinned in
+    // test_loom_forks, this drives the gesture that produces it.
+    t = IM_REGISTER_TEST(engine, "loom", "reweave_form_emits_request");
+    t->GuiFunc = reweave_gui;
+    t->TestFunc = [](ImGuiTestContext *ctx) {
+        using namespace asmdesk;
+        g_reweave_form = loom_reweave_form_t{};
+        ctx->SetRef("ReweaveHarness");
+        ctx->Yield();
+        // step K := 3
+        ctx->ItemInput("step K");
+        ctx->KeyCharsReplace("3");
+        // register := rcx (a real combo selection, not a model poke)
+        ctx->ComboClick("register/rcx");
+        // value := 0x40
+        ctx->ItemInput("value");
+        ctx->KeyCharsReplace("0x40");
+        ctx->Yield();
+        IM_CHECK(!g_reweave_form.requested); // nothing emitted until submit
+        ctx->ItemClick("Reweave from step K");
+        ctx->Yield();
+        IM_CHECK(g_reweave_form.requested);        // the gesture emitted a request
+        IM_CHECK(g_reweave_form.req_step == 3);     // K captured from the input
+        IM_CHECK(g_reweave_form.req_reg == "rcx");  // register captured from combo
+        IM_CHECK(g_reweave_form.req_value == 0x40); // value parsed from hex
     };
 }
 

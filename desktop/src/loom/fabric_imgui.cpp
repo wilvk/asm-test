@@ -5,6 +5,7 @@
 #include "ImZoomSlider.h"
 
 #include <algorithm>
+#include <cstdlib>
 
 #include "loom/loom_draw.h"
 #include "nav.h"             // dt_link — the minimap click routes through it (21 T3)
@@ -382,6 +383,11 @@ void draw_loom(LoomState &L, const Streams &s, const Workspace &ws, int self,
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Takes")) {
+            // 30 R3 T3: the Reweave gesture — fork from a chosen step K. Emits a
+            // request the full app applies through loom_take_run_from_step; the
+            // form itself runs no engine (D4), like the gutter below.
+            draw_loom_reweave_form(L.reweave);
+            ImGui::Separator();
             // The persistent takes gutter (22 T4): per-take remove + clear forks,
             // both reversible. The accumulator is empty here until a full build
             // appends a loom_take_run result; the render-only viewer shows recorded
@@ -477,6 +483,55 @@ void draw_loom_takes_gutter(LoomState &L, UndoStack *undo) {
             loom_takes_remove(L.takes, static_cast<size_t>(remove_idx));
         }
     }
+}
+
+const std::vector<std::string> &loom_reweave_regs() {
+    static const std::vector<std::string> regs = {
+        "rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp", "r8",
+        "r9",  "r10", "r11", "r12", "r13", "r14", "r15", "rip", "rflags"};
+    return regs;
+}
+
+void draw_loom_reweave_form(loom_reweave_form_t &f) {
+    // `requested` is a latch the CALLER consumes (clears after applying), not a
+    // per-frame flag — a one-frame reset here would be gone by the time an
+    // interaction-test (or the app) reads it the frame after the click.
+    ImGui::TextColored(dt_refuse_col(), "Reweave — fork from a chosen step");
+    // The MANDATORY crossing-the-line disclosure (D7): a reweave IS emulator
+    // replay, an explicit native→virtual crossing — never observed silicon.
+    ImGui::TextDisabled("%s", kLoomReweaveBanner);
+
+    const std::vector<std::string> &regs = loom_reweave_regs();
+    if (f.reg < 0 || f.reg >= static_cast<int>(regs.size()))
+        f.reg = 0;
+
+    ImGui::SetNextItemWidth(120);
+    ImGui::InputInt("step K", &f.step);
+    if (f.step < 0)
+        f.step = 0;
+
+    ImGui::SetNextItemWidth(110);
+    if (ImGui::BeginCombo("register", regs[f.reg].c_str())) {
+        for (int i = 0; i < static_cast<int>(regs.size()); i++)
+            if (ImGui::Selectable(regs[i].c_str(), i == f.reg))
+                f.reg = i;
+        ImGui::EndCombo();
+    }
+
+    ImGui::SetNextItemWidth(170);
+    ImGui::InputText("value", f.value_hex, sizeof f.value_hex,
+                     ImGuiInputTextFlags_CharsNoBlank);
+
+    if (ImGui::Button("Reweave from step K")) {
+        f.requested = true;
+        f.req_step = static_cast<uint64_t>(f.step);
+        f.req_reg = regs[f.reg];
+        // base 0: accepts a 0x-prefixed hex or a plain decimal, whatever typed.
+        f.req_value = std::strtoull(f.value_hex, nullptr, 0);
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(full app re-runs the emulator replay; this build "
+                        "captures the request)");
 }
 
 } // namespace asmdesk

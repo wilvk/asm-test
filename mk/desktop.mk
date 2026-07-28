@@ -619,11 +619,15 @@ endif
 # (08-observer-views.md T8): the app replays a RECORDED PT path through the
 # emulator, which needs the producer and the purity/replayability gates it
 # reuses — but no PT silicon, because the path was decoded when it was captured.
+#
+# dataflow_resume.o joins for the Loom's Reweave (30 R3 T3): forks.cpp's
+# fork-from-step-K checkpoints + resumes the value producer on an emu_t through
+# this seam.
 DESKTOP_ENGINE_OBJ := $(BUILD)/emu.o $(BUILD)/trace.o \
                       $(BUILD)/disasm.o $(BUILD)/assemble.o \
                       $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o \
                       $(BUILD)/dataflow_emu.o $(BUILD)/dataflow_blockstep.o \
-                      $(BUILD)/dataflow_pt.o
+                      $(BUILD)/dataflow_pt.o $(BUILD)/dataflow_resume.o
 
 # The capability panel (06-doors-and-learning.md T6) reads the library's own
 # status APIs — asmtest_trace_resolve / asmtest_hwtrace_status / the IBS reasons
@@ -1645,7 +1649,8 @@ $(BUILD)/desktop_test_loom_forks: $(BUILD)/desktop/test/t/test_loom_forks.o \
     $(BUILD)/desktop/test/an/diff.o $(BUILD)/desktop/test/an/slice.o \
     $(DESKTOP_TEST_DOC) \
     $(BUILD)/emu.o $(BUILD)/trace.o $(BUILD)/disasm.o $(BUILD)/assemble.o \
-    $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o $(BUILD)/dataflow_emu.o
+    $(BUILD)/dataflow.o $(BUILD)/dataflow_operands.o $(BUILD)/dataflow_emu.o \
+    $(BUILD)/dataflow_resume.o
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ $(UNICORN_LIBS) $(KEYSTONE_LIBS) \
 	  $(CAPSTONE_LIBS) -o $@
 
