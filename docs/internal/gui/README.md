@@ -243,8 +243,10 @@ register Scrubber on the shared **execution-step** brush (T1), give the 3D overv
 **play/pause transport** to each playhead (T3), and name each axis so the two
 playheads read as different axes, not a faked global clock (T4/honesty). A pure
 `ShellState`/`HudState` desktop brief — no producer/engine/schema change, driven by
-the null backend (D4). Authored 2026-07-28 against HEAD `326afde`.
-☐ 0/5 · `agent-opus-b · doc34 T1–T5 · 2026-07-28`.
+the null backend (D4). Authored 2026-07-28 against HEAD `326afde`; **implemented
+2026-07-28 (`e962fb5`)** — all five tasks (execution-step brush, `5`/handoff reach,
+per-axis play/pause transports, axis labels), both docker-desktop lanes green.
+☑ 5/5 · —.
 
 [35-continuous-live-dataflow.md](35-continuous-live-dataflow.md) — make the live
 `dataflow` / `auto` engine **re-arm and keep capturing until Stop** (today it is
