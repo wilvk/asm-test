@@ -2,6 +2,7 @@
 // no engine (D4). Renders into the caller's current ImGui frame.
 #include "scene3d/hud.h"
 
+#include <cstdio>
 #include <string>
 
 #include "imgui.h"
@@ -32,6 +33,38 @@ void chip(const ImVec4 &col, const char *text, bool &first) {
 
 } // namespace
 
+std::vector<PlacementChip> placement_chips(const space::TerrainModel &terr,
+                                           const space::TrajectorySet &traj) {
+    std::vector<PlacementChip> out;
+    // Terrain height placement (36 T3/T4): the height field could not be placed,
+    // or a df_step residency rung fed it (never block coverage).
+    if (!terr.anchor_error.empty())
+        out.push_back({PlacementChip::Bad, "HEIGHTS NOT PLACED"});
+    if (terr.height_source == "df_step")
+        out.push_back(
+            {PlacementChip::Warn,
+             "heights: single-step residency (df_step), not block coverage"});
+    // Trajectory PC-path placement (36 T2/T4): not placed at all, a partial
+    // placement (the 4096-byte codeimage clamp), or a fully derived placement.
+    if (traj.pc_points > 0) {
+        if (traj.pc_placed == 0) {
+            out.push_back({PlacementChip::Bad, "PATH NOT PLACED"});
+        } else if (traj.pc_placed < traj.pc_points) {
+            char buf[96];
+            std::snprintf(buf, sizeof buf,
+                          "%llu of %llu path vertices off-plane",
+                          (unsigned long long)(traj.pc_points - traj.pc_placed),
+                          (unsigned long long)traj.pc_points);
+            out.push_back({PlacementChip::Warn, buf});
+        } else if (traj.anchored) {
+            out.push_back(
+                {PlacementChip::Warn,
+                 "rel: anchored to the codeimage span (derived placement)"});
+        }
+    }
+    return out;
+}
+
 void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
                     const space::TrajectorySet &traj) {
     ImGui::Begin("3D overview");
@@ -44,15 +77,27 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     ImGui::TextUnformatted("provenance:");
     ImGui::SameLine();
     bool first = true;
-    if (!terr.basis_error.empty())
+    if (!terr.basis_error.empty()) {
         chip(kBad, "EXACT TERRAIN REFUSED (mixed basis)", first);
-    else if (!terr.basis.empty())
-        chip(kOk,
-             terr.basis == "abs" ? "abs: true address-space path"
-                                 : "rel: routine-relative (not a true path)",
-             first);
+    } else {
+        // 36 T4 (defect 1): a df-only recording has an EMPTY terr.basis (no
+        // `trace` feeds the canvas), so fall back to the trajectory's basis —
+        // which DOES say "rel". This finally draws the rel chip 25 T6 promised
+        // but that never fired because the HUD keyed only on the canvas basis.
+        const std::string &basis =
+            !terr.basis.empty() ? terr.basis : traj.basis;
+        if (!basis.empty())
+            chip(kOk,
+                 basis == "abs" ? "abs: true address-space path"
+                                : "rel: routine-relative (not a true path)",
+                 first);
+    }
     if (traj.refused())
         chip(kBad, "trajectory refused", first);
+    // 36 T4: the placement chrome — nothing about anchoring is silent.
+    for (const PlacementChip &pc : placement_chips(terr, traj))
+        chip(pc.sev == PlacementChip::Bad ? kBad : kWarn, pc.text.c_str(),
+             first);
     // coarse-vs-rich
     chip(terr.mem_present ? kOk : kWarn,
          terr.mem_present ? "rich: per-access memory"
@@ -68,6 +113,15 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
     if (!terr.mem_note.empty()) {
         ImGui::TextColored(kDim, "%s", terr.mem_note.c_str());
     }
+    // 36 T4: the placement notes as dim asides beside mem_note (anchor_error is a
+    // refusal, so it rides in the refuse colour). No HudState field is needed —
+    // these derive from terr/traj each frame.
+    if (!terr.height_note.empty())
+        ImGui::TextColored(kDim, "%s", terr.height_note.c_str());
+    if (!terr.anchor_error.empty())
+        ImGui::TextColored(kBad, "%s", terr.anchor_error.c_str());
+    if (!traj.placement_note.empty())
+        ImGui::TextColored(kDim, "%s", traj.placement_note.c_str());
     if (!terr.basis_error.empty())
         ImGui::TextColored(kBad, "%s", terr.basis_error.c_str());
     if (traj.refused())

@@ -250,8 +250,9 @@ int main() {
 
         // a non-code region does not make a single code span ambiguous.
         {
-            Anchor a = resolve_anchor({data(0x0, 0x1000), code(0x400000, 0x1000),
-                                       data(0x800000, 0x2000)});
+            Anchor a =
+                resolve_anchor({data(0x0, 0x1000), code(0x400000, 0x1000),
+                                data(0x800000, 0x2000)});
             check("non-code regions do not spoil a single-code anchor",
                   a.ok && a.base == 0x400000, "a data region broke the anchor");
         }

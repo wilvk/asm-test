@@ -273,6 +273,17 @@ side buffer (bounded, ≤ 64 bytes). `bytes` is **omitted** when the producer ha
 no side buffer or the value was not captured, and a reader then degrades to a
 `[wide]` placeholder — the bytes are never invented.
 
+**`off` is region-relative, and carries no `basis`** (doc-only clarification,
+[36](36-anchor-the-3d-plane.md) T4, 2026-07-29 — the wire is unchanged). Unlike
+`trace`, a `df_step` states no `basis` field: `off` is **always** an offset from
+the session's scoped region base (`pc - base_ip`,
+[dataflow_ptrace.c](../../../src/dataflow_ptrace.c)), by definition. A consumer
+that needs the absolute address anchors it to the recording's `codeimage` span
+(`base + off`); with exactly one code span that derivation is exact, and with
+zero or ≥2 it is unrecoverable from a bare offset (which
+[37](37-region-tag-on-df-step.md) resolves by stating the region on the wire as
+an optional `rbase`). An absolute-offset producer would be out of this contract.
+
 ### `df_edge` — one last-writer def-use edge (L1)
 
 ```json

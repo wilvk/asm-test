@@ -11,6 +11,7 @@
 
 #include "doc/recording.h"
 #include "doc/workspace_state.h" // 20 T3: capture/restore round-trip
+#include "scene3d/hud.h"         // 36 T4: placement_chips (honesty chrome)
 #include "ui/layout.h" // 19: kPane* names, DockLayout, LayoutPreset, layout_build
 #include "ui/shell.h"
 #include "ui/view_presence.h" // 20 T1: the data-driven view set
@@ -95,7 +96,7 @@ int main() {
         s.ws.open(fx(f), err); // rejects can't happen for these; ignore err
     }
     check("smoke/opened", s.ws.recordings.size() == 6, "all six should open");
-    s.open_dialog = true; // exercise the open-dialog draw path
+    s.open_dialog = true;   // exercise the open-dialog draw path
     s.show_settings = true; // exercise the Settings pane draw path (20 T5)
     // The Inspect door (07 T4/T5) draws in BOTH binaries, so its whole path —
     // the /proc list, the patch bay's budget decision, the live status — runs
@@ -353,9 +354,16 @@ int main() {
         check("scene/golden opened", igs >= 0, err.c_str());
         int imt = shell_open(s3, fx("min-trace.asmtrace"), err);
         check("scene/min-trace opened", imt >= 0, err.c_str());
+        // 36 T4: the LIVE dataflow shape — absolute codeimage + region-relative
+        // df_step, NO trace. Before 36 this opened onto an empty, unlabelled
+        // plane; now the terrain draws a df_step residency rung anchored to the
+        // span and the trajectory anchors the offsets onto it.
+        int igd = shell_open(s3, gd("scene-df-loop.asmtrace"), err);
+        check("scene/df-loop opened", igd >= 0, err.c_str());
 
         // Parallel to the workspace, like every other per-recording vector.
-        check("scene/scenes parallel", s3.scenes.size() == s3.ws.recordings.size(),
+        check("scene/scenes parallel",
+              s3.scenes.size() == s3.ws.recordings.size(),
               "the SceneView vector must be parallel to the workspace");
 
         // Drive the pane for the golden scene (codeimage + abs trace): the models
@@ -368,25 +376,94 @@ int main() {
             ImGui::NewFrame();
             ImGui::Begin("t3");
             if (a != nullptr)
-                draw_scene_overview(s3, s3.ws.recordings[static_cast<size_t>(igs)],
-                                    *a);
+                draw_scene_overview(
+                    s3, s3.ws.recordings[static_cast<size_t>(igs)], *a);
             ImGui::End();
             ImGui::Render();
 
             const SceneView &sv = s3.scenes[static_cast<size_t>(igs)];
-            check("scene/models woven", sv.built, "the pane must build the models");
+            check("scene/models woven", sv.built,
+                  "the pane must build the models");
             check("scene/regions placed", sv.has_regions,
                   "a codeimage recording must place code regions on the plane");
             check("scene/terrain sized", sv.terr.w > 0 && sv.terr.h > 0,
                   "the terrain plane must be sized");
             check("scene/abs terrain has heat", !sv.terr.code.empty(),
                   "the abs trace must populate code cells");
-            check("scene/exact trajectory", !sv.traj.refused() &&
-                                                !sv.traj.trajectories.empty() &&
-                                                sv.traj.basis == "abs",
+            check("scene/exact trajectory",
+                  !sv.traj.refused() && !sv.traj.trajectories.empty() &&
+                      sv.traj.basis == "abs",
                   "an abs recording must weave one exact trajectory");
             check("scene/slice cut at the playhead", sv.slice_t == sv.hud.t,
                   "the terrain slice must track the HUD playhead");
+
+            // 36 T4: the abs golden is fully placed — no placement chip fires
+            // for it (all its chip branches are for rel/df/unplaced recordings).
+            auto abs_chips = scene3d::placement_chips(sv.terr, sv.traj);
+            check("scene/abs draws no placement chip (fully placed abs path)",
+                  abs_chips.empty(),
+                  "an abs recording raised a placement chip");
+        }
+
+        // 36 T4: drive the pane for the LIVE dataflow golden and assert the df
+        // shape renders end to end — a non-empty terrain from the df_step rung
+        // and a fully-anchored PC path — where before 36 the tab was mute.
+        if (igd >= 0) {
+            s3.active_tab = igd;
+            const Streams *a = shell_a(s3);
+            check("scene/df stream decoded", a != nullptr, "no stream");
+            ImGui::NewFrame();
+            ImGui::Begin("t3df");
+            if (a != nullptr)
+                draw_scene_overview(
+                    s3, s3.ws.recordings[static_cast<size_t>(igd)], *a);
+            ImGui::End();
+            ImGui::Render();
+
+            const SceneView &sv = s3.scenes[static_cast<size_t>(igd)];
+            check("scene/df regions placed", sv.has_regions,
+                  "a codeimage recording must place code regions on the plane");
+            check("scene/df terrain has steps", sv.terr.nsteps > 0,
+                  "the df_step stream is a real time axis");
+            check("scene/df height source is df_step",
+                  sv.terr.height_source == "df_step",
+                  ("got '" + sv.terr.height_source + "'").c_str());
+            check("scene/df terrain has a residency rung",
+                  !sv.terr.code.empty(),
+                  "the df_step rung must populate code cells");
+            check("scene/df path is rel and anchored",
+                  sv.traj.basis == "rel" && sv.traj.anchored,
+                  "the df PC path must anchor to the single span");
+            check("scene/df path fully placed",
+                  sv.traj.pc_placed == sv.traj.pc_points &&
+                      sv.traj.pc_points > 0,
+                  (std::to_string(sv.traj.pc_placed) + "/" +
+                   std::to_string(sv.traj.pc_points))
+                      .c_str());
+
+            // The honesty chrome: a df capture raises exactly the residency +
+            // derived-placement chips, and NEITHER "NOT PLACED" refusal. Deleting
+            // a chip branch fails one of these named checks.
+            auto chips = scene3d::placement_chips(sv.terr, sv.traj);
+            bool df_residency = false, derived = false, not_placed = false;
+            for (const scene3d::PlacementChip &c : chips) {
+                if (c.text.find("single-step residency (df_step)") !=
+                    std::string::npos)
+                    df_residency = true;
+                if (c.text.find("anchored to the codeimage span") !=
+                    std::string::npos)
+                    derived = true;
+                if (c.text.find("NOT PLACED") != std::string::npos)
+                    not_placed = true;
+            }
+            check("scene/df chip: single-step residency (df_step)",
+                  df_residency,
+                  "the df height rung must label itself, not claim coverage");
+            check(
+                "scene/df chip: rel anchored (derived placement)", derived,
+                "a fully-anchored rel path must say it is a derived placement");
+            check("scene/df chip: nothing refused as NOT PLACED", !not_placed,
+                  "a placed df capture must raise no NOT PLACED refusal");
         }
 
         // The codeimage-less recording takes the "no regions" placard path
@@ -398,13 +475,14 @@ int main() {
             ImGui::NewFrame();
             ImGui::Begin("t3b");
             if (a != nullptr)
-                draw_scene_overview(s3, s3.ws.recordings[static_cast<size_t>(imt)],
-                                    *a);
+                draw_scene_overview(
+                    s3, s3.ws.recordings[static_cast<size_t>(imt)], *a);
             ImGui::End();
             ImGui::Render();
             const SceneView &sv = s3.scenes[static_cast<size_t>(imt)];
-            check("scene/no-regions is honest", sv.built && !sv.has_regions,
-                  "a codeimage-less recording must take the no-regions placard");
+            check(
+                "scene/no-regions is honest", sv.built && !sv.has_regions,
+                "a codeimage-less recording must take the no-regions placard");
         }
 
         // Closing keeps the SceneView vector parallel — a stale slice would drive
@@ -415,6 +493,73 @@ int main() {
               "shell_close must erase the SceneView slot too");
 
         ImGui::DestroyContext();
+    }
+
+    // 36 T4: placement_chips is PURE, so each honesty-chrome branch is asserted
+    // directly (no ImGui frame needed) — deleting any one branch fails a named
+    // check here, which the golden-driven cases above cannot fully cover (no
+    // committed golden refuses placement; that is 37 T6's two-span golden).
+    {
+        using asmdesk::space::TerrainModel;
+        using asmdesk::space::TrajectorySet;
+        auto has = [](const std::vector<scene3d::PlacementChip> &cs,
+                      const char *sub, scene3d::PlacementChip::Sev sev) {
+            for (const auto &c : cs)
+                if (c.sev == sev && c.text.find(sub) != std::string::npos)
+                    return true;
+            return false;
+        };
+        { // HEIGHTS NOT PLACED (terrain anchor refused) + df residency label.
+            TerrainModel t;
+            t.anchor_error = "two or more codeimage code spans";
+            t.height_source = "df_step";
+            auto cs = scene3d::placement_chips(t, TrajectorySet{});
+            check("chip/HEIGHTS NOT PLACED",
+                  has(cs, "HEIGHTS NOT PLACED", scene3d::PlacementChip::Bad),
+                  "anchor_error must raise HEIGHTS NOT PLACED");
+            check("chip/df residency label",
+                  has(cs, "single-step residency (df_step)",
+                      scene3d::PlacementChip::Warn),
+                  "height_source df_step must label the rung");
+        }
+        { // PATH NOT PLACED (nothing of the path projects).
+            TrajectorySet tr;
+            tr.pc_points = 4;
+            tr.pc_placed = 0;
+            check("chip/PATH NOT PLACED",
+                  has(scene3d::placement_chips(TerrainModel{}, tr),
+                      "PATH NOT PLACED", scene3d::PlacementChip::Bad),
+                  "pc_placed==0 with points must raise PATH NOT PLACED");
+        }
+        { // K of N off-plane (partial placement — the 4096-byte clamp).
+            TrajectorySet tr;
+            tr.pc_points = 4;
+            tr.pc_placed = 3;
+            check("chip/K of N off-plane",
+                  has(scene3d::placement_chips(TerrainModel{}, tr), "off-plane",
+                      scene3d::PlacementChip::Warn),
+                  "a partial placement must raise the K of N chip");
+        }
+        { // fully anchored rel path -> derived-placement chip (Warn).
+            TrajectorySet tr;
+            tr.pc_points = 4;
+            tr.pc_placed = 4;
+            tr.anchored = true;
+            check("chip/derived placement",
+                  has(scene3d::placement_chips(TerrainModel{}, tr),
+                      "anchored to the codeimage span",
+                      scene3d::PlacementChip::Warn),
+                  "a fully anchored rel path must say derived placement");
+        }
+        { // fully placed ABS path -> no chip at all.
+            TrajectorySet tr;
+            tr.pc_points = 4;
+            tr.pc_placed = 4;
+            tr.anchored = false; // abs: placed but not anchored
+            check("chip/abs raises no chip",
+                  scene3d::placement_chips(TerrainModel{}, tr).empty(),
+                  "a fully placed abs path must raise no placement chip");
+        }
     }
 
     // --- 19 (dockable panes keystone): the docked shell draws REAL kPane* panes -
@@ -430,7 +575,8 @@ int main() {
     {
         ImGui::CreateContext();
         ImGuiIO &iod = ImGui::GetIO();
-        iod.IniFilename = nullptr; // still file-free — DockBuilder driven in-proc
+        iod.IniFilename =
+            nullptr; // still file-free — DockBuilder driven in-proc
         iod.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
         unsigned char *pd = nullptr;
         int wd = 0, hd = 0;
@@ -494,16 +640,16 @@ int main() {
             ImGui::DockBuilderAddNode(root, ImGuiDockNodeFlags_DockSpace);
             ImGui::DockBuilderSetNodeSize(root, ImVec2(1280, 720));
             ImGuiID c = root;
-            ImGuiID nleft =
-                ImGui::DockBuilderSplitNode(c, ImGuiDir_Left, 0.18f, nullptr, &c);
-            ImGuiID nright =
-                ImGui::DockBuilderSplitNode(c, ImGuiDir_Right, 0.24f, nullptr, &c);
-            ImGuiID nrightb = ImGui::DockBuilderSplitNode(nright, ImGuiDir_Down,
-                                                          0.5f, nullptr, &nright);
-            ImGuiID nbot =
-                ImGui::DockBuilderSplitNode(c, ImGuiDir_Down, 0.30f, nullptr, &c);
-            ImGuiID nbot2 = ImGui::DockBuilderSplitNode(nbot, ImGuiDir_Right, 0.5f,
-                                                        nullptr, &nbot);
+            ImGuiID nleft = ImGui::DockBuilderSplitNode(c, ImGuiDir_Left, 0.18f,
+                                                        nullptr, &c);
+            ImGuiID nright = ImGui::DockBuilderSplitNode(c, ImGuiDir_Right,
+                                                         0.24f, nullptr, &c);
+            ImGuiID nrightb = ImGui::DockBuilderSplitNode(
+                nright, ImGuiDir_Down, 0.5f, nullptr, &nright);
+            ImGuiID nbot = ImGui::DockBuilderSplitNode(c, ImGuiDir_Down, 0.30f,
+                                                       nullptr, &c);
+            ImGuiID nbot2 = ImGui::DockBuilderSplitNode(nbot, ImGuiDir_Right,
+                                                        0.5f, nullptr, &nbot);
             ImGui::DockBuilderDockWindow(kPaneHome, nleft);
             ImGui::DockBuilderDockWindow(kPaneRecording, c);
             ImGui::DockBuilderDockWindow(kPaneLoom, c);
@@ -549,10 +695,11 @@ int main() {
         ds.active_tab = imin;
         frame(ds);
         frame(ds);
-        check("dock/scrubber placard producer-absent",
-              imin >= 0 && static_cast<size_t>(imin) < ds.stepidx.size() &&
-                  !ds.stepidx[static_cast<size_t>(imin)].present(),
-              "min-trace has no regstate ring — the scrubber pane must placard");
+        check(
+            "dock/scrubber placard producer-absent",
+            imin >= 0 && static_cast<size_t>(imin) < ds.stepidx.size() &&
+                !ds.stepidx[static_cast<size_t>(imin)].present(),
+            "min-trace has no regstate ring — the scrubber pane must placard");
         check("dock/scrubber pane active for placard", active(kPaneScrubber),
               "the scrubber pane must be active to have drawn its placard");
         // The 3D overview's no-regions placard likewise survives into the pane
@@ -585,10 +732,12 @@ int main() {
         check("dock/preset docked timeline", tl_ri != 0,
               "the timeline pane must be docked in ReplayInspect");
         apply_preset(ds, LayoutPreset::LiveObserver);
-        check("dock/preset moves timeline", dockid(kPaneTimeline) != tl_ri,
-              "a preset switch must move the timeline pane to a different node");
-        check("dock/preset moves scrubber", dockid(kPaneScrubber) != sc_ri,
-              "a preset switch must move the scrubber pane to a different node");
+        check(
+            "dock/preset moves timeline", dockid(kPaneTimeline) != tl_ri,
+            "a preset switch must move the timeline pane to a different node");
+        check(
+            "dock/preset moves scrubber", dockid(kPaneScrubber) != sc_ri,
+            "a preset switch must move the scrubber pane to a different node");
         // Reset layout (the menu's own call) restores the default assignment.
         apply_preset(ds, LayoutPreset::ReplayInspect);
         check("dock/reset restores timeline", dockid(kPaneTimeline) == tl_ri,
@@ -657,14 +806,16 @@ int main() {
 
         // Cancel keeps the recording and drops the guard.
         shell_cancel_close(cs);
-        check("t3/cancel-keeps", cs.close_pending == -1 &&
-              cs.ws.recordings.size() == n - 1, "cancel must keep it open");
+        check("t3/cancel-keeps",
+              cs.close_pending == -1 && cs.ws.recordings.size() == n - 1,
+              "cancel must keep it open");
 
         // A save clears dirty; the same close then completes cleanly.
         cs.ws.recordings[0].dirty = false; // stand-in for a successful save
         shell_request_close(cs, 0);
-        check("t3/saved-closes-clean", cs.ws.recordings.size() == n - 2 &&
-              cs.close_pending == -1, "a saved recording closes without a guard");
+        check("t3/saved-closes-clean",
+              cs.ws.recordings.size() == n - 2 && cs.close_pending == -1,
+              "a saved recording closes without a guard");
 
         // Discard erases a dirty recording after the guard is raised.
         int j0 = shell_open(cs, fx("min-trace.asmtrace"), err);
@@ -674,8 +825,9 @@ int main() {
               "a dirty close raises the guard");
         size_t before = cs.ws.recordings.size();
         shell_discard_close(cs);
-        check("t3/discard-erases", cs.ws.recordings.size() == before - 1 &&
-              cs.close_pending == -1, "discard must erase the entry");
+        check("t3/discard-erases",
+              cs.ws.recordings.size() == before - 1 && cs.close_pending == -1,
+              "discard must erase the entry");
 
         // The Author door tab's own guard: a dirty run raises it rather than
         // closing; a clean tab closes on request.
@@ -752,8 +904,8 @@ int main() {
                         return &e;
                 return nullptr;
             };
-            check("20t1/summary present", find(ViewId::Summary) &&
-                                              find(ViewId::Summary)->present,
+            check("20t1/summary present",
+                  find(ViewId::Summary) && find(ViewId::Summary)->present,
                   "Summary is always present");
             check("20t1/canvas present",
                   find(ViewId::Canvas) && find(ViewId::Canvas)->present,
@@ -763,7 +915,8 @@ int main() {
                   "Timeline is in the lean default");
             // The reveal-when-present views are absent for a bare recording, and
             // each names WHY (never an empty "unavailable").
-            for (ViewId id : {ViewId::Loom, ViewId::Scrubber, ViewId::Scene3D}) {
+            for (ViewId id :
+                 {ViewId::Loom, ViewId::Scrubber, ViewId::Scene3D}) {
                 const ViewPresence *e = find(id);
                 check("20t1/absent", e && !e->present,
                       "a reveal view must be absent for a bare recording");
@@ -874,8 +1027,9 @@ int main() {
               "the panes must land on the live capture from Home");
         {
             size_t i = static_cast<size_t>(ls.live_tab);
-            auto vp = view_presence(ls.streams[i], ls.observers[i], ls.stepidx[i],
-                                    ls.ws.recordings[i], ls.mode, false, true);
+            auto vp =
+                view_presence(ls.streams[i], ls.observers[i], ls.stepidx[i],
+                              ls.ws.recordings[i], ls.mode, false, true);
             const ViewPresence *loom = find_view(vp, ViewId::Loom);
             check("25/no df -> Loom absent", loom && !loom->present,
                   "the Loom needs df_step values it does not have yet");
@@ -895,10 +1049,12 @@ int main() {
               "growth must move the built-event watermark and re-decode");
         {
             size_t i = static_cast<size_t>(ls.live_tab);
-            check("25/df decoded live", ls.streams[i].df.present(),
-                  "the live tab's df stream must decode the fed df_step events");
-            auto vp = view_presence(ls.streams[i], ls.observers[i], ls.stepidx[i],
-                                    ls.ws.recordings[i], ls.mode, false, true);
+            check(
+                "25/df decoded live", ls.streams[i].df.present(),
+                "the live tab's df stream must decode the fed df_step events");
+            auto vp =
+                view_presence(ls.streams[i], ls.observers[i], ls.stepidx[i],
+                              ls.ws.recordings[i], ls.mode, false, true);
             const ViewPresence *loom = find_view(vp, ViewId::Loom);
             const ViewPresence *slice = find_view(vp, ViewId::Slice);
             const ViewPresence *scrub = find_view(vp, ViewId::Scrubber);
@@ -906,14 +1062,16 @@ int main() {
                   "an exact dataflow capture must weave a Loom live");
             check("25/Slice live", slice && slice->present,
                   "df_step present -> the slice explorer must be offered live");
-            check("25/Scrubber absent without --steps", scrub && !scrub->present,
+            check("25/Scrubber absent without --steps",
+                  scrub && !scrub->present,
                   "this live capture did not arm --steps -> no regstate ring");
-            check("26/Scrubber live-no-steps reason",
-                  scrub &&
-                      scrub->reason.find("live session") != std::string::npos &&
-                      scrub->reason.find("--steps") != std::string::npos,
-                  "the live Scrubber's absent-reason must name the live session "
-                  "AND its --steps opt-in (26 T4)");
+            check(
+                "26/Scrubber live-no-steps reason",
+                scrub &&
+                    scrub->reason.find("live session") != std::string::npos &&
+                    scrub->reason.find("--steps") != std::string::npos,
+                "the live Scrubber's absent-reason must name the live session "
+                "AND its --steps opt-in (26 T4)");
         }
 
         // 34 T2: the "View in 3D overview" handoff — from the picked process's
@@ -927,10 +1085,11 @@ int main() {
             check("34/handoff jumps to the live tab",
                   ls.want_open_tab == ls.live_tab,
                   "the handoff must select the live capture's outer tab");
-            check("34/handoff requests the 3D inner tab",
-                  ls.want_view_id.has_value() &&
-                      *ls.want_view_id == ViewId::Scene3D,
-                  "want_view_id must name the 3D overview (no dt_view spelling)");
+            check(
+                "34/handoff requests the 3D inner tab",
+                ls.want_view_id.has_value() &&
+                    *ls.want_view_id == ViewId::Scene3D,
+                "want_view_id must name the 3D overview (no dt_view spelling)");
             check("34/handoff consumes the intent", !ls.inspect.want_scene,
                   "the one-frame intent must be cleared once honoured");
         }
@@ -1017,8 +1176,9 @@ int main() {
                   "the register file must move step-to-step (rax 0 -> 6)");
         }
         {
-            auto vp = view_presence(ls.streams[i], ls.observers[i], ls.stepidx[i],
-                                    ls.ws.recordings[i], ls.mode, false, true);
+            auto vp =
+                view_presence(ls.streams[i], ls.observers[i], ls.stepidx[i],
+                              ls.ws.recordings[i], ls.mode, false, true);
             const ViewPresence *scrub = find_view(vp, ViewId::Scrubber);
             check("26/Scrubber offered live", scrub && scrub->present,
                   "with a live regstate ring the Scrubber is a present view");
@@ -1044,7 +1204,8 @@ int main() {
         sess.feed_line(
             R"({"k":"session","state":"started","mode":"dataflow","pid":7,"params":{}})");
         sess.feed_line(kHdr);
-        sess.feed_line(R"({"k":"df_step","step":0,"off":0,"disasm":"nop","ops":[]})");
+        sess.feed_line(
+            R"({"k":"df_step","step":0,"off":0,"disasm":"nop","ops":[]})");
         sess.feed_line(
             R"({"k":"end","events":1,"truncated":false,"drops":{"lost":0,"throttled":false}})");
         sess.feed_line(
@@ -1061,8 +1222,9 @@ int main() {
               ls.live_tab == -1 && ls.ws.recordings.empty(),
               "adopting the capture must retire the ephemeral live tab");
         shell_sync_live_tab(ls);
-        check("25t3/no resurrection", ls.live_tab == -1,
-              "the adopted (dismissed) completed recording must not re-promote");
+        check(
+            "25t3/no resurrection", ls.live_tab == -1,
+            "the adopted (dismissed) completed recording must not re-promote");
 
         // A fresh session after disconnect still promotes (the watermark reset).
         sess.shutdown();
@@ -1072,7 +1234,8 @@ int main() {
         sess.feed_line(
             R"({"k":"session","state":"started","mode":"dataflow","pid":8,"params":{}})");
         sess.feed_line(kHdr);
-        sess.feed_line(R"({"k":"df_step","step":0,"off":0,"disasm":"nop","ops":[]})");
+        sess.feed_line(
+            R"({"k":"df_step","step":0,"off":0,"disasm":"nop","ops":[]})");
         shell_sync_live_tab(ls);
         check("25t3/fresh session re-promotes", ls.live_tab >= 0,
               "a new capture after disconnect must promote a fresh live tab");
@@ -1095,8 +1258,9 @@ int main() {
         shell_sync_live_tab(ls);
         size_t i = static_cast<size_t>(ls.live_tab);
         {
-            auto vp = view_presence(ls.streams[i], ls.observers[i], ls.stepidx[i],
-                                    ls.ws.recordings[i], ls.mode, false);
+            auto vp =
+                view_presence(ls.streams[i], ls.observers[i], ls.stepidx[i],
+                              ls.ws.recordings[i], ls.mode, false);
             const ViewPresence *s3d = find_view(vp, ViewId::Scene3D);
             check("25t6/3D live", s3d && s3d->present,
                   "a live capture carrying codeimage regions must offer 3D");
@@ -1104,7 +1268,8 @@ int main() {
         // Set a camera sentinel, grow the capture, and re-sync: the re-weave must
         // drop the woven geometry but keep the user's interactive camera.
         ls.scenes[i].cam.yaw = 2.5f;
-        sess.feed_line(R"({"k":"df_step","step":0,"off":0,"disasm":"nop","ops":[]})");
+        sess.feed_line(
+            R"({"k":"df_step","step":0,"off":0,"disasm":"nop","ops":[]})");
         shell_sync_live_tab(ls);
         check("25t6/camera preserved", ls.scenes[i].cam.yaw == 2.5f,
               "a live 3D re-weave must keep the camera, not reset the orbit");
@@ -1137,31 +1302,37 @@ int main() {
         s.active_tab = a;
         UndoCommand cmd;
         cmd.kind = UndoCommand::Kind::Filter;
-        cmd.filter_rec = s.streams[static_cast<size_t>(a)].id; // A's id, NOT a tab
+        cmd.filter_rec =
+            s.streams[static_cast<size_t>(a)].id; // A's id, NOT a tab
         cmd.filter_before = "";
         cmd.filter_after = "openat";
         s.undo.push(std::move(cmd));
         check("fix6/command carries the recording id",
               !s.undo.cmds.empty() &&
                   s.undo.cmds.back().filter_rec == s.streams[0].id,
-              "the Filter command is stamped with recording A's id, not a tab idx");
+              "the Filter command is stamped with recording A's id, not a tab "
+              "idx");
 
         // Now switch to B and undo — the exact sequence that used to corrupt B.
         s.active_tab = b;
         const UndoCommand *un = s.undo.undo();
-        check("fix6/undo pops the filter command", un != nullptr, "one on the stack");
+        check("fix6/undo pops the filter command", un != nullptr,
+              "one on the stack");
         if (un)
             undo_apply(s, *un, /*redo=*/false);
         check("fix6/undo restores A by id",
               std::string(s.observers[0].syscall_filter).empty(),
-              "Ctrl+Z after a tab switch must restore A's filter (to its baseline)");
-        check("fix6/undo leaves B untouched",
-              std::string(s.observers[1].syscall_filter) == "read",
-              "the active tab B's own filter must NOT be clobbered by A's undo");
+              "Ctrl+Z after a tab switch must restore A's filter (to its "
+              "baseline)");
+        check(
+            "fix6/undo leaves B untouched",
+            std::string(s.observers[1].syscall_filter) == "read",
+            "the active tab B's own filter must NOT be clobbered by A's undo");
 
         // Redo lands back on A too (by id), still not on B.
         const UndoCommand *re = s.undo.redo();
-        check("fix6/redo replays the filter command", re != nullptr, "redoable");
+        check("fix6/redo replays the filter command", re != nullptr,
+              "redoable");
         if (re)
             undo_apply(s, *re, /*redo=*/true);
         check("fix6/redo re-applies onto A by id",
@@ -1219,8 +1390,9 @@ int main() {
         // engines (dataflow / auto); a whole-process mode ignores it.
         is.want = LiveMode::Auto;
         is.steps = true;
-        check("cap/auto steps", inspect_start_params(is).value("steps", false),
-              "auto + steps -> {steps:true} (the live Scrubber's register ring)");
+        check(
+            "cap/auto steps", inspect_start_params(is).value("steps", false),
+            "auto + steps -> {steps:true} (the live Scrubber's register ring)");
         is.want = LiveMode::Log;
         check("cap/log ignores steps", inspect_start_params(is).empty(),
               "a whole-process mode carries no register ring, steps or not");
@@ -1265,10 +1437,11 @@ int main() {
         InspectState ah;
         ah.host_started = true;
         inspect_attach_full_detail(ah, 7);
-        check("attach/host arms confirm",
-              ah.perturb_pending && ah.want == LiveMode::Auto,
-              "with a host, full-detail attach arms the perturb confirm for the "
-              "single-step (it does not silently start)");
+        check(
+            "attach/host arms confirm",
+            ah.perturb_pending && ah.want == LiveMode::Auto,
+            "with a host, full-detail attach arms the perturb confirm for the "
+            "single-step (it does not silently start)");
     }
 
     if (failures) {

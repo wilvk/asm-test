@@ -51,10 +51,10 @@ struct Projection {
 struct TrajPoint {
     uint64_t t = 0;    // trace step index (time = vertical axis)
     uint64_t addr = 0; // an address in the recording's address space: absolute
-                       // for a measured abs vertex; the DERIVED absolute address
-                       // base+off for a rel offset the anchor placed (36 T2 —
-                       // set.basis still reads "rel"); the raw wire offset for a
-                       // rel offset the anchor could NOT place (with placed=false)
+        // for a measured abs vertex; the DERIVED absolute address
+        // base+off for a rel offset the anchor placed (36 T2 —
+        // set.basis still reads "rel"); the raw wire offset for a
+        // rel offset the anchor could NOT place (with placed=false)
     enum { Exact, Statistical } fidelity = Exact; // trace/PT vs ibs survey
     bool is_access = false; // false = PC vertex; true = a data-access mark
     int32_t tid = -1;       // -1 = single-trajectory replay; else per-thread

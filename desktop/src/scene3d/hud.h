@@ -11,12 +11,26 @@
 #define ASMDESK_SCENE3D_HUD_H
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "scene3d/scene.h"
 #include "space/terrain.h"
 #include "space/trajectory.h"
 
 namespace asmdesk::scene3d {
+
+// 36 T4: the placement-provenance chips, as PURE DATA so the honesty chrome is
+// testable without an ImGui frame — deleting a branch fails a named check. Bad is
+// a refusal (rendered ALL CAPS, in the refuse colour); Warn is a graded fact
+// (lowercase `label: explanation`, in the warn colour). draw_scene_hud renders
+// this list into the chip row; the tests assert its contents per scenario.
+struct PlacementChip {
+    enum Sev { Bad, Warn } sev;
+    std::string text;
+};
+std::vector<PlacementChip> placement_chips(const space::TerrainModel &terr,
+                                           const space::TrajectorySet &traj);
 
 struct HudState {
     uint64_t t = 0;      // playhead: the inclusive terrain slice [0, t]

@@ -172,6 +172,15 @@ region-relative → labelled). Deferrable without blocking T1–T5.
 > per-tid split); the shell weave reaches it through the unchanged
 > `draw_scene_overview` → `build_trajectories` call, and the live re-weave
 > through `shell_sync_live_tab`.
+>
+> **Corrected by [36](36-anchor-the-3d-plane.md) (2026-07-29).** The chip claim
+> above was a D7 breach: the HUD basis chip keyed on `terr.basis` (the *canvas*
+> basis), which is empty for a df-only recording — so **no basis chip drew at all**
+> for a live single-step capture, and its region-relative path projected onto
+> nothing, so the tube was silently dropped. 36 fixes both: the HUD now falls back
+> to the trajectory's basis (the rel chip finally fires), and the rel path is
+> ANCHORED to the recording's single `codeimage` span (`base+off`) so it draws —
+> with the derivation stated in the HUD, never faked as a measured address.
 
 ### T7 — headless test in `test_shell`  (S, depends on: T2, T4)
 

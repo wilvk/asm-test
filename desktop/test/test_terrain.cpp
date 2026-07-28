@@ -444,7 +444,8 @@ int main() {
         check("G: df rung sets height_source df_step",
               m.height_source == "df_step", "got '" + m.height_source + "'");
         check("G: label is single-step residency, not coverage",
-              m.height_note.find("single-step residency") != std::string::npos &&
+              m.height_note.find("single-step residency") !=
+                      std::string::npos &&
                   m.height_note.find("no block coverage") != std::string::npos,
               "note: " + m.height_note);
         check("G: nsteps is the df step count (real time axis)", m.nsteps == 3,
@@ -471,7 +472,8 @@ int main() {
             check("G2: a df height carries no STAT bit (exact, not sampled)",
                   (f & TF_STAT) == 0u, "df residency flagged statistical");
         check("G2: no separate statistical layer", !m.has_stat, "has_stat set");
-        check("G2: no data cells synthesized", m.data.empty(), "data not empty");
+        check("G2: no data cells synthesized", m.data.empty(),
+              "data not empty");
         steps_explained("G", m);
     }
 

@@ -70,9 +70,9 @@ struct TerrainModel {
     // 36 T3: which stream fed the height field, and its provenance.
     std::string height_source; // "trace" | "df_step" | "" (nothing placed)
     std::string height_note;   // labels a df_step rung as single-step residency
-    std::string anchor_error;  // non-empty => a rel path had no resolvable
-                               // codeimage span: no cells, but nsteps is real.
-                               // DISTINCT from basis_error (which is mixed bases)
+    // anchor_error non-empty => a rel path had no resolvable codeimage span: no
+    // cells, but nsteps is real. DISTINCT from basis_error (mixed bases).
+    std::string anchor_error;
     bool torn = false; // the recording is truncated/torn or dropped events
     bool mem_present = false; // the rich rung's `mem` stream fed the data cells
     std::string mem_note; // "coarse: no per-access memory stream" when absent

@@ -84,7 +84,8 @@ static Projection code_span(uint64_t base, uint64_t len) {
 // 36 T2 regression bar: every BUILT PC vertex is either placed on the plane or
 // explained (a note / a refusal). The ABSENCE of this bar is what let a total
 // placement failure look like success — so it runs at the end of every T2 case.
-static void placed_or_explained(const std::string &what, const TrajectorySet &ts,
+static void placed_or_explained(const std::string &what,
+                                const TrajectorySet &ts,
                                 const Projection &proj) {
     const bool explained = !ts.placement_note.empty() || ts.refused();
     for (const Trajectory &tr : ts.trajectories)
@@ -434,13 +435,15 @@ int main() {
         check("36 T2 df_step: not refused", !ts.refused(), ts.diagnostic);
         check("36 T2 df_step: basis stays rel (wire basis unchanged)",
               ts.basis == "rel", "got '" + ts.basis + "'");
-        check("36 T2 df_step: the set is anchored", ts.anchored, "not anchored");
+        check("36 T2 df_step: the set is anchored", ts.anchored,
+              "not anchored");
         check("36 T2 df_step: one trajectory", ts.trajectories.size() == 1,
               "got " + std::to_string(ts.trajectories.size()));
         if (ts.trajectories.size() == 1) {
             const Trajectory &tr = ts.trajectories[0];
             check("36 T2 df_step: BOTH rel and anchored flags set",
-                  (tr.flags & TRAJ_RELATIVE_BASIS) && (tr.flags & TRAJ_ANCHORED),
+                  (tr.flags & TRAJ_RELATIVE_BASIS) &&
+                      (tr.flags & TRAJ_ANCHORED),
                   "flags=" + std::to_string(tr.flags));
             const uint64_t off[3] = {0, 2, 6};
             for (size_t i = 0; i < tr.points.size() && i < 3; i++) {
@@ -460,7 +463,8 @@ int main() {
         }
         check("36 T2 df_step: placement counted (all placed)",
               ts.pc_points == 3 && ts.pc_placed == 3,
-              std::to_string(ts.pc_placed) + "/" + std::to_string(ts.pc_points));
+              std::to_string(ts.pc_placed) + "/" +
+                  std::to_string(ts.pc_points));
         placed_or_explained("36 T2 df_step", ts, proj);
     }
 
@@ -478,7 +482,8 @@ int main() {
         if (!ts.trajectories.empty()) {
             const Trajectory &tr = ts.trajectories[0];
             check("36 T2 rel trace: both flags",
-                  (tr.flags & TRAJ_RELATIVE_BASIS) && (tr.flags & TRAJ_ANCHORED),
+                  (tr.flags & TRAJ_RELATIVE_BASIS) &&
+                      (tr.flags & TRAJ_ANCHORED),
                   "flags");
             check("36 T2 rel trace: addr == base + off",
                   tr.points.size() == 3 && tr.points[0].addr == base &&
@@ -510,8 +515,9 @@ int main() {
         nd += "{\"k\":\"df_step\",\"step\":1,\"off\":2}\n";
         TrajectorySet ts = build_trajectories(load(nd), proj);
         check("36 T2 two-span: NOT anchored", !ts.anchored, "anchored");
-        check("36 T2 two-span: refused() still false (each vertex merely failed)",
-              !ts.refused(), "refused");
+        check(
+            "36 T2 two-span: refused() still false (each vertex merely failed)",
+            !ts.refused(), "refused");
         check("36 T2 two-span: placement_note names both bases",
               ts.placement_note.find("0x400000") != std::string::npos &&
                   ts.placement_note.find("0x800000") != std::string::npos,
@@ -535,8 +541,9 @@ int main() {
         const uint64_t base = 0x400000, len = 0x1000;
         Projection proj = code_span(base, len);
         std::string nd = kHdrExact;
-        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0}\n";    // in span
-        nd += "{\"k\":\"df_step\",\"step\":1,\"off\":4096}\n"; // == len: clamped out
+        nd += "{\"k\":\"df_step\",\"step\":0,\"off\":0}\n"; // in span
+        nd +=
+            "{\"k\":\"df_step\",\"step\":1,\"off\":4096}\n"; // == len: clamped out
         TrajectorySet ts = build_trajectories(load(nd), proj);
         check("36 T2 clamp: anchored", ts.anchored, "not anchored");
         check("36 T2 clamp: two points offered", ts.pc_points == 2,

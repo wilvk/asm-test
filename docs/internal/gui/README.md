@@ -305,13 +305,14 @@ unanchored one and any individually-unplaced vertex still cannot (with the hones
 limit that `df_step` carries no `tid`, so a live dataflow capture is one trajectory
 and yields no marks regardless). Pure `space/` + HUD: no engine, no GL, no wire
 change, no existing golden regenerated. Authored 2026-07-29 against HEAD `24778e4`.
-◐ 3/5 (T1 `resolve_anchor`; T2 the rel PC path is ANCHORED onto the plane —
-`base+off`, `TRAJ_ANCHORED` alongside `TRAJ_RELATIVE_BASIS`, placement counted,
-every anchored vertex projects, and `placement_note` states any shortfall/refusal
-— plus `TrajPoint::placed` for T5; T3 terrain gains a labelled `df_step`
-single-step-residency height rung + anchors the trace rung, with `height_source`/
-`height_note`/`anchor_error` and a "steps without cells are explained" bar) ·
-will · T4–T5 · 2026-07-29.
+◐ 4/5 (T1 `resolve_anchor`; T2 the rel PC path ANCHORED onto the plane; T3 the
+labelled `df_step` height rung + anchored trace rung; T4 the honesty chrome —
+pure testable `placement_chips` (HEIGHTS/PATH NOT PLACED, K-of-N, df residency,
+derived placement), the dropped rel chip fixed (HUD falls back to the traj
+basis), a pane placard for an unplaced plane, the `scene-df-loop` golden
+(byte-stable under docker-cli) + `test_shell`/`test_scene_fbo` end-to-end incl.
+the GL "anchored tube puts pixels on screen", and the doc/schema reconciliation) ·
+will · T5 · 2026-07-29.
 
 [37-region-tag-on-df-step.md](37-region-tag-on-df-step.md) — **the producer half of
 36**: state the region on the wire instead of deriving it. 36 anchors a

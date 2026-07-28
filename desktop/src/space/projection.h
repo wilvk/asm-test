@@ -43,9 +43,10 @@ Projection build_projection(std::vector<Region> regions);
 // wire so the multi-span case resolves instead of refusing — this stays the
 // permanent fallback for pre-37 recordings and for rel `trace`).
 struct Anchor {
-    bool ok = false;          // true iff exactly one codeimage code span pins it
-    uint64_t base = 0, len = 0; // the resolved span (absolute base, byte length)
-    std::string reason;       // why it could not anchor (empty when ok)
+    bool ok = false; // true iff exactly one codeimage code span pins it
+    uint64_t base = 0,
+             len = 0;   // the resolved span (absolute base, byte length)
+    std::string reason; // why it could not anchor (empty when ok)
 
     // Place a region-relative offset onto the absolute plane. False — so the
     // caller *counts* the miss instead of silently dropping it — when unanchored

@@ -106,7 +106,10 @@ static SceneModel build_scene(Recording rec,
     for (const space::Region &r : extra)
         regs.push_back(r);
     m.terr = space::build_terrain(space::build_projection(regs), rec);
-    m.traj = space::build_trajectories(rec);
+    // 36 T2: production-faithful — the terrain's Projection anchors a rel/df PC
+    // path onto the plane (a no-op for an abs recording), exactly as the shell
+    // does, so an anchored path's vertices project and the scene draws its tube.
+    m.traj = space::build_trajectories(rec, m.terr.proj);
     m.rec = std::move(rec);
     return m;
 }
@@ -356,6 +359,40 @@ static void pure_scene_checks() {
               m.terr.code.size() == coarse.terr.code.size() &&
                   m.terr.nsteps == coarse.terr.nsteps,
               "the mem lines perturbed the coarse terrain");
+    }
+
+    // (E) the LIVE dataflow scene (36 T4): absolute codeimage + region-relative
+    // df_step, NO trace. The df_step rung feeds the terrain and the PC path
+    // ANCHORS onto the single span (base+off) — and at least two of its vertices
+    // project, so scene.cpp's line.size() >= 6 tube gate cannot silently drop the
+    // trajectory (the very failure 36 repairs, and the assertion whose absence
+    // hid it).
+    {
+        SceneModel m = build_scene(
+            load_path(ASMTEST_GOLDEN_DIR, "scene-df-loop.asmtrace"));
+        check("golden df scene: no trace, so the canvas basis is empty",
+              m.terr.basis.empty(), "a df-only scene has no canvas basis");
+        check("golden df scene: height source is df_step",
+              m.terr.height_source == "df_step", m.terr.height_source.c_str());
+        check("golden df scene: the df rung placed code cells",
+              !m.terr.code.empty(), "the df_step residency rung is empty");
+        check("golden df scene: the PC path is rel AND anchored",
+              m.traj.basis == "rel" && m.traj.anchored, "path not anchored");
+        check("golden df scene: exactly one trajectory",
+              m.traj.trajectories.size() == 1, "wrong trajectory count");
+        size_t projected = 0;
+        if (m.traj.trajectories.size() == 1)
+            for (const space::TrajPoint &p : m.traj.trajectories[0].points) {
+                if (p.is_access)
+                    continue;
+                float u = 0, v = 0;
+                if (m.terr.proj.project(p.addr, &u, &v))
+                    projected++;
+            }
+        check(
+            "golden df scene: at least two vertices project (tube not dropped)",
+            projected >= 2,
+            ("only " + std::to_string(projected) + " projected").c_str());
     }
 }
 
@@ -640,6 +677,50 @@ int main() {
             check("torn cell is red (r dominates g and b)",
                   p[0] > p[1] + 40 && p[0] > p[2] + 40, "not a red gash");
         }
+    }
+
+    // --- (e) 36 T4: the ANCHORED df trajectory puts pixels on screen ---------
+    // scene-df-loop is a live dataflow capture (df_step + codeimage, no trace):
+    // its PC path is rel and must ANCHOR to the single span (base+off) before the
+    // scene can place it; an unanchored path projects nowhere and the tube is
+    // silently dropped by the line.size() >= 6 gate. Render the trajectory layer
+    // alone against a blank layer set — the anchored tube must add lit pixels.
+    {
+        Recording rec = load_path(ASMTEST_GOLDEN_DIR, "scene-df-loop.asmtrace");
+        space::TerrainModel terr = space::build_terrain(
+            space::build_projection(space::regions_from_codeimage(rec)), rec);
+        space::TrajectorySet traj = space::build_trajectories(rec, terr.proj);
+        check("df GL: the path anchored", traj.anchored, "not anchored");
+        scene.nsteps = static_cast<uint32_t>(terr.nsteps);
+        scene.set_terrain(terr.full());
+        scene.set_trajectories(traj, terr.proj);
+
+        auto lit = [&](const SceneLayers &L) {
+            glBindFramebuffer(GL_FRAMEBUFFER, cf.fbo);
+            glViewport(0, 0, W, H);
+            glClearColor(0.02f, 0.02f, 0.03f, 1.0f);
+            glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+            scene.render(cam, W, H, L);
+            std::vector<unsigned char> px(static_cast<size_t>(W) * H * 4);
+            glReadBuffer(GL_COLOR_ATTACHMENT0);
+            glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, px.data());
+            glBindFramebuffer(GL_FRAMEBUFFER, 0);
+            int n = 0;
+            for (size_t i = 0; i < px.size(); i += 4)
+                if (px[i] > 16 || px[i + 1] > 16 || px[i + 2] > 16)
+                    n++;
+            return n;
+        };
+        SceneLayers tube_only{};
+        tube_only.terrain = false;
+        tube_only.statistical = false;
+        tube_only.access_marks = false;
+        tube_only.convergence = false; // exact (the tube) stays on
+        SceneLayers nothing = tube_only;
+        nothing.exact = false;
+        check("df GL: the anchored trajectory puts pixels on screen",
+              lit(tube_only) > lit(nothing),
+              "the anchored tube added no pixels — the path was dropped");
     }
 
     // --- (d) convergence arcs: a bright cross-thread arc renders, and toggles -

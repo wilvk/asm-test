@@ -175,7 +175,8 @@ TrajectorySet build_trajectories(const Recording &r, const Projection &proj) {
                         p.addr = abs;
                         p.placed = true;
                     } else {
-                        p.placed = false; // out-of-span: leave addr = raw offset
+                        p.placed =
+                            false; // out-of-span: leave addr = raw offset
                     }
                 }
             }

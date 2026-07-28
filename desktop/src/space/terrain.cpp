@@ -288,7 +288,8 @@ TerrainModel build_terrain(Projection proj, const Recording &rec) {
         m.height_note = "coarse: heights from single-step residency (df_step) "
                         "— no block coverage";
         if (!anchor.ok && m.anchor_error.empty())
-            m.anchor_error = anchor.reason; // no span to place df offsets against
+            m.anchor_error =
+                anchor.reason; // no span to place df offsets against
         std::map<uint32_t, std::vector<uint64_t>> df_cell_steps;
         for (uint32_t st = 0; st < s.df.nsteps; ++st) {
             if (!s.df.has_step(st))

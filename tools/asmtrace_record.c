@@ -1095,6 +1095,117 @@ static int record_scene_abs(const char *dir, const char *out, const char *label,
     return 0;
 }
 
+/* Record one 3D-overview golden SCENE in the LIVE DATAFLOW shape (36 T4): the
+ * same emulator L0 run as record_scene_abs, but written the way a live serve
+ * `dataflow`/`auto` session writes it — an ABSOLUTE `codeimage` (the region that
+ * becomes terrain) plus REGION-RELATIVE `df_step` events (the PC path), and NO
+ * `trace`. This is the shape no other committed golden carries: the continuous
+ * fixture has df_step but no codeimage, and every other df golden also carries a
+ * rel `trace`, so 36's single-codeimage anchor fallback never fires against a
+ * committed file until this one exists. The desktop reads it unconditionally —
+ * the terrain places a labelled single-step residency rung anchored to the span,
+ * and the trajectory anchors the df_step offsets onto the same plane.
+ *
+ * `codeimage` is emitted VERBATIM from record_scene_abs (same base/len/bytes);
+ * the df_step offsets are `vt->insn_off[s]` — REGION-RELATIVE by construction,
+ * exactly as dataflow_ptrace.c writes `pc - base_ip`. No df_edge/regstate/ops:
+ * the scene consumes only the PC path + the region (all the anchor and the
+ * residency rung need), and — like record_scene_abs's `trace` — writing operands
+ * here would pin the value producer's field order a second time.
+ *
+ * Returns 0 on success, -1 on a setup/write failure. */
+static int record_scene_df(const char *dir, const char *out, const char *label,
+                           const uint8_t *code, size_t code_len, const long *args,
+                           int nargs) {
+    asmtrace_prov_t prov = {"emu-l0", 1, "exact", 0, NULL, 0};
+    asmtrace_writer_t w;
+    asmtest_valtrace_t *vt = NULL;
+    char path[1024], body[65536], text[1024];
+    char hexbytes[2 * REC_WINDOW + 1];
+    size_t nsteps, s;
+    int rc;
+
+    if (code_len > REC_WINDOW) {
+        fprintf(stderr, "asmtrace_record: scene %s exceeds the %d-byte window\n",
+                out, REC_WINDOW);
+        return -1;
+    }
+    vt = asmtest_valtrace_new(4096, 65536, 4096);
+    if (!vt) {
+        fprintf(stderr, "asmtrace_record: out of memory\n");
+        return -1;
+    }
+    rc = asmtest_dataflow_emu_run(code, code_len, args, nargs, 0, vt);
+    if (rc < 0) {
+        fprintf(stderr, "asmtrace_record: emulator producer failed for %s\n",
+                out);
+        asmtest_valtrace_free(vt);
+        return -1;
+    }
+    nsteps = vt->steps_len;
+
+    snprintf(path, sizeof path, "%s/%s.asmtrace", dir, out);
+    if (asmtrace_open(&w, path, 1 /* deterministic */) != 0) {
+        fprintf(stderr, "asmtrace_record: cannot write %s\n", path);
+        asmtest_valtrace_free(vt);
+        return -1;
+    }
+    set_code_identity(&w, out, code, code_len);
+    asmtrace_header(&w, "asmtrace_record", &prov, 0, NULL);
+
+    {
+        int o = snprintf(text, sizeof text,
+                         "3D-overview golden scene (live dataflow shape): %s(",
+                         label);
+        for (int i = 0; i < nargs; i++)
+            o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
+                          i ? ", " : "", args[i]);
+        snprintf(text + o, sizeof text - (size_t)o,
+                 ") under the deterministic emulator L0 producer, written as a "
+                 "live serve dataflow session does: an absolute `codeimage` at "
+                 "0x%lx plus REGION-RELATIVE `df_step` offsets, and NO `trace`. "
+                 "36 anchors the offsets to the single codeimage span (base+off) "
+                 "and the terrain draws a labelled single-step residency rung.",
+                 REC_CODE_BASE);
+        asmtrace_escape(body, sizeof body, text);
+        asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
+    }
+
+    for (s = 0; s < code_len; s++)
+        snprintf(hexbytes + 2 * s, 3, "%02x", code[s]);
+    hexbytes[2 * code_len] = '\0';
+    asmtrace_emitf(&w, "codeimage",
+                   "\"base\":%llu,\"len\":%llu,\"version\":0,\"when\":0,"
+                   "\"bytes\":\"%s\"",
+                   (unsigned long long)REC_CODE_BASE,
+                   (unsigned long long)code_len, hexbytes);
+
+    /* df_step: step + REGION-RELATIVE off + disasm (no ops). Field order is the
+     * schema's step, off, disasm? — the same prefix cli_smoke greps and the
+     * anchor case 37 later extends with `rbase`. */
+    for (s = 0; s < nsteps; s++) {
+        char dis[160] = "";
+        unsigned long long off = (unsigned long long)vt->insn_off[s];
+        if (emu_disas_available())
+            emu_disas(EMU_ARCH_X86_64, code, code_len, REC_CODE_BASE,
+                      vt->insn_off[s], dis, sizeof dis);
+        if (dis[0]) {
+            asmtrace_escape(body, sizeof body, dis);
+            asmtrace_emitf(&w, "df_step",
+                           "\"step\":%zu,\"off\":%llu,\"disasm\":\"%s\"", s, off,
+                           body);
+        } else {
+            asmtrace_emitf(&w, "df_step", "\"step\":%zu,\"off\":%llu", s, off);
+        }
+    }
+
+    asmtrace_writer_set_steps_total(&w, vt->steps_total);
+    asmtrace_close(&w, 0, 0, NULL);
+    asmtest_valtrace_free(vt);
+    printf("  %-28s %zu step(s), 1 codeimage, df_step (no trace)\n", out, nsteps);
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* The ABI x-ray's paired goldens (09-teaching-producers.md T4)        */
 /*                                                                     */
@@ -1556,6 +1667,13 @@ int main(int argc, char **argv) {
         if (record_scene_abs(dir, "scene-abs-loop-truncated", "scene_hot_loop",
                              SCENE_HOT_LOOP, sizeof SCENE_HOT_LOOP, scene_args,
                              1, 6) != 0)
+            failed++;
+        /* 36 T4: the SAME bytes in the live dataflow shape — absolute codeimage
+         * + region-relative df_step, no trace. The one committed golden that
+         * exercises 36's anchor + the terrain's df_step residency rung. */
+        if (record_scene_df(dir, "scene-df-loop", "scene_hot_loop",
+                            SCENE_HOT_LOOP, sizeof SCENE_HOT_LOOP, scene_args,
+                            1) != 0)
             failed++;
     }
 

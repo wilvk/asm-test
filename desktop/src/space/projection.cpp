@@ -137,9 +137,10 @@ Anchor resolve_anchor(const std::vector<Region> &regions) {
             bases += ", ";
         bases += buf;
     }
-    a.reason = "two or more codeimage code spans (" + bases +
-               ") — a routine-relative offset carries no region tag, so the span "
-               "it belongs to is unrecoverable";
+    a.reason =
+        "two or more codeimage code spans (" + bases +
+        ") — a routine-relative offset carries no region tag, so the span "
+        "it belongs to is unrecoverable";
     return a;
 }
 

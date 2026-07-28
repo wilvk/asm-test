@@ -241,6 +241,16 @@ and arm64 (`make docker-desktop DOCKER_PLATFORM=linux/arm64`).
 4. **Statistical isolation.** `survey`-derived residency, if shown, writes a
    **separate** `Terrain` with every cell `flags |= STAT`; the exact terrain and
    the statistical terrain are distinct layers the renderer never merges.
+5. **A second, labelled height source ([36](36-anchor-the-3d-plane.md) T3,
+   2026-07-29).** When the trace canvas placed nothing (a live serve
+   `dataflow`/`auto` capture: `df_step` only, no `trace`), the coarse rung is
+   driven from the single-step residency stream (`df_step.off`), anchored to the
+   recording's single `codeimage` span. It is labelled `height_source == "df_step"`
+   with a `height_note` that says **single-step residency, not block coverage** —
+   it synthesizes no `blocks`, marks nothing covered, and flags nothing `STAT`
+   (the stream is exact, not sampled). A rel path with no resolvable span sets
+   `anchor_error` (a flat plane that *says why*, distinct from the mixed-basis
+   `basis_error`).
 
 **Tests.** `test_terrain.cpp` (headless): a hand-built recording of 3 offsets in
 2 regions yields the expected non-zero cells; a truncated fixture sets `TORN`; a
@@ -273,9 +283,17 @@ marks), tagged exact/statistical and by tid.
    a live serve `dataflow`/`auto` session emits `df_step`/`df_edge` and **no**
    `trace`, so when a recording carries no `trace` the PC path is woven from the
    `df_step` offset stream instead — region-relative by construction
-   (`RELATIVE_BASIS`, `basis:"rel"`), grouped per tid, and never projected as a
-   true absolute path. `trace`, when present, wins (an emulator `--dataflow` file
-   carries both).
+   (`RELATIVE_BASIS`, `basis:"rel"`), grouped per tid. `trace`, when present, wins
+   (an emulator `--dataflow` file carries both). **Narrowed by
+   [36](36-anchor-the-3d-plane.md) (2026-07-29):** "never projected as a true
+   absolute path" was correct against the fact available then (a bare offset has
+   no anchor), but when the recording carries exactly one `codeimage` code span,
+   `base + off` **is** the true address — a derivation from a stated fact — so the
+   path is now ANCHORED onto the absolute plane (`TRAJ_ANCHORED` alongside
+   `RELATIVE_BASIS`; the wire basis stays `rel`), placement is counted, and zero
+   or ≥2 spans refuse **louder** (no geometry *and* a stated reason) instead of
+   the old silent empty plane. [37](37-region-tag-on-df-step.md) states the region
+   on the wire so the multi-span case resolves instead of refusing.
 
 **Tests.** `test_trajectory.cpp` (headless): an `abs` fixture yields vertices at
 the projected cells in step order; a `rel` fixture sets `RELATIVE_BASIS`; a mixed
