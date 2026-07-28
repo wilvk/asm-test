@@ -1,0 +1,225 @@
+# Continuous live `dataflow` / `auto` capture — re-arm the engine — implementation
+
+> **A tail follow-on to the [extension roadmap](27-extension-roadmap.md)**, not one
+> of its six roots and **not** R3. It removes a single structural limit: the live
+> `dataflow` / `auto` engine captures **one** invocation of the picked region and
+> then the session ends on its own, which reads as "auto + Start starts then
+> stops." This brief makes the engine **re-arm and keep capturing until Stop**,
+> into one continuously growing recording.
+>
+> **This is not [R3 resume-from-state](30-resume-from-state-and-reweave.md).** R3
+> restores an emulator snapshot to run a counterfactual from an *edited* state, and
+> live-process resume "stays killed" ([30](30-resume-from-state-and-reweave.md)).
+> Continuous capture re-runs the **same** scoped capture repeatedly; it never
+> restores, edits, or forks live state. And it is **not** "whole process,
+> continuously" — that unbounded-window posture is explicitly refused as the DR
+> taint tier's job ([dataflow_ptrace.c:2150-2155](../../../src/dataflow_ptrace.c#L2150));
+> every pass here stays scoped and bounded exactly as today.
+>
+> Authored 2026-07-28, verified against HEAD `f2b6cdf`. If a cited file:line
+> disagrees with the code when you implement, the code wins — re-verify, then fix
+> this doc in the same change.
+
+## Why this work exists
+
+`auto` is `dataflow` behind a picker, and the dataflow producer is one-shot by
+construction: [`asmspy_engine_dataflow`](../../../cli/asmspy_engine.c#L3629) calls
+`asmtest_dataflow_ptrace_attach_jit` **once** — a full SEIZE → wait-for-entry →
+single-step one entry→exit → DETACH — and returns. There is no `while (!stop)`
+loop, unlike every other live mode
+([syscalls :2733](../../../cli/asmspy_engine.c#L2733),
+[region :3508](../../../cli/asmspy_engine.c#L3508),
+[stream :3760](../../../cli/asmspy_engine.c#L3760),
+[graph :4176](../../../cli/asmspy_engine.c#L4176),
+[tree :4427](../../../cli/asmspy_engine.c#L4427),
+[procs :4795](../../../cli/asmspy_engine.c#L4795),
+[watch :5195](../../../cli/asmspy_engine.c#L5195)). So the tracer thread ends the
+instant that one invocation completes, `growing()` goes null, and the live
+Scrubber / def-use view freeze on a single sample. On a target where the picker
+is gated (IBS under `perf_event_paranoid`) or the region does not re-enter within
+the entry wait, the pass returns a positive skip (`ASMSPY_REGION_NEVER_RAN`) and
+the session ends with an empty recording — the same symptom, faster.
+
+The other live modes prove the shape is sound; the region engine
+([`asmspy_engine_region`](../../../cli/asmspy_engine.c#L3450)) already re-samples a
+scoped region every pass until `stop`. This brief brings the dataflow engine to
+that model, with the two consequences that make it more than a `while` wrapper.
+
+## What already exists (verified 2026-07-28)
+
+- **The one-shot producer** — [`asmspy_engine_dataflow`](../../../cli/asmspy_engine.c#L3629);
+  the per-call value trace `vt` (and its optional register ring) is allocated and
+  freed *inside* the call, so nothing persists between invocations.
+- **The full attach lifecycle** — `dfp_attach_worker`
+  ([dataflow_ptrace.c:1985](../../../src/dataflow_ptrace.c#L1985)) owns SEIZE →
+  entry-wait → step → DETACH per call. It leaves no leaked attach (safe to call in
+  a loop), but each call **re-SEIZEs the whole target tree** — unlike the region
+  engine, which holds one seize across all passes.
+- **The loop to mirror** — [`asmspy_engine_region`](../../../cli/asmspy_engine.c#L3450):
+  seizes once, checks `stop` in the `while` condition **and** threads it into the
+  entry race (interruptible), re-arms the entry per pass via a `planter`, emits one
+  sample per produced trace, and detaches once after the loop.
+- **One recording per session, opened/closed once** — `serve_tracer`
+  ([rec_open :3757](../../../cli/asmspy.c#L3757) /
+  [rec_close :3788](../../../cli/asmspy.c#L3788)) brackets `serve_run_engine`, so a
+  loop inside the engine naturally yields **one growing recording** (header once,
+  events appended, `end` once). The desktop's
+  [`shell_sync_live_tab`](../../../desktop/src/ui/shell.cpp#L169) already follows a
+  growing recording live.
+- **The stop signal** — `atomic_bool s->stop`, set by `serve_stop`
+  ([asmspy.c:3804](../../../cli/asmspy.c#L3804)) with a `SIGALRM` wake + join.
+- **The two hazards this brief must resolve** (both absent for the region engine,
+  because it re-samples a held attach rather than re-SEIZEing a fresh `vt`):
+  1. **Step-index collision.** Each pass gets a fresh `vt`, so `df_step` and
+     `regstate` both restart at step 0, and the `end` footer's `steps_total` is
+     **overwritten per pass** ([dataflow_record :2358](../../../cli/asmspy.c#L2358)).
+     The desktop step-index keys on that step field with
+     `first_step = drops_lost = 0`
+     ([stepindex.cpp:86-87](../../../desktop/src/analysis/stepindex.cpp#L86)), so
+     without a discriminator two invocations' step ranges overwrite each other.
+  2. **Uninterruptible mid-pass.** Neither the entry wait nor
+     [`dfp_step_loop`](../../../src/dataflow_ptrace.c#L1007) takes `stop`; the step
+     loop treats `EINTR` as retry
+     ([:1027](../../../src/dataflow_ptrace.c#L1027)). So `stop` is only observed
+     *between* passes, and one pass can run to the `2^20`-step backstop or the 10 s
+     entry wait before yielding.
+
+## Tasks
+
+### T1 — engine re-arm loop + per-invocation discriminator  (M)
+
+**Goal.** Turn `asmspy_engine_dataflow` into a bounded re-arm loop that emits a
+continuous stream of invocations into one growing recording, each cleanly
+delimited.
+
+**Steps.**
+1. Wrap the producer call in the standard live-mode loop —
+   `while ((max < 0 || passes < max) && !(stop && atomic_load(stop)))` — mirroring
+   [region :3508](../../../cli/asmspy_engine.c#L3508). Gate it on a new
+   `continuous` param so the default stays one-shot (D-compat).
+2. Emit a **`df_invocation`** marker (new reserved kind, D5 — define fields in
+   [asmtrace-schema.md](asmtrace-schema.md): `{pass, result, steps, truncated}`)
+   **before** each pass's `df_step` run, so the reader segments passes without
+   guessing. This retires the ambiguity of the sticky/overwritten `steps_total`
+   footer: `steps` rides the marker per pass; the footer `steps_total` becomes the
+   cumulative total (or is documented as last-pass-only and deprecated for
+   continuous). Fix field order (D6); coordinate the kind with the freeze (D5).
+3. `auto` (`SM_AUTO`) pins its pick: run the picker **once**, then re-arm the same
+   `(base,len)` each pass rather than re-picking the hottest region every cycle
+   (which would make the view jump between functions). The serve dispatch is
+   [SM_AUTO :3645](../../../cli/asmspy.c#L3645); the pick note is already emitted
+   for the desktop.
+4. Serve param + CLI flag: `continuous:true` in `serve_parse_start`
+   ([asmspy.c:3861](../../../cli/asmspy.c#L3861), beside the existing
+   [`steps` :3916](../../../cli/asmspy.c#L3916) / [`mem` :3926](../../../cli/asmspy.c#L3926))
+   and `--dataflow --continuous` on the CLI.
+
+**Done when.** A continuous dataflow session over a hot fixture region emits ≥2
+`df_invocation`-delimited passes into one recording and ends cleanly on `stop`;
+the one-shot default is byte-identical to today; `test_dataflow` / a serve test
+covers both.
+
+### T2 — interruptible Stop + cheap re-arm (hold one seize)  (L)
+
+**Goal.** Bound Stop latency and stop re-SEIZEing the whole target every pass.
+
+**Steps.**
+1. Thread `atomic_bool *stop` into `dfp_run_to_multi` (the entry wait) and
+   [`dfp_step_loop`](../../../src/dataflow_ptrace.c#L1007): on `stop`, treat the
+   `SIGALRM`/`EINTR` as **terminate**, not retry
+   ([:1027](../../../src/dataflow_ptrace.c#L1027)) — so a running pass yields
+   promptly instead of only between passes.
+2. Refactor `dfp_attach_worker`
+   ([dataflow_ptrace.c:1985](../../../src/dataflow_ptrace.c#L1985)) to separate
+   **seize-once** from **per-invocation step**, so the loop holds one seize and
+   re-arms the entry each pass (the region engine's `planter` model) instead of a
+   fresh SEIZE/DETACH per pass. This is the invasive part; it touches the ptrace
+   core.
+3. **arm64 pass required.** Single-step re-arming amplifies the arm64 detach-fatal
+   hazard (PTRACE_SINGLESTEP on a thread in a blocking syscall survives DETACH and
+   kills the target); verify on the arm64 docker/GH lane, not just x86-64.
+
+**Done when.** A `stop` during a live continuous capture is honored within one
+in-flight pass (asserted with a timed test); a long session shows no per-pass
+re-SEIZE cost regression; the arm64 lane is green (or the hazard is re-confirmed
+and gated, per project policy).
+
+### T3 — desktop consumer: segment by invocation  (M)
+
+**Goal.** Render the continuous stream without conflating passes; default to a
+live-refreshing view of the latest invocation.
+
+**Steps.**
+1. Step-index / Scrubber / def-use key off `df_invocation` so each pass's
+   `df_step` 0..N is scoped to its pass, not overwritten
+   ([stepindex.cpp:86](../../../desktop/src/analysis/stepindex.cpp#L86)). Default:
+   show the **latest** invocation, refreshing live; optionally a small invocation
+   navigator (prev/next pass) — a stepping stone toward the roadmap's "accumulate
+   invocations" timeline.
+2. `shell_sync_live_tab` / `growing()` already follow a growing recording; confirm
+   the live-weave banner and the single-tab promotion behave for a recording that
+   grows across many invocations (no per-pass tab churn).
+
+**Done when.** The null-backend desktop test drives a two-invocation continuous
+recording and asserts the two passes are addressable separately and the tab shows
+the latest; `desktop-test` green.
+
+### T4 — UI arming + goldens + honesty fixtures  (S–M)
+
+**Steps.**
+1. A "continuous" checkbox in the capture pane (an `InspectState` flag beside
+   `steps`); send `continuous:true`. Do **not** re-confirm the perturbation
+   warning per pass — mark it session-confirmed on the first accepted start.
+2. D6/D7: a continuous golden (multi-invocation) **and** a dishonesty fixture
+   (a pass that skips / truncates), with the renderer test asserting the honest
+   placard per pass.
+
+**Done when.** `make docker-desktop` + `docker-cli` green; the checkbox drives a
+live continuous capture end-to-end; goldens committed under
+`tests/golden-asmtrace/`.
+
+## Alternative considered — desktop-driven re-arm (not the endpoint)
+
+A cheaper MVP is to leave the engine one-shot and have the **desktop re-fire
+`start`** each time a dataflow/auto session completes, until Stop. It needs **zero
+engine or schema change** (each pass is a clean separate recording, no step-index
+collision), reuses `shell_sync_live_tab`'s "follow growing → fall back to last
+completed" logic, and is ~1 day. It is a legitimate first ship. It is **not** the
+endpoint because: (a) `auto` re-picks per `start` unless the desktop pins the
+region from the pick note; (b) each cycle pays a full teardown→re-arm gap and a
+re-SEIZE; (c) completed recordings accumulate unboundedly and need eviction; and
+(d) it produces a *sequence* of recordings, not one continuous timeline — so it
+can never grow into the "accumulate invocations" view. This brief specifies the
+durable engine-side form; the desktop-driven loop is a valid interim if urgency
+demands it.
+
+## Non-goals / honest limits
+
+- **Not resume-from-state / Reweave.** That is [R3](30-resume-from-state-and-reweave.md)
+  (emulator snapshot/restore for counterfactuals); live-process resume stays
+  killed. Continuous capture never restores, edits, or forks live state — it
+  re-runs the same scoped capture.
+- **Not "whole process, continuously."** Each pass stays **scoped and bounded**
+  (`max_insns`, the `2^20`-step backstop); continuity is re-arming a bounded scoped
+  capture, not widening the window
+  ([dataflow_ptrace.c:2150](../../../src/dataflow_ptrace.c#L2150)).
+- **Stop latency is bounded by one in-flight pass**, even after T2 — a genuinely
+  hung target still costs up to the entry wait (`DFP_ENTRY_WAIT_MS`) before a pass
+  yields.
+- **Perturbation is amplified.** Every pass single-steps the target; the
+  once-per-session perturb confirm becomes more load-bearing, and the arm64
+  detach-fatal hazard is the gating risk (T2 step 3).
+- Inherits the tier's standing refusals unchanged: exact-only, scoped, no
+  cross-thread value hops, provenance starts at instrumentation.
+
+## Cross-references
+
+Builds on the live substrate: [25](25-live-model-wiring.md) (live model wiring)
+and [26](26-live-regstate-producer.md) (the live `regstate` ring the Scrubber
+already reads). Mirrors the loop in
+[`asmspy_engine_region`](../../../cli/asmspy_engine.c#L3450) (`SM_TRACE`). Distinct
+from [R3 / 30](30-resume-from-state-and-reweave.md). Schema/D5
+[01](01-asmtrace-format.md) + [asmtrace-schema.md](asmtrace-schema.md); consumers
+[04](04-replay-views.md) (dataflow/Scrubber), [09](09-teaching-producers.md).
+D9 (capture host): live `--dataflow` / `--serve` is `asmspy`-only; keep the
+desktop app engine-free (D4). Golden/dishonesty + honest-degradation D6/D7.

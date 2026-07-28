@@ -235,6 +235,17 @@ demand-gated arch axis. The plan's permanent Honest-limits (exact-only fabric, n
 cross-thread hops, forks-never-touch-live, statistical-absence-proves-nothing)
 are out of scope by design — a brief there would fight the design.
 
+**Follow-on briefs (beyond the six roots).**
+[35-continuous-live-dataflow.md](35-continuous-live-dataflow.md) — make the live
+`dataflow` / `auto` engine **re-arm and keep capturing until Stop** (today it is
+one-shot: "auto + Start starts then stops"), into one continuously growing
+recording. Mirrors the region engine's `while (!stop)` loop; the surgery is a
+per-invocation `df_invocation` discriminator (each pass's `df_step` restarts at 0)
+and threading `stop` into the ptrace step loop. **Not** R3 resume-from-state (no
+state restore/edit) and **not** whole-process-continuous (each pass stays scoped +
+bounded). Authored 2026-07-28 against HEAD `f2b6cdf`; **not yet implemented**
+(planning). ☐ 0/4 · *free*.
+
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
 09 (09-T1 — the emulator ring — is engine-only and can start any time).
