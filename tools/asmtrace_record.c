@@ -52,6 +52,14 @@ int asmtest_dataflow_emu_run_fp(const uint8_t *code, size_t code_len,
                                 const double *fargs, int nfargs,
                                 uint64_t max_insns, asmtest_valtrace_t *vt);
 
+/* The per-guest entry (R5, docs/internal/gui/32-per-guest-value-producer.md): the
+ * SAME producer selecting a guest by arch. asmtest_dataflow_emu_run is this pinned
+ * to x86-64; the arm64 golden below runs an AArch64 routine through the arm64
+ * guest, so the value fabric is no longer x86-64-only. */
+int asmtest_dataflow_emu_run_arch(asmtest_arch_t arch, const uint8_t *code,
+                                  size_t code_len, const long *args, int nargs,
+                                  uint64_t max_insns, asmtest_valtrace_t *vt);
+
 /* name -> routine pointer, from the conformance corpus. */
 void *asmtest_corpus_routine(const char *name);
 
@@ -309,6 +317,150 @@ static const uint8_t SCENE_HOT_LOOP[] = {
     0x48, 0x89, 0xc8, /* 0x0e mov rax, rcx */
     0xc3,             /* 0x11 ret          */
 };
+
+/* ------------------------------------------------------------------ */
+/* The AArch64 value-fabric golden                                      */
+/* (docs/internal/gui/32-per-guest-value-producer.md R5 T2)             */
+/*                                                                      */
+/* A BYTE LITERAL, hand-derivable on paper exactly like the Loom's      */
+/* x86-64 fixtures: the whole point of this golden is to prove the       */
+/* value fabric is NO LONGER x86-64-only, so the arm64 listing lives     */
+/* right beside its bytes. Run through the arm64 `df_guest` under         */
+/* Unicorn (which emulates AArch64 on any host), so it is generated on    */
+/* the SAME x86-64 lane as every other golden — the guest is the arch,    */
+/* not the host.                                                          */
+/* ------------------------------------------------------------------ */
+
+/* arm64_df_chain(a, b)  [x0=a, x1=b] — a straight-line def-use chain:
+ *   0x00  add x2, x0, x1   ; 02 00 01 8b   x2 = a + b   (reads x0,x1; writes x2)
+ *   0x04  add x3, x2, x2   ; 43 00 02 8b   x3 = 2 * x2  (edge x2; writes x3)
+ *   0x08  mov x0, x3       ; e0 03 03 aa   x0 = x3      (edge x3; the return value)
+ *   0x0c  ret              ; c0 03 5f d6   return via x30 (LR)
+ * With a = 7, b = 5 the fabric is x2 = 12, x3 = 24, x0 = 24, and the def-use graph
+ * has edges 0->1 (x2) and 1->2 (x3) — the same L0->L1 story the x86-64 df_chain
+ * tells, under the arm64 guest. */
+static const uint8_t ARM64_DF_CHAIN[] = {
+    0x02, 0x00, 0x01, 0x8b, /* 0x00 add x2, x0, x1 */
+    0x43, 0x00, 0x02, 0x8b, /* 0x04 add x3, x2, x2 */
+    0xe0, 0x03, 0x03, 0xaa, /* 0x08 mov x0, x3     */
+    0xc0, 0x03, 0x5f, 0xd6, /* 0x0c ret            */
+};
+
+/* Record one AArch64 routine as a value-fabric golden (R5 T2): the SAME emulator
+ * L0 run record_bytes makes for x86-64, through the arm64 `df_guest`, written as
+ * `note` + `trace` (rel) + `df_step` + `df_edge`. The header's `arch` is honestly
+ * "aarch64" (the guest, via the writer override) even though the recording is
+ * produced on an x86-64 lane. No regstate/mem/blame: those ride their own opt-ins,
+ * and the arm64 register RING is a separate emu_t concern (see the scope note in
+ * the brief). The reader is already arch-parameterized (descriptor + generic
+ * def-use over locations), so the Loom / Slice / Timeline render this with NO
+ * desktop change. Returns 0 / -1. */
+static int record_arm64(const char *dir, const char *out, const char *label,
+                        const uint8_t *code, size_t code_len, const long *args,
+                        int nargs) {
+    asmtrace_prov_t prov = {"emu-l0", 1, "exact", 0, NULL, 0};
+    asmtrace_writer_t w;
+    asmtest_valtrace_t *vt = NULL;
+    asmtest_defuse_t *g = NULL;
+    char path[1024], body[65536];
+    size_t nsteps, nrecs, cur = 0, s;
+    int rc;
+
+    vt = asmtest_valtrace_new(4096, 65536, 4096);
+    if (!vt) {
+        fprintf(stderr, "asmtrace_record: out of memory\n");
+        return -1;
+    }
+    rc = asmtest_dataflow_emu_run_arch(ASMTEST_ARCH_ARM64, code, code_len, args,
+                                       nargs, 0, vt);
+    if (rc < 0) {
+        fprintf(stderr,
+                "asmtrace_record: arm64 emulator producer failed for %s\n", out);
+        asmtest_valtrace_free(vt);
+        return -1;
+    }
+    g = asmtest_defuse_build(vt);
+
+    snprintf(path, sizeof path, "%s/%s.asmtrace", dir, out);
+    if (asmtrace_open(&w, path, 1 /* deterministic */) != 0) {
+        fprintf(stderr, "asmtrace_record: cannot write %s\n", path);
+        asmtest_defuse_free(g);
+        asmtest_valtrace_free(vt);
+        return -1;
+    }
+    set_code_identity(&w, out, code, code_len);
+    asmtrace_writer_set_arch(&w, "aarch64"); /* the guest, not the host (R5) */
+    asmtrace_header(&w, "asmtrace_record", &prov, 0, NULL);
+
+    {
+        char text[256];
+        int o = snprintf(text, sizeof text, "%s(", label);
+        for (int i = 0; i < nargs; i++)
+            o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
+                          i ? ", " : "", args[i]);
+        snprintf(text + o, sizeof text - (size_t)o,
+                 ") under the deterministic emulator L0 producer, AArch64 guest");
+        asmtrace_escape(body, sizeof body, text);
+        asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
+    }
+
+    nsteps = vt->steps_len;
+    nrecs = vt->recs_len;
+
+    for (s = 0; s < nsteps; s++) {
+        char dis[160] = "";
+        if (emu_disas_available())
+            emu_disas(EMU_ARCH_ARM64, code, code_len, REC_CODE_BASE,
+                      vt->insn_off[s], dis, sizeof dis);
+        if (dis[0]) {
+            asmtrace_escape(body, sizeof body, dis);
+            asmtrace_emitf(&w, "trace",
+                           "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu,"
+                           "\"disasm\":\"%s\"",
+                           (unsigned long long)vt->insn_off[s], body);
+        } else {
+            asmtrace_emitf(&w, "trace",
+                           "\"basis\":\"rel\",\"kind\":\"insn\",\"off\":%llu",
+                           (unsigned long long)vt->insn_off[s]);
+        }
+    }
+
+    for (s = 0; s < nsteps; s++) {
+        char dis[160] = "";
+        size_t first;
+        if (emu_disas_available())
+            emu_disas(EMU_ARCH_ARM64, code, code_len, REC_CODE_BASE,
+                      vt->insn_off[s], dis, sizeof dis);
+        while (cur < nrecs && vt->recs[cur].step < s)
+            cur++;
+        first = cur;
+        while (cur < nrecs && vt->recs[cur].step == s)
+            cur++;
+        asmtrace_df_step_body(body, sizeof body, (unsigned)s, vt->insn_off[s],
+                              dis, &vt->recs[first], cur - first, vt->wide,
+                              vt->wide_len);
+        asmtrace_emit(&w, "df_step", body);
+    }
+
+    for (size_t i = 0; g && i < g->n; i++) {
+        asmtrace_df_edge_body(body, sizeof body, &g->edges[i]);
+        asmtrace_emit(&w, "df_edge", body);
+    }
+
+    if (vt->truncated)
+        w.truncated = 1;
+    asmtrace_writer_set_steps_total(&w, vt->steps_total);
+    asmtrace_close(&w, 0, 0, NULL);
+
+    {
+        size_t nedges = g ? g->n : (size_t)0;
+        asmtest_defuse_free(g);
+        asmtest_valtrace_free(vt);
+        printf("  %-20s %zu steps, %zu records, %zu def-use edges  [arm64]\n",
+               out, nsteps, nrecs, nedges);
+    }
+    return 0;
+}
 
 /* One per-step register snapshot as a `regstate` event, by descriptor
  * reference (schema: `desc` names a state descriptor, never a bare inline
@@ -1292,6 +1444,19 @@ int main(int argc, char **argv) {
         if (record_scene_abs(dir, "scene-abs-loop-truncated", "scene_hot_loop",
                              SCENE_HOT_LOOP, sizeof SCENE_HOT_LOOP, scene_args,
                              1, 6) != 0)
+            failed++;
+    }
+
+    /* The AArch64 value-fabric golden (R5 T2, doc 32): the first non-x86-64
+     * guest. Generated on the SAME x86-64 lane (Unicorn emulates the arm64
+     * guest), so it rides the existing ASMTRACE_GOLDEN_OK gate; deterministic and
+     * byte-stable like every other golden. The header's arch is honestly
+     * "aarch64" (the guest), and the Loom / Slice / Timeline render its fabric
+     * with no desktop change. */
+    {
+        static const long arm64_args[2] = {7, 5};
+        if (record_arm64(dir, "arm64-df-chain", "arm64_df_chain", ARM64_DF_CHAIN,
+                         sizeof ARM64_DF_CHAIN, arm64_args, 2) != 0)
             failed++;
     }
 

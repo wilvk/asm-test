@@ -59,6 +59,16 @@ typedef struct {
     char code_name[128];         /* routine name (escaped at emit)         */
     char code_sha[65];           /* lowercase-hex SHA-256 of the bytes     */
     unsigned long long code_len; /* the byte length hashed               */
+
+    /* Optional GUEST-arch override for the header's "arch" field (R5, doc 32).
+     * The default is the recording HOST's compiled-in arch, correct for a live
+     * capture; but the emulator L0 producer can run a guest of a DIFFERENT arch
+     * (an AArch64 routine under Unicorn on an x86-64 host), and then the honest
+     * `arch` is the guest's — set before asmtrace_header. have_arch == 0 (the
+     * memset default) keeps the host arch, so every existing recording is
+     * byte-unchanged. */
+    int have_arch;
+    char arch[16];
 } asmtrace_writer_t;
 
 /* Open `path` for writing and zero the rest of *w. Returns 0, or -1 (errno set
@@ -87,6 +97,13 @@ int asmtrace_header(asmtrace_writer_t *w, const char *producer,
  * (asmtrace_sha256_hex). */
 void asmtrace_writer_set_code(asmtrace_writer_t *w, const char *name,
                               const char *sha256_hex, unsigned long long len);
+
+/* Override the header's `arch` field with the GUEST arch (R5, doc 32). Call AFTER
+ * asmtrace_open* and BEFORE asmtrace_header. The default (unset) is the recording
+ * host's compiled-in arch; the emulator L0 producer sets it to the arch of the
+ * bytes it ran (e.g. "aarch64") so an AArch64 fabric recorded on an x86-64 host is
+ * honestly tagged. A NULL or empty `arch` disarms the override. */
+void asmtrace_writer_set_arch(asmtrace_writer_t *w, const char *arch);
 
 /* Arm the optional `steps_total` footer field (28 R1 T2): the total number of
  * steps the producer saw, past any ring cap. Call before asmtrace_close. This

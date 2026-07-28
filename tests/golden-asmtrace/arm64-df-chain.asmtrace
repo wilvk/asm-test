@@ -1,0 +1,13 @@
+{"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"aarch64","code":{"name":"arm64-df-chain","sha256":"7181052e1016378f34bcbb197659e1b2069c9d7187348e106596d2ab2067b273","len":16}}
+{"k":"note","text":"arm64_df_chain(7, 5) under the deterministic emulator L0 producer, AArch64 guest"}
+{"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"add x2, x0, x1"}
+{"k":"trace","basis":"rel","kind":"insn","off":4,"disasm":"add x3, x2, x2"}
+{"k":"trace","basis":"rel","kind":"insn","off":8,"disasm":"mov x0, x3"}
+{"k":"trace","basis":"rel","kind":"insn","off":12,"disasm":"ret"}
+{"k":"df_step","step":0,"off":0,"disasm":"add x2, x0, x1","ops":[{"space":"reg","reg":218,"size":0,"write":false,"value_valid":true,"value":7},{"space":"reg","reg":219,"size":0,"write":false,"value_valid":true,"value":5},{"space":"reg","reg":220,"size":0,"write":true,"value_valid":true,"value":12}]}
+{"k":"df_step","step":1,"off":4,"disasm":"add x3, x2, x2","ops":[{"space":"reg","reg":220,"size":0,"write":false,"value_valid":true,"value":12},{"space":"reg","reg":221,"size":0,"write":true,"value_valid":true,"value":24}]}
+{"k":"df_step","step":2,"off":8,"disasm":"mov x0, x3","ops":[{"space":"reg","reg":221,"size":0,"write":false,"value_valid":true,"value":24},{"space":"reg","reg":218,"size":0,"write":true,"value_valid":true,"value":24}]}
+{"k":"df_step","step":3,"off":12,"disasm":"ret","ops":[]}
+{"k":"df_edge","from":0,"to":1,"loc":{"space":"reg","reg":220,"size":0,"write":false,"value_valid":true,"value":12}}
+{"k":"df_edge","from":1,"to":2,"loc":{"space":"reg","reg":221,"size":0,"write":false,"value_valid":true,"value":24}}
+{"k":"end","events":11,"truncated":false,"drops":{"lost":0,"throttled":false},"steps_total":4}

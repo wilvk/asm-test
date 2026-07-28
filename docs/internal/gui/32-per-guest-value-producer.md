@@ -8,6 +8,53 @@
 >
 > Authored 2026-07-28, verified against HEAD `da566c9`.
 
+## Status (2026-07-28) — T1 + the T2 value fabric landed; regstate + T3 scoped
+
+The **value-producer core landed and is docker-verified**:
+
+- **T1 — DONE (byte-identical).** The six inline x86-64 seams in
+  [`dataflow_emu.c`](../../../src/dataflow_emu.c) are now a `df_guest` descriptor
+  (open mode, Capstone→Unicorn reg map, operand-enumerator arch tag, ABI arg
+  table, register init, call/return setup). The run is arch-neutral and selects a
+  guest by arch; `asmtest_dataflow_emu_run` is exactly the x86-64 guest. A
+  clean-baseline-vs-refactor regen diff proved the value trace is **byte-for-byte
+  identical** — the ONLY golden churn is `make_pair`'s 64-byte-window `code.sha256`
+  (the documented R1-T1 fragility: adding the arm64 functions shifted the binary
+  `.text` the window reads past the real routine), regenerated with the corpus.
+- **T2 value fabric — DONE.** A `df_guest_arm64` (`UC_ARCH_ARM64`, a
+  `cap_arm64_to_uc` map folding W→X and X29/X30=FP/LR, AAPCS64 args x0–x7, the
+  register init, and a link-register return). The operand enumerator already
+  covered `ASMTEST_ARCH_ARM64`, so no enumerator change was needed. Proven end to
+  end in `examples/test_dataflow_emu.c` (an AArch64 `add/add/mov/ret` chain: the
+  value fabric captures x2=12, x3=24, x0=24 and the def-use edges 0→1, 1→2), and a
+  **golden `arm64-df-chain.asmtrace`** is committed (`"arch":"aarch64"` via a new
+  `asmtrace_writer_set_arch` guest-arch override, correct disasm, byte-stable,
+  `asmtrace-golden-check` green). The Loom / Slice / Timeline render it with **no
+  desktop change** (the reader is arch-generic over locations; `loom_reg_name`
+  degrades an unmapped arm64 id to `reg#N`, a cosmetic reg-name follow-on).
+
+**Deferred (honest scope), each with a concrete reason:**
+
+- **T2 arm64 `regstate` / Scrubber time-travel — DEFERRED.** The per-step register
+  RING lives in [`emu.c`](../../../src/emu.c) as `emu_x86_regs_t` (x86-64-only),
+  NOT in the value producer. Arch-parameterizing that ring is the **R4** vector-deck
+  axis ([31](31-wide-register-deck.md)) and was under active concurrent rewrite, so
+  extending it here would collide destructively. The value fabric renders without
+  it; the descriptor path (`user_regs@aarch64/aapcs64`) is ready for when the arm64
+  ring lands.
+- **T3 Author-mode arm64 run — DEFERRED.** The Author door's run path is
+  x86-coupled end to end: `emu_call_traced` (`emu.c`, x86-64), an `emu_result_t`
+  with `rip/rax/rbx…` fields, and `emu_fault_describe(EMU_ARCH_X86_64, …)`
+  ([`author_door.cpp`](../../../desktop/src/ui/author_door.cpp) `:81-92`). Flipping
+  `can_run` for arm64 without an arm64 run path + an arm64-shaped result + register
+  display would be a D7 lie, so the honest "run/trace is x86-64-only in v1" author
+  label **stays accurate**. The producer is now ready; routing the author RUN to
+  the arm64 guest (a value fabric, not an `emu_result_t`) is the follow-on.
+
+The remainder of this brief is the original plan; the seam it specifies (T1) is
+what shipped, and T2's producer half is done. RISC-V is now another `df_guest`
+instance, exactly as designed.
+
 ## Why this work exists
 
 The plan states the limit plainly and the code enforces it: "value fabrics are

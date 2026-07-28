@@ -96,6 +96,17 @@ void asmtrace_writer_set_steps_total(asmtrace_writer_t *w,
     w->have_steps_total = 1;
 }
 
+void asmtrace_writer_set_arch(asmtrace_writer_t *w, const char *arch) {
+    if (!w)
+        return;
+    if (!arch || !arch[0]) {
+        w->have_arch = 0;
+        return;
+    }
+    snprintf(w->arch, sizeof w->arch, "%s", arch);
+    w->have_arch = 1;
+}
+
 void asmtrace_writer_set_code(asmtrace_writer_t *w, const char *name,
                               const char *sha256_hex, unsigned long long len) {
     if (!w)
@@ -122,7 +133,14 @@ int asmtrace_header(asmtrace_writer_t *w, const char *producer,
     fputs(esc, w->f);
     fputs("\",\"version\":\"" ASMTEST_VERSION "\"},\"provenance\":", w->f);
     prov_line(w->f, prov ? prov : &unknown);
-    fputs(",\"arch\":\"" ASMTRACE_ARCH "\"", w->f);
+    if (w->have_arch) {
+        /* A guest-arch override (R5): the bytes are for a different arch than the
+         * recording host. Escaped defensively though the producer sets a fixed id. */
+        asmtrace_escape(esc, sizeof esc, w->arch);
+        fprintf(w->f, ",\"arch\":\"%s\"", esc);
+    } else {
+        fputs(",\"arch\":\"" ASMTRACE_ARCH "\"", w->f);
+    }
     /* `code` routine identity, when armed — an optional object right after the
      * required identity cluster (producer/provenance/arch), emitted in both
      * deterministic and live mode because a routine's bytes are not volatile. */
