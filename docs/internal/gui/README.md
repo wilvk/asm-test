@@ -305,7 +305,7 @@ unanchored one and any individually-unplaced vertex still cannot (with the hones
 limit that `df_step` carries no `tid`, so a live dataflow capture is one trajectory
 and yields no marks regardless). Pure `space/` + HUD: no engine, no GL, no wire
 change, no existing golden regenerated. Authored 2026-07-29 against HEAD `24778e4`.
-☐ 0/5 · *free*.
+☐ 0/5 · will · T1–T5 · 2026-07-29.
 
 [37-region-tag-on-df-step.md](37-region-tag-on-df-step.md) — **the producer half of
 36**: state the region on the wire instead of deriving it. 36 anchors a
