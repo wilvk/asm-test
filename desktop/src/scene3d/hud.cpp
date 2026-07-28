@@ -87,6 +87,13 @@ void draw_scene_hud(HudState &s, const space::TerrainModel &terr,
         s.t = static_cast<uint64_t>(t);
         s.playhead_moved = true;
     }
+    // --- play/pause: animate the playhead over the terrain-time axis (34 T3) ----
+    // Reports the intent; the caller owns the transport and advances t. Labelled
+    // by its axis so it never reads as the flat views' execution-step playhead.
+    if (ImGui::Button(s.playing ? "Pause##scene" : "Play##scene"))
+        s.req_play_toggle = true;
+    ImGui::SameLine();
+    ImGui::TextColored(kDim, "play — step (trace time)");
 
     // --- layer toggles ---------------------------------------------------------
     ImGui::TextUnformatted("layers:");

@@ -243,6 +243,24 @@ void shell_sync_live_tab(ShellState &s) {
     shell_wire_nav(s); // the decoded stream id is now live — point the router at it
 }
 
+// 34 T2: the Live-capture "View in 3D overview" handoff. A pure model move — no
+// ImGui — so test_shell drives it directly. want_open_tab selects the live
+// recording's outer tab (honoured by both shells); want_view_id selects its 3D
+// inner tab (mirroring the 1/2/3/4 want_view path). With no live tab yet, an
+// honest status line instead of a silent no-op (D7).
+void shell_consume_scene_handoff(ShellState &s) {
+    if (!s.inspect.want_scene)
+        return;
+    s.inspect.want_scene = false;
+    if (s.live_tab >= 0) {
+        s.want_open_tab = s.live_tab;
+        s.want_view_id = ViewId::Scene3D;
+    } else {
+        s.status = "no live capture tab yet — attach a target in Processes "
+                   "first, then View in 3D";
+    }
+}
+
 // The dirty-close guard (18-breach-stops.md T3, F24): a clean recording closes
 // on the spot; a DIRTY (authored + unsaved) one raises the save/discard/cancel
 // choice instead of erasing, so authored output is never lost to one click.
@@ -621,7 +639,10 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
             "execution PATH threading across it over time. An exact path is a "
             "solid tube; statistical residency is stippled, never a solid tube "
             "(the second channel keeps sampled evidence honestly distinct). Use "
-            "3D to FIND a place, then the flat 2D views to READ it.",
+            "3D to FIND a place, then the flat 2D views to READ it. The playhead "
+            "here walks TRACE-RESIDENCY time — a different axis from the "
+            "execution step the flat views brush, so the two clocks are separate "
+            "(press Play to watch the path form). Reach this view with 5.",
             [] { dt_semantic_legend(); }, sv.primer);
     }
 
@@ -646,12 +667,29 @@ void draw_scene_overview(ShellState &s, const Recording &r, const Streams &a) {
     // reports the user's intent back through sv.hud; we apply it here (04's rule:
     // the view keeps no state the model does not).
     sv.hud.nsteps = sv.terr.nsteps;
+    sv.hud.playing = sv.play.playing; // 34 T3: the HUD labels its Play button
     scene3d::draw_scene_hud(sv.hud, sv.terr, sv.traj);
     if (sv.hud.req_reset_view)
         sv.cam.reset();
     if (sv.hud.req_top_down)
         sv.cam.top_down();
     sv.hud.req_reset_view = sv.hud.req_top_down = false;
+    // 34 T3: play/pause the TERRAIN-TIME playhead — its own axis (trace-residency
+    // steps), distinct from the execution step the flat views brush. Restart from
+    // 0 when pressed at the end, then advance hud.t over terr.nsteps; the existing
+    // re-slice below (sv.slice_t != sv.hud.t) redraws the terrain for the new t,
+    // so the trajectory visibly forms across the surface over time.
+    if (sv.hud.req_play_toggle) {
+        sv.hud.req_play_toggle = false;
+        sv.play.playing = !sv.play.playing;
+        if (sv.play.playing && sv.hud.t >= sv.terr.nsteps) {
+            sv.hud.t = 0;
+            sv.play.accum = 0.0f;
+        }
+    }
+    if (sv.play.playing)
+        sv.hud.t = transport_tick(sv.play, sv.hud.t, sv.terr.nsteps,
+                                  ImGui::GetIO().DeltaTime);
 
     // 22 T2 (F18): the keyboard camera acts when the HUD (reported above) or the 3D
     // viewport holds focus. The viewport target is drawn in the branches below —
@@ -924,9 +962,46 @@ static void body_scrubber(ShellState &s) {
     // tab). The register VALUES are ground truth; the run is not pristine.
     shell_live_weave_banner(s);
     size_t i = static_cast<size_t>(s.active_tab);
-    if (i < s.stepidx.size())
-        s.scrubber_playhead[i] =
-            draw_scrubber(s.stepidx[i], s.scrubber_playhead[i]);
+    if (i >= s.stepidx.size())
+        return;
+    const StepIndex &idx = s.stepidx[i];
+    const Streams *a = shell_a(s);
+    // 34 T1: the Scrubber joins the shared execution-step brush (22 T1). Seed the
+    // playhead from the shared selection when it belongs to THIS recording, so a
+    // step brushed anywhere (a timeline/slice/Loom pick, a j/k step, a play tick)
+    // seeds the register file here too. Clamped to the ring; a brush in another
+    // recording projects to nothing (the selection-scoping gate), and a step past
+    // the held prefix shows the Scrubber's own torn edge, never a neighbour.
+    const uint64_t maxstep =
+        idx.present() && idx.total_steps() > 0 ? idx.total_steps() - 1 : 0;
+    if (a)
+        if (auto seed = playhead_project(s.selection, a->id, maxstep))
+            s.scrubber_playhead[i] = *seed;
+    // 34 T3: play/pause the execution-step playhead. The button only toggles the
+    // transport; draw_shell advances it centrally so playback continues even when
+    // this pane is not the visible tab. Restart from 0 when pressed at the end.
+    if (ImGui::SmallButton(s.play.playing ? "Pause###scrubplay"
+                                          : "Play###scrubplay")) {
+        s.play.playing = !s.play.playing;
+        if (s.play.playing && a && a->df.nsteps > 0) {
+            const uint64_t cur = s.selection.rec == a->id
+                                     ? s.selection.step.value_or(0)
+                                     : 0;
+            if (cur >= a->df.nsteps - 1) {
+                s.selection.set(a->id, 0, std::nullopt);
+                s.play.accum = 0.0f;
+            }
+        }
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("play — step (execution)");
+    const uint64_t before = s.scrubber_playhead[i];
+    s.scrubber_playhead[i] = draw_scrubber(idx, before);
+    // 34 T1: a manual scrub brushes the shared selection through the ONE writer
+    // (D4), so the timeline / slice / Loom follow to the same step.
+    if (a && s.scrubber_playhead[i] != before)
+        s.selection.set(a->id, static_cast<uint32_t>(s.scrubber_playhead[i]),
+                        std::nullopt);
 }
 static void body_abixray(ShellState &s, const Streams *a, const Streams *b) {
     // The ABI x-ray (09-T4): locks the active recording (the SysV leg) against
@@ -1134,6 +1209,14 @@ static void draw_recording_tab(ShellState &s, const Recording &r) {
         for (const ViewPresence &e : vp)
             if (!e.present && e.view && *e.view == *s.want_view)
                 absent_want = *s.want_view;
+    // 34 T2: the same for a `5` / "View in 3D" request naming an absent ViewId
+    // (the 3D overview with no codeimage regions) — routed to the affordance, its
+    // machine reason shown, never a silent no-op.
+    bool absent_want_id = false;
+    if (s.want_view_id)
+        for (const ViewPresence &e : vp)
+            if (!e.present && e.id == *s.want_view_id)
+                absent_want_id = true;
 
     if (ImGui::BeginTabBar("views")) {
         if (a == nullptr) {
@@ -1148,6 +1231,8 @@ static void draw_recording_tab(ShellState &s, const Recording &r) {
                 ImGuiTabItemFlags fl = 0;
                 if (e.view && s.want_view == e.view)
                     fl |= ImGuiTabItemFlags_SetSelected;
+                if (s.want_view_id && e.id == *s.want_view_id)
+                    fl |= ImGuiTabItemFlags_SetSelected; // 34 T2 (e.g. Scene3D)
                 if (e.id == ViewId::Loom && s.want_loom)
                     fl |= ImGuiTabItemFlags_SetSelected;
                 if (ImGui::BeginTabItem(e.label, nullptr, fl)) {
@@ -1162,7 +1247,8 @@ static void draw_recording_tab(ShellState &s, const Recording &r) {
                 std::string label = "unavailable views (" +
                                     std::to_string(nabs) + ")###unavail";
                 ImGuiTabItemFlags fl =
-                    absent_want ? ImGuiTabItemFlags_SetSelected : 0;
+                    (absent_want || absent_want_id) ? ImGuiTabItemFlags_SetSelected
+                                                    : 0;
                 if (ImGui::BeginTabItem(label.c_str(), nullptr, fl)) {
                     draw_unavailable_views(vp, absent_want);
                     ImGui::EndTabItem();
@@ -1237,13 +1323,17 @@ static void handle_keymap(ShellState &s) {
     if (io.WantTextInput)
         return;
 
-    // 1/2/3/4 — switch the active recording's view. A keypress cannot select an
+    // 1/2/3/4/5 — switch the active recording's view. A keypress cannot select an
     // ImGui tab directly, so record the intent; the view tab bar honours it with
-    // SetSelected next pass (want_view, mirroring want_loom).
-    if (ImGui::IsKeyPressed(ImGuiKey_1)) s.want_view = dt_view::canvas;
-    if (ImGui::IsKeyPressed(ImGuiKey_2)) s.want_view = dt_view::timeline;
-    if (ImGui::IsKeyPressed(ImGuiKey_3)) s.want_view = dt_view::slice;
-    if (ImGui::IsKeyPressed(ImGuiKey_4)) s.want_view = dt_view::diff;
+    // SetSelected next pass (want_view, mirroring want_loom). 1-4 are the router
+    // views (want_view); 5 is the 3D overview, which has no dt_view spelling, so
+    // it routes by ViewId (want_view_id, 34 T2). The two are mutually exclusive —
+    // setting one clears the other so a single frame never forces two tabs.
+    if (ImGui::IsKeyPressed(ImGuiKey_1)) { s.want_view = dt_view::canvas; s.want_view_id.reset(); }
+    if (ImGui::IsKeyPressed(ImGuiKey_2)) { s.want_view = dt_view::timeline; s.want_view_id.reset(); }
+    if (ImGui::IsKeyPressed(ImGuiKey_3)) { s.want_view = dt_view::slice; s.want_view_id.reset(); }
+    if (ImGui::IsKeyPressed(ImGuiKey_4)) { s.want_view = dt_view::diff; s.want_view_id.reset(); }
+    if (ImGui::IsKeyPressed(ImGuiKey_5)) { s.want_view_id = ViewId::Scene3D; s.want_view.reset(); }
 
     // y / Ctrl+C — copy a deep link to the current position to the clipboard.
     // Ctrl+C is the convention alias (18-breach-stops.md T1); both are wired.
@@ -1614,6 +1704,7 @@ static void draw_windowed_shell(ShellState &s, const ImGuiViewport *vp) {
         s.want_open_tab = -1;
         s.want_loom = false;
         s.want_view.reset(); // the 1/2/3/4 view-switch intent is consumed here too
+        s.want_view_id.reset(); // the 5 / "View in 3D" intent, likewise (34 T2)
         // want_layout_reset is left for the docked path to consume (both binaries
         // run the docked shell — main.cpp enables docking for the app AND the
         // viewer; only the null test backend takes this windowed path, where there
@@ -2006,6 +2097,14 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
                         if (hosts(e.id) && !e.present && e.view &&
                             *e.view == *s.want_view)
                             absent_want = *s.want_view;
+                // 34 T2: a `5` / "View in 3D" request for an absent hosted ViewId
+                // routes to the affordance here too (the 3D overview lives in this
+                // pane, so its absence is explained in this pane's affordance).
+                bool absent_want_id = false;
+                if (s.want_view_id)
+                    for (const ViewPresence &e : vp)
+                        if (hosts(e.id) && !e.present && e.id == *s.want_view_id)
+                            absent_want_id = true;
                 size_t nabs = 0;
                 for (const ViewPresence &e : vp) {
                     if (!hosts(e.id))
@@ -2018,6 +2117,8 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
                         (e.view && s.want_view == e.view)
                             ? ImGuiTabItemFlags_SetSelected
                             : 0;
+                    if (s.want_view_id && e.id == *s.want_view_id)
+                        fl |= ImGuiTabItemFlags_SetSelected; // 34 T2 (Scene3D)
                     if (ImGui::BeginTabItem(e.label, nullptr, fl)) {
                         if (e.view)
                             s.view = *e.view;
@@ -2029,7 +2130,9 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
                     std::string label = "unavailable views (" +
                                         std::to_string(nabs) + ")###unavail_c";
                     ImGuiTabItemFlags fl =
-                        absent_want ? ImGuiTabItemFlags_SetSelected : 0;
+                        (absent_want || absent_want_id)
+                            ? ImGuiTabItemFlags_SetSelected
+                            : 0;
                     if (ImGui::BeginTabItem(label.c_str(), nullptr, fl)) {
                         for (const ViewPresence &e : vp)
                             if (hosts(e.id) && !e.present) {
@@ -2191,6 +2294,7 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     s.want_open_tab = -1;
     s.want_loom = false;
     s.want_view.reset();
+    s.want_view_id.reset(); // the 5 / "View in 3D" intent, likewise (34 T2)
     if (to_close >= 0)
         shell_request_close(s, static_cast<size_t>(to_close)); // T3 dirty guard
 }
@@ -2577,6 +2681,31 @@ void draw_shell(ShellState &s) {
             inspect_connect(s.inspect);
             if (!s.inspect.host_started)
                 s.inspect.want_open_connect = true;
+        }
+    }
+    // 34 T2: the Live-capture "View in 3D overview" handoff — jump from the picked
+    // process's growing capture straight to its 3D tab. Consumed centrally so both
+    // the docked and windowed shells honour it (a pure model move, tested direct).
+    shell_consume_scene_handoff(s);
+    // 34 T3: advance the execution-step play/pause transport once per frame, over
+    // the active recording's dataflow step space, brushing selection.step through
+    // the ONE writer so the timeline / slice / Loom / Scrubber animate together.
+    // Advanced here (not in body_scrubber) so playback continues regardless of
+    // which pane is visible. The 3D overview's terrain-time transport is advanced
+    // separately in draw_scene_overview over its own axis (a different clock).
+    if (s.play.playing) {
+        const Streams *pa = shell_a(s);
+        if (pa && pa->df.nsteps > 0) {
+            const uint64_t maxstep = pa->df.nsteps - 1;
+            const uint64_t cur =
+                s.selection.rec == pa->id ? s.selection.step.value_or(0) : 0;
+            const uint64_t nxt =
+                transport_tick(s.play, cur, maxstep, ImGui::GetIO().DeltaTime);
+            if (nxt != cur || s.selection.rec != pa->id)
+                s.selection.set(pa->id, static_cast<uint32_t>(nxt),
+                                std::nullopt);
+        } else {
+            s.play.playing = false; // nothing to play in this recording
         }
     }
     // Keep the honesty-chrome theme flag + the live text-scale in step with the

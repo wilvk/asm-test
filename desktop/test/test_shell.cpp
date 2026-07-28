@@ -916,6 +916,37 @@ int main() {
                   "AND its --steps opt-in (26 T4)");
         }
 
+        // 34 T2: the "View in 3D overview" handoff — from the picked process's
+        // growing capture straight to its 3D tab. With a live tab up, the intent
+        // jumps the active tab to it and requests the 3D inner view (want_view_id).
+        {
+            ls.inspect.want_scene = true;
+            ls.want_open_tab = -1;
+            ls.want_view_id.reset();
+            shell_consume_scene_handoff(ls);
+            check("34/handoff jumps to the live tab",
+                  ls.want_open_tab == ls.live_tab,
+                  "the handoff must select the live capture's outer tab");
+            check("34/handoff requests the 3D inner tab",
+                  ls.want_view_id.has_value() &&
+                      *ls.want_view_id == ViewId::Scene3D,
+                  "want_view_id must name the 3D overview (no dt_view spelling)");
+            check("34/handoff consumes the intent", !ls.inspect.want_scene,
+                  "the one-frame intent must be cleared once honoured");
+        }
+        // The no-live-tab branch is honest, never a silent no-op (D7): status set,
+        // no tab jump. A fresh state (no session) is the "attach first" case.
+        {
+            ShellState empty;
+            empty.inspect.want_scene = true;
+            shell_consume_scene_handoff(empty);
+            check("34/handoff no-tab sets status",
+                  empty.want_open_tab < 0 && !empty.status.empty() &&
+                      empty.status.find("attach") != std::string::npos,
+                  "with no live tab the handoff explains, it does not silently "
+                  "do nothing");
+        }
+
         // T4: the ephemeral, path-less live tab is never written to the store.
         WorkspaceState wss = shell_capture_workspace(ls);
         check("25/live tab not persisted", wss.open.empty(),

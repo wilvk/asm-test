@@ -161,6 +161,11 @@ struct InspectState {
     // shell_select_mode, consumed once in draw_shell; a failed connect falls back
     // to revealing Connect (so its host_error is visible).
     bool want_autoconnect = false;
+    // 34 T2: the Live-capture "View in 3D overview" handoff — raised by the button
+    // in draw_live_views, consumed once in draw_shell to jump the active tab to the
+    // live capture and select its 3D inner tab (want_open_tab + want_view_id). Like
+    // the reveals above, the door cannot reach ShellState, so it flags the intent.
+    bool want_scene = false;
 
     // What the client believes is live on this target, for the patch bay. The
     // serve loop refuses a second concurrent start too, but the budget is

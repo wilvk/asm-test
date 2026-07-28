@@ -30,7 +30,9 @@
 #include "ui/scene_host.h"
 #include "ui/selection.h" // shared brushing-and-linking selection (22 T1)
 #include "ui/settings.h"  // user text-scale / theme / window size (20 T5)
+#include "ui/transport.h" // play/pause transport + playhead projection (34)
 #include "ui/undo.h"      // app-level command/undo stack (22 T4)
+#include "ui/view_presence.h" // ViewId — the want_view_id tab intent (34 T2)
 #include "views/completeness.h"
 #include "views/observer_draw.h"
 #include "views/timeline.h" // dt_timeline — shell_timeline_model's return type
@@ -67,6 +69,11 @@ struct SceneView {
     // ORed with the HUD focus to decide whether the keyboard camera acts; persisted
     // because the target is drawn after the camera keys are applied.
     bool viewport_focus = false;
+    // 34 T3: the terrain-time play/pause transport, per recording so switching
+    // tabs holds each scene's playback state. Advances hud.t over terr.nsteps —
+    // the trace-residency axis, distinct from the execution step the flat views
+    // brush (the brief's honesty note).
+    Transport play;
     dt_primer_state primer; // the first-open primer (24 T5), per recording
 };
 
@@ -143,6 +150,17 @@ struct ShellState {
     // below — a keypress cannot select an ImGui tab directly, only ask the tab
     // to select itself next frame. Cleared once honoured.
     std::optional<dt_view> want_view;
+    // 34 T2: the `5` / "View in 3D" intent to select a hostable tab that has NO
+    // dt_view spelling (the 3D overview; and any future non-router view). Mirrors
+    // want_view but keyed on ViewId — honoured with SetSelected, routed to the
+    // "unavailable views" affordance when absent, and consumed the same frame.
+    std::optional<ViewId> want_view_id;
+    // 34 T3: the execution-step play/pause transport. Advances the shared
+    // selection.step once per frame in draw_shell (over the active recording's
+    // dataflow step space), so the timeline / slice / Loom / Scrubber animate
+    // together. The 3D overview's terrain-time transport is a SEPARATE clock on
+    // SceneView::play — a different axis, deliberately not chained to this one.
+    Transport play;
     // The `Ctrl+G` go-to-step/offset modal (17-T1 keymap): open flag + its
     // InputText buffer. The modal parses the text with dt_nav_parse and jumps
     // via dt_nav_go, so a typed target lands exactly like a clicked link.
@@ -324,6 +342,13 @@ void shell_close(ShellState &s, size_t idx);
 // fed session. Rebuilds the tab's decoded streams / observer / step index only
 // when the capture's event count moves.
 void shell_sync_live_tab(ShellState &s);
+
+// 34 T2: consume the Live-capture "View in 3D overview" intent
+// (InspectState::want_scene). When a live capture tab is up, jump the active tab
+// to it (want_open_tab) and request its 3D inner tab (want_view_id = Scene3D);
+// otherwise route an honest reason to the status bar. A pure model move (no
+// ImGui), so test_shell drives it directly. Called once per frame from draw_shell.
+void shell_consume_scene_handoff(ShellState &s);
 
 // 25 T3: drop the ephemeral live tab (its parallel slots, the index shift, the
 // active-tab clamp) without touching the dedup watermark. Used both by

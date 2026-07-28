@@ -31,6 +31,14 @@ struct HudState {
     bool req_reset_view = false;
     bool req_top_down = false;
 
+    // 34 T3: the terrain-time play/pause transport, same shape as the camera
+    // presets. `playing` is set by the caller before the draw so the button reads
+    // "Play"/"Pause"; `req_play_toggle` is the HUD's intent, which the caller
+    // applies to SceneView::play and clears. The 3D playhead walks trace-residency
+    // time, a DIFFERENT axis from the flat views' execution step (34 honesty note).
+    bool playing = false;
+    bool req_play_toggle = false;
+
     // Set true by draw_scene_hud when the HUD window holds keyboard focus this
     // frame (22-selection-and-search.md T2, F18). The caller ORs it with the 3D
     // viewport's focus to decide whether the arrow/dolly/reset camera keys act, so

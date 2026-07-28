@@ -505,6 +505,15 @@ void draw_live_views(InspectState &s) {
             "no capture yet — start a mode above and its view appears here");
         return;
     }
+    // 34 T2: the handoff from the picked process's growing capture to its 3D
+    // spacetime overview — the reach the walkthrough was missing. Raises a flag
+    // draw_shell consumes (the door cannot reach ShellState). The 3D pane is honest
+    // if the capture has no codeimage regions yet, so this is safe to always offer.
+    if (ImGui::Button("View in the 3D overview"))
+        s.want_scene = true;
+    ImGui::SameLine();
+    ImGui::TextDisabled("(spacetime terrain — press Play there to watch it form)");
+    ImGui::Separator();
     uint64_t n = live->event_count();
     if (!s.observer.built || n != s.observed_events ||
         done.size() != s.observed_recordings) {

@@ -171,6 +171,61 @@ int main() {
               "on its own recording the timeline marks the brushed step");
     }
 
+    // === 34 T3: the play/pause transport is a pure, steady, honest advance =====
+    // transport_tick advances a playhead over ITS OWN axis while playing, at a
+    // steady rate under a variable frame time, stopping exactly at max.
+    {
+        Transport tp;
+        tp.steps_per_sec = 10.0f;
+        check("transport/paused-holds", transport_tick(tp, 5, 100, 1.0f) == 5,
+              "a paused transport never advances");
+        tp.playing = true;
+        check("transport/steady-rate", transport_tick(tp, 5, 100, 1.0f) == 15,
+              "10 steps/s over 1s advances +10 steps");
+        // A sub-step frame carries its remainder until it crosses a whole step.
+        Transport tf;
+        tf.playing = true;
+        tf.steps_per_sec = 10.0f;
+        check("transport/subframe-holds", transport_tick(tf, 0, 100, 0.05f) == 0,
+              "half a step does not advance the playhead");
+        check("transport/subframe-accumulates",
+              transport_tick(tf, 0, 100, 0.05f) == 1,
+              "the carried remainder crosses a whole step on the next frame");
+        // Lands on the last step and STOPS — never overshoots or loops.
+        Transport te;
+        te.playing = true;
+        te.steps_per_sec = 1000.0f;
+        const uint64_t landed = transport_tick(te, 90, 100, 1.0f);
+        check("transport/stops-at-max", landed == 100 && !te.playing,
+              "playback lands on the last step and clears playing");
+        // A zero-dt frame (the null backend's DeltaTime) is inert.
+        Transport tz;
+        tz.playing = true;
+        check("transport/zero-dt-holds", transport_tick(tz, 3, 100, 0.0f) == 3,
+              "a zero-dt frame never advances (headless-safe)");
+    }
+
+    // === 34 T1: playhead_project gates on the recording (the Scrubber's seed) ==
+    // The Scrubber seeds its playhead from the shared brush through this seam, so a
+    // step brushed anywhere lands on the register file — but ONLY for the recording
+    // the brush was made in (22 T1), and clamped to the local axis.
+    {
+        Selection pj;
+        check("project/inactive-nothing",
+              !playhead_project(pj, a->id, 50).has_value(),
+              "an inactive selection projects to nothing (no seed)");
+        pj.set(a->id, 7, std::nullopt);
+        const auto own = playhead_project(pj, a->id, 50);
+        check("project/own-recording", own && *own == 7,
+              "a step brushed in THIS recording seeds its playhead");
+        check("project/clamped-to-axis",
+              playhead_project(pj, a->id, 3).value_or(999) == 3,
+              "a step past the local axis clamps, never overshoots the ring");
+        check("project/other-recording-nothing",
+              !playhead_project(pj, "some-other.asmtrace", 50).has_value(),
+              "a brush in another recording does not seed this pane (D7, :812)");
+    }
+
     // === clear brushes nothing everywhere ====================================
     const uint64_t e1 = s.selection.epoch;
     s.selection.clear();

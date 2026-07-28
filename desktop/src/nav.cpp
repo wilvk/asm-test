@@ -348,7 +348,8 @@ const std::vector<dt_binding> &dt_nav_bindings() {
     // acts on, so all are wired:true. A future advertised-but-unmapped gesture
     // lands as wired:false and the overlay greys it "planned" rather than lying.
     static const std::vector<dt_binding> b = {
-        {"1 / 2 / 3 / 4", "canvas / timeline / slice explorer / diff", true},
+        {"1 / 2 / 3 / 4 / 5",
+         "canvas / timeline / slice explorer / diff / 3D overview", true},
         {"j / k, Down / Up", "next / previous row or step", true},
         {"F10 / F11", "step / step back (j / k aliases)", true},
         {", / .", "step to the previous / next sibling", true},
@@ -372,6 +373,9 @@ const std::vector<dt_binding> &dt_nav_bindings() {
         {"Ctrl+Z / Ctrl+Y", "undo / redo a filter / cone / take change", true},
         {"Arrows, +/-, R, T",
          "3D camera: orbit / dolly / reset / top-down (3D pane focus)", true},
+        {"Play / Pause (button)",
+         "animate the playhead — Scrubber (execution step) or 3D (trace time)",
+         true},
     };
     return b;
 }
