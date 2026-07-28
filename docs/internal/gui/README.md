@@ -352,8 +352,12 @@ keys the churn join + df-rung placement on each step's own `rbase`, so a
 multi-span `auto` capture gets relief and two spans churn at distinct steps; T5
 the HUD grades the placement by `anchor_source` — `wire` ("span stated on the
 wire (rbase)") distinct from `single-span` ("derived placement") and `mixed`;
-36's fallback reconciled in doc 36 + CHANGELOG) · will · T6 (T4 severable) ·
-2026-07-29.
+36's fallback reconciled in doc 36 + CHANGELOG; T6 the end-to-end proof —
+`record_scene_df_multi` emits `scene-df-two-span.asmtrace` (two `codeimage` spans +
+`df_step`s tagged to each, no `trace`; byte-stable under docker-cli), and
+`test_shell` asserts both spans place, `pc_placed==pc_points>0`, and
+`anchor_source=="wire"` — the recording 36 alone renders labelled-empty). **☑ 5/6
+LANDED (T1–T3, T5, T6); T4 (`when`) severable.** · will · T4 · 2026-07-29.
 
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then

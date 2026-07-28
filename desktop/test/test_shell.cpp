@@ -360,6 +360,9 @@ int main() {
         // span and the trajectory anchors the offsets onto it.
         int igd = shell_open(s3, gd("scene-df-loop.asmtrace"), err);
         check("scene/df-loop opened", igd >= 0, err.c_str());
+        // 37 T6: the TWO-span shape 36 must refuse and 37 resolves from the wire.
+        int igd2 = shell_open(s3, gd("scene-df-two-span.asmtrace"), err);
+        check("scene/df-two-span opened", igd2 >= 0, err.c_str());
 
         // Parallel to the workspace, like every other per-recording vector.
         check("scene/scenes parallel",
@@ -468,6 +471,42 @@ int main() {
                   "a wire-tagged df capture must say its span is wire-stated");
             check("scene/df chip: nothing refused as NOT PLACED", !not_placed,
                   "a placed df capture must raise no NOT PLACED refusal");
+        }
+
+        // 37 T6: the TWO-span golden renders a placed path where 36 alone renders
+        // a labelled-empty plane — the end-to-end proof rbase resolves a multi-
+        // span capture that the single-codeimage anchor must refuse.
+        if (igd2 >= 0) {
+            s3.active_tab = igd2;
+            const Streams *a = shell_a(s3);
+            check("scene/two-span stream decoded", a != nullptr, "no stream");
+            ImGui::NewFrame();
+            ImGui::Begin("t3two");
+            if (a != nullptr)
+                draw_scene_overview(
+                    s3, s3.ws.recordings[static_cast<size_t>(igd2)], *a);
+            ImGui::End();
+            ImGui::Render();
+
+            const SceneView &sv = s3.scenes[static_cast<size_t>(igd2)];
+            // Two codeimage spans ⇒ resolve_anchor alone refuses; rbase resolves.
+            check("scene/two-span: two code regions on the plane",
+                  sv.terr.proj.regions.size() == 2,
+                  "the two codeimage spans must both place regions");
+            check("scene/two-span: path anchored from the WIRE (not refused)",
+                  sv.traj.anchored && sv.traj.anchor_source == "wire",
+                  ("anchored=" + std::to_string(sv.traj.anchored) + " src='" +
+                   sv.traj.anchor_source + "'")
+                      .c_str());
+            check("scene/two-span: every vertex placed (both spans)",
+                  sv.traj.pc_placed == sv.traj.pc_points &&
+                      sv.traj.pc_points > 0,
+                  (std::to_string(sv.traj.pc_placed) + "/" +
+                   std::to_string(sv.traj.pc_points))
+                      .c_str());
+            check("scene/two-span: the df rung placed residency cells",
+                  sv.terr.height_source == "df_step" && !sv.terr.code.empty(),
+                  "the multi-span df rung must place cells via rbase");
         }
 
         // The codeimage-less recording takes the "no regions" placard path

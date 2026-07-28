@@ -1211,6 +1211,122 @@ static int record_scene_df(const char *dir, const char *out, const char *label,
     return 0;
 }
 
+/* Record a TWO-SPAN 3D-overview golden (37 T6): the multi-span shape 37 exists to
+ * resolve, which no committed artifact carried. TWO absolute `codeimage` spans at
+ * two bases plus REGION-RELATIVE `df_step` events tagged (rbase) to one span or
+ * the other, and NO `trace`. 36's single-codeimage anchor MUST refuse this (it
+ * cannot derive one base from two spans); 37 resolves each step from its stated
+ * rbase, so both spans place. Synthetic by construction — the emulator runs one
+ * routine and the two spans carry the SAME bytes at two bases with the steps split
+ * between them — but the recorder controls its own map, so this is a REAL test, not
+ * a lane that can only self-skip.
+ *
+ * Returns 0 on success, -1 on a setup/write failure. */
+static int record_scene_df_multi(const char *dir, const char *out,
+                                 const char *label, const uint8_t *code,
+                                 size_t code_len, const long *args, int nargs) {
+    asmtrace_prov_t prov = {"emu-l0", 1, "exact", 0, NULL, 0};
+    asmtrace_writer_t w;
+    asmtest_valtrace_t *vt = NULL;
+    char path[1024], body[65536], text[1024];
+    char hexbytes[2 * REC_WINDOW + 1];
+    size_t nsteps, s;
+    int rc;
+    /* Two code spans: A at the producer's mapping base, B a fixed offset above. */
+    const unsigned long long baseA = (unsigned long long)REC_CODE_BASE;
+    const unsigned long long baseB =
+        (unsigned long long)REC_CODE_BASE + 0x10000ULL;
+
+    if (code_len > REC_WINDOW) {
+        fprintf(stderr, "asmtrace_record: scene %s exceeds the %d-byte window\n",
+                out, REC_WINDOW);
+        return -1;
+    }
+    vt = asmtest_valtrace_new(4096, 65536, 4096);
+    if (!vt) {
+        fprintf(stderr, "asmtrace_record: out of memory\n");
+        return -1;
+    }
+    rc = asmtest_dataflow_emu_run(code, code_len, args, nargs, 0, vt);
+    if (rc < 0) {
+        fprintf(stderr, "asmtrace_record: emulator producer failed for %s\n",
+                out);
+        asmtest_valtrace_free(vt);
+        return -1;
+    }
+    nsteps = vt->steps_len;
+
+    snprintf(path, sizeof path, "%s/%s.asmtrace", dir, out);
+    if (asmtrace_open(&w, path, 1 /* deterministic */) != 0) {
+        fprintf(stderr, "asmtrace_record: cannot write %s\n", path);
+        asmtest_valtrace_free(vt);
+        return -1;
+    }
+    set_code_identity(&w, out, code, code_len);
+    asmtrace_header(&w, "asmtrace_record", &prov, 0, NULL);
+
+    {
+        int o =
+            snprintf(text, sizeof text,
+                     "3D-overview golden scene (two-span dataflow shape): %s(",
+                     label);
+        for (int i = 0; i < nargs; i++)
+            o += snprintf(text + o, sizeof text - (size_t)o, "%s%ld",
+                          i ? ", " : "", args[i]);
+        snprintf(text + o, sizeof text - (size_t)o,
+                 ") — TWO absolute `codeimage` spans at 0x%llx and 0x%llx plus "
+                 "REGION-RELATIVE `df_step` events tagged (rbase) to one span or "
+                 "the other, NO `trace`. 36's single-span anchor MUST refuse this "
+                 "(two spans, no derivable base); 37 resolves each step from its "
+                 "stated rbase, so both spans place.",
+                 baseA, baseB);
+        asmtrace_escape(body, sizeof body, text);
+        asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
+    }
+
+    for (s = 0; s < code_len; s++)
+        snprintf(hexbytes + 2 * s, 3, "%02x", code[s]);
+    hexbytes[2 * code_len] = '\0';
+    /* Two codeimage spans, the SAME bytes, at two bases. */
+    asmtrace_emitf(&w, "codeimage",
+                   "\"base\":%llu,\"len\":%llu,\"version\":0,\"when\":0,"
+                   "\"bytes\":\"%s\"",
+                   baseA, (unsigned long long)code_len, hexbytes);
+    asmtrace_emitf(&w, "codeimage",
+                   "\"base\":%llu,\"len\":%llu,\"version\":0,\"when\":0,"
+                   "\"bytes\":\"%s\"",
+                   baseB, (unsigned long long)code_len, hexbytes);
+
+    /* df_step: alternate the region tag between the two spans, so a reader must
+     * resolve each step by its OWN rbase — precisely the case 36 refuses. */
+    for (s = 0; s < nsteps; s++) {
+        char dis[160] = "";
+        unsigned long long off = (unsigned long long)vt->insn_off[s];
+        unsigned long long rb = (s & 1) ? baseB : baseA;
+        if (emu_disas_available())
+            emu_disas(EMU_ARCH_X86_64, code, code_len, REC_CODE_BASE,
+                      vt->insn_off[s], dis, sizeof dis);
+        if (dis[0]) {
+            asmtrace_escape(body, sizeof body, dis);
+            asmtrace_emitf(&w, "df_step",
+                           "\"step\":%zu,\"off\":%llu,\"rbase\":%llu,"
+                           "\"disasm\":\"%s\"",
+                           s, off, rb, body);
+        } else {
+            asmtrace_emitf(&w, "df_step",
+                           "\"step\":%zu,\"off\":%llu,\"rbase\":%llu", s, off,
+                           rb);
+        }
+    }
+
+    asmtrace_writer_set_steps_total(&w, vt->steps_total);
+    asmtrace_close(&w, 0, 0, NULL);
+    asmtest_valtrace_free(vt);
+    printf("  %-28s %zu step(s), 2 codeimage spans, df_step tagged (no trace)\n",
+           out, nsteps);
+    return 0;
+}
+
 /* ------------------------------------------------------------------ */
 /* The ABI x-ray's paired goldens (09-teaching-producers.md T4)        */
 /*                                                                     */
@@ -1679,6 +1795,12 @@ int main(int argc, char **argv) {
         if (record_scene_df(dir, "scene-df-loop", "scene_hot_loop",
                             SCENE_HOT_LOOP, sizeof SCENE_HOT_LOOP, scene_args,
                             1) != 0)
+            failed++;
+        /* 37 T6: the two-span shape 36 must refuse and 37 resolves from the wire
+         * — the end-to-end proof that rbase places a multi-span capture. */
+        if (record_scene_df_multi(dir, "scene-df-two-span", "scene_hot_loop",
+                                  SCENE_HOT_LOOP, sizeof SCENE_HOT_LOOP,
+                                  scene_args, 1) != 0)
             failed++;
     }
 
