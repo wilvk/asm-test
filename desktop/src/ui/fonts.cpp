@@ -39,7 +39,27 @@ bool load_fonts(ImGuiIO &io, const char *jbm_ttf, const char *codicon_ttf,
         px = 256.0f;
 
     io.Fonts->Clear();
-    io.Fonts->AddFontFromFileTTF(jbm_ttf, px);
+    // The GLYPH RANGE the atlas rasterizes. Without this, AddFontFromFileTTF
+    // defaults to GetGlyphRangesDefault() = Basic Latin + Latin-1 only
+    // (U+0020..U+00FF), so every character the UI uses OUTSIDE that block — the
+    // em-dash (U+2014, in >1000 strings), the ellipsis in "Open…"/"Browse…", the
+    // "-> " arrow, the • bullet, the ▸/◄ menu/nav triangles, ∘/∩ set operators —
+    // is never baked and renders as the fallback '?'. JetBrains Mono has all of
+    // them; the range just has to ASK for them. Static const so the array outlives
+    // the deferred atlas Build() (same discipline as the icon ranges below). The
+    // blocks are deliberately whole (not a hand-picked codepoint list) so a future
+    // string that reaches for standard punctuation renders too, never a new '?'.
+    static const ImWchar text_ranges[] = {
+        0x0020, 0x00FF, // Basic Latin + Latin-1 Supplement (§ ± · × ° …)
+        0x2000, 0x206F, // General Punctuation: – — ‘ ’ “ ” … • † ‰
+        0x2190, 0x21FF, // Arrows: → ← ↑ ↓ ↔
+        0x2200, 0x22FF, // Mathematical Operators: ∘ ∩ ∪ ≈ ≠ ≤ ≥
+        0x2500, 0x257F, // Box Drawing (defensive: any ASCII-art table borders)
+        0x25A0, 0x25FF, // Geometric Shapes: ▸ ◄ ● ○ ■ ▲ ▼
+        0x2700, 0x27BF, // Dingbats: ✕ ✓ ✗
+        0,
+    };
+    io.Fonts->AddFontFromFileTTF(jbm_ttf, px, nullptr, text_ranges);
 
     // Merge each icon range onto the same font so ICON_* macros render inline in
     // labels. Each is optional (absent TTF -> no icons from that set). The range

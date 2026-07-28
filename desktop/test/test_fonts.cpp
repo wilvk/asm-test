@@ -51,6 +51,25 @@ int main() {
         check("a FontAwesome glyph (ICON_MIN_FA) is merged in (for ImGuiNotify)",
               f->FindGlyphNoFallback(static_cast<ImWchar>(ICON_MIN_FA)) !=
                   nullptr);
+        // The TEXT punctuation the UI actually uses, which the DEFAULT glyph range
+        // (Latin-1 only) left out — so it rendered as '?' until fonts.cpp asked for
+        // the right blocks. Each codepoint is from a rendered string: the em-dash
+        // (>1000 uses), the ellipsis in "Open…"/"Browse…", the "-> " arrow, the
+        // bullet, the ▸/◄ menu + nav triangles, the ✕ close, the ∘/∩ set operators.
+        // FindGlyphNoFallback is null when the glyph was never baked — exactly the
+        // old bug, so this fails loudly if the range ever regresses.
+        struct {
+            ImWchar cp;
+            const char *name;
+        } punct[] = {
+            {0x2014, "em-dash U+2014"},   {0x2026, "ellipsis U+2026"},
+            {0x2192, "arrow U+2192"},     {0x2022, "bullet U+2022"},
+            {0x25B8, "triangle U+25B8"},  {0x25C4, "pointer U+25C4"},
+            {0x2715, "mult-x U+2715"},    {0x2218, "ring U+2218"},
+            {0x2229, "intersect U+2229"},
+        };
+        for (auto &g : punct)
+            check(g.name, f->FindGlyphNoFallback(g.cp) != nullptr);
     }
     ImGui::DestroyContext();
 
