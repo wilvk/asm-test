@@ -3,6 +3,8 @@
 #include "space/projection.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <string>
 #include <utility>
 
 namespace asmdesk::space {
@@ -97,6 +99,58 @@ Projection build_projection(std::vector<Region> regions) {
         order++;
     p.order = order;
     return p;
+}
+
+// 36 T1 — the rel->abs anchor. Derive the span a routine-relative offset is
+// relative to from the one fact the recording states: its codeimage code span.
+Anchor resolve_anchor(const std::vector<Region> &regions) {
+    Anchor a;
+
+    // Only code spans anchor a routine-relative PC offset; a data/stack/heap/mmap
+    // region never makes the anchor ambiguous (a df_step offset is a code offset).
+    std::vector<const Region *> code;
+    for (const Region &r : regions)
+        if (r.kind == Region::Code)
+            code.push_back(&r);
+
+    if (code.size() == 1) {
+        a.ok = true;
+        a.base = code[0]->base;
+        a.len = code[0]->len;
+        return a;
+    }
+    if (code.empty()) {
+        a.reason = "no codeimage code span — a routine-relative offset has "
+                   "nothing to anchor to";
+        return a;
+    }
+    // Two or more: a bare offset carries no region tag on the wire, so which span
+    // it belongs to is unrecoverable here. Name each base so the refusal is
+    // legible (37 states the region on the wire to resolve this instead of
+    // refusing; until then this refuses, louder than a silent empty plane).
+    std::string bases;
+    for (size_t i = 0; i < code.size(); ++i) {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "0x%llx",
+                      (unsigned long long)code[i]->base);
+        if (i)
+            bases += ", ";
+        bases += buf;
+    }
+    a.reason = "two or more codeimage code spans (" + bases +
+               ") — a routine-relative offset carries no region tag, so the span "
+               "it belongs to is unrecoverable";
+    return a;
+}
+
+bool Anchor::place(uint64_t off, uint64_t *abs) const {
+    // An out-of-span offset returns false so the caller COUNTS it rather than
+    // dropping it silently — this is the SERVE_CI_MAX_BYTES=4096 clamp case, which
+    // is common on real routines, not exotic.
+    if (!ok || off >= len)
+        return false;
+    *abs = base + off;
+    return true;
 }
 
 bool Projection::project(uint64_t addr, float *u, float *v) const {

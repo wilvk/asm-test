@@ -219,6 +219,77 @@ int main() {
         }
     }
 
+    // --- 36 T1: the rel->abs anchor -----------------------------------------
+    {
+        auto code = [](uint64_t base, uint64_t len) {
+            Region r;
+            r.base = base;
+            r.len = len;
+            r.kind = Region::Code;
+            return r;
+        };
+        auto data = [](uint64_t base, uint64_t len) {
+            Region r;
+            r.base = base;
+            r.len = len;
+            r.kind = Region::Data;
+            return r;
+        };
+
+        // exactly one code span anchors, base/len from it, and places an offset.
+        {
+            Anchor a = resolve_anchor({code(0x400000, 0x1000)});
+            check("one code span anchors", a.ok && a.reason.empty(),
+                  "did not anchor a single code span");
+            check("anchor base/len come from the span",
+                  a.base == 0x400000 && a.len == 0x1000, "base/len wrong");
+            uint64_t abs = 0;
+            check("place maps off onto base+off",
+                  a.place(0x10, &abs) && abs == 0x400010, "place wrong");
+        }
+
+        // a non-code region does not make a single code span ambiguous.
+        {
+            Anchor a = resolve_anchor({data(0x0, 0x1000), code(0x400000, 0x1000),
+                                       data(0x800000, 0x2000)});
+            check("non-code regions do not spoil a single-code anchor",
+                  a.ok && a.base == 0x400000, "a data region broke the anchor");
+        }
+
+        // zero code spans refuses with a stated reason and never places.
+        {
+            Anchor a = resolve_anchor({data(0x0, 0x1000)});
+            check("zero code spans refuses", !a.ok && !a.reason.empty(),
+                  "did not refuse with a reason");
+            uint64_t abs = 0;
+            check("an unanchored anchor never places", !a.place(0x10, &abs),
+                  "placed against a refused anchor");
+        }
+
+        // two code spans refuse, and the reason names BOTH bases. Reverting the
+        // >=2 branch to "pick the first" makes a.ok true and fails this.
+        {
+            Anchor a = resolve_anchor(
+                {code(0x400000, 0x1000), code(0x800000, 0x2000)});
+            check("two code spans refuse (not pick-the-first)", !a.ok,
+                  "anchored an ambiguous two-span recording");
+            check("the two-span reason names both hex bases",
+                  a.reason.find("0x400000") != std::string::npos &&
+                      a.reason.find("0x800000") != std::string::npos,
+                  "reason did not name both bases: " + a.reason);
+        }
+
+        // the clamp boundary: place(len) is false; place(len-1) equals base+len-1.
+        {
+            Anchor a = resolve_anchor({code(0x400000, 0x1000)});
+            uint64_t abs = 0;
+            check("place(len) is refused (the 4096-byte clamp)",
+                  !a.place(0x1000, &abs), "placed an out-of-span offset");
+            check("place(len-1) is base+len-1",
+                  a.place(0x0FFF, &abs) && abs == 0x400FFF, "boundary wrong");
+        }
+    }
+
     if (failures) {
         std::fprintf(stderr, "%d projection check(s) failed\n", failures);
         return 1;
