@@ -63,6 +63,13 @@ struct ObserverState {
     char hotedges_filter[96] = {0};
     char disasm_filter[96] = {0};
 
+    // Which graph the shared "Graph" tab (15 T3) is showing: 0 = topology,
+    // 1 = hot-edges, 2 = call tree. The tab offers only the KINDS this recording
+    // actually has and re-homes the selection onto an available one, so a stored
+    // index whose data vanished (a live recording changing shape between frames)
+    // never leaves an empty canvas.
+    int graph_sel = 0;
+
     bool built = false;
 };
 

@@ -385,16 +385,10 @@ void draw_obs_topo(const TopoView &v, const std::string &rec_id,
                 v.cards.size(), v.snapshots,
                 v.count_mode.empty() ? "(unstated)" : v.count_mode.c_str());
 
-    // The graph canvas (15 T3): processes as nodes on the app's deterministic
-    // layers (root -> child), pan/zoom + fit-graph + double-click-to-open. Only
-    // the real app enables it (node-editor is app-only, like ImPlot); the
-    // headless deck smoke falls back to the card list below.
-    if (obs_graph_enabled()) {
-        static ed::EditorContext *ctx = nullptr;
-        draw_graph_canvas("topo-graph", graph_from_topo(v, rec_id), go, ctx);
-        return;
-    }
-
+    // The pan/zoom graph of this same topology now lives in the shared "Graph"
+    // tab (15 T3) rather than replacing the cards here, so this tab always shows
+    // the readable, navigable fingerprint list (its "open this process" button is
+    // the same 04 drill-in a graph node routes through).
     for (const TopoCard &c : v.cards) {
         ImGui::PushID(static_cast<int>(c.tgid));
         ImGui::Separator();
@@ -464,18 +458,12 @@ void draw_obs_hotedges(const HotEdgeView &v, ObserverState &s,
         }
     }
 
-    // The FROZEN snapshot as a navigable graph (15 T3): branch endpoints as
-    // nodes on the app's deterministic grid, edges from -> to, pan/zoom +
-    // fit-graph. Still a survey of edges — no parent/child/total is synthesized
-    // (doc 08 T4). App-only; the headless smoke and the ranked table below are
-    // unaffected. Drawn between the heatmap and the exact table it complements.
-    if (obs_graph_enabled() && !v.edges.empty()) {
-        ImGui::TextDisabled("frozen snapshot — a graph of the ranked edges "
-                            "(the exact counts are in the table below)");
-        static ed::EditorContext *ctx = nullptr;
-        draw_graph_canvas("hotedges-graph", graph_from_hotedges(v, rec_id), go,
-                          ctx);
-    }
+    // The FROZEN snapshot's pan/zoom graph (15 T3) now lives in the shared
+    // "Graph" tab, beside the topology and call-tree graphs, so this tab stays
+    // the exact heatmap + counts table it always was. rec_id/go travel to that
+    // tab (which builds the graph from this same view), not here.
+    (void)rec_id;
+    (void)go;
 
     // Client-side type-to-narrow the DISPLAYED edges (22 T3 step 4): honesty-safe
     // because it narrows the display only and says "showing N of M" — every model
@@ -602,15 +590,11 @@ std::string draw_obs_tree(const TreeView &v, ObserverState &s, long pid,
     }
 
     ImGui::SeparatorText("calls");
-    // The call tree as a graph (15 T3): x = the engine's EFFECTIVE depth (never
-    // recomputed — it is re-based under a focus filter), y = emission order,
-    // parent edges the nearest shallower row. Pan/zoom + fit-graph + click-to-
-    // open. App-only; the headless deck smoke draws the indented list below.
-    if (obs_graph_enabled() && !v.rows.empty()) {
-        static ed::EditorContext *ctx = nullptr;
-        draw_graph_canvas("tree-graph", graph_from_tree(v, rec_id), go, ctx);
-        return cmd;
-    }
+    // The pan/zoom graph of this call tree now lives in the shared "Graph" tab
+    // (15 T3), so this tab always shows the indented list. rec_id/go travel to
+    // that tab (which builds the graph from this same view), not here.
+    (void)rec_id;
+    (void)go;
     for (const TreeRow &r : v.rows) {
         ImGui::Indent(static_cast<float>(r.depth) * 12.0f);
         ImGui::Text("-> %s [%s]  tid %ld",
@@ -811,6 +795,78 @@ void draw_obs_disasm(const DisasmView &v, ObserverState &s) {
     }
 }
 
+// --- Graph (15 T3) ----------------------------------------------------------
+// The ONE pan/zoom node-editor canvas, shared by the three graph-able views
+// (topology / hot-edges / call tree) via a selector, so the "Fit graph" chrome
+// no longer repeats inside each of those data tabs. Each data tab keeps its own
+// list / heatmap / table; this is the single place the deterministic graph
+// layout is explored. App-only, drawn only when obs_graph_enabled() — the
+// headless deck never even offers the tab (see draw_observer's gate).
+static void draw_obs_graph(ObserverState &s, const std::string &rec_id,
+                           const std::function<void(const dt_link &)> &go) {
+    // The graph-able kinds, in tab order. A kind with no data is not offered — an
+    // empty canvas would read as "no graph" rather than "no data of this kind".
+    struct Kind {
+        const char *label;
+        bool avail;
+    };
+    const Kind kinds[3] = {
+        {"Topology", !s.topo.cards.empty()},
+        {"Hot edges", !s.hotedges.edges.empty()},
+        {"Tree", !s.tree.rows.empty()},
+    };
+    // Re-home the selection onto an available kind: the stored index may point at
+    // a kind whose data vanished when a live recording changed shape.
+    if (s.graph_sel < 0 || s.graph_sel >= 3 || !kinds[s.graph_sel].avail) {
+        s.graph_sel = -1;
+        for (int i = 0; i < 3; i++)
+            if (kinds[i].avail) {
+                s.graph_sel = i;
+                break;
+            }
+    }
+    if (s.graph_sel < 0) {
+        // The tab's gate (draw_observer) means at least one kind is present, so
+        // this is belt-and-braces rather than a reachable state.
+        ImGui::TextDisabled("no graph-able view in this recording (topology, "
+                            "hot-edges or call tree)");
+        return;
+    }
+    // The selector: only the available kinds, so it never offers an empty canvas.
+    for (int i = 0; i < 3; i++) {
+        if (!kinds[i].avail)
+            continue;
+        if (ImGui::RadioButton(kinds[i].label, s.graph_sel == i))
+            s.graph_sel = i;
+        ImGui::SameLine();
+    }
+    ImGui::NewLine();
+    // A per-kind persistent editor context — panning one graph must not carry to
+    // another. draw_graph_canvas lazily creates each on first use.
+    static ed::EditorContext *ctx_topo = nullptr;
+    static ed::EditorContext *ctx_hot = nullptr;
+    static ed::EditorContext *ctx_tree = nullptr;
+    switch (s.graph_sel) {
+    case 0:
+        draw_graph_canvas("topo-graph", graph_from_topo(s.topo, rec_id), go,
+                          ctx_topo);
+        break;
+    case 1:
+        // Still a survey of edges — no parent/child/total is synthesized (doc 08
+        // T4); the exact counts stay in the Hot edges tab, said here so the graph
+        // is never mistaken for them.
+        ImGui::TextDisabled("frozen snapshot — a graph of the ranked edges "
+                            "(the exact counts are in the Hot edges tab)");
+        draw_graph_canvas("hotedges-graph",
+                          graph_from_hotedges(s.hotedges, rec_id), go, ctx_hot);
+        break;
+    case 2:
+        draw_graph_canvas("tree-graph", graph_from_tree(s.tree, rec_id), go,
+                          ctx_tree);
+        break;
+    }
+}
+
 void draw_observer(ObserverState &s, const Recording &r,
                    const std::string &rec_id,
                    const std::function<void(const dt_link &)> &go) {
@@ -843,6 +899,19 @@ void draw_observer(ObserverState &s, const Recording &r,
     }
     if (!s.tree.rows.empty() && ImGui::BeginTabItem("Tree")) {
         draw_obs_tree(s.tree, s, 0, rec_id, go);
+        ImGui::EndTabItem();
+    }
+    // The shared pan/zoom graph (15 T3): one tab for whichever of the graph-able
+    // views (topology / hot-edges / call tree) is present, chosen with a selector,
+    // so the canvas no longer repeats inside each data tab. App-only — node-editor
+    // reaches into ImGui internals (like ImPlot), so the headless null-backend deck
+    // (obs_graph_enabled() == false) never offers the tab and its data tabs keep
+    // their list/table exactly as before.
+    if (obs_graph_enabled() &&
+        (!s.topo.cards.empty() || !s.hotedges.edges.empty() ||
+         !s.tree.rows.empty()) &&
+        ImGui::BeginTabItem("Graph")) {
+        draw_obs_graph(s, rec_id, go);
         ImGui::EndTabItem();
     }
     if (!s.region.invocations.empty() && ImGui::BeginTabItem("Invocations")) {

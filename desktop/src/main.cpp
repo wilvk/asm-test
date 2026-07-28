@@ -174,6 +174,19 @@ int main() {
     // reaches into ImGui internals, so the headless null-backend view tests never
     // enable it (they fall back to the list/table). The real app + viewer do.
     asmdesk::obs_graph_enable(true);
+    // ...which forces OFF imgui 1.91's id-conflict highlight. That debug feature
+    // flags a "Programmer error: N visible items with conflicting ID" tooltip when
+    // one hovered ImGui id was submitted more than once in a frame — and imgui-
+    // node-editor legitimately does exactly that: its End() replays each node's
+    // captured content, re-submitting the hovered node/pin id, so the count trips
+    // whenever the pointer is over the graph. Our node ids are unique (the pure
+    // graph_from_* builders key them on tgid / emission index / interned rank), so
+    // this is a false positive on vendored, maintenance-mode code we do not patch.
+    // It is a developer aid, not a correctness guard — imgui itself recommends
+    // disabling it for non-programmer builds (imgui.cpp, BeginErrorTooltip note) —
+    // and this is a shipping end-user app. The detector cannot be scoped to the
+    // canvas: NewFrame() reads the flag once, before any view draws.
+    ImGui::GetIO().ConfigDebugHighlightIdConflicts = false;
     // Real monospace font + merged Codicons (13 F3), baked DPI-aware at the
     // window's content scale (20 T5). Paths are compiled in (ASMTEST_*_TTF); a
     // stripped install degrades honestly to the bitmap font.
