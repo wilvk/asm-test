@@ -20,10 +20,11 @@ at_val_rec_t to_rec(const ValRec &r) {
     o.addr = r.addr;
     o.size = static_cast<uint16_t>(r.size);
     o.is_write = r.write;
-    // A value the producer never captured stays uncaptured, and a >8-byte value
-    // stays `wide` with no bytes behind it: the v1 schema does not serialise the
-    // wide side buffer (a documented limit). Inventing either would put a number
-    // on a worldline that no producer ever measured.
+    // A value the producer never captured stays uncaptured. A >8-byte value keeps
+    // only its `wide` flag here: the bytes ARE on the wire now (the `bytes` field,
+    // 28 R1 T3, reconstructed by the Timeline's to_recs), but the Loom's threads
+    // render no per-operand bytes, so carrying the flag alone is faithful — never
+    // a number on a worldline no producer measured.
     o.value_valid = r.value_valid;
     o.wide = r.wide;
     o.value = r.value;

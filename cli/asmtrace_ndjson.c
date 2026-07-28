@@ -210,10 +210,13 @@ static const char *loc_space(at_loc_kind_t k) {
 }
 
 /* One operand record: space, [memory addressing terms], size, write,
- * value_valid, [wide], [value]. Memory terms are omitted for a register and
- * `value` is omitted when it was not captured (or spilled wide) — "not
- * measured" must not render as a zero. */
-static size_t op_body(char *b, size_t cap, size_t o, const at_val_rec_t *r) {
+ * value_valid, [wide], [bytes], [value]. Memory terms are omitted for a register
+ * and `value` is omitted when it was not captured (or spilled wide) — "not
+ * measured" must not render as a zero. A >8-byte operand carries `"wide":true`
+ * and, when the side buffer holds its bytes, a `bytes` hex string (28 R1 T3);
+ * `wide`/`wide_len` are that side buffer (NULL when the producer has none). */
+static size_t op_body(char *b, size_t cap, size_t o, const at_val_rec_t *r,
+                      const uint8_t *wide, size_t wide_len) {
     o = bp(b, cap, o, "{\"space\":\"%s\"", loc_space(r->kind));
     if (r->kind == AT_LOC_REG) {
         o = bp(b, cap, o, ",\"reg\":%u", r->reg);
@@ -226,16 +229,27 @@ static size_t op_body(char *b, size_t cap, size_t o, const at_val_rec_t *r) {
     }
     o = bp(b, cap, o, ",\"size\":%u,\"write\":%s,\"value_valid\":%s", r->size,
            r->is_write ? "true" : "false", r->value_valid ? "true" : "false");
-    if (r->wide)
+    if (r->wide) {
         o = bp(b, cap, o, ",\"wide\":true");
-    else if (r->value_valid)
+        /* The bytes, when the side buffer carries them: a fixed lowercase-hex
+         * string of the operand's `size` bytes at wide_off. Bounds-checked, so a
+         * wide flag with no (or a short) buffer degrades to bytes-less [wide]. */
+        if (r->value_valid && wide != NULL && r->size > 0 &&
+            (size_t)r->wide_off + r->size <= wide_len) {
+            o = bp(b, cap, o, ",\"bytes\":\"");
+            for (uint16_t k = 0; k < r->size; k++)
+                o = bp(b, cap, o, "%02x", wide[r->wide_off + k]);
+            o = bp(b, cap, o, "\"");
+        }
+    } else if (r->value_valid) {
         o = bp(b, cap, o, ",\"value\":%llu", (unsigned long long)r->value);
+    }
     return bp(b, cap, o, "}");
 }
 
 size_t asmtrace_df_step_body(char *dst, size_t cap, unsigned step, uint64_t off,
                              const char *disasm, const at_val_rec_t *recs,
-                             size_t n) {
+                             size_t n, const uint8_t *wide, size_t wide_len) {
     size_t o = 0;
     if (!dst || !cap)
         return 0;
@@ -251,7 +265,7 @@ size_t asmtrace_df_step_body(char *dst, size_t cap, unsigned step, uint64_t off,
     for (size_t i = 0; i < n; i++) {
         if (i)
             o = bp(dst, cap, o, ",");
-        o = op_body(dst, cap, o, &recs[i]);
+        o = op_body(dst, cap, o, &recs[i], wide, wide_len);
     }
     return bp(dst, cap, o, "]");
 }
@@ -264,7 +278,9 @@ size_t asmtrace_df_edge_body(char *dst, size_t cap,
     dst[0] = '\0';
     o = bp(dst, cap, o, "\"from\":%u,\"to\":%u,\"loc\":", e->from_step,
            e->to_step);
-    return op_body(dst, cap, o, &e->loc);
+    /* An edge's loc is a location identity, not a captured value: no side buffer,
+     * so a wide loc degrades to bytes-less [wide]. */
+    return op_body(dst, cap, o, &e->loc, NULL, 0);
 }
 
 size_t asmtrace_regstate_body(char *dst, size_t cap,

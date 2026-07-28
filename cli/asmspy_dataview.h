@@ -36,6 +36,28 @@ static inline void asmspy_df_tok_append(char *ann, size_t cap,
         snprintf(ann + l, cap - l, "%s%s", l ? " " : "", tok);
 }
 
+/* Format a >8-byte operand's captured bytes (from the valtrace's `wide` side
+ * buffer, 28 R1 T3) as "0x<hex>" in memory order, capped at 32 bytes with a
+ * trailing ".." so the token stays compact. Writes "" when the bytes are not on
+ * the wire (no side buffer, not captured, or a short/out-of-range slice), which
+ * is the caller's signal to fall back to the bytes-less "[wide]" placeholder. */
+static inline void asmspy_df_wide_hex(const asmtest_valtrace_t *vt,
+                                      const at_val_rec_t *r, char *out,
+                                      size_t cap) {
+    if (cap)
+        out[0] = '\0';
+    if (!r->value_valid || vt->wide == NULL || r->size == 0 ||
+        (size_t)r->wide_off + r->size > vt->wide_len)
+        return;
+    size_t n = r->size, shown = n > 32 ? 32 : n, o = 0;
+    o += (size_t)snprintf(out + o, cap - o, "0x");
+    for (size_t k = 0; k < shown && o + 3 < cap; k++)
+        o += (size_t)snprintf(out + o, cap - o, "%02x",
+                              vt->wide[r->wide_off + k]);
+    if (shown < n && o + 3 < cap)
+        snprintf(out + o, cap - o, "..");
+}
+
 /* Build step `s`'s captured-VALUE annotation into `ann[cap]` (always NUL-
  * terminated; empty when the step carried nothing worth showing). Records in
  * `vt` are appended grouped and in ascending step order, so `*cur` threads a
@@ -43,9 +65,11 @@ static inline void asmspy_df_tok_append(char *ann, size_t cap,
  * it is advanced past step `s`'s records). The token grammar mirrors what the
  * disassembly cannot already show:
  *   - a register READ is skipped (it is the disasm's own source operand);
- *   - a register WRITE shows "->0xVAL" (or "->[wide]" for an XMM/YMM result);
+ *   - a register WRITE shows "->0xVAL" (or "->0x<hex>" for an XMM/YMM result
+ *     whose bytes are on the wire, else "->[wide]" — 28 R1 T3);
  *   - a memory operand shows "[0xEA]<-0xVAL" (store) or "[0xEA]->0xVAL" (load),
- *     with "?" when the value was not captured and "[wide]" when it is >8 bytes.
+ *     with "?" when the value was not captured and the wide bytes ("0x<hex>", or
+ *     "[wide]" when the side buffer is absent) when it is >8 bytes.
  * At most `max_tokens` tokens are appended; an overflow appends a trailing "...".
  * Returns the number of operand records step `s` carried (shown or not). */
 static inline size_t asmspy_df_annotate(const asmtest_valtrace_t *vt, size_t s,
@@ -64,23 +88,26 @@ static inline size_t asmspy_df_annotate(const asmtest_valtrace_t *vt, size_t s,
     while (c < nrecs && vt->recs[c].step == s) {
         const at_val_rec_t *r = &vt->recs[c++];
         seen++;
-        char tok[64];
+        char tok[128], hx[80];
         if (r->kind == AT_LOC_REG) {
             if (!r->is_write)
                 continue; /* a source operand — already named in the disasm */
-            if (r->wide)
-                snprintf(tok, sizeof tok, "->[wide]");
-            else if (r->value_valid)
+            if (r->wide) {
+                asmspy_df_wide_hex(vt, r, hx, sizeof hx);
+                snprintf(tok, sizeof tok, "->%s", hx[0] ? hx : "[wide]");
+            } else if (r->value_valid)
                 snprintf(tok, sizeof tok, "->0x%llx",
                          (unsigned long long)r->value);
             else
                 continue;
         } else {
             const char *arrow = r->is_write ? "<-" : "->";
-            if (r->wide)
-                snprintf(tok, sizeof tok, "[0x%llx]%s[wide]",
-                         (unsigned long long)r->addr, arrow);
-            else if (r->value_valid)
+            if (r->wide) {
+                asmspy_df_wide_hex(vt, r, hx, sizeof hx);
+                snprintf(tok, sizeof tok, "[0x%llx]%s%s",
+                         (unsigned long long)r->addr, arrow,
+                         hx[0] ? hx : "[wide]");
+            } else if (r->value_valid)
                 snprintf(tok, sizeof tok, "[0x%llx]%s0x%llx",
                          (unsigned long long)r->addr, arrow,
                          (unsigned long long)r->value);

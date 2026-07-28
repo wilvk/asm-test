@@ -9,9 +9,10 @@
 // dt_edge. Including asmtest_valtrace.h would be legal (it is plain structs),
 // but the operand shape here mirrors what the SCHEMA serialises rather than
 // what the C struct holds, and the two are not the same thing — the schema
-// omits `value` when `value_valid` is false, and the >8-byte side buffer is a
-// documented v1 non-field. A decoder that pretended otherwise would invent
-// values no producer wrote.
+// omits `value` when `value_valid` is false, and a >8-byte operand's bytes ride
+// in the `bytes` hex field (28 R1 T3), decoded here into ValRec::bytes, or are
+// absent (the view degrades to [wide]). A decoder that invented either would
+// show values no producer wrote.
 #ifndef ASMDESK_DOC_STREAMS_H
 #define ASMDESK_DOC_STREAMS_H
 
@@ -35,8 +36,12 @@ struct ValRec {
     uint32_t size = 0;
     bool write = false;
     bool value_valid = false; // false => the value was NOT captured
-    bool wide = false;        // > 8 bytes: `value` is absent, by v1 design
+    bool wide = false;        // > 8 bytes: inline `value` is absent
     uint64_t value = 0;
+    // The wide operand's bytes (28 R1 T3), decoded from the `bytes` hex field in
+    // memory order; empty when the producer did not serialize them (the reader
+    // then degrades to "[wide]"). A view shows these instead of a placeholder.
+    std::vector<uint8_t> bytes;
 };
 
 // The exact execution stream: `trace` + `coverage` events.

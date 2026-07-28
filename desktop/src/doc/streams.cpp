@@ -28,6 +28,31 @@ void get(const nlohmann::json &j, const char *key, T &out) {
     }
 }
 
+// Decode a lowercase-hex string into bytes in order; a malformed/odd-length one
+// yields no bytes rather than a partial guess (the view then degrades to [wide]).
+std::vector<uint8_t> decode_hex(const std::string &h) {
+    std::vector<uint8_t> out;
+    if (h.size() % 2 != 0)
+        return out;
+    auto nib = [](char c) -> int {
+        if (c >= '0' && c <= '9')
+            return c - '0';
+        if (c >= 'a' && c <= 'f')
+            return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F')
+            return c - 'A' + 10;
+        return -1;
+    };
+    out.reserve(h.size() / 2);
+    for (size_t i = 0; i < h.size(); i += 2) {
+        int hi = nib(h[i]), lo = nib(h[i + 1]);
+        if (hi < 0 || lo < 0)
+            return {};
+        out.push_back(static_cast<uint8_t>((hi << 4) | lo));
+    }
+    return out;
+}
+
 ValRec decode_op(const nlohmann::json &j) {
     ValRec v;
     get(j, "space", v.space);
@@ -38,6 +63,10 @@ ValRec decode_op(const nlohmann::json &j) {
     get(j, "value_valid", v.value_valid);
     get(j, "wide", v.wide);
     get(j, "value", v.value);
+    std::string hex;
+    get(j, "bytes", hex);
+    if (!hex.empty())
+        v.bytes = decode_hex(hex);
     return v;
 }
 

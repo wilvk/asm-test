@@ -2317,7 +2317,8 @@ static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
         while (cur < nrecs && vt->recs[cur].step == s)
             cur++;
         asmtrace_df_step_body(body, sizeof body, (unsigned)s, vt->insn_off[s],
-                              dis, &vt->recs[first], cur - first);
+                              dis, &vt->recs[first], cur - first, vt->wide,
+                              vt->wide_len);
         rec_emit(r, "df_step", body);
         /* 26 T2: when the register ring is armed, one `regstate` per step, right
          * after its `df_step` and in step order — so the Scrubber pairs them 1:1

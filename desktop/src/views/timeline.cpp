@@ -37,13 +37,15 @@ at_loc_kind_t space_of(const std::string &s) {
     return AT_LOC_MEM_ABS;
 }
 
-// Rebuild the engine's operand records from the decoded stream. This is a VIEW
-// in the sense that it copies nothing the recording did not carry: a value the
-// producer never captured stays value_valid=false, and a >8-byte value stays
-// `wide` with no bytes behind it (the v1 schema does not serialise the side
-// buffer, a documented limit — inventing bytes here would be a lie the
-// annotation grammar would faithfully print).
-std::vector<at_val_rec_t> to_recs(const DataflowStream &df) {
+// Rebuild the engine's operand records from the decoded stream, reconstructing
+// the `wide` side buffer (28 R1 T3) so the shared annotator renders a >8-byte
+// operand's bytes exactly as the CLI does. This is a VIEW in the sense that it
+// copies nothing the recording did not carry: a value the producer never
+// captured stays value_valid=false, and a wide operand whose `bytes` were NOT
+// serialised keeps wide=true with nothing behind it (the annotator then degrades
+// to "[wide]" — inventing bytes here would be a lie it would faithfully print).
+std::vector<at_val_rec_t> to_recs(const DataflowStream &df,
+                                  std::vector<uint8_t> &wide) {
     std::vector<at_val_rec_t> v;
     v.reserve(df.recs.size());
     for (const ValRec &r : df.recs) {
@@ -57,6 +59,10 @@ std::vector<at_val_rec_t> to_recs(const DataflowStream &df) {
         o.wide = r.wide;
         o.value = r.value;
         o.step = r.step;
+        if (r.wide && !r.bytes.empty()) {
+            o.wide_off = static_cast<uint32_t>(wide.size());
+            wide.insert(wide.end(), r.bytes.begin(), r.bytes.end());
+        }
         v.push_back(o);
     }
     return v;
@@ -130,7 +136,8 @@ dt_timeline dt_timeline_build(const Streams &s, const dt_slice *cone) {
     t.banner = build_banner(s);
 
     const DataflowStream &df = s.df;
-    std::vector<at_val_rec_t> recs = to_recs(df);
+    std::vector<uint8_t> wide;
+    std::vector<at_val_rec_t> recs = to_recs(df, wide);
     std::vector<asmtest_defuse_edge_t> edges = to_edges(df);
 
     asmtest_valtrace_t vt{};
@@ -141,6 +148,8 @@ dt_timeline dt_timeline_build(const Streams &s, const dt_slice *cone) {
     vt.recs = recs.empty() ? nullptr : recs.data();
     vt.recs_cap = vt.recs_len = recs.size();
     vt.recs_total = recs.size();
+    vt.wide = wide.empty() ? nullptr : wide.data();
+    vt.wide_cap = vt.wide_len = wide.size();
     vt.truncated = s.truncated;
     vt.mem_space = AT_LOC_MEM_ABS;
 

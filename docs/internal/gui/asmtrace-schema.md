@@ -263,11 +263,15 @@ Operand objects mirror [`at_val_rec_t`](../../../include/asmtest_valtrace.h#L61)
 with the enum rendered as a token: `space` is `"reg"` (`AT_LOC_REG`) \| `"abs"`
 (`AT_LOC_MEM_ABS`) \| `"off"` (`AT_LOC_MEM_OFF`). Operand field order:
 `space`, `reg`, `base`, `index`, `scale`, `disp`, `addr`, `size`, `write`,
-`value_valid`, `wide`, `value`. Memory addressing terms
+`value_valid`, `wide`, `bytes`, `value`. Memory addressing terms
 (`base`/`index`/`scale`/`disp`/`addr`) are omitted for a register operand;
 `value` is omitted when `value_valid` is false. A value wider than 8 bytes sets
-`"wide":true` and omits `value` (the wide side buffer is not serialized in v1 —
-a documented v1 limit, not a silent drop).
+`"wide":true` and omits `value`; its bytes ride in **`bytes`** (28 R1 T3) — a
+lowercase-hex string of the operand's `size` bytes in memory order, present when
+the producer serialized the [`wide`](../../../include/asmtest_valtrace.h#L133)
+side buffer (bounded, ≤ 64 bytes). `bytes` is **omitted** when the producer had
+no side buffer or the value was not captured, and a reader then degrades to a
+`[wide]` placeholder — the bytes are never invented.
 
 ### `df_edge` — one last-writer def-use edge (L1)
 
@@ -449,10 +453,10 @@ has to make explicitly rather than inherit.
   and `df_step` events and no `coverage`. Block starts cannot be recovered from
   an offset stream without instruction lengths, so the recorder emits none
   rather than guessing. Raised 2026-07-24 by 04.
-- **The wide side buffer is not serialised.** `df_step.ops[]` marks a >8-byte
-  value `"wide":true` and omits `value` (see `df_step` above). A reader renders
-  it as `[wide]` and cannot show the bytes. Documented as a v1 limit at
-  authoring time; listed here so the freeze either closes it or confirms it.
+- ~~**The wide side buffer is not serialised.**~~ **CLOSED 2026-07-28 (28 R1
+  T3).** A >8-byte operand now emits its bytes in the `bytes` hex field (see
+  `df_step` above) when the producer carries the `wide` side buffer; a reader
+  renders the bytes and degrades to `[wide]` only when they are genuinely absent.
 
 ## Example
 

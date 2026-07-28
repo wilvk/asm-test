@@ -159,6 +159,20 @@ fixture (wide-but-invalid) still degrades honestly; `test_golden` updated.
   confirm or fund separately.
 - A `code` hash proves the **bytes** match, not that two runs used the same ABI or
   arguments — the diff keeps stating what it does and does not verify.
+- **Known limitation — the corpus recorder's fixed 64-byte window is not a stable
+  identity for a SHORT routine** (discovered 2026-07-28 implementing T1/T3). The
+  Author-mode recorder hashes a fixed `REC_WINDOW = 64` bytes from a routine's
+  entry; a routine shorter than 64 bytes that sits near an object-file boundary
+  (measured: `make_pair`, whose abixray goldens re-hashed on every writer edit)
+  has its window spill into link-order-dependent bytes, so its `code.sha256`
+  CHANGES when unrelated code shifts the binary layout. That forces a golden
+  regen and means two recordings of one short routine from *different builds* can
+  carry different hashes and be refused as "different routines". It does NOT
+  affect the live `--dataflow` producer (it hashes the region's true `len`, no
+  spill) or any routine ≥ 64 bytes. The durable fix — hash only the routine's
+  executed extent, not the fixed window — is a T1 amendment that re-hashes the
+  WHOLE corpus (every `code.len` drops from 64 to the real length), so it is left
+  for the Phase-3 freeze to fund rather than smuggled into T3.
 
 ## Cross-references
 

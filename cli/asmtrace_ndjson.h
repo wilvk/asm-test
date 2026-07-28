@@ -127,10 +127,14 @@ void asmtrace_escape(char *dst, size_t cap, const char *src);
 /* {"step":N,"off":N,"disasm":"..."?,"ops":[...]} — `recs[0..n)` must be
  * exactly this step's operand records. `disasm` may be NULL/"" (D10: a
  * producer without Capstone omits the field and readers degrade to offsets).
+ * `wide`/`wide_len` are the valtrace's side buffer (asmtest_valtrace_t.wide):
+ * a >8-byte operand's `size` bytes at its wide_off are emitted as a lowercase-hex
+ * `bytes` field (28 R1 T3). Pass NULL/0 when the producer has no side buffer, and
+ * a wide operand degrades to `"wide":true` with no bytes.
  * Returns the body length written (truncated to fit `cap`). */
 size_t asmtrace_df_step_body(char *dst, size_t cap, unsigned step, uint64_t off,
                              const char *disasm, const at_val_rec_t *recs,
-                             size_t n);
+                             size_t n, const uint8_t *wide, size_t wide_len);
 
 /* {"from":N,"to":N,"loc":{...}} for one last-writer def-use edge. */
 size_t asmtrace_df_edge_body(char *dst, size_t cap,

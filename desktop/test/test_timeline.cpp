@@ -129,5 +129,48 @@ int main() {
                   "a refused pair has no meaningful divergence");
     }
 
+    // --- 28 R1 T3: a wide operand's bytes render as hex, not "[wide]" --------
+    // No golden carries a wide-with-bytes operand (the emulator L0 corpus has no
+    // >8-byte values), so this is a synthetic Streams: the reconstruction of the
+    // side buffer in to_recs is what lets the shared annotator show the bytes.
+    {
+        Streams s;
+        s.df.insn_off = {0};
+        s.df.nsteps = 1;
+        s.df.step_present = {1};
+        s.df.disasm = {""};
+        ValRec w;
+        w.step = 0;
+        w.space = "reg";
+        w.reg = 35; // rax
+        w.size = 16;
+        w.write = true;
+        w.value_valid = true;
+        w.wide = true;
+        for (int i = 0; i < 16; i++)
+            w.bytes.push_back(static_cast<uint8_t>(i + 1));
+        s.df.recs.push_back(w);
+
+        dt_timeline t = dt_timeline_build(s);
+        vt::check("a wide operand renders its bytes as hex",
+                  t.rows.size() == 1 &&
+                      t.rows[0].ann.find(
+                          "0x0102030405060708090a0b0c0d0e0f10") !=
+                          std::string::npos,
+                  t.rows.empty() ? "no rows" : t.rows[0].ann);
+        vt::check("no [wide] placeholder when the bytes are present",
+                  !t.rows.empty() &&
+                      t.rows[0].ann.find("[wide]") == std::string::npos,
+                  t.rows.empty() ? "no rows" : t.rows[0].ann);
+
+        // Absent bytes still degrade honestly to "[wide]".
+        s.df.recs[0].bytes.clear();
+        dt_timeline t2 = dt_timeline_build(s);
+        vt::check("a bytes-less wide operand degrades to [wide]",
+                  !t2.rows.empty() &&
+                      t2.rows[0].ann.find("[wide]") != std::string::npos,
+                  t2.rows.empty() ? "no rows" : t2.rows[0].ann);
+    }
+
     return vt::report("test_timeline");
 }

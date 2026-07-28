@@ -390,6 +390,54 @@ static void test_steps_total_footer(void) {
           "a recording with no set_steps_total must omit the field");
 }
 
+/* The `bytes` wide-operand field (28 R1 T3): a >8-byte operand emits its bytes
+ * as lowercase-hex when the side buffer carries them, keeps `"wide":true`, and
+ * degrades to bytes-less when they are absent or the value was not captured. */
+static void test_df_step_wide_bytes(void) {
+    at_val_rec_t r;
+    char body[256];
+    uint8_t wide[4] = {0xde, 0xad, 0xbe, 0xef};
+
+    memset(&r, 0, sizeof r);
+    r.kind = AT_LOC_REG;
+    r.reg = 35;
+    r.is_write = true;
+    r.value_valid = true;
+    r.wide = true;
+    r.wide_off = 0;
+    r.size = 4;
+
+    /* Bytes on the wire: emitted, and the wide flag stays. */
+    asmtrace_df_step_body(body, sizeof body, 0, 0x10, NULL, &r, 1, wide,
+                          sizeof wide);
+    check("df_step.wide emits bytes",
+          strstr(body, "\"bytes\":\"deadbeef\"") != NULL, body);
+    check("df_step.wide keeps the wide flag",
+          strstr(body, "\"wide\":true") != NULL, body);
+
+    /* No side buffer: degrades to bytes-less [wide] honestly. */
+    asmtrace_df_step_body(body, sizeof body, 0, 0x10, NULL, &r, 1, NULL, 0);
+    check("df_step.wide with no buffer omits bytes",
+          strstr(body, "\"bytes\"") == NULL, body);
+    check("df_step.wide with no buffer keeps the wide flag",
+          strstr(body, "\"wide\":true") != NULL, body);
+
+    /* Wide but the value was NOT captured (the dishonesty case): no bytes. */
+    r.value_valid = false;
+    asmtrace_df_step_body(body, sizeof body, 0, 0x10, NULL, &r, 1, wide,
+                          sizeof wide);
+    check("df_step.wide-but-invalid omits bytes",
+          strstr(body, "\"bytes\"") == NULL, body);
+
+    /* An out-of-range slice (wide_off past the buffer) never over-reads. */
+    r.value_valid = true;
+    r.wide_off = 100;
+    asmtrace_df_step_body(body, sizeof body, 0, 0x10, NULL, &r, 1, wide,
+                          sizeof wide);
+    check("df_step.wide out-of-range omits bytes",
+          strstr(body, "\"bytes\"") == NULL, body);
+}
+
 static void test_field_order_fixed(void) {
     char a[600], b[600];
     FILE *fa, *fb;
@@ -722,6 +770,7 @@ int main(void) {
     test_header_and_roundtrip();
     test_code_header();
     test_steps_total_footer();
+    test_df_step_wide_bytes();
     test_field_order_fixed();
     test_escape_edges();
     test_deterministic_omits_volatile();

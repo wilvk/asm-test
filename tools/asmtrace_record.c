@@ -337,7 +337,8 @@ static int record_bytes(const char *dir, const char *out, const char *label,
         while (cur < nrecs && vt->recs[cur].step == s)
             cur++;
         asmtrace_df_step_body(body, sizeof body, (unsigned)s, vt->insn_off[s],
-                              dis, &vt->recs[first], cur - first);
+                              dis, &vt->recs[first], cur - first, vt->wide,
+                              vt->wide_len);
         asmtrace_emit(&w, "df_step", body);
     }
     for (size_t i = 0; g && i < g->n; i++) {

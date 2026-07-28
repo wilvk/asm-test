@@ -276,9 +276,60 @@ static void test_loc_str(void) {
     check_str("loc null", b, "");
 }
 
+/* 28 R1 T3: a >8-byte operand whose bytes are on the valtrace's side buffer
+ * annotates as "0x<hex>" (memory order) instead of the bytes-less "[wide]". */
+static void test_annotate_wide_bytes(void) {
+    asmtest_valtrace_t *v = asmtest_valtrace_new(8, 16, 128);
+
+    /* A 16-byte XMM register write, bytes 01..10 stashed in the side buffer. */
+    uint8_t xmm[16];
+    for (int i = 0; i < 16; i++)
+        xmm[i] = (uint8_t)(i + 1);
+    size_t woff = asmtest_valtrace_stash_wide(v, xmm, sizeof xmm);
+    at_val_rec_t wr = reg(RA, 0, true, true);
+    wr.wide = true;
+    wr.wide_off = (uint32_t)woff;
+    wr.size = 16;
+    asmtest_valtrace_append(v, 0, &wr, 1);
+
+    /* A 16-byte memory store, bytes ff..f0. */
+    uint8_t vec[16];
+    for (int i = 0; i < 16; i++)
+        vec[i] = (uint8_t)(0xff - i);
+    size_t moff = asmtest_valtrace_stash_wide(v, vec, sizeof vec);
+    at_val_rec_t mw = mem(0xbeef00, 0, true, true);
+    mw.wide = true;
+    mw.wide_off = (uint32_t)moff;
+    mw.size = 16;
+    asmtest_valtrace_append(v, 1, &mw, 1);
+
+    /* A wide operand marked valid but with NO bytes behind it (wide_off past the
+     * buffer): must degrade to "[wide]", never a partial/garbage read. */
+    at_val_rec_t nb = reg(RC, 0, true, true);
+    nb.wide = true;
+    nb.wide_off = 9999;
+    nb.size = 16;
+    asmtest_valtrace_append(v, 2, &nb, 1);
+
+    char a[192];
+    size_t one = 0;
+    asmspy_df_annotate(v, 0, &one, 6, a, sizeof a);
+    check_str("annot wide reg hex", a, "->0x0102030405060708090a0b0c0d0e0f10");
+    one = 0;
+    asmspy_df_annotate(v, 1, &one, 6, a, sizeof a);
+    check_str("annot wide mem hex", a,
+              "[0xbeef00]<-0xfffefdfcfbfaf9f8f7f6f5f4f3f2f1f0");
+    one = 0;
+    asmspy_df_annotate(v, 2, &one, 6, a, sizeof a);
+    check_str("annot wide no-bytes degrades", a, "->[wide]");
+
+    asmtest_valtrace_free(v);
+}
+
 int main(void) {
     test_annotate();
     test_annotate_edges();
+    test_annotate_wide_bytes();
     test_defuse_counts();
     test_slices_and_rowstyle();
     test_loc_str();
