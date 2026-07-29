@@ -88,6 +88,21 @@ void draw_honesty_chip(const char *text, HonestyTier tier) {
     ImGui::PopStyleColor();
 }
 
+void draw_command_hint(const char *id, const std::string &cmd) {
+    if (cmd.empty())
+        return;
+    // Sits directly under the "-> remedy" line it belongs to. The default UI font
+    // is monospace (JetBrains Mono), so a plain `$ …` line already reads as code;
+    // the Copy button is the app's existing clipboard idiom (ImGui::SetClipboardText,
+    // as the nav deep-link copy uses). id keeps the button unique across rows.
+    ImGui::PushID(id);
+    ImGui::TextDisabled("$ %s", cmd.c_str());
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Copy"))
+        ImGui::SetClipboardText(cmd.c_str());
+    ImGui::PopID();
+}
+
 void draw_banner(const char *text, bool refusal) {
     // The thin shim (T1 step 3): refusal -> integrity (loud, non-collapsible),
     // else -> caution (amber). The ten legacy sites route through here unchanged.

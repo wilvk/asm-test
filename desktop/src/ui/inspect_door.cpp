@@ -218,8 +218,11 @@ void draw_status(InspectState &s) {
     if (st.state == LiveState::Running)
         ImGui::Text("mode %s on pid %ld", st.mode.c_str(), st.pid);
 
-    if (!st.last_err.empty())
+    if (!st.last_err.empty()) {
         ImGui::TextColored(kBad, "refused: %s", st.last_err.c_str());
+        // A refusal that names a gate (a stale asmspy -> `make cli`) gets its fix.
+        draw_command_hint("refused-cmd", remedy_command(st.last_err));
+    }
     if (st.skip_code) {
         // A skip grades NEUTRAL (schema:98/544): the tracer worked and had
         // nothing to report, so it is a quiet chip, never an amber banner. The
@@ -228,6 +231,9 @@ void draw_status(InspectState &s) {
         std::snprintf(buf, sizeof buf, "skipped (%d): %s", st.skip_code,
                       st.skip_reason.c_str());
         draw_honesty_chip(buf, HonestyTier::Neutral);
+        // A perf-gated skip (IBS/sampler: "needs perf_event_paranoid<=2 ...")
+        // carries the sysctl fix; a plain idle-window skip carries none.
+        draw_command_hint("skip-cmd", remedy_command(st.skip_reason));
     }
     if (st.paused_dropped) {
         // paused_dropped -> CAUTION (a usable prefix with a recorded gap).
@@ -313,6 +319,8 @@ void draw_status(InspectState &s) {
             ImGui::PushStyleColor(ImGuiCol_Text, kGood);
             ImGui::TextWrapped("%s", fix.c_str());
             ImGui::PopStyleColor();
+            // The protocol-mismatch fix names `make cli` — offer it copy-ready.
+            draw_command_hint("endfix-cmd", remedy_command(fix));
         }
     }
 }
@@ -985,6 +993,10 @@ void draw_processes_pane(InspectState &s) {
             ImGui::TextUnformatted(r.verdict.why.c_str());
             if (!r.verdict.remedy.empty())
                 ImGui::TextDisabled("-> %s", r.verdict.remedy.c_str());
+            // When the gate has a one-line fix (scope 1 -> the yama sysctl),
+            // offer it copy-pasteable right here in the disabled attach's row.
+            draw_command_hint(("attach-cmd-" + std::to_string(r.pid)).c_str(),
+                              remedy_command(r.verdict.remedy));
         }
         ImGui::EndTable();
     }

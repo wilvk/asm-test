@@ -11,6 +11,7 @@
 #include <string>
 
 #include "capview.h"
+#include "live/inspect.h" // remedy_command — the copy-pasteable fix a remedy names
 
 using namespace asmdesk;
 
@@ -261,6 +262,17 @@ int main() {
         check("remedy/available-none",
               ss != nullptr && capview_remedy(*ss).empty(),
               "a working backend has nothing to remedy");
+
+        // The command surface: a recognised perf_event_paranoid remedy also
+        // yields a copy-pasteable command; a working backend yields none.
+        check("cmd/paranoid",
+              pt != nullptr &&
+                  remedy_command(capview_remedy(*pt)) ==
+                      "sudo sysctl -w kernel.perf_event_paranoid=2",
+              "a perf_event_paranoid remedy must yield the sysctl command");
+        check("cmd/available-none",
+              ss != nullptr && remedy_command(capview_remedy(*ss)).empty(),
+              "a working backend has no command to run");
 
         // The ptrace family REUSES attach_verdict, so the capability panel and
         // the Inspect door give one answer. Synthetic reasons for each.

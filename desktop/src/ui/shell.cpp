@@ -384,6 +384,13 @@ void shell_log_push(ShellState &s, const std::string &text, ToastKind kind) {
                         static_cast<long>(s.log.size() - ShellState::kLogMax));
 }
 
+void shell_log_command_hint(ShellState &s, const std::string &advice) {
+    std::string cmd = remedy_command(advice);
+    if (cmd.empty())
+        return;
+    shell_log_push(s, "run this in a terminal: " + cmd, ToastKind::Info);
+}
+
 // A descriptive label for an open recording in the Home list (R6): the
 // disambiguated name, then what it IS — backend, exact/statistical, and its size
 // (events, and steps when it carries a dataflow) — so the list reads as more than
@@ -3161,6 +3168,7 @@ void draw_shell(ShellState &s) {
     // all. Graded a Warning: the status bar carries refusals, not successes.
     if (!s.status.empty() && s.status != s.last_logged_status) {
         shell_log_push(s, s.status, ToastKind::Warning);
+        shell_log_command_hint(s, s.status); // no-op unless the status names a gate
         s.last_logged_status = s.status;
     }
 
@@ -3208,6 +3216,14 @@ void draw_shell(ShellState &s) {
                     t.text.c_str()));
             }
         }
+        // Echo the terminal fix for a newly-changed gate reason into the Log, so
+        // a perf-gated skip or a refusal leaves its command in the scrollback
+        // after the toast dismisses. Guarded on the reason CHANGING (as the toasts
+        // are) so it logs once per transition, never per frame.
+        if (cur.status.skip_reason != s.prev_feedback.status.skip_reason)
+            shell_log_command_hint(s, cur.status.skip_reason);
+        if (cur.status.last_err != s.prev_feedback.status.last_err)
+            shell_log_command_hint(s, cur.status.last_err);
         s.prev_feedback = cur;
         // Draw the queued toasts last, so they float over every pane.
         ImGui::RenderNotifications();

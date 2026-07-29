@@ -150,6 +150,9 @@ void draw_capability_panel(CapState &s, const Recording *loaded) {
                 std::string remedy = capview_remedy(r);
                 if (!remedy.empty())
                     ImGui::TextDisabled("-> %s", remedy.c_str());
+                // A perf_event_paranoid / ptrace_scope remedy has a one-line fix;
+                // offer it copy-pasteable under the greyed backend it unblocks.
+                draw_command_hint(r.label.c_str(), remedy_command(remedy));
                 ImGui::Unindent();
             }
         }

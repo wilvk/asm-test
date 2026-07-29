@@ -576,8 +576,63 @@ static void test_region() {
           "an empty spec is the (invalid) name form");
 }
 
+// ---------------------------------------------------------------------------
+// remedy_command — the copy-pasteable terminal fix a remedy names, or "" when no
+// single command clears the gate. Derived from the SAME remedy prose the UI
+// shows, so a command is offered iff a universal one-liner exists.
+// ---------------------------------------------------------------------------
+static void test_remedy_command() {
+    // The attach gate the operator actually hits: scope 1 -> the yama sysctl,
+    // taken from the real remedy string (not a hand-written duplicate).
+    {
+        AttachFacts f;
+        f.yama_scope = 1;
+        std::string cmd = remedy_command(attach_verdict(f).remedy);
+        check("cmd/scope1-exact",
+              cmd == "sudo sysctl -w kernel.yama.ptrace_scope=0", cmd);
+    }
+    // The sampling/hwtrace gate, from a verbatim IBS skip reason.
+    check("cmd/paranoid-exact",
+          remedy_command("IBS is present but perf is locked down — needs "
+                         "perf_event_paranoid<=2 or CAP_PERFMON") ==
+              "sudo sysctl -w kernel.perf_event_paranoid=2",
+          "a perf_event_paranoid reason yields the sysctl command");
+    // The protocol-mismatch fix, from the end-placard prose.
+    check("cmd/protocol-make-cli",
+          remedy_command("Fix: rebuild `build/asmspy` (`make cli`); Disconnect "
+                         "+ reconnect.") == "make cli",
+          "a protocol-mismatch fix yields `make cli`");
+
+    // The gates with NO single-command fix return "" — matching the REMEDY, not
+    // the why: scope 3's why names ptrace_scope=3, but its remedy says reboot.
+    {
+        AttachFacts f;
+        f.yama_scope = 3;
+        check("cmd/scope3-none",
+              remedy_command(attach_verdict(f).remedy).empty(),
+              "scope 3 needs a reboot — no command, despite its why naming "
+              "ptrace_scope=3");
+    }
+    {
+        AttachFacts f;
+        f.yama_scope = 2;
+        check("cmd/scope2-none",
+              remedy_command(attach_verdict(f).remedy).empty(),
+              "scope 2 needs a privileged relaunch — no universal one-liner");
+    }
+    {
+        AttachFacts f;
+        f.elf_class = 32;
+        check("cmd/i386-none", remedy_command(attach_verdict(f).remedy).empty(),
+              "an i386 ABI mismatch has no terminal fix");
+    }
+    check("cmd/benign-none", remedy_command("capturing 42 steps").empty(),
+          "an ordinary status names no gate and yields no command");
+}
+
 int main(void) {
     test_attach();
+    test_remedy_command();
     test_evidence();
     test_front_door();
     test_progress();

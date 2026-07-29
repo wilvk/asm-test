@@ -467,6 +467,12 @@ const char *shell_banner(const Recording &r);
 // bound headlessly. The colored render is draw_log_pane.
 void shell_log_push(ShellState &s, const std::string &text, ToastKind kind);
 
+// When `advice` (a refusal / skip reason) names a gate with a one-line terminal
+// fix (remedy_command), echo "run this in a terminal: <cmd>" into the Log so the
+// exact command survives in the scrollback after the transient toast dismisses.
+// No-op when the advice has no single-command fix. Pure model move, test-driven.
+void shell_log_command_hint(ShellState &s, const std::string &advice);
+
 // Set pane_open for the panes RELEVANT to task mode `m` and clear the rest — the
 // "only open the relevant tabs" move (docs R8/R9), applied on a mode transition
 // (shell_select_mode) and once for the restored mode on first frame. Context still

@@ -158,6 +158,30 @@ AttachVerdict attach_verdict(const AttachFacts &f) {
     return v;
 }
 
+std::string remedy_command(const std::string &advice) {
+    auto has = [&](const char *n) {
+        return advice.find(n) != std::string::npos;
+    };
+    // Ordered most-specific first, and matched on the sysctl KEY / tool name the
+    // remedy prose already spells — so a command is offered only where a single,
+    // universal, argv-independent line actually clears the gate:
+    //  - perf_event_paranoid: the sampling / hwtrace / IBS gate (auto, --sample).
+    //  - ptrace_scope: the attach gate. NB match the remedy, not the why — the
+    //    scope-3 refusal names "ptrace_scope=3" in its why but its remedy says
+    //    "reboot", so running this over the REMEDY correctly yields "" there.
+    //  - make cli: the protocol-mismatch fix (stale build/asmspy).
+    // Everything else — a CAP_* relaunch, a uid change, an i386 ABI mismatch, a
+    // kernel rebuild, hardware — has no honest one-liner, so it returns "" and
+    // the caller keeps showing the prose remedy alone.
+    if (has("perf_event_paranoid"))
+        return "sudo sysctl -w kernel.perf_event_paranoid=2";
+    if (has("ptrace_scope"))
+        return "sudo sysctl -w kernel.yama.ptrace_scope=0";
+    if (has("make cli"))
+        return "make cli";
+    return "";
+}
+
 // ---------------------------------------------------------------------------
 // /proc
 // ---------------------------------------------------------------------------

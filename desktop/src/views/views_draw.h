@@ -10,6 +10,7 @@
 #define ASMDESK_VIEWS_DRAW_H
 
 #include <functional>
+#include <string>
 
 #include "nav.h"
 #include "ui/honesty.h" // HonestyTier — the ONE graded honesty vocabulary (23 T1)
@@ -43,6 +44,15 @@ void draw_honesty_banner(const char *text, HonestyTier tier,
 // sits on a header row without a banner's weight. A T1 signal (skip, statistical,
 // redacted, coarse, bounded) renders as this, never as an amber banner.
 void draw_honesty_chip(const char *text, HonestyTier tier);
+
+// The copyable terminal-command hint: one rung more concrete than a "-> remedy"
+// line. When an action is gated behind a command the app cannot run itself
+// (raising a Yama scope, lowering perf_event_paranoid, rebuilding asmspy), the
+// remedy prose already names it; this renders that command as a `$ …` line in the
+// default monospace font with a one-click Copy button (ImGui::SetClipboardText).
+// `cmd` empty -> nothing drawn, so callers pass remedy_command(...) directly.
+// `id` scopes the button's ImGui id (a per-row pid, a backend label, ...).
+void draw_command_hint(const char *id, const std::string &cmd);
 
 // The legacy two-level placard, kept as a THIN SHIM over the graded banner so the
 // ten existing call sites migrate incrementally: refusal -> integrity (loud, non

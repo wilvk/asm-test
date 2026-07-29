@@ -170,6 +170,16 @@ struct AttachVerdict {
 // thing (raising a Yama scope when the real problem is a 32-bit tracee).
 AttachVerdict attach_verdict(const AttachFacts &f);
 
+// The exact terminal command that clears the gate named in `advice` — a why /
+// remedy / reason / skip / fix string the app already shows — or "" when no
+// single command fixes it (a reboot for ptrace_scope=3, a privileged relaunch
+// for CAP_*, an ABI mismatch for i386, a kernel rebuild, or hardware). Pure, and
+// matched on the stable tokens the prose already carries, so it stays ONE source
+// of truth with the remedy text: the empty cases keep rendering as prose with no
+// invented one-liner. Every UI surface that shows a remedy runs this to decide
+// whether to also offer a copy-pasteable command (and the Log echoes it too).
+std::string remedy_command(const std::string &advice);
+
 // One row of the process list.
 struct ProcRow {
     long pid = 0;

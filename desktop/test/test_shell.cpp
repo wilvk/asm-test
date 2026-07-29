@@ -1815,6 +1815,21 @@ int main() {
               "an empty line is not logged");
     }
 
+    // ---- the terminal-command hint echoes a gate's fix into the Log ---------
+    {
+        ShellState gs;
+        shell_log_command_hint(
+            gs, "sampler skipped: needs perf_event_paranoid<=2 or CAP_PERFMON");
+        check("log/cmd-hint",
+              gs.log.size() == 1 &&
+                  gs.log.back().text == "run this in a terminal: sudo sysctl -w "
+                                        "kernel.perf_event_paranoid=2",
+              gs.log.empty() ? "(no line)" : gs.log.back().text.c_str());
+        shell_log_command_hint(gs, "capturing 42 steps"); // names no gate
+        check("log/cmd-hint-none", gs.log.size() == 1,
+              "an advice that names no gate logs nothing");
+    }
+
     if (failures) {
         std::fprintf(stderr, "test_shell: %d FAILURE(S)\n", failures);
         return 1;
