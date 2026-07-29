@@ -738,6 +738,15 @@ expect_badarg "$ASM" --dataflow 1 --auto --tid=1
 # --module= without --auto would be a silent no-op that reads like a filter.
 expect_badarg "$ASM" --dataflow 1 hotfn --module=libc
 
+# 39 T3: --window sizes the --auto sample window. It is accepted WITH --auto
+# (verified above the way the flag reaches the sampler is proven by cli-ibs), and
+# rejected as a silent no-op without it — the same posture as --sampler/--module.
+# These are pure arg-parse checks (no sampler), so they run on every lane.
+expect_badarg "$ASM" --dataflow 1 hotfn --window=100    # --window without --auto
+expect_badarg "$ASM" --dataflow 1 --auto --window=abc   # non-numeric window
+expect_badarg "$ASM" --dataflow 1 --auto --window=0     # zero window
+expect_badarg "$ASM" --dataflow 1 --auto --window=99999 # over the 60000 ms cap
+
 # bad --tid / --max / pid are rejected up front (rc=2), before any attach
 expect_badarg "$ASM" --dataflow "$AVPID" hotfn --tid=nope
 expect_badarg "$ASM" --dataflow "$AVPID" hotfn --max=0

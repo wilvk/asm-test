@@ -463,6 +463,30 @@ int main(void) {
               "T2: the 2nd candidate carries a real (base,len) to arm next");
     }
 
+    /* ==== 18. the EMPTY-WINDOW RETRY reuses the walk (39 T3) ==================
+     * An idle sample window (the sampler ran, nothing qualified) is a retry, not
+     * a verdict: the picker re-samples up to a bound before reporting NEVER_RAN.
+     * The decision is the SAME pure walk — "empty window" is the advance
+     * condition, the window try is `attempt`, and the retry bound is `ncand`. So
+     * the retry loop cannot spin forever (it EXHAUSTS) and cannot give up early
+     * (it ADVANCEs while windows remain). AUTO_WINDOW_TRIES is 3 in asmspy.c; the
+     * literal here mirrors it. */
+    {
+        const int tries = 3; /* == AUTO_WINDOW_TRIES */
+        CHECK(asmspy_autoregion_walk(/*empty=*/1, 0, tries) ==
+                  ASMSPY_WALK_ADVANCE,
+              "T3: an empty first window re-samples (advance), not a verdict");
+        CHECK(asmspy_autoregion_walk(1, 1, tries) == ASMSPY_WALK_ADVANCE,
+              "T3: still re-sampling while windows remain");
+        CHECK(asmspy_autoregion_walk(1, tries - 1, tries) ==
+                  ASMSPY_WALK_EXHAUSTED,
+              "T3: the last empty window stops (exhausted) — a bounded retry, "
+              "never an unbounded spin");
+        CHECK(
+            asmspy_autoregion_walk(/*empty=*/0, 0, tries) == ASMSPY_WALK_STOP,
+            "T3: a window that qualified a region stops the retry immediately");
+    }
+
     printf("1..%d\n", checks);
     if (failures) {
         printf("# %d/%d FAILED\n", failures, checks);

@@ -1592,6 +1592,27 @@ int main() {
               !inspect_start_params(is).contains("continuous"),
               "a whole-process mode has no re-arm loop, continuous or not");
 
+        // 39 T3: the `auto` sample window (ms). Sent as `ms` only for `auto` and
+        // only when the operator set a non-default value; 0 (the default) sends
+        // nothing so the host applies its own AUTO_WINDOW_MS. A dataflow/whole-
+        // process want samples no region, so it never carries the window.
+        is.continuous = false;
+        is.want = LiveMode::Auto;
+        is.window_ms = 0;
+        check("cap/auto default window omitted",
+              !inspect_start_params(is).contains("ms"),
+              "auto + window 0 -> no `ms` (the host default, byte-identical)");
+        is.window_ms = 900;
+        check("cap/auto window set",
+              inspect_start_params(is).value("ms", 0) == 900,
+              "auto + window 900 -> {ms:900} (the settable sample window)");
+        is.want = LiveMode::Dataflow;
+        check("cap/dataflow ignores window",
+              !inspect_start_params(is).contains("ms"),
+              "a named-region mode samples nothing, so it carries no window");
+        is.window_ms = 0;
+        is.want = LiveMode::Auto;
+
         // The tree filter (depth/focus/module/tid/follow) rides this same Start now
         // the patch bay owns tree config: inspect_start_params merges the engine-
         // side filter (obs_tree_start_params) for a `tree` want, omitting any field

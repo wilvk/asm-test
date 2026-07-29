@@ -168,6 +168,13 @@ struct InspectState {
     // continuous does NOT re-confirm per pass.
     bool continuous = false;
 
+    // The `auto` SAMPLE WINDOW in ms (39 T3): how long the out-of-band sampler
+    // watches before ranking a region. 0 means "unset" — the host's own default
+    // (AUTO_WINDOW_MS, 400) is used and no `ms` is sent, so an untouched capture
+    // is byte-identical to before. Surfaced as a capture-pane input for `auto`
+    // only (dataflow/trace name their region and sample nothing); sent as `ms`.
+    int window_ms = 0;
+
     // Cross-pane requests from the Processes pane's row actions (double-click /
     // right-click): the door cannot reach ShellState, so it raises a flag the
     // docked shell consumes to reveal the Connect / Live-capture pane. No-ops in

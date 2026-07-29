@@ -133,6 +133,12 @@ nlohmann::json inspect_start_params(const InspectState &s) {
     if ((s.want == LiveMode::Dataflow || s.want == LiveMode::Auto) &&
         s.continuous)
         params["continuous"] = true;
+    // 39 T3: the `auto` sample window (ms). Only `auto` samples for a region;
+    // dataflow/trace name theirs. Sent only when the operator set a non-default
+    // value (window_ms > 0), so an untouched capture is byte-identical and the
+    // host applies its own default (AUTO_WINDOW_MS).
+    if (s.want == LiveMode::Auto && s.window_ms > 0)
+        params["ms"] = s.window_ms;
     // The tree filter (depth/focus/module/tid/follow) rides this same Start — the
     // patch bay owns tree config now, so the one Start carries it. obs_tree_start_
     // params omits any field left at its default, exactly as the wire expects. To
@@ -449,6 +455,20 @@ void draw_patch_bay(InspectState &s) {
         ImGui::Checkbox(
             "continuous — re-arm and keep capturing until Stop (35)",
             &s.continuous);
+        // 39 T3: the `auto` sample window (ms) — how long the out-of-band sampler
+        // watches before ranking a region. Only `auto` samples; a named dataflow
+        // region needs no window. 0 leaves the host default (400 ms) and sends no
+        // `ms`; an empty window is retried, not a verdict (the host re-samples a
+        // bounded number of times), so a wider window is a knob, not a fix.
+        if (s.want == LiveMode::Auto) {
+            ImGui::SetNextItemWidth(160.0f);
+            ImGui::InputInt("auto sample window (ms, 0 = default 400)",
+                            &s.window_ms);
+            if (s.window_ms < 0)
+                s.window_ms = 0;
+            if (s.window_ms > 60000)
+                s.window_ms = 60000; // mirror the host's 1..60000 ms bound
+        }
     }
 
     // The tree filter (depth/focus/module/tid/follow): a `tree` capture's engine-

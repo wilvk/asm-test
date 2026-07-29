@@ -2559,6 +2559,14 @@ static int auto_resolve_sym(void *ctx, uint64_t addr, uint64_t *start,
  * one more" without turning a refusal into a minute of waits. */
 #define AUTO_TRIES 3
 
+/* How many SAMPLE WINDOWS --auto will try before reporting NEVER_RAN (39 T3). An
+ * idle target yields nothing in ONE window but may enter its work in the next,
+ * so "idle for one window" must not be spelled "this target has no regions".
+ * Distinct from AUTO_TRIES: that walks the CANDIDATES a single window produced;
+ * this re-runs the SAMPLER when a window produced none. Bounded, and each empty
+ * window is reported so the retry is visible, never silent. */
+#define AUTO_WINDOW_TRIES 3
+
 /* One picked candidate with its name COPIED out: a JIT winner's name borrows
  * from a map that dies with the picker, so borrowing is not an option, and
  * copying uniformly beats remembering which winners borrow from where. Filled by
@@ -2588,7 +2596,7 @@ typedef struct {
  * silently disable the guard. Copies names out (a JIT winner's borrows from a map
  * that dies with this call), exactly as auto_pick_sw does. */
 static int auto_pick(pid_t pid, const asmspy_symtab_t *t, const char *module,
-                     auto_cand_copy *out, int max_out) {
+                     auto_cand_copy *out, int max_out, int window_ms) {
     if (!asmtest_ibs_available()) {
         fprintf(stderr, "# SKIP --dataflow --auto: %s\n",
                 asmtest_ibs_unavail_reason());
@@ -2602,7 +2610,7 @@ static int auto_pick(pid_t pid, const asmspy_symtab_t *t, const char *module,
     asmspy_jitmap_init(&jit, pid);
     asmspy_jitmap_refresh(&jit);
     sample_snap snap = {0};
-    int rc = asmspy_engine_sample(pid, AUTO_WINDOW_MS, NULL, t, &jit,
+    int rc = asmspy_engine_sample(pid, (unsigned)window_ms, NULL, t, &jit,
                                   sample_capture_sink, &snap);
     if (rc == ASMSPY_SAMPLE_UNAVAIL) {
         fprintf(stderr, "# SKIP --dataflow --auto: %s\n",
@@ -2656,7 +2664,7 @@ static int auto_pick(pid_t pid, const asmspy_symtab_t *t, const char *module,
                 "  the target may be idle, or its work may be in a module the "
                 "filter excludes;\n"
                 "  name a function explicitly, or widen --module=\n",
-                (int)pid, AUTO_WINDOW_MS, (unsigned long long)snap.n,
+                (int)pid, window_ms, (unsigned long long)snap.n,
                 module ? ", --module=" : "", module ? module : "");
     } else {
         /* Up to max_out RANKED candidates, names COPIED out (a JIT winner's is
@@ -2677,7 +2685,7 @@ static int auto_pick(pid_t pid, const asmspy_symtab_t *t, const char *module,
                 cands[0].name ? cands[0].name : "?",
                 cands[0].module ? cands[0].module : "?", cands[0].arrivals,
                 cands[0].sites, cands[0].sites == 1 ? "" : "s", nc,
-                nc == 1 ? "" : "s", AUTO_WINDOW_MS, nout);
+                nc == 1 ? "" : "s", window_ms, nout);
     }
     if (cands != stackc)
         free(cands);
@@ -2709,9 +2717,9 @@ typedef enum {
  * "portable --auto lands the hot callee two rows down, reporting each honest
  * refusal on the way". */
 static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
-                        auto_cand_copy *out, int max_out) {
+                        auto_cand_copy *out, int max_out, int window_ms) {
     asmtest_swclock_survey_t sv;
-    int rc = asmtest_swclock_survey_process(pid, AUTO_WINDOW_MS, 0, &sv);
+    int rc = asmtest_swclock_survey_process(pid, (unsigned)window_ms, 0, &sv);
     if (rc != ASMTEST_IBS_OK) {
         fprintf(stderr, "# SKIP --dataflow --auto: %s\n",
                 asmtest_swclock_unavail_reason());
@@ -2767,7 +2775,7 @@ static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
                 "  the target may be idle, or its work may be in a module the "
                 "filter excludes;\n"
                 "  name a function explicitly, or widen --module=\n",
-                (int)pid, AUTO_WINDOW_MS, (unsigned long long)sv.samples, sv.n,
+                (int)pid, window_ms, (unsigned long long)sv.samples, sv.n,
                 module ? ", --module=" : "", module ? module : "");
     } else {
         for (size_t i = 0; i < nc && nout < max_out; i++, nout++) {
@@ -2785,7 +2793,7 @@ static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
                 cands[0].name ? cands[0].name : "?",
                 cands[0].module ? cands[0].module : "?", cands[0].arrivals,
                 cands[0].sites, cands[0].sites == 1 ? "" : "s", nc,
-                nc == 1 ? "" : "s", AUTO_WINDOW_MS, nout);
+                nc == 1 ? "" : "s", window_ms, nout);
     }
     if (cands != stackc)
         free(cands);
@@ -2799,7 +2807,7 @@ static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
 static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                         int json, int auto_region, const char *module,
                         sampler_mode_t sampler, const char *record, int steps,
-                        int mem, int fpregs, int continuous) {
+                        int mem, int fpregs, int continuous, int window_ms) {
     asmspy_symtab_t t;
     rec_t rec;
     if (asmspy_symtab_load(pid, &t) < 0) {
@@ -2822,9 +2830,36 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
          * either way — the IBS/entry path is no longer a single, un-walked pick. */
         int use_sw = sampler == SAMPLER_SW ||
                      (sampler == SAMPLER_AUTO && !asmtest_ibs_available());
-        ncand = use_sw ? auto_pick_sw(pid, &t, module, cands, AUTO_TRIES)
-                       : auto_pick(pid, &t, module, cands, AUTO_TRIES);
+        /* 39 T3: an EMPTY window (ncand == 0 — the sampler RAN and nothing
+         * qualified, NOT a self-skip, which is < 0) is a retry, not a verdict.
+         * Re-sample a bounded number of windows before giving up: an idle target
+         * yields nothing in ONE window but may enter its work in the next. The
+         * decision reuses the pure candidate-walk (an empty window is "advance"
+         * while windows remain); a self-skip (< 0) and a real pick (> 0) are both
+         * final. auto_pick prints the per-window "nothing entered" itself. */
+        int wtry = 0;
+        for (;;) {
+            ncand = use_sw ? auto_pick_sw(pid, &t, module, cands, AUTO_TRIES,
+                                          window_ms)
+                           : auto_pick(pid, &t, module, cands, AUTO_TRIES,
+                                       window_ms);
+            if (ncand != 0 ||
+                asmspy_autoregion_walk(1, wtry, AUTO_WINDOW_TRIES) !=
+                    ASMSPY_WALK_ADVANCE)
+                break;
+            wtry++;
+            fprintf(
+                stderr,
+                "--auto: idle window %d/%d — re-sampling (an idle window is "
+                "not a verdict)\n",
+                wtry + 1, AUTO_WINDOW_TRIES);
+        }
         if (ncand <= 0) {
+            if (ncand == 0 && wtry > 0)
+                fprintf(stderr,
+                        "--auto: gave up after %d idle windows (%d ms each) — "
+                        "the target executed nothing we could scope\n",
+                        wtry + 1, window_ms);
             asmspy_symtab_free(&t);
             return ncand < 0 ? 0 : 1; /* <0 = clean skip (exit 0), 0 = no pick */
         }
@@ -3065,6 +3100,8 @@ typedef struct {
     int continuous; /* dataflow/auto: re-arm until stop (35 `continuous:true`) */
     long max;
     long ms;
+    int has_ms; /* the client set `ms` explicitly — auto (39 T3) uses it as the
+                 * sample window; unset means the AUTO_WINDOW_MS default */
     uint64_t base;
     size_t len;
     uint64_t addr;
@@ -3610,14 +3647,18 @@ static size_t serve_params_json(char *dst, size_t cap,
             (unsigned long long)p->addr, p->wlen, p->rw, p->max);
         break;
     case SM_AUTO:
+        /* 39 T3: echo the effective sample window (ms) too, so a client that
+         * omitted it sees what its omission became (AUTO_WINDOW_MS). */
         o = (size_t)snprintf(
             dst, cap,
             "{\"max\":%ld,\"module\":\"%s\",\"sampler\":"
-            "\"%s\",\"steps\":%s,\"mem\":%s,\"fpregs\":%s,\"continuous\":%s}",
+            "\"%s\",\"ms\":%d,\"steps\":%s,\"mem\":%s,\"fpregs\":%s,"
+            "\"continuous\":%s}",
             p->max, em,
             p->sampler == SAMPLER_IBS
                 ? "ibs"
                 : (p->sampler == SAMPLER_SW ? "sw" : "auto"),
+            p->has_ms ? (int)p->ms : AUTO_WINDOW_MS,
             p->steps ? "true" : "false", p->mem ? "true" : "false",
             p->fpregs ? "true" : "false", p->continuous ? "true" : "false");
         break;
@@ -3708,33 +3749,48 @@ static void serve_run_engine(serve_session_t *s) {
         const char *smp = use_sw ? "sw-clock" : "ibs-op";
         const char *rule = use_sw ? "residency" : "entry";
         const char *mod = p->module[0] ? p->module : NULL;
-        if (use_sw) {
-            ncand = auto_pick_sw(p->pid, &s->syms, mod, cands, AUTO_TRIES);
-            if (ncand <= 0) {
-                /* <0 = the SAMPLER self-skipped (perf refused); 0 = it ran and
-                 * nothing qualified. Two different facts about two different
-                 * subsystems, so they must not share a code or a reason. */
-                s->rc =
-                    ncand < 0 ? ASMSPY_SAMPLE_UNAVAIL : ASMSPY_REGION_NEVER_RAN;
-                snprintf(s->skip_note, sizeof s->skip_note, "%s",
-                         ncand < 0 ? asmtest_swclock_unavail_reason()
-                                   : "the software-clock survey ran but no "
-                                     "function qualified as a region (nothing "
-                                     "was observed executing in a sized "
-                                     "symbol during the window)");
+        /* 39 T3: the sample window (ms) is settable on the wire — the grammar
+         * already validates `ms`; auto reads it here, defaulting to
+         * AUTO_WINDOW_MS so an omitting client is byte-identical to before. And
+         * an EMPTY window (ncand == 0: the sampler RAN, nothing qualified — NOT a
+         * self-skip, which is < 0) is a retry, not a verdict: re-sample a bounded
+         * number of windows, each reported on the pick channel so a client can
+         * show "re-sampling" rather than freeze. */
+        int window_ms = p->has_ms ? (int)p->ms : AUTO_WINDOW_MS;
+        int wtry = 0;
+        for (;;) {
+            ncand = use_sw ? auto_pick_sw(p->pid, &s->syms, mod, cands,
+                                          AUTO_TRIES, window_ms)
+                           : auto_pick(p->pid, &s->syms, mod, cands, AUTO_TRIES,
+                                       window_ms);
+            if (ncand != 0 ||
+                asmspy_autoregion_walk(1, wtry, AUTO_WINDOW_TRIES) !=
+                    ASMSPY_WALK_ADVANCE)
                 break;
-            }
-        } else {
-            ncand = auto_pick(p->pid, &s->syms, mod, cands, AUTO_TRIES);
-            if (ncand <= 0) {
-                s->rc =
-                    ncand < 0 ? ASMSPY_SAMPLE_UNAVAIL : ASMSPY_REGION_NEVER_RAN;
+            wtry++;
+            /* An empty window on the pick channel: no func (a real candidate has
+             * one), attempt/of = the WINDOW retry, so a client shows "idle window
+             * N/M, re-sampling" rather than a silent gap. */
+            serve_emit_pick(s, smp, rule, "(idle window)", 0, 0, 0, 0, wtry,
+                            AUTO_WINDOW_TRIES);
+        }
+        if (ncand <= 0) {
+            /* <0 = the SAMPLER self-skipped (perf refused); 0 = every window ran
+             * and nothing qualified. Two different facts about two different
+             * subsystems, so they must not share a code or a reason. */
+            s->rc = ncand < 0 ? ASMSPY_SAMPLE_UNAVAIL : ASMSPY_REGION_NEVER_RAN;
+            if (ncand < 0)
                 snprintf(s->skip_note, sizeof s->skip_note, "%s",
-                         ncand < 0 ? asmtest_ibs_unavail_reason()
-                                   : "IBS-Op sampled the window but observed no "
-                                     "function being ENTERED (nothing ranked)");
-                break;
-            }
+                         use_sw ? asmtest_swclock_unavail_reason()
+                                : asmtest_ibs_unavail_reason());
+            else
+                snprintf(
+                    s->skip_note, sizeof s->skip_note,
+                    "%d idle sample window%s (%d ms each) qualified no "
+                    "region — the target may be idle, or its work may be in "
+                    "a module the filter excludes",
+                    wtry + 1, wtry ? "s" : "", window_ms);
+            break;
         }
         p->base = cands[0].base;
         p->len = cands[0].len;
@@ -4014,6 +4070,7 @@ static int serve_parse_start(const char *line, serve_params_t *p,
             return -1;
         }
         p->ms = (long)n;
+        p->has_ms = 1; /* 39 T3: auto reads this as the sample window */
     }
     if ((v = sj_find(line, "count")) != NULL) {
         char c[16];
@@ -7293,8 +7350,9 @@ static int usage(const char *argv0) {
         "  %s --trace  <pid> <sym|0xADDR[:LEN]> [n] [--tid=<t>]  live samples "
         "of a function/region (any thread)\n"
         "  %s --dataflow <pid> <sym|0xADDR[:LEN]|--auto> [--json] [--tid=<t>] "
-        "[--max=<n>] [--module=<m>] [--sampler=ibs|sw] [--steps] [--mem] "
-        "[--fpregs] [--continuous]  "
+        "[--max=<n>] [--module=<m>] [--sampler=ibs|sw] [--window=<ms>] "
+        "[--steps] "
+        "[--mem] [--fpregs] [--continuous]  "
         "scoped "
         "L0 "
         "value trace + L1 def-use of one invocation (native targets). --steps "
@@ -7315,8 +7373,11 @@ static int usage(const char *argv0) {
         "band (AMD IBS-Op entry edges where available; elsewhere a portable "
         "software-clock RESIDENCY sampler that walks up to 3 candidates, since "
         "residency is not entry evidence) — --sampler= forces one of the two, "
-        "--module=<m> scopes the pick, and --auto cannot be combined with "
-        "--tid\n"
+        "--window=<ms> sizes each sample window (default 400; an empty window "
+        "is "
+        "retried, not a verdict), --module=<m> scopes the pick, and --auto "
+        "cannot "
+        "be combined with --tid\n"
         "  %s --stream <pid> [n] [--tid=<t>] [--follow] [--json] "
         "[--record=<f>]  stream n instructions live (function + asm)\n"
         "  %s --graph  <pid> [n] [--sort=invocations|fanout|functions-called] "
@@ -7468,8 +7529,10 @@ int main(int argc, char **argv) {
         int mem = 0;    /* --mem: arm the `mem` address stream (29 R2) */
         int fpregs = 0; /* --fpregs: arm the XMM/MXCSR deck (31 R4) */
         int continuous = 0; /* --continuous: re-arm until Ctrl-C (35 T1) */
+        int window_ms = AUTO_WINDOW_MS;  /* --window=MS: the --auto sample
+                                         * window (39 T3); default unchanged */
         for (int i = 4; i < argc; i++) { /* [--json] [--tid=N] [--max=N]
-                                          * [--module=M] [--sampler=S]
+                                          * [--module=M] [--sampler=S] [--window=MS]
                                           * [--record=F] [--steps] [--mem]
                                           * [--fpregs] [--continuous], any order */
             if (strcmp(argv[i], "--json") == 0)
@@ -7499,6 +7562,11 @@ int main(int argc, char **argv) {
                     sampler = SAMPLER_SW;
                 else
                     return bad_arg("sampler (ibs|sw)", argv[i] + 10);
+            } else if (strncmp(argv[i], "--window=", 9) == 0) {
+                long w = 0;
+                if (parse_count(argv[i] + 9, &w) != 0 || w <= 0 || w > 60000)
+                    return bad_arg("window (1..60000 ms)", argv[i] + 9);
+                window_ms = (int)w;
             } else {
                 return bad_arg("dataflow option", argv[i]);
             }
@@ -7529,8 +7597,17 @@ int main(int argc, char **argv) {
                            "automatic pick's sampler; a named region samples "
                            "nothing)",
                            argv[3]);
+        /* --window sizes the AUTO sample window; a named region samples nothing,
+         * so accepting it there would read like it did something. Same posture as
+         * --sampler / --module. */
+        if (!auto_region && window_ms != AUTO_WINDOW_MS)
+            return bad_arg("--window= without --auto (it sizes the automatic "
+                           "pick's sample window; a named region samples "
+                           "nothing)",
+                           argv[3]);
         return cmd_dataflow(pid, argv[3], tid, max, json, auto_region, module,
-                            sampler, record, steps, mem, fpregs, continuous);
+                            sampler, record, steps, mem, fpregs, continuous,
+                            window_ms);
     }
     if (strcmp(argv[1], "--stream") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)
