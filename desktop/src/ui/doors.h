@@ -301,11 +301,23 @@ void inspect_attach_full_detail(InspectState &s, long pid);
 // for the windowed / render-only path):
 //   Connect     — the serve-host connection (asmspy path pre-filled + ssh host).
 //   Processes   — the searchable /proc target picker (pid / comm / attach / why).
-//   Live capture — the patch bay (mode + region), session status, live views,
-//                  save-to-.asmtrace, and the PT-replay slice.
+//   Live capture — the patch bay CONTROLS (mode + region + Start), the 3D handoff
+//                  and the PT-replay slice. The session log and save-to-.asmtrace
+//                  are their OWN panes (draw_session_status / draw_save_pane), and
+//                  the live views render in the doc-25 live-tab mirror panes.
 void draw_connect_pane(InspectState &s);
 void draw_processes_pane(InspectState &s);
 void draw_capture_pane(InspectState &s);
+
+// The Log pane's session half (the colored session/refusal/skip/torn/end-cause
+// log that used to sit inside the capture pane) and the Save pane (save the
+// session's capture to a .asmtrace + Open in Loom). Both forward to the same
+// bodies the windowed stack (draw_inspect_door) draws inline.
+void draw_session_status(InspectState &s);
+void draw_save_pane(InspectState &s);
+// Is there a capture to act on (a growing one, or a completed one this session)?
+// The Save pane's context gate + the capture pane's 3D-handoff enable.
+bool inspect_has_capture(const InspectState &s);
 
 // The single-window composition of the three panes (the windowed shell's Inspect
 // tab and the render-only viewer). The docked shell draws the three separately.

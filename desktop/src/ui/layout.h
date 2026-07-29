@@ -87,6 +87,11 @@ extern const char *const kPaneObserver;
 extern const char *const kPaneConnect;
 extern const char *const kPaneProcesses;
 extern const char *const kPaneCapture;
+// The capture surface's two split-out panes: the colored session Log (docked in
+// the bottom region beside the timeline) and Save capture (docked beside the
+// Live-capture controls). Each opens on demand and appears in View ▸ Panels.
+extern const char *const kPaneLog;
+extern const char *const kPaneSave;
 
 } // namespace asmdesk
 #endif // ASMDESK_UI_LAYOUT_H

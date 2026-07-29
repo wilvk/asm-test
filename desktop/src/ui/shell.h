@@ -191,6 +191,22 @@ struct ShellState {
     // required". A pure model field, so test_shell can drive visibility headlessly.
     std::map<std::string, bool> pane_open;
     std::string status; // the status bar: nav refusals land here verbatim
+
+    // --- the colored session/status Log (the Log pane) ----------------------
+    // A scrollback of everything the capture (and other tabs) emit as "additional
+    // information": every live-session TRANSITION (the same live_session_toasts()
+    // the toast layer fires, so a toast IS a log line), plus a nav refusal each
+    // time `status` changes. Colored by ToastKind. It lets the capture/other tabs
+    // stay uncluttered — the noise moved here. Bounded (kLogMax) so an unbounded
+    // session cannot grow it without limit. A pure model field; test_shell drives
+    // the append rules headlessly.
+    struct LogLine {
+        std::string text;
+        ToastKind kind = ToastKind::Info;
+    };
+    std::vector<LogLine> log;
+    std::string last_logged_status; // the `status` value already in the log
+    static constexpr size_t kLogMax = 500;
     CompletenessState completeness;
     // The Loom's per-tab state (05-loom-day-one.md). Woven once per recording,
     // not per frame.
@@ -266,6 +282,14 @@ struct ShellState {
     // not resurrect it from the same still-present `recordings()` entry. Reset to
     // 0 when the host fully empties (a fresh connect starts clean).
     size_t live_dismissed_done = 0;
+    // The CAPTURE ORDINAL the "only the panes this capture fills" pass last ran
+    // for (R10 / doc 40) — NOT the live_tab index, which is unstable: an unrelated
+    // tab close shifts live_tab (shell_close), and a completed capture stays
+    // mirrored so live_tab is reused across captures in one session. The ordinal
+    // (completed recordings + a growing one) is a stable per-capture identity, so
+    // the one-shot pass fires exactly once per distinct capture and never re-opens
+    // a pane the user closed on an unrelated tab move. -1 = never applied.
+    long live_applied_ordinal = -1;
 
     // A pending cross-door jump: a capture the Inspect door just saved and asked
     // to open in the Loom (07-serve-live-host.md). `want_open_tab` is the
@@ -437,6 +461,24 @@ void undo_apply(ShellState &s, const UndoCommand &c, bool redo);
 // "TRUNCATED recording — buffers filled"). The returned pointer is valid until
 // the next call on the same thread. This is D7 as behaviour, asserted by tests.
 const char *shell_banner(const Recording &r);
+
+// Append one line to the session Log (the Log pane), bounded to kLogMax (the
+// oldest lines drop). Pure model move, so test_shell drives the append + the ring
+// bound headlessly. The colored render is draw_log_pane.
+void shell_log_push(ShellState &s, const std::string &text, ToastKind kind);
+
+// Set pane_open for the panes RELEVANT to task mode `m` and clear the rest — the
+// "only open the relevant tabs" move (docs R8/R9), applied on a mode transition
+// (shell_select_mode) and once for the restored mode on first frame. Context still
+// gates whether a relevant pane actually shows; View ▸ Panels still reopens any of
+// them. A pure model move, so test_shell asserts the resulting pane_open map.
+void shell_apply_mode_panes(ShellState &s, Mode m);
+
+// When a live capture appears, open exactly the visualization panes that capture
+// fills and close the rest — once per capture (R10), so a manual close afterward
+// holds. Runs only in Capture/Inspect mode; resets its guard when the capture
+// ends. Pure model move over ShellState; test_shell drives it headlessly.
+void shell_apply_live_panes(ShellState &s);
 
 } // namespace asmdesk
 #endif // ASMDESK_UI_SHELL_H

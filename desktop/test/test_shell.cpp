@@ -884,6 +884,22 @@ int main() {
         check("pane/menu reopens", active(kPaneScrubber),
               "reopening (View ▸ Panels) must bring the scrubber pane back");
 
+        // Render the split-out capture panes with a host up, so ImGui validates
+        // their Begin / EndChild / EndDisabled balance headlessly (an imbalance
+        // aborts via IM_ASSERT — asserts are on, the build has no -DNDEBUG). The
+        // Log draws its scrollback child + the moved session-status block; the
+        // Live-capture pane draws the reordered patch bay + the 3D handoff.
+        ds.inspect.host_started = true;
+        ds.pane_open[kPaneLog] = true;
+        ds.pane_open[kPaneCapture] = true;
+        frame(ds);
+        frame(ds);
+        check("pane/log renders with a host", active(kPaneLog),
+              "the Log pane shows (and draws cleanly) once a host connects");
+        check("pane/capture renders with a host", active(kPaneCapture),
+              "the Live-capture controls show once a host connects");
+        ds.inspect.host_started = false;
+
         ImGui::DestroyContext();
     }
 
@@ -1546,14 +1562,213 @@ int main() {
         check("attach/no-host does not start", !at.perturb_pending,
               "with no host there is nothing to arm yet");
 
-        InspectState ah;
-        ah.host_started = true;
-        inspect_attach_full_detail(ah, 7);
-        check(
-            "attach/host arms confirm",
-            ah.perturb_pending && ah.want == LiveMode::Auto,
-            "with a host, full-detail attach arms the perturb confirm for the "
-            "single-step (it does not silently start)");
+        // The perturb confirm now fires ONLY for the unrecoverable arm64
+        // blocking-syscall kill — every other target starts immediately (the "just
+        // use Start" simplification; the x86 page-dirty nuisance no longer gates).
+        // Drive the gate directly (send_start is a safe no-op with no real host —
+        // LiveSession::send() guards on wfd_ < 0), so this exercises the arm
+        // without spawning anything.
+        InspectState ax; // arm64 target: the kill confirm survives
+        ax.host_started = true;
+        ax.selected_pid = 7;
+        ax.want = LiveMode::Auto;
+        ax.target_arch = "aarch64";
+        bool arm_started = inspect_request_start(ax);
+        check("perturb/arm64 arms confirm",
+              !arm_started && ax.perturb_pending && ax.want == LiveMode::Auto,
+              "on arm64 a single-step attach must arm the kill confirm, not "
+              "silently start");
+
+        InspectState ix; // x86 target: Start just starts, no confirm
+        ix.host_started = true;
+        ix.selected_pid = 7;
+        ix.want = LiveMode::Auto;
+        ix.target_arch = "x86_64";
+        inspect_request_start(ix);
+        check("perturb/x86 no confirm", !ix.perturb_pending,
+              "on x86 the perturb nuisance no longer gates Start — it starts");
+    }
+
+    // ---- R9: selecting a task opens only that task's relevant panes ---------
+    // Capture leads with the live workflow (Processes / Live capture / Log / Save)
+    // and CLOSES the replay reading panes; Open is the mirror image. Connect stays
+    // closed — Capture auto-connects and only the failure path reveals it.
+    {
+        ShellState cs;
+        shell_apply_mode_panes(cs, Mode::Capture);
+        check("panes/capture-opens-workflow",
+              cs.pane_open[kPaneProcesses] && cs.pane_open[kPaneCapture] &&
+                  cs.pane_open[kPaneLog] && cs.pane_open[kPaneSave],
+              "Capture opens Processes / Live capture / Log / Save");
+        check("panes/capture-closes-reading",
+              !cs.pane_open[kPaneRecording] && !cs.pane_open[kPaneLoom] &&
+                  !cs.pane_open[kPaneTimeline] && !cs.pane_open[kPaneInspector],
+              "Capture closes the replay reading panes");
+        check("panes/capture-no-connect", !cs.pane_open[kPaneConnect],
+              "Capture must not force the Connect pane open (it auto-connects)");
+        check("panes/home-universal", cs.pane_open[kPaneHome],
+              "Home is open in every task");
+
+        ShellState os;
+        shell_apply_mode_panes(os, Mode::Open);
+        check("panes/open-opens-reading",
+              os.pane_open[kPaneRecording] && os.pane_open[kPaneLoom] &&
+                  os.pane_open[kPaneTimeline] && os.pane_open[kPaneScrubber] &&
+                  os.pane_open[kPaneObserver] && os.pane_open[kPaneInspector],
+              "Open opens the replay reading panes");
+        check("panes/open-closes-capture",
+              !os.pane_open[kPaneCapture] && !os.pane_open[kPaneLog] &&
+                  !os.pane_open[kPaneProcesses],
+              "Open closes the capture workflow panes");
+
+        // Learn leads with the reading panes (a walkthrough opens a recording) but
+        // NOT the capture workflow; Home stays open in both.
+        ShellState le;
+        shell_apply_mode_panes(le, Mode::Learn);
+        check("panes/learn",
+              le.pane_open[kPaneHome] && le.pane_open[kPaneRecording] &&
+                  le.pane_open[kPaneScrubber] && !le.pane_open[kPaneCapture] &&
+                  !le.pane_open[kPaneProcesses],
+              "Learn opens Home + the reading panes, not the capture workflow");
+
+        // Author leads with Home + the authored run's Recording + Scrubber, and
+        // closes the capture workflow and the inspector.
+        ShellState au;
+        shell_apply_mode_panes(au, Mode::Author);
+        check("panes/author",
+              au.pane_open[kPaneHome] && au.pane_open[kPaneRecording] &&
+                  au.pane_open[kPaneScrubber] && !au.pane_open[kPaneCapture] &&
+                  !au.pane_open[kPaneLog] && !au.pane_open[kPaneInspector],
+              "Author opens Home + Recording + Scrubber, not the capture workflow");
+
+        // Entering Capture clears the live-viz one-shot guard so an ongoing capture
+        // re-reveals its panes (shell_apply_live_panes re-applies).
+        ShellState cg;
+        cg.live_applied_ordinal = 3;
+        shell_apply_mode_panes(cg, Mode::Capture);
+        check("panes/capture-resets-live-guard", cg.live_applied_ordinal == -1,
+              "re-entering Capture re-arms the live-viz pass for an ongoing capture");
+    }
+
+    // ---- R10: a live capture opens ONLY the viz panes it fills --------------
+    // The running mode falls back to inspect.want when the session has no `started`
+    // echo yet. A `log` capture fills Observer + Timeline (no Loom/Scrubber); an
+    // `auto` capture fills the whole exact deck. Applied ONCE per capture.
+    {
+        ShellState ls;
+        ls.mode = Mode::Capture;
+        ls.live_tab = 0;
+        ls.inspect.want = LiveMode::Log;
+        shell_apply_live_panes(ls);
+        check("live-panes/log-fills-observer-timeline",
+              ls.pane_open[kPaneObserver] && ls.pane_open[kPaneTimeline],
+              "a log capture opens the Observer + Timeline it fills");
+        check("live-panes/log-no-loom-scrubber",
+              !ls.pane_open[kPaneLoom] && !ls.pane_open[kPaneScrubber] &&
+                  !ls.pane_open[kPaneRecording],
+              "a log capture does NOT open the exact Loom / Scrubber / Slice");
+        check("live-panes/applied-once", ls.live_applied_ordinal == 0,
+              "the pass records the capture ordinal it ran for (no live recording "
+              "yet -> 0), so it does not re-fire");
+        // Idempotent: a manual close after the one-shot pass holds.
+        ls.pane_open[kPaneObserver] = false;
+        shell_apply_live_panes(ls);
+        check("live-panes/one-shot", !ls.pane_open[kPaneObserver],
+              "a second call is a no-op — a manual close is respected");
+        // The guard keys on the capture ORDINAL, not the tab index — so shifting
+        // live_tab (what an unrelated tab close does) must NOT re-open the closed
+        // pane. This is the exact regression the index-keyed guard had.
+        ls.live_tab = 2;
+        shell_apply_live_panes(ls);
+        check("live-panes/stable-across-index-shift", !ls.pane_open[kPaneObserver],
+              "shifting live_tab (an unrelated close) must not re-open a pane the "
+              "user closed");
+        // The capture ends -> the guard resets so the next capture re-applies.
+        ls.live_tab = -1;
+        shell_apply_live_panes(ls);
+        check("live-panes/reset-on-end", ls.live_applied_ordinal == -1,
+              "when the capture ends the guard resets for the next one");
+
+        ShellState as;
+        as.mode = Mode::Capture;
+        as.live_tab = 0;
+        as.inspect.want = LiveMode::Auto;
+        shell_apply_live_panes(as);
+        check("live-panes/auto-fills-exact-deck",
+              as.pane_open[kPaneRecording] && as.pane_open[kPaneLoom] &&
+                  as.pane_open[kPaneScrubber] && as.pane_open[kPaneTimeline] &&
+                  as.pane_open[kPaneObserver],
+              "an auto capture opens the whole exact deck");
+
+        // A `trace` capture fills Timeline + Recording (3D/region) + Observer, but
+        // NOT the exact Loom/Scrubber (it plants a breakpoint, it does not
+        // single-step every step).
+        ShellState ts;
+        ts.mode = Mode::Capture;
+        ts.live_tab = 0;
+        ts.inspect.want = LiveMode::Trace;
+        shell_apply_live_panes(ts);
+        check("live-panes/trace",
+              ts.pane_open[kPaneTimeline] && ts.pane_open[kPaneRecording] &&
+                  ts.pane_open[kPaneObserver] && !ts.pane_open[kPaneLoom] &&
+                  !ts.pane_open[kPaneScrubber],
+              "a trace capture opens Timeline/Recording/Observer, not Loom/Scrubber");
+
+        // A statistical `sample` capture never single-steps: Observer (hot edges) +
+        // the 3D plane, and DEFINITELY not the exact Loom/Scrubber.
+        ShellState ss;
+        ss.mode = Mode::Capture;
+        ss.live_tab = 0;
+        ss.inspect.want = LiveMode::Sample;
+        shell_apply_live_panes(ss);
+        check("live-panes/sample-no-exact",
+              ss.pane_open[kPaneObserver] && !ss.pane_open[kPaneLoom] &&
+                  !ss.pane_open[kPaneScrubber],
+              "a statistical sample capture never opens the exact Loom / Scrubber");
+
+        // Outside Capture/Inspect mode the pass is inert (it must not fight a
+        // replay reader who opened a file).
+        ShellState off;
+        off.mode = Mode::Open;
+        off.live_tab = 0;
+        off.pane_open[kPaneLoom] = true;
+        shell_apply_live_panes(off);
+        check("live-panes/inert-outside-capture",
+              off.pane_open[kPaneLoom] && off.live_applied_ordinal == -1,
+              "the live-viz pass does nothing in Open mode (never fights a reader)");
+
+        // The PRODUCTION path: the running mode comes from the session's `started`
+        // echo FIRST, and `want` is only the pre-echo fallback. Feed a `log`
+        // started but leave want = Auto — the LOG panes must open (Observer +
+        // Timeline, not the full deck), proving status().mode wins over want.
+        ShellState ms;
+        ms.mode = Mode::Capture;
+        ms.live_tab = 0;
+        ms.inspect.want = LiveMode::Auto; // deliberately != the echoed mode
+        ms.inspect.session.feed_line(
+            R"({"k":"session","state":"started","mode":"log","pid":1,"params":{}})");
+        shell_apply_live_panes(ms);
+        check("live-panes/uses-session-mode",
+              ms.pane_open[kPaneObserver] && ms.pane_open[kPaneTimeline] &&
+                  !ms.pane_open[kPaneLoom] && !ms.pane_open[kPaneScrubber],
+              "the running mode is the session's started echo (log), not want (auto)");
+    }
+
+    // ---- R2: the Log is a bounded, colored scrollback -----------------------
+    {
+        ShellState gs;
+        for (size_t i = 0; i < ShellState::kLogMax + 10; i++)
+            shell_log_push(gs, "line " + std::to_string(i), ToastKind::Info);
+        check("log/bounded", gs.log.size() == ShellState::kLogMax,
+              "the log ring drops the oldest past kLogMax");
+        check("log/keeps-tail", gs.log.back().text == "line " +
+                                    std::to_string(ShellState::kLogMax + 9),
+              "the newest line is kept (a scrollback keeps the tail)");
+        check("log/drops-head", gs.log.front().text == "line 10",
+              "the oldest ten lines dropped");
+        shell_log_push(gs, "", ToastKind::Error);
+        check("log/ignores-empty", gs.log.size() == ShellState::kLogMax,
+              "an empty line is not logged");
     }
 
     if (failures) {

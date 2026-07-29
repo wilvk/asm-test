@@ -44,8 +44,27 @@ enum class LiveMode {
 const char *mode_name(LiveMode m);
 bool mode_from_name(const std::string &name, LiveMode *out);
 
-// Every mode, for exhaustive iteration (the budget test walks all pairs).
+// Every mode, for exhaustive iteration (the budget test walks all pairs). This
+// is the WIRE order (asmtrace-schema.md); do not reorder it — the budget walk and
+// the protocol both depend on it. For the picker's reading order, use
+// patch_bay_order() instead.
 const std::vector<LiveMode> &all_modes();
+
+// The mode picker's READING order (39-auto-capture-reliability.md framing): `auto`
+// leads, because it is the one choice an un-named target should reach for first
+// (it finds its own region and captures at full detail), then the two scoped
+// single-step engines, then the whole-process and out-of-band modes. A UI-only
+// ordering over the SAME set as all_modes() — distinct so the wire order stays
+// fixed. test_budget pins that this is a permutation of all_modes() with Auto first.
+const std::vector<LiveMode> &patch_bay_order();
+
+// The visualizations a mode's capture can fill, as short view names — what the
+// picker advertises so a choice is not a leap of faith ("pick auto → you get the
+// Slice, Loom, Scrubber, Timeline and 3D overview"). Derived from WHAT each mode
+// records, kept consistent with ui/view_presence.cpp's presence rules: a
+// statistical sampler (`sample`) never single-steps, so it offers no exact Loom /
+// Scrubber. Pure and allocation-light, so test_budget pins the mapping.
+std::vector<const char *> mode_visualizations(LiveMode m);
 
 // Does this mode occupy the target's single ptrace jack?
 bool mode_uses_ptrace(LiveMode m);

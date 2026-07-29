@@ -114,6 +114,27 @@ inline PatchActions patch_actions(PatchMode m) {
     return a;
 }
 
+// Which lifecycle buttons can ACT at the current stage (R4): Start needs a valid
+// target (can_start); Stop needs a live-or-paused capture; Pause needs a
+// running-and-not-already-paused one; Resume needs an operator pause. A button
+// that cannot act is greyed rather than firing a command the serve loop would just
+// refuse — no dead levers. Pure, so test_inspect pins every stage.
+struct LiveControls {
+    bool start = false;
+    bool stop = false;
+    bool pause = false;
+    bool resume = false;
+};
+inline LiveControls live_controls(bool can_start, bool running,
+                                  bool operator_paused, bool have_active) {
+    LiveControls c;
+    c.start = can_start;
+    c.stop = running || have_active || operator_paused;
+    c.pause = running && !operator_paused;
+    c.resume = operator_paused;
+    return c;
+}
+
 // ---------------------------------------------------------------------------
 // 1. attachability
 // ---------------------------------------------------------------------------

@@ -77,13 +77,15 @@ void inspect_disconnect(InspectState &s) {
 }
 
 bool inspect_request_start(InspectState &s) {
-    // The perturbation gate (T5, F22): a single-stepping mode dirties the traced
-    // page, perturbs timing, and on arm64 can kill a target blocked in a syscall.
-    // The FIRST Start only arms the confirm (like the swap below, and the syscall
-    // reveal-all); only a confirmed start proceeds. `sample` (out of band) skips
-    // the gate. The confirm is one-shot: inspect_confirm_perturb sets the flag,
-    // calls back in, and clears it.
-    if (mode_uses_ptrace(s.want) && !s.perturb_confirmed) {
+    // The perturbation gate (T5, F22), now scoped to the ONE unrecoverable case.
+    // A single-stepping mode always dirties the traced page and perturbs timing —
+    // a nuisance, and no longer worth a second click (Start just starts). But on
+    // arm64 single-stepping a thread blocked in a syscall TERMINATES the target
+    // and detach cannot undo it: that is data loss, so it keeps the pre-commit
+    // confirm. The confirm is one-shot: inspect_confirm_perturb sets the flag,
+    // calls back in, and clears it. `sample` and every non-arm64 mode skip it.
+    if (mode_arm64_blocking_hazard(s.want, s.target_arch) &&
+        !s.perturb_confirmed) {
         s.perturb_pending = true;
         s.perturb_reason = mode_perturb_warning(s.want, s.target_arch);
         return false;
@@ -315,10 +317,20 @@ void draw_status(InspectState &s) {
     }
 }
 
+// Join a mode's visualizations into one "Slice, Loom, …" line (R11).
+static std::string viz_line(LiveMode m) {
+    std::string o;
+    for (const char *v : mode_visualizations(m))
+        o += (o.empty() ? "" : ", ") + std::string(v);
+    return o;
+}
+
 // The patch bay: one jack per target, and what is in it.
 void draw_patch_bay(InspectState &s) {
     ImGui::SeparatorText("patch bay — one ptrace jack per target");
-    for (LiveMode m : all_modes()) {
+    // `auto` leads the picker (R11): patch_bay_order() is the reading order, with
+    // the fullest self-scoping choice first — distinct from the wire order.
+    for (LiveMode m : patch_bay_order()) {
         // arm64 blocking-syscall hazard (T5): a single-stepped thread inside a
         // blocking syscall survives DETACH on arm64 and dies ~300ms later
         // (SPSR.SS), and teardown cannot undo it. Grey (BeginDisabled) the
@@ -332,15 +344,23 @@ void draw_patch_bay(InspectState &s) {
         if (hazard)
             ImGui::EndDisabled();
         if (ImGui::IsItemHovered()) {
+            // The tooltip names what the jack does AND what the mode lets you see
+            // (R11), so a pick is not a leap of faith.
+            std::string viz = viz_line(m);
             if (hazard)
-                ImGui::SetTooltip("%s\n\narm64: %s", mode_jack_reason(m),
+                ImGui::SetTooltip("%s\n\nshows: %s\n\narm64: %s",
+                                  mode_jack_reason(m), viz.c_str(),
                                   mode_perturb_warning(m, s.target_arch).c_str());
             else
-                ImGui::SetTooltip("%s", mode_jack_reason(m));
+                ImGui::SetTooltip("%s\n\nshows: %s", mode_jack_reason(m),
+                                  viz.c_str());
         }
         ImGui::SameLine();
     }
     ImGui::NewLine();
+    // For the SELECTED mode, spell the visualizations inline (R11) — the tooltip is
+    // per-mode discovery; this is the standing answer to "what will I get?".
+    ImGui::TextDisabled("shows: %s", viz_line(s.want).c_str());
     // Least-perturbing default (T5): steer the picker off a single-step mode
     // toward the lightest substrate the host supports. `sample_available` is set
     // by the shell from the capability probe; false under the null backend, where
@@ -401,12 +421,23 @@ void draw_patch_bay(InspectState &s) {
         ImGui::TextWrapped("%s", d.reason.c_str());
     }
 
+    // What stage are we at? Only buttons that can act at this stage stay enabled
+    // (R4): Start needs a host + target (+ region); Stop needs a live/paused
+    // capture; Pause needs a running-and-not-already-paused one; Resume needs an
+    // operator pause. A greyed button never fires a command the serve loop would
+    // just refuse.
+    const LiveStatus &st = s.session.status();
+    const bool running =
+        s.session.growing() != nullptr || st.state == LiveState::Running;
     const bool can = s.host_started && s.selected_pid > 0 && has_region;
-    ImGui::BeginDisabled(!can);
+    const LiveControls ctl =
+        live_controls(can, running, s.operator_paused, !s.active.empty());
+
+    ImGui::BeginDisabled(!ctl.start);
     if (ImGui::Button("Start"))
         inspect_request_start(s);
     ImGui::EndDisabled();
-    if (!can) {
+    if (!ctl.start) {
         ImGui::SameLine();
         const char *why = !s.host_started  ? "connect a serve host first"
                           : s.selected_pid <= 0 ? "select a process first"
@@ -415,35 +446,42 @@ void draw_patch_bay(InspectState &s) {
         ImGui::TextDisabled("%s", why);
     }
     ImGui::SameLine();
+    ImGui::BeginDisabled(!ctl.stop);
     if (ImGui::Button("Stop")) {
         s.session.send_stop();
         s.active.clear();
         s.operator_paused = false;
     }
+    ImGui::EndDisabled();
     ImGui::SameLine();
     // OPERATOR PAUSE (F23), split from the budget block: this hold's ONLY
     // recovery is Resume, and the state says so — "PAUSED (you)".
+    ImGui::BeginDisabled(!ctl.pause);
     if (ImGui::Button("Pause")) {
         s.session.send_pause(true);
         s.operator_paused = true;
     }
+    ImGui::EndDisabled();
     ImGui::SameLine();
+    ImGui::BeginDisabled(!ctl.resume);
     if (ImGui::Button("Resume")) {
         s.session.send_pause(false);
         s.operator_paused = false;
     }
+    ImGui::EndDisabled();
     if (s.operator_paused)
         ImGui::TextColored(kMaybe,
                            "PAUSED (you) — emission is suspended (tracing is "
                            "not); the only recovery is Resume.");
 
-    // The perturbation confirm (T5): armed by the first Start on a single-step
-    // mode, it states the concrete consequence VERBATIM and only the second
-    // click fires. Drawn before the swap confirm because it gates first.
+    // The arm64 kill confirm (T5), now the ONLY pre-commit gate: it fires just for
+    // the case that can silently TERMINATE the target (a single-stepped thread in
+    // a blocking syscall on arm64, which detach cannot undo). Every other Start
+    // began immediately. Only the second click proceeds.
     if (s.perturb_pending) {
         ImGui::Separator();
         ImGui::TextColored(kBad, "%s", s.perturb_reason.c_str());
-        if (ImGui::Button("Arm it anyway"))
+        if (ImGui::Button("Start anyway (accept the risk)"))
             inspect_confirm_perturb(s);
         ImGui::SameLine();
         if (ImGui::Button("Cancel##perturb"))
@@ -502,29 +540,18 @@ void draw_patch_bay(InspectState &s) {
     }
 }
 
-// The live views over whatever this session has produced: the recording still
-// growing, or the last completed one. Rebuilt only when the event count moves —
-// the builders are pure and cheap, but per-frame work on a live stream is how a
-// UI starts costing the thing it is watching.
-void draw_live_views(InspectState &s) {
+// Lazily (re)build the InspectState observer over the session's growing (or last
+// completed) recording and return it — the shared seam for the live views and the
+// live tree-capture control. Rebuilt only when the event count moves: the builders
+// are pure and cheap, but per-frame work on a live stream is how a UI starts
+// costing the thing it is watching. Returns nullptr when there is nothing captured.
+const Recording *live_observer_build(InspectState &s) {
     const Recording *live = s.session.growing();
     const std::vector<Recording> &done = s.session.recordings();
     if (live == nullptr && !done.empty())
         live = &done.back();
-    if (live == nullptr) {
-        ImGui::TextDisabled(
-            "no capture yet — start a mode above and its view appears here");
-        return;
-    }
-    // 34 T2: the handoff from the picked process's growing capture to its 3D
-    // spacetime overview — the reach the walkthrough was missing. Raises a flag
-    // draw_shell consumes (the door cannot reach ShellState). The 3D pane is honest
-    // if the capture has no codeimage regions yet, so this is safe to always offer.
-    if (ImGui::Button("View in the 3D overview"))
-        s.want_scene = true;
-    ImGui::SameLine();
-    ImGui::TextDisabled("(spacetime terrain — press Play there to watch it form)");
-    ImGui::Separator();
+    if (live == nullptr)
+        return nullptr;
     uint64_t n = live->event_count();
     if (!s.observer.built || n != s.observed_events ||
         done.size() != s.observed_recordings) {
@@ -539,19 +566,58 @@ void draw_live_views(InspectState &s) {
         s.observed_events = n;
         s.observed_recordings = done.size();
     }
-    // The tree filter's Start button hands back a command; sending it is the
-    // door's job, not the view's.
-    if (!s.observer.tree.rows.empty() || s.want == LiveMode::Tree) {
-        std::string cmd =
-            draw_obs_tree(s.observer.tree, s.observer, s.selected_pid,
-                          "live-session", nullptr);
-        if (!cmd.empty()) {
-            s.session.send(cmd);
-            s.active.clear();
-            s.active.push_back(LiveMode::Tree);
-        }
-        ImGui::Separator();
+    return live;
+}
+
+// The live tree-capture subtree re-arm — the ONE capture ACTION that lived inside
+// the observer views: narrow a running `tree` capture to a subtree and send that
+// `start` to the serve host. It stays with the capture CONTROLS (the docked
+// Capture pane) now the observer PREVIEW moved to the Observer pane — the deck's
+// own Tree tab is read-only (draw_observer calls draw_obs_tree with pid 0 and
+// discards its command). Self-gates on there being a tree, so it is invisible
+// otherwise. Returns true when it drew the control (so callers can rule off).
+bool draw_live_tree_control(InspectState &s) {
+    // Cheap gate FIRST — only a tree session has this control. This avoids
+    // rebuilding the observer every frame in the docked Capture pane (the Observer
+    // pane already builds the deck for the live tab); a non-tree capture reads the
+    // (empty) current tree and returns before any build.
+    if (s.want != LiveMode::Tree && s.observer.tree.rows.empty())
+        return false;
+    if (live_observer_build(s) == nullptr)
+        return false;
+    if (s.observer.tree.rows.empty() && s.want != LiveMode::Tree)
+        return false;
+    std::string cmd = draw_obs_tree(s.observer.tree, s.observer, s.selected_pid,
+                                    "live-session", nullptr);
+    if (!cmd.empty()) {
+        s.session.send(cmd);
+        s.active.clear();
+        s.active.push_back(LiveMode::Tree);
     }
+    return true;
+}
+
+// The live views over whatever this session has produced (the windowed stack; the
+// docked shell renders the deck in its own Observer pane and keeps only the
+// tree-capture control in the Capture pane).
+void draw_live_views(InspectState &s) {
+    const Recording *live = live_observer_build(s);
+    if (live == nullptr) {
+        ImGui::TextDisabled(
+            "no capture yet — start a mode above and its view appears here");
+        return;
+    }
+    // 34 T2: the handoff from the picked process's growing capture to its 3D
+    // spacetime overview. Raises a flag draw_shell consumes (the door cannot reach
+    // ShellState). The 3D pane is honest if the capture has no codeimage regions
+    // yet, so this is safe to always offer.
+    if (ImGui::Button("View in the 3D overview"))
+        s.want_scene = true;
+    ImGui::SameLine();
+    ImGui::TextDisabled("(spacetime terrain — press Play there to watch it form)");
+    ImGui::Separator();
+    if (draw_live_tree_control(s))
+        ImGui::Separator();
     draw_observer(s.observer, *live, "live-session", nullptr);
 }
 
@@ -681,7 +747,42 @@ void draw_pt_slice(InspectState &s) {
     draw_slice_view(dt_slice_view_build(st, std::nullopt));
 }
 
+// The full single-window stack (the windowed shell's Inspect tab + the render-
+// only viewer): the patch bay, the session log, the live views, save and the PT
+// slice, one under another. The DOCKED shell splits these across the Live-capture
+// / Log / Save panes instead (draw_capture_pane below draws only the controls);
+// this keeps the non-docked path exactly as it was so test_inspect / test_ui
+// exercise the whole surface in one window.
+void draw_capture_full(InspectState &s) {
+    if (!s.host_started) {
+        ImGui::TextDisabled(
+            "connect a serve host (the Connect pane) to capture.");
+        return;
+    }
+    if (s.selected_pid <= 0)
+        ImGui::TextDisabled(
+            "pick a process in the Processes pane, then pick a mode below.");
+    draw_patch_bay(s);
+    draw_status(s);
+    ImGui::SeparatorText("live views");
+    draw_live_views(s);
+    draw_save_capture(s);
+    draw_pt_slice(s);
+}
+
 } // namespace
+
+// Public entry points for the docked shell's split panes (the Log and Save tabs).
+// They forward to the SAME anonymous bodies the windowed stack draws, so the two
+// paths cannot drift.
+void draw_session_status(InspectState &s) { draw_status(s); }
+void draw_save_pane(InspectState &s) { draw_save_capture(s); }
+
+// Is there a capture to act on (a growing one, or a completed one this session)?
+// Gates the Save pane's context and the docked capture pane's 3D handoff.
+bool inspect_has_capture(const InspectState &s) {
+    return s.session.growing() != nullptr || !s.session.recordings().empty();
+}
 
 // --- Connect pane: the serve-host connection ------------------------------
 void draw_connect_pane(InspectState &s) {
@@ -876,7 +977,12 @@ void draw_processes_pane(InspectState &s) {
     }
 }
 
-// --- Live capture pane: the patch bay + session + views + save + PT slice --
+// --- Live capture pane: the patch bay CONTROLS only ------------------------
+// The docked shell's Live-capture tab. The session log moved to the Log pane
+// (draw_session_status) and save-to-.asmtrace to the Save pane (draw_save_pane);
+// the live views render in their own docked panes (the doc-25 live_tab mirror).
+// So this tab is now just the controls: pick a mode, scope it, Start — plus the
+// 3D-overview handoff and the PT slice, both capture-adjacent actions.
 void draw_capture_pane(InspectState &s) {
     if (!s.host_started) {
         ImGui::TextDisabled(
@@ -885,27 +991,41 @@ void draw_capture_pane(InspectState &s) {
     }
     if (s.selected_pid <= 0)
         ImGui::TextDisabled(
-            "pick a process in the Processes pane, then arm a mode below.");
+            "pick a process in the Processes pane, then pick a mode below.");
     draw_patch_bay(s);
-    draw_status(s);
-    ImGui::SeparatorText("live views");
-    draw_live_views(s);
-    draw_save_capture(s);
+    ImGui::Separator();
+    // The live tree-capture subtree re-arm is a capture CONTROL, so it stays here
+    // (the observer PREVIEW moved to the Observer pane). Self-gates on a tree
+    // session — invisible for every other mode, so the tab stays clean. When it
+    // draws, a rule divides it from the 3D handoff below.
+    if (draw_live_tree_control(s))
+        ImGui::Separator();
+    // The 3D-overview handoff (34 T2), kept as a compact button now the live views
+    // render in their own panes. Disabled until there is a capture to show, so a
+    // button that cannot act is greyed (F22-adjacent: no dead levers).
+    ImGui::BeginDisabled(!inspect_has_capture(s));
+    if (ImGui::Button("View in the 3D overview"))
+        s.want_scene = true;
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    ImGui::TextDisabled(
+        "(spacetime terrain — press Play there to watch it form)");
     draw_pt_slice(s);
 }
 
 void draw_inspect_door(InspectState &s) {
     // The single-window composition (windowed shell + render-only viewer): the
     // three panes stacked, each under its own separator. The docked shell instead
-    // Begins draw_connect_pane / draw_processes_pane / draw_capture_pane in three
-    // real dockable windows. Poll once per frame here; the docked path polls too.
+    // Begins draw_connect_pane / draw_processes_pane and splits the capture surface
+    // across the Live-capture / Log / Save panes; here it stays one full stack
+    // (draw_capture_full) so the non-docked path loses nothing. Poll once per frame.
     s.session.poll();
     ImGui::SeparatorText("Connect");
     draw_connect_pane(s);
     ImGui::SeparatorText("Processes");
     draw_processes_pane(s);
     ImGui::SeparatorText("Live capture");
-    draw_capture_pane(s);
+    draw_capture_full(s);
     // The cross-pane reveal requests are docked-shell only — here all three are
     // already in the one Inspect tab, so consume (clear) them without action.
     s.want_open_connect = false;

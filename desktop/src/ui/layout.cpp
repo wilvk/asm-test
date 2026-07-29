@@ -17,6 +17,8 @@ const char *const kPaneObserver = "Observer";
 const char *const kPaneConnect = "Connect";
 const char *const kPaneProcesses = "Processes";
 const char *const kPaneCapture = "Live capture";
+const char *const kPaneLog = "Log";
+const char *const kPaneSave = "Save capture";
 
 const char *layout_preset_name(LayoutPreset p) {
     switch (p) {
@@ -102,6 +104,12 @@ DockLayout layout_build(ImGuiID dockspace_id, ImVec2 size, LayoutPreset preset) 
     ImGui::DockBuilderDockWindow(kPaneConnect, L.left);
     ImGui::DockBuilderDockWindow(kPaneProcesses, L.left);
     ImGui::DockBuilderDockWindow(kPaneCapture, L.right);
+    // The split-out capture panes: the session Log tabs into the bottom row (the
+    // "bottom pane" beside the timeline); Save capture tabs beside the Live-capture
+    // controls on the right. Docked the same across presets — a workflow, not a
+    // reading arrangement — so on-demand visibility, not the split, gates them.
+    ImGui::DockBuilderDockWindow(kPaneLog, L.bottom);
+    ImGui::DockBuilderDockWindow(kPaneSave, L.right);
     switch (preset) {
     case LayoutPreset::ReplayInspect:
     case LayoutPreset::Author:

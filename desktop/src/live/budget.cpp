@@ -81,6 +81,56 @@ const std::vector<LiveMode> &all_modes() {
     return v;
 }
 
+const std::vector<LiveMode> &patch_bay_order() {
+    // `auto` first (39-auto-capture-reliability.md): the fullest, self-scoping
+    // choice an un-named target should reach for. Then the two scoped single-step
+    // engines (dataflow / trace), then the whole-process streamers and the
+    // out-of-band samplers. A UI-only permutation of all_modes() — the wire order
+    // (kRows) is unchanged.
+    static const std::vector<LiveMode> v = {
+        LiveMode::Auto,  LiveMode::Dataflow, LiveMode::Trace,
+        LiveMode::Log,   LiveMode::Stream,   LiveMode::Tree,
+        LiveMode::Graph, LiveMode::Procs,    LiveMode::Sample,
+        LiveMode::Watch,
+    };
+    return v;
+}
+
+std::vector<const char *> mode_visualizations(LiveMode m) {
+    // The view names a mode's capture can fill, kept in step with
+    // view_presence.cpp: the Slice needs df_step; the Loom + Scrubber need EXACT
+    // per-step values (so a statistical sampler can never offer them); the 3D
+    // overview needs codeimage regions; the Observer deck holds the syscall / tree
+    // / graph / watch / hot-edge facets.
+    switch (m) {
+    case LiveMode::Auto:
+        // dataflow-with-a-picker at full detail: the whole exact deck.
+        return {"Slice", "Loom", "Scrubber", "Timeline", "3D overview",
+                "Observer"};
+    case LiveMode::Dataflow:
+        return {"Slice", "Loom", "Scrubber", "Timeline", "3D overview"};
+    case LiveMode::Trace:
+        return {"Timeline", "3D overview", "Observer (codeimage)"};
+    case LiveMode::Log:
+        return {"Observer (syscalls)", "Timeline"};
+    case LiveMode::Stream:
+        return {"Timeline", "Slice"};
+    case LiveMode::Tree:
+        return {"Observer (call tree)"};
+    case LiveMode::Graph:
+        return {"Observer (call graph)"};
+    case LiveMode::Procs:
+        return {"Observer (process tree)"};
+    case LiveMode::Sample:
+        // Out-of-band statistical: hot-edges + the address-space plane, but NEVER
+        // an exact Loom / Scrubber (it does not single-step).
+        return {"Observer (hot edges)", "3D overview"};
+    case LiveMode::Watch:
+        return {"Observer (watchpoints)"};
+    }
+    return {};
+}
+
 bool mode_uses_ptrace(LiveMode m) { return row_for(m)->ptrace; }
 
 bool mode_needs_region(LiveMode m) {

@@ -509,6 +509,39 @@ static void test_patchbay() {
           "an operator pause reads as its own state, never the budget block");
 }
 
+// The lifecycle button gating (R4): only a button that can ACT at the current
+// stage is enabled, so a greyed button never fires a command the serve loop would
+// refuse. Pins every stage of live_controls().
+static void test_controls() {
+    // Idle: nothing to start (no host/target), nothing running -> all greyed.
+    LiveControls idle = live_controls(false, false, false, false);
+    check("controls/idle",
+          !idle.start && !idle.stop && !idle.pause && !idle.resume,
+          "with nothing running and no valid target, every button is greyed");
+    // A valid target, nothing running yet -> only Start.
+    LiveControls ready = live_controls(true, false, false, false);
+    check("controls/ready",
+          ready.start && !ready.stop && !ready.pause && !ready.resume,
+          "a valid target enables Start only");
+    // Running -> Stop + Pause; not Resume (nothing to resume).
+    LiveControls run = live_controls(true, true, false, false);
+    check("controls/running", run.stop && run.pause && !run.resume,
+          "a running capture can be Stopped or Paused, not Resumed");
+    // Operator-paused -> Stop + Resume; NOT Pause (already paused).
+    LiveControls paused = live_controls(false, false, true, false);
+    check("controls/paused", paused.stop && paused.resume && !paused.pause,
+          "a paused capture can be Stopped or Resumed, never re-Paused");
+    // Running AND operator-paused (the pause landed while it streams): Pause stays
+    // greyed (already paused), Resume enabled — the two are never both offered.
+    LiveControls both = live_controls(false, true, true, false);
+    check("controls/running-paused", !both.pause && both.resume && both.stop,
+          "a running-but-paused capture offers Resume, never a second Pause");
+    // Believed-active but not yet 'running' in the status -> Stop still enabled.
+    LiveControls active = live_controls(false, false, false, true);
+    check("controls/active-can-stop", active.stop,
+          "a believed-live capture is Stoppable even before the status flips");
+}
+
 // The scoped-region parser (the dataflow/trace region input). "0xADDR:LEN" yields
 // base+len; a bare name (including a C++ `ns::func`) is the func form; anything
 // malformed falls back to the name form. A wrong split here sends garbage to the
@@ -550,6 +583,7 @@ int main(void) {
     test_progress();
     test_toasts();
     test_patchbay();
+    test_controls();
     test_region();
     if (failures) {
         std::fprintf(stderr, "test_inspect: %d FAILURE(S)\n", failures);

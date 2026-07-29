@@ -290,6 +290,59 @@ int main(void) {
                       "a hidden swap");
     }
 
+    // ---- the picker's reading order + the per-mode visualizations (R11) -----
+    // patch_bay_order() is a UI-only permutation of all_modes() that leads with
+    // `auto`; the wire order (all_modes) is unchanged. mode_visualizations names
+    // what each mode's capture can fill, and must stay consistent with the
+    // presence rules — most importantly, the statistical `sample` never offers the
+    // exact Loom / Scrubber.
+    {
+        const std::vector<LiveMode> &order = patch_bay_order();
+        check("order/auto-first", !order.empty() && order.front() == autom,
+              "the picker must lead with auto");
+        check("order/same-size", order.size() == modes.size(),
+              "the picker order is a permutation of all_modes — same size");
+        // Every wire mode appears exactly once (a true permutation, nothing lost).
+        for (LiveMode m : modes) {
+            int n = 0;
+            for (LiveMode o : order)
+                if (o == m)
+                    n++;
+            check("order/permutation",
+                  n == 1, std::string("mode `") + mode_name(m) +
+                              "` must appear exactly once in the picker order");
+        }
+
+        // Every mode advertises at least one visualization.
+        for (LiveMode m : modes)
+            check("viz/non-empty", !mode_visualizations(m).empty(),
+                  std::string("mode `") + mode_name(m) +
+                      "` must name at least one visualization");
+
+        // A statistical sampler cannot offer an EXACT Loom or Scrubber (it never
+        // single-steps) — the one mapping that would be a lie if it drifted.
+        LiveMode sample;
+        mode_from_name("sample", &sample);
+        for (const char *v : mode_visualizations(sample)) {
+            check("viz/sample-no-exact-loom",
+                  std::string(v).find("Loom") == std::string::npos,
+                  "the statistical sampler must not advertise the exact Loom");
+            check("viz/sample-no-scrubber",
+                  std::string(v).find("Scrubber") == std::string::npos,
+                  "the statistical sampler must not advertise the Scrubber");
+        }
+        // auto is the fullest exact deck — it DOES offer the Loom and Scrubber.
+        bool auto_loom = false, auto_scrub = false;
+        for (const char *v : mode_visualizations(autom)) {
+            if (std::string(v).find("Loom") != std::string::npos)
+                auto_loom = true;
+            if (std::string(v).find("Scrubber") != std::string::npos)
+                auto_scrub = true;
+        }
+        check("viz/auto-has-loom-and-scrubber", auto_loom && auto_scrub,
+              "auto captures exact per-step values — it offers Loom + Scrubber");
+    }
+
     if (failures) {
         std::fprintf(stderr, "test_budget: %d FAILURE(S)\n", failures);
         return 1;

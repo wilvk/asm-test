@@ -369,11 +369,59 @@ static std::string base_name(const std::string &path) {
     return b.empty() ? "(unnamed)" : b;
 }
 
+void shell_log_push(ShellState &s, const std::string &text, ToastKind kind) {
+    if (text.empty())
+        return;
+    s.log.push_back({text, kind});
+    // Bounded ring: an unbounded live session must not grow the log without limit.
+    // Drop from the front (oldest) once over the cap — a scrollback keeps the tail.
+    if (s.log.size() > ShellState::kLogMax)
+        s.log.erase(s.log.begin(),
+                    s.log.begin() +
+                        static_cast<long>(s.log.size() - ShellState::kLogMax));
+}
+
+// A descriptive label for an open recording in the Home list (R6): the
+// disambiguated name, then what it IS — backend, exact/statistical, and its size
+// (events, and steps when it carries a dataflow) — so the list reads as more than
+// a column of "capture.asmtrace"s. The live capture is marked "● live … —
+// capturing" so it is unmistakable. No `###id` suffix or dirty `*` here; the
+// caller appends those so the Selectable id stays stable across a rename.
+static std::string descriptive_recording_label(const ShellState &s, size_t i) {
+    const Recording &r = s.ws.recordings[i];
+    const bool is_live = static_cast<int>(i) == s.live_tab;
+    std::string meta;
+    if (!r.provenance.backend.empty())
+        meta = r.provenance.backend;
+    if (!meta.empty())
+        meta += " · ";
+    meta += r.statistical() ? "statistical" : "exact";
+    uint64_t ev = r.event_count();
+    meta += " · " + std::to_string(ev) + (ev == 1 ? " event" : " events");
+    if (i < s.streams.size() && s.streams[i].df.present() &&
+        s.streams[i].df.nsteps > 0)
+        meta += ", " + std::to_string(s.streams[i].df.nsteps) + " steps";
+
+    std::string name = disambiguated_label(s.ws, i);
+    if (is_live) {
+        const std::string &mode = s.inspect.session.status().mode;
+        std::string tag = mode.empty() ? "live" : ("live " + mode);
+        return "\xE2\x97\x8F " + name + "  \xE2\x80\x94 " + tag +
+               ", capturing (" + meta + ")";
+    }
+    return name + "  \xE2\x80\x94 " + meta;
+}
+
 // --- 20 T2: select a task mode (the seam the rail CTAs + the tests drive) -----
 void shell_select_mode(ShellState &s, Mode m) {
     s.mode = m;
     s.pending_preset =
         mode_preset(m); // the docked frame applies it (T2 step 5)
+    // Open exactly the panes this task leads with and close the rest (R9): picking
+    // Capture must not leave the replay reading panes cluttering the workspace, and
+    // picking Open must not leave the capture panes up. Context still gates whether
+    // a listed pane shows; View ▸ Panels still reopens any of them.
+    shell_apply_mode_panes(s, m);
     switch (m) {
     case Mode::Learn:
         s.show_learn = true;
@@ -389,12 +437,10 @@ void shell_select_mode(ShellState &s, Mode m) {
         // `asmspy --serve` as a subprocess, so the render-only viewer hosts live
         // sessions with its `ldd` still free of every tracer.
         s.show_inspect = true; // the windowed shell's Inspect tab
-        // Land on the Processes tab and connect the serve host from the saved
-        // Settings (want_autoconnect, consumed in draw_shell) rather than forcing
-        // the Connect pane open. Connect stays a fallback: draw_shell reveals it if
-        // the auto-connect fails, and it is reachable from View ▸ Panels. The
-        // Capture pane opens when the user attaches a target (want_open_capture).
-        s.pane_open[kPaneProcesses] = true;
+        // Land on the Processes tab (opened by shell_apply_mode_panes) and connect
+        // the serve host from the saved Settings (want_autoconnect, consumed in
+        // draw_shell) rather than forcing the Connect pane open. Connect stays a
+        // fallback: draw_shell reveals it if the auto-connect fails.
         s.inspect.want_autoconnect = true;
         break;
     case Mode::Author:
@@ -1848,17 +1894,35 @@ static bool pctx_recording(const ShellState &s) {
     return shell_a(s) != nullptr;
 }
 static bool pctx_host(const ShellState &s) { return s.inspect.host_started; }
+// The Save pane only means anything once there is a capture to write (R3): a
+// growing recording, or a completed one this session.
+static bool pctx_save(const ShellState &s) {
+    return inspect_has_capture(s.inspect);
+}
 static const PaneDef kManagedPanes[] = {
     {kPaneHome, true, pctx_always, ""},
     {kPaneConnect, false, pctx_always, ""},
     {kPaneProcesses, false, pctx_always, ""},
     {kPaneCapture, false, pctx_host,
      "connect a serve host in the Connect pane first"},
+    // The Log shows the session's own feed; it needs a host up to have one. Default
+    // closed — Capture mode opens it (shell_apply_mode_panes), and it stays a named
+    // View ▸ Panels entry otherwise.
+    {kPaneLog, false, pctx_host,
+     "connect a serve host in the Connect pane first"},
+    // Save appears only when there IS a capture to save (R3).
+    {kPaneSave, false, pctx_save, "start a capture first — nothing to save yet"},
     {kPaneRecording, true, pctx_recording, "open a recording first"},
     {kPaneLoom, true, pctx_recording, "open a recording first"},
     {kPaneObserver, true, pctx_recording, "open a recording first"},
     {kPaneTimeline, true, pctx_recording, "open a recording first"},
     {kPaneScrubber, true, pctx_recording, "open a recording first"},
+    // The Inspector stays always-available: it hosts BOTH the ABI x-ray (which
+    // needs a recording, and is self-honest per-tab with its own placard) AND the
+    // Backends decode-capability panel, which needs NO recording — gating the pane
+    // on a recording would hide Backends at startup and show a false "open a
+    // recording first" reason for it (D7). So R8's "only available tabs" is served
+    // by the other panes' context; the Inspector is genuinely available.
     {kPaneInspector, true, pctx_always, ""},
 };
 static const PaneDef *pane_def(const char *name) {
@@ -1877,6 +1941,152 @@ static bool pane_is_open(const ShellState &s, const char *name) {
 static bool pane_shown(const ShellState &s, const char *name) {
     const PaneDef *d = pane_def(name);
     return pane_is_open(s, name) && (d == nullptr || d->context_ok(s));
+}
+
+// The panes each task mode leads with (R8/R9). Home is universal; Capture/Inspect
+// lead with the live workflow (Processes / Live capture / Log, and Save which its
+// own context gates to "when there is something to save"), NOT the replay reading
+// panes; Connect stays closed — Capture auto-connects and only the failure path
+// reveals it. Replay/Author lead with the reading panes (context still gates them
+// on a recording). A pure predicate, so shell_apply_mode_panes is testable.
+static bool mode_wants_pane(Mode m, const char *name) {
+    if (std::strcmp(name, kPaneHome) == 0)
+        return true;
+    switch (m) {
+    case Mode::Capture:
+    case Mode::Inspect:
+        return std::strcmp(name, kPaneProcesses) == 0 ||
+               std::strcmp(name, kPaneCapture) == 0 ||
+               std::strcmp(name, kPaneLog) == 0 ||
+               std::strcmp(name, kPaneSave) == 0;
+    case Mode::Open:
+        return std::strcmp(name, kPaneRecording) == 0 ||
+               std::strcmp(name, kPaneLoom) == 0 ||
+               std::strcmp(name, kPaneObserver) == 0 ||
+               std::strcmp(name, kPaneTimeline) == 0 ||
+               std::strcmp(name, kPaneScrubber) == 0 ||
+               std::strcmp(name, kPaneInspector) == 0;
+    case Mode::Learn:
+        return std::strcmp(name, kPaneRecording) == 0 ||
+               std::strcmp(name, kPaneLoom) == 0 ||
+               std::strcmp(name, kPaneTimeline) == 0 ||
+               std::strcmp(name, kPaneScrubber) == 0;
+    case Mode::Author:
+        return std::strcmp(name, kPaneRecording) == 0 ||
+               std::strcmp(name, kPaneScrubber) == 0;
+    }
+    return false;
+}
+
+void shell_apply_mode_panes(ShellState &s, Mode m) {
+    for (const PaneDef &p : kManagedPanes)
+        s.pane_open[p.name] = mode_wants_pane(m, p.name);
+    // Entering Capture/Inspect is a transition where an ongoing capture should
+    // re-reveal exactly the viz panes it fills (shell_apply_live_panes runs next
+    // frame): clear the one-shot guard so it re-applies rather than leaving the
+    // reading panes this call just closed.
+    if (m == Mode::Capture || m == Mode::Inspect)
+        s.live_applied_ordinal = -1;
+}
+
+// The visualization panes a live capture in `m` fills (R10) — the panes to open
+// when that capture starts, so only the tabs it actually produces show. Mirrors
+// budget's mode_visualizations() at the pane granularity (kPaneRecording hosts the
+// Slice / 3D / Canvas). The viz panes NOT returned are closed for that capture.
+static const char *const kAllVizPanes[] = {kPaneRecording, kPaneLoom,
+                                           kPaneObserver, kPaneTimeline,
+                                           kPaneScrubber};
+static std::vector<const char *> mode_viz_panes(LiveMode m) {
+    switch (m) {
+    case LiveMode::Auto:
+        return {kPaneRecording, kPaneLoom, kPaneScrubber, kPaneTimeline,
+                kPaneObserver};
+    case LiveMode::Dataflow:
+        return {kPaneRecording, kPaneLoom, kPaneScrubber, kPaneTimeline};
+    case LiveMode::Trace:
+        return {kPaneRecording, kPaneTimeline, kPaneObserver};
+    case LiveMode::Log:
+        return {kPaneObserver, kPaneTimeline};
+    case LiveMode::Stream:
+        return {kPaneRecording, kPaneTimeline};
+    case LiveMode::Sample:
+        return {kPaneObserver, kPaneRecording};
+    case LiveMode::Tree:
+    case LiveMode::Graph:
+    case LiveMode::Procs:
+    case LiveMode::Watch:
+        return {kPaneObserver};
+    }
+    return {kPaneObserver};
+}
+
+// R10: when a live capture appears, open exactly the viz panes that capture fills
+// and close the rest — ONCE per capture (live_panes_applied guards it), so a
+// manual close after that holds (Q3: set on transitions, never per-frame). The
+// running mode comes from the session's own `started` echo, falling back to the
+// pending want. Pure model move; test_shell drives it.
+void shell_apply_live_panes(ShellState &s) {
+    if (s.live_tab < 0) {
+        s.live_applied_ordinal = -1; // reset so the NEXT capture re-applies
+        return;
+    }
+    if (s.mode != Mode::Capture && s.mode != Mode::Inspect)
+        return;
+    // A per-capture identity that survives tab-index shifts (an unrelated tab
+    // close decrements live_tab) and a mirrored-completed capture (live_tab stays
+    // >= 0 between captures): the count of captures this session has produced —
+    // completed recordings plus the one still growing. Each distinct capture bumps
+    // it; completing a capture does not (a completed one just moves from the
+    // growing slot into recordings), so the pass fires once per capture, no more.
+    const LiveSession &sess = s.inspect.session;
+    long ord = static_cast<long>(sess.recordings().size()) +
+               (sess.growing() != nullptr ? 1 : 0);
+    if (ord == s.live_applied_ordinal)
+        return;
+    LiveMode rm;
+    if (!mode_from_name(sess.status().mode, &rm))
+        rm = s.inspect.want;
+    std::vector<const char *> want = mode_viz_panes(rm);
+    for (const char *p : kAllVizPanes) {
+        bool on = false;
+        for (const char *w : want)
+            if (std::strcmp(p, w) == 0)
+                on = true;
+        s.pane_open[p] = on;
+    }
+    s.live_applied_ordinal = ord;
+}
+
+// The Log pane (docs R2): the live session's current status (moved out of the
+// capture pane) above a COLORED scrollback of everything the capture and the
+// other tabs emit — every session transition and every nav refusal — so those
+// tabs stay uncluttered. Lines are graded on the shared honesty axis: Error red,
+// Warning amber, Success green, Info neutral. Auto-scrolls to the newest line only
+// while the reader is already at the bottom (so scrolling back to read holds).
+static void draw_log_pane(ShellState &s) {
+    // The current session state (the block that used to sit inside the capture
+    // pane). It carries its own progress bar / Cancel, so it stays interactive.
+    draw_session_status(s.inspect);
+    ImGui::Separator();
+    ImGui::TextDisabled("log (%zu)", s.log.size());
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Clear"))
+        s.log.clear();
+    if (ImGui::BeginChild("logscroll", ImVec2(0, 0), true)) {
+        for (const ShellState::LogLine &ln : s.log) {
+            ImVec4 col = ln.kind == ToastKind::Error     ? dt_bad_col()
+                         : ln.kind == ToastKind::Warning ? dt_maybe_col()
+                         : ln.kind == ToastKind::Success ? dt_good_col()
+                                                         : ImGui::GetStyleColorVec4(
+                                                               ImGuiCol_Text);
+            ImGui::PushStyleColor(ImGuiCol_Text, col);
+            ImGui::TextWrapped("%s", ln.text.c_str());
+            ImGui::PopStyleColor();
+        }
+        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+            ImGui::SetScrollHereY(1.0f);
+    }
+    ImGui::EndChild();
 }
 
 static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
@@ -2080,8 +2290,10 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
             if (s.ws.recordings.empty())
                 ImGui::TextDisabled("(none yet — pick a task above)");
             for (size_t i = 0; i < s.ws.recordings.size(); ++i) {
-                // A dirty (authored + unsaved) recording carries a trailing `*`.
-                std::string label = disambiguated_label(s.ws, i) +
+                // A descriptive label (R6): name + backend/fidelity/size, live tag
+                // when it is the capture. A dirty (authored + unsaved) recording
+                // carries a trailing `*`; the ###home id keeps selection stable.
+                std::string label = descriptive_recording_label(s, i) +
                                     (s.ws.recordings[i].dirty ? " *" : "") +
                                     "###home" + std::to_string(i);
                 if (ImGui::Selectable(label.c_str(),
@@ -2089,8 +2301,12 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
                     s.active_tab = static_cast<int>(i);
                 ImGui::SameLine();
                 ImGui::PushID(static_cast<int>(i));
+                // The `x` closes this recording (R7) — the dirty-close guard still
+                // stands in front of an unsaved authored one.
                 if (ImGui::SmallButton("x"))
                     to_close = static_cast<int>(i);
+                if (ImGui::IsItemHovered())
+                    ImGui::SetTooltip("close this recording");
                 ImGui::PopID();
             }
         }
@@ -2129,6 +2345,9 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
         s.inspect.want_open_capture = false;
         s.show_inspect = true;
         s.pane_open[kPaneCapture] = true;
+        // Reveal the Log beside it, so a right-click "Trace a function…" (which
+        // bypasses shell_select_mode) still gets the session feed alongside.
+        s.pane_open[kPaneLog] = true;
     }
     if (pane_shown(s, kPaneConnect)) {
         bool open = true;
@@ -2153,6 +2372,25 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
         ImGui::End();
         if (!open)
             s.pane_open[kPaneCapture] = false;
+    }
+    // The Log pane (R2): the colored session/status scrollback, split out of the
+    // capture pane so that tab stays just controls.
+    if (pane_shown(s, kPaneLog)) {
+        bool open = true;
+        if (ImGui::Begin(kPaneLog, &open))
+            draw_log_pane(s);
+        ImGui::End();
+        if (!open)
+            s.pane_open[kPaneLog] = false;
+    }
+    // The Save pane (R3): save-to-.asmtrace, shown only when there is a capture.
+    if (pane_shown(s, kPaneSave)) {
+        bool open = true;
+        if (ImGui::Begin(kPaneSave, &open))
+            draw_save_pane(s.inspect);
+        ImGui::End();
+        if (!open)
+            s.pane_open[kPaneSave] = false;
     }
     if (s.show_learn) {
         if (ImGui::Begin("Learn", &s.show_learn))
@@ -2779,6 +3017,10 @@ void draw_shell(ShellState &s) {
     // live views trail the observer deck by at most one frame — imperceptible,
     // and it keeps poll() the door's single responsibility.
     shell_sync_live_tab(s);
+    // R10: once a live capture appears, open exactly the viz panes it fills (and
+    // close the rest) — once per capture, so only the tabs relevant to THAT capture
+    // are up. A no-op outside Capture/Inspect mode and when no capture is live.
+    shell_apply_live_panes(s);
     // Entering Capture mode auto-connects the serve host from the saved Settings
     // (asmspy path / ssh host) so the "Capture a live process" button lands on the
     // Processes pane already attached — no Connect detour. Done here, not in
@@ -2853,6 +3095,14 @@ void draw_shell(ShellState &s) {
     // AFTER the shell drew (and the user may have edited) the filter this frame.
     record_filter_undo(s);
 
+    // A nav refusal (or any status-bar line) is "additional information" from the
+    // other tabs — mirror each CHANGE into the Log so the one scrollback holds it
+    // all. Graded a Warning: the status bar carries refusals, not successes.
+    if (!s.status.empty() && s.status != s.last_logged_status) {
+        shell_log_push(s, s.status, ToastKind::Warning);
+        s.last_logged_status = s.status;
+    }
+
     // Live-session toasts (16 T1): raise one per TRANSITION, then remember this
     // frame's feedback state so the next comparison is against it (never
     // re-toast an unchanged state). Guarded on a current context so the
@@ -2869,6 +3119,13 @@ void draw_shell(ShellState &s) {
         cur.save_status = s.inspect.save_status;
         for (const SessionToast &t :
              live_session_toasts(s.prev_feedback, cur)) {
+            // Every transition is a Log line first — a toast IS a log entry, so
+            // the Log pane carries the full history the trimmed toasts no longer
+            // pop. Then trim the pop-ups to ERRORS only (per the Log decision): the
+            // rest lives in the Log, not as transient overlays that steal focus.
+            shell_log_push(s, t.text, t.kind);
+            if (t.kind != ToastKind::Error && t.open_path.empty())
+                continue;
             ImGuiToastType ty =
                 t.kind == ToastKind::Error     ? ImGuiToastType::Error
                 : t.kind == ToastKind::Warning ? ImGuiToastType::Warning
