@@ -1647,6 +1647,8 @@ int main() {
               "Capture must not force the Connect pane open (it auto-connects)");
         check("panes/home-universal", cs.pane_open[kPaneHome],
               "Home is open in every task");
+        check("panes/log-universal-capture", cs.pane_open[kPaneLog],
+              "the Log is a persistent console — open in every task");
 
         ShellState os;
         shell_apply_mode_panes(os, Mode::Open);
@@ -1656,9 +1658,12 @@ int main() {
                   os.pane_open[kPaneObserver] && os.pane_open[kPaneInspector],
               "Open opens the replay reading panes");
         check("panes/open-closes-capture",
-              !os.pane_open[kPaneCapture] && !os.pane_open[kPaneLog] &&
-                  !os.pane_open[kPaneProcesses],
+              !os.pane_open[kPaneCapture] && !os.pane_open[kPaneProcesses],
               "Open closes the capture workflow panes");
+        // The Log is the exception: a persistent console open in every task, so it
+        // survives the switch OUT of Capture rather than being closed with it.
+        check("panes/log-universal-open", os.pane_open[kPaneLog],
+              "the Log stays open in Open mode too (persistent console)");
 
         // Learn leads with the reading panes (a walkthrough opens a recording) but
         // NOT the capture workflow; Home stays open in both.
@@ -1677,7 +1682,7 @@ int main() {
         check("panes/author",
               au.pane_open[kPaneHome] && au.pane_open[kPaneRecording] &&
                   au.pane_open[kPaneScrubber] && !au.pane_open[kPaneCapture] &&
-                  !au.pane_open[kPaneLog] && !au.pane_open[kPaneInspector],
+                  !au.pane_open[kPaneInspector],
               "Author opens Home + Recording + Scrubber, not the capture workflow");
 
         // Entering Capture clears the live-viz one-shot guard so an ongoing capture

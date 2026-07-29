@@ -78,6 +78,8 @@ const char *shell_banner(const Recording &r) {
     return buf.c_str();
 }
 
+static std::string base_name(const std::string &path); // defined below
+
 int shell_open(ShellState &s, const std::string &path, std::string &err) {
     int idx = s.ws.open(path, err);
     if (idx < 0)
@@ -116,6 +118,7 @@ int shell_open(ShellState &s, const std::string &path, std::string &err) {
     recents_push(s.recents, path);
     s.ws_dirty = true;
     shell_wire_nav(s);
+    shell_log_push(s, "opened " + base_name(path), ToastKind::Success);
     return idx;
 }
 
@@ -415,6 +418,9 @@ static std::string descriptive_recording_label(const ShellState &s, size_t i) {
 // --- 20 T2: select a task mode (the seam the rail CTAs + the tests drive) -----
 void shell_select_mode(ShellState &s, Mode m) {
     s.mode = m;
+    // An application-log line for the task switch, so the Log carries the app's own
+    // lifecycle (not only the live-session feed).
+    shell_log_push(s, std::string("task: ") + mode_cta(m), ToastKind::Info);
     s.pending_preset =
         mode_preset(m); // the docked frame applies it (T2 step 5)
     // Open exactly the panes this task leads with and close the rest (R9): picking
@@ -1896,7 +1902,6 @@ static bool pctx_always(const ShellState &) { return true; }
 static bool pctx_recording(const ShellState &s) {
     return shell_a(s) != nullptr;
 }
-static bool pctx_host(const ShellState &s) { return s.inspect.host_started; }
 // The Live-capture pane is a per-target control surface: it only means anything
 // once a process is picked in the Processes list (selected_pid). Gating it on the
 // selection — not just a live host — keeps Capture mode landing on the target
@@ -1922,11 +1927,12 @@ static const PaneDef kManagedPanes[] = {
     {kPaneProcesses, false, pctx_always, ""},
     {kPaneCapture, false, pctx_capture,
      "pick a process in the Processes pane first"},
-    // The Log shows the session's own feed; it needs a host up to have one. Default
-    // closed — Capture mode opens it (shell_apply_mode_panes), and it stays a named
-    // View ▸ Panels entry otherwise.
-    {kPaneLog, false, pctx_host,
-     "connect a serve host in the Connect pane first"},
+    // The Log is a persistent application + session console: open from startup and
+    // in every mode (mode_wants_pane), so it never newly-appears — and so never
+    // steals the Processes focus — when Capture connects, and so application events
+    // have somewhere to land from the first frame. Always available: draw_status
+    // renders an idle "no host" session cleanly.
+    {kPaneLog, true, pctx_always, ""},
     // Save appears only when there IS a capture to save (R3).
     {kPaneSave, false, pctx_save, "start a capture first — nothing to save yet"},
     // The PT slice appears only on an Intel PT host (pctx_pt). Default closed —
@@ -1975,6 +1981,12 @@ static bool pane_shown(const ShellState &s, const char *name) {
 static bool mode_wants_pane(Mode m, const char *name) {
     if (std::strcmp(name, kPaneHome) == 0)
         return true;
+    // The Log is a persistent console — open in every mode so it is already up
+    // before Capture connects (it must not newly-appear and steal the Processes
+    // focus) and so application events are logged from startup, not only during a
+    // live capture.
+    if (std::strcmp(name, kPaneLog) == 0)
+        return true;
     switch (m) {
     case Mode::Capture:
     case Mode::Inspect:
@@ -1983,7 +1995,6 @@ static bool mode_wants_pane(Mode m, const char *name) {
         // PT host even though this opens it.
         return std::strcmp(name, kPaneProcesses) == 0 ||
                std::strcmp(name, kPaneCapture) == 0 ||
-               std::strcmp(name, kPaneLog) == 0 ||
                std::strcmp(name, kPaneSave) == 0 ||
                std::strcmp(name, kPanePtSlice) == 0;
     case Mode::Open:
@@ -2413,7 +2424,10 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     // capture pane so that tab stays just controls.
     if (pane_shown(s, kPaneLog)) {
         bool open = true;
-        if (ImGui::Begin(kPaneLog, &open))
+        // NoFocusOnAppearing: the persistent Log must never seize focus the frame
+        // it first becomes visible — it would pull the user off whatever pane they
+        // are working in (the Processes picker on Capture-mode entry).
+        if (ImGui::Begin(kPaneLog, &open, ImGuiWindowFlags_NoFocusOnAppearing))
             draw_log_pane(s);
         ImGui::End();
         if (!open)

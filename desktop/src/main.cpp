@@ -223,6 +223,14 @@ int main() {
         asmdesk::shell_restore_workspace(state, ws);
         state.ws_dirty = false; // a restore is not a change to persist back
     }
+    // Seed the application log with a startup line, so the persistent Log pane has
+    // content from the first frame (and the app's own lifecycle — not just the live
+    // session — is recorded there).
+    asmdesk::shell_log_push(
+        state,
+        std::string(title) + " started — " +
+            std::to_string(state.ws.recordings.size()) + " recording(s) restored",
+        asmdesk::ToastKind::Info);
 
     // GLFW callbacks reach ShellState through the user pointer (T3/T5): drag-drop
     // opens a file, a resize remembers the size, a content-scale change re-bakes.
