@@ -26,7 +26,7 @@ when picking one up.
 |---|---|---|---|---|
 | L1 | live-dataflow serve leg on **arm64** (`cli/dataflow_ptrace.c` is entirely `#if __x86_64__`) — re-arm via `PTRACE_SYSCALL`-at-resume, **never** naive SINGLESTEP | Scrubber, live `df_step` 3D trajectory, value fabric, Loom/Slice/Timeline on **arm64 hosts** — a whole platform | L | **REAL, biggest unlock.** Load-bearing hazard: arm64 `PTRACE_SINGLESTEP` is detach-fatal (SPSR.SS) and qemu-user can't single-step. R5/doc 32 closed only the emulator/Author arm64 producer. |
 | L2 | `decode_streams` becomes `df_invocation`-aware (mirror the Scrubber's `build_segmented_step_index`, `analysis/stepindex.cpp`) | per-pass Slice/Loom/Timeline on a **continuous** live capture (today they flatten passes to the last/conflated one) | M | **CLOSED ([doc 40](40-segment-dataflow-by-invocation.md)).** `build_segmented_dataflow` splits the passes; `Streams::df` resolves to the LATEST (the live default, like the Scrubber), so passes never conflate; the Slice/Timeline/Loom panes carry a per-pass invocation pager to reach an earlier one. One-shot recordings stay byte-identical. |
-| L3 | the precomputed `blame` + `statediff` **KINDS** over the asmspy serve leg (R6/doc 33 landed them recorder/emulator-only) | reproducible/deep-linkable `blame`/`statediff` artifacts from a live attach | M | **LOWER value — the VIEWS already work live.** Corrected: the backward-cone *view* derives client-side over the live `df_edge` graph (`b`/`f` keys); the statediff *diff* is `dt_statediff_build` over two recordings' `regstate`, and a live recording is a valid leg. Only the *precomputed kinds* (a convenience) are recorder-only. |
+| L3 | the precomputed `blame` + `statediff` **KINDS** over the asmspy serve leg (R6/doc 33 landed them recorder/emulator-only) | reproducible/deep-linkable `blame`/`statediff` artifacts from a live attach | M | **CLOSED ([doc 41](41-live-blame-statediff-serve-leg.md)).** The serve leg emits both — `blame` via `dataflow_emit_blame` (backward cone over the def-use graph it already builds, penultimate seed), `statediff` via a delta of the `regstate` ring (`--statediff` self-arms it); both ride the sink ctx (no engine change) and use the SHARED body builders. As predicted this was **low value** — the backward-cone and statediff *views* already worked live client-side; this lands the precomputed *convenience* only. |
 | L4 | build `libasmtest_dataflow` on macOS/Darwin | Author-mode value-fabric capture on macOS | M | REAL (Author mode, produced not attached). |
 | L5 | ARM32 + RISC-V run/trace in Author mode (another `df_guest` instance) | Author value fabric for ARM32/RISC-V guests | M | REAL, narrow audience. |
 | L6 | [37](37-region-tag-on-df-step.md) T4 (`when`: bytes-live-at-step) on the serve/observer disasm path | Observer Disassembly disasm-at-`when` refinement (JIT/self-modifying targets) | M | **severable, deferred** — no view breaks (reader-rule-2 fallback is sound). |
@@ -48,8 +48,9 @@ landed the live `--dataflow --mem` / serve `mem:true` producer, so a live captur
 
 **Sequencing.** L2 was the cleanest self-contained desktop win (host-testable, no
 engine change) — **done first ([doc 40](40-segment-dataflow-by-invocation.md)).**
-L1 is the largest single unlock (a whole platform) but L-effort and hazard-gated. L3's *views* already work live, so it is low priority
-(precomputed-kind convenience). L4/L5 are Author-mode platform breadth. L6 is the
+L1 is the largest single unlock (a whole platform) but L-effort and hazard-gated. L3 (the precomputed-kind convenience) is **done
+([doc 41](41-live-blame-statediff-serve-leg.md))** — its *views* already worked live,
+so it was low priority but cheap. L4/L5 are Author-mode platform breadth. L6 is the
 severable [37](37-region-tag-on-df-step.md)
 tail — no view breaks without it (reader-rule-2 fallback stays sound).
 

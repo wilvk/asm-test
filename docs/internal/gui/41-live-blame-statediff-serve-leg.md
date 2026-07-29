@@ -37,7 +37,12 @@
 > code when you implement, the code wins — re-verify, then fix this doc in the same
 > change.
 >
-> **Status (2026-07-29) — ☐ 0/3.**
+> **Status (2026-07-29) — ✅ 3/3.** T1 `blame` + T2 `statediff` from the live serve
+> leg (both ride `dataflow_ctx` like `emit_mem`, `dataflow_emit_blame` ports the
+> recorder's cone, `--statediff` self-arms the ring); T3 this reconcile. Proven live
+> against `attach_victim hotfn`: one `blame` (penultimate seed, ascending cone incl.
+> sink, `born_untraced:false`) + one `statediff` per step (step 0 `computed:false`,
+> later `computed:true`). `cli_smoke` asserts both; both `cli-smoke` lanes green.
 
 ## Why this work exists
 
@@ -132,8 +137,8 @@ Update this brief to ✅ 3/3.
 
 ## Claim
 
-| Task | Who · when |
-|---|---|
-| T1 `blame` serve leg | will · 2026-07-29 |
-| T2 `statediff` serve leg | will · 2026-07-29 |
-| T3 roadmap/changelog | will · 2026-07-29 |
+| Task | Who · when | Status |
+|---|---|---|
+| T1 `blame` serve leg | will · 2026-07-29 | ✅ landed |
+| T2 `statediff` serve leg | will · 2026-07-29 | ✅ landed |
+| T3 roadmap/changelog | will · 2026-07-29 | ✅ landed |

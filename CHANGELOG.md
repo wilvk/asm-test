@@ -8,6 +8,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Live `blame` + `statediff` from the `asmspy` serve/dataflow leg**
+  (docs/internal/gui/41-live-blame-statediff-serve-leg.md). The backward-attribution
+  `blame` cone and the step-to-step `statediff` register delta were producible only by
+  the emulator recorder; a live attach could not emit them. Both are now emitted by the
+  live single-step leg as pure projections over data it already captures — `blame` is a
+  backward slice over the def-use graph the sink already builds (seeded at the
+  penultimate step), `statediff` is a delta of the per-step register ring — spelled with
+  the same wire builders the recorder uses, so a live artifact and a golden one are
+  byte-identical. Opt in with serve `blame:true` / `statediff:true` or CLI `--blame` /
+  `--statediff` (the latter self-arms the register ring); off by default. No capture-engine,
+  wire, or schema change (both kinds were already defined). The blame cone and state-diff
+  *views* already worked live client-side; this adds the reproducible, deep-linkable
+  precomputed artifact.
 - **Per-invocation dataflow views over a continuous capture**
   (docs/internal/gui/40-segment-dataflow-by-invocation.md). A continuous
   `dataflow`/`auto` capture appends many invocation passes into one recording, each

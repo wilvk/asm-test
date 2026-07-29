@@ -438,6 +438,23 @@ the latest by default, pinnable to an earlier pass, no chrome for a one-shot. Pu
 decode + a selector: no engine, wire, or schema change. Authored 2026-07-29. ✅ 3/3
 · —.
 
+[41-live-blame-statediff-serve-leg.md](41-live-blame-statediff-serve-leg.md) — **emit
+the `blame` + `statediff` kinds from the live serve leg** (gap **L3** from
+[38](38-live-feed-completion-roadmap.md)). [R6/doc 33](33-backward-attribution-producers.md)
+landed both producers recorder-only; the live `asmspy --dataflow`/serve leg emitted
+`df_step`/`df_edge`/`regstate`/`mem` but not those two. Both are pure projections over
+data the serve leg already has — `blame` is the backward cone (`dataflow_emit_blame`,
+a port of the recorder's `emit_blame`, seeded at the penultimate step over the def-use
+graph the sink already builds) and `statediff` is a delta of the `regstate` ring
+(`--statediff` self-arms it) — so they ride the sink ctx like `emit_mem` with **no
+engine, wire, or schema change** (both kinds were already defined), spelling the wire
+with the SHARED body builders so a live and a golden one are byte-identical. Serve
+`blame:true`/`statediff:true` + CLI `--blame`/`--statediff`, echoed in the
+started-params announce. **Genuinely low value** (the *views* already worked live
+client-side; this is the reproducible/deep-linkable *convenience* only) but cheap and
+host-testable — `cli_smoke` asserts the live cone + the step-0-`computed:false` delta.
+Authored 2026-07-29. ✅ 3/3 · —.
+
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
 09 (09-T1 — the emulator ring — is engine-only and can start any time).
