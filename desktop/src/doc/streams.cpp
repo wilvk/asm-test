@@ -100,6 +100,101 @@ const std::vector<Event> *kind(const Recording &r, const char *k) {
     return it == r.by_kind.end() ? nullptr : &it->second;
 }
 
+// Decode one invocation pass's df_step + df_edge events (already the slice for this
+// pass, in stream order) into a DataflowStream. The `step` axis is 0-based within
+// THIS pass; a continuous capture's passes are sliced apart by
+// build_segmented_dataflow before they reach here, so no pass's step overwrites
+// another's (40). Pure — it reads only the supplied events, the exact logic
+// decode_streams held inline pre-40.
+DataflowStream decode_dataflow(const std::vector<const Event *> &step_evs,
+                               const std::vector<const Event *> &edge_evs) {
+    DataflowStream df;
+    if (!step_evs.empty()) {
+        // Steps arrive in file order, which the deterministic producer emits
+        // ascending — but a stitched or resumed stream need not, and
+        // asmspy_df_annotate's cursor walk is only correct over ascending, grouped
+        // records. Sort by step, and say so if the file was not already.
+        struct Step {
+            uint32_t step;
+            uint64_t off;
+            uint64_t
+                rbase; // 37: region base off is relative to; 0 = not stated
+            std::string disasm;
+            std::vector<ValRec> ops;
+        };
+        std::vector<Step> steps;
+        steps.reserve(step_evs.size());
+        uint32_t prev = 0;
+        bool first = true;
+        for (const Event *ep : step_evs) {
+            const Event &e = *ep;
+            Step st{};
+            auto it = e.body.find("step");
+            if (it == e.body.end() || !it->is_number())
+                continue;
+            st.step = it->get<uint32_t>();
+            get(e.body, "off", st.off);
+            get(e.body, "rbase", st.rbase); // 37: 0 when the wire omitted it
+            if (st.rbase)
+                df.rbase_present = true;
+            get(e.body, "disasm", st.disasm);
+            auto ops = e.body.find("ops");
+            if (ops != e.body.end() && ops->is_array())
+                for (const auto &o : *ops) {
+                    ValRec v = decode_op(o);
+                    v.step = st.step;
+                    st.ops.push_back(v);
+                }
+            if (!first && st.step < prev)
+                df.recs_grouped = false;
+            prev = st.step;
+            first = false;
+            steps.push_back(std::move(st));
+        }
+        std::stable_sort(
+            steps.begin(), steps.end(),
+            [](const Step &a, const Step &b) { return a.step < b.step; });
+        for (const Step &st : steps)
+            df.nsteps = std::max(df.nsteps, st.step + 1);
+        df.insn_off.assign(df.nsteps, 0);
+        df.insn_rbase.assign(df.nsteps, 0); // 37, parallel to insn_off
+        df.disasm.assign(df.nsteps, std::string());
+        std::vector<char> seen(df.nsteps, 0);
+        for (const Step &st : steps) {
+            df.insn_off[st.step] = st.off;
+            df.insn_rbase[st.step] = st.rbase;
+            if (!st.disasm.empty())
+                df.disasm[st.step] = st.disasm;
+            seen[st.step] = 1;
+            for (const ValRec &v : st.ops)
+                df.recs.push_back(v);
+        }
+        // A gap in the step indices is a dropped step, not a step at offset 0:
+        // count it so the banner can say the stream is incomplete.
+        for (char c : seen)
+            if (!c)
+                df.steps_missing++;
+        df.step_present = std::move(seen);
+    }
+    for (const Event *ep : edge_evs) {
+        const Event &e = *ep;
+        dt_edge edge{};
+        auto f = e.body.find("from");
+        auto t = e.body.find("to");
+        if (f == e.body.end() || t == e.body.end() || !f->is_number() ||
+            !t->is_number())
+            continue;
+        edge.from_step = f->get<uint32_t>();
+        edge.to_step = t->get<uint32_t>();
+        df.edges.push_back(edge);
+        auto loc = e.body.find("loc");
+        df.edge_loc.push_back(loc != e.body.end() && loc->is_object()
+                                  ? decode_op(*loc)
+                                  : ValRec{});
+    }
+    return df;
+}
+
 } // namespace
 
 std::string recording_id(const std::string &path) {
@@ -168,88 +263,15 @@ Streams decode_streams(const Recording &r) {
         s.trace.truncated = s.trace.truncated || s.trace.present();
 
     // --- dataflow ---------------------------------------------------------
-    if (const auto *ev = kind(r, "df_step")) {
-        // Steps arrive in file order, which the deterministic producer emits
-        // ascending — but a stitched or resumed stream need not, and
-        // asmspy_df_annotate's cursor walk is only correct over ascending,
-        // grouped records. Sort by step, and say so if the file was not already.
-        struct Step {
-            uint32_t step;
-            uint64_t off;
-            uint64_t
-                rbase; // 37: region base off is relative to; 0 = not stated
-            std::string disasm;
-            std::vector<ValRec> ops;
-        };
-        std::vector<Step> steps;
-        steps.reserve(ev->size());
-        uint32_t prev = 0;
-        bool first = true;
-        for (const Event &e : *ev) {
-            Step st{};
-            auto it = e.body.find("step");
-            if (it == e.body.end() || !it->is_number())
-                continue;
-            st.step = it->get<uint32_t>();
-            get(e.body, "off", st.off);
-            get(e.body, "rbase", st.rbase); // 37: 0 when the wire omitted it
-            if (st.rbase)
-                s.df.rbase_present = true;
-            get(e.body, "disasm", st.disasm);
-            auto ops = e.body.find("ops");
-            if (ops != e.body.end() && ops->is_array())
-                for (const auto &o : *ops) {
-                    ValRec v = decode_op(o);
-                    v.step = st.step;
-                    st.ops.push_back(v);
-                }
-            if (!first && st.step < prev)
-                s.df.recs_grouped = false;
-            prev = st.step;
-            first = false;
-            steps.push_back(std::move(st));
-        }
-        std::stable_sort(
-            steps.begin(), steps.end(),
-            [](const Step &a, const Step &b) { return a.step < b.step; });
-        for (const Step &st : steps)
-            s.df.nsteps = std::max(s.df.nsteps, st.step + 1);
-        s.df.insn_off.assign(s.df.nsteps, 0);
-        s.df.insn_rbase.assign(s.df.nsteps, 0); // 37, parallel to insn_off
-        s.df.disasm.assign(s.df.nsteps, std::string());
-        std::vector<char> seen(s.df.nsteps, 0);
-        for (const Step &st : steps) {
-            s.df.insn_off[st.step] = st.off;
-            s.df.insn_rbase[st.step] = st.rbase;
-            if (!st.disasm.empty())
-                s.df.disasm[st.step] = st.disasm;
-            seen[st.step] = 1;
-            for (const ValRec &v : st.ops)
-                s.df.recs.push_back(v);
-        }
-        // A gap in the step indices is a dropped step, not a step at offset 0:
-        // count it so the banner can say the stream is incomplete.
-        for (char c : seen)
-            if (!c)
-                s.df.steps_missing++;
-        s.df.step_present = std::move(seen);
-    }
-    if (const auto *ev = kind(r, "df_edge")) {
-        for (const Event &e : *ev) {
-            dt_edge edge{};
-            auto f = e.body.find("from");
-            auto t = e.body.find("to");
-            if (f == e.body.end() || t == e.body.end() || !f->is_number() ||
-                !t->is_number())
-                continue;
-            edge.from_step = f->get<uint32_t>();
-            edge.to_step = t->get<uint32_t>();
-            s.df.edges.push_back(edge);
-            auto loc = e.body.find("loc");
-            s.df.edge_loc.push_back(loc != e.body.end() && loc->is_object()
-                                        ? decode_op(*loc)
-                                        : ValRec{});
-        }
+    // Segment-aware (40): Streams::df is the LATEST invocation pass, so a
+    // continuous capture's passes never conflate into one fake-monotonic run
+    // (35 T1). A one-shot recording resolves to its single pass — byte-identical
+    // to the pre-40 flat decode. Use build_segmented_dataflow to reach an earlier
+    // pass; this mirrors build_step_index over the register ring.
+    {
+        SegmentedDataflow seg = build_segmented_dataflow(r);
+        if (!seg.passes.empty())
+            s.df = std::move(seg.passes[seg.latest()]);
     }
 
     // --- survey (statistical) --------------------------------------------
@@ -312,6 +334,56 @@ Streams decode_streams(const Recording &r) {
         }
     }
     return s;
+}
+
+SegmentedDataflow build_segmented_dataflow(const Recording &r) {
+    SegmentedDataflow seg;
+
+    // df_step + df_edge event pointers in stream order (by_kind preserves append
+    // order, so they are seq-ascending), and the continuous-capture pass
+    // delimiters (35): one df_invocation marker emitted before each pass's df_step
+    // block. A one-shot recording has none.
+    std::vector<const Event *> steps, edges;
+    if (auto it = r.by_kind.find("df_step"); it != r.by_kind.end())
+        for (const Event &e : it->second)
+            steps.push_back(&e);
+    if (auto it = r.by_kind.find("df_edge"); it != r.by_kind.end())
+        for (const Event &e : it->second)
+            edges.push_back(&e);
+    std::vector<const Event *> marks;
+    if (auto it = r.by_kind.find("df_invocation"); it != r.by_kind.end())
+        for (const Event &e : it->second)
+            marks.push_back(&e);
+
+    if (marks.empty()) {
+        // One-shot (or any non-continuous recording): a single pass over the whole
+        // df list — the pre-40 flat decode. An empty df list yields no pass, so
+        // decode_streams leaves Streams::df absent exactly as before.
+        if (!steps.empty() || !edges.empty())
+            seg.passes.push_back(decode_dataflow(steps, edges));
+        return seg;
+    }
+
+    // Segment: each pass owns the df events whose stream position (seq) falls at or
+    // after its marker and before the next. Each pass restarts at step 0. This is
+    // the same seq-window bucketing build_segmented_step_index applies to the
+    // register ring (stepindex.cpp).
+    std::sort(marks.begin(), marks.end(),
+              [](const Event *a, const Event *b) { return a->seq < b->seq; });
+    for (size_t p = 0; p < marks.size(); p++) {
+        uint64_t lo = marks[p]->seq;
+        uint64_t hi = (p + 1 < marks.size()) ? marks[p + 1]->seq
+                                             : ~static_cast<uint64_t>(0);
+        std::vector<const Event *> sb, eb;
+        for (const Event *e : steps)
+            if (e->seq >= lo && e->seq < hi)
+                sb.push_back(e);
+        for (const Event *e : edges)
+            if (e->seq >= lo && e->seq < hi)
+                eb.push_back(e);
+        seg.passes.push_back(decode_dataflow(sb, eb));
+    }
+    return seg;
 }
 
 } // namespace asmdesk

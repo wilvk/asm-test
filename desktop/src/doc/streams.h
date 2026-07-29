@@ -68,13 +68,12 @@ struct DataflowStream {
     std::vector<uint64_t> insn_off; // per step
     // 37: per step, the region base `off` is relative to (df_step.rbase); 0 where
     // the wire did not state one (a pre-37 recording, or a producer that omitted
-    // it). KNOWN ALIASING (pre-existing, not fixed here): the decoder indexes by
-    // `step`, but a continuous capture restarts `step` at 0 per pass (35 T1), so
-    // passes alias — and with rbase that aliasing can now yield a WRONG BASE, not
-    // merely a wrong offset, if two passes ever carry different bases. The fix
-    // belongs with 35's segmentation, not here.
+    // it). One DataflowStream now holds exactly ONE invocation pass (40): a
+    // continuous capture's passes are split by build_segmented_dataflow before they
+    // reach here, so the per-pass `step` restart (35 T1) no longer aliases offsets
+    // OR bases across passes — every index in this vector belongs to one pass.
     std::vector<uint64_t> insn_rbase;
-    bool rbase_present = false;      // any df_step stated an rbase on the wire
+    bool rbase_present = false;      // any df_step of THIS pass stated an rbase
     std::vector<std::string> disasm; // per step; "" where the producer had none
     std::vector<ValRec> recs;        // ALL steps' operands, ascending by step
     std::vector<dt_edge> edges;      // def-use endpoints (slice input)
@@ -96,6 +95,36 @@ struct DataflowStream {
     }
 
     bool present() const { return nsteps > 0; }
+};
+
+// The dataflow stream segmented by df_invocation (35 T1): one DataflowStream per
+// continuous-capture pass, oldest first. A one-shot recording (no marker) is
+// exactly ONE pass over the whole df_step/df_edge list — byte-identical to the
+// pre-40 flat decode. Each pass restarts step at 0, so passes never alias into
+// one another (the KNOWN-ALIASING hazard the DataflowStream comment above flagged
+// is closed here, not deferred). Mirrors analysis/stepindex.h's SegmentedStepIndex
+// exactly: build_segmented_dataflow : DataflowStream :: build_segmented_step_index
+// : StepIndex, and decode_streams resolves Streams::df to passes[latest()] the way
+// build_step_index resolves the register ring — latest is the live default.
+struct SegmentedDataflow {
+    std::vector<DataflowStream> passes; // one per pass, oldest first
+    // The latest (newest) pass — the live default. 0 when passes is empty.
+    size_t latest() const { return passes.empty() ? 0 : passes.size() - 1; }
+    // Any pass carries a df_step block (an edges-only or empty pass does not).
+    bool present() const {
+        for (const DataflowStream &p : passes)
+            if (p.present())
+                return true;
+        return false;
+    }
+    // How many passes carry a df_step block.
+    size_t present_passes() const {
+        size_t n = 0;
+        for (const DataflowStream &p : passes)
+            if (p.present())
+                n++;
+        return n;
+    }
 };
 
 // One statistical hot edge (`survey`). STATISTICAL: never merged into exact
@@ -169,8 +198,17 @@ struct Streams {
 };
 
 // Decode one loaded Recording. Total: an event this does not understand is
-// skipped, exactly as the loader's forward-compat rule requires.
+// skipped, exactly as the loader's forward-compat rule requires. Streams::df is
+// the LATEST invocation pass (the live default) — see build_segmented_dataflow.
 Streams decode_streams(const Recording &r);
+
+// The dataflow stream, one DataflowStream per continuous-capture pass (35 T1),
+// bucketed by the `df_invocation` markers' stream position (Event::seq) exactly as
+// build_segmented_step_index buckets the register ring. A one-shot recording (no
+// marker) yields exactly ONE pass over the whole df_step/df_edge list —
+// byte-identical to the pre-40 flat decode. Use this to address a pass other than
+// the latest; decode_streams already exposes the latest as Streams::df.
+SegmentedDataflow build_segmented_dataflow(const Recording &r);
 
 // The deep-link id of a recording: its path's basename. Recordings are opened
 // by path and the schema carries no recording id, so the basename is the only

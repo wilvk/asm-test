@@ -1025,6 +1025,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_drillin \
                  $(BUILD)/desktop_test_camera \
                  $(BUILD)/desktop_test_diff $(BUILD)/desktop_test_canvas \
+                 $(BUILD)/desktop_test_streams \
                  $(BUILD)/desktop_test_timeline \
                  $(BUILD)/desktop_test_scrubber \
                  $(BUILD)/desktop_test_scrubber_draw \
@@ -1479,6 +1480,13 @@ $(BUILD)/desktop_test_scrubber: $(BUILD)/desktop/test/t/test_scrubber.o \
     $(DESKTOP_TEST_DOC)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 
+# 40 T1: the dataflow decode's df_invocation segmentation. Pure decode over the
+# document model — links only $(DESKTOP_TEST_DOC) (recording.o + streams.o), the
+# same engine-free closure asmtest-viewer weaves a recording through.
+$(BUILD)/desktop_test_streams: $(BUILD)/desktop/test/t/test_streams.o \
+    $(DESKTOP_TEST_DOC)
+	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
+
 # The scrubber's DRAW half under ImGui's null backend — the same split the
 # Observer deck's draw smoke uses (test_obs_draw): the model test asserts what
 # the scrubber decides, this one asserts the deck draws it, including the torn
@@ -1877,6 +1885,7 @@ desktop-test: asmtrace-export-test
 # Fixture/golden roots reach the new tests the same way as 03's (compile
 # defines, so no argv wiring and identical behaviour host + docker).
 $(BUILD)/desktop/test/t/test_canvas.o \
+$(BUILD)/desktop/test/t/test_streams.o \
 $(BUILD)/desktop/test/t/test_timeline.o \
 $(BUILD)/desktop/test/t/test_scrubber.o \
 $(BUILD)/desktop/test/t/test_scrubber_draw.o \
