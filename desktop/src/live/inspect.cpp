@@ -13,6 +13,7 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h> // nanosleep — the fixed activity-sample window
 #include <unistd.h>
 
 namespace asmdesk {
@@ -227,6 +228,24 @@ bool all_digits(const char *s) {
     return true;
 }
 
+// Total CPU jiffies (utime + stime) of a pid, from /proc/<pid>/stat — the same
+// field pair cli/asmspy_proc.c's proc_cpu() reads for ASMSPY_SORT_ACTIVE. The
+// comm field can hold spaces and parens, so parse everything AFTER the last ')'.
+unsigned long long proc_cpu(const std::string &pid) {
+    const std::string stat = read_file("/proc/" + pid + "/stat");
+    const size_t rp = stat.rfind(')');
+    if (rp == std::string::npos)
+        return 0;
+    unsigned long ut = 0, st = 0;
+    // after ')': state ppid pgrp session tty tpgid flags minflt cminflt majflt
+    // cmajflt utime stime ...  (utime = field 14, stime = field 15)
+    if (std::sscanf(stat.c_str() + rp + 1,
+                    " %*c %*d %*d %*d %*d %*d %*u %*u %*u %*u %*u %lu %lu", &ut,
+                    &st) == 2)
+        return (unsigned long long)ut + st;
+    return 0;
+}
+
 } // namespace
 
 int read_yama_scope() {
@@ -293,7 +312,7 @@ const char *local_inspect_unavailable() {
 #endif
 }
 
-std::vector<ProcRow> list_processes() {
+std::vector<ProcRow> list_processes(bool sample_cpu) {
     std::vector<ProcRow> rows;
     const int scope = read_yama_scope();
     const long our_uid = (long)::geteuid();
@@ -326,9 +345,28 @@ std::vector<ProcRow> list_processes() {
         r.uid = uid.empty() ? -1 : std::atol(uid.c_str());
         r.facts = probe_attach(r.pid, scope, our_uid, have_cap);
         r.verdict = attach_verdict(r.facts);
+        // First CPU snapshot; the delta over the window below becomes ::cpu. Only
+        // the activity sort asks for this, so an unsampled list never reads /stat
+        // and never sleeps.
+        if (sample_cpu)
+            r.cpu = proc_cpu(e->d_name);
         rows.push_back(std::move(r));
     }
     ::closedir(d);
+
+    // Second snapshot after a short FIXED window -> per-process CPU jiffies used
+    // during it, exactly as cli/asmspy_proc.c's ASMSPY_SORT_ACTIVE measures. The
+    // model stays pid-sorted (below); the Processes pane's "activity" column
+    // reorders view indices to rank by ::cpu (D4/D7: never reorder the model).
+    if (sample_cpu && !rows.empty()) {
+        struct timespec ts = {0, 150L * 1000 * 1000};
+        ::nanosleep(&ts, nullptr);
+        for (ProcRow &r : rows) {
+            const unsigned long long c1 = proc_cpu(std::to_string(r.pid));
+            r.cpu = (c1 > r.cpu) ? c1 - r.cpu : 0;
+        }
+    }
+
     std::sort(rows.begin(), rows.end(),
               [](const ProcRow &a, const ProcRow &b) { return a.pid < b.pid; });
     return rows;

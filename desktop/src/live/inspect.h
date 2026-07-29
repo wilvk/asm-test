@@ -188,6 +188,11 @@ struct ProcRow {
     std::string cmdline;
     AttachFacts facts;
     AttachVerdict verdict;
+    // CPU jiffies (utime + stime) used during the sample window when the list is
+    // built with sample_cpu — the same measure cli/asmspy_proc.c's
+    // ASMSPY_SORT_ACTIVE ranks on. 0 (and never sampled) on the cheap default
+    // list, so the "activity" column shows it only when it was actually measured.
+    unsigned long long cpu = 0;
 };
 
 // Read /proc/sys/kernel/yama/ptrace_scope; -1 when absent (Yama not enforcing).
@@ -199,7 +204,15 @@ AttachFacts probe_attach(long pid, int yama_scope, long our_uid, bool have_cap);
 
 // The whole list, client-side (D9: the desktop reads /proc itself; it does not
 // need a tracer to enumerate processes). Sorted by pid.
-std::vector<ProcRow> list_processes();
+//
+// sample_cpu ranks activity: it snapshots each process's CPU jiffies, sleeps a
+// short FIXED window (~150ms), then re-snapshots, filling ProcRow::cpu with the
+// delta — most-active processes carry the largest values. A fixed window makes
+// the raw delta comparable across rows with no wall-clock normalization, and a
+// process idle during the window reads 0 ("active now", not "ever active"). It
+// is off by default because that sample is not free (the call briefly sleeps);
+// the Processes pane only asks for it when the "activity" column is the sort.
+std::vector<ProcRow> list_processes(bool sample_cpu = false);
 
 // Parse a scoped-region spec for trace/dataflow's serve `start` params. A spec of
 // the form "0xADDR:LEN" (base and len each 0x-hex or decimal, len > 0) yields

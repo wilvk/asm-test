@@ -19,6 +19,8 @@
 #include <string>
 #include <vector>
 
+#include <signal.h>   // kill / SIGKILL — reap the busy child of the activity test
+#include <sys/wait.h> // waitpid
 #include <time.h>
 #include <unistd.h>
 
@@ -232,6 +234,55 @@ static void test_attach() {
                 check("list/all-explained", !r.verdict.why.empty(),
                       "every row must carry a reason");
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// the activity sample — list_processes(sample_cpu), the "activity" sort
+// ---------------------------------------------------------------------------
+static void test_activity() {
+    // No /proc: the sampled path is a no-op over an empty list (the emptiness is
+    // already asserted, with its reason, in test_attach). Nothing to measure.
+    if (*local_inspect_unavailable())
+        return;
+
+    // The gate earns its name: the cheap default samples nothing, so every row's
+    // cpu is 0. A nonzero here would mean the pid / comm / attach sorts are
+    // silently paying the ~150ms window they exist to avoid.
+    std::vector<ProcRow> plain = list_processes(false);
+    bool any_cpu = false;
+    for (const ProcRow &r : plain)
+        if (r.cpu != 0)
+            any_cpu = true;
+    check("activity/unsampled-is-cheap", !any_cpu,
+          "the unsampled list must not carry a CPU sample");
+
+    // The measure itself: a child pegged at 100% across the sample window MUST
+    // show nonzero CPU jiffies — the exact quantity the activity sort ranks on.
+    // Forked, not threaded, so the test needs no -lpthread.
+    pid_t busy = ::fork();
+    if (busy == 0) {
+        volatile unsigned long x = 0;
+        for (;;)
+            x++; // spin; the parent SIGKILLs us right after the sample
+    }
+    check("activity/spawn", busy > 0, "could not fork a busy child");
+    if (busy > 0) {
+        std::vector<ProcRow> hot = list_processes(true);
+        ::kill(busy, SIGKILL);
+        int st = 0;
+        ::waitpid(busy, &st, 0);
+        unsigned long long child_cpu = 0;
+        bool found = false;
+        for (const ProcRow &r : hot)
+            if (r.pid == (long)busy) {
+                found = true;
+                child_cpu = r.cpu;
+            }
+        check("activity/busy-child-listed", found,
+              "the sampled list dropped a live child pid");
+        check("activity/busy-child-active", child_cpu > 0,
+              "a pegged child must show CPU jiffies over the sample window");
     }
 }
 
@@ -661,6 +712,7 @@ static void test_remedy_command() {
 
 int main(void) {
     test_attach();
+    test_activity();
     test_remedy_command();
     test_evidence();
     test_front_door();

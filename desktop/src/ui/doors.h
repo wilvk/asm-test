@@ -144,6 +144,15 @@ struct InspectState {
     // pid / comm / cmdline.
     dt_filter_state proc_filter;
 
+    // The "activity" column ranks processes by CPU used over a short window, but
+    // that sample is not free (list_processes(sample_cpu) briefly sleeps), so it
+    // is gated on that column being the active sort: pid / comm / attach stay
+    // instant. sample_cpu = the current rows carry a CPU sample; want_cpu_sort =
+    // the table's sort column is "activity" (set by the sort block each frame,
+    // read at the top of the next to (re)scan when the intent flips).
+    bool sample_cpu = false;
+    bool want_cpu_sort = false;
+
     // The scoped region for trace/dataflow (mode_needs_region): a func NAME or
     // "0xADDR:LEN". Sent as the `start` params (parse_region_spec); ignored by the
     // whole-process modes and `auto` (which finds its own region).

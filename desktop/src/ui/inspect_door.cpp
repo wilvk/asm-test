@@ -10,6 +10,7 @@
 #include <strings.h> // strcasecmp — case-insensitive column sort of comm / why
 
 #include <sys/utsname.h> // uname — best-effort target arch for the arm64 gate
+#include <unistd.h>      // sysconf(_SC_CLK_TCK) — jiffies -> %CPU in the activity cell
 
 #include "imgui.h"
 
@@ -25,7 +26,7 @@
 namespace asmdesk {
 
 void inspect_scan(InspectState &s) {
-    s.rows = list_processes();
+    s.rows = list_processes(s.sample_cpu);
     s.scanned = true;
     // Best-effort target arch for the arm64 blocking-syscall gate (T5): the
     // tracee's true ELF arch needs a probe, so v1 uses the host's — the tracer
@@ -983,12 +984,23 @@ void draw_processes_pane(InspectState &s) {
             "remote capture still works — set an ssh host in Connect.");
         return;
     }
+    // Sampling activity costs a ~150ms window, so it is gated on the "activity"
+    // column being the sort (want_cpu_sort, set a frame earlier by the sort block
+    // below). Honor a change in that intent here, before anything reads s.rows.
+    if (s.want_cpu_sort != s.sample_cpu) {
+        s.sample_cpu = s.want_cpu_sort;
+        s.scanned = false; // fall through to the (re)scan just below
+    }
     if (!s.scanned)
         inspect_scan(s);
     if (ImGui::Button("Rescan"))
         inspect_scan(s);
     ImGui::SameLine();
     ImGui::TextDisabled("ptrace_scope=%d", read_yama_scope());
+    if (s.sample_cpu) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("· activity = %%CPU/core over a ~150ms sample");
+    }
 
     // Type-to-narrow (24 T4's shared filter) over pid / comm / cmdline — the
     // /proc list is the one client-side table that never had a filter (doc 16's
@@ -1006,7 +1018,9 @@ void draw_processes_pane(InspectState &s) {
     // 24-T4 free-column-sort idiom — reorder our own VIEW indices only; the model
     // (list_processes(), pid-sorted) is never touched (D4/D7). The type-to-narrow
     // filter above still applies on top, over whichever order is showing.
-    if (ImGui::BeginTable("procs", 4,
+    // Column indices, shared by the sort switch and the activity gate below.
+    enum { kColPid = 0, kColComm, kColActivity, kColAttach, kColWhy };
+    if (ImGui::BeginTable("procs", 5,
                           ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
                               ImGuiTableFlags_ScrollY |
                               ImGuiTableFlags_Resizable |
@@ -1017,6 +1031,12 @@ void draw_processes_pane(InspectState &s) {
         ImGui::TableSetupColumn("pid", ImGuiTableColumnFlags_DefaultSort |
                                            ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableSetupColumn("comm");
+        // Clicking "activity" is what asks for the CPU sample (want_cpu_sort,
+        // consumed at the top next frame); most-active-first is the useful order,
+        // so it prefers to sort descending.
+        ImGui::TableSetupColumn("activity",
+                                ImGuiTableColumnFlags_PreferSortDescending |
+                                    ImGuiTableColumnFlags_WidthFixed);
         ImGui::TableSetupColumn("attach");
         ImGui::TableSetupColumn("why / remedy");
         ImGui::TableSetupScrollFreeze(0, 1);
@@ -1029,24 +1049,33 @@ void draw_processes_pane(InspectState &s) {
         std::vector<int> order(s.rows.size());
         for (size_t k = 0; k < order.size(); ++k)
             order[k] = static_cast<int>(k);
+        // Default false so no-sort (unreachable given pid's DefaultSort, but
+        // honest) leaves the instant path; set true only while activity sorts.
+        s.want_cpu_sort = false;
         if (ImGuiTableSortSpecs *ss = ImGui::TableGetSortSpecs();
             ss && ss->SpecsCount > 0) {
             const ImGuiTableColumnSortSpecs &c = ss->Specs[0];
             const bool asc = c.SortDirection == ImGuiSortDirection_Ascending;
+            s.want_cpu_sort = (c.ColumnIndex == kColActivity);
             std::stable_sort(
                 order.begin(), order.end(), [&](int a, int b) {
                     const ProcRow &ra = s.rows[static_cast<size_t>(a)];
                     const ProcRow &rb = s.rows[static_cast<size_t>(b)];
                     int cmp;
                     switch (c.ColumnIndex) {
-                    case 1: // comm
+                    case kColComm:
                         cmp = strcasecmp(ra.comm.c_str(), rb.comm.c_str());
                         break;
-                    case 2: // attach — by attachability (the verdict enum)
+                    case kColActivity: // CPU used over the sample window
+                        cmp = (ra.cpu < rb.cpu)   ? -1
+                              : (ra.cpu > rb.cpu) ? 1
+                                                  : 0;
+                        break;
+                    case kColAttach: // by attachability (the verdict enum)
                         cmp = static_cast<int>(ra.verdict.verdict) -
                               static_cast<int>(rb.verdict.verdict);
                         break;
-                    case 3: // why / remedy
+                    case kColWhy:
                         cmp = strcasecmp(ra.verdict.why.c_str(),
                                          rb.verdict.why.c_str());
                         break;
@@ -1060,6 +1089,10 @@ void draw_processes_pane(InspectState &s) {
                 });
         }
 
+        // Turn the sampled jiffies into a %CPU of one core over the ~150ms
+        // window (jiffies / (window_s * ticks_per_s) * 100). One busy core reads
+        // ~100%, two ~200% — the same shape top shows.
+        const double clk_tck = static_cast<double>(sysconf(_SC_CLK_TCK));
         for (int oi : order) {
             const size_t i = static_cast<size_t>(oi);
             if (!dt_filter_match(q, hay[i]))
@@ -1104,6 +1137,18 @@ void draw_processes_pane(InspectState &s) {
             }
             ImGui::TableNextColumn();
             ImGui::TextUnformatted(r.comm.c_str());
+            ImGui::TableNextColumn();
+            // Activity is a MEASURED quantity: show "—" when this list was not
+            // sampled (the instant pid/comm/attach path), never "0%", which would
+            // claim a zero the code never took. A genuinely idle process in a
+            // sampled list does read 0%, and that is honest — it was measured.
+            if (!s.sample_cpu) {
+                ImGui::TextDisabled("—");
+            } else {
+                const double pct =
+                    clk_tck > 0 ? 100.0 * (double)r.cpu / (0.150 * clk_tck) : 0.0;
+                ImGui::Text("%.0f%%", pct);
+            }
             ImGui::TableNextColumn();
             ImGui::TextColored(verdict_colour(r.verdict.verdict), "%s",
                                verdict_word(r.verdict.verdict));
