@@ -1,6 +1,6 @@
 # `tests/golden-asmtrace/scenes/` — 3D-overview scene fixtures (hand-authored)
 
-Like [`../dishonest/`](../dishonest/), [`../views/`](../views/) and
+Like [`../low-fidelity/`](../low-fidelity/), [`../views/`](../views/) and
 [`../export/`](../export/), and unlike the flat `*.asmtrace` files in the
 parent, **nothing here is generated**. `make asmtrace-golden` writes only flat
 `*.asmtrace` files into the parent and never descends into a subdirectory, and

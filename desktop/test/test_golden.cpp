@@ -1,7 +1,7 @@
 // test_golden.cpp — the consumer-side schema-stability gate (03-desktop-shell.md
 // T7, plan DX golden-recording tests). Proves the viewer opens every committed
 // golden recording (D6): each parses, satisfies the model invariants, and — for
-// the hand-authored dishonest/ fixtures — surfaces its D7 honesty fact. Then all
+// the hand-authored low-fidelity/ fixtures — surfaces its D7 fidelity fact. Then all
 // of them open into one ShellState and run a 3-frame null render, so a Capstone
 // bump that renames a field or an ImGui upgrade that breaks a draw fails HERE,
 // in-lane, not on a user.
@@ -100,19 +100,20 @@ int main() {
         s.ws.open(f, err);
     }
 
-    // The hand-authored dishonest/ fixtures: each encodes one honesty fact, and
-    // each must surface it (D7). torn loads to a torn recording, not an error.
-    fs::path dishonest = root / "dishonest";
-    std::vector<std::string> dfiles = asmtraces_in(dishonest);
-    check("corpus/dishonest-present", !dfiles.empty(),
-          "no dishonest/ fixtures (broken checkout)");
+    // The hand-authored low-fidelity/ fixtures: each encodes one way a recording
+    // is less faithful than it looks, and each must surface it (D7). torn loads to
+    // a torn recording, not an error.
+    fs::path low_fidelity = root / "low-fidelity";
+    std::vector<std::string> dfiles = asmtraces_in(low_fidelity);
+    check("corpus/low-fidelity-present", !dfiles.empty(),
+          "no low-fidelity/ fixtures (broken checkout)");
     for (const std::string &f : dfiles) {
         Recording r = open_and_check(f);
-        bool dishonest_flag =
+        bool low_fidelity_flag =
             r.truncated() || r.dropped() || r.provenance.redacted;
         check(
-            f + " encodes-dishonesty", dishonest_flag,
-            "a dishonest/ fixture must surface truncation, drops or redaction");
+            f + " encodes-fidelity-loss", low_fidelity_flag,
+            "a low-fidelity/ fixture must surface truncation, drops or redaction");
         std::string err;
         s.ws.open(f, err);
     }

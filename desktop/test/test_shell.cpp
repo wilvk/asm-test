@@ -2066,7 +2066,7 @@ int main() {
         };
         ShellState ps;
         std::string err;
-        int ci = shell_open(ps, gd("dishonest/continuous-df.asmtrace"), err);
+        int ci = shell_open(ps, gd("low-fidelity/continuous-df.asmtrace"), err);
         check("dfpass/open", ci >= 0, err.c_str());
         if (ci >= 0) {
             size_t i = static_cast<size_t>(ci);

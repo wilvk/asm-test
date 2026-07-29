@@ -275,7 +275,7 @@ int main() {
     // segmented builder keeps each pass separately addressable, and the scalar
     // build_step_index resolves to the LATEST (the live default).
     {
-        Recording r = load_rec("dishonest/continuous-df.asmtrace");
+        Recording r = load_rec("low-fidelity/continuous-df.asmtrace");
         SegmentedStepIndex seg = build_segmented_step_index(r);
         vt::eq("continuous: three invocation passes", seg.passes.size(),
                size_t{3});

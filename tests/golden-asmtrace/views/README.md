@@ -1,6 +1,6 @@
 # `tests/golden-asmtrace/views/` — replay-view fixtures (hand-authored)
 
-Like [`../dishonest/`](../dishonest/) and [`../export/`](../export/), and unlike
+Like [`../low-fidelity/`](../low-fidelity/) and [`../export/`](../export/), and unlike
 the flat `*.asmtrace` files in the parent, **nothing here is generated**.
 `make asmtrace-golden` writes only flat `*.asmtrace` files into the parent and
 never descends into a subdirectory, and `make asmtrace-golden-check` compares

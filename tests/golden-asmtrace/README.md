@@ -38,7 +38,7 @@ in the generator (the recorder links no assembler) and
 `desktop/test/test_loom_forks.cpp` assembles the same listing with Keystone and
 asserts the two are byte-identical, so the encodings cannot drift apart.
 
-`dishonest/` is **hand-authored and never regenerated**. Each file encodes one
+`low-fidelity/` is **hand-authored and never regenerated**. Each file encodes one
 way a recording can be less than it looks — a filled buffer (`truncated`),
 dropped and throttled samples (`dropped`), content withheld at record time
 (`redacted`), and a producer that died mid-record (`torn`) — and each carries a

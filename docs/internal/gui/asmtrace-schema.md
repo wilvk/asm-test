@@ -29,7 +29,7 @@ to renderer discipline:
   redaction and a torn (unterminated) file are all *representable* and therefore
   *testable* — see
   [`tests/golden-asmtrace/`](../../../tests/golden-asmtrace/README.md), whose
-  four hand-authored `dishonest/` fixtures each carry a `note` event stating
+  four hand-authored `low-fidelity/` fixtures each carry a `note` event stating
   what a reader must conclude from them.
 
 ## Envelope
@@ -1233,7 +1233,7 @@ to. The rule is the same one `codeimage` states: a reader that gets it wrong is
 silently wrong. The reference mapper is
 [`fidelity_severity`](../../../desktop/src/ui/fidelity.h) — pure, derivable, and
 pinned against the committed dishonesty fixtures
-([tests/golden-asmtrace/dishonest/](../../../tests/golden-asmtrace/dishonest/)).
+([tests/golden-asmtrace/low-fidelity/](../../../tests/golden-asmtrace/low-fidelity/)).
 
 ## `df_step` region tag — the `rbase` extension (37)
 

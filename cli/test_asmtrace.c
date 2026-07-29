@@ -845,7 +845,7 @@ static void test_schema_example(void) {
 static void fixture_path(char *out, size_t cap, const char *name) {
     const char *dir = getenv("ASMTRACE_FIXTURE_DIR");
     snprintf(out, cap, "%s/%s.asmtrace",
-             dir ? dir : "tests/golden-asmtrace/dishonest", name);
+             dir ? dir : "tests/golden-asmtrace/low-fidelity", name);
 }
 
 /* Each fixture encodes ONE way a recording can be less than it looks, and each

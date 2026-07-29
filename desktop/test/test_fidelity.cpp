@@ -2,7 +2,7 @@
 // T1, F5). Model state, not pixels (D4/D7).
 //
 // The load-bearing test: fidelity_severity() grades the committed deliberate-
-// dishonesty fixtures (tests/golden-asmtrace/dishonest/*) into the RIGHT tier, so
+// dishonesty fixtures (tests/golden-asmtrace/low-fidelity/*) into the RIGHT tier, so
 // the grading is pinned against the same fixtures the whole honesty layer is. The
 // grading must RESTRUCTURE, never remove: a neutral tier for a statistical/
 // dropped survey still surfaces its lost/throttled drop record (D7), and the T3
@@ -32,7 +32,7 @@ static void check(const char *what, bool cond, const std::string &why) {
 
 static Recording load(const std::string &name) {
     std::string path =
-        std::string(ASMTEST_GOLDEN_DIR) + "/dishonest/" + name;
+        std::string(ASMTEST_GOLDEN_DIR) + "/low-fidelity/" + name;
     std::string err;
     auto r = load_recording_file(path, err);
     if (!r) {

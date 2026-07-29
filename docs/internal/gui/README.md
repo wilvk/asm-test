@@ -262,7 +262,7 @@ one-shot byte-identical) + the `df_invocation` per-pass delimiter (schema-define
 `asmtrace_df_invocation_body`) + serve `continuous:true` / CLI `--dataflow
 --continuous` (`fa2cef4`); the desktop segments the growing recording per pass
 (`build_segmented_step_index`, latest = the live default) + the capture-pane
-`continuous` checkbox + the hand-authored `dishonest/continuous-df.asmtrace`
+`continuous` checkbox + the hand-authored `low-fidelity/continuous-df.asmtrace`
 fixture (`fc836e0`). **T2 step 1 (interruptible Stop) landed 2026-07-28**
 (`c2313be`): `stop` is threaded through a new `asmtest_dataflow_ptrace_attach_jit_stop`
 entry (the old signature forwards NULL, so every existing caller stays

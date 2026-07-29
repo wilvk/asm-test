@@ -521,7 +521,7 @@ asmtrace-golden: $(BUILD)/asmtrace_record
 
 # Regenerate into a temp dir and diff: a field-order or value change fails here
 # as a byte diff instead of passing quietly. Compares only the flat generated
-# files — dishonest/ is hand-authored and never regenerated.
+# files — low-fidelity/ is hand-authored and never regenerated.
 asmtrace-golden-check: $(BUILD)/asmtrace_record
 	@tmp=$$(mktemp -d) && $(BUILD)/asmtrace_record $$tmp >/dev/null && \
 	  for f in $$tmp/*.asmtrace; do \

@@ -91,7 +91,7 @@ non-collapsible exactly as `draw_banner`'s refusal path is today.
   *data* (F5's own observation) but nothing names a tier for the *rendered*
   chrome.
 - **The committed dishonesty fixtures (D6/D7).**
-  [`tests/golden-asmtrace/dishonest/`](../../../tests/golden-asmtrace/dishonest/)
+  [`tests/golden-asmtrace/low-fidelity/`](../../../tests/golden-asmtrace/low-fidelity/)
   holds `torn.asmtrace` (no `end`), `truncated.asmtrace`, `redacted.asmtrace`,
   `dropped.asmtrace` (statistical, `lost:12345`, `throttled:true`); each opens
   with a `note` stating the deliberate breach. These are what T1's grading must
@@ -218,7 +218,7 @@ fix is loudness, not suppression (D7).
    chip (schema:544 — a successful session), not an amber banner.
 
 **Tests.** `desktop/test/test_fidelity.cpp` (new): load each
-`tests/golden-asmtrace/dishonest/*.asmtrace` fixture and assert `fidelity_severity()`
+`tests/golden-asmtrace/low-fidelity/*.asmtrace` fixture and assert `fidelity_severity()`
 grades it into the right tier — `torn`→integrity, `truncated`→caution,
 `redacted`→neutral, `dropped`(statistical)→neutral chip **plus** its `lost`/
 `throttled` drop record still surfaced (D7: the drop is not hidden by being
@@ -453,7 +453,7 @@ no-fabricated-total honesty rule still holds; `make desktop-test` green.
   *louder and more specific*, never quieter; T4's coarse-degrade shows the same
   labelled coarse provenance the rung shows normally. The graded system must keep
   passing against the committed deliberate-dishonesty fixtures
-  (`tests/golden-asmtrace/dishonest/`, D6/D7).
+  (`tests/golden-asmtrace/low-fidelity/`, D6/D7).
 - **T1 is a schema change (D5, Phase-3 freeze).** The `severity` field lands
   under 01's append-only rule with **01 owner sign-off recorded in
   `asmtrace-schema.md`** (as `codeimage`/`stitch` did, schema:657); it must be

@@ -36,7 +36,7 @@
 > - **T3 — DONE** (`fc836e0`): `build_segmented_step_index` buckets the regstate
 >   ring by `df_invocation` seq into one StepIndex per pass; `build_step_index` is
 >   segment-aware (latest pass = the live default; one-shot byte-identical);
->   `test_scrubber` drives the hand-authored `dishonest/continuous-df.asmtrace`
+>   `test_scrubber` drives the hand-authored `low-fidelity/continuous-df.asmtrace`
 >   fixture. (Def-use/streams per-pass segmentation is a scoped follow-on — the
 >   Scrubber is the primary continuous consumer; a continuous def-use view shows
 >   the last pass's offsets, not a lie about honesty chrome.)

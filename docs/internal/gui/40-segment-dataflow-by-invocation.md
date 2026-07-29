@@ -120,7 +120,7 @@ cannot occur.
 
 **Definition of done.** A new `desktop_test_streams` binary (link
 `test_streams.o + $(DESKTOP_TEST_DOC)`; add to `DESKTOP_TESTS`) asserts, loading
-`dishonest/continuous-df.asmtrace`:
+`low-fidelity/continuous-df.asmtrace`:
 - `build_segmented_dataflow` returns **3** passes; `present_passes() == 3`.
 - pass 0 and pass 1 each have `nsteps == 3` with `insn_off == {0,3,6}`; pass 2
   (`truncated`) has `nsteps == 2` (only two `df_step` events survived) with the last

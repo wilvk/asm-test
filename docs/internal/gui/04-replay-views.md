@@ -511,7 +511,7 @@ fixture; all view tests riding `desktop-test`; changelog.
    without instruction lengths — reconstructing them would be a guess wearing a
    measurement's clothes. Everything a clean deterministic run cannot produce is
    hand-authored under `tests/golden-asmtrace/views/` (a never-regenerated sibling of
-   `dishonest/` and `export/`, with its own README): `loop-coverage` (heat > 1 + a real
+   `low-fidelity/` and `export/`, with its own README): `loop-coverage` (heat > 1 + a real
    coverage event), `trunc-trace`, `trunc-dataflow`, `mixed-basis`, `no-disasm`, and the
    `pair-a`/`pair-b` diff pair.
 2. Confirm every T3–T7 test consumes fixtures from `tests/golden-asmtrace/` only, so

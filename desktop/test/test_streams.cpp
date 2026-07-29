@@ -40,7 +40,7 @@ uint64_t step0_value(const DataflowStream &df, const char *what) {
 // kills would fold all three into one step space (last-write-wins offsets; merged
 // ops/edges); segmentation keeps each pass whole and independent.
 void test_continuous_segments() {
-    Recording r = load_rec("dishonest/continuous-df.asmtrace");
+    Recording r = load_rec("low-fidelity/continuous-df.asmtrace");
     SegmentedDataflow seg = build_segmented_dataflow(r);
 
     vt::eq("continuous: three passes", seg.passes.size(), size_t{3});

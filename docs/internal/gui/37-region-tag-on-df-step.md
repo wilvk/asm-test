@@ -150,7 +150,7 @@ violates this today; asmspy's dataflow engine uses the `attach_jit_stop` path.
   has not been passed, so this lands under the append-only rule (D5).
 - **The corpus blast radius, counted.** 20 generated flat goldens carry `df_step`
   and will each gain `,"rbase":1048576`; 3 hand-authored goldens
-  (`dishonest/continuous-df`, `views/trunc-dataflow`, `views/no-disasm`) and 1
+  (`low-fidelity/continuous-df`, `views/trunc-dataflow`, `views/no-disasm`) and 1
   desktop fixture (`blame-attribution`) carry it and are **deliberately left
   untagged** — they become the standing regression coverage for reader rule 2.
 

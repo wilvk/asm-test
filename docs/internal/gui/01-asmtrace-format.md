@@ -428,7 +428,7 @@ int main(int argc, char **argv); /* argv[1] = output directory */
 **Steps.**
 1. Run `make asmtrace-golden` in the `docker-cli` image; commit the output (flat, one file per
    routine: `add_signed.asmtrace`, ...).
-2. Hand-author `tests/golden-asmtrace/dishonest/` (committed, never regenerated; each file's
+2. Hand-author `tests/golden-asmtrace/low-fidelity/` (committed, never regenerated; each file's
    first event is a `note` naming its purpose and what a reader must conclude — a `note` EVENT,
    not a header field, since the schema already has that kind and a new header field would be
    one more thing every reader must know): `truncated.asmtrace` (`end` has `"truncated":true`; `coverage`
@@ -453,7 +453,7 @@ int main(int argc, char **argv); /* argv[1] = output directory */
 check.
 
 **Docs.** `tests/golden-asmtrace/README.md` (3 short paragraphs: what regenerates the flat files;
-`dishonest/` is never regenerated; the docker-lane-authoritative rule).
+`low-fidelity/` is never regenerated; the docker-lane-authoritative rule).
 
 **Done when.**
 - `git ls-files tests/golden-asmtrace` shows the corpus + 4 dishonesty fixtures + README.
