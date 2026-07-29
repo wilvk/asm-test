@@ -808,6 +808,7 @@ endef
 
 .PHONY: desktop desktop-render desktop-test desktop-ui-test desktop-fmt desktop-fmt-check \
         docker-desktop desktop-setup desktop-setup-render \
+        desktop-install desktop-uninstall desktop-icon-regen \
         addon-fetch-test desktop-addon-compile-check
 
 # --- addon supply chain (12-addon-supply-chain.md) ---------------------------
@@ -886,6 +887,63 @@ else
 desktop-render:
 	$(call DESKTOP_GUIDE,asmtest-viewer (render-only),$(DESKTOP_MISSING))
 endif
+
+# --- desktop-install: launcher + themed icons so the app has a dock identity ---
+# The compiled-in window icon (main.cpp -> glfwSetWindowIcon) already gives an X11
+# session a titlebar/taskbar icon straight from `./build/asmtest-desktop`, but for
+# a PROPER dock entry — grouped under a launcher, working on Wayland, showing in
+# the app grid — the freedesktop bits have to be installed: the icon-theme PNGs
+# that `Icon=asmtest-desktop` resolves to, and the .desktop launcher whose
+# StartupWMClass ties a running window (main.cpp's WM_CLASS / app_id) back to it.
+# Honors PREFIX/DESTDIR (defined in the root Makefile). The launcher's Exec is
+# rewritten to the absolute installed path so it runs regardless of PATH. The two
+# XDG cache refreshers are best-effort — absent on a headless box, and a DESTDIR
+# staging build (for a distro package) must not poke the live caches.
+DESKTOP_DATADIR    ?= $(PREFIX)/share
+DESKTOP_ICON_SIZES := 16 24 32 48 64 128 256
+DESKTOP_APPLDIR    := $(DESTDIR)$(DESKTOP_DATADIR)/applications
+DESKTOP_ICONDIR    := $(DESTDIR)$(DESKTOP_DATADIR)/icons/hicolor
+
+desktop-install: $(BUILD)/asmtest-desktop
+	mkdir -p $(DESTDIR)$(PREFIX)/bin $(DESKTOP_APPLDIR)
+	cp $(BUILD)/asmtest-desktop $(DESTDIR)$(PREFIX)/bin/
+	for s in $(DESKTOP_ICON_SIZES); do \
+	  mkdir -p $(DESKTOP_ICONDIR)/$${s}x$${s}/apps; \
+	  cp desktop/assets/icons/hicolor/$${s}x$${s}/apps/asmtest-desktop.png \
+	     $(DESKTOP_ICONDIR)/$${s}x$${s}/apps/; \
+	done
+	sed 's|^Exec=asmtest-desktop|Exec=$(PREFIX)/bin/asmtest-desktop|' \
+	  desktop/assets/asmtest-desktop.desktop \
+	  > $(DESKTOP_APPLDIR)/asmtest-desktop.desktop
+	@# The render-only viewer shares the icon; install its launcher too, but only
+	@# if it has actually been built (make desktop-render) — never force that here.
+	if [ -f $(BUILD)/asmtest-viewer ]; then \
+	  cp $(BUILD)/asmtest-viewer $(DESTDIR)$(PREFIX)/bin/; \
+	  sed 's|^Exec=asmtest-viewer|Exec=$(PREFIX)/bin/asmtest-viewer|' \
+	    desktop/assets/asmtest-viewer.desktop \
+	    > $(DESKTOP_APPLDIR)/asmtest-viewer.desktop; \
+	fi
+	-update-desktop-database $(DESKTOP_APPLDIR) 2>/dev/null || true
+	-gtk-update-icon-cache -f -t $(DESKTOP_ICONDIR) 2>/dev/null || true
+	@echo "installed asmtest-desktop + launcher + icon theme under $(DESTDIR)$(DESKTOP_DATADIR)"
+	@echo "  (if the dock icon does not refresh, log out/in or restart the shell)"
+
+desktop-uninstall:
+	rm -f $(DESTDIR)$(PREFIX)/bin/asmtest-desktop $(DESTDIR)$(PREFIX)/bin/asmtest-viewer
+	rm -f $(DESKTOP_APPLDIR)/asmtest-desktop.desktop $(DESKTOP_APPLDIR)/asmtest-viewer.desktop
+	for s in $(DESKTOP_ICON_SIZES); do \
+	  rm -f $(DESKTOP_ICONDIR)/$${s}x$${s}/apps/asmtest-desktop.png; \
+	done
+	-update-desktop-database $(DESKTOP_APPLDIR) 2>/dev/null || true
+	-gtk-update-icon-cache -f -t $(DESKTOP_ICONDIR) 2>/dev/null || true
+	@echo "removed the asmtest-desktop launcher + icon from $(DESTDIR)$(DESKTOP_DATADIR)"
+
+# desktop-icon-regen: re-run the artwork generator (needs Pillow — a DEV tool, not
+# a build step; the build consumes the committed outputs). Review + commit the
+# regenerated desktop/src/ui/app_icon.h and desktop/assets/ afterwards.
+desktop-icon-regen:
+	python3 scripts/gen-app-icon.py
+	@echo "regenerated the app icon — review + commit desktop/src/ui/app_icon.h and desktop/assets/**"
 
 # --- desktop-setup: bare host -> a GUI you can launch, in one command ---------
 # The gates above (DESKTOP_MISSING / DESKTOP_ENGINE_MISSING) are $(shell) probes

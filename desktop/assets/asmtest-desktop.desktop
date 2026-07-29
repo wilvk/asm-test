@@ -1,0 +1,19 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=asmtest desktop
+GenericName=Assembly Trace Viewer
+Comment=Inspect and replay assembly execution traces
+# `desktop-install` rewrites Exec to the absolute installed binary path; the bare
+# name works when asmtest-desktop is on PATH.
+Exec=asmtest-desktop
+# Resolved through the freedesktop icon theme (hicolor/**/apps/asmtest-desktop.png),
+# installed alongside this file by `make desktop-install`.
+Icon=asmtest-desktop
+Terminal=false
+Categories=Development;Debugger;Profiling;
+Keywords=assembly;disassembly;trace;debugger;emulator;
+# Ties a running window to this launcher so the dock shows THIS icon and groups
+# under it. Matches the WM_CLASS / Wayland app_id main.cpp sets on the window.
+StartupWMClass=asmtest-desktop
+StartupNotify=true

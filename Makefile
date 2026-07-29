@@ -152,6 +152,8 @@ help:
 	@echo '  desktop         build build/asmtest-desktop (full app; links the engines, GPL-2.0 whole)'
 	@echo '                  parallel by default (DESKTOP_JOBS, defaults to nproc; lower it on a memory-constrained host)'
 	@echo '  desktop-render  build build/asmtest-viewer (render-only; engine-free, permissive)'
+	@echo '  desktop-install install the app + .desktop launcher + dock icon (honors PREFIX/DESTDIR)'
+	@echo '  desktop-icon-regen  redraw the app icon from scripts/gen-app-icon.py (dev tool; needs Pillow)'
 	@echo '  desktop-test    headless null-backend tests (any host with a C++17 compiler; make docker-desktop)'
 	@echo '  desktop-ui-test imgui_test_engine interaction lane: keymap + door/flow tests, JUnit XML (fetches the one test-lane-only non-MIT dep; make docker-desktop runs it)'
 	@echo '  addon-fetch-test          exercise scripts/fetch-addon.sh (pin + refuse-unpinned; network)'

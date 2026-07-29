@@ -10,6 +10,7 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
@@ -21,6 +22,7 @@
 #include <GLFW/glfw3.h> // drags in the system OpenGL headers
 
 #include "doc/workspace_state.h" // persisted workspace store (20 T3)
+#include "ui/app_icon.h"         // compiled-in window icon RGBA (dock/titlebar)
 #include "ui/gl_scene_host.h"
 #include "ui/settings.h"         // user text-scale / theme / window size (20 T5)
 #include "ui/shell.h"
@@ -126,8 +128,25 @@ int main() {
 
 #ifdef ASMTEST_DESKTOP_RENDER_ONLY
     const char *title = "asmtest viewer (render-only)";
+    const char *app_id = "asmtest-viewer";
 #else
     const char *title = "asmtest desktop";
+    const char *app_id = "asmtest-desktop";
+#endif
+
+    // The window's application identity, set BEFORE the window exists (these are
+    // window hints, latched at creation). On X11 it becomes WM_CLASS; a GNOME
+    // dash matches that against the installed .desktop's StartupWMClass to show
+    // the launcher's icon and group the window under it. On Wayland it is the
+    // app_id, the ONLY handle the compositor has to that same .desktop (there is
+    // no per-window icon protocol there, so glfwSetWindowIcon below is a no-op
+    // and this is what makes the dock icon appear at all). GLFW_X11_CLASS_NAME/
+    // _INSTANCE_NAME exist since 3.2; the dedicated Wayland hint only since 3.4,
+    // so it is probed — on 3.3 the X11 class name doubles as the Wayland app_id.
+    glfwWindowHintString(GLFW_X11_CLASS_NAME, app_id);
+    glfwWindowHintString(GLFW_X11_INSTANCE_NAME, app_id);
+#ifdef GLFW_WAYLAND_APP_ID
+    glfwWindowHintString(GLFW_WAYLAND_APP_ID, app_id);
 #endif
 
     // Load the persisted settings BEFORE the window so it opens at the size the
@@ -145,6 +164,24 @@ int main() {
     }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1); // vsync
+
+    // The window icon (titlebar + X11 taskbar/dock). GLFW copies the pixels, so
+    // the compiled-in RGBA mips (ui/app_icon.h) can be stack-local. GLFW picks
+    // the nearest size per surface. A no-op on Wayland (feature-unavailable) and
+    // on macOS (the .app bundle's icon wins) — harmless there, and the .desktop
+    // `Icon=` carries the Wayland case.
+    {
+        size_t icon_count = 0;
+        const asmdesk::AppIconImage *icons = asmdesk::app_icon_images(&icon_count);
+        std::vector<GLFWimage> imgs(icon_count);
+        for (size_t i = 0; i < icon_count; ++i) {
+            imgs[i].width = icons[i].size;
+            imgs[i].height = icons[i].size;
+            imgs[i].pixels = const_cast<unsigned char *>(icons[i].rgba);
+        }
+        if (!imgs.empty())
+            glfwSetWindowIcon(window, static_cast<int>(imgs.size()), imgs.data());
+    }
 
     // The GLFW content (DPI) scale of this window drives the atlas bake size, so
     // a HiDPI display gets a crisp atlas rather than an upscaled 15px one (T5).

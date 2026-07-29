@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=asmtest viewer
+GenericName=Assembly Trace Viewer (render-only)
+Comment=Open and replay .asmtrace recordings (engine-free viewer)
+# `desktop-install` rewrites Exec to the absolute installed binary path; the bare
+# name works when asmtest-viewer is on PATH.
+Exec=asmtest-viewer
+# Shares the app's icon theme entry (same artwork, one installed PNG set).
+Icon=asmtest-desktop
+Terminal=false
+Categories=Development;Debugger;Profiling;
+Keywords=assembly;disassembly;trace;debugger;viewer;
+# Matches the WM_CLASS / Wayland app_id main.cpp sets for the render-only viewer.
+StartupWMClass=asmtest-viewer
+StartupNotify=true
