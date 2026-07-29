@@ -356,6 +356,64 @@ assert isinstance(d["defuse"], list)' \
     fi
     rm -f "$dfmem" "$dfmem0"
 
+    # 41 L3: the `blame` backward cone (T1) + `statediff` step-delta (T2) on the
+    # LIVE serve leg — R6 landed both recorder-only. Both are pure projections the
+    # serve leg already has the material for (the def-use graph for blame's cone, the
+    # regstate ring for statediff's delta) and spell the wire with the SHARED body
+    # builders, so a live blame/statediff and a golden one are byte-identical.
+    dfbs="$BUILD/df_blamestate_$$.asmtrace"
+    dfbs0="$BUILD/df_noblamestate_$$.asmtrace"
+    rm -f "$dfbs" "$dfbs0"
+    echo "--- asmspy --dataflow $AVPID hotfn --blame --statediff --record (41 L3) ---"
+    set +e
+    timeout 40 "$ASM" --dataflow "$AVPID" hotfn --blame --statediff \
+        --record="$dfbs" >/dev/null 2>&1; rc=$?
+    set -e
+    [ "$rc" -eq 124 ] && fail "--dataflow --blame --statediff hung"
+    [ "$rc" -eq 0 ] || fail "--dataflow --blame --statediff exited $rc"
+    [ -s "$dfbs" ] || fail "--dataflow --blame --statediff: no recording written"
+    # T1: at least one blame event, each with an ascending cone INCLUDING the sink
+    # and an honest born_untraced verdict (never an empty cone).
+    nblame=$(grep -c '"k":"blame"' "$dfbs" || true)
+    [ "$nblame" -ge 1 ] || fail "--dataflow --blame: no blame event emitted"
+    blaml=$(grep -m1 '"k":"blame"' "$dfbs")
+    printf '%s' "$blaml" | grep -qE '"cone":\[.*"kind":"insn".*\]' \
+        || fail "--dataflow --blame: blame carries no cone: $blaml"
+    printf '%s' "$blaml" | grep -qE '"born_untraced":(true|false)' \
+        || fail "--dataflow --blame: blame missing born_untraced verdict: $blaml"
+    echo "  blame: $nblame event(s), cone + born_untraced present"
+    # T2: --statediff self-arms the register ring, so statediff pairs 1:1 with
+    # regstate; step 0 is computed:false (no predecessor -> empty changed, never a
+    # full-delta lie); a later step is computed:true with a non-empty changed set.
+    nsd=$(grep -c '"k":"statediff"' "$dfbs" || true)
+    nrg=$(grep -c '"k":"regstate"' "$dfbs" || true)
+    [ "$nsd" -gt 0 ] \
+        || fail "--dataflow --statediff: no statediff (register ring not self-armed)"
+    [ "$nsd" = "$nrg" ] \
+        || fail "--dataflow --statediff: $nsd statediff != $nrg regstate (not 1:1)"
+    grep -q '"k":"statediff","step":0,"changed":{},"computed":false' "$dfbs" \
+        || fail "--dataflow --statediff: step 0 not computed:false with empty changed"
+    if [ "$nsd" -ge 2 ]; then
+        grep -qE '"k":"statediff","step":[0-9]+,"changed":\{"[^}]+\},"computed":true' \
+            "$dfbs" \
+            || fail "--dataflow --statediff: no computed:true step with a non-empty changed set"
+    fi
+    echo "  statediff: $nsd event(s), 1:1 with regstate, step-0 computed:false"
+    # negative control: WITHOUT the flags the recording carries NEITHER kind.
+    set +e
+    timeout 40 "$ASM" --dataflow "$AVPID" hotfn --steps --record="$dfbs0" \
+        >/dev/null 2>&1; rc=$?
+    set -e
+    [ "$rc" -eq 0 ] || fail "--dataflow (no blame/statediff) exited $rc"
+    if [ -s "$dfbs0" ]; then
+        grep -q '"k":"blame"' "$dfbs0" \
+            && fail "--dataflow WITHOUT --blame emitted a blame event"
+        grep -q '"k":"statediff"' "$dfbs0" \
+            && fail "--dataflow WITHOUT --statediff emitted a statediff event"
+        echo "  no flags: recording carries neither blame nor statediff, OK"
+    fi
+    rm -f "$dfbs" "$dfbs0"
+
     # 35 T1: --continuous re-arms the SAME region and keeps capturing until a stop
     # signal, appending each pass into ONE growing recording delimited by a
     # `df_invocation` marker (each pass's df_step restarts at step 0). attach_victim

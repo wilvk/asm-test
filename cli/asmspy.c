@@ -2293,9 +2293,69 @@ typedef struct {
     int json;
     rec_t *r;     /* --record tee (NULL = not recording) */
     int emit_mem; /* 29 R2: --mem armed the `mem` address stream */
+    int emit_blame;     /* 41 L3: --blame armed the `blame` backward cone */
+    int emit_statediff; /* 41 L3: --statediff armed the `statediff` delta */
     int continuous; /* 35 T1: re-arm loop -> emit a df_invocation per pass */
     unsigned pass;  /* 35 T1: 0-based invocation ordinal, ++ per sink call */
 } dataflow_ctx;
+
+/* 41 L3: emit one `blame` backward-attribution event for `seed` over the def-use
+ * graph `g` — the live parallel of tools/asmtrace_record.c's emit_blame, spelling
+ * the body with the SHARED asmtrace_blame_body so a live blame and a golden one are
+ * byte-identical. The cone is the ascending backward slice INCLUDING the sink; the
+ * blamed `loc` is the seed step's first register write (or none for a memory-only /
+ * writeless step); born_untraced (cone reached only the sink) is the honest
+ * "provenance starts at instrumentation" verdict, never an empty cone. Fail-closed
+ * on OOM: no blame beats a truncated one. */
+static void dataflow_emit_blame(rec_t *r, const asmtest_valtrace_t *vt,
+                                const asmtest_defuse_t *g, uint32_t seed) {
+    at_val_rec_t seed_rec;
+    asmtest_slice_t *sl;
+    uint32_t *cone_steps;
+    uint64_t *cone_offs;
+    const at_val_rec_t *loc = NULL;
+    char *body;
+    size_t ncone = 0;
+
+    memset(&seed_rec, 0, sizeof seed_rec);
+    seed_rec.step = seed; /* the slicer reads only .step */
+    sl = asmtest_slice_backward_seed(g, &seed_rec);
+    if (sl == NULL)
+        return;
+    cone_steps = malloc((sl->n ? sl->n : 1) * sizeof *cone_steps);
+    cone_offs = malloc((sl->n ? sl->n : 1) * sizeof *cone_offs);
+    body = malloc(4096 + sl->n * 32);
+    if (cone_steps == NULL || cone_offs == NULL || body == NULL) {
+        free(cone_steps);
+        free(cone_offs);
+        free(body);
+        asmtest_slice_free(sl);
+        return; /* fail closed: no blame beats a truncated one */
+    }
+    for (size_t i = 0; i < sl->n; i++) {
+        uint32_t s = sl->steps[i];
+        cone_steps[ncone] = s;
+        cone_offs[ncone] = (s < vt->steps_len) ? vt->insn_off[s] : 0;
+        ncone++;
+    }
+    /* The blamed value is the seed step's first register write; a memory-only or
+     * writeless step blames the step without a `loc`. */
+    for (size_t i = 0; i < vt->recs_len; i++) {
+        if (vt->recs[i].step == seed && vt->recs[i].is_write &&
+            vt->recs[i].kind == AT_LOC_REG) {
+            loc = &vt->recs[i];
+            break;
+        }
+    }
+    asmtrace_blame_body(body, 4096 + sl->n * 32, seed,
+                        (seed < vt->steps_len) ? vt->insn_off[seed] : 0, loc,
+                        cone_steps, cone_offs, ncone, sl->n <= 1 /*born_untraced*/);
+    rec_emit(r, "blame", body);
+    free(cone_steps);
+    free(cone_offs);
+    free(body);
+    asmtest_slice_free(sl);
+}
 
 /* Record one captured invocation as `df_step` + `df_edge` events, mirroring the
  * render sink's walk over the L0 record stream. The BODY builders live in the
@@ -2304,7 +2364,8 @@ typedef struct {
 static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
                             const asmtest_defuse_t *g, const uint8_t *code,
                             size_t len, uint64_t base, int emit_mem,
-                            int continuous, unsigned pass, long result) {
+                            int emit_blame, int emit_statediff, int continuous,
+                            unsigned pass, long result) {
     size_t nsteps = vt->steps_len, nrecs = vt->recs_len, cur = 0;
     char body[65536];
     if (!rec_on(r))
@@ -2345,6 +2406,16 @@ static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
         if (vt->regfile != NULL) {
             asmtrace_regstate_body(body, sizeof body, &vt->regfile[s]);
             rec_emit(r, "regstate", body);
+            /* 41 L3 T2: the `statediff` step-delta, paired 1:1 right after its
+             * regstate. The live ring is tail-drop (first_step=0), so step 0 is the
+             * first held step (prev NULL -> computed:false, never a full-delta lie)
+             * and every later step has its true predecessor regfile[s-1]. */
+            if (emit_statediff) {
+                asmtrace_statediff_body(body, sizeof body, (unsigned)s,
+                                        s == 0 ? NULL : &vt->regfile[s - 1],
+                                        &vt->regfile[s]);
+                rec_emit(r, "statediff", body);
+            }
             /* 31 R4 T2: the FP-environment, paired 1:1 with the regstate, only
              * where the wide deck armed and MXCSR was read (has_vec) — a GPR-only
              * ring (no --fpregs) emits no fpenv. */
@@ -2376,6 +2447,14 @@ static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
         asmtrace_df_edge_body(body, sizeof body, &g->edges[i]);
         rec_emit(r, "df_edge", body);
     }
+    /* 41 L3 T1: one `blame` backward cone over the def-use graph, seeded at the
+     * PENULTIMATE step (the last instruction before the `ret` — the return value's
+     * producer for an epilogue-free routine) — the same which-value seed policy the
+     * recorder uses. Needs g (a routine with no def-use graph carries none). */
+    if (emit_blame && g != NULL && nsteps >= 1)
+        dataflow_emit_blame(r, vt, g,
+                            nsteps >= 2 ? (uint32_t)(nsteps - 2)
+                                        : (uint32_t)(nsteps - 1));
     if (vt->truncated)
         rec_truncated(r);
     /* The value trace saw vt->steps_total steps (it counts past the ring cap even
@@ -2414,8 +2493,8 @@ static void dataflow_render_sink(void *ctx, long result,
     /* 35 T1: post-increment the per-session pass ordinal so each continuous
      * invocation's df_invocation marker carries a distinct `pass`. */
     unsigned pass = dc->pass++;
-    dataflow_record(dc->r, vt, g, code, len, base, dc->emit_mem, dc->continuous,
-                    pass, result);
+    dataflow_record(dc->r, vt, g, code, len, base, dc->emit_mem, dc->emit_blame,
+                    dc->emit_statediff, dc->continuous, pass, result);
 
     if (dc->json) {
         char ef[256];
@@ -2807,9 +2886,13 @@ static int auto_pick_sw(pid_t pid, const asmspy_symtab_t *t, const char *module,
 static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
                         int json, int auto_region, const char *module,
                         sampler_mode_t sampler, const char *record, int steps,
-                        int mem, int fpregs, int continuous, int window_ms) {
+                        int mem, int blame, int statediff, int fpregs,
+                        int continuous, int window_ms) {
     asmspy_symtab_t t;
     rec_t rec;
+    /* 41 L3: statediff IS a delta of the register ring, so arm it (like fpregs). */
+    if (statediff)
+        steps = 1;
     if (asmspy_symtab_load(pid, &t) < 0) {
         fprintf(stderr, "cannot read symbols for pid %d\n", (int)pid);
         return 1;
@@ -2923,7 +3006,8 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         const char *rname =
             s ? s->name
               : (auto_region ? (autoname[0] ? autoname : "?") : region);
-        dataflow_ctx dc = {pid, rname, json, &rec, mem, continuous, 0};
+        dataflow_ctx dc = {pid,   rname,      json, &rec, mem, blame,
+                           statediff, continuous, 0};
         /* status to STDERR so --json stdout stays a single clean object */
         fprintf(stderr,
                 "data-flow capture of %s @ 0x%llx (%zu bytes) in pid %d%s\n",
@@ -3096,6 +3180,8 @@ typedef struct {
     int follow;
     int steps; /* dataflow/auto: arm the per-step register ring (26 `--steps`) */
     int mem;   /* dataflow/auto: arm the `mem` address stream (29 R2 `--mem`) */
+    int blame; /* dataflow/auto: arm the `blame` backward cone (41 L3) */
+    int statediff; /* dataflow/auto: arm the `statediff` delta (41 L3; arms steps) */
     int fpregs; /* dataflow/auto: arm the XMM/MXCSR deck (31 R4 `fpregs:true`) */
     int continuous; /* dataflow/auto: re-arm until stop (35 `continuous:true`) */
     long max;
@@ -3356,8 +3442,8 @@ static void serve_dataflow_sink(void *ctx, long result,
     /* 35 T1: in a continuous session the sink fires once per re-armed pass; the
      * per-session df_pass ordinal delimits them via the df_invocation marker. */
     unsigned pass = s->df_pass++;
-    dataflow_record(&s->rec, vt, g, code, len, base, s->p.mem, s->p.continuous,
-                    pass, result);
+    dataflow_record(&s->rec, vt, g, code, len, base, s->p.mem, s->p.blame,
+                    s->p.statediff, s->p.continuous, pass, result);
     serve_codeimage_refresh(s);
 }
 
@@ -3646,10 +3732,12 @@ static size_t serve_params_json(char *dst, size_t cap,
         o = (size_t)snprintf(
             dst, cap,
             "{\"tid\":%d,\"base\":%llu,\"len\":%llu,\"max\":%ld,\"steps\":%s,"
-            "\"mem\":%s,\"fpregs\":%s,\"continuous\":%s}",
+            "\"mem\":%s,\"blame\":%s,\"statediff\":%s,\"fpregs\":%s,"
+            "\"continuous\":%s}",
             (int)p->tid, (unsigned long long)p->base,
             (unsigned long long)p->len, p->max, p->steps ? "true" : "false",
-            p->mem ? "true" : "false", p->fpregs ? "true" : "false",
+            p->mem ? "true" : "false", p->blame ? "true" : "false",
+            p->statediff ? "true" : "false", p->fpregs ? "true" : "false",
             p->continuous ? "true" : "false");
         break;
     case SM_PROCS:
@@ -3671,14 +3759,15 @@ static size_t serve_params_json(char *dst, size_t cap,
         o = (size_t)snprintf(
             dst, cap,
             "{\"max\":%ld,\"module\":\"%s\",\"sampler\":"
-            "\"%s\",\"ms\":%d,\"steps\":%s,\"mem\":%s,\"fpregs\":%s,"
-            "\"continuous\":%s}",
+            "\"%s\",\"ms\":%d,\"steps\":%s,\"mem\":%s,\"blame\":%s,"
+            "\"statediff\":%s,\"fpregs\":%s,\"continuous\":%s}",
             p->max, em,
             p->sampler == SAMPLER_IBS
                 ? "ibs"
                 : (p->sampler == SAMPLER_SW ? "sw" : "auto"),
             serve_auto_window_ms(p), p->steps ? "true" : "false",
-            p->mem ? "true" : "false", p->fpregs ? "true" : "false",
+            p->mem ? "true" : "false", p->blame ? "true" : "false",
+            p->statediff ? "true" : "false", p->fpregs ? "true" : "false",
             p->continuous ? "true" : "false");
         break;
     default:
@@ -4087,6 +4176,28 @@ static int serve_parse_start(const char *line, serve_params_t *p,
             return -1;
         }
         p->mem = b;
+    }
+    /* 41 L3: dataflow/auto opt-in for the `blame` backward-attribution cone. A
+     * BOOLEAN like `mem`: one blame event per invocation, seeded at the penultimate
+     * step, over the def-use graph already built. Off by default. */
+    if ((v = sj_find(line, "blame")) != NULL) {
+        if (sj_bool(v, &b) != 0) {
+            *why = "\"blame\" must be true or false";
+            return -1;
+        }
+        p->blame = b;
+    }
+    /* 41 L3: dataflow/auto opt-in for the `statediff` step-delta. A BOOLEAN like
+     * `fpregs`; it arms the register ring too (statediff IS a delta of that ring),
+     * so `statediff:true` alone yields a paired regstate+statediff stream. */
+    if ((v = sj_find(line, "statediff")) != NULL) {
+        if (sj_bool(v, &b) != 0) {
+            *why = "\"statediff\" must be true or false";
+            return -1;
+        }
+        p->statediff = b;
+        if (b)
+            p->steps = 1;
     }
     /* 31 R4: dataflow/auto opt-in for the wide XMM/MXCSR deck. A BOOLEAN like
      * `steps`; it arms the register ring too, so `fpregs:true` alone yields a
@@ -7428,7 +7539,7 @@ static int usage(const char *argv0) {
         "  %s --dataflow <pid> <sym|0xADDR[:LEN]|--auto> [--json] [--tid=<t>] "
         "[--max=<n>] [--module=<m>] [--sampler=ibs|sw] [--window=<ms>] "
         "[--steps] "
-        "[--mem] [--fpregs] [--continuous]  "
+        "[--mem] [--blame] [--statediff] [--fpregs] [--continuous]  "
         "scoped "
         "L0 "
         "value trace + L1 def-use of one invocation (native targets). --steps "
@@ -7603,6 +7714,8 @@ int main(int argc, char **argv) {
         const char *record = NULL;
         int steps = 0;  /* --steps: arm the per-step register ring (26) */
         int mem = 0;    /* --mem: arm the `mem` address stream (29 R2) */
+        int blame = 0;  /* --blame: arm the `blame` backward cone (41 L3) */
+        int statediff = 0; /* --statediff: arm the `statediff` delta (41 L3) */
         int fpregs = 0; /* --fpregs: arm the XMM/MXCSR deck (31 R4) */
         int continuous = 0; /* --continuous: re-arm until Ctrl-C (35 T1) */
         int window_ms = AUTO_WINDOW_MS;  /* --window=MS: the --auto sample
@@ -7613,13 +7726,18 @@ int main(int argc, char **argv) {
         for (int i = 4; i < argc; i++) { /* [--json] [--tid=N] [--max=N]
                                           * [--module=M] [--sampler=S] [--window=MS]
                                           * [--record=F] [--steps] [--mem]
-                                          * [--fpregs] [--continuous], any order */
+                                          * [--blame] [--statediff] [--fpregs]
+                                          * [--continuous], any order */
             if (strcmp(argv[i], "--json") == 0)
                 json = 1;
             else if (strcmp(argv[i], "--steps") == 0)
                 steps = 1;
             else if (strcmp(argv[i], "--mem") == 0)
                 mem = 1;
+            else if (strcmp(argv[i], "--blame") == 0)
+                blame = 1;
+            else if (strcmp(argv[i], "--statediff") == 0)
+                statediff = 1;
             else if (strcmp(argv[i], "--fpregs") == 0)
                 fpregs = 1;
             else if (strcmp(argv[i], "--continuous") == 0)
@@ -7686,8 +7804,8 @@ int main(int argc, char **argv) {
                            "nothing)",
                            argv[3]);
         return cmd_dataflow(pid, argv[3], tid, max, json, auto_region, module,
-                            sampler, record, steps, mem, fpregs, continuous,
-                            window_ms);
+                            sampler, record, steps, mem, blame, statediff, fpregs,
+                            continuous, window_ms);
     }
     if (strcmp(argv[1], "--stream") == 0 && argc >= 3) {
         if (parse_pid(argv[2], &pid) != 0)
