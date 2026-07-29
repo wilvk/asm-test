@@ -1231,7 +1231,7 @@ capture time overrides the derivation). Two readings must never disagree, so a
 producer that emits `severity` MUST emit the tier its own honesty fields derive
 to. The rule is the same one `codeimage` states: a reader that gets it wrong is
 silently wrong. The reference mapper is
-[`honesty_severity`](../../../desktop/src/ui/honesty.h) — pure, derivable, and
+[`fidelity_severity`](../../../desktop/src/ui/fidelity.h) — pure, derivable, and
 pinned against the committed dishonesty fixtures
 ([tests/golden-asmtrace/dishonest/](../../../tests/golden-asmtrace/dishonest/)).
 

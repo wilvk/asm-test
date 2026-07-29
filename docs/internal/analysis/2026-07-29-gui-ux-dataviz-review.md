@@ -15,7 +15,7 @@ views ([slice](../../../desktop/src/views/slice_view_draw.cpp) /
 [capture flow](../../../desktop/src/live/session.cpp). The review is held to the
 app's own tested design language — the semantic palette
 ([ui/theme.h](../../../desktop/src/ui/theme.h)) and the graded honesty vocabulary
-([ui/honesty.h](../../../desktop/src/ui/honesty.h)).
+([ui/fidelity.h](../../../desktop/src/ui/fidelity.h)).
 
 **Method.** Eight reviewers each read one cluster of the *real draw code* and
 produced recommendations grounded in a file:line; an adversarial pass re-opened
@@ -41,7 +41,7 @@ published as an artifact: <https://claude.ai/code/artifact/77943c4c-0e96-4228-b7
 
 ## 1. Executive summary
 
-This is a mature, honesty-disciplined GUI: nearly every finding is a refinement inside an already-correct pure-model/draw-half split, not a broken invariant. Two patterns dominate the wins. First, the app repeatedly renders magnitude as a bare integer in sortable tables (canvas heat, hot-edge samples, topology cards, %CPU, completeness N/M, A/B heat deltas) — one shared in-cell-bar treatment, with the number kept as the second channel, is the single highest-leverage change and lands mostly draw-side. Second, the honesty grading in honesty.h is applied unevenly: ordinary data-shape absences and capture-property notes are painted in the same loud caution amber reserved for real truncation, diluting the signal, and one live path (a failed ssh host) actually renders a hidden failure as "Session ended cleanly" — a genuine D7 violation. Beyond those, the biggest structural gaps are wired-but-undiscoverable affordances (the palette/history in menus, the 3D camera controls, an interactive slice DAG, an unreachable Loom lane deck) and missing spatial anchoring in the Loom fabric and 3D scene (no playhead marker, no region hue on terrain, no pick preview). The flagship dead interaction is the Loom fork/take + Reweave overlay, fully built and tested but never consumed in-app.
+This is a mature, honesty-disciplined GUI: nearly every finding is a refinement inside an already-correct pure-model/draw-half split, not a broken invariant. Two patterns dominate the wins. First, the app repeatedly renders magnitude as a bare integer in sortable tables (canvas heat, hot-edge samples, topology cards, %CPU, completeness N/M, A/B heat deltas) — one shared in-cell-bar treatment, with the number kept as the second channel, is the single highest-leverage change and lands mostly draw-side. Second, the honesty grading in fidelity.h is applied unevenly: ordinary data-shape absences and capture-property notes are painted in the same loud caution amber reserved for real truncation, diluting the signal, and one live path (a failed ssh host) actually renders a hidden failure as "Session ended cleanly" — a genuine D7 violation. Beyond those, the biggest structural gaps are wired-but-undiscoverable affordances (the palette/history in menus, the 3D camera controls, an interactive slice DAG, an unreachable Loom lane deck) and missing spatial anchoring in the Loom fabric and 3D scene (no playhead marker, no region hue on terrain, no pick preview). The flagship dead interaction is the Loom fork/take + Reweave overlay, fully built and tested but never consumed in-app.
 
 ---
 
@@ -107,7 +107,7 @@ Each finding carries three tags and cites the file(s) it was verified against.
 
 ### 4.1 Honesty grading is applied unevenly
 
-*honesty.h defines a three-tier language (Neutral chip / Caution amber collapsible / Integrity red non-collapsible), but many sites paint every ordinary capture-property in one loud caution amber, diluting the real refusals two lines away — and worse, one supported path renders a hidden failure as success. The fix is to route each note through its true tier and make one buried failure loud.*
+*fidelity.h defines a three-tier language (Neutral chip / Caution amber collapsible / Integrity red non-collapsible), but many sites paint every ordinary capture-property in one loud caution amber, diluting the real refusals two lines away — and worse, one supported path renders a hidden failure as success. The fix is to route each note through its true tier and make one buried failure loud.*
 
 #### #7 Stop reporting a failed ssh/host connection as 'Session ended cleanly' ★
 
@@ -121,17 +121,17 @@ Each finding carries three tags and cites the file(s) it was verified against.
 
 `both` · **high** impact · medium effort — Observer deck — shared chrome_line() and per-invocation notes
 
-- **Today.** chrome_line() draws the whole provenance banner in one flat non-collapsible kWarn amber (observer_draw.cpp:157-163), so a torn recording and a merely-truncated one render at identical loudness; draw_obs_region likewise paints crawl_warning and jit_hint — normal capture properties honesty.h grades Neutral — in the same loud amber (610-613). This dilutes the real caution/integrity banners two lines up.
-- **Change.** In obs_chrome()/region compute the dominant HonestyTier from the discrete facts and store it; in the draw half route torn/drop-on-exact through draw_honesty_banner(Integrity, red, non-collapsible), truncated through draw_honesty_banner(Caution) with a per-view collapsed bool in ObserverState (one chrome_line serves all 8 tabs), and backend/statistical/crawl/JIT provenance through draw_honesty_chip(Neutral). Keeps basis_error red. Same regrade philosophy at both sites.
-- **Files.** `desktop/src/views/observer_draw.cpp` · `desktop/src/views/observer.cpp` · `desktop/src/ui/honesty.h` · `desktop/src/views/canvas_draw.cpp` · `desktop/src/views/region.cpp`
+- **Today.** chrome_line() draws the whole provenance banner in one flat non-collapsible kWarn amber (observer_draw.cpp:157-163), so a torn recording and a merely-truncated one render at identical loudness; draw_obs_region likewise paints crawl_warning and jit_hint — normal capture properties fidelity.h grades Neutral — in the same loud amber (610-613). This dilutes the real caution/integrity banners two lines up.
+- **Change.** In obs_chrome()/region compute the dominant FidelityTier from the discrete facts and store it; in the draw half route torn/drop-on-exact through draw_fidelity_banner(Integrity, red, non-collapsible), truncated through draw_fidelity_banner(Caution) with a per-view collapsed bool in ObserverState (one chrome_line serves all 8 tabs), and backend/statistical/crawl/JIT provenance through draw_fidelity_chip(Neutral). Keeps basis_error red. Same regrade philosophy at both sites.
+- **Files.** `desktop/src/views/observer_draw.cpp` · `desktop/src/views/observer.cpp` · `desktop/src/ui/fidelity.h` · `desktop/src/views/canvas_draw.cpp` · `desktop/src/views/region.cpp`
 
 #### #21 Grade unavailable-view reasons neutral, not amber
 
 `dataviz` · **medium** impact · small effort — Unavailable-views (N) affordance
 
-- **Today.** draw_unavailable_views pushes dt_warn_col (caution amber) for every absent view's reason (shell.cpp:1363 and the docked copy 2613-2614), but these are ordinary data-shape absences (no df_step, no second recording, no regstate ring) that honesty.h explicitly grades NEUTRAL — exactly the pre-honesty amber dilution the header was written to kill.
-- **Change.** Drop the PushStyleColor at both sites so the verbatim reason renders in neutral/TextDisabled style; keep amber only if a ViewPresence ever carries a genuinely Caution-tier reason. Cleanest is to add a HonestyTier to ViewPresence and pick color from it; minimal is the two-site color drop.
-- **Files.** `desktop/src/ui/shell.cpp` · `desktop/src/ui/honesty.h` · `desktop/src/ui/view_presence.cpp`
+- **Today.** draw_unavailable_views pushes dt_warn_col (caution amber) for every absent view's reason (shell.cpp:1363 and the docked copy 2613-2614), but these are ordinary data-shape absences (no df_step, no second recording, no regstate ring) that fidelity.h explicitly grades NEUTRAL — exactly the pre-honesty amber dilution the header was written to kill.
+- **Change.** Drop the PushStyleColor at both sites so the verbatim reason renders in neutral/TextDisabled style; keep amber only if a ViewPresence ever carries a genuinely Caution-tier reason. Cleanest is to add a FidelityTier to ViewPresence and pick color from it; minimal is the two-site color drop.
+- **Files.** `desktop/src/ui/shell.cpp` · `desktop/src/ui/fidelity.h` · `desktop/src/ui/view_presence.cpp`
 
 #### #28 Let 'Reveal every payload' be undone — add Hide all
 

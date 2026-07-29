@@ -1,12 +1,12 @@
 // canvas_draw.cpp — the ImGui half of the trace canvas + the ONE graded honesty
 // vocabulary's draw half (23-graded-truth-layer.md T1) + the uniform busy signal
-// (T4). Draws only; every grading rule is pure in ui/honesty.h / ui/progress.h.
+// (T4). Draws only; every grading rule is pure in ui/fidelity.h / ui/progress.h.
 #include <cfloat>
 
 #include "imgui.h"
 
 #include "IconsCodicons.h" // the ONE glyph set per tier (doc 13 F3 Codicons)
-#include "ui/honesty.h"
+#include "ui/fidelity.h"
 #include "ui/progress.h"
 #include "ui/theme.h"
 #include "views/views_draw.h"
@@ -22,13 +22,13 @@ namespace {
 // The ONE tier -> colour map (doc 24 T5.1's semantic accessors; NO new literals
 // here — F14/T5.1 owns that axis). Neutral is the quiet "maybe" tint (not the
 // caution amber), caution is the amber, integrity is the refusal red.
-ImVec4 tier_col(HonestyTier t) {
+ImVec4 tier_col(FidelityTier t) {
     switch (t) {
-    case HonestyTier::Neutral:
+    case FidelityTier::Neutral:
         return dt_maybe_col();
-    case HonestyTier::Caution:
+    case FidelityTier::Caution:
         return dt_warn_col();
-    case HonestyTier::Integrity:
+    case FidelityTier::Integrity:
         return dt_refuse_col();
     }
     return dt_maybe_col();
@@ -37,25 +37,25 @@ ImVec4 tier_col(HonestyTier t) {
 // The ONE tier -> glyph map: a Codicon per tier so the tier reads without colour
 // alone (24 T5.2's second channel). info / warning / error, the three the whole
 // app already understands.
-const char *tier_glyph(HonestyTier t) {
+const char *tier_glyph(FidelityTier t) {
     switch (t) {
-    case HonestyTier::Neutral:
+    case FidelityTier::Neutral:
         return ICON_CI_INFO;
-    case HonestyTier::Caution:
+    case FidelityTier::Caution:
         return ICON_CI_WARNING;
-    case HonestyTier::Integrity:
+    case FidelityTier::Integrity:
         return ICON_CI_ERROR;
     }
     return ICON_CI_INFO;
 }
 } // namespace
 
-void draw_honesty_banner(const char *text, HonestyTier tier, bool *collapsed) {
+void draw_fidelity_banner(const char *text, FidelityTier tier, bool *collapsed) {
     if (text == nullptr || *text == '\0')
         return;
     // Integrity NEVER collapses — the one signal that means "do not trust the
     // tail of this data" cannot be dismissed while the numbers below are wrong.
-    const bool may_collapse = tier != HonestyTier::Integrity && collapsed;
+    const bool may_collapse = tier != FidelityTier::Integrity && collapsed;
     ImGui::PushStyleColor(ImGuiCol_Text, tier_col(tier));
     if (may_collapse && *collapsed) {
         // The collapsed caution form IS the chip — same text, never gone (D7).
@@ -77,7 +77,7 @@ void draw_honesty_banner(const char *text, HonestyTier tier, bool *collapsed) {
     ImGui::Separator();
 }
 
-void draw_honesty_chip(const char *text, HonestyTier tier) {
+void draw_fidelity_chip(const char *text, FidelityTier tier) {
     if (text == nullptr || *text == '\0')
         return;
     // A chip is inline and quiet: a glyph + the text, no separator, no wrap-to-
@@ -106,8 +106,8 @@ void draw_command_hint(const char *id, const std::string &cmd) {
 void draw_banner(const char *text, bool refusal) {
     // The thin shim (T1 step 3): refusal -> integrity (loud, non-collapsible),
     // else -> caution (amber). The ten legacy sites route through here unchanged.
-    draw_honesty_banner(text, refusal ? HonestyTier::Integrity
-                                      : HonestyTier::Caution);
+    draw_fidelity_banner(text, refusal ? FidelityTier::Integrity
+                                      : FidelityTier::Caution);
 }
 
 void draw_progress(LongOp &op) {

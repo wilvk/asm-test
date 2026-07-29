@@ -1,4 +1,4 @@
-// honesty.h — the ONE graded honesty vocabulary, decided purely
+// fidelity.h — the ONE graded honesty vocabulary, decided purely
 // (docs/internal/gui/23-graded-truth-layer.md T1, F5).
 //
 // Before this, honesty chrome PROLIFERATED: a redaction placard, a statistical
@@ -22,13 +22,13 @@
 //                 capture (dropped-prefix -> UNKNOWN). A red banner, loud, and
 //                 NON-collapsible.
 //
-// Pure + header-only + ImGui-free (like progress.h), so honesty_severity() is
+// Pure + header-only + ImGui-free (like progress.h), so fidelity_severity() is
 // unit-tested against the committed dishonesty fixtures with no context (D4) and
 // the fixtures pin the grading. The `severity` schema field is DERIVABLE from the
-// existing honesty fields (see honesty_facts_of): a producer need not emit it,
+// existing honesty fields (see fidelity_facts_of): a producer need not emit it,
 // old recordings still grade, and when it IS present the reader honours it.
-#ifndef ASMDESK_UI_HONESTY_H
-#define ASMDESK_UI_HONESTY_H
+#ifndef ASMDESK_UI_FIDELITY_H
+#define ASMDESK_UI_FIDELITY_H
 
 #include <optional>
 #include <string>
@@ -39,18 +39,18 @@ namespace asmdesk {
 
 // The three graded tiers, ordered by loudness so tier arithmetic (max) is just
 // integer comparison — a recording's DOMINANT tier is the loudest active signal.
-enum class HonestyTier { Neutral = 0, Caution = 1, Integrity = 2 };
+enum class FidelityTier { Neutral = 0, Caution = 1, Integrity = 2 };
 
 // The wire spelling of the derivable `severity` field (asmtrace-schema.md). This
 // is the ONE table mapping tier <-> string, so the schema, the parser and the
 // renderer cannot drift.
-inline const char *honesty_tier_name(HonestyTier t) {
+inline const char *fidelity_tier_name(FidelityTier t) {
     switch (t) {
-    case HonestyTier::Neutral:
+    case FidelityTier::Neutral:
         return "neutral";
-    case HonestyTier::Caution:
+    case FidelityTier::Caution:
         return "caution";
-    case HonestyTier::Integrity:
+    case FidelityTier::Integrity:
         return "integrity";
     }
     return "neutral";
@@ -60,20 +60,20 @@ inline const char *honesty_tier_name(HonestyTier t) {
 // after first read — its text is unchanged, so it is never gone (D7). An INTEGRITY
 // banner NEVER collapses (the refusal path was always non-dismissable); a NEUTRAL
 // signal is already a minimal chip with nothing to collapse.
-inline bool honesty_tier_collapsible(HonestyTier t) {
-    return t == HonestyTier::Caution;
+inline bool fidelity_tier_collapsible(FidelityTier t) {
+    return t == FidelityTier::Caution;
 }
 
 // The NON-colour second channel (24 T5.2's rule): a short word the tier reads by,
 // so the grade never rides on colour alone. Paired with a per-tier glyph in the
 // draw half (canvas_draw.cpp).
-inline const char *honesty_tier_token(HonestyTier t) {
+inline const char *fidelity_tier_token(FidelityTier t) {
     switch (t) {
-    case HonestyTier::Neutral:
+    case FidelityTier::Neutral:
         return "note";
-    case HonestyTier::Caution:
+    case FidelityTier::Caution:
         return "caution";
-    case HonestyTier::Integrity:
+    case FidelityTier::Integrity:
         return "integrity";
     }
     return "note";
@@ -82,13 +82,13 @@ inline const char *honesty_tier_token(HonestyTier t) {
 // Parse the optional wire `severity` string. Unknown / empty -> nullopt (a reader
 // then derives the tier from the honesty facts, so an old or partial recording
 // still grades). Never guesses a tier from a malformed value.
-inline std::optional<HonestyTier> honesty_tier_from_wire(const std::string &s) {
+inline std::optional<FidelityTier> fidelity_tier_from_wire(const std::string &s) {
     if (s == "neutral")
-        return HonestyTier::Neutral;
+        return FidelityTier::Neutral;
     if (s == "caution")
-        return HonestyTier::Caution;
+        return FidelityTier::Caution;
     if (s == "integrity")
-        return HonestyTier::Integrity;
+        return FidelityTier::Integrity;
     return std::nullopt;
 }
 
@@ -96,7 +96,7 @@ inline std::optional<HonestyTier> honesty_tier_from_wire(const std::string &s) {
 // schema already carries; the tier is DERIVED from them, never a truth of its
 // own. A caller that has a fact the Recording model does not expose (a mixed
 // basis from the canvas, a coarse rung, a bounded window) sets it here directly.
-struct HonestyFacts {
+struct FidelityFacts {
     bool torn = false;          // no `end` footer -> a torn recording (integrity)
     bool truncated = false;     // end.truncated with a usable prefix (caution)
     bool statistical = false;   // trust:"statistical" / !exact (neutral)
@@ -109,9 +109,9 @@ struct HonestyFacts {
     bool coarse = false;        // coarse-provenance rung (neutral)
 
     // The parsed wire `severity`, when the producer emitted one. Present ->
-    // honesty_severity honours it verbatim; absent -> the tier is derived. This
+    // fidelity_severity honours it verbatim; absent -> the tier is derived. This
     // is what makes the field additive and derivable (D5 / schema append-only).
-    std::optional<HonestyTier> declared;
+    std::optional<FidelityTier> declared;
 };
 
 // The DOMINANT tier for a recording's chrome: the loudest active signal, or the
@@ -119,14 +119,14 @@ struct HonestyFacts {
 // addresses become UNKNOWN); a drop on a STATISTICAL survey is neutral (sampling
 // drops are expected and the survey never claimed completeness), so `dropped`
 // only raises the tier when the capture was exact.
-inline HonestyTier honesty_severity(const HonestyFacts &f) {
+inline FidelityTier fidelity_severity(const FidelityFacts &f) {
     if (f.declared)
         return *f.declared;
     if (f.torn || f.basis_error || (f.dropped && !f.statistical))
-        return HonestyTier::Integrity;
+        return FidelityTier::Integrity;
     if (f.truncated || f.paused_dropped)
-        return HonestyTier::Caution;
-    return HonestyTier::Neutral;
+        return FidelityTier::Caution;
+    return FidelityTier::Neutral;
 }
 
 // The tier of ONE signal in isolation, so a view can render each honesty field at
@@ -134,7 +134,7 @@ inline HonestyTier honesty_severity(const HonestyFacts &f) {
 // the survey and — because it is statistical — still a neutral drop record, never
 // hidden: D7). `dropped_on_exact` distinguishes the integrity drop from the
 // expected statistical one.
-enum class HonestySignal {
+enum class FidelitySignal {
     Torn,
     Truncated,
     Statistical,
@@ -147,17 +147,17 @@ enum class HonestySignal {
     BoundedWindow,
     Coarse,
 };
-inline HonestyTier honesty_signal_tier(HonestySignal s) {
+inline FidelityTier fidelity_signal_tier(FidelitySignal s) {
     switch (s) {
-    case HonestySignal::Torn:
-    case HonestySignal::BasisError:
-    case HonestySignal::DroppedExact:
-        return HonestyTier::Integrity;
-    case HonestySignal::Truncated:
-    case HonestySignal::PausedDropped:
-        return HonestyTier::Caution;
+    case FidelitySignal::Torn:
+    case FidelitySignal::BasisError:
+    case FidelitySignal::DroppedExact:
+        return FidelityTier::Integrity;
+    case FidelitySignal::Truncated:
+    case FidelitySignal::PausedDropped:
+        return FidelityTier::Caution;
     default:
-        return HonestyTier::Neutral;
+        return FidelityTier::Neutral;
     }
 }
 
@@ -166,8 +166,8 @@ inline HonestyTier honesty_signal_tier(HonestySignal s) {
 // producer emitted one, the optional `severity` string off the provenance object
 // (provenance.raw), which then OVERRIDES the derivation. Additive: a recording
 // with no `severity` field grades exactly as before.
-inline HonestyFacts honesty_facts_of(const Recording &r) {
-    HonestyFacts f;
+inline FidelityFacts fidelity_facts_of(const Recording &r) {
+    FidelityFacts f;
     f.torn = r.torn;
     f.truncated = r.end_truncated && !r.torn; // torn is louder; do not double-count
     f.statistical = r.statistical();
@@ -178,9 +178,9 @@ inline HonestyFacts honesty_facts_of(const Recording &r) {
     if (r.provenance.raw.is_object() && r.provenance.raw.contains("severity") &&
         r.provenance.raw["severity"].is_string())
         f.declared =
-            honesty_tier_from_wire(r.provenance.raw["severity"].get<std::string>());
+            fidelity_tier_from_wire(r.provenance.raw["severity"].get<std::string>());
     return f;
 }
 
 } // namespace asmdesk
-#endif // ASMDESK_UI_HONESTY_H
+#endif // ASMDESK_UI_FIDELITY_H

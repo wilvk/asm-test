@@ -407,7 +407,7 @@ equally loud and non-collapsible, so the one signal that means *"do not trust th
 tail of this data"* drowned among four that mean *"this is normal"* (F5). It is
 now **one banner, one inline chip, one glyph set**, graded into three tiers whose
 loudness follows the schema's own severity gradient (23 T1). The pure grader is
-[`ui/honesty.h`](src/ui/honesty.h) (`honesty_severity`), pinned against the
+[`ui/fidelity.h`](src/ui/fidelity.h) (`fidelity_severity`), pinned against the
 committed dishonesty fixtures; the tier's colours come from the semantic palette
 above (no new literals), and each tier also carries a **Codicon glyph + a text
 token**, so the tier never rides on colour alone.
@@ -418,8 +418,8 @@ token**, so the tier never rides on colour alone.
 | **caution** | truncated-but-usable · paused gap | **banner** (pane-top) | `dt_warn` amber | to its chip after first read (never gone) |
 | **integrity** | torn (no `end`) · mixed-basis refusal · a drop on an EXACT capture | **banner** (pane-top), loud | `dt_refuse` red | **never** |
 
-**Placement is enforced by the API**, not by discipline: `draw_honesty_banner`
-is the pane-top placard a pane calls at the top, `draw_honesty_chip` is the inline
+**Placement is enforced by the API**, not by discipline: `draw_fidelity_banner`
+is the pane-top placard a pane calls at the top, `draw_fidelity_chip` is the inline
 mark a header calls — so a T3 integrity signal cannot be placed as a quiet chip.
 The grading **restructures, it removes no truth** (D7): every honesty field still
 renders, a statistical survey that dropped still surfaces its `lost`/`throttled`

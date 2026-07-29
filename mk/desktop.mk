@@ -475,8 +475,8 @@ $(BUILD)/desktop/test/t/test_golden.o:    DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_
 # test_theme's source-lint (24 T1) reads the drift files straight from the tree,
 # so it needs the source root as a compile define (it runs from the repo root).
 $(BUILD)/desktop/test/t/test_theme.o:     DESKTOP_TEST_EXTRA = -DASMTEST_DESKTOP_SRC_DIR='"desktop/src"'
-# test_honesty (23 T1) loads the committed dishonesty fixtures from the corpus.
-$(BUILD)/desktop/test/t/test_honesty.o:   DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
+# test_fidelity (23 T1) loads the committed dishonesty fixtures from the corpus.
+$(BUILD)/desktop/test/t/test_fidelity.o:   DESKTOP_TEST_EXTRA = -DASMTEST_GOLDEN_DIR='"tests/golden-asmtrace"'
 $(BUILD)/desktop/test/t/test_live_session.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_inspect.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
 $(BUILD)/desktop/test/t/test_converge.o: DESKTOP_TEST_EXTRA = -DASMTEST_FIXTURE_DIR='"desktop/test/fixtures"'
@@ -1010,7 +1010,7 @@ DESKTOP_TESTS := $(BUILD)/desktop_test_null $(BUILD)/desktop_test_recording \
                  $(BUILD)/desktop_test_ictedit \
                  $(BUILD)/desktop_test_asm_language \
                  $(BUILD)/desktop_test_theme \
-                 $(BUILD)/desktop_test_honesty \
+                 $(BUILD)/desktop_test_fidelity \
                  $(BUILD)/desktop_test_progress \
                  $(BUILD)/desktop_test_cvd \
                  $(BUILD)/desktop_test_terms \
@@ -1543,7 +1543,7 @@ $(BUILD)/desktop_test_completeness_view: \
 # against the committed dishonesty fixtures + the graded chrome (banner/chip/glyph)
 # drawing under the null backend. Links canvas_draw.o (the components), the doc
 # model (to load the fixtures) and imgui — no engine, no GL.
-$(BUILD)/desktop_test_honesty: $(BUILD)/desktop/test/t/test_honesty.o \
+$(BUILD)/desktop_test_fidelity: $(BUILD)/desktop/test/t/test_fidelity.o \
     $(BUILD)/desktop/test/vw/canvas_draw.o $(DESKTOP_TEST_DOC) $(DESKTOP_TEST_IG)
 	$(CXX) $(DESKTOP_CXXFLAGS) $^ -o $@
 

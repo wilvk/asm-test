@@ -1,7 +1,7 @@
-// test_honesty.cpp — the ONE graded honesty vocabulary (23-graded-truth-layer.md
+// test_fidelity.cpp — the ONE graded honesty vocabulary (23-graded-truth-layer.md
 // T1, F5). Model state, not pixels (D4/D7).
 //
-// The load-bearing test: honesty_severity() grades the committed deliberate-
+// The load-bearing test: fidelity_severity() grades the committed deliberate-
 // dishonesty fixtures (tests/golden-asmtrace/dishonest/*) into the RIGHT tier, so
 // the grading is pinned against the same fixtures the whole honesty layer is. The
 // grading must RESTRUCTURE, never remove: a neutral tier for a statistical/
@@ -13,7 +13,7 @@
 #include "imgui.h"
 
 #include "doc/recording.h"
-#include "ui/honesty.h"
+#include "ui/fidelity.h"
 #include "views/views_draw.h"
 
 #ifndef ASMTEST_GOLDEN_DIR
@@ -42,7 +42,7 @@ static Recording load(const std::string &name) {
     return *r;
 }
 
-static const char *tname(HonestyTier t) { return honesty_tier_name(t); }
+static const char *tname(FidelityTier t) { return fidelity_tier_name(t); }
 
 int main() {
     // --- the four dishonesty fixtures grade into the right tier ---------------
@@ -50,8 +50,8 @@ int main() {
         // torn.asmtrace: no `end` footer -> INTEGRITY (loud, non-collapsible).
         Recording r = load("torn.asmtrace");
         check("torn/is-torn", r.torn, "the fixture must load torn");
-        HonestyTier t = honesty_severity(honesty_facts_of(r));
-        check("torn/integrity", t == HonestyTier::Integrity,
+        FidelityTier t = fidelity_severity(fidelity_facts_of(r));
+        check("torn/integrity", t == FidelityTier::Integrity,
               std::string("torn graded ") + tname(t) + ", want integrity");
     }
     {
@@ -59,8 +59,8 @@ int main() {
         Recording r = load("truncated.asmtrace");
         check("trunc/flag", r.end_truncated && !r.torn,
               "the fixture must load truncated-but-not-torn");
-        HonestyTier t = honesty_severity(honesty_facts_of(r));
-        check("trunc/caution", t == HonestyTier::Caution,
+        FidelityTier t = fidelity_severity(fidelity_facts_of(r));
+        check("trunc/caution", t == FidelityTier::Caution,
               std::string("truncated graded ") + tname(t) + ", want caution");
     }
     {
@@ -68,8 +68,8 @@ int main() {
         // NEUTRAL (a policy choice, not a data-integrity breach).
         Recording r = load("redacted.asmtrace");
         check("red/flag", r.provenance.redacted, "the fixture must load redacted");
-        HonestyTier t = honesty_severity(honesty_facts_of(r));
-        check("red/neutral", t == HonestyTier::Neutral,
+        FidelityTier t = fidelity_severity(fidelity_facts_of(r));
+        check("red/neutral", t == FidelityTier::Neutral,
               std::string("redacted graded ") + tname(t) + ", want neutral");
     }
     {
@@ -81,8 +81,8 @@ int main() {
         check("drop/statistical", r.statistical(),
               "the survey fixture must be statistical");
         check("drop/dropped", r.dropped(), "the fixture dropped samples");
-        HonestyTier t = honesty_severity(honesty_facts_of(r));
-        check("drop/neutral", t == HonestyTier::Neutral,
+        FidelityTier t = fidelity_severity(fidelity_facts_of(r));
+        check("drop/neutral", t == FidelityTier::Neutral,
               std::string("statistical dropped graded ") + tname(t) +
                   ", want neutral");
         // The drop is still surfaced (D7): the fact survives the neutral grade.
@@ -90,104 +90,104 @@ int main() {
               "the lost/throttled drop record must still be present");
         // A drop on an EXACT capture WOULD be integrity — the tier turns on
         // exactness, not on the drop alone.
-        HonestyFacts exact_drop;
+        FidelityFacts exact_drop;
         exact_drop.dropped = true;
         exact_drop.statistical = false;
         check("drop/exact-is-integrity",
-              honesty_severity(exact_drop) == HonestyTier::Integrity,
+              fidelity_severity(exact_drop) == FidelityTier::Integrity,
               "a drop on an EXACT capture makes its addresses UNKNOWN -> "
               "integrity");
     }
 
     // --- a skip=success grades NEUTRAL, never caution/integrity (schema:98) ----
     {
-        HonestyFacts skip;
+        FidelityFacts skip;
         skip.has_skip = true;
-        check("skip/neutral", honesty_severity(skip) == HonestyTier::Neutral,
+        check("skip/neutral", fidelity_severity(skip) == FidelityTier::Neutral,
               "a skip is a successful session with nothing to report");
         // A statistical capture, on its own, is neutral too.
-        HonestyFacts stat;
+        FidelityFacts stat;
         stat.statistical = true;
-        check("stat/neutral", honesty_severity(stat) == HonestyTier::Neutral,
+        check("stat/neutral", fidelity_severity(stat) == FidelityTier::Neutral,
               "statistical alone is a caveat, not a caution/integrity breach");
         // A bounded window and a coarse rung are neutral.
-        HonestyFacts win;
+        FidelityFacts win;
         win.bounded_window = true;
         win.coarse = true;
         check("neutral/window-coarse",
-              honesty_severity(win) == HonestyTier::Neutral,
+              fidelity_severity(win) == FidelityTier::Neutral,
               "bounded window / coarse rung grade neutral");
     }
 
     // --- the dominant tier is the loudest active signal -----------------------
     {
-        HonestyFacts mixed; // statistical (neutral) + truncated (caution)
+        FidelityFacts mixed; // statistical (neutral) + truncated (caution)
         mixed.statistical = true;
         mixed.truncated = true;
         check("dominant/caution",
-              honesty_severity(mixed) == HonestyTier::Caution,
+              fidelity_severity(mixed) == FidelityTier::Caution,
               "caution dominates a neutral statistical caveat");
         mixed.torn = true; // + torn (integrity)
         check("dominant/integrity",
-              honesty_severity(mixed) == HonestyTier::Integrity,
+              fidelity_severity(mixed) == FidelityTier::Integrity,
               "integrity dominates every lower tier");
     }
 
     // --- the derivable `severity` field: parsed when present, else derived -----
     {
         check("wire/parse-neutral",
-              honesty_tier_from_wire("neutral") == HonestyTier::Neutral,
+              fidelity_tier_from_wire("neutral") == FidelityTier::Neutral,
               "the wire string parses");
         check("wire/parse-integrity",
-              honesty_tier_from_wire("integrity") == HonestyTier::Integrity, "");
-        check("wire/unknown-nullopt", !honesty_tier_from_wire("bogus"),
+              fidelity_tier_from_wire("integrity") == FidelityTier::Integrity, "");
+        check("wire/unknown-nullopt", !fidelity_tier_from_wire("bogus"),
               "an unknown severity never guesses a tier");
         // A declared wire tier OVERRIDES the derivation (additive + honoured).
-        HonestyFacts f;
+        FidelityFacts f;
         f.torn = true;                        // would derive integrity
-        f.declared = HonestyTier::Neutral;    // but the producer said neutral
-        check("wire/override", honesty_severity(f) == HonestyTier::Neutral,
+        f.declared = FidelityTier::Neutral;    // but the producer said neutral
+        check("wire/override", fidelity_severity(f) == FidelityTier::Neutral,
               "a present `severity` field is honoured verbatim");
         // Round-trip the names.
-        for (HonestyTier t : {HonestyTier::Neutral, HonestyTier::Caution,
-                              HonestyTier::Integrity})
-            check("wire/roundtrip", honesty_tier_from_wire(honesty_tier_name(t)) == t,
+        for (FidelityTier t : {FidelityTier::Neutral, FidelityTier::Caution,
+                              FidelityTier::Integrity})
+            check("wire/roundtrip", fidelity_tier_from_wire(fidelity_tier_name(t)) == t,
                   "name round-trip");
     }
 
     // --- collapsibility: T3 non-collapsible, T2 collapses, T1 is a chip --------
     {
         check("collapse/integrity-never",
-              !honesty_tier_collapsible(HonestyTier::Integrity),
+              !fidelity_tier_collapsible(FidelityTier::Integrity),
               "an integrity banner must never collapse");
         check("collapse/caution-yes",
-              honesty_tier_collapsible(HonestyTier::Caution),
+              fidelity_tier_collapsible(FidelityTier::Caution),
               "a caution banner collapses to its chip after first read");
         check("collapse/neutral-no",
-              !honesty_tier_collapsible(HonestyTier::Neutral),
+              !fidelity_tier_collapsible(FidelityTier::Neutral),
               "a neutral signal is already a chip, nothing to collapse");
     }
 
     // --- per-signal tiers ------------------------------------------------------
     {
-        check("sig/torn", honesty_signal_tier(HonestySignal::Torn) ==
-                              HonestyTier::Integrity, "");
-        check("sig/basis", honesty_signal_tier(HonestySignal::BasisError) ==
-                               HonestyTier::Integrity, "");
+        check("sig/torn", fidelity_signal_tier(FidelitySignal::Torn) ==
+                              FidelityTier::Integrity, "");
+        check("sig/basis", fidelity_signal_tier(FidelitySignal::BasisError) ==
+                               FidelityTier::Integrity, "");
         check("sig/dropped-exact",
-              honesty_signal_tier(HonestySignal::DroppedExact) ==
-                  HonestyTier::Integrity, "");
-        check("sig/truncated", honesty_signal_tier(HonestySignal::Truncated) ==
-                                   HonestyTier::Caution, "");
-        check("sig/paused", honesty_signal_tier(HonestySignal::PausedDropped) ==
-                                HonestyTier::Caution, "");
+              fidelity_signal_tier(FidelitySignal::DroppedExact) ==
+                  FidelityTier::Integrity, "");
+        check("sig/truncated", fidelity_signal_tier(FidelitySignal::Truncated) ==
+                                   FidelityTier::Caution, "");
+        check("sig/paused", fidelity_signal_tier(FidelitySignal::PausedDropped) ==
+                                FidelityTier::Caution, "");
         check("sig/dropped-stat",
-              honesty_signal_tier(HonestySignal::DroppedStatistical) ==
-                  HonestyTier::Neutral, "");
-        check("sig/redacted", honesty_signal_tier(HonestySignal::Redacted) ==
-                                  HonestyTier::Neutral, "");
-        check("sig/skip", honesty_signal_tier(HonestySignal::Skip) ==
-                              HonestyTier::Neutral, "");
+              fidelity_signal_tier(FidelitySignal::DroppedStatistical) ==
+                  FidelityTier::Neutral, "");
+        check("sig/redacted", fidelity_signal_tier(FidelitySignal::Redacted) ==
+                                  FidelityTier::Neutral, "");
+        check("sig/skip", fidelity_signal_tier(FidelitySignal::Skip) ==
+                              FidelityTier::Neutral, "");
     }
 
     // --- the graded chrome components draw headlessly (null backend) -----------
@@ -204,13 +204,13 @@ int main() {
 
         ImGui::NewFrame();
         ImGui::Begin("honesty");
-        draw_honesty_chip("statistical survey", HonestyTier::Neutral);
+        draw_fidelity_chip("statistical survey", FidelityTier::Neutral);
         bool collapsed = false;
-        draw_honesty_banner("truncated but usable", HonestyTier::Caution,
+        draw_fidelity_banner("truncated but usable", FidelityTier::Caution,
                             &collapsed);
         // An integrity banner ignores the collapsed bit entirely.
         bool ignored = true;
-        draw_honesty_banner("TORN — do not trust the tail", HonestyTier::Integrity,
+        draw_fidelity_banner("TORN — do not trust the tail", FidelityTier::Integrity,
                             &ignored);
         ImGui::End();
         ImGui::Render();
@@ -221,9 +221,9 @@ int main() {
     }
 
     if (failures) {
-        std::fprintf(stderr, "test_honesty: %d FAILURE(S)\n", failures);
+        std::fprintf(stderr, "test_fidelity: %d FAILURE(S)\n", failures);
         return 1;
     }
-    std::printf("test_honesty: all checks passed\n");
+    std::printf("test_fidelity: all checks passed\n");
     return 0;
 }

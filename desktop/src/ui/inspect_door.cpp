@@ -18,7 +18,7 @@
 #include "live/end_state.h"  // end_cause — the session-end placard (23 T2)
 #include "ui/doors.h"
 #include "ui/filter.h"   // dt_filter_bar / dt_filter_match — searchable procs (24 T4)
-#include "ui/honesty.h"  // the graded honesty vocabulary (23 T1)
+#include "ui/fidelity.h"  // the graded honesty vocabulary (23 T1)
 #include "ui/progress.h"
 #include "ui/theme.h"
 #include "views/views_draw.h"
@@ -315,7 +315,7 @@ void draw_status(InspectState &s) {
         char buf[512];
         std::snprintf(buf, sizeof buf, "skipped (%d): %s", st.skip_code,
                       st.skip_reason.c_str());
-        draw_honesty_chip(buf, HonestyTier::Neutral);
+        draw_fidelity_chip(buf, FidelityTier::Neutral);
         // A perf-gated skip (IBS/sampler: "needs perf_event_paranoid<=2 ...")
         // carries the sysctl fix; a plain idle-window skip carries none.
         draw_command_hint("skip-cmd", remedy_command(st.skip_reason));
@@ -327,13 +327,13 @@ void draw_status(InspectState &s) {
                       "%llu event(s) dropped while paused — this recording is "
                       "truncated (usable, but incomplete)",
                       (unsigned long long)st.paused_dropped);
-        draw_honesty_chip(buf, HonestyTier::Caution);
+        draw_fidelity_chip(buf, FidelityTier::Caution);
     }
     if (s.session.malformed_lines()) {
         char buf[128];
         std::snprintf(buf, sizeof buf, "%llu unparseable line(s) from the host",
                       (unsigned long long)s.session.malformed_lines());
-        draw_honesty_chip(buf, HonestyTier::Caution);
+        draw_fidelity_chip(buf, FidelityTier::Caution);
     }
 
     // What --auto chose, and on what evidence. The weaker label is not
@@ -386,9 +386,9 @@ void draw_status(InspectState &s) {
     // — a torn capture is the one signal that means "do not trust the tail".
     for (const Recording &r : s.session.recordings())
         if (r.torn)
-            draw_honesty_banner("TORN recording — the host stopped before "
+            draw_fidelity_banner("TORN recording — the host stopped before "
                                 "writing its footer; this capture is incomplete",
-                                HonestyTier::Integrity);
+                                FidelityTier::Integrity);
 
     // The persistent, cause-distinguished END-OF-SESSION placard (23 T2, F20).
     // Co-located with the last events, it fans the single collapsed `Ended` into
@@ -399,10 +399,10 @@ void draw_status(InspectState &s) {
     if (st.state == LiveState::Ended) {
         EndCause cause = end_cause(end_facts_of(s.session));
         ImGui::SeparatorText(end_cause_title(cause));
-        HonestyTier tier = end_cause_is_integrity(cause) ? HonestyTier::Integrity
-                                                         : HonestyTier::Neutral;
+        FidelityTier tier = end_cause_is_integrity(cause) ? FidelityTier::Integrity
+                                                         : FidelityTier::Neutral;
         std::string msg = end_cause_message(cause);
-        draw_honesty_banner(msg.c_str(), tier);
+        draw_fidelity_banner(msg.c_str(), tier);
         std::string fix = end_cause_fix(cause);
         if (!fix.empty()) {
             ImGui::PushStyleColor(ImGuiCol_Text, kGood);
@@ -692,7 +692,7 @@ void draw_patch_bay(InspectState &s) {
                       "Queued: %s will start automatically when the %s jack "
                       "frees",
                       mode_name(s.queued_want), mode_name(d.blocker));
-        draw_honesty_chip(chip, HonestyTier::Neutral);
+        draw_fidelity_chip(chip, FidelityTier::Neutral);
         ImGui::SameLine();
         if (ImGui::SmallButton("Cancel queue"))
             s.has_queued = false;

@@ -13,7 +13,7 @@
 #include <string>
 
 #include "nav.h"
-#include "ui/honesty.h" // HonestyTier — the ONE graded honesty vocabulary (23 T1)
+#include "ui/fidelity.h" // FidelityTier — the ONE graded honesty vocabulary (23 T1)
 #include "ui/progress.h" // LongOp — the uniform busy signal (23 T4)
 #include "views/canvas.h"
 #include "views/diff_view.h"
@@ -37,13 +37,13 @@ namespace asmdesk {
 // chip after first read (the caller passes/owns `collapsed`); an integrity banner
 // NEVER collapses (`collapsed` is ignored for it) — exactly as the refusal path
 // was always non-dismissable. `collapsed` may be null (never collapses).
-void draw_honesty_banner(const char *text, HonestyTier tier,
+void draw_fidelity_banner(const char *text, FidelityTier tier,
                          bool *collapsed = nullptr);
 
 // The quiet inline chip (stream-header contract): a neutral honesty mark that
 // sits on a header row without a banner's weight. A T1 signal (skip, statistical,
 // redacted, coarse, bounded) renders as this, never as an amber banner.
-void draw_honesty_chip(const char *text, HonestyTier tier);
+void draw_fidelity_chip(const char *text, FidelityTier tier);
 
 // The copyable terminal-command hint: one rung more concrete than a "-> remedy"
 // line. When an action is gated behind a command the app cannot run itself

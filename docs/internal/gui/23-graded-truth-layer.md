@@ -1,18 +1,18 @@
 # Wave 3: restructure the truth layer — graded honesty tiers, session-end placard, split paused, progress everywhere — implementation
 
 > **LANDED 2026-07-27 (T1–T4, all four tasks).** T1: the ONE graded honesty
-> vocabulary (`ui/honesty.h` grader + `draw_honesty_banner`/`draw_honesty_chip` +
+> vocabulary (`ui/fidelity.h` grader + `draw_fidelity_banner`/`draw_fidelity_chip` +
 > a Codicon glyph per tier) over a **derivable `severity` schema field** landed
 > under doc 01's append-only rule with **01-owner sign-off recorded in
 > `asmtrace-schema.md`** (the Phase-3-freeze checkpoint, D5) — the field is
-> derivable, additive, and gates no truth off (D7); `test_honesty` pins the three
+> derivable, additive, and gates no truth off (D7); `test_fidelity` pins the three
 > tiers against the committed dishonesty fixtures. T2: the persistent,
 > cause-distinguished session-end placard (`live/end_state.h` `end_cause`) with the
 > verbatim protocol-mismatch fix; toasts supplement, never replace. T3: "paused"
 > split into "PAUSED (you) — Resume" vs "BLOCKED — jack held by …" with explicit
 > Swap/Queue/Cancel and no auto-swap. T4: `progress.h` generalised to a `LongOp`
 > (elapsed + Cancel + honest mode) with a degrade-to-coarse 3D scrub. Tests:
-> `test_honesty`, `test_progress`, `test_terrain` (coarse_slice), `test_budget`
+> `test_fidelity`, `test_progress`, `test_terrain` (coarse_slice), `test_budget`
 > (queue + BLOCKED label), `test_inspect` (patch-bay split), `test_live_session`
 > (end_cause). All green on the host `make desktop desktop-render desktop-test`.
 
@@ -189,13 +189,13 @@ fix is loudness, not suppression (D7).
    `codeimage`/`stitch` additions were, schema:657) — do not merge the render
    half until that sign-off exists. State plainly in the schema note: the field
    *grades* honesty, it does not gate any truth off.
-2. **A pure severity mapper.** Write `honesty_severity()` in a new header-only
-   `ui/honesty.h` (ImGui-free, like `progress.h`): given the honesty facts of a
+2. **A pure severity mapper.** Write `fidelity_severity()` in a new header-only
+   `ui/fidelity.h` (ImGui-free, like `progress.h`): given the honesty facts of a
    recording/stream (or the parsed `severity` when present), return the tier
    enum. This is the part that must be unit-testable without a context (D4) and
    the part the fixtures pin.
 3. **The fixed chrome components.** In `views_draw.h`/`canvas_draw.cpp` add,
-   beside `draw_banner`, a `draw_honesty_chip(text, tier)` (the quiet inline chip
+   beside `draw_banner`, a `draw_fidelity_chip(text, tier)` (the quiet inline chip
    for T1) and generalise the banner to take a **tier** rather than the `refusal`
    bool — keep the current signature as a thin shim (`refusal ? integrity :
    caution`) so the ten call sites migrate incrementally. Add **one glyph set**
@@ -206,7 +206,7 @@ fix is loudness, not suppression (D7).
 4. **Mandated placement.** Banner → pane-top (the full-pane placard contract
    `draw_canvas` already follows, canvas_draw.cpp:24-28). Chip → on the stream
    header row. Encode the contract in the component API (a `draw_banner` that a
-   pane calls at top; a `draw_honesty_chip` a header calls inline) so a caller
+   pane calls at top; a `draw_fidelity_chip` a header calls inline) so a caller
    cannot place a T3 integrity banner as a chip.
 5. **T2 collapse-after-read.** The caution banner collapses to its chip after
    first read — hold the collapsed/expanded bit in the *view-model* (not ImGui id
@@ -217,8 +217,8 @@ fix is loudness, not suppression (D7).
    the graded components so no view hand-rolls a placard. A `skip` becomes a T1
    chip (schema:544 — a successful session), not an amber banner.
 
-**Tests.** `desktop/test/test_honesty.cpp` (new): load each
-`tests/golden-asmtrace/dishonest/*.asmtrace` fixture and assert `honesty_severity()`
+**Tests.** `desktop/test/test_fidelity.cpp` (new): load each
+`tests/golden-asmtrace/dishonest/*.asmtrace` fixture and assert `fidelity_severity()`
 grades it into the right tier — `torn`→integrity, `truncated`→caution,
 `redacted`→neutral, `dropped`(statistical)→neutral chip **plus** its `lost`/
 `throttled` drop record still surfaced (D7: the drop is not hidden by being
@@ -238,7 +238,7 @@ placement contract. Cross-note doc 24 T5.1 (tier colours) and doc 16 (toasts map
 to tiers).
 
 **Done when.** the `severity` field is in the schema with 01 owner sign-off and
-is derivable for old recordings; `honesty_severity()` grades all four dishonesty
+is derivable for old recordings; `fidelity_severity()` grades all four dishonesty
 fixtures into the right tier and a `skip` grades neutral; the fixed vocabulary
 (one banner, one chip, one glyph set) is the only honesty chrome and its
 placement is enforced by the API; T3 is non-collapsible and no truth was removed
@@ -472,7 +472,7 @@ no-fabricated-total honesty rule still holds; `make desktop-test` green.
   percentage.
 - **Headlessly testable (D4).** Every task asserts **model state, not pixels**,
   on the null backend under `make desktop-test`; the pure decision halves
-  (`honesty_severity`, `end_cause`, the budget/queue predicates,
+  (`fidelity_severity`, `end_cause`, the budget/queue predicates,
   `should_degrade`) are header-testable without an ImGui context. Any genuine
   interaction step (a Swap/Queue click flow) may use the doc 17 T1
   `make desktop-ui-test` engine lane, but the states themselves are model-checked.
