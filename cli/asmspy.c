@@ -2546,22 +2546,49 @@ static int auto_resolve_sym(void *ctx, uint64_t addr, uint64_t *start,
     return 0;
 }
 
-/* Sample the target OUT OF BAND, rank the entry arrivals, and hand back the
- * winner's (base,len). Returns 0 on a pick, <0 for a clean self-skip (no IBS
- * substrate / perf refused), >0 when the sampler ran but nothing qualified.
- *
- * This is the ADAPTER, and it is deliberately thin: everything that can be WRONG
- * about the choice lives in asmspy_autoregion_rank, which is pure and unit-tested
- * on every host (cli/test_autoregion.c). The sampler underneath is AMD IBS-Op
- * hardware and self-skips elsewhere — so keeping this function to "drain the
- * window, call the picker" is what stops the feature's correctness from depending
- * on a lane most machines cannot run. */
 #define AUTO_WINDOW_MS 400
 /* OOM-fallback size only: the real candidate table is sized by the window's
  * edge count, so the picker's fold can never drop a candidate (see below). */
 #define AUTO_MAX_CANDS 16
+
+/* How many ranked candidates --auto will try. BOTH samplers now (39 T2 gave the
+ * IBS/entry path the same walk the sw/residency path always had). A ranked
+ * winner can be a function that never re-enters — main-shaped for residency, a
+ * once-entered caller for entry — so one try is a coin flip; each extra try
+ * costs at most one entry-wait. 3 covers "the event loop, its hot callee, and
+ * one more" without turning a refusal into a minute of waits. */
+#define AUTO_TRIES 3
+
+/* One picked candidate with its name COPIED out: a JIT winner's name borrows
+ * from a map that dies with the picker, so borrowing is not an option, and
+ * copying uniformly beats remembering which winners borrow from where. Filled by
+ * BOTH auto_pick (entry) and auto_pick_sw (residency); `weight`/`sites` carry
+ * whichever sampler's evidence (entry samples + call sites, or residency samples
+ * + sampled offsets). */
+typedef struct {
+    uint64_t base;
+    size_t len;
+    unsigned long long weight; /* entry samples (ibs) / residency samples (sw) */
+    unsigned sites;            /* distinct call sites (ibs) / offsets (sw)     */
+    char name[160];
+} auto_cand_copy;
+
+/* Sample the target OUT OF BAND, rank the entry arrivals, and hand back the
+ * RANKED candidates (base,len,name,weight,sites). Returns how many were written
+ * (>0), 0 when the sampler ran but nothing qualified (honest refusal, printed),
+ * <0 for a clean self-skip (no IBS substrate / perf refused).
+ *
+ * Everything that can be WRONG about the choice lives in asmspy_autoregion_rank,
+ * which is pure and unit-tested on every host (cli/test_autoregion.c). The
+ * sampler underneath is AMD IBS-Op hardware and self-skips elsewhere. 39 T2:
+ * this now returns the RANKED LIST (like auto_pick_sw), not just cands[0], so the
+ * caller can WALK it on NEVER_RAN. The entry rule is the STRONG one, but its top
+ * pick can still be a caller entered once before the window and never again; it
+ * had NO walk only because it returned a single pick, leaving ncand == 0 to
+ * silently disable the guard. Copies names out (a JIT winner's borrows from a map
+ * that dies with this call), exactly as auto_pick_sw does. */
 static int auto_pick(pid_t pid, const asmspy_symtab_t *t, const char *module,
-                     uint64_t *base, size_t *len, char *name, size_t name_cap) {
+                     auto_cand_copy *out, int max_out) {
     if (!asmtest_ibs_available()) {
         fprintf(stderr, "# SKIP --dataflow --auto: %s\n",
                 asmtest_ibs_unavail_reason());
@@ -2590,7 +2617,8 @@ static int auto_pick(pid_t pid, const asmspy_symtab_t *t, const char *module,
         fprintf(stderr, "--auto: sampling failed: %s\n", e);
         asmspy_jitmap_free(&jit);
         free(snap.v);
-        return 1;
+        return 0; /* ran but produced no usable pick — the caller reports it
+                   * as "nothing qualified" (exit 1), never a clean self-skip */
     }
 
     /* One deliberate re-read AFTER the window — a method the runtime emitted
@@ -2617,7 +2645,7 @@ static int auto_pick(pid_t pid, const asmspy_symtab_t *t, const char *module,
     auto_resolve_ctx rctx = {t, &jit};
     size_t nc = asmspy_autoregion_rank(snap.v, snap.n, auto_resolve_sym, &rctx,
                                        module, cands, cap);
-    int ret;
+    int nout = 0;
     if (nc == 0) {
         /* An honest refusal, not a guess. Most processes are idle most of the
          * time, and an idle target yields no edges at all — picking SOMETHING
@@ -2630,29 +2658,32 @@ static int auto_pick(pid_t pid, const asmspy_symtab_t *t, const char *module,
                 "  name a function explicitly, or widen --module=\n",
                 (int)pid, AUTO_WINDOW_MS, (unsigned long long)snap.n,
                 module ? ", --module=" : "", module ? module : "");
-        ret = 1;
     } else {
-        *base = cands[0].addr;
-        *len = (size_t)cands[0].size;
-        /* COPY the winner's name out (a JIT winner's is borrowed from the map,
-         * which dies with this function): the caller names the capture with it,
-         * since a JIT method is invisible to asmspy_symtab_at. */
-        if (name && name_cap)
-            snprintf(name, name_cap, "%s", cands[0].name ? cands[0].name : "?");
+        /* Up to max_out RANKED candidates, names COPIED out (a JIT winner's is
+         * borrowed from the map, which dies with this function): the caller
+         * names each capture with them and WALKS them on NEVER_RAN, since a JIT
+         * method is invisible to asmspy_symtab_at. */
+        for (size_t i = 0; i < nc && nout < max_out; i++, nout++) {
+            out[nout].base = cands[i].addr;
+            out[nout].len = (size_t)cands[i].size;
+            out[nout].weight = cands[i].arrivals;
+            out[nout].sites = cands[i].sites;
+            snprintf(out[nout].name, sizeof out[nout].name, "%s",
+                     cands[i].name ? cands[i].name : "?");
+        }
         fprintf(stderr,
                 "--auto: %s [%s] — %llu entry samples from %u call site%s "
-                "(of %zu candidate%s in %d ms)\n",
+                "(of %zu candidate%s in %d ms); up to %d will be tried\n",
                 cands[0].name ? cands[0].name : "?",
                 cands[0].module ? cands[0].module : "?", cands[0].arrivals,
                 cands[0].sites, cands[0].sites == 1 ? "" : "s", nc,
-                nc == 1 ? "" : "s", AUTO_WINDOW_MS);
-        ret = 0;
+                nc == 1 ? "" : "s", AUTO_WINDOW_MS, nout);
     }
     if (cands != stackc)
         free(cands);
     asmspy_jitmap_free(&jit);
     free(snap.v);
-    return ret;
+    return nout;
 }
 
 /* Which sampler --auto uses. AUTO detects: IBS-Op where the substrate exists
@@ -2665,23 +2696,6 @@ typedef enum {
     SAMPLER_IBS = 1,
     SAMPLER_SW = 2,
 } sampler_mode_t;
-
-/* How many ranked sw candidates cmd_dataflow will try. Residency's winner can
- * be a function that never re-enters (main-shaped), so one try is a coin flip;
- * each extra try costs at most one entry-wait. 3 covers "the event loop, its
- * hot callee, and one more" without turning a refusal into a minute of waits. */
-#define AUTO_SW_TRIES 3
-
-/* One picked candidate with its name COPIED out: a JIT winner's name borrows
- * from a map that dies with the picker, so borrowing is not an option, and
- * copying uniformly beats remembering which winners borrow from where. */
-typedef struct {
-    uint64_t base;
-    size_t len;
-    unsigned long long weight; /* residency samples (sw) */
-    unsigned sites;            /* distinct sampled offsets */
-    char name[160];
-} auto_cand_copy;
 
 /* The PORTABLE pick: software-clock IP survey -> residency ranking
  * (asmspy_autoregion_rank_ip). Returns how many candidates were written
@@ -2795,34 +2809,28 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
     uint64_t base = 0;
     size_t len = 0;
     char autoname[160] = "";
-    auto_cand_copy swcands[AUTO_SW_TRIES];
-    int nswcand = 0; /* >0 => the sw candidate walk below is armed */
+    auto_cand_copy cands[AUTO_TRIES];
+    int ncand = 0; /* >0 => the candidate walk below is armed (either sampler) */
     if (auto_region) {
         /* No symbol given: find what the target is DOING and trace that.
          * AUTO mode picks the sampler by SUBSTRATE (is this an IBS box?), not
          * by whether perf will allow the open — if IBS exists but perf is
          * locked down, the sw open would be refused by the same lockdown, and
          * one skip naming CAP_PERFMON beats two. --sampler=sw forces the
-         * portable path (how an AMD host exercises and tests it). */
+         * portable path (how an AMD host exercises and tests it). 39 T2: both
+         * samplers now hand back the ranked list, so the walk below is armed
+         * either way — the IBS/entry path is no longer a single, un-walked pick. */
         int use_sw = sampler == SAMPLER_SW ||
                      (sampler == SAMPLER_AUTO && !asmtest_ibs_available());
-        if (use_sw) {
-            nswcand = auto_pick_sw(pid, &t, module, swcands, AUTO_SW_TRIES);
-            if (nswcand <= 0) {
-                asmspy_symtab_free(&t);
-                return nswcand < 0 ? 0 : 1; /* <0 clean skip, 0 no pick */
-            }
-            base = swcands[0].base;
-            len = swcands[0].len;
-            snprintf(autoname, sizeof autoname, "%s", swcands[0].name);
-        } else {
-            int arc = auto_pick(pid, &t, module, &base, &len, autoname,
-                                sizeof autoname);
-            if (arc != 0) {
-                asmspy_symtab_free(&t);
-                return arc < 0 ? 0 : 1; /* <0 = clean skip, >0 = no pick */
-            }
+        ncand = use_sw ? auto_pick_sw(pid, &t, module, cands, AUTO_TRIES)
+                       : auto_pick(pid, &t, module, cands, AUTO_TRIES);
+        if (ncand <= 0) {
+            asmspy_symtab_free(&t);
+            return ncand < 0 ? 0 : 1; /* <0 = clean skip (exit 0), 0 = no pick */
         }
+        base = cands[0].base;
+        len = cands[0].len;
+        snprintf(autoname, sizeof autoname, "%s", cands[0].name);
     } else if (resolve_region(&t, region, &base, &len) != 0) {
         fprintf(
             stderr,
@@ -2892,22 +2900,25 @@ static int cmd_dataflow(pid_t pid, const char *region, pid_t tid, long max,
         rc = asmspy_engine_dataflow(pid, tid, base, len, max, steps, fpregs,
                                     continuous, &g_sigstop,
                                     dataflow_render_sink, &dc);
-        /* The sw candidate walk: residency's winner can be a function that
+        /* The candidate walk (39 T1): residency's winner can be a function that
          * never re-enters (the picker header's documented hazard), and
          * NEVER_RAN is the bounded entry wait saying exactly that — an honest
-         * refusal about THIS candidate, not about the target. Move to the
-         * next-ranked one; every other outcome is final. */
-        if (rc == ASMSPY_REGION_NEVER_RAN && attempt + 1 < nswcand) {
+         * refusal about THIS candidate, not about the target. The advance /
+         * exhausted / stop decision is pure and unit-tested
+         * (asmspy_autoregion_walk); move to the next-ranked one on ADVANCE,
+         * every other outcome is final. */
+        if (asmspy_autoregion_walk(rc == ASMSPY_REGION_NEVER_RAN, attempt,
+                                   ncand) == ASMSPY_WALK_ADVANCE) {
             attempt++;
             fprintf(stderr,
-                    "--auto[sw-clock]: %s was not seen ENTERING — a residency "
-                    "winner that never re-enters is the rule's known failure "
-                    "shape; trying candidate %d/%d: %s (%llu samples)\n",
-                    fname, attempt + 1, nswcand, swcands[attempt].name,
-                    swcands[attempt].weight);
-            base = swcands[attempt].base;
-            len = swcands[attempt].len;
-            snprintf(autoname, sizeof autoname, "%s", swcands[attempt].name);
+                    "--auto: %s was not seen ENTERING — a ranked winner that "
+                    "never re-enters is the rule's known failure shape; trying "
+                    "candidate %d/%d: %s (%llu samples)\n",
+                    fname, attempt + 1, ncand, cands[attempt].name,
+                    cands[attempt].weight);
+            base = cands[attempt].base;
+            len = cands[attempt].len;
+            snprintf(autoname, sizeof autoname, "%s", cands[attempt].name);
             continue;
         }
         break;
@@ -3681,17 +3692,24 @@ static void serve_run_engine(serve_session_t *s) {
                                        &s->stop, serve_dataflow_sink, s);
         break;
     case SM_AUTO: {
-        /* The sw path hands back RANKED candidates and the walk below tries
-         * them on NEVER_RAN, exactly as cmd_dataflow does: a residency winner
-         * that never re-enters is the rule's known failure shape, not a fact
-         * about the target, and each refusal is reported honestly on the way. */
-        auto_cand_copy cands[AUTO_SW_TRIES];
+        /* BOTH paths hand back RANKED candidates and the walk below tries them
+         * on NEVER_RAN, exactly as cmd_dataflow does: a ranked winner that never
+         * re-enters is the rule's known failure shape, not a fact about the
+         * target, and each refusal is reported honestly on the way. 39 T2 gave
+         * the IBS/entry path the same list + walk the sw/residency path had. */
+        auto_cand_copy cands[AUTO_TRIES];
         int ncand = 0, attempt = 0;
         int use_sw = p->sampler == SAMPLER_SW ||
                      (p->sampler == SAMPLER_AUTO && !asmtest_ibs_available());
+        /* The sampler + rule labels the client renders (asmtrace-schema.md, Serve
+         * protocol): "entry" is strong evidence, "residency" is weaker and must
+         * be labelled as such. Held here so the initial emit AND every walked
+         * candidate name the same rule. */
+        const char *smp = use_sw ? "sw-clock" : "ibs-op";
+        const char *rule = use_sw ? "residency" : "entry";
         const char *mod = p->module[0] ? p->module : NULL;
         if (use_sw) {
-            ncand = auto_pick_sw(p->pid, &s->syms, mod, cands, AUTO_SW_TRIES);
+            ncand = auto_pick_sw(p->pid, &s->syms, mod, cands, AUTO_TRIES);
             if (ncand <= 0) {
                 /* <0 = the SAMPLER self-skipped (perf refused); 0 = it ran and
                  * nothing qualified. Two different facts about two different
@@ -3706,33 +3724,26 @@ static void serve_run_engine(serve_session_t *s) {
                                      "symbol during the window)");
                 break;
             }
-            p->base = cands[0].base;
-            p->len = cands[0].len;
-            snprintf(s->autoname, sizeof s->autoname, "%s", cands[0].name);
-            serve_emit_pick(s, "sw-clock", "residency", s->autoname, p->base,
-                            p->len, cands[0].weight, cands[0].sites, 1, ncand);
         } else {
-            size_t alen = 0;
-            int arc = auto_pick(p->pid, &s->syms, mod, &p->base, &alen,
-                                s->autoname, sizeof s->autoname);
-            if (arc != 0) {
+            ncand = auto_pick(p->pid, &s->syms, mod, cands, AUTO_TRIES);
+            if (ncand <= 0) {
                 s->rc =
-                    arc < 0 ? ASMSPY_SAMPLE_UNAVAIL : ASMSPY_REGION_NEVER_RAN;
+                    ncand < 0 ? ASMSPY_SAMPLE_UNAVAIL : ASMSPY_REGION_NEVER_RAN;
                 snprintf(s->skip_note, sizeof s->skip_note, "%s",
-                         arc < 0 ? asmtest_ibs_unavail_reason()
-                                 : "IBS-Op sampled the window but observed no "
-                                   "function being ENTERED (residency is not "
-                                   "entry evidence, so nothing was ranked)");
+                         ncand < 0 ? asmtest_ibs_unavail_reason()
+                                   : "IBS-Op sampled the window but observed no "
+                                     "function being ENTERED (nothing ranked)");
                 break;
             }
-            p->len = alen;
-            /* The IBS path ranks ENTRY EDGES, so the evidence is of the right
-             * type: something was observed ARRIVING here. auto_pick keeps no
-             * per-candidate weight for the caller, so those fields are 0 —
-             * a client reads the "entry" label, not the counts. */
-            serve_emit_pick(s, "ibs-op", "entry", s->autoname, p->base, p->len,
-                            0, 0, 1, 1);
         }
+        p->base = cands[0].base;
+        p->len = cands[0].len;
+        snprintf(s->autoname, sizeof s->autoname, "%s", cands[0].name);
+        /* 39 T2: the IBS path now carries REAL per-candidate weight/sites (entry
+         * samples + call sites), not the old hardcoded 0, 0, 1, 1 — the wire
+         * channel already existed; the pick simply discarded the counts. */
+        serve_emit_pick(s, smp, rule, s->autoname, p->base, p->len,
+                        cands[0].weight, cands[0].sites, 1, ncand);
         for (;;) {
             /* The region is only known once the picker has run, so the code
              * image is armed here rather than before the engine — and re-armed
@@ -3743,21 +3754,23 @@ static void serve_run_engine(serve_session_t *s) {
             s->rc = asmspy_engine_dataflow(p->pid, 0, p->base, p->len, p->max,
                                            p->steps, p->fpregs, p->continuous,
                                            &s->stop, serve_dataflow_sink, s);
-            if (s->rc == ASMSPY_REGION_NEVER_RAN && attempt + 1 < ncand) {
+            if (asmspy_autoregion_walk(s->rc == ASMSPY_REGION_NEVER_RAN,
+                                       attempt, ncand) == ASMSPY_WALK_ADVANCE) {
                 /* NEVER_RAN is the bounded entry wait saying this CANDIDATE was
-                 * not seen entering — a residency winner that never re-enters
-                 * is the rule's known failure shape, not a fact about the
-                 * target. Walk to the next ranked one, and say so on the wire
-                 * so the client can show the refusal rather than a silent
-                 * substitution. */
+                 * not seen entering — a ranked winner that never re-enters is
+                 * the rule's known failure shape, not a fact about the target.
+                 * Walk to the next ranked one (the decision is the pure,
+                 * unit-tested asmspy_autoregion_walk), and say so on the wire
+                 * (with the same sampler/rule label as the pick) so the client
+                 * can show the refusal rather than a silent substitution. */
                 attempt++;
                 p->base = cands[attempt].base;
                 p->len = cands[attempt].len;
                 snprintf(s->autoname, sizeof s->autoname, "%s",
                          cands[attempt].name);
-                serve_emit_pick(s, "sw-clock", "residency", s->autoname,
-                                p->base, p->len, cands[attempt].weight,
-                                cands[attempt].sites, attempt + 1, ncand);
+                serve_emit_pick(s, smp, rule, s->autoname, p->base, p->len,
+                                cands[attempt].weight, cands[attempt].sites,
+                                attempt + 1, ncand);
                 continue;
             }
             break;

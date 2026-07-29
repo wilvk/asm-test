@@ -577,7 +577,8 @@ fi
 # back-edge (mid-function, not a region at all). Only an ENTRY-ARRIVAL rule lands
 # here. quiet_helper() is never called: it must never be named.
 #
-# The picker itself is unit-tested on every host (build/test_autoregion, 19 checks).
+# The picker AND the candidate walk are unit-tested on every host
+# (build/test_autoregion, incl. the pure asmspy_autoregion_walk cases 39 T1 adds).
 # THIS block covers only the wiring, and it self-skips off AMD IBS — real hardware,
 # a legitimate gate per CLAUDE.md. `make docker-cli-ibs` is the lane that runs it.
 echo "--- asmspy --dataflow --auto (pick the hot ENTRY, no symbol given) ---"
@@ -591,7 +592,14 @@ set -e
 [ "$aurc" -eq 124 ] && fail "--dataflow --auto hung"
 if printf '%s\n' "$auout" | grep -q '^# SKIP --dataflow --auto'; then
     printf '%s\n' "$auout" | grep '^# SKIP' | sed 's/^/  /'
-    echo "  (IBS-Op unavailable — --auto self-skipped; assertions NOT run. Use make docker-cli-ibs)"
+    # 39 T2: a self-skip must NAME a real reason (perf / the substrate), never
+    # pass green with an empty one — the --sample lesson, and the same guard the
+    # sw leg below carries. This is the DEFAULT/IBS leg's version: on this lane
+    # the sampler open is refused (seccomp / paranoid), and the skip must SAY so
+    # rather than land an empty reason on exactly the host where it matters.
+    printf '%s\n' "$auout" | grep -qE '^# SKIP --dataflow --auto: .*perf' \
+        || fail "--auto self-skip with an empty/vague reason (the --sample lesson): $auout"
+    echo "  (sampler unavailable — --auto self-skipped WITH a real reason; assertions NOT run. Use make docker-cli-ibs)"
 else
     [ "$aurc" -eq 0 ] || fail "--dataflow --auto exited $aurc: $auout"
     # THE assertion: the callee, not the residency winner.

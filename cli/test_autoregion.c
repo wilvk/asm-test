@@ -389,6 +389,80 @@ int main(void) {
               "(drill != rank)");
     }
 
+    /* ==== 16. asmspy_autoregion_walk: the candidate walk as a pure decision ===
+     * The advance/exhausted/stop policy the two inline walks (cmd_dataflow, the
+     * serve SM_AUTO loop) now share. These checks carry the real burden: the walk
+     * only ever RUNS on a live AMD/perf host, but its logic is what decides
+     * whether --auto recovers a main-shaped mispick or gives up — and it is what
+     * the IBS path silently skipped by passing ncand == 0. If you revert either
+     * call site to its inline `attempt + 1 < ncand` guard, this stays green only
+     * because the expression is the same; delete the size>0-style ncand==0 guard
+     * and #5 catches the underflow a `ncand - 1` rewrite would introduce. */
+    {
+        /* not seen entering, candidates remain -> ADVANCE */
+        CHECK(asmspy_autoregion_walk(1, 0, 3) == ASMSPY_WALK_ADVANCE,
+              "walk: NEVER_RAN with candidates left -> advance");
+        CHECK(asmspy_autoregion_walk(1, 1, 3) == ASMSPY_WALK_ADVANCE,
+              "walk: NEVER_RAN mid-list -> advance to the next");
+
+        /* any other outcome is final, no matter how many candidates remain */
+        CHECK(asmspy_autoregion_walk(0, 0, 3) == ASMSPY_WALK_STOP,
+              "walk: a captured (not-NEVER_RAN) outcome -> stop, even with "
+              "candidates left");
+
+        /* not seen entering, none left -> EXHAUSTED (a distinct end, reported
+         * as 'every candidate tried', never as a bare 'never ran') */
+        CHECK(asmspy_autoregion_walk(1, 2, 3) == ASMSPY_WALK_EXHAUSTED,
+              "walk: NEVER_RAN on the last candidate -> exhausted");
+        CHECK(strstr(asmspy_autoregion_walk_reason(ASMSPY_WALK_EXHAUSTED),
+                     "every ranked candidate") != NULL,
+              "walk: the exhausted reason says the list was exhausted, not "
+              "'never ran'");
+
+        /* a single-candidate list never advances (there is nowhere to go) */
+        CHECK(asmspy_autoregion_walk(1, 0, 1) == ASMSPY_WALK_EXHAUSTED,
+              "walk: a single-candidate list never advances -> exhausted");
+
+        /* ncand == 0 is a LEGAL 'no list' input: `attempt + 1 < ncand` is
+         * `1 < 0` (false) — no advance, no underflow. This is the exact
+         * expression that hid the IBS gap (the IBS path returned one pick and
+         * left ncand == 0, so its walk never fired). */
+        CHECK(asmspy_autoregion_walk(1, 0, 0) == ASMSPY_WALK_EXHAUSTED,
+              "walk: ncand==0 (no list) -> exhausted, no underflow (the IBS-gap "
+              "expression)");
+        CHECK(asmspy_autoregion_walk(0, 0, 0) == ASMSPY_WALK_STOP,
+              "walk: ncand==0 with a captured outcome -> stop");
+    }
+
+    /* ==== 17. rank + walk COMPOSED — the recovery 39 T2 gave the IBS path =====
+     * The entry rule hands back a RANKED list, and the caller walks it on
+     * NEVER_RAN. Before T2 the IBS/entry path returned only cands[0] (ncand==0),
+     * so this recovery could not run on the STRONG sampler at all. Here two
+     * functions are both entered (leaf_hot more than mid_warm); rank orders them,
+     * and if the top pick is not seen entering (a phase change between the sample
+     * window and the attach) the walk advances to the second — landing a real
+     * region instead of giving up. This is exactly what the adapter now enables;
+     * revert auto_pick to a single pick and the ncand it produces is 0, so the
+     * walk (asmspy_autoregion_walk) returns EXHAUSTED on the first refusal. */
+    {
+        asmspy_sample_edge_t e[] = {
+            mk(0x3000, 0x1000, 900, 0), /* -> leaf_hot ENTRY, many arrivals   */
+            mk(0x3008, 0x2000, 100, 0), /* -> mid_warm ENTRY, fewer arrivals  */
+        };
+        size_t nc = asmspy_autoregion_rank(e, 2, t_resolve, NULL, NULL, out, 8);
+        CHECK(nc == 2 && out[0].addr == 0x1000 && out[1].addr == 0x2000,
+              "T2: the entry ranker returns a 2-deep ORDERED list (leaf_hot, "
+              "then mid_warm) — the list the IBS walk now has to work with");
+        /* top pick not seen entering, one candidate left -> advance to it */
+        CHECK(asmspy_autoregion_walk(/*never_ran=*/1, /*attempt=*/0, (int)nc) ==
+                  ASMSPY_WALK_ADVANCE,
+              "T2: NEVER_RAN on the top entry pick walks to the 2nd (the "
+              "recovery the IBS path lacked when it returned a single pick)");
+        /* the walked-to candidate is the second-ranked region, ready to arm */
+        CHECK(out[1].addr == 0x2000 && out[1].size == 0x80,
+              "T2: the 2nd candidate carries a real (base,len) to arm next");
+    }
+
     printf("1..%d\n", checks);
     if (failures) {
         printf("# %d/%d FAILED\n", failures, checks);

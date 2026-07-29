@@ -306,6 +306,74 @@ asmspy_autoregion_rank_ip(const asmspy_ip_hit_t *hits, size_t n,
     return nout;
 }
 
+/* ---------------------------------------------------------------------------
+ * THE CANDIDATE WALK, as a pure decision (39 T1).
+ *
+ * Both auto paths hand back a RANKED list and re-try the next candidate when the
+ * one they armed was "not seen entering" within the bounded entry wait — a
+ * residency winner that never re-enters is the weak rule's KNOWN failure shape
+ * (the header note above), and each refusal is a truthful statement about the
+ * target, not a fact about the region. That policy used to live INLINE in two
+ * places (cmd_dataflow and the serve SM_AUTO loop), identical and untestable, so
+ * a fix to one copy left the other wrong — which is exactly how the IBS path
+ * ended up with no walk at all (it returned a single pick, so `ncand` was 0 and
+ * the guard `attempt + 1 < ncand` never fired). Extracted here it is unit-tested
+ * on every host, like the ranks it complements.
+ *
+ * The decision takes a BOOLEAN "this candidate was not seen entering" rather than
+ * the engine's rc, so this header stays free of cli/asmspy.h's cross-engine code
+ * numbers (the caller translates rc == ASMSPY_REGION_NEVER_RAN into the bool). */
+typedef enum {
+    ASMSPY_WALK_STOP = 0,      /* the outcome is final — report it as it stands */
+    ASMSPY_WALK_ADVANCE = 1,   /* not seen entering; arm the next ranked one    */
+    ASMSPY_WALK_EXHAUSTED = 2, /* not seen entering AND no candidates remain    */
+} asmspy_walk_action_t;
+
+/* Decide what to do after arming candidate `attempt` (0-based) of a `ncand`-long
+ * ranked list returned this outcome.
+ *
+ *   not_seen_entering : the bounded entry wait expired without the region being
+ *                       entered (rc == ASMSPY_REGION_NEVER_RAN at the call site)
+ *   attempt           : the 0-based index just armed
+ *   ncand             : how many ranked candidates the picker handed back. 0 is
+ *                       a LEGAL input meaning "no list" (a lone non-list pick is
+ *                       ncand == 1); the comparison is kept as `attempt + 1 <
+ *                       ncand` on signed ints precisely so ncand == 0 evaluates
+ *                       `1 < 0` (false) and never underflows the way a
+ *                       `ncand - 1` form would — the exact expression that hid
+ *                       the IBS gap.
+ *
+ * Returns ADVANCE (walk to attempt+1), EXHAUSTED (nothing entered and none left
+ * — a distinct, honestly worded end, not a bare "never ran"), or STOP (any other
+ * outcome — the capture stands). Pure: no state, no side effects, no I/O. */
+static inline asmspy_walk_action_t
+asmspy_autoregion_walk(int not_seen_entering, int attempt, int ncand) {
+    if (!not_seen_entering)
+        return ASMSPY_WALK_STOP;
+    if (attempt + 1 < ncand)
+        return ASMSPY_WALK_ADVANCE;
+    return ASMSPY_WALK_EXHAUSTED;
+}
+
+/* The category reason for the wire/stderr, WITHOUT the per-candidate detail the
+ * caller adds (names, counts) — so a client can render the walk state even when
+ * it has no candidate metadata. */
+static inline const char *asmspy_autoregion_walk_reason(asmspy_walk_action_t a) {
+    switch (a) {
+    case ASMSPY_WALK_ADVANCE:
+        return "not seen entering — a residency winner that never re-enters is "
+               "the rule's known failure shape; trying the next ranked "
+               "candidate";
+    case ASMSPY_WALK_EXHAUSTED:
+        return "not seen entering, and every ranked candidate has now been "
+               "tried — the region was not observed being entered in any "
+               "window";
+    case ASMSPY_WALK_STOP:
+    default:
+        return "the capture outcome is final";
+    }
+}
+
 /* Resolve ONE selected hot edge to a drillable region. Tries to_addr (where
  * control went), then from_addr; an endpoint qualifies only if it resolves AND
  * has size > 0 (the zero-size vacuity rule above). Returns 0 and fills
