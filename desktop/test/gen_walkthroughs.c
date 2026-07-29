@@ -280,7 +280,7 @@ static int gen_one(const char *dir, const walkthrough_t *wt) {
     asmtrace_escape(body, sizeof body, wt->title);
     asmtrace_emitf(&w, "note", "\"text\":\"%s\"", body);
 
-    /* The recorded window. `truncate_at` is how the D7 dishonesty fixture is
+    /* The recorded window. `truncate_at` is how the D7 low-fidelity fixture is
      * MADE rather than hand-edited: the recording really does stop early, and
      * the footer really does declare it. */
     size_t nsteps = tr.insns_len;
@@ -524,12 +524,12 @@ int main(int argc, char **argv) {
          "imax_wrong(3, 4) — why is rax wrong? (`make demo-fail`'s story)",
          DEMOFAIL_SRC, {3, 4, 0}, 2, DEMOFAIL_STOPS,
          (int)(sizeof DEMOFAIL_STOPS / sizeof DEMOFAIL_STOPS[0]), 0},
-        /* The D7 dishonesty fixture: the SAME square run, recorded with the
+        /* The D7 low-fidelity fixture: the SAME square run, recorded with the
          * window cut short. Its last stop is anchored at step 2, which is now
          * BEYOND what was recorded — the player must say so and refuse to
          * navigate, never silently clamp to the last recorded step. */
         {"square-truncated",
-         "square(2) — recorded with the window cut short (dishonesty fixture)",
+         "square(2) — recorded with the window cut short (low-fidelity fixture)",
          SQUARE_SRC, {2, 0, 0}, 1, SQUARE_STOPS,
          (int)(sizeof SQUARE_STOPS / sizeof SQUARE_STOPS[0]), 2},
     };

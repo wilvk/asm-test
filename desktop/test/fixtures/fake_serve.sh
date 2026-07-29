@@ -60,7 +60,7 @@ while IFS= read -r line; do
         ;;
     *'"mode":"sample"'*)
         # A skip: the session RAN and had nothing to report. Note it still
-        # produces a closed, honest recording — an empty file would be the bug.
+        # produces a closed, faithful recording — an empty file would be the bug.
         emit '{"k":"cmd","cmd":"start","mode":"sample"}'
         emit '{"k":"session","state":"started","mode":"sample","pid":4242,"params":{"ms":200}}'
         emit '{"asmtrace":1,"container":"ndjson","producer":{"name":"asmspy","version":"1.1.0"},"provenance":{"backend":"ibs-op","exact":false,"trust":"statistical"},"arch":"x86_64"}'
@@ -94,7 +94,7 @@ while IFS= read -r line; do
         emit '{"k":"session","state":"stopped","mode":"auto","events":1,"reason":"max"}'
         ;;
     *'"mode":"torn"'*)
-        # The dishonesty fixture: a session that starts, emits, and DIES with no
+        # The low-fidelity fixture: a session that starts, emits, and DIES with no
         # `end`. The host must mark that recording torn rather than present a
         # prefix as complete (schema Compatibility rules).
         emit '{"k":"cmd","cmd":"start","mode":"stream"}'

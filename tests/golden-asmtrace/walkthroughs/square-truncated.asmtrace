@@ -1,5 +1,5 @@
 {"asmtrace":1,"container":"ndjson","producer":{"name":"asmtrace_record","version":"1.1.0"},"provenance":{"backend":"emu-l0","exact":true,"trust":"exact"},"arch":"x86_64"}
-{"k":"note","text":"square(2) — recorded with the window cut short (dishonesty fixture)"}
+{"k":"note","text":"square(2) — recorded with the window cut short (low-fidelity fixture)"}
 {"k":"trace","basis":"rel","kind":"insn","off":0,"disasm":"mov rax, rdi"}
 {"k":"trace","basis":"rel","kind":"insn","off":3,"disasm":"imul rax, rdi"}
 {"k":"coverage","basis":"rel","blocks":[0],"blocks_total":1,"insns_total":3,"truncated":true}
