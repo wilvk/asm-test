@@ -343,10 +343,17 @@ belongs to that pass. Field order: `pass`, `result`, `steps`, `truncated`.
   contaminating its neighbours.
 
 Emitted **only** in continuous mode; a one-shot capture (the default) emits no
-`df_invocation` and is byte-identical to before. A pass that reaches the entry
-wait without the region running ends the session (like the region engine's idle
-bailout) and emits no marker; a hand-authored *skip* dishonesty fixture may carry
-a marker with `steps:0` to exercise the per-pass placard.
+`df_invocation` and is byte-identical to before. On the **first** pass, reaching
+the entry wait without the region running ends the session (like the region
+engine's idle bailout) and emits no marker — a region never seen entering is a
+genuine NEVER_RAN. But once a continuous session has produced at least one pass,
+a later quiet window (the pinned region not entered for one entry wait) is
+**armed-and-waiting, not a verdict** (39 T4): the session re-arms and keeps
+capturing until Stop, and the quiet window is surfaced as a marker with
+`steps:0` (an empty pass — `vt` genuinely holds nothing, so it is a marker, not
+fabricated data) so a reader shows *"armed, region quiet"* rather than inferring
+the lull from a gap. A hand-authored *skip* dishonesty fixture may likewise carry
+a `steps:0` marker to exercise the per-pass placard.
 
 ### `mem` — one memory access (address stream)
 

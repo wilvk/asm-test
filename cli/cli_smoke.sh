@@ -407,6 +407,60 @@ assert isinstance(d["defuse"], list)' \
     fi
     rm -f "$dfcont" "$dfone"
 
+    # 39 T4: a continuous session must SURVIVE a QUIET region — the pinned region
+    # not entered for one entry wait — and keep capturing the later burst. 35's
+    # re-arm loop cleared its stop flag only on a PRODUCTIVE pass, so a single
+    # quiet window ENDED the session (the checkbox promised "until Stop" but the
+    # first lull stopped it). quiet_hot_victim alternates a dense hot burst with a
+    # ~1.5 s quiet stretch; with a 300 ms entry wait the quiet stretch yields
+    # several armed-but-quiet windows (0-step df_invocation markers) and the hot
+    # bursts yield productive passes. The recording must therefore show a
+    # PRODUCTIVE pass AFTER a quiet one — proof it did not stop at the lull — in
+    # one clean, footer-closed recording. (The pick stays PINNED, never re-picks.)
+    echo "--- asmspy --dataflow --continuous through a QUIET region (39 T4) ---"
+    "$BUILD/quiet_hot_victim" 2>/dev/null &
+    QHPID=$!
+    sleep 1 # let the warmup hot phase begin so the capture catches the first entry
+    kill -0 "$QHPID" 2>/dev/null || fail "quiet_hot_victim did not start"
+    dfq="$BUILD/df_quiet_$$.asmtrace"
+    rm -f "$dfq"
+    set +e
+    timeout 40 env ASMTEST_DF_ENTRY_WAIT_MS=300 "$ASM" --dataflow "$QHPID" hotfn \
+        --continuous --record="$dfq" >/dev/null 2>&1 &
+    qpid=$!
+    sleep 6 # warmup-productive, then >=1 quiet stretch, then another hot burst
+    kill -INT "$qpid" 2>/dev/null
+    wait "$qpid"; qrc=$?
+    set -e
+    [ "$qrc" -eq 124 ] && fail "--continuous through quiet hung (stop not honored)"
+    if [ -s "$dfq" ] && grep -q '"k":"df_invocation"' "$dfq"; then
+        # ONE growing recording, cleanly closed (survived to the stop, not torn at
+        # a lull).
+        [ "$(grep -c '"asmtrace":1' "$dfq")" = 1 ] \
+            || fail "--continuous quiet: not one recording (multiple headers)"
+        grep -q '"k":"end"' "$dfq" \
+            || fail "--continuous quiet: no footer (torn) — ended at a lull?"
+        # A 0-step df_invocation is the armed-but-quiet window marker (39 T4).
+        grep -qE '"k":"df_invocation".*"steps":0,' "$dfq" \
+            || fail "--continuous quiet: no 0-step df_invocation — the quiet window was not surfaced (or the session ended at it): $dfq"
+        # THE survival property: a PRODUCTIVE pass (steps>0) lands AFTER a quiet
+        # one (steps:0). Without 39 T4 the session ends at the first quiet window,
+        # so no productive pass could follow it.
+        awk '
+          /"k":"df_invocation"/ &&  /"steps":0,/ { sawquiet=1 }
+          /"k":"df_invocation"/ && !/"steps":0,/ { if (sawquiet) { print "survived"; exit } }
+        ' "$dfq" | grep -q survived \
+            || fail "--continuous quiet: no productive pass after a quiet one — did not survive the lull ($(grep -c '"k":"df_invocation"' "$dfq") passes)"
+        echo "  --continuous SURVIVED the quiet region: $(grep -c '"k":"df_invocation"' "$dfq") passes, productive after quiet, one clean recording"
+    else
+        # A slow/loaded box could miss the whole warmup and take the by-design
+        # first-pass NEVER_RAN exit; that is not a T4 regression (the survival path
+        # needs at least one productive pass first). Do not fail spuriously.
+        echo "  (no continuous recording — the capture never caught the warmup burst on this box; T4 survival path not exercised here)"
+    fi
+    kill "$QHPID" 2>/dev/null || true
+    rm -f "$dfq"
+
     # 35 T2: interruptible Stop. The stop is threaded into the entry wait
     # (dfp_run_to_multi) and the single-step loop (dfp_step_loop), so a SIGTERM
     # mid-session is honored WITHIN one in-flight pass (bounded well under the 10 s

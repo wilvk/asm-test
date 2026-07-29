@@ -3734,13 +3734,34 @@ int asmspy_engine_dataflow(pid_t pid, pid_t only_tid, uint64_t base, size_t len,
             break;
         }
         case DF_PTRACE_NEVER:
-            /* No thread reached the entry inside the bound. In a continuous session
-             * that has ALREADY produced, the region simply went quiet — a clean
-             * end, not a NEVER_RAN verdict (mirrors the region engine: any sample
-             * means it ran). On the first pass it is the real "did not run in the
-             * window" answer. Reuse the REGION engine's positive rather than
-             * minting a fourth code (cli/asmspy.h numbers these across engines). */
-            rc = (continuous && passes > 0) ? 0 : ASMSPY_REGION_NEVER_RAN;
+            /* No thread reached the entry inside the bound. On the FIRST pass that
+             * is the real "did not run in the window" answer (NEVER_RAN). In a
+             * continuous session that has ALREADY produced, the region simply went
+             * QUIET for one entry wait — armed and waiting, not a verdict.
+             *
+             * 39 T4: 35's re-arm loop cleared stop_loop only on a PRODUCTIVE pass,
+             * so a single quiet window ENDED a continuous session — the checkbox
+             * promised "keep capturing until Stop" but the first lull stopped it.
+             * Keep re-arming instead (stop_loop = 0). The `stop` flag is threaded
+             * into the entry wait, so a Stop during the quiet window still ends
+             * within the pass; and the pick stays PINNED — a continuous session
+             * never silently re-picks (35 T1), so the view does not jump regions.
+             *
+             * Surface the quiet window as an EMPTY pass (the vt genuinely holds 0
+             * steps) through the same sink, so a reader sees "armed, region quiet"
+             * — a 0-step df_invocation — rather than a frozen last-pass inferred
+             * from a gap. It is a marker, not fabricated data. */
+            if (continuous && passes > 0) {
+                rc = 0;
+                stop_loop = 0;
+                if (sink) {
+                    asmtest_defuse_t *qg = asmtest_defuse_build(vt);
+                    sink(ctx, 0, vt, qg, code, len, base);
+                    asmtest_defuse_free(qg);
+                }
+            } else {
+                rc = ASMSPY_REGION_NEVER_RAN;
+            }
             break;
         case DF_PTRACE_ENOSYS:
             rc = ASMSPY_DATAFLOW_UNAVAIL; /* off-platform / no Capstone: skip */

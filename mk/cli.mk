@@ -241,6 +241,14 @@ $(BUILD)/sample_victim: $(BUILD)/sample_victim.o
 $(BUILD)/auto_victim: $(BUILD)/auto_victim.o
 	$(CC) $(CFLAGS) $^ -o $@
 
+# quiet_hot_victim backs the 39 T4 continuous-through-a-quiet-window smoke: hotfn
+# goes HOT (dense entries), then QUIET (~1.5s never entered), then hot again, so a
+# --continuous capture pinned to it must SURVIVE the quiet stretch and capture the
+# later burst. A uniform-period victim cannot produce that reliably. Compiles via
+# the cli/ .o pattern rule.
+$(BUILD)/quiet_hot_victim: $(BUILD)/quiet_hot_victim.o
+	$(CC) $(CFLAGS) $^ -o $@
+
 # watch_victim's WORKER thread (not the leader) stores a known magic into a known
 # 8-byte global, so the --watch (hardware data-watchpoint) smoke can prove asmspy
 # arms the watchpoint PER-THREAD (a leader-only arm would trap none of the writes)
@@ -626,7 +634,7 @@ cli-smoke: $(BUILD)/asmspy $(BUILD)/attach_victim $(BUILD)/syscall_victim \
            $(BUILD)/spy_victim $(BUILD)/threads_victim $(BUILD)/cpp_victim \
            $(BUILD)/jit_victim $(BUILD)/jitdump_victim $(BUILD)/int3_victim \
            $(BUILD)/tid_victim $(BUILD)/sample_victim $(BUILD)/watch_victim \
-           $(BUILD)/auto_victim \
+           $(BUILD)/auto_victim $(BUILD)/quiet_hot_victim \
            $(BUILD)/debuglink_victim $(BUILD)/test_arch $(BUILD)/test_logview \
            $(BUILD)/test_graphsort $(BUILD)/test_jitdump $(BUILD)/test_view \
            $(BUILD)/test_treefilter $(BUILD)/test_symtab $(BUILD)/test_autoregion \
