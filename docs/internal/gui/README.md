@@ -406,7 +406,7 @@ queue restarts, which is what makes `continuous` un-settable in practice. **No
 hardware unlock:** every policy change is proven by pure tests in `test_autoregion`
 (no backend link, both `cli-smoke` lanes), because no CI lane has AMD silicon — per
 CLAUDE.md, *"a test that can only ever self-skip is not a test."* Authored
-2026-07-29 against HEAD `0b52704`, measured on the Zen 2 dev box. ☐ 0/6 · *free*.
+2026-07-29 against HEAD `0b52704`, measured on the Zen 2 dev box. ☐ 0/6 · will · T1–T6 · 2026-07-29.
 
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
