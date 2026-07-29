@@ -884,21 +884,33 @@ int main() {
         check("pane/menu reopens", active(kPaneScrubber),
               "reopening (View ▸ Panels) must bring the scrubber pane back");
 
-        // Render the split-out capture panes with a host up, so ImGui validates
-        // their Begin / EndChild / EndDisabled balance headlessly (an imbalance
-        // aborts via IM_ASSERT — asserts are on, the build has no -DNDEBUG). The
-        // Log draws its scrollback child + the moved session-status block; the
-        // Live-capture pane draws the reordered patch bay + the 3D handoff.
+        // The Live-capture pane is a per-target control surface: a connected host
+        // is necessary but not sufficient — it stays hidden until a process is
+        // picked (selected_pid), so Capture mode lands on the target picker alone.
         ds.inspect.host_started = true;
         ds.pane_open[kPaneLog] = true;
         ds.pane_open[kPaneCapture] = true;
         frame(ds);
         frame(ds);
+        check("pane/capture needs a selected process",
+              !active(kPaneCapture),
+              "Live capture must stay hidden with a host but no process picked");
+        // Render the split-out capture panes with a host up AND a target selected,
+        // so ImGui validates their Begin / EndChild / EndDisabled balance headlessly
+        // (an imbalance aborts via IM_ASSERT — asserts are on, the build has no
+        // -DNDEBUG). The Log draws its scrollback child + the moved session-status
+        // block; the Live-capture pane draws the reordered patch bay + the 3D handoff.
+        ds.inspect.selected_pid = 4242;
+        frame(ds);
+        frame(ds);
         check("pane/log renders with a host", active(kPaneLog),
               "the Log pane shows (and draws cleanly) once a host connects");
-        check("pane/capture renders with a host", active(kPaneCapture),
-              "the Live-capture controls show once a host connects");
+        check("pane/capture renders with a host and a target",
+              active(kPaneCapture),
+              "the Live-capture controls show once a host connects and a "
+              "process is picked");
         ds.inspect.host_started = false;
+        ds.inspect.selected_pid = 0;
 
         ImGui::DestroyContext();
     }

@@ -1897,17 +1897,31 @@ static bool pctx_recording(const ShellState &s) {
     return shell_a(s) != nullptr;
 }
 static bool pctx_host(const ShellState &s) { return s.inspect.host_started; }
+// The Live-capture pane is a per-target control surface: it only means anything
+// once a process is picked in the Processes list (selected_pid). Gating it on the
+// selection — not just a live host — keeps Capture mode landing on the target
+// picker alone; the capture controls appear the moment a row is selected. A host
+// is still required (no host, nothing to capture with).
+static bool pctx_capture(const ShellState &s) {
+    return s.inspect.host_started && s.inspect.selected_pid > 0;
+}
 // The Save pane only means anything once there is a capture to write (R3): a
 // growing recording, or a completed one this session.
 static bool pctx_save(const ShellState &s) {
     return inspect_has_capture(s.inspect);
 }
+// The PT slice pane is available ONLY on an Intel PT host — the host must be able
+// to start a live PT capture for there to ever be a hardware-recorded path to
+// replay. A non-PT host (this AMD box, an arm64 host, the render-only viewer)
+// never shows the tab; the View ▸ Panels entry greys with the library's reason.
+// Independent of a host connection or a recording — it is a fact about the CPU.
+static bool pctx_pt(const ShellState &) { return inspect_pt_host_available(); }
 static const PaneDef kManagedPanes[] = {
     {kPaneHome, true, pctx_always, ""},
     {kPaneConnect, false, pctx_always, ""},
     {kPaneProcesses, false, pctx_always, ""},
-    {kPaneCapture, false, pctx_host,
-     "connect a serve host in the Connect pane first"},
+    {kPaneCapture, false, pctx_capture,
+     "pick a process in the Processes pane first"},
     // The Log shows the session's own feed; it needs a host up to have one. Default
     // closed — Capture mode opens it (shell_apply_mode_panes), and it stays a named
     // View ▸ Panels entry otherwise.
@@ -1915,6 +1929,12 @@ static const PaneDef kManagedPanes[] = {
      "connect a serve host in the Connect pane first"},
     // Save appears only when there IS a capture to save (R3).
     {kPaneSave, false, pctx_save, "start a capture first — nothing to save yet"},
+    // The PT slice appears only on an Intel PT host (pctx_pt). Default closed —
+    // Capture mode opens it (mode_wants_pane), but the context gate keeps it
+    // hidden off a PT host regardless. The hint is the specific gate, not a generic
+    // "unavailable".
+    {kPanePtSlice, false, pctx_pt,
+     "the PT slice needs an Intel PT host — no PT silicon here to record a path"},
     {kPaneRecording, true, pctx_recording, "open a recording first"},
     {kPaneLoom, true, pctx_recording, "open a recording first"},
     {kPaneObserver, true, pctx_recording, "open a recording first"},
@@ -1958,10 +1978,14 @@ static bool mode_wants_pane(Mode m, const char *name) {
     switch (m) {
     case Mode::Capture:
     case Mode::Inspect:
+        // The PT slice joins the capture workflow so a PT host reveals it
+        // alongside the others; its context gate (pctx_pt) keeps it hidden off a
+        // PT host even though this opens it.
         return std::strcmp(name, kPaneProcesses) == 0 ||
                std::strcmp(name, kPaneCapture) == 0 ||
                std::strcmp(name, kPaneLog) == 0 ||
-               std::strcmp(name, kPaneSave) == 0;
+               std::strcmp(name, kPaneSave) == 0 ||
+               std::strcmp(name, kPanePtSlice) == 0;
     case Mode::Open:
         return std::strcmp(name, kPaneRecording) == 0 ||
                std::strcmp(name, kPaneLoom) == 0 ||
@@ -2363,8 +2387,11 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     if (pane_shown(s, kPaneProcesses)) {
         bool open = true;
         // Consumed once (Capture-mode entry): raise Processes to its dock node's
-        // active tab so the target picker is what the user lands on.
-        if (s.inspect.want_focus_processes) {
+        // active tab so the target picker is what the user lands on. HOLD the
+        // request until the mode's pending_preset has been applied — layout_build
+        // re-docks every pane the frame after the mode switch and resets each
+        // node's selected tab, so focusing before that rebuild would be clobbered.
+        if (s.inspect.want_focus_processes && !s.pending_preset) {
             s.inspect.want_focus_processes = false;
             ImGui::SetNextWindowFocus();
         }
@@ -2400,6 +2427,17 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
         ImGui::End();
         if (!open)
             s.pane_open[kPaneSave] = false;
+    }
+    // The PT slice pane: the def-use slice with zero single-steps of the target,
+    // shown only on an Intel PT host (pctx_pt). Its own tab now, out of the
+    // Live-capture controls.
+    if (pane_shown(s, kPanePtSlice)) {
+        bool open = true;
+        if (ImGui::Begin(kPanePtSlice, &open))
+            draw_pt_slice_pane(s.inspect);
+        ImGui::End();
+        if (!open)
+            s.pane_open[kPanePtSlice] = false;
     }
     if (s.show_learn) {
         if (ImGui::Begin("Learn", &s.show_learn))
