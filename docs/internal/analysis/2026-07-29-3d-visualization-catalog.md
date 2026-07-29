@@ -36,6 +36,10 @@ and the honesty invariants below.
 This is an ideation catalog, not a schedule — it is a menu the GUI briefs can
 draw from. A companion to the [UX/dataviz review](2026-07-29-gui-ux-dataviz-review.md).
 
+> **Update 2026-07-30.** Added [§8 Concurrency &amp; liveness](#8-concurrency--liveness):
+> per-graph thread / process / fibre handling and the live / statistical / offline
+> tiers — the two cross-cutting properties the per-graph entries do not state.
+
 ---
 
 ## 1. Thesis
@@ -405,7 +409,99 @@ Cheapest-highest-value first. Phase 0 is §4.
 
 ---
 
-## 8. Open questions & known limits
+## 8. Concurrency & liveness
+
+Two cross-cutting properties the per-graph entries above do not state
+individually: how each graph behaves as a capture streams in, and how it treats
+threads, processes and fibres. Both follow from the substrate, not from any one
+graph.
+
+### 8.1 Liveness — three tiers
+
+The scene is already live-capable. A live `asmspy --serve` capture is mirrored as
+an ordinary GROWING tab — *"the growing recording is not a second code path, it is
+the same model"* (`desktop/src/ui/shell.cpp:192`) — and each event batch that
+grows it re-decodes the streams and does a **lazy 3D re-weave** that preserves the
+interactive camera/HUD (`desktop/src/ui/shell.cpp:260`, 25 T6). Every graph is
+built from those same decoded streams, so it inherits that re-weave. The set
+splits three ways:
+
+- **Tier L1 — live (streams in per batch).** Every additive layer (§5) plus the
+  operand/call-tree scenes: confidence terrain, per-module residency skyline,
+  opcode-class terrain, read/write twin relief, working-set tide, observed-lifetime
+  pillars, data-access ribbon, kernel-crossing spurs, taint isochrone, SIMD lane
+  prism, module excursion ribbon. Dataflow, blame and statediff are emitted on the
+  live serve leg (docs 35 / 40 / 41), so the value/taint layers update too. "Live"
+  here means per-event-BATCH (the same growth gate `draw_live_views` uses), not
+  per-frame.
+- **Tier L2 — live but statistical (accrues over the sampling window).** The
+  survey-sourced graphs — misprediction arcs, the survey residency canopy,
+  dominant-path ridge — fill in as IBS samples arrive and stay labelled
+  `statistical`, never merged into exact. The confidence terrain exists precisely
+  to read this incoming tide honestly (*never-looked* vs *below-rate* vs
+  *captured*).
+- **Tier L3 — offline (needs a second run or a completed structure).** The
+  cross-recording scenes — Divergence worldline (two recordings), Ensemble
+  stability terrain (N completed runs) — cannot be live against a run that has not
+  happened. The pass-indexed scenes — Invocation stack, Computation-character over
+  passes — advance at pass-CLOSE granularity, not continuously; an open invocation
+  renders as a frayed prefix (the honesty rule, not a bug).
+
+Two caveats: the render-only `asmtest-viewer` opens a finished file and has NO live
+feed (live is the full-app / observer path); and the current model re-decodes the
+WHOLE growing recording each batch — fine for modest captures, a scaling concern
+for large/fast ones, where incremental (append-only) builders would be needed. That
+perf note joins the occlusion budget in §9.
+
+### 8.2 Threads — first-class
+
+`tid` is carried end to end: one Trajectory per thread
+(`desktop/src/space/trajectory.h:42`, `TrajPoint.tid` at
+`desktop/src/space/types.h:60`), per-thread stacks labelled `[stack:tidN]`, and
+tid on the syscall stream and the call tree. The existing scene already draws N
+per-thread trajectories and **cross-thread convergence** marks, keyed by unordered
+tid-pair per cell (`desktop/src/space/converge.cpp:84-114`) — two threads meeting on
+a cell is a visible crossing. Three catalog graphs make threads their organizing
+axis: the **Module excursion ribbon** puts tids on Z (one depth sheet per thread),
+the **Boundary curtain** is a time×tid floor, and the **Blame convergence forest** /
+crossing / misprediction layers inherit per-tid colour. Within one process,
+concurrency is well covered.
+
+### 8.3 Processes — 2D today; the 3D plane is single-process by construction
+
+The substrate is ONE virtual address space: the Hilbert plane projects a single
+compacted address domain, and the convergence model states its precondition
+outright — *"same address space: guaranteed structurally"*
+(`desktop/src/space/converge.h:61`). Two processes have different address spaces
+(and different ASLR), so co-locating them on one plane would fabricate a shared
+coordinate that does not exist (a D7 violation). Processes are modelled instead in
+the **2D topo view** — one card per process (leader, its threads, parent,
+invocation total), ordered by pid/tgid (`desktop/src/views/topo.h`). The
+cross-run scenes (Divergence, Ensemble) compare DIFFERENT recordings aligned by
+code identity — A/B/N comparison, **not concurrent co-resident processes**. So the
+catalog has no live multi-process 3D scene. The honest direction, if wanted, is
+either **per-process planes** as depth-stacked small multiples (reusing the
+exploded-evidence-stack machinery) or a discrete **process axis** — new design
+work, flagged here, never smuggled into the single-process substrate.
+
+### 8.4 Fibres — not modelled; a capture-layer gate, not a rendering choice
+
+There is NO fibre / coroutine / goroutine concept in the model or the schema. This
+is a fact about the CAPTURE layer, not an omission in the catalog: ptrace, Intel PT
+and IBS all see OS threads (tid); a fibre, coroutine or goroutine is a userspace
+stack swap WITHIN one OS thread, so a fibre switch looks like the same tid jumping
+stack/PC — indistinguishable from an ordinary call. Under D7 (never fabricate
+structure) no graph may draw fibre boundaries the recording never captured. The
+clean path is a **runtime-aware producer** that emits a fibre/coroutine id per step
+the way `tid` is carried today (a Go `goid`, a coroutine handle); once that field
+existed, a fibre would take its own lane or axis exactly as tid does in the
+Boundary curtain and Module excursion ribbon. Until a producer emits it,
+fibre-awareness is a HARD gate — recorded in the same spirit as the
+observed-data-span and SIMD-width gates in §9.
+
+---
+
+## 9. Open questions & known limits
 
 The genuine unknowns — missing producer fields, occlusion/perf risks, and the
 places 2D still wins (recorded here so they are not re-litigated).
@@ -424,7 +520,7 @@ places 2D still wins (recorded here so they are not re-litigated).
 
 ---
 
-## 9. Provenance
+## 10. Provenance
 
 Generated 2026-07-29 by a 17-agent grounded-ideation workflow (8 domain ideators
 → adversarial buildability+honesty critique → synthesis) under
