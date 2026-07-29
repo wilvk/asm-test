@@ -419,6 +419,25 @@ the pre-existing `test_shell` `attach/no-host reveals panes` bar was made
 environment-adaptive (it was RED on any checkout that had built `./build/asmspy`).
 Both docker lanes green (`test_ui` 28/28). · —.
 
+[40-segment-dataflow-by-invocation.md](40-segment-dataflow-by-invocation.md) —
+**segment the dataflow decode by `df_invocation`** (gap **L2** from
+[38](38-live-feed-completion-roadmap.md), the cleanest self-contained desktop win).
+`decode_streams` indexed `df_step`/`df_edge` by a flat `step` space, so a continuous
+`dataflow`/`auto` capture's passes (each restarting `step` at 0, 35 T1) aliased —
+offsets last-write-wins, ops/edges merged across passes sharing a step number — the
+last dataflow consumer that still conflated passes after the Scrubber segmented its
+register ring (35 T3). T1 refactors the df decode into a pure `decode_dataflow` core
+and adds `build_segmented_dataflow` (one `DataflowStream` per pass, bucketed by the
+`df_invocation` markers' `seq` exactly as `build_segmented_step_index` buckets
+regstate); `decode_streams` resolves `Streams::df` to the LATEST pass (the live
+default, mirroring `build_step_index`), so passes never conflate and a one-shot
+recording stays byte-identical to the flat decode (`test_streams`, `4b15f87`). T2
+caches the segments per recording and gives the Slice/Timeline/Loom panes a discrete
+per-pass invocation pager (`shell_apply_df_pass` / `shell_df_pass_pager`) — following
+the latest by default, pinnable to an earlier pass, no chrome for a one-shot. Pure
+decode + a selector: no engine, wire, or schema change. Authored 2026-07-29. ✅ 3/3
+· —.
+
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then
 09 (09-T1 — the emulator ring — is engine-only and can start any time).

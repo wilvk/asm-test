@@ -33,7 +33,11 @@
 > the code when you implement, the code wins — re-verify, then fix this doc in the
 > same change.
 >
-> **Status (2026-07-29) — ☐ 0/3.**
+> **Status (2026-07-29) — ✅ 3/3.** T1 the segmented decode + latest resolution
+> (`4b15f87`); T2 the per-pass invocation pager on Slice/Timeline/Loom
+> (`shell_apply_df_pass` + `shell_df_pass_pager`, following the latest by default,
+> pinnable, one-shot recordings unchanged); T3 this reconcile. Both `docker-desktop`
+> lanes green.
 
 ## Why this work exists
 
@@ -174,8 +178,8 @@ add a CHANGELOG line. Update this brief's status to ✅ 3/3.
 
 ## Claim
 
-| Task | Who · when |
-|---|---|
-| T1 the segmented decode + latest resolution | will · 2026-07-29 |
-| T2 the per-pass selector | will · 2026-07-29 |
-| T3 roadmap/changelog reconcile | will · 2026-07-29 |
+| Task | Who · when | Status |
+|---|---|---|
+| T1 the segmented decode + latest resolution | will · 2026-07-29 | ✅ `4b15f87` |
+| T2 the per-pass selector | will · 2026-07-29 | ✅ landed |
+| T3 roadmap/changelog reconcile | will · 2026-07-29 | ✅ landed |

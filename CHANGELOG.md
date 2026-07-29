@@ -8,6 +8,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Per-invocation dataflow views over a continuous capture**
+  (docs/internal/gui/40-segment-dataflow-by-invocation.md). A continuous
+  `dataflow`/`auto` capture appends many invocation passes into one recording, each
+  restarting `df_step` at 0 (delimited by a `df_invocation` marker). The desktop's
+  `decode_streams` indexed those steps in one flat space, so the passes aliased —
+  offsets were last-write-wins and operands/edges merged across passes that merely
+  shared a step number — the last dataflow consumer that still conflated passes
+  after the register Scrubber learned to segment its ring. `build_segmented_dataflow`
+  now splits them (one decoded stream per pass, bucketed exactly as the Scrubber's
+  `build_segmented_step_index` buckets regstate), `Streams::df` resolves to the
+  latest pass (the live default), and the Slice / Timeline / Loom panes carry a
+  per-pass invocation pager — following the latest by default, pinnable to an earlier
+  pass. A one-shot recording stays a single pass, byte-identical to before. Pure
+  desktop decode + a selector: no producer, wire, or schema change.
 - **`df_step` states its region base on the wire (`rbase`)**
   (docs/internal/gui/37-region-tag-on-df-step.md). 36 anchors a routine-relative
   `df_step` offset by *deriving* the base from a recording's single `codeimage`
