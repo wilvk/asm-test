@@ -3136,6 +3136,42 @@ grep -q '"k":"err"' "$RECDIR/serve_slice.asmtrace" \
     || fail "--serve: the refusal did not land inside the session slice — the filter rule is untested here"
 echo "  a session's slice is a valid .asmtrace ($slice_ev events, footer agrees once control lines are dropped)"
 
+# 39 T5: a session that ends on its OWN announces itself (T5.1, from the tracer
+# tail — an idle client learns without sending a command), and a `stop` for that
+# already-ended session is ACKed, not refused. Before, serve_reap ran at the top
+# of the command loop and cleared `joinable`, so the very next `stop` hit
+# "no session is running" — the desktop's Swap->stop knot. A bounded stream
+# session self-ends during the sleep, and the following `stop` must be acked.
+echo "--- asmspy --serve: a self-ended session is announced + its stop acked (39 T5) ---"
+T5_OUT="$RECDIR/serve_t5.ndjson"
+set +e
+{
+    printf '{"cmd":"start","mode":"stream","pid":%d,"max":2}\n' "$SRVPID"
+    sleep 1 # the bounded session self-ends here (2 insns); its terminal `session`
+            # event is announced with NO follow-up command driving it
+    printf '{"cmd":"stop"}\n' # for the ALREADY self-ended session: must be ACKed
+    printf '{"cmd":"quit"}\n'
+    sleep 1
+} | timeout 60 "$ASM" --serve >"$T5_OUT" 2>/dev/null
+t5rc=$?
+set -e
+[ "$t5rc" -eq 124 ] && fail "--serve T5 hung"
+grep -qE '"k":"session","state":"(stopped|skip)","mode":"stream"' "$T5_OUT" \
+    || fail "--serve T5: the self-ended stream session was never announced (T5.1)"
+grep -q '"k":"cmd","cmd":"stop"' "$T5_OUT" \
+    || fail "--serve T5: the stop for a self-ended session was not acked (T5.3)"
+if grep '"k":"err"' "$T5_OUT" | grep -q '"cmd":"stop"'; then
+    fail "--serve T5: the stop was REFUSED — serve_reap cleared its own precondition (the 39 knot): $(grep '"k":"err"' "$T5_OUT")"
+fi
+# The reap-ack must NOT turn a genuinely-empty stop into a false ack: a stop with
+# no session ever started is still refused.
+NS_OUT="$RECDIR/serve_nostop.ndjson"
+printf '{"cmd":"stop"}\n{"cmd":"quit"}\n' | timeout 30 "$ASM" --serve >"$NS_OUT" 2>/dev/null || true
+grep '"k":"err"' "$NS_OUT" | grep -q 'no session is running' \
+    || fail "--serve T5: a stop with no session ever started must still be refused"
+echo "  self-ended session announced; its stop acked; a no-session stop still refused"
+rm -f "$T5_OUT" "$NS_OUT"
+
 kill -9 "$SRVPID" 2>/dev/null || true
 wait "$SRVPID" 2>/dev/null || true
 SRVPID=""

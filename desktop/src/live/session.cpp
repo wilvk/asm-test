@@ -364,6 +364,12 @@ void LiveSession::feed_line(const std::string &line) {
             st_.skip_reason.clear();
             st_.last_stop_reason.clear();
             st_.paused_dropped = 0;
+            // 39 T5: a healthy new session must not inherit the PREVIOUS one's
+            // refusal banner. The four fields above are cleared here and this one
+            // pointedly was not, so a stale red "refused:" haunted the next
+            // capture (a self-ended session's "no session is running" being the
+            // very case 39 fixes). Clear it too.
+            st_.last_err.clear();
         } else if (state == "stopped" || state == "skip") {
             if (state == "skip") {
                 // A skip is a SUCCESS with nothing to report. Keeping it in a

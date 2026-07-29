@@ -66,6 +66,7 @@ void inspect_disconnect(InspectState &s) {
     // /proc scan (rows/selected_pid) and the typed asmspy path / ssh host
     // survive — reconnecting to the same target must not mean re-entering it.
     s.active.clear();
+    s.seen_sessions_ended = 0; // 39 T5: reset() zeroes the status counter too
     s.swap_pending = false;
     s.operator_paused = false;
     s.has_queued = false;
@@ -114,6 +115,7 @@ bool inspect_request_start(InspectState &s) {
     s.session.send_start(mode_name(s.want), s.selected_pid,
                          inspect_start_params(s));
     s.active.push_back(s.want);
+    s.awaiting_started = true; // 39 T5: a start is in flight until `started`
     return true;
 }
 
@@ -161,6 +163,31 @@ nlohmann::json inspect_start_params(const InspectState &s) {
         params["func"] = spec;
     }
     return params;
+}
+
+void inspect_reconcile_self_end(InspectState &s, const LiveStatus &st) {
+    // A start the desktop issued resolves once the host confirms it (Running) or
+    // the host is gone — clear the in-flight guard then.
+    if (st.state != LiveState::Idle)
+        s.awaiting_started = false;
+    if (st.sessions_ended == s.seen_sessions_ended)
+        return; // no NEW terminal event since we last reconciled
+    s.seen_sessions_ended = st.sessions_ended; // consume the delta
+    // Free the ptrace jack ONLY for a genuine self-end: the host is idle AND the
+    // desktop has no start in flight. A SWAP sends stop+start together, so the
+    // old session's terminal event must not free the newly-armed session before
+    // its `started` lands (awaiting_started bridges that gap; keying on
+    // state==Idle alone would misfire if the two events split across frames). A
+    // user-driven Stop/Swap already updated `active`, so re-freeing — or freeing
+    // an empty set — here is harmless. The serve host runs ONE ptrace capture at
+    // a time, so a terminal event frees whatever ptrace mode held the jack; free
+    // views were never on it.
+    if (st.state == LiveState::Idle && !s.awaiting_started)
+        s.active.erase(std::remove_if(s.active.begin(), s.active.end(),
+                                      [](LiveMode m) {
+                                          return mode_uses_ptrace(m);
+                                      }),
+                       s.active.end());
 }
 
 void inspect_attach_full_detail(InspectState &s, long pid) {
@@ -220,6 +247,7 @@ void inspect_confirm_swap(InspectState &s) {
     s.session.send_start(mode_name(s.want), s.selected_pid,
                          inspect_start_params(s));
     s.active.push_back(s.want);
+    s.awaiting_started = true; // 39 T5: the swap's new start is in flight
 }
 
 void inspect_arm_queue(InspectState &s) {
@@ -482,6 +510,19 @@ void draw_patch_bay(InspectState &s) {
     if (s.want == LiveMode::Tree)
         tree_err = draw_tree_filter(s.observer);
 
+    // 39 T5: reconcile the patch bay's belief against sessions that ended on
+    // their OWN (one-shot `auto`, hit `max`, target exited). Every `active`
+    // mutation elsewhere is a user action, so NOTHING freed the jack for a
+    // self-end — the pane held [Auto] forever and budget-refused every Start,
+    // offering only a Swap whose stop the host then refused (the very knot 39
+    // fixes end to end). Key on the terminal-event COUNT, not on state==Idle
+    // (which also holds in the gap between a Start and its `started` reply, and
+    // would spuriously clear a just-started session). Done HERE, before the queue
+    // poll, so a queued want sees the freed jack in the same frame. The serve host
+    // runs ONE ptrace capture at a time, so a terminal event frees whatever ptrace
+    // mode held the jack; free views were never on it.
+    inspect_reconcile_self_end(s, s.session.status());
+
     // The Queue path (23 T3): a queued want starts the MOMENT the jack frees —
     // never an auto-swap, because budget_queue_ready is true only when the jack is
     // genuinely free (the blocker stopped/ended). The one-ptrace-jack invariant is
@@ -490,6 +531,7 @@ void draw_patch_bay(InspectState &s) {
         s.session.send_start(mode_name(s.queued_want), s.selected_pid,
                              s.queued_params);
         s.active.push_back(s.queued_want);
+        s.awaiting_started = true; // 39 T5: the queued start is in flight
         s.has_queued = false;
     }
 

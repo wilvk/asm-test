@@ -1661,6 +1661,70 @@ int main() {
               "a queued whole-process mode carries no params, as its Start would");
     }
 
+    // --- 39 T5: the self-end reconcile frees the ptrace jack no user action
+    // would (a one-shot `auto` that "starts then stops"). inspect_reconcile_self_
+    // end keys on LiveStatus::sessions_ended; an in-flight start (awaiting_started,
+    // a Swap's stop+start pair) must NOT be freed before its `started` lands.
+    {
+        InspectState is;
+        is.active.push_back(LiveMode::Auto); // a live auto capture holds the jack
+        LiveStatus st;                       // it ended on its own
+        st.state = LiveState::Idle;
+        st.sessions_ended = 1;
+        inspect_reconcile_self_end(is, st);
+        check("reconcile/self-end-frees-jack",
+              is.active.empty() && is.seen_sessions_ended == 1,
+              "a self-ended session frees the ptrace jack the pane held forever "
+              "(the 'starts then stops, refused: no session' knot)");
+        // No NEW terminal event -> a no-op (idempotent, not a re-clear each frame).
+        is.active.push_back(LiveMode::Auto);
+        inspect_reconcile_self_end(is, st); // sessions_ended still 1
+        check("reconcile/no-delta-no-op", is.active.size() == 1,
+              "without a new terminal event the reconcile does nothing");
+
+        // A swap's newly-armed session (awaiting_started) is NOT freed by the OLD
+        // session's terminal event, even in the brief Idle before the new start
+        // lands (the split-frame case state==Idle alone would misfire on).
+        InspectState sw;
+        sw.active.push_back(LiveMode::Dataflow); // the newly-armed swap target
+        sw.awaiting_started = true;              // its `started` has not landed
+        LiveStatus swst;
+        swst.state = LiveState::Idle; // brief Idle between old stop and new start
+        swst.sessions_ended = 1;      // the OLD session's terminal event
+        inspect_reconcile_self_end(sw, swst);
+        check("reconcile/in-flight-start-not-freed",
+              sw.active.size() == 1 && sw.active[0] == LiveMode::Dataflow,
+              "a swap's newly-armed session is not freed before its started lands");
+        // Once the host confirms the start (Running), the guard clears and the
+        // jack stays held.
+        InspectState r;
+        r.active.push_back(LiveMode::Dataflow);
+        r.awaiting_started = true;
+        LiveStatus run;
+        run.state = LiveState::Running;
+        run.sessions_ended = 1;
+        inspect_reconcile_self_end(r, run);
+        check("reconcile/running-clears-guard-holds-jack",
+              !r.awaiting_started && r.active.size() == 1,
+              "a confirmed (Running) start clears the in-flight guard and keeps "
+              "the jack");
+    }
+
+    // --- 39 T5: a healthy new session must not inherit the previous one's refusal
+    // banner. feed_line an `err` (sets last_err), then a `started` — last_err must
+    // clear, so a stale red "refused:" does not haunt the next capture.
+    {
+        LiveSession sess;
+        sess.feed_line(
+            R"({"k":"err","reason":"no session is running","cmd":"stop"})");
+        check("t5/err-sets-last-err", !sess.status().last_err.empty(),
+              "an err note surfaces as last_err (the refusal banner)");
+        sess.feed_line(
+            R"({"k":"session","state":"started","mode":"log","pid":4242})");
+        check("t5/started-clears-last-err", sess.status().last_err.empty(),
+              "a new session's `started` clears the stale refusal banner");
+    }
+
     // --- inspect_request_start refuses an illegal tree filter — the wire-safety the
     // deleted obs_tree_start_command enforced (it returned "" on a bad filter). The
     // patch bay greys Start on it, but the backstop must hold for every caller.
@@ -1719,11 +1783,27 @@ int main() {
               "full-detail attach uses auto — the fullest un-named capture");
         check("attach/ring", at.steps,
               "full-detail attach arms the register ring (--steps)");
-        check("attach/no-host reveals panes",
-              at.want_open_connect && at.want_open_capture,
-              "with no host, attach reveals the Connect + Live-capture panes");
-        check("attach/no-host does not start", !at.perturb_pending,
-              "with no host there is nothing to arm yet");
+        // inspect_attach_full_detail auto-connects from the saved settings, so
+        // whether a host actually comes up depends on the environment — a built
+        // ./build/asmspy on a dev box spawns one; the engine-free desktop lane has
+        // none. Assert the invariant for WHICHEVER happened rather than depending
+        // on asmspy's absence (39 T5: this used to be RED on any checkout that had
+        // built the CLI). The Live-capture pane is revealed either way.
+        check("attach/opens-capture", at.want_open_capture,
+              "full-detail attach always lands on the Live-capture pane");
+        if (at.host_started) {
+            // The auto-connect succeeded: the capture is armed on the live host
+            // and Connect is not forced (a host is already up).
+            check("attach/host-up-no-connect-reveal", !at.want_open_connect,
+                  "a successful auto-connect does not force the Connect pane");
+        } else {
+            // No host: reveal Connect so the user can bring one up, and — with no
+            // host — nothing is armed yet.
+            check("attach/no-host-reveals-connect", at.want_open_connect,
+                  "with no host, attach reveals the Connect pane to bring one up");
+            check("attach/no-host-does-not-arm", !at.perturb_pending,
+                  "with no host there is nothing to arm yet");
+        }
 
         // The perturb confirm now fires ONLY for the unrecoverable arm64
         // blocking-syscall kill — every other target starts immediately (the "just

@@ -203,6 +203,22 @@ struct InspectState {
     // decided HERE so the UI can render an occupied jack and offer a swap
     // rather than firing a command that comes back as an error.
     std::vector<LiveMode> active;
+    // 39 T5: the count of terminal `session` events already reconciled against
+    // `active`. A capture that ends on its OWN (one-shot `auto`, hit `max`, target
+    // exited) increments LiveStatus::sessions_ended, but NOTHING cleared the
+    // patch bay's belief — every `active` mutation is a user action — so an idle
+    // pane held [Auto] forever and budget-refused every Start. Tracking the count
+    // lets the pane free the ptrace jack the frame a session self-ends (keyed on
+    // the terminal EVENT, not on state==Idle, which also holds in the gap between
+    // a Start and its `started` reply). Reset on Disconnect.
+    uint64_t seen_sessions_ended = 0;
+    // 39 T5: a start the desktop issued (Start / Swap / Queue) whose `started`
+    // reply has not landed yet — the jack is "held" from the desktop's intent
+    // even though the host has not confirmed. It stops the self-end reconcile
+    // above from freeing a session between its send_start and its `started`
+    // (the swap's stop+start pair is the case that needs it). Cleared once the
+    // host resolves the start (state leaves Idle).
+    bool awaiting_started = false;
     LiveMode want = LiveMode::Log;
     // Set when a start was blocked: the swap the user may confirm. A swap
     // stops someone else's capture, so it is never silent.
@@ -312,6 +328,15 @@ void inspect_arm_queue(InspectState &s);
 // register ring is armed on a dataflow/auto capture; empty for the whole-process
 // modes. Pure over InspectState; test_shell drives it.
 nlohmann::json inspect_start_params(const InspectState &s);
+
+// 39 T5: reconcile the patch bay's `active` belief against a session that ended
+// on its OWN (one-shot `auto`, hit `max`, target exited) — freeing the ptrace
+// jack no user action would, so an idle pane stops holding [Auto] and refusing
+// every Start. Keyed on the terminal-event COUNT (LiveStatus::sessions_ended),
+// guarded so an in-flight start (a Swap's stop+start pair) is not freed before
+// its `started` lands. Pure over (InspectState, LiveStatus); draw_patch_bay
+// calls it each frame and test_shell drives it directly.
+void inspect_reconcile_self_end(InspectState &s, const LiveStatus &st);
 
 // The "full detail" attach (a Processes-pane double-click, or the right-click
 // "Attach & trace"): capture `pid` at the fullest detail an un-named target

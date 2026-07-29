@@ -3119,6 +3119,9 @@ typedef struct {
     pthread_t th;
     atomic_int running; /* 1 while the tracer thread is live            */
     int joinable;       /* a thread exists and has not been joined yet  */
+    int end_announced; /* 39 T5: the terminal `session` event was emitted by the
+                         * tracer tail on a self-end, so serve_stop must not
+                         * emit a second one (reset per session start)      */
     FILE *out;          /* the client's event stream                    */
     pthread_mutex_t mu; /* serialises lifecycle lines against events    */
     rec_t rec;
@@ -3839,6 +3842,10 @@ static void serve_run_engine(serve_session_t *s) {
     }
 }
 
+/* Defined below with serve_stop (both are session-teardown helpers), but the
+ * tracer tail calls it to announce a self-end (39 T5), so forward-declare it. */
+static void serve_emit_session_end(serve_session_t *s, const char *reason);
+
 static void *serve_tracer(void *arg) {
     serve_session_t *s = arg;
     const char *backend = "ptrace-syscalls";
@@ -3897,30 +3904,30 @@ static void *serve_tracer(void *arg) {
         fflush(s->out);
         pthread_mutex_unlock(&s->mu);
     }
+    /* 39 T5: a session that ends on its OWN (hit `max`, target exited, one-shot
+     * `auto`) announces itself from HERE, right after the `end` footer, so an
+     * idle client learns immediately — rather than only when it next sends a
+     * command, which is what triggers serve_reap. An EXPLICIT stop set s->stop
+     * first and is announced by serve_stop with its own reason; skip that case
+     * (end_announced then guards serve_stop's emit against a double). The mutex
+     * is free here (rec_close released it above), and serve_emit_session_end
+     * re-locks it via serve_emitf. */
+    if (!atomic_load(&s->stop)) {
+        serve_emit_session_end(s, "max");
+        s->end_announced = 1;
+    }
     atomic_store(&s->running, 0);
     return NULL;
 }
 
 /* ---- session lifecycle --------------------------------------------- */
 
-/* End the running session THROUGH THE ENGINE'S OWN TEARDOWN: set the stop
- * flag, then repeatedly SIGALRM the tracer thread to unblock a pending
- * waitpid, and join. This is copied from the TUI's live-view teardown and is
- * the only supported way out of a session — a cancel or a kill would leave a
- * planted int3 in the target's text and the target would later die on it. */
-static void serve_stop(serve_session_t *s, const char *reason) {
+/* Emit the terminal `session` event for a finished session — EXACTLY once per
+ * session, either from the tracer tail on a SELF-END (39 T5, so an idle client
+ * learns immediately) or from serve_stop on an EXPLICIT stop. Reads
+ * rc/events/paused_dropped/p.mode; the caller guards the once via end_announced. */
+static void serve_emit_session_end(serve_session_t *s, const char *reason) {
     char sk[512], mode[32];
-    if (!s->joinable)
-        return;
-    atomic_store(&s->stop, 1);
-    for (int i = 0; i < 200 && atomic_load(&s->running); i++) {
-        pthread_kill(s->th, SIGALRM);
-        struct timespec ts = {0, 10 * 1000 * 1000}; /* 10ms */
-        nanosleep(&ts, NULL);
-    }
-    pthread_join(s->th, NULL);
-    s->joinable = 0;
-
     snprintf(mode, sizeof mode, "%s", serve_mode_name(s->p.mode));
     if (s->rc > 0) {
         /* A POSITIVE code is a successful session with nothing to report —
@@ -3952,6 +3959,29 @@ static void serve_stop(serve_session_t *s, const char *reason) {
                         "\"reason\":\"%s\"",
                         mode, s->events, reason);
     }
+}
+
+/* End the running session THROUGH THE ENGINE'S OWN TEARDOWN: set the stop
+ * flag, then repeatedly SIGALRM the tracer thread to unblock a pending
+ * waitpid, and join. This is copied from the TUI's live-view teardown and is
+ * the only supported way out of a session — a cancel or a kill would leave a
+ * planted int3 in the target's text and the target would later die on it. */
+static void serve_stop(serve_session_t *s, const char *reason) {
+    if (!s->joinable)
+        return;
+    atomic_store(&s->stop, 1);
+    for (int i = 0; i < 200 && atomic_load(&s->running); i++) {
+        pthread_kill(s->th, SIGALRM);
+        struct timespec ts = {0, 10 * 1000 * 1000}; /* 10ms */
+        nanosleep(&ts, NULL);
+    }
+    pthread_join(s->th, NULL);
+    s->joinable = 0;
+    /* 39 T5: the tracer tail announces its OWN self-end, so emit here only for a
+     * stop that interrupted a still-running session (or a self-end that raced in
+     * before the tracer reached its tail — end_announced guards the double). */
+    if (!s->end_announced)
+        serve_emit_session_end(s, reason);
     s->p.mode = SM_NONE;
 }
 
@@ -4256,7 +4286,17 @@ static int serve_loop(FILE *in, FILE *out) {
     while (fgets(line, sizeof line, in)) {
         char cmd[32] = "";
         const char *why = NULL;
+        /* 39 T5: serve_reap runs at the TOP, before dispatch, and frees a
+         * self-finished session's jack (setting joinable = 0). A `stop`/`pause`
+         * for that very session then found its precondition — a running session —
+         * already gone and refused it: a first, non-redundant stop for a
+         * self-ended session was ALWAYS refused. Capture whether a jack was held
+         * BEFORE the reap, so a command the reap just freed is ACKed (the session
+         * did end, idempotently) rather than erroring on a precondition the host
+         * itself removed. */
+        int was_joinable = s.joinable;
         serve_reap(&s); /* a self-finished session frees its jack */
+        int reaped = was_joinable && !s.joinable;
 
         if (sj_str(sj_find(line, "cmd"), cmd, sizeof cmd) != 0) {
             serve_err(&s, "", "every command needs a string \"cmd\"");
@@ -4269,7 +4309,14 @@ static int serve_loop(FILE *in, FILE *out) {
         }
         if (strcmp(cmd, "stop") == 0) {
             if (!s.joinable) {
-                serve_err(&s, "stop", "no session is running");
+                if (reaped) {
+                    /* The session already ended on its own; the reap above freed
+                     * the jack (and the tracer already announced the end). ACK
+                     * the stop rather than refuse its own reap's victim. */
+                    serve_emitf(&s, "cmd", "\"cmd\":\"stop\"");
+                } else {
+                    serve_err(&s, "stop", "no session is running");
+                }
                 continue;
             }
             serve_emitf(&s, "cmd", "\"cmd\":\"stop\"");
@@ -4283,7 +4330,14 @@ static int serve_loop(FILE *in, FILE *out) {
                 continue;
             }
             if (!s.joinable) {
-                serve_err(&s, "pause", "no session is running");
+                if (reaped) {
+                    /* Same as stop: a pause for a session the reap just closed is
+                     * acked as a no-op, not refused for a gone precondition. */
+                    serve_emitf(&s, "cmd", "\"cmd\":\"pause\",\"on\":%s",
+                                on ? "true" : "false");
+                } else {
+                    serve_err(&s, "pause", "no session is running");
+                }
                 continue;
             }
             s.rec.paused = on;
@@ -4350,6 +4404,7 @@ static int serve_loop(FILE *in, FILE *out) {
         atomic_store(&s.running, 1);
         s.rc = 0;
         s.events = 0;
+        s.end_announced = 0; /* 39 T5: this session has not announced its end */
         s.autoname[0] = '\0';
         s.skip_note[0] = '\0';
         /* `version` is 0-based PER SESSION's tracked span (schema): a second
