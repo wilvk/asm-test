@@ -16,17 +16,29 @@
 > internally, reports the count, and returns only `cands[0]`
 > ([asmspy.c:2634-2649](../../../cli/asmspy.c#L2634)), so the walk's guard
 > `attempt + 1 < ncand` ([asmspy.c:3746](../../../cli/asmspy.c#L3746)) sees
-> `ncand == 0` and never fires. **On an AMD box the better sampler produces the
-> less resilient capture.**
+> `ncand == 0` and never fires. **On an AMD box where the IBS path actually opens,
+> the better sampler produces the less resilient capture.**
 >
-> Authored 2026-07-29, verified against HEAD `0b52704`, and measured on this
-> machine: **Ryzen 9 4900HS, family 0x17 (Zen 2 / Renoir), `perf_event_paranoid=2`,
-> `ibs_op` + `ibs_fetch` present, no `amd_lbr_v2`** — the box
+> Authored 2026-07-29, verified against HEAD `0b52704`. **Originally measured on a
+> Ryzen 9 4900HS** (family 0x17, Zen 2 / Renoir, `perf_event_paranoid=2`, no
+> `amd_lbr_v2`) — the IBS-without-LBR box
 > [amd-hardware-validation.md](../amd-hardware-validation.md) calls the only place
-> the IBS-without-LBR path runs. If a cited file:line disagrees with the code when
-> you implement, the code wins — re-verify, then fix this doc in the same change.
+> that degradation path runs. **Re-verified 2026-07-29 against HEAD `54b004a` on a
+> Ryzen 9 9950X** (family 26 / `0x1A`, Zen 5, model 68), `perf_event_paranoid=4`,
+> `ibs_op` + `ibs_fetch` + `swfilt` present, **`amd_lbr_v2` present**. On the 9950X
+> at `paranoid=4`, `asmtest_ibs_available()` still reports IBS present (it never
+> reads `paranoid`), but `perf_event_open` is refused (`EACCES`) for **both** IBS-Op
+> and `SW_TASK_CLOCK` unprivileged, so `--sample` and `--dataflow --auto` both
+> self-skip (*"needs perf_event_paranoid<=2 or CAP_PERFMON"*) — auto takes the IBS
+> branch and does **not** fall back to the sw sampler. **So the IBS-vs-sw inversion
+> this brief headlines reproduces on this box only with CAP_PERFMON or a lowered
+> `paranoid` (e.g. `make docker-hwtrace-privileged`);** the picker logic itself is
+> host-independent and testable on every lane. If a cited file:line disagrees with
+> the code when you implement, the code wins — re-verify, then fix this doc in the
+> same change.
 >
-> **Status (2026-07-29) — ☐ 0/6.** Not started.
+> **Status (2026-07-29) — ☐ 0/6.** Not started; re-verified still 0/6 against HEAD
+> `54b004a` on the Zen 5 box (2026-07-29).
 
 ## Why this work exists
 
@@ -66,10 +78,10 @@ recovery to the path this host takes.
 
 **The second half.** When a pass does end — cleanly, skipped, or one-shot by design
 — the desktop never learns. `InspectState::active` is mutated in five places
-([inspect_door.cpp](../../../desktop/src/ui/inspect_door.cpp) 68, 179, 279, 420,
-550) and every one is a user action; nothing reconciles it against a self-ended
-session, and :279 sits inside `if (session.growing())` so it is unreachable once the
-footer lands. `active` keeps `[Auto]` forever, `budget_can_start` refuses every
+([inspect_door.cpp](../../../desktop/src/ui/inspect_door.cpp) 68, 181, 281, 452,
+594) and every one is a user action; nothing reconciles it against a self-ended
+session, and :281 sits inside `if (session.growing())` (the guard at :263) so it is
+unreachable once the footer lands. `active` keeps `[Auto]` forever, `budget_can_start` refuses every
 frame, and the pane offers only Swap. Clicking Swap sends `stop` — and the host's
 command loop runs `serve_reap()` at the **top**, before dispatch
 ([asmspy.c:4189](../../../cli/asmspy.c#L4189)), which clears `joinable`, so the stop
@@ -83,7 +95,7 @@ printf '{"cmd":"stop"}\n{"cmd":"quit"}\n' | ./build/asmspy --serve
 ```
 
 The desktop renders that as `refused: %s`
-([inspect_door.cpp:220](../../../desktop/src/ui/inspect_door.cpp#L220)) in the same
+([inspect_door.cpp:222](../../../desktop/src/ui/inspect_door.cpp#L222)) in the same
 frame as a contradictory success toast, *"session ended: max"*.
 
 ## What already exists (verified 2026-07-29)
@@ -106,7 +118,7 @@ frame as a contradictory success toast, *"session ended: max"*.
   path just hardcodes `0, 0, 1, 1` ([asmspy.c:3733](../../../cli/asmspy.c#L3733)).
 - **The lanes.** `cli-smoke` runs on `ubuntu-latest` **and** `ubuntu-24.04-arm`
   (real Neoverse-N2, not qemu). `docker-cli-ibs` exists
-  ([mk/docker.mk:819](../../../mk/docker.mk#L819)) but is referenced by **no**
+  ([mk/cli.mk:689](../../../mk/cli.mk#L689)) but is referenced by **no**
   workflow. **No CI lane has AMD silicon**: the self-hosted `amd-zen` lane in
   `hw.yml` is guarded by `vars.HW_RUNNER_AMD_ZEN`, currently `0` and de-registered
   ([ci/runners.md:276](../ci/runners.md)). So on CI this brief's logic must be
@@ -169,9 +181,11 @@ still must not silently pass — assert the skip reason names `perf` or the
 substrate, mirroring the existing sw-leg guard against *"an empty/vague reason (the
 --sample lesson)"* ([cli_smoke.sh:658-661](../../../cli/cli_smoke.sh#L658)).
 
-**Done when.** On this Zen 2 box a first candidate that never re-enters walks to the
-second and says so on the wire; reverting the signature fails a named check; the
-arm64 lane stays green (both samplers self-skip there — see Constraints).
+**Done when.** On an AMD box with the IBS path live (CAP_PERFMON or `paranoid<=2`;
+e.g. `make docker-hwtrace-privileged` — on this 9950X at `paranoid=4` it self-skips)
+a first candidate that never re-enters walks to the second and says so on the wire;
+reverting the signature fails a named check; the arm64 lane stays green (both
+samplers self-skip there — see Constraints).
 
 ### T3 — an empty window is a retry, not a verdict; and put the window on the wire  (M)
 
@@ -185,7 +199,7 @@ regions."
    two facts distinct exactly as the code already does: *"`<0` = the SAMPLER
    self-skipped (perf refused); `0` = it ran and nothing qualified. Two different
    facts about two different subsystems, so they must not share a code or a reason"*
-   ([asmspy.c:3696-3699](../../../cli/asmspy.c#L3696)).
+   ([asmspy.c:3696-3698](../../../cli/asmspy.c#L3696)).
 2. Thread the sample window as a start param (the serve grammar already validates
    `ms`; it is simply wired to the wrong engine) and as a CLI flag, defaulting to
    `AUTO_WINDOW_MS` so nothing changes unasked. Surface it in the capture pane
@@ -245,20 +259,20 @@ command is refused for a precondition the host itself just removed.
    arrives until the user acts.
 2. **Free the desktop's jack.** Reconcile `InspectState::active` against
    `LiveStatus::sessions_ended`, immediately before the Queue poll
-   ([inspect_door.cpp:389](../../../desktop/src/ui/inspect_door.cpp#L389)) so the
+   ([inspect_door.cpp:409](../../../desktop/src/ui/inspect_door.cpp#L409)) so the
    queue sees the freed jack in the same frame. **Ships with step 1** — with no next
    command, `sessions_ended` never increments and the reconciliation never fires.
 3. **Stop refusing the reap's own victim.** Capture `joinable` before
    `serve_reap` ([asmspy.c:4189](../../../cli/asmspy.c#L4189)) and, when the reap
    just fired, ack the `stop` instead of erroring. Same shape for `pause`
-   ([:4214](../../../cli/asmspy.c#L4214)).
+   ([:4215](../../../cli/asmspy.c#L4215)).
 4. **Clear `last_err` on a new session.** The `started` branch
-   ([session.cpp:357-366](../../../desktop/src/live/session.cpp#L357)) already clears
+   ([session.cpp:358-366](../../../desktop/src/live/session.cpp#L358)) already clears
    four stale fields and pointedly not this one, so a red *"refused:"* banner haunts
    the next healthy capture.
 5. **Pass the start params on restart.** `inspect_confirm_swap`
-   ([inspect_door.cpp:181](../../../desktop/src/ui/inspect_door.cpp#L181)) and the
-   Queue poll ([:390](../../../desktop/src/ui/inspect_door.cpp#L390)) call
+   ([inspect_door.cpp:183](../../../desktop/src/ui/inspect_door.cpp#L183)) and the
+   Queue poll ([:410](../../../desktop/src/ui/inspect_door.cpp#L410)) call
    `send_start(mode, pid)` with no third argument, silently dropping `steps`,
    `continuous` and the region — so a restarted `auto` comes back ringless and
    one-shot, and a restarted `trace`/`dataflow` is refused outright for want of a
@@ -269,10 +283,11 @@ command is refused for a precondition the host itself just removed.
 **cannot** reproduce the refusal — give it a `joinable` notion so the stale-state
 path is representable, then assert in `test_inspect`/`test_shell` that after a
 self-ended session the jack is free, a restart carries its params, and no refusal
-banner survives it. Note `desktop_test_shell` is currently **red** on this checkout
-(`attach/no-host reveals panes`, `attach/no-host does not start`) because
-`resolve_asmspy_path` finds a real `./build/asmspy`; fix or quarantine that first,
-or the new bars land on an already-failing suite.
+banner survives it. Note `desktop_test_shell` is currently **red** on this checkout (one bar:
+`attach/no-host reveals panes`) because `resolve_asmspy_path` finds a real
+`./build/asmspy`; `attach/no-host does not start` no longer fails (`e6d827a` scoped
+the perturb confirm to the arm64 blocking-syscall case only). Fix or quarantine that
+first, or the new bars land on an already-failing suite.
 
 **Done when.** Start + Arm a target that ends one-shot: the pane returns to idle, the
 jack frees, no refusal appears, and a second Start works without a Swap.
@@ -283,12 +298,15 @@ jack frees, no refusal appears, and a second Start works without a Swap.
 1. Surface the pick honestly in the capture pane: which sampler and rule was used,
    which attempt of how many, and — when it skipped — the substrate reason verbatim.
    The wire already carries all of it via `serve_emit_pick`; the pane discards it.
-   A user on an Intel host and one on this Zen 2 box are getting **different
+   A user on an Intel host and one on an AMD box are getting **different
    selection rules**, and the UI says nothing.
 2. Fix two stale references in [38](38-live-feed-completion-roadmap.md): its text
-   says *"the closable remainder is L1–L7"* while the table ends at L6, and its AMD
-   bullet links `amd-live-validation` to `CLAUDE.md`, which has no such section —
-   the ledger is [amd-hardware-validation.md](../amd-hardware-validation.md).
+   ([38:93](38-live-feed-completion-roadmap.md)) says *"the closable remainder is
+   L1–L7"* while the table ends at L6 (adding T6.3's `auto` row as **L7** resolves
+   this the other way — do one or the other, not neither), and its AMD bullet
+   ([38:64](38-live-feed-completion-roadmap.md)) links `amd-live-validation` to
+   `../../../CLAUDE.md`, which has no such section — the ledger is
+   [amd-hardware-validation.md](../amd-hardware-validation.md).
 3. `CHANGELOG.md`, this README's row, and doc 38's L-table (add the `auto`
    reliability row it currently lacks — the audit recorded the *survey stream* as a
    permanent AMD gate and never noticed that the region *pick* has a portable
@@ -367,5 +385,8 @@ not pass count). The desktop consumers whose emptiness prompted this are
 budget patch-bay are [07](07-serve-live-host.md); the capture pane is
 [08](08-observer-views.md). Honesty chrome D7 / [23](23-graded-truth-layer.md);
 wording D7 / [24](24-one-visual-language.md). Host ledgers:
-[amd-hardware-validation.md](../amd-hardware-validation.md) and the Zen 2 empirical
-record in [analysis/](../analysis/2026-07-12-zen2-ibs-tracing-review.md).
+[amd-hardware-validation.md](../amd-hardware-validation.md) (which already records
+this 9950X — the 2026-07-20 and 2026-07-22 Zen 5 entries), the Zen 2 empirical
+record in [analysis/](../analysis/2026-07-12-zen2-ibs-tracing-review.md), and the
+Zen 5 privileged-LBR findings in
+[analysis/](../analysis/2026-07-12-zen5-privileged-lbr-findings.md).
