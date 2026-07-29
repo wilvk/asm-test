@@ -442,6 +442,9 @@ void shell_select_mode(ShellState &s, Mode m) {
         // draw_shell) rather than forcing the Connect pane open. Connect stays a
         // fallback: draw_shell reveals it if the auto-connect fails.
         s.inspect.want_autoconnect = true;
+        // Bring the Processes pane forward so the target picker takes focus, not
+        // whichever peer (Connect / Live capture) last held its dock tab.
+        s.inspect.want_focus_processes = true;
         break;
     case Mode::Author:
         s.show_author = true;
@@ -2359,6 +2362,12 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
     }
     if (pane_shown(s, kPaneProcesses)) {
         bool open = true;
+        // Consumed once (Capture-mode entry): raise Processes to its dock node's
+        // active tab so the target picker is what the user lands on.
+        if (s.inspect.want_focus_processes) {
+            s.inspect.want_focus_processes = false;
+            ImGui::SetNextWindowFocus();
+        }
         if (ImGui::Begin(kPaneProcesses, &open))
             draw_processes_pane(s.inspect);
         ImGui::End();

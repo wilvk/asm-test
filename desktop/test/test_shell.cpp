@@ -1000,6 +1000,8 @@ int main() {
               "Capture must open the Processes pane");
         check("20t2/capture-autoconnects", es.inspect.want_autoconnect,
               "Capture must request an auto-connect from saved Settings");
+        check("20t2/capture-focuses-processes", es.inspect.want_focus_processes,
+              "Capture must ask draw_shell to focus the Processes pane");
         check("20t2/capture-no-forced-connect", !es.pane_open[kPaneConnect],
               "Capture must not force the Connect pane open");
         shell_select_mode(es, Mode::Learn);

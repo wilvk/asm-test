@@ -180,6 +180,11 @@ struct InspectState {
     // shell_select_mode, consumed once in draw_shell; a failed connect falls back
     // to revealing Connect (so its host_error is visible).
     bool want_autoconnect = false;
+    // Raised alongside want_autoconnect when Capture mode is entered: the docked
+    // shell brings the Processes pane forward (SetNextWindowFocus) so it wins its
+    // dock node's tab bar rather than opening behind a peer (Connect / Live
+    // capture). Consumed once in draw_shell; no-op in the single-window shell.
+    bool want_focus_processes = false;
     // 34 T2: the Live-capture "View in 3D overview" handoff — raised by the button
     // in draw_live_views, consumed once in draw_shell to jump the active tab to the
     // live capture and select its 3D inner tab (want_open_tab + want_view_id). Like
