@@ -545,22 +545,17 @@ void draw_obs_hotedges(const HotEdgeView &v, ObserverState &s,
 }
 
 // --- T5 ---------------------------------------------------------------------
-std::string draw_obs_tree(const TreeView &v, ObserverState &s, long pid,
-                          const std::string &rec_id,
-                          const std::function<void(const dt_link &)> &go) {
-    std::string cmd;
-    chrome_line(v.chrome);
-    skip_line(v.skip);
-    if (v.have_effective)
-        ImGui::TextDisabled(
-            "running with: depth=%d focus=%s module=%s tid=%ld follow=%s",
-            v.effective.depth,
-            v.effective.focus.empty() ? "(none)" : v.effective.focus.c_str(),
-            v.effective.module.empty() ? "(none)" : v.effective.module.c_str(),
-            v.effective.tid, v.effective.follow ? "yes" : "no");
-
-    ImGui::SeparatorText("filter (engine-side — it bounds what is EMITTED, so "
-                         "the depths stay true)");
+// The tree-capture filter editor (depth / focus / module / tid / follow): a
+// `tree` capture's ENGINE-side bound on what it EMITS, so the surviving depths
+// stay true (tree.h). Pure input state — it mutates s.filter and the edit buffers
+// and needs no built recording, so the patch bay draws it beside the mode picker,
+// where every other mode's config already lives (region, --steps, continuous).
+// Returns the filter validation error ("" = legal) in the serve loop's own words,
+// so the one Start there can gate on it; the illegal case is also shown inline in
+// red, beside the field that is wrong.
+std::string draw_tree_filter(ObserverState &s) {
+    ImGui::SeparatorText("tree filter (engine-side — it bounds what is EMITTED, "
+                         "so the depths stay true)");
     ImGui::SetNextItemWidth(120);
     ImGui::InputInt("depth (0 = unlimited)", &s.filter.depth);
     ImGui::InputText("focus", s.focus_buf, sizeof s.focus_buf);
@@ -578,23 +573,28 @@ std::string draw_obs_tree(const TreeView &v, ObserverState &s, long pid,
         // The client refuses first, in the same words the server would use —
         // so nobody learns the rule by having a command bounce.
         ImGui::TextColored(kBad, "%s", err.c_str());
-    } else {
-        ImGui::BeginDisabled(pid <= 0);
-        if (ImGui::Button("Start a tree session with this filter"))
-            cmd = obs_tree_start_command(s.filter, pid);
-        ImGui::EndDisabled();
-        if (pid <= 0) {
-            ImGui::SameLine();
-            ImGui::TextDisabled("select a process first");
-        }
     }
+    return err;
+}
 
+// The call-tree PREVIEW: the effective filter the session actually ran with, then
+// the indented call list. A pure view over the built TreeView — the filter EDITOR
+// moved to the patch bay (draw_tree_filter), so the Observer deck's Tree tab is
+// this preview alone, with no capture ACTION on the observer surface.
+void draw_obs_tree(const TreeView &v) {
+    chrome_line(v.chrome);
+    skip_line(v.skip);
+    if (v.have_effective)
+        ImGui::TextDisabled(
+            "running with: depth=%d focus=%s module=%s tid=%ld follow=%s",
+            v.effective.depth,
+            v.effective.focus.empty() ? "(none)" : v.effective.focus.c_str(),
+            v.effective.module.empty() ? "(none)" : v.effective.module.c_str(),
+            v.effective.tid, v.effective.follow ? "yes" : "no");
+
+    // The pan/zoom graph of this call tree lives in the shared "Graph" tab (15 T3),
+    // so this tab always shows the indented list.
     ImGui::SeparatorText("calls");
-    // The pan/zoom graph of this call tree now lives in the shared "Graph" tab
-    // (15 T3), so this tab always shows the indented list. rec_id/go travel to
-    // that tab (which builds the graph from this same view), not here.
-    (void)rec_id;
-    (void)go;
     for (const TreeRow &r : v.rows) {
         ImGui::Indent(static_cast<float>(r.depth) * 12.0f);
         ImGui::Text("-> %s [%s]  tid %ld",
@@ -602,7 +602,6 @@ std::string draw_obs_tree(const TreeView &v, ObserverState &s, long pid,
                     r.module.empty() ? "?" : r.module.c_str(), r.tid);
         ImGui::Unindent(static_cast<float>(r.depth) * 12.0f);
     }
-    return cmd;
 }
 
 // --- T6 ---------------------------------------------------------------------
@@ -898,7 +897,7 @@ void draw_observer(ObserverState &s, const Recording &r,
         ImGui::EndTabItem();
     }
     if (!s.tree.rows.empty() && ImGui::BeginTabItem("Tree")) {
-        draw_obs_tree(s.tree, s, 0, rec_id, go);
+        draw_obs_tree(s.tree);
         ImGui::EndTabItem();
     }
     // The shared pan/zoom graph (15 T3): one tab for whichever of the graph-able

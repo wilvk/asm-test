@@ -909,6 +909,16 @@ int main() {
               active(kPaneCapture),
               "the Live-capture controls show once a host connects and a "
               "process is picked");
+        // Tree mode reveals the tree-filter editor INSIDE the patch bay (it lives
+        // beside the mode picker now, not in a separate control): render a frame in
+        // that mode so ImGui validates the added widgets' scope balance too.
+        ds.inspect.want = LiveMode::Tree;
+        frame(ds);
+        frame(ds);
+        check("pane/capture renders the tree filter in tree mode",
+              active(kPaneCapture),
+              "the patch bay's tree-filter editor must draw cleanly for a tree "
+              "capture");
 
         // The PT slice is its OWN pane now, CONTEXT-GATED to an Intel PT host
         // (pctx_pt) — not a host connection but a fact about the CPU. Opening it
@@ -1581,6 +1591,99 @@ int main() {
         check("cap/log ignores continuous",
               !inspect_start_params(is).contains("continuous"),
               "a whole-process mode has no re-arm loop, continuous or not");
+
+        // The tree filter (depth/focus/module/tid/follow) rides this same Start now
+        // the patch bay owns tree config: inspect_start_params merges the engine-
+        // side filter (obs_tree_start_params) for a `tree` want, omitting any field
+        // left at its default. steps/continuous are still set from above, so this
+        // also proves a tree carries neither ring nor re-arm loop.
+        is.want = LiveMode::Tree;
+        check("cap/tree default filter -> empty params",
+              inspect_start_params(is).empty(),
+              "a tree with an all-default filter sends nothing — and no register "
+              "ring or re-arm loop, even with steps/continuous left set");
+        is.observer.filter.depth = 3;
+        is.observer.filter.focus = "main";
+        is.observer.filter.module = "libc";
+        nlohmann::json tp = inspect_start_params(is);
+        check("cap/tree filter -> depth+focus+module",
+              tp.value("depth", 0) == 3 &&
+                  tp.value("focus", std::string()) == "main" &&
+                  tp.value("module", std::string()) == "libc" &&
+                  !tp.contains("steps") && !tp.contains("continuous"),
+              "tree + filter -> {depth,focus,module} on the wire, no ring");
+    }
+
+    // --- Swap/Queue must carry the same params as the direct Start. Routing tree
+    // through the shared budget flow newly exposed it to the budget-recovery paths,
+    // which used to drop ALL start params — so a tree started via Queue silently
+    // captured the WHOLE process instead of the configured subtree. inspect_arm_
+    // queue snapshots inspect_start_params, and the fire replays that snapshot.
+    {
+        InspectState is;
+        is.want = LiveMode::Tree;
+        is.observer.filter.depth = 4;
+        is.observer.filter.focus = "worker";
+        inspect_arm_queue(is);
+        check("queue/arms-want",
+              is.has_queued && is.queued_want == LiveMode::Tree,
+              "arming the queue stashes the current want");
+        check("queue/snapshots-tree-filter",
+              is.queued_params.value("depth", 0) == 4 &&
+                  is.queued_params.value("focus", std::string()) == "worker",
+              "a queued tree FREEZES its depth/focus, not an empty whole-process "
+              "start (the regression this refactor had to avoid)");
+        InspectState wp;
+        wp.want = LiveMode::Log;
+        inspect_arm_queue(wp);
+        check("queue/whole-process-empty", wp.queued_params.empty(),
+              "a queued whole-process mode carries no params, as its Start would");
+    }
+
+    // --- inspect_request_start refuses an illegal tree filter — the wire-safety the
+    // deleted obs_tree_start_command enforced (it returned "" on a bad filter). The
+    // patch bay greys Start on it, but the backstop must hold for every caller.
+    {
+        InspectState is;
+        is.host_started = true; // send_start is a safe no-op with no real host
+        is.selected_pid = 4242;
+        is.want = LiveMode::Tree;
+        is.observer.filter.tid = 7;
+        is.observer.filter.follow = true; // tid XOR follow — illegal
+        check("start/illegal-tree-filter-refused",
+              !inspect_request_start(is) && is.active.empty(),
+              "a start with an illegal tree filter must not fire or mark the jack");
+        is.observer.filter.follow = false; // now legal (tid alone)
+        check("start/legal-tree-filter-starts",
+              inspect_request_start(is) && is.active.size() == 1 &&
+                  is.active[0] == LiveMode::Tree,
+              "a legal tree filter starts and marks the jack active");
+    }
+
+    // --- inspect_confirm_swap carries the same backstop, symmetric with
+    // inspect_request_start: an illegal tree filter must not stop the blocker to
+    // start nothing; a legal one completes the swap (blocker stopped, tree active).
+    {
+        InspectState is;
+        is.host_started = true; // send_start/send_stop are safe no-ops, no host
+        is.selected_pid = 4242;
+        is.want = LiveMode::Tree;
+        is.active.push_back(LiveMode::Log); // a blocker holds the jack
+        is.swap_pending = true;
+        is.observer.filter.depth = -5; // illegal (depth is 1..1000)
+        inspect_confirm_swap(is);
+        check("swap/illegal-tree-filter-no-op",
+              is.swap_pending && is.active.size() == 1 &&
+                  is.active[0] == LiveMode::Log,
+              "an illegal tree filter must not complete the swap — the blocker "
+              "stays and the confirm stays up");
+        is.observer.filter.depth = 3; // now legal
+        inspect_confirm_swap(is);
+        check("swap/legal-tree-filter-completes",
+              !is.swap_pending && is.active.size() == 1 &&
+                  is.active[0] == LiveMode::Tree,
+              "a legal tree filter completes the swap: blocker stopped, tree "
+              "the sole active jack");
     }
 
     // --- Processes double-click / right-click: the "full detail" attach. It

@@ -77,6 +77,14 @@ void inspect_disconnect(InspectState &s) {
 }
 
 bool inspect_request_start(InspectState &s) {
+    // An illegal tree filter must never reach the wire — the deleted
+    // obs_tree_start_command self-guarded exactly this way (it returned "" on a
+    // bad filter). The patch bay already greys Start on tree_err, so this is the
+    // backstop for every OTHER caller into this function (the perturb "Start
+    // anyway", any future path): the guarantee never rests on a UI gate alone.
+    if (s.want == LiveMode::Tree &&
+        !obs_tree_filter_error(s.observer.filter).empty())
+        return false;
     // The perturbation gate (T5, F22), now scoped to the ONE unrecoverable case.
     // A single-stepping mode always dirties the traced page and perturbs timing —
     // a nuisance, and no longer worth a second click (Start just starts). But on
@@ -125,6 +133,17 @@ nlohmann::json inspect_start_params(const InspectState &s) {
     if ((s.want == LiveMode::Dataflow || s.want == LiveMode::Auto) &&
         s.continuous)
         params["continuous"] = true;
+    // The tree filter (depth/focus/module/tid/follow) rides this same Start — the
+    // patch bay owns tree config now, so the one Start carries it. obs_tree_start_
+    // params omits any field left at its default, exactly as the wire expects. To
+    // NARROW a running tree, Stop it first: the host is one-jack and refuses a
+    // start while a session runs, so the patch bay budget-blocks a re-Start.
+    if (s.want == LiveMode::Tree) {
+        nlohmann::json tp = obs_tree_start_params(s.observer.filter);
+        for (auto it = tp.begin(); it != tp.end(); ++it)
+            params[it.key()] = it.value();
+        return params;
+    }
     if (!mode_needs_region(s.want))
         return params;
     std::string spec(s.region);
@@ -174,14 +193,36 @@ void inspect_confirm_perturb(InspectState &s) {
 void inspect_confirm_swap(InspectState &s) {
     if (!s.swap_pending)
         return;
+    // Same wire-safety backstop as inspect_request_start, kept SYMMETRIC so the
+    // guarantee never rests on the can-gated button alone: never stop the blocker's
+    // capture to start an illegal tree filter (which would then bounce, leaving the
+    // jack empty). Leave swap_pending up so the confirm — and the inline filter
+    // error — stay visible until the filter is fixed or the swap is cancelled.
+    if (s.want == LiveMode::Tree &&
+        !obs_tree_filter_error(s.observer.filter).empty())
+        return;
     // Stopping someone else's capture is a real consequence, which is why this
     // is a separate, explicit action rather than something inspect_request_start
     // does on the user's behalf.
     s.session.send_stop();
     s.active.clear();
     s.swap_pending = false;
-    s.session.send_start(mode_name(s.want), s.selected_pid);
+    // Carry the SAME params the direct Start would (region / tree filter / --steps).
+    // The swap fires s.want — exactly what the confirm names ("start <want>?") — so
+    // inspect_start_params(s) is the right snapshot. Dropping it here is how a
+    // swapped-in tree used to lose its whole filter and capture the world instead.
+    s.session.send_start(mode_name(s.want), s.selected_pid,
+                         inspect_start_params(s));
     s.active.push_back(s.want);
+}
+
+void inspect_arm_queue(InspectState &s) {
+    s.has_queued = true;
+    s.queued_want = s.want;
+    // Snapshot the params NOW. The queue is locked to queued_want and fires later
+    // when the jack frees; re-reading the picker at fire time would attach whatever
+    // mode/region/filter the user has since moved to. This freezes what was queued.
+    s.queued_params = inspect_start_params(s);
 }
 
 namespace {
@@ -410,12 +451,24 @@ void draw_patch_bay(InspectState &s) {
             &s.continuous);
     }
 
+    // The tree filter (depth/focus/module/tid/follow): a `tree` capture's engine-
+    // side bound on what it EMITS, edited here beside the mode picker exactly as
+    // the region (trace/dataflow) and --steps/continuous (dataflow/auto) are. The
+    // one Start below carries it (inspect_start_params). To narrow a RUNNING tree,
+    // Stop first (one jack — a re-Start is budget-blocked otherwise). The call-tree
+    // PREVIEW lives in the Observer deck's Tree tab. tree_err gates Start (and
+    // Swap/Queue) while the filter is illegal.
+    std::string tree_err;
+    if (s.want == LiveMode::Tree)
+        tree_err = draw_tree_filter(s.observer);
+
     // The Queue path (23 T3): a queued want starts the MOMENT the jack frees —
     // never an auto-swap, because budget_queue_ready is true only when the jack is
     // genuinely free (the blocker stopped/ended). The one-ptrace-jack invariant is
     // never bypassed. Polled here, before we render the state below.
     if (s.has_queued && budget_queue_ready(s.queued_want, s.active)) {
-        s.session.send_start(mode_name(s.queued_want), s.selected_pid);
+        s.session.send_start(mode_name(s.queued_want), s.selected_pid,
+                             s.queued_params);
         s.active.push_back(s.queued_want);
         s.has_queued = false;
     }
@@ -437,7 +490,8 @@ void draw_patch_bay(InspectState &s) {
     const LiveStatus &st = s.session.status();
     const bool running =
         s.session.growing() != nullptr || st.state == LiveState::Running;
-    const bool can = s.host_started && s.selected_pid > 0 && has_region;
+    const bool can = s.host_started && s.selected_pid > 0 && has_region &&
+                     tree_err.empty();
     const LiveControls ctl =
         live_controls(can, running, s.operator_paused, !s.active.empty());
 
@@ -447,10 +501,15 @@ void draw_patch_bay(InspectState &s) {
     ImGui::EndDisabled();
     if (!ctl.start) {
         ImGui::SameLine();
-        const char *why = !s.host_started  ? "connect a serve host first"
+        // The tree-filter case sits before the region one: a `tree` needs no
+        // region, so has_region is already true — tree_err is the only thing left
+        // that can hold Start. The inline red error says WHAT is wrong; this says
+        // WHERE to fix it.
+        const char *why = !s.host_started     ? "connect a serve host first"
                           : s.selected_pid <= 0 ? "select a process first"
-                                              : "name a region above, or pick "
-                                                "`auto`";
+                          : !tree_err.empty()   ? "fix the tree filter above"
+                                                : "name a region above, or pick "
+                                                  "`auto`";
         ImGui::TextDisabled("%s", why);
     }
     ImGui::SameLine();
@@ -489,8 +548,14 @@ void draw_patch_bay(InspectState &s) {
     if (s.perturb_pending) {
         ImGui::Separator();
         ImGui::TextColored(kBad, "%s", s.perturb_reason.c_str());
+        // "Start anyway" FIRES the start, so it obeys the same config gate as Start
+        // itself — a filter edited to illegal while this confirm is up must not
+        // slip through (inspect_request_start backstops it too, but a greyed button
+        // is the honest signal).
+        ImGui::BeginDisabled(!can);
         if (ImGui::Button("Start anyway (accept the risk)"))
             inspect_confirm_perturb(s);
+        ImGui::EndDisabled();
         ImGui::SameLine();
         if (ImGui::Button("Cancel##perturb"))
             s.perturb_pending = false;
@@ -500,6 +565,13 @@ void draw_patch_bay(InspectState &s) {
     // confirm), Queue (a visible cancellable chip), Cancel. Never an auto-swap.
     if (!d.allowed) {
         ImGui::Separator();
+        // Swap and Queue both START the configured capture (now, or when the jack
+        // frees), so a config that could not be Started — illegal tree filter,
+        // missing region — must not be Swappable/Queueable either: gate them on the
+        // same `can`. Queue in particular SNAPSHOTS the params here, so gating the
+        // arm is what keeps the frozen snapshot legal. Cancel stays live so a
+        // blocked user is never trapped.
+        ImGui::BeginDisabled(!can);
         if (ImGui::Button("Swap")) {
             // Arm the two-step confirm — it names WHAT detaches. Never silent.
             s.swap_pending = true;
@@ -507,10 +579,9 @@ void draw_patch_bay(InspectState &s) {
             s.swap_reason = d.reason;
         }
         ImGui::SameLine();
-        if (ImGui::Button("Queue")) {
-            s.has_queued = true;
-            s.queued_want = s.want;
-        }
+        if (ImGui::Button("Queue"))
+            inspect_arm_queue(s);
+        ImGui::EndDisabled();
         ImGui::SameLine();
         if (ImGui::Button("Cancel##block")) {
             s.swap_pending = false;
@@ -525,8 +596,12 @@ void draw_patch_bay(InspectState &s) {
                            "Stop the %s capture on pid %ld and start %s?",
                            mode_name(s.swap_blocker), s.selected_pid,
                            mode_name(s.want));
+        // The actual fire point — gate it on `can` too, since the filter can be
+        // edited illegal between arming the confirm and clicking it.
+        ImGui::BeginDisabled(!can);
         if (ImGui::Button("Stop it and start this one"))
             inspect_confirm_swap(s);
+        ImGui::EndDisabled();
         ImGui::SameLine();
         if (ImGui::Button("Cancel##swap"))
             s.swap_pending = false;
@@ -549,10 +624,10 @@ void draw_patch_bay(InspectState &s) {
 }
 
 // Lazily (re)build the InspectState observer over the session's growing (or last
-// completed) recording and return it — the shared seam for the live views and the
-// live tree-capture control. Rebuilt only when the event count moves: the builders
-// are pure and cheap, but per-frame work on a live stream is how a UI starts
-// costing the thing it is watching. Returns nullptr when there is nothing captured.
+// completed) recording and return it — the seam the live views build on. Rebuilt
+// only when the event count moves: the builders are pure and cheap, but per-frame
+// work on a live stream is how a UI starts costing the thing it is watching.
+// Returns nullptr when there is nothing captured.
 const Recording *live_observer_build(InspectState &s) {
     const Recording *live = s.session.growing();
     const std::vector<Recording> &done = s.session.recordings();
@@ -577,37 +652,10 @@ const Recording *live_observer_build(InspectState &s) {
     return live;
 }
 
-// The live tree-capture subtree re-arm — the ONE capture ACTION that lived inside
-// the observer views: narrow a running `tree` capture to a subtree and send that
-// `start` to the serve host. It stays with the capture CONTROLS (the docked
-// Capture pane) now the observer PREVIEW moved to the Observer pane — the deck's
-// own Tree tab is read-only (draw_observer calls draw_obs_tree with pid 0 and
-// discards its command). Self-gates on there being a tree, so it is invisible
-// otherwise. Returns true when it drew the control (so callers can rule off).
-bool draw_live_tree_control(InspectState &s) {
-    // Cheap gate FIRST — only a tree session has this control. This avoids
-    // rebuilding the observer every frame in the docked Capture pane (the Observer
-    // pane already builds the deck for the live tab); a non-tree capture reads the
-    // (empty) current tree and returns before any build.
-    if (s.want != LiveMode::Tree && s.observer.tree.rows.empty())
-        return false;
-    if (live_observer_build(s) == nullptr)
-        return false;
-    if (s.observer.tree.rows.empty() && s.want != LiveMode::Tree)
-        return false;
-    std::string cmd = draw_obs_tree(s.observer.tree, s.observer, s.selected_pid,
-                                    "live-session", nullptr);
-    if (!cmd.empty()) {
-        s.session.send(cmd);
-        s.active.clear();
-        s.active.push_back(LiveMode::Tree);
-    }
-    return true;
-}
-
 // The live views over whatever this session has produced (the windowed stack; the
-// docked shell renders the deck in its own Observer pane and keeps only the
-// tree-capture control in the Capture pane).
+// docked shell renders the deck in its own Observer pane). The tree-capture filter
+// moved to the patch bay (draw_tree_filter, beside the mode picker), so the live
+// views are pure views now — no capture control lives here.
 void draw_live_views(InspectState &s) {
     const Recording *live = live_observer_build(s);
     if (live == nullptr) {
@@ -624,8 +672,6 @@ void draw_live_views(InspectState &s) {
     ImGui::SameLine();
     ImGui::TextDisabled("(spacetime terrain — press Play there to watch it form)");
     ImGui::Separator();
-    if (draw_live_tree_control(s))
-        ImGui::Separator();
     draw_observer(s.observer, *live, "live-session", nullptr);
 }
 
@@ -1020,12 +1066,6 @@ void draw_capture_pane(InspectState &s) {
             "pick a process in the Processes pane, then pick a mode below.");
     draw_patch_bay(s);
     ImGui::Separator();
-    // The live tree-capture subtree re-arm is a capture CONTROL, so it stays here
-    // (the observer PREVIEW moved to the Observer pane). Self-gates on a tree
-    // session — invisible for every other mode, so the tab stays clean. When it
-    // draws, a rule divides it from the 3D handoff below.
-    if (draw_live_tree_control(s))
-        ImGui::Separator();
     // The 3D-overview handoff (34 T2), kept as a compact button now the live views
     // render in their own panes. Disabled until there is a capture to show, so a
     // button that cannot act is greyed (F22-adjacent: no dead levers).

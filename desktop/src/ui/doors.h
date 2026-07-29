@@ -213,6 +213,13 @@ struct InspectState {
     bool operator_paused = false;
     bool has_queued = false;
     LiveMode queued_want = LiveMode::Log;
+    // The start params snapshotted the moment Queue was armed (inspect_arm_queue),
+    // replayed verbatim when the jack frees. Snapshotting is what keeps a queued
+    // capture faithful: the queue is locked to `queued_want`, so its region / tree
+    // filter / --steps must be locked to what was configured THEN, not re-read from
+    // a picker the user may have moved on to something else. Empty for a whole-
+    // process mode, exactly as inspect_start_params returns.
+    nlohmann::json queued_params;
 
     // The uniform busy signal for the unbounded live stream (23 T4): its elapsed
     // clock + Cancel. `started_at` is re-armed to 0 between sessions so each
@@ -286,6 +293,12 @@ bool inspect_request_start(InspectState &s);
 void inspect_confirm_perturb(InspectState &s);
 // Confirm the armed swap: stop the holder, then start what was refused.
 void inspect_confirm_swap(InspectState &s);
+
+// Arm the Queue: stash the current want AND a SNAPSHOT of its start params, so the
+// auto-fire (when the jack frees) replays exactly what was configured at queue
+// time — not whatever the picker holds later. Pure over InspectState; test_shell
+// drives it.
+void inspect_arm_queue(InspectState &s);
 
 // The serve `start` params for the current want: a scoped region (func name or
 // base+len, parse_region_spec) for trace/dataflow, plus `steps:true` when the

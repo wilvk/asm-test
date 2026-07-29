@@ -108,11 +108,16 @@ void draw_obs_topo(const TopoView &v, const std::string &rec_id,
 void draw_obs_hotedges(const HotEdgeView &v, ObserverState &s,
                        const std::string &rec_id,
                        const std::function<void(const dt_link &)> &go);
-// Returns a `start` command line when the user asks for one, else "". The
-// caller sends it — this file never touches a session.
-std::string draw_obs_tree(const TreeView &v, ObserverState &s, long pid,
-                          const std::string &rec_id,
-                          const std::function<void(const dt_link &)> &go);
+// The tree-capture filter editor (depth/focus/module/tid/follow): the patch bay
+// draws it beside the mode picker, so a `tree` capture's engine-side filter is
+// configured where every other mode's config lives. Returns the filter validation
+// error ("" = legal) so the caller can gate its single Start on it; the illegal
+// case is also shown inline in red. Pure input state — no built recording needed.
+std::string draw_tree_filter(ObserverState &s);
+// The call-tree preview (the effective filter the session ran with, then the
+// indented call list). A pure view over the built TreeView — the filter EDITOR is
+// draw_tree_filter above, so the Observer deck's Tree tab is this preview alone.
+void draw_obs_tree(const TreeView &v);
 void draw_obs_region(RegionView &v);
 void draw_obs_disasm(const DisasmView &v, ObserverState &s);
 
