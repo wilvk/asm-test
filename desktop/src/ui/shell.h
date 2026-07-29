@@ -242,6 +242,17 @@ struct ShellState {
     std::vector<StepIndex> stepidx;
     std::vector<uint64_t> scrubber_playhead;
 
+    // 40 T2: the dataflow stream segmented by df_invocation, one per recording,
+    // parallel to `streams`. A continuous dataflow/auto capture is many invocation
+    // passes in one recording (35 T1), each restarting df_step at 0; the dataflow
+    // views (Slice / Timeline / Loom) show ONE pass at a time. `df_pass` is the
+    // selected pass per recording: < 0 follows the LATEST pass (the live default,
+    // as build_step_index resolves the register ring for the Scrubber), >= 0 pins
+    // an earlier one. A one-shot recording (one pass) shows no selector and reads
+    // exactly as pre-40. shell_apply_df_pass resolves + applies the choice.
+    std::vector<SegmentedDataflow> seg_df;
+    std::vector<int> df_pass;
+
     // The ABI x-ray (09-teaching-producers.md T4), surfaced as a tab that locks
     // the active recording (the SysV leg) against the attached B (the Win64 leg,
     // the `d` binding) — the same A/B mechanism the Diff tab uses. The rail
@@ -420,6 +431,13 @@ void shell_restore_workspace(ShellState &s, const WorkspaceState &ws);
 // The A / B streams for the active tab; B is null when nothing is attached.
 const Streams *shell_a(const ShellState &s);
 const Streams *shell_b(const ShellState &s);
+
+// 40 T2: resolve + apply the dataflow pass recording `i`'s views show. df_pass[i]
+// < 0 follows the LATEST pass (the live default); >= 0 pins one. Sets the cached
+// streams[i].df to the chosen pass (a no-op when following latest — decode_streams
+// already put it there) and returns the resolved pass index (0 when the recording
+// has no dataflow or no segment cache). Pure of ImGui so test_shell drives it.
+size_t shell_apply_df_pass(ShellState &s, size_t i);
 
 // Build the operand-timeline model for `a` (with `b` for a diff), projecting the
 // shared selection + the global-find hits — but the selection ONLY when it

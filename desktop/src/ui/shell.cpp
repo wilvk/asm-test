@@ -42,6 +42,7 @@
 #include "ui/perspectives.h" // named dock perspectives + filter presets (20 T4)
 #include "ui/terms.h"        // domain-term-first headings + Terms pane (24 T3)
 #include "ui/theme.h" // dt_set_light_theme (20 T5); dt_maybe_col coarse-scrub degrade (23 T4)
+#include "ui/timepos.h" // the one time-position widget: the df pass pager (40 T2)
 #include "ui/view_presence.h" // data-driven view set + honest absence (20 T1)
 #include "ui/wayfinding.h"    // persistent breadcrumb + disambiguation (21 T2)
 #include "views/abixray.h"
@@ -106,6 +107,14 @@ int shell_open(ShellState &s, const std::string &path, std::string &err) {
         build_step_index(s.ws.recordings[static_cast<size_t>(idx)]);
     s.scrubber_playhead.resize(s.ws.recordings.size());
     s.scrubber_playhead[static_cast<size_t>(idx)] = 0;
+    // The dataflow stream segmented by df_invocation (40 T2), parallel to
+    // `streams`. The pass selector defaults to following the latest pass (-1);
+    // decode_streams already put that pass in streams[idx].df.
+    s.seg_df.resize(s.ws.recordings.size());
+    s.seg_df[static_cast<size_t>(idx)] =
+        build_segmented_dataflow(s.ws.recordings[static_cast<size_t>(idx)]);
+    s.df_pass.resize(s.ws.recordings.size());
+    s.df_pass[static_cast<size_t>(idx)] = -1;
     // The 3D overview's per-recording state (doc 10), parallel to the workspace.
     // The models are woven lazily on first view, so a fresh (unbuilt) slot is all
     // that is reserved here; assigned rather than left to resize's fill so a reused
@@ -135,6 +144,10 @@ void shell_close(ShellState &s, size_t idx) {
     if (idx < s.scrubber_playhead.size())
         s.scrubber_playhead.erase(s.scrubber_playhead.begin() +
                                   static_cast<long>(idx));
+    if (idx < s.seg_df.size())
+        s.seg_df.erase(s.seg_df.begin() + static_cast<long>(idx));
+    if (idx < s.df_pass.size())
+        s.df_pass.erase(s.df_pass.begin() + static_cast<long>(idx));
     if (idx < s.scenes.size())
         s.scenes.erase(s.scenes.begin() + static_cast<long>(idx));
     if (s.b_index == static_cast<int>(idx))
@@ -208,8 +221,11 @@ void shell_sync_live_tab(ShellState &s) {
         s.stepidx.resize(s.ws.recordings.size());
         s.scrubber_playhead.resize(s.ws.recordings.size());
         s.scenes.resize(s.ws.recordings.size());
+        s.seg_df.resize(s.ws.recordings.size());
+        s.df_pass.resize(s.ws.recordings.size());
         s.scrubber_playhead[i] = 0;
         s.scenes[i] = SceneView{};
+        s.df_pass[i] = -1; // a live continuous capture follows its latest pass
         s.live_built_events =
             ~static_cast<uint64_t>(0); // force the first build
         s.live_built_recordings = ~static_cast<size_t>(0);
@@ -238,6 +254,9 @@ void shell_sync_live_tab(ShellState &s) {
     ObsLifecycle lc = observer_lifecycle_from(bodies);
     observer_build(s.observers[i], s.ws.recordings[i], &lc);
     s.stepidx[i] = build_step_index(s.ws.recordings[i]);
+    // Re-segment the grown capture so a new invocation pass appears in the pager;
+    // a df_pass following the latest (-1) tracks the new tail automatically.
+    s.seg_df[i] = build_segmented_dataflow(s.ws.recordings[i]);
     // 25 T6: force a lazy 3D re-weave over the grown recording, but KEEP the
     // interactive camera / HUD / primer — else a growing capture would snap the
     // user's 3D view back to the default orbit on every event batch.
@@ -975,7 +994,58 @@ dt_timeline shell_timeline_model(const ShellState &s, const Streams *a,
     return t;
 }
 
+size_t shell_apply_df_pass(ShellState &s, size_t i) {
+    if (i >= s.seg_df.size() || s.seg_df[i].passes.empty())
+        return 0;
+    const SegmentedDataflow &seg = s.seg_df[i];
+    size_t latest = seg.latest();
+    int sel = (i < s.df_pass.size()) ? s.df_pass[i] : -1;
+    size_t cur = (sel < 0 || static_cast<size_t>(sel) > latest)
+                     ? latest
+                     : static_cast<size_t>(sel);
+    // Always apply the resolved pass: streams[i].df may currently hold a
+    // previously pinned pass (clearing a pin must restore the latest), and a live
+    // rebuild resets it to the latest (a pin must be re-enforced). The caller only
+    // reaches here for a multi-pass recording, so a one-shot pays no copy.
+    if (i < s.streams.size())
+        s.streams[i].df = seg.passes[cur];
+    return cur;
+}
+
+// The per-pass invocation pager (40 T2). A continuous dataflow/auto capture is many
+// invocation passes in one recording (35 T1); the dataflow views show ONE at a
+// time. When the active recording has more than one pass, draw the DISCRETE
+// invocation stepper (24 T4's one time-position widget — between two invocations
+// the target ran unobserved, so it is deliberate discrete paging, never a faked
+// scrub) and apply the choice to the cached Streams::df the views read. Following
+// the latest by default (the live default), pinnable to an earlier pass. A one-shot
+// recording (one pass) draws nothing — the chrome is byte-identical to pre-40.
+static void shell_df_pass_pager(ShellState &s) {
+    if (s.active_tab < 0 || static_cast<size_t>(s.active_tab) >= s.seg_df.size())
+        return;
+    size_t i = static_cast<size_t>(s.active_tab);
+    int npasses = static_cast<int>(s.seg_df[i].passes.size());
+    if (npasses <= 1)
+        return; // one pass (or none): decode already set df; no chrome, no copy
+    int latest = npasses - 1;
+    int sel = (i < s.df_pass.size()) ? s.df_pass[i] : -1;
+    int cur = (sel < 0 || sel > latest) ? latest : sel;
+    if (dt_timepos_step("invocation", &cur, npasses,
+                        dt_timepos_discrete_reason("invocations")))
+        // Stepping to the newest re-enables follow-latest; else pin the choice.
+        s.df_pass[i] = (cur == latest) ? -1 : cur;
+    size_t applied = shell_apply_df_pass(s, i);
+    ImGui::SameLine();
+    if (i < s.df_pass.size() && s.df_pass[i] < 0)
+        ImGui::TextDisabled("· pass %zu of %d — following the latest",
+                            applied + 1, npasses);
+    else
+        ImGui::TextDisabled("· pass %zu of %d — pinned (latest is %d)",
+                            applied + 1, npasses, npasses);
+}
+
 static void body_timeline(ShellState &s, const Streams *a, const Streams *b) {
+    shell_df_pass_pager(s); // 40 T2: pick which invocation pass this view shows
     dt_timeline t = shell_timeline_model(s, a, b);
 
     // Always-visible overview/minimap (21-spine-navigation.md T3): the whole-trace
@@ -1001,6 +1071,7 @@ static void body_timeline(ShellState &s, const Streams *a, const Streams *b) {
 }
 static void body_slice(ShellState &s, const Streams *a, const Streams *b) {
     dt_view_header("slice");
+    shell_df_pass_pager(s); // 40 T2: pick which invocation pass this view shows
     draw_slice_view(dt_slice_view_build(*a, s.selection.step));
     if (b != nullptr) {
         // The two-recording state-diff (33 R6 T2): the `statediff` producer now
@@ -1252,6 +1323,7 @@ static void draw_view_body(ShellState &s, ViewId id, const Recording &r,
     case ViewId::Loom:
         shell_live_weave_banner(
             s); // 25 T5: perturb+torn caveat on a live weave
+        shell_df_pass_pager(s); // 40 T2: pick which invocation pass this weave shows
         draw_loom(
             s.loom, *a, s.ws, s.active_tab,
             [&s](const dt_link &l) {
@@ -2568,6 +2640,8 @@ static void draw_docked_shell(ShellState &s, const ImGuiViewport *vp) {
         if (a != nullptr) {
             shell_live_weave_banner(
                 s); // 25 T5: perturb+torn caveat on a live weave
+            shell_df_pass_pager(
+                s); // 40 T2: pick which invocation pass this weave shows
             draw_loom(
                 s.loom, *a, s.ws, s.active_tab,
                 [&s](const dt_link &l) {

@@ -2052,6 +2052,56 @@ int main() {
               "an advice that names no gate logs nothing");
     }
 
+    // ---- 40 T2: the per-pass invocation selector over a continuous capture --
+    // A continuous dataflow capture is many invocation passes in one recording;
+    // shell_open caches them segmented, the dataflow views follow the latest pass
+    // by default (like the Scrubber), and shell_apply_df_pass pins an earlier one.
+    // A one-shot recording has a single pass and offers no selector.
+    {
+        auto step0 = [](const DataflowStream &df) -> long long {
+            for (const ValRec &v : df.recs)
+                if (v.step == 0)
+                    return static_cast<long long>(v.value);
+            return -1;
+        };
+        ShellState ps;
+        std::string err;
+        int ci = shell_open(ps, gd("dishonest/continuous-df.asmtrace"), err);
+        check("dfpass/open", ci >= 0, err.c_str());
+        if (ci >= 0) {
+            size_t i = static_cast<size_t>(ci);
+            check("dfpass/three-passes", ps.seg_df[i].passes.size() == 3,
+                  "continuous-df carries three df_invocation passes");
+            check("dfpass/default-follow-latest", ps.df_pass[i] == -1,
+                  "a freshly opened recording follows its latest pass");
+            // Default: following the latest -> pass 2 (step-0 value 100) is shown.
+            size_t cur = shell_apply_df_pass(ps, i);
+            check("dfpass/latest-index", cur == 2, "latest of three passes is 2");
+            check("dfpass/latest-value", step0(ps.streams[i].df) == 100,
+                  "the latest pass's step-0 op value is 100");
+            // Pin pass 0: the active Streams::df becomes pass 0's (value 6), proof
+            // the views can reach an earlier pass, not just the conflated tail.
+            ps.df_pass[i] = 0;
+            cur = shell_apply_df_pass(ps, i);
+            check("dfpass/pin-index", cur == 0, "pinned to pass 0");
+            check("dfpass/pin-value", step0(ps.streams[i].df) == 6,
+                  "pass 0's step-0 op value is 6, distinct from the latest's");
+            // Clearing the pin returns to the latest pass.
+            ps.df_pass[i] = -1;
+            cur = shell_apply_df_pass(ps, i);
+            check("dfpass/refollow", cur == 2 && step0(ps.streams[i].df) == 100,
+                  "clearing the pin returns to the latest pass");
+        }
+        // A one-shot recording (no df_invocation marker): exactly one pass, so the
+        // pager draws nothing and shell_apply_df_pass follows that single pass.
+        int oi = shell_open(ps, gd("mem-df-chain.asmtrace"), err);
+        check("dfpass/oneshot-open", oi >= 0, err.c_str());
+        if (oi >= 0)
+            check("dfpass/oneshot-one-pass",
+                  ps.seg_df[static_cast<size_t>(oi)].passes.size() == 1,
+                  "a one-shot recording has a single pass and no pager");
+    }
+
     if (failures) {
         std::fprintf(stderr, "test_shell: %d FAILURE(S)\n", failures);
         return 1;
