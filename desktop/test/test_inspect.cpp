@@ -251,6 +251,8 @@ static void test_evidence() {
               "the entry label must say it observed an entry");
         check("ev/entry-counts", has(l, "184") && has(l, "2"),
               "the entry label should carry its measured counts");
+        check("ev/entry-names-sampler", has(l, "ibs-op"),
+              "the label names WHICH sampler ran (the rule is host-shaped)");
         check("ev/entry-no-walk", pick_walk_note(p).empty(),
               "a first attempt has no walk note");
     }
@@ -270,6 +272,8 @@ static void test_evidence() {
               has(l, "never fire") || has(l, "re-entered"),
               "the label must state the CONSEQUENCE, not just the caveat — a "
               "warning the reader must already understand is not a warning");
+        check("ev/res-names-sampler", has(l, "sw-clock"),
+              "the residency label names its sampler too (host-shaped rule)");
     }
     {
         // The walk: attempt 2 means a previous candidate was refused, and that
@@ -299,6 +303,31 @@ static void test_evidence() {
                     R"({"state":"pick","pick":{"sampler":"sw-clock","func":"x"}})"),
                 &p),
             "a pick with no evidence field cannot be presented honestly");
+    }
+    {
+        // 39 T3: an IDLE-WINDOW retry marker rides the pick channel with the
+        // sentinel func "(idle window)". It must render as an honest "re-sampling"
+        // note, NOT as a region pick claiming an entry/residency observation.
+        // Custom raw-string delimiter: the JSON's "(idle window)" contains a `)"`
+        // sequence that would close a plain R"(...)" early. Evidence "idle" is the
+        // honest wire value — the window observed NOTHING, so it is not entry.
+        json body = json::parse(
+            R"J({"state":"pick","mode":"auto","pick":{"sampler":"ibs-op","evidence":"idle","func":"(idle window)","base":0,"len":0,"weight":0,"sites":0,"attempt":2,"of":3}})J");
+        AutoPick p;
+        check("ev/parse-idle", parse_auto_pick(body, &p),
+              "an idle-window marker parses off the pick channel");
+        check("ev/is-idle-window", pick_is_idle_window(p),
+              "the evidence:\"idle\" marker is recognised, not treated as a pick");
+        std::string l = pick_evidence_label(p);
+        check("ev/idle-labelled",
+              has(l, "idle sample window 2 of 3") && has(l, "re-sampling"),
+              "the idle label says which window and that it is re-sampling");
+        check("ev/idle-not-entered",
+              !has(l, "ENTERED") && !has(l, "EXECUTING"),
+              "an idle window must NOT claim it observed an entry or execution");
+        check("ev/idle-no-walk-note", pick_walk_note(p).empty(),
+              "an idle window carries no candidate-walk note (its attempt/of is "
+              "the WINDOW retry, not a candidate ordinal)");
     }
 }
 

@@ -242,6 +242,14 @@ bool parse_auto_pick(const nlohmann::json &session_body, AutoPick *out);
 // for? True for residency. This is the predicate the UI must not skip.
 bool pick_is_weak_evidence(const AutoPick &p);
 
+// Is this "pick" actually an IDLE-WINDOW retry marker (39 T3)? The serve loop
+// reuses the pick channel to report each empty sample window — the sampler ran
+// and nothing qualified — with the sentinel func "(idle window)". It is NOT a
+// region pick: rendering it through the entry/residency label would claim the
+// capture observed something it did not. The pane shows the honest retry note
+// instead.
+bool pick_is_idle_window(const AutoPick &p);
+
 // The label to show beside the pick. For residency it states the weakness and
 // its consequence in the same breath — a caveat the user has to already
 // understand is not a caveat.

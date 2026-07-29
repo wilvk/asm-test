@@ -167,7 +167,16 @@ nlohmann::json inspect_start_params(const InspectState &s) {
 
 void inspect_reconcile_self_end(InspectState &s, const LiveStatus &st) {
     // A start the desktop issued resolves once the host confirms it (Running) or
-    // the host is gone — clear the in-flight guard then.
+    // the host is gone — clear the in-flight guard then. NOT keyed on skip_code:
+    // that field is STICKY (set on a `skip`, cleared only by the next `started`),
+    // and a Swap's swapped-OUT session can itself skip — a dataflow/auto blocker
+    // that saw 0 passes returns NEVER_RAN, which serve reports as `skip` — so
+    // clearing the guard on skip_code would free the swap's newly-armed session in
+    // the same Idle split-frame the guard exists to protect. The honest cost: a
+    // fresh start that is itself SKIPPED at the door (an i386 tracee, a sampler
+    // self-skip) leaves the guard set until the next resolving event, so its jack
+    // reads held until a Stop/Disconnect — the pre-39 behaviour for a skip, never
+    // freed automatically, so this is not a regression, only an unclosed edge.
     if (st.state != LiveState::Idle)
         s.awaiting_started = false;
     if (st.sessions_ended == s.seen_sessions_ended)
@@ -336,7 +345,11 @@ void draw_status(InspectState &s) {
         std::string walk = pick_walk_note(p);
         if (!walk.empty())
             ImGui::TextColored(kMaybe, "%s", walk.c_str());
-        ImGui::TextColored(pick_is_weak_evidence(p) ? kMaybe : kGood, "%s",
+        // An idle-window retry (39 T3) is neither strong nor weak EVIDENCE — it
+        // is a "nothing this window, re-sampling" note, so it grades CAUTION, not
+        // the green of a real entry pick.
+        bool cautious = pick_is_idle_window(p) || pick_is_weak_evidence(p);
+        ImGui::TextColored(cautious ? kMaybe : kGood, "%s",
                            pick_evidence_label(p).c_str());
     }
 

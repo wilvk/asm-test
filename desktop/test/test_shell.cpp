@@ -1708,6 +1708,24 @@ int main() {
               !r.awaiting_started && r.active.size() == 1,
               "a confirmed (Running) start clears the in-flight guard and keeps "
               "the jack");
+
+        // The guard must NOT be cleared by a swapped-out session's `skip`: a
+        // dataflow/auto blocker that saw 0 passes ends its swap-stop as NEVER_RAN
+        // -> serve `skip`, in the same Idle split-frame the guard protects. So a
+        // pending swap with skip_code set (from the OLD session) still holds the
+        // NEW session's jack until its `started` lands.
+        InspectState sw2;
+        sw2.active.push_back(LiveMode::Dataflow); // the newly-armed swap target
+        sw2.awaiting_started = true;              // its `started` has not landed
+        LiveStatus sw2st;
+        sw2st.state = LiveState::Idle;
+        sw2st.skip_code = 1;       // the OLD (swapped-out) session skipped
+        sw2st.sessions_ended = 1;  // its terminal event
+        inspect_reconcile_self_end(sw2, sw2st);
+        check("reconcile/swapped-out-skip-does-not-free-new",
+              sw2.active.size() == 1 && sw2.active[0] == LiveMode::Dataflow,
+              "a swapped-out session's skip must NOT free the swap's newly-armed "
+              "session before its started lands");
     }
 
     // --- 39 T5: a healthy new session must not inherit the previous one's refusal

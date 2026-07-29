@@ -797,6 +797,7 @@ expect_badarg "$ASM" --dataflow 1 hotfn --module=libc
 # rejected as a silent no-op without it — the same posture as --sampler/--module.
 # These are pure arg-parse checks (no sampler), so they run on every lane.
 expect_badarg "$ASM" --dataflow 1 hotfn --window=100    # --window without --auto
+expect_badarg "$ASM" --dataflow 1 hotfn --window=400    # even ==default: no silent no-op
 expect_badarg "$ASM" --dataflow 1 --auto --window=abc   # non-numeric window
 expect_badarg "$ASM" --dataflow 1 --auto --window=0     # zero window
 expect_badarg "$ASM" --dataflow 1 --auto --window=99999 # over the 60000 ms cap

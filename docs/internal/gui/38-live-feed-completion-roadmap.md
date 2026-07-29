@@ -30,6 +30,7 @@ when picking one up.
 | L4 | build `libasmtest_dataflow` on macOS/Darwin | Author-mode value-fabric capture on macOS | M | REAL (Author mode, produced not attached). |
 | L5 | ARM32 + RISC-V run/trace in Author mode (another `df_guest` instance) | Author value fabric for ARM32/RISC-V guests | M | REAL, narrow audience. |
 | L6 | [37](37-region-tag-on-df-step.md) T4 (`when`: bytes-live-at-step) on the serve/observer disasm path | Observer Disassembly disasm-at-`when` refinement (JIT/self-modifying targets) | M | **severable, deferred** — no view breaks (reader-rule-2 fallback is sound). |
+| L7 | make `auto` reliably capture ([39](39-auto-capture-reliability.md)): a pure candidate walk (armed on BOTH samplers), empty-window retry, a settable sample window, `continuous` through a quiet region, and the session-lifecycle repairs | reliable live `auto` capture — kills the *"start + arm, it starts then stops, `refused: no session is running`"* complaint | S | **CLOSED (doc 39).** A PORTABLE fallback, not a hardware gate: the audit had recorded only the AMD-IBS *survey stream* as gated and missed that the region *pick* has a sw-clock fallback and is therefore closable. Proven by pure `test_autoregion` cases (no CI lane has AMD silicon) + serve/desktop smokes. |
 
 **Corrected NOT-a-gap (audit over-claimed).** *"Carry `tid` on `df_step` to light
 live 3D convergence"* is **not closable and not real**: the live dataflow engine is
@@ -61,7 +62,7 @@ would fight physics or the design. They are marked so no one re-opens them.
   needs AMD Zen IBS-Op silicon + `perf_event_paranoid`; a non-AMD host self-skips
   (`skip.code=2`). The sw-clock fallback exists only for `auto`'s region *pick*, not
   for a survey stream. (Validated live on the Zen 5 box — see
-  [amd-live-validation](../../../CLAUDE.md).)
+  [amd-hardware-validation](../amd-hardware-validation.md).)
 - **Intel-PT observer + the PT-replay slice.** No serve mode captures PT/CoreSight;
   `ptslice` *replays* a recorded stitch path (replay needs no silicon, but *capturing*
   stitch needs Intel PT, and `stitch` has no v1 writer). Gated behind

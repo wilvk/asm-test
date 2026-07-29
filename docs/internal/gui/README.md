@@ -406,7 +406,18 @@ queue restarts, which is what makes `continuous` un-settable in practice. **No
 hardware unlock:** every policy change is proven by pure tests in `test_autoregion`
 (no backend link, both `cli-smoke` lanes), because no CI lane has AMD silicon — per
 CLAUDE.md, *"a test that can only ever self-skip is not a test."* Authored
-2026-07-29 against HEAD `0b52704`, measured on the Zen 2 dev box. ☐ 0/6 · will · T1–T6 · 2026-07-29.
+2026-07-29 against HEAD `0b52704`, measured on the Zen 2 dev box. ✅ 6/6 (T1
+pure `asmspy_autoregion_walk` + T2 `auto_pick` ranked list — both inline walks
+retired — `7de837c`; T3 empty-window retry + `--window`/wire `ms` + capture-pane
+input `bc46d49`; T4 continuous through a quiet region + 0-step `df_invocation`
+marker + `quiet_hot_victim` smoke `9710a79`; T5 self-end announced from the tracer
+tail + `inspect_reconcile_self_end` frees the jack + stop-reap ack + `last_err`
+clear `2427a64`; T6 idle-window pick rendered honestly + doc 38/CHANGELOG
+reconciled). **Corrected stale premises:** the swap/queue param-drop (T5.5) was
+**already repaired** and `InspectState::active` has **7** mutation sites, not 5;
+the pre-existing `test_shell` `attach/no-host reveals panes` bar was made
+environment-adaptive (it was RED on any checkout that had built `./build/asmspy`).
+Both docker lanes green (`test_ui` 28/28). · —.
 
 71 tasks across the ten core docs (01–10). Suggested start order: 01 and 03 in parallel (03's
 T1–T6 need no corpus), then 02/04, then 05/06/07 in parallel, then 08, then

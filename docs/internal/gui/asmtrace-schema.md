@@ -768,7 +768,7 @@ emitted per candidate attempted, between `started` and the terminal event.
 | `pick` field | Type | Meaning |
 |---|---|---|
 | `sampler` | str | `"ibs-op"` or `"sw-clock"` — which sampler actually ran, after `"auto"` resolved. |
-| `evidence` | str | `"entry"` or `"residency"` — **the load-bearing field**, see below. |
+| `evidence` | str | `"entry"`, `"residency"`, or `"idle"` — **the load-bearing field**, see below. |
 | `func` | str | The chosen function's name (or `"0x…"`). |
 | `base` / `len` | u64 | The region handed to the capture engine. |
 | `weight` | u64 | Entry samples (`entry`) or residency samples (`residency`). |
@@ -789,6 +789,16 @@ can never fire again — the rule's known failure shape. So a client showing a
 events with rising `attempt` are the server walking the ranked candidates after
 a `REGION_NEVER_RAN`, which is an honest refusal about *that candidate* and not
 a fact about the target.
+
+`"idle"` (39 T3) is the third value, and it is **not a pick** — it is an empty
+sample window reported on this same channel: the sampler ran and *nothing*
+qualified as a region this window, so the pick will re-sample. Its `func` is the
+sentinel `"(idle window)"`, its `weight`/`sites` are 0, and its `attempt`/`of`
+are the **window** retry (not a candidate ordinal). A client must render it as
+*"idle window N of M — re-sampling"*, never as an entry/residency observation:
+`evidence:"idle"` exists precisely so the wire does not claim an observation that
+did not happen. An idle window is a retry, not a verdict; only after the bounded
+window budget is exhausted does the session end `REGION_NEVER_RAN`.
 
 #### `err` — a refused command
 

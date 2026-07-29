@@ -371,9 +371,31 @@ bool pick_is_weak_evidence(const AutoPick &p) {
     return p.evidence != "entry";
 }
 
+bool pick_is_idle_window(const AutoPick &p) {
+    // The serve loop reuses the pick channel for an empty sample window (39 T3):
+    // evidence "idle" (it observed nothing this window — NOT an entry/residency
+    // claim) with the sentinel func "(idle window)". Keyed on the honest evidence
+    // value; the func is a secondary tell.
+    return p.evidence == "idle" || p.func == "(idle window)";
+}
+
 std::string pick_evidence_label(const AutoPick &p) {
+    if (pick_is_idle_window(p)) {
+        // An empty window is a RETRY, not a verdict: the sampler ran and nothing
+        // qualified this time, so the capture re-samples. Rendering it as an
+        // entry/residency pick would claim an observation that did not happen.
+        return "idle sample window " + std::to_string(p.attempt) + " of " +
+               std::to_string(p.of) +
+               " — nothing qualified as a region this window; re-sampling (an "
+               "empty window is a retry, not a verdict)";
+    }
+    // Name the SAMPLER (39 T6): which one ran is host-shaped — an AMD box takes
+    // the IBS-Op entry path, everywhere else the software-clock residency path —
+    // and two operators on different hosts get different SELECTION RULES. Saying
+    // which is what stops the pane from silently presenting them as the same.
+    std::string smp = p.sampler.empty() ? std::string() : " [" + p.sampler + "]";
     if (!pick_is_weak_evidence(p)) {
-        std::string s = "entry evidence: " + p.func +
+        std::string s = "entry evidence" + smp + ": " + p.func +
                         " was observed being ENTERED — the same event the "
                         "capture waits for";
         if (p.weight)
@@ -384,8 +406,8 @@ std::string pick_evidence_label(const AutoPick &p) {
             s += ")";
         return s;
     }
-    std::string s = "WEAKER EVIDENCE — residency, not entry: " + p.func +
-                    " was observed EXECUTING";
+    std::string s = "WEAKER EVIDENCE — residency" + smp + ", not entry: " +
+                    p.func + " was observed EXECUTING";
     if (p.weight)
         s += " (" + std::to_string(p.weight) + " residency samples)";
     s += ". That is a different claim: a function entered once and never "
@@ -395,6 +417,11 @@ std::string pick_evidence_label(const AutoPick &p) {
 }
 
 std::string pick_walk_note(const AutoPick &p) {
+    // An idle-window marker carries the WINDOW retry in attempt/of, not a
+    // candidate ordinal — its whole story is in pick_evidence_label, and the
+    // "candidate N of M, not seen entering" wording would be wrong for it.
+    if (pick_is_idle_window(p))
+        return std::string();
     if (p.attempt <= 1)
         return std::string();
     return "candidate " + std::to_string(p.attempt) + " of " +

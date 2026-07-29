@@ -3591,6 +3591,22 @@ static const char *serve_mode_name(serve_mode_t m) {
     return "?";
 }
 
+/* The effective --auto sample window (ms): the client's `ms` clamped to the SAME
+ * 1..60000 the CLI --window enforces, or AUTO_WINDOW_MS when unset (39 T3). The
+ * clamp is on `long`, BEFORE any int cast, because `ms` is a 64-bit wire value
+ * with only a >0 check: an out-of-range ms would truncate to a negative int and
+ * re-expand through (unsigned) into a ~24-day uninterruptible survey. Used by
+ * both the pick (the window it samples) and the `started` echo (so the client
+ * sees the EFFECTIVE window, not the raw value it sent). */
+static int serve_auto_window_ms(const serve_params_t *p) {
+    long w = p->has_ms ? p->ms : AUTO_WINDOW_MS;
+    if (w < 1)
+        w = 1;
+    if (w > 60000)
+        w = 60000;
+    return (int)w;
+}
+
 /* The `started` event's params echo: the EFFECTIVE parameters, after
  * defaulting, so the client can see what its omissions became. */
 static size_t serve_params_json(char *dst, size_t cap,
@@ -3661,9 +3677,9 @@ static size_t serve_params_json(char *dst, size_t cap,
             p->sampler == SAMPLER_IBS
                 ? "ibs"
                 : (p->sampler == SAMPLER_SW ? "sw" : "auto"),
-            p->has_ms ? (int)p->ms : AUTO_WINDOW_MS,
-            p->steps ? "true" : "false", p->mem ? "true" : "false",
-            p->fpregs ? "true" : "false", p->continuous ? "true" : "false");
+            serve_auto_window_ms(p), p->steps ? "true" : "false",
+            p->mem ? "true" : "false", p->fpregs ? "true" : "false",
+            p->continuous ? "true" : "false");
         break;
     default:
         o = (size_t)snprintf(dst, cap, "{}");
@@ -3759,7 +3775,9 @@ static void serve_run_engine(serve_session_t *s) {
          * self-skip, which is < 0) is a retry, not a verdict: re-sample a bounded
          * number of windows, each reported on the pick channel so a client can
          * show "re-sampling" rather than freeze. */
-        int window_ms = p->has_ms ? (int)p->ms : AUTO_WINDOW_MS;
+        /* The effective sample window, clamped to the CLI --window bound so an
+         * out-of-range wire `ms` cannot truncate into a ~24-day survey (review). */
+        int window_ms = serve_auto_window_ms(p);
         int wtry = 0;
         for (;;) {
             ncand = use_sw ? auto_pick_sw(p->pid, &s->syms, mod, cands,
@@ -3771,10 +3789,13 @@ static void serve_run_engine(serve_session_t *s) {
                     ASMSPY_WALK_ADVANCE)
                 break;
             wtry++;
-            /* An empty window on the pick channel: no func (a real candidate has
-             * one), attempt/of = the WINDOW retry, so a client shows "idle window
+            /* An empty window on the pick channel: evidence "idle" (NOT the
+             * sampler's entry/residency rule — nothing was observed this window,
+             * so claiming entry/residency would be a lie on the wire), the
+             * sentinel func "(idle window)" (a real candidate has a real name),
+             * and attempt/of = the WINDOW retry, so a client shows "idle window
              * N/M, re-sampling" rather than a silent gap. */
-            serve_emit_pick(s, smp, rule, "(idle window)", 0, 0, 0, 0, wtry,
+            serve_emit_pick(s, smp, "idle", "(idle window)", 0, 0, 0, 0, wtry,
                             AUTO_WINDOW_TRIES);
         }
         if (ncand <= 0) {
@@ -7586,6 +7607,9 @@ int main(int argc, char **argv) {
         int continuous = 0; /* --continuous: re-arm until Ctrl-C (35 T1) */
         int window_ms = AUTO_WINDOW_MS;  /* --window=MS: the --auto sample
                                          * window (39 T3); default unchanged */
+        int window_set = 0;              /* --window was given explicitly (so a
+                                          * value == the default is still refused
+                                          * without --auto — no silent no-op) */
         for (int i = 4; i < argc; i++) { /* [--json] [--tid=N] [--max=N]
                                           * [--module=M] [--sampler=S] [--window=MS]
                                           * [--record=F] [--steps] [--mem]
@@ -7622,6 +7646,7 @@ int main(int argc, char **argv) {
                 if (parse_count(argv[i] + 9, &w) != 0 || w <= 0 || w > 60000)
                     return bad_arg("window (1..60000 ms)", argv[i] + 9);
                 window_ms = (int)w;
+                window_set = 1;
             } else {
                 return bad_arg("dataflow option", argv[i]);
             }
@@ -7655,7 +7680,7 @@ int main(int argc, char **argv) {
         /* --window sizes the AUTO sample window; a named region samples nothing,
          * so accepting it there would read like it did something. Same posture as
          * --sampler / --module. */
-        if (!auto_region && window_ms != AUTO_WINDOW_MS)
+        if (!auto_region && window_set)
             return bad_arg("--window= without --auto (it sizes the automatic "
                            "pick's sample window; a named region samples "
                            "nothing)",

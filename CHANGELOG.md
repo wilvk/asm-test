@@ -28,6 +28,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`auto` reliably captures — one shot is not a policy**
+  (docs/internal/gui/39-auto-capture-reliability.md). The complaint *"start and arm
+  a process, it starts then stops, and the pane says `refused: no session is
+  running`"* was two independent bugs. **The region picker:** the candidate walk
+  (arm a ranked pick, and on *"not seen entering"* try the next) lived inline in two
+  identical, untestable copies, and that duplication is exactly how the strong
+  AMD-IBS/entry sampler ended up with **no walk at all** — it returned a single pick,
+  so `ncand` was 0 and the guard never fired (on an AMD box the *better* sampler gave
+  the *less* resilient capture). The walk is now one pure, unit-tested
+  `asmspy_autoregion_walk`, and `auto_pick` hands back the ranked list like its
+  sw-clock sibling, so BOTH samplers walk; an empty sample window is a **retry, not a
+  verdict** (an idle target yields nothing in one 400 ms window but may in the next),
+  and the window is settable end to end (`--window=<ms>`, a wire `ms` param, a
+  capture-pane input); a `continuous` capture now **survives a quiet region** instead
+  of ending at the first lull, surfacing the quiet window as a 0-step `df_invocation`
+  marker. **The session lifecycle:** a capture that ends on its own is now announced
+  from the tracer tail (an idle client learns without sending a command), the desktop
+  frees the ptrace jack it used to hold forever (reconciling `active` against the
+  terminal-event count), a `stop` for a self-ended session is acked rather than
+  refused for a precondition the host's own reap just removed, and a stale
+  `refused:` banner no longer haunts the next healthy capture. Every policy change is
+  proven by pure tests (no CI lane has AMD silicon), per CLAUDE.md.
 - **The 3D overview places a live routine-relative path, or says why not**
   (docs/internal/gui/36-anchor-the-3d-plane.md). A live `dataflow`/`auto` capture
   (`df_step` + `codeimage`, no `trace`) is `basis:"rel"`, so its 3D-overview tab
