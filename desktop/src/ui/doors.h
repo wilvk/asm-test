@@ -306,23 +306,34 @@ void inspect_attach_full_detail(InspectState &s, long pid);
 // for the windowed / render-only path):
 //   Connect     — the serve-host connection (asmspy path pre-filled + ssh host).
 //   Processes   — the searchable /proc target picker (pid / comm / attach / why).
-//   Live capture — the patch bay CONTROLS (mode + region + Start), the 3D handoff
-//                  and the PT-replay slice. The session log and save-to-.asmtrace
-//                  are their OWN panes (draw_session_status / draw_save_pane), and
+//   Live capture — the patch bay CONTROLS (mode + region + Start) and the 3D
+//                  handoff. The session log and save-to-.asmtrace are their OWN
+//                  panes (draw_session_status / draw_save_pane), the PT-replay
+//                  slice is its own PT-host-gated pane (draw_pt_slice_pane), and
 //                  the live views render in the doc-25 live-tab mirror panes.
 void draw_connect_pane(InspectState &s);
 void draw_processes_pane(InspectState &s);
 void draw_capture_pane(InspectState &s);
 
 // The Log pane's session half (the colored session/refusal/skip/torn/end-cause
-// log that used to sit inside the capture pane) and the Save pane (save the
-// session's capture to a .asmtrace + Open in Loom). Both forward to the same
-// bodies the windowed stack (draw_inspect_door) draws inline.
+// log that used to sit inside the capture pane), the Save pane (save the session's
+// capture to a .asmtrace + Open in Loom), and the PT slice pane (the def-use slice
+// with zero single-steps of the target — hardware-recorded path, emulator-replayed
+// values). All three forward to the same bodies the windowed stack
+// (draw_inspect_door) draws inline.
 void draw_session_status(InspectState &s);
 void draw_save_pane(InspectState &s);
+void draw_pt_slice_pane(InspectState &s);
 // Is there a capture to act on (a growing one, or a completed one this session)?
 // The Save pane's context gate + the capture pane's 3D-handoff enable.
 bool inspect_has_capture(const InspectState &s);
+// Is this an Intel PT host — a host where a live PT capture can be started, so
+// there is ever a hardware-recorded path for the PT slice to replay? The pure
+// verdict is ptslice_gate(ptslice_facts()).can_capture (tested with synthetic
+// facts in test_obs_ptslice); this reads the real host. Gates the PT slice pane's
+// context so that tab appears ONLY on a PT host, and the windowed stack's inline
+// PT slice with it.
+bool inspect_pt_host_available();
 
 // The single-window composition of the three panes (the windowed shell's Inspect
 // tab and the render-only viewer). The docked shell draws the three separately.

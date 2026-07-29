@@ -767,7 +767,11 @@ void draw_capture_full(InspectState &s) {
     ImGui::SeparatorText("live views");
     draw_live_views(s);
     draw_save_capture(s);
-    draw_pt_slice(s);
+    // The PT slice is a docked pane of its own (draw_pt_slice_pane) and appears
+    // ONLY on an Intel PT host; the single-window stack honours the same gate so
+    // there is no surface that offers it off a PT host.
+    if (inspect_pt_host_available())
+        draw_pt_slice(s);
 }
 
 } // namespace
@@ -777,6 +781,15 @@ void draw_capture_full(InspectState &s) {
 // paths cannot drift.
 void draw_session_status(InspectState &s) { draw_status(s); }
 void draw_save_pane(InspectState &s) { draw_save_capture(s); }
+void draw_pt_slice_pane(InspectState &s) { draw_pt_slice(s); }
+
+// The PT slice pane's context gate: can a live Intel PT capture be started on
+// this host? Only then is there ever a hardware-recorded path for the slice to
+// replay — so the tab shows on a PT host and nowhere else. Pure verdict from
+// ptslice_gate (tested with synthetic facts); this samples the real host.
+bool inspect_pt_host_available() {
+    return ptslice_gate(ptslice_facts()).can_capture;
+}
 
 // Is there a capture to act on (a growing one, or a completed one this session)?
 // Gates the Save pane's context and the docked capture pane's 3D handoff.
@@ -979,10 +992,11 @@ void draw_processes_pane(InspectState &s) {
 
 // --- Live capture pane: the patch bay CONTROLS only ------------------------
 // The docked shell's Live-capture tab. The session log moved to the Log pane
-// (draw_session_status) and save-to-.asmtrace to the Save pane (draw_save_pane);
-// the live views render in their own docked panes (the doc-25 live_tab mirror).
-// So this tab is now just the controls: pick a mode, scope it, Start — plus the
-// 3D-overview handoff and the PT slice, both capture-adjacent actions.
+// (draw_session_status), save-to-.asmtrace to the Save pane (draw_save_pane), and
+// the PT slice to its own PT-host-gated pane (draw_pt_slice_pane); the live views
+// render in their own docked panes (the doc-25 live_tab mirror). So this tab is
+// now just the controls: pick a mode, scope it, Start — plus the 3D-overview
+// handoff, a capture-adjacent action.
 void draw_capture_pane(InspectState &s) {
     if (!s.host_started) {
         ImGui::TextDisabled(
@@ -1010,7 +1024,6 @@ void draw_capture_pane(InspectState &s) {
     ImGui::SameLine();
     ImGui::TextDisabled(
         "(spacetime terrain — press Play there to watch it form)");
-    draw_pt_slice(s);
 }
 
 void draw_inspect_door(InspectState &s) {

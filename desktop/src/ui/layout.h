@@ -80,18 +80,21 @@ extern const char *const kPaneTimeline;
 // this brief (19) tears down. They dock alongside the five regions above.
 extern const char *const kPaneLoom;
 extern const char *const kPaneObserver;
-// The Inspect / live-capture workflow, split into three dockable panes (replacing
-// the single Inspect door window): the host Connect pane, the searchable Processes
-// target picker, and the Live-capture controls (patch bay + region + save + PT
-// slice). Each opens on demand, closes, undocks, and appears in View ▸ Panels.
+// The Inspect / live-capture workflow, split into dockable panes (replacing the
+// single Inspect door window): the host Connect pane, the searchable Processes
+// target picker, and the Live-capture controls (patch bay + region + Start).
+// Each opens on demand, closes, undocks, and appears in View ▸ Panels.
 extern const char *const kPaneConnect;
 extern const char *const kPaneProcesses;
 extern const char *const kPaneCapture;
-// The capture surface's two split-out panes: the colored session Log (docked in
-// the bottom region beside the timeline) and Save capture (docked beside the
-// Live-capture controls). Each opens on demand and appears in View ▸ Panels.
+// The capture surface's split-out panes: the colored session Log (docked in the
+// bottom region beside the timeline), Save capture (docked beside the Live-capture
+// controls), and the PT slice — the hardware-recorded def-use slice, its OWN pane
+// and CONTEXT-GATED to an Intel PT host (it needs PT silicon to have a path to
+// replay). Each opens on demand and appears in View ▸ Panels.
 extern const char *const kPaneLog;
 extern const char *const kPaneSave;
+extern const char *const kPanePtSlice;
 
 } // namespace asmdesk
 #endif // ASMDESK_UI_LAYOUT_H

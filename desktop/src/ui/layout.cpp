@@ -19,6 +19,7 @@ const char *const kPaneProcesses = "Processes";
 const char *const kPaneCapture = "Live capture";
 const char *const kPaneLog = "Log";
 const char *const kPaneSave = "Save capture";
+const char *const kPanePtSlice = "PT slice";
 
 const char *layout_preset_name(LayoutPreset p) {
     switch (p) {
@@ -110,6 +111,10 @@ DockLayout layout_build(ImGuiID dockspace_id, ImVec2 size, LayoutPreset preset) 
     // reading arrangement — so on-demand visibility, not the split, gates them.
     ImGui::DockBuilderDockWindow(kPaneLog, L.bottom);
     ImGui::DockBuilderDockWindow(kPaneSave, L.right);
+    // The PT slice tabs in beside the Live-capture controls (a capture-adjacent
+    // action, like Save). Docked the same across presets; its context gate — an
+    // Intel PT host — decides whether it ever shows.
+    ImGui::DockBuilderDockWindow(kPanePtSlice, L.right);
     switch (preset) {
     case LayoutPreset::ReplayInspect:
     case LayoutPreset::Author:

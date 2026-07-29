@@ -909,8 +909,33 @@ int main() {
               active(kPaneCapture),
               "the Live-capture controls show once a host connects and a "
               "process is picked");
+
+        // The PT slice is its OWN pane now, CONTEXT-GATED to an Intel PT host
+        // (pctx_pt) — not a host connection but a fact about the CPU. Opening it
+        // must show it IFF this host can start a live PT capture, both directions:
+        // on the usual non-PT test host that means hidden, and on a PT host it
+        // shows. Asserting against inspect_pt_host_available() keeps the check
+        // correct on either. The pure PT-host verdict itself is proved with
+        // synthetic facts in test_obs_ptslice — no PT silicon needed there.
+        ds.pane_open[kPanePtSlice] = true;
+        frame(ds);
+        frame(ds);
+        check("pane/pt-slice tracks the PT-host gate",
+              active(kPanePtSlice) == inspect_pt_host_available(),
+              "the PT slice pane must show exactly when the host can capture PT");
         ds.inspect.host_started = false;
         ds.inspect.selected_pid = 0;
+
+        // Its BODY draws cleanly everywhere (it self-gates internally with the
+        // disclosure + a disabled Replay button), independent of the host gate —
+        // render it in a plain window so ImGui validates its Begin / EndDisabled
+        // balance headlessly. This is the coverage that used to ride the capture
+        // pane before the PT slice moved out; an imbalance aborts via IM_ASSERT.
+        ImGui::NewFrame();
+        if (ImGui::Begin("pt-slice-body-probe"))
+            draw_pt_slice_pane(ds.inspect);
+        ImGui::End();
+        ImGui::Render();
 
         ImGui::DestroyContext();
     }
