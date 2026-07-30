@@ -3,3 +3,4 @@
 {"timestamp": "2026-07-22T10:46:00Z", "commit": "cdd86fe", "os": "windows", "arch": "x86_64", "unit": "cyc", "virtualized": false, "native": [{"name": "win64.ret_arg0", "median": 28.0312, "unit": "cyc"}]}
 {"timestamp": "2026-07-26T09:11:32Z", "commit": "5779f93", "os": "windows", "arch": "x86_64", "unit": "cyc", "virtualized": false, "native": [{"name": "win64.ret_arg0", "median": 23.3696, "unit": "cyc"}]}
 {"timestamp": "2026-07-29T09:36:40Z", "commit": "ea1f56e", "os": "windows", "arch": "x86_64", "unit": "cyc", "virtualized": false, "native": [{"name": "win64.ret_arg0", "median": 23.3635, "unit": "cyc"}]}
+{"timestamp": "2026-07-30T09:29:29Z", "commit": "f98f23d", "os": "windows", "arch": "x86_64", "unit": "cyc", "virtualized": false, "native": [{"name": "win64.ret_arg0", "median": 21.7788, "unit": "cyc"}]}
