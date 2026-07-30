@@ -472,18 +472,54 @@ static void test_end_state() {
         check("end/host-gone-integrity", end_cause_is_integrity(c),
               "a crash mid-capture is integrity");
     }
-    // The four placards are DISTINCT strings (the user can tell them apart).
+    // HostFailedNoData: the host exited with an ERROR before any recording began
+    // (a refused ssh, a bad flag) — no data, non-zero status, no usage banner.
+    // Must NOT collapse to a clean stop.
+    {
+        EndFacts f;
+        f.host_exited = true;
+        f.host_status = 255 << 8; // ssh-shaped: WEXITSTATUS 255, a failed connect
+        f.malformed_lines = 0;
+        f.any_recording = false;
+        f.torn_recording = false;
+        EndCause c = end_cause(f);
+        check("end/host-failed", c == EndCause::HostFailedNoData,
+              "a non-zero host exit with no recording is a host failure");
+        check("end/host-failed-not-clean", c != EndCause::StoppedClean,
+              "a failed host must never read as a clean stop");
+        check("end/host-failed-integrity", end_cause_is_integrity(c),
+              "a host that failed to start is loud (integrity)");
+        check("end/host-failed-has-fix", !end_cause_fix(c).empty(),
+              "the host-failure placard offers a mechanical fix");
+    }
+    // A host that ran and exited CLEANLY (status 0) with no recording is still a
+    // clean stop, not a failure — the discriminator is the non-zero status.
+    {
+        EndFacts f;
+        f.host_exited = true;
+        f.host_status = 0;
+        f.any_recording = false;
+        EndCause c = end_cause(f);
+        check("end/clean-no-data", c == EndCause::StoppedClean,
+              "a clean host exit with no data is a clean stop, not a failure");
+    }
+    // The five placards are DISTINCT strings (the user can tell them apart).
     {
         std::string a = end_cause_message(EndCause::StoppedClean);
         std::string b = end_cause_message(EndCause::TornHostGone);
         std::string d = end_cause_message(EndCause::TornEof);
         std::string e = end_cause_message(EndCause::ProtocolMismatch);
+        std::string g = end_cause_message(EndCause::HostFailedNoData);
         check("end/distinct",
-              a != b && a != d && a != e && b != d && b != e && d != e,
+              a != b && a != d && a != e && a != g && b != d && b != e &&
+                  b != g && d != e && d != g && e != g,
               "each cause must render a distinct placard string");
         check("end/mismatch-nothing-captured",
               e.find("Nothing was captured") != std::string::npos,
               "the protocol-mismatch placard must state nothing was captured");
+        check("end/host-failed-not-clean-text",
+              g.find("not a clean stop") != std::string::npos,
+              "the host-failure placard must disclaim a clean stop");
     }
 }
 

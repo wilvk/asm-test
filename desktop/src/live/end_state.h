@@ -30,6 +30,9 @@ enum class EndCause {
     TornHostGone,     // the host crashed mid-capture (non-clean exit) — tail untrusted
     TornEof,          // the stream ended (EOF) mid-capture — tail untrusted
     ProtocolMismatch, // a non-serve asmspy printed a usage banner and exited 0
+    HostFailedNoData, // the host exited with an ERROR before any recording began —
+                      // a bad remote (ssh refused/auth), a wrong flag, a missing
+                      // target. Nothing was captured; NOT a clean stop.
 };
 
 // The facts end_cause() decides from — all derivable today. Kept as a struct so
@@ -53,6 +56,13 @@ inline EndCause end_cause(const EndFacts &f) {
     // never opened a recording. Nothing was captured, and the fix is mechanical.
     if (f.malformed_lines > 0 && !f.any_recording)
         return EndCause::ProtocolMismatch;
+    // HOST-FAILED: the host exited with an ERROR and no recording ever began — a
+    // refused/failed ssh, a bad flag, a missing target. It printed nothing we
+    // could parse (or that path is above), so the collapsed "ended" would read as
+    // a clean stop; it is a failure and must be LOUD (a non-zero wait status is a
+    // non-clean exit or a signal death — see reap()).
+    if (!f.any_recording && f.host_exited && f.host_status != 0)
+        return EndCause::HostFailedNoData;
     if (f.torn_recording) {
         // A non-clean host exit means it crashed mid-capture; a clean/absent exit
         // status with a torn tail means the stream just ended (EOF).
@@ -91,6 +101,8 @@ inline const char *end_cause_title(EndCause c) {
         return "Stream ended mid-capture";
     case EndCause::ProtocolMismatch:
         return "Not a serve-capable asmspy";
+    case EndCause::HostFailedNoData:
+        return "Capture host failed to start";
     }
     return "Session ended";
 }
@@ -112,16 +124,23 @@ inline std::string end_cause_message(EndCause c) {
     case EndCause::ProtocolMismatch:
         return "The host is not a serve-capable `asmspy` — it printed a usage "
                "banner and exited. Nothing was captured.";
+    case EndCause::HostFailedNoData:
+        return "The capture host exited with an ERROR before any data arrived — "
+               "e.g. a refused/failed ssh, a wrong flag, or a missing target. "
+               "Nothing was captured; this is a failure, not a clean stop.";
     }
     return "Session ended.";
 }
 
-// The ONE-LINE FIX, rendered in-pane (T2 step 2 / step 4). Non-empty only for
-// PROTOCOL-MISMATCH: it is a machine-checkable instruction, kept VERBATIM so it
-// mirrors the README essay's remedy voice rather than paraphrasing it.
+// The ONE-LINE FIX, rendered in-pane (T2 step 2 / step 4). Non-empty for the two
+// causes with a mechanical remedy: it is a machine-checkable instruction, kept
+// VERBATIM so it mirrors the README essay's remedy voice rather than paraphrasing.
 inline std::string end_cause_fix(EndCause c) {
     if (c == EndCause::ProtocolMismatch)
         return "Fix: rebuild `build/asmspy` (`make cli`); Disconnect + reconnect.";
+    if (c == EndCause::HostFailedNoData)
+        return "Fix: check the capture command / connection (run it in a shell to "
+               "see its error), then Disconnect + reconnect.";
     return std::string();
 }
 
