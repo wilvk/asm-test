@@ -267,7 +267,7 @@ static size_t op_body(char *b, size_t cap, size_t o, const at_val_rec_t *r,
 }
 
 size_t asmtrace_df_step_body(char *dst, size_t cap, unsigned step, uint64_t off,
-                             uint64_t rbase, const char *disasm,
+                             uint64_t rbase, uint64_t when, const char *disasm,
                              const at_val_rec_t *recs, size_t n,
                              const uint8_t *wide, size_t wide_len) {
     size_t o = 0;
@@ -276,14 +276,22 @@ size_t asmtrace_df_step_body(char *dst, size_t cap, unsigned step, uint64_t off,
     dst[0] = '\0';
     o = bp(dst, cap, o, "\"step\":%u,\"off\":%llu", step,
            (unsigned long long)off);
-    /* 37: the absolute region base `off` is relative to, immediately after `off`
-     * (the anchor beside the thing it anchors). Emitted ONLY when the producer
-     * knows it; OMITTED — never null, never 0-as-unknown — otherwise, since
-     * address 0 is never a mapped code span, so base==0 means "not known" at the
-     * writer. `off` is region-relative by definition; an absolute-offset producer
-     * (base==0) is out of contract and must not be wired to df_step. */
+    /* 37 T1: the absolute region base `off` is relative to, immediately after
+     * `off` (the anchor beside the thing it anchors). Emitted ONLY when the
+     * producer knows it; OMITTED — never null, never 0-as-unknown — otherwise,
+     * since address 0 is never a mapped code span, so base==0 means "not known"
+     * at the writer. `off` is region-relative by definition; an absolute-offset
+     * producer (base==0) is out of contract and must not be wired to df_step. */
     if (rbase)
         o = bp(dst, cap, o, ",\"rbase\":%llu", (unsigned long long)rbase);
+    /* 37 T4: the codeimage `when` (asmtest_codeimage_now) whose bytes were live
+     * when this step's invocation STARTED, immediately after `rbase`. Emitted
+     * ONLY when the producer holds a codeimage timeline (serve sessions only —
+     * the headless sink and the corpus recorders have none); OMITTED — never
+     * null, never 0-as-unknown — otherwise, since a real codeimage version's
+     * `seq` is assigned from `++img->seq` and so is never 0. */
+    if (when)
+        o = bp(dst, cap, o, ",\"when\":%llu", (unsigned long long)when);
     if (disasm && *disasm) {
         char esc[512];
         asmtrace_escape(esc, sizeof esc, disasm);

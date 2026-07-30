@@ -77,6 +77,13 @@ PtSliceFacts ptslice_facts();
 // by version is the whole reason both kinds exist.
 struct PtSliceInput {
     uint64_t base = 0;
+    // 37 T4: the codeimage `when` of the version the path was decoded against
+    // (the same version `base`/`code` are drawn from) — 0 when no version
+    // pinned it (in.error is set in that case; `base`/`code` stay empty too).
+    // Not the serve sink's "sampled once before the pass" approximation: the
+    // replay already knows the EXACT version by its `stitch`-carried `version`
+    // index, so this is the precise value, not a proxy for it.
+    uint64_t when = 0;
     std::vector<uint8_t> code;
     std::vector<uint64_t> path; // executed offsets, in order
     long tid = 0;

@@ -537,9 +537,12 @@ static int record_arm64(const char *dir, const char *out, const char *label,
         first = cur;
         while (cur < nrecs && vt->recs[cur].step == s)
             cur++;
+        /* 37 T4: `when` is omitted (0) — this recorder holds no codeimage
+         * timeline (it emits none), so its output never carries the field and
+         * the golden corpus does not churn. */
         asmtrace_df_step_body(body, sizeof body, (unsigned)s, vt->insn_off[s],
-                              REC_CODE_BASE, dis, &vt->recs[first], cur - first,
-                              vt->wide, vt->wide_len);
+                              REC_CODE_BASE, 0, dis, &vt->recs[first],
+                              cur - first, vt->wide, vt->wide_len);
         asmtrace_emit(&w, "df_step", body);
     }
 
@@ -864,9 +867,12 @@ static int record_bytes_fp(const char *dir, const char *out, const char *label,
         first = cur;
         while (cur < nrecs && vt->recs[cur].step == s)
             cur++;
+        /* 37 T4: `when` is omitted (0) — this recorder holds no codeimage
+         * timeline (it emits none), so its output never carries the field and
+         * the golden corpus does not churn. */
         asmtrace_df_step_body(body, sizeof body, (unsigned)s, vt->insn_off[s],
-                              REC_CODE_BASE, dis, &vt->recs[first], cur - first,
-                              vt->wide, vt->wide_len);
+                              REC_CODE_BASE, 0, dis, &vt->recs[first],
+                              cur - first, vt->wide, vt->wide_len);
         asmtrace_emit(&w, "df_step", body);
     }
 

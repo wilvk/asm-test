@@ -2360,12 +2360,15 @@ static void dataflow_emit_blame(rec_t *r, const asmtest_valtrace_t *vt,
 /* Record one captured invocation as `df_step` + `df_edge` events, mirroring the
  * render sink's walk over the L0 record stream. The BODY builders live in the
  * writer TU (asmtrace_ndjson.h) so a live recording and a golden one spell an
- * operand identically. */
+ * operand identically. `when` (37 T4) is the codeimage timestamp whose bytes
+ * were live when THIS invocation started, sampled once by the caller before the
+ * pass and stamped on every df_step of it — 0 (omitted) from every caller but
+ * the serve sink, which is the only one holding a codeimage timeline. */
 static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
                             const asmtest_defuse_t *g, const uint8_t *code,
-                            size_t len, uint64_t base, int emit_mem,
-                            int emit_blame, int emit_statediff, int continuous,
-                            unsigned pass, long result) {
+                            size_t len, uint64_t base, uint64_t when,
+                            int emit_mem, int emit_blame, int emit_statediff,
+                            int continuous, unsigned pass, long result) {
     size_t nsteps = vt->steps_len, nrecs = vt->recs_len, cur = 0;
     char body[65536];
     if (!rec_on(r))
@@ -2391,12 +2394,13 @@ static void dataflow_record(rec_t *r, const asmtest_valtrace_t *vt,
         first = cur;
         while (cur < nrecs && vt->recs[cur].step == s)
             cur++;
-        /* 37: `base` is the scoped region base `off` (pc - base_ip) is relative
-         * to — state it on the wire as `rbase` so a reader resolves the span
-         * instead of deriving it (the auto candidate walk emits several spans). */
+        /* 37 T1: `base` is the scoped region base `off` (pc - base_ip) is
+         * relative to — state it on the wire as `rbase` so a reader resolves the
+         * span instead of deriving it (the auto candidate walk emits several
+         * spans). 37 T4: `when` rides beside it, already resolved by the caller. */
         asmtrace_df_step_body(body, sizeof body, (unsigned)s, vt->insn_off[s],
-                              base, dis, &vt->recs[first], cur - first, vt->wide,
-                              vt->wide_len);
+                              base, when, dis, &vt->recs[first], cur - first,
+                              vt->wide, vt->wide_len);
         rec_emit(r, "df_step", body);
         /* 26 T2: when the register ring is armed, one `regstate` per step, right
          * after its `df_step` and in step order — so the Scrubber pairs them 1:1
@@ -2493,8 +2497,11 @@ static void dataflow_render_sink(void *ctx, long result,
     /* 35 T1: post-increment the per-session pass ordinal so each continuous
      * invocation's df_invocation marker carries a distinct `pass`. */
     unsigned pass = dc->pass++;
-    dataflow_record(dc->r, vt, g, code, len, base, dc->emit_mem, dc->emit_blame,
-                    dc->emit_statediff, dc->continuous, pass, result);
+    /* 37 T4: this headless sink holds no codeimage timeline, so `when` is
+     * always 0 (omitted) — only the serve sink stamps it. */
+    dataflow_record(dc->r, vt, g, code, len, base, 0, dc->emit_mem,
+                    dc->emit_blame, dc->emit_statediff, dc->continuous, pass,
+                    result);
 
     if (dc->json) {
         char ef[256];
@@ -3442,8 +3449,16 @@ static void serve_dataflow_sink(void *ctx, long result,
     /* 35 T1: in a continuous session the sink fires once per re-armed pass; the
      * per-session df_pass ordinal delimits them via the df_invocation marker. */
     unsigned pass = s->df_pass++;
-    dataflow_record(&s->rec, vt, g, code, len, base, s->p.mem, s->p.blame,
-                    s->p.statediff, s->p.continuous, pass, result);
+    /* 37 T4: sample `when` BEFORE this pass's df_step block, not after — the
+     * bytes in force when the invocation STARTED. Sound because nothing has
+     * refreshed the timeline since serve_codeimage_refresh ran at the end of the
+     * PREVIOUS pass (or serve_codeimage_arm for the first): the img's `seq` here
+     * is exactly the version live for the whole of this pass. The refresh below
+     * runs only AFTER dataflow_record, so a change this pass caused is dated to
+     * the NEXT one, never this one. 0 (omitted) when codeimage is unavailable. */
+    uint64_t when = s->img ? asmtest_codeimage_now(s->img) : 0;
+    dataflow_record(&s->rec, vt, g, code, len, base, when, s->p.mem,
+                    s->p.blame, s->p.statediff, s->p.continuous, pass, result);
     serve_codeimage_refresh(s);
 }
 

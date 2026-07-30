@@ -47,6 +47,11 @@ struct ObserverState {
     // The disassembly pane's logical time. 0 = the latest version, mirroring
     // asmtest_codeimage_bytes_at's own convention.
     uint64_t disasm_when = 0;
+    // 37 T4: has the analyst EVER edited disasm_when by hand? Gates the default
+    // observer_build seeds from DisasmView::stamped_when — set once, on the
+    // first genuine edit, so a live session's repeated rebuilds (every growth
+    // tick) never clobber a manual choice back to the recording's own default.
+    bool disasm_when_touched = false;
 
     // The syscall pane's client-side name filter (16 T2). UI state, not model:
     // it selects which rows draw_obs_syscalls DRAWS (via obs_syscall_filter_

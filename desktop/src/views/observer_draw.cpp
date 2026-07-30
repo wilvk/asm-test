@@ -188,6 +188,13 @@ void observer_build(ObserverState &s, const Recording &r,
     s.tree = obs_tree_build(r, lc);
     s.region = obs_region_build(r, lc);
     s.disasm = obs_disasm_build(r, lc);
+    // 37 T4: seed the manual "as of logical time" slider from the recording's
+    // own per-step `when`, so a dataflow capture opens already resolved against
+    // the bytes that were actually live — never once the analyst has typed a
+    // value of their own (a live session rebuilds on every growth tick, and
+    // that must not silently walk a manual choice back to the default).
+    if (!s.disasm_when_touched && s.disasm.stamped_when)
+        s.disasm_when = s.disasm.stamped_when;
     s.built = true;
 }
 
@@ -695,8 +702,12 @@ void draw_obs_disasm(const DisasmView &v, ObserverState &s) {
     }
     int when = static_cast<int>(s.disasm_when);
     ImGui::SetNextItemWidth(160);
-    if (ImGui::InputInt("as of logical time (0 = latest)", &when))
+    if (ImGui::InputInt("as of logical time (0 = latest)", &when)) {
         s.disasm_when = when < 0 ? 0 : static_cast<uint64_t>(when);
+        // 37 T4: a genuine hand edit — the recording's own default never
+        // overwrites it again this session.
+        s.disasm_when_touched = true;
+    }
     // Marked as a DISCRETE logical-time step, not a continuous clock (24 T4):
     // the same intentional-discrete marker + registry reason the invocation
     // pager carries, so the fidelity choice reads the same across the deck.

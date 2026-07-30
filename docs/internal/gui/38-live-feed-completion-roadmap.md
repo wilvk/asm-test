@@ -29,7 +29,7 @@ when picking one up.
 | L3 | the precomputed `blame` + `statediff` **KINDS** over the asmspy serve leg (R6/doc 33 landed them recorder/emulator-only) | reproducible/deep-linkable `blame`/`statediff` artifacts from a live attach | M | **CLOSED ([doc 41](41-live-blame-statediff-serve-leg.md)).** The serve leg emits both — `blame` via `dataflow_emit_blame` (backward cone over the def-use graph it already builds, penultimate seed), `statediff` via a delta of the `regstate` ring (`--statediff` self-arms it); both ride the sink ctx (no engine change) and use the SHARED body builders. As predicted this was **low value** — the backward-cone and statediff *views* already worked live client-side; this lands the precomputed *convenience* only. |
 | L4 | build `libasmtest_dataflow` on macOS/Darwin | Author-mode value-fabric capture on macOS | M | REAL (Author mode, produced not attached). |
 | L5 | ARM32 + RISC-V run/trace in Author mode (another `df_guest` instance) | Author value fabric for ARM32/RISC-V guests | M | REAL, narrow audience. |
-| L6 | [37](37-region-tag-on-df-step.md) T4 (`when`: bytes-live-at-step) on the serve/observer disasm path | Observer Disassembly disasm-at-`when` refinement (JIT/self-modifying targets) | M | **severable, deferred** — no view breaks (reader-rule-2 fallback is sound). |
+| L6 | [37](37-region-tag-on-df-step.md) T4 (`when`: bytes-live-at-step) on the serve/observer disasm path | Observer Disassembly disasm-at-`when` refinement (JIT/self-modifying targets) | M | **CLOSED (37 T4).** The serve sink (`cli/asmspy.c`'s `serve_dataflow_sink`) samples `asmtest_codeimage_now` once before each pass and stamps it on every `df_step` as an optional `when`, keyed with `rbase` (never alone — it restarts per re-armed span); the headless sink and both corpus recorders hold no codeimage timeline and omit it, so no golden churned. `DataflowStream` carries it (`insn_when`/`when_present`), the PT-replay `ptslice.cpp` populates it from the exact version it replayed against, and `observer_build` seeds the Observer Disassembly pane's manual "as of logical time" slider from it — a genuine edit still wins on every later rebuild. |
 | L7 | make `auto` reliably capture ([39](39-auto-capture-reliability.md)): a pure candidate walk (armed on BOTH samplers), empty-window retry, a settable sample window, `continuous` through a quiet region, and the session-lifecycle repairs | reliable live `auto` capture — kills the *"start + arm, it starts then stops, `refused: no session is running`"* complaint | S | **CLOSED (doc 39).** A PORTABLE fallback, not a hardware gate: the audit had recorded only the AMD-IBS *survey stream* as gated and missed that the region *pick* has a sw-clock fallback and is therefore closable. Proven by pure `test_autoregion` cases (no CI lane has AMD silicon) + serve/desktop smokes. |
 
 **Corrected NOT-a-gap (audit over-claimed).** *"Carry `tid` on `df_step` to light
@@ -50,9 +50,9 @@ landed the live `--dataflow --mem` / serve `mem:true` producer, so a live captur
 engine change) — **done first ([doc 40](40-segment-dataflow-by-invocation.md)).**
 L1 is the largest single unlock (a whole platform) but L-effort and hazard-gated. L3 (the precomputed-kind convenience) is **done
 ([doc 41](41-live-blame-statediff-serve-leg.md))** — its *views* already worked live,
-so it was low priority but cheap. L4/L5 are Author-mode platform breadth. L6 is the
-severable [37](37-region-tag-on-df-step.md)
-tail — no view breaks without it (reader-rule-2 fallback stays sound).
+so it was low priority but cheap. L4/L5 are Author-mode platform breadth. L6, the
+severable [37](37-region-tag-on-df-step.md) T4 tail, is **done** — the serve path
+now states `when` and the Observer disasm pane resolves against it by default.
 
 ## Permanent gates — recorded, NOT briefed
 

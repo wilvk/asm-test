@@ -73,7 +73,17 @@ struct DataflowStream {
     // reach here, so the per-pass `step` restart (35 T1) no longer aliases offsets
     // OR bases across passes — every index in this vector belongs to one pass.
     std::vector<uint64_t> insn_rbase;
-    bool rbase_present = false;      // any df_step of THIS pass stated an rbase
+    bool rbase_present = false; // any df_step of THIS pass stated an rbase
+    // 37 T4: per step, the codeimage `when` in force when this step's invocation
+    // STARTED (df_step.when); 0 where the wire did not state one (only the serve
+    // path ever does — the headless sink and both corpus recorders hold no
+    // codeimage timeline). Constant across every step of one pass by
+    // construction (the producer samples it once before the pass), but carried
+    // per-step so a reader never has to special-case a pass boundary. Keyed
+    // together with insn_rbase[step] — `when` alone is not distinguishing (it
+    // restarts at each re-armed span in a candidate walk).
+    std::vector<uint64_t> insn_when;
+    bool when_present = false;       // any df_step of THIS pass stated a when
     std::vector<std::string> disasm; // per step; "" where the producer had none
     std::vector<ValRec> recs;        // ALL steps' operands, ascending by step
     std::vector<dt_edge> edges;      // def-use endpoints (slice input)

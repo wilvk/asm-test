@@ -336,7 +336,7 @@ fixture stay deliberately untagged as standing coverage for the absent-`rbase`
 fallback. **36's `resolve_anchor` is retired to *the fallback*, never deleted** — it
 remains permanent for pre-37 recordings and for rel `trace`, which this brief
 deliberately does not tag. T4 (`when`: which bytes were live at this step) is
-severable. Authored 2026-07-29 against HEAD `81e6ade`. ◐ 1/6 (T1 the `rbase` tag —
+severable. Authored 2026-07-29 against HEAD `81e6ade`. ☑ 6/6 (T1 the `rbase` tag —
 optional u64 after `off`, emitted only when nonzero so a `rbase==0` df_step is
 byte-identical to pre-37; all 3 C producers + Author VM + `record_scene_df` state
 their base; exact-body unit test; schema field/order + freeze-item closed; 20 flat
@@ -356,14 +356,15 @@ wire (rbase)") distinct from `single-span` ("derived placement") and `mixed`;
 `record_scene_df_multi` emits `scene-df-two-span.asmtrace` (two `codeimage` spans +
 `df_step`s tagged to each, no `trace`; byte-stable under docker-cli), and
 `test_shell` asserts both spans place, `pc_placed==pc_points>0`, and
-`anchor_source=="wire"` — the recording 36 alone renders labelled-empty). **☑ 5/6
-LANDED (T1–T3, T5, T6).** T4 (`when`: which bytes were live at this step) is
-**DEFERRED as the severable extension the brief marks it** — it is a serve-path
-disasm-version refinement (disassemble each JIT-churning step against the bytes in
-force), orthogonal to the multi-span resolution the other five tasks deliver and to
-the live-process *visualization* goal; it re-plumbs the serve sink + the observer
-disasm-at-`when` default. Reader-rule 2 fallback stays sound without it. · will ·
-T4 deferred · 2026-07-29.
+`anchor_source=="wire"` — the recording 36 alone renders labelled-empty). **☑ 6/6
+LANDED IN FULL (T1–T6).** T4 the `when` tag — the serve-path disasm-version
+refinement, severable from the multi-span resolution the other five tasks deliver:
+the serve sink samples `asmtest_codeimage_now` once per invocation and stamps it on
+every `df_step`, keyed with `rbase` (never `when` alone, since it restarts per
+re-armed span); the headless sink and both corpus recorders have no codeimage
+timeline and omit it, so no golden churned; `DataflowStream`/`ptslice` carry it and
+`observer_build` seeds the Observer disasm pane's manual "as of logical time"
+default from it, a hand override still winning. · will · 2026-07-31.
 
 [38-live-feed-completion-roadmap.md](38-live-feed-completion-roadmap.md) — **the
 live-feed audit + roadmap** (a family overview like [27](27-extension-roadmap.md),

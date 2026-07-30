@@ -256,10 +256,10 @@ when unresolved.
 ### `df_step` — one executed step's operand values (L0)
 
 ```json
-{"k":"df_step","step":0,"off":0,"rbase":1048576,"disasm":"mov eax, edi","ops":[{"space":"reg","reg":35,"size":4,"write":false,"value_valid":true,"value":40}]}
+{"k":"df_step","step":0,"off":0,"rbase":1048576,"when":3,"disasm":"mov eax, edi","ops":[{"space":"reg","reg":35,"size":4,"write":false,"value_valid":true,"value":40}]}
 ```
 
-Field order: `step`, `off`, `rbase?`, `disasm?`, `ops`.
+Field order: `step`, `off`, `rbase?`, `when?`, `disasm?`, `ops`.
 
 Operand objects mirror [`at_val_rec_t`](../../../include/asmtest_valtrace.h#L61)
 with the enum rendered as a token: `space` is `"reg"` (`AT_LOC_REG`) \| `"abs"`
@@ -303,6 +303,32 @@ Additive optional field on a known kind ⇒ no envelope bump, no break; `rbase` 
 `"region base"`, not the operand `base` register inside `ops[]`, so the two
 substring-scanning readers (the conformance `field()` and `cli_smoke.sh`) do not
 collide.
+
+**`when` — the codeimage timestamp whose bytes were live at this step**
+([37](37-region-tag-on-df-step.md) T4, 2026-07-30). `rbase` answers *which span*;
+it does not answer *which version's bytes*, and guessing the latest version is
+silently wrong — the exact failure mode the *`codeimage`* section's own
+resolution rule (below) already names. `when` closes that gap: an optional u64,
+immediately after `rbase`, carrying the logical `codeimage` timestamp
+(`asmtest_codeimage_now`) in force when this step's invocation **started** — sampled
+once per invocation and stamped on every `df_step` of it, never re-sampled
+mid-invocation. It is **omitted entirely — never `null`, never 0-as-unknown** —
+when the producer holds no codeimage timeline (a live `codeimage` version's `seq`
+is assigned from `++img->seq`, so a real version is never `when == 0`). Resolution
+rule: a reader resolves the step's bytes as the `codeimage` version with the
+greatest `when` <= this value, covering the address `rbase + off` — the same
+`(when, version)` tiebreak the `codeimage` resolver already uses for the manual
+"as of logical time" query, now given a per-step default instead of a guess.
+**Normative: key on `(rbase, when)` together, never `when` alone** — `when`
+restarts (starts again from a small `seq`) at each re-armed span in a candidate
+walk, so two different spans can each stamp `when:1` on their own first step, and
+only the paired `rbase` tells them apart (the address `rbase + off` already carries
+this pairing, since a version's coverage is address-ranged). Without `when`, a
+reader falls back to its existing behaviour unchanged — the manual "as of logical
+time" input, or a version-guess where nothing else is stated. **Emitted only by the
+serve path**: the headless `--dataflow`/`--record` sink and both corpus recorders
+(`tools/asmtrace_record.c`) hold no codeimage timeline and always omit it, so this
+field churns none of the generated corpus.
 
 ### `df_edge` — one last-writer def-use edge (L1)
 
@@ -1251,3 +1277,23 @@ pinned against the committed low-fidelity fixtures
 > deliberately-untagged hand-authored fixtures remain valid, and the freeze
 > checklist item *"`df_step` states no region"* is closed by it. Recorded
 > 2026-07-29.**
+
+## `df_step` bytes-version tag — the `when` extension (37 T4)
+
+> **Owned by [37-region-tag-on-df-step.md](37-region-tag-on-df-step.md)** (T4),
+> appended under this file's D5 append-only rule. It **adds one optional field**
+> (`when`) to the existing `df_step` kind (see *`df_step`* above for the field,
+> the normative order `step, off, rbase?, when?, disasm?, ops`, the
+> omit-when-unknown rule, and the `(rbase, when)` keying caveat) — **no new kind,
+> no new descriptor, no new envelope major**. A `when == 0` (omitted) `df_step` is
+> byte-identical to a pre-T4 recording, which is why the append is a break-free
+> additive change under *Ignore unknown fields*. **Emitted only by the serve
+> path** (`cli/asmspy.c`'s `serve_dataflow_sink`, sampling `when` once per
+> invocation from the session's own `asmtest_codeimage_t` before the pass and
+> stamping it on every `df_step` the pass emits) — the headless `--dataflow`
+> sink and both corpus recorders (`tools/asmtrace_record.c`) hold no codeimage
+> timeline and always pass `when == 0`, so **this extension churns no generated
+> golden**. **01 owner sign-off: `when` adds an optional field to a known kind,
+> stated only by the one producer that holds a codeimage timeline, and no reader
+> in the tree rejects it — the pre-T4 corpus and every hand-authored fixture
+> remain valid unchanged. Recorded 2026-07-30.**

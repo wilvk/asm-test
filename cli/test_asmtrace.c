@@ -408,7 +408,7 @@ static void test_df_step_wide_bytes(void) {
     r.size = 4;
 
     /* Bytes on the wire: emitted, and the wide flag stays. */
-    asmtrace_df_step_body(body, sizeof body, 0, 0x10, 0, NULL, &r, 1, wide,
+    asmtrace_df_step_body(body, sizeof body, 0, 0x10, 0, 0, NULL, &r, 1, wide,
                           sizeof wide);
     check("df_step.wide emits bytes",
           strstr(body, "\"bytes\":\"deadbeef\"") != NULL, body);
@@ -416,7 +416,8 @@ static void test_df_step_wide_bytes(void) {
           strstr(body, "\"wide\":true") != NULL, body);
 
     /* No side buffer: degrades to bytes-less [wide] gracefully. */
-    asmtrace_df_step_body(body, sizeof body, 0, 0x10, 0, NULL, &r, 1, NULL, 0);
+    asmtrace_df_step_body(body, sizeof body, 0, 0x10, 0, 0, NULL, &r, 1, NULL,
+                          0);
     check("df_step.wide with no buffer omits bytes",
           strstr(body, "\"bytes\"") == NULL, body);
     check("df_step.wide with no buffer keeps the wide flag",
@@ -424,7 +425,7 @@ static void test_df_step_wide_bytes(void) {
 
     /* Wide but the value was NOT captured (the low-fidelity case): no bytes. */
     r.value_valid = false;
-    asmtrace_df_step_body(body, sizeof body, 0, 0x10, 0, NULL, &r, 1, wide,
+    asmtrace_df_step_body(body, sizeof body, 0, 0x10, 0, 0, NULL, &r, 1, wide,
                           sizeof wide);
     check("df_step.wide-but-invalid omits bytes",
           strstr(body, "\"bytes\"") == NULL, body);
@@ -432,13 +433,13 @@ static void test_df_step_wide_bytes(void) {
     /* An out-of-range slice (wide_off past the buffer) never over-reads. */
     r.value_valid = true;
     r.wide_off = 100;
-    asmtrace_df_step_body(body, sizeof body, 0, 0x10, 0, NULL, &r, 1, wide,
+    asmtrace_df_step_body(body, sizeof body, 0, 0x10, 0, 0, NULL, &r, 1, wide,
                           sizeof wide);
     check("df_step.wide out-of-range omits bytes",
           strstr(body, "\"bytes\"") == NULL, body);
 }
 
-/* The optional region base `rbase` (37): emitted immediately after `off` and
+/* The optional region base `rbase` (37 T1): emitted immediately after `off` and
  * before `ops` ONLY when nonzero, so a rbase==0 call is byte-identical to a
  * pre-37 recording (the fallback coverage 36's single-span anchor relies on).
  * df_step had NO exact-body unit gate before this — only the golden corpus. */
@@ -453,8 +454,8 @@ static void test_df_step_body(void) {
     r.size = 4;
 
     /* rbase nonzero: emitted immediately after off and before ops. */
-    asmtrace_df_step_body(body, sizeof body, 1, 0x10, 1048576ULL, NULL, &r, 1,
-                          NULL, 0);
+    asmtrace_df_step_body(body, sizeof body, 1, 0x10, 1048576ULL, 0, NULL, &r,
+                          1, NULL, 0);
     check("df_step.body places rbase right after off",
           strstr(body, "\"step\":1,\"off\":16,\"rbase\":1048576,\"ops\":[") ==
               body,
@@ -466,11 +467,61 @@ static void test_df_step_body(void) {
           body);
 
     /* rbase == 0: OMITTED — the body is byte-identical to a pre-37 recording. */
-    asmtrace_df_step_body(body0, sizeof body0, 1, 0x10, 0, NULL, &r, 1, NULL, 0);
+    asmtrace_df_step_body(body0, sizeof body0, 1, 0x10, 0, 0, NULL, &r, 1,
+                          NULL, 0);
     check("df_step.body rbase==0 omits the field",
           strstr(body0, "\"rbase\"") == NULL, body0);
     check("df_step.body rbase==0 keeps the pre-37 step/off/ops prefix",
           strstr(body0, "\"step\":1,\"off\":16,\"ops\":[") == body0, body0);
+}
+
+/* The optional codeimage `when` (37 T4): emitted immediately after `rbase` and
+ * before `disasm`/`ops` ONLY when nonzero, so a when==0 call is byte-identical
+ * to a pre-T4 (post-T1) recording — the serve path is the only producer that
+ * ever passes a nonzero value; the headless sink and both corpus recorders
+ * always pass 0 (no codeimage timeline), so their output never churns. */
+static void test_df_step_when_body(void) {
+    char body[256], body0[256], bodyrb[256];
+    at_val_rec_t r;
+    memset(&r, 0, sizeof r);
+    r.kind = AT_LOC_REG;
+    r.reg = 35; /* eax/rax */
+    r.value_valid = true;
+    r.value = 40;
+    r.size = 4;
+
+    /* rbase + when both nonzero: when lands immediately after rbase. */
+    asmtrace_df_step_body(body, sizeof body, 1, 0x10, 1048576ULL, 3ULL, NULL,
+                          &r, 1, NULL, 0);
+    check("df_step.body places when right after rbase",
+          strstr(body, "\"step\":1,\"off\":16,\"rbase\":1048576,\"when\":3,"
+                       "\"ops\":[") == body,
+          body);
+    check("df_step.body field order step<off<rbase<when<ops",
+          strstr(body, "\"step\":") < strstr(body, "\"off\":") &&
+              strstr(body, "\"off\":") < strstr(body, "\"rbase\":") &&
+              strstr(body, "\"rbase\":") < strstr(body, "\"when\":") &&
+              strstr(body, "\"when\":") < strstr(body, "\"ops\":"),
+          body);
+
+    /* when == 0: OMITTED entirely — never null, never a sentinel zero (D7). */
+    asmtrace_df_step_body(body0, sizeof body0, 1, 0x10, 1048576ULL, 0, NULL,
+                          &r, 1, NULL, 0);
+    check("df_step.body when==0 omits the field",
+          strstr(body0, "\"when\"") == NULL, body0);
+    check("df_step.body when==0 keeps the rbase-only body byte-identical",
+          strstr(body0, "\"step\":1,\"off\":16,\"rbase\":1048576,\"ops\":[") ==
+              body0,
+          body0);
+
+    /* when nonzero but rbase == 0 (unknown span, known bytes-timestamp): the
+     * writer states each field independently — no cross-field gating. */
+    asmtrace_df_step_body(bodyrb, sizeof bodyrb, 1, 0x10, 0, 3ULL, NULL, &r, 1,
+                          NULL, 0);
+    check("df_step.body when survives rbase==0",
+          strstr(bodyrb, "\"step\":1,\"off\":16,\"when\":3,\"ops\":[") ==
+              bodyrb,
+          bodyrb);
 }
 
 /* The `mem` address-stream body (29 R2): a memory access serializes to
@@ -932,6 +983,7 @@ int main(void) {
     test_steps_total_footer();
     test_df_step_wide_bytes();
     test_df_step_body();
+    test_df_step_when_body();
     test_mem_body();
     test_df_invocation_body();
     test_blame_body();

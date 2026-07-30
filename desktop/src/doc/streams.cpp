@@ -119,6 +119,8 @@ DataflowStream decode_dataflow(const std::vector<const Event *> &step_evs,
             uint64_t off;
             uint64_t
                 rbase; // 37: region base off is relative to; 0 = not stated
+            uint64_t when; // 37 T4: codeimage `when` live at this step; 0 = not
+                           // stated (only the serve path ever states one)
             std::string disasm;
             std::vector<ValRec> ops;
         };
@@ -137,6 +139,9 @@ DataflowStream decode_dataflow(const std::vector<const Event *> &step_evs,
             get(e.body, "rbase", st.rbase); // 37: 0 when the wire omitted it
             if (st.rbase)
                 df.rbase_present = true;
+            get(e.body, "when", st.when); // 37 T4: 0 when the wire omitted it
+            if (st.when)
+                df.when_present = true;
             get(e.body, "disasm", st.disasm);
             auto ops = e.body.find("ops");
             if (ops != e.body.end() && ops->is_array())
@@ -158,11 +163,13 @@ DataflowStream decode_dataflow(const std::vector<const Event *> &step_evs,
             df.nsteps = std::max(df.nsteps, st.step + 1);
         df.insn_off.assign(df.nsteps, 0);
         df.insn_rbase.assign(df.nsteps, 0); // 37, parallel to insn_off
+        df.insn_when.assign(df.nsteps, 0);  // 37 T4, parallel to insn_off
         df.disasm.assign(df.nsteps, std::string());
         std::vector<char> seen(df.nsteps, 0);
         for (const Step &st : steps) {
             df.insn_off[st.step] = st.off;
             df.insn_rbase[st.step] = st.rbase;
+            df.insn_when[st.step] = st.when;
             if (!st.disasm.empty())
                 df.disasm[st.step] = st.disasm;
             seen[st.step] = 1;
