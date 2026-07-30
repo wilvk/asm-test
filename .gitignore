@@ -84,3 +84,9 @@ isolate-*.log
 # .NET build artifacts from the examples/dotnet demo projects (incl. jit_dotnet)
 examples/dotnet/**/obj/
 examples/dotnet/**/bin/
+
+# graphify: per-file extraction cache (regenerable) + machine-local interpreter/root
+# pointers. graph.json/graph.html/GRAPH_REPORT.md are the tracked deliverables.
+graphify-out/cache/
+graphify-out/.graphify_python
+graphify-out/.graphify_root
